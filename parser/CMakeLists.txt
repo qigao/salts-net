@@ -1,34 +1,17 @@
-set(TARGET_NAME parrser_uri)
-find_package(RE2C REQUIRED)
+message(STATUS "JSON Parser generation enabled")
+message(STATUS "  re2c: ${RE2C_EXECUTABLE}")
+message(STATUS "  lemon: ${LEMON_EXECUTABLE}")
+message(STATUS "Parser module enabled")
+# =============================================================================
+# Submodules (must be added first so we can link to them)
+# =============================================================================
 
-re2c_target(
-    MyLexer ${CMAKE_CURRENT_SOURCE_DIR}/parser/lexer.re
-    ${CMAKE_CURRENT_BINARY_DIR}/lexer.c
-)
-
-# Find all files recursively
-file(
-    GLOB_RECURSE
-    SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h* 
-    ${CMAKE_CURRENT_SOURCE_DIR}/parser/*.re
-)
-
-# Libary part
-add_library(${TARGET_NAME} STATIC)
-add_library(TurboParser::URI  ALIAS parrser_uri )
-
-target_sources(${TARGET_NAME} PRIVATE ${SOURCE_FILES}  ${CMAKE_CURRENT_BINARY_DIR}/lexer.c)
-
+add_subdirectory(internal/ini_parser)
+add_subdirectory(internal/json_parser)
+add_subdirectory(internal/csv_parser)
+add_subdirectory(internal/uri_parser)
+add_subdirectory(internal/tlv_parser)
+add_subdirectory(internal/ltv_parser)
+add_subdirectory(internal/soa_parser)
+add_subdirectory(turbo_parser)
  
-target_include_directories(${TARGET_NAME}
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-)
-set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${TARGET_NAME})
-# tests
-if(ENABLE_TESTS)
-    add_subdirectory(test)
-endif()

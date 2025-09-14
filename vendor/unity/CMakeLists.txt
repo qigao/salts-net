@@ -21,6 +21,9 @@ set_target_properties(unity PROPERTIES
     C_EXTENSIONS OFF
 )
 
+# Enable double precision support for Unity
+target_compile_definitions(unity PUBLIC UNITY_INCLUDE_DOUBLE)
+
 # Compiler flags (Unity uses C99 features)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(unity PRIVATE
@@ -37,24 +40,3 @@ elseif(MSVC)
     )
 endif()
 set_target_properties(unity PROPERTIES FOLDER "vendor/unity")
-# Export targets for parent projects
-install(TARGETS unity
-    EXPORT unityTargets
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-    INCLUDES DESTINATION include
-)
-
-# Install headers
-install(DIRECTORY include/
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h"
-)
-
-# Export target file
-install(EXPORT unityTargets
-    FILE unityTargets.cmake
-    NAMESPACE unity::
-    DESTINATION lib/cmake/unity
-)

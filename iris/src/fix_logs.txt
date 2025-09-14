@@ -1,0 +1,5 @@
+s/printf(/LOG_INFO(/g
+s/\);$/,);/
+s/fprintf(stderr,/LOG_ERROR(/g
+s/\n");$/");/
+s/\n$//

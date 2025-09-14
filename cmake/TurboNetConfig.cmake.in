@@ -1,51 +1,13 @@
-# TurboNet Core Configuration
-# Simple configuration for external users
-# Exports: turbonet.h, turbonet_fs.h, platform.h
+@PACKAGE_INIT@
 
-# Set basic variables
-set(TurboNet_VERSION "@PROJECT_VERSION@")
-set(TurboNet_FOUND TRUE)
+include(CMakeFindDependencyMacro)
 
-# Set include directories
-set(TurboNet_INCLUDE_DIRS "@CMAKE_INSTALL_FULL_INCLUDEDIR@/turbonet")
+# Find dependencies (add more as needed)
+find_dependency(libuv)
+find_dependency(OpenSSL)  
+#find_dependency(c-ares)
+#find_dependency(base64) 
 
-# Set library paths - handle both static and shared libraries
-if(WIN32)
-    if(BUILD_SHARED_LIBS)
-        set(TurboNet_LIBRARIES "@CMAKE_INSTALL_FULL_LIBDIR@/NetCore.dll")
-        set(TurboNet_LIBRARY_DIRS "@CMAKE_INSTALL_FULL_LIBDIR@")
-    else()
-        set(TurboNet_LIBRARIES "@CMAKE_INSTALL_FULL_LIBDIR@/NetCore.lib")
-        set(TurboNet_LIBRARY_DIRS "@CMAKE_INSTALL_FULL_LIBDIR@")
-    endif()
-else()
-    if(BUILD_SHARED_LIBS)
-        set(TurboNet_LIBRARIES "@CMAKE_INSTALL_FULL_LIBDIR@/libNetCore.so")
-        set(TurboNet_LIBRARY_DIRS "@CMAKE_INSTALL_FULL_LIBDIR@")
-    else()
-        set(TurboNet_LIBRARIES "@CMAKE_INSTALL_FULL_LIBDIR@/libNetCore.a")
-        set(TurboNet_LIBRARY_DIRS "@CMAKE_INSTALL_FULL_LIBDIR@")
-    endif()
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/TurboNetTargets.cmake")
 
-# Required dependencies that users need to link
-find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
-find_package(PkgConfig REQUIRED)
-
-# Find libuv
-pkg_check_modules(LIBUV REQUIRED libuv)
-
-# Add all required libraries to TurboNet_LIBRARIES
-list(APPEND TurboNet_LIBRARIES 
-    ${CMAKE_THREAD_LIBS_INIT}
-    OpenSSL::SSL 
-    OpenSSL::Crypto
-    ${LIBUV_LIBRARIES}
-)
-
-# Usage instructions:
-# find_package(TurboNet REQUIRED)
-# target_include_directories(your_target PRIVATE ${TurboNet_INCLUDE_DIRS})
-# target_link_libraries(your_target ${TurboNet_LIBRARIES})
-# target_link_directories(your_target PRIVATE ${TurboNet_LIBRARY_DIRS})
+check_required_components(TurboNet)

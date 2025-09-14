@@ -1,0 +1,220 @@
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include "compat.h"
+#include "async.h"
+#include <stb_sprintf.h>
+
+// Thread pool work callback
+static void _async_work_cb(uv_work_t *req)
+{
+    async_t *task = (async_t *)req->data;
+    task->work_fn(task, task->context);
+}
+
+// Completion callback after thread work is done
+static void _async_after_work_cb(uv_work_t *req, int status)
+{
+    async_t *task = (async_t *)req->data;
+    task->completed = 1;
+
+    // Store status code from libuv if there was an issue
+    if (status < 0)
+    {
+        char error_buf[128];
+        stbsp_snprintf(error_buf, sizeof(error_buf), "libuv error: %s", uv_strerror(status));
+
+        // Allocate error using malloc since we're in completion callback
+        task->error = strdup(error_buf);
+        task->result = 0;
+    }
+
+    // Call the response handler with result
+    if (task->handler)
+    {
+        task->handler(task->context, task->result, task->error);
+    }
+
+    // Free error message if it was malloc'd
+    if (task->error)
+    {
+        free(task->error);
+        task->error = NULL;
+    }
+
+    // Free the task itself (always malloc'd)
+    free(task);
+}
+
+// Mark task as successfully completed
+void ok(async_t *task)
+{
+    if (!task)
+        return;
+    task->result = 1;
+}
+
+// Mark task as failed with an error message
+void fail(async_t *task, const char *error_msg)
+{
+    if (!task)
+        return;
+    task->result = 0;
+
+    // Free existing error if any
+    if (task->error)
+    {
+        free(task->error);
+        task->error = NULL;
+    }
+
+    // Set new error message
+    if (error_msg)
+    {
+        task->error = strdup(error_msg);
+    }
+    else
+    {
+        task->error = strdup("Unknown error");
+    }
+}
+
+// Creates and executes an async task
+int task(
+    void *context,                    // User context to pass to callbacks
+    async_work_fn_t work_fn,          // Function to execute in the thread pool
+    async_response_handler_t handler) // Response handler called after task completion
+{
+    if (!work_fn)
+        return -1;
+
+    // Create task using malloc (managed by libuv)
+    async_t *task = (async_t *)malloc(sizeof(async_t));
+    if (!task)
+    {
+        fprintf(stderr, "Failed to allocate memory for async task\n");
+        return -1;
+    }
+
+    // Initialize task
+    task->work.data = task;
+    task->context = context;
+    task->completed = 0;
+    task->result = 0;
+    task->error = NULL;
+    task->work_fn = work_fn;
+    task->handler = handler;
+
+    // Queue work
+    int result = uv_queue_work(
+        uv_default_loop(),
+        &task->work,
+        _async_work_cb,
+        _async_after_work_cb);
+
+    if (result != 0)
+    {
+        fprintf(stderr, "Failed to queue async work: %s\n", uv_strerror(result));
+        free(task);
+        return result;
+    }
+
+    return 0;
+}
+
+// Chains another async task after a successful response
+void then(
+    void *context,                    // User context
+    int success,                      // Whether previous task was successful
+    char *error,                      // Error message if previous task failed
+    async_work_fn_t next_work_fn,     // Next work function to execute if successful
+    async_response_handler_t handler) // Response handler for the next task
+{
+    if (success)
+    {
+        // Previous task was successful, chain the next task
+        task(context, next_work_fn, handler);
+    }
+    else
+    {
+        // Previous task failed, call the handler with failure
+        if (handler)
+        {
+            handler(context, 0, error);
+        }
+    }
+}
+
+/*
+Example usage with arena pattern:
+
+typedef struct {
+    turbo_arena_t *arena;        // Arena reference for cleanup
+    Res *res;           // Copied in arena
+    char *operation_name; // Allocated in arena
+    int user_id;
+} async_context_t;
+
+void arena_async_handler(Req *req, Res *res)
+{
+    // Create separate arena for async operation
+    turbo_arena_t *async_arena = malloc(sizeof(Arena));
+    if (!async_arena) {
+        send_text(res, 500, "Arena allocation failed");
+        return;
+    }
+    memset(async_arena, 0, sizeof(Arena));
+
+    // Allocate context in arena
+    async_context_t *ctx = turbo_arena_alloc(async_arena, sizeof(async_context_t));
+    if (!ctx) {
+        arena_free(async_arena);
+        free(async_arena);
+        send_text(res, 500, "Context allocation failed");
+        return;
+    }
+
+    // Store arena reference and copy data to arena
+    ctx->arena = async_arena;
+    ctx->res = arena_copy_res(async_arena, res);
+    ctx->operation_name = arena_strdup(async_arena, "database_query");
+    ctx->user_id = 123;
+
+    // Check if arena allocations succeeded
+    if (!ctx->res || !ctx->operation_name) {
+        arena_free(async_arena);
+        free(async_arena);
+        send_text(res, 500, "Arena allocation failed");
+        return;
+    }
+
+    // Use regular task() function
+    task(ctx, arena_async_work, arena_async_response);
+}
+
+void arena_async_work(async_t *task, void *context)
+{
+    async_context_t *ctx = (async_context_t *)context;
+
+    // Simulate work
+    printf("Performing %s for user %d\n", ctx->operation_name, ctx->user_id);
+
+    ok(task);
+}
+
+void arena_async_response(void *context, int success, char *error)
+{
+    async_context_t *ctx = (async_context_t *)context;
+
+    if (success) {
+        send_json(ctx->res, 200, "{\"result\": \"success\"}");
+    } else {
+        send_text(ctx->res, 500, error);
+    }
+
+    // Single arena cleanup
+    turbo_arena_t *arena = ctx->arena;
+    arena_free(arena);
+    free(arena);
+}
+*/

@@ -13,6 +13,22 @@
       ]
     },
     {
+      "name": "asan-windows",
+      "displayName": "Build with ASan (Windows)",
+      "configurePreset": "dev-win-msvc-ninja-asan",
+      "inherits": [
+        "ISWindows"
+      ]
+    },
+    {
+      "name": "release-windows",
+      "displayName": "Build (Default, Windows)",
+      "configurePreset": "release-win-msvc-ninja",
+      "inherits": [
+        "ISWindows"
+      ]
+    },
+    {
       "name": "default-linux",
       "displayName": "Build (Default, Linux)",
       "configurePreset": "release-linux-ninja",

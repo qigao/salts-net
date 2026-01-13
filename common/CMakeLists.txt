@@ -7,7 +7,7 @@ add_subdirectory(parser)
 # Common/base utilities - contains stats, base64, DNS, mDNS, filesystem, logger,
 # platform, and client utilities Find all files recursively
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
-     ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
+     ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*  )
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 # Public alias
 add_library(TurboNet::Common ALIAS ${TARGET_NAME})
@@ -21,7 +21,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
          $<INSTALL_INTERFACE:include/common>
   PRIVATE $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>
-          $<BUILD_INTERFACE:${FMT_VA_LEXER_INCLUDE_DIRS}>)
+          $<BUILD_INTERFACE:${FMT_LEXER_INCLUDE_DIRS}>)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 # Link dependencies
@@ -31,7 +31,7 @@ target_link_libraries(
          aklomp::base64 # Base64 utilities
   PRIVATE PkgConfig::STC # Thread-safe containers
           ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
-          ${FMT_VA_LEXER_LIBRARY} # fmt_va lexer
+          ${FMT_LEXER_LIBRARY} # fmt_lexer
 )
 
 # Set target properties

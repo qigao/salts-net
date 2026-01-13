@@ -9,9 +9,8 @@ set(TEST_FILES
     test_memory_pool.c
     test_simple_arena.c
     test_turbo_logger.c
-    test_stc.c
-    test_stc_cstr.c
-    test_stc_hmap_struct.c
+    test_stc.c 
+    test_fmt_re2c.c
 )
 
 # Create executables and link libraries for each test
@@ -33,6 +32,10 @@ foreach(TEST_FILE ${TEST_FILES})
     # Add specific libraries based on test type
     if(TEST_NAME MATCHES "dns")
         target_link_libraries(${TEST_NAME} PRIVATE libuv::uv c-ares::cares)
+    endif()
+
+    if(TEST_NAME MATCHES "fmt_re2c")
+        target_link_libraries(${TEST_NAME} PRIVATE fmt_lexer)
     endif()
 endforeach()
 

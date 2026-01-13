@@ -26,7 +26,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "stb_sprintf.h"
-#include "fmt_va_lexer.h"
+#include "../parser/fmt_lexer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,7 +55,7 @@ static inline int fmt_va_vprint(char *buf, size_t size, const char *fmt, va_list
     }
 
     char *dst = buf;
-    char *end = buf + size - 1;
+    char *end = buf + size - 1; // Reserve 1 for null terminator
     const char *cursor = fmt;
     
     // Padded format strings for stbsp_sprintf safety
@@ -69,7 +69,7 @@ static inline int fmt_va_vprint(char *buf, size_t size, const char *fmt, va_list
     while (dst < end) {
         const char *token_start;
         size_t token_len;
-        fmt_token_t token = fmt_va_scan(&cursor, &token_start, &token_len);
+        fmt_token_t token = fmt_scan(&cursor, &token_start, &token_len);
         
         switch (token) {
             case FMT_TOKEN_END:
@@ -87,17 +87,97 @@ static inline int fmt_va_vprint(char *buf, size_t size, const char *fmt, va_list
                 break;
             }
             
-            case FMT_TOKEN_ESCAPED_BRACE:
-                // Copy single '{'
-                if (dst < end) {
-                    *dst++ = '{';
-                }
+            case FMT_TOKEN_LBRACE_ESC:
+                if (dst < end) *dst++ = '{';
+                break;
+
+            case FMT_TOKEN_RBRACE_ESC:
+                if (dst < end) *dst++ = '}';
                 break;
                 
-            case FMT_TOKEN_STRING: {
-                const char *str = va_arg(args, const char*);
+            case FMT_TOKEN_SPECIFIER: {
+                // token_start points to content inside {:, length is token_len
+                // We need to guess the type from the specifier string.
+                // Simple heuristic: check the last character.
+                char type = (token_len > 0) ? token_start[token_len - 1] : 0;
+                
+                // Construct a printf-style format string for stb_sprintf
+                // We map {:[flags]type} to %[flags]type
+                // But stb_sprintf might not support all fmt.h modifiers. 
+                // For safety in this VA bridge, we primarily look for the type char
+                // and use a simple % format, ignoring complex precision for now unless we reconstructing it.
+                // However, the USER expectations are probably that modifiers work.
+                
+                // Reconstructing full format string: "%" + content
+                char fmt_buf[64];
+                if (token_len < 60) {
+                    fmt_buf[0] = '%';
+                    memcpy(fmt_buf + 1, token_start, token_len);
+                    fmt_buf[token_len + 1] = '\0';
+                } else {
+                    // Too long, fallback to default
+                    type = 0; 
+                }
+
                 char temp[256];
-                int written = stbsp_snprintf(temp, sizeof(temp), fmt_str, str ? str : "(null)");
+                int written = 0;
+
+                switch (type) {
+                    case 's': {
+                        const char *str = va_arg(args, const char*);
+                        written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, str ? str : "(null)");
+                        break;
+                    }
+                    case 'd': // int
+                    case 'i': {
+                        int val = va_arg(args, int);
+                        written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, val);
+                        break;
+                    }
+                    case 'u': { // unsigned
+                        unsigned int val = va_arg(args, unsigned int);
+                        written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, val);
+                        break;
+                    }
+                    case 'x': 
+                    case 'X': { // hex
+                        unsigned int val = va_arg(args, unsigned int);
+                        written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, val);
+                        break;
+                    }
+                    case 'f':
+                    case 'g': 
+                    case 'e':
+                    case 'G':
+                    case 'E': { // double/float
+                        double val = va_arg(args, double);
+                        written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, val);
+                        break;
+                    }
+                    case 'p': { // pointer
+                        void *val = va_arg(args, void*);
+                        written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, val);
+                        break;
+                    }
+                    default:
+                        // Unknown or no type specifier found at end. 
+                        // It might be precision-only (e.g. {:.2}) which defaults to float in fmt.h usually?
+                        // Or just print the placeholder raw as fallback?
+                        // For safety, let's treat it as a string if it looks like just alignment? 
+                        // Actually, without type info, we can't safely va_arg. 
+                        // So we print the raw placeholder "{:...}"
+                        
+                        // We need to reconstruct the braces
+                        if (dst + token_len + 4 <= end) { // {:...}
+                             *dst++ = '{'; *dst++ = ':';
+                             memcpy(dst, token_start, token_len);
+                             dst += token_len;
+                             *dst++ = '}';
+                        }
+                        written = 0;
+                        break;
+                }
+                
                 if (written > 0) {
                     int copy_len = written;
                     if (dst + copy_len > end) {
@@ -109,88 +189,56 @@ static inline int fmt_va_vprint(char *buf, size_t size, const char *fmt, va_list
                 break;
             }
             
-            case FMT_TOKEN_INT: {
-                int val = va_arg(args, int);
-                char temp[64];
-                int written = stbsp_snprintf(temp, sizeof(temp), fmt_int, val);
-                if (written > 0) {
-                    int copy_len = written;
-                    if (dst + copy_len > end) {
-                        copy_len = (int)(end - dst);
-                    }
-                    memcpy(dst, temp, copy_len);
-                    dst += copy_len;
-                }
-                break;
-            }
-            
-            case FMT_TOKEN_UINT: {
-                unsigned int val = va_arg(args, unsigned int);
-                char temp[64];
-                int written = stbsp_snprintf(temp, sizeof(temp), fmt_uint, val);
-                if (written > 0) {
-                    int copy_len = written;
-                    if (dst + copy_len > end) {
-                        copy_len = (int)(end - dst);
-                    }
-                    memcpy(dst, temp, copy_len);
-                    dst += copy_len;
-                }
-                break;
-            }
-            
-            case FMT_TOKEN_HEX: {
-                unsigned int val = va_arg(args, unsigned int);
-                char temp[64];
-                int written = stbsp_snprintf(temp, sizeof(temp), fmt_hex, val);
-                if (written > 0) {
-                    int copy_len = written;
-                    if (dst + copy_len > end) {
-                        copy_len = (int)(end - dst);
-                    }
-                    memcpy(dst, temp, copy_len);
-                    dst += copy_len;
-                }
-                break;
-            }
-            
-            case FMT_TOKEN_FLOAT: {
-                double val = va_arg(args, double);
-                char temp[64];
-                int written = stbsp_snprintf(temp, sizeof(temp), fmt_float, val);
-                if (written > 0) {
-                    int copy_len = written;
-                    if (dst + copy_len > end) {
-                        copy_len = (int)(end - dst);
-                    }
-                    memcpy(dst, temp, copy_len);
-                    dst += copy_len;
-                }
-                break;
-            }
-            
-            case FMT_TOKEN_POINTER: {
-                void *val = va_arg(args, void*);
-                char temp[64];
-                int written = stbsp_snprintf(temp, sizeof(temp), fmt_ptr, val);
-                if (written > 0) {
-                    int copy_len = written;
-                    if (dst + copy_len > end) {
-                        copy_len = (int)(end - dst);
-                    }
-                    memcpy(dst, temp, copy_len);
-                    dst += copy_len;
-                }
-                break;
-            }
-            
-            case FMT_TOKEN_EMPTY:
-            case FMT_TOKEN_UNKNOWN:
+            case FMT_TOKEN_PLACEHOLDER:
+            case FMT_TOKEN_INVALID:
+            default:
                 // Copy placeholder as-is (can't determine type from va_list)
-                if (token_len > 0 && dst + token_len < end) {
-                    memcpy(dst, token_start, token_len);
-                    dst += token_len;
-                }
+                 if (dst < end) *dst++ = '{'; 
+                 // Note: Logic for invalid might need to be more robust to print original chars
+                 // But since lexer consumes the whole invalid block, we might not have it all easily accessable 
+                 // if we only have payload. 
+                 // Actually fmt_scan returns payload. For PLACEHOLDER payload is empty. 
+                 // For INVALID, payload is the content.
+                 
+                 if (token == FMT_TOKEN_PLACEHOLDER) {
+                     if (dst < end) *dst++ = '}';
+                 } else {
+                     // INVALID: print content then close brace? 
+                     // fmt_lexer returns inner content IIRC? 
+                     // Wait, fmt_lexer.re for INVALID:
+                     // "*token_len = (size_t)(YYCURSOR - start);" -> includes braces!
+                     // So we just copy token content.
+                     // But wait, scan signature: token_start, token_len. 
+                     // For INVALID, it covers the whole match.
+                     // For PLACEHOLDER, it covers 0 len?
+                     // Let's check generated code behavior or .re file
+                     
+                     // .re:
+                     // "{}" -> token_len = 2; return PLACEHOLDER.
+                     // Invalid -> token_len = full match.
+                     
+                     // So for both, we can just copy token_start[0..token_len]
+                     // Wait, for PLACEHOLDER, token_len=2, start points to "{".
+                     // For SPECIFIER, start points to AFTER "{:".
+                     
+                     if (token == FMT_TOKEN_SPECIFIER) {
+                         // Already handled above
+                     } else {
+                        // For PLACEHOLDER, INVALID, TEXT -> copy [token_start, token_start+token_len]
+                        // Re-do the copy logic to be generic for pass-through
+                        
+                        // Wait, my SPECIFIER block handled it separately.
+                        // So here we only handle PLACEHOLDER and INVALID and TEXT-fallback?
+                        // TEXT is handled.
+                        
+                        int copy_len = (int)token_len;
+                        if (dst + copy_len > end) {
+                            copy_len = (int)(end - dst);
+                        }
+                        memcpy(dst, token_start, copy_len);
+                        dst += copy_len;
+                     }
+                 }
                 break;
         }
     }

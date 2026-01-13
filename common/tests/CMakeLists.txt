@@ -22,7 +22,7 @@ foreach(TEST_FILE ${TEST_FILES})
     add_executable(${TEST_NAME} ${TEST_FILE})
     
     # Link common libraries
-    target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Common unity PkgConfig::STC)
+    target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Utils unity PkgConfig::STC)
     
     # Add Windows system libraries for tests
     if(WIN32)
@@ -49,5 +49,5 @@ endforeach()
 # Set folder properties for all test targets
 set_target_properties(
     ${TEST_TARGETS}
-    PROPERTIES FOLDER "common/tests"
+    PROPERTIES FOLDER "utils/tests"
 )

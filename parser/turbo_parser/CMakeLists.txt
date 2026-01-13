@@ -15,7 +15,7 @@ target_include_directories(
  
 target_link_libraries(
   turbo_parser
-  PUBLIC TurboNet::Common
+  PUBLIC TurboNet::Utils
   PRIVATE csv_parser
           ini_parser
           json_parser

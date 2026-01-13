@@ -152,13 +152,30 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
-static JSValue js_sleep(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_sleep(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     uint64_t delay = 0;
     JS_ToInt64(ctx, (int64_t*)&delay, argv[0]);
-    
+
     // Use platform sleep
     turbo_sleep_ms((uint32_t)delay);
     return JS_UNDEFINED;
+}
+
+// ES6 module export wrappers
+JSValue js_set_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return js_set_timer(ctx, this_val, argc, argv, 0);
+}
+
+JSValue js_set_interval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return js_set_timer(ctx, this_val, argc, argv, 1);
+}
+
+JSValue js_clear_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return js_clear_timer(ctx, this_val, argc, argv);
+}
+
+JSValue js_clear_interval(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return js_clear_timer(ctx, this_val, argc, argv);
 }
 
 static const JSCFunctionListEntry js_timer_funcs[] = {

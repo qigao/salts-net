@@ -6,11 +6,12 @@
 #include "http_client.h"
 #include "memory_pool.h"
 #include "turbo_parser.h"
-#include "platform.h"
 // clang-format on
 #include "base64_utils.h"
-#include "cookie_parser.h"
 #include "cookie_jar.h"
+#include "cookie_parser.h"
+
+#define STB_SPRINTF_IMPLEMENTATION
 #include <stb_sprintf.h>
 
 #define HTTP_REQUEST_POOL_SIZE (1024 * 1024) // 1MB pool for request lifecycle
@@ -21,7 +22,7 @@
  * This means:
  * 1. Format strings must be in padded static arrays (e.g., static const char FMT[32] = "...")
  * 2. String arguments (%s) must have at least 4 bytes readable after the null terminator
- * 
+ *
  * Use strdup_padded() or malloc(len + 8) for strings passed to stbsp_snprintf.
  */
 
@@ -39,7 +40,7 @@
 #define malloc_padded turbo_malloc_padded
 
 /* Helper for pool-based string duplication */
-#define pool_strdup(pool, str) turbo_pool_strdup((void*)(pool), (str))
+#define pool_strdup(pool, str) turbo_pool_strdup((void *)(pool), (str))
 
 /* Interceptor list node */
 typedef struct http_interceptor_node_s {
@@ -400,7 +401,7 @@ static char *build_full_url(MemoryPool *pool, http_client_t *client, const char 
     static const char FMT_URL_JOIN_SLASH[32] = "%s/%s";
     stbsp_snprintf(full_url, (int)full_len, FMT_URL_JOIN_SLASH, client->base_url, url_padded);
   }
-  
+
   free(url_padded);
   return full_url;
 }
@@ -779,7 +780,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   char *uri_path_padded = strdup_padded(uri_path[0] ? uri_path : "/");
   char *uri_query_padded = strdup_padded(uri_query);
   char *uri_host_padded = strdup_padded(uri_host);
-  
+
   if (!uri_path_padded || !uri_query_padded || !uri_host_padded) {
     free(uri_path_padded);
     free(uri_query_padded);
@@ -798,7 +799,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   /* Safe padded strings for stb_sprintf which may read 4 bytes */
   static const char QUESTION_STR[8] = "?";
   static const char EMPTY_STR[8] = "";
-  
+
   /* Pad method string for stb_sprintf safety */
   char *method_padded = strdup_padded(method_to_string(method));
   if (!method_padded) {
@@ -814,15 +815,14 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     return response;
   }
 
-  stbsp_snprintf(request_line, sizeof(request_line), FMT_REQ_LINE, method_padded,
-                 uri_path_padded, uri_query_padded[0] ? QUESTION_STR : EMPTY_STR,
-                 uri_query_padded);
+  stbsp_snprintf(request_line, sizeof(request_line), FMT_REQ_LINE, method_padded, uri_path_padded,
+                 uri_query_padded[0] ? QUESTION_STR : EMPTY_STR, uri_query_padded);
   free(method_padded);
 
   char host_header[512];
   static const char FMT_HOST_HDR[32] = "Host: %s\r\n";
   stbsp_snprintf(host_header, sizeof(host_header), FMT_HOST_HDR, uri_host_padded);
-  
+
   /* Free padded URI components after use */
   free(uri_path_padded);
   free(uri_query_padded);
@@ -887,7 +887,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
       char *pool_cookie = pool_strdup(pool, cookie_header);
       free(cookie_header);
       cookie_header = pool_cookie;
-      
+
       if (cookie_header) {
         parts[part_count].data = cookie_header;
         parts[part_count].len = strlen(cookie_header);
@@ -1099,7 +1099,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
       static const char FMT_PARSE_ERR[32] = "Parse error: %s";
       /* Pad error name for stb_sprintf safety */
       char *err_name_padded = strdup_padded(llhttp_errno_name(err));
-      stbsp_snprintf(response->error, 256, FMT_PARSE_ERR, 
+      stbsp_snprintf(response->error, 256, FMT_PARSE_ERR,
                      err_name_padded ? err_name_padded : "unknown");
       free(err_name_padded);
     }
@@ -1140,11 +1140,11 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     if (location) {
       /* Handle relative URLs */
       char *redirect_url = NULL;
-      
+
       /* Copy URI components with padding for stb_sprintf safety */
       char *scheme_padded = strdup_padded(uri_scheme);
       char *host_padded = strdup_padded(uri_host);
-      
+
       if (!scheme_padded || !host_padded) {
         free(scheme_padded);
         free(host_padded);
@@ -1156,21 +1156,21 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
         err_response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
         return err_response;
       }
-      
+
       if (location[0] == '/') {
         /* Relative path - construct full URL with padding for stb_sprintf */
         size_t url_len = strlen(uri_scheme) + strlen(uri_host) + strlen(location) + 20;
         redirect_url = malloc(url_len + 8);
         static const char FMT_REDIR_LOCAL[32] = "%s://%s:%d%s";
-        stbsp_snprintf(redirect_url, (int)url_len, FMT_REDIR_LOCAL, scheme_padded, host_padded, uri_port,
-                       location);
+        stbsp_snprintf(redirect_url, (int)url_len, FMT_REDIR_LOCAL, scheme_padded, host_padded,
+                       uri_port, location);
       } else if (strncmp(location, "http://", 7) != 0 && strncmp(location, "https://", 8) != 0) {
         /* Relative to current path with padding for stb_sprintf */
         size_t url_len = strlen(uri_scheme) + strlen(uri_host) + strlen(location) + 20;
         redirect_url = malloc(url_len + 8);
         static const char FMT_REDIR_REL[32] = "%s://%s:%d/%s";
-        stbsp_snprintf(redirect_url, (int)url_len, FMT_REDIR_REL, scheme_padded, host_padded, uri_port,
-                       location);
+        stbsp_snprintf(redirect_url, (int)url_len, FMT_REDIR_REL, scheme_padded, host_padded,
+                       uri_port, location);
       } else {
         /* location already has padding from get_header_value, but strdup doesn't preserve it */
         redirect_url = strdup_padded(location);
@@ -1813,13 +1813,13 @@ static void parse_set_cookie_enhanced(http_cookie_jar_t *jar, const char *set_co
   while (existing) {
     if (strcmp(existing->name, cookie->name) == 0) {
       /* Check domain and path matching for replacement */
-      int domain_match = (!existing->domain && !cookie->domain) ||
-                        (existing->domain && cookie->domain && 
-                         strcmp(existing->domain, cookie->domain) == 0);
-      int path_match = (!existing->path && !cookie->path) ||
-                      (existing->path && cookie->path && 
-                       strcmp(existing->path, cookie->path) == 0);
-      
+      int domain_match =
+          (!existing->domain && !cookie->domain) ||
+          (existing->domain && cookie->domain && strcmp(existing->domain, cookie->domain) == 0);
+      int path_match =
+          (!existing->path && !cookie->path) ||
+          (existing->path && cookie->path && strcmp(existing->path, cookie->path) == 0);
+
       if (domain_match && path_match) {
         /* Replace existing cookie */
         *prev = existing->next;
@@ -1853,7 +1853,7 @@ static char *build_cookie_header_enhanced(http_cookie_jar_t *jar, const char *ur
   /* Calculate total size for matching cookies */
   size_t total_size = 0;
   int matching_count = 0;
-  
+
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     if (cookie_matches_request(cookie, url)) {
@@ -2306,9 +2306,7 @@ static int calculate_retry_delay(http_retry_policy_t *policy, int attempt) {
 }
 
 /* Sleep for specified milliseconds - uses platform abstraction */
-static void sleep_ms(int milliseconds) {
-  turbo_sleep_ms((uint32_t)milliseconds);
-}
+static void sleep_ms(int milliseconds) { turbo_sleep_ms((uint32_t)milliseconds); }
 
 /* ============================================================================
  * Streaming API
@@ -2565,9 +2563,7 @@ http_response_t *http_post_json_object(http_client_t *client, const char *url,
  * ========================================================================= */
 
 /* Get current time in seconds - uses platform abstraction */
-static double get_time_seconds(void) {
-  return (double)turbo_monotonic_ms() / 1000.0;
-}
+static double get_time_seconds(void) { return (double)turbo_monotonic_ms() / 1000.0; }
 
 void http_client_set_rate_limit(http_client_t *client, const http_rate_limit_t *limit) {
   if (!client || !limit)

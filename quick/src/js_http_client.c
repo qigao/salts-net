@@ -141,14 +141,14 @@ static JSValue js_http_request_internal(JSContext *ctx, int method, const char *
     return js_http_response_to_js(ctx, response);
 }
 
-static JSValue js_http_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_http_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *url = JS_ToCString(ctx, argv[0]);
     JSValue res = js_http_request_internal(ctx, HTTP_GET, url, (argc > 1) ? argv[1] : JS_UNDEFINED);
     JS_FreeCString(ctx, url);
     return res;
 }
 
-static JSValue js_http_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_http_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *url = JS_ToCString(ctx, argv[0]);
     JSValue options = JS_NewObject(ctx);
     if (argc > 1) JS_SetPropertyStr(ctx, options, "body", JS_DupValue(ctx, argv[1]));
@@ -163,7 +163,7 @@ static JSValue js_http_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return res;
 }
 
-static JSValue js_http_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_http_request(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "http.request requires method and url");
     const char *method_str = JS_ToCString(ctx, argv[0]);
     const char *url = JS_ToCString(ctx, argv[1]);

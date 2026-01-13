@@ -5,6 +5,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 static JSUVTestEnv env;
 
@@ -41,16 +46,24 @@ static const char *dup_string_global(const char *name) {
 
 void test_process_spawn_returns_exit_code(void) {
     js_uv_test_eval(&env,
-                    "globalThis.procExit = -999;\n"
-                    "globalThis.procStdout = null;\n"
-                    "uv.proc.spawn({ file: 'cmd.exe', args: ['cmd.exe', '/C', 'echo.'] })\n"
+                    "var procExit = -999;\n"
+                    "var procStdout = null;\n"
+                    "turbo.proc.spawn({ file: 'cmd.exe', args: ['cmd.exe', '/C', 'echo.'] })\n"
                     "  .then((res) => {\n"
-                    "    globalThis.procExit = res.exitCode;\n"
-                    "    globalThis.procStdout = res.stdout;\n"
+                    "    procExit = res.exitCode;\n"
+                    "    procStdout = res.stdout;\n"
                     "  })\n"
-                    "  .catch(() => { globalThis.procExit = -1; });\n");
-    uv_sleep(100);
-    js_uv_test_run_loop(&env);
+                    "  .catch((e) => { procExit = -1; });\n");
+
+    // Run the event loop until the process completes (max 50 iterations)
+    for (int i = 0; i < 50 && get_int_global("procExit") == -999; i++) {
+        js_uv_test_run_loop(&env);
+#ifdef _WIN32
+        Sleep(10);
+#else
+        usleep(10000);
+#endif
+    }
 
     TEST_ASSERT_EQUAL_INT(0, get_int_global("procExit"));
     const char *stdout_str = dup_string_global("procStdout");

@@ -20,7 +20,7 @@ find_package(OpenSSL REQUIRED)
 
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboNet::Common TurboNet::Core OpenSSL::Crypto
+  PUBLIC TurboNet::Utils TurboNet::Core OpenSSL::Crypto
   PRIVATE TurboNet::Asn1Parser)
 
 set_target_properties(

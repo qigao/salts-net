@@ -25,7 +25,7 @@ target_include_directories(log_pattern_lexer
 
 # Set target properties
 set_target_properties(log_pattern_lexer PROPERTIES
-  FOLDER "common/parser"
+  FOLDER "utils/parser"
   OUTPUT_NAME "log_pattern_lexer"
 )
 
@@ -68,7 +68,7 @@ target_include_directories(fmt_lexer
 
 # Set target properties
 set_target_properties(fmt_lexer PROPERTIES
-  FOLDER "common/parser"
+  FOLDER "utils/parser"
   OUTPUT_NAME "fmt_lexer"
 )
 

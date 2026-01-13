@@ -32,7 +32,7 @@ add_sanitizers(${TARGET_NAME})
 # Link libraries
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC OpenSSL::SSL OpenSSL::Crypto libuv::uv TurboNet::Common
+  PUBLIC OpenSSL::SSL OpenSSL::Crypto libuv::uv TurboNet::Utils
          TurboNet::Parser
   PRIVATE kcp::kcp Threads::Threads llhttp::llhttp_static PkgConfig::STC
           TurboNet::WebSocketParser)

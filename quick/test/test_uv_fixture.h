@@ -27,6 +27,8 @@ static inline void js_turbo_test_env_init(JSTurboTestEnv* env)
 static inline void js_turbo_test_env_cleanup(JSTurboTestEnv* env)
 {
   if (env->ctx) {
+    // Run GC to finalize any remaining objects before freeing context
+    JS_RunGC(env->rt);
     JS_FreeContext(env->ctx);
     env->ctx = NULL;
   }

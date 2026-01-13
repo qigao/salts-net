@@ -4,17 +4,23 @@
  */
 #include "js_internal.h"
 #include "turbo_logger.h"
+#include <uv.h>
 #include <stdlib.h>
 #include <string.h>
 
 static JSClassID js_turbo_context_class_id = 0;
 
 static void js_turbo_context_finalizer(JSRuntime *rt, JSValue val) {
+    (void)rt;
     JSTurboContextState *state = JS_GetOpaque(val, js_turbo_context_class_id);
     if (state) {
         js_turbo_cleanup_timers(state);
         if (state->http_client) {
             http_client_destroy(state->http_client);
+        }
+        if (state->loop) {
+            uv_loop_close((uv_loop_t *)state->loop);
+            free(state->loop);
         }
         free(state);
     }
@@ -38,7 +44,18 @@ int js_turbo_init_state(JSContext *ctx) {
     state->http_client = http_client_create();
     state->next_timer_id = 1;
 
+    // Initialize event loop for async operations
+    state->loop = malloc(sizeof(uv_loop_t));
+    if (!state->loop || uv_loop_init((uv_loop_t *)state->loop) != 0) {
+        if (state->loop) free(state->loop);
+        if (state->http_client) http_client_destroy(state->http_client);
+        free(state);
+        return -1;
+    }
+
     if (!state->http_client) {
+        uv_loop_close((uv_loop_t *)state->loop);
+        free(state->loop);
         free(state);
         return -1;
     }
@@ -46,6 +63,8 @@ int js_turbo_init_state(JSContext *ctx) {
     JSValue obj = JS_NewObjectClass(ctx, js_turbo_context_class_id);
     if (JS_IsException(obj)) {
         http_client_destroy(state->http_client);
+        uv_loop_close((uv_loop_t *)state->loop);
+        free(state->loop);
         free(state);
         return -1;
     }

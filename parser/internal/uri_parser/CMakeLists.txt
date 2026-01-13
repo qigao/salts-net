@@ -30,7 +30,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include/turbo/common>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
-target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Common)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
  
 
 set_target_properties(

@@ -42,62 +42,41 @@ add_custom_command(
 # HTTP Library Sources
 # =============================================================================
 
-set(HTTP_SOURCES
-    src/http_client.c
-    src/cookie_parser.c
-    ${COOKIE_LEXER_GEN}
-    ${COOKIE_GRAMMAR_GEN}
-)
+set(HTTP_SOURCES src/http_client.c src/cookie_parser.c ${COOKIE_LEXER_GEN}
+                 ${COOKIE_GRAMMAR_GEN})
 
-set(HTTP_HEADERS
-    include/http_client.h
-    include/cookie_parser.h
-    include/cookie_jar.h
-    ${COOKIE_GRAMMAR_H}
-)
+set(HTTP_HEADERS include/http_client.h include/cookie_parser.h
+                 include/cookie_jar.h ${COOKIE_GRAMMAR_H})
 
 # =============================================================================
 # Create HTTP Library
 # =============================================================================
 
-add_library(http_client ${HTTP_SOURCES} ${HTTP_HEADERS})
+add_library(http_client SHARED ${HTTP_SOURCES} ${HTTP_HEADERS})
 add_library(TurboNet::HttpClient ALIAS http_client)
-
+# DLL export macro - matches pattern from other TurboNet libraries
+target_compile_definitions(http_client PRIVATE SHARED_CXX)
 # Include directories
-target_include_directories(http_client
-    PUBLIC 
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-        $<INSTALL_INTERFACE:include>
-        $<INSTALL_INTERFACE:include/turbo/http>
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
+target_include_directories(
+  http_client
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/turbo/http>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 
 # Link dependencies
-target_link_libraries(http_client
-    PUBLIC
-        TurboNet::Common
-        TurboNet::Core
-    PRIVATE
-        llhttp::llhttp_static
-        libuv::uv
-)
-
-# Compiler definitions
-target_compile_definitions(http_client
-    PRIVATE
-        $<$<CONFIG:Debug>:HTTP_DEBUG>
-)
+target_link_libraries(
+  http_client
+  PUBLIC TurboNet::Utils TurboNet::Core libuv::uv
+  PRIVATE llhttp::llhttp_static)
 
 # Set properties
-set_target_properties(http_client PROPERTIES 
-    FOLDER http/http_client
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-    EXPORT_NAME HTTP
-)
+set_target_properties(
+  http_client
+  PROPERTIES FOLDER http/http_client
+             VERSION ${PROJECT_VERSION}
+             SOVERSION ${PROJECT_VERSION_MAJOR}
+             EXPORT_NAME HTTP)
 
 # Tests
 if(ENABLE_TESTS)
@@ -105,13 +84,11 @@ if(ENABLE_TESTS)
 endif()
 
 # Installation
-install(TARGETS http_client
-    EXPORT TurboNetTargets
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-)
+install(
+  TARGETS http_client
+  EXPORT TurboNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
 
-install(FILES ${HTTP_HEADERS}
-    DESTINATION include/turbo/http
-)
+install(FILES ${HTTP_HEADERS} DESTINATION include/turbo/http)

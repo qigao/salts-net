@@ -1,4 +1,4 @@
-set(TARGET_NAME TurboCommon)
+set(TARGET_NAME turbo_utils)
 find_package(Stb REQUIRED)
 
 # Add parser subdirectory first (generates lexer)
@@ -10,7 +10,7 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
      ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*  )
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 # Public alias
-add_library(TurboNet::Common ALIAS ${TARGET_NAME})
+add_library(TurboNet::Utils ALIAS ${TARGET_NAME})
 
 # Include directories
 target_include_directories(
@@ -37,10 +37,10 @@ target_link_libraries(
 # Set target properties
 set_target_properties(
   ${TARGET_NAME}
-  PROPERTIES FOLDER "common"
+  PROPERTIES FOLDER "utils"
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME Common)
+             EXPORT_NAME Utils)
 
 add_sanitizers(${TARGET_NAME})
 

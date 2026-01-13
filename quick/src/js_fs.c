@@ -14,7 +14,8 @@
 #include <dirent.h>
 #endif
 
-static JSValue js_fs_stat(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_stat(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc;
     const char *path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
 
@@ -33,7 +34,8 @@ static JSValue js_fs_stat(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return obj;
 }
 
-static JSValue js_fs_read_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_read_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
     const char *path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
 
@@ -61,7 +63,8 @@ static JSValue js_fs_read_file(JSContext *ctx, JSValueConst this_val, int argc, 
     return res;
 }
 
-static JSValue js_fs_write_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_write_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc;
     const char *path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
 
@@ -81,7 +84,7 @@ static JSValue js_fs_write_file(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_NewBool(ctx, rc == 0);
 }
 
-static JSValue js_fs_read_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_read_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSValue content = js_fs_read_file(ctx, this_val, argc, argv);
     if (JS_IsException(content) || JS_IsNull(content)) return content;
 
@@ -94,7 +97,7 @@ static JSValue js_fs_read_json(JSContext *ctx, JSValueConst this_val, int argc, 
     return res;
 }
 
-static JSValue js_fs_write_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_write_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc < 2) return JS_EXCEPTION;
     JSValue str = JS_JSONStringify(ctx, argv[1], JS_UNDEFINED, JS_UNDEFINED);
     if (JS_IsException(str)) return str;
@@ -106,7 +109,8 @@ static JSValue js_fs_write_json(JSContext *ctx, JSValueConst this_val, int argc,
     return res;
 }
 
-static JSValue js_fs_readdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_readdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc;
     const char *path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
 
@@ -150,7 +154,7 @@ static JSValue js_fs_readdir(JSContext *ctx, JSValueConst this_val, int argc, JS
     return arr;
 }
 
-static JSValue js_fs_join(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_join(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     char result[TURBO_FS_MAX_PATH] = {0};
     char current[TURBO_FS_MAX_PATH] = {0};
     
@@ -170,7 +174,7 @@ static JSValue js_fs_join(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return JS_NewString(ctx, result);
 }
 
-static JSValue js_fs_mkdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+JSValue js_fs_mkdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
 

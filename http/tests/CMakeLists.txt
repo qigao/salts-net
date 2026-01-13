@@ -15,9 +15,7 @@ set(HTTP_TESTS
 
 foreach(test_name ${HTTP_TESTS})
   add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboHTTP unity)
-  target_include_directories(${test_name}
-                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient unity)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
   
   # Platform-specific fixes

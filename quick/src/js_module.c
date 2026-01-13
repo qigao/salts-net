@@ -4,6 +4,7 @@
  */
 #include "js_internal.h"
 #include "turbo_logger.h"
+#include <uv.h>
 #include <stdlib.h>
 
 /* Forward declarations of registration functions */
@@ -11,7 +12,13 @@ extern int js_turbo_register_timers(JSContext *ctx, JSValue turbo_obj);
 extern int js_turbo_register_fs(JSContext *ctx, JSValue turbo_obj);
 extern int js_turbo_register_dns(JSContext *ctx, JSValue turbo_obj);
 extern int js_turbo_register_http(JSContext *ctx, JSValue turbo_obj);
+extern int js_turbo_register_utils(JSContext *ctx, JSValue turbo_obj);
+extern int js_turbo_register_net(JSContext *ctx, JSValue turbo_obj);
+extern int js_turbo_register_os(JSContext *ctx, JSValue turbo_obj);
+extern int js_turbo_register_signal(JSContext *ctx, JSValue turbo_obj);
+extern int js_turbo_register_proc(JSContext *ctx, JSValue turbo_obj);
 extern int js_init_string_utils_module(JSContext *ctx);
+extern void js_turbo_init_module_loader(JSContext *ctx);
 
 /**
  * @brief Initialize all JS modules for a given context.
@@ -22,9 +29,12 @@ int js_init_turbo_module(JSContext *ctx) {
     /* Initialize context-specific state */
     if (js_turbo_init_state(ctx) < 0) return -1;
 
+    /* Initialize ES6 module loader for dynamic imports */
+    js_turbo_init_module_loader(ctx);
+
     JSValue global_obj = JS_GetGlobalObject(ctx);
     JSValue turbo_obj = JS_NewObject(ctx);
-    
+
     if (JS_IsException(turbo_obj)) {
         JS_FreeValue(ctx, global_obj);
         return -1;
@@ -35,10 +45,15 @@ int js_init_turbo_module(JSContext *ctx) {
     js_turbo_register_fs(ctx, turbo_obj);
     js_turbo_register_dns(ctx, turbo_obj);
     js_turbo_register_http(ctx, turbo_obj);
+    js_turbo_register_utils(ctx, turbo_obj);
+    js_turbo_register_net(ctx, turbo_obj);
+    js_turbo_register_os(ctx, turbo_obj);
+    js_turbo_register_signal(ctx, turbo_obj);
+    js_turbo_register_proc(ctx, turbo_obj);
 
     /* Attach 'turbo' object to global scope */
     JS_SetPropertyStr(ctx, global_obj, "turbo", turbo_obj);
-    
+
     /* Initialize other standalone modules */
     js_init_string_utils_module(ctx);
 
@@ -52,7 +67,7 @@ int js_init_turbo_module(JSContext *ctx) {
 void js_turbo_process_events(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
     JSContext *pctx;
-    
+
     // Process JavaScript job queue
     int ret;
     for (;;) {
@@ -64,7 +79,13 @@ void js_turbo_process_events(JSContext *ctx) {
             break;
         }
     }
-    
+
+    // Process libuv event loop (non-blocking)
+    JSTurboContextState *state = js_turbo_get_state(ctx);
+    if (state && state->loop) {
+        uv_run((uv_loop_t *)state->loop, UV_RUN_NOWAIT);
+    }
+
     // Process timers
     js_turbo_process_timers(ctx);
 }

@@ -30,7 +30,7 @@ target_include_directories(${TARGET_NAME}
 # - uri_parser for backward compatibility (uri.h includes uri_parser.h)
 target_link_libraries(${TARGET_NAME}
     PUBLIC
-        TurboNet::Common
+        TurboNet::Utils
         TurboNet::UriParser
 )
 

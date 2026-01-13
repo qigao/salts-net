@@ -38,12 +38,12 @@ static JSValue get_global(const char *name) {
 
 void test_os_queries_return_values(void) {
     js_uv_test_eval(&env,
-                    "const os = uv.os;\n"
-                    "globalThis.osHostname = os.hostname();\n"
-                    "globalThis.osHomedir = os.homedir();\n"
-                    "globalThis.osTmpdir = os.tmpdir();\n"
-                    "globalThis.osUptime = os.uptime();\n"
-                    "globalThis.osLoad = os.loadavg();\n");
+                    "var os = turbo.os;\n"
+                    "var osHostname = os.hostname();\n"
+                    "var osHomedir = os.homedir();\n"
+                    "var osTmpdir = os.tmpdir();\n"
+                    "var osUptime = os.uptime();\n"
+                    "var osLoad = os.loadavg();\n");
 
     JSValue hostname = get_global("osHostname");
     char *hostname_str = dup_string(hostname);

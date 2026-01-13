@@ -28,6 +28,7 @@ typedef struct JSTurboContextState {
     http_client_t *http_client;
     JSTimer *timer_head;
     uint32_t next_timer_id;
+    void *loop;  // libuv event loop for async operations
 } JSTurboContextState;
 
 int js_turbo_init_state(JSContext *ctx);

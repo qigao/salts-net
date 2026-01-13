@@ -23,11 +23,11 @@ static int32_t get_int_global(const char *name) {
 
 void test_dns_resolve_localhost(void) {
     js_turbo_test_eval(&env,
-                    "globalThis.dnsResult = '';\n"
+                    "var dnsResult = '';\n"
                     "try {\n"
-                    "  globalThis.dnsResult = turbo.dns.resolve('localhost');\n"
+                    "  dnsResult = turbo.dns.resolve('localhost');\n"
                     "} catch (err) {\n"
-                    "  globalThis.dnsResult = 'error';\n"
+                    "  dnsResult = 'error';\n"
                     "}\n");
     
     JSValue prop = js_turbo_test_global_prop(&env, "dnsResult");

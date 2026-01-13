@@ -124,13 +124,13 @@ void test_fs_write_and_read_file(void) {
   char script[2048];
   snprintf(script, sizeof(script),
            "const fs = turbo.fs;\n"
-           "globalThis.fsResult = null;\n"
+           "var fsResult = null;\n"
            "try {\n"
            "  fs.writeFile(\"%s\", \"unity_file_data\");\n"
            "  const data = fs.readFile(\"%s\");\n"
-           "  globalThis.fsResult = data;\n"
+           "  var fsResult = data;\n"
            "} catch (err) {\n"
-           "  globalThis.fsResult = 'ERROR:' + err.message;\n"
+           "  var fsResult = 'ERROR:' + err.message;\n"
            "}\n",
            literal, literal);
   js_turbo_test_eval(&env, script);
@@ -156,12 +156,12 @@ void test_fs_stat_reports_file(void) {
   char script[1024];
   snprintf(script, sizeof(script),
            "const fs = turbo.fs;\n"
-           "globalThis.statResult = null;\n"
+           "var statResult = null;\n"
            "try {\n"
            "  const info = fs.stat(\"%s\");\n"
-           "  globalThis.statResult = info ? info.isFile : false;\n"
+           "  var statResult = info ? info.isFile : false;\n"
            "} catch (err) {\n"
-           "  globalThis.statResult = false;\n"
+           "  var statResult = false;\n"
            "}\n",
            literal);
   js_turbo_test_eval(&env, script);
@@ -196,12 +196,12 @@ void test_fs_readdir_lists_file(void) {
   char script[2048];
   snprintf(script, sizeof(script),
            "const fs = turbo.fs;\n"
-           "globalThis.dirResult = null;\n"
+           "var dirResult = null;\n"
            "try {\n"
            "  const entries = fs.readdir(\"%s\");\n"
-           "  globalThis.dirResult = entries.sort().join(\",\");\n"
+           "  var dirResult = entries.sort().join(\",\");\n"
            "} catch (err) {\n"
-           "  globalThis.dirResult = 'ERROR:' + err.message;\n"
+           "  var dirResult = 'ERROR:' + err.message;\n"
            "}\n",
            literal);
   js_turbo_test_eval(&env, script);

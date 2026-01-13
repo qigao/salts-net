@@ -50,7 +50,7 @@ set_target_properties(
 # Link libraries first - vcpkg style
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC libuv::uv OpenSSL::SSL OpenSSL::Crypto TurboNet::Common
+  PUBLIC libuv::uv OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils
   PRIVATE llhttp::llhttp_static
           cjson
           kcp::kcp

@@ -17,31 +17,31 @@
 // High-level parsing function
 http_cookie_t *parse_set_cookie_rfc(const char *set_cookie_value) {
     if (!set_cookie_value) return NULL;
-    
+
     cookie_lexer_t lexer;
     cookie_parser_context_t ctx = {0};
-    
+
     cookie_lexer_init(&lexer, set_cookie_value);
-    
-    void *parser = ParseAlloc(malloc);
+
+    void *parser = CookieParseAlloc(malloc);
     if (!parser) return NULL;
-    
+
     cookie_token_t token;
     while (cookie_lexer_next(&lexer, &token) != COOKIE_EOF) {
-        Parse(parser, token.type, &token, &ctx);
+        CookieParse(parser, token.type, &token, &ctx);
         if (ctx.error) {
             cookie_token_free(&token);
             break;
         }
         // Don't free token here - parser takes ownership
     }
-    
+
     // Signal end of input
-    Parse(parser, 0, NULL, &ctx);
-    
-    ParseFree(parser, free);
+    CookieParse(parser, 0, NULL, &ctx);
+
+    CookieParseFree(parser, free);
     cookie_lexer_cleanup(&lexer);
-    
+
     return ctx.error ? NULL : ctx.result;
 }
 

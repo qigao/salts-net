@@ -39,10 +39,10 @@ static int get_bool_global(const char *name) {
 
 void test_signal_watch_and_stop_closes_handle(void) {
     js_uv_test_eval(&env,
-                    "globalThis.signalStatus = 'pending';\n"
-                    "globalThis.signalClosed = false;\n"
-                    "const watcher = uv.signal.watch(2, () => { globalThis.signalStatus = 'fired'; });\n"
-                    "watcher.onClose(() => { globalThis.signalClosed = true; });\n"
+                    "var signalStatus = 'pending';\n"
+                    "var signalClosed = false;\n"
+                    "var watcher = turbo.signal.watch(2, () => { signalStatus = 'fired'; });\n"
+                    "watcher.onClose(() => { signalClosed = true; });\n"
                     "watcher.stop();\n");
     js_uv_test_run_loop(&env);
 
@@ -50,6 +50,9 @@ void test_signal_watch_and_stop_closes_handle(void) {
     TEST_ASSERT_EQUAL_STRING("pending", status);
     free(status);
     TEST_ASSERT_NOT_EQUAL(0, get_bool_global("signalClosed"));
+
+    // Clean up the watcher reference
+    js_uv_test_eval(&env, "watcher = null;\n");
 }
 
 int main(void) {

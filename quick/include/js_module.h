@@ -1,0 +1,58 @@
+#pragma once
+
+#include "quickjs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// DLL export/import macros
+#ifdef _WIN32
+    #ifdef TURBO_QUICK_BUILDING
+        #define TURBO_QUICK_API __declspec(dllexport)
+    #else
+        #define TURBO_QUICK_API __declspec(dllimport)
+    #endif
+#else
+    #ifdef TURBO_QUICK_BUILDING
+        #define TURBO_QUICK_API __attribute__((visibility("default")))
+    #else
+        #define TURBO_QUICK_API
+    #endif
+#endif
+
+/**
+ * Initialize TurboNet modules for a QuickJS context.
+ *
+ * This registers the global 'turbo' object with all sub-modules:
+ *   turbo.dns, turbo.fs, turbo.http, turbo.timers
+ *
+ * Also sets up the ES6 module loader for dynamic imports:
+ *   import dns from 'turbo:dns'
+ *   import { readFile } from 'turbo:fs'
+ */
+TURBO_QUICK_API int js_init_turbo_module(JSContext *ctx);
+
+/**
+ * Initialize only the ES6 module loader without global 'turbo' object.
+ *
+ * Use this if you prefer ES6 imports over global object:
+ *   import dns from 'turbo:dns'
+ *   import fs from 'turbo:fs'
+ *   import http from 'turbo:http'
+ *   import timers from 'turbo:timers'
+ */
+TURBO_QUICK_API void js_turbo_init_module_loader(JSContext *ctx);
+
+/**
+ * Process pending JavaScript jobs and network events.
+ *
+ * Call this in your event loop to process:
+ *   - QuickJS job queue (promises, async functions)
+ *   - libuv events (DNS, timers, network I/O)
+ */
+TURBO_QUICK_API void js_turbo_process_events(JSContext *ctx);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif

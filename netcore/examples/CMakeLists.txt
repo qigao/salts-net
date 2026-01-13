@@ -17,7 +17,7 @@ foreach(test_source ${EXTRA_SOURCES})
 
     # Special case: programs using DNS resolution
     if(test_name STREQUAL "test_tls_simple")
-        target_link_libraries(${test_name} PRIVATE TurboNet::Common)
+        target_link_libraries(${test_name} PRIVATE TurboNet::Utils)
     endif()
 
     # Special case: programs using Ed25519 certificate generation

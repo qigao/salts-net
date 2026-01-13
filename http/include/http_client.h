@@ -2,7 +2,7 @@
 #define HTTP_CLIENT_H
 
 #include <stdint.h>
-#include <common/platform.h>
+#include <platform.h>
 #include <turbo_parser.h>
 
 #ifdef __cplusplus

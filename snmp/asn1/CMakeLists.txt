@@ -91,7 +91,7 @@ target_include_directories(
 
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboNet::Common OpenSSL::Crypto
+  PUBLIC TurboNet::Utils OpenSSL::Crypto
   PRIVATE monocypher)
 
 set_target_properties(

@@ -9,6 +9,8 @@
 #include "platform.h"
 // clang-format on
 #include "base64_utils.h"
+#include "cookie_parser.h"
+#include "cookie_jar.h"
 #include <stb_sprintf.h>
 
 #define HTTP_REQUEST_POOL_SIZE (1024 * 1024) // 1MB pool for request lifecycle
@@ -117,22 +119,8 @@ struct http_params_s {
   int count;
 };
 
-/* Cookie structure */
-typedef struct http_cookie_s {
-  char *name;
-  char *value;
-  char *domain;
-  char *path;
-  int secure;
-  int http_only;
-  struct http_cookie_s *next;
-} http_cookie_t;
-
-/* Cookie jar structure */
-struct http_cookie_jar_s {
-  http_cookie_t *cookies;
-  int count;
-};
+/* Enhanced cookie structure - now using the new parser structures */
+typedef http_cookie_t http_cookie_enhanced_t;
 
 /* Multipart form part */
 typedef struct http_multipart_part_s {
@@ -586,9 +574,9 @@ static int establish_connection(http_client_t *client, const char *host, int por
   return 0;
 }
 
-/* Forward declarations for cookie functions */
-static void parse_set_cookie(http_cookie_jar_t *jar, const char *set_cookie_value);
-static char *build_cookie_header(http_cookie_jar_t *jar);
+/* Forward declarations for enhanced cookie functions */
+static void parse_set_cookie_enhanced(http_cookie_jar_t *jar, const char *set_cookie_value);
+static char *build_cookie_header_enhanced(http_cookie_jar_t *jar, const char *url);
 
 /* Forward declarations for retry functions */
 static void sleep_ms(int milliseconds);
@@ -667,8 +655,8 @@ static void extract_response_cookies(http_client_t *client, http_response_t *res
       memcpy(cookie_value, p, len);
       cookie_value[len] = '\0';
 
-      /* Parse and store cookie */
-      parse_set_cookie(client->cookie_jar, cookie_value);
+      /* Parse and store cookie using enhanced parser */
+      parse_set_cookie_enhanced(client->cookie_jar, cookie_value);
       free(cookie_value);
 
       p = end;
@@ -893,7 +881,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   // Add cookies if jar is set
   char *cookie_header = NULL;
   if (client->cookie_jar) {
-    cookie_header = build_cookie_header(client->cookie_jar);
+    cookie_header = build_cookie_header_enhanced(client->cookie_jar, full_url);
     if (cookie_header) {
       /* Copy to pool for automatic cleanup */
       char *pool_cookie = pool_strdup(pool, cookie_header);
@@ -1701,6 +1689,9 @@ http_response_t *http_post_form(http_client_t *client, const char *url, http_par
 
 http_cookie_jar_t *http_cookie_jar_create(void) {
   http_cookie_jar_t *jar = calloc(1, sizeof(http_cookie_jar_t));
+  if (jar) {
+    jar->last_cleanup = time(NULL);
+  }
   return jar;
 }
 
@@ -1711,11 +1702,7 @@ void http_cookie_jar_destroy(http_cookie_jar_t *jar) {
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     http_cookie_t *next = cookie->next;
-    free(cookie->name);
-    free(cookie->value);
-    free(cookie->domain);
-    free(cookie->path);
-    free(cookie);
+    http_cookie_free(cookie); // Use the enhanced free function
     cookie = next;
   }
 
@@ -1726,7 +1713,7 @@ void http_cookie_jar_set(http_cookie_jar_t *jar, const char *name, const char *v
   if (!jar || !name || !value)
     return;
 
-  /* Check if cookie already exists */
+  /* Check if cookie already exists and update it */
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     if (strcmp(cookie->name, name) == 0) {
@@ -1738,13 +1725,11 @@ void http_cookie_jar_set(http_cookie_jar_t *jar, const char *name, const char *v
     cookie = cookie->next;
   }
 
-  /* Add new cookie */
-  cookie = calloc(1, sizeof(http_cookie_t));
+  /* Add new cookie using enhanced creation */
+  cookie = http_cookie_create_normalized(name, value, NULL, NULL);
   if (!cookie)
     return;
 
-  cookie->name = strdup(name);
-  cookie->value = strdup(value);
   cookie->next = jar->cookies;
   jar->cookies = cookie;
   jar->count++;
@@ -1775,11 +1760,7 @@ void http_cookie_jar_remove(http_cookie_jar_t *jar, const char *name) {
   while (cookie) {
     if (strcmp(cookie->name, name) == 0) {
       *prev = cookie->next;
-      free(cookie->name);
-      free(cookie->value);
-      free(cookie->domain);
-      free(cookie->path);
-      free(cookie);
+      http_cookie_free(cookie); // Use enhanced free function
       jar->count--;
       return;
     }
@@ -1795,11 +1776,7 @@ void http_cookie_jar_clear(http_cookie_jar_t *jar) {
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     http_cookie_t *next = cookie->next;
-    free(cookie->name);
-    free(cookie->value);
-    free(cookie->domain);
-    free(cookie->path);
-    free(cookie);
+    http_cookie_free(cookie); // Use enhanced free function
     cookie = next;
   }
 
@@ -1819,66 +1796,78 @@ http_cookie_jar_t *http_client_get_cookie_jar(http_client_t *client) {
   return client ? client->cookie_jar : NULL;
 }
 
-/* Parse Set-Cookie header and add to jar */
-static void parse_set_cookie(http_cookie_jar_t *jar, const char *set_cookie_value) {
+/* Enhanced Set-Cookie parsing using re2c+lemon parser */
+static void parse_set_cookie_enhanced(http_cookie_jar_t *jar, const char *set_cookie_value) {
   if (!jar || !set_cookie_value)
     return;
 
-  /* Simple parser: name=value; other-attributes */
-  const char *equals = strchr(set_cookie_value, '=');
-  if (!equals)
+  /* Use the RFC-compliant parser */
+  http_cookie_t *cookie = parse_set_cookie_rfc(set_cookie_value);
+  if (!cookie)
     return;
 
-  /* Extract name */
-  size_t name_len = equals - set_cookie_value;
-  char *name = malloc(name_len + 1);
-  memcpy(name, set_cookie_value, name_len);
-  name[name_len] = '\0';
+  /* Check if cookie already exists and replace it */
+  http_cookie_t **prev = &jar->cookies;
+  http_cookie_t *existing = jar->cookies;
 
-  /* Trim whitespace from name */
-  while (name_len > 0 && (name[name_len - 1] == ' ' || name[name_len - 1] == '\t')) {
-    name[--name_len] = '\0';
+  while (existing) {
+    if (strcmp(existing->name, cookie->name) == 0) {
+      /* Check domain and path matching for replacement */
+      int domain_match = (!existing->domain && !cookie->domain) ||
+                        (existing->domain && cookie->domain && 
+                         strcmp(existing->domain, cookie->domain) == 0);
+      int path_match = (!existing->path && !cookie->path) ||
+                      (existing->path && cookie->path && 
+                       strcmp(existing->path, cookie->path) == 0);
+      
+      if (domain_match && path_match) {
+        /* Replace existing cookie */
+        *prev = existing->next;
+        http_cookie_free(existing);
+        jar->count--;
+        break;
+      }
+    }
+    prev = &existing->next;
+    existing = existing->next;
   }
 
-  /* Extract value (up to semicolon or end) */
-  const char *value_start = equals + 1;
-  const char *semicolon = strchr(value_start, ';');
-  size_t value_len = semicolon ? (size_t)(semicolon - value_start) : strlen(value_start);
+  /* Add new cookie to jar */
+  cookie->next = jar->cookies;
+  jar->cookies = cookie;
+  jar->count++;
 
-  char *value = malloc(value_len + 1);
-  memcpy(value, value_start, value_len);
-  value[value_len] = '\0';
-
-  /* Trim whitespace from value */
-  while (value_len > 0 && (value[value_len - 1] == ' ' || value[value_len - 1] == '\t')) {
-    value[--value_len] = '\0';
+  /* Periodic cleanup of expired cookies */
+  time_t now = time(NULL);
+  if (now - jar->last_cleanup > 3600) { // Cleanup every hour
+    http_cookie_jar_cleanup_expired(jar);
+    jar->last_cleanup = now;
   }
-
-  /* Add to jar */
-  http_cookie_jar_set(jar, name, value);
-
-  free(name);
-  free(value);
 }
 
-/* Build Cookie header from jar */
-static char *build_cookie_header(http_cookie_jar_t *jar) {
-  if (!jar || !jar->cookies)
+/* Enhanced Cookie header building with URL-based filtering */
+static char *build_cookie_header_enhanced(http_cookie_jar_t *jar, const char *url) {
+  if (!jar || !jar->cookies || !url)
     return NULL;
 
-  /* Calculate required size */
-  size_t size = 0;
+  /* Calculate total size for matching cookies */
+  size_t total_size = 0;
+  int matching_count = 0;
+  
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
-    size += strlen(cookie->name) + strlen(cookie->value) + 3; /* name=value; */
+    if (cookie_matches_request(cookie, url)) {
+      total_size += strlen(cookie->name) + strlen(cookie->value) + 3; /* name=value; */
+      matching_count++;
+    }
     cookie = cookie->next;
   }
 
-  if (size == 0)
+  if (matching_count == 0)
     return NULL;
 
   /* Build header */
-  char *header = malloc(size + 10); /* "Cookie: " + size */
+  char *header = malloc(total_size + 10); /* "Cookie: " + size */
   if (!header)
     return NULL;
 
@@ -1888,16 +1877,18 @@ static char *build_cookie_header(http_cookie_jar_t *jar) {
   cookie = jar->cookies;
   int first = 1;
   while (cookie) {
-    if (!first) {
-      *p++ = ';';
-      *p++ = ' ';
+    if (cookie_matches_request(cookie, url)) {
+      if (!first) {
+        *p++ = ';';
+        *p++ = ' ';
+      }
+      strcpy(p, cookie->name);
+      p += strlen(cookie->name);
+      *p++ = '=';
+      strcpy(p, cookie->value);
+      p += strlen(cookie->value);
+      first = 0;
     }
-    strcpy(p, cookie->name);
-    p += strlen(cookie->name);
-    *p++ = '=';
-    strcpy(p, cookie->value);
-    p += strlen(cookie->value);
-    first = 0;
     cookie = cookie->next;
   }
   *p = '\0';

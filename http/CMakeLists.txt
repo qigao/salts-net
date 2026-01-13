@@ -1,71 +1,117 @@
-set(TARGET_NAME http_client)
-find_package(llhttp CONFIG REQUIRED)
-# Synchronous HTTP client library
-add_library(http_client SHARED src/http_client.c src/stb_sprintf.c)
+# HTTP Client Library CMakeLists.txt
+
+cmake_minimum_required(VERSION 3.20)
+
+# =============================================================================
+# re2c Generated Files
+# =============================================================================
+
+set(COOKIE_LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie_lexer.re)
+set(COOKIE_LEXER_GEN ${CMAKE_CURRENT_BINARY_DIR}/cookie_lexer_gen.c)
+
+add_custom_command(
+  OUTPUT ${COOKIE_LEXER_GEN}
+  COMMAND ${RE2C_EXECUTABLE} -o ${COOKIE_LEXER_GEN} ${COOKIE_LEXER_RE}
+  DEPENDS ${COOKIE_LEXER_RE}
+  COMMENT "Generating cookie lexer with re2c"
+  VERBATIM)
+
+# =============================================================================
+# Lemon Generated Files
+# =============================================================================
+
+set(COOKIE_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie_parser.y)
+set(COOKIE_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/cookie_parser_gen.c)
+set(COOKIE_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/cookie_parser_gen.h)
+
+if(NOT LEMPAR)
+  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
+endif()
+
+add_custom_command(
+  OUTPUT ${COOKIE_GRAMMAR_GEN} ${COOKIE_GRAMMAR_H}
+  COMMAND ${CMAKE_COMMAND} -E copy ${COOKIE_GRAMMAR_Y}
+          ${CMAKE_CURRENT_BINARY_DIR}/cookie_parser_gen.y
+  COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR}
+          ${CMAKE_CURRENT_BINARY_DIR}/cookie_parser_gen.y
+  DEPENDS ${COOKIE_GRAMMAR_Y} ${LEMON_DEPENDS}
+  COMMENT "Generating cookie parser with lemon"
+  VERBATIM)
+
+# =============================================================================
+# HTTP Library Sources
+# =============================================================================
+
+set(HTTP_SOURCES
+    src/http_client.c
+    src/cookie_parser.c
+    ${COOKIE_LEXER_GEN}
+    ${COOKIE_GRAMMAR_GEN}
+)
+
+set(HTTP_HEADERS
+    include/http_client.h
+    include/cookie_parser.h
+    include/cookie_jar.h
+    ${COOKIE_GRAMMAR_H}
+)
+
+# =============================================================================
+# Create HTTP Library
+# =============================================================================
+
+add_library(http_client ${HTTP_SOURCES} ${HTTP_HEADERS})
 add_library(TurboNet::HttpClient ALIAS http_client)
-target_compile_definitions(http_client PRIVATE SHARED_CXX)
 
-target_include_directories(
-  http_client
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/turbo>
-  PRIVATE ${Stb_INCLUDE_DIR})
+# Include directories
+target_include_directories(http_client
+    PUBLIC 
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+        $<INSTALL_INTERFACE:include>
+        $<INSTALL_INTERFACE:include/turbo/http>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
+)
 
-target_link_libraries(
-  http_client
-  PUBLIC TurboNet::Core TurboNet::Common TurboNet::Parser
-  PRIVATE llhttp::llhttp_static)
+# Link dependencies
+target_link_libraries(http_client
+    PUBLIC
+        TurboNet::Common
+        TurboNet::Core
+    PRIVATE
+        llhttp::llhttp_static
+        libuv::uv
+)
 
-# Asynchronous HTTP client library
-add_library(http_client_async SHARED src/http_client_async.c src/stb_sprintf.c)
-add_library(TurboNet::HttpClient::Async ALIAS http_client_async)
-target_compile_definitions(http_client_async PRIVATE SHARED_CXX)
+# Compiler definitions
+target_compile_definitions(http_client
+    PRIVATE
+        $<$<CONFIG:Debug>:HTTP_DEBUG>
+)
 
-target_include_directories(
-  http_client_async
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-         $<INSTALL_INTERFACE:include>
-  PRIVATE ${Stb_INCLUDE_DIR} ${LLHTTP_INCLUDE_DIR})
+# Set properties
+set_target_properties(http_client PROPERTIES 
+    FOLDER http/http_client
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    EXPORT_NAME HTTP
+)
 
-target_link_libraries(
-  http_client_async
-  PUBLIC TurboNet::Core TurboNet::Common TurboNet::Parser
-  PRIVATE llhttp::llhttp_static)
-
-# Set target properties
-set_target_properties(
-  ${TARGET_NAME}
-  PROPERTIES FOLDER http
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME HttpClient)
-set_target_properties(
-  http_client_async
-  PROPERTIES FOLDER http
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME HttpClientAsync)
-if(ENABLE_ASAN)
-  add_sanitizers(http_client)
-  add_sanitizers(http_client_async)
-endif()
-# Install
-install(
-  TARGETS http_client
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
-
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/http_client.h
-        DESTINATION include)
-# Examples subdirectory
-if(BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-
-# Tests subdirectory
-if(BUILD_TESTS)
+# Tests
+if(ENABLE_TESTS)
   add_subdirectory(tests)
 endif()
+
+# Installation
+install(TARGETS http_client
+    EXPORT TurboNetTargets
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
+install(FILES ${HTTP_HEADERS}
+    DESTINATION include/turbo/http
+)

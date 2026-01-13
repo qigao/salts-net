@@ -139,8 +139,8 @@ int websocket_handshake_parser_scan(websocket_handshake_parser_t *parser,
     return WEBSOCKET_HANDSHAKE_TOKEN_ERROR;
 
   llhttp_t *http_parser = (llhttp_t *)parser->http_parser;
-  llhttp_settings_t *settings = (llhttp_settings_t *)parser->http_settings;
   llhttp_context_t *ctx = (llhttp_context_t *)parser->http_context;
+  (void)parser->http_settings;
 
   ctx->current_value = value;
 
@@ -300,7 +300,7 @@ int websocket_handshake_is_websocket_request(const websocket_handshake_parser_t 
   if (!conn_lower) return 0;
 
   for (char *p = conn_lower; *p; p++) {
-    *p = tolower((unsigned char)*p);
+    *p = (char)tolower((unsigned char)*p);
   }
 
   int has_upgrade = strstr(conn_lower, "upgrade") != NULL;

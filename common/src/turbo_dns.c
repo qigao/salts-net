@@ -98,8 +98,8 @@ static char g_dns_servers[MAX_DNS_SERVERS][46];
 static int g_dns_count = 0;
 static int g_ares_lib_ref = 0;
 
-static uv_once_t g_dns_init_once = UV_ONCE_INIT;
-static uv_mutex_t g_dns_lock;
+static turbo_once_t g_dns_init_once = TURBO_ONCE_INIT;
+static turbo_mutex_t g_dns_lock;
 static int g_dns_lock_initialized = 0;
 static int g_dns_refcount = 0;
 
@@ -385,7 +385,8 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
 // =============================================================================
 
 static void dns_init_once(void) {
-    if (uv_mutex_init(&g_dns_lock) == 0)
+    turbo_mutex_init(&g_dns_lock);
+    if (g_dns_lock != NULL)
         g_dns_lock_initialized = 1;
 }
 
@@ -440,21 +441,21 @@ static void force_close_cb(uv_handle_t *h, void *arg) {
 // =============================================================================
 
 int turbo_dns_init(void) {
-    uv_once(&g_dns_init_once, dns_init_once);
+    turbo_once(&g_dns_init_once, dns_init_once);
     if (!g_dns_lock_initialized) return UV_EBUSY;
 
-    uv_mutex_lock(&g_dns_lock);
+    turbo_mutex_lock(&g_dns_lock);
     g_dns_refcount++;
-    uv_mutex_unlock(&g_dns_lock);
+    turbo_mutex_unlock(&g_dns_lock);
     return 0;
 }
 
 void turbo_dns_cleanup(void) {
     if (!g_dns_lock_initialized) return;
 
-    uv_mutex_lock(&g_dns_lock);
+    turbo_mutex_lock(&g_dns_lock);
     if (g_dns_refcount > 0) g_dns_refcount--;
-    uv_mutex_unlock(&g_dns_lock);
+    turbo_mutex_unlock(&g_dns_lock);
 }
 
 // =============================================================================

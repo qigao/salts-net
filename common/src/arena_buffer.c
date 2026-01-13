@@ -7,23 +7,21 @@
 #include "stats.h"
  
 
-/* Enhanced arena with zero-copy capabilities and better memory management */
-
 /* Default configuration */
-#ifndef turbo_ARENA_DEFAULT_REGION_SIZE
-  #define turbo_ARENA_DEFAULT_REGION_SIZE (2 * 1024 * 1024) /* 2MB regions */
+#ifndef TURBO_ARENA_DEFAULT_REGION_SIZE
+  #define TURBO_ARENA_DEFAULT_REGION_SIZE (2 * 1024 * 1024) /* 2MB regions */
 #endif
 
-#ifndef turbo_ARENA_MAX_REGIONS
-  #define turbo_ARENA_MAX_REGIONS 64 /* Max regions per arena */
+#ifndef TURBO_ARENA_MAX_REGIONS
+  #define TURBO_ARENA_MAX_REGIONS 64 /* Max regions per arena */
 #endif
 
-#ifndef turbo_ARENA_ALIGNMENT
-  #define turbo_ARENA_ALIGNMENT 16 /* 16-byte alignment for SIMD */
+#ifndef TURBO_ARENA_ALIGNMENT
+  #define TURBO_ARENA_ALIGNMENT 16 /* 16-byte alignment for SIMD */
 #endif
 
-#ifndef turbo_ARENA_RECYCLE_LIMIT
-  #define turbo_ARENA_RECYCLE_LIMIT 1024 /* Max recycled buffers per arena */
+#ifndef TURBO_ARENA_RECYCLE_LIMIT
+  #define TURBO_ARENA_RECYCLE_LIMIT 1024 /* Max recycled buffers per arena */
 #endif
 
 /* Align size to boundary */
@@ -52,7 +50,7 @@ static void free_region_memory(void *ptr, size_t size) {
 
 /* Create new enhanced region */
 static turbo_arena_region_t *create_region(size_t min_size) {
-  size_t region_size = turbo_ARENA_DEFAULT_REGION_SIZE;
+  size_t region_size = TURBO_ARENA_DEFAULT_REGION_SIZE;
   if (min_size > region_size) {
     region_size = align_size(min_size + sizeof(turbo_arena_region_t), 4096);
   }
@@ -145,7 +143,7 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
   memset(arena, 0, sizeof(*arena));
 
   if (initial_size == 0) {
-    initial_size = turbo_ARENA_DEFAULT_REGION_SIZE;
+    initial_size = TURBO_ARENA_DEFAULT_REGION_SIZE;
   }
 
   arena->head = create_region(initial_size);
@@ -156,10 +154,10 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
   arena->region_count = 1;
   arena->total_allocated = arena->head->size;
   arena->total_used = 0;
-  arena->flags = turbo_ARENA_FLAG_AUTO_GROW;
+  arena->flags = TURBO_ARENA_FLAG_AUTO_GROW;
   arena->recycle_head = NULL;
   arena->recycle_count = 0;
-  arena->recycle_limit = turbo_ARENA_RECYCLE_LIMIT;
+  arena->recycle_limit = TURBO_ARENA_RECYCLE_LIMIT;
 
   TURBO_STATS_INC("arena.arenas_created");
 
@@ -171,7 +169,7 @@ void *turbo_arena_alloc(turbo_arena_t *arena, size_t size) {
   if (!arena || size == 0)
     return NULL;
 
-  size = align_size(size, turbo_ARENA_ALIGNMENT);
+  size = align_size(size, TURBO_ARENA_ALIGNMENT);
 
   /* Try current region first */
   turbo_arena_region_t *region = arena->current;
@@ -202,12 +200,12 @@ void *turbo_arena_alloc(turbo_arena_t *arena, size_t size) {
   }
 
   /* Need new region */
-  if (!(arena->flags & turbo_ARENA_FLAG_AUTO_GROW)) {
+  if (!(arena->flags & TURBO_ARENA_FLAG_AUTO_GROW)) {
     TURBO_STATS_INC("arena.allocation_failures");
     return NULL;
   }
 
-  if (arena->region_count >= turbo_ARENA_MAX_REGIONS) {
+  if (arena->region_count >= TURBO_ARENA_MAX_REGIONS) {
     TURBO_STATS_INC("arena.max_regions_exceeded");
     return NULL;
   }
@@ -288,7 +286,7 @@ turbo_arena_buffer_t *turbo_arena_get_buffer(turbo_arena_t *arena,
   if (!arena || min_size == 0)
     return NULL;
 
-  size_t aligned_size = align_size(min_size, turbo_ARENA_ALIGNMENT);
+  size_t aligned_size = align_size(min_size, TURBO_ARENA_ALIGNMENT);
   size_t total_size = sizeof(turbo_arena_buffer_t) + aligned_size;
 
   /* Allocate buffer header + data in one block */

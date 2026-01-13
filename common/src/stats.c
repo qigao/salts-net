@@ -34,22 +34,17 @@ typedef struct stats_update_msg_s {
 #define i_val uint32_t
 #include <stc/hmap.h>
 
-/* Statistics update message (internal) */
-typedef struct turbo_stat_update_s {
-  char name[64];
-  turbo_stat_type_t type;
-  int64_t value;
-  int operation; /* 0=set, 1=add, 2=sub, 3=min, 4=max */
-  struct turbo_stat_update_s *next;
-} turbo_stat_update_t;
+
 
 /* Statistics collector (internal implementation) */
 struct turbo_stats_s {
   uv_loop_t *loop;
   uv_async_t async_handle;
   uv_mutex_t queue_mutex;
+  uv_mutex_t map_mutex;
   uv_timer_t rate_timer;
   int queue_mutex_inited;
+  int map_mutex_inited;
 
   /* Update queue (thread-safe) */
   UpdateQueue update_queue;
@@ -136,6 +131,13 @@ int turbo_stats_init(void *loop, size_t update_pool_size) {
   }
   g_turbo_stats->queue_mutex_inited = 1;
 
+  rc = uv_mutex_init(&g_turbo_stats->map_mutex);
+  if (rc != 0) {
+    turbo_stats_cleanup();
+    return rc;
+  }
+  g_turbo_stats->map_mutex_inited = 1;
+
   /* Initialize async handle */
   rc = uv_async_init(loop, &g_turbo_stats->async_handle, on_async_update);
   if (rc != 0) {
@@ -177,27 +179,46 @@ void turbo_stats_cleanup(void) {
   if (g_turbo_stats->queue_mutex_inited) {
     uv_mutex_destroy(&g_turbo_stats->queue_mutex);
   }
+  if (g_turbo_stats->map_mutex_inited) {
+    uv_mutex_destroy(&g_turbo_stats->map_mutex);
+  }
   free(g_turbo_stats);
   g_turbo_stats = NULL;
-}
+} 
 
 /* --------- Update enqueue helpers (ringbuffer based) --------- */
 
-static int post_update(const char *name, turbo_stat_type_t type, int64_t value, int operation) {
+turbo_stat_id_t turbo_stats_register(const char *name, turbo_stat_type_t type) {
   if (!g_turbo_stats || !g_turbo_stats->initialized)
     return -1;
 
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
   uint32_t slot = UINT32_MAX;
   turbo_stat_entry_t *entry = find_or_create_entry(name, type, &slot);
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
+
   if (!entry)
     return -1;
 
+  return (turbo_stat_id_t)slot;
+}
+
+static int post_update_fast(turbo_stat_id_t id, turbo_stat_type_t type, int64_t value,
+                            int operation) {
+  if (!g_turbo_stats || !g_turbo_stats->initialized)
+    return -1;
+
+  /* Basic safety check on ID */
+  if (id < 0 || (size_t)id >= g_turbo_stats->entry_capacity)
+    return -1;
+
   stats_update_msg_t msg = {
-      .slot = slot, .value = value, .type = (uint8_t)type, .op = (uint8_t)operation};
+      .slot = (uint32_t)id, .value = value, .type = (uint8_t)type, .op = (uint8_t)operation};
 
   uv_mutex_lock(&g_turbo_stats->queue_mutex);
 
-  if (UpdateQueue_size(&g_turbo_stats->update_queue) >= (isize)g_turbo_stats->update_queue_max_size) {
+  if (UpdateQueue_size(&g_turbo_stats->update_queue) >=
+      (isize)g_turbo_stats->update_queue_max_size) {
     uv_mutex_unlock(&g_turbo_stats->queue_mutex);
     return -1; /* drop if full */
   }
@@ -208,9 +229,43 @@ static int post_update(const char *name, turbo_stat_type_t type, int64_t value, 
 
   /* Signal async handler */
   uv_async_send(&g_turbo_stats->async_handle);
-  (void)entry; /* entry is already ensured */
   return 0;
 }
+
+static int post_update(const char *name, turbo_stat_type_t type, int64_t value, int operation) {
+  turbo_stat_id_t id = turbo_stats_register(name, type);
+  if (id < 0)
+    return -1;
+  return post_update_fast(id, type, value, operation);
+}
+
+/* Fast API */
+
+int turbo_stats_counter_add_fast(turbo_stat_id_t id, uint64_t value) {
+  return post_update_fast(id, TURBO_STAT_COUNTER, (int64_t)value, 1);
+}
+
+int turbo_stats_counter_inc_fast(turbo_stat_id_t id) {
+  return post_update_fast(id, TURBO_STAT_COUNTER, 1, 1);
+}
+
+int turbo_stats_gauge_set_fast(turbo_stat_id_t id, int64_t value) {
+  return post_update_fast(id, TURBO_STAT_GAUGE, value, 0);
+}
+
+int turbo_stats_gauge_add_fast(turbo_stat_id_t id, int64_t delta) {
+  return post_update_fast(id, TURBO_STAT_GAUGE, delta, 1);
+}
+
+int turbo_stats_histogram_record_fast(turbo_stat_id_t id, uint64_t value) {
+  return post_update_fast(id, TURBO_STAT_HISTOGRAM, (int64_t)value, 0);
+}
+
+int turbo_stats_rate_record_fast(turbo_stat_id_t id, uint64_t value) {
+  return post_update_fast(id, TURBO_STAT_RATE, (int64_t)value, 0);
+}
+
+/* Legacy String API (now wrappers) */
 
 int turbo_stats_counter_add(const char *name, uint64_t value) {
   return post_update(name, TURBO_STAT_COUNTER, (int64_t)value, 1);
@@ -245,75 +300,89 @@ static void process_update_queue(void) {
   if (!g_turbo_stats)
     return;
 
-  stats_update_msg_t msg;
+  stats_update_msg_t batch[128];
+  size_t batch_count;
 
   for (;;) {
+    /* Pop a batch of updates */
+    batch_count = 0;
     uv_mutex_lock(&g_turbo_stats->queue_mutex);
-    if (UpdateQueue_is_empty(&g_turbo_stats->update_queue)) {
-      uv_mutex_unlock(&g_turbo_stats->queue_mutex);
-      break;
+    while (batch_count < 128 && !UpdateQueue_is_empty(&g_turbo_stats->update_queue)) {
+      batch[batch_count++] = *UpdateQueue_front(&g_turbo_stats->update_queue);
+      UpdateQueue_pop_front(&g_turbo_stats->update_queue);
     }
-    msg = *UpdateQueue_front(&g_turbo_stats->update_queue);
-    UpdateQueue_pop_front(&g_turbo_stats->update_queue);
     uv_mutex_unlock(&g_turbo_stats->queue_mutex);
 
-    if (msg.slot >= g_turbo_stats->entry_capacity ||
-        !bitmap_test(g_turbo_stats->used_bitmap, msg.slot)) {
-      continue; /* stale slot */
+    if (batch_count == 0) {
+      break;
     }
 
-    turbo_stat_entry_t *entry = &g_turbo_stats->entries[msg.slot];
+    /* Process batch under map lock to protect entry data and metadata */
+    uv_mutex_lock(&g_turbo_stats->map_mutex);
+    
+    for (size_t i = 0; i < batch_count; ++i) {
+      stats_update_msg_t *msg = &batch[i];
 
-    switch (entry->type) {
-    case TURBO_STAT_COUNTER:
-      if (msg.op == 1) {
-        entry->data.counter += (uint64_t)msg.value;
-      } else if (msg.op == 0) {
-        entry->data.counter = (uint64_t)msg.value;
+      if (msg->slot >= g_turbo_stats->entry_capacity ||
+          !bitmap_test(g_turbo_stats->used_bitmap, msg->slot)) {
+        continue; /* stale slot */
       }
-      break;
 
-    case TURBO_STAT_GAUGE:
-      if (msg.op == 0) {
-        entry->data.gauge = msg.value;
-      } else if (msg.op == 1) {
-        entry->data.gauge += msg.value;
-      } else if (msg.op == 2) {
-        entry->data.gauge -= msg.value;
-      }
-      break;
+      turbo_stat_entry_t *entry = &g_turbo_stats->entries[msg->slot];
 
-    case TURBO_STAT_HISTOGRAM: {
-      uint64_t v = (uint64_t)msg.value;
-      entry->data.histogram.sum += v;
-      entry->data.histogram.count += 1;
-      if (entry->data.histogram.count == 1) {
-        entry->data.histogram.min = v;
-        entry->data.histogram.max = v;
-      } else {
-        if (v < entry->data.histogram.min)
+      switch (entry->type) {
+      case TURBO_STAT_COUNTER:
+        if (msg->op == 1) {
+          entry->data.counter += (uint64_t)msg->value;
+        } else if (msg->op == 0) {
+          entry->data.counter = (uint64_t)msg->value;
+        }
+        break;
+
+      case TURBO_STAT_GAUGE:
+        if (msg->op == 0) {
+          entry->data.gauge = msg->value;
+        } else if (msg->op == 1) {
+          entry->data.gauge += msg->value;
+        } else if (msg->op == 2) {
+          entry->data.gauge -= msg->value;
+        }
+        break;
+
+      case TURBO_STAT_HISTOGRAM: {
+        uint64_t v = (uint64_t)msg->value;
+        entry->data.histogram.sum += v;
+        entry->data.histogram.count += 1;
+        if (entry->data.histogram.count == 1) {
           entry->data.histogram.min = v;
-        if (v > entry->data.histogram.max)
           entry->data.histogram.max = v;
+        } else {
+          if (v < entry->data.histogram.min)
+            entry->data.histogram.min = v;
+          if (v > entry->data.histogram.max)
+            entry->data.histogram.max = v;
+        }
+        break;
       }
-      break;
-    }
 
-    case TURBO_STAT_RATE: {
-      uint64_t now = get_timestamp_ms();
-      uint64_t delta_time = now - entry->data.rate.last_time;
-      uint64_t delta_value = (uint64_t)msg.value - entry->data.rate.last_value;
-      entry->data.rate.value = (uint64_t)msg.value;
-      entry->data.rate.last_time = now;
-      entry->data.rate.last_value = (uint64_t)msg.value;
-      if (delta_time > 0) {
-        entry->data.rate.rate = (double)delta_value / ((double)delta_time / 1000.0);
+      case TURBO_STAT_RATE: {
+        uint64_t now = get_timestamp_ms();
+        uint64_t delta_time = now - entry->data.rate.last_time;
+        uint64_t delta_value = (uint64_t)msg->value - entry->data.rate.last_value;
+        entry->data.rate.value = (uint64_t)msg->value;
+        entry->data.rate.last_time = now;
+        entry->data.rate.last_value = (uint64_t)msg->value;
+        if (delta_time > 0) {
+          entry->data.rate.rate = (double)delta_value / ((double)delta_time / 1000.0);
+        }
+        break;
       }
-      break;
-    }
-    }
+      }
 
-    bitmap_set(g_turbo_stats->dirty_bitmap, msg.slot);
+      bitmap_set(g_turbo_stats->dirty_bitmap, msg->slot);
+    }
+    
+    uv_mutex_unlock(&g_turbo_stats->map_mutex);
   }
 }
 
@@ -367,13 +436,21 @@ static turbo_stat_entry_t *find_or_create_entry(const char *name, turbo_stat_typ
 turbo_stat_entry_t *turbo_stats_get(const char *name) {
   if (!g_turbo_stats || !name)
     return NULL;
+
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
   const NameIndex_value *val = NameIndex_get(&g_turbo_stats->name_index, name);
-  if (!val)
+  if (!val) {
+    uv_mutex_unlock(&g_turbo_stats->map_mutex);
     return NULL;
+  }
   uint32_t slot = val->second;
-  if (slot >= g_turbo_stats->entry_capacity || !bitmap_test(g_turbo_stats->used_bitmap, slot))
+  if (slot >= g_turbo_stats->entry_capacity || !bitmap_test(g_turbo_stats->used_bitmap, slot)) {
+    uv_mutex_unlock(&g_turbo_stats->map_mutex);
     return NULL;
-  return &g_turbo_stats->entries[slot];
+  }
+  turbo_stat_entry_t *entry = &g_turbo_stats->entries[slot];
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
+  return entry;
 }
 
 turbo_stat_entry_t *turbo_stats_get_all(void) {
@@ -383,11 +460,14 @@ turbo_stat_entry_t *turbo_stats_get_all(void) {
 void turbo_stats_foreach(turbo_stats_iter_cb callback, void *user_data) {
   if (!g_turbo_stats || !callback)
     return;
+
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
   turbo_stat_entry_t *cur = g_turbo_stats->entries_head;
   while (cur) {
     callback(cur, user_data);
     cur = cur->next;
   }
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
 }
 
 void turbo_stats_reset(const char *name) {
@@ -431,6 +511,7 @@ void turbo_stats_print(void) {
     return;
   }
 
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
   turbo_stat_entry_t *entry = g_turbo_stats->entries_head;
   while (entry) {
     switch (entry->type) {
@@ -460,6 +541,7 @@ void turbo_stats_print(void) {
 
     entry = entry->next;
   }
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
 
   log_info(NULL, "Stats", "Total entries: {}", g_turbo_stats->entry_count);
 }
@@ -477,6 +559,7 @@ char *turbo_stats_to_json(void) {
   size_t pos = 0;
   pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "{\n");
 
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
   turbo_stat_entry_t *entry = g_turbo_stats->entries_head;
   int first = 1;
 
@@ -517,6 +600,7 @@ char *turbo_stats_to_json(void) {
     pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "}");
     entry = entry->next;
   }
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
 
   pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "\n}\n");
 

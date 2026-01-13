@@ -21,6 +21,17 @@ static turbo_mutex_t g_tls_pool_mutex;
 static turbo_mutex_t g_pipe_pool_mutex;
 static int g_pools_initialized = 0;
 
+static turbo_once_t g_pools_once = TURBO_ONCE_INIT;
+
+static void turbo_pools_init_internal(void) {
+  turbo_mutex_init(&g_tcp_pool_mutex);
+  turbo_mutex_init(&g_udp_pool_mutex);
+  turbo_mutex_init(&g_kcp_pool_mutex);
+  turbo_mutex_init(&g_tls_pool_mutex);
+  turbo_mutex_init(&g_pipe_pool_mutex);
+  g_pools_initialized = 1;
+}
+
 /**
  * @brief Initialize all global pool mutexes.
  * 
@@ -28,17 +39,7 @@ static int g_pools_initialized = 0;
  * It's safe to call multiple times (idempotent).
  */
 void turbo_pools_init(void) {
-  if (g_pools_initialized) {
-    return;
-  }
-  
-  turbo_mutex_init(&g_tcp_pool_mutex);
-  turbo_mutex_init(&g_udp_pool_mutex);
-  turbo_mutex_init(&g_kcp_pool_mutex);
-  turbo_mutex_init(&g_tls_pool_mutex);
-  turbo_mutex_init(&g_pipe_pool_mutex);
-  
-  g_pools_initialized = 1;
+  turbo_once(&g_pools_once, turbo_pools_init_internal);
 }
 
 /**

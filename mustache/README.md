@@ -5,7 +5,7 @@ A C-based Mustache templating engine integrated with TurboNet's JSON parser.
 ## Features
 
 - **Complete Mustache Implementation**: Based on Mustache4C with full spec compliance
-- **Advanced Parser**: Uses re2c + Lemon for robust lexing and parsing (same as JSON parser)
+- **Advanced Parser**: Uses re2c + recursive descent for robust lexing and parsing
 - **JSON Integration**: Direct integration with TurboNet's high-performance JSON parser
 - **Memory Efficient**: Minimal memory footprint with streaming capabilities
 - **HTML Escaping**: Built-in HTML escaping for web applications
@@ -122,7 +122,7 @@ int file_out_verbatim(const char *output, size_t size, void *renderer_data) {
 
 ## Advanced Parser Features
 
-The mustache module now uses the same re2c + Lemon toolchain as TurboNet's JSON parser, providing:
+The mustache module now uses re2c + recursive descent parser, providing:
 
 ### Benefits over Manual Parsing
 - **Better Error Messages**: Precise line/column error reporting
@@ -157,7 +157,7 @@ if (mustache_tokenize(template_str, strlen(template_str), &tokens, &token_count)
 
 ### Grammar Overview
 
-The Lemon grammar supports:
+The recursive descent parser supports:
 - Variables: `{{name}}`, `{{{unescaped}}}`, `{{&unescaped}}`
 - Sections: `{{#section}}...{{/section}}`
 - Inverted sections: `{{^missing}}...{{/missing}}`
@@ -204,7 +204,7 @@ Run the integration tests:
 # Basic JSON integration tests
 ctest -R mustache_json_integration
 
-# New re2c + Lemon parser tests  
+# New re2c + recursive descent parser tests  
 ctest -R mustache_new_parser
 
 # Comprehensive mustache specification tests

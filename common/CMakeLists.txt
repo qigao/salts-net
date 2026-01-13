@@ -20,32 +20,29 @@ target_include_directories(
          $<BUILD_INTERFACE:${Stb_INCLUDE_DIR}>
          $<INSTALL_INTERFACE:include>
          $<INSTALL_INTERFACE:include/common>
-  PRIVATE $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>)
+  PRIVATE $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>
+          $<BUILD_INTERFACE:${FMT_VA_LEXER_INCLUDE_DIRS}>)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 # Link dependencies
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC libuv::uv
-  PRIVATE c-ares::cares # DNS resolver uses c-ares
-          aklomp::base64 # Base64 utilities
-          PkgConfig::STC # Thread-safe containers
+  PUBLIC libuv::uv c-ares::cares # DNS resolver uses c-ares
+         aklomp::base64 # Base64 utilities
+  PRIVATE PkgConfig::STC # Thread-safe containers
           ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
+          ${FMT_VA_LEXER_LIBRARY} # fmt_va lexer
 )
 
 # Set target properties
 set_target_properties(
   ${TARGET_NAME}
-  PROPERTIES C_STANDARD 11
-             C_STANDARD_REQUIRED ON
-             C_EXTENSIONS OFF
-             FOLDER "common"
+  PROPERTIES FOLDER "common"
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME Common)
-if(ENABLE_ASAN)
-  add_sanitizers(${TARGET_NAME})
-endif()
+
+add_sanitizers(${TARGET_NAME})
 
 # Install library
 install(
@@ -56,8 +53,7 @@ install(
   RUNTIME DESTINATION bin)
 
 # Install headers preserving directory structure
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/common.h
-        DESTINATION include)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/common.h DESTINATION include)
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/common
   DESTINATION include

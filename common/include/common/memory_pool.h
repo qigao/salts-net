@@ -4,7 +4,7 @@
 #include <platform.h>
 #include <stddef.h>
 #include <stdint.h>
-// Memory pool for zero-allocation parsing
+// Simple and easy Memory pool for zero-allocation parsing
 typedef struct MemoryPool {
   uint8_t *pool;
   size_t size;

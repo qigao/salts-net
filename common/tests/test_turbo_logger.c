@@ -124,9 +124,9 @@ void test_simplified_api(void) {
     int error_code = 404;
 
     LOG_INFO("Starting simplified API test");
-    LOG_DEBUG("Debug message: value={}", 42);
-    LOG_WARN("Warning: {} returned code {}", url, error_code);
-    LOG_ERROR("Invalid URL format: {}", url);
+    LOG_DEBUG("Debug message: value={d}", 42);
+    LOG_WARN("Warning: {s} returned code {d}", url, error_code);
+    LOG_ERROR("Invalid URL format: {s}", url);
 
     // Test with custom logger set as default
     turbo_logger_config_t config = {
@@ -145,7 +145,7 @@ void test_simplified_api(void) {
     turbo_logger_set_default(custom_logger);
 
     LOG_INFO("Custom logger with file:line info");
-    LOG_ERROR("Error with custom config: {}", "test error");
+    LOG_ERROR("Error with custom config: {s}", "test error");
 
     // Reset to auto-created logger
     turbo_logger_set_default(default_logger);

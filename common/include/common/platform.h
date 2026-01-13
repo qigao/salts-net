@@ -92,6 +92,15 @@ extern "C" {
 typedef void *turbo_mutex_t;
 typedef void *turbo_cond_t;
 typedef void *turbo_thread_t;
+// One-time initialization guard
+#ifdef _WIN32
+typedef INIT_ONCE turbo_once_t;
+#define TURBO_ONCE_INIT INIT_ONCE_STATIC_INIT
+#else
+#include <pthread.h>
+typedef pthread_once_t turbo_once_t;
+#define TURBO_ONCE_INIT PTHREAD_ONCE_INIT
+#endif
 
 // Thread entry point callback type
 typedef void (*turbo_thread_cb)(void *arg);
@@ -151,6 +160,15 @@ CXX_C_API void turbo_cond_broadcast(turbo_cond_t *cond);
  */
 CXX_C_API void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex);
 
+/**
+ * @brief Wait for a condition variable with timeout
+ * @param cond Condition variable to wait on
+ * @param mutex Mutex to hold while waiting (released while waiting, re-acquired before return)
+ * @param timeout_ns Timeout in nanoseconds
+ * @return 0 on success, UV_ETIMEDOUT on timeout
+ */
+CXX_C_API int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns);
+
 // =============================================================================
 // Thread utilities - cross-platform threading (via libuv)
 // =============================================================================
@@ -170,6 +188,13 @@ CXX_C_API int turbo_thread_create(turbo_thread_t *thread, turbo_thread_cb entry,
  * @return 0 on success, < 0 on failure
  */
 CXX_C_API int turbo_thread_join(turbo_thread_t *thread);
+
+/**
+ * @brief Run a function exactly once
+ * @param guard Control variable
+ * @param callback Function to run
+ */
+CXX_C_API void turbo_once(turbo_once_t *guard, void (*callback)(void));
 
 /**
  * @brief Destroy a thread handle (frees memory)

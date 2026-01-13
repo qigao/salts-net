@@ -16,6 +16,7 @@
 #include "stb_sprintf.h"
 #include "turbo_atomic.h"
 #include "turbo_fs.h"
+#include "fmt_va.h"
 #include <c11/fmt.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,20 +59,26 @@ uint64_t __pthread_threadid_np(void);
 #define COLOR_ERROR "\033[31m"
 #define COLOR_FATAL "\033[35m"
 
-// =============================================================================
-// Async Log Entry (heap-allocated for queue)
-// =============================================================================
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4200) // nonstandard extension used: zero-sized array in struct/union
+#endif
 
 typedef struct {
   turbo_log_level_t level;
   uint64_t timestamp_ms;
   uint32_t thread_id;
-  char *component; // strdup'd
-  char *file;      // strdup'd
   int line;
-  char *message; // strdup'd
   size_t message_len;
+  const char *component; // Points into data buffer
+  const char *file;      // Points into data buffer
+  const char *message;   // Points into data buffer
+  char data[];           // Contiguous storage for strings
 } async_log_entry_t;
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 /* Define STC Deque for the async log queue */
 #define i_static
@@ -79,8 +86,14 @@ typedef struct {
 #define i_key async_log_entry_t *
 #include <stc/deque.h>
 
-static async_log_entry_t *async_entry_create(const turbo_log_entry_t *entry) {
-  async_log_entry_t *ae = malloc(sizeof(async_log_entry_t));
+static async_log_entry_t *async_entry_create(MemoryPool *pool, const turbo_log_entry_t *entry) {
+  size_t comp_len = entry->component ? strlen(entry->component) : 0;
+  size_t file_len = entry->file ? strlen(entry->file) : 0;
+  size_t msg_len = entry->message_len;
+
+  // Allocate in one block: struct + component + file + message (+ padding for each)
+  size_t total_size = sizeof(async_log_entry_t) + comp_len + 8 + file_len + 8 + msg_len + 8;
+  async_log_entry_t *ae = (async_log_entry_t *)pool_alloc(pool, total_size);
   if (!ae)
     return NULL;
 
@@ -88,21 +101,37 @@ static async_log_entry_t *async_entry_create(const turbo_log_entry_t *entry) {
   ae->timestamp_ms = entry->timestamp_ms;
   ae->thread_id = entry->thread_id;
   ae->line = entry->line;
-  ae->component = turbo_strdup_padded(entry->component);
-  ae->file = turbo_strdup_padded(entry->file);
-  ae->message = turbo_strdup_padded(entry->message);
-  ae->message_len = entry->message_len;
+  ae->message_len = msg_len;
+
+  char *ptr = ae->data;
+  if (entry->component) {
+    ae->component = ptr;
+    memcpy(ptr, entry->component, comp_len);
+    memset(ptr + comp_len, 0, 8);
+    ptr += comp_len + 8;
+  } else {
+    ae->component = NULL;
+  }
+
+  if (entry->file) {
+    ae->file = ptr;
+    memcpy(ptr, entry->file, file_len);
+    memset(ptr + file_len, 0, 8);
+    ptr += file_len + 8;
+  } else {
+    ae->file = NULL;
+  }
+
+  ae->message = ptr;
+  memcpy(ptr, entry->message, msg_len);
+  memset(ptr + msg_len, 0, 8);
 
   return ae;
 }
 
+// Entries are managed by MemoryPool, no individual free needed
 static void async_entry_destroy(async_log_entry_t *ae) {
-  if (!ae)
-    return;
-  free(ae->component);
-  free(ae->file);
-  free(ae->message);
-  free(ae);
+  (void)ae;
 }
 
 // =============================================================================
@@ -266,37 +295,10 @@ static void console_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *
     fprintf(out, "%s", get_level_color(entry->level));
   }
 
-  if (cs->pattern) {
-    // Pattern-based formatting
-    char formatted[MAX_MESSAGE_SIZE];
-    format_with_pattern(formatted, sizeof(formatted), cs->pattern, entry);
-    fprintf(out, "%s", formatted);
-  } else {
-    // Legacy formatting
-    if (cs->include_timestamp) {
-      time_t sec = (time_t)(entry->timestamp_ms / 1000);
-      struct tm *tm_info = localtime(&sec);
-      char ts[32];
-      strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-      fprintf(out, "[%s] ", ts);
-    }
-
-    fprintf(out, "[%s] ", turbo_log_level_name(entry->level));
-
-    if (cs->include_thread_id) {
-      fprintf(out, "[%u] ", entry->thread_id);
-    }
-
-    if (entry->component) {
-      fprintf(out, "[%s] ", entry->component);
-    }
-
-    if (cs->include_file_line && entry->file) {
-      fprintf(out, "(%s:%d) ", entry->file, entry->line);
-    }
-
-    fprintf(out, "%s", entry->message);
-  }
+  // Unified pattern-based formatting
+  char formatted[MAX_MESSAGE_SIZE];
+  format_with_pattern(formatted, sizeof(formatted), cs->pattern, entry);
+  fprintf(out, "%s", formatted);
 
   if (cs->use_colors) {
     fprintf(out, "%s", COLOR_RESET);
@@ -329,17 +331,20 @@ turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opt
   if (opts) {
     sink->output = opts->output ? opts->output : stdout;
     sink->use_colors = opts->use_colors;
-    sink->pattern = turbo_strdup_padded(opts->pattern);
-    sink->include_timestamp = opts->include_timestamp;
-    sink->include_thread_id = opts->include_thread_id;
-    sink->include_file_line = opts->include_file_line;
+    if (opts->pattern) {
+      sink->pattern = turbo_strdup_padded(opts->pattern);
+    } else {
+      // Build pattern from legacy opts if needed, else use default
+      if (opts->include_file_line) {
+        sink->pattern = turbo_strdup_padded(TURBO_LOG_FULL_PATTERN);
+      } else {
+        sink->pattern = turbo_strdup_padded(TURBO_LOG_DEFAULT_PATTERN);
+      }
+    }
   } else {
     sink->output = stdout;
     sink->use_colors = 1;
-    sink->pattern = NULL;
-    sink->include_timestamp = 1;
-    sink->include_thread_id = 0;
-    sink->include_file_line = 0;
+    sink->pattern = turbo_strdup_padded(TURBO_LOG_DEFAULT_PATTERN);
   }
 
   return &sink->base;
@@ -398,28 +403,9 @@ static void file_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *ent
   }
 
   char line[MAX_MESSAGE_SIZE];
-  int len;
-
-  if (fs->pattern) {
-    len = format_with_pattern(line, sizeof(line) - 1, fs->pattern, entry);
-    line[len++] = '\n';
-  } else {
-    time_t sec = (time_t)(entry->timestamp_ms / 1000);
-    struct tm *tm_info = localtime(&sec);
-    char ts[32];
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-
-    if (entry->component) {
-      fmt_printd(line, "[{}] [{}] [{}] {}\n", ts,
-                turbo_log_level_name(entry->level), entry->component, entry->message);
-    } else {
-      fmt_printd(line, "[{}] [{}] {}\n", ts,
-                turbo_log_level_name(entry->level), entry->message);
-    }
-    len = (int)strlen(line);
-  }
-
+  int len = format_with_pattern(line, sizeof(line) - 1, fs->pattern, entry);
   if (len > 0) {
+    line[len++] = '\n';
     int written = turbo_fs_write_sync(fs->fd, line, (size_t)len);
     if (written > 0) {
       fs->current_size += written;
@@ -458,7 +444,7 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   sink->base.min_level = TURBO_LOG_LEVEL_DEBUG;
 
   sink->path = turbo_strdup_padded(opts->path);
-  sink->pattern = turbo_strdup_padded(opts->pattern);
+  sink->pattern = turbo_strdup_padded(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN);
   sink->max_size = opts->max_size;
   sink->max_files = opts->max_files;
   sink->fd = TURBO_INVALID_FILE;
@@ -545,15 +531,17 @@ struct turbo_logger_s {
 
   // Memory pool for sync mode formatting
   MemoryPool *pool;
-  uv_mutex_t pool_mutex;
+  turbo_mutex_t pool_mutex;
 
-  // Async mode (using libuv threading)
+  // Async mode (using platform threading)
   int async_mode;
   LogQueue async_queue;
-  uv_mutex_t queue_mutex;
-  uv_cond_t wake_cond;
-  uv_thread_t thread;
+  turbo_mutex_t queue_mutex;
+  turbo_cond_t wake_cond;
+  turbo_thread_t thread;
   turbo_atomic_int_t running;
+  // Memory pool for async mode (unified approach)
+  MemoryPool *async_pool;
 };
 
 // Default logger
@@ -571,12 +559,12 @@ static void logger_process_queue(turbo_logger_t *logger) {
     async_log_entry_t *ae = NULL;
 
     // Dequeue under lock
-    uv_mutex_lock(&logger->queue_mutex);
+    turbo_mutex_lock(&logger->queue_mutex);
     if (!LogQueue_is_empty(&logger->async_queue)) {
       ae = *LogQueue_front(&logger->async_queue);
       LogQueue_pop_front(&logger->async_queue);
     }
-    uv_mutex_unlock(&logger->queue_mutex);
+    turbo_mutex_unlock(&logger->queue_mutex);
 
     if (!ae)
       break;
@@ -600,13 +588,25 @@ static void async_logger_thread(void *arg) {
   turbo_logger_t *logger = (turbo_logger_t *)arg;
 
   while (turbo_atomic_load(&logger->running)) {
-    // Wait with timeout using libuv condition variable
-    uv_mutex_lock(&logger->queue_mutex);
-    uv_cond_timedwait(&logger->wake_cond, &logger->queue_mutex,
-                      100 * 1000000ULL); // 100ms in nanoseconds
-    uv_mutex_unlock(&logger->queue_mutex);
+    // True async: wait indefinitely until signaled
+    turbo_mutex_lock(&logger->queue_mutex);
+    while (LogQueue_is_empty(&logger->async_queue) && turbo_atomic_load(&logger->running)) {
+      turbo_cond_wait(&logger->wake_cond, &logger->queue_mutex);
+    }
+    turbo_mutex_unlock(&logger->queue_mutex);
+
+    if (!turbo_atomic_load(&logger->running) && LogQueue_is_empty(&logger->async_queue)) {
+      break;
+    }
 
     logger_process_queue(logger);
+
+    // After processing a batch, if queue is empty, we can reset the pool
+    turbo_mutex_lock(&logger->queue_mutex);
+    if (LogQueue_is_empty(&logger->async_queue)) {
+      pool_reset(logger->async_pool);
+    }
+    turbo_mutex_unlock(&logger->queue_mutex);
   }
 
   // Final drain
@@ -616,12 +616,10 @@ static void async_logger_thread(void *arg) {
 static int logger_start_async_thread(turbo_logger_t *logger) {
   turbo_atomic_store(&logger->running, 1);
 
-  if (uv_cond_init(&logger->wake_cond) != 0) {
-    return -1;
-  }
+  turbo_cond_init(&logger->wake_cond);
 
-  if (uv_thread_create(&logger->thread, async_logger_thread, logger) != 0) {
-    uv_cond_destroy(&logger->wake_cond);
+  if (turbo_thread_create(&logger->thread, async_logger_thread, logger) != 0) {
+    turbo_cond_destroy(&logger->wake_cond);
     return -1;
   }
 
@@ -632,18 +630,18 @@ static void logger_stop_async_thread(turbo_logger_t *logger) {
   turbo_atomic_store(&logger->running, 0);
 
   // Wake thread to exit
-  uv_mutex_lock(&logger->queue_mutex);
-  uv_cond_signal(&logger->wake_cond);
-  uv_mutex_unlock(&logger->queue_mutex);
+  turbo_mutex_lock(&logger->queue_mutex);
+  turbo_cond_signal(&logger->wake_cond);
+  turbo_mutex_unlock(&logger->queue_mutex);
 
-  uv_thread_join(&logger->thread);
-  uv_cond_destroy(&logger->wake_cond);
+  turbo_thread_join(&logger->thread);
+  turbo_cond_destroy(&logger->wake_cond);
 }
 
 static void logger_wake_async_thread(turbo_logger_t *logger) {
-  uv_mutex_lock(&logger->queue_mutex);
-  uv_cond_signal(&logger->wake_cond);
-  uv_mutex_unlock(&logger->queue_mutex);
+  turbo_mutex_lock(&logger->queue_mutex);
+  turbo_cond_signal(&logger->wake_cond);
+  turbo_mutex_unlock(&logger->queue_mutex);
 }
 
 // =============================================================================
@@ -663,24 +661,28 @@ turbo_logger_t *turbo_logger_create(const turbo_logger_config_t *config) {
     logger->async_mode = 0;
   }
 
-  // Create memory pool for sync mode
+  // Unified pool for sync formatting and general usage
   size_t pool_size = (config && config->pool_size) ? config->pool_size : DEFAULT_POOL_SIZE;
   logger->pool = pool_create(pool_size);
   if (!logger->pool) {
     free(logger);
     return NULL;
   }
-  uv_mutex_init(&logger->pool_mutex);
+  turbo_mutex_init(&logger->pool_mutex);
 
   // Initialize async mode
   if (logger->async_mode) {
     logger->async_queue = LogQueue_init();
-    uv_mutex_init(&logger->queue_mutex);
+    turbo_mutex_init(&logger->queue_mutex);
+
+    size_t async_pool_size = (config && config->buffer_size) ? config->buffer_size : 1024 * 1024;
+    logger->async_pool = pool_create(async_pool_size);
 
     if (logger_start_async_thread(logger) != 0) {
       LogQueue_drop(&logger->async_queue);
-      uv_mutex_destroy(&logger->queue_mutex);
+      turbo_mutex_destroy(&logger->queue_mutex);
       pool_destroy(logger->pool);
+      pool_destroy(logger->async_pool);
       free(logger);
       return NULL;
     }
@@ -704,7 +706,7 @@ void turbo_logger_destroy(turbo_logger_t *logger) {
       async_entry_destroy(ae);
     }
     LogQueue_drop(&logger->async_queue);
-    uv_mutex_destroy(&logger->queue_mutex);
+    turbo_mutex_destroy(&logger->queue_mutex);
   }
 
   // Flush and destroy sinks
@@ -715,8 +717,11 @@ void turbo_logger_destroy(turbo_logger_t *logger) {
     turbo_sink_destroy(logger->sinks[i]);
   }
 
-  uv_mutex_destroy(&logger->pool_mutex);
+  turbo_mutex_destroy(&logger->pool_mutex);
   pool_destroy(logger->pool);
+  if (logger->async_pool) {
+    pool_destroy(logger->async_pool);
+  }
   free(logger);
 
   if (g_default_logger == logger) {
@@ -786,46 +791,81 @@ void turbo_log_v(turbo_logger_t *logger, turbo_log_level_t level, const char *co
   if (logger->sink_count == 0)
     return;
 
-  // Format message using stb_sprintf for better performance and consistency
-  uv_mutex_lock(&logger->pool_mutex);
-  pool_reset(logger->pool);
-
-  char *message = pool_alloc(logger->pool, MAX_MESSAGE_SIZE);
-  if (!message) {
-    uv_mutex_unlock(&logger->pool_mutex);
-    return;
-  }
-
-  int len = stbsp_vsnprintf(message, MAX_MESSAGE_SIZE, fmt, args);
-  if (len < 0)
-    len = 0;
-  if (len >= MAX_MESSAGE_SIZE)
-    len = MAX_MESSAGE_SIZE - 1;
-
-  turbo_log_entry_t entry = {.level = level,
-                             .timestamp_ms = turbo_realtime_ms(),
-                             .thread_id = gettid(),
-                             .component = component,
-                             .file = file,
-                             .line = line,
-                             .message = message,
-                             .message_len = (size_t)len};
-
   if (logger->async_mode) {
-    // Queue for async processing
-    async_log_entry_t *ae = async_entry_create(&entry);
-    if (ae) {
-      uv_mutex_lock(&logger->queue_mutex);
-      LogQueue_push_back(&logger->async_queue, ae);
-      uv_mutex_unlock(&logger->queue_mutex);
-      logger_wake_async_thread(logger);
+    turbo_mutex_lock(&logger->queue_mutex);
+    
+    // Check if we need to reset the pool
+    if (pool_get_available(logger->async_pool) < (MAX_MESSAGE_SIZE + 1024)) {
+        if (LogQueue_is_empty(&logger->async_queue)) {
+            pool_reset(logger->async_pool);
+        } else {
+            // Drop log if pool full
+            turbo_mutex_unlock(&logger->queue_mutex);
+            return;
+        }
     }
-  } else {
-    // Sync mode: write directly
-    logger_write_to_sinks(logger, &entry);
-  }
 
-  uv_mutex_unlock(&logger->pool_mutex);
+    size_t comp_len = component ? strlen(component) : 0;
+    size_t file_len = file ? strlen(file) : 0;
+    size_t total_size = sizeof(async_log_entry_t) + comp_len + 8 + file_len + 8 + MAX_MESSAGE_SIZE + 8;
+
+    async_log_entry_t *ae = (async_log_entry_t *)pool_alloc(logger->async_pool, total_size);
+    if (!ae) {
+        turbo_mutex_unlock(&logger->queue_mutex);
+        return;
+    }
+
+    ae->level = level;
+    ae->timestamp_ms = turbo_realtime_ms();
+    ae->thread_id = gettid();
+    ae->line = line;
+
+    char *ptr = ae->data;
+    if (component) {
+        ae->component = ptr;
+        memcpy(ptr, component, comp_len);
+        memset(ptr + comp_len, 0, 8);
+        ptr += comp_len + 8;
+    } else {
+        ae->component = NULL;
+    }
+
+    if (file) {
+        ae->file = ptr;
+        memcpy(ptr, file, file_len);
+        memset(ptr + file_len, 0, 8);
+        ptr += file_len + 8;
+    } else {
+        ae->file = NULL;
+    }
+
+    // Format directly into the remaining space
+    ae->message = ptr;
+    int len = fmt_va_vprint(ptr, MAX_MESSAGE_SIZE, fmt, args);
+    if (len < 0) len = 0;
+    if (len >= MAX_MESSAGE_SIZE) len = MAX_MESSAGE_SIZE - 1;
+    memset(ptr + len, 0, 8);
+    ae->message_len = (size_t)len;
+
+    LogQueue_push_back(&logger->async_queue, ae);
+    turbo_cond_signal(&logger->wake_cond);
+    turbo_mutex_unlock(&logger->queue_mutex);
+
+  } else {
+    // Sync mode code (remains largely same but simplified)
+    turbo_mutex_lock(&logger->pool_mutex);
+    pool_reset(logger->pool);
+    char *message = pool_alloc(logger->pool, MAX_MESSAGE_SIZE + 8);
+    if (message) {
+      int len = fmt_va_vprint(message, MAX_MESSAGE_SIZE, fmt, args);
+      if (len < 0) len = 0;
+      if (len >= MAX_MESSAGE_SIZE) len = MAX_MESSAGE_SIZE - 1;
+      memset(message + len, 0, 8);
+      turbo_log_entry_t entry = {level, turbo_realtime_ms(), gettid(), component, file, line, message, (size_t)len};
+      logger_write_to_sinks(logger, &entry);
+    }
+    turbo_mutex_unlock(&logger->pool_mutex);
+  }
 }
 
 void turbo_log(turbo_logger_t *logger, turbo_log_level_t level, const char *component,
@@ -837,7 +877,7 @@ void turbo_log(turbo_logger_t *logger, turbo_log_level_t level, const char *comp
 }
 
 void turbo_log_str(turbo_logger_t *logger, turbo_log_level_t level, const char *component,
-                   const char *file, int line, const char *message, size_t message_len) {
+                    const char *file, int line, const char *message, size_t message_len) {
   if (!logger || !message)
     return;
   if (level < logger->min_level)
@@ -845,26 +885,27 @@ void turbo_log_str(turbo_logger_t *logger, turbo_log_level_t level, const char *
   if (logger->sink_count == 0)
     return;
 
-  turbo_log_entry_t entry = {.level = level,
-                             .timestamp_ms = turbo_realtime_ms(),
-                             .thread_id = gettid(),
-                             .component = component,
-                             .file = file,
-                             .line = line,
-                             .message = message,
-                             .message_len = message_len};
-
   if (logger->async_mode) {
-    // Queue for async processing
-    async_log_entry_t *ae = async_entry_create(&entry);
-    if (ae) {
-      uv_mutex_lock(&logger->queue_mutex);
-      LogQueue_push_back(&logger->async_queue, ae);
-      uv_mutex_unlock(&logger->queue_mutex);
-      logger_wake_async_thread(logger);
+    turbo_mutex_lock(&logger->queue_mutex);
+    
+    if (pool_get_available(logger->async_pool) < (message_len + 1024)) {
+        if (LogQueue_is_empty(&logger->async_queue)) {
+            pool_reset(logger->async_pool);
+        } else {
+            turbo_mutex_unlock(&logger->queue_mutex);
+            return;
+        }
     }
+
+    turbo_log_entry_t entry = {level, turbo_realtime_ms(), gettid(), component, file, line, message, message_len};
+    async_log_entry_t *ae = async_entry_create(logger->async_pool, &entry);
+    if (ae) {
+        LogQueue_push_back(&logger->async_queue, ae);
+        turbo_cond_signal(&logger->wake_cond);
+    }
+    turbo_mutex_unlock(&logger->queue_mutex);
   } else {
-    // Sync mode: write directly
+    turbo_log_entry_t entry = {level, turbo_realtime_ms(), gettid(), component, file, line, message, message_len};
     logger_write_to_sinks(logger, &entry);
   }
 }
@@ -948,35 +989,40 @@ turbo_log_level_t turbo_log_level_from_name(const char *name) {
 void LOG_DEBUG(const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_DEBUG, NULL, __FILE__, __LINE__, fmt, args);
+  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_DEBUG, NULL, __FILE__, __LINE__, fmt,
+              args);
   va_end(args);
 }
 
 void LOG_INFO(const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_INFO, NULL, __FILE__, __LINE__, fmt, args);
+  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_INFO, NULL, __FILE__, __LINE__, fmt,
+              args);
   va_end(args);
 }
 
 void LOG_WARN(const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_WARN, NULL, __FILE__, __LINE__, fmt, args);
+  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_WARN, NULL, __FILE__, __LINE__, fmt,
+              args);
   va_end(args);
 }
 
 void LOG_ERROR(const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_ERROR, NULL, __FILE__, __LINE__, fmt, args);
+  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_ERROR, NULL, __FILE__, __LINE__, fmt,
+              args);
   va_end(args);
 }
 
 void LOG_FATAL(const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_FATAL, NULL, __FILE__, __LINE__, fmt, args);
+  turbo_log_v(turbo_logger_get_default(), TURBO_LOG_LEVEL_FATAL, NULL, __FILE__, __LINE__, fmt,
+              args);
   va_end(args);
 }
 

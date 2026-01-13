@@ -40,21 +40,6 @@ set_target_properties(
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME UriParser)
 
-if(MSVC)
-  target_compile_options(
-    ${TARGET_NAME}
-    PRIVATE /wd4101 # Unreferenced local variable
-            /wd4102 # Unreferenced label
-            /wd4244 # Conversion, possible loss of data
-            /wd4267 # Conversion from size_t
-            /wd4996 # Deprecated functions
-  )
-else()
-  target_compile_options(
-    ${TARGET_NAME} PRIVATE -Wno-unused-parameter -Wno-unused-function
-                           -Wno-unused-variable -Wno-unused-but-set-variable)
-endif()
-
 # =============================================================================
 # Tests
 # =============================================================================

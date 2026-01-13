@@ -8,17 +8,7 @@
 #include "stats.h"
 #include "turbo_udp.h"
 #include "internal.h"
-
-
-#ifdef _WIN32
-  #include <winsock2.h>
-  #define sleep_ms(ms) Sleep(ms)
-#else
-  #include <unistd.h>
-  #define sleep_ms(ms) usleep((ms) * 1000)
-#endif
-
-/* Enhanced UDP server with true zero-copy and arena memory management */
+ 
 
 /* Forward declarations for pool synchronization */
 extern void turbo_udp_pool_lock(void);
@@ -37,6 +27,26 @@ static turbo_udp_send_op_t *g_send_op_pool = NULL;
 static size_t g_send_op_pool_size = 0;
 static const size_t MAX_SEND_OP_POOL_SIZE = 512;
 
+/* UDP Statistics IDs */
+static struct {
+    turbo_stat_id_t bytes_sent;
+    turbo_stat_id_t bytes_received;
+    turbo_stat_id_t send_errors;
+    turbo_stat_id_t recv_errors;
+    int initialized;
+} s_udp_stats = {0};
+
+static void init_udp_stats(void) {
+    if (s_udp_stats.initialized) return;
+    
+    s_udp_stats.bytes_sent = turbo_stats_register("udp.bytes_sent", TURBO_STAT_COUNTER);
+    s_udp_stats.bytes_received = turbo_stats_register("udp.bytes_received", TURBO_STAT_COUNTER);
+    s_udp_stats.send_errors = turbo_stats_register("udp.send_errors", TURBO_STAT_COUNTER);
+    s_udp_stats.recv_errors = turbo_stats_register("udp.recv_errors", TURBO_STAT_COUNTER);
+    
+    s_udp_stats.initialized = 1;
+}
+
 /* Get send operation from pool (thread-safe) */
 static turbo_udp_send_op_t *get_send_op(turbo_udp_server_t *server) {
   turbo_udp_send_op_t *op = NULL;
@@ -46,14 +56,12 @@ static turbo_udp_send_op_t *get_send_op(turbo_udp_server_t *server) {
     op = g_send_op_pool;
     g_send_op_pool = op->next;
     g_send_op_pool_size--;
-    TURBO_STATS_INC("udp.send_ops_reused");
   }
   turbo_udp_pool_unlock();
 
   if (!op) {
     op = (turbo_udp_send_op_t *)malloc(sizeof(turbo_udp_send_op_t));
     if (op) {
-      TURBO_STATS_INC("udp.send_ops_allocated");
     } else {
       return NULL; // NULL check
     }
@@ -79,11 +87,10 @@ static void return_send_op(turbo_udp_send_op_t *op) {
     g_send_op_pool = op;
     g_send_op_pool_size++;
     turbo_udp_pool_unlock();
-    TURBO_STATS_INC("udp.send_ops_pooled");
+    turbo_udp_pool_unlock();
   } else {
     turbo_udp_pool_unlock();
     free(op);
-    TURBO_STATS_INC("udp.send_ops_freed");
   }
 }
 
@@ -93,11 +100,9 @@ static void on_send_complete(uv_udp_send_t *req, int status) {
       (turbo_udp_send_op_t *)((char *)req - offsetof(turbo_udp_send_op_t, req));
 
   if (status == 0) {
-    TURBO_STATS_ADD("udp.bytes_sent", op->slice.length);
-    TURBO_STATS_INC("udp.packets_sent");
-    TURBO_STATS_RECORD("udp.send_size", op->slice.length);
+    turbo_stats_counter_add_fast(s_udp_stats.bytes_sent, op->slice.length);
   } else {
-    TURBO_STATS_INC("udp.send_errors");
+    turbo_stats_counter_inc_fast(s_udp_stats.send_errors);
   }
 
   return_send_op(op);
@@ -140,16 +145,14 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     return;
 
   if (nread < 0) {
-    TURBO_STATS_INC("udp.recv_errors");
+    turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
     return;
   }
 
   if (nread == 0 || !buf || !buf->base || !addr)
     return;
 
-  TURBO_STATS_ADD("udp.bytes_received", (size_t)nread);
-  TURBO_STATS_INC("udp.packets_received");
-  TURBO_STATS_RECORD("udp.recv_size", (size_t)nread);
+  turbo_stats_counter_add_fast(s_udp_stats.bytes_received, (size_t)nread);
 
   /* Determine which buffer was used */
   turbo_arena_buffer_t *used_buffer = NULL;
@@ -186,6 +189,8 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop,
 
   memset(server, 0, sizeof(*server));
   server->loop = loop;
+  
+  init_udp_stats();
 
   /* Initialize arena */
   if (turbo_arena_init(&server->arena, 0) != 0) {
@@ -238,7 +243,7 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop,
     return rc;
   }
 
-  TURBO_STATS_INC("udp.servers_created");
+
   return 0;
 } /* S
  tart enhanced UDP server */
@@ -275,7 +280,7 @@ void turbo_udp_server_stop(turbo_udp_server_t *server) {
 
   turbo_arena_free(&server->arena);
 
-  TURBO_STATS_INC("udp.servers_stopped");
+
 }
 
 /* Get zero-copy send buffer */
@@ -318,7 +323,7 @@ int turbo_udp_send_buffer(turbo_udp_server_t *server, const struct sockaddr *des
     return rc;
   }
 
-  TURBO_STATS_INC("udp.zero_copy_sends");
+
   return 0;
 }
 
@@ -344,7 +349,7 @@ int turbo_udp_send(turbo_udp_server_t *server, const struct sockaddr *dest,
   turbo_arena_buffer_unref(buffer);
 
   if (rc == 0) {
-    TURBO_STATS_INC("udp.copy_sends");
+    
   }
 
   return rc;
@@ -404,8 +409,7 @@ int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_
   }
 
   if (rc == 0) {
-    TURBO_STATS_INC("udp.scatter_gather_sends");
-    TURBO_STATS_INC("udp.zero_copy_sendv");
+    
   }
 
   return rc;
@@ -498,7 +502,7 @@ void turbo_udp_cleanup_pools(void) {
   }
   g_send_op_pool_size = 0;
 
-  TURBO_STATS_INC("udp.pools_cleaned");
+  g_send_op_pool_size = 0;
 }
 
 /* ========================================================================
@@ -519,9 +523,9 @@ int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr,
     
     int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_JOIN_GROUP);
     if (rc == 0) {
-        TURBO_STATS_INC("udp.multicast_joins");
+        
     } else {
-        TURBO_STATS_INC("udp.multicast_join_errors");
+        turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
     }
     
     return rc;
@@ -541,9 +545,9 @@ int turbo_udp_leave_multicast_group(turbo_udp_t* udp, const char* multicast_addr
     
     int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_LEAVE_GROUP);
     if (rc == 0) {
-        TURBO_STATS_INC("udp.multicast_leaves");
+        
     } else {
-        TURBO_STATS_INC("udp.multicast_leave_errors");
+        turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
     }
     
     return rc;

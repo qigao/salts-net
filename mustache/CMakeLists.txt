@@ -15,28 +15,6 @@ add_custom_command(
   VERBATIM)
 
 # =============================================================================
-# Lemon Generated Files
-# =============================================================================
-
-set(MUSTACHE_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/mustache_grammar.y)
-set(MUSTACHE_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/mustache_grammar_gen.c)
-set(MUSTACHE_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/mustache_grammar_gen.h)
-
-if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
-endif()
-
-add_custom_command(
-  OUTPUT ${MUSTACHE_GRAMMAR_GEN} ${MUSTACHE_GRAMMAR_H}
-  COMMAND ${CMAKE_COMMAND} -E copy ${MUSTACHE_GRAMMAR_Y}
-          ${CMAKE_CURRENT_BINARY_DIR}/mustache_grammar_gen.y
-  COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR}
-          ${CMAKE_CURRENT_BINARY_DIR}/mustache_grammar_gen.y
-  DEPENDS ${MUSTACHE_GRAMMAR_Y} ${LEMON_DEPENDS}
-  COMMENT "Generating Mustache parser with lemon"
-  VERBATIM)
-
-# =============================================================================
 # Library
 # =============================================================================
 
@@ -44,14 +22,9 @@ add_custom_command(
 add_library(
   mustache SHARED
   src/mustache.c
-  src/mustache.h
   src/mustache_json.c
-  src/mustache_json.h
   src/mustache_parser.c
-  src/mustache_parser.h
-  parser/mustache_lexer.h
-  ${MUSTACHE_LEXER_GEN}
-  ${MUSTACHE_GRAMMAR_GEN})
+  ${MUSTACHE_LEXER_GEN})
 add_library(TurboNet::Mustache ALIAS mustache)
 
 # DLL export macro - matches pattern from other TurboNet libraries

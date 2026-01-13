@@ -1,6 +1,6 @@
 /**
  * @file test_new_parser.c
- * @brief Test the new re2c + Lemon based parser using acutest framework
+ * @brief Test the new re2c + recursive descent parser using acutest framework
  */
 
 #include "acutest.h"

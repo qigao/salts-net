@@ -9,8 +9,6 @@
 extern "C" {
 #endif
 
-/* Enhanced arena with zero-copy capabilities and reference counting */
-
 /* Forward declarations */
 typedef struct turbo_arena_region_s turbo_arena_region_t;
 typedef struct turbo_arena_s turbo_arena_t;
@@ -20,16 +18,16 @@ typedef struct turbo_arena_slice_s turbo_arena_slice_t;
 
 /* Arena flags */
 typedef enum {
-  turbo_ARENA_FLAG_AUTO_GROW = 1 << 0,  /* Automatically allocate new regions */
-  turbo_ARENA_FLAG_ZERO_COPY = 1 << 1,  /* Enable zero-copy optimizations */
-  turbo_ARENA_FLAG_THREAD_SAFE = 1 << 2 /* Thread-safe operations (future) */
+  TURBO_ARENA_FLAG_AUTO_GROW = 1 << 0,  /* Automatically allocate new regions */
+  TURBO_ARENA_FLAG_ZERO_COPY = 1 << 1,  /* Enable zero-copy optimizations */
+  TURBO_ARENA_FLAG_THREAD_SAFE = 1 << 2 /* Thread-safe operations (future) */
 } turbo_arena_flags_t;
 
 /* Buffer flags */
 typedef enum {
-  turbo_ARENA_BUFFER_FLAG_READONLY = 1 << 0, /* Buffer is read-only */
-  turbo_ARENA_BUFFER_FLAG_PINNED = 1 << 1,   /* Buffer cannot be moved */
-  turbo_ARENA_BUFFER_FLAG_SHARED = 1 << 2    /* Buffer is shared between threads */
+  TURBO_ARENA_BUFFER_FLAG_READONLY = 1 << 0, /* Buffer is read-only */
+  TURBO_ARENA_BUFFER_FLAG_PINNED = 1 << 1,   /* Buffer cannot be moved */
+  TURBO_ARENA_BUFFER_FLAG_SHARED = 1 << 2    /* Buffer is shared between threads */
 } turbo_arena_buffer_flags_t;
 
 /* Memory region with reference counting */
@@ -244,9 +242,9 @@ CXX_C_API void turbo_arena_slice_release(turbo_arena_slice_t *slice);
 CXX_C_API void turbo_arena_get_stats(const turbo_arena_t *arena, turbo_arena_stats_t *stats);
 
 /* Convenience macros */
-#define turbo_ARENA_ALLOC(arena, type) ((type *)turbo_arena_alloc(arena, sizeof(type)))
+#define TURBO_ARENA_ALLOC(arena, type) ((type *)turbo_arena_alloc(arena, sizeof(type)))
 
-#define turbo_ARENA_ALLOC_ARRAY(arena, type, count)                                                \
+#define TURBO_ARENA_ALLOC_ARRAY(arena, type, count)                                                \
   ((type *)turbo_arena_alloc(arena, sizeof(type) * (count)))
 
 /* Buffer helpers */

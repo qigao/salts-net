@@ -47,7 +47,7 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_parser.h
 if(BUILD_TESTING)
   add_executable(test_turbo_parser test/test_turbo_parser.c)
   target_link_libraries(test_turbo_parser PRIVATE turbo_parser)
-  set_target_properties(test_turbo_parser PROPERTIES FOLDER turbo_parser/test)
+  set_target_properties(test_turbo_parser PROPERTIES FOLDER turbo_parser)
   add_sanitizers(test_turbo_parser)
   add_test(NAME test_turbo_parser COMMAND test_turbo_parser)
 endif()

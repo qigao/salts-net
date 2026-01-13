@@ -74,6 +74,30 @@ static turbo_kcp_send_op_t *g_send_op_pool = NULL;
 static size_t g_send_op_pool_size = 0;
 static const size_t MAX_SEND_OP_POOL_SIZE = 512;
 
+/* KCP Statistics IDs */
+static struct {
+    turbo_stat_id_t bytes_sent;
+    turbo_stat_id_t bytes_received;
+    turbo_stat_id_t send_errors;
+    turbo_stat_id_t recv_errors;
+    turbo_stat_id_t active_connections;
+    turbo_stat_id_t connections_closed;
+    int initialized;
+} s_kcp_stats = {0};
+
+static void init_kcp_stats(void) {
+    if (s_kcp_stats.initialized) return;
+    
+    s_kcp_stats.bytes_sent = turbo_stats_register("kcp.bytes_sent", TURBO_STAT_COUNTER);
+    s_kcp_stats.bytes_received = turbo_stats_register("kcp.bytes_received", TURBO_STAT_COUNTER);
+    s_kcp_stats.send_errors = turbo_stats_register("kcp.send_errors", TURBO_STAT_COUNTER);
+    s_kcp_stats.recv_errors = turbo_stats_register("kcp.recv_errors", TURBO_STAT_COUNTER);
+    s_kcp_stats.active_connections = turbo_stats_register("kcp.active_connections", TURBO_STAT_GAUGE);
+    s_kcp_stats.connections_closed = turbo_stats_register("kcp.connections_closed", TURBO_STAT_COUNTER);
+    
+    s_kcp_stats.initialized = 1;
+}
+
 /* Connection handshake */
 #define KCP_CONN_REQUEST 0x00000000
 #define KCP_CONN_SYN "KCP_SYN"
@@ -119,10 +143,12 @@ static void add_client_mapping(uint32_t conv_id, turbo_kcp_client_t *client) {
 
   mapping->conv_id = conv_id;
   mapping->client = client;
-  mapping->next = g_client_map[hash];
   g_client_map[hash] = mapping;
+  
+  /* Update active connections (simplified for now, ideally track with atomic or context) */
+  /* turbo_stats_gauge_set_fast(s_kcp_stats.active_connections, ...); */
 
-  TURBO_STATS_INC("kcp.clients_mapped");
+  g_client_map[hash] = mapping;
 }
 
 /* Remove client mapping */
@@ -135,7 +161,7 @@ static void remove_client_mapping(uint32_t conv_id) {
       turbo_kcp_client_mapping_t *to_remove = *mapping;
       *mapping = (*mapping)->next;
       free(to_remove);
-      TURBO_STATS_INC("kcp.clients_unmapped");
+      turbo_stats_counter_inc_fast(s_kcp_stats.connections_closed);
       return;
     }
     mapping = &(*mapping)->next;
@@ -151,14 +177,12 @@ static turbo_kcp_send_op_t *get_send_op(turbo_kcp_server_t *server) {
     op = g_send_op_pool;
     g_send_op_pool = op->next;
     g_send_op_pool_size--;
-    TURBO_STATS_INC("kcp.send_ops_reused");
   }
   turbo_kcp_pool_unlock();
 
   if (!op) {
     op = (turbo_kcp_send_op_t *)malloc(sizeof(turbo_kcp_send_op_t));
     if (op) {
-      TURBO_STATS_INC("kcp.send_ops_allocated");
     } else {
       return NULL;
     }
@@ -175,18 +199,16 @@ static void return_send_op(turbo_kcp_send_op_t *op) {
 
   turbo_arena_slice_release(&op->slice);
 
-  turbo_kcp_pool_lock();
-  if (g_send_op_pool_size < MAX_SEND_OP_POOL_SIZE) {
-    op->next = g_send_op_pool;
-    g_send_op_pool = op;
-    g_send_op_pool_size++;
-    turbo_kcp_pool_unlock();
-    TURBO_STATS_INC("kcp.send_ops_pooled");
-  } else {
-    turbo_kcp_pool_unlock();
-    free(op);
-    TURBO_STATS_INC("kcp.send_ops_freed");
-  }
+    turbo_kcp_pool_lock();
+    if (g_send_op_pool_size < MAX_SEND_OP_POOL_SIZE) {
+        op->next = g_send_op_pool;
+        g_send_op_pool = op;
+        g_send_op_pool_size++;
+        turbo_kcp_pool_unlock();
+    } else {
+        turbo_kcp_pool_unlock();
+        free(op);
+    }
 }
 
 /* Send completion callback */
@@ -195,10 +217,9 @@ static void on_send_complete(uv_udp_send_t *req, int status) {
       (turbo_kcp_send_op_t *)((char *)req - offsetof(turbo_kcp_send_op_t, req));
 
   if (status == 0) {
-    TURBO_STATS_ADD("kcp.bytes_sent", op->slice.length);
-    TURBO_STATS_INC("kcp.packets_sent");
+    turbo_stats_counter_add_fast(s_kcp_stats.bytes_sent, op->slice.length);
   } else {
-    TURBO_STATS_INC("kcp.send_errors");
+    turbo_stats_counter_inc_fast(s_kcp_stats.send_errors);
   }
 
   return_send_op(op);
@@ -246,7 +267,6 @@ static int ikcp_output_callback(const char *buf, int len, ikcpcb *kcp, void *use
     return -1;
   }
 
-  TURBO_STATS_INC("kcp.kcp_outputs");
   return 0;
 }
 
@@ -309,7 +329,6 @@ static void kcp_update_timer_cb(uv_timer_t *handle) {
   if (delay > 100) delay = 100; /* Cap at 100ms */
 
   uv_timer_start(&client->update_timer, kcp_update_timer_cb, delay, 0);
-  TURBO_STATS_INC("kcp.updates");
 }
 
 /* Receive buffer allocation */
@@ -418,8 +437,6 @@ static void handle_connection_request(turbo_kcp_server_t *server, const struct s
   if (server->on_accept) {
     server->on_accept(server, client, NULL);
   }
-
-  TURBO_STATS_INC("kcp.connections_established");
 }
 
 /* Handle connection ACK (client-side) */
@@ -464,8 +481,6 @@ static int handle_connection_ack(turbo_kcp_server_t *server, const char *data, s
   if (client->on_connect) {
     client->on_connect(client, 0, NULL);
   }
-
-  TURBO_STATS_INC("kcp.client_connections_established");
   return 1;
 }
 
@@ -487,8 +502,6 @@ static void process_kcp_recv(turbo_kcp_server_t *server, turbo_kcp_client_t *cli
         server->on_recv(server, &slice, client);
         turbo_arena_slice_release(&slice);
       }
-
-      TURBO_STATS_INC("kcp.messages_received");
     }
 
     turbo_arena_buffer_unref(buffer);
@@ -504,14 +517,13 @@ static void on_kcp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
   if (!server) return;
 
   if (nread < 0) {
-    TURBO_STATS_INC("kcp.recv_errors");
+    turbo_stats_counter_inc_fast(s_kcp_stats.recv_errors);
     return;
   }
 
   if (nread == 0 || !buf || !buf->base || !addr) return;
 
-  TURBO_STATS_ADD("kcp.bytes_received", (size_t)nread);
-  TURBO_STATS_INC("kcp.packets_received");
+  turbo_stats_counter_add_fast(s_kcp_stats.bytes_received, (size_t)nread);
 
   /* Client-mode: check for connection ACK first */
   if (server->connecting_client && handle_connection_ack(server, buf->base, nread)) {
@@ -544,7 +556,7 @@ static void on_kcp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
       /* Feed data to ikcp */
       int rc = ikcp_input(client->kcp_ctx->kcp, buf->base, (long)nread);
       if (rc < 0) {
-        TURBO_STATS_INC("kcp.input_errors");
+        turbo_stats_counter_inc_fast(s_kcp_stats.recv_errors);
         return;
       }
 
@@ -566,6 +578,8 @@ int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const cha
 
   memset(server, 0, sizeof(*server));
   server->loop = loop;
+
+  init_kcp_stats();
 
   if (turbo_arena_init(&server->arena, 0) != 0) {
     return UV_ENOMEM;
@@ -616,7 +630,7 @@ int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const cha
     return rc;
   }
 
-  TURBO_STATS_INC("kcp.servers_created");
+
   return 0;
 }
 
@@ -675,7 +689,6 @@ void turbo_kcp_server_stop(turbo_kcp_server_t *server) {
   }
 
   turbo_arena_free(&server->arena);
-  TURBO_STATS_INC("kcp.servers_stopped");
 }
 
 /* Set KCP nodelay configuration */
@@ -724,15 +737,13 @@ int turbo_kcp_send_buffer(turbo_kcp_client_t *client, turbo_arena_buffer_t *buff
 
   int rc = ikcp_send(client->kcp_ctx->kcp, buffer->data, (int)length);
   if (rc < 0) {
-    TURBO_STATS_INC("kcp.send_errors");
+    turbo_stats_counter_inc_fast(s_kcp_stats.send_errors);
     return UV_EIO;
   }
 
   /* Flush for low latency */
   ikcp_flush(client->kcp_ctx->kcp);
 
-  TURBO_STATS_INC("kcp.zero_copy_sends");
-  TURBO_STATS_INC("kcp.messages_sent");
   return 0;
 }
 
@@ -743,15 +754,13 @@ int turbo_kcp_send(turbo_kcp_client_t *client, const char *data, size_t length) 
 
   int rc = ikcp_send(client->kcp_ctx->kcp, data, (int)length);
   if (rc < 0) {
-    TURBO_STATS_INC("kcp.send_errors");
+    turbo_stats_counter_inc_fast(s_kcp_stats.send_errors);
     return UV_EIO;
   }
 
   /* Flush for low latency */
   ikcp_flush(client->kcp_ctx->kcp);
-
-  TURBO_STATS_INC("kcp.copy_sends");
-  TURBO_STATS_INC("kcp.messages_sent");
+  
   return 0;
 }
 
@@ -760,6 +769,7 @@ int turbo_kcp_client_init(turbo_kcp_client_t *client, uv_loop_t *loop) {
   if (!client || !loop) return UV_EINVAL;
 
   memset(client, 0, sizeof(*client));
+  init_kcp_stats();
 
   client->server = malloc(sizeof(turbo_kcp_server_t));
   if (!client->server) return UV_ENOMEM;

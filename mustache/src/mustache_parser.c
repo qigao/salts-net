@@ -1,45 +1,310 @@
 /**
  * @file mustache_parser.c
- * @brief Bridge between re2c+Lemon parser and existing mustache API
+ * @brief Recursive descent parser for mustache templates
  */
 
 #include "mustache_types.h"
 #include "mustache_lexer.h"
-#include "mustache.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
-// Forward declarations for generated parser functions
-void *MustacheParseAlloc(void *(*mallocProc)(size_t));
-void MustacheParseFree(void *p, void (*freeProc)(void*));
-void MustacheParse(void *yyp, int yymajor, mustache_token_t yyminor, mustache_parse_ctx_t *ctx);
+typedef struct {
+    mustache_token_t *tokens;
+    size_t token_count;
+    size_t current;
+    mustache_parse_ctx_t *ctx;
+} parser_state_t;
 
-// Include the old MUSTACHE_TAGTYPE definitions for compatibility
-typedef enum MUSTACHE_TAGTYPE {
-    MUSTACHE_TAGTYPE_NONE = 0,
-    MUSTACHE_TAGTYPE_DELIM,
-    MUSTACHE_TAGTYPE_COMMENT,
-    MUSTACHE_TAGTYPE_VAR,
-    MUSTACHE_TAGTYPE_VERBATIMVAR,
-    MUSTACHE_TAGTYPE_VERBATIMVAR2,
-    MUSTACHE_TAGTYPE_OPENSECTION,
-    MUSTACHE_TAGTYPE_OPENSECTIONINV,
-    MUSTACHE_TAGTYPE_CLOSESECTION,
-    MUSTACHE_TAGTYPE_CLOSESECTIONINV,
-    MUSTACHE_TAGTYPE_PARTIAL,
-    MUSTACHE_TAGTYPE_INDENT
-} MUSTACHE_TAGTYPE;
+static mustache_ast_node_t *create_node(mustache_node_type_t type) {
+    mustache_ast_node_t *node = malloc(sizeof(mustache_ast_node_t));
+    if (!node) return NULL;
+    
+    memset(node, 0, sizeof(mustache_ast_node_t));
+    node->type = type;
+    return node;
+}
 
-typedef struct MUSTACHE_TAGINFO {
-    MUSTACHE_TAGTYPE type;
-    int line;
-    int col;
-    int beg;
-    int end;
-    int name_beg;
-    int name_end;
-} MUSTACHE_TAGINFO;
+static void add_child(mustache_ast_node_t *parent, mustache_ast_node_t *child) {
+    if (!parent || !child) return;
+    
+    if (!parent->children) {
+        parent->children = malloc(sizeof(mustache_ast_node_t*) * 4);
+        parent->children_capacity = 4;
+        parent->children_count = 0;
+    }
+    
+    if (parent->children_count >= parent->children_capacity) {
+        parent->children_capacity *= 2;
+        parent->children = realloc(parent->children, 
+                                 sizeof(mustache_ast_node_t*) * parent->children_capacity);
+    }
+    
+    parent->children[parent->children_count++] = child;
+    child->parent = parent;
+}
+
+static char *copy_token_text(const mustache_token_t *token) {
+    if (!token || token->len == 0) return NULL;
+    
+    char *text = malloc(token->len + 1);
+    if (!text) return NULL;
+    
+    memcpy(text, token->start, token->len);
+    text[token->len] = '\0';
+    
+    return text;
+}
+
+static char *copy_token_text_trimmed(const mustache_token_t *token) {
+    if (!token || token->len == 0) return NULL;
+    
+    char *text = malloc(token->len + 1);
+    if (!text) return NULL;
+    
+    memcpy(text, token->start, token->len);
+    text[token->len] = '\0';
+    
+    // Trim whitespace for identifiers
+    char *start = text;
+    char *end = text + token->len - 1;
+    
+    while (*start && (*start == ' ' || *start == '\t')) start++;
+    while (end > start && (*end == ' ' || *end == '\t')) end--;
+    
+    *(end + 1) = '\0';
+    
+    if (start != text) {
+        memmove(text, start, strlen(start) + 1);
+    }
+    
+    return text;
+}
+
+static mustache_token_t *current_token(parser_state_t *state) {
+    if (state->current >= state->token_count) return NULL;
+    return &state->tokens[state->current];
+}
+
+static mustache_token_t *peek_token(parser_state_t *state) {
+    return current_token(state);
+}
+
+static mustache_token_t *consume_token(parser_state_t *state) {
+    mustache_token_t *token = current_token(state);
+    if (token) state->current++;
+    return token;
+}
+
+static int expect_token(parser_state_t *state, int expected_type) {
+    mustache_token_t *token = current_token(state);
+    if (!token || token->type != expected_type) {
+        state->ctx->error = 1;
+        snprintf(state->ctx->error_message, sizeof(state->ctx->error_message),
+                "Expected token type %d, got %d at line %d", 
+                expected_type, token ? token->type : -1, 
+                token ? token->line : 0);
+        return 0;
+    }
+    state->current++;
+    return 1;
+}
+
+static mustache_ast_node_t *parse_template(parser_state_t *state);
+
+static mustache_ast_node_t *parse_variable(parser_state_t *state, int var_type) {
+    mustache_ast_node_t *node = create_node(
+        var_type == MUSTACHE_TOKEN_VARIABLE ? MUSTACHE_NODE_VARIABLE :
+        var_type == MUSTACHE_TOKEN_UNESCAPED ? MUSTACHE_NODE_UNESCAPED :
+        var_type == MUSTACHE_TOKEN_UNESCAPED_ALT ? MUSTACHE_NODE_UNESCAPED :
+        MUSTACHE_NODE_VARIABLE
+    );
+    
+    if (!node) return NULL;
+    
+    // Expect variable name (TEXT token)
+    mustache_token_t *name_token = peek_token(state);
+    if (name_token && name_token->type == MUSTACHE_TOKEN_TEXT) {
+        node->name = copy_token_text_trimmed(name_token);
+        node->line = name_token->line;
+        node->column = name_token->column;
+        consume_token(state);
+    }
+    
+    // Expect closing }}
+    if (!expect_token(state, MUSTACHE_TOKEN_CLOSE)) {
+        free(node->name);
+        free(node);
+        return NULL;
+    }
+    
+    return node;
+}
+
+static mustache_ast_node_t *parse_section(parser_state_t *state, int section_type) {
+    mustache_ast_node_t *node = create_node(
+        section_type == MUSTACHE_TOKEN_SECTION_OPEN ? MUSTACHE_NODE_SECTION :
+        MUSTACHE_NODE_INVERTED
+    );
+    
+    if (!node) return NULL;
+    
+    // Expect section name (TEXT token)
+    mustache_token_t *name_token = peek_token(state);
+    if (name_token && name_token->type == MUSTACHE_TOKEN_TEXT) {
+        node->name = copy_token_text_trimmed(name_token);
+        node->line = name_token->line;
+        node->column = name_token->column;
+        consume_token(state);
+    }
+    
+    // Expect closing }}
+    if (!expect_token(state, MUSTACHE_TOKEN_CLOSE)) {
+        free(node->name);
+        free(node);
+        return NULL;
+    }
+    
+    // Parse section content until we find the closing tag
+    while (peek_token(state) && peek_token(state)->type != MUSTACHE_TOKEN_SECTION_CLOSE) {
+        mustache_ast_node_t *child = parse_template(state);
+        if (child) {
+            add_child(node, child);
+        }
+        if (state->ctx->error) break;
+    }
+    
+    // Expect section close
+    if (!expect_token(state, MUSTACHE_TOKEN_SECTION_CLOSE)) {
+        mustache_ast_free(node);
+        return NULL;
+    }
+    
+    // Expect closing section name
+    mustache_token_t *close_name_token = peek_token(state);
+    if (close_name_token && close_name_token->type == MUSTACHE_TOKEN_TEXT) {
+        char *close_name = copy_token_text(close_name_token);
+        if (node->name && close_name && strcmp(node->name, close_name) != 0) {
+            state->ctx->error = 1;
+            snprintf(state->ctx->error_message, sizeof(state->ctx->error_message),
+                    "Section name mismatch: '%s' vs '%s'", node->name, close_name);
+            free(close_name);
+            mustache_ast_free(node);
+            return NULL;
+        }
+        free(close_name);
+        consume_token(state);
+    }
+    
+    // Expect final closing }}
+    if (!expect_token(state, MUSTACHE_TOKEN_CLOSE)) {
+        mustache_ast_free(node);
+        return NULL;
+    }
+    
+    return node;
+}
+
+static mustache_ast_node_t *parse_partial(parser_state_t *state) {
+    mustache_ast_node_t *node = create_node(MUSTACHE_NODE_PARTIAL);
+    if (!node) return NULL;
+    
+    // Expect partial name (TEXT token)
+    mustache_token_t *name_token = peek_token(state);
+    if (name_token && name_token->type == MUSTACHE_TOKEN_TEXT) {
+        node->name = copy_token_text(name_token);
+        node->line = name_token->line;
+        node->column = name_token->column;
+        consume_token(state);
+    }
+    
+    // Expect closing }}
+    if (!expect_token(state, MUSTACHE_TOKEN_CLOSE)) {
+        free(node->name);
+        free(node);
+        return NULL;
+    }
+    
+    return node;
+}
+
+static mustache_ast_node_t *parse_comment(parser_state_t *state) {
+    mustache_ast_node_t *node = create_node(MUSTACHE_NODE_COMMENT);
+    if (!node) return NULL;
+    
+    // Expect comment text (TEXT token)
+    mustache_token_t *text_token = peek_token(state);
+    if (text_token && text_token->type == MUSTACHE_TOKEN_TEXT) {
+        node->text = copy_token_text(text_token);
+        node->line = text_token->line;
+        node->column = text_token->column;
+        consume_token(state);
+    }
+    
+    // Expect closing }}
+    if (!expect_token(state, MUSTACHE_TOKEN_CLOSE)) {
+        free(node->text);
+        free(node);
+        return NULL;
+    }
+    
+    return node;
+}
+
+static mustache_ast_node_t *parse_template(parser_state_t *state) {
+    mustache_token_t *token = peek_token(state);
+    if (!token || token->type == MUSTACHE_TOKEN_EOF) {
+        return NULL;
+    }
+    
+    switch (token->type) {
+        case MUSTACHE_TOKEN_TEXT: {
+            mustache_ast_node_t *node = create_node(MUSTACHE_NODE_TEXT);
+            if (node) {
+                node->text = copy_token_text(token);
+                node->line = token->line;
+                node->column = token->column;
+            }
+            consume_token(state);
+            return node;
+        }
+        
+        case MUSTACHE_TOKEN_VARIABLE:
+        case MUSTACHE_TOKEN_UNESCAPED:
+        case MUSTACHE_TOKEN_UNESCAPED_ALT:
+            consume_token(state);
+            return parse_variable(state, token->type);
+            
+        case MUSTACHE_TOKEN_SECTION_OPEN:
+        case MUSTACHE_TOKEN_SECTION_INVERTED:
+            consume_token(state);
+            return parse_section(state, token->type);
+            
+        case MUSTACHE_TOKEN_PARTIAL:
+            consume_token(state);
+            return parse_partial(state);
+            
+        case MUSTACHE_TOKEN_COMMENT:
+            consume_token(state);
+            return parse_comment(state);
+            
+        case MUSTACHE_TOKEN_DELIMITER:
+            // Skip delimiter changes for now
+            consume_token(state);
+            if (peek_token(state) && peek_token(state)->type == MUSTACHE_TOKEN_TEXT) {
+                consume_token(state); // Skip delimiter content
+            }
+            if (peek_token(state) && peek_token(state)->type == MUSTACHE_TOKEN_CLOSE) {
+                consume_token(state); // Skip closing }}
+            }
+            return parse_template(state); // Continue parsing
+            
+        default:
+            // Skip unknown tokens
+            consume_token(state);
+            return parse_template(state);
+    }
+}
 
 int mustache_parse_template(const char *input, size_t len, mustache_parse_ctx_t *ctx) {
     memset(ctx, 0, sizeof(mustache_parse_ctx_t));
@@ -54,29 +319,32 @@ int mustache_parse_template(const char *input, size_t len, mustache_parse_ctx_t 
         return -1;
     }
     
-    // Create parser
-    void *parser = MustacheParseAlloc(malloc);
-    if (!parser) {
+    // Create parser state
+    parser_state_t state = {
+        .tokens = tokens,
+        .token_count = token_count,
+        .current = 0,
+        .ctx = ctx
+    };
+    
+    // Create root template node
+    ctx->root = create_node(MUSTACHE_NODE_TEMPLATE);
+    if (!ctx->root) {
         free(tokens);
         ctx->error = 1;
-        snprintf(ctx->error_message, sizeof(ctx->error_message), "Parser allocation failed");
+        snprintf(ctx->error_message, sizeof(ctx->error_message), "Memory allocation failed");
         return -1;
     }
     
-    // Parse tokens
-    for (size_t i = 0; i < token_count && !ctx->error; i++) {
-        MustacheParse(parser, tokens[i].type, tokens[i], ctx);
+    // Parse all elements
+    while (peek_token(&state) && peek_token(&state)->type != MUSTACHE_TOKEN_EOF && !ctx->error) {
+        mustache_ast_node_t *element = parse_template(&state);
+        if (element) {
+            add_child(ctx->root, element);
+        }
     }
     
-    // Finalize parsing
-    if (!ctx->error) {
-        MustacheParse(parser, 0, (mustache_token_t){0}, ctx);
-    }
-    
-    // Cleanup
-    MustacheParseFree(parser, free);
     free(tokens);
-    
     return ctx->error ? -1 : 0;
 }
 
@@ -113,109 +381,4 @@ void mustache_ast_print(const mustache_ast_node_t *node, int indent) {
     for (size_t i = 0; i < node->children_count; i++) {
         mustache_ast_print(node->children[i], indent + 1);
     }
-}
-
-// Convert AST to old-style MUSTACHE_TAGINFO array for compatibility
-static int ast_to_taginfo(const mustache_ast_node_t *node, const char *template_data, 
-                         MUSTACHE_TAGINFO **tags, size_t *count, size_t *capacity) {
-    if (!node) return 0;
-    
-    // Add current node if it's not the root template
-    if (node->type != MUSTACHE_NODE_TEMPLATE) {
-        if (*count >= *capacity) {
-            *capacity *= 2;
-            MUSTACHE_TAGINFO *new_tags = realloc(*tags, *capacity * sizeof(MUSTACHE_TAGINFO));
-            if (!new_tags) return -1;
-            *tags = new_tags;
-        }
-        
-        MUSTACHE_TAGINFO *tag = &(*tags)[(*count)++];
-        memset(tag, 0, sizeof(MUSTACHE_TAGINFO));
-        
-        // Map node types to tag types
-        switch (node->type) {
-            case MUSTACHE_NODE_TEXT:
-                tag->type = MUSTACHE_TAGTYPE_NONE; // Text is handled differently
-                break;
-            case MUSTACHE_NODE_VARIABLE:
-                tag->type = MUSTACHE_TAGTYPE_VAR;
-                break;
-            case MUSTACHE_NODE_UNESCAPED:
-                tag->type = MUSTACHE_TAGTYPE_VERBATIMVAR;
-                break;
-            case MUSTACHE_NODE_SECTION:
-                tag->type = MUSTACHE_TAGTYPE_OPENSECTION;
-                break;
-            case MUSTACHE_NODE_INVERTED:
-                tag->type = MUSTACHE_TAGTYPE_OPENSECTIONINV;
-                break;
-            case MUSTACHE_NODE_PARTIAL:
-                tag->type = MUSTACHE_TAGTYPE_PARTIAL;
-                break;
-            case MUSTACHE_NODE_COMMENT:
-                tag->type = MUSTACHE_TAGTYPE_COMMENT;
-                break;
-            default:
-                tag->type = MUSTACHE_TAGTYPE_NONE;
-                break;
-        }
-        
-        tag->line = node->line;
-        tag->col = node->column;
-        
-        // For compatibility, we need to find the positions in the original template
-        // This is a simplified approach - in a full implementation, we'd store
-        // the original positions during parsing
-        if (node->name) {
-            const char *pos = strstr(template_data, node->name);
-            if (pos) {
-                tag->name_beg = pos - template_data;
-                tag->name_end = tag->name_beg + strlen(node->name);
-            }
-        }
-    }
-    
-    // Process children
-    for (size_t i = 0; i < node->children_count; i++) {
-        if (ast_to_taginfo(node->children[i], template_data, tags, count, capacity) != 0) {
-            return -1;
-        }
-    }
-    
-    return 0;
-}
-
-// Enhanced mustache_compile that can use either the new parser or fall back to old
-MUSTACHE_TEMPLATE* mustache_compile_enhanced(const char* templ_data, size_t templ_size,
-                                           const MUSTACHE_PARSER* parser, void* parser_data,
-                                           unsigned flags) {
-    // Try new parser first
-    mustache_parse_ctx_t ctx;
-    if (mustache_parse_template(templ_data, templ_size, &ctx) == 0) {
-        // Success with new parser - convert AST to old format for compatibility
-        size_t capacity = 64;
-        size_t count = 0;
-        MUSTACHE_TAGINFO *tags = malloc(capacity * sizeof(MUSTACHE_TAGINFO));
-        
-        if (!tags) {
-            mustache_ast_free(ctx.root);
-            return NULL;
-        }
-        
-        if (ast_to_taginfo(ctx.root, templ_data, &tags, &count, &capacity) == 0) {
-            // Successfully converted - now compile using existing logic
-            // This is a simplified approach - ideally we'd generate bytecode directly from AST
-            mustache_ast_free(ctx.root);
-            
-            // For now, fall back to original parser but we have validated syntax
-            free(tags);
-        } else {
-            free(tags);
-            mustache_ast_free(ctx.root);
-        }
-    }
-    
-    // Fall back to original parser (for now)
-    // In a complete implementation, we'd generate the template directly from the AST
-    return mustache_compile(templ_data, templ_size, parser, parser_data, flags);
 }

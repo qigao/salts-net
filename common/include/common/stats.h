@@ -119,7 +119,41 @@ CXX_C_API int turbo_stats_init(void *loop, size_t update_pool_size);
  */
 CXX_C_API void turbo_stats_cleanup(void);
 
-/* Thread-safe statistics updates */
+/* Statistics ID for fast updates */
+typedef int32_t turbo_stat_id_t;
+
+/* Get or register a statistic ID (thread-safe, invokes lock) */
+/**
+ * @brief Registers a statistic and returns its ID.
+ *        If the statistic already exists, returns the existing ID.
+ *        This function is thread-safe but involves a lock.
+ *
+ * @param name The name of the statistic.
+ * @param type The type of the statistic.
+ * @return The statistic ID (>= 0), or -1 on error.
+ */
+CXX_C_API turbo_stat_id_t turbo_stats_register(const char *name, turbo_stat_type_t type);
+
+/* Fast update API using ID (lock-free lookup, only locks queue) */
+/**
+ * @brief Fast path for counter addition.
+ */
+CXX_C_API int turbo_stats_counter_add_fast(turbo_stat_id_t id, uint64_t value);
+CXX_C_API int turbo_stats_counter_inc_fast(turbo_stat_id_t id);
+
+/**
+ * @brief Fast path for gauge updates.
+ */
+CXX_C_API int turbo_stats_gauge_set_fast(turbo_stat_id_t id, int64_t value);
+CXX_C_API int turbo_stats_gauge_add_fast(turbo_stat_id_t id, int64_t delta);
+
+/**
+ * @brief Fast path for histogram/rate.
+ */
+CXX_C_API int turbo_stats_histogram_record_fast(turbo_stat_id_t id, uint64_t value);
+CXX_C_API int turbo_stats_rate_record_fast(turbo_stat_id_t id, uint64_t value);
+
+/* Thread-safe statistics updates (String-based, slower due to lookup lock) */
 /**
  * @brief Atomically adds a value to a counter statistic.
  *

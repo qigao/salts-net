@@ -32,7 +32,7 @@ target_link_libraries(openssl_algorithms PRIVATE TurboNet::Common OpenSSL::SSL
 # Logger example
 add_executable(logger_example logger_example.c)
 
-target_link_libraries(logger_example PRIVATE TurboNet::Common calg)
+target_link_libraries(logger_example PRIVATE TurboNet::Common )
 
 add_executable(bitmap_stats bitmap_stats_example.c)
 target_link_libraries(bitmap_stats PRIVATE TurboNet::Common)

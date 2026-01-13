@@ -615,6 +615,7 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
   uint8_t opcode = frame.opcode;
   uint64_t payload_len = frame.payload_len;
   size_t header_len = frame.header_len;
+  (void)header_len;
 
   // Get payload
   const uint8_t *payload = frame.payload;

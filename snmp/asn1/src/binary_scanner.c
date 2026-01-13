@@ -168,7 +168,23 @@ static asn1_value_t *parse_primitive(const uint8_t *data, size_t len, asn1_tag_t
                     }
                 }
                 break;
-                
+
+            case 10: // ENUMERATED (same encoding as INTEGER)
+                value = asn1_create_value(ASN1_TYPE_INTEGER, 0, 0, 10);
+                if (value) {
+                    value->value.integer = 0;
+                    for (size_t i = 0; i < len && i < sizeof(int64_t); i++) {
+                        value->value.integer = (value->value.integer << 8) | data[i];
+                    }
+                    // Handle negative numbers (two's complement)
+                    if (len > 0 && (data[0] & 0x80)) {
+                        for (size_t i = len; i < sizeof(int64_t); i++) {
+                            value->value.integer |= (0xFFLL << (i * 8));
+                        }
+                    }
+                }
+                break;
+
             case 3: // BIT STRING
                 value = asn1_create_value(ASN1_TYPE_BIT_STRING, 0, 0, 3);
                 if (value && len > 0) {

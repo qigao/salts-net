@@ -58,6 +58,7 @@ add_subdirectory(http)
 add_subdirectory(iris)
 add_subdirectory(rpc_client)
 add_subdirectory(snmp)
+add_subdirectory(ldap)
 add_subdirectory(modules)
 add_subdirectory(mustache)
 # Package Configuration

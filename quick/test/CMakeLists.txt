@@ -4,6 +4,7 @@ file(GLOB TEST_SOURCES
     js_uv_fs_test.c
     js_uv_http_test.c
     js_uv_module_test.c
+    js_uv_multi_runtime_test.c
     js_uv_net_test.c
     js_uv_os_test.c
     js_uv_process_test.c

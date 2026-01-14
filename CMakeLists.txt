@@ -50,7 +50,7 @@ pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
 # Additional components
 add_subdirectory(vendor)
 include(cmake/FindTools.cmake)
-add_subdirectory(common)
+add_subdirectory(utils)
 add_subdirectory(parser)
 add_subdirectory(netcore)
 add_subdirectory(db)

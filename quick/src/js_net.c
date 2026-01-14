@@ -491,7 +491,9 @@ int js_turbo_register_net(JSContext *ctx, JSValue turbo_obj) {
 
     // Register TcpClient class
     JS_NewClassID(rt, &js_tcp_client_class_id);
-    JS_NewClass(rt, js_tcp_client_class_id, &js_tcp_client_class);
+    if (!JS_IsRegisteredClass(rt, js_tcp_client_class_id)) {
+        JS_NewClass(rt, js_tcp_client_class_id, &js_tcp_client_class);
+    }
 
     JSValue tcp_proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, tcp_proto, js_tcp_client_proto, countof(js_tcp_client_proto));
@@ -503,7 +505,9 @@ int js_turbo_register_net(JSContext *ctx, JSValue turbo_obj) {
 
     // Register WebSocket class
     JS_NewClassID(rt, &js_websocket_client_class_id);
-    JS_NewClass(rt, js_websocket_client_class_id, &js_websocket_client_class);
+    if (!JS_IsRegisteredClass(rt, js_websocket_client_class_id)) {
+        JS_NewClass(rt, js_websocket_client_class_id, &js_websocket_client_class);
+    }
 
     JSValue ws_proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, ws_proto, js_websocket_proto, countof(js_websocket_proto));

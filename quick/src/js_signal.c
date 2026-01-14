@@ -199,7 +199,9 @@ int js_turbo_register_signal(JSContext *ctx, JSValue turbo_obj) {
 
     // Register SignalWatcher class
     JS_NewClassID(rt, &js_signal_watcher_class_id);
-    JS_NewClass(rt, js_signal_watcher_class_id, &js_signal_watcher_class);
+    if (!JS_IsRegisteredClass(rt, js_signal_watcher_class_id)) {
+        JS_NewClass(rt, js_signal_watcher_class_id, &js_signal_watcher_class);
+    }
 
     JSValue proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, proto, js_signal_watcher_proto, countof(js_signal_watcher_proto));

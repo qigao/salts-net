@@ -33,8 +33,11 @@ static JSClassDef js_turbo_context_class = {
 
 int js_turbo_init_state(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
-    if (js_turbo_context_class_id == 0) {
-        JS_NewClassID(rt, &js_turbo_context_class_id);
+
+    // Always register class ID with this runtime
+    // JS_NewClassID is idempotent per-runtime when class_id is non-zero
+    JS_NewClassID(rt, &js_turbo_context_class_id);
+    if (!JS_IsRegisteredClass(rt, js_turbo_context_class_id)) {
         JS_NewClass(rt, js_turbo_context_class_id, &js_turbo_context_class);
     }
 

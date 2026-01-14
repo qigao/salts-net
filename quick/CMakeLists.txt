@@ -22,7 +22,7 @@ target_link_libraries(
 
 target_compile_definitions(${TARGET_NAME}
   PUBLIC $<$<BOOL:WIN32>:NOMINMAX>
-  PRIVATE TURBO_QUICK_BUILDING)
+  PRIVATE SHARED_CXX)
 
 # Set target properties
 set_target_properties(

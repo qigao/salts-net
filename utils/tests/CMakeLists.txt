@@ -11,7 +11,9 @@ set(TEST_FILES
     test_turbo_logger.c
     test_stc.c 
     test_fmt_re2c.c
-)
+    test_arena_multithread.c
+    test_mutex.c
+ )
 
 # Create executables and link libraries for each test
 foreach(TEST_FILE ${TEST_FILES})

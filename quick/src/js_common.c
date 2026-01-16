@@ -96,7 +96,7 @@ void js_turbo_dump_error(JSContext *ctx) {
     }
     const char *message = JS_ToCString(ctx, exception);
     if (message) {
-        LOG_ERROR("JS Exception: {}", message);
+        TLOG_ERROR("JS Exception: {}", message);
         JS_FreeCString(ctx, message);
     }
     JS_FreeValue(ctx, exception);

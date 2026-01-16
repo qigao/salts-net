@@ -33,20 +33,20 @@ set_target_properties(
 add_library(TurboNet::Redis ALIAS netcore_redis)
 
 # Install
-install(
-  TARGETS netcore_redis
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
+# install(
+#   TARGETS netcore_redis
+#   EXPORT TurboNetTargets
+#   LIBRARY DESTINATION lib
+#   ARCHIVE DESTINATION lib
+#   RUNTIME DESTINATION bin)
 
-install(
-  FILES turbo_redis.h
-  DESTINATION include/turbo
-  RENAME redis.h)
+# install(
+#   FILES turbo_redis.h
+#   DESTINATION include/turbo
+#   RENAME redis.h)
 
-install(FILES redis_client.h redis_pool.h redis_cluster.h
-        DESTINATION include/turbo/db)
+# install(FILES redis_client.h redis_pool.h redis_cluster.h
+#         DESTINATION include/turbo/db)
 
 # Tests
 enable_testing()

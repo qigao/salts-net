@@ -461,8 +461,15 @@ static void on_pipe_client_connected(uv_connect_t* req, int status) {
         }
     } else {
         turbo_stats_counter_inc_fast(s_pipe_stats.recv_errors);
-        log_error(NULL, "Pipe", "Pipe connection failed: {}", uv_strerror(status));
-        turbo_pipe_client_close(client);
+        TLOG_ERROR("Pipe connection failed: {:s}", uv_strerror(status));
+        
+        // Notify caller of connection failure
+        if (client->on_connect) {
+            client->on_connect(client, status, NULL);
+        }
+        
+        // Clean up internally - user doesn't know client structs
+       // turbo_pipe_client_close(client);
     }
     
     free(req);

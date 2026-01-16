@@ -16,10 +16,8 @@ add_library(TurboNet::Utils ALIAS ${TARGET_NAME})
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/common>
          $<BUILD_INTERFACE:${Stb_INCLUDE_DIR}>
          $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/common>
   PRIVATE $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>
           $<BUILD_INTERFACE:${FMT_LEXER_INCLUDE_DIRS}>)
 
@@ -53,10 +51,9 @@ install(
   RUNTIME DESTINATION bin)
 
 # Install headers preserving directory structure
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/common.h DESTINATION include)
 install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/common
-  DESTINATION include
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include
+  DESTINATION  /
   FILES_MATCHING
   PATTERN "*.h")
 

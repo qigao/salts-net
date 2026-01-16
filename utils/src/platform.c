@@ -66,7 +66,7 @@ void turbo_mutex_init(turbo_mutex_t *mutex) {
 }
 
 void turbo_mutex_destroy(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL) {
+  if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) {
     return;
   }
   // SRW locks don't need explicit cleanup, just free memory
@@ -75,14 +75,14 @@ void turbo_mutex_destroy(turbo_mutex_t *mutex) {
 }
 
 void turbo_mutex_lock(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL) {
+  if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) {
     return;
   }
   AcquireSRWLockExclusive((PSRWLOCK)*mutex);
 }
 
 void turbo_mutex_unlock(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL) {
+  if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) {
     return;
   }
   ReleaseSRWLockExclusive((PSRWLOCK)*mutex);
@@ -173,14 +173,16 @@ void turbo_cond_broadcast(turbo_cond_t *cond) {
 }
 
 void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex) {
-  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL) {
+  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL ||
+      *mutex == (turbo_mutex_t)(uintptr_t)-1) {
     return;
   }
   SleepConditionVariableSRW((PCONDITION_VARIABLE)*cond, (PSRWLOCK)*mutex, INFINITE, 0);
 }
 
 int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns) {
-  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL) {
+  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL ||
+      *mutex == (turbo_mutex_t)(uintptr_t)-1) {
     return UV_EINVAL;
   }
   DWORD timeout_ms = (DWORD)(timeout_ns / 1000000ULL); // Convert ns to ms
@@ -420,11 +422,11 @@ int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout,
   // Start libuv timer
   int err = uv_timer_start(&timer->uv_timer, turbo_timer_uv_cb, timeout, repeat);
   if (err != 0) {
-    LOG_ERROR("uv_timer_start failed: {}", uv_strerror(err));
+    TLOG_ERROR("uv_timer_start failed: {}", uv_strerror(err));
     return err;
   }
 
-  LOG_DEBUG("Timer started: timeout={} ms, repeat={} ms", (unsigned long long)timeout,
+  TLOG_DEBUG("Timer started: timeout={} ms, repeat={} ms", (unsigned long long)timeout,
             (unsigned long long)repeat);
   return 0;
 }
@@ -436,11 +438,11 @@ int turbo_timer_stop(turbo_timer_t *timer) {
 
   int err = uv_timer_stop(&timer->uv_timer);
   if (err != 0) {
-    LOG_ERROR("uv_timer_stop failed: {}", uv_strerror(err));
+    TLOG_ERROR("uv_timer_stop failed: {}", uv_strerror(err));
     return err;
   }
 
-  LOG_DEBUG("Timer stopped");
+  TLOG_DEBUG("Timer stopped");
   return 0;
 }
 
@@ -458,7 +460,7 @@ void turbo_timer_close(turbo_timer_t *timer) {
   // Clear callback to prevent accidental calls
   timer->callback = NULL;
 
-  LOG_DEBUG("Timer closed");
+  TLOG_DEBUG("Timer closed");
 }
 
 // =============================================================================
@@ -580,14 +582,14 @@ int turbo_timer_init(turbo_timer_t *timer, void *loop) {
   // Initialize libuv timer with provided loop
   int err = uv_timer_init((uv_loop_t *)loop, &timer->uv_timer);
   if (err != 0) {
-    LOG_ERROR("uv_timer_init failed: {}", uv_strerror(err));
+    TLOG_ERROR("uv_timer_init failed: {}", uv_strerror(err));
     return err;
   }
 
   // Link back to our timer
   timer->uv_timer.data = timer;
 
-  LOG_DEBUG("Timer initialized with provided loop");
+  TLOG_DEBUG("Timer initialized with provided loop");
   return 0;
 }
 

@@ -128,7 +128,7 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
 }
 
 int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char *host, int port) {
-  LOG_DEBUG("turbo_websocket_client_connect: start host={} port={}", host, port);
+  TLOG_DEBUG("turbo_websocket_client_connect: start host={} port={}", host, port);
 
   if (!client || !host)
     return -1;
@@ -136,7 +136,7 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
   // Store host and port for handshake
   client->connect_host = turbo_arena_strdup(client->conn_arena, host);
   client->connect_port = port;
-  LOG_DEBUG("turbo_websocket_client_connect: is_tls={}", client->is_tls);
+  TLOG_DEBUG("turbo_websocket_client_connect: is_tls={}", client->is_tls);
 
   // Create underlying transport
   if (client->is_tls) {
@@ -189,13 +189,13 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
     // Send WebSocket handshake after TLS handshake (in callback)
     return 0;
   } else {
-    LOG_DEBUG("turbo_websocket_client_connect: creating TCP client");
+    TLOG_DEBUG("turbo_websocket_client_connect: creating TCP client");
     turbo_tcp_client_t *tcp = turbo_tcp_client_create(client->loop);
     if (!tcp) {
-      LOG_DEBUG("turbo_websocket_client_connect: turbo_tcp_client_create failed");
+      TLOG_DEBUG("turbo_websocket_client_connect: turbo_tcp_client_create failed");
       return -1;
     }
-    LOG_DEBUG("turbo_websocket_client_connect: TCP client created, connecting...");
+    TLOG_DEBUG("turbo_websocket_client_connect: TCP client created, connecting...");
 
     client->transport = tcp;
     tcp->user_data = client;
@@ -204,7 +204,7 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
     // Connect with TCP-specific callbacks
     int result = turbo_tcp_client_connect(tcp, host, (unsigned short)port, on_tcp_recv_internal,
                                           on_tcp_connect_internal, on_tcp_close_internal);
-    LOG_DEBUG("turbo_websocket_client_connect: turbo_tcp_client_connect returned {}", result);
+    TLOG_DEBUG("turbo_websocket_client_connect: turbo_tcp_client_connect returned {}", result);
     if (result != 0) {
       turbo_tcp_client_close(tcp);
       client->transport = NULL;
@@ -333,7 +333,7 @@ turbo_websocket_state_t turbo_websocket_client_get_state(turbo_websocket_client_
 
 static void on_tcp_connect_internal(void *handle, int status, void *peer) {
   (void)peer;
-  LOG_DEBUG("on_tcp_connect_internal: status={}", status);
+  TLOG_DEBUG("on_tcp_connect_internal: status={}", status);
   if (!handle) return;
 
   turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
@@ -343,7 +343,7 @@ static void on_tcp_connect_internal(void *handle, int status, void *peer) {
 
   if (status != 0) {
     // TCP connection failed
-    LOG_DEBUG("on_tcp_connect_internal: TCP connection failed");
+    TLOG_DEBUG("on_tcp_connect_internal: TCP connection failed");
     if (client->on_connect) {
       client->on_connect(client, status, peer);
     }
@@ -351,28 +351,28 @@ static void on_tcp_connect_internal(void *handle, int status, void *peer) {
   }
 
   // TCP connected, send WebSocket handshake
-  LOG_DEBUG("on_tcp_connect_internal: TCP connected, sending WS handshake");
+  TLOG_DEBUG("on_tcp_connect_internal: TCP connected, sending WS handshake");
   client->state = TURBO_WS_STATE_HANDSHAKING;
   send_websocket_handshake(client, client->connect_host, client->connect_port);
 }
 
 static int on_tcp_recv_internal(void *handle, const turbo_arena_slice_t *data, void *peer) {
   (void)peer;
-  LOG_DEBUG("on_tcp_recv_internal: handle={} data={}", handle, (void*)data);
+  TLOG_DEBUG("on_tcp_recv_internal: handle={} data={}", handle, (void*)data);
   if (!handle) return 0;
 
   turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
   turbo_websocket_client_t *client = (turbo_websocket_client_t *)tcp->user_data;
 
   if (!client || !data || !data->data || data->length == 0) {
-    LOG_DEBUG("on_tcp_recv_internal: invalid data or client");
+    TLOG_DEBUG("on_tcp_recv_internal: invalid data or client");
     return 0;
   }
-  LOG_DEBUG("on_tcp_recv_internal: state={} data_len={}", (int)client->state, data->length);
+  TLOG_DEBUG("on_tcp_recv_internal: state={} data_len={}", (int)client->state, data->length);
 
   if (client->state == TURBO_WS_STATE_HANDSHAKING) {
     // Process handshake response
-    LOG_DEBUG("on_tcp_recv_internal: processing handshake response");
+    TLOG_DEBUG("on_tcp_recv_internal: processing handshake response");
     process_handshake_response(client, data->data, data->length);
   } else if (client->state == TURBO_WS_STATE_OPEN || client->state == TURBO_WS_STATE_CLOSING) {
     // Process WebSocket frames
@@ -540,11 +540,11 @@ static const char *strcasestr_local(const char *haystack, const char *needle) {
 
 static int process_handshake_response(turbo_websocket_client_t *client, const char *data,
                                       size_t len) {
-  LOG_DEBUG("process_handshake_response: len={} client={}", len, (void*)client);
-  LOG_DEBUG("process_handshake_response: handshake_recv_buffer={}", (void*)client->handshake_recv_buffer);
+  TLOG_DEBUG("process_handshake_response: len={} client={}", len, (void*)client);
+  TLOG_DEBUG("process_handshake_response: handshake_recv_buffer={}", (void*)client->handshake_recv_buffer);
   // Accumulate in handshake buffer (leave room for null terminator)
   if (client->handshake_recv_used + len >= client->handshake_recv_buffer->capacity) {
-    LOG_DEBUG("process_handshake_response: handshake too large");
+    TLOG_DEBUG("process_handshake_response: handshake too large");
     return -1; // Handshake too large
   }
 
@@ -575,7 +575,7 @@ static int process_handshake_response(turbo_websocket_client_t *client, const ch
 
   // Handshake failed - call on_connect with error
   if (client->on_connect) {
-    log_error(NULL, "WebSocket", "WS Handshake failed. Response:\n{}", client->handshake_recv_buffer->data);
+    TLOG_ERROR("WS Handshake failed. Response:\n{}", client->handshake_recv_buffer->data);
     client->on_connect(client, -1, NULL);
   }
 
@@ -584,11 +584,11 @@ static int process_handshake_response(turbo_websocket_client_t *client, const ch
 
 static int process_websocket_frame(turbo_websocket_client_t *client, const uint8_t *data,
                                    size_t len) {
-  LOG_DEBUG("process_websocket_frame: len={}", len);
+  TLOG_DEBUG("process_websocket_frame: len={}", len);
   // Parse WebSocket frame
   ws_frame_t frame;
   ws_parse_result_t result = ws_frame_parse(data, len, &frame);
-  LOG_DEBUG("process_websocket_frame: parse result={}", (int)result);
+  TLOG_DEBUG("process_websocket_frame: parse result={}", (int)result);
 
   if (result == WS_PARSE_NEED_MORE) {
     // Buffer incomplete frame data for later
@@ -677,14 +677,14 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
   } else if (opcode == WS_OPCODE_TEXT || opcode == WS_OPCODE_BINARY) {
     if (fin) {
       // Complete unfragmented message
-      LOG_DEBUG("process_websocket_frame: complete message opcode={} payload_len={} on_recv={}",
+      TLOG_DEBUG("process_websocket_frame: complete message opcode={} payload_len={} on_recv={}",
               (int)opcode, (unsigned long long)payload_len, (void*)client->on_recv);
       if (client->on_recv) {
         turbo_arena_slice_t slice = {
             .data = (char *)payload, .length = payload_len, .buffer = NULL};
-        LOG_DEBUG("process_websocket_frame: calling on_recv");
+        TLOG_DEBUG("process_websocket_frame: calling on_recv");
         client->on_recv(client, &slice, NULL);
-        LOG_DEBUG("process_websocket_frame: on_recv returned");
+        TLOG_DEBUG("process_websocket_frame: on_recv returned");
       }
     } else {
       // First fragment of a fragmented message

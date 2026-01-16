@@ -23,6 +23,7 @@
 #define FMT_VA_H
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include "stb_sprintf.h"
@@ -125,6 +126,11 @@ static inline int fmt_va_vprint(char *buf, size_t size, const char *fmt, va_list
                 switch (type) {
                     case 's': {
                         const char *str = va_arg(args, const char*);
+                        // Safety check for common invalid pointers that cause crashes
+                        // 0xFFFFFFFFFFFFFFFF (-1) is a common error result cast to pointer
+                        if (str == (const char*)(uintptr_t)-1) {
+                            str = "(invalid_ptr_-1)";
+                        }
                         written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, str ? str : "(null)");
                         break;
                     }

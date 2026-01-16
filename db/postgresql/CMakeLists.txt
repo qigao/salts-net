@@ -27,16 +27,16 @@ set_target_properties(
 add_library(TurboNet::PostgreSQL ALIAS netcore_postgresql)
 
 # Install
-install(
-  TARGETS netcore_postgresql
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin OPTIONAL)
+# install(
+#   TARGETS netcore_postgresql
+#   EXPORT TurboNetTargets
+#   LIBRARY DESTINATION lib
+#   ARCHIVE DESTINATION lib
+#   RUNTIME DESTINATION bin OPTIONAL)
 
-install(
-  FILES turbo_postgresql.h
-  DESTINATION include/turbo
-  RENAME postgresql.h)
+# install(
+#   FILES turbo_postgresql.h
+#   DESTINATION include/turbo
+#   RENAME postgresql.h)
 
-install(FILES pquv.h DESTINATION include/turbo/db)
+# install(FILES pquv.h DESTINATION include/turbo/db)

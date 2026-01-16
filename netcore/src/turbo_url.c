@@ -76,7 +76,7 @@ static void to_lower(char *str) {
 static int parse_and_validate_url(const char *url, uri_t **parsed_url) {
   if (turbo_parse_uri((const uint8_t *)url, strlen(url), parsed_url) != 0 ||
       !turbo_uri_is_valid(*parsed_url)) {
-    LOG_ERROR("Invalid URL format: {}", url);
+    TLOG_ERROR("Invalid URL format: {}", url);
     if (*parsed_url) {
       turbo_free_uri(parsed_url);
     }
@@ -85,7 +85,7 @@ static int parse_and_validate_url(const char *url, uri_t **parsed_url) {
 
   int port = turbo_uri_port(*parsed_url);
   if (port > 65535 || port < 0) {
-    LOG_ERROR("Invalid port number: {} (must be 0-65535)", port);
+    TLOG_ERROR("Invalid port number: {} (must be 0-65535)", port);
     turbo_free_uri(parsed_url);
     return TURBO_EINVAL_TRANSPORT;
   }
@@ -107,7 +107,7 @@ static int get_transport_info(const char *scheme, int *default_port,
 
   if (!found) {
     static const char FMT_UNSUPPORTED[48] = "Unsupported transport scheme: {}";
-    LOG_ERROR(FMT_UNSUPPORTED, scheme);
+    TLOG_ERROR(FMT_UNSUPPORTED, scheme);
     return TURBO_EINVAL_TRANSPORT;
   }
 

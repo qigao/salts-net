@@ -106,6 +106,32 @@ static inline int turbo_atomic_cas(turbo_atomic_int_t *ptr, int expected, int de
 #endif
 }
 
+/**
+ * @brief Atomically fetch and add, return OLD value
+ */
+static inline int turbo_atomic_fetch_add(turbo_atomic_int_t *ptr, int value) {
+#ifdef TURBO_WIN32
+  return (int)InterlockedExchangeAdd(ptr, (LONG)value);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_add(ptr, value);
+#else
+  return __sync_fetch_and_add(ptr, value);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and subtract, return OLD value
+ */
+static inline int turbo_atomic_fetch_sub(turbo_atomic_int_t *ptr, int value) {
+#ifdef TURBO_WIN32
+  return (int)InterlockedExchangeAdd(ptr, -(LONG)value);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_sub(ptr, value);
+#else
+  return __sync_fetch_and_sub(ptr, value);
+#endif
+}
+
 /* ============================================================================
  * Atomic Int64 Operations
  * ============================================================================ */
@@ -134,6 +160,32 @@ static inline void turbo_atomic_store64(turbo_atomic_int64_t *ptr, int64_t value
   atomic_store(ptr, value);
 #else
   __sync_lock_test_and_set(ptr, value);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and add to 64-bit value, return OLD value
+ */
+static inline int64_t turbo_atomic_fetch_add64(turbo_atomic_int64_t *ptr, int64_t value) {
+#ifdef TURBO_WIN32
+  return (int64_t)InterlockedExchangeAdd64(ptr, (LONG64)value);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_add(ptr, value);
+#else
+  return __sync_fetch_and_add(ptr, value);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and subtract from 64-bit value, return OLD value
+ */
+static inline int64_t turbo_atomic_fetch_sub64(turbo_atomic_int64_t *ptr, int64_t value) {
+#ifdef TURBO_WIN32
+  return (int64_t)InterlockedExchangeAdd64(ptr, -(LONG64)value);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_sub(ptr, value);
+#else
+  return __sync_fetch_and_sub(ptr, value);
 #endif
 }
 

@@ -29,10 +29,10 @@ void test_log_levels(void) {
     };
     turbo_logger_add_sink(logger, turbo_sink_console_create(&sink_opts));
 
-    log_info(logger, "test", "Info message");
-    log_warn(logger, "test", "Warning message");
-    log_error(logger, "test", "Error message");
-    log_debug(logger, "test", "Debug message (should not appear)");
+    TURBO_LOG_INFO(logger, "test", "Info message");
+    TURBO_LOG_WARN(logger, "test", "Warning message");
+    TURBO_LOG_ERROR(logger, "test", "Error message");
+    TURBO_LOG_DEBUG(logger, "test", "Debug message (should not appear)");
 
     turbo_logger_destroy(logger);
 }
@@ -67,7 +67,7 @@ void test_multi_sink(void) {
         turbo_logger_add_sink(logger, file_sink);
     }
 
-    log_info(logger, "test", "Multi-sink test message");
+    TURBO_LOG_INFO(logger, "test", "Multi-sink test message");
 
     turbo_logger_destroy(logger);
 }
@@ -81,8 +81,8 @@ void test_level_control(void) {
     turbo_logger_set_level(logger, TURBO_LOG_LEVEL_WARN);
     TEST_ASSERT_EQUAL(TURBO_LOG_LEVEL_WARN, turbo_logger_get_level(logger));
 
-    log_info(logger, "test", "Info (should not appear)");
-    log_warn(logger, "test", "Warning (should appear)");
+    TURBO_LOG_INFO(logger, "test", "Info (should not appear)");
+    TURBO_LOG_WARN(logger, "test", "Warning (should appear)");
 
     turbo_logger_destroy(logger);
 }
@@ -107,9 +107,9 @@ void test_components(void) {
 
     turbo_logger_add_sink(logger, turbo_sink_console_create(NULL));
 
-    log_info(logger, "server", "Server message");
-    log_info(logger, "client", "Client message");
-    log_info(logger, "protocol", "Protocol message");
+    TURBO_LOG_INFO(logger, "server", "Server message");
+    TURBO_LOG_INFO(logger, "client", "Client message");
+    TURBO_LOG_INFO(logger, "protocol", "Protocol message");
 
     turbo_logger_destroy(logger);
 }
@@ -123,10 +123,10 @@ void test_simplified_api(void) {
     const char *url = "http://example.com/invalid";
     int error_code = 404;
 
-    LOG_INFO("Starting simplified API test");
-    LOG_DEBUG("Debug message: value={:d}", 42);
-    LOG_WARN("Warning: {:s} returned code {:d}", url, error_code);
-    LOG_ERROR("Invalid URL format: {:s}", url);
+    TLOG_INFO("Starting simplified API test");
+    TLOG_DEBUG("Debug message: value={:d}", 42);
+    TLOG_WARN("Warning: {:s} returned code {:d}", url, error_code);
+    TLOG_ERROR("Invalid URL format: {:s}", url);
 
     // Test with custom logger set as default
     turbo_logger_config_t config = {
@@ -144,12 +144,12 @@ void test_simplified_api(void) {
     turbo_logger_add_sink(custom_logger, turbo_sink_console_create(&sink_opts));
     turbo_logger_set_default(custom_logger);
 
-    LOG_INFO("Custom logger with file:line info");
-    LOG_ERROR("Error with custom config: {:s}", "test error");
+    TLOG_INFO("Custom logger with file:line info");
+    TLOG_ERROR("Error with custom config: {:s}", "test error");
 
     // Reset to auto-created logger
     turbo_logger_set_default(default_logger);
-    LOG_INFO("Back to auto-created logger");
+    TLOG_INFO("Back to auto-created logger");
 
     turbo_logger_destroy(custom_logger);
 }
@@ -172,13 +172,74 @@ void test_callback_sink(void) {
     TEST_ASSERT_NOT_NULL(cb_sink);
     turbo_logger_add_sink(logger, cb_sink);
 
-    log_info(logger, "test", "First callback message");
-    log_warn(logger, "test", "Second callback message");
-    log_error(logger, "test", "Third callback message");
+    TURBO_LOG_INFO(logger, "test", "First callback message");
+    TURBO_LOG_WARN(logger, "test", "Second callback message");
+    TURBO_LOG_ERROR(logger, "test", "Third callback message");
 
     TEST_ASSERT_EQUAL(3, callback_count);
 
     turbo_logger_destroy(logger);
+}
+
+#include <uv.h>
+void test_logger_untyped_placeholder(void) {
+    // This is the line the user mentioned
+    int status = UV_ECONNREFUSED;
+    // We expect this to NOT abort. 
+    TLOG_ERROR("Pipe connection failed: {:s}", uv_strerror(status));
+}
+
+/* ============================================================================
+ * TurboMQ Simulation for Logging Test
+ * ============================================================================ */
+
+typedef enum {
+  TURBOMQ_ERR_NONE = 0,
+  TURBOMQ_ERR_INVALID_ARG = -1,
+  TURBOMQ_ERR_NO_MEMORY = -2,
+  TURBOMQ_ERR_INVALID_STATE = -3,
+  TURBOMQ_ERR_TIMEOUT = -4,
+  TURBOMQ_ERR_CONN_FAILED = -5
+} turbomq_error_t;
+
+static turbomq_error_t tls_error = TURBOMQ_ERR_NONE;
+
+const char *turbomq_strerror_internal(int errnum) {
+  switch (errnum) {
+  case TURBOMQ_ERR_NONE:
+    return "No error";
+  case TURBOMQ_ERR_INVALID_ARG:
+    return "Invalid argument";
+  case TURBOMQ_ERR_NO_MEMORY:
+    return "Out of memory";
+  case TURBOMQ_ERR_INVALID_STATE:
+    return "Invalid socket state";
+  case TURBOMQ_ERR_TIMEOUT:
+    return "Operation timed out";
+  case TURBOMQ_ERR_CONN_FAILED:
+    return "Connection failed";
+  default:
+    return "Unknown error";
+  }
+}
+
+void turbomq_set_error(turbomq_error_t err) {
+    tls_error = err;
+    if (err != TURBOMQ_ERR_NONE) {
+      // Corrected matching: {:s} for string, {:d} for int
+      TLOG_DEBUG("Error set: {:s} ({:d})", turbomq_strerror_internal(err), (int)err);
+    }
+}
+
+void test_turbomq_error_logging(void) {
+    // Set level to DEBUG so we can see the output
+    turbo_logger_set_level(turbo_logger_get_default(), TURBO_LOG_LEVEL_DEBUG);
+    
+    // Trigger the log
+    turbomq_set_error(TURBOMQ_ERR_CONN_FAILED);
+    
+    // Restoration (optional)
+    turbo_logger_set_level(turbo_logger_get_default(), TURBO_LOG_LEVEL_INFO);
 }
 
 int main(void) {
@@ -192,6 +253,8 @@ int main(void) {
     RUN_TEST(test_components);
     RUN_TEST(test_simplified_api);
     RUN_TEST(test_callback_sink);
+    RUN_TEST(test_logger_untyped_placeholder);
+    RUN_TEST(test_turbomq_error_logging);
 
     return UNITY_END();
 }

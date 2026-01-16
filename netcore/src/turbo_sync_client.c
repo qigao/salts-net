@@ -575,7 +575,7 @@ static void handle_connect_command(sync_client_t *client, sync_client_command_t 
 static void handle_send_command(sync_client_t *client, sync_client_command_t *cmd) {
   char *data = cmd->payload.send.data;
   size_t len = cmd->payload.send.len;
-  LOG_DEBUG("handle_send_command: transport={} data={} len={}", (int)client->transport, (void*)data, len);
+  TLOG_DEBUG("handle_send_command: transport={} data={} len={}", (int)client->transport, (void*)data, len);
 
   if (len == 0 || !data) {
     signal_done_with_status(client, 0, SYNC_CLIENT_STATUS_OK, NULL);
@@ -586,11 +586,11 @@ static void handle_send_command(sync_client_t *client, sync_client_command_t *cm
   cmd->payload.send.data = NULL;
 
   /* Dispatch via vtable - NO SWITCH STATEMENT! */
-  LOG_DEBUG("handle_send_command: ops={} ops->send={} ops->name={}",
+  TLOG_DEBUG("handle_send_command: ops={} ops->send={} ops->name={}",
           (void*)client->ops, (void*)(client->ops ? client->ops->send : NULL),
           client->ops ? client->ops->name : "NULL");
   int rc = client->ops->send(client, data, len);
-  LOG_DEBUG("handle_send_command: ops->send returned rc={}", rc);
+  TLOG_DEBUG("handle_send_command: ops->send returned rc={}", rc);
 
   /* UDP handles cleanup in callback */
   if (client->transport != SYNC_CLIENT_TRANSPORT_UDP) {
@@ -627,12 +627,12 @@ static void handle_send_command(sync_client_t *client, sync_client_command_t *cm
  * Eliminates the repeated 6-line cleanup pattern.
  */
 static void cleanup_iov_buffers(sync_client_iovec_t *iov, size_t iovcnt) {
-  LOG_DEBUG("cleanup_iov_buffers: iov={} iovcnt={}", (void*)iov, iovcnt);
+  TLOG_DEBUG("cleanup_iov_buffers: iov={} iovcnt={}", (void*)iov, iovcnt);
   if (!iov) {
     return;
   }
   for (size_t i = 0; i < iovcnt; i++) {
-    LOG_DEBUG("cleanup_iov_buffers: freeing iov[{}].data={}", i, (void*)iov[i].data);
+    TLOG_DEBUG("cleanup_iov_buffers: freeing iov[{}].data={}", i, (void*)iov[i].data);
     free((void *)iov[i].data);
   }
   free(iov);
@@ -1475,10 +1475,10 @@ static void ws_connect_cb(void *client_ptr, int status, void *peer) {
 
 static int ws_recv_cb(void *client_ptr, const turbo_arena_slice_t *data, void *peer) {
   (void)peer;
-  LOG_DEBUG("ws_recv_cb: client_ptr={} data={}", client_ptr, (void*)data);
+  TLOG_DEBUG("ws_recv_cb: client_ptr={} data={}", client_ptr, (void*)data);
   turbo_websocket_client_t *ws_client = (turbo_websocket_client_t *)client_ptr;
   sync_client_t *client = (sync_client_t *)ws_client->user_data;
-  LOG_DEBUG("ws_recv_cb: client={} data_len={}", (void*)client, data ? data->length : 0);
+  TLOG_DEBUG("ws_recv_cb: client={} data_len={}", (void*)client, data ? data->length : 0);
   if (!client || !data || data->length == 0) return 0;
 
   char *copy = (char *)malloc(data->length);
@@ -1528,7 +1528,7 @@ static void ws_close_cb(void *client_ptr) {
 }
 
 static int ws_connect_impl(sync_client_t *client, const char *host, int port) {
-  LOG_DEBUG("ws_connect_impl: start host={} port={}", host, port);
+  TLOG_DEBUG("ws_connect_impl: start host={} port={}", host, port);
   uv_mutex_lock(&client->mutex);
   client->stats.connection_attempts++;
   uv_mutex_unlock(&client->mutex);
@@ -1540,16 +1540,16 @@ static int ws_connect_impl(sync_client_t *client, const char *host, int port) {
   ws_config.subprotocols = client->proto.ws.config.subprotocols;
   ws_config.subprotocol_count = client->proto.ws.config.subprotocol_count;
   ws_config.host = host;
-  LOG_DEBUG("ws_connect_impl: config path={} subprotocol_count={} use_tls={}",
+  TLOG_DEBUG("ws_connect_impl: config path={} subprotocol_count={} use_tls={}",
           ws_config.path, ws_config.subprotocol_count, client->proto.ws.config.use_tls);
 
   /* Create WebSocket client */
-  LOG_DEBUG("ws_connect_impl: calling turbo_websocket_client_create");
+  TLOG_DEBUG("ws_connect_impl: calling turbo_websocket_client_create");
   client->proto.ws.client = turbo_websocket_client_create(
       &client->loop, client->proto.ws.config.use_tls, &ws_config);
 
   if (!client->proto.ws.client) {
-    LOG_DEBUG("ws_connect_impl: turbo_websocket_client_create failed");
+    TLOG_DEBUG("ws_connect_impl: turbo_websocket_client_create failed");
     uv_mutex_lock(&client->mutex);
     client->stats.connection_failures++;
     result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create websocket client");
@@ -1558,7 +1558,7 @@ static int ws_connect_impl(sync_client_t *client, const char *host, int port) {
     uv_mutex_unlock(&client->mutex);
     return -1;
   }
-  LOG_DEBUG("ws_connect_impl: turbo_websocket_client_create succeeded");
+  TLOG_DEBUG("ws_connect_impl: turbo_websocket_client_create succeeded");
 
   client->proto.ws.client->user_data = client;
 
@@ -1588,9 +1588,9 @@ static int ws_connect_impl(sync_client_t *client, const char *host, int port) {
   turbo_websocket_client_set_callbacks(client->proto.ws.client, ws_recv_cb, ws_connect_cb, ws_close_cb);
 
   /* Connect */
-  LOG_DEBUG("ws_connect_impl: calling turbo_websocket_client_connect");
+  TLOG_DEBUG("ws_connect_impl: calling turbo_websocket_client_connect");
   int rc = turbo_websocket_client_connect(client->proto.ws.client, host, port);
-  LOG_DEBUG("ws_connect_impl: turbo_websocket_client_connect returned rc={}", rc);
+  TLOG_DEBUG("ws_connect_impl: turbo_websocket_client_connect returned rc={}", rc);
   if (rc != 0) {
     turbo_websocket_client_destroy(client->proto.ws.client);
     client->proto.ws.client = NULL;
@@ -1607,16 +1607,16 @@ static int ws_connect_impl(sync_client_t *client, const char *host, int port) {
 }
 
 static int ws_send_impl(sync_client_t *client, const char *data, size_t len) {
-  LOG_DEBUG("ws_send_impl: ENTER len={}", len);
-  LOG_DEBUG("ws_send_impl: client={} proto.ws.client={} connected={}",
+  TLOG_DEBUG("ws_send_impl: ENTER len={}", len);
+  TLOG_DEBUG("ws_send_impl: client={} proto.ws.client={} connected={}",
           (void*)client, (void*)client->proto.ws.client, client->proto.ws.connected);
   if (!client->proto.ws.client || !client->proto.ws.connected) {
-    LOG_DEBUG("ws_send_impl: NOT READY");
+    TLOG_DEBUG("ws_send_impl: NOT READY");
     return -1;
   }
-  LOG_DEBUG("ws_send_impl: calling turbo_websocket_client_send");
+  TLOG_DEBUG("ws_send_impl: calling turbo_websocket_client_send");
   int rc = turbo_websocket_client_send(client->proto.ws.client, data, len);
-  LOG_DEBUG("ws_send_impl: turbo_websocket_client_send returned {}", rc);
+  TLOG_DEBUG("ws_send_impl: turbo_websocket_client_send returned {}", rc);
   return rc;
 }
 
@@ -1791,6 +1791,7 @@ static void command_async_cb(uv_async_t *handle) {
         client->command_tail = NULL;
     }
     int shutting_down = client->shutting_down;
+    UNUSED(shutting_down);
     uv_mutex_unlock(&client->mutex);
 
     if (!cmd) {
@@ -1799,27 +1800,27 @@ static void command_async_cb(uv_async_t *handle) {
 
     switch (cmd->type) {
     case COMMAND_CONNECT:
-      LOG_DEBUG("command_async_cb: COMMAND_CONNECT");
+      TLOG_DEBUG("command_async_cb: COMMAND_CONNECT");
       handle_connect_command(client, cmd);
       break;
     case COMMAND_SEND:
-      LOG_DEBUG("command_async_cb: COMMAND_SEND len={}", cmd->payload.send.len);
+      TLOG_DEBUG("command_async_cb: COMMAND_SEND len={}", cmd->payload.send.len);
       handle_send_command(client, cmd);
       break;
     case COMMAND_SENDV:
-      LOG_DEBUG("command_async_cb: COMMAND_SENDV iovcnt={}", cmd->payload.sendv.iovcnt);
+      TLOG_DEBUG("command_async_cb: COMMAND_SENDV iovcnt={}", cmd->payload.sendv.iovcnt);
       handle_sendv_command(client, cmd);
       break;
     case COMMAND_RECEIVE:
-      LOG_DEBUG("command_async_cb: COMMAND_RECEIVE");
+      TLOG_DEBUG("command_async_cb: COMMAND_RECEIVE");
       handle_receive_command(client);
       break;
     case COMMAND_STOP:
-      LOG_DEBUG("command_async_cb: COMMAND_STOP");
+      TLOG_DEBUG("command_async_cb: COMMAND_STOP");
       handle_stop_command(client);
       break;
     default:
-      LOG_DEBUG("command_async_cb: UNKNOWN type={}", (int)cmd->type);
+      TLOG_DEBUG("command_async_cb: UNKNOWN type={}", (int)cmd->type);
       break;
     }
 
@@ -2195,11 +2196,11 @@ static int pipe_recv_cb(void *handle, const turbo_arena_slice_t *data, void *pee
     client->done = 1;
     uv_cond_signal(&client->cond);
     uv_mutex_unlock(&client->mutex);
-    turbo_arena_slice_release(data);
+    turbo_arena_slice_release((turbo_arena_slice_t *)data);
     return 0;
   }
   memcpy(copy, data->data, data->length);
-  turbo_arena_slice_release(data);
+  turbo_arena_slice_release((turbo_arena_slice_t *)data);
 
   uv_mutex_lock(&client->mutex);
   if (client->response)

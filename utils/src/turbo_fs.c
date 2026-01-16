@@ -43,7 +43,7 @@ int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf) {
   // Get file size first
   err = uv_fs_stat(NULL, &stat_req, path, NULL);
   if (err < 0) {
-    LOG_ERROR("Failed to stat file {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to stat file {}: {}", path, uv_strerror(err));
     return err;
   }
 
@@ -53,7 +53,7 @@ int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf) {
   // Open file
   err = uv_fs_open(NULL, &open_req, path, UV_FS_O_RDONLY, 0, NULL);
   if (err < 0) {
-    LOG_ERROR("Failed to open file {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to open file {}: {}", path, uv_strerror(err));
     return err;
   }
 
@@ -75,14 +75,14 @@ int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf) {
   err = uv_fs_read(NULL, &read_req, fd, &uv_buf, 1, 0, NULL);
 
   if (err < 0) {
-    LOG_ERROR("Failed to read file {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to read file {}: {}", path, uv_strerror(err));
     free(buf->base);
     buf->base = NULL;
     buf->len = 0;
   } else {
     buf->len = (size_t)read_req.result;
     buf->base[buf->len] = '\0'; // Null terminate
-    LOG_DEBUG("Read file {}: {} bytes", path, buf->len);
+    TLOG_DEBUG("Read file {}: {} bytes", path, buf->len);
   }
 
   uv_fs_req_cleanup(&read_req);
@@ -106,7 +106,7 @@ int turbo_fs_write_file_sync(const char *path, const turbo_fs_buf_t *buf) {
   err = uv_fs_open(NULL, &open_req, path, UV_FS_O_WRONLY | UV_FS_O_CREAT | UV_FS_O_TRUNC,
                    TURBO_FS_DEFAULT_MODE, NULL);
   if (err < 0) {
-    LOG_ERROR("Failed to open file {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to open file {}: {}", path, uv_strerror(err));
     return err;
   }
 
@@ -118,9 +118,9 @@ int turbo_fs_write_file_sync(const char *path, const turbo_fs_buf_t *buf) {
   err = uv_fs_write(NULL, &write_req, fd, &uv_buf, 1, 0, NULL);
 
   if (err < 0) {
-    LOG_ERROR("Failed to write file {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to write file {}: {}", path, uv_strerror(err));
   } else {
-    LOG_DEBUG("Wrote file {}: {} bytes", path, buf->len);
+    TLOG_DEBUG("Wrote file {}: {} bytes", path, buf->len);
   }
 
   uv_fs_req_cleanup(&write_req);
@@ -155,9 +155,9 @@ int turbo_fs_stat_sync(const char *path, turbo_fs_stat_t *stat) {
     stat->is_directory = S_ISDIR(req.statbuf.st_mode);
     stat->is_symlink = S_ISLNK(req.statbuf.st_mode);
 
-    LOG_DEBUG("Stat sync completed for: {}", path);
+    TLOG_DEBUG("Stat sync completed for: {}", path);
   } else {
-    LOG_ERROR("Stat sync failed for {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Stat sync failed for {}: {}", path, uv_strerror(err));
   }
 
   uv_fs_req_cleanup(&req);
@@ -173,9 +173,9 @@ int turbo_fs_mkdir_sync(const char *path, int mode) {
   int err = uv_fs_mkdir(NULL, &req, path, mode, NULL);
 
   if (err == 0) {
-    LOG_DEBUG("Directory created: {}", path);
+    TLOG_DEBUG("Directory created: {}", path);
   } else {
-    LOG_ERROR("Failed to create directory {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to create directory {}: {}", path, uv_strerror(err));
   }
 
   uv_fs_req_cleanup(&req);
@@ -191,9 +191,9 @@ int turbo_fs_rmdir_sync(const char *path) {
   int err = uv_fs_rmdir(NULL, &req, path, NULL);
 
   if (err == 0) {
-    LOG_DEBUG("Directory removed: {}", path);
+    TLOG_DEBUG("Directory removed: {}", path);
   } else {
-    LOG_ERROR("Failed to remove directory {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to remove directory {}: {}", path, uv_strerror(err));
   }
 
   uv_fs_req_cleanup(&req);
@@ -209,9 +209,9 @@ int turbo_fs_unlink_sync(const char *path) {
   int err = uv_fs_unlink(NULL, &req, path, NULL);
 
   if (err == 0) {
-    LOG_DEBUG("File removed: {}", path);
+    TLOG_DEBUG("File removed: {}", path);
   } else {
-    LOG_ERROR("Failed to remove file {}: {}", path, uv_strerror(err));
+    TLOG_ERROR("Failed to remove file {}: {}", path, uv_strerror(err));
   }
 
   uv_fs_req_cleanup(&req);
@@ -246,9 +246,9 @@ int turbo_fs_get_tmpdir(char *buffer, size_t buffer_size) {
   int err = uv_os_tmpdir(buffer, &size);
 
   if (err == 0) {
-    LOG_DEBUG("Temporary directory: {}", buffer);
+    TLOG_DEBUG("Temporary directory: {}", buffer);
   } else {
-    LOG_ERROR("Failed to get temporary directory: {}", uv_strerror(err));
+    TLOG_ERROR("Failed to get temporary directory: {}", uv_strerror(err));
   }
 
   return err;

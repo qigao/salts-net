@@ -10,7 +10,8 @@
             "cacheVariables": {
                 "EXTERNAL_REPO_ROOT": "c:/projects/cpp/external/",
                 "EXTERNAL_ROOT": "c:/projects/cpp/external/pkgs",
-                "CMAKE_MAKE_PROGRAM": "C:/Users/lockg/scoop/shims/ninja.exe"
+                "CMAKE_MAKE_PROGRAM": "C:/Users/lockg/scoop/shims/ninja.exe",
+                "VCPKG_TARGET_TRIPLET": "x64-windows"
             },
             "environment": {
                 "VCPKG_ROOT": "C:/tools/vcpkg"
@@ -23,10 +24,7 @@
                 "dev-win-msvc-ninja",
                 "user-paths",
                 "pkg-vcpkg"
-            ],
-            "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows"
-            }
+            ]
         },
         {
             "name": "win-release-user",
@@ -35,10 +33,7 @@
                 "release-win-msvc-ninja",
                 "user-paths",
                 "pkg-vcpkg"
-            ],
-            "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows"
-            }
+            ]
         },
         {
             "name": "win-dev-user-ASan",
@@ -47,10 +42,7 @@
                 "dev-win-msvc-ninja-asan",
                 "user-paths",
                 "pkg-vcpkg"
-            ],
-            "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": "x64-windows"
-            }
+            ]
         }
     ]
 }

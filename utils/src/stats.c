@@ -507,7 +507,7 @@ void turbo_stats_reset_all(void) {
 
 void turbo_stats_print(void) {
   if (!g_turbo_stats) {
-    log_info(NULL, "Stats", "Statistics not initialized");
+    TLOG_INFO("Statistics not initialized");
     return;
   }
 
@@ -516,25 +516,25 @@ void turbo_stats_print(void) {
   while (entry) {
     switch (entry->type) {
     case TURBO_STAT_COUNTER:
-      log_info(NULL, "Stats", "{:30} counter: {}", entry->name,
+      TLOG_INFO("{:30} counter: {}", entry->name,
                (unsigned long long)entry->data.counter);
       break;
     case TURBO_STAT_GAUGE:
-      log_info(NULL, "Stats", "{:30} gauge: {}", entry->name, (long long)entry->data.gauge);
+      TLOG_INFO("{:30} gauge: {}", entry->name, (long long)entry->data.gauge);
       break;
     case TURBO_STAT_HISTOGRAM:
       if (entry->data.histogram.count > 0) {
         double avg = (double)entry->data.histogram.sum / (double)entry->data.histogram.count;
-        log_info(NULL, "Stats", "{:30} histogram: count={}, avg={:.2f}, min={}, max={}",
+        TLOG_INFO("{:30} histogram: count={}, avg={:.2f}, min={}, max={}",
                  entry->name, (unsigned long long)entry->data.histogram.count, avg,
                  (unsigned long long)entry->data.histogram.min,
                  (unsigned long long)entry->data.histogram.max);
       } else {
-        log_info(NULL, "Stats", "{:30} histogram: no data", entry->name);
+        TLOG_INFO("{:30} histogram: no data", entry->name);
       }
       break;
     case TURBO_STAT_RATE:
-      log_info(NULL, "Stats", "{:30} rate: {:.2f}/sec (value={})", entry->name,
+      TLOG_INFO("{:30} rate: {:.2f}/sec (value={})", entry->name,
                entry->data.rate.rate, (unsigned long long)entry->data.rate.value);
       break;
     }
@@ -543,7 +543,7 @@ void turbo_stats_print(void) {
   }
   uv_mutex_unlock(&g_turbo_stats->map_mutex);
 
-  log_info(NULL, "Stats", "Total entries: {}", g_turbo_stats->entry_count);
+  TLOG_INFO("Total entries: {}", g_turbo_stats->entry_count);
 }
 
 char *turbo_stats_to_json(void) {

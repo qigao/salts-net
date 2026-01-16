@@ -30,7 +30,7 @@ static size_t calculate_next_size(size_t current, size_t needed)
 {
     if (needed > ABSOLUTE_MAX_REQUEST)
     {
-        LOG_ERROR("Request too large: {} bytes", needed);
+        TLOG_ERROR("Request too large: {} bytes", needed);
         return 0;
     }
 
@@ -81,7 +81,7 @@ static int ensure_buffer_capacity(turbo_arena_t *arena, char **buffer, size_t *c
 
     if (total_needed > ABSOLUTE_MAX_REQUEST)
     {
-        LOG_ERROR("Request exceeds maximum size: {} bytes", total_needed);
+        TLOG_ERROR("Request exceeds maximum size: {} bytes", total_needed);
         return -2;
     }
 
@@ -93,7 +93,7 @@ static int ensure_buffer_capacity(turbo_arena_t *arena, char **buffer, size_t *c
     char *new_buffer = turbo_arena_alloc(arena, new_capacity);
     if (!new_buffer)
     {
-        LOG_ERROR("Arena buffer reallocation failed");
+        TLOG_ERROR("Arena buffer reallocation failed");
         return -1;
     }
 
@@ -118,7 +118,7 @@ static int on_url_cb(llhttp_t *parser, const char *at, size_t length)
     // Check URL length limit
     if (context->url_length + length > MAX_URL_LENGTH)
     {
-        LOG_ERROR("URL too long: {} bytes", context->url_length + length);
+        TLOG_ERROR("URL too long: {} bytes", context->url_length + length);
         return 1;
     }
 
@@ -146,14 +146,14 @@ static int on_header_field_cb(llhttp_t *parser, const char *at, size_t length)
     // Check header count limit
     if (context->headers.count >= MAX_HEADERS_COUNT)
     {
-        LOG_ERROR("Too many headers: {}", context->headers.count);
+        TLOG_ERROR("Too many headers: {}", context->headers.count);
         return 1;
     }
 
     // Check header field size
     if (length > MAX_HEADER_SIZE)
     {
-        LOG_ERROR("Header field too large: {} bytes", length);
+        TLOG_ERROR("Header field too large: {} bytes", length);
         return 1;
     }
 
@@ -170,7 +170,7 @@ static int on_header_field_cb(llhttp_t *parser, const char *at, size_t length)
     iris_security_result_t validation_result = iris_validate_http_header_name(temp_name, limits->max_header_name_length);
     
     if (validation_result != IRIS_SECURITY_OK) {
-        LOG_ERROR("Invalid header field name: {}", iris_security_error_string(validation_result));
+        TLOG_ERROR("Invalid header field name: {}", iris_security_error_string(validation_result));
         return 1;
     }
 
@@ -209,7 +209,7 @@ static int ensure_array_capacity(turbo_arena_t *arena, request_t *array)
     request_item_t *new_items = turbo_arena_alloc(arena, new_capacity * sizeof(request_item_t));
     if (!new_items)
     {
-        LOG_ERROR("Arena array reallocation failed");
+        TLOG_ERROR("Arena array reallocation failed");
         return -1;
     }
 
@@ -245,7 +245,7 @@ static int on_header_value_cb(llhttp_t *parser, const char *at, size_t length)
     // Check header value size
     if (length > MAX_HEADER_SIZE)
     {
-        LOG_ERROR("Header value too large: {} bytes", length);
+        TLOG_ERROR("Header value too large: {} bytes", length);
         return 1;
     }
 
@@ -262,7 +262,7 @@ static int on_header_value_cb(llhttp_t *parser, const char *at, size_t length)
     iris_security_result_t validation_result = iris_validate_http_header_value(temp_value, limits->max_header_value_length);
     
     if (validation_result != IRIS_SECURITY_OK) {
-        LOG_ERROR("Invalid header field value: {}", iris_security_error_string(validation_result));
+        TLOG_ERROR("Invalid header field value: {}", iris_security_error_string(validation_result));
         return 1;
     }
 
@@ -314,7 +314,7 @@ static int on_method_cb(llhttp_t *parser, const char *at, size_t length)
     // Limit method length
     if (context->method_length + length > MAX_METHOD_LENGTH)
     {
-        LOG_ERROR("Method too long: {} bytes",
+        TLOG_ERROR("Method too long: {} bytes",
                 context->method_length + length);
         return 1;
     }
@@ -343,7 +343,7 @@ static int on_body_cb(llhttp_t *parser, const char *at, size_t length)
     // Check request body size limit before processing
     const iris_security_limits_t *limits = iris_security_get_limits();
     if (context->body_length + length > limits->max_request_body_size) {
-        LOG_ERROR("Request body too large: {} bytes (limit: {})",
+        TLOG_ERROR("Request body too large: {} bytes (limit: {})",
                 context->body_length + length, limits->max_request_body_size);
         return HPE_USER; // Payload too large
     }
@@ -513,7 +513,7 @@ void parse_query(turbo_arena_t *arena, const char *query_string, request_t *quer
     size_t query_len = strlen(query_string);
     if (query_len > MAX_URL_LENGTH)
     {
-        LOG_ERROR("Query string too long: {} bytes", query_len);
+        TLOG_ERROR("Query string too long: {} bytes", query_len);
         return;
     }
 
@@ -528,7 +528,7 @@ void parse_query(turbo_arena_t *arena, const char *query_string, request_t *quer
     // Limit parameters
     if (param_count > MAX_QUERY_PARAMS)
     {
-        LOG_ERROR("Too many query parameters: {}", param_count);
+        TLOG_ERROR("Too many query parameters: {}", param_count);
         param_count = MAX_QUERY_PARAMS;
     }
 

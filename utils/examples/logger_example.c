@@ -37,10 +37,10 @@ static void example_basic_logging(void) {
   printf("\n=== Example 1: Basic Logging ===\n");
 
   // Uses auto-created default logger with console sink
-  LOG_DEBUG("This debug message won't show (default level is INFO)");
-  LOG_INFO("Application started");
-  LOG_WARN("Configuration file not found, using defaults");
-  LOG_ERROR("Failed to connect to database");
+  TLOG_DEBUG("This debug message won't show (default level is INFO)");
+  TLOG_INFO("Application started");
+  TLOG_WARN("Configuration file not found, using defaults");
+  TLOG_ERROR("Failed to connect to database");
 }
 
 // =============================================================================
@@ -89,12 +89,12 @@ static void example_multi_sink(void) {
   turbo_logger_add_sink(logger, callback);
 
   // Log some messages
-  log_debug(logger, "Network", "Socket created fd={}", 42);
-  log_info(logger, "Network", "Connected to server 192.168.1.1:8080");
-  log_warn(logger, "Network", "Connection timeout, retrying...");
-  log_error(logger, "Network", "Connection failed after 3 retries");
-  log_info(logger, "Database", "Query completed in 15ms");
-  log_error(logger, "Database", "Transaction rollback: constraint violation");
+  TURBO_LOG_DEBUG(logger, "Network", "Socket created fd={}", 42);
+  TURBO_LOG_INFO(logger, "Network", "Connected to server 192.168.1.1:8080");
+  TURBO_LOG_WARN(logger, "Network", "Connection timeout, retrying...");
+  TURBO_LOG_ERROR(logger, "Network", "Connection failed after 3 retries");
+  TURBO_LOG_INFO(logger, "Database", "Query completed in 15ms");
+  TURBO_LOG_ERROR(logger, "Database", "Transaction rollback: constraint violation");
 
   printf("\n  Total errors captured by callback: %d\n", g_error_count);
 
@@ -126,7 +126,7 @@ static void example_file_rotation(void) {
 
     // Generate enough logs to trigger rotation
     for (int i = 0; i < 20; i++) {
-      log_info(logger, "Rotation", "Log entry #{} - testing file rotation mechanism", i);
+      TURBO_LOG_INFO(logger, "Rotation", "Log entry #{} - testing file rotation mechanism", i);
     }
 
     printf("  Check rotating.log, rotating.log.1, rotating.log.2, rotating.log.3\n");
@@ -166,8 +166,8 @@ static void example_stderr_errors(void) {
   stderr_sink->min_level = TURBO_LOG_LEVEL_ERROR;
   turbo_logger_add_sink(logger, stderr_sink);
 
-  log_info(logger, "App", "This goes to stdout only");
-  log_error(logger, "App", "This goes to BOTH stdout and stderr");
+  TURBO_LOG_INFO(logger, "App", "This goes to stdout only");
+  TURBO_LOG_ERROR(logger, "App", "This goes to BOTH stdout and stderr");
 
   turbo_logger_destroy(logger);
 }
@@ -196,8 +196,8 @@ static void example_replace_default(void) {
   turbo_logger_set_default(logger);
 
   // Now LOG_* macros use our custom logger
-  LOG_DEBUG("Debug with file:line info");
-  LOG_INFO("Info with thread ID");
+  TLOG_DEBUG("Debug with file:line info");
+  TLOG_INFO("Info with thread ID");
 
   // Cleanup - set default to NULL first
   turbo_logger_set_default(NULL);
@@ -224,8 +224,8 @@ static void example_format_patterns(void) {
   turbo_log_sink_t *minimal = turbo_sink_console_create(&minimal_opts);
   turbo_logger_add_sink(logger, minimal);
 
-  log_info(logger, "App", "Minimal format example");
-  log_error(logger, "App", "Error with minimal format");
+  TURBO_LOG_INFO(logger, "App", "Minimal format example");
+  TURBO_LOG_ERROR(logger, "App", "Error with minimal format");
 
   turbo_logger_remove_sink(logger, minimal);
   turbo_sink_destroy(minimal);
@@ -240,8 +240,8 @@ static void example_format_patterns(void) {
   turbo_log_sink_t *full = turbo_sink_console_create(&full_opts);
   turbo_logger_add_sink(logger, full);
 
-  log_info(logger, "Network", "Full format with all fields");
-  log_warn(logger, "Database", "Warning with thread ID and file info");
+  TURBO_LOG_INFO(logger, "Network", "Full format with all fields");
+  TURBO_LOG_WARN(logger, "Database", "Warning with thread ID and file info");
 
   turbo_logger_remove_sink(logger, full);
   turbo_sink_destroy(full);
@@ -256,8 +256,8 @@ static void example_format_patterns(void) {
   turbo_log_sink_t *custom = turbo_sink_console_create(&custom_opts);
   turbo_logger_add_sink(logger, custom);
 
-  log_info(logger, "HTTP", "Request received from 192.168.1.1");
-  log_debug(logger, "Parser", "Parsing JSON payload");
+  TURBO_LOG_INFO(logger, "HTTP", "Request received from 192.168.1.1");
+  TURBO_LOG_DEBUG(logger, "Parser", "Parsing JSON payload");
 
   turbo_logger_destroy(logger);
 }
@@ -307,11 +307,11 @@ static void example_async_logging(void) {
 
   // These calls return immediately - messages are queued for background thread
   for (int i = 0; i < 10; i++) {
-    log_info(logger, "AsyncDemo", "Async message #{} - queued for background processing", i);
+    TURBO_LOG_INFO(logger, "AsyncDemo", "Async message #{} - queued for background processing", i);
   }
 
-  log_warn(logger, "AsyncDemo", "Warning: high latency detected");
-  log_error(logger, "AsyncDemo", "Error: connection timeout");
+  TURBO_LOG_WARN(logger, "AsyncDemo", "Warning: high latency detected");
+  TURBO_LOG_ERROR(logger, "AsyncDemo", "Error: connection timeout");
 
   printf("  All log calls returned immediately (non-blocking)\n");
 
@@ -359,7 +359,7 @@ static void example_async_throughput(void) {
 
   // Log 1000 messages as fast as possible
   for (int i = 0; i < 1000; i++) {
-    log_info(logger, "Throughput", "Message {}: testing high-throughput async logging performance", i);
+    TURBO_LOG_INFO(logger, "Throughput", "Message {}: testing high-throughput async logging performance", i);
   }
 
   uint64_t queued = turbo_monotonic_ms();

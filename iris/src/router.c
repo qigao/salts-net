@@ -86,7 +86,7 @@ static void send_error(async_server_connection_t *connection, int error_code) {
   size_t len = strlen(err);
   async_server_status_t status = async_server_send(NULL, connection, err, len);
   if (status != ASYNC_SERVER_STATUS_OK) {
-    LOG_ERROR("Send error: {}", async_server_status_to_string(status));
+    TLOG_ERROR("Send error: {}", async_server_status_to_string(status));
   }
 }
 
@@ -219,7 +219,7 @@ void set_connection_context(async_server_connection_t *connection, void *data,
   void *ctx_ptr = async_server_connection_get_user_data(connection);
   if (!ctx_ptr) {
     /* No connection context exists - this shouldn't happen in normal operation */
-    LOG_ERROR("Warning: Attempting to set connection context on connection without context");
+    TLOG_ERROR("Warning: Attempting to set connection context on connection without context");
     return;
   }
 
@@ -599,7 +599,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
           if (res->arena) {
             // We don't have direct access to req here, but we can add a flag to res if needed
             // For now, just log that escaping was applied
-            LOG_ERROR("Security: Output escaped for content type: {}", content_type);
+            TLOG_ERROR("Security: Output escaped for content type: {}", content_type);
           }
         } else if (escape_result == IRIS_SECURITY_ERROR_BUFFER_TOO_SMALL) {
           // Try with larger buffer
@@ -613,10 +613,10 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
               escaped_body = escaped_buffer;
               escaped_body_len = strlen(escaped_buffer);
               // Mark that output has been escaped for security tracking
-              LOG_ERROR("Security: Output escaped for content type: {} (retry)", content_type);
+              TLOG_ERROR("Security: Output escaped for content type: {} (retry)", content_type);
             } else {
               // Escaping failed, log warning and use original content
-              LOG_ERROR("Warning: Output escaping failed: {}",
+              TLOG_ERROR("Warning: Output escaping failed: {}",
                         iris_security_error_string(escape_result));
               free(escaped_buffer);
               escaped_buffer = NULL;
@@ -624,7 +624,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
           }
         } else {
           // Escaping failed, log warning and use original content
-          LOG_ERROR("Warning: Output escaping failed: {}",
+          TLOG_ERROR("Warning: Output escaping failed: {}",
                     iris_security_error_string(escape_result));
           free(escaped_buffer);
           escaped_buffer = NULL;
@@ -732,7 +732,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   // Send using NetCore API
   async_server_status_t result = async_server_send(NULL, res->connection, response, total_len);
   if (result != ASYNC_SERVER_STATUS_OK) {
-    LOG_ERROR("Send error: {}", async_server_status_to_string(result));
+    TLOG_ERROR("Send error: {}", async_server_status_to_string(result));
   }
 
   // Free the response buffer immediately since NetCore copies the data
@@ -801,7 +801,7 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
     iris_security_result_t name_validation =
         iris_validate_cookie_name(name, limits->max_cookie_name_length);
     if (name_validation != IRIS_SECURITY_OK) {
-      LOG_ERROR("Security: Invalid cookie name in request: {} (error: {})", name,
+      TLOG_ERROR("Security: Invalid cookie name in request: {} (error: {})", name,
                 iris_security_error_string(name_validation));
       free(name);
       return name_validation;
@@ -832,7 +832,7 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
     iris_security_result_t value_validation =
         iris_validate_cookie_value(value, limits->max_cookie_value_length);
     if (value_validation != IRIS_SECURITY_OK) {
-      LOG_ERROR("Security: Invalid cookie value for '{}' (error: {})", name,
+      TLOG_ERROR("Security: Invalid cookie value for '{}' (error: {})", name,
                 iris_security_error_string(value_validation));
       free(name);
       free(value);
@@ -923,7 +923,7 @@ int router(async_server_connection_t *connection, const char *request_data, size
   if (path_validation != IRIS_SECURITY_OK) {
     if (path_validation == IRIS_SECURITY_ERROR_MALICIOUS_CONTENT) {
       // Log potential attack attempt
-      LOG_ERROR("Security: Malicious URL path detected: {}", path);
+      TLOG_ERROR("Security: Malicious URL path detected: {}", path);
       error_code = 400;
     } else if (path_validation == IRIS_SECURITY_ERROR_SIZE_EXCEEDED) {
       error_code = 414; // URI Too Long
@@ -940,7 +940,7 @@ int router(async_server_connection_t *connection, const char *request_data, size
   if (cookie_validation != IRIS_SECURITY_OK) {
     if (cookie_validation == IRIS_SECURITY_ERROR_MALICIOUS_CONTENT) {
       // Log potential attack attempt
-      LOG_ERROR("Security: Malicious cookie content detected\n");
+      TLOG_ERROR("Security: Malicious cookie content detected\n");
       error_code = 400;
     } else if (cookie_validation == IRIS_SECURITY_ERROR_SIZE_EXCEEDED) {
       error_code = 400; // Bad Request - cookie too large
@@ -965,7 +965,7 @@ int router(async_server_connection_t *connection, const char *request_data, size
 
   // Route matching validation
   if (!global_route_trie || !ctx->method) {
-    LOG_ERROR("Missing route trie ({}) or method ({})", global_route_trie,
+    TLOG_ERROR("Missing route trie ({}) or method ({})", global_route_trie,
               ctx->method ? ctx->method : "NULL");
     cors_add_headers(ctx, res);
     send_404_response = true;
@@ -1040,7 +1040,7 @@ cleanup:
 // Adds a header
 void set_header(Res *res, const char *name, const char *value) {
   if (!res || !name || !value) {
-    LOG_ERROR("Error: Invalid argument(s) to set_header\n");
+    TLOG_ERROR("Error: Invalid argument(s) to set_header\n");
     return;
   }
 
@@ -1061,7 +1061,7 @@ void set_header(Res *res, const char *name, const char *value) {
     }
 
     if (!tmp) {
-      LOG_ERROR("Error: Failed to realloc headers array\n");
+      TLOG_ERROR("Error: Failed to realloc headers array\n");
       return;
     }
 
@@ -1080,7 +1080,7 @@ void set_header(Res *res, const char *name, const char *value) {
   }
 
   if (!res->headers[res->header_count].name || !res->headers[res->header_count].value) {
-    LOG_ERROR("Error: Failed to allocate memory for header strings\n");
+    TLOG_ERROR("Error: Failed to allocate memory for header strings\n");
     // Cleanup on failure
     if (!res->arena) {
       free(res->headers[res->header_count].name);

@@ -4,6 +4,7 @@
 #include "turbo_protocol.h"
 #include <platform.h>
 #include <stddef.h>
+#include <uv.h>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -73,7 +74,7 @@ CXX_C_API void client_common_config_release(void);
 #endif /* NETCORE_CLIENT_COMMON_H */
 
 #define CLIENT_COMMON_DEFINE_PIPE_CLIENT_LIST(prefix, type)                                        \
-  static turbo_once_t g_##prefix##_client_list_once = TURBO_ONCE_INIT;                             \
-  static turbo_mutex_t g_##prefix##_client_list_lock;                                              \
+  static uv_once_t g_##prefix##_client_list_once = UV_ONCE_INIT;                                   \
+  static uv_mutex_t g_##prefix##_client_list_lock;                                                 \
   static int g_##prefix##_client_list_initialized = 0;                                             \
   static type *g_##prefix##_client_list_head = NULL;

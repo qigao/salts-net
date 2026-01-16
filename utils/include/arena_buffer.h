@@ -50,6 +50,7 @@ struct turbo_arena_s {
   turbo_arena_buffer_t *recycle_head; /* Recycled buffer list head */
   size_t recycle_count;               /* Number of recycled buffers */
   size_t recycle_limit;               /* Max recycled buffers */
+  turbo_mutex_t lock;                 /* Mutex for thread safety */
 };
 
 /* Zero-copy buffer */

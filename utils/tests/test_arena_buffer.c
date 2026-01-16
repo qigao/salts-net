@@ -248,6 +248,22 @@ void test_arena_get_stats(void) {
   TEST_ASSERT_GREATER_OR_EQUAL(1, stats.region_count);
 }
 
+void test_arena_buffer_recycling(void) {
+  turbo_arena_buffer_t *buf = turbo_arena_get_pooled_buffer(&arena, 128);
+  TEST_ASSERT_NOT_NULL(buf);
+  TEST_ASSERT_EQUAL(0, arena.recycle_count); // Should be empty initially
+
+  turbo_arena_return_buffer(buf);
+  TEST_ASSERT_EQUAL(1, arena.recycle_count);
+  TEST_ASSERT_EQUAL(buf, arena.recycle_head);
+
+  turbo_arena_buffer_t *buf2 = turbo_arena_get_pooled_buffer(&arena, 128);
+  TEST_ASSERT_EQUAL(buf, buf2); // Should get the same buffer back
+  TEST_ASSERT_EQUAL(0, arena.recycle_count);
+
+  turbo_arena_buffer_unref(buf2);
+}
+
 int main(void) {
   UNITY_BEGIN();
 
@@ -273,6 +289,7 @@ int main(void) {
   RUN_TEST(test_arena_buffer_set_used);
   RUN_TEST(test_arena_buffer_remaining);
   RUN_TEST(test_arena_buffer_write_ptr);
+  RUN_TEST(test_arena_buffer_recycling);
 
   /* Slice operations */
   RUN_TEST(test_arena_buffer_slice_basic);

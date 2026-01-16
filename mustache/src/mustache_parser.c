@@ -5,6 +5,7 @@
 
 #include "mustache_types.h"
 #include "mustache_lexer.h"
+#include "turbo_logger.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -366,17 +367,30 @@ void mustache_ast_free(mustache_ast_node_t *node) {
 void mustache_ast_print(const mustache_ast_node_t *node, int indent) {
     if (!node) return;
     
-    for (int i = 0; i < indent; i++) printf("  ");
-    
     const char *type_names[] = {
         "TEMPLATE", "TEXT", "VARIABLE", "UNESCAPED", 
         "SECTION", "INVERTED", "PARTIAL", "COMMENT", "IDENTIFIER"
     };
     
-    printf("%s", type_names[node->type]);
-    if (node->name) printf(" name='%s'", node->name);
-    if (node->text) printf(" text='%.20s%s'", node->text, strlen(node->text) > 20 ? "..." : "");
-    printf(" (%d:%d)\n", node->line, node->column);
+    if (node->name && node->text) {
+        TLOG_DEBUG("{:*>{}} {} name='{}' text='{:.20s}{}' ({}:{})", 
+                   "", indent * 2, type_names[node->type], node->name, 
+                   node->text, strlen(node->text) > 20 ? "..." : "",
+                   node->line, node->column);
+    } else if (node->name) {
+        TLOG_DEBUG("{:*>{}} {} name='{}' ({}:{})", 
+                   "", indent * 2, type_names[node->type], node->name,
+                   node->line, node->column);
+    } else if (node->text) {
+        TLOG_DEBUG("{:*>{}} {} text='{:.20s}{}' ({}:{})", 
+                   "", indent * 2, type_names[node->type],
+                   node->text, strlen(node->text) > 20 ? "..." : "",
+                   node->line, node->column);
+    } else {
+        TLOG_DEBUG("{:*>{}} {} ({}:{})", 
+                   "", indent * 2, type_names[node->type],
+                   node->line, node->column);
+    }
     
     for (size_t i = 0; i < node->children_count; i++) {
         mustache_ast_print(node->children[i], indent + 1);

@@ -8,7 +8,7 @@
 
 #include "mustache.h"
 #include "mustache_types.h"
-#include "common/platform.h"
+#include "platform.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -225,7 +225,7 @@ static size_t build_ptr_response(uint8_t *buf, const mdns_service_t *service) {
 
 static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
   if (len < 12) {
-    LOG_DEBUG("Packet too short: {} bytes", len);
+    TLOG_DEBUG("Packet too short: {} bytes", len);
     return;
   }
 
@@ -234,7 +234,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
   uint16_t authority = ntohs(*(uint16_t *)(packet + 8));
   uint16_t additional = ntohs(*(uint16_t *)(packet + 10));
 
-  LOG_DEBUG("DNS Header: Questions={}, Answers={}, Authority={}, Additional={}", questions, answers,
+  TLOG_DEBUG("DNS Header: Questions={}, Answers={}, Authority={}, Additional={}", questions, answers,
             authority, additional);
 
   size_t offset = 12;
@@ -245,10 +245,10 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
     char name[MDNS_MAX_NAME_LEN];
     offset = decode_name(packet, len, offset, name, sizeof(name));
     if (offset == 0 || offset + 4 > len) {
-      LOG_DEBUG("Failed to parse question {}", i);
+      TLOG_DEBUG("Failed to parse question {}", i);
       return;
     }
-    LOG_DEBUG("Question {}: {}", i, name);
+    TLOG_DEBUG("Question {}: {}", i, name);
     offset += 4;
   }
 
@@ -268,7 +268,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
     uint16_t type = ntohs(*(uint16_t *)(packet + name_end));
     uint16_t rdlen = ntohs(*(uint16_t *)(packet + name_end + 8));
 
-    LOG_DEBUG("Record {}: Name='{}', Type={}, RDLen={}", i, name, type, rdlen);
+    TLOG_DEBUG("Record {}: Name='{}', Type={}, RDLen={}", i, name, type, rdlen);
 
     offset = name_end + 10;
     if (offset + rdlen > len)
@@ -277,7 +277,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
     if (type == DNS_TYPE_PTR) {
       char ptr_target[MDNS_MAX_NAME_LEN];
       decode_name(packet, len, offset, ptr_target, sizeof(ptr_target));
-      LOG_DEBUG("  PTR points to: {}", ptr_target);
+      TLOG_DEBUG("  PTR points to: {}", ptr_target);
 
       if (strstr(name, ctx->target_service)) {
         /* Extract instance name from full service name */
@@ -292,7 +292,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
             strcpy(found_service.ip, "0.0.0.0");
             found_service.port = 0;
             found_service.ttl = 120;
-            LOG_DEBUG("  -> Found service instance: {}", found_service.instance);
+            TLOG_DEBUG("  -> Found service instance: {}", found_service.instance);
             ctx->discover_callback(&found_service, ctx->discover_userdata);
           }
         }
@@ -303,7 +303,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
         char hostname[MDNS_MAX_NAME_LEN];
         decode_name(packet, len, offset + 6, hostname, sizeof(hostname));
 
-        LOG_DEBUG("  SRV: Port={}, Target={}", port, hostname);
+        TLOG_DEBUG("  SRV: Port={}, Target={}", port, hostname);
 
         if (strstr(name, ctx->target_service)) {
           /* Extract instance name from SRV record name */
@@ -318,7 +318,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
           if (ctx->discover_callback) {
             strcpy(found_service.ip, "0.0.0.0"); /* Will be filled by A record if available */
             found_service.ttl = 120;
-            LOG_DEBUG("  -> Found SRV record for: {}:{}", hostname, port);
+            TLOG_DEBUG("  -> Found SRV record for: {}:{}", hostname, port);
             ctx->discover_callback(&found_service, ctx->discover_userdata);
           }
         }
@@ -329,14 +329,14 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
       stbsp_snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d", addr_bytes[0], addr_bytes[1], addr_bytes[2],
                addr_bytes[3]);
 
-      LOG_DEBUG("  A record: {} -> {}", name, ip_str);
+      TLOG_DEBUG("  A record: {} -> {}", name, ip_str);
 
       /* If this A record matches our target hostname, update service info */
       if (strlen(found_service.hostname) > 0 && strstr(name, found_service.hostname)) {
         strcpy(found_service.ip, ip_str);
         if (ctx->discover_callback) {
           found_service.ttl = 120;
-          LOG_DEBUG("  -> Found A record: {}", ip_str);
+          TLOG_DEBUG("  -> Found A record: {}", ip_str);
           ctx->discover_callback(&found_service, ctx->discover_userdata);
         }
       }
@@ -355,7 +355,7 @@ static void on_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 
     /* Debug: Print packet info */
     if (ctx->discover_callback) {
-      LOG_DEBUG("Received {} bytes from network", nread);
+      TLOG_DEBUG("Received {} bytes from network", nread);
       parse_response(ctx, (uint8_t *)buf->base, nread);
     }
 
@@ -377,7 +377,7 @@ static void on_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
             break;
 
           uint16_t qtype = ntohs(*(uint16_t *)(buf->base + query_offset));
-          LOG_DEBUG("Query for: {} (type {})", query_name, qtype);
+          TLOG_DEBUG("Query for: {} (type {})", query_name, qtype);
 
           /* Check if this query is for our service */
           char our_service[MDNS_MAX_NAME_LEN];
@@ -386,7 +386,7 @@ static void on_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 
           if (qtype == DNS_TYPE_PTR && strcmp(query_name, our_service) == 0) {
             should_respond = 1;
-            LOG_DEBUG("  -> This matches our service type!");
+            TLOG_DEBUG("  -> This matches our service type!");
           }
 
           query_offset += 4;
@@ -398,7 +398,7 @@ static void on_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 
           uv_buf_t send_buf = uv_buf_init((char *)response, (unsigned int)response_len);
           uv_udp_send_t *req = malloc(sizeof(uv_udp_send_t));
-          LOG_DEBUG("Sending response to matching query ({} bytes)", response_len);
+          TLOG_DEBUG("Sending response to matching query ({} bytes)", response_len);
           uv_udp_send(req, handle, &send_buf, 1, addr, send_cleanup);
         }
       }

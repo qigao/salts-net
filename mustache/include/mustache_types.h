@@ -7,7 +7,7 @@
 #define MUSTACHE_TYPES_H
 
 #include <stddef.h>
-#include "common/platform.h"
+#include "platform.h"
 
 #ifdef __cplusplus
 extern "C" {

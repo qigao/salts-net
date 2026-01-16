@@ -230,7 +230,7 @@ static void release_parent_ref(turbo_dns_parent_query_t *parent) {
                       : (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0
                              ? parent->status_v6
                              : ARES_ENODATA);
-        LOG_ERROR("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
+        TLOG_ERROR("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
         parent->callback(parent->hostname, NULL, err, parent->user_data);
     }
 
@@ -281,7 +281,7 @@ static void dns_dual_addrinfo_cb(void *arg, int status, int timeouts,
         }
 
         if (ip[0] != '\0') {
-            LOG_DEBUG("DNS: {} -> {}  ", parent->hostname, ip);
+            TLOG_DEBUG("DNS: {} -> {}  ", parent->hostname, ip);
             parent->callback(parent->hostname, ip, 0, parent->user_data);
             parent->delivered = 1;
         }
@@ -334,7 +334,7 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
     if (g_ares_lib_ref == 0) {
         status = ares_library_init(ARES_LIB_INIT_ALL);
         if (status != ARES_SUCCESS) {
-            LOG_ERROR("ares_library_init failed: {}   ", ares_strerror(status));
+            TLOG_ERROR("ares_library_init failed: {}   ", ares_strerror(status));
             free(ctx);
             return UV_EAI_FAIL;
         }
@@ -350,7 +350,7 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
         int valid_dns = 0;
         for (int i = 0; i < g_dns_count; i++) {
             if (inet_pton(AF_INET, g_dns_servers[i], &dns_addrs[valid_dns]) == 1) {
-                LOG_INFO("Using custom DNS server: {}    ", g_dns_servers[i]);
+                TLOG_INFO("Using custom DNS server: {}    ", g_dns_servers[i]);
                 valid_dns++;
             }
         }
@@ -367,7 +367,7 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
 
     status = ares_init_options(&ctx->channel, &options, init_flags);
     if (status != ARES_SUCCESS) {
-        LOG_ERROR("ares_init_options failed: {}   ", ares_strerror(status));
+        TLOG_ERROR("ares_init_options failed: {}   ", ares_strerror(status));
         ctx->closing = 1;
         uv_close((uv_handle_t *)&ctx->timer, on_uv_handle_closed);
         if (g_ares_lib_ref == 0) ares_library_cleanup();
@@ -680,7 +680,7 @@ int turbo_dns_resolve_async(void *loop, const char *hostname,
         }
     }
 
-    LOG_DEBUG("Started DNS lookup for {}  ", hostname);
+    TLOG_DEBUG("Started DNS lookup for {}  ", hostname);
     release_parent_ref(parent); /* Release initial reference */
     return 0;
 }
@@ -700,10 +700,10 @@ int turbo_dns_set_servers(const char *servers[], int count) {
 
         strcpy(g_dns_servers[g_dns_count], servers[i]);
         g_dns_count++;
-        LOG_INFO("Added DNS server[{}]: {}   ", g_dns_count - 1, servers[i]);
+        TLOG_INFO("Added DNS server[{}]: {}   ", g_dns_count - 1, servers[i]);
     }
 
-    LOG_INFO("Configured {} DNS servers      ", g_dns_count);
+    TLOG_INFO("Configured {} DNS servers      ", g_dns_count);
     return 0;
 }
 

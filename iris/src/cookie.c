@@ -5,7 +5,7 @@
 #include "cookie.h"
 #include "security.h"
 #include <stb_sprintf.h>
-
+#include "turbo_logger.h"
 char *get_cookie(Req *req, const char *name)
 {
     if (!req || !name)
@@ -16,7 +16,7 @@ char *get_cookie(Req *req, const char *name)
     iris_security_result_t name_validation = iris_validate_cookie_name(name, limits->max_cookie_name_length);
     if (name_validation != IRIS_SECURITY_OK) {
         // Log security issue but don't crash - just return NULL
-        LOG_ERROR("Security: Invalid cookie name requested: {} (error: {})",
+        TLOG_ERROR("Security: Invalid cookie name requested: {} (error: {})",
                 name, iris_security_error_string(name_validation));
         return NULL;
     }
@@ -63,7 +63,7 @@ char *get_cookie(Req *req, const char *name)
             iris_security_result_t value_validation = iris_validate_cookie_value(value, limits->max_cookie_value_length);
             if (value_validation != IRIS_SECURITY_OK) {
                 // Log security issue and free the value
-                LOG_ERROR("Security: Invalid cookie value for '{}' (error: {})",
+                TLOG_ERROR("Security: Invalid cookie value for '{}' (error: {})",
                         name, iris_security_error_string(value_validation));
                 free(value);
                 return NULL;
@@ -85,21 +85,21 @@ void set_cookie(Res *res, const char *name, const char *value, cookie_options_t 
 {
     if (!res || !name || !value)
     {
-        LOG_ERROR("Invalid parameters for set_cookie");
+        TLOG_ERROR("Invalid parameters for set_cookie");
         return;
     }
 
     // Validate cookie name and value before setting
     iris_security_result_t validation_result = iris_validate_cookie(name, value);
     if (validation_result != IRIS_SECURITY_OK) {
-        LOG_ERROR("Security: Cannot set invalid cookie '{}' (error: {})",
+        TLOG_ERROR("Security: Cannot set invalid cookie '{}' (error: {})",
                 name, iris_security_error_string(validation_result));
         return;
     }
 
     if (options && options->max_age < 0)
     {
-        LOG_ERROR("Invalid max_age value");
+        TLOG_ERROR("Invalid max_age value");
         return;
     }
 
@@ -138,7 +138,7 @@ void set_cookie(Res *res, const char *name, const char *value, cookie_options_t 
 
     if (needed < 0)
     {
-        LOG_ERROR("Cookie formatting error");
+        TLOG_ERROR("Cookie formatting error");
         return;
     }
 
@@ -152,7 +152,7 @@ void set_cookie(Res *res, const char *name, const char *value, cookie_options_t 
     int written = stbsp_snprintf(cookie_val, (size_t)needed + 1, "%s=%s", name, value);
     if (written < 0)
     {
-        LOG_ERROR("Cookie formatting error");
+        TLOG_ERROR("Cookie formatting error");
         free(cookie_val);
         return;
     }
@@ -199,6 +199,6 @@ void set_cookie(Res *res, const char *name, const char *value, cookie_options_t 
     return;
 
 error:
-    LOG_ERROR("Cookie formatting error during construction");
+    TLOG_ERROR("Cookie formatting error during construction");
     free(cookie_val);
 }

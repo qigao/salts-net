@@ -1092,68 +1092,68 @@ const char *iris_config_error_string(iris_config_result_t result) {
 
 void iris_config_print(const iris_config_t *config) {
   if (!config) {
-    LOG_INFO("Configuration: NULL");
+    TLOG_INFO("Configuration: NULL");
     return;
   }
 
-  LOG_INFO("Iris Configuration:");
-  LOG_INFO("  Security Limits:");
-  LOG_INFO("    max_request_size: {}", config->max_request_size);
-  LOG_INFO("    max_header_size: {}", config->max_header_size);
-  LOG_INFO("    max_url_length: {}", config->max_url_length);
-  LOG_INFO("    max_headers_count: {}", config->max_headers_count);
+  TLOG_INFO("Iris Configuration:");
+  TLOG_INFO("  Security Limits:");
+  TLOG_INFO("    max_request_size: {}", config->max_request_size);
+  TLOG_INFO("    max_header_size: {}", config->max_header_size);
+  TLOG_INFO("    max_url_length: {}", config->max_url_length);
+  TLOG_INFO("    max_headers_count: {}", config->max_headers_count);
 
-  LOG_INFO("  Rate Limits:");
-  LOG_INFO("    requests_per_second: {}", config->requests_per_second);
-  LOG_INFO("    connections_per_ip: {}", config->connections_per_ip);
+  TLOG_INFO("  Rate Limits:");
+  TLOG_INFO("    requests_per_second: {}", config->requests_per_second);
+  TLOG_INFO("    connections_per_ip: {}", config->connections_per_ip);
 
-  LOG_INFO("  Timeouts:");
-  LOG_INFO("    connection_timeout: {}", config->connection_timeout);
-  LOG_INFO("    request_timeout: {}", config->request_timeout);
-  LOG_INFO("    keepalive_timeout: {}", config->keepalive_timeout);
+  TLOG_INFO("  Timeouts:");
+  TLOG_INFO("    connection_timeout: {}", config->connection_timeout);
+  TLOG_INFO("    request_timeout: {}", config->request_timeout);
+  TLOG_INFO("    keepalive_timeout: {}", config->keepalive_timeout);
 
-  LOG_INFO("  Memory:");
-  LOG_INFO("    arena_initial_size: {}", config->arena_initial_size);
-  LOG_INFO("    arena_max_size: {}", config->arena_max_size);
+  TLOG_INFO("  Memory:");
+  TLOG_INFO("    arena_initial_size: {}", config->arena_initial_size);
+  TLOG_INFO("    arena_max_size: {}", config->arena_max_size);
 
-  LOG_INFO("  Logging:");
-  LOG_INFO("    log_level: {}", config->log_level);
-  LOG_INFO("    log_format: {}", config->log_format);
+  TLOG_INFO("  Logging:");
+  TLOG_INFO("    log_level: {}", config->log_level);
+  TLOG_INFO("    log_format: {}", config->log_format);
 
-  LOG_INFO("  TLS:");
-  LOG_INFO("    cipher_suites: {}", config->cipher_suites);
-  LOG_INFO("    min_tls_version: {}", config->min_tls_version);
+  TLOG_INFO("  TLS:");
+  TLOG_INFO("    cipher_suites: {}", config->cipher_suites);
+  TLOG_INFO("    min_tls_version: {}", config->min_tls_version);
 
-  LOG_INFO("  Server:");
-  LOG_INFO("    max_concurrent_connections: {}", config->max_concurrent_connections);
-  LOG_INFO("    worker_threads: {}", config->worker_threads);
-  LOG_INFO("    enable_compression: {}", config->enable_compression ? "true" : "false");
+  TLOG_INFO("  Server:");
+  TLOG_INFO("    max_concurrent_connections: {}", config->max_concurrent_connections);
+  TLOG_INFO("    worker_threads: {}", config->worker_threads);
+  TLOG_INFO("    enable_compression: {}", config->enable_compression ? "true" : "false");
 
-  LOG_INFO("  Health Check:");
-  LOG_INFO("    enable_health_check: {}", config->enable_health_check ? "true" : "false");
-  LOG_INFO("    health_check_path: {}", config->health_check_path);
+  TLOG_INFO("  Health Check:");
+  TLOG_INFO("    enable_health_check: {}", config->enable_health_check ? "true" : "false");
+  TLOG_INFO("    health_check_path: {}", config->health_check_path);
 
-  LOG_INFO("  Security Features:");
-  LOG_INFO("    enable_csrf_protection: {}", config->enable_csrf_protection ? "true" : "false");
-  LOG_INFO("    enable_xss_protection: {}", config->enable_xss_protection ? "true" : "false");
-  LOG_INFO("    enable_content_security_policy: {}",
+  TLOG_INFO("  Security Features:");
+  TLOG_INFO("    enable_csrf_protection: {}", config->enable_csrf_protection ? "true" : "false");
+  TLOG_INFO("    enable_xss_protection: {}", config->enable_xss_protection ? "true" : "false");
+  TLOG_INFO("    enable_content_security_policy: {}",
          config->enable_content_security_policy ? "true" : "false");
 
-  LOG_INFO("  File Upload:");
-  LOG_INFO("    max_file_upload_size: {}", config->max_file_upload_size);
-  LOG_INFO("    allowed_file_extensions: {}", config->allowed_file_extensions);
+  TLOG_INFO("  File Upload:");
+  TLOG_INFO("    max_file_upload_size: {}", config->max_file_upload_size);
+  TLOG_INFO("    allowed_file_extensions: {}", config->allowed_file_extensions);
 
-  LOG_INFO("  CORS:");
-  LOG_INFO("    enable_cors: {}", config->enable_cors ? "true" : "false");
-  LOG_INFO("    cors_allowed_origins: {}", config->cors_allowed_origins);
-  LOG_INFO("    cors_allowed_methods: {}", config->cors_allowed_methods);
-  LOG_INFO("    cors_allowed_headers: {}", config->cors_allowed_headers);
+  TLOG_INFO("  CORS:");
+  TLOG_INFO("    enable_cors: {}", config->enable_cors ? "true" : "false");
+  TLOG_INFO("    cors_allowed_origins: {}", config->cors_allowed_origins);
+  TLOG_INFO("    cors_allowed_methods: {}", config->cors_allowed_methods);
+  TLOG_INFO("    cors_allowed_headers: {}", config->cors_allowed_headers);
 
-  LOG_INFO("  Performance:");
-  LOG_INFO("    read_buffer_size: {}", config->read_buffer_size);
-  LOG_INFO("    write_buffer_size: {}", config->write_buffer_size);
-  LOG_INFO("    tcp_nodelay: {}", config->tcp_nodelay);
-  LOG_INFO("    tcp_keepalive: {}", config->tcp_keepalive);
+  TLOG_INFO("  Performance:");
+  TLOG_INFO("    read_buffer_size: {}", config->read_buffer_size);
+  TLOG_INFO("    write_buffer_size: {}", config->write_buffer_size);
+  TLOG_INFO("    tcp_nodelay: {}", config->tcp_nodelay);
+  TLOG_INFO("    tcp_keepalive: {}", config->tcp_keepalive);
 }
 
 iris_config_result_t iris_config_get_parameter_string(const iris_config_t *config,

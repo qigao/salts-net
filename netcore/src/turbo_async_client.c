@@ -1,4 +1,4 @@
-﻿#include "stb_sprintf.h"
+#include "stb_sprintf.h"
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>

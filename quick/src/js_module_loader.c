@@ -432,6 +432,62 @@ static JSModuleDef *js_init_module_proc(JSContext *ctx, const char *module_name)
 // Module Loader
 // =============================================================================
 
+// Read file contents for module loading
+static char *js_load_file(JSContext *ctx, const char *filename, size_t *out_len) {
+    FILE *f = fopen(filename, "rb");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (len < 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    char *buf = js_malloc(ctx, len + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t read_len = fread(buf, 1, len, f);
+    fclose(f);
+
+    if (read_len != (size_t)len) {
+        js_free(ctx, buf);
+        return NULL;
+    }
+
+    buf[len] = '\0';
+    if (out_len) *out_len = len;
+    return buf;
+}
+
+// Load a JS module from file
+static JSModuleDef *js_load_module_file(JSContext *ctx, const char *module_name) {
+    size_t buf_len;
+    char *buf = js_load_file(ctx, module_name, &buf_len);
+    if (!buf) {
+        JS_ThrowReferenceError(ctx, "could not load module file '%s'", module_name);
+        return NULL;
+    }
+
+    // Compile the module
+    JSValue func_val = JS_Eval(ctx, buf, buf_len, module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    js_free(ctx, buf);
+
+    if (JS_IsException(func_val)) {
+        return NULL;
+    }
+
+    // Get the module definition - must not free func_val as QuickJS takes ownership
+    JSModuleDef *m = JS_VALUE_GET_PTR(func_val);
+    return m;
+}
+
 static JSModuleDef *js_turbo_module_loader(JSContext *ctx, const char *module_name, void *opaque) {
     (void)opaque;
 
@@ -442,15 +498,31 @@ static JSModuleDef *js_turbo_module_loader(JSContext *ctx, const char *module_na
         }
     }
 
-    // Not a turbo module - return NULL to let other loaders handle it
-    return NULL;
+    // Try to load from file system
+    // Check for .js extension or add it
+    const char *ext = strrchr(module_name, '.');
+    if (ext && strcmp(ext, ".js") == 0) {
+        return js_load_module_file(ctx, module_name);
+    }
+
+    // Try with .js extension
+    size_t name_len = strlen(module_name);
+    char *js_name = js_malloc(ctx, name_len + 4);
+    if (js_name) {
+        memcpy(js_name, module_name, name_len);
+        memcpy(js_name + name_len, ".js", 4);
+        JSModuleDef *m = js_load_module_file(ctx, js_name);
+        js_free(ctx, js_name);
+        if (m) return m;
+    }
+
+    // Try original name (might be a directory with index.js or other extension)
+    return js_load_module_file(ctx, module_name);
 }
 
 // Normalize module name (for relative imports)
 static char *js_turbo_module_normalize(JSContext *ctx, const char *base_name,
                                         const char *name, void *opaque) {
-    (void)ctx;
-    (void)base_name;
     (void)opaque;
 
     // For turbo: modules, return as-is
@@ -458,7 +530,31 @@ static char *js_turbo_module_normalize(JSContext *ctx, const char *base_name,
         return js_strdup(ctx, name);
     }
 
-    // For other modules, return as-is (let default loader handle)
+    // For absolute paths, return as-is
+    if (name[0] == '/' || (name[0] != '\0' && name[1] == ':')) {
+        return js_strdup(ctx, name);
+    }
+
+    // For relative paths, resolve against base_name
+    if (name[0] == '.' && base_name) {
+        // Find the directory of base_name
+        const char *last_slash = strrchr(base_name, '/');
+        const char *last_backslash = strrchr(base_name, '\\');
+        const char *dir_end = last_slash > last_backslash ? last_slash : last_backslash;
+
+        if (dir_end) {
+            size_t dir_len = dir_end - base_name + 1;
+            size_t name_len = strlen(name);
+            char *result = js_malloc(ctx, dir_len + name_len + 1);
+            if (result) {
+                memcpy(result, base_name, dir_len);
+                memcpy(result + dir_len, name, name_len + 1);
+                return result;
+            }
+        }
+    }
+
+    // For other modules, return as-is
     return js_strdup(ctx, name);
 }
 

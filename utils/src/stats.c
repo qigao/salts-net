@@ -11,7 +11,7 @@
 #include <uv.h>
 
 #include <stc/cstr.h>
-#include "turbo_logger.h"
+#include "tlog.h"
 
 /* Statistics update message packed into the queue */
 typedef struct stats_update_msg_s {

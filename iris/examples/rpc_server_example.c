@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 
 /* Math.add handler */
 static int math_add_handler(Req *req, rpc_request_t *rpc_req, rpc_response_t *rpc_res) {
@@ -91,7 +92,7 @@ static int log_message_handler(Req *req, rpc_request_t *rpc_req, rpc_response_t 
   /* Get message parameter */
   const char *message = rpc_get_param_string(rpc_req, "message");
   if (message) {
-    printf("[LOG] %s\n", message);
+    TLOG_INFO("RPC Log: {:s}", message);
   }
 
   /* Notifications don't send responses */
@@ -205,8 +206,8 @@ static void home_handler(Req *req, Res *res) {
 }
 
 int main(void) {
-  printf("RPC Server Example\n");
-  printf("==================\n\n");
+  TLOG_INFO("RPC Server Example");
+  TLOG_INFO("==================");
 
   /* Create RPC configuration */
   rpc_config_t rpc_config;
@@ -220,11 +221,11 @@ int main(void) {
   /* Initialize RPC context */
   rpc_context_t *rpc_ctx = rpc_init(&rpc_config);
   if (!rpc_ctx) {
-    fprintf(stderr, "Failed to initialize RPC context\n");
+    TLOG_ERROR("Failed to initialize RPC context");
     return 1;
   }
 
-  printf("RPC context initialized\n");
+  TLOG_INFO("RPC context initialized");
 
   /* Register RPC methods */
   rpc_method_t method;
@@ -234,64 +235,64 @@ int main(void) {
   method.description = "Add two numbers";
   method.requires_auth = 0;
   rpc_register_method(rpc_ctx, &method);
-  printf("Registered method: %s\n", method.name);
+  TLOG_DEBUG("Registered method: {:s}", method.name);
 
   method.name = "math.multiply";
   method.handler = math_multiply_handler;
   method.description = "Multiply two numbers";
   method.requires_auth = 0;
   rpc_register_method(rpc_ctx, &method);
-  printf("Registered method: %s\n", method.name);
+  TLOG_DEBUG("Registered method: {:s}", method.name);
 
   method.name = "user.getInfo";
   method.handler = user_getinfo_handler;
   method.description = "Get user information";
   method.requires_auth = 0;
   rpc_register_method(rpc_ctx, &method);
-  printf("Registered method: %s\n", method.name);
+  TLOG_DEBUG("Registered method: {:s}", method.name);
 
   method.name = "log.message";
   method.handler = log_message_handler;
   method.description = "Log a message";
   method.requires_auth = 0;
   rpc_register_method(rpc_ctx, &method);
-  printf("Registered method: %s\n", method.name);
+  TLOG_DEBUG("Registered method: {:s}", method.name);
 
   method.name = "echo";
   method.handler = echo_handler;
   method.description = "Echo back a message";
   method.requires_auth = 0;
   rpc_register_method(rpc_ctx, &method);
-  printf("Registered method: %s\n", method.name);
+  TLOG_DEBUG("Registered method: {:s}", method.name);
 
   method.name = "status";
   method.handler = status_handler;
   method.description = "Get server status";
   method.requires_auth = 0;
   rpc_register_method(rpc_ctx, &method);
-  printf("Registered method: %s\n", method.name);
+  TLOG_DEBUG("Registered method: {:s}", method.name);
 
   /* Setup RPC endpoint */
   if (rpc_setup_endpoint(rpc_ctx) != 0) {
-    fprintf(stderr, "Failed to setup RPC endpoint\n");
+    TLOG_ERROR("Failed to setup RPC endpoint");
     rpc_destroy(rpc_ctx);
     return 1;
   }
 
-  printf("RPC endpoint setup at %s\n", rpc_config.endpoint);
+  TLOG_INFO("RPC endpoint setup at {:s}", rpc_config.endpoint);
 
   /* Register home page */
   get("/", home_handler);
 
-  printf("\nServer starting on http://localhost:8080\n");
-  printf("RPC endpoint: http://localhost:8080/rpc\n");
-  printf("Home page: http://localhost:8080/\n");
-  printf("\nPress Ctrl+C to stop\n\n");
+  TLOG_INFO("Server starting on http://localhost:8080");
+  TLOG_INFO("RPC endpoint: http://localhost:8080/rpc");
+  TLOG_INFO("Home page: http://localhost:8080/");
+  TLOG_INFO("Press Ctrl+C to stop");
 
   /* Start server */
   int result = ecewo(8080);
   if (result != 0) {
-    fprintf(stderr, "Server failed to start: %d\n", result);
+    TLOG_ERROR("Server failed to start: {:d}", result);
   }
 
   /* Cleanup */

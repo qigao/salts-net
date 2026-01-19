@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 
 #include <stc/cstr.h>
 #define i_static
@@ -237,33 +238,33 @@ void turbo_tcp_config_init_defaults(void) {
 
 void turbo_config_print_all(void) {
   if (!g_config_init) {
-    printf("Configuration system not initialized\n");
+    TLOG_ERROR("Configuration system not initialized");
     return;
   }
 
-  printf("=== Iris Configuration ===\n");
-  printf("TCP Configuration:\n");
-  printf("  recv_buffer_size: %d\n", turbo_tcp_config_get_recv_buffer_size());
-  printf("  send_buffer_size: %d\n", turbo_tcp_config_get_send_buffer_size());
-  printf("  batch_bytes: %zu\n", turbo_tcp_config_get_batch_bytes());
-  printf("  arena_free_max: %zu\n", turbo_tcp_config_get_arena_free_max());
-  printf("  arena_region_hint: %zu\n", turbo_tcp_config_get_arena_region_hint());
-  printf("  backlog: %u\n", turbo_tcp_config_get_backlog());
-  printf("  pool_chunk_size: %zu\n", turbo_tcp_config_get_pool_chunk_size());
-  printf("  read_buf_min: %zu\n", turbo_tcp_config_get_read_buf_min());
-  printf("  read_buf_max: %zu\n", turbo_tcp_config_get_read_buf_max());
-  printf("  read_buf_size: %zu\n", turbo_tcp_config_get_read_buf_size());
+  TLOG_INFO("=== Iris Configuration ===");
+  TLOG_INFO("TCP Configuration:");
+  TLOG_INFO("  recv_buffer_size: {:d}", turbo_tcp_config_get_recv_buffer_size());
+  TLOG_INFO("  send_buffer_size: {:d}", turbo_tcp_config_get_send_buffer_size());
+  TLOG_INFO("  batch_bytes: {}", turbo_tcp_config_get_batch_bytes());
+  TLOG_INFO("  arena_free_max: {}", turbo_tcp_config_get_arena_free_max());
+  TLOG_INFO("  arena_region_hint: {}", turbo_tcp_config_get_arena_region_hint());
+  TLOG_INFO("  backlog: {:u}", turbo_tcp_config_get_backlog());
+  TLOG_INFO("  pool_chunk_size: {}", turbo_tcp_config_get_pool_chunk_size());
+  TLOG_INFO("  read_buf_min: {}", turbo_tcp_config_get_read_buf_min());
+  TLOG_INFO("  read_buf_max: {}", turbo_tcp_config_get_read_buf_max());
+  TLOG_INFO("  read_buf_size: {}", turbo_tcp_config_get_read_buf_size());
 
-  printf("UDP Configuration:\n");
-  printf("  pool_chunk_size: %zu\n", turbo_udp_config_get_pool_chunk_size());
-  printf("  recv_buf_size: %zu\n", turbo_udp_config_get_recv_buf_size());
-  printf("  recv_buf_min: %zu\n", turbo_udp_config_get_recv_buf_min());
-  printf("  recv_buf_max: %zu\n", turbo_udp_config_get_recv_buf_max());
+  TLOG_INFO("UDP Configuration:");
+  TLOG_INFO("  pool_chunk_size: {}", turbo_udp_config_get_pool_chunk_size());
+  TLOG_INFO("  recv_buf_size: {}", turbo_udp_config_get_recv_buf_size());
+  TLOG_INFO("  recv_buf_min: {}", turbo_udp_config_get_recv_buf_min());
+  TLOG_INFO("  recv_buf_max: {}", turbo_udp_config_get_recv_buf_max());
 
-  printf("Statistics Configuration:\n");
-  printf("  update_pool_size: %zu\n", turbo_stats_config_get_update_pool_size());
-  printf("  rate_interval_ms: %d\n", turbo_stats_config_get_rate_interval_ms());
-  printf("==========================\n");
+  TLOG_INFO("Statistics Configuration:");
+  TLOG_INFO("  update_pool_size: {}", turbo_stats_config_get_update_pool_size());
+  TLOG_INFO("  rate_interval_ms: {:d}", turbo_stats_config_get_rate_interval_ms());
+  TLOG_INFO("==========================");
 }
 
 int turbo_config_load_from_file(const char *filename) {

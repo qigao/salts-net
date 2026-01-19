@@ -1,8 +1,8 @@
 #include "error_recovery.h"
-#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include "tlog.h"
 
 /**
  * @file error_recovery.c
@@ -89,7 +89,7 @@ void iris_log_error(const iris_error_context_t *ctx) {
         return;
     }
 
-    fprintf(stderr, "[ERROR] %s: %s (code: %d) at %s:%d in %s()\n",
+    TLOG_ERROR("{}: {} (code: {:d}) at {}:{:d} in {}()",
             iris_error_type_string(ctx->error_type),
             ctx->message,
             ctx->error_code,

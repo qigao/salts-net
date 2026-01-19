@@ -3,7 +3,7 @@
  * @brief Common state management for JS TurboNet modules.
  */
 #include "js_internal.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include <uv.h>
 #include <stdlib.h>
 #include <string.h>

@@ -2,9 +2,9 @@
 #include "iris.h"
 #include "security.h"
 #include <cjson/cJSON.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 #include <stb_sprintf.h>
 
 /* Global RPC context - temporary solution until iris_app_t refactor */
@@ -212,7 +212,7 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
           cJSON_AddStringToObject(error, "message", escaped_message);
         } else {
           // Fallback to original message if escaping fails
-          fprintf(stderr, "Warning: Failed to escape RPC error message: %s\n", iris_security_error_string(escape_result));
+          TLOG_WARN("Failed to escape RPC error message: {:s}", iris_security_error_string(escape_result));
           cJSON_AddStringToObject(error, "message", rpc_res->error_message);
         }
         free(escaped_message);
@@ -239,7 +239,7 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
             cJSON_AddStringToObject(root, "result", escaped_result);
           } else {
             // Fallback to original result if escaping fails
-            fprintf(stderr, "Warning: Failed to escape RPC result: %s\n", iris_security_error_string(escape_result));
+            TLOG_WARN("Failed to escape RPC result: {:s}", iris_security_error_string(escape_result));
             cJSON_AddStringToObject(root, "result", rpc_res->result);
           }
           free(escaped_result);
@@ -319,7 +319,7 @@ void rpc_send_error(Res *res, int error_code, const char *error_message, const c
         cJSON_AddStringToObject(error, "message", escaped_message);
       } else {
         // Fallback to original message if escaping fails
-        fprintf(stderr, "Warning: Failed to escape RPC error message: %s\n", iris_security_error_string(escape_result));
+        TLOG_WARN("Failed to escape RPC error message: {:s}", iris_security_error_string(escape_result));
         cJSON_AddStringToObject(error, "message", error_message);
       }
       free(escaped_message);

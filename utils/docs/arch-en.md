@@ -7,14 +7,14 @@ The Common module provides foundational utilities and general-purpose functions 
 ```
 turbonet/common/
 ├── include/
-│   ├── turbo_logger.h          # Logging system
+│   ├── tlog.h          # Logging system
 │   ├── turbo_dns.h             # DNS resolution
 │   ├── turbo_fs.h              # File system operations
 │   ├── base64_utils.h          # Base64 utilities
 │   ├── platform.h              # Platform abstraction
 │   └── ...
 └── src/
-    ├── turbo_logger.c
+    ├── tlog.c
     ├── turbo_dns.c
     ├── turbo_fs.c
     ├── base64_utils.c
@@ -239,7 +239,7 @@ char *data = read_file(path);            // Who allocated? Who frees?
 
 ### Clear Ownership Rules
 
-1. **Logger**: Owned by caller, must call `turbo_logger_destroy()`
+1. **Logger**: Owned by caller, must call `tlog_destroy()`
 2. **File Buffers**: Allocated by `turbo_fs_read_file_sync()`, caller uses `turbo_fs_buf_free()` to release
 3. **Base64 Output**: Allocated by function, caller uses `free()` to release
 4. **DNS Callback Parameters**: Pointers valid only during callback execution, must copy
@@ -282,7 +282,7 @@ void on_resolved(const char *hostname, const char *ip, int status, void *data) {
 -1 / negative        // Error (usually errno)
 
 // Logger special case
-turbo_logger_create() // NULL means failure
+tlog_create() // NULL means failure
 
 // DNS special case
 status parameter     // 0 = success, non-zero = c-ares error code

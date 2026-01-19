@@ -1,4 +1,5 @@
 #include "rpc_client.h"
+#include "tlog.h"
 #include "rpc_error.h"
 #include "cjson/cJSON.h"
 #include "http_client_async.h"
@@ -324,21 +325,21 @@ static void sync_call_callback(http_async_request_t *request, http_async_respons
   (void)request;
   sync_call_context_t *ctx = (sync_call_context_t *)user_data;
 
-  printf("[DEBUG] sync_call_callback called (ctx=%p, response=%p)\n", (void*)ctx, (void*)response);
+  TLOG_DEBUG("sync_call_callback called (ctx={}, response={})", (void*)ctx, (void*)response);
 
   if (!ctx || !ctx->result) {
-    printf("[DEBUG] ERROR: Invalid ctx or result\n");
+    TLOG_DEBUG("ERROR: Invalid ctx or result");
     return;
   }
 
-  printf("[DEBUG] HTTP status: %d, error_code: %d, body_len: %zu\n",
+  TLOG_DEBUG("HTTP status: {:d}, error_code: {:d}, body_len: {}",
          response->status_code, response->error_code, response->body_len);
 
   memset(ctx->result, 0, sizeof(rpc_call_result_t));
 
   if (response->error_code != HTTP_ASYNC_ERROR_NONE) {
     /* Network/HTTP error */
-    printf("[DEBUG] HTTP error detected\n");
+    TLOG_DEBUG("HTTP error detected");
     ctx->result->success = 0;
     ctx->result->error_code = RPC_ERROR_INTERNAL;
     if (response->error) {
@@ -346,11 +347,11 @@ static void sync_call_callback(http_async_request_t *request, http_async_respons
     }
   } else if (response->body && response->body_len > 0) {
     /* Parse JSON-RPC response */
-    printf("[DEBUG] Parsing JSON-RPC response (%zu bytes)\n", response->body_len);
+    TLOG_DEBUG("Parsing JSON-RPC response ({} bytes)", response->body_len);
     parse_jsonrpc_response(response->body, ctx->result);
   } else {
     /* Empty response */
-    printf("[DEBUG] Empty response\n");
+    TLOG_DEBUG("Empty response");
     ctx->result->success = 0;
     ctx->result->error_code = RPC_ERROR_INTERNAL;
     ctx->result->error_message = strdup("Empty response");
@@ -359,9 +360,9 @@ static void sync_call_callback(http_async_request_t *request, http_async_respons
   /* Set HTTP status AFTER parsing (parse may memset the result) */
   ctx->result->http_status = response->status_code;
 
-  printf("[DEBUG] Setting ctx->done = 1\n");
+  TLOG_DEBUG("Setting ctx->done = 1");
   ctx->done = 1;
-  printf("[DEBUG] sync_call_callback finished\n");
+  TLOG_DEBUG("sync_call_callback finished");
 }
 
 int rpc_client_call(rpc_client_t *client, const char *method, const char *params,

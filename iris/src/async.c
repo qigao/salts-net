@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "compat.h"
 #include "async.h"
+#include "tlog.h"
 #include <stb_sprintf.h>
 
 // Thread pool work callback
@@ -92,7 +93,7 @@ int task(
     async_t *task = (async_t *)malloc(sizeof(async_t));
     if (!task)
     {
-        fprintf(stderr, "Failed to allocate memory for async task\n");
+        TLOG_ERROR("Failed to allocate memory for async task");
         return -1;
     }
 
@@ -114,7 +115,7 @@ int task(
 
     if (result != 0)
     {
-        fprintf(stderr, "Failed to queue async work: %s\n", uv_strerror(result));
+        TLOG_ERROR("Failed to queue async work: {:s}", uv_strerror(result));
         free(task);
         return result;
     }
@@ -197,7 +198,7 @@ void arena_async_work(async_t *task, void *context)
     async_context_t *ctx = (async_context_t *)context;
 
     // Simulate work
-    printf("Performing %s for user %d\n", ctx->operation_name, ctx->user_id);
+    TLOG_INFO("Performing {:s} for user {:d}", ctx->operation_name, ctx->user_id);
 
     ok(task);
 }

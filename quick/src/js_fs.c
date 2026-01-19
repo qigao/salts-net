@@ -4,7 +4,7 @@
  */
 #include "js_internal.h"
 #include "turbo_fs.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include <string.h>
 #include <stdlib.h>
 

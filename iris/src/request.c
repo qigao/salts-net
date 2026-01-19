@@ -7,7 +7,7 @@
 #include "arena_buffer.h"
 #include "request.h"
 #include "security.h"
-#include <turbo_logger.h>
+#include <tlog.h>
 // Internal implementation structure (hidden from public API)
 struct http_parser_impl
 {

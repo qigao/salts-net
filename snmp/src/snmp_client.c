@@ -12,6 +12,7 @@
 #include <uv.h>
 #define STB_SPRINTF_IMPLEMENTATION
 #include <stb_sprintf.h>
+#include "tlog.h"
 
 /* SNMP Client structure */
 struct snmp_client_s {
@@ -89,6 +90,7 @@ static int on_udp_recv(
         if (result > 0) {
             client->pending_result = SNMP_CLIENT_OK;
             client->response_received = 1;
+            TLOG_DEBUG("SNMP response received ({:d} bytes)", slice->length);
 
             /* Stop event loop */
             uv_stop(client->loop);
@@ -105,6 +107,7 @@ static void on_timeout(uv_timer_t *timer) {
     if (!client->response_received) {
         client->pending_result = SNMP_CLIENT_ERROR_TIMEOUT;
         strcpy(client->error_msg, "Request timeout");
+        TLOG_ERROR("SNMP request timeout for {:s}:{:d}", client->host, client->port);
 
         /* Stop event loop */
         uv_stop(client->loop);
@@ -207,6 +210,9 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
     /* Start receiving */
     turbo_udp_server_start(&client->udp, on_udp_recv);
 
+    TLOG_INFO("SNMP client created for {:s}:{:d} (version: {:d})", 
+              client->host, client->port, (int)client->version);
+
     return client;
 }
 
@@ -253,6 +259,7 @@ static int send_request_and_wait(
 
         if (send_result != 0) {
             pool_destroy(client->response_pool);
+            TLOG_ERROR("SNMP network error: failed to send request to {:s}", client->host);
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 
@@ -317,6 +324,7 @@ int snmp_client_get(
 
     if (build_result != SNMP_BUILD_OK) {
         strcpy(client->error_msg, "Failed to build GetRequest");
+        TLOG_ERROR("SNMP build error: {:s}", client->error_msg);
         return SNMP_CLIENT_ERROR_INVALID;
     }
 

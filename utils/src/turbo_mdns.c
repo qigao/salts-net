@@ -1,10 +1,11 @@
 #include "turbo_mdns.h"
-#include "turbo_logger.h"
+#include "tlog.h"
+#include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
-#include <stb_sprintf.h>
+
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -162,7 +163,7 @@ static size_t build_ptr_response(uint8_t *buf, const mdns_service_t *service) {
 
   stbsp_snprintf(service_name, sizeof(service_name), "%s.local.", service->service_type);
   stbsp_snprintf(instance_name, sizeof(instance_name), "%s.%s.local.", service->instance,
-           service->service_type);
+                 service->service_type);
   stbsp_snprintf(hostname_fqdn, sizeof(hostname_fqdn), "%s.local.", service->hostname);
 
   memset(buf, 0, 12);
@@ -234,8 +235,8 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
   uint16_t authority = ntohs(*(uint16_t *)(packet + 8));
   uint16_t additional = ntohs(*(uint16_t *)(packet + 10));
 
-  TLOG_DEBUG("DNS Header: Questions={}, Answers={}, Authority={}, Additional={}", questions, answers,
-            authority, additional);
+  TLOG_DEBUG("DNS Header: Questions={}, Answers={}, Authority={}, Additional={}", questions,
+             answers, authority, additional);
 
   size_t offset = 12;
   int i;
@@ -326,8 +327,8 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
     } else if (type == DNS_TYPE_A && rdlen == 4) {
       uint8_t *addr_bytes = (uint8_t *)(packet + offset);
       char ip_str[16];
-      stbsp_snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d", addr_bytes[0], addr_bytes[1], addr_bytes[2],
-               addr_bytes[3]);
+      stbsp_snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d", addr_bytes[0], addr_bytes[1],
+                     addr_bytes[2], addr_bytes[3]);
 
       TLOG_DEBUG("  A record: {} -> {}", name, ip_str);
 
@@ -382,7 +383,7 @@ static void on_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
           /* Check if this query is for our service */
           char our_service[MDNS_MAX_NAME_LEN];
           stbsp_snprintf(our_service, sizeof(our_service), "%s.local.",
-                   ctx->published_service.service_type);
+                         ctx->published_service.service_type);
 
           if (qtype == DNS_TYPE_PTR && strcmp(query_name, our_service) == 0) {
             should_respond = 1;
@@ -475,7 +476,8 @@ void mdns_destroy(mdns_ctx_t *ctx) {
     uv_buf_t buf = uv_buf_init((char *)goodbye, (unsigned int)len);
     uv_udp_send_t *req = malloc(sizeof(uv_udp_send_t)); /* Malloc instead of stack */
     if (req) {
-        uv_udp_send(req, &ctx->socket, &buf, 1, (const struct sockaddr *)&ctx->mcast_addr, send_cleanup);
+      uv_udp_send(req, &ctx->socket, &buf, 1, (const struct sockaddr *)&ctx->mcast_addr,
+                  send_cleanup);
     }
   }
 

@@ -21,7 +21,7 @@
 #include "config.h"
 #include "turbo_dns.h"
 #include "turbo_kcp.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "turbo_pipe.h"
 #include "turbo_sync_client.h"
 #include "turbo_tcp.h"

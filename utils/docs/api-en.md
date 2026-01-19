@@ -43,29 +43,29 @@ typedef struct {
   int include_timestamp;            // Include timestamp
   int include_thread_id;            // Include thread ID
   int include_file_line;            // Include file and line number
-} turbo_logger_config_t;
+} tlog_config_t;
 ```
 
-### turbo_logger_create
+### tlog_create
 
 Creates a logger instance.
 
 ```c
-turbo_logger_t *turbo_logger_create(const turbo_logger_config_t *config);
+tlog_t *tlog_create(const tlog_config_t *config);
 ```
 
 **Parameters:**
 
 | Name | Type | Description |
 |------|------|-------------|
-| `config` | `turbo_logger_config_t *` | Logger configuration |
+| `config` | `tlog_config_t *` | Logger configuration |
 
 **Returns:**
 - Logger instance pointer on success, NULL on failure
 
 **Example:**
 ```c
-turbo_logger_config_t config = {
+tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_DEBUG,
     .format = TURBO_LOG_FORMAT_TEXT,
     .output = stdout,
@@ -75,7 +75,7 @@ turbo_logger_config_t config = {
     .include_file_line = 1
 };
 
-turbo_logger_t *logger = turbo_logger_create(&config);
+tlog_t *logger = tlog_create(&config);
 if (!logger) {
     fprintf(stderr, "Failed to create logger\n");
     return 1;
@@ -84,22 +84,22 @@ if (!logger) {
 
 ---
 
-### turbo_logger_destroy
+### tlog_destroy
 
 Destroys a logger instance.
 
 ```c
-void turbo_logger_destroy(turbo_logger_t *logger);
+void tlog_destroy(tlog_t *logger);
 ```
 
 ---
 
-### turbo_logger_set_level
+### tlog_set_level
 
 Sets the minimum log level.
 
 ```c
-void turbo_logger_set_level(turbo_logger_t *logger, turbo_log_level_t level);
+void tlog_set_level(tlog_t *logger, turbo_log_level_t level);
 ```
 
 **Parameters:**
@@ -108,12 +108,12 @@ void turbo_logger_set_level(turbo_logger_t *logger, turbo_log_level_t level);
 
 ---
 
-### turbo_logger_get_level
+### tlog_get_level
 
 Gets the current log level.
 
 ```c
-turbo_log_level_t turbo_logger_get_level(const turbo_logger_t *logger);
+turbo_log_level_t tlog_get_level(const tlog_t *logger);
 ```
 
 **Returns:**
@@ -121,12 +121,12 @@ turbo_log_level_t turbo_logger_get_level(const turbo_logger_t *logger);
 
 ---
 
-### turbo_logger_set_format
+### tlog_set_format
 
 Sets the output format.
 
 ```c
-void turbo_logger_set_format(turbo_logger_t *logger, turbo_log_format_t format);
+void tlog_set_format(tlog_t *logger, turbo_log_format_t format);
 ```
 
 **Parameters:**
@@ -135,12 +135,12 @@ void turbo_logger_set_format(turbo_logger_t *logger, turbo_log_format_t format);
 
 ---
 
-### turbo_logger_set_output
+### tlog_set_output
 
 Sets the output file stream.
 
 ```c
-void turbo_logger_set_output(turbo_logger_t *logger, FILE *output);
+void tlog_set_output(tlog_t *logger, FILE *output);
 ```
 
 **Parameters:**
@@ -179,29 +179,29 @@ LOG_FATAL(fmt, ...)
 
 **Example:**
 ```c
-turbo_logger_set_default(logger);
+tlog_set_default(logger);
 LOG_INFO("Server started on port 3000");
 LOG_WARN("Connection timeout in 30 seconds");
 ```
 
 ---
 
-### turbo_logger_set_default
+### tlog_set_default
 
 Sets the global default logger.
 
 ```c
-void turbo_logger_set_default(turbo_logger_t *logger);
+void tlog_set_default(tlog_t *logger);
 ```
 
 ---
 
-### turbo_logger_get_default
+### tlog_get_default
 
 Gets the global default logger.
 
 ```c
-turbo_logger_t *turbo_logger_get_default(void);
+tlog_t *tlog_get_default(void);
 ```
 
 ---

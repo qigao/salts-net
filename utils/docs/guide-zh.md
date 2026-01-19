@@ -9,11 +9,11 @@ Logger 提供灵活的日志记录功能，支持多种日志级别和输出格�
 #### 创建和初始化
 
 ```c
-#include "turbo_logger.h"
+#include "tlog.h"
 
 int main() {
     // 配置 Logger
-    turbo_logger_config_t config = {
+    tlog_config_t config = {
         .min_level = TURBO_LOG_LEVEL_DEBUG,
         .format = TURBO_LOG_FORMAT_TEXT,
         .output = stdout,
@@ -24,19 +24,19 @@ int main() {
     };
 
     // 创建 Logger 实例
-    turbo_logger_t *logger = turbo_logger_create(&config);
+    tlog_t *logger = tlog_create(&config);
     if (!logger) {
         fprintf(stderr, "Failed to create logger\n");
         return 1;
     }
 
     // 设置为全局默认 Logger
-    turbo_logger_set_default(logger);
+    tlog_set_default(logger);
 
     // 使用...
 
     // 销毁 Logger
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
     return 0;
 }
 ```
@@ -63,17 +63,17 @@ LOG_ERROR("Request failed");
 
 ```c
 // 开发阶段使用 DEBUG 级别
-turbo_logger_set_level(logger, TURBO_LOG_LEVEL_DEBUG);
+tlog_set_level(logger, TURBO_LOG_LEVEL_DEBUG);
 
 // 生产环境切换到 INFO 级别
-turbo_logger_set_level(logger, TURBO_LOG_LEVEL_INFO);
+tlog_set_level(logger, TURBO_LOG_LEVEL_INFO);
 ```
 
 #### 输出到文件
 
 ```c
 FILE *logfile = fopen("app.log", "a");
-turbo_logger_set_output(logger, logfile);
+tlog_set_output(logger, logfile);
 
 LOG_INFO("This will be written to app.log");
 
@@ -83,7 +83,7 @@ fclose(logfile);
 #### JSON 格式日志
 
 ```c
-turbo_logger_config_t config = {
+tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_INFO,
     .format = TURBO_LOG_FORMAT_JSON,
     .output = stdout,
@@ -91,7 +91,7 @@ turbo_logger_config_t config = {
     .include_thread_id = 1
 };
 
-turbo_logger_t *logger = turbo_logger_create(&config);
+tlog_t *logger = tlog_create(&config);
 // JSON 格式日志便于机器解析和分析
 ```
 
@@ -409,13 +409,13 @@ int receive_binary_from_http() {
 ### 完整应用示例
 
 ```c
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "turbo_dns.h"
 #include "turbo_fs.h"
 #include "base64_utils.h"
 #include <uv.h>
 
-turbo_logger_t *global_logger = NULL;
+tlog_t *global_logger = NULL;
 
 void on_dns_resolved(const char *hostname, const char *ip, int status, void *user_data) {
     if (status == 0) {
@@ -433,7 +433,7 @@ void on_dns_resolved(const char *hostname, const char *ip, int status, void *use
 
 int main() {
     // 初始化 Logger
-    turbo_logger_config_t config = {
+    tlog_config_t config = {
         .min_level = TURBO_LOG_LEVEL_DEBUG,
         .format = TURBO_LOG_FORMAT_TEXT,
         .output = stdout,
@@ -441,8 +441,8 @@ int main() {
         .include_timestamp = 1
     };
 
-    global_logger = turbo_logger_create(&config);
-    turbo_logger_set_default(global_logger);
+    global_logger = tlog_create(&config);
+    tlog_set_default(global_logger);
 
     LOG_INFO("Application started");
 
@@ -463,7 +463,7 @@ int main() {
     uv_loop_close(loop);
     free(loop);
 
-    turbo_logger_destroy(global_logger);
+    tlog_destroy(global_logger);
     LOG_INFO("Application finished");
 
     return 0;
@@ -473,7 +473,7 @@ int main() {
 ### 配置文件管理
 
 ```c
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "turbo_fs.h"
 
 typedef struct {

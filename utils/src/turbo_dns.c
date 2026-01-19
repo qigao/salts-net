@@ -6,7 +6,7 @@
  * - Sync: Wraps async API with temporary event loop
  */
 #include "turbo_dns.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include <uv.h>
 #include <ares.h>
 #include <stdlib.h>

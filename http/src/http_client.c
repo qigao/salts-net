@@ -10,6 +10,7 @@
 #include "base64_utils.h"
 #include "cookie_jar.h"
 #include "cookie_parser.h"
+#include "tlog.h"
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include <stb_sprintf.h>
@@ -562,8 +563,11 @@ static int establish_connection(http_client_t *client, const char *host, int por
   }
 
   if (status != SYNC_CLIENT_STATUS_OK) {
+    TLOG_ERROR("HTTP connection failed to {:s}:{:d} (TLS: {:d})", host, port, is_tls);
     return -1;
   }
+
+  TLOG_DEBUG("HTTP connected to {:s}:{:d}", host, port);
 
   /* Save connection info */
   free(client->current_host);
@@ -658,6 +662,7 @@ static void extract_response_cookies(http_client_t *client, http_response_t *res
 
       /* Parse and store cookie using enhanced parser */
       parse_set_cookie_enhanced(client->cookie_jar, cookie_value);
+      TLOG_DEBUG("Extracted cookie from response: {:s}", cookie_value);
       free(cookie_value);
 
       p = end;
@@ -695,6 +700,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
 
   /* Build full URL if base URL is set */
   char *full_url = build_full_url(pool, client, url);
+  TLOG_INFO("HTTP Request: {:s} {:s}", method_to_string(method), full_url ? full_url : url);
   if (!full_url) {
     http_response_t *response = calloc(1, sizeof(http_response_t));
     response->pool = pool;

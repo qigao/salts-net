@@ -12,9 +12,9 @@
 #include "iris.h"
 #include "redis_client.h"
 #include "server.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 #include <time.h>
 #include <stb_sprintf.h>
 
@@ -34,7 +34,7 @@ void on_cache_get(redis_client_t *client, redis_reply_t *reply, void *data) {
   if (reply->type == REDIS_REPLY_BULK_STRING) {
     /* Cache hit */
     cache_stats.hits++;
-    printf("[CACHE HIT] Serving from cache\n");
+    TLOG_INFO("[CACHE HIT] Serving from cache");
 
     char *response = turbo_arena_sprintf(
         res->arena, "{\"data\":%s,\"cached\":true,\"stats\":{\"hits\":%d,\"misses\":%d}}",
@@ -44,7 +44,7 @@ void on_cache_get(redis_client_t *client, redis_reply_t *reply, void *data) {
   } else {
     /* Cache miss - generate data */
     cache_stats.misses++;
-    printf("[CACHE MISS] Generating data\n");
+    TLOG_INFO("[CACHE MISS] Generating data");
 
     /* Simulate expensive operation */
     time_t now = time(NULL);
@@ -198,7 +198,7 @@ void home_handler(Req *req, Res *res) {
 /* Redis connection callback */
 void on_redis_connect(redis_client_t *client, int status, void *user_data) {
   if (status == 0) {
-    printf(" Connected to Redis\n");
+    TLOG_INFO(" Connected to Redis");
 
     /* Initialize some demo data */
     redis_command(client, NULL, NULL, "ZADD leaderboard 100 Alice");
@@ -207,18 +207,18 @@ void on_redis_connect(redis_client_t *client, int status, void *user_data) {
     redis_command(client, NULL, NULL, "ZADD leaderboard 85 David");
     redis_command(client, NULL, NULL, "ZADD leaderboard 80 Eve");
   } else {
-    fprintf(stderr, " Failed to connect to Redis\n");
+    TLOG_ERROR(" Failed to connect to Redis");
   }
 }
 
 int main(void) {
-  printf("Redis Cache Example\n");
-  printf("===================\n\n");
+  TLOG_INFO("Redis Cache Example");
+  TLOG_INFO("===================");
 
   /* Create and connect Redis client */
   redis = redis_client_create("localhost", 6379);
   if (!redis) {
-    fprintf(stderr, "Failed to create Redis client\n");
+    TLOG_ERROR("Failed to create Redis client");
     return 1;
   }
 
@@ -232,21 +232,23 @@ int main(void) {
   get("/leaderboard", leaderboard_handler);
   get("/stats", stats_handler);
 
-  printf("Server starting on http://localhost:8080\n");
-  printf("Redis: localhost:6379\n");
-  printf("\nEndpoints:\n");
-  printf("  http://localhost:8080/         - Home page\n");
-  printf("  http://localhost:8080/cached   - Cached data\n");
-  printf("  http://localhost:8080/counter  - Page counter\n");
-  printf("  http://localhost:8080/session  - Session demo\n");
-  printf("  http://localhost:8080/leaderboard - Leaderboard\n");
-  printf("  http://localhost:8080/stats    - Cache stats\n");
-  printf("\nPress Ctrl+C to stop\n\n");
+  TLOG_INFO("Server starting on http://localhost:8080");
+  TLOG_INFO("Redis: localhost:6379");
+  TLOG_INFO("");
+  TLOG_INFO("Endpoints:");
+  TLOG_INFO("  http://localhost:8080/         - Home page");
+  TLOG_INFO("  http://localhost:8080/cached   - Cached data");
+  TLOG_INFO("  http://localhost:8080/counter  - Page counter");
+  TLOG_INFO("  http://localhost:8080/session  - Session demo");
+  TLOG_INFO("  http://localhost:8080/leaderboard - Leaderboard");
+  TLOG_INFO("  http://localhost:8080/stats    - Cache stats");
+  TLOG_INFO("");
+  TLOG_INFO("Press Ctrl+C to stop");
 
   /* Start server */
   int result = ecewo(8080);
   if (result != 0) {
-    fprintf(stderr, "Server failed to start: %d\n", result);
+    TLOG_ERROR("Server failed to start: {:d}", result);
   }
 
   /* Cleanup */

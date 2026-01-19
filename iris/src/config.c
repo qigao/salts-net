@@ -9,7 +9,7 @@
 
 #include "config.h"
 #include "arena_buffer.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "turbo_parser.h"
 #include <ctype.h>
 #include <errno.h>

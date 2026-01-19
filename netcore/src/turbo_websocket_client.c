@@ -6,7 +6,7 @@
 #include "base64_utils.h"
 #include "client_common.h"
 #include "stb_sprintf.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "turbo_tcp.h"
 #include "turbo_tls.h"
 #include "websocket_crypto.h"
@@ -25,7 +25,7 @@
 
 // ============================================================================
 // Forward declarations
-#include "turbo_logger.h"
+#include "tlog.h"
 
 // ============================================================================
 static int on_tcp_recv_internal(void *handle, const turbo_arena_slice_t *data, void *peer);

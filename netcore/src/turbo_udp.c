@@ -8,6 +8,7 @@
 #include "stats.h"
 #include "turbo_udp.h"
 #include "internal.h"
+#include "tlog.h"
  
 
 /* Forward declarations for pool synchronization */
@@ -252,7 +253,13 @@ int turbo_udp_server_start(turbo_udp_server_t *server, turbo_recv_cb cb) {
     return UV_EINVAL;
 
   server->on_recv = cb;
-  return uv_udp_recv_start(server->handle, alloc_recv_buffer, on_udp_recv);
+  int rc = uv_udp_recv_start(server->handle, alloc_recv_buffer, on_udp_recv);
+  if (rc == 0) {
+    TLOG_INFO("UDP server listening");
+  } else {
+    TLOG_ERROR("UDP server start failed: {:s}", uv_strerror(rc));
+  }
+  return rc;
 }
 
 /* Stop enhanced UDP server */
@@ -523,9 +530,10 @@ int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr,
     
     int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_JOIN_GROUP);
     if (rc == 0) {
-        
+        TLOG_INFO("Joined multicast group: {:s}", multicast_addr);
     } else {
         turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
+        TLOG_ERROR("Failed to join multicast group {:s}: {:s}", multicast_addr, uv_strerror(rc));
     }
     
     return rc;

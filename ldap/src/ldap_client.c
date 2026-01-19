@@ -12,6 +12,7 @@
 #include <string.h>
 #include <uv.h>
 #include <stb_sprintf.h>
+#include "tlog.h"
 
 /* Client error codes (match ldap_client.h) */
 #define LDAP_CLIENT_OK              0
@@ -129,6 +130,7 @@ static int on_tcp_recv(void *handle, const turbo_arena_slice_t *slice, void *pee
 
         if (rc == LDAP_PARSE_OK && parse_result.message) {
             ldap_message_t *msg = parse_result.message;
+            TLOG_DEBUG("LDAP message received: ID={:d}, Op={:d}", msg->message_id, msg->protocol_op);
 
             /* Check if this is the response we're waiting for */
             if (msg->message_id == client->expected_message_id) {
@@ -186,10 +188,13 @@ static void on_tcp_connect(void *handle, int status) {
     if (status == 0) {
         client->connected = 1;
         client->pending_result = LDAP_CLIENT_OK;
+        TLOG_INFO("LDAP connected to {:s}:{:d}", client->host, client->port);
     } else {
         client->pending_result = LDAP_CLIENT_ERROR_NETWORK;
         stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
                        "Connection failed: %s", uv_strerror(status));
+        TLOG_ERROR("LDAP connection failed to {:s}:{:d}: {:s}", 
+                   client->host, client->port, client->error_msg);
     }
     client->response_received = 1;
     uv_stop(client->loop);
@@ -209,6 +214,7 @@ static void on_timeout(uv_timer_t *timer) {
     if (!client->response_received) {
         client->pending_result = LDAP_CLIENT_ERROR_TIMEOUT;
         strcpy(client->error_msg, "Operation timeout");
+        TLOG_ERROR("LDAP operation timeout for {:s}:{:d}", client->host, client->port);
         uv_stop(client->loop);
     }
 }
@@ -288,6 +294,8 @@ ldap_client_t *ldap_client_create(const ldap_client_config_t *config) {
     /* Initialize timeout timer */
     uv_timer_init(client->loop, &client->timeout_timer);
     client->timeout_timer.data = client;
+
+    TLOG_INFO("LDAP client created for {:s}:{:d}", client->host, client->port);
 
     return client;
 }
@@ -369,6 +377,7 @@ int ldap_client_simple_bind(ldap_client_t *client, const char *dn, const char *p
     int rc = ldap_build_bind_request(message_id, 3, dn, password, buf, &len);
     if (rc != LDAP_BUILD_OK) {
         strcpy(client->error_msg, "Failed to build BindRequest");
+        TLOG_ERROR("LDAP build error: {:s}", client->error_msg);
         return LDAP_CLIENT_ERROR_INVALID;
     }
 

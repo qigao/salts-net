@@ -30,6 +30,7 @@ target_link_libraries(
   PRIVATE PkgConfig::STC # Thread-safe containers
           ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
           ${FMT_LEXER_LIBRARY} # fmt_lexer
+
 )
 
 # Set target properties
@@ -44,7 +45,7 @@ add_sanitizers(${TARGET_NAME})
 
 # Install library
 install(
-  TARGETS ${TARGET_NAME}
+  TARGETS ${TARGET_NAME} fmt_lexer log_pattern_lexer
   EXPORT TurboNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib

@@ -3,7 +3,7 @@
  * @brief Main registration point for JavaScript modules in TurboNet.
  */
 #include "js_internal.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include <uv.h>
 #include <stdlib.h>
 

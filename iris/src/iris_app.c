@@ -9,9 +9,9 @@
 #include "middleware.h"
 #include "cors.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 
 /* Default global app instance for backward compatibility */
 static iris_app_t *g_default_app = NULL;
@@ -19,14 +19,14 @@ static iris_app_t *g_default_app = NULL;
 iris_app_t *iris_app_create(void) {
     iris_app_t *app = calloc(1, sizeof(iris_app_t));
     if (!app) {
-        fprintf(stderr, "Failed to allocate iris_app_t\n");
+        TLOG_ERROR("Failed to allocate iris_app_t");
         return NULL;
     }
 
     /* Initialize route trie */
     app->route_trie = route_trie_create();
     if (!app->route_trie) {
-        fprintf(stderr, "Failed to create route trie\n");
+        TLOG_ERROR("Failed to create route trie");
         free(app);
         return NULL;
     }
@@ -104,19 +104,19 @@ void iris_app_reset_default(void) {
 void iris_app_route(iris_app_t *app, const char *method, const char *path,
                     MiddlewareArray middleware, RequestHandler handler) {
     if (!app || !method || !path || !handler) {
-        fprintf(stderr, "iris_app_route: invalid parameters\n");
+        TLOG_ERROR("iris_app_route: invalid parameters");
         return;
     }
 
     if (!app->route_trie) {
-        fprintf(stderr, "iris_app_route: route trie not initialized\n");
+        TLOG_ERROR("iris_app_route: route trie not initialized");
         return;
     }
 
     /* Create middleware info */
     MiddlewareInfo *middleware_info = calloc(1, sizeof(MiddlewareInfo));
     if (!middleware_info) {
-        fprintf(stderr, "iris_app_route: memory allocation failed\n");
+        TLOG_ERROR("iris_app_route: memory allocation failed");
         return;
     }
 
@@ -125,7 +125,7 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
     if (middleware.count > 0 && middleware.handlers) {
         middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
         if (!middleware_info->middleware) {
-            fprintf(stderr, "iris_app_route: middleware allocation failed\n");
+            TLOG_ERROR("iris_app_route: middleware allocation failed");
             free(middleware_info);
             return;
         }
@@ -136,7 +136,7 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
 
     int result = route_trie_add(app->route_trie, method, path, handler, middleware_info);
     if (result != 0) {
-        fprintf(stderr, "iris_app_route: failed to add route %s %s\n", method, path);
+        TLOG_ERROR("iris_app_route: failed to add route {:s} {:s}", method, path);
         free_middleware_info(middleware_info);
     }
 }
@@ -156,7 +156,7 @@ void iris_app_hook(iris_app_t *app, MiddlewareHandler middleware) {
                                                        : INITIAL_MW_CAPACITY;
         MiddlewareHandler *tmp = realloc(app->global_middleware, new_cap * sizeof(MiddlewareHandler));
         if (!tmp) {
-            fprintf(stderr, "iris_app_hook: realloc failed\n");
+            TLOG_ERROR("iris_app_hook: realloc failed");
             return;
         }
         app->global_middleware = tmp;

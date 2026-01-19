@@ -6,9 +6,10 @@ set(TEST_FILES
     test_arena.c
     test_bitmap.c
     test_dns_pref.c
+    test_fmt_typed.c
     test_memory_pool.c
     test_simple_arena.c
-    test_turbo_logger.c
+    test_tlog.c
     test_stc.c 
     test_fmt_re2c.c
     test_arena_multithread.c
@@ -36,7 +37,7 @@ foreach(TEST_FILE ${TEST_FILES})
         target_link_libraries(${TEST_NAME} PRIVATE libuv::uv c-ares::cares)
     endif()
 
-    if(TEST_NAME MATCHES "fmt_re2c")
+    if(TEST_NAME MATCHES "fmt_re2c|fmt_typed")
         target_link_libraries(${TEST_NAME} PRIVATE fmt_lexer)
     endif()
 endforeach()

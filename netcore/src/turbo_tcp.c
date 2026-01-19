@@ -8,6 +8,7 @@
 #include "client_common.h"
 #include "turbo_dns.h"
 #include "internal.h"
+#include "tlog.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -216,6 +217,9 @@ static void on_tcp_handle_closed(uv_handle_t* handle) {
         turbo_stats_gauge_set_fast(s_tcp_stats.active_connections, client->server->active_connections);
         turbo_stats_counter_inc_fast(s_tcp_stats.connections_closed);
         
+        TLOG_DEBUG("TCP connection closed (server mode), active connections: {:d}", 
+                   client->server->active_connections);
+
         if (client->server->on_close) {
             client->server->on_close(client);
         }
@@ -312,6 +316,8 @@ static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
         server->active_connections++;
         turbo_stats_gauge_set_fast(s_tcp_stats.active_connections, server->active_connections);
         
+        TLOG_DEBUG("TCP connection accepted, active connections: {:d}", server->active_connections);
+
         if (client->on_connect) {
             client->on_connect(client, 0, server);
         }
@@ -367,6 +373,7 @@ int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
         return rc;
     }
     
+    TLOG_INFO("TCP server initialized on {:s}:{:d}", bind_host, port);
     return 0;
 }
 
@@ -382,7 +389,13 @@ int turbo_tcp_server_start(turbo_tcp_server_t* server,
     server->on_close = on_close;
     
     int backlog = turbo_tcp_config_get_backlog();
-    return uv_listen((uv_stream_t*)server->handle, backlog, on_tcp_new_connection);
+    int rc = uv_listen((uv_stream_t*)server->handle, backlog, on_tcp_new_connection);
+    if (rc == 0) {
+        TLOG_INFO("TCP server listening (backlog={:d})", backlog);
+    } else {
+        TLOG_ERROR("TCP server listen failed: {:s}", uv_strerror(rc));
+    }
+    return rc;
 }
 
 /* Stop server */
@@ -513,11 +526,13 @@ static void on_tcp_client_connected(uv_connect_t* req, int status) {
         /* Start reading */
         uv_read_start((uv_stream_t*)&client->handle, alloc_tcp_recv_buffer, on_tcp_recv);
         
+        TLOG_DEBUG("TCP client connected successfully");
         if (client->on_connect) {
             client->on_connect(client, 0, NULL);
         }
     } else {
         turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
+        TLOG_ERROR("TCP connection failed: {:s}", uv_strerror(status));
         turbo_tcp_client_close(client);
     }
 }

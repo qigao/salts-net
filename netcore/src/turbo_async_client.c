@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 
 #include <uv.h>
 
@@ -2245,8 +2246,11 @@ static void emit_error_message(async_client_t *client, int status, const char *c
     buffer[sizeof(buffer) - 1] = '\0';
   } else
     buffer[0] = '\0';
-  emit_event(client, ASYNC_CLIENT_EVENT_ERROR, NULL, 0, status, buffer[0] ? buffer : NULL, NULL,
-             ASYNC_CLIENT_EVENT_FLAG_NONE);
+
+  TLOG_ERROR("Async client error: {:s} (status: {:d})", buffer[0] ? buffer : "unknown", status);
+
+  emit_event(client, ASYNC_CLIENT_EVENT_ERROR, NULL, 0, status, buffer[0] ? buffer : NULL,
+             NULL, ASYNC_CLIENT_EVENT_FLAG_NONE);
 }
 
 /**
@@ -2284,6 +2288,9 @@ static void emit_uv_error(async_client_t *client, int status, const char *contex
     static const char FMT_UV_ERR[32] = "%s (%d)";
     stbsp_snprintf(buffer, (int)sizeof(buffer), FMT_UV_ERR, msg_padded, status);
   }
+
+  TLOG_ERROR("Async client UV error: {:s}", buffer);
+
   emit_event(client, ASYNC_CLIENT_EVENT_ERROR, NULL, 0, status, buffer, NULL,
              ASYNC_CLIENT_EVENT_FLAG_NONE);
 }

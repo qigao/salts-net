@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stb_sprintf.h>
+#include "tlog.h"
 
 /* Windows doesn't have strndup */
 #ifdef _WIN32
@@ -114,6 +115,7 @@ static void on_client_event(async_client_t *ac, const async_client_event_t *even
     }
 
     if (client->connect_cb) {
+      TLOG_INFO("Redis connected to {:s}:{:d}", client->config.host, client->config.port);
       client->connect_cb(client, 0, client->connect_user_data);
     }
     break;
@@ -168,6 +170,7 @@ static void on_client_event(async_client_t *ac, const async_client_event_t *even
     break;
 
   case ASYNC_CLIENT_EVENT_ERROR:
+    TLOG_ERROR("Redis connection error for {:s}:{:d}", client->config.host, client->config.port);
     if (client->connect_cb && !client->is_connected) {
       client->connect_cb(client, -1, client->connect_user_data);
     }
@@ -208,6 +211,7 @@ static int parse_resp_reply(redis_client_t *client, redis_reply_t **reply) {
     (*reply)->type = REDIS_REPLY_ERROR;
     (*reply)->str = strndup(buf + 1, line_len);
     (*reply)->len = line_len;
+    TLOG_WARN("Redis error reply: {:s}", (*reply)->str);
     return (end - buf) + 1;
 
   case ':': /* Integer */
@@ -451,6 +455,7 @@ void redis_client_destroy(redis_client_t *client) {
   if (!client)
     return;
 
+  TLOG_DEBUG("Destroying Redis client for {:s}:{:d}", client->config.host, client->config.port);
   redis_client_disconnect(client);
 
   if (client->client) {

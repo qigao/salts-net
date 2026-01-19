@@ -8,6 +8,7 @@
 #include "iris.h"
 #include "iris_app.h"
 #include "route_trie.h"
+#include "tlog.h"
 
 /* Legacy global middleware - for backward compatibility.
  * New code should use iris_app_hook() instead. */
@@ -32,7 +33,7 @@ void hook(MiddlewareHandler middleware_handler)
       int new_cap = global_middleware_capacity ? global_middleware_capacity * 2 : INITIAL_MW_CAPACITY;
       MiddlewareHandler* tmp = realloc(global_middleware, new_cap * sizeof *tmp);
       if (!tmp) {
-        perror("realloc");
+        TLOG_ERROR("Failed to reallocate global middleware array");
         return;
       }
       global_middleware = tmp;
@@ -46,12 +47,12 @@ void hook(MiddlewareHandler middleware_handler)
 int next(Chain* chain, Req* req, Res* res)
 {
   if (!chain) {
-    printf("Error: NULL middleware chain\n");
+    TLOG_ERROR("Error: NULL middleware chain");
     return -1;
   }
 
   if (!req || !res) {
-    printf("Error: NULL request or response\n");
+    TLOG_ERROR("Error: NULL request or response");
     return -1;
   }
 
@@ -62,7 +63,7 @@ int next(Chain* chain, Req* req, Res* res)
     if (next_middleware) {
       return next_middleware(req, res, chain);
     } else {
-      printf("Warning: NULL middleware handler at position %d\n", chain->current - 1);
+      TLOG_WARN("Warning: NULL middleware handler at position {:d}", chain->current - 1);
       // Skip this middleware and try the next one
       return next(chain, req, res);
     }
@@ -92,7 +93,7 @@ void free_middleware_info(MiddlewareInfo* info)
 void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_info)
 {
   if (!req || !res || !middleware_info) {
-    printf("ERROR: NULL request, response, or middleware info\n");
+    TLOG_ERROR("ERROR: NULL request, response, or middleware info");
     return;
   }
 
@@ -110,7 +111,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
   MiddlewareHandler* combined_handlers =
       turbo_arena_alloc(req->arena, sizeof(MiddlewareHandler) * total_middleware_count);
   if (!combined_handlers) {
-    printf("Arena allocation failed for middleware handlers\n");
+    TLOG_ERROR("Arena allocation failed for middleware handlers");
     if (middleware_info->handler) {
       middleware_info->handler(req, res);
     }
@@ -131,7 +132,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
   // Create middleware chain context (allocated in request arena)
   Chain* chain = turbo_arena_alloc(req->arena, sizeof(Chain));
   if (!chain) {
-    printf("Arena allocation failed for middleware chain\n");
+    TLOG_ERROR("Arena allocation failed for middleware chain");
     if (middleware_info->handler) {
       middleware_info->handler(req, res);
     }
@@ -148,7 +149,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
 
   // Error handling
   if (result == -1) {
-    printf("ERROR: Middleware chain failed, calling handler directly as fallback\n");
+    TLOG_ERROR("ERROR: Middleware chain failed, calling handler directly as fallback");
     if (middleware_info->handler) {
       middleware_info->handler(req, res);
     }
@@ -162,23 +163,23 @@ void register_route(const char* method,
                     RequestHandler handler)
 {
   if (!handler) {
-    printf("Error: No handler provided for route: %s %s\n", method, path);
+    TLOG_ERROR("Error: No handler provided for route: {:s} {:s}", method, path);
     return;
   }
 
   if (!method || !path) {
-    printf("Error: NULL method or path provided\n");
+    TLOG_ERROR("Error: NULL method or path provided");
     return;
   }
 
   if (!global_route_trie) {
-    printf("Error: Route trie not initialized\n");
+    TLOG_ERROR("Error: Route trie not initialized");
     return;
   }
 
   MiddlewareInfo* middleware_info = calloc(1, sizeof(MiddlewareInfo));
   if (!middleware_info) {
-    printf("Memory allocation failed for middleware info\n");
+    TLOG_ERROR("Memory allocation failed for middleware info");
     return;
   }
 
@@ -187,7 +188,7 @@ void register_route(const char* method,
   if (middleware.count > 0 && middleware.handlers) {
     middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
     if (!middleware_info->middleware) {
-      printf("Memory allocation failed for middleware handlers\n");
+      TLOG_ERROR("Memory allocation failed for middleware handlers");
       free(middleware_info);
       return;
     }
@@ -199,7 +200,7 @@ void register_route(const char* method,
 
   int result = route_trie_add(global_route_trie, method, path, handler, middleware_info);
   if (result != 0) {
-    printf("Failed to add route to trie: %s %s\n", method, path);
+    TLOG_ERROR("Failed to add route to trie: {:s} {:s}", method, path);
     free_middleware_info(middleware_info);
     return;
   }

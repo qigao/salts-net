@@ -7,14 +7,14 @@ Common 模块提供 TurboNet 核心库的基础工具和通用功能，包括日
 ```
 turbonet/common/
 ├── include/
-│   ├── turbo_logger.h          # 日志系统
+│   ├── tlog.h          # 日志系统
 │   ├── turbo_dns.h             # DNS 解析
 │   ├── turbo_fs.h              # 文件系统操作
 │   ├── base64_utils.h          # Base64 工具
 │   ├── platform.h              # 平台抽象层
 │   └── ...
 └── src/
-    ├── turbo_logger.c
+    ├── tlog.c
     ├── turbo_dns.c
     ├── turbo_fs.c
     ├── base64_utils.c
@@ -239,7 +239,7 @@ char *data = read_file(path);            // 谁分配的？谁释放？
 
 ### 清晰的所有权规则
 
-1. **Logger**：调用者拥有，负责调用 `turbo_logger_destroy()`
+1. **Logger**：调用者拥有，负责调用 `tlog_destroy()`
 2. **文件缓冲区**：由 `turbo_fs_read_file_sync()` 分配，调用者使用 `turbo_fs_buf_free()` 释放
 3. **Base64 输出**：由函数分配，调用者使用 `free()` 释放
 4. **DNS 回调参数**：指针有效期仅在回调执行期间，需复制
@@ -282,7 +282,7 @@ void on_resolved(const char *hostname, const char *ip, int status, void *data) {
 -1 / 负数            // 错误（通常是 errno）
 
 // Logger 特殊情况
-turbo_logger_create() // 返回 NULL 表示失败
+tlog_create() // 返回 NULL 表示失败
 
 // DNS 特殊情况
 status 参数在回调中  // 0 成功，非 0 为 c-ares 错误代码

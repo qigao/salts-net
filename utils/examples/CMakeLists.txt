@@ -9,8 +9,7 @@ target_link_libraries(dns_lookup PRIVATE TurboNet::Utils libuv::uv
 # DNS test using turbo_dns API (requires netcore for turbo_dns.h)
 add_executable(test_dns test_dns.c)
 
-target_link_libraries(test_dns PRIVATE TurboNet::Utils TurboNet::Core
-                                       libuv::uv)
+target_link_libraries(test_dns PRIVATE TurboNet::Utils TurboNet::Core libuv::uv)
 
 # Synchronous DNS example
 add_executable(sync_dns_example sync_dns_example.c)
@@ -32,10 +31,15 @@ target_link_libraries(openssl_algorithms PRIVATE TurboNet::Utils OpenSSL::SSL
 # Logger example
 add_executable(logger_example logger_example.c)
 
-target_link_libraries(logger_example PRIVATE TurboNet::Utils )
+target_link_libraries(logger_example PRIVATE TurboNet::Utils)
 
 add_executable(bitmap_stats bitmap_stats_example.c)
 target_link_libraries(bitmap_stats PRIVATE TurboNet::Utils)
+
+# C++ Integration Test
+add_executable(cpp_test_tlog cpp_test.cpp)
+target_link_libraries(cpp_test_tlog PRIVATE TurboNet::Utils)
+
 # Set folder properties
 set_target_properties(
   dns_lookup
@@ -45,4 +49,5 @@ set_target_properties(
   openssl_algorithms
   logger_example
   bitmap_stats
+  cpp_test_tlog
   PROPERTIES FOLDER "utils/examples")

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tlog.h"
 #ifdef _WIN32
   #include <windows.h>
   #include <winsock2.h>
@@ -85,7 +86,7 @@ static void safe_close_client(client_t *client) {
   // Stop reading first to prevent new data from being processed
   int read_result = uv_read_stop((uv_stream_t *)&client->handle);
   if (read_result != 0 && read_result != UV_EINVAL) {
-    fprintf(stderr, "Error stopping read: %s\n", uv_strerror(read_result));
+    TLOG_ERROR("Error stopping read: {:s}", uv_strerror(read_result));
   }
 
   // Then close the handle if it's not already closing
@@ -115,7 +116,7 @@ static void on_read(uv_stream_t *client_stream, ssize_t nread, const uv_buf_t *b
 
   if (nread < 0) {
     if (nread != UV_EOF && nread != UV_ECONNRESET) {
-      fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
+      TLOG_ERROR("Read error: {:s}", uv_strerror((int)nread));
     }
 
     safe_close_client(client);
@@ -139,7 +140,7 @@ static void on_read(uv_stream_t *client_stream, ssize_t nread, const uv_buf_t *b
 // Called when a new connection is accepted.
 static void on_new_connection(uv_stream_t *server_stream, int status) {
   if (status < 0) {
-    fprintf(stderr, "New connection error: %s\n", uv_strerror(status));
+    TLOG_ERROR("New connection error: {:s}", uv_strerror(status));
     return;
   }
 
@@ -150,7 +151,7 @@ static void on_new_connection(uv_stream_t *server_stream, int status) {
 
   client_t *client = malloc(sizeof(client_t));
   if (!client) {
-    fprintf(stderr, "Failed to allocate client\n");
+    TLOG_ERROR("Failed to allocate client");
     return;
   }
 
@@ -160,7 +161,7 @@ static void on_new_connection(uv_stream_t *server_stream, int status) {
   // Initialize the handle
   int init_result = uv_tcp_init(uv_default_loop(), &client->handle);
   if (init_result != 0) {
-    fprintf(stderr, "TCP init error: %s\n", uv_strerror(init_result));
+    TLOG_ERROR("TCP init error: {:s}", uv_strerror(init_result));
     free(client);
     return;
   }
@@ -178,7 +179,7 @@ static void on_new_connection(uv_stream_t *server_stream, int status) {
     if (read_result == 0) {
       active_connections++;
     } else {
-      fprintf(stderr, "Read start error: %s\n", uv_strerror(read_result));
+      TLOG_ERROR("Read start error: {:s}", uv_strerror(read_result));
       uv_close((uv_handle_t *)&client->handle, on_client_closed);
     }
   } else {
@@ -205,7 +206,7 @@ static void on_signal_closed(uv_handle_t *handle) {
 // Timer close callback
 static void on_timer_closed(uv_handle_t *handle) {
   (void)handle;
-  printf("Timer closed\n");
+  TLOG_DEBUG("Timer closed");
 }
 
 // Used to close all client connections
@@ -242,7 +243,7 @@ static void count_handles(uv_handle_t *h, void *arg) {
   int *cnt = arg;
   if (!uv_is_closing(h)) {
     ++*cnt;
-    fprintf(stderr, "OPEN HANDLE: %s\n", uv_handle_type_name(h->type));
+    TLOG_DEBUG("OPEN HANDLE: {:s}", uv_handle_type_name(h->type));
   }
 }
 
@@ -251,7 +252,7 @@ static void report_open_handles(uv_loop_t *loop) {
   int count = 0;
   uv_walk(loop, count_handles, &count);
   if (count > 0) {
-    fprintf(stderr, ">>> %d handle(s) still open\n", count);
+    TLOG_DEBUG(">>> {:d} handle(s) still open", count);
   }
 }
 
@@ -286,7 +287,7 @@ static void graceful_shutdown(void) {
     wait_iterations++;
 
     if (wait_iterations % 10 == 0) {
-      printf("Waiting for %d connections to close... (iter %d)\n", active_connections,
+      TLOG_INFO("Waiting for {:d} connections to close... (iter {:d})", active_connections,
              wait_iterations);
     }
 
@@ -296,7 +297,7 @@ static void graceful_shutdown(void) {
   }
 
   if (active_connections > 0) {
-    printf("Warning: %d connections still active after timeout\n", active_connections);
+    TLOG_WARN("Warning: {:d} connections still active after timeout", active_connections);
   }
 
   // Close the server
@@ -334,20 +335,20 @@ static void signal_handler(uv_signal_t *handle, int signum) {
   (void)handle;
   switch (signum) {
   case SIGINT:
-    printf("Received SIGINT, shutting down...\n");
+    TLOG_INFO("Received SIGINT, shutting down...");
     break;
 #ifndef _WIN32
   case SIGTERM:
-    printf("Received SIGTERM, shutting down...\n");
+    TLOG_INFO("Received SIGTERM, shutting down...");
     break;
 #endif
 #ifdef _WIN32
   case SIGBREAK:
-    printf("Received SIGBREAK, shutting down...\n");
+    TLOG_INFO("Received SIGBREAK, shutting down...");
     break;
 #endif
   default:
-    printf("Received signal %d, shutting down...\n", signum);
+    TLOG_INFO("Received signal {:d}, shutting down...", signum);
     break;
   }
   graceful_shutdown();
@@ -357,7 +358,7 @@ static void signal_handler(uv_signal_t *handle, int signum) {
 int ecewo(unsigned short PORT) {
   /* Initialize error recovery system */
   if (iris_error_recovery_init() != 0) {
-    fprintf(stderr, "Failed to initialize error recovery system\n");
+    TLOG_ERROR("Failed to initialize error recovery system");
     return -1;
   }
 
@@ -436,7 +437,7 @@ int ecewo(unsigned short PORT) {
 #endif
   }
 
-  printf("Server is running on http://localhost:%d\n", PORT);
+  TLOG_INFO("Server is running on http://localhost:{:d}", PORT);
 
   // Main event loop: runs until a signal stops it
   uv_run(loop, UV_RUN_DEFAULT);
@@ -448,7 +449,7 @@ int ecewo(unsigned short PORT) {
     uv_run(loop, UV_RUN_NOWAIT);
     iterations++;
     if (iterations % 20 == 0) {
-      printf("Waiting for handles to close... (iteration %d)\n", iterations);
+      TLOG_DEBUG("Waiting for handles to close... (iteration {:d})", iterations);
       report_open_handles(loop);
     }
   }

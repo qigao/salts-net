@@ -15,7 +15,7 @@
  *   import proc from 'turbo:proc'
  */
 #include "js_internal.h"
-#include "turbo_logger.h"
+#include "tlog.h"
 #include <string.h>
 
 // Forward declarations for module init functions

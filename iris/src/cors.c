@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "tlog.h"
 
 static cors_t *g_cors_opts = NULL;
 
@@ -132,7 +133,7 @@ void init_cors(cors_t *opts)
     cors_t *custom_cors = calloc(1, sizeof(cors_t));
     if (!custom_cors)
     {
-        fprintf(stderr, "Failed to allocate memory for CORS options\n");
+        TLOG_ERROR("Failed to allocate memory for CORS options");
         return;
     }
 
@@ -192,5 +193,5 @@ error_cleanup:
         free(custom_cors->max_age);
         free(custom_cors);
     }
-    fprintf(stderr, "Failed to allocate CORS strings\n");
+    TLOG_ERROR("Failed to allocate CORS strings");
 }

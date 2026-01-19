@@ -1,14 +1,12 @@
 #include "dotenv.h"
+#include "dotenv_lexer.h"
 #include <stdio.h>
 #include <string.h>
-#include <errno.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
 #if defined(_WIN32)
-
 #if defined(_MSC_VER)
-#define strtok_r strtok_s
 #define strdup _strdup
 #endif
 
@@ -24,189 +22,124 @@ int setenv(const char *name, const char *value, int overwrite)
     }
     return _putenv_s(name, value);
 }
-
-// https://dev.w3.org/libwww/Library/src/vms/getline.c
-int getline(char **lineptr, size_t *n, FILE *stream)
-{
-    static char line[256];
-    char *ptr;
-    unsigned int len;
-
-    if (lineptr == NULL || n == NULL)
-    {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (ferror(stream))
-        return -1;
-
-    if (feof(stream))
-        return -1;
-
-    fgets(line, 256, stream);
-
-    ptr = strstr(line, "\r\n");
-    if (ptr)
-        *ptr = '\0';
-
-    len = strlen(line);
-
-    if ((len + 1) < 256)
-    {
-        ptr = realloc(*lineptr, 256);
-        if (ptr == NULL)
-            return (-1);
-        *lineptr = ptr;
-        *n = 256;
-    }
-
-    strcpy(*lineptr, line);
-    return (len);
-}
-
 #endif
 
-/* strtok_r() won't remove the whole ${ part, only the $ */
-#define remove_bracket(name) name + 1
-
-#define remove_space(value) value + 1
-
-static char *concat(char *buffer, char *string)
+static char *concat(char *buffer, const char *string)
 {
-    if (!buffer)
-    {
-        return strdup(string);
-    }
-    if (string)
-    {
-        size_t length = strlen(buffer) + strlen(string) + 1;
-        char *new = realloc(buffer, length);
+    if (!string) return buffer;
+    if (!buffer) return strdup(string);
 
-        return strcat(new, string);
-    }
-
-    return buffer;
+    size_t length = strlen(buffer) + strlen(string) + 1;
+    char *new_buf = realloc(buffer, length);
+    if (!new_buf) return buffer;
+    strcat(new_buf, string);
+    return new_buf;
 }
 
-static bool is_nested(char *value)
+static char *resolve_nested(const char *value)
 {
-    return strstr(value, "${") && strstr(value, "}");
-}
+    if (!value) return NULL;
+    
+    // Simple check for ${}
+    if (!strstr(value, "${")) return strdup(value);
 
-/**
- * @example With TEST_DIR=${BASE_DIR}/.test the first strtok_r call will return
- * BASE_DIR}/.test instead of NULL, or an empty string
- */
-static char *prepare_value(char *value)
-{
-    char *new = malloc(strlen(value) + 2);
-    sprintf(new, " %s", value);
+    char *result = NULL;
+    const char *ptr = value;
+    const char *start;
 
-    return new;
-}
-
-static char *parse_value(char *value)
-{
-    value = prepare_value(value);
-
-    char *search = value, *parsed = NULL, *tok_ptr;
-    char *name;
-
-    if (value && is_nested(value))
-    {
-        while (1)
-        {
-            parsed = concat(parsed, strtok_r(search, "${", &tok_ptr));
-            name = strtok_r(NULL, "}", &tok_ptr);
-
-            if (!name)
-            {
-                break;
-            }
-            parsed = concat(parsed, getenv(remove_bracket(name)));
-            search = NULL;
+    while ((start = strstr(ptr, "${")) != NULL) {
+        // Concat everything before ${
+        if (start > ptr) {
+            size_t len = start - ptr;
+            char *tmp = malloc(len + 1);
+            memcpy(tmp, ptr, len);
+            tmp[len] = '\0';
+            result = concat(result, tmp);
+            free(tmp);
         }
-        free(value);
 
-        return parsed;
-    }
-    return value;
-}
+        const char *end = strstr(start, "}");
+        if (!end) break; // Unterminated ${
 
-static bool is_commented(char *line)
-{
-    if ('#' == line[0])
-    {
-        return true;
-    }
+        size_t name_len = end - (start + 2);
+        char *name = malloc(name_len + 1);
+        memcpy(name, start + 2, name_len);
+        name[name_len] = '\0';
 
-    int i = 0;
-    while (' ' == line[i])
-    {
-        if ('#' == line[++i])
-        {
-            return true;
+        const char *env_val = getenv(name);
+        if (env_val) {
+            result = concat(result, env_val);
         }
+        free(name);
+        ptr = end + 1;
     }
 
-    return false;
-}
-
-static void set_variable(char *name, char *original, bool overwrite)
-{
-    char *parsed;
-
-    if (original)
-    {
-        parsed = parse_value(original);
-        setenv(name, remove_space(parsed), overwrite);
-
-        free(parsed);
+    if (*ptr) {
+        result = concat(result, ptr);
     }
-}
 
-static void parse(FILE *file, bool overwrite)
-{
-    char *name, *original, *line = NULL, *tok_ptr;
-    size_t len = 0;
-
-    while (-1 != getline(&line, &len, file))
-    {
-        if (!is_commented(line))
-        {
-            name = strtok_r(line, "=", &tok_ptr);
-            original = strtok_r(NULL, "\n", &tok_ptr);
-
-            set_variable(name, original, overwrite);
-        }
-    }
-    free(line);
-}
-
-static FILE *open_default(const char *base_path)
-{
-    char path[512];
-    sprintf(path, "%s/.env", base_path);
-
-    return fopen(path, "rb");
+    return result ? result : strdup("");
 }
 
 int env_load(const char *path, bool overwrite)
 {
-    FILE *file = open_default(path);
+    char full_path[512];
+    FILE *file = fopen(path, "rb");
 
-    if (!file)
-    {
-        file = fopen(path, "rb");
+    if (!file) {
+        snprintf(full_path, sizeof(full_path), "%s/.env", path);
+        file = fopen(full_path, "rb");
+    }
 
-        if (!file)
-        {
-            return -1;
+    if (!file) return -1;
+
+    // Read whole file into memory
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    char *buffer = malloc(size + 1);
+    if (!buffer) {
+        fclose(file);
+        return -1;
+    }
+
+    size_t read_len = fread(buffer, 1, size, file);
+    buffer[read_len] = '\0';
+    fclose(file);
+
+    dotenv_lexer_t lexer;
+    dotenv_lexer_init(&lexer, buffer, read_len);
+
+    dotenv_token_t token;
+    char *current_key = NULL;
+
+    while (dotenv_lexer_next(&lexer, &token) > 0) {
+        if (token.type == DOTENV_TOKEN_KEY) {
+            current_key = malloc(token.length + 1);
+            memcpy(current_key, token.value, token.length);
+            current_key[token.length] = '\0';
+        } else if (token.type == DOTENV_TOKEN_VALUE) {
+            if (current_key) {
+                char *raw_val = malloc(token.length + 1);
+                memcpy(raw_val, token.value, token.length);
+                raw_val[token.length] = '\0';
+
+                char *final_val = resolve_nested(raw_val);
+                setenv(current_key, final_val, overwrite);
+
+                free(raw_val);
+                free(final_val);
+                free(current_key);
+                current_key = NULL;
+            }
+        } else if (token.type == DOTENV_TOKEN_EOF) {
+            break;
         }
     }
-    parse(file, overwrite);
-    fclose(file);
+
+    if (current_key) free(current_key);
+    free(buffer);
 
     return 0;
 }

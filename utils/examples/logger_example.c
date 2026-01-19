@@ -1,6 +1,6 @@
 /**
  * @file logger_example.c
- * @brief Demonstrates turbo_logger multi-sink capabilities
+ * @brief Demonstrates tlog multi-sink capabilities
  *
  * Features shown:
  * - Console sink with colors
@@ -10,7 +10,7 @@
  * - Component-based logging
  */
 
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,13 +51,13 @@ static void example_multi_sink(void) {
   printf("\n=== Example 2: Multi-Sink Logger ===\n");
 
   // Create logger
-  turbo_logger_config_t config = {
+  tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_DEBUG,
     .async_mode = 0,
     .buffer_size = 0,
     .pool_size = 0
   };
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_t *logger = tlog_create(&config);
 
   // Add console sink (shows everything, with colors)
   turbo_console_sink_opts_t console_opts = {
@@ -68,7 +68,7 @@ static void example_multi_sink(void) {
     .include_file_line = 0
   };
   turbo_log_sink_t *console = turbo_sink_console_create(&console_opts);
-  turbo_logger_add_sink(logger, console);
+  tlog_add_sink(logger, console);
 
   // Add file sink (only WARN and above)
   turbo_file_sink_opts_t file_opts = {
@@ -80,13 +80,13 @@ static void example_multi_sink(void) {
   turbo_log_sink_t *file = turbo_sink_file_create(&file_opts);
   if (file) {
     file->min_level = TURBO_LOG_LEVEL_WARN;  // Only warnings and errors to file
-    turbo_logger_add_sink(logger, file);
+    tlog_add_sink(logger, file);
   }
 
   // Add callback sink (custom error monitoring)
   turbo_log_sink_t *callback = turbo_sink_callback_create(error_counter_callback, NULL);
   callback->min_level = TURBO_LOG_LEVEL_ERROR;
-  turbo_logger_add_sink(logger, callback);
+  tlog_add_sink(logger, callback);
 
   // Log some messages
   TURBO_LOG_DEBUG(logger, "Network", "Socket created fd={}", 42);
@@ -99,8 +99,8 @@ static void example_multi_sink(void) {
   printf("\n  Total errors captured by callback: %d\n", g_error_count);
 
   // Cleanup
-  turbo_logger_flush(logger);
-  turbo_logger_destroy(logger);
+  tlog_flush(logger);
+  tlog_destroy(logger);
 }
 
 // =============================================================================
@@ -110,8 +110,8 @@ static void example_multi_sink(void) {
 static void example_file_rotation(void) {
   printf("\n=== Example 3: File Rotation ===\n");
 
-  turbo_logger_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+  tlog_t *logger = tlog_create(&config);
 
   // Small file size to trigger rotation quickly
   turbo_file_sink_opts_t file_opts = {
@@ -122,7 +122,7 @@ static void example_file_rotation(void) {
   };
   turbo_log_sink_t *file = turbo_sink_file_create(&file_opts);
   if (file) {
-    turbo_logger_add_sink(logger, file);
+    tlog_add_sink(logger, file);
 
     // Generate enough logs to trigger rotation
     for (int i = 0; i < 20; i++) {
@@ -132,7 +132,7 @@ static void example_file_rotation(void) {
     printf("  Check rotating.log, rotating.log.1, rotating.log.2, rotating.log.3\n");
   }
 
-  turbo_logger_destroy(logger);
+  tlog_destroy(logger);
 }
 
 // =============================================================================
@@ -142,8 +142,8 @@ static void example_file_rotation(void) {
 static void example_stderr_errors(void) {
   printf("\n=== Example 4: Separate stdout/stderr ===\n");
 
-  turbo_logger_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+  tlog_t *logger = tlog_create(&config);
 
   // Console sink for info (stdout)
   turbo_console_sink_opts_t stdout_opts = {
@@ -153,7 +153,7 @@ static void example_stderr_errors(void) {
   };
   turbo_log_sink_t *stdout_sink = turbo_sink_console_create(&stdout_opts);
   stdout_sink->min_level = TURBO_LOG_LEVEL_DEBUG;
-  turbo_logger_add_sink(logger, stdout_sink);
+  tlog_add_sink(logger, stdout_sink);
 
   // Console sink for errors (stderr) - only errors go here
   turbo_console_sink_opts_t stderr_opts = {
@@ -164,12 +164,12 @@ static void example_stderr_errors(void) {
   };
   turbo_log_sink_t *stderr_sink = turbo_sink_console_create(&stderr_opts);
   stderr_sink->min_level = TURBO_LOG_LEVEL_ERROR;
-  turbo_logger_add_sink(logger, stderr_sink);
+  tlog_add_sink(logger, stderr_sink);
 
   TURBO_LOG_INFO(logger, "App", "This goes to stdout only");
   TURBO_LOG_ERROR(logger, "App", "This goes to BOTH stdout and stderr");
 
-  turbo_logger_destroy(logger);
+  tlog_destroy(logger);
 }
 
 // =============================================================================
@@ -180,8 +180,8 @@ static void example_replace_default(void) {
   printf("\n=== Example 5: Custom Default Logger ===\n");
 
   // Create custom logger
-  turbo_logger_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+  tlog_t *logger = tlog_create(&config);
 
   turbo_console_sink_opts_t opts = {
     .output = stdout,
@@ -190,18 +190,18 @@ static void example_replace_default(void) {
     .include_thread_id = 1,
     .include_file_line = 1
   };
-  turbo_logger_add_sink(logger, turbo_sink_console_create(&opts));
+  tlog_add_sink(logger, turbo_sink_console_create(&opts));
 
   // Set as default
-  turbo_logger_set_default(logger);
+  tlog_set_default(logger);
 
   // Now LOG_* macros use our custom logger
   TLOG_DEBUG("Debug with file:line info");
   TLOG_INFO("Info with thread ID");
 
   // Cleanup - set default to NULL first
-  turbo_logger_set_default(NULL);
-  turbo_logger_destroy(logger);
+  tlog_set_default(NULL);
+  tlog_destroy(logger);
 }
 
 // =============================================================================
@@ -211,8 +211,8 @@ static void example_replace_default(void) {
 static void example_format_patterns(void) {
   printf("\n=== Example 6: Custom Format Patterns ===\n");
 
-  turbo_logger_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+  tlog_t *logger = tlog_create(&config);
 
   // Minimal pattern - just level and message
   printf("\n  Pattern: \"{level}: {message}\"\n");
@@ -222,12 +222,12 @@ static void example_format_patterns(void) {
     .pattern = "{level}: {message}"
   };
   turbo_log_sink_t *minimal = turbo_sink_console_create(&minimal_opts);
-  turbo_logger_add_sink(logger, minimal);
+  tlog_add_sink(logger, minimal);
 
   TURBO_LOG_INFO(logger, "App", "Minimal format example");
   TURBO_LOG_ERROR(logger, "App", "Error with minimal format");
 
-  turbo_logger_remove_sink(logger, minimal);
+  tlog_remove_sink(logger, minimal);
   turbo_sink_destroy(minimal);
 
   // Full pattern with all fields
@@ -238,12 +238,12 @@ static void example_format_patterns(void) {
     .pattern = TURBO_LOG_FULL_PATTERN
   };
   turbo_log_sink_t *full = turbo_sink_console_create(&full_opts);
-  turbo_logger_add_sink(logger, full);
+  tlog_add_sink(logger, full);
 
   TURBO_LOG_INFO(logger, "Network", "Full format with all fields");
   TURBO_LOG_WARN(logger, "Database", "Warning with thread ID and file info");
 
-  turbo_logger_remove_sink(logger, full);
+  tlog_remove_sink(logger, full);
   turbo_sink_destroy(full);
 
   // Custom pattern - timestamp with ms and component
@@ -254,12 +254,12 @@ static void example_format_patterns(void) {
     .pattern = "[{time_ms}] <{component}> {message}"
   };
   turbo_log_sink_t *custom = turbo_sink_console_create(&custom_opts);
-  turbo_logger_add_sink(logger, custom);
+  tlog_add_sink(logger, custom);
 
   TURBO_LOG_INFO(logger, "HTTP", "Request received from 192.168.1.1");
   TURBO_LOG_DEBUG(logger, "Parser", "Parsing JSON payload");
 
-  turbo_logger_destroy(logger);
+  tlog_destroy(logger);
 }
 
 // =============================================================================
@@ -270,12 +270,12 @@ static void example_async_logging(void) {
   printf("\n=== Example 7: Async Logging (Background Thread) ===\n");
 
   // Create async logger - logs are queued and processed by background thread
-  turbo_logger_config_t config = {
+  tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_DEBUG,
     .async_mode = 1,  // Enable async mode
     .pool_size = 32 * 1024  // 32KB memory pool for formatting
   };
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_t *logger = tlog_create(&config);
   if (!logger) {
     printf("  Failed to create async logger\n");
     return;
@@ -289,7 +289,7 @@ static void example_async_logging(void) {
     .include_thread_id = 1,
     .include_file_line = 0
   };
-  turbo_logger_add_sink(logger, turbo_sink_console_create(&console_opts));
+  tlog_add_sink(logger, turbo_sink_console_create(&console_opts));
 
   // Add file sink for persistent logging
   turbo_file_sink_opts_t file_opts = {
@@ -300,7 +300,7 @@ static void example_async_logging(void) {
   };
   turbo_log_sink_t *file = turbo_sink_file_create(&file_opts);
   if (file) {
-    turbo_logger_add_sink(logger, file);
+    tlog_add_sink(logger, file);
   }
 
   printf("  Logging messages asynchronously (non-blocking)...\n");
@@ -317,12 +317,12 @@ static void example_async_logging(void) {
 
   // Flush ensures all queued messages are written before we continue
   printf("  Flushing queue...\n");
-  turbo_logger_flush(logger);
+  tlog_flush(logger);
 
   printf("  Queue flushed. Check async.log for file output.\n");
 
   // Cleanup - this also drains any remaining queue entries
-  turbo_logger_destroy(logger);
+  tlog_destroy(logger);
 }
 
 // =============================================================================
@@ -332,12 +332,12 @@ static void example_async_logging(void) {
 static void example_async_throughput(void) {
   printf("\n=== Example 8: High-Throughput Async Logging ===\n");
 
-  turbo_logger_config_t config = {
+  tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_INFO,
     .async_mode = 1,
     .pool_size = 64 * 1024
   };
-  turbo_logger_t *logger = turbo_logger_create(&config);
+  tlog_t *logger = tlog_create(&config);
   if (!logger) {
     printf("  Failed to create logger\n");
     return;
@@ -352,7 +352,7 @@ static void example_async_throughput(void) {
   };
   turbo_log_sink_t *file = turbo_sink_file_create(&file_opts);
   if (file) {
-    turbo_logger_add_sink(logger, file);
+    tlog_add_sink(logger, file);
   }
 
   uint64_t start = turbo_monotonic_ms();
@@ -366,13 +366,13 @@ static void example_async_throughput(void) {
   printf("  Queued 1000 messages in %llu ms\n", (unsigned long long)(queued - start));
 
   // Flush and measure total time
-  turbo_logger_flush(logger);
+  tlog_flush(logger);
   uint64_t done = turbo_monotonic_ms();
   printf("  Flushed all messages in %llu ms (total: %llu ms)\n",
          (unsigned long long)(done - queued),
          (unsigned long long)(done - start));
 
-  turbo_logger_destroy(logger);
+  tlog_destroy(logger);
   printf("  Check throughput.log for output\n");
 }
 

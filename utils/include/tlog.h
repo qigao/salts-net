@@ -1,5 +1,5 @@
 /**
- * @file turbo_logger.h
+ * @file tlog.h
  * @brief High-performance async logger with multi-sink support
  *
  * Architecture:
@@ -9,14 +9,15 @@
  * - Simple vtable-based sink interface
  */
 
-#ifndef TURBO_LOGGER_H
-#define TURBO_LOGGER_H
+#ifndef tlog_H
+#define tlog_H
 
 #include <platform.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "fmt_typed.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -145,7 +146,7 @@ CXX_C_API void turbo_sink_destroy(turbo_log_sink_t *sink);
 // Logger
 // =============================================================================
 
-typedef struct turbo_logger_s turbo_logger_t;
+typedef struct tlog_s tlog_t;
 
 /**
  * @brief Logger configuration
@@ -155,65 +156,64 @@ typedef struct {
   int async_mode;              // 0 = sync, 1 = async with ring buffer
   size_t buffer_size;          // Ring buffer size for async (default: 64KB)
   size_t pool_size;            // Memory pool size (default: 32KB)
-} turbo_logger_config_t;
+} tlog_config_t;
 
 /**
  * @brief Create logger with configuration
  */
-CXX_C_API turbo_logger_t *turbo_logger_create(const turbo_logger_config_t *config);
+CXX_C_API tlog_t *tlog_create(const tlog_config_t *config);
 
 /**
  * @brief Destroy logger and all attached sinks
  */
-CXX_C_API void turbo_logger_destroy(turbo_logger_t *logger);
+CXX_C_API void tlog_destroy(tlog_t *logger);
 
 /**
  * @brief Add sink to logger (takes ownership)
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_logger_add_sink(turbo_logger_t *logger, turbo_log_sink_t *sink);
+CXX_C_API int tlog_add_sink(tlog_t *logger, turbo_log_sink_t *sink);
 
 /**
  * @brief Remove sink from logger
  */
-CXX_C_API void turbo_logger_remove_sink(turbo_logger_t *logger, turbo_log_sink_t *sink);
+CXX_C_API void tlog_remove_sink(tlog_t *logger, turbo_log_sink_t *sink);
 
 /**
  * @brief Flush all sinks (blocks until async queue is drained)
  */
-CXX_C_API void turbo_logger_flush(turbo_logger_t *logger);
+CXX_C_API void tlog_flush(tlog_t *logger);
 
 // =============================================================================
 // Logging Functions
 // =============================================================================
 
 /**
- * @brief Log a message
- */
-CXX_C_API void turbo_log(turbo_logger_t *logger, turbo_log_level_t level, const char *component,
-                         const char *file, int line, const char *fmt, ...);
-
-CXX_C_API void turbo_log_v(turbo_logger_t *logger, turbo_log_level_t level, const char *component,
-                           const char *file, int line, const char *fmt, va_list args);
-
-/**
  * @brief Log a pre-formatted string directly
  */
-CXX_C_API void turbo_log_str(turbo_logger_t *logger, turbo_log_level_t level, const char *component,
-                            const char *file, int line, const char *message, size_t message_len);
+CXX_C_API void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *component,
+                             const char *file, int line, const char *message, size_t message_len);
+
+/**
+ * @brief Log a message using typed arguments (auto-detects types for {})
+ */
+CXX_C_API void turbo_log_typed(tlog_t *logger, turbo_log_level_t level,
+                               const char *component, const char *file, int line, const char *fmt,
+                               const fmt_arg_t *args, size_t arg_count);
+
 // =============================================================================
 // Level Control
 // =============================================================================
 
-CXX_C_API void turbo_logger_set_level(turbo_logger_t *logger, turbo_log_level_t level);
-CXX_C_API turbo_log_level_t turbo_logger_get_level(const turbo_logger_t *logger);
+CXX_C_API void tlog_set_level(tlog_t *logger, turbo_log_level_t level);
+CXX_C_API turbo_log_level_t tlog_get_level(const tlog_t *logger);
 
 // =============================================================================
 // Default Logger
 // =============================================================================
 
-CXX_C_API void turbo_logger_set_default(turbo_logger_t *logger);
-CXX_C_API turbo_logger_t *turbo_logger_get_default(void);
+CXX_C_API void tlog_set_default(tlog_t *logger);
+CXX_C_API tlog_t *tlog_get_default(void);
 
 // =============================================================================
 // Statistics (for monitoring)
@@ -222,17 +222,17 @@ CXX_C_API turbo_logger_t *turbo_logger_get_default(void);
 /**
  * @brief Get total logs written
  */
-CXX_C_API uint64_t turbo_logger_get_written(const turbo_logger_t *logger);
+CXX_C_API uint64_t tlog_get_written(const tlog_t *logger);
 
 /**
  * @brief Get total logs dropped (due to backpressure in async mode)
  */
-CXX_C_API uint64_t turbo_logger_get_dropped(const turbo_logger_t *logger);
+CXX_C_API uint64_t tlog_get_dropped(const tlog_t *logger);
 
 /**
  * @brief Get current async queue size
  */
-CXX_C_API int turbo_logger_get_queue_size(const turbo_logger_t *logger);
+CXX_C_API int tlog_get_queue_size(const tlog_t *logger);
 
 // =============================================================================
 // Utility Functions
@@ -241,38 +241,71 @@ CXX_C_API int turbo_logger_get_queue_size(const turbo_logger_t *logger);
 CXX_C_API const char *turbo_log_level_name(turbo_log_level_t level);
 CXX_C_API turbo_log_level_t turbo_log_level_from_name(const char *name);
 
-// =============================================================================
-// Convenience Macros (capture caller's file/line correctly)
-// =============================================================================
-
-#define TURBO_LOG(logger, level, component, ...) \
-  turbo_log((logger), (level), (component), __FILE__, __LINE__, __VA_ARGS__)
-
-#define TURBO_LOG_DEBUG(logger, component, ...) \
-  turbo_log((logger), TURBO_LOG_LEVEL_DEBUG, (component), __FILE__, __LINE__, __VA_ARGS__)
-
-#define TURBO_LOG_INFO(logger, component, ...) \
-  turbo_log((logger), TURBO_LOG_LEVEL_INFO, (component), __FILE__, __LINE__, __VA_ARGS__)
-
-#define TURBO_LOG_WARN(logger, component, ...) \
-  turbo_log((logger), TURBO_LOG_LEVEL_WARN, (component), __FILE__, __LINE__, __VA_ARGS__)
-
-#define TURBO_LOG_ERROR(logger, component, ...) \
-  turbo_log((logger), TURBO_LOG_LEVEL_ERROR, (component), __FILE__, __LINE__, __VA_ARGS__)
-
-#define TURBO_LOG_FATAL(logger, component, ...) \
-  turbo_log((logger), TURBO_LOG_LEVEL_FATAL, (component), __FILE__, __LINE__, __VA_ARGS__)
-
-// Default logger macros (use typed placeholders: {:s}, {:d}, {:x}, etc.)
-#define TLOG_DEBUG(...) TURBO_LOG_DEBUG(turbo_logger_get_default(), NULL, __VA_ARGS__)
-#define TLOG_INFO(...)  TURBO_LOG_INFO(turbo_logger_get_default(), NULL, __VA_ARGS__)
-#define TLOG_WARN(...)  TURBO_LOG_WARN(turbo_logger_get_default(), NULL, __VA_ARGS__)
-#define TLOG_ERROR(...) TURBO_LOG_ERROR(turbo_logger_get_default(), NULL, __VA_ARGS__)
-#define TLOG_FATAL(...) TURBO_LOG_FATAL(turbo_logger_get_default(), NULL, __VA_ARGS__)
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif // TURBO_LOGGER_H
+// =============================================================================
+// Convenience Macros (capture caller's file/line correctly)
+// =============================================================================
 
+#define TURBO_LOG(logger, level, component, ...)                                                   \
+  TURBO_LOG_TYPED((logger), (level), (component), __VA_ARGS__)
+
+#define TURBO_LOG_DEBUG(logger, component, ...)                                                    \
+  TURBO_LOG_TYPED((logger), TURBO_LOG_LEVEL_DEBUG, (component), __VA_ARGS__)
+
+#define TURBO_LOG_INFO(logger, component, ...)                                                     \
+  TURBO_LOG_TYPED((logger), TURBO_LOG_LEVEL_INFO, (component), __VA_ARGS__)
+
+#define TURBO_LOG_WARN(logger, component, ...)                                                     \
+  TURBO_LOG_TYPED((logger), TURBO_LOG_LEVEL_WARN, (component), __VA_ARGS__)
+
+#define TURBO_LOG_ERROR(logger, component, ...)                                                    \
+  TURBO_LOG_TYPED((logger), TURBO_LOG_LEVEL_ERROR, (component), __VA_ARGS__)
+
+#define TURBO_LOG_FATAL(logger, component, ...)                                                    \
+  TURBO_LOG_TYPED((logger), TURBO_LOG_LEVEL_FATAL, (component), __VA_ARGS__)
+
+// Typed logging macros (use auto-detected {} or typed placeholders)
+#ifdef __cplusplus
+
+// C++ Helper: wrapper for type-safe logging using variadic templates
+// This avoids non-standard compound literals in macros
+template <typename... Args>
+inline void turbo_log_cpp_wrapper(tlog_t* logger, turbo_log_level_t level, 
+                                  const char* component, const char* file, int line, 
+                                  const char* fmt, const Args&... args) {
+     if constexpr (sizeof...(Args) > 0) {
+         // Create array on stack - safe and efficient
+         const fmt_arg_t arg_array[] = { FMT_ARG(args)... };
+         turbo_log_typed(logger, level, component, file, line, fmt, arg_array, sizeof...(Args));
+     } else {
+         turbo_log_typed(logger, level, component, file, line, fmt, NULL, 0);
+     }
+}
+
+#define TURBO_LOG_TYPED(logger, lvl, comp, fmt, ...)                                               \
+  turbo_log_cpp_wrapper((logger), (lvl), (comp), __FILE__, __LINE__, (fmt), ##__VA_ARGS__)
+
+#else
+
+// Standard C Implementation using Compound Literals (C99)
+#define TURBO_LOG_TYPED(logger, lvl, comp, fmt, ...)                                               \
+  turbo_log_typed((logger), (lvl), (comp), __FILE__, __LINE__, (fmt), FMT_ARGS(__VA_ARGS__),       \
+                  FMT_NARGS(__VA_ARGS__))
+
+#endif
+
+#define TLOG_DEBUG(fmt, ...)                                                                       \
+  TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_DEBUG, NULL, fmt, ##__VA_ARGS__)
+#define TLOG_INFO(fmt, ...)                                                                        \
+  TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_INFO, NULL, fmt, ##__VA_ARGS__)
+#define TLOG_WARN(fmt, ...)                                                                        \
+  TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_WARN, NULL, fmt, ##__VA_ARGS__)
+#define TLOG_ERROR(fmt, ...)                                                                       \
+  TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_ERROR, NULL, fmt, ##__VA_ARGS__)
+#define TLOG_FATAL(fmt, ...)                                                                       \
+  TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_FATAL, NULL, fmt, ##__VA_ARGS__)
+
+#endif // tlog_H

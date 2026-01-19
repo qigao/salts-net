@@ -15,6 +15,7 @@
 #include "router.h"
 #include "router_adapter.h"
 #include "error_recovery.h"
+#include "tlog.h"
 
 #define READ_BUF_SIZE 8192
 
@@ -51,27 +52,7 @@ static void signal_handler(int signum) {
   if (g_shutdown_requested)
     return;
 
-  switch (signum) {
-  case SIGINT:
-    printf("Received SIGINT, shutting down...\n");
-    break;
-#ifndef _WIN32
-  case SIGTERM:
-    printf("Received SIGTERM, shutting down...\n");
-    break;
-#endif
-#ifdef _WIN32
-  case SIGBREAK:
-    printf("Received SIGBREAK, shutting down...\n");
-    break;
-#endif
-#ifndef _WIN32
-  case SIGHUP:
-    printf("Received SIGHUP, shutting down...\n");
-    break;
-#endif
-  default:
-    printf("Received signal %d, shutting down...\n", signum);
+    TLOG_INFO("Received signal {:d}, shutting down...", signum);
     break;
   }
 
@@ -162,7 +143,7 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
 
   case ASYNC_SERVER_EVENT_CLOSED:
     /* Server closed */
-    printf("Server closed\n");
+    TLOG_INFO("Server closed");
     break;
 
   case ASYNC_SERVER_EVENT_ERROR:
@@ -186,7 +167,7 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
 int ecewo(unsigned short PORT) {
   /* Initialize error recovery system */
   if (iris_error_recovery_init() != 0) {
-    fprintf(stderr, "Failed to initialize error recovery system\n");
+    TLOG_ERROR("Failed to initialize error recovery system");
     return -1;
   }
 
@@ -225,7 +206,7 @@ int ecewo(unsigned short PORT) {
     return -1;
   }
 
-  printf("Server is running on http://localhost:%d\n", PORT);
+  TLOG_INFO("Server is running on http://localhost:{:d}", PORT);
 
   /* Wait for shutdown signal */
   while (!g_shutdown_requested) {
@@ -236,13 +217,13 @@ int ecewo(unsigned short PORT) {
   cleanup_all_connections();
 
   /* Cleanup */
-  printf("Shutting down server...\n");
+  TLOG_INFO("Shutting down server...");
   if (g_server) {
     async_server_destroy(g_server);
     g_server = NULL;
   }
 
-  printf("Server shutdown complete\n");
+  TLOG_INFO("Server shutdown complete");
   
   /* Cleanup error recovery system */
   iris_error_recovery_cleanup();
@@ -273,8 +254,8 @@ static void cleanup_connection_context(iris_connection_ctx_t *ctx) {
   /* Log connection statistics for monitoring */
   time_t connection_duration = time(NULL) - ctx->created_time;
   if (connection_duration > 0) {
-    printf("Connection closed: duration=%ld seconds, requests=%d\n", 
-           connection_duration, ctx->request_count);
+    TLOG_DEBUG("Connection closed: duration={:d} seconds, requests={:d}", 
+               connection_duration, ctx->request_count);
   }
 
   /* Free the context structure */
@@ -296,7 +277,7 @@ static void cleanup_all_connections(void) {
    * for future enhancements where we might need additional cleanup logic.
    */
   
-  printf("Cleaning up all active connections...\n");
+  TLOG_INFO("Cleaning up all active connections...");
   
   /* Future enhancement: If we maintain a list of active connections,
    * we would iterate through them here and ensure cleanup */

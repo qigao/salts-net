@@ -16,7 +16,7 @@ TurboNet 项目的通用工具库。
 
 | Component | Description |
 |-----------|-------------|
-| **turbo_logger** | Structured logging with levels and formats |
+| **tlog** | Structured logging with levels and formats |
 | **turbo_dns** | Async DNS resolution (c-ares + libuv) |
 | **turbo_fs** | File system operations (sync/async) |
 | **base64_utils** | Base64 encoding/decoding |
@@ -30,27 +30,27 @@ TurboNet 项目的通用工具库。
 ### Logging
 
 ```c
-#include "turbo_logger.h"
+#include "tlog.h"
 
 // Create logger
-turbo_logger_config_t config = {
+tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_INFO,
     .format = TURBO_LOG_FORMAT_TEXT,
     .output = stdout,
     .use_colors = 1,
     .include_timestamp = 1
 };
-turbo_logger_t *logger = turbo_logger_create(&config);
+tlog_t *logger = tlog_create(&config);
 
 // Set as default
-turbo_logger_set_default(logger);
+tlog_set_default(logger);
 
 // Log messages
 LOG_INFO("Server started on port %d", 8080);
 LOG_ERROR("Connection failed: %s", error_msg);
 
 // Cleanup
-turbo_logger_destroy(logger);
+tlog_destroy(logger);
 ```
 
 ### DNS Resolution

@@ -1,23 +1,26 @@
-#include "turbo_logger.h"
+#include "tlog.h"
 #include "unity.h"
 #include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+
 
 void setUp(void) {}
 void tearDown(void) {}
 
 void test_logger_create(void) {
-    turbo_logger_t *logger = turbo_logger_create(NULL);
+    tlog_t *logger = tlog_create(NULL);
     TEST_ASSERT_NOT_NULL(logger);
 
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
 }
 
 void test_log_levels(void) {
-    turbo_logger_config_t config = {
+    tlog_config_t config = {
         .min_level = TURBO_LOG_LEVEL_INFO
     };
 
-    turbo_logger_t *logger = turbo_logger_create(&config);
+    tlog_t *logger = tlog_create(&config);
     TEST_ASSERT_NOT_NULL(logger);
 
     turbo_console_sink_opts_t sink_opts = {
@@ -27,22 +30,22 @@ void test_log_levels(void) {
         .include_thread_id = 0,
         .include_file_line = 0
     };
-    turbo_logger_add_sink(logger, turbo_sink_console_create(&sink_opts));
+    tlog_add_sink(logger, turbo_sink_console_create(&sink_opts));
 
     TURBO_LOG_INFO(logger, "test", "Info message");
     TURBO_LOG_WARN(logger, "test", "Warning message");
     TURBO_LOG_ERROR(logger, "test", "Error message");
     TURBO_LOG_DEBUG(logger, "test", "Debug message (should not appear)");
 
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
 }
 
 void test_multi_sink(void) {
-    turbo_logger_config_t config = {
+    tlog_config_t config = {
         .min_level = TURBO_LOG_LEVEL_DEBUG
     };
 
-    turbo_logger_t *logger = turbo_logger_create(&config);
+    tlog_t *logger = tlog_create(&config);
     TEST_ASSERT_NOT_NULL(logger);
 
     // Add console sink
@@ -53,7 +56,7 @@ void test_multi_sink(void) {
         .include_thread_id = 0,
         .include_file_line = 1
     };
-    turbo_logger_add_sink(logger, turbo_sink_console_create(&console_opts));
+    tlog_add_sink(logger, turbo_sink_console_create(&console_opts));
 
     // Add file sink
     turbo_file_sink_opts_t file_opts = {
@@ -64,27 +67,27 @@ void test_multi_sink(void) {
     };
     turbo_log_sink_t *file_sink = turbo_sink_file_create(&file_opts);
     if (file_sink) {
-        turbo_logger_add_sink(logger, file_sink);
+        tlog_add_sink(logger, file_sink);
     }
 
     TURBO_LOG_INFO(logger, "test", "Multi-sink test message");
 
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
 }
 
 void test_level_control(void) {
-    turbo_logger_t *logger = turbo_logger_create(NULL);
+    tlog_t *logger = tlog_create(NULL);
     TEST_ASSERT_NOT_NULL(logger);
 
-    turbo_logger_add_sink(logger, turbo_sink_console_create(NULL));
+    tlog_add_sink(logger, turbo_sink_console_create(NULL));
 
-    turbo_logger_set_level(logger, TURBO_LOG_LEVEL_WARN);
-    TEST_ASSERT_EQUAL(TURBO_LOG_LEVEL_WARN, turbo_logger_get_level(logger));
+    tlog_set_level(logger, TURBO_LOG_LEVEL_WARN);
+    TEST_ASSERT_EQUAL(TURBO_LOG_LEVEL_WARN, tlog_get_level(logger));
 
     TURBO_LOG_INFO(logger, "test", "Info (should not appear)");
     TURBO_LOG_WARN(logger, "test", "Warning (should appear)");
 
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
 }
 
 void test_level_names(void) {
@@ -102,21 +105,21 @@ void test_level_names(void) {
 }
 
 void test_components(void) {
-    turbo_logger_t *logger = turbo_logger_create(NULL);
+    tlog_t *logger = tlog_create(NULL);
     TEST_ASSERT_NOT_NULL(logger);
 
-    turbo_logger_add_sink(logger, turbo_sink_console_create(NULL));
+    tlog_add_sink(logger, turbo_sink_console_create(NULL));
 
     TURBO_LOG_INFO(logger, "server", "Server message");
     TURBO_LOG_INFO(logger, "client", "Client message");
     TURBO_LOG_INFO(logger, "protocol", "Protocol message");
 
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
 }
 
 void test_simplified_api(void) {
     // Test auto-creation of default logger
-    turbo_logger_t *default_logger = turbo_logger_get_default();
+    tlog_t *default_logger = tlog_get_default();
     TEST_ASSERT_NOT_NULL(default_logger);
 
     // Test simplified macros with printf-style formatting
@@ -129,11 +132,11 @@ void test_simplified_api(void) {
     TLOG_ERROR("Invalid URL format: {:s}", url);
 
     // Test with custom logger set as default
-    turbo_logger_config_t config = {
+    tlog_config_t config = {
         .min_level = TURBO_LOG_LEVEL_DEBUG
     };
 
-    turbo_logger_t *custom_logger = turbo_logger_create(&config);
+    tlog_t *custom_logger = tlog_create(&config);
     turbo_console_sink_opts_t sink_opts = {
         .output = stdout,
         .use_colors = 1,
@@ -141,17 +144,19 @@ void test_simplified_api(void) {
         .include_thread_id = 0,
         .include_file_line = 1
     };
-    turbo_logger_add_sink(custom_logger, turbo_sink_console_create(&sink_opts));
-    turbo_logger_set_default(custom_logger);
+    tlog_add_sink(custom_logger, turbo_sink_console_create(&sink_opts));
+    tlog_set_default(custom_logger);
 
     TLOG_INFO("Custom logger with file:line info");
     TLOG_ERROR("Error with custom config: {:s}", "test error");
 
     // Reset to auto-created logger
-    turbo_logger_set_default(default_logger);
+    tlog_set_default(default_logger);
+    (void)default_logger;
     TLOG_INFO("Back to auto-created logger");
 
-    turbo_logger_destroy(custom_logger);
+
+    tlog_destroy(custom_logger);
 }
 
 static int callback_count = 0;
@@ -165,12 +170,12 @@ static void test_callback(const turbo_log_entry_t *entry, void *user_data) {
 void test_callback_sink(void) {
     callback_count = 0;
 
-    turbo_logger_t *logger = turbo_logger_create(NULL);
+    tlog_t *logger = tlog_create(NULL);
     TEST_ASSERT_NOT_NULL(logger);
 
     turbo_log_sink_t *cb_sink = turbo_sink_callback_create(test_callback, NULL);
     TEST_ASSERT_NOT_NULL(cb_sink);
-    turbo_logger_add_sink(logger, cb_sink);
+    tlog_add_sink(logger, cb_sink);
 
     TURBO_LOG_INFO(logger, "test", "First callback message");
     TURBO_LOG_WARN(logger, "test", "Second callback message");
@@ -178,8 +183,25 @@ void test_callback_sink(void) {
 
     TEST_ASSERT_EQUAL(3, callback_count);
 
-    turbo_logger_destroy(logger);
+    tlog_destroy(logger);
 }
+
+void test_type_safe_logging(void) {
+    // These should work with auto-detection {} or typed placeholders
+    TLOG_INFO("Auto-detected string: {}", "Hello World");
+    TLOG_INFO("Auto-detected int: {}", 42);
+    TLOG_INFO("Auto-detected double: {}", 3.14159);
+    TLOG_INFO("Auto-detected bool: {}", true);
+    
+    // Mixed usage
+    TLOG_INFO("Mixed: string={}, int={}, ptr={}", "test", 123, (void*)(uintptr_t)0xdeadbeef);
+
+    
+    // Explicit specifiers with auto-detected types
+    TLOG_INFO("Hex int: {:04x}", 255);
+    TLOG_INFO("Padded double: {:08.2f}", 12.3456);
+}
+
 
 #include <uv.h>
 void test_logger_untyped_placeholder(void) {
@@ -233,13 +255,13 @@ void turbomq_set_error(turbomq_error_t err) {
 
 void test_turbomq_error_logging(void) {
     // Set level to DEBUG so we can see the output
-    turbo_logger_set_level(turbo_logger_get_default(), TURBO_LOG_LEVEL_DEBUG);
+    tlog_set_level(tlog_get_default(), TURBO_LOG_LEVEL_DEBUG);
     
     // Trigger the log
     turbomq_set_error(TURBOMQ_ERR_CONN_FAILED);
     
     // Restoration (optional)
-    turbo_logger_set_level(turbo_logger_get_default(), TURBO_LOG_LEVEL_INFO);
+    tlog_set_level(tlog_get_default(), TURBO_LOG_LEVEL_INFO);
 }
 
 int main(void) {
@@ -255,6 +277,8 @@ int main(void) {
     RUN_TEST(test_callback_sink);
     RUN_TEST(test_logger_untyped_placeholder);
     RUN_TEST(test_turbomq_error_logging);
+    RUN_TEST(test_type_safe_logging);
+
 
     return UNITY_END();
 }

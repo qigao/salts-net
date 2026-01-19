@@ -1,23 +1,17 @@
 /**
  * @file fmt_typed.h
  * @brief Type-safe formatting using C11 _Generic
- * 
- * This module provides compile-time type detection for format arguments,
- * allowing {} placeholders to work without explicit type specifiers.
- * 
- * Usage:
- *   TLOG_INFO("Count: {}, Name: {}", 42, "test");
- *   // Automatically detects: int, const char*
  */
 
 #ifndef FMT_TYPED_H
 #define FMT_TYPED_H
 
+#include "platform.h"
+#include "../parser/fmt_lexer.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include "stb_sprintf.h"
-#include "../parser/fmt_lexer.h"
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,19 +22,19 @@ extern "C" {
  * ============================================================================ */
 
 typedef enum {
-    FMT_TYPE_NONE = 0,
-    FMT_TYPE_CHAR,
-    FMT_TYPE_INT,
-    FMT_TYPE_UINT,
-    FMT_TYPE_LONG,
-    FMT_TYPE_ULONG,
-    FMT_TYPE_LLONG,
-    FMT_TYPE_ULLONG,
-    FMT_TYPE_DOUBLE,
-    FMT_TYPE_STR,
-    FMT_TYPE_PTR,
-    FMT_TYPE_SIZE,
-    FMT_TYPE_BOOL
+  FMT_TYPE_NONE = 0,
+  FMT_TYPE_CHAR,
+  FMT_TYPE_INT,
+  FMT_TYPE_UINT,
+  FMT_TYPE_LONG,
+  FMT_TYPE_ULONG,
+  FMT_TYPE_LLONG,
+  FMT_TYPE_ULLONG,
+  FMT_TYPE_DOUBLE,
+  FMT_TYPE_STR,
+  FMT_TYPE_PTR,
+  FMT_TYPE_SIZE,
+  FMT_TYPE_BOOL
 } fmt_type_t;
 
 /* ============================================================================
@@ -48,105 +42,200 @@ typedef enum {
  * ============================================================================ */
 
 typedef struct {
-    fmt_type_t type;
-    union {
-        char c;
-        int i;
-        unsigned int u;
-        long l;
-        unsigned long ul;
-        long long ll;
-        unsigned long long ull;
-        double f;
-        const char* s;
-        const void* p;
-        size_t sz;
-        int b;  /* bool stored as int */
-    } val;
+  fmt_type_t type;
+  union {
+    char c;
+    int i;
+    unsigned int u;
+    long l;
+    unsigned long ul;
+    long long ll;
+    unsigned long long ull;
+    double f;
+    const char *s;
+    const void *p;
+    size_t sz;
+    int b; /* bool stored as int */
+  } val;
 } fmt_arg_t;
 
 /* ============================================================================
- * _Generic Type Wrapper Macros (C11)
+ * Type Detection Helpers
  * ============================================================================ */
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-
-/* Helper functions to create typed args - avoids _Generic type conversion issues */
-static inline fmt_arg_t fmt_arg_char(char x) { return (fmt_arg_t){FMT_TYPE_CHAR, {.c = x}}; }
-static inline fmt_arg_t fmt_arg_int(int x) { return (fmt_arg_t){FMT_TYPE_INT, {.i = x}}; }
-static inline fmt_arg_t fmt_arg_uint(unsigned int x) { return (fmt_arg_t){FMT_TYPE_UINT, {.u = x}}; }
-static inline fmt_arg_t fmt_arg_long(long x) { return (fmt_arg_t){FMT_TYPE_LONG, {.l = x}}; }
-static inline fmt_arg_t fmt_arg_ulong(unsigned long x) { return (fmt_arg_t){FMT_TYPE_ULONG, {.ul = x}}; }
-static inline fmt_arg_t fmt_arg_llong(long long x) { return (fmt_arg_t){FMT_TYPE_LLONG, {.ll = x}}; }
-static inline fmt_arg_t fmt_arg_ullong(unsigned long long x) { return (fmt_arg_t){FMT_TYPE_ULLONG, {.ull = x}}; }
-static inline fmt_arg_t fmt_arg_double(double x) { return (fmt_arg_t){FMT_TYPE_DOUBLE, {.f = x}}; }
-static inline fmt_arg_t fmt_arg_str(const char* x) { return (fmt_arg_t){FMT_TYPE_STR, {.s = x}}; }
-static inline fmt_arg_t fmt_arg_ptr(const void* x) { return (fmt_arg_t){FMT_TYPE_PTR, {.p = x}}; }
-
-/* Wrap a single argument with type information
- * Note: No default case - we explicitly list all supported types.
- * If a type is not listed, you'll get a compile error (which is better than UB).
- */
-#define FMT_ARG(x) _Generic((x), \
-    char:               fmt_arg_char((char)(x)), \
-    signed char:        fmt_arg_char((char)(x)), \
-    unsigned char:      fmt_arg_char((char)(x)), \
-    short:              fmt_arg_int((int)(x)), \
-    unsigned short:     fmt_arg_uint((unsigned)(x)), \
-    int:                fmt_arg_int(x), \
-    unsigned int:       fmt_arg_uint(x), \
-    long:               fmt_arg_long(x), \
-    unsigned long:      fmt_arg_ulong(x), \
-    long long:          fmt_arg_llong(x), \
-    unsigned long long: fmt_arg_ullong(x), \
-    float:              fmt_arg_double((double)(x)), \
-    double:             fmt_arg_double(x), \
-    char*:              fmt_arg_str((const char*)(x)), \
-    const char*:        fmt_arg_str(x), \
-    void*:              fmt_arg_ptr(x), \
-    const void*:        fmt_arg_ptr(x) \
-)
-
+#ifdef __cplusplus
+  #define FMT_MAKE_ARG(t, m, v)                                                                    \
+    fmt_arg_t arg;                                                                                 \
+    arg.type = t;                                                                                  \
+    arg.val.m = v;                                                                                 \
+    return arg;
 #else
-/* Fallback for pre-C11: no type detection, treat as int */
-static inline fmt_arg_t fmt_arg_int_fallback(int x) { return (fmt_arg_t){FMT_TYPE_INT, {.i = x}}; }
-#define FMT_ARG(x) fmt_arg_int_fallback((int)(x))
+  #define FMT_MAKE_ARG(t, m, v) return (fmt_arg_t){t, {.m = v}};
 #endif
 
+static inline fmt_arg_t fmt_arg_char(char x) { FMT_MAKE_ARG(FMT_TYPE_CHAR, c, x) }
+static inline fmt_arg_t fmt_arg_int(int x) { FMT_MAKE_ARG(FMT_TYPE_INT, i, x) }
+static inline fmt_arg_t fmt_arg_uint(unsigned int x) { FMT_MAKE_ARG(FMT_TYPE_UINT, u, x) }
+static inline fmt_arg_t fmt_arg_long(long x) { FMT_MAKE_ARG(FMT_TYPE_LONG, l, x) }
+static inline fmt_arg_t fmt_arg_ulong(unsigned long x) { FMT_MAKE_ARG(FMT_TYPE_ULONG, ul, x) }
+static inline fmt_arg_t fmt_arg_llong(long long x) { FMT_MAKE_ARG(FMT_TYPE_LLONG, ll, x) }
+static inline fmt_arg_t fmt_arg_ullong(unsigned long long x) {
+  FMT_MAKE_ARG(FMT_TYPE_ULLONG, ull, x)
+}
+static inline fmt_arg_t fmt_arg_double(double x) { FMT_MAKE_ARG(FMT_TYPE_DOUBLE, f, x) }
+static inline fmt_arg_t fmt_arg_str(const char *x) { FMT_MAKE_ARG(FMT_TYPE_STR, s, x) }
+static inline fmt_arg_t fmt_arg_ptr(const void *x) { FMT_MAKE_ARG(FMT_TYPE_PTR, p, x) }
+static inline fmt_arg_t fmt_arg_bool(int x) { FMT_MAKE_ARG(FMT_TYPE_BOOL, b, x) }
+static inline fmt_arg_t fmt_arg_size(size_t x) { FMT_MAKE_ARG(FMT_TYPE_SIZE, sz, x) }
 
+#undef FMT_MAKE_ARG
+
+/* ============================================================================
+ * Type Wrappers (C++ Overloads or C11 _Generic)
+ * ============================================================================ */
+
+#ifdef __cplusplus
+} /* End extern "C" to allow C++ overloading */
+
+/* C++ Overloads for automatic type detection */
+static inline fmt_arg_t fmt_arg_detect(char x) { return fmt_arg_char(x); }
+static inline fmt_arg_t fmt_arg_detect(signed char x) { return fmt_arg_char((char)x); }
+static inline fmt_arg_t fmt_arg_detect(unsigned char x) { return fmt_arg_char((char)x); }
+static inline fmt_arg_t fmt_arg_detect(short x) { return fmt_arg_int(x); }
+static inline fmt_arg_t fmt_arg_detect(unsigned short x) { return fmt_arg_uint(x); }
+static inline fmt_arg_t fmt_arg_detect(int x) { return fmt_arg_int(x); }
+static inline fmt_arg_t fmt_arg_detect(unsigned int x) { return fmt_arg_uint(x); }
+static inline fmt_arg_t fmt_arg_detect(long x) { return fmt_arg_long(x); }
+static inline fmt_arg_t fmt_arg_detect(unsigned long x) { return fmt_arg_ulong(x); }
+static inline fmt_arg_t fmt_arg_detect(long long x) { return fmt_arg_llong(x); }
+static inline fmt_arg_t fmt_arg_detect(unsigned long long x) { return fmt_arg_ullong(x); }
+static inline fmt_arg_t fmt_arg_detect(float x) { return fmt_arg_double((double)x); }
+static inline fmt_arg_t fmt_arg_detect(double x) { return fmt_arg_double(x); }
+static inline fmt_arg_t fmt_arg_detect(bool x) { return fmt_arg_bool(x); }
+static inline fmt_arg_t fmt_arg_detect(char *x) { return fmt_arg_str(x); }
+static inline fmt_arg_t fmt_arg_detect(const char *x) { return fmt_arg_str(x); }
+static inline fmt_arg_t fmt_arg_detect(void *x) { return fmt_arg_ptr(x); }
+static inline fmt_arg_t fmt_arg_detect(const void *x) { return fmt_arg_ptr(x); }
+
+/* Template for classes with c_str() member (e.g. std::string) */
+template <typename T>
+static inline auto fmt_arg_detect(const T &x) -> decltype(fmt_arg_str(x.c_str())) {
+  return fmt_arg_str(x.c_str());
+}
+
+/* Template catches all other pointer types */
+template <typename T> static inline fmt_arg_t fmt_arg_detect(T *x) {
+  return fmt_arg_ptr((const void *)x);
+}
+
+  #define FMT_ARG(x) fmt_arg_detect(x)
+
+extern "C" { /* Re-open extern "C" */
+
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+  #define FMT_TYPED_HAS_GENERIC 1
+
+  #ifdef _MSC_VER
+    /* MSVC-specific cascading _Generic */
+    #define FMT_ARG(x)                                                                             \
+      (_Generic((x),                                                                               \
+           char *: fmt_arg_str,                                                                    \
+           const char *: fmt_arg_str,                                                              \
+           double: fmt_arg_double,                                                                 \
+           float: fmt_arg_double,                                                                  \
+           void *: fmt_arg_ptr,                                                                    \
+           const void *: fmt_arg_ptr,                                                              \
+           char: fmt_arg_char,                                                                     \
+           int: fmt_arg_int,                                                                       \
+           unsigned int: fmt_arg_uint,                                                             \
+           long long: fmt_arg_llong,                                                               \
+           unsigned long long: fmt_arg_ullong,                                                     \
+           default: _Generic((x),                                                                  \
+               signed char: fmt_arg_char,                                                          \
+               unsigned char: fmt_arg_char,                                                        \
+               short: fmt_arg_int,                                                                 \
+               unsigned short: fmt_arg_uint,                                                       \
+               long: fmt_arg_long,                                                                 \
+               unsigned long: fmt_arg_ulong,                                                       \
+               default: fmt_arg_ptr))(x))
+  #else
+    /* Standard C11 _Generic */
+    #define FMT_ARG(x)                                                                             \
+      _Generic((x),                                                                                \
+          char: fmt_arg_char((char)(x)),                                                           \
+          signed char: fmt_arg_char((char)(x)),                                                    \
+          unsigned char: fmt_arg_char((char)(x)),                                                  \
+          short: fmt_arg_int((int)(x)),                                                            \
+          unsigned short: fmt_arg_uint((unsigned)(x)),                                             \
+          int: fmt_arg_int(x),                                                                     \
+          unsigned int: fmt_arg_uint(x),                                                           \
+          long: fmt_arg_long(x),                                                                   \
+          unsigned long: fmt_arg_ulong(x),                                                         \
+          long long: fmt_arg_llong(x),                                                             \
+          unsigned long long: fmt_arg_ullong(x),                                                   \
+          float: fmt_arg_double((double)(x)),                                                      \
+          double: fmt_arg_double(x),                                                               \
+          char *: fmt_arg_str((const char *)(x)),                                                  \
+          const char *: fmt_arg_str(x),                                                            \
+          void *: fmt_arg_ptr(x),                                                                  \
+          const void *: fmt_arg_ptr(x),                                                            \
+          _Bool: fmt_arg_bool((int)(x)),                                                           \
+          default: fmt_arg_ptr(x))
+  #endif
+#else
+  #define FMT_TYPED_HAS_GENERIC 0
+  /* Fallback: use uintptr_t cast for absolute safety on pointer/long conversion */
+  #define FMT_ARG(x) fmt_arg_llong((long long)(uintptr_t)(x))
+#endif
 
 /* ============================================================================
  * Argument Count Macros (for variadic)
  * ============================================================================ */
 
-/* Count arguments (up to 16) */
-#define FMT_NARGS_IMPL(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
-#define FMT_NARGS(...) FMT_NARGS_IMPL(__VA_ARGS__,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0)
+/* Use a helper to force macro expansion on MSVC */
+#define FMT_EXPAND(x) x
+
+/* Count arguments (up to 16). MSVC compatible 0-arg detection. */
+#define FMT_NARGS_IMPL(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16,  \
+                       N, ...)                                                                     \
+  N
+#define FMT_NARGS(...)                                                                             \
+  FMT_EXPAND(                                                                                      \
+      FMT_NARGS_IMPL(0, ##__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0))
 
 /* Expand each argument with FMT_ARG */
-#define FMT_WRAP_1(a)  FMT_ARG(a)
-#define FMT_WRAP_2(a,b)  FMT_ARG(a), FMT_ARG(b)
-#define FMT_WRAP_3(a,b,c)  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c)
-#define FMT_WRAP_4(a,b,c,d)  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d)
-#define FMT_WRAP_5(a,b,c,d,e)  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e)
-#define FMT_WRAP_6(a,b,c,d,e,f)  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e), FMT_ARG(f)
-#define FMT_WRAP_7(a,b,c,d,e,f,g)  FMT_WRAP_6(a,b,c,d,e,f), FMT_ARG(g)
-#define FMT_WRAP_8(a,b,c,d,e,f,g,h)  FMT_WRAP_7(a,b,c,d,e,f,g), FMT_ARG(h)
+#define FMT_WRAP_0() {FMT_TYPE_NONE}
+#define FMT_WRAP_1(a) FMT_ARG(a)
+#define FMT_WRAP_2(a, b) FMT_ARG(a), FMT_ARG(b)
+#define FMT_WRAP_3(a, b, c) FMT_ARG(a), FMT_ARG(b), FMT_ARG(c)
+#define FMT_WRAP_4(a, b, c, d) FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d)
+#define FMT_WRAP_5(a, b, c, d, e) FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e)
+#define FMT_WRAP_6(a, b, c, d, e, f)                                                               \
+  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e), FMT_ARG(f)
+#define FMT_WRAP_7(a, b, c, d, e, f, g) FMT_WRAP_6(a, b, c, d, e, f), FMT_ARG(g)
+#define FMT_WRAP_8(a, b, c, d, e, f, g, h) FMT_WRAP_7(a, b, c, d, e, f, g), FMT_ARG(h)
 
 /* Dispatch to correct wrapper based on count */
-#define FMT_WRAP_N_IMPL(N, ...) FMT_WRAP_##N(__VA_ARGS__)
-#define FMT_WRAP_N(N, ...) FMT_WRAP_N_IMPL(N, __VA_ARGS__)
+#define FMT_WRAP_N_INNER(N, ...) FMT_WRAP_##N(__VA_ARGS__)
+#define FMT_WRAP_N(N, ...) FMT_WRAP_N_INNER(N, __VA_ARGS__)
 
-/* Main wrapper: creates array of typed args */
-#define FMT_ARGS(...) (fmt_arg_t[]){ FMT_WRAP_N(FMT_NARGS(__VA_ARGS__), __VA_ARGS__) }
+/* Main wrapper: creates array of typed args. */
+#define FMT_ARGS(...)                                                                              \
+  (fmt_arg_t[]) { FMT_WRAP_N(FMT_NARGS(__VA_ARGS__), __VA_ARGS__) }
 
 /* ============================================================================
  * Type-Safe Formatting Function
  * ============================================================================ */
 
 /**
+ * @brief Simple macro for buffer formatting using type-safe logic
+ */
+#define turbo_fmt(buf, size, fmt, ...)                                                             \
+  fmt_typed_print((buf), (size), (fmt), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
+
+/**
  * @brief Format a string using typed arguments
- * 
+ *
  * @param buf      Output buffer
  * @param size     Buffer size
  * @param fmt      Format string with {} placeholders
@@ -154,195 +243,8 @@ static inline fmt_arg_t fmt_arg_int_fallback(int x) { return (fmt_arg_t){FMT_TYP
  * @param arg_count Number of arguments
  * @return Number of characters written
  */
-static inline int fmt_typed_print(char* buf, size_t size, const char* fmt, 
-                                   const fmt_arg_t* args, size_t arg_count) {
-    if (!buf || !fmt || size == 0) return 0;
-
-    char* dst = buf;
-    char* end = buf + size - 1;
-    const char* cursor = fmt;
-    size_t arg_idx = 0;
-
-    while (dst < end) {
-        const char* token_start;
-        size_t token_len;
-        fmt_token_t token = fmt_scan(&cursor, &token_start, &token_len);
-
-        switch (token) {
-            case FMT_TOKEN_END:
-                *dst = '\0';
-                return (int)(dst - buf);
-
-            case FMT_TOKEN_TEXT: {
-                size_t copy_len = token_len;
-                if (dst + copy_len > end) copy_len = (size_t)(end - dst);
-                memcpy(dst, token_start, copy_len);
-                dst += copy_len;
-                break;
-            }
-
-            case FMT_TOKEN_LBRACE_ESC:
-                if (dst < end) *dst++ = '{';
-                break;
-
-            case FMT_TOKEN_RBRACE_ESC:
-                if (dst < end) *dst++ = '}';
-                break;
-
-            case FMT_TOKEN_PLACEHOLDER:
-            case FMT_TOKEN_SPECIFIER: {
-                /* Get next argument */
-                if (arg_idx >= arg_count) {
-                    /* No more arguments - print placeholder as-is */
-                    if (dst < end) *dst++ = '{';
-                    if (dst < end) *dst++ = '}';
-                    break;
-                }
-
-                const fmt_arg_t* arg = &args[arg_idx++];
-                char temp[256];
-                int written = 0;
-
-                /* For SPECIFIER, extract modifier (e.g., {:08x} -> "08x") */
-                char modifier[64] = "";
-                if (token == FMT_TOKEN_SPECIFIER && token_len > 0 && token_len < 60) {
-                    memcpy(modifier, token_start, token_len);
-                    modifier[token_len] = '\0';
-                }
-
-                /* Format based on type */
-                switch (arg->type) {
-                    case FMT_TYPE_CHAR: {
-                        if (modifier[0]) {
-                            char fmt_buf[64];
-                            stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%sc", modifier);
-                            written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, arg->val.c);
-                        } else {
-                            written = stbsp_snprintf(temp, sizeof(temp), "%c", arg->val.c);
-                        }
-                        break;
-                    }
-                    case FMT_TYPE_INT: {
-                        if (modifier[0]) {
-                            char fmt_buf[64];
-                            stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%sd", modifier);
-                            written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, arg->val.i);
-                        } else {
-                            written = stbsp_snprintf(temp, sizeof(temp), "%d", arg->val.i);
-                        }
-                        break;
-                    }
-                    case FMT_TYPE_UINT: {
-                        if (modifier[0]) {
-                            char fmt_buf[64];
-                            /* Check if modifier ends with x/X for hex */
-                            size_t mlen = strlen(modifier);
-                            char last = mlen > 0 ? modifier[mlen-1] : 'd';
-                            if (last != 'x' && last != 'X' && last != 'o' && last != 'u') {
-                                stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%su", modifier);
-                            } else {
-                                stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%s", modifier);
-                            }
-                            written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, arg->val.u);
-                        } else {
-                            written = stbsp_snprintf(temp, sizeof(temp), "%u", arg->val.u);
-                        }
-                        break;
-                    }
-                    case FMT_TYPE_LONG: {
-                        if (modifier[0]) {
-                            char fmt_buf[64];
-                            stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%sld", modifier);
-                            written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, arg->val.l);
-                        } else {
-                            written = stbsp_snprintf(temp, sizeof(temp), "%ld", arg->val.l);
-                        }
-                        break;
-                    }
-                    case FMT_TYPE_ULONG: {
-                        written = stbsp_snprintf(temp, sizeof(temp), "%lu", arg->val.ul);
-                        break;
-                    }
-                    case FMT_TYPE_LLONG: {
-                        written = stbsp_snprintf(temp, sizeof(temp), "%lld", arg->val.ll);
-                        break;
-                    }
-                    case FMT_TYPE_ULLONG: {
-                        written = stbsp_snprintf(temp, sizeof(temp), "%llu", arg->val.ull);
-                        break;
-                    }
-                    case FMT_TYPE_DOUBLE: {
-                        if (modifier[0]) {
-                            char fmt_buf[64];
-                            size_t mlen = strlen(modifier);
-                            char last = mlen > 0 ? modifier[mlen-1] : 'f';
-                            if (last != 'f' && last != 'e' && last != 'E' && last != 'g' && last != 'G') {
-                                stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%sf", modifier);
-                            } else {
-                                stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%s", modifier);
-                            }
-                            written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, arg->val.f);
-                        } else {
-                            written = stbsp_snprintf(temp, sizeof(temp), "%g", arg->val.f);
-                        }
-                        break;
-                    }
-                    case FMT_TYPE_STR: {
-                        const char* s = arg->val.s ? arg->val.s : "(null)";
-                        if (modifier[0]) {
-                            char fmt_buf[64];
-                            stbsp_snprintf(fmt_buf, sizeof(fmt_buf), "%%%ss", modifier);
-                            written = stbsp_snprintf(temp, sizeof(temp), fmt_buf, s);
-                        } else {
-                            written = stbsp_snprintf(temp, sizeof(temp), "%s", s);
-                        }
-                        break;
-                    }
-                    case FMT_TYPE_PTR: {
-                        written = stbsp_snprintf(temp, sizeof(temp), "%p", arg->val.p);
-                        break;
-                    }
-                    case FMT_TYPE_SIZE: {
-                        written = stbsp_snprintf(temp, sizeof(temp), "%zu", arg->val.sz);
-                        break;
-                    }
-                    case FMT_TYPE_BOOL: {
-                        written = stbsp_snprintf(temp, sizeof(temp), "%s", 
-                                                  arg->val.b ? "true" : "false");
-                        break;
-                    }
-                    default:
-                        /* Unknown type - print as hex */
-                        written = stbsp_snprintf(temp, sizeof(temp), "0x%llx", 
-                                                  (unsigned long long)(uintptr_t)arg->val.p);
-                        break;
-                }
-
-                if (written > 0) {
-                    size_t copy_len = (size_t)written;
-                    if (dst + copy_len > end) copy_len = (size_t)(end - dst);
-                    memcpy(dst, temp, copy_len);
-                    dst += copy_len;
-                }
-                break;
-            }
-
-            case FMT_TOKEN_INVALID:
-            default:
-                /* Copy invalid token as-is */
-                if (token_len > 0) {
-                    size_t copy_len = token_len;
-                    if (dst + copy_len > end) copy_len = (size_t)(end - dst);
-                    memcpy(dst, token_start, copy_len);
-                    dst += copy_len;
-                }
-                break;
-        }
-    }
-
-    *dst = '\0';
-    return (int)(dst - buf);
-}
+CXX_C_API int fmt_typed_print(char *buf, size_t size, const char *fmt, const fmt_arg_t *args,
+                              size_t arg_count);
 
 #ifdef __cplusplus
 }

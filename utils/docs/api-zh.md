@@ -43,15 +43,15 @@ typedef struct {
   int include_timestamp;            // 包含时间戳
   int include_thread_id;            // 包含线程 ID
   int include_file_line;            // 包含文件行号
-} turbo_logger_config_t;
+} tlog_config_t;
 ```
 
-### turbo_logger_create
+### tlog_create
 
 创建 Logger 实例。
 
 ```c
-turbo_logger_t *turbo_logger_create(const turbo_logger_config_t *config);
+tlog_t *tlog_create(const tlog_config_t *config);
 ```
 
 **参数：**
@@ -62,7 +62,7 @@ turbo_logger_t *turbo_logger_create(const turbo_logger_config_t *config);
 
 **示例：**
 ```c
-turbo_logger_config_t config = {
+tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_DEBUG,
     .format = TURBO_LOG_FORMAT_TEXT,
     .output = stdout,
@@ -72,27 +72,27 @@ turbo_logger_config_t config = {
     .include_file_line = 1
 };
 
-turbo_logger_t *logger = turbo_logger_create(&config);
+tlog_t *logger = tlog_create(&config);
 ```
 
 ---
 
-### turbo_logger_destroy
+### tlog_destroy
 
 销毁 Logger 实例。
 
 ```c
-void turbo_logger_destroy(turbo_logger_t *logger);
+void tlog_destroy(tlog_t *logger);
 ```
 
 ---
 
-### turbo_logger_set_level
+### tlog_set_level
 
 设置最低日志级别。
 
 ```c
-void turbo_logger_set_level(turbo_logger_t *logger, turbo_log_level_t level);
+void tlog_set_level(tlog_t *logger, turbo_log_level_t level);
 ```
 
 **参数：**
@@ -101,12 +101,12 @@ void turbo_logger_set_level(turbo_logger_t *logger, turbo_log_level_t level);
 
 ---
 
-### turbo_logger_get_level
+### tlog_get_level
 
 获取当前日志级别。
 
 ```c
-turbo_log_level_t turbo_logger_get_level(const turbo_logger_t *logger);
+turbo_log_level_t tlog_get_level(const tlog_t *logger);
 ```
 
 **返回值：**
@@ -114,12 +114,12 @@ turbo_log_level_t turbo_logger_get_level(const turbo_logger_t *logger);
 
 ---
 
-### turbo_logger_set_format
+### tlog_set_format
 
 设置输出格式。
 
 ```c
-void turbo_logger_set_format(turbo_logger_t *logger, turbo_log_format_t format);
+void tlog_set_format(tlog_t *logger, turbo_log_format_t format);
 ```
 
 **参数：**
@@ -128,12 +128,12 @@ void turbo_logger_set_format(turbo_logger_t *logger, turbo_log_format_t format);
 
 ---
 
-### turbo_logger_set_output
+### tlog_set_output
 
 设置输出文件流。
 
 ```c
-void turbo_logger_set_output(turbo_logger_t *logger, FILE *output);
+void tlog_set_output(tlog_t *logger, FILE *output);
 ```
 
 **参数：**
@@ -172,28 +172,28 @@ LOG_FATAL(fmt, ...)
 
 **示例：**
 ```c
-turbo_logger_set_default(logger);
+tlog_set_default(logger);
 LOG_INFO("Server started");
 ```
 
 ---
 
-### turbo_logger_set_default
+### tlog_set_default
 
 设置全局默认 Logger。
 
 ```c
-void turbo_logger_set_default(turbo_logger_t *logger);
+void tlog_set_default(tlog_t *logger);
 ```
 
 ---
 
-### turbo_logger_get_default
+### tlog_get_default
 
 获取全局默认 Logger。
 
 ```c
-turbo_logger_t *turbo_logger_get_default(void);
+tlog_t *tlog_get_default(void);
 ```
 
 ---

@@ -1,5 +1,8 @@
 # Iris Framework Examples
 
+# Vendors - Shared libraries used by examples
+add_subdirectory(vendors)
+
 # Castle - Full-featured web application with PostgreSQL
 add_subdirectory(castle)
 

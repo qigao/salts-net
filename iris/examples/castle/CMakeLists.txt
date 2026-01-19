@@ -31,7 +31,7 @@ target_include_directories(castle PRIVATE
 # Link libraries
 target_link_libraries(castle PRIVATE
     iris
-    
+    iris_vendors
     NetCore
     TurboNet::PostgreSQL
     OpenSSL::SSL
@@ -56,11 +56,6 @@ set_target_properties(castle PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# Add vendor sources that castle needs
-target_sources(castle PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../vendors/dotenv.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../vendors/slugify.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../vendors/session.c
-)
+# Vendor sources are now handled by iris_vendors library
 
 message(STATUS "Castle application configured")

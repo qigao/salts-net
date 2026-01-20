@@ -13,6 +13,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Normalize install prefix (remove trailing slashes)
+get_filename_component(CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}" ABSOLUTE)
+
 # Project description
 set(PROJECT_DESCRIPTION "High-performance networking library")
 set(PROJECT_HOMEPAGE_URL "https://github.com/qigao/turbonet")

@@ -26,12 +26,9 @@ add_library(TurboNet::UriParser ALIAS ${TARGET_NAME})
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include/turbo>
-         $<INSTALL_INTERFACE:include/turbo/common>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
- 
 
 set_target_properties(
   ${TARGET_NAME}

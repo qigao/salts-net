@@ -23,18 +23,4 @@ set_target_properties(rpc_server_example PROPERTIES
     FOLDER ${TARGET_NAME}/examples
     OUTPUT_NAME "rpc_server_example"
 )
-
-# Redis Cache Example
-add_executable(redis_cache_example
-    redis_cache_example.c
-)
-
-target_link_libraries(redis_cache_example PRIVATE
-    iris
-    TurboNet::Redis
-)
-
-set_target_properties(redis_cache_example PROPERTIES 
-    FOLDER ${TARGET_NAME}/examples
-    OUTPUT_NAME "redis_cache_example"
-)
+ 

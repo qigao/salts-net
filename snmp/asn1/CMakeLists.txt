@@ -114,18 +114,18 @@ target_include_directories(mib_compiler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/incl
 set_target_properties(mib_compiler PROPERTIES FOLDER snmp/tools)
 
 # Install
-install(
-  TARGETS ${TARGET_NAME} mib_compiler
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
+# install(
+#   TARGETS ${TARGET_NAME} mib_compiler
+#   EXPORT TurboNetTargets
+#   LIBRARY DESTINATION lib
+#   ARCHIVE DESTINATION lib
+#   RUNTIME DESTINATION bin)
 
-install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-  DESTINATION include/turbo
-  FILES_MATCHING
-  PATTERN "*.h")
+# install(
+#   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+#   DESTINATION include/
+#   FILES_MATCHING
+#   PATTERN "*.h")
 
 # =============================================================================
 # Tests

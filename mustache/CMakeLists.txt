@@ -34,7 +34,7 @@ target_include_directories(
   mustache
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/turbo/mustache>
+         $<INSTALL_INTERFACE:include/mustache>
   PRIVATE ${CMAKE_SOURCE_DIR}/parser/internal/json_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -73,4 +73,4 @@ install(
 
 install(FILES include/mustache.h include/mustache_json.h
               include/mustache_parser.h include/mustache_types.h
-              include/mustache_lexer.h DESTINATION include/turbo/mustache)
+              include/mustache_lexer.h DESTINATION include/mustache)

@@ -11,7 +11,7 @@ target_include_directories(${TARGET_NAME}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-        $<INSTALL_INTERFACE:include/turbo/ltv_parser>
+        $<INSTALL_INTERFACE:include/ltv_parser>
 )
 
 set_target_properties(${TARGET_NAME} PROPERTIES

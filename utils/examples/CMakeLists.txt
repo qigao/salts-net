@@ -40,6 +40,9 @@ target_link_libraries(bitmap_stats PRIVATE TurboNet::Utils)
 add_executable(cpp_test_tlog cpp_test.cpp)
 target_link_libraries(cpp_test_tlog PRIVATE TurboNet::Utils)
 
+add_executable(test_spec test_spec.cpp)
+target_link_libraries(test_spec PRIVATE TurboNet::Utils)
+
 # Set folder properties
 set_target_properties(
   dns_lookup
@@ -50,4 +53,5 @@ set_target_properties(
   logger_example
   bitmap_stats
   cpp_test_tlog
+  test_spec
   PROPERTIES FOLDER "utils/examples")

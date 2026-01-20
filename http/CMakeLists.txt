@@ -61,7 +61,7 @@ target_include_directories(
   http_client
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/turbo/http>
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/http>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 
 # Link dependencies
@@ -91,4 +91,4 @@ install(
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
 
-install(FILES ${HTTP_HEADERS} DESTINATION include/turbo/http)
+install(FILES ${HTTP_HEADERS} DESTINATION include/http)

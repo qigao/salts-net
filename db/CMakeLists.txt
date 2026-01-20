@@ -3,11 +3,6 @@
 
 message(STATUS "Configuring netcore clients...")
 
-# Redis Client (RESP protocol)
-# Always available - no external dependencies
-add_subdirectory(redis)
-message(STATUS "  ✓ Redis client (RESP protocol)")
-
 # PostgreSQL Client (pquv)
 # Optional - requires libpq
 find_package(PostgreSQL QUIET)

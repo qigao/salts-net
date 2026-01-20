@@ -45,7 +45,7 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
   case FMT_TYPE_INT:
     if (mod_buf[0]) {
       char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxX") != NULL) ? "%%%s" : "%%%sd", mod_buf);
+      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%sd", mod_buf);
       written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.i);
     } else {
       written = stbsp_snprintf(temp, sizeof(temp), P("%d"), arg->val.i);
@@ -55,7 +55,7 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
   case FMT_TYPE_UINT:
     if (mod_buf[0]) {
       char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "ouxX") != NULL) ? "%%%s" : "%%%su", mod_buf);
+      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "ouxXc") != NULL) ? "%%%s" : "%%%su", mod_buf);
       written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.u);
     } else {
       written = stbsp_snprintf(temp, sizeof(temp), P("%u"), arg->val.u);
@@ -65,7 +65,7 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
   case FMT_TYPE_LONG:
     if (mod_buf[0]) {
       char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxX") != NULL) ? "%%%s" : "%%%sld", mod_buf);
+      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%sld", mod_buf);
       written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.l);
     } else {
       written = stbsp_snprintf(temp, sizeof(temp), P("%ld"), arg->val.l);
@@ -73,15 +73,33 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
     break;
 
   case FMT_TYPE_ULONG:
-    written = stbsp_snprintf(temp, sizeof(temp), P("%lu"), arg->val.ul);
+    if (mod_buf[0]) {
+      char fb[64];
+      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "ouxXc") != NULL) ? "%%%s" : "%%%slu", mod_buf);
+      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.ul);
+    } else {
+      written = stbsp_snprintf(temp, sizeof(temp), P("%lu"), arg->val.ul);
+    }
     break;
 
   case FMT_TYPE_LLONG:
-    written = stbsp_snprintf(temp, sizeof(temp), P("%lld"), arg->val.ll);
+    if (mod_buf[0]) {
+      char fb[64];
+      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%slld", mod_buf);
+      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.ll);
+    } else {
+      written = stbsp_snprintf(temp, sizeof(temp), P("%lld"), arg->val.ll);
+    }
     break;
 
   case FMT_TYPE_ULLONG:
-    written = stbsp_snprintf(temp, sizeof(temp), P("%llu"), arg->val.ull);
+    if (mod_buf[0]) {
+      char fb[64];
+      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "ouxXc") != NULL) ? "%%%s" : "%%%sllu", mod_buf);
+      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.ull);
+    } else {
+      written = stbsp_snprintf(temp, sizeof(temp), P("%llu"), arg->val.ull);
+    }
     break;
 
   case FMT_TYPE_DOUBLE:

@@ -8,7 +8,7 @@ add_library(netcore_postgresql pquv.c)
 target_include_directories(
   netcore_postgresql
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-         $<INSTALL_INTERFACE:include/turbo/db>
+         $<INSTALL_INTERFACE:include/db>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include ${PostgreSQL_INCLUDE_DIRS})
 
 target_link_libraries(
@@ -36,7 +36,7 @@ add_library(TurboNet::PostgreSQL ALIAS netcore_postgresql)
 
 # install(
 #   FILES turbo_postgresql.h
-#   DESTINATION include/turbo
+#   DESTINATION include/
 #   RENAME postgresql.h)
 
-# install(FILES pquv.h DESTINATION include/turbo/db)
+# install(FILES pquv.h DESTINATION include//db)

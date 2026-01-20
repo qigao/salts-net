@@ -37,19 +37,19 @@ set_target_properties(
              EXPORT_NAME SNMPParser)
 
 # Install
-install(
-    TARGETS ${TARGET_NAME}
-    EXPORT TurboNetTargets
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-)
+# install(
+#     TARGETS ${TARGET_NAME}
+#     EXPORT TurboNetTargets
+#     LIBRARY DESTINATION lib
+#     ARCHIVE DESTINATION lib
+#     RUNTIME DESTINATION bin
+# )
 
-install(
-    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-    DESTINATION include/turbo/snmp
-    FILES_MATCHING PATTERN "*.h"
-)
+# install(
+#     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+#     DESTINATION include/snmp
+#     FILES_MATCHING PATTERN "*.h"
+# )
 
 # =============================================================================
 # Tests

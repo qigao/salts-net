@@ -50,7 +50,7 @@ target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/turbo/json_parser>
+         $<INSTALL_INTERFACE:include/json_parser>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
@@ -90,4 +90,4 @@ endif()
 #         RUNTIME DESTINATION bin)
 
 # install(FILES include/json_parser.h
-#         DESTINATION include/turbo/json_parser)
+#         DESTINATION include/json_parser)

@@ -2,20 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-  #include <windows.h>
-  #include <winsock2.h>
-  #define sleep_ms(ms) Sleep(ms)
-#else
-  #include <unistd.h>
-  #define sleep_ms(ms) usleep((ms) * 1000)
-#endif
+ 
 
-#include "turbo_async_server.h"
+#include "error_recovery.h"
 #include "router.h"
 #include "router_adapter.h"
-#include "error_recovery.h"
 #include "tlog.h"
+#include "turbo_async_server.h"
 
 #define READ_BUF_SIZE 8192
 
@@ -27,8 +20,8 @@ typedef struct {
   int keep_alive;
   time_t created_time;
   int request_count;
-  void *middleware_data;  /* For middleware-specific connection data */
-  void (*middleware_cleanup)(void *data);  /* Cleanup function for middleware data */
+  void *middleware_data;                  /* For middleware-specific connection data */
+  void (*middleware_cleanup)(void *data); /* Cleanup function for middleware data */
 } iris_connection_ctx_t;
 
 /* Forward declarations */
@@ -43,17 +36,14 @@ static void (*g_app_shutdown_hook)(void) = NULL;
 /* Global shutdown flag for external modules (like pquv) */
 int shutdown_requested = 0;
 
-void shutdown_hook(void (*hook)(void)) {
-  g_app_shutdown_hook = hook;
-}
+void shutdown_hook(void (*hook)(void)) { g_app_shutdown_hook = hook; }
 
 /* Signal handler for graceful shutdown */
 static void signal_handler(int signum) {
-  if (g_shutdown_requested)
-    return;
+  if (g_shutdown_requested) {
 
     TLOG_INFO("Received signal {:d}, shutting down...", signum);
-    break;
+    return;
   }
 
   g_shutdown_requested = 1;
@@ -72,7 +62,7 @@ static void signal_handler(int signum) {
 
 /* Server event callback */
 static void server_event_cb(async_server_t *server, const async_server_event_t *event,
-                           void *user_data) {
+                            void *user_data) {
   (void)user_data;
 
   switch (event->type) {
@@ -84,8 +74,8 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
     /* New connection established */
     iris_connection_ctx_t *ctx = (iris_connection_ctx_t *)calloc(1, sizeof(iris_connection_ctx_t));
     if (!ctx) {
-      iris_error_context_t error_ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_OUT_OF_MEMORY, -1,
-                                                          "Failed to allocate connection context");
+      iris_error_context_t error_ctx =
+          IRIS_ERROR_CONTEXT(IRIS_ERROR_OUT_OF_MEMORY, -1, "Failed to allocate connection context");
       iris_handle_error(&error_ctx, IRIS_RECOVERY_REJECT_REQUEST);
       async_server_close_connection(server, event->connection);
       return;
@@ -118,8 +108,9 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
     ctx->request_count++;
 
     /* Process the HTTP request through the router adapter */
-    int should_close = router_process_request(server, event->connection, event->data, event->length);
-    
+    int should_close =
+        router_process_request(server, event->connection, event->data, event->length);
+
     /* Close connection if requested */
     if (should_close) {
       async_server_close_connection(server, event->connection);
@@ -149,14 +140,14 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
   case ASYNC_SERVER_EVENT_ERROR:
     /* Error occurred */
     if (event->message) {
-      iris_error_context_t ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_PROTOCOL_ERROR, event->status,
-                                                    event->message);
+      iris_error_context_t ctx =
+          IRIS_ERROR_CONTEXT(IRIS_ERROR_PROTOCOL_ERROR, event->status, event->message);
       iris_handle_error(&ctx, IRIS_RECOVERY_CONTINUE);
     } else {
       char error_msg[64];
       snprintf(error_msg, sizeof(error_msg), "Server error: status=%d", event->status);
-      iris_error_context_t ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_PROTOCOL_ERROR, event->status,
-                                                    error_msg);
+      iris_error_context_t ctx =
+          IRIS_ERROR_CONTEXT(IRIS_ERROR_PROTOCOL_ERROR, event->status, error_msg);
       iris_handle_error(&ctx, IRIS_RECOVERY_CONTINUE);
     }
     break;
@@ -185,8 +176,8 @@ int ecewo(unsigned short PORT) {
   /* Create async server */
   g_server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, NULL);
   if (!g_server) {
-    iris_error_context_t ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_SERVER_INIT_FAILED, -1,
-                                                  "Failed to create server");
+    iris_error_context_t ctx =
+        IRIS_ERROR_CONTEXT(IRIS_ERROR_SERVER_INIT_FAILED, -1, "Failed to create server");
     iris_handle_error(&ctx, IRIS_RECOVERY_GRACEFUL_SHUTDOWN);
     iris_error_recovery_cleanup();
     return -1;
@@ -196,7 +187,7 @@ int ecewo(unsigned short PORT) {
   async_server_status_t status = async_server_listen(g_server, "0.0.0.0", PORT, 128);
   if (status != ASYNC_SERVER_STATUS_OK) {
     char error_msg[256];
-    snprintf(error_msg, sizeof(error_msg), "Failed to start listening: %s", 
+    snprintf(error_msg, sizeof(error_msg), "Failed to start listening: %s",
              async_server_status_to_string(status));
     iris_error_context_t ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_LISTEN_FAILED, (int)status, error_msg);
     iris_handle_error(&ctx, IRIS_RECOVERY_GRACEFUL_SHUTDOWN);
@@ -224,10 +215,10 @@ int ecewo(unsigned short PORT) {
   }
 
   TLOG_INFO("Server shutdown complete");
-  
+
   /* Cleanup error recovery system */
   iris_error_recovery_cleanup();
-  
+
   return 0;
 }
 
@@ -254,8 +245,8 @@ static void cleanup_connection_context(iris_connection_ctx_t *ctx) {
   /* Log connection statistics for monitoring */
   time_t connection_duration = time(NULL) - ctx->created_time;
   if (connection_duration > 0) {
-    TLOG_DEBUG("Connection closed: duration={:d} seconds, requests={:d}", 
-               connection_duration, ctx->request_count);
+    TLOG_DEBUG("Connection closed: duration={:d} seconds, requests={:d}", connection_duration,
+               ctx->request_count);
   }
 
   /* Free the context structure */
@@ -264,7 +255,7 @@ static void cleanup_connection_context(iris_connection_ctx_t *ctx) {
 
 /**
  * @brief Clean up all active connections during server shutdown
- * 
+ *
  * This function is called during server shutdown to ensure all connection
  * contexts are properly cleaned up. Since we don't maintain a list of
  * active connections, this function serves as a placeholder for future
@@ -276,9 +267,9 @@ static void cleanup_all_connections(void) {
    * cleanup_connection_context() for each connection. This function is here
    * for future enhancements where we might need additional cleanup logic.
    */
-  
+
   TLOG_INFO("Cleaning up all active connections...");
-  
+
   /* Future enhancement: If we maintain a list of active connections,
    * we would iterate through them here and ensure cleanup */
 }

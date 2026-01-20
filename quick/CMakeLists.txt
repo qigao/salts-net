@@ -12,7 +12,7 @@ target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/turbo/quick>)
+         $<INSTALL_INTERFACE:include/quick>)
 
 # Link dependencies
 target_link_libraries(
@@ -43,7 +43,7 @@ install(
 # Install headers
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-  DESTINATION include/turbo/quick
+  DESTINATION include/quick
   FILES_MATCHING
   PATTERN "*.h")
 

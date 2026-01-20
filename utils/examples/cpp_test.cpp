@@ -34,7 +34,7 @@ int main() {
   turbo_console_sink_opts_t opts;
   opts.output = stdout;
   opts.use_colors = 1;
-  opts.pattern = NULL; // Use default
+  opts.pattern = "[{time_ms}] [{level}] [{thread}] ({file}:{line}) {message}"; // Without component
 
   turbo_log_sink_t *console = turbo_sink_console_create(&opts);
   tlog_add_sink(tlog_get_default(), console);
@@ -59,6 +59,15 @@ int main() {
 
   // 4. Test Mixed
   TLOG_INFO("Mixed: {} | {} | {}", i, cpp_str, b);
+
+  // 4b. Test Enum (Implicit Cast)
+  enum Color { RED = 1, GREEN = 2, BLUE = 3 };
+  Color c = GREEN;
+  enum class Status : uint16_t { OK = 200, TERROR = 404 };
+  Status s_code = Status::OK;
+
+  TLOG_INFO("Enum (Old-style): {}", c);
+  TLOG_INFO("Enum Class (Typed): {}", s_code);
 
   // 5. Test Custom Class (via helper)
   User u = {100, "Alice"};

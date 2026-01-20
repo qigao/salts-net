@@ -7,13 +7,14 @@
 #define FMT_TYPED_H
 
 #include "platform.h"
-#include "../parser/fmt_lexer.h"
+#include "fmt_lexer.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 
 #ifdef __cplusplus
+#include <type_traits>
 extern "C" {
 #endif
 
@@ -128,6 +129,16 @@ template <typename T> static inline fmt_arg_t fmt_arg_detect(T *x) {
   return fmt_arg_ptr((const void *)x);
 }
 
+/* Template for enum types: cast to underlying integer type */
+template <typename T>
+static inline typename std::enable_if<std::is_enum<T>::value, fmt_arg_t>::type
+fmt_arg_detect(T x) {
+  using U = typename std::underlying_type<T>::type;
+  // Promote char/uchar sized enums to int so they print as numbers, not characters
+  using P = typename std::conditional<(sizeof(U) == 1), int, U>::type;
+  return fmt_arg_detect(static_cast<P>(x));
+}
+
   #define FMT_ARG(x) fmt_arg_detect(x)
 
 extern "C" { /* Re-open extern "C" */
@@ -233,6 +244,7 @@ extern "C" { /* Re-open extern "C" */
 #define turbo_fmt(buf, size, fmt, ...)                                                             \
   fmt_typed_print((buf), (size), (fmt), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
 
+
 /**
  * @brief Format a string using typed arguments
  *
@@ -247,7 +259,25 @@ CXX_C_API int fmt_typed_print(char *buf, size_t size, const char *fmt, const fmt
                               size_t arg_count);
 
 #ifdef __cplusplus
+} /* End extern "C" */
+
+/**
+ * @brief C++ Helper for type-safe formatting
+ */
+template <typename... Args>
+inline int turbo_fmt_cpp_wrapper(char *buf, size_t size, const char *fmt, const Args &...args) {
+  if constexpr (sizeof...(Args) > 0) {
+    const fmt_arg_t arg_array[] = {FMT_ARG(args)...};
+    return fmt_typed_print(buf, size, fmt, arg_array, sizeof...(Args));
+  } else {
+    return fmt_typed_print(buf, size, fmt, NULL, 0);
+  }
 }
+
+/* Override macro for C++ */
+#undef turbo_fmt
+#define turbo_fmt(buf, size, fmt, ...) turbo_fmt_cpp_wrapper((buf), (size), (fmt), ##__VA_ARGS__)
 #endif
 
 #endif /* FMT_TYPED_H */
+

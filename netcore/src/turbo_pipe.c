@@ -8,14 +8,6 @@
 #include "internal.h"
 #include "tlog.h"
 
-#ifdef _WIN32
-#include <winsock2.h>
-#define sleep_ms(ms) Sleep(ms)
-#else
-#include <unistd.h>
-#define sleep_ms(ms) usleep((ms) * 1000)
-#endif
-
 /* Enhanced Pipe with True Zero-Copy Implementation */
 
 /* Forward declarations for pool synchronization */

@@ -80,17 +80,19 @@ void test_parse_httpbin_bytes5(void)
   assert_addr_eq(&a, TURBO_TCP, "httpbin.org", 80, "/bytes/5");
 }
 
-#ifdef _WIN32
-void test_parse_pipe_windows(void)
+void test_parse_pipe_service(void)
 {
   turbo_address_t a;
-  int rc = parse_transport_url("pipe://./mypipe", &a);
+  int rc = parse_transport_url("pipe://my_service", &a);
   TEST_ASSERT_EQUAL_INT(0, rc);
   TEST_ASSERT_TRUE(a.valid);
   TEST_ASSERT_EQUAL_INT(TURBO_PIPE, a.transport);
-  TEST_ASSERT_EQUAL_STRING("\\\\.\\pipe\\mypipe", a.path);
-}
+#ifdef _WIN32
+  TEST_ASSERT_EQUAL_STRING("\\\\.\\pipe\\my_service", a.path);
+#else
+  TEST_ASSERT_EQUAL_STRING("/tmp/my_service", a.path);
 #endif
+}
 
 int main(void)
 {
@@ -101,8 +103,6 @@ int main(void)
   RUN_TEST(test_parse_ipv6_host);
   RUN_TEST(test_parse_invalid_scheme);
   RUN_TEST(test_parse_httpbin_bytes5);
-#ifdef _WIN32
-  RUN_TEST(test_parse_pipe_windows);
-#endif
+  RUN_TEST(test_parse_pipe_service);
   return UNITY_END();
 }

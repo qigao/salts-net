@@ -124,26 +124,17 @@ static void build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
   const char *query = turbo_uri_query(parsed_url);
 
   if (addr->transport == TURBO_PIPE) {
+    if (host && host[0] && strcmp(host, ".") != 0) {
 #ifdef _WIN32
-    char tmp[1024];
-    const char *name = (path && path[0] == '/') ? path + 1 : path;
-
-    static const char FMT_PATH_REMOTE[32] = "\\\\%s\\pipe\\%s";
-    static const char FMT_PATH_LOCAL[32] = "\\\\.\\pipe\\%s";
-
-    if (host[0] == '\0' || strcmp(host, ".") == 0) {
-      stbsp_snprintf(tmp, (int)sizeof(tmp), FMT_PATH_LOCAL, name ? name : "");
-    } else {
-      stbsp_snprintf(tmp, (int)sizeof(tmp), FMT_PATH_REMOTE, host, name ? name : "");
-    }
-    strncpy(addr->path, tmp, sizeof(addr->path) - 1);
-    addr->path[sizeof(addr->path) - 1] = '\0';
+      stbsp_snprintf(addr->path, (int)sizeof(addr->path), "\\\\.\\pipe\\%s", host);
 #else
-    if (path && path[0]) {
-      strncpy(addr->path, path, sizeof(addr->path) - 1);
-      addr->path[sizeof(addr->path) - 1] = '\0';
-    }
+      stbsp_snprintf(addr->path, (int)sizeof(addr->path), "/tmp/%s", host);
 #endif
+    } else {
+      TLOG_ERROR("Invalid pipe URL: {}. Expected pipe://service_name", turbo_uri_scheme(parsed_url));
+      return TURBO_EINVAL_TRANSPORT;
+    }
+    addr->path[sizeof(addr->path) - 1] = '\0';
   } else {
     if ((!path || path[0] == '\0') && (!query || query[0] == '\0')) {
       return;

@@ -25,8 +25,7 @@ set(HTTP_EXAMPLES
 foreach(example_name ${HTTP_EXAMPLES})
   add_executable(${example_name} ${example_name}.c)
   target_link_libraries(${example_name} PRIVATE http_client)
-  set_target_properties(${example_name} PROPERTIES FOLDER
-                                                   http/${folder_name})
+  set_target_properties(${example_name} PROPERTIES FOLDER http/${folder_name})
   add_sanitizers(${example_name})
 
 endforeach()

@@ -171,6 +171,30 @@ CXX_C_API int turbo_soa_peek_header(const uint8_t *data, size_t len, uint32_t *o
 CXX_C_API int turbo_soa_schema_count(const turbo_soa_schema_t *schema);
 CXX_C_API int turbo_soa_schema_column_type(const turbo_soa_schema_t *schema, int idx);
 
+/* CMD Parser */
+typedef struct turbo_cmd_parser_s turbo_cmd_parser_t;
+
+CXX_C_API turbo_cmd_parser_t *turbo_cmd_create(const char *app_name, const char *version);
+CXX_C_API void turbo_cmd_destroy(turbo_cmd_parser_t *parser);
+
+CXX_C_API void turbo_cmd_add_flag(turbo_cmd_parser_t *parser, bool *out, const char *name,
+                                  const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_add_string(turbo_cmd_parser_t *parser, char **out, const char *name,
+                                    const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_add_integer(turbo_cmd_parser_t *parser, int64_t *out, const char *name,
+                                     const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_add_float(turbo_cmd_parser_t *parser, double *out, const char *name,
+                                   const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_add_string_list(turbo_cmd_parser_t *parser, char **out_arr,
+                                         uint32_t *out_count, uint32_t max_count, const char *name,
+                                         const char *short_name, const char *desc);
+
+/* Required arguments */
+CXX_C_API void turbo_cmd_add_required_string(turbo_cmd_parser_t *parser, char **out,
+                                             const char *name, const char *desc);
+
+CXX_C_API void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool colors);
+
 #ifdef __cplusplus
 }
 #endif

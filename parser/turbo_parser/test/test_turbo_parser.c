@@ -51,6 +51,46 @@ int main() {
         }
     }
 
+    /* Test CMD Parsing */
+    {
+        printf("Testing CMD parsing...\n");
+        turbo_cmd_parser_t *parser = turbo_cmd_create("test_app", "1.0");
+        assert(parser != NULL);
+
+        bool verbose = false;
+        char *output = NULL;
+        int64_t count = 0;
+
+        turbo_cmd_add_flag(parser, &verbose, "verbose", "v", "Enable verbose output");
+        turbo_cmd_add_string(parser, &output, "output", "o", "Output file");
+        turbo_cmd_add_integer(parser, &count, "count", "c", "Count items");
+
+        char *arg0 = strdup("test_app");
+        char *arg1 = strdup("--verbose");
+        char *arg2 = strdup("-o");
+        char *arg3 = strdup("file.txt");
+        char *arg4 = strdup("--count=10");
+
+        char *argv[] = {arg0, arg1, arg2, arg3, arg4};
+        int argc = 5;
+
+        turbo_cmd_parse(parser, argc, argv, false);
+        
+        assert(verbose == 1);
+        assert(output != NULL);
+        assert(strcmp(output, "file.txt") == 0);
+        assert(count == 10);
+
+        free(arg0);
+        free(arg1);
+        free(arg2);
+        free(arg3);
+        free(arg4);
+
+        turbo_cmd_destroy(parser);
+        printf("CMD parsing test passed!\n");
+    }
+
     printf("Turbo Parser dedicated interfaces test finished.\n");
     return 0;
 }

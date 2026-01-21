@@ -79,9 +79,9 @@ set_target_properties(
              EXPORT_NAME HTTP)
 
 # Tests
-if(ENABLE_TESTS)
-  add_subdirectory(tests)
-endif()
+add_subdirectory(examples)
+add_subdirectory(turl)
+add_subdirectory(tests)
 
 # Installation
 install(

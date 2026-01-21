@@ -13,5 +13,6 @@ add_subdirectory(internal/uri_parser)
 add_subdirectory(internal/tlv_parser)
 add_subdirectory(internal/ltv_parser)
 add_subdirectory(internal/soa_parser)
+add_subdirectory(internal/cmd_parser)
 add_subdirectory(turbo_parser)
  

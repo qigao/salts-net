@@ -41,14 +41,7 @@ void test_status_to_string(void) {
   TEST_ASSERT_EQUAL_STRING("unknown error", async_client_status_to_string(999));
 }
 
-void test_transport_to_string(void) {
-  TEST_ASSERT_EQUAL_STRING("tcp", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_TCP));
-  TEST_ASSERT_EQUAL_STRING("udp", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_UDP));
-  TEST_ASSERT_EQUAL_STRING("kcp", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_KCP));
-  TEST_ASSERT_EQUAL_STRING("tls", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_TLS));
-  TEST_ASSERT_EQUAL_STRING("pipe", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_PIPE));
-  TEST_ASSERT_EQUAL_STRING("unknown", async_client_transport_to_string(999));
-}
+/* test_transport_to_string - REMOVED: transport types no longer exposed in public API */
 
 /* Client creation tests */
 void test_create_null_callback(void) {
@@ -251,7 +244,7 @@ int main(void) {
 
   /* String conversion */
   RUN_TEST(test_status_to_string);
-  RUN_TEST(test_transport_to_string);
+  /* test_transport_to_string - REMOVED */
 
   /* Client creation/destruction */
   RUN_TEST(test_create_null_callback);

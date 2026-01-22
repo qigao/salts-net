@@ -34,6 +34,15 @@
 #define ASYNC_SERVER_DEFAULT_BACKLOG 128
 #define UNUSED(x) (void)(x)
 
+/* Internal transport type - not exposed in public API */
+typedef turbo_client_transport_t async_server_transport_t;
+#define ASYNC_SERVER_TRANSPORT_TCP TURBO_PROTOCOL_TCP
+#define ASYNC_SERVER_TRANSPORT_UDP TURBO_PROTOCOL_UDP
+#define ASYNC_SERVER_TRANSPORT_KCP TURBO_PROTOCOL_KCP
+#define ASYNC_SERVER_TRANSPORT_TLS TURBO_PROTOCOL_TLS
+#define ASYNC_SERVER_TRANSPORT_PIPE TURBO_PROTOCOL_PIPE
+#define ASYNC_SERVER_TRANSPORT_WEBSOCKET TURBO_PROTOCOL_WEBSOCKET
+
 #ifndef CONTAINER_OF
   #define CONTAINER_OF(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
 #endif
@@ -2434,7 +2443,7 @@ const char *async_server_status_to_string(async_server_status_t status) {
   }
 }
 
-const char *async_server_transport_to_string(async_server_transport_t transport) {
+static const char *async_server_transport_to_string(async_server_transport_t transport) {
   switch (transport) {
   case ASYNC_SERVER_TRANSPORT_TCP:
     return "tcp";
@@ -2569,7 +2578,7 @@ async_server_status_t async_server_listen(async_server_t *server, const char *ur
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
   }
 
-  /* Map URL transport to server transport and validate match */
+  /* Map URL transport to server transport */
   async_server_transport_t url_transport;
   switch (addr.transport) {
   case TURBO_TCP:

@@ -32,6 +32,15 @@
 #define ASYNC_CLIENT_ERROR_MESSAGE_MAX 128
 #define UNUSED(x) (void)(x)
 
+/* Internal transport type - not exposed in public API */
+typedef turbo_client_transport_t async_client_transport_t;
+#define ASYNC_CLIENT_TRANSPORT_TCP TURBO_PROTOCOL_TCP
+#define ASYNC_CLIENT_TRANSPORT_UDP TURBO_PROTOCOL_UDP
+#define ASYNC_CLIENT_TRANSPORT_KCP TURBO_PROTOCOL_KCP
+#define ASYNC_CLIENT_TRANSPORT_TLS TURBO_PROTOCOL_TLS
+#define ASYNC_CLIENT_TRANSPORT_PIPE TURBO_PROTOCOL_PIPE
+#define ASYNC_CLIENT_TRANSPORT_WEBSOCKET TURBO_PROTOCOL_WEBSOCKET
+
 #ifndef CONTAINER_OF
   #define CONTAINER_OF(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
 #endif
@@ -2391,7 +2400,7 @@ const char *async_client_status_to_string(async_client_status_t status) {
   }
 }
 
-const char *async_client_transport_to_string(async_client_transport_t transport) {
+static const char *async_client_transport_to_string(async_client_transport_t transport) {
   switch (transport) {
   case ASYNC_CLIENT_TRANSPORT_TCP:
     return "tcp";
@@ -2537,7 +2546,7 @@ async_client_status_t async_client_connect(async_client_t *client, const char *u
     return ASYNC_CLIENT_STATUS_INVALID_PARAM;
   }
 
-  /* Map URL transport to client transport and validate match */
+  /* Map URL transport to client transport */
   async_client_transport_t url_transport;
   switch (addr.transport) {
   case TURBO_TCP:
@@ -2561,15 +2570,6 @@ async_client_status_t async_client_connect(async_client_t *client, const char *u
   default:
     TLOG_ERROR("Unsupported transport type from URL: {}", (int)addr.transport);
     return ASYNC_CLIENT_STATUS_TRANSPORT_ERROR;
-  }
-
-  /* Map URL transport to client transport and initialize if needed */
-  if (client->transport == 0) {
-    client->transport = url_transport;
-  } else if (url_transport != client->transport) {
-    TLOG_ERROR("URL transport {} does not match client transport {}", 
-                (int)url_transport, (int)client->transport);
-    return ASYNC_CLIENT_STATUS_INVALID_PARAM;
   }
 
   /* For pipes, use path instead of host; for others use host */

@@ -22,13 +22,11 @@ typedef turbo_client_status_t async_client_status_t;
 #define ASYNC_CLIENT_STATUS_TRANSPORT_ERROR TURBO_CLIENT_STATUS_TRANSPORT_ERROR
 #define ASYNC_CLIENT_STATUS_INTERNAL_ERROR TURBO_CLIENT_STATUS_INTERNAL_ERROR
 
-typedef turbo_client_transport_t async_client_transport_t;
-#define ASYNC_CLIENT_TRANSPORT_TCP TURBO_PROTOCOL_TCP
-#define ASYNC_CLIENT_TRANSPORT_UDP TURBO_PROTOCOL_UDP
-#define ASYNC_CLIENT_TRANSPORT_KCP TURBO_PROTOCOL_KCP
-#define ASYNC_CLIENT_TRANSPORT_TLS TURBO_PROTOCOL_TLS
-#define ASYNC_CLIENT_TRANSPORT_PIPE TURBO_PROTOCOL_PIPE
-#define ASYNC_CLIENT_TRANSPORT_WEBSOCKET TURBO_PROTOCOL_WEBSOCKET
+/* Transport type is determined automatically from URL scheme.
+ * No need to specify transport explicitly - just use the URL:
+ *   tcp://host:port, tls://host:port, udp://host:port,
+ *   kcp://host:port, pipe://name, ws://host:port, wss://host:port
+ */
 
 typedef enum {
   ASYNC_CLIENT_EVENT_CONNECTED = 0,
@@ -62,13 +60,6 @@ typedef void (*async_client_event_cb)(async_client_t *client, const async_client
  * @return A string representation of the status.
  */
 CXX_C_API const char *async_client_status_to_string(async_client_status_t status);
-/**
- * @brief Converts an async_client_transport_t enum to its string representation.
- *
- * @param transport The transport enum to convert.
- * @return A string representation of the transport.
- */
-CXX_C_API const char *async_client_transport_to_string(async_client_transport_t transport);
 
 /**
  * @brief Creates a new asynchronous client instance.

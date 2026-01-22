@@ -284,17 +284,7 @@ void test_udp_sendv(void) {
   TEST_ASSERT_EQUAL(2, stats.total_iov_buffers_sent);
 }
 
-/* Test: Transport string conversion */
-void test_transport_string_conversion(void) {
-  TEST_ASSERT_EQUAL_STRING("tcp", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_TCP));
-  TEST_ASSERT_EQUAL_STRING("udp", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_UDP));
-  TEST_ASSERT_EQUAL_STRING("kcp", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_KCP));
-  TEST_ASSERT_EQUAL_STRING("tls", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_TLS));
-  TEST_ASSERT_EQUAL_STRING("pipe", async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_PIPE));
-  TEST_ASSERT_EQUAL_STRING("websocket",
-                           async_client_transport_to_string(ASYNC_CLIENT_TRANSPORT_WEBSOCKET));
-  TEST_ASSERT_EQUAL_STRING("unknown", async_client_transport_to_string(999));
-}
+/* Test: Transport string conversion - REMOVED: transport types no longer exposed in public API */
 
 /* Test: Pipe transport works */
 void test_pipe_transport(void) {
@@ -504,7 +494,7 @@ void test_websocket_transport(void) {
 
 /* Test: WebSocket config validation and lazy transport initialization */
 void test_websocket_config_validation(void) {
-  /* Test: set_ws_config on fresh client should succeed and lock transport to WebSocket */
+  /* Test: set_ws_config on fresh client should succeed */
   async_client_t *client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(client);
 
@@ -512,13 +502,8 @@ void test_websocket_config_validation(void) {
   async_client_status_t status = async_client_set_ws_config(client, &ws_config);
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, status);
 
-  /* Now try to connect with TCP - should fail due to transport mismatch */
-  async_client_status_t connect_status = async_client_connect(client, "tcp://127.0.0.1:18900");
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, connect_status);
-
-  /* Connect with WebSocket should be allowed (though server might not be there, param check passes) */
-  /* We just check that it doesn't return INVALID_PARAM related to transport mismatch. 
-     It might return ok (async start) or other error. */
+  /* Transport is now determined by URL prefix, not by prior config.
+   * Connecting with any valid URL should work (transport determined from URL). */
   
   async_client_destroy(client);
 }
@@ -536,7 +521,7 @@ int main(void) {
   RUN_TEST(test_websocket_transport);
   RUN_TEST(test_tcp_sendv);
   RUN_TEST(test_udp_sendv);
-  RUN_TEST(test_transport_string_conversion);
+  /* test_transport_string_conversion - REMOVED */
   RUN_TEST(test_transport_isolation);
   RUN_TEST(test_websocket_config_validation);
 

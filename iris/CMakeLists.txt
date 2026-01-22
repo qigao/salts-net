@@ -31,9 +31,6 @@ set(GENERATED_SOURCES ${SECURITY_VALIDATORS_GEN} ${ROUTE_PARSER_GEN})
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
      ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 
-# Remove old server.c (replaced by server_refactored.c)
-list(FILTER SOURCE_FILES EXCLUDE REGEX ".*server\\.c$")
-
 # Add generated sources
 list(APPEND SOURCE_FILES ${GENERATED_SOURCES})
 
@@ -50,13 +47,13 @@ set_target_properties(
 # Link libraries first - vcpkg style
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC libuv::uv OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils
+  PUBLIC libuv::uv OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Core
   PRIVATE llhttp::llhttp_static
           cjson
           kcp::kcp
           c-ares::cares
           TurboNet::Parser
-          TurboNet::Core
+
           Threads::Threads)
 
 # Include directories

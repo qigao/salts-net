@@ -209,8 +209,8 @@ http_async_client_t *http_async_client_create(void) {
     return NULL;
   }
 
-  /* Use TLS transport for HTTPS support */
-  client->client = async_client_create(ASYNC_CLIENT_TRANSPORT_TLS, async_event_handler, client);
+  /* Use URL-based transport determination */
+  client->client = async_client_create(async_event_handler, client);
   if (!client->client) {
     turbo_arena_free(&client->client_arena);
     free(client);
@@ -348,7 +348,7 @@ void http_async_client_set_basic_auth(http_async_client_t *client, const char *u
 
   size_t creds_len = strlen(username) + strlen(password) + 2;
   char *credentials = malloc(creds_len);
-  stbsp_snprintf(credentials, creds_len, "%s:%s", username, password);
+  stbsp_snprintf(credentials, (int)creds_len, "%s:%s", username, password);
 
   char *encoded = NULL;
   if (tn_base64_encode((const uint8_t *)credentials, strlen(credentials), &encoded) != 0) {
@@ -364,7 +364,7 @@ void http_async_client_set_basic_auth(http_async_client_t *client, const char *u
    * Allocate new auth_header from arena */
   size_t header_len = strlen("Authorization: Basic ") + strlen(encoded) + 1;
   client->auth_header = (char *)turbo_arena_alloc(&client->client_arena, header_len);
-  stbsp_snprintf(client->auth_header, header_len, "Authorization: Basic %s", encoded);
+  stbsp_snprintf(client->auth_header, (int)header_len, "Authorization: Basic %s", encoded);
   free(encoded);
 }
 
@@ -375,7 +375,7 @@ void http_async_client_set_bearer_token(http_async_client_t *client, const char 
   /* Phase HTTP-1: No need to free old auth_header - arena owns it */
   size_t header_len = strlen("Authorization: Bearer ") + strlen(token) + 1;
   client->auth_header = (char *)turbo_arena_alloc(&client->client_arena, header_len);
-  stbsp_snprintf(client->auth_header, header_len, "Authorization: Bearer %s", token);
+  stbsp_snprintf(client->auth_header, (int)header_len, "Authorization: Bearer %s", token);
 }
 
 void http_async_client_clear_auth(http_async_client_t *client) {
@@ -875,9 +875,9 @@ static char *build_full_url(http_async_client_t *client, const char *url, turbo_
     return NULL;
 
   if (url[0] == '/') {
-    stbsp_snprintf(full_url, full_len, "%s%s", client->base_url, url);
+    stbsp_snprintf(full_url, (int)full_len, "%s%s", client->base_url, url);
   } else {
-    stbsp_snprintf(full_url, full_len, "%s/%s", client->base_url, url);
+    stbsp_snprintf(full_url, (int)full_len, "%s/%s", client->base_url, url);
   }
 
   return full_url;
@@ -935,11 +935,9 @@ static void initiate_request(http_async_request_t *request) {
   /* Initiate connection */
   request->state = REQUEST_STATE_CONNECTING;
 
-  printf("[DEBUG] Calling async_client_connect(%s, %d)\n",
-         uri_host, uri_port);
+  printf("[DEBUG] Calling async_client_connect(%s)\n", request->url);
 
-  async_client_status_t status = async_client_connect(
-      request->client->client, uri_host, uri_port);
+  async_client_status_t status = async_client_connect(request->client->client, request->url);
 
 
   printf("[DEBUG] async_client_connect returned: %d\n", status);
@@ -1029,7 +1027,7 @@ static void send_http_request(http_async_request_t *request) {
         size_t len = strlen(entry->name) + strlen(entry->value) + 5;
         char *header_str = malloc(len);
         if (header_str) {
-          stbsp_snprintf(header_str, len, "%s: %s\r\n", entry->name, entry->value);
+          stbsp_snprintf(header_str, (int)len, "%s: %s\r\n", entry->name, entry->value);
           default_header_strings[default_headers_added] = header_str;
 
           iov[iov_count].data = (char*)header_str;
@@ -1378,7 +1376,7 @@ char *http_async_build_url(const char *base_url, http_async_params_t *query_para
     return NULL;
   }
 
-  stbsp_snprintf(full_url, url_len, "%s%c%s", base_url, separator, query_string);
+  stbsp_snprintf(full_url, (int)url_len, "%s%c%s", base_url, separator, query_string);
   free(query_string);
 
   return full_url;

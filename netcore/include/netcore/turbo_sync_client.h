@@ -46,22 +46,25 @@ CXX_C_API const char *sync_client_status_to_string(sync_client_status_t status);
 CXX_C_API const char *sync_client_transport_to_string(sync_client_transport_t transport);
 
 /**
- * @brief Creates a new synchronous client instance using the default TCP
- * transport.
+ * @brief Creates a new synchronous client instance.
+ *
+ * The transport type will be determined from the URL scheme when connecting
+ * (e.g., tcp://, tls://, pipe://, ws://, udp://, kcp://).
  *
  * @return A pointer to the newly created `sync_client_t` instance, or NULL on
  * failure.
  */
 CXX_C_API sync_client_t *sync_client_create(void);
 /**
- * @brief Creates a new synchronous client instance with a specified transport
- * type.
+ * @brief Creates a new synchronous client instance with a specific transport.
  *
- * @param transport The transport type to use (TCP, UDP, KCP, TLS, PIPE).
+ * @param transport The transport type to use.
  * @return A pointer to the newly created `sync_client_t` instance, or NULL on
  * failure.
  */
 CXX_C_API sync_client_t *sync_client_create_with_transport(sync_client_transport_t transport);
+
+
 /**
  * @brief Destroys a synchronous client instance and frees associated resources.
  *
@@ -76,6 +79,18 @@ CXX_C_API void sync_client_destroy(sync_client_t *client);
  * @return The `sync_client_transport_t` enum value.
  */
 CXX_C_API sync_client_transport_t sync_client_get_transport(const sync_client_t *client);
+
+/**
+ * @brief Gets the transport scheme as a string.
+ * 
+ * This is the recommended way to introspect the transport type,
+ * as it returns user-friendly scheme names matching URL prefixes.
+ *
+ * @param client A pointer to the `sync_client_t` instance.
+ * @return The transport scheme ("tcp", "tls", "udp", "kcp", "pipe", "ws")
+ *         or "unknown" if not connected or invalid.
+ */
+CXX_C_API const char *sync_client_get_transport_scheme(const sync_client_t *client);
 
 /**
  * @brief Connection state enumeration.
@@ -160,28 +175,39 @@ CXX_C_API int sync_client_last_uv_error(sync_client_t *client);
 CXX_C_API const char *sync_client_last_message(sync_client_t *client);
 
 /**
- * @brief Connects the synchronous client to a specified host and port.
+ * @brief Connects the synchronous client using a URL.
+ *
+ * The URL scheme determines the transport type:
+ * - tcp://host:port - TCP connection
+ * - tls://host:port or https://host:port - TLS/SSL connection
+ * - udp://host:port - UDP connection
+ * - kcp://host:port - KCP (reliable UDP) connection
+ * - ws://host:port/path or wss://host:port/path - WebSocket connection
+ * - pipe://name - Named pipe (cross-platform IPC)
  *
  * @param client A pointer to the `sync_client_t` instance.
- * @param host The hostname or IP address to connect to.
- * @param port The port number to connect to.
+ * @param url The connection URL (e.g., "tcp://example.com:8080", "pipe://myservice").
  * @return `SYNC_CLIENT_STATUS_OK` on successful connection, or an error code
  * otherwise.
+ *
+ * @example
+ * sync_client_connect(client, "tcp://127.0.0.1:8080");
+ * sync_client_connect(client, "tls://secure.example.com:443");
+ * sync_client_connect(client, "pipe://myservice");
  */
-CXX_C_API sync_client_status_t sync_client_connect(sync_client_t *client, const char *host, int port);
+CXX_C_API sync_client_status_t sync_client_connect(sync_client_t *client, const char *url);
 
 /**
  * @brief Connects the synchronous client with a timeout.
  *
  * @param client A pointer to the `sync_client_t` instance.
- * @param host The hostname or IP address to connect to.
- * @param port The port number to connect to.
+ * @param url The connection URL (e.g., "tcp://example.com:8080").
  * @param timeout_ms Timeout in milliseconds (0 = no timeout).
  * @return `SYNC_CLIENT_STATUS_OK` on successful connection, or an error code
  * otherwise.
  */
-CXX_C_API sync_client_status_t sync_client_connect_timeout(sync_client_t *client, const char *host, 
-                                                 int port, int timeout_ms);
+CXX_C_API sync_client_status_t sync_client_connect_timeout(sync_client_t *client, const char *url, 
+                                                 int timeout_ms);
 
 /**
  * @brief Sends data through the synchronous client.
@@ -328,7 +354,7 @@ typedef struct {
  * @note This must be called before sync_client_connect() for TLS clients.
  *
  * @example
- * sync_client_t *client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TLS);
+ * sync_client_t *client = sync_client_create();
  * sync_client_tls_config_t tls_config = {
  *     .ca_file = "ca.crt",
  *     .cert_file = "client.crt",
@@ -336,7 +362,7 @@ typedef struct {
  *     .verify_peer = 1
  * };
  * sync_client_set_tls_config(client, &tls_config);
- * sync_client_connect(client, "example.com", 8883);
+ * sync_client_connect(client, "tls://example.com:8883");
  */
 CXX_C_API sync_client_status_t sync_client_set_tls_config(sync_client_t *client,
                                                 const sync_client_tls_config_t *config);
@@ -375,7 +401,7 @@ typedef struct {
  * @note This must be called before sync_client_connect() for WebSocket clients.
  *
  * @example
- * sync_client_t *client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_WEBSOCKET);
+ * sync_client_t *client = sync_client_create();
  * sync_client_ws_config_t ws_config = {
  *     .path = "/mqtt",
  *     .subprotocols = (const char *[]){"mqtt"},
@@ -383,7 +409,7 @@ typedef struct {
  *     .use_tls = 0
  * };
  * sync_client_set_ws_config(client, &ws_config);
- * sync_client_connect(client, "broker.example.com", 8083);
+ * sync_client_connect(client, "ws://broker.example.com:8083");
  */
 CXX_C_API sync_client_status_t sync_client_set_ws_config(sync_client_t *client,
                                                const sync_client_ws_config_t *config);

@@ -44,12 +44,12 @@ void test_parse_ws_wss(void)
   int rc = parse_transport_url("ws://host:99/abc", &a);
   TEST_ASSERT_EQUAL_INT(0, rc);
   TEST_ASSERT_TRUE(a.valid);
-  assert_addr_eq(&a, TURBO_TCP, "host", 99, "/abc");
+  assert_addr_eq(&a, TURBO_WEBSOCKET, "host", 99, "/abc");
 
   rc = parse_transport_url("wss://host/def", &a);
   TEST_ASSERT_EQUAL_INT(0, rc);
   TEST_ASSERT_TRUE(a.valid);
-  assert_addr_eq(&a, TURBO_TLS, "host", 443, "/def");
+  assert_addr_eq(&a, TURBO_WEBSOCKET, "host", 443, "/def");
 }
 
 void test_parse_ipv6_host(void)

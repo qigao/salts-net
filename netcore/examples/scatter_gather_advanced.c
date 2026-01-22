@@ -202,7 +202,9 @@ int main(void) {
 
   /* Connect */
   printf("\nConnecting to %s:%d...\n", SERVER_HOST, SERVER_PORT);
-  sync_client_status_t status = sync_client_connect(client, SERVER_HOST, SERVER_PORT);
+  char url[128];
+  snprintf(url, sizeof(url), "tcp://%s:%d", SERVER_HOST, SERVER_PORT);
+  sync_client_status_t status = sync_client_connect(client, url);
   if (status != SYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, "Connection failed: %s\n", sync_client_last_message(client));
     sync_client_destroy(client);

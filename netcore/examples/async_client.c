@@ -1,14 +1,20 @@
 /**
  * async_client.c - Asynchronous network client example
  *
- * Demonstrates event-driven I/O using libuv with support for multiple
- * transport protocols (TCP, UDP, KCP, TLS, named pipes).
+ * Demonstrates event-driven I/O with automatic transport detection
+ * from URL schemes (tcp://, tls://, pipe://, etc.).
  *
  * Configuration via environment variables:
- *   ASYNC_CLIENT_TRANSPORT - tcp|udp|kcp|tls|pipe (default: tcp)
- *   ASYNC_CLIENT_HOST      - server hostname (default: 127.0.0.1)
- *   ASYNC_CLIENT_PORT      - server port (default: 8080)
- *   ASYNC_CLIENT_MESSAGE   - message to send (default: "Hello, server!")
+ *   ASYNC_CLIENT_URL     - Full connection URL (default: tcp://127.0.0.1:8080)
+ *   ASYNC_CLIENT_MESSAGE - Message to send (default: "Hello, server!")
+ *
+ * Supported URL formats:
+ *   - TCP:       tcp://host:port
+ *   - TLS:       tls://host:port
+ *   - UDP:       udp://host:port
+ *   - KCP:       kcp://host:port
+ *   - Pipe:      pipe://service_name
+ *   - WebSocket: ws://host:port/path
  */
 
 #include <stdio.h>
@@ -18,7 +24,6 @@
 #include <uv.h>
 
 #include "turbo_async_client.h"
-#include "example_common.h"
 
 typedef struct {
   uv_sem_t done;
@@ -28,29 +33,13 @@ typedef struct {
   int exit_code;
 } app_state_t;
 
-static async_client_transport_t parse_transport(const char *value) {
-  if (!value || value[0] == '\0')
-    return ASYNC_CLIENT_TRANSPORT_TCP;
-  if (equals_ignore_case(value, "tcp"))
-    return ASYNC_CLIENT_TRANSPORT_TCP;
-  if (equals_ignore_case(value, "udp"))
-    return ASYNC_CLIENT_TRANSPORT_UDP;
-  if (equals_ignore_case(value, "kcp"))
-    return ASYNC_CLIENT_TRANSPORT_KCP;
-  if (equals_ignore_case(value, "tls"))
-    return ASYNC_CLIENT_TRANSPORT_TLS;
-  if (equals_ignore_case(value, "pipe"))
-    return ASYNC_CLIENT_TRANSPORT_PIPE;
-  return ASYNC_CLIENT_TRANSPORT_TCP;
-}
-
 static void on_client_event(async_client_t *client, const async_client_event_t *event,
                             void *user_data) {
   app_state_t *state = (app_state_t *)user_data;
 
   switch (event->type) {
   case ASYNC_CLIENT_EVENT_CONNECTED: {
-    printf("Connected.\n");
+    printf("Connected using %s transport\n", async_client_get_transport_scheme(client));
     async_client_status_t send_status =
         async_client_send(client, state->message, state->message_len);
     if (send_status != ASYNC_CLIENT_STATUS_OK) {
@@ -82,16 +71,9 @@ static void on_client_event(async_client_t *client, const async_client_event_t *
 }
 
 int main(void) {
-  const char *transport_env = getenv("ASYNC_CLIENT_TRANSPORT");
-  async_client_transport_t transport = parse_transport(transport_env);
-
-  const char *host_env = getenv("ASYNC_CLIENT_HOST");
-  const char *host = host_env && host_env[0] ? host_env : "127.0.0.1";
-
-  int port = 8080;
-  const char *port_env = getenv("ASYNC_CLIENT_PORT");
-  if (port_env && port_env[0])
-    port = atoi(port_env);
+  /* Get connection URL from environment or use default */
+  const char *url_env = getenv("ASYNC_CLIENT_URL");
+  const char *url = url_env ? url_env : "tcp://127.0.0.1:8080";
 
   const char *message_env = getenv("ASYNC_CLIENT_MESSAGE");
 
@@ -100,21 +82,24 @@ int main(void) {
   state.message_len = strlen(state.message);
   state.done_signaled = 0;
   state.exit_code = 0;
+  
   if (uv_sem_init(&state.done, 0) != 0) {
     fprintf(stderr, "Failed to initialize completion semaphore.\n");
     return 1;
   }
 
-  async_client_t *client = async_client_create(transport, on_client_event, &state);
+  /* Create client - transport is determined automatically from URL */
+  async_client_t *client = async_client_create(on_client_event, &state);
   if (!client) {
-    fprintf(stderr, "Failed to initialize async client.\n");
+    fprintf(stderr, "Failed to create async client.\n");
     uv_sem_destroy(&state.done);
     return 1;
   }
 
-  printf("Using transport: %s\n", async_client_transport_to_string(transport));
+  printf("Connecting to: %s\n", url);
 
-  async_client_status_t status = async_client_connect(client, host, port);
+  /* Connect using URL - scheme determines transport automatically */
+  async_client_status_t status = async_client_connect(client, url);
   if (status != ASYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, "Connect failed (%s)\n", async_client_status_to_string(status));
     async_client_destroy(client);
@@ -122,8 +107,7 @@ int main(void) {
     return 1;
   }
 
-  printf("Connecting to %s:%d\n", host, port);
-
+  /* Wait for completion */
   uv_sem_wait(&state.done);
 
   async_client_destroy(client);

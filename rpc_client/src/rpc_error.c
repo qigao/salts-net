@@ -208,6 +208,11 @@ rpc_error_severity_t rpc_error_get_severity(rpc_error_code_t code) {
     return RPC_SEVERITY_FATAL;
   }
 
+  // Warnings
+  if (code == RPC_ERROR_CIRCUIT_OPEN || code == RPC_ERROR_TOO_MANY_REQUESTS) {
+    return RPC_SEVERITY_WARNING;
+  }
+
   // Errors that may be recoverable
   if (code >= 100 && code < 200) {
     return RPC_SEVERITY_ERROR; // Transport errors
@@ -215,11 +220,6 @@ rpc_error_severity_t rpc_error_get_severity(rpc_error_code_t code) {
 
   if (code >= 300 && code < 400) {
     return RPC_SEVERITY_ERROR; // Client errors
-  }
-
-  // Warnings
-  if (code == RPC_ERROR_CIRCUIT_OPEN || code == RPC_ERROR_TOO_MANY_REQUESTS) {
-    return RPC_SEVERITY_WARNING;
   }
 
   // Default to error

@@ -38,9 +38,7 @@ void example_get_block_number(void) {
 
   // Create RPC client for Public Node
   // Note: Using HTTP for testing (most production endpoints require HTTPS)
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
   config.timeout_ms = 10000; // 10 seconds
 
   printf("[DEBUG] Creating RPC client...\n");
@@ -94,9 +92,7 @@ void example_get_block_number(void) {
 void example_get_chain_id(void) {
   printf("\n=== Example 2: Get Ethereum Chain ID ===\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
 
   rpc_client_t *client = rpc_client_create(&config);
   if (!client) {
@@ -125,9 +121,7 @@ void example_get_chain_id(void) {
 void example_get_gas_price(void) {
   printf("\n=== Example 3: Get Current Gas Price ===\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
 
   rpc_client_t *client = rpc_client_create(&config);
   if (!client) {
@@ -167,9 +161,7 @@ void example_error_handling(void) {
   printf("\n=== Example 4: Error Handling ===\n");
   printf("Testing JSON-RPC error responses\n\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
 
   rpc_client_t *client = rpc_client_create(&config);
   if (!client) {
@@ -206,9 +198,7 @@ void example_statistics(void) {
   printf("\n=== Example 5: Statistics Tracking ===\n");
   printf("Making multiple requests and tracking performance\n\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
 
   rpc_client_t *client = rpc_client_create(&config);
   if (!client) {
@@ -305,9 +295,7 @@ void example_retry_logic(void) {
 void example_get_balance(void) {
   printf("\n=== Example 7: Get ETH Balance ===\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
 
   rpc_client_t *client = rpc_client_create(&config);
   if (!client) {

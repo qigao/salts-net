@@ -43,8 +43,8 @@ static void initialize_scheme_map(void) {
   const transport_scheme_t schemes[] = {
       {"tcp", 80, TURBO_TCP},       {"tls", 443, TURBO_TLS},
       {"ssl", 443, TURBO_TLS},      {"https", 443, TURBO_TLS},
-      {"http", 80, TURBO_TCP},      {"ws", 80, TURBO_TCP},
-      {"wss", 443, TURBO_TLS},      {"udp", 53, TURBO_UDP},
+      {"http", 80, TURBO_TCP},      {"ws", 80, TURBO_WEBSOCKET},
+      {"wss", 443, TURBO_WEBSOCKET}, {"udp", 53, TURBO_UDP},
       {"pipe", 0, TURBO_PIPE},      {"kcp", 7000, TURBO_KCP},
       {"quic", 443, TURBO_QUIC},    {"http3", 443, TURBO_QUIC},
       {NULL, 0, 0}};
@@ -187,5 +187,95 @@ int parse_transport_url(const char *url, turbo_address_t *addr) {
 
   addr->valid = true;
   turbo_free_uri(&parsed_url);
+  return 0;
+}
+
+// Validates a transport URL format
+int turbo_url_is_valid(const char *url) {
+  if (!url || !url[0]) {
+    return 0;
+  }
+
+  turbo_address_t addr;
+  int result = parse_transport_url(url, &addr);
+  return (result == 0 && addr.valid) ? 1 : 0;
+}
+
+// Extracts the scheme from a URL
+int turbo_url_get_scheme(const char *url, char *scheme_buf, size_t buf_size) {
+  if (!url || !scheme_buf || buf_size == 0) {
+    return UV_EINVAL;
+  }
+
+  uri_t *parsed_url = NULL;
+  int err = parse_and_validate_url(url, &parsed_url);
+  if (err) {
+    return err;
+  }
+
+  const char *scheme = turbo_uri_scheme(parsed_url);
+  if (!scheme || !scheme[0]) {
+    turbo_free_uri(&parsed_url);
+    return TURBO_EINVAL_TRANSPORT;
+  }
+
+  strncpy(scheme_buf, scheme, buf_size - 1);
+  scheme_buf[buf_size - 1] = '\0';
+  
+  turbo_free_uri(&parsed_url);
+  return 0;
+}
+
+// Builds a URL from components
+int turbo_url_build(const char *scheme, const char *host, int port, 
+                    const char *path, char *url_buf, size_t buf_size) {
+  if (!scheme || !url_buf || buf_size == 0) {
+    return UV_EINVAL;
+  }
+
+  // Validate port range
+  if (port < 0 || port > 65535) {
+    return TURBO_EINVAL_TRANSPORT;
+  }
+
+  // Convert scheme to lowercase for consistency
+  char lower_scheme[32];
+  strncpy(lower_scheme, scheme, sizeof(lower_scheme) - 1);
+  lower_scheme[sizeof(lower_scheme) - 1] = '\0';
+  to_lower(lower_scheme);
+
+  // Special handling for pipe URLs
+  if (strcmp(lower_scheme, "pipe") == 0) {
+    if (!path || !path[0]) {
+      return TURBO_EINVAL_TRANSPORT;
+    }
+    stbsp_snprintf(url_buf, (int)buf_size, "pipe://%s", path);
+    return 0;
+  }
+
+  // For other protocols, host is required
+  if (!host || !host[0]) {
+    return TURBO_EINVAL_TRANSPORT;
+  }
+
+  // Build URL based on whether we have a path
+  if (path && path[0]) {
+    // Ensure path starts with /
+    const char *path_prefix = (path[0] == '/') ? "" : "/";
+    if (port > 0) {
+      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s:%d%s%s", 
+                     lower_scheme, host, port, path_prefix, path);
+    } else {
+      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s%s%s", 
+                     lower_scheme, host, path_prefix, path);
+    }
+  } else {
+    if (port > 0) {
+      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s:%d", lower_scheme, host, port);
+    } else {
+      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s", lower_scheme, host);
+    }
+  }
+
   return 0;
 }

@@ -3,9 +3,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <turbo/common/platform.h>
+#include <platform.h>
 // JSON helpers
-#include <turbo/parser.h>
+#include <turbo_parser.h>
 
 #ifdef __cplusplus
 extern "C" {

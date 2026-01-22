@@ -52,17 +52,18 @@ void test_transport_to_string(void) {
 
 /* Client creation tests */
 void test_create_null_callback(void) {
-  async_client_t *c = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, NULL, NULL);
+  async_client_t *c = async_client_create(NULL, NULL);
   TEST_ASSERT_NULL(c);
 }
 
-void test_create_tcp(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+void test_create(void) {
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 }
 
-void test_create_udp(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_UDP, test_event_cb, NULL);
+void test_create_with_user_data(void) {
+  int user_data = 123;
+  client = async_client_create(test_event_cb, &user_data);
   TEST_ASSERT_NOT_NULL(client);
 }
 
@@ -78,7 +79,7 @@ void test_get_state_null(void) {
 }
 
 void test_get_state_disconnected(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   async_client_state_t state = async_client_get_state(client);
@@ -91,7 +92,7 @@ void test_is_connected_null(void) {
 }
 
 void test_is_connected_disconnected(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   int connected = async_client_is_connected(client);
@@ -100,7 +101,7 @@ void test_is_connected_disconnected(void) {
 
 /* Operation with NULL client tests */
 void test_connect_null_client(void) {
-  async_client_status_t status = async_client_connect(NULL, "localhost", 8080);
+  async_client_status_t status = async_client_connect(NULL, "tcp://localhost:8080");
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
 }
 
@@ -136,7 +137,7 @@ void test_set_connect_timeout_null(void) {
 }
 
 void test_set_connect_timeout(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   /* Should not crash, no return value to test */
@@ -149,7 +150,7 @@ void test_set_operation_timeout_null(void) {
 }
 
 void test_set_operation_timeout(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   /* Should not crash, no return value to test */
@@ -165,7 +166,7 @@ void test_get_stats_null_client(void) {
 
 
 void test_get_stats_initial(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   async_client_stats_t stats;
@@ -190,7 +191,7 @@ void test_reset_stats_null(void) {
 }
 
 void test_reset_stats(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   /* Should not crash, no way to verify without connecting */
@@ -208,16 +209,21 @@ void test_set_multicast_ttl_null(void) {
 }
 
 void test_set_multicast_ttl_wrong_transport(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
+  
+  /* Connect as TCP */
+  async_client_connect(client, "tcp://127.0.0.1:8080");
 
+  /* Try setting multicast TTL (UDP only) */
   async_client_status_t status = async_client_set_multicast_ttl(client, 32);
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_TRANSPORT_ERROR, status);
 }
 
 void test_set_multicast_ttl_invalid_value(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_UDP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
+  async_client_connect(client, "udp://127.0.0.1:8080"); // Connect as UDP to allow multicast options
 
   /* TTL out of range (1-255) */
   async_client_status_t status = async_client_set_multicast_ttl(client, 0);
@@ -233,7 +239,7 @@ void test_set_multicast_loop_null(void) {
 }
 
 void test_set_multicast_loop_wrong_transport(void) {
-  client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, test_event_cb, NULL);
+  client = async_client_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(client);
 
   async_client_status_t status = async_client_set_multicast_loop(client, 1);
@@ -249,8 +255,8 @@ int main(void) {
 
   /* Client creation/destruction */
   RUN_TEST(test_create_null_callback);
-  RUN_TEST(test_create_tcp);
-  RUN_TEST(test_create_udp);
+  RUN_TEST(test_create);
+  RUN_TEST(test_create_with_user_data);
   RUN_TEST(test_destroy_null);
 
   /* State queries */

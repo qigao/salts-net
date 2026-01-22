@@ -26,6 +26,7 @@
 #include "turbo_sync_client.h"
 #include "turbo_tcp.h"
 #include "turbo_tls.h"
+#include "turbo_url.h"
 #include "turbo_websocket_client.h"
 
 #define SYNC_CLIENT_ERROR_MESSAGE_MAX 128
@@ -49,6 +50,7 @@ typedef struct sync_client_command_s {
     struct {
       char *host;
       int port;
+      sync_client_transport_t transport;
     } connect;
     struct {
       char *data;
@@ -143,6 +145,110 @@ typedef struct sync_client_transport_ops_s {
   const char *name;
 } sync_client_transport_ops_t;
 
+/* Forward declarations for ops functions we'll implement below */
+static int tcp_setup_impl(sync_client_t *client);
+static int tcp_connect_impl(sync_client_t *client, const char *host, int port);
+static int tcp_send_impl(sync_client_t *client, const char *data, size_t len);
+static int tcp_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
+static void tcp_close_impl(sync_client_t *client);
+static int tcp_receive_impl(sync_client_t *client); 
+
+static int udp_setup_impl(sync_client_t *client);
+static int udp_connect_impl(sync_client_t *client, const char *host, int port);
+static int udp_send_impl(sync_client_t *client, const char *data, size_t len);
+static int udp_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
+static void udp_close_impl(sync_client_t *client);
+
+static int kcp_setup_impl(sync_client_t *client);
+static int kcp_connect_impl(sync_client_t *client, const char *host, int port);
+static int kcp_send_impl(sync_client_t *client, const char *data, size_t len);
+static int kcp_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
+static void kcp_close_impl(sync_client_t *client);
+
+static int tls_setup_impl(sync_client_t *client);
+static int tls_connect_impl(sync_client_t *client, const char *host, int port);
+static int tls_send_impl(sync_client_t *client, const char *data, size_t len);
+static int tls_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
+static void tls_close_impl(sync_client_t *client);
+
+static int pipe_setup_impl(sync_client_t *client);
+static int pipe_connect_impl(sync_client_t *client, const char *host, int port);
+static int pipe_send_impl(sync_client_t *client, const char *data, size_t len);
+static int pipe_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
+static void pipe_close_impl(sync_client_t *client);
+
+static int ws_setup_impl(sync_client_t *client);
+static int ws_connect_impl(sync_client_t *client, const char *host, int port);
+static int ws_send_impl(sync_client_t *client, const char *data, size_t len);
+static int ws_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
+static void ws_close_impl(sync_client_t *client);
+
+/* TCP operations */
+static const sync_client_transport_ops_t tcp_ops = {
+    .setup = tcp_setup_impl,
+    .connect = tcp_connect_impl,
+    .send = tcp_send_impl,
+    .sendv = tcp_sendv_impl,
+    .close = tcp_close_impl,
+    .receive = tcp_receive_impl,
+    .name = "TCP"
+};
+
+/* UDP operations */
+static const sync_client_transport_ops_t udp_ops = {
+    .setup = udp_setup_impl,
+    .connect = udp_connect_impl,
+    .send = udp_send_impl,
+    .sendv = udp_sendv_impl,
+    .close = udp_close_impl,
+    .receive = NULL,
+    .name = "UDP"
+};
+
+/* KCP operations */
+static const sync_client_transport_ops_t kcp_ops = {
+    .setup = kcp_setup_impl,
+    .connect = kcp_connect_impl,
+    .send = kcp_send_impl,
+    .sendv = kcp_sendv_impl,
+    .close = kcp_close_impl,
+    .receive = NULL,
+    .name = "KCP"
+};
+
+/* TLS operations */
+static const sync_client_transport_ops_t tls_ops = {
+    .setup = tls_setup_impl,
+    .connect = tls_connect_impl,
+    .send = tls_send_impl,
+    .sendv = tls_sendv_impl,
+    .close = tls_close_impl,
+    .receive = NULL,
+    .name = "TLS"
+};
+
+/* PIPE operations */
+static const sync_client_transport_ops_t pipe_ops = {
+    .setup = pipe_setup_impl,
+    .connect = pipe_connect_impl,
+    .send = pipe_send_impl,
+    .sendv = pipe_sendv_impl,
+    .close = pipe_close_impl,
+    .receive = NULL,
+    .name = "PIPE"
+};
+
+/* WebSocket operations */
+static const sync_client_transport_ops_t websocket_ops = {
+    .setup = ws_setup_impl,
+    .connect = ws_connect_impl,
+    .send = ws_send_impl,
+    .sendv = ws_sendv_impl,
+    .close = ws_close_impl,
+    .receive = NULL,
+    .name = "WebSocket"
+};
+
 struct sync_client_s {
   uv_loop_t loop;
   uv_thread_t loop_thread;
@@ -202,7 +308,7 @@ static void result_set_uv_error(sync_client_t *client, int uv_status);
 static void result_set_transport_error(sync_client_t *client, const char *message);
 
 static sync_client_command_t *command_create(sync_client_command_type_t type);
-static sync_client_command_t *command_create_connect(const char *host, int port);
+static sync_client_command_t *command_create_connect(sync_client_transport_t transport, const char *host, int port);
 static sync_client_command_t *command_create_send(const char *data, size_t len);
 static sync_client_command_t *command_create_receive(void);
 static sync_client_command_t *command_create_stop(void);
@@ -324,6 +430,13 @@ const char *sync_client_last_message(sync_client_t *client) {
   return sync_client_status_to_string(client->result_code);
 }
 
+const char *sync_client_get_transport_scheme(const sync_client_t *client) {
+  if (!client || !client->ops) {
+    return "unknown";
+  }
+  return sync_client_transport_to_string(client->transport);
+}
+
 static void result_reset(sync_client_t *client) {
   client->result_code = SYNC_CLIENT_STATUS_OK;
   client->uv_status = 0;
@@ -426,12 +539,13 @@ static sync_client_command_t *command_create(sync_client_command_type_t type) {
   return cmd;
 }
 
-static sync_client_command_t *command_create_connect(const char *host, int port) {
+static sync_client_command_t *command_create_connect(sync_client_transport_t transport, const char *host, int port) {
   if (!host)
     return NULL;
   sync_client_command_t *cmd = command_create(COMMAND_CONNECT);
   if (!cmd)
     return NULL;
+  cmd->payload.connect.transport = transport;
   cmd->payload.connect.host = client_common_strdup(host);
   if (!cmd->payload.connect.host) {
     free(cmd);
@@ -557,8 +671,14 @@ static sync_client_status_t submit_command(sync_client_t *client, sync_client_co
 }
 
 static void transport_close(sync_client_t *client) {
+  /* If ops is not set, transport was never initialized (no connect called) */
+  if (!client->ops) {
+    return;
+  }
+
   /* Dispatch via vtable - NO SWITCH! */
-  client->ops->close(client);
+  if (client->ops->close)
+    client->ops->close(client);
 }
 
 static sync_client_status_t transport_setup(sync_client_t *client) {
@@ -566,8 +686,53 @@ static sync_client_status_t transport_setup(sync_client_t *client) {
   return client->ops->setup(client);
 }
 static void handle_connect_command(sync_client_t *client, sync_client_command_t *cmd) {
+  sync_client_transport_t transport = cmd->payload.connect.transport;
   const char *host = cmd->payload.connect.host;
   int port = cmd->payload.connect.port;
+
+  /* Initialize transport-specific ops if not already done */
+  if (!client->ops) {
+    client->transport = transport;
+    switch (transport) {
+    case SYNC_CLIENT_TRANSPORT_TCP:
+      client->ops = &tcp_ops;
+      break;
+    case SYNC_CLIENT_TRANSPORT_UDP:
+      client->ops = &udp_ops;
+      break;
+    case SYNC_CLIENT_TRANSPORT_KCP:
+      client->ops = &kcp_ops;
+      break;
+    case SYNC_CLIENT_TRANSPORT_TLS:
+      client->ops = &tls_ops;
+      break;
+    case SYNC_CLIENT_TRANSPORT_PIPE:
+      client->ops = &pipe_ops;
+      break;
+    case SYNC_CLIENT_TRANSPORT_WEBSOCKET:
+      client->ops = &websocket_ops;
+      break;
+    default:
+      result_set_error(client, SYNC_CLIENT_STATUS_TRANSPORT_ERROR, "unsupported transport");
+      client->done = 1;
+      uv_cond_signal(&client->cond);
+      return;
+    }
+
+    int setup_rc = client->ops->setup(client);
+    if (setup_rc != SYNC_CLIENT_STATUS_OK) {
+      client->ops = NULL;
+      result_set_error(client, setup_rc, "transport setup failed");
+      client->done = 1;
+      uv_cond_signal(&client->cond);
+      return;
+    }
+  } else if (client->transport != transport) {
+    result_set_error(client, SYNC_CLIENT_STATUS_TRANSPORT_ERROR, "client already initialized with different transport");
+    client->done = 1;
+    uv_cond_signal(&client->cond);
+    return;
+  }
 
   /* Dispatch via vtable - NO 210-LINE SWITCH! This is "good taste". */
   client->ops->connect(client, host, port);
@@ -586,10 +751,12 @@ static void handle_send_command(sync_client_t *client, sync_client_command_t *cm
   cmd->payload.send.data = NULL;
 
   /* Dispatch via vtable - NO SWITCH STATEMENT! */
-  TLOG_DEBUG("handle_send_command: ops={} ops->send={} ops->name={}",
-          (void*)client->ops, (void*)(client->ops ? client->ops->send : NULL),
-          client->ops ? client->ops->name : "NULL");
-  int rc = client->ops->send(client, data, len);
+  int rc;
+  if (client->ops && client->ops->send) {
+    rc = client->ops->send(client, data, len);
+  } else {
+    rc = -1; /* Not ready */
+  }
   TLOG_DEBUG("handle_send_command: ops->send returned rc={}", rc);
 
   /* UDP handles cleanup in callback */
@@ -647,6 +814,9 @@ static void signal_done_with_status(sync_client_t *client, int rc, sync_client_s
   uv_mutex_lock(&client->mutex);
   if (rc == 0) {
     result_reset(client);
+  } else if (rc == -1) {
+    /* Custom error code */
+    result_set_error(client, error_code, error_msg);
   } else if (rc < 0 && rc > -4096) {
     /* libuv error code */
     result_set_uv_error(client, rc);
@@ -881,59 +1051,9 @@ static int ws_send_impl(sync_client_t *client, const char *data, size_t len);
 static int ws_sendv_impl(sync_client_t *client, sync_client_iovec_t *iov, size_t iovcnt);
 static void ws_close_impl(sync_client_t *client);
 
-/* TCP operations */
-static const sync_client_transport_ops_t tcp_ops = {.setup = tcp_setup_impl,
-                                                    .connect = tcp_connect_impl,
-                                                    .send = tcp_send_impl,
-                                                    .sendv = tcp_sendv_impl,
-                                                    .close = tcp_close_impl,
-                                                    .receive = tcp_receive_impl,  /* TCP-specific */
-                                                    .name = "TCP"};
 
-/* UDP operations */
-static const sync_client_transport_ops_t udp_ops = {.setup = udp_setup_impl,
-                                                    .connect = udp_connect_impl,
-                                                    .send = udp_send_impl,
-                                                    .sendv = udp_sendv_impl,
-                                                    .close = udp_close_impl,
-                                                    .receive = NULL,  /* Not supported */
-                                                    .name = "UDP"};
 
-/* KCP operations */
-static const sync_client_transport_ops_t kcp_ops = {.setup = kcp_setup_impl,
-                                                    .connect = kcp_connect_impl,
-                                                    .send = kcp_send_impl,
-                                                    .sendv = kcp_sendv_impl,
-                                                    .close = kcp_close_impl,
-                                                    .receive = NULL,  /* Not supported */
-                                                    .name = "KCP"};
 
-/* TLS operations */
-static const sync_client_transport_ops_t tls_ops = {.setup = tls_setup_impl,
-                                                    .connect = tls_connect_impl,
-                                                    .send = tls_send_impl,
-                                                    .sendv = tls_sendv_impl,
-                                                    .close = tls_close_impl,
-                                                    .receive = NULL,  /* Not supported */
-                                                    .name = "TLS"};
-
-/* PIPE operations */
-static const sync_client_transport_ops_t pipe_ops = {.setup = pipe_setup_impl,
-                                                     .connect = pipe_connect_impl,
-                                                     .send = pipe_send_impl,
-                                                     .sendv = pipe_sendv_impl,
-                                                     .close = pipe_close_impl,
-                                                     .receive = NULL,  /* Not supported */
-                                                     .name = "PIPE"};
-
-/* WEBSOCKET operations */
-static const sync_client_transport_ops_t websocket_ops = {.setup = ws_setup_impl,
-                                                          .connect = ws_connect_impl,
-                                                          .send = ws_send_impl,
-                                                          .sendv = ws_sendv_impl,
-                                                          .close = ws_close_impl,
-                                                          .receive = NULL,  /* Not supported */
-                                                          .name = "WEBSOCKET"};
 
 /* ========================================================================
  * Send implementations (single buffer) for each protocol
@@ -1670,7 +1790,12 @@ static void handle_sendv_command(sync_client_t *client, sync_client_command_t *c
   size_t total_bytes = calculate_iov_total_bytes(iov, iovcnt);
 
   /* Dispatch via vtable - NO SWITCH STATEMENT! This is "good taste". */
-  int rc = client->ops->sendv(client, iov, iovcnt);
+  int rc;
+  if (client->ops && client->ops->sendv) {
+    rc = client->ops->sendv(client, iov, iovcnt);
+  } else {
+    rc = -1; /* Not ready */
+  }
 
   /* Special case: UDP cleanup happens in callback */
   if (client->transport == SYNC_CLIENT_TRANSPORT_UDP) {
@@ -1707,8 +1832,13 @@ static void handle_sendv_command(sync_client_t *client, sync_client_command_t *c
 }
 
 static void handle_receive_command(sync_client_t *client) {
+  if (!client->ops) {
+    signal_done_with_status(client, -1, SYNC_CLIENT_STATUS_NOT_READY, "client not connected");
+    return;
+  }
+
   /* Dispatch via vtable for protocol-specific receive handling (TCP only) */
-  if (client->ops->receive) {
+  if (client->ops && client->ops->receive) {
     client->ops->receive(client);
     return;
   }
@@ -2266,12 +2396,9 @@ static void loop_thread_main(void *arg) {
     }
   }
 
+  /* Transport setup now happens during first connect command */
   if (rc == 0) {
-    sync_client_status_t setup_status = transport_setup(client);
-    if (setup_status != SYNC_CLIENT_STATUS_OK) {
-      transport_close(client);
-      rc = UV_EINVAL;
-    }
+    /* No-op here, setup deferred */
   }
 
   if (rc != 0) {
@@ -2330,40 +2457,15 @@ sync_client_transport_t sync_client_get_transport(const sync_client_t *client) {
   return client->transport;
 }
 
-sync_client_t *sync_client_create_with_transport(sync_client_transport_t transport) {
+sync_client_t *sync_client_create(void) {
   sync_client_t *client = (sync_client_t *)calloc(1, sizeof(*client));
   if (!client)
     return NULL;
 
-  client->transport = transport;
+  client->transport = (sync_client_transport_t)0;
+  client->ops = NULL;
 
-  /* Set transport operations vtable based on transport type */
-  switch (transport) {
-  case SYNC_CLIENT_TRANSPORT_TCP:
-    client->ops = &tcp_ops;
-    break;
-  case SYNC_CLIENT_TRANSPORT_UDP:
-    client->ops = &udp_ops;
-    break;
-  case SYNC_CLIENT_TRANSPORT_KCP:
-    client->ops = &kcp_ops;
-    break;
-  case SYNC_CLIENT_TRANSPORT_TLS:
-    client->ops = &tls_ops;
-    break;
-  case SYNC_CLIENT_TRANSPORT_PIPE:
-    client->ops = &pipe_ops;
-    break;
-  case SYNC_CLIENT_TRANSPORT_WEBSOCKET:
-    client->ops = &websocket_ops;
-    break;
-  default:
-    /* Fallback to TCP */
-    client->ops = &tcp_ops;
-    break;
-  }
-
-  /* Initialize new fields */
+  /* Initialize fields */
   client->state = SYNC_CLIENT_STATE_DISCONNECTED;
   client->connect_timeout_ms = 0; /* 0 = no timeout */
   client->operation_timeout_ms = 0;
@@ -2426,8 +2528,22 @@ sync_client_t *sync_client_create_with_transport(sync_client_transport_t transpo
   return client;
 }
 
-sync_client_t *sync_client_create(void) {
-  return sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TCP);
+sync_client_t *sync_client_create_with_transport(sync_client_transport_t transport) {
+  sync_client_t *client = sync_client_create();
+  if (client) {
+    client->transport = transport;
+    /* Pre-set ops if created with transport */
+    switch (transport) {
+    case SYNC_CLIENT_TRANSPORT_TCP: client->ops = &tcp_ops; break;
+    case SYNC_CLIENT_TRANSPORT_UDP: client->ops = &udp_ops; break;
+    case SYNC_CLIENT_TRANSPORT_KCP: client->ops = &kcp_ops; break;
+    case SYNC_CLIENT_TRANSPORT_TLS: client->ops = &tls_ops; break;
+    case SYNC_CLIENT_TRANSPORT_PIPE: client->ops = &pipe_ops; break;
+    case SYNC_CLIENT_TRANSPORT_WEBSOCKET: client->ops = &websocket_ops; break;
+    default: break;
+    }
+  }
+  return client;
 }
 
 void sync_client_destroy(sync_client_t *client) {
@@ -2478,11 +2594,50 @@ void sync_client_destroy(sync_client_t *client) {
   free(client);
 }
 
-sync_client_status_t sync_client_connect(sync_client_t *client, const char *host, int port) {
-  if (!client || !host)
+sync_client_status_t sync_client_connect(sync_client_t *client, const char *url) {
+  if (!client || !url)
     return SYNC_CLIENT_STATUS_INVALID_PARAM;
 
-  sync_client_command_t *cmd = command_create_connect(host, port);
+  /* Parse URL to determine transport and extract connection details */
+  turbo_address_t addr;
+  int parse_result = parse_transport_url(url, &addr);
+  if (parse_result != 0 || !addr.valid) {
+    TLOG_ERROR("Failed to parse connection URL: {}", url);
+    return SYNC_CLIENT_STATUS_INVALID_PARAM;
+  }
+
+  /* Map URL transport to client transport and validate match */
+  sync_client_transport_t url_transport;
+  switch (addr.transport) {
+  case TURBO_TCP:
+    url_transport = SYNC_CLIENT_TRANSPORT_TCP;
+    break;
+  case TURBO_UDP:
+    url_transport = SYNC_CLIENT_TRANSPORT_UDP;
+    break;
+  case TURBO_KCP:
+    url_transport = SYNC_CLIENT_TRANSPORT_KCP;
+    break;
+  case TURBO_TLS:
+    url_transport = SYNC_CLIENT_TRANSPORT_TLS;
+    break;
+  case TURBO_PIPE:
+    url_transport = SYNC_CLIENT_TRANSPORT_PIPE;
+    break;
+  case TURBO_WEBSOCKET:
+    url_transport = SYNC_CLIENT_TRANSPORT_WEBSOCKET;
+    break;
+  default:
+    TLOG_ERROR("Unsupported transport type from URL: {}", (int)addr.transport);
+    return SYNC_CLIENT_STATUS_TRANSPORT_ERROR;
+  }
+
+  /* For pipes, use path instead of host; for others use host */
+  const char *connect_host = (url_transport == SYNC_CLIENT_TRANSPORT_PIPE) 
+                              ? addr.path 
+                              : addr.host;
+
+  sync_client_command_t *cmd = command_create_connect(url_transport, connect_host, addr.port);
   if (!cmd)
     return SYNC_CLIENT_STATUS_ALLOC_FAILED;
 
@@ -2648,7 +2803,7 @@ void sync_client_reset_stats(sync_client_t *client) {
   uv_mutex_unlock(&client->mutex);
 }
 
-sync_client_status_t sync_client_connect_timeout(sync_client_t *client, const char *host, int port,
+sync_client_status_t sync_client_connect_timeout(sync_client_t *client, const char *url,
                                                  int timeout_ms) {
   if (!client)
     return SYNC_CLIENT_STATUS_INVALID_PARAM;
@@ -2657,7 +2812,7 @@ sync_client_status_t sync_client_connect_timeout(sync_client_t *client, const ch
   client->connect_timeout_ms = timeout_ms;
 
   /* Call regular connect (timeout will be used internally) */
-  return sync_client_connect(client, host, port);
+  return sync_client_connect(client, url);
 }
 
 sync_client_status_t sync_client_receive_timeout(sync_client_t *client, char **response,

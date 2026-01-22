@@ -163,7 +163,6 @@ static int run_example(int example_num, const char *description) {
     
     /* Create async client with event callback */
     async_client_t *client = async_client_create(
-        ASYNC_CLIENT_TRANSPORT_TCP,
         on_client_event,
         &state
     );
@@ -176,7 +175,9 @@ static int run_example(int example_num, const char *description) {
     
     /* Connect to server */
     printf("Connecting to %s:%d...\n", SERVER_HOST, SERVER_PORT);
-    async_client_status_t status = async_client_connect(client, SERVER_HOST, SERVER_PORT);
+    char url[128];
+    snprintf(url, sizeof(url), "tcp://%s:%d", SERVER_HOST, SERVER_PORT);
+    async_client_status_t status = async_client_connect(client, url);
     if (status != ASYNC_CLIENT_STATUS_OK) {
         fprintf(stderr, "Connect failed: %s\n", async_client_status_to_string(status));
         async_client_destroy(client);

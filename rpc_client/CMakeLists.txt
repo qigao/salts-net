@@ -3,7 +3,7 @@
 
 # Library (respects BUILD_SHARED_LIBS)
 add_library(rpc_client src/rpc_client.c src/rpc_error.c src/rpc_stats.c
-                       src/rpc_retry.c)
+                       src/rpc_retry.c src/stb_sprintf.c)
 add_library(TurboNet::RPCClient ALIAS rpc_client)
 
 target_include_directories(
@@ -11,8 +11,7 @@ target_include_directories(
                     $<INSTALL_INTERFACE:include>)
 
 # Link with dependencies http_client_async and cJSON are required dependencies
-target_link_libraries(rpc_client PUBLIC http_client_async cjson
-                                        TurboNet::Core )
+target_link_libraries(rpc_client PUBLIC http_client_async cjson TurboNet::Core)
 
 # Set folder for IDE organization
 set_target_properties(
@@ -21,7 +20,7 @@ set_target_properties(
              OUTPUT_NAME "rpc_client"
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR})
- 
+
 # Examples
 add_subdirectory(examples)
 

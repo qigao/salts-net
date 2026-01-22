@@ -1117,12 +1117,12 @@ void iris_config_print(const iris_config_t *config) {
   TLOG_INFO("    arena_max_size: {}", config->arena_max_size);
 
   TLOG_INFO("  Logging:");
-  TLOG_INFO("    log_level: {}", config->log_level);
+  TLOG_INFO("    log_level: {}", (int)config->log_level);
   TLOG_INFO("    log_format: {}", config->log_format);
 
   TLOG_INFO("  TLS:");
   TLOG_INFO("    cipher_suites: {}", config->cipher_suites);
-  TLOG_INFO("    min_tls_version: {}", config->min_tls_version);
+  TLOG_INFO("    min_tls_version: {}", (int)config->min_tls_version);
 
   TLOG_INFO("  Server:");
   TLOG_INFO("    max_concurrent_connections: {}", config->max_concurrent_connections);

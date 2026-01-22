@@ -26,9 +26,7 @@ void tearDown(void) {}
 void test_eth_block_number(void) {
   printf("\n[TEST] Get Ethereum block number...\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
   config.timeout_ms = 15000; // 15 seconds for network calls
 
   rpc_client_t *client = rpc_client_create(&config);
@@ -58,9 +56,7 @@ void test_eth_block_number(void) {
 void test_eth_chain_id(void) {
   printf("\n[TEST] Get Ethereum chain ID...\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
   config.timeout_ms = 15000;
 
   rpc_client_t *client = rpc_client_create(&config);
@@ -92,9 +88,7 @@ void test_eth_chain_id(void) {
 void test_eth_gas_price(void) {
   printf("\n[TEST] Get current gas price...\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
   config.timeout_ms = 15000;
 
   rpc_client_t *client = rpc_client_create(&config);
@@ -122,9 +116,7 @@ void test_eth_gas_price(void) {
 void test_invalid_method_error(void) {
   printf("\n[TEST] Test invalid method error handling...\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
   config.timeout_ms = 15000;
 
   rpc_client_t *client = rpc_client_create(&config);
@@ -158,9 +150,7 @@ void test_invalid_method_error(void) {
 void test_stats_with_real_requests(void) {
   printf("\n[TEST] Statistics tracking with Ethereum RPC...\n");
 
-  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("ethereum.publicnode.com", 443);
-  config.endpoint = "/";
-  config.transport = RPC_TRANSPORT_TLS;
+  rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
   config.timeout_ms = 15000;
 
   rpc_client_t *client = rpc_client_create(&config);

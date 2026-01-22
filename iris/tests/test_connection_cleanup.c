@@ -77,7 +77,7 @@ void tearDown(void) {
  */
 void test_connection_context_set_get(void) {
     /* Create a test server and connection */
-    async_server_t *server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_server_event_cb, NULL);
+    async_server_t *server = async_server_create(test_server_event_cb, NULL);
     TEST_ASSERT_NOT_NULL(server);
     
     /* For this test, we'll simulate a connection by creating a mock connection

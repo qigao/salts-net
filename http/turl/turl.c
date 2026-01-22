@@ -152,7 +152,10 @@ static int handle_websocket(const char *url, const char *body, size_t body_len, 
   ws_config.use_tls = use_tls;
   sync_client_set_ws_config(client, &ws_config);
 
-  if (sync_client_connect(client, host, port) != SYNC_CLIENT_STATUS_OK) {
+  char connect_url[512];
+  snprintf(connect_url, sizeof(connect_url), "%s://%s:%d", use_tls ? "wss" : "ws", host, port);
+
+  if (sync_client_connect(client, connect_url) != SYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, CLR_RED "WebSocket connection failed: %s" CLR_RESET "\n",
             sync_client_last_message(client));
     sync_client_destroy(client);

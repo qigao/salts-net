@@ -47,11 +47,7 @@ static int test_counter = 0;
 
 /* Generate unique pipe name per test */
 static void get_pipe_name(char *buffer, size_t size) {
-#ifdef _WIN32
-  stbsp_snprintf(buffer, size, "\\\\.\\pipe\\netcore_test_%d_%d", (int)GetCurrentProcessId(), test_counter++);
-#else
-  stbsp_snprintf(buffer, size, "/tmp/netcore_test_%d_%d.sock", (int)getpid(), test_counter++);
-#endif
+  stbsp_snprintf(buffer, size, "netcore_test_%d_%d", (int)uv_os_getpid(), test_counter++);
 }
 
 void setUp(void) {
@@ -165,14 +161,14 @@ static void client_event_cb(async_client_t *client, const async_client_event_t *
 
 /* Test: Pipe client can be created */
 void test_pipe_client_create(void) {
-  async_client_t *client = async_client_create(ASYNC_CLIENT_TRANSPORT_PIPE, client_event_cb, &ctx);
+  async_client_t *client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(client);
   async_client_destroy(client);
 }
 
 /* Test: Pipe server can be created */
 void test_pipe_server_create(void) {
-  async_server_t *server = async_server_create(ASYNC_SERVER_TRANSPORT_PIPE, server_event_cb, &ctx);
+  async_server_t *server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(server);
   async_server_destroy(server);
 }
@@ -183,11 +179,13 @@ void test_pipe_server_listen(void) {
   get_pipe_name(pipe_name, sizeof(pipe_name));
   printf("  Using pipe: %s\n", pipe_name);
 
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_PIPE, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
-  /* For pipe, host is the pipe name, port is ignored */
-  async_server_status_t status = async_server_listen(ctx.server, pipe_name, 0, 0);
+  /* Build pipe URL */
+  char pipe_url[512];
+  snprintf(pipe_url, sizeof(pipe_url), "pipe://%s", pipe_name);
+  async_server_status_t status = async_server_listen(ctx.server, pipe_url, 0);
   printf("  listen() returned: %d\n", status);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
 
@@ -205,20 +203,23 @@ void test_pipe_client_connect(void) {
   printf("  Using pipe: %s\n", pipe_name);
 
   /* Start server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_PIPE, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
-  async_server_status_t status = async_server_listen(ctx.server, pipe_name, 0, 0);
+  char pipe_url[512];
+  snprintf(pipe_url, sizeof(pipe_url), "pipe://%s", pipe_name);
+  async_server_status_t status = async_server_listen(ctx.server, pipe_url, 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
   uv_sem_wait(&ctx.server_ready);
   TEST_ASSERT_EQUAL(0, ctx.server_error);
 
   /* Create client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_PIPE, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
   /* Connect - for pipe, host is the pipe name, port is ignored */
-  async_client_status_t client_status = async_client_connect(ctx.client, pipe_name, 0);
+  snprintf(pipe_url, sizeof(pipe_url), "pipe://%s", pipe_name);
+  async_client_status_t client_status = async_client_connect(ctx.client, pipe_url);
   printf("  connect() returned: %d\n", client_status);
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
@@ -237,14 +238,18 @@ void test_pipe_send_receive(void) {
   printf("  Using pipe: %s\n", pipe_name);
 
   /* Start server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_PIPE, server_event_cb, &ctx);
-  async_server_listen(ctx.server, pipe_name, 0, 0);
+  ctx.server = async_server_create(server_event_cb, &ctx);
+  char pipe_url[512];
+  snprintf(pipe_url, sizeof(pipe_url), "pipe://%s", pipe_name);
+  async_server_listen(ctx.server, pipe_url, 0);
   uv_sem_wait(&ctx.server_ready);
   TEST_ASSERT_EQUAL(0, ctx.server_error);
 
   /* Connect client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_PIPE, client_event_cb, &ctx);
-  async_client_connect(ctx.client, pipe_name, 0);
+  ctx.client = async_client_create(client_event_cb, &ctx);
+  char client_pipe_url[512];
+  snprintf(client_pipe_url, sizeof(client_pipe_url), "pipe://%s", pipe_name);
+  async_client_connect(ctx.client, client_pipe_url);
   uv_sem_wait(&ctx.client_connected);
   TEST_ASSERT_EQUAL(1, ctx.client_connected_flag);
 
@@ -272,16 +277,20 @@ void test_pipe_bidirectional_e2e(void) {
   ctx.enable_server_echo = 1;
 
   /* Start server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_PIPE, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
-  async_server_listen(ctx.server, pipe_name, 0, 0);
+  char server_pipe_url[512];
+  snprintf(server_pipe_url, sizeof(server_pipe_url), "pipe://%s", pipe_name);
+  async_server_listen(ctx.server, server_pipe_url, 0);
   uv_sem_wait(&ctx.server_ready);
   TEST_ASSERT_EQUAL(0, ctx.server_error);
 
   /* Connect client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_PIPE, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
-  async_client_connect(ctx.client, pipe_name, 0);
+  char final_pipe_url[512];
+  snprintf(final_pipe_url, sizeof(final_pipe_url), "pipe://%s", pipe_name);
+  async_client_connect(ctx.client, final_pipe_url);
   uv_sem_wait(&ctx.client_connected);
   TEST_ASSERT_EQUAL(1, ctx.client_connected_flag);
 

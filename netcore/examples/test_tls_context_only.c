@@ -7,7 +7,7 @@
 #include <string.h>
 
 #include "turbo_tls.h"
-#include <turbo/asn1/x509_generate.h>
+#include <asn1/x509_generate.h>
 
 int main(void) {
     printf("TLS Context Test\n");

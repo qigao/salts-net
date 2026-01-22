@@ -12,7 +12,6 @@
 #include "cookie_parser.h"
 #include "tlog.h"
 
-#define STB_SPRINTF_IMPLEMENTATION
 #include <stb_sprintf.h>
 
 #define HTTP_REQUEST_POOL_SIZE (1024 * 1024) // 1MB pool for request lifecycle
@@ -525,41 +524,25 @@ static int establish_connection(http_client_t *client, const char *host, int por
     client->current_host = NULL;
   }
 
-  /* If we don't have a client or need to switch transport, recreate */
-  int need_new_client = 0;
+  /* Create new client if needed - transport will be determined from URL */
   if (!client->client) {
-    need_new_client = 1;
-  } else {
-    /* Check if we need to switch transport type */
-    sync_client_transport_t current_transport = sync_client_get_transport(client->client);
-    sync_client_transport_t needed_transport =
-        is_tls ? SYNC_CLIENT_TRANSPORT_TLS : SYNC_CLIENT_TRANSPORT_TCP;
-    if (current_transport != needed_transport) {
-      sync_client_destroy(client->client);
-      client->client = NULL;
-      need_new_client = 1;
-    }
-  }
-
-  /* Create new client if needed */
-  if (need_new_client) {
-    if (is_tls) {
-      client->client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TLS);
-    } else {
-      client->client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TCP);
-    }
-
+    client->client = sync_client_create();
     if (!client->client) {
       return -1;
     }
   }
 
+  /* Build connection URL - scheme determines transport automatically */
+  char connect_url[512];
+  const char *scheme = is_tls ? "tls" : "tcp";
+  stbsp_snprintf(connect_url, sizeof(connect_url), "%s://%s:%d", scheme, host, port);
+
   /* Connect with timeout */
   sync_client_status_t status;
   if (client->connect_timeout_ms > 0) {
-    status = sync_client_connect_timeout(client->client, host, port, client->connect_timeout_ms);
+    status = sync_client_connect_timeout(client->client, connect_url, client->connect_timeout_ms);
   } else {
-    status = sync_client_connect(client->client, host, port);
+    status = sync_client_connect(client->client, connect_url);
   }
 
   if (status != SYNC_CLIENT_STATUS_OK) {

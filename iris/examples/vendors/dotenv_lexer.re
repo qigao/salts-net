@@ -1,3 +1,4 @@
+// re2c --lang c
 #include "dotenv_lexer.h"
 #include <string.h>
 

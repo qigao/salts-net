@@ -2,18 +2,18 @@
 #include "tlog.h"
 #include "rpc_error.h"
 #include "cjson/cJSON.h"
-#include "http_client_async.h"
+#include <http_client_async.h>
 #include <platform.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <stb_sprintf.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
-#include <stb_sprintf.h>
+
 #endif
 
 #define RPC_CLIENT_VERSION "1.0.0"
@@ -25,7 +25,6 @@ struct rpc_client_s {
   rpc_client_state_t state;
   http_async_client_t *http_client;
   int request_id_counter;
-  char url_buffer[512];
 };
 
 /* Async call context */
@@ -41,10 +40,7 @@ typedef struct {
 
 /* Build full URL from config */
 static const char *build_url(rpc_client_t *client) {
-  const char *protocol = (client->config.transport == RPC_TRANSPORT_TLS) ? "https" : "http";
-  stbsp_snprintf(client->url_buffer, sizeof(client->url_buffer), "%s://%s:%d%s", protocol,
-           client->config.host, client->config.port, client->config.endpoint);
-  return client->url_buffer;
+  return client->config.url;
 }
 
 /* Build JSON-RPC request using cJSON */
@@ -243,7 +239,7 @@ static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
  * ============================================================================ */
 
 rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
-  if (!config || !config->host)
+  if (!config || !config->url)
     return NULL;
 
   rpc_client_t *client = (rpc_client_t *)calloc(1, sizeof(rpc_client_t));
@@ -332,8 +328,8 @@ static void sync_call_callback(http_async_request_t *request, http_async_respons
     return;
   }
 
-  TLOG_DEBUG("HTTP status: {:d}, error_code: {:d}, body_len: {}",
-         response->status_code, response->error_code, response->body_len);
+  TLOG_DEBUG("HTTP status: {}, error_code: {}, body_len: {}",
+         (int)response->status_code, (int)response->error_code, (unsigned long long)response->body_len);
 
   memset(ctx->result, 0, sizeof(rpc_call_result_t));
 
@@ -347,7 +343,7 @@ static void sync_call_callback(http_async_request_t *request, http_async_respons
     }
   } else if (response->body && response->body_len > 0) {
     /* Parse JSON-RPC response */
-    TLOG_DEBUG("Parsing JSON-RPC response ({} bytes)", response->body_len);
+    TLOG_DEBUG("Parsing JSON-RPC response ({} bytes)", (unsigned long long)response->body_len);
     parse_jsonrpc_response(response->body, ctx->result);
   } else {
     /* Empty response */

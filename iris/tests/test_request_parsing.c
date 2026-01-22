@@ -11,9 +11,16 @@
 #include "arena_buffer.h"
 #include "security.h"
 #include <stb_sprintf.h>
-
+#include <llhttp.h>
 static turbo_arena_t arena;
 static http_context_t ctx;
+
+/* Internal definition from request.c to allow white-box testing */
+struct http_parser_impl
+{
+    llhttp_t parser;            // llhttp parser instance
+    llhttp_settings_t settings; // llhttp parser settings
+};
 
 void setUp(void) {
     turbo_arena_init(&arena, 8192);
@@ -57,7 +64,7 @@ void test_parse_simple_get(void) {
                           "Host: localhost\r\n"
                           "\r\n";
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_EQUAL_STRING("GET", ctx.method);
     TEST_ASSERT_EQUAL_STRING("/users", ctx.url);
@@ -68,7 +75,7 @@ void test_parse_get_with_query(void) {
                           "Host: localhost\r\n"
                           "\r\n";
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_EQUAL_STRING("/users?page=1&limit=10", ctx.url);
 }
@@ -87,7 +94,7 @@ void test_parse_post_with_body(void) {
              "%s",
              body_len, body);
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_EQUAL_STRING("POST", ctx.method);
     TEST_ASSERT_EQUAL(body_len, ctx.body_length);
@@ -101,7 +108,7 @@ void test_parse_headers_with_validation(void) {
                           "Authorization: Bearer token123\r\n"
                           "\r\n";
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_EQUAL(3, ctx.headers.count);
 
@@ -122,7 +129,7 @@ void test_parse_invalid_header_name(void) {
                           "Invalid Header Name: value\r\n"
                           "\r\n";
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_NOT_EQUAL(HPE_OK, err);
 }
 
@@ -138,7 +145,7 @@ void test_parse_invalid_header_value_crlf_injection(void) {
                           "X-Test: normal-value\r\n"
                           "\r\n";
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     
     /* Verify that our security validation would catch CRLF injection in values */
@@ -153,7 +160,7 @@ void test_parse_valid_header_edge_cases(void) {
                           "Authorization: \r\n"
                           "\r\n";
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_EQUAL(3, ctx.headers.count);
 }
@@ -163,7 +170,7 @@ void test_parse_keep_alive_http11(void) {
                           "Host: localhost\r\n"
                           "\r\n";
 
-    llhttp_execute(&ctx.parser, request, strlen(request));
+    llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     /* HTTP/1.1 defaults to keep-alive */
     TEST_ASSERT_EQUAL(1, ctx.keep_alive);
 }
@@ -174,7 +181,7 @@ void test_parse_connection_close(void) {
                           "Connection: close\r\n"
                           "\r\n";
 
-    llhttp_execute(&ctx.parser, request, strlen(request));
+    llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     /* Connection: close should override HTTP/1.1 default */
     TEST_ASSERT_EQUAL(0, ctx.keep_alive);
 }
@@ -185,7 +192,7 @@ void test_parse_connection_keep_alive(void) {
                           "Connection: keep-alive\r\n"
                           "\r\n";
 
-    llhttp_execute(&ctx.parser, request, strlen(request));
+    llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(1, ctx.keep_alive);
 }
 
@@ -194,7 +201,7 @@ void test_parse_http10_default_close(void) {
                           "Host: localhost\r\n"
                           "\r\n";
 
-    llhttp_execute(&ctx.parser, request, strlen(request));
+    llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     /* HTTP/1.0 defaults to close */
     TEST_ASSERT_EQUAL(0, ctx.keep_alive);
 }
@@ -210,7 +217,7 @@ void test_parse_http10_keep_alive(void) {
                           "Connection: keep-alive\r\n"
                           "\r\n";
 
-    llhttp_execute(&ctx.parser, request, strlen(request));
+    llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     /* Connection: keep-alive should override HTTP/1.0 default */
     TEST_ASSERT_EQUAL(1, ctx.keep_alive);
 }
@@ -227,7 +234,7 @@ void test_parse_all_methods(void) {
         char request[256];
         stbsp_snprintf(request, sizeof(request), "%s /test HTTP/1.1\r\nHost: localhost\r\n\r\n", methods[i]);
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
         TEST_ASSERT_EQUAL_MESSAGE(HPE_OK, err, methods[i]);
         TEST_ASSERT_EQUAL_STRING(methods[i], ctx.method);
     }
@@ -352,7 +359,7 @@ void test_parse_long_url(void) {
     char request[2048];
     stbsp_snprintf(request, sizeof(request), "GET /%s HTTP/1.1\r\nHost: localhost\r\n\r\n", long_url);
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
 }
 
@@ -366,7 +373,7 @@ void test_parse_many_headers(void) {
     }
     strcat(request, "\r\n");
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_GREATER_OR_EQUAL(50, ctx.headers.count);
 }
@@ -385,7 +392,7 @@ void test_parse_large_body(void) {
              "%s",
              strlen(body), body);
 
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, strlen(request));
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
     TEST_ASSERT_EQUAL(HPE_OK, err);
     TEST_ASSERT_EQUAL(strlen(body), ctx.body_length);
 }
@@ -418,7 +425,7 @@ void test_parse_body_size_limit_exceeded(void) {
     memcpy(request + header_len, large_body, body_size);
 
     // Parse should fail with HPE_USER (payload too large)
-    enum llhttp_errno err = llhttp_execute(&ctx.parser, request, header_len + body_size);
+    enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, header_len + body_size);
     TEST_ASSERT_EQUAL(HPE_USER, err);
 
     free(large_body);

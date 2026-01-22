@@ -83,13 +83,14 @@ CXX_C_API const char *async_server_transport_to_string(async_server_transport_t 
 /**
  * @brief Creates a new asynchronous server instance.
  *
- * @param transport The transport type to use (TCP, UDP, KCP, TLS, PIPE).
+ * The transport type will be determined from the URL scheme when listening
+ * (e.g., tcp://, tls://, pipe://, ws://, udp://).
+ *
  * @param callback The callback function to handle server events.
  * @param user_data User-defined data to be passed to the callback.
  * @return A pointer to the newly created async_server_t instance, or NULL on failure.
  */
-CXX_C_API async_server_t *async_server_create(async_server_transport_t transport,
-                                    async_server_event_cb callback, void *user_data);
+CXX_C_API async_server_t *async_server_create(async_server_event_cb callback, void *user_data);
 
 /**
  * @brief Destroys an asynchronous server instance and frees associated resources.
@@ -99,17 +100,26 @@ CXX_C_API async_server_t *async_server_create(async_server_transport_t transport
 CXX_C_API void async_server_destroy(async_server_t *server);
 
 /**
- * @brief Binds and starts listening on the specified host and port.
+ * @brief Binds and starts listening using a URL.
+ *
+ * The URL scheme determines the transport type and binding address:
+ * - tcp://host:port or tcp://:port - TCP server (use :port to bind all interfaces)
+ * - tls://host:port - TLS/SSL server
+ * - udp://host:port - UDP server
+ * - ws://host:port - WebSocket server
+ * - pipe://name - Named pipe server (cross-platform IPC)
  *
  * @param server A pointer to the async_server_t instance.
- * @param host The hostname or IP address to bind to (NULL or "0.0.0.0" for all interfaces).
- * @param port The port number to listen on.
+ * @param url The binding URL (e.g., "tcp://:8080", "pipe://myservice").
  * @param backlog The maximum length of the queue of pending connections (TCP only, 0 for default).
  * @return ASYNC_SERVER_STATUS_OK if the server started listening successfully,
  *         or an error code otherwise.
+ *
+ * @example
+ * async_server_listen(server, "tcp://0.0.0.0:8080", 128);
+ * async_server_listen(server, "pipe://myservice", 0);
  */
-CXX_C_API async_server_status_t async_server_listen(async_server_t *server, const char *host, int port,
-                                          int backlog);
+CXX_C_API async_server_status_t async_server_listen(async_server_t *server, const char *url, int backlog);
 
 /**
  * @brief Sends data to a specific connection.
@@ -496,14 +506,14 @@ typedef struct {
  * @note Only valid for WebSocket servers (ASYNC_SERVER_TRANSPORT_WEBSOCKET).
  *
  * @example
- * async_server_t *server = async_server_create(ASYNC_SERVER_TRANSPORT_WEBSOCKET, cb, NULL);
+ * async_server_t *server = async_server_create(cb, NULL);
  * async_server_ws_config_t ws_config = {
  *     .subprotocols = (const char *[]){"mqtt"},
  *     .subprotocol_count = 1,
  *     .use_tls = 0
  * };
  * async_server_set_ws_config(server, &ws_config);
- * async_server_listen(server, "0.0.0.0", 8080, 128);
+ * async_server_listen(server, "ws://0.0.0.0:8080", 128);
  */
 CXX_C_API async_server_status_t async_server_set_ws_config(async_server_t *server,
                                                               const async_server_ws_config_t *config);

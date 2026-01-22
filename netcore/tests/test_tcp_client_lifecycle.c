@@ -15,8 +15,8 @@
 
 #define TEST_PORT 18888
 #define TEST_HOST "127.0.0.1"
-#define TEST_MESSAGE "test_data"
-#define TEST_RESPONSE "response_data"
+#define TCP_TEST_MESSAGE "test_data"
+#define TCP_TEST_RESPONSE "response_data"
 
 typedef struct {
   async_server_t *server;
@@ -79,7 +79,7 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
         memcpy(context->received_data, event->data, event->length);
         context->received_len = event->length;
       }
-      async_server_send(server, event->connection, TEST_RESPONSE, strlen(TEST_RESPONSE));
+      async_server_send(server, event->connection, TCP_TEST_RESPONSE, strlen(TCP_TEST_RESPONSE));
       uv_sem_post(&context->server_received);
     }
     break;
@@ -129,7 +129,7 @@ static void client_event_cb(async_client_t *client, const async_client_event_t *
 
 /* Test: Create and destroy client without connecting */
 void test_client_create_destroy(void) {
-  async_client_t *client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+  async_client_t *client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(client);
   async_client_destroy(client);
 }
@@ -137,20 +137,22 @@ void test_client_create_destroy(void) {
 /* Test: Complete lifecycle - connect, send, receive, close */
 void test_client_full_lifecycle(void) {
   /* Start server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
-  async_server_status_t status = async_server_listen(ctx.server, TEST_HOST, TEST_PORT, 0);
+  char url[128];
+  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+  async_server_status_t status = async_server_listen(ctx.server, url, 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
 
   /* Wait for server to be ready */
   uv_sem_wait(&ctx.server_ready);
 
   /* Create and connect client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
-  async_client_status_t client_status = async_client_connect(ctx.client, TEST_HOST, TEST_PORT);
+  async_client_status_t client_status = async_client_connect(ctx.client, url);
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Wait for connection */
@@ -162,19 +164,19 @@ void test_client_full_lifecycle(void) {
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATE_CONNECTED, async_client_get_state(ctx.client));
 
   /* Send data from client to server */
-  client_status = async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  client_status = async_client_send(ctx.client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Wait for server to receive data */
   uv_sem_wait(&ctx.server_received);
-  TEST_ASSERT_EQUAL_MEMORY(TEST_MESSAGE, ctx.received_data, strlen(TEST_MESSAGE));
+  TEST_ASSERT_EQUAL_MEMORY(TCP_TEST_MESSAGE, ctx.received_data, strlen(TCP_TEST_MESSAGE));
 
   /* Clear received buffer for client response */
   memset(ctx.received_data, 0, sizeof(ctx.received_data));
 
   /* Wait for client to receive response */
   uv_sem_wait(&ctx.client_received);
-  TEST_ASSERT_EQUAL_MEMORY(TEST_RESPONSE, ctx.received_data, strlen(TEST_RESPONSE));
+  TEST_ASSERT_EQUAL_MEMORY(TCP_TEST_RESPONSE, ctx.received_data, strlen(TCP_TEST_RESPONSE));
 
   /* Verify statistics */
   async_client_stats_t stats;
@@ -190,7 +192,7 @@ void test_client_full_lifecycle(void) {
 
 /* Test: Client state transitions */
 void test_client_state_transitions(void) {
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
   /* Initial state should be disconnected */
@@ -198,13 +200,15 @@ void test_client_state_transitions(void) {
   TEST_ASSERT_EQUAL(0, async_client_is_connected(ctx.client));
 
   /* Start server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
-  async_server_listen(ctx.server, TEST_HOST, TEST_PORT, 0);
+  char url[128];
+  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+  async_server_listen(ctx.server, url, 0);
   uv_sem_wait(&ctx.server_ready);
 
   /* Connect - state should change to connected */
-  async_client_connect(ctx.client, TEST_HOST, TEST_PORT);
+  async_client_connect(ctx.client, url);
   uv_sem_wait(&ctx.client_connected);
 
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATE_CONNECTED, async_client_get_state(ctx.client));
@@ -213,25 +217,27 @@ void test_client_state_transitions(void) {
 
 /* Test: Send before connect should fail */
 void test_send_before_connect(void) {
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
-  async_client_status_t status = async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  async_client_status_t status = async_client_send(ctx.client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_NOT_READY, status);
 }
 
 /* Test: Multiple sends work correctly */
 void test_multiple_sends(void) {
   /* Start server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
-  async_server_listen(ctx.server, TEST_HOST, TEST_PORT, 0);
+  char url[128];
+  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+  async_server_listen(ctx.server, url, 0);
   uv_sem_wait(&ctx.server_ready);
 
   /* Connect client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
-  async_client_connect(ctx.client, TEST_HOST, TEST_PORT);
+  async_client_connect(ctx.client, url);
   uv_sem_wait(&ctx.client_connected);
 
   /* Send multiple messages */
@@ -256,15 +262,17 @@ void test_multiple_sends(void) {
 
 /* Test: Reset statistics */
 void test_reset_stats(void) {
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, &ctx);
-  async_server_listen(ctx.server, TEST_HOST, TEST_PORT, 0);
+  ctx.server = async_server_create(server_event_cb, &ctx);
+  char url[128];
+  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+  async_server_listen(ctx.server, url, 0);
   uv_sem_wait(&ctx.server_ready);
 
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
-  async_client_connect(ctx.client, TEST_HOST, TEST_PORT);
+  ctx.client = async_client_create(client_event_cb, &ctx);
+  async_client_connect(ctx.client, url);
   uv_sem_wait(&ctx.client_connected);
 
-  async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  async_client_send(ctx.client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
   uv_sem_wait(&ctx.server_received);
 
   /* Get stats before reset */

@@ -54,7 +54,9 @@ int main(int argc, char *argv[]) {
     */
 
     printf("Connecting to wss://%s:%d%s...\n", host, port, path);
-    status = sync_client_connect(client, host, port);
+    char url[256];
+    snprintf(url, sizeof(url), "wss://%s:%d", host, port);
+    status = sync_client_connect(client, url);
     if (status != SYNC_CLIENT_STATUS_OK) {
         fprintf(stderr, "Connect failed (%d): %s\n", status, sync_client_last_message(client));
         sync_client_destroy(client);

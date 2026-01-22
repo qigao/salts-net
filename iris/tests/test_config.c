@@ -232,6 +232,25 @@ void test_config_validation(void) {
     iris_config_destroy(config);
 }
 
+void test_config_print(void) {
+    iris_config_t *config = iris_config_create_default();
+    TEST_ASSERT_NOT_NULL(config);
+    
+    // Just call print to ensure it doesn't crash
+    // Visual verification would need stdout capture, but crash detection is sufficient for CI
+    iris_config_print(config);
+    
+    // Test with modified values
+    config->log_level = IRIS_LOG_LEVEL_DEBUG;
+    config->min_tls_version = IRIS_TLS_VERSION_1_3;
+    iris_config_print(config);
+    
+    // Test with NULL
+    iris_config_print(NULL);
+    
+    iris_config_destroy(config);
+}
+
 int main(void) {
     UNITY_BEGIN();
     
@@ -242,6 +261,7 @@ int main(void) {
     RUN_TEST(test_config_to_json);
     RUN_TEST(test_config_save_and_load_roundtrip);
     RUN_TEST(test_config_validation);
+    RUN_TEST(test_config_print);
     
     return UNITY_END();
 }

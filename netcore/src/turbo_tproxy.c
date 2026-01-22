@@ -124,7 +124,7 @@ tproxy_server_t *tproxy_server_create(const tproxy_config_t *config,
     server->config.max_connections = TPROXY_DEFAULT_MAX_CONNECTIONS;
   }
 
-  server->server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, on_server_event, server);
+  server->server = async_server_create(on_server_event, server);
   if (!server->server) {
     free(server);
     return NULL;
@@ -161,10 +161,15 @@ turbo_client_status_t tproxy_server_start(tproxy_server_t *server) {
     return TURBO_CLIENT_STATUS_INVALID_PARAM;
   }
 
+  /* Build URL from config */
+  char url[512];
+  snprintf(url, sizeof(url), "tcp://%s:%d", 
+           server->config.listen_host ? server->config.listen_host : "0.0.0.0",
+           server->config.listen_port);
+  
   async_server_status_t status = async_server_listen(
       server->server,
-      server->config.listen_host,
-      server->config.listen_port,
+      url,
       server->config.max_connections
   );
 
@@ -551,7 +556,7 @@ static int connect_upstream(tproxy_connection_t *conn) {
   }
 
   /* Create upstream client */
-  upstream->client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, on_upstream_event, conn);
+  upstream->client = async_client_create(on_upstream_event, conn);
   if (!upstream->client) {
     free(upstream);
     return -1;
@@ -563,7 +568,10 @@ static int connect_upstream(tproxy_connection_t *conn) {
   const char *host = conn->server->config.upstream_host ? conn->server->config.upstream_host : conn->target_host;
   int port = conn->server->config.upstream_host ? conn->server->config.upstream_port : conn->target_port;
 
-  async_client_connect(upstream->client, host, port);
+  /* Build URL for connection */
+  char url[512];
+  snprintf(url, sizeof(url), "tcp://%s:%d", host, port);
+  async_client_connect(upstream->client, url);
 
   return 0;
 }

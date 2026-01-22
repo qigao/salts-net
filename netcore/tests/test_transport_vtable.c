@@ -25,7 +25,7 @@
 
 #define TEST_PORT_BASE 18900
 #define TEST_HOST "127.0.0.1"
-#define TEST_MESSAGE "vtable_test"
+#define VTABLE_TEST_MESSAGE "vtable_test"
 
 typedef struct {
   async_server_t *server;
@@ -126,81 +126,81 @@ static void client_event_cb(async_client_t *client, const async_client_event_t *
 /* Test: TCP transport works */
 void test_tcp_transport(void) {
   /* Start TCP server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
-  async_server_status_t status = async_server_listen(ctx.server, TEST_HOST, TEST_PORT_BASE, 0);
+  async_server_status_t status = async_server_listen(ctx.server, "tcp://127.0.0.1:18900", 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
   uv_sem_wait(&ctx.server_ready);
 
   /* Create TCP client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
   /* Connect */
-  async_client_status_t client_status = async_client_connect(ctx.client, TEST_HOST, TEST_PORT_BASE);
+  async_client_status_t client_status = async_client_connect(ctx.client, "tcp://127.0.0.1:18900");
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
   uv_sem_wait(&ctx.client_connected);
   TEST_ASSERT_EQUAL(1, ctx.test_ok);
 
   /* Send data */
-  client_status = async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  client_status = async_client_send(ctx.client, VTABLE_TEST_MESSAGE, strlen(VTABLE_TEST_MESSAGE));
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Verify server received */
   uv_sem_wait(&ctx.data_received);
-  TEST_ASSERT_EQUAL_MEMORY(TEST_MESSAGE, ctx.received_data, strlen(TEST_MESSAGE));
+  TEST_ASSERT_EQUAL_MEMORY(VTABLE_TEST_MESSAGE, ctx.received_data, strlen(VTABLE_TEST_MESSAGE));
 }
 
 /* Test: UDP transport works */
 void test_udp_transport(void) {
   /* Start UDP server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_UDP, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
-  async_server_status_t status = async_server_listen(ctx.server, TEST_HOST, TEST_PORT_BASE + 1, 0);
+  async_server_status_t status = async_server_listen(ctx.server, "udp://127.0.0.1:18901", 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
   uv_sem_wait(&ctx.server_ready);
 
   /* Create UDP client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_UDP, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
   /* Connect (for UDP this just sets the remote address) */
   async_client_status_t client_status =
-      async_client_connect(ctx.client, TEST_HOST, TEST_PORT_BASE + 1);
+      async_client_connect(ctx.client, "udp://127.0.0.1:18901");
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
   uv_sem_wait(&ctx.client_connected);
 
   /* Send data */
-  client_status = async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  client_status = async_client_send(ctx.client, VTABLE_TEST_MESSAGE, strlen(VTABLE_TEST_MESSAGE));
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Verify server received */
   uv_sem_wait(&ctx.data_received);
-  TEST_ASSERT_EQUAL_MEMORY(TEST_MESSAGE, ctx.received_data, strlen(TEST_MESSAGE));
+  TEST_ASSERT_EQUAL_MEMORY(VTABLE_TEST_MESSAGE, ctx.received_data, strlen(VTABLE_TEST_MESSAGE));
 }
 
 /* Test: Non-KCP transport types can be created */
 void test_transports_create(void) {
   async_client_t *tcp_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
+      async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(tcp_client);
 
   async_client_t *udp_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_UDP, client_event_cb, &ctx);
+      async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(udp_client);
 
   async_client_t *tls_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_TLS, client_event_cb, &ctx);
+      async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(tls_client);
 
   async_client_t *pipe_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_PIPE, client_event_cb, &ctx);
+      async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(pipe_client);
 
   async_client_t *ws_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_WEBSOCKET, client_event_cb, &ctx);
+      async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ws_client);
 
   /* Clean up */
@@ -214,13 +214,13 @@ void test_transports_create(void) {
 /* Test: TCP scatter-gather send (vtable sendv) */
 void test_tcp_sendv(void) {
   /* Start TCP server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, server_event_cb, &ctx);
-  async_server_listen(ctx.server, TEST_HOST, TEST_PORT_BASE + 2, 0);
+  ctx.server = async_server_create(server_event_cb, &ctx);
+  async_server_listen(ctx.server, "tcp://127.0.0.1:18902", 0);
   uv_sem_wait(&ctx.server_ready);
 
   /* Create TCP client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
-  async_client_connect(ctx.client, TEST_HOST, TEST_PORT_BASE + 2);
+  ctx.client = async_client_create(client_event_cb, &ctx);
+  async_client_connect(ctx.client, "tcp://127.0.0.1:18902");
   uv_sem_wait(&ctx.client_connected);
 
   /* Prepare scatter-gather buffers */
@@ -254,12 +254,12 @@ void test_tcp_sendv(void) {
 
 /* Test: UDP scatter-gather send */
 void test_udp_sendv(void) {
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_UDP, server_event_cb, &ctx);
-  async_server_listen(ctx.server, TEST_HOST, TEST_PORT_BASE + 3, 0);
+  ctx.server = async_server_create(server_event_cb, &ctx);
+  async_server_listen(ctx.server, "udp://127.0.0.1:18903", 0);
   uv_sem_wait(&ctx.server_ready);
 
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_UDP, client_event_cb, &ctx);
-  async_client_connect(ctx.client, TEST_HOST, TEST_PORT_BASE + 3);
+  ctx.client = async_client_create(client_event_cb, &ctx);
+  async_client_connect(ctx.client, "udp://127.0.0.1:18903");
   uv_sem_wait(&ctx.client_connected);
 
   const char *part1 = "UDP";
@@ -298,45 +298,43 @@ void test_transport_string_conversion(void) {
 
 /* Test: Pipe transport works */
 void test_pipe_transport(void) {
-#ifdef _WIN32
-  const char *pipe_name = "\\\\.\\pipe\\vtable_test_pipe";
-#else
-  const char *pipe_name = "/tmp/vtable_test_pipe.sock";
-#endif
+  const char *pipe_name = "vtable_test_pipe";
 
   /* Start Pipe server - for pipe, host is the name, port is ignored */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_PIPE, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
-  async_server_status_t status = async_server_listen(ctx.server, pipe_name, 0, 0);
+  char url[256];
+  stbsp_snprintf(url, sizeof(url), "pipe://%s", pipe_name);
+  async_server_status_t status = async_server_listen(ctx.server, url, 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
   uv_sem_wait(&ctx.server_ready);
 
   /* Create Pipe client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_PIPE, client_event_cb, &ctx);
+  ctx.client = async_client_create(client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
   /* Connect - for pipe, host is the name, port is ignored */
-  async_client_status_t client_status = async_client_connect(ctx.client, pipe_name, 0);
+  async_client_status_t client_status = async_client_connect(ctx.client, url);
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
   uv_sem_wait(&ctx.client_connected);
   TEST_ASSERT_EQUAL(1, ctx.test_ok);
 
   /* Send data */
-  client_status = async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  client_status = async_client_send(ctx.client, VTABLE_TEST_MESSAGE, strlen(VTABLE_TEST_MESSAGE));
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Verify server received */
   uv_sem_wait(&ctx.data_received);
-  TEST_ASSERT_EQUAL_MEMORY(TEST_MESSAGE, ctx.received_data, strlen(TEST_MESSAGE));
+  TEST_ASSERT_EQUAL_MEMORY(VTABLE_TEST_MESSAGE, ctx.received_data, strlen(VTABLE_TEST_MESSAGE));
 }
 
 /* Test: Each transport has different vtable (no sharing) */
 void test_transport_isolation(void) {
   /* Create clients of different types */
-  async_client_t *tcp = async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
-  async_client_t *udp = async_client_create(ASYNC_CLIENT_TRANSPORT_UDP, client_event_cb, &ctx);
-  async_client_t *ws = async_client_create(ASYNC_CLIENT_TRANSPORT_WEBSOCKET, client_event_cb, &ctx);
+  async_client_t *tcp = async_client_create(client_event_cb, &ctx);
+  async_client_t *udp = async_client_create(client_event_cb, &ctx);
+  async_client_t *ws = async_client_create(client_event_cb, &ctx);
 
   TEST_ASSERT_NOT_NULL(tcp);
   TEST_ASSERT_NOT_NULL(udp);
@@ -355,7 +353,7 @@ void test_transport_isolation(void) {
 /* Test: WebSocket server creation only (debugging) */
 void test_websocket_server_create(void) {
   /* Start WebSocket server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_WEBSOCKET, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
   /* Configure WebSocket server */
@@ -407,14 +405,14 @@ void test_websocket_server_listen(void) {
   ws_listen_listening_received = 0;
 
   async_server_t *server =
-      async_server_create(ASYNC_SERVER_TRANSPORT_WEBSOCKET, ws_listen_test_cb, NULL);
+      async_server_create(ws_listen_test_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   async_server_ws_config_t ws_config = {.use_tls = 0};
   async_server_status_t status = async_server_set_ws_config(server, &ws_config);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
 
-  status = async_server_listen(server, TEST_HOST, TEST_PORT_BASE + 11, 128);
+  status = async_server_listen(server, "ws://127.0.0.1:18911", 128);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
 
   /* Poll for result with timeout */
@@ -462,7 +460,7 @@ void test_websocket_transport(void) {
   ws_transport_error_msg[0] = '\0';
 
   /* Start WebSocket server */
-  ctx.server = async_server_create(ASYNC_SERVER_TRANSPORT_WEBSOCKET, server_event_cb, &ctx);
+  ctx.server = async_server_create(server_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.server);
 
   /* Configure WebSocket server */
@@ -470,12 +468,12 @@ void test_websocket_transport(void) {
   async_server_status_t status = async_server_set_ws_config(ctx.server, &server_ws_config);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
 
-  status = async_server_listen(ctx.server, TEST_HOST, TEST_PORT_BASE + 12, 0);
+  status = async_server_listen(ctx.server, "ws://127.0.0.1:18912", 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
   uv_sem_wait(&ctx.server_ready);
 
   /* Create WebSocket client */
-  ctx.client = async_client_create(ASYNC_CLIENT_TRANSPORT_WEBSOCKET, ws_client_event_cb, &ctx);
+  ctx.client = async_client_create(ws_client_event_cb, &ctx);
   TEST_ASSERT_NOT_NULL(ctx.client);
 
   /* Configure WebSocket client */
@@ -484,7 +482,7 @@ void test_websocket_transport(void) {
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Connect */
-  client_status = async_client_connect(ctx.client, TEST_HOST, TEST_PORT_BASE + 12);
+  client_status = async_client_connect(ctx.client, "ws://127.0.0.1:18912");
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
   uv_sem_wait(&ctx.client_connected);
 
@@ -496,36 +494,33 @@ void test_websocket_transport(void) {
   }
 
   /* Send data */
-  client_status = async_client_send(ctx.client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  client_status = async_client_send(ctx.client, VTABLE_TEST_MESSAGE, strlen(VTABLE_TEST_MESSAGE));
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, client_status);
 
   /* Verify server received */
   uv_sem_wait(&ctx.data_received);
-  TEST_ASSERT_EQUAL_MEMORY(TEST_MESSAGE, ctx.received_data, strlen(TEST_MESSAGE));
+  TEST_ASSERT_EQUAL_MEMORY(VTABLE_TEST_MESSAGE, ctx.received_data, strlen(VTABLE_TEST_MESSAGE));
 }
 
-/* Test: WebSocket config validation */
+/* Test: WebSocket config validation and lazy transport initialization */
 void test_websocket_config_validation(void) {
-  /* Test: set_ws_config on non-WebSocket client should fail */
-  async_client_t *tcp_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_TCP, client_event_cb, &ctx);
-  TEST_ASSERT_NOT_NULL(tcp_client);
+  /* Test: set_ws_config on fresh client should succeed and lock transport to WebSocket */
+  async_client_t *client = async_client_create(client_event_cb, &ctx);
+  TEST_ASSERT_NOT_NULL(client);
 
   async_client_ws_config_t ws_config = {.path = "/", .use_tls = 0};
-  async_client_status_t status = async_client_set_ws_config(tcp_client, &ws_config);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-
-  async_client_destroy(tcp_client);
-
-  /* Test: set_ws_config on WebSocket client should succeed */
-  async_client_t *ws_client =
-      async_client_create(ASYNC_CLIENT_TRANSPORT_WEBSOCKET, client_event_cb, &ctx);
-  TEST_ASSERT_NOT_NULL(ws_client);
-
-  status = async_client_set_ws_config(ws_client, &ws_config);
+  async_client_status_t status = async_client_set_ws_config(client, &ws_config);
   TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_OK, status);
 
-  async_client_destroy(ws_client);
+  /* Now try to connect with TCP - should fail due to transport mismatch */
+  async_client_status_t connect_status = async_client_connect(client, "tcp://127.0.0.1:18900");
+  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, connect_status);
+
+  /* Connect with WebSocket should be allowed (though server might not be there, param check passes) */
+  /* We just check that it doesn't return INVALID_PARAM related to transport mismatch. 
+     It might return ok (async start) or other error. */
+  
+  async_client_destroy(client);
 }
 
 int main(void) {

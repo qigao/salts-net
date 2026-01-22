@@ -52,17 +52,17 @@ void test_transport_to_string(void) {
 
 /* Server creation tests */
 void test_create_null_callback(void) {
-  async_server_t *s = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, NULL, NULL);
+  async_server_t *s = async_server_create(NULL, NULL);
   TEST_ASSERT_NULL(s);
 }
 
 void test_create_tcp(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 }
 
 void test_create_udp(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_UDP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 }
 
@@ -78,7 +78,7 @@ void test_get_state_null(void) {
 }
 
 void test_get_state_stopped(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   async_server_state_t state = async_server_get_state(server);
@@ -91,7 +91,7 @@ void test_is_listening_null(void) {
 }
 
 void test_is_listening_stopped(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   int listening = async_server_is_listening(server);
@@ -104,7 +104,7 @@ void test_get_connection_count_null(void) {
 }
 
 void test_get_connection_count_initial(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   size_t count = async_server_get_connection_count(server);
@@ -113,7 +113,7 @@ void test_get_connection_count_initial(void) {
 
 /* Operation with NULL server tests */
 void test_listen_null_server(void) {
-  async_server_status_t status = async_server_listen(NULL, "0.0.0.0", 8080, 0);
+  async_server_status_t status = async_server_listen(NULL, "tcp://0.0.0.0:8080", 0);
   TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_INVALID_PARAM, status);
 }
 
@@ -163,7 +163,7 @@ void test_set_max_connections_null(void) {
 }
 
 void test_set_max_connections(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   /* Should not crash, no return value to test */
@@ -176,7 +176,7 @@ void test_set_idle_timeout_null(void) {
 }
 
 void test_set_idle_timeout(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   /* Should not crash, no return value to test */
@@ -207,7 +207,7 @@ void test_get_stats_null_server(void) {
 
 
 void test_get_stats_initial(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   async_server_stats_t stats;
@@ -234,7 +234,7 @@ void test_reset_stats_null(void) {
 }
 
 void test_reset_stats(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   /* Should not crash */
@@ -254,7 +254,7 @@ void test_set_tls_config_null_server(void) {
 
 
 void test_set_tls_config_wrong_transport(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   async_server_tls_config_t config = {0};
@@ -270,7 +270,7 @@ void test_join_multicast_null_server(void) {
 
 
 void test_join_multicast_wrong_transport(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_TCP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   async_server_status_t status = async_server_join_multicast_group(server, "239.0.0.1", NULL);
@@ -290,7 +290,7 @@ void test_set_multicast_ttl_null_server(void) {
 
 
 void test_set_multicast_ttl_invalid_value(void) {
-  server = async_server_create(ASYNC_SERVER_TRANSPORT_UDP, test_event_cb, NULL);
+  server = async_server_create(test_event_cb, NULL);
   TEST_ASSERT_NOT_NULL(server);
 
   /* TTL out of range (1-255) */

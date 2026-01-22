@@ -73,13 +73,14 @@ CXX_C_API const char *async_client_transport_to_string(async_client_transport_t 
 /**
  * @brief Creates a new asynchronous client instance.
  *
- * @param transport The transport type to use (TCP, UDP, KCP, TLS, PIPE).
+ * The transport type will be determined from the URL scheme when connecting
+ * (e.g., tcp://, tls://, pipe://, ws://, udp://, kcp://).
+ *
  * @param callback The callback function to handle client events.
  * @param user_data User-defined data to be passed to the callback.
  * @return A pointer to the newly created async_client_t instance, or NULL on failure.
  */
-CXX_C_API async_client_t *async_client_create(async_client_transport_t transport,
-                                    async_client_event_cb callback, void *user_data);
+CXX_C_API async_client_t *async_client_create(async_client_event_cb callback, void *user_data);
 /**
  * @brief Destroys an asynchronous client instance and frees associated resources.
  *
@@ -88,15 +89,27 @@ CXX_C_API async_client_t *async_client_create(async_client_transport_t transport
 CXX_C_API void async_client_destroy(async_client_t *client);
 
 /**
- * @brief Connects the asynchronous client to a specified host and port.
+ * @brief Connects the asynchronous client using a URL.
+ *
+ * The URL scheme determines the transport type:
+ * - tcp://host:port - TCP connection
+ * - tls://host:port or https://host:port - TLS/SSL connection
+ * - udp://host:port - UDP connection
+ * - kcp://host:port - KCP (reliable UDP) connection
+ * - ws://host:port/path or wss://host:port/path - WebSocket connection
+ * - pipe://name - Named pipe (cross-platform IPC)
  *
  * @param client A pointer to the async_client_t instance.
- * @param host The hostname or IP address to connect to.
- * @param port The port number to connect to.
+ * @param url The connection URL (e.g., "tcp://example.com:8080", "pipe://myservice").
  * @return ASYNC_CLIENT_STATUS_OK if the connection process started successfully,
  *         or an error code otherwise.
+ *
+ * @example
+ * async_client_connect(client, "tcp://127.0.0.1:8080");
+ * async_client_connect(client, "tls://secure.example.com:443");
+ * async_client_connect(client, "pipe://myservice");
  */
-CXX_C_API async_client_status_t async_client_connect(async_client_t *client, const char *host, int port);
+CXX_C_API async_client_status_t async_client_connect(async_client_t *client, const char *url);
 
 /**
  * @brief Sends data through the asynchronous client.
@@ -238,6 +251,18 @@ CXX_C_API async_client_state_t async_client_get_state(const async_client_t *clie
 CXX_C_API int async_client_is_connected(const async_client_t *client);
 
 /**
+ * @brief Gets the transport scheme as a string.
+ * 
+ * This is the recommended way to introspect the transport type,
+ * as it returns user-friendly scheme names matching URL prefixes.
+ *
+ * @param client A pointer to the async_client_t instance.
+ * @return The transport scheme ("tcp", "tls", "udp", "kcp", "pipe", "ws")
+ *         or "unknown" if not connected or invalid.
+ */
+CXX_C_API const char *async_client_get_transport_scheme(const async_client_t *client);
+
+/**
  * @brief Sets the connection timeout.
  *
  * @param client A pointer to the async_client_t instance.
@@ -329,7 +354,7 @@ typedef struct {
  * @note Only valid for WebSocket clients (ASYNC_CLIENT_TRANSPORT_WEBSOCKET).
  *
  * @example
- * async_client_t *client = async_client_create(ASYNC_CLIENT_TRANSPORT_WEBSOCKET, cb, NULL);
+ * async_client_t *client = async_client_create(cb, NULL);
  * async_client_ws_config_t ws_config = {
  *     .path = "/mqtt",
  *     .subprotocols = (const char *[]){"mqtt"},
@@ -337,7 +362,7 @@ typedef struct {
  *     .use_tls = 0
  * };
  * async_client_set_ws_config(client, &ws_config);
- * async_client_connect(client, "broker.example.com", 8080);
+ * async_client_connect(client, "ws://broker.example.com:8080");
  */
 CXX_C_API async_client_status_t async_client_set_ws_config(async_client_t *client,
                                                               const async_client_ws_config_t *config);

@@ -20,24 +20,12 @@ extern "C" {
 /* Forward declarations */
 typedef struct rpc_client_s rpc_client_t;
 
-/**
- * @brief Transport types
- */
-typedef enum {
-  RPC_TRANSPORT_TCP = 0,
-  RPC_TRANSPORT_UDP,
-  RPC_TRANSPORT_TLS,
-  RPC_TRANSPORT_UNIX
-} rpc_transport_t;
 
 /**
  * @brief Client configuration
  */
 typedef struct {
-  const char *host;              /**< Server hostname or IP */
-  int port;                      /**< Server port */
-  const char *endpoint;          /**< RPC endpoint path (e.g., "/rpc") */
-  rpc_transport_t transport;     /**< Transport type */
+  const char *url;               /**< Full URL (e.g., "http://127.0.0.1:8080/rpc") */
   int timeout_ms;                /**< Request timeout in milliseconds */
   int keep_alive;                /**< Keep connection alive */
   const char *user_agent;        /**< User-Agent header */
@@ -282,30 +270,18 @@ int rpc_result_get_double(const rpc_call_result_t *result, const char *key, doub
 /**
  * @brief Default configuration
  */
-#define RPC_CLIENT_DEFAULT_CONFIG(host, port) \
+#define RPC_CLIENT_DEFAULT_CONFIG(url) \
   { \
-    (const char *)(host), \
-    (port), \
-    "/rpc", \
-    RPC_TRANSPORT_TCP, \
+    (const char *)(url), \
     5000, \
     1, \
     "rpc_client/1.0" \
   }
 
 /**
- * @brief TLS configuration
+ * @brief TLS configuration helper (shorthand for https URL)
  */
-#define RPC_CLIENT_TLS_CONFIG(host, port) \
-  { \
-    (const char *)(host), \
-    (port), \
-    "/rpc", \
-    RPC_TRANSPORT_TLS, \
-    5000, \
-    1, \
-    "rpc_client/1.0" \
-  }
+#define RPC_CLIENT_TLS_CONFIG(url) RPC_CLIENT_DEFAULT_CONFIG(url)
 
 /* ============================================================================
  * Utility Functions

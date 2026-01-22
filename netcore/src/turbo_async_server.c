@@ -27,6 +27,7 @@
 #include "turbo_pipe.h"
 #include "turbo_tcp.h"
 #include "turbo_tls.h"
+#include "turbo_url.h"
 #include "turbo_websocket_server.h"
 
 #define ASYNC_SERVER_ERROR_MESSAGE_MAX 128
@@ -54,6 +55,7 @@ typedef struct async_server_command_s {
       char *host;
       int port;
       int backlog;
+      async_server_transport_t transport;
     } listen;
     struct {
       async_server_connection_t *connection;
@@ -495,10 +497,11 @@ static async_server_command_t *command_create(async_server_command_type_t type) 
   return cmd;
 }
 
-static async_server_command_t *command_create_listen(const char *host, int port, int backlog) {
+static async_server_command_t *command_create_listen(async_server_transport_t transport, const char *host, int port, int backlog) {
   async_server_command_t *cmd = command_create(COMMAND_LISTEN);
   if (!cmd)
     return NULL;
+  cmd->payload.listen.transport = transport;
   if (host) {
     cmd->payload.listen.host = client_common_strdup(host);
     if (!cmd->payload.listen.host) {
@@ -737,10 +740,9 @@ static void loop_thread_main(void *arg) {
     }
   }
 
+  /* Transport setup now happens during first listen command */
   if (rc == 0) {
-    async_server_status_t setup_status = transport_setup(server);
-    if (setup_status != ASYNC_SERVER_STATUS_OK)
-      rc = UV_EINVAL;
+    /* No-op here, setup deferred */
   }
 
   uv_mutex_lock(&server->mutex);
@@ -1179,6 +1181,11 @@ static async_server_status_t transport_setup(async_server_t *server) {
 }
 
 static void transport_close(async_server_t *server) {
+  /* If ops is not set, transport was never initialized (no listen called) */
+  if (!server->ops) {
+    return;
+  }
+
   /* Close all connections first (common for all transports) */
   async_server_connection_t *conn = server->connections_head;
   while (conn) {
@@ -1191,7 +1198,8 @@ static void transport_close(async_server_t *server) {
   server->connection_count = 0;
 
   /* Dispatch via vtable - NO SWITCH! */
-  server->ops->close(server);
+  if (server->ops->close)
+    server->ops->close(server);
   server->listening = 0;
 }
 
@@ -1398,9 +1406,48 @@ static int pipe_listen_impl(async_server_t *server, const char *host) {
 }
 
 static void handle_listen_command(async_server_t *server, async_server_command_t *cmd) {
+  async_server_transport_t transport = cmd->payload.listen.transport;
   const char *host = cmd->payload.listen.host;
   int port = cmd->payload.listen.port;
   int backlog = cmd->payload.listen.backlog;
+
+  /* Initialize transport-specific ops if not already done */
+  if (!server->ops) {
+    server->transport = transport;
+    switch (transport) {
+    case ASYNC_SERVER_TRANSPORT_TCP:
+      server->ops = &server_tcp_ops;
+      break;
+    case ASYNC_SERVER_TRANSPORT_UDP:
+      server->ops = &server_udp_ops;
+      break;
+    case ASYNC_SERVER_TRANSPORT_KCP:
+      server->ops = &server_kcp_ops;
+      break;
+    case ASYNC_SERVER_TRANSPORT_TLS:
+      server->ops = &server_tls_ops;
+      break;
+    case ASYNC_SERVER_TRANSPORT_PIPE:
+      server->ops = &server_pipe_ops;
+      break;
+    case ASYNC_SERVER_TRANSPORT_WEBSOCKET:
+      server->ops = &server_ws_ops;
+      break;
+    default:
+      emit_error_message(server, -1, "unsupported transport");
+      return;
+    }
+
+    async_server_status_t setup_status = transport_setup(server);
+    if (setup_status != ASYNC_SERVER_STATUS_OK) {
+      server->ops = NULL;
+      emit_error_message(server, setup_status, "transport setup failed");
+      return;
+    }
+  } else if (server->transport != transport) {
+    emit_error_message(server, -1, "server already initialized with different transport");
+    return;
+  }
 
   /* Dispatch via vtable - NO SWITCH! */
   int rc = server->ops->listen(server, host, port, backlog);
@@ -2406,8 +2453,7 @@ const char *async_server_transport_to_string(async_server_transport_t transport)
   }
 }
 
-async_server_t *async_server_create(async_server_transport_t transport,
-                                    async_server_event_cb callback, void *user_data) {
+async_server_t *async_server_create(async_server_event_cb callback, void *user_data) {
   if (!callback)
     return NULL;
 
@@ -2415,32 +2461,8 @@ async_server_t *async_server_create(async_server_transport_t transport,
   if (!server)
     return NULL;
 
-  server->transport = transport;
-
-  /* Set transport operations vtable based on transport type */
-  switch (transport) {
-  case ASYNC_SERVER_TRANSPORT_TCP:
-    server->ops = &server_tcp_ops;
-    break;
-  case ASYNC_SERVER_TRANSPORT_UDP:
-    server->ops = &server_udp_ops;
-    break;
-  case ASYNC_SERVER_TRANSPORT_KCP:
-    server->ops = &server_kcp_ops;
-    break;
-  case ASYNC_SERVER_TRANSPORT_TLS:
-    server->ops = &server_tls_ops;
-    break;
-  case ASYNC_SERVER_TRANSPORT_PIPE:
-    server->ops = &server_pipe_ops;
-    break;
-  case ASYNC_SERVER_TRANSPORT_WEBSOCKET:
-    server->ops = &server_ws_ops;
-    break;
-  default:
-    free(server);
-    return NULL;
-  }
+  server->transport = (async_server_transport_t)0;
+  server->ops = NULL;
 
   server->callback = callback;
   server->callback_user_data = user_data;
@@ -2535,12 +2557,51 @@ void async_server_destroy(async_server_t *server) {
   free(server);
 }
 
-async_server_status_t async_server_listen(async_server_t *server, const char *host, int port,
-                                          int backlog) {
-  if (!server)
+async_server_status_t async_server_listen(async_server_t *server, const char *url, int backlog) {
+  if (!server || !url)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
-  async_server_command_t *cmd = command_create_listen(host, port, backlog);
+  /* Parse URL to determine transport and extract binding details */
+  turbo_address_t addr;
+  int parse_result = parse_transport_url(url, &addr);
+  if (parse_result != 0 || !addr.valid) {
+    TLOG_ERROR("Failed to parse listen URL: {}", url);
+    return ASYNC_SERVER_STATUS_INVALID_PARAM;
+  }
+
+  /* Map URL transport to server transport and validate match */
+  async_server_transport_t url_transport;
+  switch (addr.transport) {
+  case TURBO_TCP:
+    url_transport = ASYNC_SERVER_TRANSPORT_TCP;
+    break;
+  case TURBO_UDP:
+    url_transport = ASYNC_SERVER_TRANSPORT_UDP;
+    break;
+  case TURBO_KCP:
+    url_transport = ASYNC_SERVER_TRANSPORT_KCP;
+    break;
+  case TURBO_TLS:
+    url_transport = ASYNC_SERVER_TRANSPORT_TLS;
+    break;
+  case TURBO_PIPE:
+    url_transport = ASYNC_SERVER_TRANSPORT_PIPE;
+    break;
+  case TURBO_WEBSOCKET:
+    url_transport = ASYNC_SERVER_TRANSPORT_WEBSOCKET;
+    break;
+  default:
+    TLOG_ERROR("Unsupported transport type from URL: {}", (int)addr.transport);
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR;
+  }
+
+  /* For pipes, use path instead of host; for others use host */
+  const char *bind_host = (url_transport == ASYNC_SERVER_TRANSPORT_PIPE) 
+                           ? addr.path 
+                           : addr.host;
+
+  /* Create listen command with parsed host and port and transport */
+  async_server_command_t *cmd = command_create_listen(url_transport, bind_host, addr.port, backlog);
   if (!cmd)
     return ASYNC_SERVER_STATUS_ALLOC_FAILED;
 
@@ -2946,8 +3007,8 @@ async_server_status_t async_server_join_multicast_group(async_server_t *server,
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
   /* Use vtable - no protocol type checking! */
-  if (!server->ops->join_multicast_group)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport */
+  if (!server->ops || !server->ops->join_multicast_group)
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
 
   return server->ops->join_multicast_group(server, multicast_addr, interface_addr);
 }
@@ -2962,8 +3023,8 @@ async_server_status_t async_server_leave_multicast_group(async_server_t *server,
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
   /* Use vtable - no protocol type checking! */
-  if (!server->ops->leave_multicast_group)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport */
+  if (!server->ops || !server->ops->leave_multicast_group)
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
 
   return server->ops->leave_multicast_group(server, multicast_addr, interface_addr);
 }
@@ -2975,9 +3036,12 @@ async_server_status_t async_server_set_multicast_ttl(async_server_t *server, int
   if (!server)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
+  if (ttl < 1 || ttl > 255)
+    return ASYNC_SERVER_STATUS_INVALID_PARAM;
+
   /* Use vtable - no protocol type checking! */
-  if (!server->ops->set_multicast_ttl)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport */
+  if (!server->ops || !server->ops->set_multicast_ttl)
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
 
   return server->ops->set_multicast_ttl(server, ttl);
 }
@@ -2989,9 +3053,12 @@ async_server_status_t async_server_set_multicast_loop(async_server_t *server, in
   if (!server)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
+  if (on != 0 && on != 1)
+    return ASYNC_SERVER_STATUS_INVALID_PARAM;
+
   /* Use vtable - no protocol type checking! */
-  if (!server->ops->set_multicast_loop)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport */
+  if (!server->ops || !server->ops->set_multicast_loop)
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
 
   return server->ops->set_multicast_loop(server, on);
 }
@@ -3005,6 +3072,9 @@ static int ws_server_on_recv(void *handle, const turbo_arena_slice_t *data, void
 static void ws_server_on_close(void *handle);
 
 static async_server_status_t server_ws_setup_impl(async_server_t *server) {
+  if (server->proto.ws.config_set) {
+    return ASYNC_SERVER_STATUS_OK;
+  }
   server->proto.ws.server = NULL;
   server->proto.ws.config_set = 0;
   server->proto.ws.use_tls = 0;
@@ -3239,8 +3309,11 @@ async_server_status_t async_server_set_ws_config(async_server_t *server,
   if (!server || !config)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
-  if (server->transport != ASYNC_SERVER_TRANSPORT_WEBSOCKET)
+  if (server->transport == 0) {
+    server->transport = ASYNC_SERVER_TRANSPORT_WEBSOCKET;
+  } else if (server->transport != ASYNC_SERVER_TRANSPORT_WEBSOCKET) {
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
+  }
 
   uv_mutex_lock(&server->mutex);
 

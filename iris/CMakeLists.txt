@@ -53,6 +53,7 @@ target_link_libraries(
           kcp::kcp
           c-ares::cares
           TurboNet::Parser
+          cjwt
 
           Threads::Threads)
 

@@ -3,6 +3,7 @@
 #include "turbo_async_client.h"
 #include <llhttp.h>
 #include "http_client_async.h"
+#include <cjwt/cjwt.h>
 #include "turbo_parser.h"
 // clang-format on
 #include "base64_utils.h"
@@ -11,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stb_sprintf.h>
+#include <time.h>
 
 #ifdef _WIN32
   #define strdup _strdup
@@ -377,6 +379,36 @@ void http_async_client_set_bearer_token(http_async_client_t *client, const char 
   client->auth_header = (char *)turbo_arena_alloc(&client->client_arena, header_len);
   stbsp_snprintf(client->auth_header, (int)header_len, "Authorization: Bearer %s", token);
 }
+
+void http_async_client_set_jwt_auth(http_async_client_t *client, const char *secret, const char *claims_json) {
+  if (!client || !secret || !claims_json)
+    return;
+
+  cJSON *private_claims = cJSON_Parse(claims_json);
+  if (!private_claims) {
+    // TLOG not used in async client yet? Let's check.
+    // Actually async client uses printf for now based on previous view.
+    printf("[ERROR] Failed to parse JWT claims JSON\n");
+    return;
+  }
+
+  cjwt_t jwt = {0};
+  jwt.header.alg = alg_hs256;
+  jwt.private_claims = private_claims;
+
+  char *token = NULL;
+  cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
+  cJSON_Delete(private_claims);
+
+  if (rv != CJWTE_OK) {
+    printf("[ERROR] Failed to encode JWT: %d\n", rv);
+    return;
+  }
+
+  http_async_client_set_bearer_token(client, token);
+  free(token);
+}
+
 
 void http_async_client_clear_auth(http_async_client_t *client) {
   if (!client)
@@ -1947,4 +1979,18 @@ http_async_request_t *http_async_post_json_object(http_async_client_t *client, c
   turbo_json_serialize_free(json_string);
 
   return request;
+}
+
+int http_async_response_decode_jwt(http_async_response_t *response, const uint8_t *key, size_t key_len, uint32_t options, void **jwt) {
+  if (!response || !response->body || !jwt)
+    return CJWTE_INVALID_PARAMETERS;
+
+  int64_t current_time = (int64_t)time(NULL);
+  return (int)cjwt_decode(response->body, response->body_len, options, key, key_len, current_time, 0, (cjwt_t **)jwt);
+}
+
+void http_async_jwt_destroy(void *jwt) {
+  if (jwt) {
+    cjwt_destroy((cjwt_t *)jwt);
+  }
 }

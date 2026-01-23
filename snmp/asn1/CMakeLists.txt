@@ -49,7 +49,8 @@ add_custom_command(
   OUTPUT ${ASN1_BINARY_GRAMMAR_GEN} ${ASN1_BINARY_GRAMMAR_H}
   COMMAND ${CMAKE_COMMAND} -E copy ${ASN1_BINARY_GRAMMAR_Y}
           ${CMAKE_CURRENT_BINARY_DIR}/binary_parser.y
-  COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR} ${CMAKE_CURRENT_BINARY_DIR}/binary_parser.y
+  COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR}
+          ${CMAKE_CURRENT_BINARY_DIR}/binary_parser.y
   DEPENDS ${ASN1_BINARY_GRAMMAR_Y} ${LEMON_DEPENDS}
   COMMENT "Generating ASN.1 binary parser with lemon"
   VERBATIM)
@@ -58,24 +59,24 @@ add_custom_command(
 # Library (respects BUILD_SHARED_LIBS)
 # =============================================================================
 
-file(GLOB_RECURSE SOURCE_FILES 
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_runtime.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_encoder.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ast.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/mib_compiler.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_der_compat.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/binary_scanner.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/crypto_random.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/sha256.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/x509_cert.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/x509_generate.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
+file(
+  GLOB_RECURSE
+  SOURCE_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_runtime.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_encoder.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ast.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/mib_compiler.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_der_compat.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/binary_scanner.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/crypto_random.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/sha256.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/x509_cert.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/x509_generate.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
 
-add_library(${TARGET_NAME} SHARED 
-    ${SOURCE_FILES} 
-    ${ASN1_SCANNER_GEN}
-    ${ASN1_GRAMMAR_GEN}
-    ${ASN1_BINARY_GRAMMAR_GEN})
+add_library(
+  ${TARGET_NAME} SHARED ${SOURCE_FILES} ${ASN1_SCANNER_GEN} ${ASN1_GRAMMAR_GEN}
+                        ${ASN1_BINARY_GRAMMAR_GEN})
 
 add_library(TurboNet::Asn1Parser ALIAS ${TARGET_NAME})
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
@@ -85,8 +86,7 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/asn1>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser 
-          ${CMAKE_CURRENT_BINARY_DIR}
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(
@@ -105,27 +105,28 @@ set_target_properties(
 # MIB Compiler Executable
 # =============================================================================
 
-add_executable(mib_compiler 
-    ${CMAKE_CURRENT_SOURCE_DIR}/tools/mib_compiler_main.c)
+add_executable(mib_compiler
+               ${CMAKE_CURRENT_SOURCE_DIR}/tools/mib_compiler_main.c)
 
 target_link_libraries(mib_compiler PRIVATE ${TARGET_NAME})
-target_include_directories(mib_compiler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(mib_compiler
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 set_target_properties(mib_compiler PROPERTIES FOLDER snmp/tools)
 
 # Install
-# install(
-#   TARGETS ${TARGET_NAME} mib_compiler
-#   EXPORT TurboNetTargets
-#   LIBRARY DESTINATION lib
-#   ARCHIVE DESTINATION lib
-#   RUNTIME DESTINATION bin)
+install(
+  TARGETS ${TARGET_NAME} mib_compiler
+  EXPORT TurboNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
 
-# install(
-#   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-#   DESTINATION include/
-#   FILES_MATCHING
-#   PATTERN "*.h")
+install(
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+  DESTINATION include/
+  FILES_MATCHING
+  PATTERN "*.h")
 
 # =============================================================================
 # Tests

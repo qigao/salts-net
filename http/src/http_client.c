@@ -11,6 +11,7 @@
 #include "cookie_jar.h"
 #include "cookie_parser.h"
 #include "tlog.h"
+#include <cjwt/cjwt.h>
 
 #include <stb_sprintf.h>
 
@@ -1475,6 +1476,34 @@ void http_client_set_bearer_token(http_client_t *client, const char *token) {
   client->auth_header = new_header;
 }
 
+void http_client_set_jwt_auth(http_client_t *client, const char *secret, const char *claims_json) {
+  if (!client || !secret || !claims_json)
+    return;
+
+  cJSON *private_claims = cJSON_Parse(claims_json);
+  if (!private_claims) {
+    TLOG_ERROR("Failed to parse JWT claims JSON");
+    return;
+  }
+
+  cjwt_t jwt = {0};
+  jwt.header.alg = alg_hs256;
+  jwt.private_claims = private_claims;
+
+  char *token = NULL;
+  cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
+  cJSON_Delete(private_claims);
+
+  if (rv != CJWTE_OK) {
+    TLOG_ERROR("Failed to encode JWT: {}", ENUM_NAME(rv));
+    return;
+  }
+
+  http_client_set_bearer_token(client, token);
+  free(token);
+}
+
+
 void http_client_clear_auth(http_client_t *client) {
   if (!client)
     return;
@@ -2770,4 +2799,18 @@ http_response_t *http_request_builder_execute(http_request_builder_t *builder) {
   }
 
   return response;
+}
+
+int http_response_decode_jwt(http_response_t *response, const uint8_t *key, size_t key_len, uint32_t options, void **jwt) {
+  if (!response || !response->body || !jwt)
+    return CJWTE_INVALID_PARAMETERS;
+
+  int64_t current_time = (int64_t)time(NULL);
+  return (int)cjwt_decode(response->body, response->body_len, options, key, key_len, current_time, 0, (cjwt_t **)jwt);
+}
+
+void http_jwt_destroy(void *jwt) {
+  if (jwt) {
+    cjwt_destroy((cjwt_t *)jwt);
+  }
 }

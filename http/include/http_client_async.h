@@ -87,6 +87,7 @@ CXX_C_API void http_async_client_set_basic_auth(http_async_client_t* client,
                                       const char* username,
                                       const char* password);
 CXX_C_API void http_async_client_set_bearer_token(http_async_client_t* client, const char* token);
+CXX_C_API void http_async_client_set_jwt_auth(http_async_client_t* client, const char* secret, const char* claims_json);
 CXX_C_API void http_async_client_clear_auth(http_async_client_t* client);
 
 // Async request API
@@ -261,6 +262,13 @@ CXX_C_API int http_async_client_has_rate_limit(http_async_client_t* client);
 
 
 CXX_C_API json_value_t* http_async_response_parse_json(http_async_response_t* response);
+// Decode JWT from response (caller must free with http_async_jwt_destroy)
+// Returns 0 (CJWTE_OK) on success, non-zero on failure.
+CXX_C_API int http_async_response_decode_jwt(http_async_response_t* response, const uint8_t* key, size_t key_len, uint32_t options, void** jwt);
+
+// Free JWT object
+CXX_C_API void http_async_jwt_destroy(void* jwt);
+
 CXX_C_API http_async_request_t* http_async_post_json(http_async_client_t* client,
                                            const char* url,
                                            const char* json_string,

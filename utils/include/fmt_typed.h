@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#define ENUM_NAME(x) #x
 
 #ifdef __cplusplus
 #include <type_traits>

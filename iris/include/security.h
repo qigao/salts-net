@@ -413,6 +413,48 @@ CXX_C_API bool iris_is_suspicious_parameter_re2c(const char *param, size_t len);
 CXX_C_API iris_security_result_t iris_sanitize_url_parameter_re2c(const char *param, size_t param_len,
                                                                  char *sanitized, size_t buffer_size);
 
+/* ============================================================================
+ * JWT (JSON Web Token) Support
+ * ============================================================================ */
+
+struct Req;
+struct Res;
+struct Chain;
+
+/**
+ * @brief Middleware for JWT authentication.
+ * 
+ * Verifies 'Authorization: Bearer <token>' header.
+ * If valid, attaches the decoded JWT to request context.
+ * 
+ * @param req Request object
+ * @param res Response object
+ * @param chain Middleware chain
+ * @return 0 if authorized, non-zero if unauthorized (sends 401)
+ */
+CXX_C_API int iris_jwt_middleware(struct Req *req, struct Res *res, struct Chain *chain);
+
+/**
+ * @brief Set the secret key for JWT verification
+ * @param secret Secret key string
+ */
+CXX_C_API void iris_jwt_set_secret(const char *secret);
+
+/**
+ * @brief Generate a JWT token
+ * @param secret Secret key for signing
+ * @param claims_json JSON string containing claims
+ * @return Allocated JWT token string (must be freed by caller), or NULL on failure
+ */
+CXX_C_API char *iris_jwt_encode(const char *secret, const char *claims_json);
+
+/**
+ * @brief Get the decoded JWT object from request context
+ * @param req Request object
+ * @return Pointer to JWT object (void*), or NULL if not available
+ */
+CXX_C_API void *iris_jwt_get_claims(struct Req *req);
+
 #ifdef __cplusplus
 }
 #endif

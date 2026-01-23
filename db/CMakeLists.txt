@@ -3,8 +3,7 @@
 
 message(STATUS "Configuring netcore clients...")
 
-# PostgreSQL Client (pquv)
-# Optional - requires libpq
+# PostgreSQL Client (pquv) 
 find_package(PostgreSQL QUIET)
 
 if(PostgreSQL_FOUND)

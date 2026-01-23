@@ -6,14 +6,15 @@
  * across all transport protocols. No more special cases!
  */
 #include "turbo_url.h"
+#include "stb_sprintf.h"
+#include "tlog.h"
 #include <ctype.h>
+#include <stc/cstr.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "stb_sprintf.h"
 #include <string.h>
-#include "tlog.h"
 #include <uv.h>
-#include <stc/cstr.h>
+
 
 // Define the structure for scheme-port mapping
 typedef struct {
@@ -40,14 +41,19 @@ static void initialize_scheme_map(void) {
 
   g_scheme_map = SchemeMap_init();
 
-  const transport_scheme_t schemes[] = {
-      {"tcp", 80, TURBO_TCP},       {"tls", 443, TURBO_TLS},
-      {"ssl", 443, TURBO_TLS},      {"https", 443, TURBO_TLS},
-      {"http", 80, TURBO_TCP},      {"ws", 80, TURBO_WEBSOCKET},
-      {"wss", 443, TURBO_WEBSOCKET}, {"udp", 53, TURBO_UDP},
-      {"pipe", 0, TURBO_PIPE},      {"kcp", 7000, TURBO_KCP},
-      {"quic", 443, TURBO_QUIC},    {"http3", 443, TURBO_QUIC},
-      {NULL, 0, 0}};
+  const transport_scheme_t schemes[] = {{"tcp", 80, TURBO_TCP},
+                                        {"tls", 443, TURBO_TLS},
+                                        {"ssl", 443, TURBO_TLS},
+                                        {"https", 443, TURBO_TLS},
+                                        {"http", 80, TURBO_TCP},
+                                        {"ws", 80, TURBO_WEBSOCKET},
+                                        {"wss", 443, TURBO_WEBSOCKET},
+                                        {"udp", 53, TURBO_UDP},
+                                        {"pipe", 0, TURBO_PIPE},
+                                        {"kcp", 7000, TURBO_KCP},
+                                        {"quic", 443, TURBO_QUIC},
+                                        {"http3", 443, TURBO_QUIC},
+                                        {NULL, 0, 0}};
 
   for (int i = 0; schemes[i].scheme; i++) {
     SchemeMap_insert(&g_scheme_map, cstr_from(schemes[i].scheme), schemes[i]);
@@ -93,8 +99,7 @@ static int parse_and_validate_url(const char *url, uri_t **parsed_url) {
   return 0;
 }
 
-static int get_transport_info(const char *scheme, int *default_port,
-                              turbo_transport_t *transport) {
+static int get_transport_info(const char *scheme, int *default_port, turbo_transport_t *transport) {
   if (!scheme)
     return TURBO_EINVAL_TRANSPORT;
 
@@ -131,8 +136,9 @@ static void build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
       stbsp_snprintf(addr->path, (int)sizeof(addr->path), "/tmp/%s", host);
 #endif
     } else {
-      TLOG_ERROR("Invalid pipe URL: {}. Expected pipe://service_name", turbo_uri_scheme(parsed_url));
-      return TURBO_EINVAL_TRANSPORT;
+      TLOG_ERROR("Invalid pipe URL: {}. Expected pipe://service_name",
+                 turbo_uri_scheme(parsed_url));
+      return;
     }
     addr->path[sizeof(addr->path) - 1] = '\0';
   } else {
@@ -221,14 +227,14 @@ int turbo_url_get_scheme(const char *url, char *scheme_buf, size_t buf_size) {
 
   strncpy(scheme_buf, scheme, buf_size - 1);
   scheme_buf[buf_size - 1] = '\0';
-  
+
   turbo_free_uri(&parsed_url);
   return 0;
 }
 
 // Builds a URL from components
-int turbo_url_build(const char *scheme, const char *host, int port, 
-                    const char *path, char *url_buf, size_t buf_size) {
+int turbo_url_build(const char *scheme, const char *host, int port, const char *path, char *url_buf,
+                    size_t buf_size) {
   if (!scheme || !url_buf || buf_size == 0) {
     return UV_EINVAL;
   }
@@ -263,11 +269,10 @@ int turbo_url_build(const char *scheme, const char *host, int port,
     // Ensure path starts with /
     const char *path_prefix = (path[0] == '/') ? "" : "/";
     if (port > 0) {
-      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s:%d%s%s", 
-                     lower_scheme, host, port, path_prefix, path);
+      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s:%d%s%s", lower_scheme, host, port,
+                     path_prefix, path);
     } else {
-      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s%s%s", 
-                     lower_scheme, host, path_prefix, path);
+      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s%s%s", lower_scheme, host, path_prefix, path);
     }
   } else {
     if (port > 0) {

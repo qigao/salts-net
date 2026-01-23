@@ -24,3 +24,7 @@ set_target_properties(rpc_server_example PROPERTIES
     OUTPUT_NAME "rpc_server_example"
 )
  
+# JWT Example
+add_executable(jwt_example jwt_example.c)
+target_link_libraries(jwt_example PRIVATE iris)
+set_target_properties(jwt_example PROPERTIES FOLDER ${TARGET_NAME}/examples)

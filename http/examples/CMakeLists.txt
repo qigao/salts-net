@@ -19,7 +19,8 @@ set(HTTP_EXAMPLES
     file_transfer_example
     advanced_features_example
     login_request
-    asan_verify)
+    asan_verify
+    jwt_auth_example)
 
 # Build each example
 foreach(example_name ${HTTP_EXAMPLES})

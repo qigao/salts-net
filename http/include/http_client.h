@@ -5,6 +5,7 @@
 #include <platform.h>
 #include <turbo_parser.h>
 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -160,6 +161,7 @@ CXX_C_API void http_client_set_basic_auth(http_client_t* client,
                                 const char* username, 
                                 const char* password);
 CXX_C_API void http_client_set_bearer_token(http_client_t* client, const char* token);
+CXX_C_API void http_client_set_jwt_auth(http_client_t* client, const char* secret, const char* claims_json);
 CXX_C_API void http_client_clear_auth(http_client_t* client);
 
 // Statistics
@@ -338,6 +340,13 @@ CXX_C_API http_response_t* http_get_range(http_client_t* client,
 
 // Parse JSON response (returns json_value_t object, caller must free with json_free)
 CXX_C_API json_value_t* http_response_parse_json(http_response_t* response);
+
+// Decode JWT from response (caller must free with http_jwt_destroy)
+// Returns 0 (CJWTE_OK) on success, non-zero on failure.
+CXX_C_API int http_response_decode_jwt(http_response_t* response, const uint8_t* key, size_t key_len, uint32_t options, void** jwt);
+
+// Free JWT object
+CXX_C_API void http_jwt_destroy(void* jwt);
 
 // POST JSON data
 CXX_C_API http_response_t* http_post_json(http_client_t* client,

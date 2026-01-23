@@ -1,7 +1,6 @@
 # HTTP Client Library CMakeLists.txt
 
-cmake_minimum_required(VERSION 3.20)
-
+cmake_minimum_required(VERSION 3.20) 
 # =============================================================================
 # re2c Generated Files
 # =============================================================================
@@ -68,7 +67,7 @@ target_include_directories(
 target_link_libraries(
   http_client
   PUBLIC TurboNet::Utils TurboNet::Core libuv::uv
-  PRIVATE llhttp::llhttp_static)
+  PRIVATE llhttp::llhttp_static  cjwt)
 
 # Set properties
 set_target_properties(
@@ -101,7 +100,7 @@ target_include_directories(
 target_link_libraries(
   http_client_async
   PUBLIC TurboNet::Utils TurboNet::Core libuv::uv
-  PRIVATE llhttp::llhttp_static)
+  PRIVATE llhttp::llhttp_static  cjwt)
 
 set_target_properties(
   http_client_async

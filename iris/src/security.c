@@ -8,6 +8,12 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <cjwt/cjwt.h>
+#include <cjson/cJSON.h>
+#include "middleware.h"
+#include "router.h"
+#include "tlog.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -844,4 +850,86 @@ const char *iris_security_error_string(iris_security_result_t result) {
         default:
             return "Unknown error";
     }
+}
+
+/* ============================================================================
+ * JWT (JSON Web Token) Support Implementation
+ * ============================================================================ */
+
+static char *g_iris_jwt_secret = NULL;
+
+void iris_jwt_set_secret(const char *secret) {
+    if (g_iris_jwt_secret) free(g_iris_jwt_secret);
+    g_iris_jwt_secret = secret ? strdup(secret) : NULL;
+}
+
+static void jwt_cleanup_cb(void *data) {
+    if (data) {
+        cjwt_destroy((cjwt_t *)data);
+    }
+}
+
+int iris_jwt_middleware(Req *req, Res *res, Chain *chain) {
+    const char *auth = get_headers(req, "Authorization");
+    if (!auth || strncasecmp(auth, "Bearer ", 7) != 0) {
+        send_json(res, 401, "{\"error\":\"Unauthorized\", \"message\":\"Missing or invalid Authorization header\"}");
+        return 1;
+    }
+
+    const char *token = auth + 7;
+    // Skip any extra spaces after Bearer
+    while (*token == ' ') token++;
+
+    if (!g_iris_jwt_secret) {
+        TLOG_ERROR("JWT Middleware: Verification secret not configured");
+        send_json(res, 500, "{\"error\":\"Internal Server Error\", \"message\":\"JWT verification secret not configured\"}");
+        return 1;
+    }
+
+    cjwt_t *jwt = NULL;
+    int64_t current_time = (int64_t)time(NULL);
+    
+    /* Decodes token with HS256 algorithm */
+    cjwt_code_t rv = cjwt_decode(token, (int)strlen(token), 0, (const uint8_t *)g_iris_jwt_secret, (int)strlen(g_iris_jwt_secret), current_time, 0, &jwt);
+
+    if (rv != CJWTE_OK) {
+        TLOG_ERROR("JWT Middleware: Token verification failed (error {})", ENUM_NAME(rv));
+        send_json(res, 401, "{\"error\":\"Unauthorized\", \"message\":\"Invalid or expired token\"}");
+        return 1;
+    }
+
+    // Success - attach JWT to request context
+    set_context(req, jwt, sizeof(cjwt_t), jwt_cleanup_cb);
+
+    return next(chain, req, res);
+}
+
+char *iris_jwt_encode(const char *secret, const char *claims_json) {
+    if (!secret || !claims_json) return NULL;
+
+    cJSON *private_claims = cJSON_Parse(claims_json);
+    if (!private_claims) {
+        TLOG_ERROR("JWT Encode: Failed to parse claims JSON");
+        return NULL;
+    }
+
+    cjwt_t jwt = {0};
+    jwt.header.alg = alg_hs256;
+    jwt.private_claims = private_claims;
+
+    char *token = NULL;
+    cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, (int)strlen(secret), &token);
+    cJSON_Delete(private_claims);
+
+    if (rv != CJWTE_OK) {
+        TLOG_ERROR("JWT Encode: Failed to encode token (error {})", ENUM_NAME(rv));
+        if (token) free(token);
+        return NULL;
+    }
+
+    return token;
+}
+
+void *iris_jwt_get_claims(Req *req) {
+    return get_context(req);
 }

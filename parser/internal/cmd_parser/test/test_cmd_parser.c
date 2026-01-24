@@ -231,6 +231,27 @@ void test_response_file(void) {
     remove(filename);
 }
 
+void test_dotenv_integration(void) {
+    char* api_url = "default";
+    CmdArgerDesc opts[] = {
+        cmd_arger_with_env(cmd_arger_desc_string(&api_url, "url", "API URL"), "TEST_API_URL"),
+    };
+
+    // Create .env file
+    FILE* f = fopen(".env", "wb");
+    if (f) {
+        fprintf(f, "TEST_API_URL=https://api.example.com\n");
+        fclose(f);
+    }
+
+    char* argv[] = {"app"};
+    cmd_arger_parse(opts, 1, NULL, 0, 1, argv, "app", cmd_arger_false);
+
+    TEST_ASSERT_EQUAL_STRING("https://api.example.com", api_url);
+
+    remove(".env");
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_flag_parsing);
@@ -242,5 +263,6 @@ int main(void) {
     RUN_TEST(test_string_choices);
     RUN_TEST(test_custom_validator);
     RUN_TEST(test_response_file);
+    RUN_TEST(test_dotenv_integration);
     return UNITY_END();
 }

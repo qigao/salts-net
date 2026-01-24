@@ -91,6 +91,58 @@ int main() {
         printf("CMD parsing test passed!\n");
     }
 
+    /* Test DotEnv */
+    {
+        printf("Testing DotEnv parsing...\n");
+        const char *env_file = ".env.turbo_test";
+        FILE *f = fopen(env_file, "w");
+        if (f) {
+            fprintf(f, "TURBO_PARSER_TEST=success\n");
+            fclose(f);
+        }
+
+        int rc = turbo_dotenv_load(env_file, true);
+        assert(rc == 0);
+
+        char *val = getenv("TURBO_PARSER_TEST");
+        assert(val != NULL);
+        assert(strcmp(val, "success") == 0);
+
+        remove(env_file);
+        printf("DotEnv parsing test passed!\n");
+    }
+
+    /* Test JSON creation/modification */
+    {
+        printf("Testing JSON building...\n");
+        json_value_t *root = turbo_json_create_object();
+        assert(root != NULL);
+
+        turbo_json_object_set_string(root, "name", "turbo");
+        turbo_json_object_set_number(root, "version", 2.0);
+        turbo_json_object_set_bool(root, "active", true);
+        
+        json_value_t *arr = turbo_json_create_array();
+        turbo_json_array_add(arr, turbo_json_create_number(1));
+        turbo_json_array_add(arr, turbo_json_create_number(2));
+        turbo_json_object_add(root, "items", arr);
+
+        size_t len = 0;
+        char *serialized = turbo_json_serialize(root, &len);
+        assert(serialized != NULL);
+        assert(len > 0);
+        
+        // Simple string check
+        assert(strstr(serialized, "\"name\":\"turbo\"") != NULL);
+        assert(strstr(serialized, "\"version\":2") != NULL);
+        assert(strstr(serialized, "\"items\":[1,2]") != NULL);
+
+        turbo_json_serialize_free(serialized);
+        turbo_free_json(&root);
+        assert(root == NULL);
+        printf("JSON building test passed!\n");
+    }
+
     printf("Turbo Parser dedicated interfaces test finished.\n");
     return 0;
 }

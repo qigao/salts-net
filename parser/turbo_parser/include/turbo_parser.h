@@ -48,6 +48,22 @@ CXX_C_API const char *turbo_json_get_string(const json_value_t *obj, const char 
 CXX_C_API char *turbo_json_serialize(const json_value_t *value, size_t *out_len);
 CXX_C_API void turbo_json_serialize_free(char *str);
 
+/* JSON Builder/Modifier */
+CXX_C_API json_value_t *turbo_json_create_object(void);
+CXX_C_API json_value_t *turbo_json_create_array(void);
+CXX_C_API json_value_t *turbo_json_create_string(const char *str);
+CXX_C_API json_value_t *turbo_json_create_number(double num);
+CXX_C_API json_value_t *turbo_json_create_bool(bool val);
+CXX_C_API json_value_t *turbo_json_create_null(void);
+
+CXX_C_API void turbo_json_object_add(json_value_t *obj, const char *key, json_value_t *val);
+CXX_C_API void turbo_json_array_add(json_value_t *arr, json_value_t *val);
+
+CXX_C_API void turbo_json_object_set_string(json_value_t *obj, const char *key, const char *val);
+CXX_C_API void turbo_json_object_set_number(json_value_t *obj, const char *key, double val);
+CXX_C_API void turbo_json_object_set_bool(json_value_t *obj, const char *key, bool val);
+CXX_C_API void turbo_json_object_set_null(json_value_t *obj, const char *key);
+
 /* CSV */
 typedef struct csv_doc_s turbo_csv_doc_t;
 
@@ -194,6 +210,10 @@ CXX_C_API void turbo_cmd_add_required_string(turbo_cmd_parser_t *parser, char **
                                              const char *name, const char *desc);
 
 CXX_C_API void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool colors);
+
+/* DotEnv Parser */
+CXX_C_API int turbo_dotenv_load(const char *path, bool overwrite);
+CXX_C_API int turbo_dotenv_load_default(bool overwrite);
 
 #ifdef __cplusplus
 }

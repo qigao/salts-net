@@ -67,6 +67,11 @@ json_value_t *json_create_null(void);
 void json_object_add(json_value_t *obj, const char *key, json_value_t *val);
 void json_array_add(json_value_t *arr, json_value_t *val);
 
+void json_object_set_string(json_value_t *obj, const char *key, const char *val);
+void json_object_set_number(json_value_t *obj, const char *key, double val);
+void json_object_set_bool(json_value_t *obj, const char *key, bool val);
+void json_object_set_null(json_value_t *obj, const char *key);
+
 
 /* ============================================================================
  * SAX/Stream API - O(1) memory, callback-based parsing

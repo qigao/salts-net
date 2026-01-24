@@ -11,6 +11,7 @@
 #include "soa_parser.h"
 #include "uri_parser.h"
 #include "cmd_arger.h"
+#include "dotenv.h"
 
 /* JSON */
 int turbo_parse_json(const uint8_t *data, size_t len, void *out) {
@@ -87,6 +88,38 @@ char *turbo_json_serialize(const json_value_t *value, size_t *out_len) {
 }
 
 void turbo_json_serialize_free(char *str) { json_serialize_free(str); }
+
+/* JSON Builder/Modifier */
+json_value_t *turbo_json_create_object(void) { return json_create_object(); }
+json_value_t *turbo_json_create_array(void) { return json_create_array(); }
+json_value_t *turbo_json_create_string(const char *str) { return json_create_string(str); }
+json_value_t *turbo_json_create_number(double num) { return json_create_number(num); }
+json_value_t *turbo_json_create_bool(bool val) { return json_create_bool(val); }
+json_value_t *turbo_json_create_null(void) { return json_create_null(); }
+
+void turbo_json_object_add(json_value_t *obj, const char *key, json_value_t *val) {
+    json_object_add(obj, key, val);
+}
+
+void turbo_json_array_add(json_value_t *arr, json_value_t *val) {
+    json_array_add(arr, val);
+}
+
+void turbo_json_object_set_string(json_value_t *obj, const char *key, const char *val) {
+    json_object_set_string(obj, key, val);
+}
+
+void turbo_json_object_set_number(json_value_t *obj, const char *key, double val) {
+    json_object_set_number(obj, key, val);
+}
+
+void turbo_json_object_set_bool(json_value_t *obj, const char *key, bool val) {
+    json_object_set_bool(obj, key, val);
+}
+
+void turbo_json_object_set_null(json_value_t *obj, const char *key) {
+    json_object_set_null(obj, key);
+}
 
 /* CSV */
 int turbo_parse_csv(const uint8_t *data, size_t len, void *out) {
@@ -578,4 +611,13 @@ void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool col
   cmd_arger_parse(parser->optional_args, parser->optional_count,
                   parser->required_args, parser->required_count,
                   argc, argv, app_ver, (CmdArgerBool)colors);
+}
+
+/* DotEnv */
+int turbo_dotenv_load(const char *path, bool overwrite) {
+  return dotenv_load(path, overwrite);
+}
+
+int turbo_dotenv_load_default(bool overwrite) {
+  return dotenv_load_default(overwrite);
 }

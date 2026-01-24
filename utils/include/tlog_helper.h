@@ -1,5 +1,5 @@
 /**
- * @file tlog_cpp_containers.h
+ * @file tlog_helper.h
  * @brief C++ STL container logging helpers for TLog
  *
  * This header provides helper functions to enable direct logging
@@ -9,7 +9,7 @@
  *
  * Usage:
  *   #include "tlog.h"
- *   #include "tlog_cpp_containers.h"
+ *   #include "tlog_helper.h"
  *
  *   std::vector<int> vec = {1, 2, 3, 4, 5};
  *   TLOG_INFO("Vector: {}", tlog::format(vec));
@@ -25,16 +25,22 @@
 
   #include <array>
   #include <deque>
+  #include <forward_list>
   #include <list>
   #include <map>
+  #include <memory>
+  #include <optional>
   #include <set>
   #include <sstream>
   #include <string>
+  #include <string_view>
+  #include <tuple>
   #include <type_traits>
   #include <unordered_map>
   #include <unordered_set>
   #include <utility>
   #include <vector>
+  #include <filesystem>
 
 
 namespace tlog {
@@ -47,6 +53,7 @@ namespace tlog {
     // Type traits to detect container categories
     template <typename T> struct is_string_type : std::false_type {};
     template <> struct is_string_type<std::string> : std::true_type {};
+    template <> struct is_string_type<std::string_view> : std::true_type {};
     template <> struct is_string_type<const char *> : std::true_type {};
     template <> struct is_string_type<char *> : std::true_type {};
 
@@ -58,6 +65,10 @@ namespace tlog {
     struct SetTag : ContainerTag {};
     struct SequenceTag : ContainerTag {};
     struct PairTag {};
+    struct TupleTag {};
+    struct OptionalTag {};
+    struct SmartPtrTag {};
+    struct PathTag {};
     struct UnknownTag {};
 
     template <typename T> struct get_type_tag {
@@ -75,6 +86,9 @@ namespace tlog {
       using type = SequenceTag;
     };
     template <typename T, size_t N> struct get_type_tag<std::array<T, N>> {
+      using type = SequenceTag;
+    };
+    template <typename T, typename A> struct get_type_tag<std::forward_list<T, A>> {
       using type = SequenceTag;
     };
 
@@ -102,6 +116,29 @@ namespace tlog {
       using type = PairTag;
     };
 
+    // Tuples
+    template <typename... Args> struct get_type_tag<std::tuple<Args...>> {
+      using type = TupleTag;
+    };
+
+    // Optionals
+    template <typename T> struct get_type_tag<std::optional<T>> {
+      using type = OptionalTag;
+    };
+
+    // Smart Pointers
+    template <typename T, typename D> struct get_type_tag<std::unique_ptr<T, D>> {
+      using type = SmartPtrTag;
+    };
+    template <typename T> struct get_type_tag<std::shared_ptr<T>> {
+      using type = SmartPtrTag;
+    };
+
+    // Filesystem Path
+    template <> struct get_type_tag<std::filesystem::path> {
+      using type = PathTag;
+    };
+
     template <typename T>
     using get_type_tag_t = typename get_type_tag<typename std::decay<T>::type>::type;
 
@@ -120,9 +157,19 @@ namespace tlog {
         return format_map(value);
       } else if constexpr (std::is_same_v<Tag, detail::PairTag>) {
         return format_pair(value);
+      } else if constexpr (std::is_same_v<Tag, detail::TupleTag>) {
+        return format_tuple(value);
+      } else if constexpr (std::is_same_v<Tag, detail::OptionalTag>) {
+        return format_optional(value);
+      } else if constexpr (std::is_same_v<Tag, detail::SmartPtrTag>) {
+        return format_ptr(value);
+      } else if constexpr (std::is_same_v<Tag, detail::PathTag>) {
+        return "\"" + value.string() + "\"";
       } else if constexpr (detail::is_string_type<typename std::decay<T>::type>::value) {
         if constexpr (std::is_same_v<typename std::decay<T>::type, std::string>) {
           return value;
+        } else if constexpr (std::is_same_v<typename std::decay<T>::type, std::string_view>) {
+          return std::string(value);
         } else {
           return value ? value : "(null)";
         }
@@ -170,6 +217,33 @@ namespace tlog {
     template <typename Pair> static std::string format_pair(const Pair &pair) {
       std::ostringstream oss;
       oss << "(" << tlog::format(pair.first) << ", " << tlog::format(pair.second) << ")";
+      return oss.str();
+    }
+
+    template <typename Optional> static std::string format_optional(const Optional &opt) {
+      if (!opt)
+        return "nullopt";
+      return "opt(" + tlog::format(*opt) + ")";
+    }
+
+    template <typename Ptr> static std::string format_ptr(const Ptr &ptr) {
+      if (!ptr)
+        return "nullptr";
+      std::ostringstream oss;
+      oss << "@" << ptr.get();
+      return oss.str();
+    }
+
+    template <typename Tuple> static std::string format_tuple(const Tuple &t) {
+      std::ostringstream oss;
+      oss << "(";
+      std::apply(
+          [&oss](const auto &...args) {
+            size_t n = 0;
+            ((oss << (n++ > 0 ? ", " : "") << tlog::format(args)), ...);
+          },
+          t);
+      oss << ")";
       return oss.str();
     }
   };

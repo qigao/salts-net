@@ -16,7 +16,7 @@ void destroy_app(void)
 
 int main(void)
 {
-    env_load("..", false);
+    dotenv_load("..", false);
     const char *port = getenv("PORT");
     const unsigned short PORT = (unsigned short)atoi(port);
     char *CORS_ORIGIN = getenv("CORS_ORIGIN");

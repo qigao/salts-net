@@ -850,6 +850,30 @@ void json_array_add(json_value_t *arr, json_value_t *val) {
   json_array_append_arena(arr->arena, arr, val);
 }
 
+void json_object_set_string(json_value_t *obj, const char *key, const char *val) {
+    if (!obj || obj->type != JSON_OBJECT || !key || !val) return;
+    json_value_t *v = json_value_string_arena(obj->arena, val, strlen(val));
+    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+}
+
+void json_object_set_number(json_value_t *obj, const char *key, double val) {
+    if (!obj || obj->type != JSON_OBJECT || !key) return;
+    json_value_t *v = json_value_number_arena(obj->arena, val);
+    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+}
+
+void json_object_set_bool(json_value_t *obj, const char *key, bool val) {
+    if (!obj || obj->type != JSON_OBJECT || !key) return;
+    json_value_t *v = json_value_bool_arena(obj->arena, val);
+    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+}
+
+void json_object_set_null(json_value_t *obj, const char *key) {
+    if (!obj || obj->type != JSON_OBJECT || !key) return;
+    json_value_t *v = json_value_null_arena(obj->arena);
+    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+}
+
 
 
 /* ============================================================================

@@ -13,7 +13,7 @@ turl https://httpbin.org/get
 ### POST Data
 
 ```bash
-turl --request POST --data "name=TurboNet&type=Framework" https://httpbin.org/post
+turl -X POST --d "name=TurboNet&type=Framework" https://httpbin.org/post
 ```
 
 ### Short Options
@@ -45,7 +45,7 @@ Use short flags to write more concise commands:
 
 ```bash
 # Long form
-turl --request POST --data "{\"u\": \"admin\"}" --test save_session.js https://api.com/login
+turl -X POST --d "{\"u\": \"admin\"}" --test save_session.js https://api.com/login
 
 # Short form (equivalent)
 turl -X POST -d "{\"u\": \"admin\"}" -t save_session.js https://api.com/login
@@ -63,13 +63,13 @@ turl --data-binary @data.pb https://api.example.com/v1/log
 ### Custom Headers
 
 ```bash
-turl --header "Accept: application/json" --header "X-Custom: Hello" https://httpbin.org/headers
+turl -H "Accept: application/json" -H "X-Custom: Hello" https://httpbin.org/headers
 ```
 
 ### Verbose Mode & Follow Redirects
 
 ```bash
-turl --verbose --location https://google.com
+turl -v -L https://google.com
 ```
 
 ---
@@ -149,7 +149,7 @@ turl @common-headers.txt --bearer "custom_token" https://api.example.com/v1/data
 Use variables to construct your URL dynamically.
 
 ```bash
-turl --context "{\"base\": \"httpbin.org\", \"endpoint\": \"get\"}" "https://{{base}}/{{endpoint}}"
+turl -j "{\"base\": \"httpbin.org\", \"endpoint\": \"get\"}" "https://{{base}}/{{endpoint}}"
 ```
 
 ### 2. Templated Body
@@ -157,7 +157,7 @@ turl --context "{\"base\": \"httpbin.org\", \"endpoint\": \"get\"}" "https://{{b
 Inject data into your POST body.
 
 ```bash
-turl --request POST --context "{\"user\": \"Antigravity\", \"version\": \"1.0\"}" --data "{\"name\": \"{{user}}\", \"v\": \"{{version}}\"}" https://httpbin.org/post
+turl -X POST -j "{\"user\": \"Antigravity\", \"version\": \"1.0\"}" -d "{\"name\": \"{{user}}\", \"v\": \"{{version}}\"}" https://httpbin.org/post
 ```
 
 ### 3. Templated Headers
@@ -165,7 +165,7 @@ turl --request POST --context "{\"user\": \"Antigravity\", \"version\": \"1.0\"}
 Manage authentication or custom headers with templates.
 
 ```bash
-turl --context "{\"token\": \"secret_123\"}" --header "Authorization: Bearer {{token}}" https://httpbin.org/headers
+turl -j "{\"token\": \"secret_123\"}" -H "Authorization: Bearer {{token}}" https://httpbin.org/headers
 ```
 
 ### 4. Using a JSON File for Context
@@ -183,7 +183,7 @@ If you have a file named `context.json`:
 You can run:
 
 ```bash
-turl --context context.json --header "X-API-Key: {{api_key}}" "https://httpbin.org/get?q={{search}}&l={{limit}}"
+turl -j context.json -H "X-API-Key: {{api_key}}" "https://httpbin.org/get?q={{search}}&l={{limit}}"
 ```
 
 ---
@@ -193,13 +193,13 @@ turl --context context.json --header "X-API-Key: {{api_key}}" "https://httpbin.o
 ### Basic Authentication
 
 ```bash
-turl --user "user:password" https://httpbin.org/basic-auth/user/password
+turl -u "user:password" https://httpbin.org/basic-auth/user/password
 ```
 
 ### Bearer Token
 
 ```bash
-turl --bearer "your_token_here" https://httpbin.org/bearer
+turl -b "your_token_here" https://httpbin.org/bearer
 ```
 
 ### Environment-Based Auth
@@ -215,7 +215,7 @@ Use `--form` to send multipart form data, which is essential for file uploads.
 
 ```bash
 # Send text fields and a file
-turl --form "username=john" --form "avatar=@profile.png" https://api.example.com/upload
+turl -F "username=john" -F "avatar=@profile.png" https://api.example.com/upload
 ```
 
 ### WebSocket Support
@@ -224,7 +224,7 @@ turl --form "username=john" --form "avatar=@profile.png" https://api.example.com
 
 ```bash
 # Connect and send a message
-turl --verbose --data "Hello WebSocket" ws://echo.websocket.org
+turl -v -d "Hello WebSocket" ws://echo.websocket.org
 
 # Use secure WebSocket
 turl wss://echo.websocket.org
@@ -256,7 +256,7 @@ console.log(`* Pre-request script: timestamp=${env.timestamp}, nonce=${env.nonce
 Run it with:
 
 ```bash
-turl --script pre-request.js --data "{\"ts\": {{timestamp}}, \"nonce\": \"{{nonce}}\"}" https://httpbin.org/post
+turl -s pre-request.js -d "{\"ts\": {{timestamp}}, \"nonce\": \"{{nonce}}\"}" https://httpbin.org/post
 ```
 
 ### Post-Response Scripting (Tests & Extraction)
@@ -440,3 +440,175 @@ Content-Type: application/json
   "origin": "1.2.3.4"
 }
 ```
+
+```text
+* Trying to GET https://httpbin.org/ip...
+< HTTP/1.1 200
+Date: Wed, 21 Jan 2026 05:08:00 GMT
+Content-Type: application/json
+...
+{
+  "origin": "1.2.3.4"
+}
+```
+
+---
+
+## Retries & Observability
+
+`turl` is designed for reliable and observable testing.
+
+### Retry Logic
+Automatically retry failed requests (timeout, 5xx, connection error) with exponential backoff.
+
+```bash
+# Retry up to 3 times, starting with 500ms delay
+turl --retry 3 --retry-delay 500 https://unstable.api.com/data
+```
+
+### Performance Stats
+Get a printed summary of request timing and data transfer.
+
+```bash
+turl --stats https://google.com
+```
+
+Output:
+```text
+------------------ Performance Stats ------------------
+  Total Time:   45.20 ms
+  Sent:         120 bytes
+  Received:     15402 bytes
+-------------------------------------------------------
+```
+
+---
+
+## Request Collections
+
+Move beyond single commands by defining **Request Collections** in JSON. This allows you to run entire workflows (e.g., "Login -> Get Profile -> Logout") in one go.
+
+### 1. Create a Collection File
+`api_test.json`:
+```json
+{
+  "name": "User Workflow",
+  "requests": [
+    {
+      "name": "Health Check",
+      "url": "https://api.example.com/health"
+    },
+    {
+      "name": "Create User",
+      "url": "https://api.example.com/users",
+      "method": "POST",
+      "body": "{\"name\": \"test\"}",
+      "headers": {"Content-Type": "application/json"}
+    }
+  ]
+}
+```
+
+### 2. Run the Collection
+```bash
+turl --collection api_test.json
+```
+
+### 3. Collections + Environments
+Collections support templating! Create `.env.local` and `.env.prod`:
+
+`.env.local`: `BASE_URL=http://localhost:8080`
+`.env.prod`: `BASE_URL=https://api.myapp.com`
+
+Update your collection URL to `{{BASE_URL}}/health`.
+
+Run against local:
+```bash
+turl --collection api_test.json -e local
+```
+
+Run against prod:
+```bash
+turl --collection api_test.json --use-env prod
+```
+
+---
+
+## JWT Power-Tools
+
+`turl` has native support for generating and debugging JSON Web Tokens (JWT).
+
+### 1. Generate Signed JWT on-the-fly
+No need for external tools to create bearer tokens.
+
+```bash
+turl --jwt-secret "my_secret_key" --jwt-claims "{\"sub\":\"123\", \"role\":\"admin\"}" https://api.com/protected
+```
+This automatically generates a valid HS256 token and attaches it as `Authorization: Bearer <token>`.
+
+### 2. Decode & Inspect JWT
+Debug tokens returned by your API instantly.
+
+```bash
+turl --decode-jwt -X POST -d "align='center' creds..." https://api.com/login
+```
+If the response (or request) contains a JWT, `turl` will automatically find, decode, and pretty-print the claims to the console.
+
+---
+
+## Batch Downloads (Aria2c-style)
+
+`turl` supports high-performance concurrent batch downloads using a simple input file. This mimics `aria2c` functionality but with added support for Mustache templating.
+
+### Basic Batch Download
+
+Create a file `urls.txt`:
+```text
+https://example.com/file1.zip
+https://example.com/file2.zip
+https://example.com/image.png
+```
+
+Run `turl` with `-i` (input file) and `-j` (concurrency):
+
+```bash
+# Download files concurrently (max 5 at a time)
+turl -i urls.txt -j 5
+```
+
+### Templated Batch Download
+
+You can use Mustache templates in your URL list to make batch downloads dynamic based on a context file.
+
+**urls.txt:**
+```text
+{{base_url}}/img/{{category}}/001.jpg
+{{base_url}}/img/{{category}}/002.jpg
+{{base_url}}/docs/manual-{{version}}.pdf
+```
+
+**context.json:**
+```json
+{
+  "base_url": "https://cdn.example.com",
+  "category": "nature",
+  "version": "v2"
+}
+```
+
+**Command:**
+```bash
+turl -i urls.txt --context context.json -j 10 --output downloads/
+```
+
+This will download:
+- `https://cdn.example.com/img/nature/001.jpg`
+- `https://cdn.example.com/img/nature/002.jpg`
+- `https://cdn.example.com/docs/manual-v2.pdf`
+
+And save them to the `downloads/` directory.
+
+### Key Features
+- **Concurrency Control**: Use `-j <N>` to limit valid simultaneous connections.
+- **Output Directory**: Use `-o <dir>` to save all downloaded files into a specific folder. The folder is created automatically if it doesn't exist.
+- **Smart Filenames**: `turl` automatically extracts the filename from the URL (e.g., `image.png` from `http://site.com/image.png?v=1`).

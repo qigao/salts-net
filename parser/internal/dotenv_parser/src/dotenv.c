@@ -7,10 +7,12 @@
 
 #if defined(_WIN32)
 #if defined(_MSC_VER)
+#ifndef strdup
 #define strdup _strdup
 #endif
+#endif
 
-int setenv(const char *name, const char *value, int overwrite)
+static int setenv(const char *name, const char *value, int overwrite)
 {
     int errcode = 0;
     if (!overwrite)
@@ -81,12 +83,15 @@ static char *resolve_nested(const char *value)
     return result ? result : strdup("");
 }
 
-int env_load(const char *path, bool overwrite)
+int dotenv_load(const char *path, bool overwrite)
 {
-    char full_path[512];
+    if (!path) return -1;
+
+    char full_path[1024];
     FILE *file = fopen(path, "rb");
 
     if (!file) {
+        // Try appending /.env if path is a directory (or just doesn't exist as is)
         snprintf(full_path, sizeof(full_path), "%s/.env", path);
         file = fopen(full_path, "rb");
     }
@@ -97,6 +102,11 @@ int env_load(const char *path, bool overwrite)
     fseek(file, 0, SEEK_END);
     long size = ftell(file);
     fseek(file, 0, SEEK_SET);
+
+    if (size < 0) {
+        fclose(file);
+        return -1;
+    }
 
     char *buffer = malloc(size + 1);
     if (!buffer) {
@@ -126,7 +136,7 @@ int env_load(const char *path, bool overwrite)
                 raw_val[token.length] = '\0';
 
                 char *final_val = resolve_nested(raw_val);
-                setenv(current_key, final_val, overwrite);
+                setenv(current_key, final_val, overwrite ? 1 : 0);
 
                 free(raw_val);
                 free(final_val);
@@ -142,4 +152,9 @@ int env_load(const char *path, bool overwrite)
     free(buffer);
 
     return 0;
+}
+
+int dotenv_load_default(bool overwrite)
+{
+    return dotenv_load(".env", overwrite);
 }

@@ -736,71 +736,15 @@ static void process_response_data(http_async_request_t *request, const char *dat
 
   printf("[DEBUG] Total buffered: %zu bytes, parsing...\n", request->receive_buffer_used);
 
-  /* Print first 200 bytes of buffer for debugging */
-  printf("[DEBUG] Buffer content (first 200 bytes):\n");
-  size_t print_len = request->receive_buffer_used < 200 ? request->receive_buffer_used : 200;
-  for (size_t i = 0; i < print_len; i++) {
-    char c = request->receive_buffer[i];
-    if (c >= 32 && c <= 126) {
-      putchar(c);
-    } else if (c == '\r') {
-      printf("\\r");
-    } else if (c == '\n') {
-      printf("\\n\n");
-    } else {
-      printf("\\x%02x", (unsigned char)c);
-    }
-  }
-  printf("\n[DEBUG] End of buffer dump\n");
-  fflush(stdout);
-
-  printf("[DEBUG] Parser state: data=%p\n", request->parser.data);
-  printf("[DEBUG] Parser type: %d\n", request->parser.type);
-  printf("[DEBUG] Buffer ptr: %p, size: %zu\n", (void*)request->receive_buffer, request->receive_buffer_used);
-
   /* Verify pointers before parsing */
-  if (!request->receive_buffer || request->receive_buffer_used == 0) {
-    printf("[DEBUG] ERROR: Invalid buffer!\n");
-    fflush(stdout);
-    return;
+  if (len == 0 || !data) {
+     return;
   }
 
-  if (!request->parser.data) {
-    printf("[DEBUG] ERROR: Parser data is NULL!\n");
-    fflush(stdout);
-    return;
-  }
-
-  printf("[DEBUG] About to call llhttp_execute\n");
-  fflush(stdout);
-
-  /* Parse with llhttp - using a timeout mechanism */
-  printf("[DEBUG] Calling llhttp_execute NOW...\n");
-  printf("[DEBUG] Attempting to parse %zu bytes at %p\n", request->receive_buffer_used, (void*)request->receive_buffer);
-  fflush(stdout);
-
-  /* Try calling with smaller chunk first to test */
-  size_t test_size = request->receive_buffer_used < 50 ? request->receive_buffer_used : 50;
-  printf("[DEBUG] Test parse first 50 bytes...\n");
-  fflush(stdout);
-
-  enum llhttp_errno err =
-      llhttp_execute(&request->parser, request->receive_buffer, test_size);
-
-  printf("[DEBUG] Back from llhttp_execute (test): err=%d\n", err);
-  fflush(stdout);
-
-  if (err == HPE_OK && test_size < request->receive_buffer_used) {
-    printf("[DEBUG] Test succeeded, parsing remaining bytes...\n");
-    fflush(stdout);
-    err = llhttp_execute(&request->parser, request->receive_buffer + test_size,
-                         request->receive_buffer_used - test_size);
-    printf("[DEBUG] Back from second llhttp_execute\n");
-    fflush(stdout);
-  }
-
-  printf("[DEBUG] llhttp_execute returned: %s (%d)\n", llhttp_errno_name(err), err);
-  fflush(stdout);
+  /* Parse with llhttp - parse ONLY the new data chunk */
+  printf("[DEBUG] Calling llhttp_execute on new chunk (%zu bytes)...\n", len);
+  
+  enum llhttp_errno err = llhttp_execute(&request->parser, data, len);
 
   if (err != HPE_OK && err != HPE_PAUSED_UPGRADE && err != HPE_PAUSED) {
     printf("[DEBUG] Parse error detected\n");

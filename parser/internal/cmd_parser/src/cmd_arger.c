@@ -10,6 +10,8 @@
   #define strcasecmp _stricmp
 #endif
 
+#include <dotenv.h>
+
 // ============================================================================
 // Descriptor Builder Functions
 // ============================================================================
@@ -476,6 +478,9 @@ static void cmd_arger_parse_internal(CmdArgerDesc *global_optional_args,
                                      CmdArgerSubCommand *subcommands, uint32_t subcommands_count,
                                      int *selected_subcommand_idx, int argc, char **argv,
                                      char *app_name_and_version, CmdArgerBool colors) {
+  // Load .env if it exists, don't overwrite existing environment variables
+  dotenv_load_default(false);
+
   int has_response_file = 0;
   for (int i = 1; i < argc; i++) {
     if (argv[i][0] == '@') {
@@ -768,10 +773,20 @@ static void print_option_desc(CmdArgerDesc *desc, CmdArgerBool colors) {
     cmd_arger_printf(colors, "\t{{yellow}}--%s{{reset}}: %s", desc->name, desc->info);
   }
 
-  if (desc->spec.choices.items && desc->spec.choices.count > 0) {
+  if (desc->kind == CmdArgerDescKind_string && desc->spec.choices.items &&
+      desc->spec.choices.count > 0) {
     printf(" [");
     for (uint32_t i = 0; i < desc->spec.choices.count; i++) {
-      printf("%s%s", desc->spec.choices.items[i], (i < desc->spec.choices.count - 1) ? "|" : "");
+      printf("%s%s", desc->spec.choices.items[i],
+             (i < desc->spec.choices.count - 1) ? "|" : "");
+    }
+    printf("]");
+  } else if (desc->kind == CmdArgerDescKind_enum && desc->spec.enums.descs &&
+             desc->spec.enums.count > 0) {
+    printf(" [");
+    for (uint32_t i = 0; i < desc->spec.enums.count; i++) {
+      printf("%s%s", desc->spec.enums.descs[i].name,
+             (i < desc->spec.enums.count - 1) ? "|" : "");
     }
     printf("]");
   }
@@ -818,8 +833,16 @@ void cmd_arger_show_subcommand_help_and_exit(
     CmdArgerDesc *active_required_args, uint32_t active_required_args_count,
     CmdArgerSubCommand *all_subcommands, uint32_t all_subcommands_count,
     char *active_subcommand_name, char *exe_name, char *app_name_and_version, CmdArgerBool colors) {
+  const char *base_name = strrchr(exe_name, '/');
+  if (!base_name)
+    base_name = strrchr(exe_name, '\\');
+  if (base_name)
+    base_name++;
+  else
+    base_name = exe_name;
+
   cmd_arger_printf(colors, "{{bold}}------ %s help ------\n{{reset}}", app_name_and_version);
-  cmd_arger_printf(colors, "{{bold}}usage:{{reset}} %s", exe_name);
+  cmd_arger_printf(colors, "{{bold}}usage:{{reset}} %s", base_name);
 
   if (active_subcommand_name) {
     printf(" %s", active_subcommand_name);

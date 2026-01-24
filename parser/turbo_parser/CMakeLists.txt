@@ -10,6 +10,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/ltv_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/soa_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/cmd_parser/include
+          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/dotenv_parser/include
           ${CMAKE_SOURCE_DIR}/common/include # for platform.h used by uri_parser
 )
 
@@ -24,6 +25,7 @@ target_link_libraries(
           tlv_parser
           ltv_parser
           soa_parser
+          dotenv_parser
           cmd_parser)
 
 set_target_properties(

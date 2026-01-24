@@ -1,17 +1,17 @@
-set(TARGET_NAME cmd_parser)
+set(TARGET_NAME dotenv_parser)
 
 # =============================================================================
 # re2c Generated Files
 # =============================================================================
 
-set(CMD_ARGER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/cmd_arger.re)
-set(CMD_ARGER_GEN ${CMAKE_CURRENT_BINARY_DIR}/cmd_arger_gen.c)
+set(DOTENV_LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/dotenv_lexer.re)
+set(DOTENV_LEXER_GEN ${CMAKE_CURRENT_BINARY_DIR}/dotenv_lexer_gen.c)
 
 add_custom_command(
-  OUTPUT ${CMD_ARGER_GEN}
-  COMMAND ${RE2C_EXECUTABLE} -o ${CMD_ARGER_GEN} ${CMD_ARGER_RE}
-  DEPENDS ${CMD_ARGER_RE}
-  COMMENT "Generating cmd_arger with re2c"
+  OUTPUT ${DOTENV_LEXER_GEN}
+  COMMAND ${RE2C_EXECUTABLE} -o ${DOTENV_LEXER_GEN} ${DOTENV_LEXER_RE}
+  DEPENDS ${DOTENV_LEXER_RE} ${CMAKE_CURRENT_SOURCE_DIR}/src/dotenv_lexer.h
+  COMMENT "Generating dotenv lexer with re2c"
   VERBATIM)
 
 # =============================================================================
@@ -19,10 +19,10 @@ add_custom_command(
 # =============================================================================
 
 add_library(${TARGET_NAME} STATIC 
-    ${CMD_ARGER_GEN}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/cmd_arger.c
+    ${DOTENV_LEXER_GEN}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dotenv.c
 )
-add_library(TurboNet::CmdParser ALIAS ${TARGET_NAME})
+add_library(TurboNet::DotEnvParser ALIAS ${TARGET_NAME})
 
 target_include_directories(
   ${TARGET_NAME}
@@ -31,12 +31,15 @@ target_include_directories(
   PRIVATE 
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/utils/include
 )
 
-target_link_libraries(${TARGET_NAME} PRIVATE TurboNet::DotEnvParser)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
 
 set_target_properties(
   ${TARGET_NAME} PROPERTIES FOLDER turbo_parser/parser/${TARGET_NAME}
-                            EXPORT_NAME CmdParser)
+                             EXPORT_NAME DotEnvParser)
 
-add_subdirectory(test)
+if(BUILD_TESTS)
+  add_subdirectory(test)
+endif()

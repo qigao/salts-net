@@ -109,7 +109,6 @@ static int dotenv_lex_value(dotenv_lexer_t *lexer, dotenv_token_t *token) {
         dq_val = ["] ([^"\\] | [\\]["])* ["];
         sq_val = ['] ([^'\\] | [\\]['])* ['];
         // Unquoted value (up to newline or comment start)
-        // Note: in .env, a # usually starts a comment unless quoted
         uval_char = [^\r\n#\x00];
         uval = uval_char+;
 

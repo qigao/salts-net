@@ -1,3 +1,4 @@
+// re2c --lang c
 /**
  * @file cookie_lexer.re
  * @brief re2c lexer for HTTP Set-Cookie header parsing

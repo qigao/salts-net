@@ -30,13 +30,16 @@ typedef struct header_entry_s {
 } header_entry_t;
 
 /* URI parsing using uri_parser.h */
+struct http_async_request_s;
 
+/* Parser context for llhttp */
 /* Parser context for llhttp */
 typedef struct {
   http_async_response_t *response;
   int headers_complete;
   char *current_header_field;
   char *current_header_value;
+  struct http_async_request_s *request; /* Backpointer for callbacks */
 } parser_context_t;
 
 /* Request state */
@@ -65,6 +68,9 @@ struct http_async_request_s {
 
   http_async_progress_cb progress_callback;
   void *progress_user_data;
+  
+  http_async_data_cb data_callback;
+  void *data_user_data;
 
   request_state_t state;
   http_async_response_t *response;
@@ -79,6 +85,7 @@ struct http_async_request_s {
   parser_context_t parser_ctx;
 
   int redirect_count;
+  int stream_only;
 
   struct http_async_request_s *next;
   struct http_async_request_s *prev;
@@ -197,6 +204,8 @@ static void remove_request(http_async_client_t *client, http_async_request_t *re
 static const char *method_to_string(http_method_t method);
 static char *get_header_value(const char *headers, const char *header_name);
 static char *build_full_url(http_async_client_t *client, const char *url, turbo_arena_t *arena);
+static double get_time_seconds(void) { return (double)turbo_monotonic_ms() / 1000.0; }
+
 
 /* Client lifecycle */
 http_async_client_t *http_async_client_create(void) {
@@ -447,6 +456,7 @@ http_async_request_t *http_async_request(http_async_client_t *client, http_metho
   request->user_data = user_data;
   request->state = REQUEST_STATE_PENDING;
   request->redirect_count = 0;
+  request->stream_only = 0;
 
   /* Phase HTTP-1: Copy headers - allocate array and strings from arena */
   if (headers && header_count > 0) {
@@ -619,22 +629,33 @@ static int on_body(llhttp_t *parser, const char *at, size_t length) {
 
   http_async_response_t *response = ctx->response;
 
-  /* Append body data */
-  if (!response->body) {
-    response->body = malloc(length + 1);
+  /* Append body data ONLY if not in streaming mode */
+  if (ctx->request && !ctx->request->stream_only) {
     if (response->body) {
-      memcpy(response->body, at, length);
-      response->body[length] = '\0';
-      response->body_len = length;
+      /* Existing body */
+      char *new_body = realloc(response->body, response->body_len + length + 1);
+      if (new_body) {
+        memcpy(new_body + response->body_len, at, length);
+        new_body[response->body_len + length] = '\0';
+        response->body = new_body;
+      }
+    } else {
+      /* New body */
+      response->body = malloc(length + 1);
+      if (response->body) {
+        memcpy(response->body, at, length);
+        response->body[length] = '\0';
+      }
     }
-  } else {
-    char *new_body = realloc(response->body, response->body_len + length + 1);
-    if (new_body) {
-      memcpy(new_body + response->body_len, at, length);
-      response->body_len += length;
-      new_body[response->body_len] = '\0';
-      response->body = new_body;
-    }
+  }
+
+  /* Always update length for progress tracking */
+  response->body_len += length;
+  
+  /* IMPORTANT: Invoke data callback if set (Streaming Support) */
+  parser_context_t *p_ctx = (parser_context_t *)parser->data;
+  if (p_ctx && p_ctx->request && p_ctx->request->data_callback) {
+      p_ctx->request->data_callback(p_ctx->request, at, length, p_ctx->request->data_user_data);
   }
   return 0;
 }
@@ -794,6 +815,15 @@ static void process_response_data(http_async_request_t *request, const char *dat
   }
 }
 
+// Data callback setter
+void http_async_request_set_data_callback(http_async_request_t *request,
+                                          http_async_data_cb callback, void *user_data) {
+  if (!request)
+    return;
+  request->data_callback = callback;
+  request->data_user_data = user_data;
+}
+
 /* Helper functions implementation */
 
 static const char *method_to_string(http_method_t method) {
@@ -905,6 +935,7 @@ static void initiate_request(http_async_request_t *request) {
   fflush(stdout);
   request->parser.data = &request->parser_ctx;
   request->parser_ctx.response = request->response;
+  request->parser_ctx.request = request;
   printf("[DEBUG] Parser initialization complete\n");
   fflush(stdout);
 
@@ -1840,22 +1871,6 @@ int http_async_client_is_compression_enabled(http_async_client_t *client) {
  * Rate Limiting
  * ========================================================================= */
 
-#ifdef _WIN32
-  #include <sys/timeb.h>
-static double get_time_seconds(void) {
-  struct _timeb tb;
-  _ftime(&tb);
-  return (double)tb.time + (double)tb.millitm / 1000.0;
-}
-#else
-  #include <sys/time.h>
-static double get_time_seconds(void) {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
-}
-#endif
-
 void http_async_client_set_rate_limit(http_async_client_t *client,
                                       const http_async_rate_limit_t *limit) {
   if (!client || !limit)
@@ -1937,4 +1952,64 @@ void http_async_jwt_destroy(void *jwt) {
   if (jwt) {
     cjwt_destroy((cjwt_t *)jwt);
   }
+}
+
+/* ============================================================================
+ * Streaming & SSE Implementations
+ * ========================================================================= */
+
+void http_async_request_set_stream_only(http_async_request_t *request, int enable) {
+  if (request) {
+    request->stream_only = enable;
+  }
+}
+
+http_async_request_t *http_async_stream_get(http_async_client_t *client, const char *url,
+                                            http_async_data_cb data_cb,
+                                            http_async_response_cb complete_cb, void *user_data) {
+  http_async_request_t *request =
+      http_async_request(client, HTTP_GET, url, NULL, 0, NULL, 0, complete_cb, user_data);
+  if (request) {
+    request->stream_only = 1;
+    request->data_callback = data_cb;
+    request->data_user_data = user_data;
+  }
+  return request;
+}
+
+http_async_request_t *http_async_stream_post(http_async_client_t *client, const char *url,
+                                             const char *body, size_t body_len,
+                                             http_async_data_cb data_cb,
+                                             http_async_response_cb complete_cb, void *user_data) {
+  http_async_request_t *request =
+      http_async_post(client, url, body, body_len, complete_cb, user_data);
+  if (request) {
+    request->stream_only = 1;
+    request->data_callback = data_cb;
+    request->data_user_data = user_data;
+  }
+  return request;
+}
+
+http_async_request_t *http_async_sse_get(http_async_client_t *client, const char *url,
+                                         http_async_data_cb data_cb,
+                                         http_async_response_cb complete_cb, void *user_data) {
+  const char *headers[] = {"Accept: text/event-stream", "Cache-Control: no-cache"};
+  http_async_request_t *request =
+      http_async_request(client, HTTP_GET, url, headers, 2, NULL, 0, complete_cb, user_data);
+  if (request) {
+    request->stream_only = 1;
+    request->data_callback = data_cb;
+    request->data_user_data = user_data;
+  }
+  return request;
+}
+
+int http_async_response_is_sse(http_async_response_t *response) {
+  char *content_type = http_async_response_get_header(response, "Content-Type");
+  if (!content_type)
+    return 0;
+  int is_sse = (strstr(content_type, "text/event-stream") != NULL);
+  free(content_type);
+  return is_sse;
 }

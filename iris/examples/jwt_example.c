@@ -1,7 +1,9 @@
 #include "iris.h"
+#include "server.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cjwt/cjwt.h>
 
 /**
  * Iris JWT Authentication Example
@@ -9,11 +11,18 @@
 
 const char *JWT_SECRET = "super-secret-key-for-iris-jwt";
 
+void home_handler(Req *req, Res *res) {
+    send_text(res, 200, "Iris JWT Example. Go to /login to get a token.");
+}
+
 void protected_handler(Req *req, Res *res) {
-    void *jwt = iris_jwt_get_claims(req);
-    if (jwt) {
-        // In a real app, you'd cast to cjwt_t* if you have access to the header,
-        // or we'd provide more getters. For now, we just know it succeeded.
+    void *claims_ptr = iris_jwt_get_claims(req);
+    if (claims_ptr) {
+        cjwt_t *jwt = (cjwt_t *)claims_ptr;
+        
+        // Example of accessing claims (requires cjwt structure knowledge)
+        // Here we just print success.
+        
         send_json(res, 200, "{\"status\":\"success\", \"message\":\"You have accessed a protected route!\"}");
     } else {
         send_json(res, 500, "{\"status\":\"error\", \"message\":\"JWT claims not found in context\"}");
@@ -35,27 +44,76 @@ void login_handler(Req *req, Res *res) {
     }
 }
 
+// Guest Login Handler
+void login_guest_handler(Req *req, Res *res) {
+    // Guest user, admin = false
+    const char *claims = "{\"sub\":\"guest_456\", \"name\":\"Guest User\", \"admin\":false}";
+    char *token = iris_jwt_encode(JWT_SECRET, claims);
+    
+    if (token) {
+        char response[512];
+        snprintf(response, sizeof(response), "{\"token\":\"%s\"}", token);
+        send_json(res, 200, response);
+        free(token);
+    } else {
+        send_json(res, 500, "{\"error\":\"Failed to generate token\"}");
+    }
+}
+
+// ACL Middleware: Checks if the user has "admin": true claim
+int acl_middleware(Req *req, Res *res, Chain *chain) {
+    void *claims_ptr = iris_jwt_get_claims(req);
+    if (!claims_ptr) {
+        // Did you forget to add jwt_middleware before this?
+        send_json(res, 500, "{\"error\":\"Internal Server Error\", \"message\":\"No JWT context found\"}");
+        return 1;
+    }
+
+    cjwt_t *jwt = (cjwt_t *)claims_ptr;
+    cJSON *admin_claim = cJSON_GetObjectItem(jwt->private_claims, "admin");
+
+    if (!cJSON_IsBool(admin_claim) || !cJSON_IsTrue(admin_claim)) {
+        send_json(res, 403, "{\"error\":\"Forbidden\", \"message\":\"Admin access required\"}");
+        return 1;
+    }
+
+    // Access granted
+    return next(chain, req, res);
+}
+
+void admin_handler(Req *req, Res *res) {
+    send_json(res, 200, "{\"status\":\"success\", \"message\":\"Welcome, Admin!\"}");
+}
+
 int main() {
-    iris_app_t *app = iris_app_create();
+    // Initialize the router (required for legacy route registration macros)
+    if (init_router() != 0) {
+        fprintf(stderr, "Failed to initialize router\n");
+        return 1;
+    }
 
     // Set the global JWT secret
     iris_jwt_set_secret(JWT_SECRET);
 
     // Public route
-    iris_app_get(app, "/", (RequestHandler)[](Req *req, Res *res) {
-        send_text(res, 200, "Iris JWT Example. Go to /login to get a token.");
-    });
+    get("/", home_handler);
 
-    // Login route (returns a JWT)
-    iris_app_post(app, "/login", login_handler);
+    // Login route (returns a JWT with admin:true)
+    post("/login", login_handler);
 
-    // Protected route (requires JWT middleware)
-    iris_app_get_mw(app, "/protected", use(iris_jwt_middleware), protected_handler);
+    // Guest login route (returns a JWT with admin:false)
+    post("/login/guest", login_guest_handler);
+
+    // Protected route (requires valid JWT)
+    get("/protected", use(iris_jwt_middleware), protected_handler);
+
+    // Admin route (requires valid JWT AND admin claim)
+    get("/admin", use(iris_jwt_middleware, acl_middleware), admin_handler);
 
     printf("Iris JWT server starting on http://localhost:8080\n");
-    // Start the server (simplified for example)
-    // iris_app_listen(app, "tcp://0.0.0.0:8080"); 
+    
+    // Start the server using ecewo (listening on port 8080)
+    ecewo(8080);
 
-    iris_app_destroy(app);
     return 0;
 }

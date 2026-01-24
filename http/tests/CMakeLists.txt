@@ -11,11 +11,12 @@ set(HTTP_TESTS
     test_cookies
     test_multipart
     test_interceptors
+    test_async_stream
     test_retry)
 
 foreach(test_name ${HTTP_TESTS})
   add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient unity)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::HttpAsyncClient unity)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
   
   # Platform-specific fixes

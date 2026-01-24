@@ -109,6 +109,7 @@ typedef struct {
 typedef struct Req {
   turbo_arena_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
   async_server_connection_t *connection; /* NetCore migration: replaced uv_tcp_t* */
+  async_server_t *server; /* NetCore server instance */
   char *method;
   char *path;
   char *body;
@@ -133,6 +134,7 @@ typedef struct {
 typedef struct Res {
   turbo_arena_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
   async_server_connection_t *connection; /* NetCore migration: replaced uv_tcp_t* */
+  async_server_t *server; /* NetCore server instance */
   int status;
   char *content_type; // Arena allocated string
   void *body;         // Arena allocated if owned by Res
@@ -162,7 +164,7 @@ typedef struct MiddlewareInfo MiddlewareInfo;
 void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
 
 // Function declarations
-CXX_C_API int router(async_server_connection_t *connection, const char *request_data, size_t request_len);
+CXX_C_API int router(async_server_t *server, async_server_connection_t *connection, const char *request_data, size_t request_len);
 CXX_C_API Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Req *copy_req(const Req *original);
@@ -197,6 +199,11 @@ static inline void send_json(Res *res, int status, const char *body) {
 static inline void send_cbor(Res *res, int status, const char *body, size_t body_len) {
   reply(res, status, "application/cbor", body, body_len);
 }
+
+// Streaming (SSE) support
+CXX_C_API void reply_stream_start(Res *res, int status);
+CXX_C_API void reply_stream_chunk(Res *res, const char *data);
+CXX_C_API void reply_stream_end(Res *res);
 
 // Convenience getter functions
 static inline const char *get_params(const Req *req, const char *key) {

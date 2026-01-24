@@ -39,7 +39,7 @@ struct write_req_s {
 };
 
 // Sends error responses (400, 413, 414, or 500) - uses NetCore send
-static void send_error(async_server_connection_t *connection, int error_code) {
+static void send_error(async_server_t *server, async_server_connection_t *connection, int error_code) {
   if (!connection)
     return;
 
@@ -84,7 +84,7 @@ static void send_error(async_server_connection_t *connection, int error_code) {
     return;
 
   size_t len = strlen(err);
-  async_server_status_t status = async_server_send(NULL, connection, err, len);
+  async_server_status_t status = async_server_send(server, connection, err, len);
   if (status != ASYNC_SERVER_STATUS_OK) {
     TLOG_ERROR("Send error: {}", async_server_status_to_string(status));
   }
@@ -259,7 +259,7 @@ void *get_connection_context(async_server_connection_t *connection) {
 
 // Create and initialize Req
 /* Phase IRIS-1: Updated to use turbo_arena_t */
-static Req *create_req(turbo_arena_t *arena, async_server_connection_t *connection) {
+static Req *create_req(turbo_arena_t *arena, async_server_t *server, async_server_connection_t *connection) {
   if (!arena)
     return NULL;
 
@@ -270,6 +270,7 @@ static Req *create_req(turbo_arena_t *arena, async_server_connection_t *connecti
 
   memset(req, 0, sizeof(Req));
   req->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
+  req->server = server;
   req->connection = connection; /* NetCore migration: use connection instead of client_socket */
   req->method = NULL;
   req->path = NULL;
@@ -300,7 +301,7 @@ static Req *create_req(turbo_arena_t *arena, async_server_connection_t *connecti
 
 // Create and initialize Res
 /* Phase IRIS-1: Updated to use turbo_arena_t */
-static Res *create_res(turbo_arena_t *arena, async_server_connection_t *connection) {
+static Res *create_res(turbo_arena_t *arena, async_server_t *server, async_server_connection_t *connection) {
   if (!arena)
     return NULL;
 
@@ -311,6 +312,7 @@ static Res *create_res(turbo_arena_t *arena, async_server_connection_t *connecti
 
   memset(res, 0, sizeof(Res));
   res->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
+  res->server = server;
   res->connection = connection; /* NetCore migration: use connection instead of client_socket */
   res->status = 200;
   res->content_type = turbo_arena_strdup(arena, "text/plain"); /* Phase IRIS-1: Updated */
@@ -650,7 +652,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   // Allocate and fill entire header string using malloc
   char *all_headers = malloc(headers_size + 1);
   if (!all_headers) {
-    send_error(res->connection, 500);
+    send_error(res->server, res->connection, 500);
     return;
   }
 
@@ -663,7 +665,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
         pos += n;
       } else {
         free(all_headers);
-        send_error(res->connection, 500);
+        send_error(res->server, res->connection, 500);
         return;
       }
     }
@@ -687,7 +689,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     free(all_headers);
     if (escaped_buffer)
       free(escaped_buffer);
-    send_error(res->connection, 500);
+    send_error(res->server, res->connection, 500);
     return;
   }
 
@@ -699,7 +701,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     free(all_headers);
     if (escaped_buffer)
       free(escaped_buffer);
-    send_error(res->connection, 500);
+    send_error(res->server, res->connection, 500);
     return;
   }
 
@@ -721,7 +723,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     free(response);
     if (escaped_buffer)
       free(escaped_buffer);
-    send_error(res->connection, 500);
+    send_error(res->server, res->connection, 500);
     return;
   }
 
@@ -730,7 +732,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   }
 
   // Send using NetCore API
-  async_server_status_t result = async_server_send(NULL, res->connection, response, total_len);
+  async_server_status_t result = async_server_send(res->server, res->connection, response, total_len);
   if (result != ASYNC_SERVER_STATUS_OK) {
     TLOG_ERROR("Send error: {}", async_server_status_to_string(result));
   }
@@ -742,6 +744,79 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   if (escaped_buffer) {
     free(escaped_buffer);
   }
+}
+
+// Streaming (SSE) support implementation
+
+void reply_stream_start(Res *res, int status) {
+  if (!res || !res->connection)
+    return;
+
+  // Get current date
+  time_t now = time(NULL);
+  struct tm *gmt = gmtime(&now);
+  char date_str[64];
+  strftime(date_str, sizeof(date_str), "%a, %d %b %Y %H:%M:%S GMT", gmt);
+
+  // Headers for SSE
+  // Note: We use Transfer-Encoding: chunked to support streaming properly
+  char headers[1024];
+  int n = stbsp_snprintf(headers, sizeof(headers),
+                         "HTTP/1.1 %d OK\r\n"
+                         "Server: Ecewo\r\n"
+                         "Date: %s\r\n"
+                         "Content-Type: text/event-stream\r\n"
+                         "Cache-Control: no-cache\r\n"
+                         "Connection: keep-alive\r\n"
+                         "Transfer-Encoding: chunked\r\n"
+                         "X-Accel-Buffering: no\r\n" // Hint for Nginx
+                         "\r\n", 
+                         status, date_str);
+
+  if (n > 0) {
+    async_server_send(res->server, res->connection, headers, n);
+  }
+}
+
+void reply_stream_chunk(Res *res, const char *data) {
+  if (!res || !res->connection || !data)
+    return;
+
+  // Format the SSE payload: "data: <content>\n\n"
+  // Since we are using chunked transfer encoding, we need to wrap this in a chunk.
+  
+  size_t data_len = strlen(data);
+  // Estimate size: "data: " + data + "\n\n"
+  size_t payload_len = data_len + 8; 
+  
+  char *payload = malloc(payload_len + 1);
+  if (!payload) return;
+  
+  stbsp_snprintf(payload, payload_len + 1, "data: %s\n\n", data);
+  
+  // Now create the HTTP chunk
+  // Format: <hex_len>\r\n<payload>\r\n
+  char hex_len[32];
+  stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", payload_len);
+  
+  // Send length
+  async_server_send(res->server, res->connection, hex_len, strlen(hex_len));
+  // Send payload
+  async_server_send(res->server, res->connection, payload, payload_len);
+  // Send trailing CRLF
+  async_server_send(res->server, res->connection, "\r\n", 2);
+  
+  free(payload);
+}
+
+void reply_stream_end(Res *res) {
+  if (!res || !res->connection)
+    return;
+    
+  // Send the zero-length chunk to signal end of stream
+  // Format: 0\r\n\r\n
+  const char *end_chunk = "0\r\n\r\n";
+  async_server_send(res->server, res->connection, end_chunk, strlen(end_chunk));
 }
 
 // Validates all cookies in the Cookie header
@@ -854,17 +929,17 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
 }
 
 // Main router function
-int router(async_server_connection_t *connection, const char *request_data, size_t request_len) {
+int router(async_server_t *server, async_server_connection_t *connection, const char *request_data, size_t request_len) {
   if (!connection || !request_data || request_len == 0) {
     if (connection)
-      send_error(connection, 400);
+      send_error(server, connection, 400);
     return 1;
   }
 
   // Phase IRIS-1: Create request arena (8KB initial - enough for typical HTTP request)
   turbo_arena_t arena;
   if (turbo_arena_init(&arena, 8192) != 0) {
-    send_error(connection, 500);
+    send_error(server, connection, 500);
     return 1; // Close connection on arena init failure
   }
 
@@ -880,8 +955,8 @@ int router(async_server_connection_t *connection, const char *request_data, size
 
   // Create resources
   ctx = create_http_context(&arena);
-  req = create_req(&arena, connection);
-  res = create_res(&arena, connection);
+  req = create_req(&arena, server, connection);
+  res = create_res(&arena, server, connection);
 
   if (!ctx || !req || !res) {
     error_code = 500;
@@ -1024,7 +1099,7 @@ int router(async_server_connection_t *connection, const char *request_data, size
 cleanup:
   // Send error responses if needed
   if (send_error_response && error_code > 0) {
-    send_error(connection, error_code);
+    send_error(server, connection, error_code);
   } else if (send_404_response) {
     const char *not_found_msg = "404 Not Found";
     reply(res, 404, "text/plain", not_found_msg, strlen(not_found_msg));
@@ -1104,6 +1179,7 @@ Res *copy_res(const Res *original) {
   // Copy primitive fields
   *copy = *original;
   copy->arena = NULL;
+  copy->server = original->server;
   copy->body = original->body; // pointer only, not deep copied
   copy->content_type = original->content_type;
 
@@ -1157,6 +1233,7 @@ Req *copy_req(const Req *original) {
   // Copy primitive fields
   copy->arena = NULL;
   copy->connection = original->connection; /* NetCore migration: use connection */
+  copy->server = original->server;
   copy->body_len = original->body_len;
 
   // Deep copy method string
@@ -1246,6 +1323,7 @@ Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original) {
   // Copy primitive fields
   copy->arena = target_arena;
   copy->connection = original->connection; /* NetCore migration: use connection */
+  copy->server = original->server;
   copy->body_len = original->body_len;
 
   // Deep copy strings using target arena
@@ -1298,6 +1376,7 @@ Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original) {
   // Copy primitive fields
   *copy = *original;
   copy->arena = target_arena;
+  copy->server = original->server;
 
   if (original->content_type)
     copy->content_type = turbo_arena_strdup(target_arena, original->content_type);

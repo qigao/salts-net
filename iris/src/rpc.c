@@ -293,6 +293,24 @@ void rpc_send_response(Res *res, rpc_response_t *rpc_res) {
   }
 }
 
+void rpc_send_stream_start(Res *res, rpc_response_t *rpc_res) {
+    (void)rpc_res;
+    reply_stream_start(res, 200);
+}
+
+void rpc_send_stream_chunk(Res *res, rpc_response_t *rpc_res) {
+    if (!res || !rpc_res) return;
+    char *output = NULL;
+    size_t output_len = 0;
+    if (rpc_build_response(rpc_res, &output, &output_len) == 0 && output) {
+        reply_stream_chunk(res, output);
+    }
+}
+
+void rpc_send_stream_end(Res *res) {
+    reply_stream_end(res);
+}
+
 void rpc_send_error(Res *res, int error_code, const char *error_message, const char *id) {
   if (!res)
     return;
@@ -499,7 +517,12 @@ static void rpc_endpoint_handler(Req *req, Res *res) {
   rpc_res.protocol = rpc_req.protocol;
 
   /* Call handler */
-  int result = handler(req, &rpc_req, &rpc_res);
+  int result = handler(req, res, &rpc_req, &rpc_res);
+  if (result == RPC_STREAMING) {
+      /* Handler handled its own response (streaming) */
+      return;
+  }
+  
   if (result != 0 && rpc_res.error_code == 0) {
     /* Handler returned error but didn't set error details */
     rpc_set_error(&rpc_res, RPC_ERROR_INTERNAL, "Method execution failed");
@@ -510,8 +533,9 @@ static void rpc_endpoint_handler(Req *req, Res *res) {
 }
 
 /* Introspection handler */
-static int rpc_introspection_handler(Req *req, rpc_request_t *rpc_req, rpc_response_t *rpc_res) {
+static int rpc_introspection_handler(Req *req, Res *res, rpc_request_t *rpc_req, rpc_response_t *rpc_res) {
   (void)req;
+  (void)res;
   (void)rpc_req;
 
   rpc_context_t *ctx = g_rpc_context;

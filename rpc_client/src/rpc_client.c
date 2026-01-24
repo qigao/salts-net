@@ -34,6 +34,16 @@ typedef struct {
   rpc_call_result_t *result;
 } async_call_context_t;
 
+/* Stream call context */
+typedef struct {
+  rpc_callback_t result_cb;
+  rpc_callback_t complete_cb;
+  void *user_data;
+  char *buffer;
+  size_t buffer_size;
+  size_t buffer_used;
+} rpc_stream_context_t;
+
 /* ============================================================================
  * Internal Helpers
  * ============================================================================ */
@@ -573,10 +583,9 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
   /* Build URL */
   const char *url = build_url(client);
 
-  /* Make async HTTP POST request with JSON content type */
-  const char *headers[] = {"Content-Type: application/json"};
+  /* Make async HTTP POST request (Content-Type already set as default header) */
   http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
-                                                  headers, 1, jsonrpc_body, jsonrpc_len,
+                                                  NULL, 0, jsonrpc_body, jsonrpc_len,
                                                   async_call_callback, ctx);
   free(jsonrpc_body);
 
@@ -686,10 +695,9 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   /* Create batch context */
   batch_call_context_t ctx = {0, results, count};
 
-  /* Make async HTTP POST request with JSON content type */
-  const char *headers[] = {"Content-Type: application/json"};
+  /* Make async HTTP POST request (Content-Type already set as default header) */
   http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
-                                                  headers, 1, batch_json, pos,
+                                                  NULL, 0, batch_json, pos,
                                                   batch_call_callback, &ctx);
   free(batch_json);
 
@@ -710,3 +718,187 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
 }
 
 const char *rpc_client_version(void) { return RPC_CLIENT_VERSION; }
+
+/* ============================================================================
+ * Streaming (SSE) Implementation
+ * ========================================================================= */
+
+static void process_sse_event(rpc_stream_context_t *ctx, const char *event_data) {
+  if (!event_data || event_data[0] == '\0')
+    return;
+
+  rpc_call_result_t result;
+  memset(&result, 0, sizeof(result));
+
+  if (parse_jsonrpc_response(event_data, &result) == 0) {
+    if (ctx->result_cb) {
+      ctx->result_cb(&result, ctx->user_data);
+    }
+  }
+  rpc_result_free(&result);
+}
+
+static void rpc_stream_data_callback(http_async_request_t *request, const char *data, size_t len,
+                                     void *user_data) {
+  (void)request;
+  rpc_stream_context_t *ctx = (rpc_stream_context_t *)user_data;
+  if (!ctx || !data || len == 0)
+    return;
+
+  /* Append to buffer */
+  size_t new_size = ctx->buffer_used + len + 1;
+  if (new_size > ctx->buffer_size) {
+    size_t alloc_size = ctx->buffer_size == 0 ? 4096 : ctx->buffer_size * 2;
+    while (alloc_size < new_size)
+      alloc_size *= 2;
+    char *new_buf = realloc(ctx->buffer, alloc_size);
+    if (!new_buf)
+      return;
+    ctx->buffer = new_buf;
+    ctx->buffer_size = alloc_size;
+  }
+  memcpy(ctx->buffer + ctx->buffer_used, data, len);
+  ctx->buffer_used += len;
+  ctx->buffer[ctx->buffer_used] = '\0';
+
+  /* Process completed events - look for double newline */
+  char *p = ctx->buffer;
+  char *event_end;
+  while ((event_end = strstr(p, "\n\n")) != NULL) {
+    *event_end = '\0';
+
+    /* Parse the event (look for data: lines) */
+    char *event_ptr = p;
+    const char *data_prefix = "data: ";
+    size_t prefix_len = strlen(data_prefix);
+
+    /* Allocate message buffer - at most as large as the event itself */
+    char *msg_buf = (char *)malloc(strlen(event_ptr) + 1);
+    if (!msg_buf) break;
+    size_t msg_pos = 0;
+
+    char *line = event_ptr;
+    while (line < event_end) {
+      char *next_line = strchr(line, '\n');
+      if (!next_line)
+        next_line = event_end;
+
+      /* Trim leading \r if present */
+      if (next_line > line && *(next_line - 1) == '\r') {
+          // Adjust for CRLF if needed, but the prefix check will handle it
+      }
+
+      if (strncmp(line, data_prefix, prefix_len) == 0) {
+        size_t line_len = next_line - (line + prefix_len);
+        /* Strip trailing \r if present */
+        if (line_len > 0 && line[prefix_len + line_len - 1] == '\r') {
+            line_len--;
+        }
+        memcpy(msg_buf + msg_pos, line + prefix_len, line_len);
+        msg_pos += line_len;
+      }
+
+      if (next_line >= event_end)
+        break;
+      line = next_line + 1;
+    }
+    msg_buf[msg_pos] = '\0';
+
+    process_sse_event(ctx, msg_buf);
+    free(msg_buf);
+
+    p = event_end + 2;
+  }
+
+  /* Move remaining data to front */
+  if (p > ctx->buffer) {
+    size_t processed = p - ctx->buffer;
+    if (processed < ctx->buffer_used) {
+      size_t remaining = ctx->buffer_used - processed;
+      memmove(ctx->buffer, p, remaining);
+      ctx->buffer_used = remaining;
+    } else {
+      ctx->buffer_used = 0;
+    }
+    ctx->buffer[ctx->buffer_used] = '\0';
+  }
+}
+
+static void rpc_stream_complete_callback(http_async_request_t *request,
+                                         http_async_response_t *response, void *user_data) {
+  (void)request;
+  rpc_stream_context_t *ctx = (rpc_stream_context_t *)user_data;
+  if (!ctx)
+    return;
+
+  if (ctx->complete_cb) {
+    rpc_call_result_t result;
+    memset(&result, 0, sizeof(result));
+    result.http_status = response->status_code;
+
+    if (response->error_code != HTTP_ASYNC_ERROR_NONE) {
+      result.success = 0;
+      result.error_code = RPC_ERROR_INTERNAL;
+      if (response->error) {
+        result.error_message = strdup(response->error);
+      }
+    } else {
+      result.success = 1;
+    }
+
+    ctx->complete_cb(&result, ctx->user_data);
+    rpc_result_free(&result);
+  }
+
+  /* Cleanup context */
+  free(ctx->buffer);
+  free(ctx);
+}
+
+int rpc_client_call_stream(rpc_client_t *client, const char *method, const char *params,
+                           rpc_callback_t result_cb, rpc_callback_t complete_cb, void *user_data) {
+  if (!client || !method || !result_cb)
+    return -1;
+
+  /* Generate request ID */
+  char id[32];
+  stbsp_snprintf(id, sizeof(id), "%d", client->request_id_counter++);
+
+  /* Build JSON-RPC request */
+  size_t jsonrpc_len = 0;
+  char *jsonrpc_body = build_jsonrpc_request(method, params, id, &jsonrpc_len);
+  if (!jsonrpc_body)
+    return -1;
+
+  /* Create stream context */
+  rpc_stream_context_t *ctx = (rpc_stream_context_t *)calloc(1, sizeof(rpc_stream_context_t));
+  if (!ctx) {
+    free(jsonrpc_body);
+    return -1;
+  }
+  ctx->result_cb = result_cb;
+  ctx->complete_cb = complete_cb;
+  ctx->user_data = user_data;
+
+  /* Build URL */
+  const char *url = build_url(client);
+
+  /* Make async HTTP POST request (Content-Type already set as default header) */
+  const char *headers[] = {"Accept: text/event-stream", "Cache-Control: no-cache"};
+
+  http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url, headers, 2,
+                                                  jsonrpc_body, jsonrpc_len,
+                                                  rpc_stream_complete_callback, ctx);
+  free(jsonrpc_body);
+
+  if (!req) {
+    free(ctx);
+    return -1;
+  }
+
+  /* Enable streaming mode in HTTP client to prevent memory accumulation */
+  http_async_request_set_stream_only(req, 1);
+  http_async_request_set_data_callback(req, rpc_stream_data_callback, ctx);
+
+  return 0;
+}

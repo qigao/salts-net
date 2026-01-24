@@ -35,7 +35,8 @@ typedef enum {
   RPC_ERROR_INVALID_PARAMS = -32602,   /**< Invalid params */
   RPC_ERROR_INTERNAL = -32603,         /**< Internal error */
   RPC_ERROR_SERVER_MIN = -32099,       /**< Server error start */
-  RPC_ERROR_SERVER_MAX = -32000        /**< Server error end */
+  RPC_ERROR_SERVER_MAX = -32000,       /**< Server error end */
+  RPC_STREAMING = 1                    /**< Special return code to indicate streaming */
 } rpc_error_code_t;
 
 /**
@@ -75,7 +76,8 @@ typedef struct {
  * @param rpc_res RPC response
  * @return 0 on success, error code otherwise
  */
-typedef int (*rpc_method_handler_t)(Req *req, rpc_request_t *rpc_req, rpc_response_t *rpc_res);
+typedef int (*rpc_method_handler_t)(Req *req, Res *res, rpc_request_t *rpc_req,
+                                    rpc_response_t *rpc_res);
 
 /**
  * @brief RPC Method Registration
@@ -177,6 +179,29 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
  * @param rpc_res RPC response
  */
 void rpc_send_response(Res *res, rpc_response_t *rpc_res);
+
+/**
+ * @brief Start an RPC stream (SSE)
+ * 
+ * @param res HTTP response
+ * @param rpc_res RPC response (metadata like id will be used)
+ */
+void rpc_send_stream_start(Res *res, rpc_response_t *rpc_res);
+
+/**
+ * @brief Send an RPC stream chunk (SSE event)
+ * 
+ * @param res HTTP response
+ * @param rpc_res RPC response (result will be sent as SSE data)
+ */
+void rpc_send_stream_chunk(Res *res, rpc_response_t *rpc_res);
+
+/**
+ * @brief End an RPC stream (SSE)
+ * 
+ * @param res HTTP response
+ */
+void rpc_send_stream_end(Res *res);
 
 /**
  * @brief Send RPC error

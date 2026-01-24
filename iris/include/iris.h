@@ -2,10 +2,11 @@
 #define ECEWO_H
 
 #include "compat.h"
+#include "server.h"
+#include "iris_app.h"
 #include "middleware.h"
 #include "route_trie.h"
 #include "router.h"
-#include "iris_app.h"
 
 /* Legacy global route trie - for backward compatibility only.
  * New code should use iris_app_t instead. */

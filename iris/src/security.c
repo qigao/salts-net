@@ -890,11 +890,13 @@ int iris_jwt_middleware(Req *req, Res *res, Chain *chain) {
     int64_t current_time = (int64_t)time(NULL);
     
     /* Decodes token with HS256 algorithm */
-    cjwt_code_t rv = cjwt_decode(token, (int)strlen(token), 0, (const uint8_t *)g_iris_jwt_secret, (int)strlen(g_iris_jwt_secret), current_time, 0, &jwt);
+    cjwt_code_t rv = cjwt_decode(token, (int)strlen(token), OPT_ALLOW_ONLY_HS_ALG, (const uint8_t *)g_iris_jwt_secret, (int)strlen(g_iris_jwt_secret), current_time, 0, &jwt);
 
     if (rv != CJWTE_OK) {
         TLOG_ERROR("JWT Middleware: Token verification failed (error {})", ENUM_NAME(rv));
-        send_json(res, 401, "{\"error\":\"Unauthorized\", \"message\":\"Invalid or expired token\"}");
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "{\"error\":\"Unauthorized\", \"message\":\"Invalid or expired token (cjwt error code: %d)\"}", (int)rv);
+        send_json(res, 401, err_msg);
         return 1;
     }
 

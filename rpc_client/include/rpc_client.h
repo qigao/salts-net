@@ -138,6 +138,21 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
                           rpc_callback_t callback, void *user_data);
 
 /**
+ * @brief Make an RPC call that returns a stream of results (Server-Sent Events)
+ * 
+ * @param client Client instance
+ * @param method Method name
+ * @param params Parameters (JSON string, can be NULL)
+ * @param result_cb Callback called for each received result
+ * @param complete_cb Callback called when the stream is closed
+ * @param user_data User data passed to both callbacks
+ * @return 0 on success, -1 on failure
+ */
+int rpc_client_call_stream(rpc_client_t *client, const char *method, const char *params,
+                           rpc_callback_t result_cb, rpc_callback_t complete_cb,
+                           void *user_data);
+
+/**
  * @brief Send notification (no response expected)
  * 
  * @param client Client instance

@@ -20,14 +20,8 @@
  */
 int router_process_request(async_server_t *server, async_server_connection_t *connection,
                            const char *request_data, size_t request_len) {
-  (void)server; // Server parameter not currently used by router
-  
-  if (!connection || !request_data || request_len == 0) {
-    return 1; // Close connection on invalid input
-  }
-
   // Call the main router function with NetCore connection
-  return router(connection, request_data, request_len);
+  return router(server, connection, request_data, request_len);
 }
 
 /**

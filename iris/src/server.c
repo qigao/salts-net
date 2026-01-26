@@ -154,8 +154,8 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
   }
 }
 
-/* Server startup function */
-int ecewo(unsigned short PORT) {
+/* Server startup function - internal implementation */
+int iris_server_run(unsigned short PORT) {
   /* Initialize error recovery system */
   if (iris_error_recovery_init() != 0) {
     TLOG_ERROR("Failed to initialize error recovery system");

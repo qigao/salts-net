@@ -1,4 +1,5 @@
 #include "iris.h"
+#include "iris_app.h"
 #include "server.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,8 +113,8 @@ int main() {
 
     printf("Iris JWT server starting on http://localhost:8080\n");
     
-    // Start the server using ecewo (listening on port 8080)
-    ecewo(8080);
+    // Start the server
+    iris_app_listen(NULL, 8080);
 
     return 0;
 }

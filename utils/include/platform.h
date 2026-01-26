@@ -53,6 +53,7 @@
   // uv.h includes windows.h, so we might not need to explicit include it,
   // but keeping it for other utils if needed.
   // Since we hid uv.h, we MUST include windows.h now for LONG, etc.
+  #include <winsock2.h>
   #include <windows.h>
 
   // Windows doesn't have ssize_t, define it if not already defined by uv
@@ -72,6 +73,7 @@ typedef intptr_t ssize_t;
   #include <netinet/in.h>
   #include <strings.h>
   #include <sys/socket.h>
+  #include <sys/time.h>
   #include <unistd.h>
 #endif
 #include <stddef.h>
@@ -217,6 +219,30 @@ CXX_C_API uint64_t turbo_monotonic_ms(void);
  * @return Wall clock time in milliseconds (can jump if system time changes)
  */
 CXX_C_API uint64_t turbo_realtime_ms(void);
+
+/**
+ * @brief Cross-platform time structure (Y2038 safe)
+ */
+typedef struct {
+    int64_t tv_sec;   /**< Seconds since epoch */
+    int32_t tv_usec;  /**< Microseconds */
+} turbo_timeval_t;
+
+/**
+ * @brief Cross-platform timezone structure (usually ignored)
+ */
+typedef struct {
+    int tz_minuteswest;
+    int tz_dsttime;
+} turbo_timezone_t;
+
+/**
+ * @brief Cross-platform gettimeofday equivalent
+ * @param tv Timeval structure to fill
+ * @param tz Timezone structure (can be NULL)
+ * @return 0 on success
+ */
+CXX_C_API int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz);
 
 /**
  * @brief Get current high-resolution time in nanoseconds

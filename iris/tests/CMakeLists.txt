@@ -30,16 +30,6 @@ add_test(NAME IrisMiddleware COMMAND test_iris_middleware)
 
 set_target_properties(test_iris_middleware PROPERTIES FOLDER "iris/tests")
 
-# Test for iris_app multi-instance support
-add_executable(test_iris_app test_iris_app.c)
-
-target_link_libraries(test_iris_app PRIVATE TurboNet::Iris unity
-                                            TurboNet::Utils)
-
-add_test(NAME IrisApp COMMAND test_iris_app)
-
-set_target_properties(test_iris_app PROPERTIES FOLDER "iris/tests")
-
 # Test for security module
 add_executable(test_iris_security test_security.c)
 

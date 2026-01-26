@@ -140,6 +140,14 @@ CXX_C_API void iris_app_cors(iris_app_t *app, cors_t *opts);
  */
 CXX_C_API void iris_app_shutdown_hook(iris_app_t *app, void (*hook)(void));
 
+/**
+ * @brief Start the server and listen on specified port
+ * @param app Application instance (can be NULL to use default)
+ * @param port Port number to listen on
+ * @return 0 on success, -1 on failure
+ */
+CXX_C_API int iris_app_listen(iris_app_t *app, unsigned short port);
+
 #ifdef __cplusplus
 }
 #endif

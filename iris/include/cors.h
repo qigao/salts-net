@@ -2,7 +2,12 @@
 #define CORS_H
 
 #include "router.h"
+#include "platform.h"
 #include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct
 {
@@ -15,10 +20,14 @@ typedef struct
     bool allow_all_origins; // For "*" support
 } cors_t;
 
-void cors_register(cors_t *opts);
-void reset_cors(void);
-bool cors_handle_preflight(const http_context_t *ctx, Res *res);
-void cors_add_headers(const http_context_t *ctx, Res *res);
-void init_cors(cors_t *opts);
+CXX_C_API void cors_register(cors_t *opts);
+CXX_C_API void reset_cors(void);
+CXX_C_API bool cors_handle_preflight(const http_context_t *ctx, Res *res);
+CXX_C_API void cors_add_headers(const http_context_t *ctx, Res *res);
+CXX_C_API void init_cors(cors_t *opts);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

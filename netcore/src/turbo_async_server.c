@@ -2822,6 +2822,28 @@ void *async_server_connection_get_user_data(const async_server_connection_t *con
   return connection->user_data;
 }
 
+async_server_status_t async_server_connection_get_peer_cert_pem(
+    async_server_connection_t *connection, char *buffer, size_t *length) {
+  if (!connection || !length)
+    return ASYNC_SERVER_STATUS_INVALID_PARAM;
+
+  if (connection->server->transport == ASYNC_SERVER_TRANSPORT_TLS) {
+    if (connection->handle.tls) {
+      int rc = turbo_tls_client_get_peer_cert_pem(connection->handle.tls, buffer, length);
+      return (rc == 0) ? ASYNC_SERVER_STATUS_OK : ASYNC_SERVER_STATUS_TRANSPORT_ERROR;
+    }
+  }
+#if TURBO_WS_SUPPORT
+  else if (connection->server->transport == ASYNC_SERVER_TRANSPORT_WEBSOCKET) {
+    /* For WebSocket over TLS (WSS), we'd need to get the underlying TLS client from the WS connection */
+    /* This might require an extension to the turbo_websocket_server_t/connection_t interface */
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR;
+  }
+#endif
+
+  return ASYNC_SERVER_STATUS_TRANSPORT_ERROR;
+}
+
 void async_server_get_stats(const async_server_t *server, async_server_stats_t *stats) {
   if (!server || !stats)
     return;

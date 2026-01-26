@@ -8,6 +8,7 @@
 // clang-format on
 #include "base64_utils.h"
 #include "arena_buffer.h"
+#include <turbo_fs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,46 @@ typedef enum {
   REQUEST_STATE_ERROR
 } request_state_t;
 
+/* Stream state for file uploads */
+typedef struct http_async_multipart_file_stream_s {
+  char *file_path;
+  turbo_file_t fd;           /* turbo_fs file descriptor */
+  int64_t file_size;
+  int64_t offset;
+  char chunk_buf[16384];    /* 16KB chunks */
+} http_async_multipart_file_stream_t;
+
+/* Multipart sending states */
+typedef enum {
+  MP_STATE_HEADERS,
+  MP_STATE_PART_HEADER,
+  MP_STATE_PART_BODY,
+  MP_STATE_PART_TRAILER,
+  MP_STATE_FINAL_BOUNDARY,
+  MP_STATE_DONE
+} mp_sending_state_t;
+
+/* Multipart form part */
+typedef struct http_async_multipart_part_s {
+  char *name;
+  char *filename;
+  char *content_type;
+  char *value;
+  void *data;
+  size_t data_len;
+  int is_file;
+  int is_stream;
+  http_async_multipart_file_stream_t *stream_ctx;
+  struct http_async_multipart_part_s *next;
+} http_async_multipart_part_t;
+
+/* Multipart form structure */
+typedef struct http_async_multipart_form_s {
+  http_async_multipart_part_t *parts;
+  char boundary[48];
+  int part_count;
+} http_async_multipart_form_t;
+
 /* Async request structure */
 struct http_async_request_s {
   http_async_client_t *client;
@@ -86,6 +127,15 @@ struct http_async_request_s {
 
   int redirect_count;
   int stream_only;
+  
+  /* Multipart Streaming State */
+  http_async_multipart_form_t *multipart_form;
+  http_async_multipart_part_t *current_part;
+  mp_sending_state_t mp_state;
+  int64_t part_bytes_sent;
+  int headers_sent; /* Flag to indicate if initial multipart headers are sent */
+  int use_chunked_encoding; /* Use Transfer-Encoding: chunked instead of Content-Length */
+
 
   struct http_async_request_s *next;
   struct http_async_request_s *prev;
@@ -121,25 +171,6 @@ struct http_async_params_s {
     struct param_entry *next;
   } *head;
   int count;
-};
-
-/* Multipart form part */
-typedef struct http_async_multipart_part_s {
-  char *name;
-  char *filename;
-  char *content_type;
-  char *value;
-  void *data;
-  size_t data_len;
-  int is_file;
-  struct http_async_multipart_part_s *next;
-} http_async_multipart_part_t;
-
-/* Multipart form structure */
-struct http_async_multipart_form_s {
-  http_async_multipart_part_t *parts;
-  char boundary[48];
-  int part_count;
 };
 
 /* Interceptor list node */
@@ -961,23 +992,36 @@ static void initiate_request(http_async_request_t *request) {
   }
 }
 
+static void send_multipart_request(http_async_request_t *request);
+
 static void send_http_request(http_async_request_t *request) {
-  if (!request)
+  if (!request || !request->client)
     return;
+
+  printf("[DEBUG] send_http_request called\n");
+  fflush(stdout);
 
   request->state = REQUEST_STATE_SENDING;
 
-  /* Build HTTP request */
+  /* Handle multipart request separately */
+  if (request->multipart_form) {
+    printf("[DEBUG] Routing to multipart sender\n");
+    fflush(stdout);
+    send_multipart_request(request);
+    return;
+  }
+
+  /* Build standard HTTP request */
   char request_line[1024];
   const char *uri_path = turbo_uri_path(request->uri);
   const char *uri_query = turbo_uri_query(request->uri);
   const char *uri_host = turbo_uri_host(request->uri);
 
   stbsp_snprintf(request_line, sizeof(request_line), "%s %s%s%s HTTP/1.1\r\n",
-           method_to_string(request->method), 
-           uri_path[0] ? uri_path : "/",
-           uri_query[0] ? "?" : "", 
-           uri_query);
+                 method_to_string(request->method),
+                 uri_path[0] ? uri_path : "/",
+                 uri_query[0] ? "?" : "",
+                 uri_query);
 
   char host_header[512];
   stbsp_snprintf(host_header, sizeof(host_header), "Host: %s\r\n", uri_host);
@@ -1070,20 +1114,8 @@ static void send_http_request(http_async_request_t *request) {
     iov_count++;
   }
 
-  /* Debug: Print the complete HTTP request */
-  printf("[DEBUG] === HTTP Request (iov_count=%d) ===\n", iov_count);
-  for (int i = 0; i < iov_count; i++) {
-    printf("%.*s", (int)iov[i].len, iov[i].data);
-  }
-  printf("\n[DEBUG] === End HTTP Request ===\n");
-  fflush(stdout);
-
   /* Send request */
-  printf("[DEBUG] Calling async_client_sendv...\n");
-  fflush(stdout);
   async_client_status_t status = async_client_sendv(request->client->client, iov, iov_count);
-  printf("[DEBUG] async_client_sendv returned: %d\n", status);
-  fflush(stdout);
 
   /* Free default header strings */
   if (default_header_strings) {
@@ -1097,12 +1129,248 @@ static void send_http_request(http_async_request_t *request) {
     request->state = REQUEST_STATE_RECEIVING;
     request->client->stats.bytes_sent += request->body_len;
   } else {
-    /* Phase HTTP-1: Allocate error from arena */
     request->response->error = turbo_arena_strdup(&request->request_arena, "Failed to send request");
     request->response->error_code = HTTP_ASYNC_ERROR_SEND_FAILED;
     request->state = REQUEST_STATE_ERROR;
     complete_request(request);
   }
+}
+
+/* Helper to send data as HTTP chunk: <hex-size>\r\n<data>\r\n 
+ * Splits large data into smaller chunks to avoid buffer overflow */
+static void send_http_chunk(async_client_t *client, const char *data, size_t len) {
+    if (len == 0) return;
+    
+    /* Split into 16KB chunks max to avoid overwhelming buffers */
+    const size_t MAX_CHUNK_SIZE = 16384;
+    size_t offset = 0;
+    
+    while (offset < len) {
+        size_t chunk_size = (len - offset > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : (len - offset);
+        
+        char chunk_header[32];
+        int header_len = stbsp_snprintf(chunk_header, sizeof(chunk_header), "%zx\r\n", chunk_size);
+        
+        /* Send chunk size */
+        async_client_send(client, chunk_header, header_len);
+        
+        /* Send chunk data */
+        async_client_send(client, data + offset, chunk_size);
+        
+        /* Send chunk trailer */
+        async_client_send(client, "\r\n", 2);
+        
+        offset += chunk_size;
+    }
+}
+
+/* Send final chunk: 0\r\n\r\n */
+static void send_http_chunk_end(async_client_t *client) {
+    async_client_send(client, "0\r\n\r\n", 5);
+}
+
+
+static void continue_multipart_sending(http_async_request_t *request);
+
+static void send_multipart_headers(http_async_request_t *request) {
+    http_async_multipart_form_t *form = request->multipart_form;
+    int use_chunked = request->use_chunked_encoding;
+    
+    /* Calculate total Content-Length (only if not using chunked) */
+    size_t total_content_length = 0;
+    if (!use_chunked) {
+        http_async_multipart_part_t *part = form->parts;
+        while (part) {
+            total_content_length += 2 + strlen(form->boundary) + 2;
+            total_content_length += 38 + strlen(part->name);
+            if (part->is_file && part->filename) {
+                total_content_length += 13 + strlen(part->filename);
+                if (part->content_type) total_content_length += 16 + strlen(part->content_type) + 2;
+            }
+            total_content_length += 2;
+            if (part->is_stream && part->stream_ctx) total_content_length += part->stream_ctx->file_size;
+            else if (part->data && part->data_len > 0) total_content_length += part->data_len;
+            else if (part->value) total_content_length += strlen(part->value);
+            total_content_length += 2;
+            part = part->next;
+        }
+        total_content_length += 2 + strlen(form->boundary) + 4;
+    }
+
+    const char *uri_path = turbo_uri_path(request->uri);
+    const char *uri_query = turbo_uri_query(request->uri);
+    const char *uri_host = turbo_uri_host(request->uri);
+    
+    if (!uri_path) uri_path = "/";
+    if (!uri_query) uri_query = "";
+    if (!uri_host) uri_host = "localhost";
+
+    char request_line[1024];
+    stbsp_snprintf(request_line, sizeof(request_line), "POST %s%s%s HTTP/1.1\r\n",
+                   uri_path[0] ? uri_path : "/",
+                   uri_query[0] ? "?" : "",
+                   uri_query);
+
+    char host_header[512];
+    stbsp_snprintf(host_header, sizeof(host_header), "Host: %s\r\n", uri_host);
+
+    char ua_header[256];
+    stbsp_snprintf(ua_header, sizeof(ua_header), "User-Agent: %s\r\n", request->client->user_agent);
+
+    char content_type_header[256];
+    stbsp_snprintf(content_type_header, sizeof(content_type_header),
+                   "Content-Type: multipart/form-data; boundary=%s\r\n", form->boundary);
+
+    char cl_header[128] = "";
+    char te_header[] = "Transfer-Encoding: chunked\r\n";
+    if (use_chunked) {
+        async_client_send(request->client->client, request_line, strlen(request_line));
+        async_client_send(request->client->client, host_header, strlen(host_header));
+        async_client_send(request->client->client, ua_header, strlen(ua_header));
+        async_client_send(request->client->client, content_type_header, strlen(content_type_header));
+        async_client_send(request->client->client, te_header, strlen(te_header));
+    } else {
+        stbsp_snprintf(cl_header, sizeof(cl_header), "Content-Length: %zu\r\n", total_content_length);
+        async_client_send(request->client->client, request_line, strlen(request_line));
+        async_client_send(request->client->client, host_header, strlen(host_header));
+        async_client_send(request->client->client, ua_header, strlen(ua_header));
+        async_client_send(request->client->client, content_type_header, strlen(content_type_header));
+        async_client_send(request->client->client, cl_header, strlen(cl_header));
+    }
+
+    if (request->client->auth_header) {
+        async_client_send(request->client->client, request->client->auth_header, strlen(request->client->auth_header));
+        async_client_send(request->client->client, "\r\n", 2);
+    }
+    async_client_send(request->client->client, "\r\n", 2);
+
+    request->mp_state = MP_STATE_PART_HEADER;
+    request->current_part = form->parts;
+    continue_multipart_sending(request);
+}
+
+static void on_fs_read_complete(http_async_request_t *request, int nread) {
+    if (nread < 0) {
+        request->response->error = turbo_arena_strdup(&request->request_arena, "File read error");
+        request->state = REQUEST_STATE_ERROR;
+        complete_request(request);
+        return;
+    }
+
+    if (nread > 0) {
+        http_async_multipart_part_t *part = request->current_part;
+        if (request->use_chunked_encoding) {
+            send_http_chunk(request->client->client, part->stream_ctx->chunk_buf, (size_t)nread);
+        } else {
+            async_client_send(request->client->client, part->stream_ctx->chunk_buf, (size_t)nread);
+        }
+        part->stream_ctx->offset += nread;
+        continue_multipart_sending(request);
+    } else {
+        /* EOF reached */
+        turbo_fs_close_sync(request->current_part->stream_ctx->fd);
+        request->current_part->stream_ctx->fd = TURBO_INVALID_FILE;
+        request->mp_state = MP_STATE_PART_TRAILER;
+        continue_multipart_sending(request);
+    }
+}
+
+static void on_fs_open_complete(http_async_request_t *request, int result) {
+    if (result < 0) {
+        request->response->error = turbo_arena_strdup(&request->request_arena, "File open error");
+        request->state = REQUEST_STATE_ERROR;
+        complete_request(request);
+        return;
+    }
+
+    request->current_part->stream_ctx->fd = (turbo_file_t)result;
+    request->mp_state = MP_STATE_PART_BODY;
+    continue_multipart_sending(request);
+}
+
+static void continue_multipart_sending(http_async_request_t *request) {
+    http_async_multipart_form_t *form = request->multipart_form;
+    http_async_multipart_part_t *part = request->current_part;
+
+    if (request->mp_state == MP_STATE_PART_HEADER) {
+        if (!part) {
+            request->mp_state = MP_STATE_FINAL_BOUNDARY;
+            continue_multipart_sending(request);
+            return;
+        }
+
+        char header[512];
+        if (part->is_file) {
+            stbsp_snprintf(header, sizeof(header), 
+                "--%s\r\nContent-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
+                form->boundary, part->name, part->filename, part->content_type);
+        } else {
+            stbsp_snprintf(header, sizeof(header), 
+                "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n",
+                form->boundary, part->name);
+        }
+
+        if (request->use_chunked_encoding) send_http_chunk(request->client->client, header, strlen(header));
+        else async_client_send(request->client->client, header, strlen(header));
+
+        if (part->is_stream && part->stream_ctx) {
+            turbo_file_t fd = turbo_fs_open_sync(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
+            on_fs_open_complete(request, (int)fd);
+        } else {
+            request->mp_state = MP_STATE_PART_BODY;
+            continue_multipart_sending(request);
+        }
+        return;
+    }
+
+    if (request->mp_state == MP_STATE_PART_BODY) {
+        if (part->is_stream && part->stream_ctx) {
+            int nread = turbo_fs_read_sync(part->stream_ctx->fd, part->stream_ctx->chunk_buf, 
+                                           sizeof(part->stream_ctx->chunk_buf));
+            on_fs_read_complete(request, nread);
+            return;
+        } else {
+            const char *data = part->data ? part->data : (part->value ? part->value : "");
+            size_t len = part->data ? part->data_len : (part->value ? strlen(part->value) : 0);
+            
+            if (request->use_chunked_encoding) send_http_chunk(request->client->client, data, len);
+            else async_client_send(request->client->client, data, len);
+            
+            request->mp_state = MP_STATE_PART_TRAILER;
+            continue_multipart_sending(request);
+            return;
+        }
+    }
+
+    if (request->mp_state == MP_STATE_PART_TRAILER) {
+        if (request->use_chunked_encoding) send_http_chunk(request->client->client, "\r\n", 2);
+        else async_client_send(request->client->client, "\r\n", 2);
+        
+        request->current_part = part->next;
+        request->mp_state = MP_STATE_PART_HEADER;
+        continue_multipart_sending(request);
+        return;
+    }
+
+    if (request->mp_state == MP_STATE_FINAL_BOUNDARY) {
+        char final[128];
+        stbsp_snprintf(final, sizeof(final), "--%s--\r\n", form->boundary);
+        if (request->use_chunked_encoding) {
+            send_http_chunk(request->client->client, final, strlen(final));
+            send_http_chunk_end(request->client->client);
+        } else {
+            async_client_send(request->client->client, final, strlen(final));
+        }
+        request->mp_state = MP_STATE_DONE;
+        request->state = REQUEST_STATE_RECEIVING;
+        return;
+    }
+}
+
+static void send_multipart_request(http_async_request_t *request) {
+    /* Entry point for multipart upload */
+    request->mp_state = MP_STATE_HEADERS;
+    send_multipart_headers(request);
 }
 
 static void complete_request(http_async_request_t *request) {
@@ -1568,6 +1836,16 @@ void http_async_multipart_form_destroy(http_async_multipart_form_t *form) {
     free(part->content_type);
     free(part->value);
     free(part->data);
+    
+    /* Clean up streaming context if present */
+    if (part->stream_ctx) {
+      if (part->stream_ctx->fd != TURBO_INVALID_FILE) {
+        turbo_fs_close_sync(part->stream_ctx->fd);
+      }
+      free(part->stream_ctx->file_path);
+      free(part->stream_ctx);
+    }
+    
     free(part);
     part = next;
   }
@@ -1622,47 +1900,72 @@ int http_async_multipart_form_add_file_path(http_async_multipart_form_t *form,
   if (!form || !field_name || !file_path)
     return -1;
 
-  FILE *fp = fopen(file_path, "rb");
-  if (!fp)
-    return -1;
-
-  fseek(fp, 0, SEEK_END);
-  long file_size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-
-  if (file_size < 0 || file_size > 100 * 1024 * 1024) {
-    fclose(fp);
+  turbo_fs_stat_t st;
+  if (turbo_fs_stat_sync(file_path, &st) != 0) {
     return -1;
   }
 
-  void *data = malloc((size_t)file_size);
-  if (!data) {
-    fclose(fp);
+  if (st.is_directory) {
     return -1;
   }
 
-  size_t read_size = fread(data, 1, (size_t)file_size, fp);
-  fclose(fp);
-
-  if (read_size != (size_t)file_size) {
-    free(data);
+  // Large files (>2GB) supported via streaming
+  
+  http_async_multipart_part_t *part = calloc(1, sizeof(http_async_multipart_part_t));
+  if (!part)
     return -1;
+
+  part->name = strdup(field_name);
+  // Extract filename from path
+  char basename[256];
+  if (turbo_fs_path_basename(file_path, basename, sizeof(basename)) == 0) {
+      part->filename = strdup(basename);
+  } else {
+      part->filename = strdup("file");
   }
+  
+  part->content_type = content_type ? strdup(content_type) : strdup("application/octet-stream");
+  part->is_file = 1;
+  part->is_stream = 1; /* Mark as streaming part */
+  
+  /* Initialize stream context */
+  part->stream_ctx = calloc(1, sizeof(http_async_multipart_file_stream_t));
+  if (!part->stream_ctx) {
+      free(part->name);
+      free(part->filename);
+      free(part->content_type);
+      free(part);
+      return -1;
+  }
+  
+  part->stream_ctx->file_path = strdup(file_path);
+  part->stream_ctx->file_size = st.size;
+  part->stream_ctx->offset = 0;
+  part->stream_ctx->fd = TURBO_INVALID_FILE; /* Open lazily during send */
+  /* Chunk buffer allocated during send */
 
-  const char *filename = strrchr(file_path, '/');
-  if (!filename)
-    filename = strrchr(file_path, '\\');
-  filename = filename ? filename + 1 : file_path;
-
-  http_async_multipart_form_add_file(form, field_name, filename, content_type, data, read_size);
-  free(data);
-
+  part->next = form->parts;
+  form->parts = part;
+  form->part_count++;
+  
   return 0;
 }
 
 static char *build_multipart_body(http_async_multipart_form_t *form, size_t *body_len) {
   if (!form || !body_len)
     return NULL;
+
+  /* SAFETY CHECK: This function loads entire body into memory.
+   * Streaming files MUST NOT use this path - they should use streaming mode.
+   * If we encounter a streaming file here, it's a bug in the caller. */
+  http_async_multipart_part_t *check = form->parts;
+  while (check) {
+    if (check->is_stream) {
+      /* Caller error: streaming files cannot be built into memory buffer */
+      return NULL;
+    }
+    check = check->next;
+  }
 
   size_t total_size = 0;
   http_async_multipart_part_t *part = form->parts;
@@ -1727,20 +2030,89 @@ static char *build_multipart_body(http_async_multipart_form_t *form, size_t *bod
   return body;
 }
 
-http_async_request_t *http_async_post_multipart(http_async_client_t *client, const char *url,
-                                                http_async_multipart_form_t *form,
-                                                http_async_response_cb callback, void *user_data) {
-  if (!client || !url || !form)
+/* Helper to create streaming multipart request */
+static http_async_request_t *create_streaming_multipart_request(
+    http_async_client_t *client,
+    const char *url,
+    http_async_multipart_form_t *form,
+    http_async_response_cb callback,
+    void *user_data,
+    int use_chunked_encoding) {
+    
+  http_async_request_t *request = calloc(1, sizeof(http_async_request_t));
+  if (!request)
     return NULL;
 
+  /* Initialize request arena */
+  if (turbo_arena_init(&request->request_arena, 8192) != 0) {
+    free(request);
+    return NULL;
+  }
+
+  request->client = client;
+  request->method = HTTP_POST;
+  
+  /* Build full URL and allocate from arena */
+  char *full_url = build_full_url(client, url, &request->request_arena);
+  request->url = full_url ? full_url : turbo_arena_strdup(&request->request_arena, url);
+
+  request->callback = callback;
+  request->user_data = user_data;
+  request->state = REQUEST_STATE_PENDING;
+  request->redirect_count = 0;
+  request->stream_only = 0;
+  
+  /* Attach multipart form for streaming */
+  request->multipart_form = form;
+  request->current_part = NULL;
+  request->part_bytes_sent = 0;
+  request->headers_sent = 0;
+  request->use_chunked_encoding = use_chunked_encoding;
+
+  /* Allocate response from arena */
+  request->response = (http_async_response_t *)turbo_arena_alloc(&request->request_arena,
+                                                                  sizeof(http_async_response_t));
+  memset(request->response, 0, sizeof(http_async_response_t));
+
+  /* Initialize receive buffer from arena */
+  request->receive_buffer_size = 65536;
+  request->receive_buffer = (char *)turbo_arena_alloc(&request->request_arena,
+                                                       request->receive_buffer_size);
+  request->receive_buffer_used = 0;
+
+  /* Add to active requests list */
+  request->next = client->active_requests;
+  request->prev = NULL;
+  if (client->active_requests) {
+    client->active_requests->prev = request;
+  }
+  client->active_requests = request;
+
+  client->stats.total_requests++;
+  client->stats.active_requests++;
+
+  /* Initiate the request */
+  initiate_request(request);
+
+  return request;
+}
+
+/* Helper to create non-streaming multipart request */
+static http_async_request_t *create_nonstreaming_multipart_request(
+    http_async_client_t *client,
+    const char *url,
+    http_async_multipart_form_t *form,
+    http_async_response_cb callback,
+    void *user_data) {
+    
   size_t body_len;
   char *body = build_multipart_body(form, &body_len);
   if (!body)
     return NULL;
 
   char content_type[256];
-  stbsp_snprintf(content_type, sizeof(content_type), "Content-Type: multipart/form-data; boundary=%s",
-           form->boundary);
+  stbsp_snprintf(content_type, sizeof(content_type), 
+                 "Content-Type: multipart/form-data; boundary=%s", form->boundary);
 
   const char *headers[] = {content_type};
 
@@ -1750,6 +2122,37 @@ http_async_request_t *http_async_post_multipart(http_async_client_t *client, con
   free(body);
   return request;
 }
+
+http_async_request_t *http_async_post_multipart(http_async_client_t *client, const char *url,
+                                                http_async_multipart_form_t *form,
+                                                http_async_response_cb callback, void *user_data) {
+  if (!client || !url || !form)
+    return NULL;
+
+  /* Check if form contains streaming parts - if so, must use streaming mode */
+  http_async_multipart_part_t *part = form->parts;
+  while (part) {
+    if (part->is_stream) {
+      /* Has streaming file, use streaming mode with Content-Length */
+      return create_streaming_multipart_request(client, url, form, callback, user_data, 0);
+    }
+    part = part->next;
+  }
+
+  /* No streaming parts - safe to build body in memory (small files only) */
+  return create_nonstreaming_multipart_request(client, url, form, callback, user_data);
+}
+
+http_async_request_t *http_async_post_multipart_chunked(http_async_client_t *client, const char *url,
+                                                        http_async_multipart_form_t *form,
+                                                        http_async_response_cb callback, void *user_data) {
+  if (!client || !url || !form)
+    return NULL;
+
+  /* Always use streaming mode with chunked encoding */
+  return create_streaming_multipart_request(client, url, form, callback, user_data, 1);
+}
+
 
 /* ============================================================================
  * Interceptors
@@ -2012,4 +2415,90 @@ int http_async_response_is_sse(http_async_response_t *response) {
   int is_sse = (strstr(content_type, "text/event-stream") != NULL);
   free(content_type);
   return is_sse;
+}
+
+/* ============================================================================
+ * File Upload/Download - Streaming implementations
+ * ========================================================================= */
+
+http_async_request_t *http_async_upload_file(http_async_client_t *client, const char *url,
+                                             const char *file_path,
+                                             http_async_response_cb callback, void *user_data) {
+  if (!client || !url || !file_path)
+    return NULL;
+
+  http_async_multipart_form_t *form = http_async_multipart_form_create();
+  if (!form)
+    return NULL;
+
+  if (http_async_multipart_form_add_file_path(form, "file", file_path, "application/octet-stream") != 0) {
+    http_async_multipart_form_destroy(form);
+    return NULL;
+  }
+
+  /* Use chunked streaming - no file size limit, constant memory */
+  return http_async_post_multipart_chunked(client, url, form, callback, user_data);
+}
+
+typedef struct {
+  turbo_file_t fd;
+  size_t bytes_written;
+  http_async_response_cb user_callback;
+  void *user_data;
+} download_file_ctx_t;
+
+static void on_download_data(http_async_request_t *request, const char *data, size_t len, void *user_data) {
+  download_file_ctx_t *ctx = (download_file_ctx_t *)user_data;
+  if (ctx->fd != TURBO_INVALID_FILE && data && len > 0) {
+    turbo_fs_write_sync(ctx->fd, data, len);
+    ctx->bytes_written += len;
+  }
+}
+
+static void on_download_complete(http_async_request_t *request, http_async_response_t *response, void *user_data) {
+  download_file_ctx_t *ctx = (download_file_ctx_t *)user_data;
+  
+  if (ctx->fd != TURBO_INVALID_FILE) {
+    turbo_fs_close_sync(ctx->fd);
+  }
+  
+  response->body_len = ctx->bytes_written;
+  
+  if (ctx->user_callback) {
+    ctx->user_callback(request, response, ctx->user_data);
+  }
+  
+  free(ctx);
+}
+
+http_async_request_t *http_async_download_file(http_async_client_t *client, const char *url,
+                                               const char *output_path,
+                                               http_async_response_cb callback, void *user_data) {
+  if (!client || !url || !output_path)
+    return NULL;
+
+  turbo_file_t fd = turbo_fs_open_sync(output_path, 
+      TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
+  if (fd == TURBO_INVALID_FILE)
+    return NULL;
+
+  download_file_ctx_t *ctx = calloc(1, sizeof(download_file_ctx_t));
+  if (!ctx) {
+    turbo_fs_close_sync(fd);
+    return NULL;
+  }
+
+  ctx->fd = fd;
+  ctx->bytes_written = 0;
+  ctx->user_callback = callback;
+  ctx->user_data = user_data;
+
+  http_async_request_t *request = http_async_stream_get(client, url, on_download_data, on_download_complete, ctx);
+  if (!request) {
+    turbo_fs_close_sync(fd);
+    free(ctx);
+    return NULL;
+  }
+
+  return request;
 }

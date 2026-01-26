@@ -11,7 +11,7 @@ add_executable(${turl_name} turl.c)
 # Dependencies for the library
 target_link_libraries(
   turl_lib
-  PUBLIC http_client_async
+  PUBLIC 
          TurboNet::Core
          TurboNet::Mustache
          TurboNet::JsonParser
@@ -19,7 +19,9 @@ target_link_libraries(
          TurboNet::Quick
          TurboNet::Utils
          qjs
-         cjwt)
+  PRIVATE 
+         cjwt http_client_async
+         )  
 
 target_include_directories(
   turl_lib

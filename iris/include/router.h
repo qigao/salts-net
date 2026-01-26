@@ -16,11 +16,9 @@
 extern "C" {
 #endif
 
-/* Phase IRIS-1: Update macros to use turbo_arena API */
-#define ecewo_alloc(req, size) turbo_arena_alloc(&(req)->arena, (size))
-#define ecewo_strdup(req, str) turbo_arena_strdup(&(req)->arena, (str))
-/* Note: turbo_arena doesn't have sprintf - will handle separately in rpc.c */
-/* #define ecewo_sprintf(req, fmt, ...) turbo_arena_sprintf(&(req)->arena, (fmt), ##__VA_ARGS__) */
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // HTTP Status Codes
 typedef enum {
@@ -159,9 +157,9 @@ typedef struct {
   void *middleware_ctx;
 } Router;
 
-// Forward declaration from middleware.ch
+// Forward declaration from middleware.h
 typedef struct MiddlewareInfo MiddlewareInfo;
-void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
+CXX_C_API void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
 
 // Function declarations
 CXX_C_API int router(async_server_t *server, async_server_connection_t *connection, const char *request_data, size_t request_len);
@@ -205,6 +203,71 @@ CXX_C_API void reply_stream_start(Res *res, int status);
 CXX_C_API void reply_stream_chunk(Res *res, const char *data);
 CXX_C_API void reply_stream_end(Res *res);
 
+// =============================================================================
+// File Download API
+// =============================================================================
+
+/**
+ * @brief Send entire file as response (Content-Length mode)
+ *
+ * @param res Response object
+ * @param status HTTP status code (usually 200)
+ * @param content_type MIME type (e.g., "application/octet-stream")
+ * @param file_path Path to file
+ * @return 0 on success, -1 on error (file not found, etc.)
+ *
+ * @note Reads entire file into memory. For large files, use chunked API.
+ */
+CXX_C_API int reply_file(Res *res, int status, const char *content_type, const char *file_path);
+
+/**
+ * @brief Send file with Content-Disposition header for download
+ *
+ * @param res Response object
+ * @param file_path Path to file
+ * @param download_name Filename shown in browser download dialog (NULL = use original)
+ * @return 0 on success, -1 on error
+ */
+CXX_C_API int reply_download(Res *res, const char *file_path, const char *download_name);
+
+/**
+ * @brief Start chunked transfer response
+ *
+ * @param res Response object
+ * @param status HTTP status code
+ * @param content_type MIME type
+ */
+CXX_C_API void reply_chunked_start(Res *res, int status, const char *content_type);
+
+/**
+ * @brief Send a chunk of data
+ *
+ * @param res Response object
+ * @param data Data to send
+ * @param len Length of data
+ */
+CXX_C_API void reply_chunked_write(Res *res, const void *data, size_t len);
+
+/**
+ * @brief End chunked transfer
+ *
+ * @param res Response object
+ */
+CXX_C_API void reply_chunked_end(Res *res);
+
+/**
+ * @brief Send file using chunked transfer (for large files)
+ *
+ * @param res Response object
+ * @param status HTTP status code
+ * @param content_type MIME type
+ * @param file_path Path to file
+ * @param chunk_size Size of each chunk (0 = default 64KB)
+ * @return 0 on success, -1 on error
+ */
+CXX_C_API int reply_file_chunked(Res *res, int status, const char *content_type,
+                                  const char *file_path, size_t chunk_size);
+
 // Convenience getter functions
 static inline const char *get_params(const Req *req, const char *key) {
   return get_req(&req->params, key);
@@ -217,5 +280,9 @@ static inline const char *get_query(const Req *req, const char *key) {
 static inline const char *get_headers(const Req *req, const char *key) {
   return get_req(&req->headers, key);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

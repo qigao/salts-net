@@ -1,4 +1,5 @@
 #include "server.h"
+#include "iris_app.h"
 #include "cors.h"
 #include "dotenv.h"
 #include "db.h"
@@ -47,7 +48,7 @@ int main(void)
     register_routers();
 
     shutdown_hook(destroy_app);
-    int result = ecewo(PORT);
+    int result = iris_app_listen(NULL, PORT);
     if (result != 0) {
         fprintf(stderr, "Server failed to start: %d\n", result);
         return result;

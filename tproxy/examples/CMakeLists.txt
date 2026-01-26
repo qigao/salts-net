@@ -1,0 +1,16 @@
+set(folder_name ${TARGET_NAME}/examples)
+
+file(GLOB EXTRA_SOURCES *.c)
+foreach(test_source ${EXTRA_SOURCES})
+    get_filename_component(test_name ${test_source} NAME_WE)
+    if(test_name STREQUAL "tproxy_example")
+        add_executable(tproxy_example ${test_source})
+    elseif(test_name STREQUAL "tproxy_test_server")
+        add_executable(tproxy_test_server ${test_source})
+    else()
+        add_executable(${test_name} ${test_source})
+    endif()
+
+    target_link_libraries(${test_name} PRIVATE ${TARGET_NAME})
+    set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
+endforeach()

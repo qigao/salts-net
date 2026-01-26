@@ -205,6 +205,15 @@ CXX_C_API void turbo_tls_reset_stats(turbo_tls_server_t *server);
 CXX_C_API void turbo_tls_trim_memory(turbo_tls_server_t *server);
 CXX_C_API size_t turbo_tls_get_memory_usage(const turbo_tls_server_t *server);
 
+/**
+ * @brief Get the peer certificate in PEM format.
+ * @param client The TLS client.
+ * @param buffer Buffer to store the PEM data. If NULL, length will be set to required size.
+ * @param length Pointer to buffer length. Updated with actual bytes copied or required.
+ * @return 0 on success, error code on failure.
+ */
+CXX_C_API int turbo_tls_client_get_peer_cert_pem(turbo_tls_client_t *client, char *buffer, size_t *length);
+
 /* Zero-copy convenience macros */
 
 /* Get buffer, write data, send buffer */

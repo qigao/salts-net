@@ -1,12 +1,13 @@
 #ifndef IRIS_ERROR_RECOVERY_H
 #define IRIS_ERROR_RECOVERY_H
 
+#include <stddef.h>
+#include <time.h>
+#include "platform.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <stddef.h>
-#include <time.h>
 
 /**
  * @file error_recovery.h
@@ -83,12 +84,12 @@ typedef iris_recovery_action_t (*iris_error_handler_t)(const iris_error_context_
  * @brief Initialize error recovery system
  * @return 0 on success, negative error code on failure
  */
-int iris_error_recovery_init(void);
+CXX_C_API int iris_error_recovery_init(void);
 
 /**
  * @brief Cleanup error recovery system
  */
-void iris_error_recovery_cleanup(void);
+CXX_C_API void iris_error_recovery_cleanup(void);
 
 /**
  * @brief Handle an error with recovery
@@ -96,26 +97,26 @@ void iris_error_recovery_cleanup(void);
  * @param recovery_action Suggested recovery action
  * @return Final recovery action to take
  */
-iris_recovery_action_t iris_handle_error(const iris_error_context_t *ctx, iris_recovery_action_t recovery_action);
+CXX_C_API iris_recovery_action_t iris_handle_error(const iris_error_context_t *ctx, iris_recovery_action_t recovery_action);
 
 /**
  * @brief Log an error
  * @param ctx Error context
  */
-void iris_log_error(const iris_error_context_t *ctx);
+CXX_C_API void iris_log_error(const iris_error_context_t *ctx);
 
 /**
  * @brief Set custom error handler
  * @param handler Error handler callback
  */
-void iris_set_error_handler(iris_error_handler_t handler);
+CXX_C_API void iris_set_error_handler(iris_error_handler_t handler);
 
 /**
  * @brief Get human-readable error message
  * @param error_type Error type
  * @return Error message string
  */
-const char *iris_error_type_string(iris_error_type_t error_type);
+CXX_C_API const char *iris_error_type_string(iris_error_type_t error_type);
 
 /**
  * @brief Create error context
@@ -127,7 +128,7 @@ const char *iris_error_type_string(iris_error_type_t error_type);
  * @param function Function name
  * @return Initialized error context
  */
-iris_error_context_t iris_create_error_context(iris_error_type_t error_type, int error_code,
+CXX_C_API iris_error_context_t iris_create_error_context(iris_error_type_t error_type, int error_code,
                                                const char *message, const char *file, int line,
                                                const char *function);
 

@@ -675,7 +675,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   // Calculate response size
   int base_header_len = stbsp_snprintf(NULL, 0,
                                        "HTTP/1.1 %d\r\n"
-                                       "Server: Ecewo\r\n"
+                                       "Server: Iris Http Server\r\n"
                                        "Date: %s\r\n"
                                        "%s"
                                        "Content-Type: %s\r\n"
@@ -707,7 +707,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
 
   int written = stbsp_snprintf(response, (size_t)base_header_len + 1,
                                "HTTP/1.1 %d\r\n"
-                               "Server: Ecewo\r\n"
+                               "Server: Iris Http Server\r\n"
                                "Date: %s\r\n"
                                "%s"
                                "Content-Type: %s\r\n"
@@ -763,7 +763,7 @@ void reply_stream_start(Res *res, int status) {
   char headers[1024];
   int n = stbsp_snprintf(headers, sizeof(headers),
                          "HTTP/1.1 %d OK\r\n"
-                         "Server: Ecewo\r\n"
+                         "Server: Iris Http Server\r\n"
                          "Date: %s\r\n"
                          "Content-Type: text/event-stream\r\n"
                          "Cache-Control: no-cache\r\n"
@@ -817,6 +817,202 @@ void reply_stream_end(Res *res) {
   // Format: 0\r\n\r\n
   const char *end_chunk = "0\r\n\r\n";
   async_server_send(res->server, res->connection, end_chunk, strlen(end_chunk));
+}
+
+// =============================================================================
+// File Download Implementation
+// =============================================================================
+
+static void send_headers_only(Res *res, int status, const char *content_type,
+                              size_t content_length, const char *extra_headers) {
+  time_t now = time(NULL);
+  struct tm *gmt = gmtime(&now);
+  char date_str[64];
+  strftime(date_str, sizeof(date_str), "%a, %d %b %Y %H:%M:%S GMT", gmt);
+
+  char headers[2048];
+  int n = stbsp_snprintf(headers, sizeof(headers),
+                         "HTTP/1.1 %d OK\r\n"
+                         "Server: Iris Http Server\r\n"
+                         "Date: %s\r\n"
+                         "Content-Type: %s\r\n"
+                         "Content-Length: %zu\r\n"
+                         "%s"
+                         "Connection: %s\r\n"
+                         "\r\n",
+                         status, date_str, content_type, content_length,
+                         extra_headers ? extra_headers : "",
+                         res->keep_alive ? "keep-alive" : "close");
+
+  if (n > 0) {
+    async_server_send(res->server, res->connection, headers, n);
+  }
+}
+
+int reply_file(Res *res, int status, const char *content_type, const char *file_path) {
+  if (!res || !res->connection || !file_path)
+    return -1;
+
+  FILE *fp = fopen(file_path, "rb");
+  if (!fp)
+    return -1;
+
+  fseek(fp, 0, SEEK_END);
+  long file_size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+
+  if (file_size < 0) {
+    fclose(fp);
+    return -1;
+  }
+
+  char *data = malloc((size_t)file_size);
+  if (!data) {
+    fclose(fp);
+    return -1;
+  }
+
+  size_t read = fread(data, 1, (size_t)file_size, fp);
+  fclose(fp);
+
+  if (read != (size_t)file_size) {
+    free(data);
+    return -1;
+  }
+
+  send_headers_only(res, status, content_type, (size_t)file_size, NULL);
+  async_server_send(res->server, res->connection, data, (size_t)file_size);
+  free(data);
+  return 0;
+}
+
+int reply_download(Res *res, const char *file_path, const char *download_name) {
+  if (!res || !res->connection || !file_path)
+    return -1;
+
+  // Extract filename from path if download_name not provided
+  const char *filename = download_name;
+  if (!filename) {
+    filename = strrchr(file_path, '/');
+    if (!filename) filename = strrchr(file_path, '\\');
+    filename = filename ? filename + 1 : file_path;
+  }
+
+  FILE *fp = fopen(file_path, "rb");
+  if (!fp)
+    return -1;
+
+  fseek(fp, 0, SEEK_END);
+  long file_size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+
+  if (file_size < 0) {
+    fclose(fp);
+    return -1;
+  }
+
+  char *data = malloc((size_t)file_size);
+  if (!data) {
+    fclose(fp);
+    return -1;
+  }
+
+  size_t read = fread(data, 1, (size_t)file_size, fp);
+  fclose(fp);
+
+  if (read != (size_t)file_size) {
+    free(data);
+    return -1;
+  }
+
+  char extra[512];
+  stbsp_snprintf(extra, sizeof(extra),
+                 "Content-Disposition: attachment; filename=\"%s\"\r\n", filename);
+
+  send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra);
+  async_server_send(res->server, res->connection, data, (size_t)file_size);
+  free(data);
+  return 0;
+}
+
+void reply_chunked_start(Res *res, int status, const char *content_type) {
+  if (!res || !res->connection)
+    return;
+
+  time_t now = time(NULL);
+  struct tm *gmt = gmtime(&now);
+  char date_str[64];
+  strftime(date_str, sizeof(date_str), "%a, %d %b %Y %H:%M:%S GMT", gmt);
+
+  char headers[1024];
+  int n = stbsp_snprintf(headers, sizeof(headers),
+                         "HTTP/1.1 %d OK\r\n"
+                         "Server: Iris Http Server\r\n"
+                         "Date: %s\r\n"
+                         "Content-Type: %s\r\n"
+                         "Transfer-Encoding: chunked\r\n"
+                         "Connection: %s\r\n"
+                         "\r\n",
+                         status, date_str, content_type,
+                         res->keep_alive ? "keep-alive" : "close");
+
+  if (n > 0) {
+    async_server_send(res->server, res->connection, headers, n);
+  }
+}
+
+void reply_chunked_write(Res *res, const void *data, size_t len) {
+  if (!res || !res->connection || !data || len == 0)
+    return;
+
+  char hex_len[32];
+  int n = stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", len);
+  if (n > 0) {
+    async_server_send(res->server, res->connection, hex_len, n);
+    async_server_send(res->server, res->connection, data, len);
+    async_server_send(res->server, res->connection, "\r\n", 2);
+  }
+}
+
+void reply_chunked_end(Res *res) {
+  if (!res || !res->connection)
+    return;
+
+  async_server_send(res->server, res->connection, "0\r\n\r\n", 5);
+}
+
+#define DEFAULT_CHUNK_SIZE (64 * 1024)
+
+int reply_file_chunked(Res *res, int status, const char *content_type,
+                       const char *file_path, size_t chunk_size) {
+  if (!res || !res->connection || !file_path)
+    return -1;
+
+  FILE *fp = fopen(file_path, "rb");
+  if (!fp)
+    return -1;
+
+  if (chunk_size == 0)
+    chunk_size = DEFAULT_CHUNK_SIZE;
+
+  char *buffer = malloc(chunk_size);
+  if (!buffer) {
+    fclose(fp);
+    return -1;
+  }
+
+  reply_chunked_start(res, status, content_type);
+
+  size_t bytes_read;
+  while ((bytes_read = fread(buffer, 1, chunk_size, fp)) > 0) {
+    reply_chunked_write(res, buffer, bytes_read);
+  }
+
+  reply_chunked_end(res);
+
+  free(buffer);
+  fclose(fp);
+  return 0;
 }
 
 // Validates all cookies in the Cookie header

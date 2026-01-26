@@ -6,6 +6,11 @@
 #include <uv.h> 
 
 #include "router.h"
+#include "platform.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Path segment structure for pre-tokenized paths
 typedef struct
@@ -76,28 +81,32 @@ typedef enum
 
 // Path tokenization functions
 /* Phase IRIS-1: Updated to use turbo_arena_t */
-int tokenize_path(turbo_arena_t *arena, const char *path, tokenized_path_t *result);
+CXX_C_API int tokenize_path(turbo_arena_t *arena, const char *path, tokenized_path_t *result);
 
 // re2c-based route parsing functions
-http_method_t parse_http_method_re2c(const char *method, size_t len);
-int tokenize_path_re2c(turbo_arena_t *arena, const char *path, tokenized_path_t *result);
-int count_path_segments_re2c(const char *path, size_t len);
-bool extract_path_segment_re2c(const char **cursor, const char *limit, path_segment_t *segment);
-bool is_valid_path_char_re2c(unsigned char c);
-bool match_path_segment_re2c(const char *pattern, size_t pattern_len,
+CXX_C_API http_method_t parse_http_method_re2c(const char *method, size_t len);
+CXX_C_API int tokenize_path_re2c(turbo_arena_t *arena, const char *path, tokenized_path_t *result);
+CXX_C_API int count_path_segments_re2c(const char *path, size_t len);
+CXX_C_API bool extract_path_segment_re2c(const char **cursor, const char *limit, path_segment_t *segment);
+CXX_C_API bool is_valid_path_char_re2c(unsigned char c);
+CXX_C_API bool match_path_segment_re2c(const char *pattern, size_t pattern_len,
                              const char *path, size_t path_len);
 
 // Now takes tokenized path instead of raw string
-bool route_trie_match(route_trie_t *trie,
+CXX_C_API bool route_trie_match(route_trie_t *trie,
                       const char *method,
                       const tokenized_path_t *tokenized_path,
                       route_match_t *match);
 
 // Existing functions remain same
-route_trie_t *route_trie_create(void);
-int route_trie_add(route_trie_t *trie, const char *method, const char *path,
+CXX_C_API route_trie_t *route_trie_create(void);
+CXX_C_API int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                    RequestHandler handler, void *middleware_ctx);
-void route_trie_free(route_trie_t *trie);
-http_method_t get_method_index(const char *method);
+CXX_C_API void route_trie_free(route_trie_t *trie);
+CXX_C_API http_method_t get_method_index(const char *method);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

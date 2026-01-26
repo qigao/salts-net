@@ -1,12 +1,12 @@
-#ifndef ECEWO_H
-#define ECEWO_H
+#ifndef __IRIS_H__
+#define __IRIS_H__
 
 #include "compat.h"
-#include "server.h"
 #include "iris_app.h"
 #include "middleware.h"
 #include "route_trie.h"
 #include "router.h"
+#include "server.h"
 
 /* Legacy global route trie - for backward compatibility only.
  * New code should use iris_app_t instead. */
@@ -72,4 +72,4 @@ static inline void del_with_mw(const char *p, MiddlewareArray mw, RequestHandler
   register_route("DELETE", p, mw, h);
 }
 
-#endif
+#endif // __IRIS_H__

@@ -12,6 +12,7 @@ set(HTTP_TESTS
     test_multipart
     test_interceptors
     test_async_stream
+    test_streaming_multipart
     test_retry)
 
 foreach(test_name ${HTTP_TESTS})

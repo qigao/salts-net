@@ -4,9 +4,11 @@
  */
 
 #include "iris.h"
+#include "iris_app.h"
 #include "server.h"
 #include "rpc.h"
 #include "tlog.h"
+#define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -140,5 +142,5 @@ int main(int argc, char *argv[]) {
     TLOG_INFO("Standard SSE endpoint: /stream");
     TLOG_INFO("RPC SSE endpoint:      /rpc (method: math.count)");
 
-    return ecewo(8080);
+    return iris_app_listen(NULL, 8080);
 }

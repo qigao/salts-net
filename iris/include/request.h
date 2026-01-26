@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include "compat.h"
 #include "arena_buffer.h"
+#include "platform.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Forward declaration - hides llhttp implementation details
 typedef struct http_parser_impl http_parser_impl_t;
@@ -61,16 +66,20 @@ typedef struct
 } http_context_t;
 
 // Function to initialize the http context 
-void http_context_init(http_context_t *context, turbo_arena_t *arena);
+CXX_C_API void http_context_init(http_context_t *context, turbo_arena_t *arena);
 
 // Function to cleanup the http context
-void http_context_free(http_context_t *context);
+CXX_C_API void http_context_free(http_context_t *context);
 
 // Parse the query string into request_t structure
 /* Phase IRIS-1: Updated to use turbo_arena_t */
-void parse_query(turbo_arena_t *arena, const char *query_string, request_t *query);
+CXX_C_API void parse_query(turbo_arena_t *arena, const char *query_string, request_t *query);
 
 // Get value by key from request_t structure
-const char *get_req(const request_t *request, const char *key);
+CXX_C_API const char *get_req(const request_t *request, const char *key);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

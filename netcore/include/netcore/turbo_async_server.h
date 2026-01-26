@@ -368,6 +368,16 @@ CXX_C_API void async_server_connection_set_user_data(async_server_connection_t *
 CXX_C_API void *async_server_connection_get_user_data(const async_server_connection_t *connection);
 
 /**
+ * @brief Gets the peer certificate in PEM format (TLS/WSS connections only).
+ * @param connection The connection pointer.
+ * @param buffer Buffer to store the PEM data. If NULL, length will be set to required size.
+ * @param length Pointer to buffer length. Updated with actual bytes copied or required.
+ * @return ASYNC_SERVER_STATUS_OK on success, or an error code otherwise.
+ */
+CXX_C_API async_server_status_t async_server_connection_get_peer_cert_pem(
+    async_server_connection_t *connection, char *buffer, size_t *length);
+
+/**
  * @brief Server statistics structure.
  */
 typedef struct {

@@ -493,6 +493,22 @@ uint64_t turbo_realtime_ms(void) {
     // Subtract EPOCH_DIFF (116444736000000000ns) to get Unix epoch in 100ns intervals.
     return (uli.QuadPart - 116444736000000000ULL) / 10000ULL;
 }
+
+int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz) {
+    if (tv) {
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        ULARGE_INTEGER uli;
+        uli.LowPart = ft.dwLowDateTime;
+        uli.HighPart = ft.dwHighDateTime;
+
+        // 100ns intervals since Jan 1, 1601.
+        uint64_t intervals = uli.QuadPart - 116444736000000000ULL;
+        tv->tv_sec = (int64_t)(intervals / 10000000ULL);
+        tv->tv_usec = (int32_t)((intervals % 10000000ULL) / 10ULL);
+    }
+    return 0;
+}
 #else
 uint64_t turbo_hrtime(void) {
     struct timespec ts;
@@ -504,6 +520,16 @@ uint64_t turbo_realtime_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz) {
+    struct timeval system_tv;
+    int result = gettimeofday(&system_tv, NULL);
+    if (result == 0 && tv) {
+        tv->tv_sec = (int64_t)system_tv.tv_sec;
+        tv->tv_usec = (int32_t)system_tv.tv_usec;
+    }
+    return result;
 }
 #endif
 

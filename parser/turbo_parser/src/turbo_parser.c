@@ -492,6 +492,17 @@ int turbo_soa_schema_column_type(const turbo_soa_schema_t *schema, int idx) {
 }
 
 /* CMD Parser */
+struct turbo_cmd_subcommand_s {
+  char *name;
+  char *info;
+  CmdArgerDesc *optional_args;
+  uint32_t optional_count;
+  uint32_t optional_capacity;
+  CmdArgerDesc *required_args;
+  uint32_t required_count;
+  uint32_t required_capacity;
+};
+
 struct turbo_cmd_parser_s {
   char *app_name;
   char *version;
@@ -503,6 +514,10 @@ struct turbo_cmd_parser_s {
   CmdArgerDesc *required_args;
   uint32_t required_count;
   uint32_t required_capacity;
+
+  turbo_cmd_subcommand_t *subcommands;
+  uint32_t subcommand_count;
+  uint32_t subcommand_capacity;
 };
 
 turbo_cmd_parser_t *turbo_cmd_create(const char *app_name, const char *version) {
@@ -517,8 +532,11 @@ turbo_cmd_parser_t *turbo_cmd_create(const char *app_name, const char *version) 
   
   parser->required_capacity = 8;
   parser->required_args = (CmdArgerDesc *)calloc(parser->required_capacity, sizeof(CmdArgerDesc));
+
+  parser->subcommand_capacity = 4;
+  parser->subcommands = (turbo_cmd_subcommand_t *)calloc(parser->subcommand_capacity, sizeof(turbo_cmd_subcommand_t));
   
-  if (!parser->optional_args || !parser->required_args) {
+  if (!parser->optional_args || !parser->required_args || !parser->subcommands) {
     turbo_cmd_destroy(parser);
     return NULL;
   }
@@ -532,6 +550,14 @@ void turbo_cmd_destroy(turbo_cmd_parser_t *parser) {
   if (parser->version) free(parser->version);
   if (parser->optional_args) free(parser->optional_args);
   if (parser->required_args) free(parser->required_args);
+  for (uint32_t i = 0; i < parser->subcommand_count; i++) {
+    turbo_cmd_subcommand_t *sub = &parser->subcommands[i];
+    if (sub->name) free(sub->name);
+    if (sub->info) free(sub->info);
+    if (sub->optional_args) free(sub->optional_args);
+    if (sub->required_args) free(sub->required_args);
+  }
+  if (parser->subcommands) free(parser->subcommands);
   free(parser);
 }
 
@@ -596,6 +622,125 @@ void turbo_cmd_add_required_string(turbo_cmd_parser_t *parser, char **out,
       cmd_arger_desc_string(out, (char*)name, (char*)desc);
 }
 
+void turbo_cmd_add_required_integer(turbo_cmd_parser_t *parser, int64_t *out,
+                                    const char *name, const char *desc) {
+  if (!parser) return;
+  if (parser->required_count >= parser->required_capacity) {
+    parser->required_capacity *= 2;
+    parser->required_args = (CmdArgerDesc *)realloc(parser->required_args, 
+                                                    parser->required_capacity * sizeof(CmdArgerDesc));
+  }
+  parser->required_args[parser->required_count++] = 
+      cmd_arger_desc_integer(out, (char*)name, (char*)desc);
+}
+
+void turbo_cmd_add_enum(turbo_cmd_parser_t *parser, int64_t *out, const char *name,
+                        const char *short_name, const char *desc,
+                        turbo_cmd_enum_t *choices, uint32_t choices_count) {
+  if (!parser) return;
+  ensure_optional_capacity(parser);
+  parser->optional_args[parser->optional_count++] = 
+      cmd_arger_desc_enum_sh(out, (char*)name, (char*)short_name, (char*)desc,
+                             (CmdArgerEnumDesc*)choices, choices_count);
+}
+
+uint32_t turbo_cmd_last_index(turbo_cmd_parser_t *parser) {
+  if (!parser || parser->optional_count == 0) return 0;
+  return parser->optional_count - 1;
+}
+
+void turbo_cmd_set_env(turbo_cmd_parser_t *parser, uint32_t index, const char *env_var) {
+  if (!parser || index >= parser->optional_count) return;
+  parser->optional_args[index] = cmd_arger_with_env(parser->optional_args[index], env_var);
+}
+
+void turbo_cmd_set_group(turbo_cmd_parser_t *parser, uint32_t index, const char *group) {
+  if (!parser || index >= parser->optional_count) return;
+  parser->optional_args[index] = cmd_arger_with_group(parser->optional_args[index], group);
+}
+
+void turbo_cmd_set_choices(turbo_cmd_parser_t *parser, uint32_t index,
+                           const char **choices, uint32_t count) {
+  if (!parser || index >= parser->optional_count) return;
+  parser->optional_args[index] = cmd_arger_with_choices(parser->optional_args[index], choices, count);
+}
+
+void turbo_cmd_set_validator(turbo_cmd_parser_t *parser, uint32_t index,
+                             turbo_cmd_validator_t validator) {
+  if (!parser || index >= parser->optional_count) return;
+  parser->optional_args[index] = cmd_arger_with_validator(parser->optional_args[index], 
+                                                          (CmdArgerValidator)validator);
+}
+
+void turbo_cmd_set_required(turbo_cmd_parser_t *parser, uint32_t index) {
+  if (!parser || index >= parser->optional_count) return;
+  parser->optional_args[index] = cmd_arger_required(parser->optional_args[index]);
+}
+
+/* Subcommand support */
+turbo_cmd_subcommand_t *turbo_cmd_add_subcommand(turbo_cmd_parser_t *parser,
+                                                  const char *name, const char *desc) {
+  if (!parser) return NULL;
+  if (parser->subcommand_count >= parser->subcommand_capacity) {
+    parser->subcommand_capacity *= 2;
+    parser->subcommands = (turbo_cmd_subcommand_t *)realloc(parser->subcommands,
+                          parser->subcommand_capacity * sizeof(turbo_cmd_subcommand_t));
+  }
+  turbo_cmd_subcommand_t *sub = &parser->subcommands[parser->subcommand_count++];
+  memset(sub, 0, sizeof(*sub));
+  sub->name = strdup(name);
+  sub->info = desc ? strdup(desc) : NULL;
+  sub->optional_capacity = 8;
+  sub->optional_args = (CmdArgerDesc *)calloc(sub->optional_capacity, sizeof(CmdArgerDesc));
+  sub->required_capacity = 4;
+  sub->required_args = (CmdArgerDesc *)calloc(sub->required_capacity, sizeof(CmdArgerDesc));
+  return sub;
+}
+
+static void ensure_sub_optional_capacity(turbo_cmd_subcommand_t *sub) {
+  if (sub->optional_count >= sub->optional_capacity) {
+    sub->optional_capacity *= 2;
+    sub->optional_args = (CmdArgerDesc *)realloc(sub->optional_args,
+                         sub->optional_capacity * sizeof(CmdArgerDesc));
+  }
+}
+
+void turbo_cmd_sub_add_flag(turbo_cmd_subcommand_t *sub, bool *out, const char *name,
+                            const char *short_name, const char *desc) {
+  if (!sub) return;
+  ensure_sub_optional_capacity(sub);
+  sub->optional_args[sub->optional_count++] = 
+      cmd_arger_desc_flag_sh((CmdArgerBool*)out, (char*)name, (char*)short_name, (char*)desc);
+}
+
+void turbo_cmd_sub_add_string(turbo_cmd_subcommand_t *sub, char **out, const char *name,
+                              const char *short_name, const char *desc) {
+  if (!sub) return;
+  ensure_sub_optional_capacity(sub);
+  sub->optional_args[sub->optional_count++] = 
+      cmd_arger_desc_string_sh(out, (char*)name, (char*)short_name, (char*)desc);
+}
+
+void turbo_cmd_sub_add_integer(turbo_cmd_subcommand_t *sub, int64_t *out,
+                               const char *name, const char *short_name, const char *desc) {
+  if (!sub) return;
+  ensure_sub_optional_capacity(sub);
+  sub->optional_args[sub->optional_count++] = 
+      cmd_arger_desc_integer_sh(out, (char*)name, (char*)short_name, (char*)desc);
+}
+
+void turbo_cmd_sub_add_required_string(turbo_cmd_subcommand_t *sub, char **out,
+                                       const char *name, const char *desc) {
+  if (!sub) return;
+  if (sub->required_count >= sub->required_capacity) {
+    sub->required_capacity *= 2;
+    sub->required_args = (CmdArgerDesc *)realloc(sub->required_args,
+                         sub->required_capacity * sizeof(CmdArgerDesc));
+  }
+  sub->required_args[sub->required_count++] = 
+      cmd_arger_desc_string(out, (char*)name, (char*)desc);
+}
+
 void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool colors) {
   if (!parser) return;
   
@@ -611,6 +756,54 @@ void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool col
   cmd_arger_parse(parser->optional_args, parser->optional_count,
                   parser->required_args, parser->required_count,
                   argc, argv, app_ver, (CmdArgerBool)colors);
+}
+
+int turbo_cmd_parse_subcommand(turbo_cmd_parser_t *parser, int argc, char **argv, bool colors) {
+  if (!parser || parser->subcommand_count == 0) return -1;
+  
+  char app_ver[256];
+  if (parser->app_name && parser->version) {
+    snprintf(app_ver, sizeof(app_ver), "%s %s", parser->app_name, parser->version);
+  } else if (parser->app_name) {
+    snprintf(app_ver, sizeof(app_ver), "%s", parser->app_name);
+  } else {
+    snprintf(app_ver, sizeof(app_ver), "Application");
+  }
+
+  CmdArgerSubCommand *subs = (CmdArgerSubCommand *)calloc(parser->subcommand_count, sizeof(CmdArgerSubCommand));
+  for (uint32_t i = 0; i < parser->subcommand_count; i++) {
+    turbo_cmd_subcommand_t *src = &parser->subcommands[i];
+    subs[i].name = src->name;
+    subs[i].info = src->info;
+    subs[i].optional_args = src->optional_args;
+    subs[i].optional_args_count = src->optional_count;
+    subs[i].required_args = src->required_args;
+    subs[i].required_args_count = src->required_count;
+  }
+
+  int selected = -1;
+  cmd_arger_parse_subcommand(parser->optional_args, parser->optional_count,
+                             subs, parser->subcommand_count,
+                             &selected, argc, argv, app_ver, (CmdArgerBool)colors);
+  free(subs);
+  return selected;
+}
+
+void turbo_cmd_show_help(turbo_cmd_parser_t *parser, bool colors) {
+  if (!parser) return;
+  
+  char app_ver[256];
+  if (parser->app_name && parser->version) {
+    snprintf(app_ver, sizeof(app_ver), "%s %s", parser->app_name, parser->version);
+  } else if (parser->app_name) {
+    snprintf(app_ver, sizeof(app_ver), "%s", parser->app_name);
+  } else {
+    snprintf(app_ver, sizeof(app_ver), "Application");
+  }
+  
+  cmd_arger_show_help_and_exit(parser->optional_args, parser->optional_count,
+                               parser->required_args, parser->required_count,
+                               NULL, app_ver, (CmdArgerBool)colors);
 }
 
 /* DotEnv */

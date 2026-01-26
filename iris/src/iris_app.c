@@ -8,6 +8,7 @@
 #include "route_trie.h"
 #include "middleware.h"
 #include "cors.h"
+#include "server.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -223,4 +224,11 @@ void iris_app_shutdown_hook(iris_app_t *app, void (*hook)(void)) {
     if (app) {
         app->shutdown_hook = hook;
     }
+}
+
+int iris_app_listen(iris_app_t *app, unsigned short port) {
+    if (app && app->shutdown_hook) {
+        shutdown_hook(app->shutdown_hook);
+    }
+    return iris_server_run(port);
 }

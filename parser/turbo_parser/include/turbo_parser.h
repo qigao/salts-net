@@ -189,10 +189,22 @@ CXX_C_API int turbo_soa_schema_column_type(const turbo_soa_schema_t *schema, int
 
 /* CMD Parser */
 typedef struct turbo_cmd_parser_s turbo_cmd_parser_t;
+typedef struct turbo_cmd_subcommand_s turbo_cmd_subcommand_t;
+
+/* Enum choice for turbo_cmd_add_enum */
+typedef struct {
+  const char *name;
+  const char *info;
+  int64_t value;
+} turbo_cmd_enum_t;
+
+/* Custom validator signature */
+typedef bool (*turbo_cmd_validator_t)(const char *value, const char **error_message);
 
 CXX_C_API turbo_cmd_parser_t *turbo_cmd_create(const char *app_name, const char *version);
 CXX_C_API void turbo_cmd_destroy(turbo_cmd_parser_t *parser);
 
+/* Basic argument types */
 CXX_C_API void turbo_cmd_add_flag(turbo_cmd_parser_t *parser, bool *out, const char *name,
                                   const char *short_name, const char *desc);
 CXX_C_API void turbo_cmd_add_string(turbo_cmd_parser_t *parser, char **out, const char *name,
@@ -204,12 +216,46 @@ CXX_C_API void turbo_cmd_add_float(turbo_cmd_parser_t *parser, double *out, cons
 CXX_C_API void turbo_cmd_add_string_list(turbo_cmd_parser_t *parser, char **out_arr,
                                          uint32_t *out_count, uint32_t max_count, const char *name,
                                          const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_add_enum(turbo_cmd_parser_t *parser, int64_t *out, const char *name,
+                                  const char *short_name, const char *desc,
+                                  turbo_cmd_enum_t *choices, uint32_t choices_count);
 
-/* Required arguments */
+/* Required positional arguments */
 CXX_C_API void turbo_cmd_add_required_string(turbo_cmd_parser_t *parser, char **out,
                                              const char *name, const char *desc);
+CXX_C_API void turbo_cmd_add_required_integer(turbo_cmd_parser_t *parser, int64_t *out,
+                                              const char *name, const char *desc);
 
+/* Argument modifiers (return index for chaining) */
+CXX_C_API void turbo_cmd_set_env(turbo_cmd_parser_t *parser, uint32_t index, const char *env_var);
+CXX_C_API void turbo_cmd_set_group(turbo_cmd_parser_t *parser, uint32_t index, const char *group);
+CXX_C_API void turbo_cmd_set_choices(turbo_cmd_parser_t *parser, uint32_t index,
+                                     const char **choices, uint32_t count);
+CXX_C_API void turbo_cmd_set_validator(turbo_cmd_parser_t *parser, uint32_t index,
+                                       turbo_cmd_validator_t validator);
+CXX_C_API void turbo_cmd_set_required(turbo_cmd_parser_t *parser, uint32_t index);
+
+/* Get last added argument index (for modifier chaining) */
+CXX_C_API uint32_t turbo_cmd_last_index(turbo_cmd_parser_t *parser);
+
+/* Subcommand support */
+CXX_C_API turbo_cmd_subcommand_t *turbo_cmd_add_subcommand(turbo_cmd_parser_t *parser,
+                                                           const char *name, const char *desc);
+CXX_C_API void turbo_cmd_sub_add_flag(turbo_cmd_subcommand_t *sub, bool *out, const char *name,
+                                      const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_sub_add_string(turbo_cmd_subcommand_t *sub, char **out, const char *name,
+                                        const char *short_name, const char *desc);
+CXX_C_API void turbo_cmd_sub_add_integer(turbo_cmd_subcommand_t *sub, int64_t *out,
+                                         const char *name, const char *short_name,
+                                         const char *desc);
+CXX_C_API void turbo_cmd_sub_add_required_string(turbo_cmd_subcommand_t *sub, char **out,
+                                                 const char *name, const char *desc);
+
+/* Parsing */
 CXX_C_API void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool colors);
+CXX_C_API int turbo_cmd_parse_subcommand(turbo_cmd_parser_t *parser, int argc, char **argv,
+                                         bool colors);
+CXX_C_API void turbo_cmd_show_help(turbo_cmd_parser_t *parser, bool colors);
 
 /* DotEnv Parser */
 CXX_C_API int turbo_dotenv_load(const char *path, bool overwrite);

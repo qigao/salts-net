@@ -34,7 +34,7 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
 # Add generated sources
 list(APPEND SOURCE_FILES ${GENERATED_SOURCES})
 
-add_library(${TARGET_NAME} ${SOURCE_FILES})
+add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 add_library(TurboNet::Iris ALIAS ${TARGET_NAME})
 
 # Set target properties
@@ -42,7 +42,8 @@ set_target_properties(
   ${TARGET_NAME}
   PROPERTIES FOLDER "iris"
              VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR})
+             SOVERSION ${PROJECT_VERSION_MAJOR}
+             EXPORT_NAME Iris)
 
 # Link libraries first - vcpkg style
 target_link_libraries(
@@ -72,6 +73,7 @@ if(WIN32)
                                                    _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(${TARGET_NAME} PRIVATE ws2_32 advapi32)
 endif()
+target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
@@ -81,3 +83,18 @@ endif()
 if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# Install library
+install(
+  TARGETS ${TARGET_NAME}
+  EXPORT TurboNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+
+# Install headers
+install(
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+  DESTINATION include
+  FILES_MATCHING
+  PATTERN "*.h")

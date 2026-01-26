@@ -231,6 +231,11 @@ CXX_C_API http_response_t* http_post_multipart(http_client_t* client,
                                      const char* url,
                                      http_multipart_form_t* form);
 
+// POST multipart form with chunked transfer encoding (for unknown size or true streaming)
+CXX_C_API http_response_t* http_post_multipart_chunked(http_client_t* client,
+                                              const char* url,
+                                              http_multipart_form_t* form);
+
 // Request/Response Interceptors
 typedef struct http_request_context_s {
     http_method_t method;

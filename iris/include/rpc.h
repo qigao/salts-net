@@ -11,6 +11,8 @@ typedef struct Res Res;
 #include "router.h"
 /* Phase IRIS-1: Use turbo_arena instead of vendor arena */
 #include "arena_buffer.h"
+#include "platform.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -118,14 +120,14 @@ typedef struct rpc_context_s {
  * @param config RPC configuration
  * @return RPC context or NULL on failure
  */
-rpc_context_t *rpc_init(const rpc_config_t *config);
+CXX_C_API rpc_context_t *rpc_init(const rpc_config_t *config);
 
 /**
  * @brief Destroy RPC context
  *
  * @param ctx RPC context
  */
-void rpc_destroy(rpc_context_t *ctx);
+CXX_C_API void rpc_destroy(rpc_context_t *ctx);
 
 /**
  * @brief Register an RPC method
@@ -134,7 +136,7 @@ void rpc_destroy(rpc_context_t *ctx);
  * @param method Method registration info
  * @return 0 on success, -1 on failure
  */
-int rpc_register_method(rpc_context_t *ctx, const rpc_method_t *method);
+CXX_C_API int rpc_register_method(rpc_context_t *ctx, const rpc_method_t *method);
 
 /**
  * @brief Unregister an RPC method
@@ -143,7 +145,7 @@ int rpc_register_method(rpc_context_t *ctx, const rpc_method_t *method);
  * @param method_name Method name
  * @return 0 on success, -1 on failure
  */
-int rpc_unregister_method(rpc_context_t *ctx, const char *method_name);
+CXX_C_API int rpc_unregister_method(rpc_context_t *ctx, const char *method_name);
 
 /**
  * @brief Setup RPC endpoint in Iris router
@@ -151,7 +153,7 @@ int rpc_unregister_method(rpc_context_t *ctx, const char *method_name);
  * @param ctx RPC context
  * @return 0 on success, -1 on failure
  */
-int rpc_setup_endpoint(rpc_context_t *ctx);
+CXX_C_API int rpc_setup_endpoint(rpc_context_t *ctx);
 
 /**
  * @brief Parse RPC request from HTTP request
@@ -160,7 +162,7 @@ int rpc_setup_endpoint(rpc_context_t *ctx);
  * @param rpc_req RPC request (output)
  * @return 0 on success, error code otherwise
  */
-int rpc_parse_request(Req *req, rpc_request_t *rpc_req);
+CXX_C_API int rpc_parse_request(Req *req, rpc_request_t *rpc_req);
 
 /**
  * @brief Build RPC response
@@ -170,7 +172,7 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req);
  * @param output_len Output length (output)
  * @return 0 on success, -1 on failure
  */
-int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_len);
+CXX_C_API int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_len);
 
 /**
  * @brief Send RPC response
@@ -178,7 +180,7 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
  * @param res HTTP response
  * @param rpc_res RPC response
  */
-void rpc_send_response(Res *res, rpc_response_t *rpc_res);
+CXX_C_API void rpc_send_response(Res *res, rpc_response_t *rpc_res);
 
 /**
  * @brief Start an RPC stream (SSE)
@@ -186,7 +188,7 @@ void rpc_send_response(Res *res, rpc_response_t *rpc_res);
  * @param res HTTP response
  * @param rpc_res RPC response (metadata like id will be used)
  */
-void rpc_send_stream_start(Res *res, rpc_response_t *rpc_res);
+CXX_C_API void rpc_send_stream_start(Res *res, rpc_response_t *rpc_res);
 
 /**
  * @brief Send an RPC stream chunk (SSE event)
@@ -194,14 +196,14 @@ void rpc_send_stream_start(Res *res, rpc_response_t *rpc_res);
  * @param res HTTP response
  * @param rpc_res RPC response (result will be sent as SSE data)
  */
-void rpc_send_stream_chunk(Res *res, rpc_response_t *rpc_res);
+CXX_C_API void rpc_send_stream_chunk(Res *res, rpc_response_t *rpc_res);
 
 /**
  * @brief End an RPC stream (SSE)
  * 
  * @param res HTTP response
  */
-void rpc_send_stream_end(Res *res);
+CXX_C_API void rpc_send_stream_end(Res *res);
 
 /**
  * @brief Send RPC error
@@ -211,7 +213,7 @@ void rpc_send_stream_end(Res *res);
  * @param error_message Error message
  * @param id Request ID (can be NULL)
  */
-void rpc_send_error(Res *res, int error_code, const char *error_message, const char *id);
+CXX_C_API void rpc_send_error(Res *res, int error_code, const char *error_message, const char *id);
 
 /**
  * @brief Helper: Set RPC result (JSON string)
@@ -219,7 +221,7 @@ void rpc_send_error(Res *res, int error_code, const char *error_message, const c
  * @param rpc_res RPC response
  * @param result Result JSON string
  */
-void rpc_set_result(rpc_response_t *rpc_res, const char *result);
+CXX_C_API void rpc_set_result(rpc_response_t *rpc_res, const char *result);
 
 /**
  * @brief Helper: Set RPC error
@@ -228,7 +230,7 @@ void rpc_set_result(rpc_response_t *rpc_res, const char *result);
  * @param error_code Error code
  * @param error_message Error message
  */
-void rpc_set_error(rpc_response_t *rpc_res, int error_code, const char *error_message);
+CXX_C_API void rpc_set_error(rpc_response_t *rpc_res, int error_code, const char *error_message);
 
 /**
  * @brief Helper: Get string parameter
@@ -237,7 +239,7 @@ void rpc_set_error(rpc_response_t *rpc_res, int error_code, const char *error_me
  * @param key Parameter key
  * @return Parameter value or NULL
  */
-const char *rpc_get_param_string(rpc_request_t *rpc_req, const char *key);
+CXX_C_API const char *rpc_get_param_string(rpc_request_t *rpc_req, const char *key);
 
 /**
  * @brief Helper: Get integer parameter
@@ -247,7 +249,7 @@ const char *rpc_get_param_string(rpc_request_t *rpc_req, const char *key);
  * @param value Output value
  * @return 0 on success, -1 on failure
  */
-int rpc_get_param_int(rpc_request_t *rpc_req, const char *key, int64_t *value);
+CXX_C_API int rpc_get_param_int(rpc_request_t *rpc_req, const char *key, int64_t *value);
 
 /**
  * @brief Helper: Get boolean parameter
@@ -257,7 +259,7 @@ int rpc_get_param_int(rpc_request_t *rpc_req, const char *key, int64_t *value);
  * @param value Output value
  * @return 0 on success, -1 on failure
  */
-int rpc_get_param_bool(rpc_request_t *rpc_req, const char *key, int *value);
+CXX_C_API int rpc_get_param_bool(rpc_request_t *rpc_req, const char *key, int *value);
 
 /**
  * @brief Convenience macro for defining RPC methods

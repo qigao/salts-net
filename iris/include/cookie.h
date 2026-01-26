@@ -2,7 +2,12 @@
 #define COOKIE_H
 
 #include "router.h"
+#include "platform.h"
 #include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct
 {
@@ -13,7 +18,11 @@ typedef struct
     bool secure;
 } cookie_options_t;
 
-char *get_cookie(Req *req, const char *name);
-void set_cookie(Res *res, const char *name, const char *value, cookie_options_t *options);
+CXX_C_API char *get_cookie(Req *req, const char *name);
+CXX_C_API void set_cookie(Res *res, const char *name, const char *value, cookie_options_t *options);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

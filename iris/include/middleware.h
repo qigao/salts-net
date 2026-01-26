@@ -2,6 +2,11 @@
 #define MIDDLEWARE_H
 
 #include "router.h"
+#include "platform.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Forward declaration of Chain structure
 typedef struct Chain Chain;
@@ -37,24 +42,24 @@ typedef struct {
 
 #define INITIAL_MW_CAPACITY 4
 
-// Global middleware array
-extern MiddlewareHandler *global_middleware;
-extern int global_middleware_count;
-
 // Function to add global middleware
-void hook(MiddlewareHandler middleware_handler);
+CXX_C_API void hook(MiddlewareHandler middleware_handler);
 
 // Function to execute the next middleware or route handler in the chain
-int next(Chain *chain, Req *req, Res *res);
+CXX_C_API int next(Chain *chain, Req *req, Res *res);
 
-void register_route(const char *method, const char *path, MiddlewareArray middleware,
+CXX_C_API void register_route(const char *method, const char *path, MiddlewareArray middleware,
                     RequestHandler handler);
 
-void reset_middleware(void);
+CXX_C_API void reset_middleware(void);
 
-void free_middleware_info(MiddlewareInfo *info);
+CXX_C_API void free_middleware_info(MiddlewareInfo *info);
 
 // The main function that runs middleware chain
-void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
+CXX_C_API void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

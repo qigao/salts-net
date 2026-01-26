@@ -217,6 +217,16 @@ typedef int turbo_file_t;
 CXX_C_API turbo_file_t turbo_fs_open_sync(const char *path, int flags, int mode);
 
 /**
+ * @brief Read from an open file synchronously
+ *
+ * @param fd File handle from turbo_fs_open_sync
+ * @param buf Buffer to store read data
+ * @param len Maximum number of bytes to read
+ * @return Number of bytes read, or negative error code
+ */
+CXX_C_API int turbo_fs_read_sync(turbo_file_t fd, char *buf, size_t len);
+
+/**
  * @brief Write to an open file synchronously
  *
  * @param fd File handle from turbo_fs_open_sync
@@ -268,6 +278,78 @@ CXX_C_API int64_t turbo_fs_tell_sync(turbo_file_t fd);
  * @return New position, or negative error code
  */
 CXX_C_API int64_t turbo_fs_seek_sync(turbo_file_t fd, int64_t offset, int whence);
+
+// =============================================================================
+// Asynchronous File Operations - non-blocking I/O
+// =============================================================================
+
+/**
+ * @brief Callback for asynchronous file operations
+ *
+ * @param result Status code (0 on success, negative on error) or bytes read/written
+ * @param user_data User-defined data
+ */
+typedef void (*turbo_fs_cb)(int result, void *user_data);
+
+/**
+ * @brief Open a file asynchronously
+ *
+ * @param path File path to open
+ * @param flags Open flags (TURBO_FS_O_*)
+ * @param mode File permissions for new files (e.g., 0644)
+ * @param cb Callback function called when done
+ * @param user_data User-defined data passed to callback
+ * @return 0 if the operation started successfully, negative on error
+ */
+CXX_C_API int turbo_fs_open_async(const char *path, int flags, int mode, turbo_fs_cb cb,
+                                  void *user_data);
+
+/**
+ * @brief Read from an open file asynchronously
+ *
+ * @param fd File handle
+ * @param buf Buffer to store read data
+ * @param len Maximum number of bytes to read
+ * @param cb Callback function called when done (result is number of bytes read)
+ * @param user_data User-defined data passed to callback
+ * @return 0 if the operation started successfully, negative on error
+ */
+CXX_C_API int turbo_fs_read_async(turbo_file_t fd, char *buf, size_t len, turbo_fs_cb cb,
+                                  void *user_data);
+
+/**
+ * @brief Close an open file asynchronously
+ *
+ * @param fd File handle to close
+ * @param cb Callback function called when done
+ * @param user_data User-defined data passed to callback
+ * @return 0 if the operation started successfully, negative on error
+ */
+CXX_C_API int turbo_fs_close_async(turbo_file_t fd, turbo_fs_cb cb, void *user_data);
+
+/**
+ * @brief Write to an open file asynchronously
+ *
+ * @param fd File handle
+ * @param buf Buffer containing data to write
+ * @param len Number of bytes to write
+ * @param cb Callback function called when done (result is number of bytes written)
+ * @param user_data User-defined data passed to callback
+ * @return 0 if the operation started successfully, negative on error
+ */
+CXX_C_API int turbo_fs_write_async(turbo_file_t fd, const char *buf, size_t len, turbo_fs_cb cb,
+                                   void *user_data);
+
+/**
+ * @brief Poll for async I/O completions
+ *
+ * Call this to process completed async operations and invoke callbacks.
+ *
+ * @param min_completions Minimum completions to wait for (0 = non-blocking)
+ * @param timeout_ms Timeout in milliseconds (-1 = infinite)
+ * @return Number of completions processed, or negative error
+ */
+CXX_C_API int turbo_fs_poll_async(uint32_t min_completions, int timeout_ms);
 
 #ifdef __cplusplus
 }

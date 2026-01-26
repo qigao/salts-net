@@ -2,18 +2,21 @@
 
 # Define list of test files
 set(TEST_FILES
+    test_aio.c
     test_arena_buffer.c
     test_arena.c
     test_bitmap.c
     test_dns_pref.c
     test_fmt_typed.c
     test_memory_pool.c
+    test_mmap.c
     test_simple_arena.c
     test_tlog.c
     test_stc.c 
     test_fmt_re2c.c
     test_arena_multithread.c
     test_mutex.c
+    test_turbo_fs.c
  )
 
 # Create executables and link libraries for each test

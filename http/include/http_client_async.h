@@ -214,6 +214,24 @@ CXX_C_API http_async_request_t *http_async_post_multipart(http_async_client_t *c
                                                           http_async_response_cb callback,
                                                           void *user_data);
 
+// Post multipart with chunked transfer encoding (for unknown size or true streaming)
+CXX_C_API http_async_request_t *http_async_post_multipart_chunked(http_async_client_t *client,
+                                                                  const char *url,
+                                                                  http_async_multipart_form_t *form,
+                                                                  http_async_response_cb callback,
+                                                                  void *user_data);
+
+// File upload/download - streaming implementations
+CXX_C_API http_async_request_t *http_async_upload_file(http_async_client_t *client, const char *url,
+                                                       const char *file_path,
+                                                       http_async_response_cb callback,
+                                                       void *user_data);
+
+CXX_C_API http_async_request_t *http_async_download_file(http_async_client_t *client, const char *url,
+                                                         const char *output_path,
+                                                         http_async_response_cb callback,
+                                                         void *user_data);
+
 // Request/Response Interceptors
 typedef struct http_async_request_context_s {
   http_method_t method;

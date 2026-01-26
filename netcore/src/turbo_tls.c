@@ -1717,3 +1717,50 @@ int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop, turbo_tls
 
   return 0;
 }
+
+int turbo_tls_client_get_peer_cert_pem(turbo_tls_client_t *client, char *buffer, size_t *length) {
+  if (!client || !client->impl || !length)
+    return TURBO_TLS_EINVAL;
+
+  turbo_tls_session_t *session = (turbo_tls_session_t *)client->impl;
+  X509 *peer_cert = SSL_get_peer_certificate(session->ssl);
+  if (!peer_cert)
+    return TURBO_TLS_ENOPEERCERT;
+
+  BIO *bio = BIO_new(BIO_s_mem());
+  if (!bio) {
+    X509_free(peer_cert);
+    return TURBO_TLS_UNKNOWN;
+  }
+
+  if (PEM_write_bio_X509(bio, peer_cert) != 1) {
+    BIO_free(bio);
+    X509_free(peer_cert);
+    return TURBO_TLS_UNKNOWN;
+  }
+
+  char *data;
+  long len = BIO_get_mem_data(bio, &data);
+
+  if (buffer == NULL) {
+    *length = (size_t)len + 1;
+    BIO_free(bio);
+    X509_free(peer_cert);
+    return 0;
+  }
+
+  if (*length < (size_t)len + 1) {
+    *length = (size_t)len + 1;
+    BIO_free(bio);
+    X509_free(peer_cert);
+    return TURBO_TLS_EINVAL;
+  }
+
+  memcpy(buffer, data, (size_t)len);
+  buffer[len] = '\0';
+  *length = (size_t)len;
+
+  BIO_free(bio);
+  X509_free(peer_cert);
+  return 0;
+}

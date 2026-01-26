@@ -10,6 +10,7 @@
 #include "middleware.h"
 #include "router.h"
 #include "iris.h"
+#include "iris_app.h"
 #include "arena_buffer.h"
 
 static turbo_arena_t arena;
@@ -207,8 +208,9 @@ void test_hook_global_middleware(void) {
     hook(middleware_a);
     hook(middleware_b);
 
-    TEST_ASSERT_EQUAL(2, global_middleware_count);
-    TEST_ASSERT_NOT_NULL(global_middleware);
+    iris_app_t *app = iris_app_default();
+    TEST_ASSERT_EQUAL(2, app->global_middleware_count);
+    TEST_ASSERT_NOT_NULL(app->global_middleware);
 }
 
 void test_global_middleware_in_chain(void) {
@@ -244,12 +246,14 @@ void test_reset_middleware(void) {
     hook(middleware_a);
     hook(middleware_b);
 
-    TEST_ASSERT_EQUAL(2, global_middleware_count);
+    iris_app_t *app = iris_app_default();
+    TEST_ASSERT_EQUAL(2, app->global_middleware_count);
 
     reset_middleware();
+    iris_app_reset_default();
 
-    TEST_ASSERT_EQUAL(0, global_middleware_count);
-    TEST_ASSERT_NULL(global_middleware);
+    app = iris_app_get_default_if_exists();
+    TEST_ASSERT_NULL(app);
 }
 
 /* ============================================================================

@@ -10,14 +10,18 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
      ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
 
 # Platform-specific async I/O
-# Windows/macOS/iOS/Android: use libuv thread pool
-# Linux: use io_uring for true kernel-level async
-if(NOT WIN32 AND NOT APPLE AND NOT ANDROID)
+if(WIN32)
+  # Windows: use IOCP for high-performance I/O
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uv\\.c$")
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uring\\.c$")
+elseif(APPLE OR ANDROID)
+  # macOS/iOS/Android: use libuv thread pool
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_iocp\\.c$")
+  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uring\\.c$")
+else()
+  # Linux: use io_uring for true kernel-level async
   list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_iocp\\.c$")
   list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uv\\.c$")
-else()
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uring\\.c$")
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_iocp\\.c$")
 endif()
 
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})

@@ -375,7 +375,7 @@ static void file_sink_rotate_unlocked(file_sink_t *fs) {
   if (fs->max_files <= 0)
     return;
 
-  turbo_fs_close_sync(fs->fd);
+  turbo_fs_close(fs->fd);
   fs->fd = TURBO_INVALID_FILE;
 
   char old_path[512], new_path[512];
@@ -386,11 +386,11 @@ static void file_sink_rotate_unlocked(file_sink_t *fs) {
       turbo_fmt(old_path, sizeof(old_path), "{}.{}", fs->path, i);
     }
     turbo_fmt(new_path, sizeof(new_path), "{}.{}", fs->path, i + 1);
-    turbo_fs_rename_sync(old_path, new_path);
+    turbo_fs_rename(old_path, new_path);
   }
 
-  fs->fd = turbo_fs_open_sync(fs->path, TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC,
-                              TURBO_FS_DEFAULT_MODE);
+  fs->fd = turbo_fs_open(fs->path, TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC,
+                         TURBO_FS_DEFAULT_MODE);
   fs->current_size = 0;
 }
 
@@ -419,7 +419,7 @@ static void file_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *ent
     }
   }
 
-  int written = turbo_fs_write_sync(fs->fd, line, (size_t)len);
+  int written = turbo_fs_write(fs->fd, line, (size_t)len);
   if (written > 0) {
     fs->current_size += written;
   }
@@ -430,7 +430,7 @@ static void file_sink_flush(turbo_log_sink_t *sink) {
   file_sink_t *fs = (file_sink_t *)sink;
   uv_mutex_lock(&fs->write_mutex);
   if (fs->fd != TURBO_INVALID_FILE) {
-    turbo_fs_fsync_sync(fs->fd);
+    turbo_fs_fsync(fs->fd);
   }
   uv_mutex_unlock(&fs->write_mutex);
 }
@@ -439,7 +439,7 @@ static void file_sink_destroy(turbo_log_sink_t *sink) {
   file_sink_t *fs = (file_sink_t *)sink;
   uv_mutex_lock(&fs->write_mutex);
   if (fs->fd != TURBO_INVALID_FILE) {
-    turbo_fs_close_sync(fs->fd);
+    turbo_fs_close(fs->fd);
   }
   uv_mutex_unlock(&fs->write_mutex);
   uv_mutex_destroy(&fs->write_mutex);
@@ -475,7 +475,7 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   int flags = TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT;
   flags |= opts->append ? TURBO_FS_O_APPEND : TURBO_FS_O_TRUNC;
 
-  sink->fd = turbo_fs_open_sync(opts->path, flags, TURBO_FS_DEFAULT_MODE);
+  sink->fd = turbo_fs_open(opts->path, flags, TURBO_FS_DEFAULT_MODE);
   if (sink->fd == TURBO_INVALID_FILE) {
     uv_mutex_destroy(&sink->write_mutex);
     free(sink->path);
@@ -485,7 +485,7 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   }
 
   if (opts->append) {
-    int64_t pos = turbo_fs_seek_sync(sink->fd, 0, SEEK_END);
+    int64_t pos = turbo_fs_seek(sink->fd, 0, SEEK_END);
     if (pos > 0) {
       sink->current_size = (size_t)pos;
     }

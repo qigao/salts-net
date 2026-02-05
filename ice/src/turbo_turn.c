@@ -675,24 +675,57 @@ static void send_allocate_request(turbo_turn_client_t *client) {
 
 static void on_request_timeout(turbo_timer_t *timer) {
     turbo_turn_client_t *client = (turbo_turn_client_t *)turbo_timer_get_data(timer);
-    if (!client || client->destroying) return;
+    if (!client) return;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->destroying) {
+        turbo_mutex_unlock(&client->lock);
+        return;
+    }
 
     client->state = TURN_STATE_ERROR;
     if (client->on_allocate) {
         client->on_allocate(client, -1, NULL, client->user_data);
     }
+    turbo_mutex_unlock(&client->lock);
 }
 
 static void on_refresh_timeout(turbo_timer_t *timer) {
     turbo_turn_client_t *client = (turbo_turn_client_t *)turbo_timer_get_data(timer);
-    if (!client || client->destroying) return;
+    if (!client) return;
 
-    turn_client_refresh(client);
+    turbo_mutex_lock(&client->lock);
+    if (client->destroying) {
+        turbo_mutex_unlock(&client->lock);
+        return;
+    }
+
+    /* internal implementation of refresh */
+    uint8_t buffer[512];
+    stun_transaction_id_t txn_id;
+    stun_generate_transaction_id(&txn_id);
+
+    int len = turn_build_refresh_request(
+        buffer, &txn_id,
+        client->username, client->realm, client->nonce, client->password,
+        client->requested_lifetime
+    );
+
+    if (len >= 0) {
+        async_client_send(client->async_client, (const char *)buffer, len);
+    }
+    turbo_mutex_unlock(&client->lock);
 }
 
 static void on_async_client_event(async_client_t *client_handle, const async_client_event_t *event, void *user_data) {
     turbo_turn_client_t *client = (turbo_turn_client_t *)user_data;
-    if (!client || client->destroying) return;
+    if (!client) return;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->destroying) {
+        turbo_mutex_unlock(&client->lock);
+        return;
+    }
 
     switch (event->type) {
     case ASYNC_CLIENT_EVENT_CONNECTED:
@@ -723,11 +756,13 @@ static void on_async_client_event(async_client_t *client_handle, const async_cli
                     }
                 }
             }
+            turbo_mutex_unlock(&client->lock);
             return;
         }
 
         /* Check if it's a STUN message */
         if (!stun_is_stun_message(data, nread)) {
+            turbo_mutex_unlock(&client->lock);
             return;
         }
 
@@ -798,6 +833,7 @@ static void on_async_client_event(async_client_t *client_handle, const async_cli
         client->state = TURN_STATE_CLOSED;
         break;
     }
+    turbo_mutex_unlock(&client->lock);
 }
 
 /* ============================================================================
@@ -810,7 +846,7 @@ turbo_turn_client_t *turn_client_create(const turn_client_config_t *config) {
     turbo_turn_client_t *client = calloc(1, sizeof(turbo_turn_client_t));
     if (!client) return NULL;
 
-    client->loop = uv_default_loop();
+    turbo_mutex_init(&client->lock);
     strncpy(client->server_host, config->server_host, sizeof(client->server_host) - 1);
     client->server_port = config->server_port ? config->server_port : TURN_DEFAULT_PORT;
     strncpy(client->username, config->username, sizeof(client->username) - 1);
@@ -826,7 +862,7 @@ turbo_turn_client_t *turn_client_create(const turn_client_config_t *config) {
         return NULL;
     }
 
-    client->timeout_timer = turbo_timer_create(client->loop);
+    client->timeout_timer = turbo_timer_create(NULL);
     if (!client->timeout_timer) {
         async_client_destroy(client->async_client);
         free(client);
@@ -834,7 +870,7 @@ turbo_turn_client_t *turn_client_create(const turn_client_config_t *config) {
     }
     turbo_timer_set_data(client->timeout_timer, client);
 
-    client->refresh_timer = turbo_timer_create(client->loop);
+    client->refresh_timer = turbo_timer_create(NULL);
     if (!client->refresh_timer) {
         turbo_timer_destroy(client->timeout_timer);
         async_client_destroy(client->async_client);
@@ -865,13 +901,8 @@ void turn_client_destroy(turbo_turn_client_t *client) {
         async_client_destroy(client->async_client);
     }
 
+    turbo_mutex_destroy(&client->lock);
     free(client);
-}
-
-void turn_client_process_events(turbo_turn_client_t *client) {
-    if (client && client->loop) {
-        uv_run(client->loop, UV_RUN_NOWAIT);
-    }
 }
 
 int turn_client_allocate(
@@ -880,7 +911,12 @@ int turn_client_allocate(
     void *user_data
 ) {
     if (!client || !callback) return -1;
-    if (client->state != TURN_STATE_IDLE) return -2;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->state != TURN_STATE_IDLE) {
+        turbo_mutex_unlock(&client->lock);
+        return -2;
+    }
 
     client->on_allocate = callback;
     client->user_data = user_data;
@@ -897,9 +933,11 @@ int turn_client_allocate(
     if (status != ASYNC_CLIENT_STATUS_OK) {
         turbo_timer_stop(client->timeout_timer);
         client->state = TURN_STATE_ERROR;
+        turbo_mutex_unlock(&client->lock);
         return -3;
     }
 
+    turbo_mutex_unlock(&client->lock);
     return 0;
 }
 
@@ -912,7 +950,12 @@ int turn_client_send(
     size_t len
 ) {
     if (!client || !peer_ip || !data) return -1;
-    if (client->state != TURN_STATE_ALLOCATED) return -2;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->state != TURN_STATE_ALLOCATED) {
+        turbo_mutex_unlock(&client->lock);
+        return -2;
+    }
 
     uint8_t buffer[2048];
     int msg_len;
@@ -925,17 +968,27 @@ int turn_client_send(
             /* Use ChannelData */
             msg_len = turn_build_channel_data(buffer, client->channels[i].channel_number,
                                               data, len);
-            if (msg_len < 0) return -3;
+            if (msg_len < 0) {
+                turbo_mutex_unlock(&client->lock);
+                return -3;
+            }
 
-            return (async_client_send(client->async_client, (const char *)buffer, msg_len) == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
+            async_client_status_t status = async_client_send(client->async_client, (const char *)buffer, msg_len);
+            turbo_mutex_unlock(&client->lock);
+            return (status == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
         }
     }
 
     /* No channel binding - use Send Indication */
     msg_len = turn_build_send_indication(buffer, peer_ip, peer_port, data, len);
-    if (msg_len < 0) return -4;
+    if (msg_len < 0) {
+        turbo_mutex_unlock(&client->lock);
+        return -4;
+    }
 
-    return (async_client_send(client->async_client, (const char *)buffer, msg_len) == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
+    async_client_status_t status = async_client_send(client->async_client, (const char *)buffer, msg_len);
+    turbo_mutex_unlock(&client->lock);
+    return (status == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
 }
 
 
@@ -971,7 +1024,12 @@ int turn_client_create_permission(
     uint16_t peer_port
 ) {
     if (!client || !peer_ip) return -1;
-    if (client->state != TURN_STATE_ALLOCATED) return -2;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->state != TURN_STATE_ALLOCATED) {
+        turbo_mutex_unlock(&client->lock);
+        return -2;
+    }
 
     uint8_t buffer[512];
     stun_transaction_id_t txn_id;
@@ -983,9 +1041,14 @@ int turn_client_create_permission(
         peer_ip, peer_port
     );
 
-    if (len < 0) return -3;
+    if (len < 0) {
+        turbo_mutex_unlock(&client->lock);
+        return -3;
+    }
 
-    return (async_client_send(client->async_client, (const char *)buffer, len) == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
+    async_client_status_t status = async_client_send(client->async_client, (const char *)buffer, len);
+    turbo_mutex_unlock(&client->lock);
+    return (status == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
 }
 
 
@@ -996,8 +1059,16 @@ int turn_client_channel_bind(
     uint16_t *channel_out
 ) {
     if (!client || !peer_ip) return -1;
-    if (client->state != TURN_STATE_ALLOCATED) return -2;
-    if (client->channel_count >= 16) return -3;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->state != TURN_STATE_ALLOCATED) {
+        turbo_mutex_unlock(&client->lock);
+        return -2;
+    }
+    if (client->channel_count >= 16) {
+        turbo_mutex_unlock(&client->lock);
+        return -3;
+    }
 
     uint16_t channel = client->next_channel++;
 
@@ -1011,7 +1082,10 @@ int turn_client_channel_bind(
         channel, peer_ip, peer_port
     );
 
-    if (len < 0) return -4;
+    if (len < 0) {
+        turbo_mutex_unlock(&client->lock);
+        return -4;
+    }
 
     async_client_status_t status = async_client_send(client->async_client, (const char *)buffer, len);
 
@@ -1024,16 +1098,23 @@ int turn_client_channel_bind(
         ch->active = 1;
 
         if (channel_out) *channel_out = channel;
+        turbo_mutex_unlock(&client->lock);
         return 0;
     }
 
+    turbo_mutex_unlock(&client->lock);
     return -1;
 }
 
 
 int turn_client_refresh(turbo_turn_client_t *client) {
     if (!client) return -1;
-    if (client->state != TURN_STATE_ALLOCATED) return -2;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->state != TURN_STATE_ALLOCATED) {
+        turbo_mutex_unlock(&client->lock);
+        return -2;
+    }
 
     uint8_t buffer[512];
     stun_transaction_id_t txn_id;
@@ -1045,8 +1126,13 @@ int turn_client_refresh(turbo_turn_client_t *client) {
         client->requested_lifetime
     );
 
-    if (len < 0) return -3;
+    if (len < 0) {
+        turbo_mutex_unlock(&client->lock);
+        return -3;
+    }
 
-    return (async_client_send(client->async_client, (const char *)buffer, len) == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
+    async_client_status_t status = async_client_send(client->async_client, (const char *)buffer, len);
+    turbo_mutex_unlock(&client->lock);
+    return (status == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
 }
 

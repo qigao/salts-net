@@ -1,44 +1,40 @@
+#include "bdd-for-c.h"
 #include "http_client.h"
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-int main(void) {
-  const char *url = "http://httpbin.org/post";
-  const char *json = "{\"name\":\"John\",\"age\":30}";
+spec("POST JSON Test") {
+  static http_client_t *client = NULL;
 
-  printf("Posting JSON to: %s\n\n", url);
-
-  // Create client
-  http_client_t *client = http_client_create();
-  if (!client) {
-    fprintf(stderr, "Failed to create client\n");
-    return 1;
+  before() {
+    client = http_client_create();
+    check(client != NULL);
   }
 
-  // Custom headers
-  const char *headers[] = {"Content-Type: application/json",
-                           "Accept: application/json"};
+  after() {
+    if (client) {
+      http_client_destroy(client);
+    }
+  }
 
-  // Make POST request
-  http_response_t *response =
-      http_request(client, HTTP_POST, url, headers, 2, json, strlen(json));
+  it("should successfully post JSON data") {
+    const char *url = "https://httpbin.org/post";
+    const char *json = "{\"name\":\"John\",\"age\":30}";
+    
+    const char *headers[] = {"Content-Type: application/json",
+                             "Accept: application/json"};
 
-  // Check for errors
-  if (response->error) {
-    fprintf(stderr, "Error: %s\n", response->error);
+    http_response_t *response =
+        http_request(client, HTTP_POST, url, headers, 2, json, strlen(json));
+    
+    check(response != NULL);
+    check(response->error == NULL, "Request failed: %s", response->error ? response->error : "unknown error");
+    check(response->status_code == 200);
+    check(response->body != NULL);
+    
+    // Verify that the sent JSON is in the response (httpbin echoes it back)
+    check(strstr(response->body, "\"name\": \"John\"") != NULL);
+    
     http_response_free(response);
-    http_client_destroy(client);
-    return 1;
   }
-
-  // Print response
-  printf("Status: %d\n", response->status_code);
-  printf("\nBody:\n%s\n", response->body);
-
-  // Cleanup
-  http_response_free(response);
-  http_client_destroy(client);
-
-  return 0;
 }
+

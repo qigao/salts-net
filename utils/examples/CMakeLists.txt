@@ -32,10 +32,6 @@ target_link_libraries(openssl_algorithms PRIVATE TurboNet::Utils OpenSSL::SSL
 add_executable(logger_example logger_example.c)
 
 target_link_libraries(logger_example PRIVATE TurboNet::Utils)
-
-add_executable(bitmap_stats bitmap_stats_example.c)
-target_link_libraries(bitmap_stats PRIVATE TurboNet::Utils)
-
 # C++ Integration Test
 add_executable(cpp_test_tlog cpp_test.cpp)
 target_link_libraries(cpp_test_tlog PRIVATE TurboNet::Utils)
@@ -51,7 +47,6 @@ set_target_properties(
   mdns_example
   openssl_algorithms
   logger_example
-  bitmap_stats
   cpp_test_tlog
   test_spec
   PROPERTIES FOLDER "utils/examples")

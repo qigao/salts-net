@@ -1,39 +1,31 @@
+#include "bdd-for-c.h"
 #include "http_client.h"
-#include <stdio.h>
-#include <stdlib.h>
 
-int main(int argc, char **argv) {
-  const char *url = argc > 1 ? argv[1] : "http://httpbin.org/get";
+spec("Simple GET Test") {
+  static http_client_t *client = NULL;
 
-  printf("Fetching: %s\n\n", url);
-
-  // Create client
-  http_client_t *client = http_client_create();
-  if (!client) {
-    fprintf(stderr, "Failed to create client\n");
-    return 1;
+  before() {
+    client = http_client_create();
+    check(client != NULL);
   }
 
-  // Make GET request
-  http_response_t *response = http_get(client, url);
+  after() {
+    if (client) {
+      http_client_destroy(client);
+    }
+  }
 
-  // Check for errors
-  if (response->error) {
-    fprintf(stderr, "Error: %s\n", response->error);
+  it("should successfully perform a basic GET request") {
+    const char *url = "http://httpbin.org/get";
+    http_response_t *response = http_get(client, url);
+    
+    check(response != NULL);
+    check(response->error == NULL, "Request failed: %s", response->error ? response->error : "unknown error");
+    check(response->status_code == 200);
+    check(response->body != NULL);
+    check(response->body_len > 0);
+    
     http_response_free(response);
-    http_client_destroy(client);
-    return 1;
   }
-
-  // Print response
-  printf("Status: %d\n", response->status_code);
-  printf("\nHeaders:\n%s\n",
-         response->headers ? response->headers : "(no headers)");
-  printf("\nBody:\n%s\n", response->body ? response->body : "(no body)");
-
-  // Cleanup
-  http_response_free(response);
-  http_client_destroy(client);
-
-  return 0;
 }
+

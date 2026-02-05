@@ -14,9 +14,12 @@
 // Include generated parser (following JSON parser naming convention)
 #include "cookie_parser_gen.h"
 
+#include "tlog.h"
+
 // High-level parsing function
 http_cookie_t *parse_set_cookie_rfc(const char *set_cookie_value) {
     if (!set_cookie_value) return NULL;
+    TLOG_INFO("Parsing cookie string: {}", set_cookie_value);
 
     cookie_lexer_t lexer;
     cookie_parser_context_t ctx = {0};
@@ -28,8 +31,10 @@ http_cookie_t *parse_set_cookie_rfc(const char *set_cookie_value) {
 
     cookie_token_t token;
     while (cookie_lexer_next(&lexer, &token) != COOKIE_EOF) {
-        CookieParse(parser, token.type, &token, &ctx);
+        TLOG_DEBUG("Token: {} ({})", (int)token.type, token.text);
+        CookieParse(parser, token.type, token, &ctx);
         if (ctx.error) {
+            TLOG_ERROR("Parser error encountered at token: {}", token.text);
             cookie_token_free(&token);
             break;
         }
@@ -37,11 +42,17 @@ http_cookie_t *parse_set_cookie_rfc(const char *set_cookie_value) {
     }
 
     // Signal end of input
-    CookieParse(parser, 0, NULL, &ctx);
+    cookie_token_t end_token = {0};
+    CookieParse(parser, 0, end_token, &ctx);
 
     CookieParseFree(parser, free);
     cookie_lexer_cleanup(&lexer);
 
+    if (ctx.error) {
+        TLOG_ERROR("Cookie parsing failed with final error");
+    } else {
+        TLOG_INFO("Cookie parsed successfully: {}", ctx.result ? ctx.result->name : "NULL");
+    }
     return ctx.error ? NULL : ctx.result;
 }
 

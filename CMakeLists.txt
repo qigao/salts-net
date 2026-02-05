@@ -64,6 +64,10 @@ add_subdirectory(snmp)
 add_subdirectory(ldap)
 add_subdirectory(quick)
 add_subdirectory(mustache)
+add_subdirectory(ice)
+add_subdirectory(squid)
+add_subdirectory(tproxy)
+
 # Package Configuration
 include(CMakePackageConfigHelpers)
 

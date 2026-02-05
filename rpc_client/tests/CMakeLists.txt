@@ -32,3 +32,12 @@ target_link_libraries(
 set_target_properties(test_eth_rpc_integration
                       PROPERTIES FOLDER "http/rpc_client/tests")
 add_test(NAME eth_rpc_integration COMMAND test_eth_rpc_integration)
+
+# Test: Ethereum RPC (BDD)
+add_executable(test_eth_rpc_bdd test_eth_rpc_bdd.c)
+target_link_libraries(
+  test_eth_rpc_bdd PRIVATE rpc_client http_client_async cjson
+                           TurboNet::Core bdd)
+set_target_properties(test_eth_rpc_bdd
+                      PROPERTIES FOLDER "http/rpc_client/tests")
+add_test(NAME eth_rpc_bdd COMMAND test_eth_rpc_bdd)

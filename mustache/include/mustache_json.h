@@ -6,22 +6,22 @@
 #ifndef MUSTACHE_JSON_H
 #define MUSTACHE_JSON_H
 
-#include "mustache.h"
-#include "json_parser.h"
 #include "platform.h"
+#include "mustache.h"
+
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+typedef struct json_value_s json_value_t;
 /**
  * JSON-based data provider for mustache templates
  */
 typedef struct MUSTACHE_JSON_PROVIDER {
-    MUSTACHE_DATAPROVIDER base;
-    json_value_t *root_data;
-    MUSTACHE_TEMPLATE *(*template_loader)(const char *name, size_t size, void *user_data);
-    void *user_data;
+  MUSTACHE_DATAPROVIDER base;
+  json_value_t *root_data;
+  MUSTACHE_TEMPLATE *(*template_loader)(const char *name, size_t size, void *user_data);
+  void *user_data;
 } MUSTACHE_JSON_PROVIDER;
 
 /**
@@ -32,10 +32,10 @@ typedef struct MUSTACHE_JSON_PROVIDER {
  * @param user_data User data passed to template loader
  * @return 0 on success, -1 on error
  */
-CXX_C_API int mustache_json_provider_init(MUSTACHE_JSON_PROVIDER *provider,
-                                json_value_t *json_data,
-                                MUSTACHE_TEMPLATE *(*template_loader)(const char *, size_t, void *),
-                                void *user_data);
+CXX_C_API int mustache_json_provider_init(MUSTACHE_JSON_PROVIDER *provider, json_value_t *json_data,
+                                          MUSTACHE_TEMPLATE *(*template_loader)(const char *,
+                                                                                size_t, void *),
+                                          void *user_data);
 
 /**
  * Render a mustache template with JSON data
@@ -47,21 +47,20 @@ CXX_C_API int mustache_json_provider_init(MUSTACHE_JSON_PROVIDER *provider,
  * @param user_data User data for template loader
  * @return 0 on success, -1 on error
  */
-CXX_C_API int mustache_render_json(const MUSTACHE_TEMPLATE *template,
-                        json_value_t *json_data,
-                        const MUSTACHE_RENDERER *renderer,
-                        void *renderer_data,
-                        MUSTACHE_TEMPLATE *(*template_loader)(const char *, size_t, void *),
-                        void *user_data);
+CXX_C_API int mustache_render_json(const MUSTACHE_TEMPLATE *template, json_value_t *json_data,
+                                   const MUSTACHE_RENDERER *renderer, void *renderer_data,
+                                   MUSTACHE_TEMPLATE *(*template_loader)(const char *, size_t,
+                                                                         void *),
+                                   void *user_data);
 
 /**
  * Simple string renderer that appends to a buffer
  */
 typedef struct MUSTACHE_STRING_RENDERER {
-    MUSTACHE_RENDERER base;
-    char *buffer;
-    size_t size;
-    size_t capacity;
+  MUSTACHE_RENDERER base;
+  char *buffer;
+  size_t size;
+  size_t capacity;
 } MUSTACHE_STRING_RENDERER;
 
 /**

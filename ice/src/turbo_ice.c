@@ -32,7 +32,6 @@
   #include <ws2tcpip.h>
   #pragma comment(lib, "iphlpapi.lib")
   #define strncasecmp _strnicmp
-  #define GET_PID() _getpid()
 #else
   #include <arpa/inet.h>
   #include <ifaddrs.h>
@@ -40,7 +39,6 @@
   #include <netinet/in.h>
   #include <strings.h>
   #include <unistd.h>
-  #define GET_PID() getpid()
 #endif
 
 /* Thread-safe random seeding using atomic CAS */
@@ -51,7 +49,7 @@ static turbo_atomic_int_t g_random_seeded = TURBO_ATOMIC_INIT(0);
 static void ensure_random_seeded(void) {
   if (turbo_atomic_load(&g_random_seeded) == 0) {
     if (turbo_atomic_cas(&g_random_seeded, 0, 1)) {
-      srand((unsigned int)time(NULL) ^ (unsigned int)GET_PID());
+      srand((unsigned int)time(NULL) ^ (unsigned int)turbo_getpid());
     }
   }
 }
@@ -112,7 +110,6 @@ static inline uint32_t read_u32_be(const uint8_t *ptr) {
 
 
 struct turbo_ice_agent_s {
-  void *loop;
   ice_config_t config;
 
   /* State */
@@ -163,6 +160,9 @@ struct turbo_ice_agent_s {
 
   /* Foundation counter */
   int foundation_counter;
+  
+  /* Synchronization */
+  turbo_mutex_t lock;
 
   /* Callbacks */
   ice_callbacks_t callbacks;
@@ -277,7 +277,13 @@ static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, co
 
 static void on_candidate_async_event(async_client_t *client, const async_client_event_t *event, void *user_data) {
   turbo_ice_agent_t *agent = (turbo_ice_agent_t *)user_data;
-  if (!agent || agent->destroying) return;
+  if (!agent) return;
+
+  turbo_mutex_lock(&agent->lock);
+  if (agent->destroying) {
+    turbo_mutex_unlock(&agent->lock);
+    return;
+  }
 
   if (event->type == ASYNC_CLIENT_EVENT_DATA) {
     const uint8_t *data = (const uint8_t *)event->data;
@@ -292,7 +298,10 @@ static void on_candidate_async_event(async_client_t *client, const async_client_
         }
     }
 
-    if (!local_cand) return;
+    if (!local_cand) {
+        turbo_mutex_unlock(&agent->lock);
+        return;
+    }
 
     /* Check if this is a STUN message */
     if (stun_is_stun_message(data, nread)) {
@@ -309,6 +318,7 @@ static void on_candidate_async_event(async_client_t *client, const async_client_
             memset(&from_dummy, 0, sizeof(from_dummy));
             handle_stun_response(agent, data, nread, (const struct sockaddr *)&from_dummy);
         }
+        turbo_mutex_unlock(&agent->lock);
         return;
     }
 
@@ -319,6 +329,7 @@ static void on_candidate_async_event(async_client_t *client, const async_client_
         }
     }
   }
+  turbo_mutex_unlock(&agent->lock);
 }
 
 
@@ -702,8 +713,15 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
 static void on_gathering_timeout(turbo_timer_t *timer) {
   turbo_ice_agent_t *agent = (turbo_ice_agent_t *)turbo_timer_get_data(timer);
 
+  if (!agent) {
+    return;
+  }
+
+  turbo_mutex_lock(&agent->lock);
+
   /* Check if agent is being destroyed */
-  if (!agent || agent->destroying) {
+  if (agent->destroying) {
+    turbo_mutex_unlock(&agent->lock);
     return;
   }
 
@@ -725,6 +743,8 @@ static void on_gathering_timeout(turbo_timer_t *timer) {
   agent->pending_stun_requests = 0;
   agent->pending_turn_requests = 0;
   set_gathering_state(agent, ICE_GATHERING_COMPLETE);
+
+  turbo_mutex_unlock(&agent->lock);
 }
 
 
@@ -747,26 +767,17 @@ ice_config_t ice_default_config(void) {
   return config;
 }
 
-void ice_agent_process_events(turbo_ice_agent_t *agent) {
-  if (agent && agent->loop) {
-    uv_run(agent->loop, UV_RUN_NOWAIT);
-  }
-}
-
 
 turbo_ice_agent_t *ice_agent_create(const ice_config_t *config) {
   if (!config)
     return NULL;
-
-
-
   ensure_random_seeded();
 
   turbo_ice_agent_t *agent = calloc(1, sizeof(turbo_ice_agent_t));
   if (!agent)
     return NULL;
 
-  agent->loop = uv_default_loop();
+  turbo_mutex_init(&agent->lock);
   agent->config = *config;
 
   agent->state = ICE_STATE_NEW;
@@ -779,34 +790,25 @@ turbo_ice_agent_t *ice_agent_create(const ice_config_t *config) {
   generate_random_string(agent->local_pwd, 24);
 
   /* Initialize timers */
-  agent->gathering_timer = turbo_timer_create(agent->loop);
+  agent->gathering_timer = turbo_timer_create(NULL);
   if (agent->gathering_timer) turbo_timer_set_data(agent->gathering_timer, agent);
   
-  agent->check_timer = turbo_timer_create(agent->loop);
+  agent->check_timer = turbo_timer_create(NULL);
   if (agent->check_timer) turbo_timer_set_data(agent->check_timer, agent);
   
-  agent->keepalive_timer = turbo_timer_create(agent->loop);
+  agent->keepalive_timer = turbo_timer_create(NULL);
   if (agent->keepalive_timer) turbo_timer_set_data(agent->keepalive_timer, agent);
 
   /* Initialize mDNS context if privacy mode enabled */
   if (config->use_mdns_candidates) {
-    agent->mdns_ctx = mdns_create(agent->loop);
+    agent->mdns_ctx = mdns_create(NULL);
   }
 
   return agent;
 }
 
-// Removed on_ice_handle_close as it's no longer needed with turbo_timer and async_client.
-// static void on_ice_handle_close(uv_handle_t *handle) {
-//   turbo_ice_agent_t *agent = (turbo_ice_agent_t *)handle->data;
-//   if (!agent)
-//     return;
 
-//   agent->pending_closes--;
-//   if (agent->pending_closes == 0) {
-//     free(agent);
-//   }
-// }
+
 
 void ice_agent_destroy(turbo_ice_agent_t *agent) {
   if (!agent) return;
@@ -861,6 +863,7 @@ void ice_agent_destroy(turbo_ice_agent_t *agent) {
     agent->mdns_ctx = NULL;
   }
 
+  turbo_mutex_destroy(&agent->lock);
   free(agent);
 }
 
@@ -899,8 +902,12 @@ int ice_agent_set_remote_credentials(turbo_ice_agent_t *agent, const char *ufrag
 int ice_agent_gather_candidates(turbo_ice_agent_t *agent) {
   if (!agent)
     return -1;
-  if (agent->state != ICE_STATE_NEW)
+  
+  turbo_mutex_lock(&agent->lock);
+  if (agent->state != ICE_STATE_NEW) {
+    turbo_mutex_unlock(&agent->lock);
     return -2;
+  }
 
   set_state(agent, ICE_STATE_GATHERING);
   set_gathering_state(agent, ICE_GATHERING_GATHERING);
@@ -934,20 +941,25 @@ int ice_agent_gather_candidates(turbo_ice_agent_t *agent) {
     set_gathering_state(agent, ICE_GATHERING_COMPLETE);
   }
 
-
+  turbo_mutex_unlock(&agent->lock);
   return 0;
 }
 
 int ice_agent_add_remote_candidate(turbo_ice_agent_t *agent, const char *candidate_str) {
   if (!agent || !candidate_str)
     return -1;
-  if (agent->remote_candidate_count >= ICE_MAX_CANDIDATES)
+  
+  turbo_mutex_lock(&agent->lock);
+  if (agent->remote_candidate_count >= ICE_MAX_CANDIDATES) {
+    turbo_mutex_unlock(&agent->lock);
     return -2;
+  }
 
   ice_candidate_t *cand = &agent->remote_candidates[agent->remote_candidate_count];
   memset(cand, 0, sizeof(*cand));
 
   if (ice_candidate_parse(candidate_str, cand) != 0) {
+    turbo_mutex_unlock(&agent->lock);
     return -3;
   }
 
@@ -959,12 +971,15 @@ int ice_agent_add_remote_candidate(turbo_ice_agent_t *agent, const char *candida
     rebuild_candidate_pairs(agent);
   }
 
+  turbo_mutex_unlock(&agent->lock);
   return 0;
 }
 
 void ice_agent_end_of_candidates(turbo_ice_agent_t *agent) {
   if (agent) {
+    turbo_mutex_lock(&agent->lock);
     agent->remote_candidates_complete = 1;
+    turbo_mutex_unlock(&agent->lock);
   }
 }
 
@@ -1250,9 +1265,8 @@ static void rebuild_candidate_pairs(turbo_ice_agent_t *agent) {
   }
 }
 
-static void on_check_timer(turbo_timer_t *timer) {
-  turbo_ice_agent_t *agent = (turbo_ice_agent_t *)turbo_timer_get_data(timer);
-  if (!agent || agent->destroying || agent->state != ICE_STATE_CONNECTING)
+static void on_check_timer_impl(turbo_timer_t *timer, turbo_ice_agent_t *agent) {
+  if (agent->destroying || agent->state != ICE_STATE_CONNECTING)
     return;
 
   /* Check for timeout */
@@ -1379,14 +1393,29 @@ static void on_check_timer(turbo_timer_t *timer) {
   }
 }
 
+static void on_check_timer(turbo_timer_t *timer) {
+  turbo_ice_agent_t *agent = (turbo_ice_agent_t *)turbo_timer_get_data(timer);
+  if (!agent)
+    return;
+
+  turbo_mutex_lock(&agent->lock);
+  on_check_timer_impl(timer, agent);
+  turbo_mutex_unlock(&agent->lock);
+}
+
 
 int ice_agent_start_checks(turbo_ice_agent_t *agent) {
   if (!agent)
     return -1;
-  if (agent->gathering_state != ICE_GATHERING_COMPLETE)
+  
+  turbo_mutex_lock(&agent->lock);
+  if (agent->gathering_state != ICE_GATHERING_COMPLETE) {
+    turbo_mutex_unlock(&agent->lock);
     return -2;
+  }
   if (!agent->remote_credentials_set) {
     TLOG_INFO("Cannot start checks: remote credentials not set");
+    turbo_mutex_unlock(&agent->lock);
     return -3;
   }
 
@@ -1394,6 +1423,7 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
       agent->state == ICE_STATE_COMPLETED) {
     /* Already started, just rebuild pairs to catch any newly added trickle candidates */
     rebuild_candidate_pairs(agent);
+    turbo_mutex_unlock(&agent->lock);
     return 0;
   }
 
@@ -1432,6 +1462,7 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
   /* Start check timer (Ta interval = 50ms) */
   turbo_timer_start(agent->check_timer, on_check_timer, 0, ICE_DEFAULT_TA_INTERVAL);
 
+  turbo_mutex_unlock(&agent->lock);
   return 0;
 }
 
@@ -1439,71 +1470,105 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
 int ice_agent_send(turbo_ice_agent_t *agent, const void *data, size_t len) {
   if (!agent || !data || len == 0)
     return -1;
-  if (agent->state != ICE_STATE_CONNECTED && agent->state != ICE_STATE_COMPLETED)
+
+  turbo_mutex_lock(&agent->lock);
+
+  if (agent->state != ICE_STATE_CONNECTED && agent->state != ICE_STATE_COMPLETED) {
+    turbo_mutex_unlock(&agent->lock);
     return -2;
-  if (!agent->selected_pair)
+  }
+  if (!agent->selected_pair) {
+    turbo_mutex_unlock(&agent->lock);
     return -3;
+  }
 
   ice_candidate_t *local = agent->selected_pair->local;
   ice_candidate_t *remote = agent->selected_pair->remote;
 
-  if (!local->socket)
+  if (!local->socket) {
+    turbo_mutex_unlock(&agent->lock);
     return -4;
+  }
 
   /* Build remote URL */
   char url[512];
   stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote->ip, remote->port);
 
   /* Send */
-  async_client_status_t status;
+  async_client_status_t status = ASYNC_CLIENT_STATUS_INTERNAL_ERROR;
   if (local->type == ICE_CANDIDATE_TYPE_HOST || local->type == ICE_CANDIDATE_TYPE_SRFLX) {
       async_client_connect((async_client_t *)local->socket, url);
       status = async_client_send((async_client_t *)local->socket, (const char *)data, len);
   } else if (local->type == ICE_CANDIDATE_TYPE_RELAY) {
-
       /* RELAY candidates use TURN client */
-      /* For now we don't have direct access here, need to find the turn client or use a wrapper */
+      turbo_mutex_unlock(&agent->lock);
       return -5;
   } else {
+      turbo_mutex_unlock(&agent->lock);
       return -6;
   }
 
+  turbo_mutex_unlock(&agent->lock);
   return (status == ASYNC_CLIENT_STATUS_OK) ? 0 : -1;
 }
 
 
 ice_state_t ice_agent_get_state(turbo_ice_agent_t *agent) {
-  return agent ? agent->state : ICE_STATE_CLOSED;
+  if (!agent) return ICE_STATE_CLOSED;
+  turbo_mutex_lock(&agent->lock);
+  ice_state_t state = agent->state;
+  turbo_mutex_unlock(&agent->lock);
+  return state;
 }
 
 ice_gathering_state_t ice_agent_get_gathering_state(turbo_ice_agent_t *agent) {
-  return agent ? agent->gathering_state : ICE_GATHERING_NEW;
+  if (!agent) return ICE_GATHERING_NEW;
+  turbo_mutex_lock(&agent->lock);
+  ice_gathering_state_t state = agent->gathering_state;
+  turbo_mutex_unlock(&agent->lock);
+  return state;
 }
 
 int ice_agent_get_selected_pair(turbo_ice_agent_t *agent, ice_candidate_t *local_out,
                                 ice_candidate_t *remote_out) {
-  if (!agent || !agent->selected_pair)
+  if (!agent)
     return -1;
+
+  turbo_mutex_lock(&agent->lock);
+  if (!agent->selected_pair) {
+    turbo_mutex_unlock(&agent->lock);
+    return -1;
+  }
 
   if (local_out)
     *local_out = *agent->selected_pair->local;
   if (remote_out)
     *remote_out = *agent->selected_pair->remote;
 
+  turbo_mutex_unlock(&agent->lock);
   return 0;
 }
 
 int ice_agent_get_local_candidate_count(turbo_ice_agent_t *agent) {
-  return agent ? agent->local_candidate_count : 0;
+  if (!agent) return 0;
+  turbo_mutex_lock(&agent->lock);
+  int count = agent->local_candidate_count;
+  turbo_mutex_unlock(&agent->lock);
+  return count;
 }
 
 int ice_agent_get_local_candidate(turbo_ice_agent_t *agent, int index, ice_candidate_t *out) {
   if (!agent || !out)
     return -1;
-  if (index < 0 || index >= agent->local_candidate_count)
+
+  turbo_mutex_lock(&agent->lock);
+  if (index < 0 || index >= agent->local_candidate_count) {
+    turbo_mutex_unlock(&agent->lock);
     return -2;
+  }
 
   *out = agent->local_candidates[index];
+  turbo_mutex_unlock(&agent->lock);
   return 0;
 }
 

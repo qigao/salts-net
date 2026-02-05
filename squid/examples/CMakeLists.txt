@@ -50,11 +50,3 @@ set_target_properties(squid_multi_listener PROPERTIES
     C_STANDARD_REQUIRED ON
     FOLDER "squid/examples"
 )
-
-# Install examples
-install(TARGETS
-    squid_simple_worker
-    squid_simple_master
-    squid_multi_listener
-    RUNTIME DESTINATION bin/examples
-)

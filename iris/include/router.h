@@ -16,10 +16,6 @@
 extern "C" {
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 // HTTP Status Codes
 typedef enum {
   // 1xx Informational

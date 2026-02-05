@@ -1,10 +1,11 @@
 #include "stb_sprintf.h"
+#include "tlog.h"
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "tlog.h"
+
 
 #include <uv.h>
 
@@ -361,17 +362,15 @@ static int ws_sendv_impl(async_client_t *client, const async_client_iovec_t *iov
 static async_client_state_t ws_get_state_impl(const async_client_t *client);
 
 /* Static vtable instances */
-static const async_client_transport_ops_t tcp_ops = {
-    .setup = tcp_setup_impl,
-    .close = tcp_close_impl,
-    .connect = tcp_connect_impl,
-    .send = tcp_send_impl,
-    .sendv = tcp_sendv_impl,
-    .get_state = tcp_get_state_impl,
-    .set_multicast_ttl = NULL,
-    .set_multicast_loop = NULL,
-    .name = "tcp"
-};
+static const async_client_transport_ops_t tcp_ops = {.setup = tcp_setup_impl,
+                                                     .close = tcp_close_impl,
+                                                     .connect = tcp_connect_impl,
+                                                     .send = tcp_send_impl,
+                                                     .sendv = tcp_sendv_impl,
+                                                     .get_state = tcp_get_state_impl,
+                                                     .set_multicast_ttl = NULL,
+                                                     .set_multicast_loop = NULL,
+                                                     .name = "tcp"};
 
 static const async_client_transport_ops_t udp_ops = {
     .setup = udp_setup_impl,
@@ -382,57 +381,47 @@ static const async_client_transport_ops_t udp_ops = {
     .get_state = udp_get_state_impl,
     .set_multicast_ttl = udp_set_multicast_ttl_impl,
     .set_multicast_loop = udp_set_multicast_loop_impl,
-    .name = "udp"
-};
+    .name = "udp"};
 
-static const async_client_transport_ops_t kcp_ops = {
-    .setup = kcp_setup_impl,
-    .close = kcp_close_impl,
-    .connect = kcp_connect_impl,
-    .send = kcp_send_impl,
-    .sendv = kcp_sendv_impl,
-    .get_state = kcp_get_state_impl,
-    .set_multicast_ttl = NULL,
-    .set_multicast_loop = NULL,
-    .name = "kcp"
-};
+static const async_client_transport_ops_t kcp_ops = {.setup = kcp_setup_impl,
+                                                     .close = kcp_close_impl,
+                                                     .connect = kcp_connect_impl,
+                                                     .send = kcp_send_impl,
+                                                     .sendv = kcp_sendv_impl,
+                                                     .get_state = kcp_get_state_impl,
+                                                     .set_multicast_ttl = NULL,
+                                                     .set_multicast_loop = NULL,
+                                                     .name = "kcp"};
 
-static const async_client_transport_ops_t tls_ops = {
-    .setup = tls_setup_impl,
-    .close = tls_close_impl,
-    .connect = tls_connect_impl,
-    .send = tls_send_impl,
-    .sendv = tls_sendv_impl,
-    .get_state = tls_get_state_impl,
-    .set_multicast_ttl = NULL,
-    .set_multicast_loop = NULL,
-    .name = "tls"
-};
+static const async_client_transport_ops_t tls_ops = {.setup = tls_setup_impl,
+                                                     .close = tls_close_impl,
+                                                     .connect = tls_connect_impl,
+                                                     .send = tls_send_impl,
+                                                     .sendv = tls_sendv_impl,
+                                                     .get_state = tls_get_state_impl,
+                                                     .set_multicast_ttl = NULL,
+                                                     .set_multicast_loop = NULL,
+                                                     .name = "tls"};
 
-static const async_client_transport_ops_t pipe_ops = {
-    .setup = pipe_setup_impl,
-    .close = pipe_close_impl,
-    .connect = pipe_connect_impl,
-    .send = pipe_send_impl,
-    .sendv = pipe_sendv_impl,
-    .get_state = pipe_get_state_impl,
-    .set_multicast_ttl = NULL,
-    .set_multicast_loop = NULL,
-    .name = "pipe"
-};
+static const async_client_transport_ops_t pipe_ops = {.setup = pipe_setup_impl,
+                                                      .close = pipe_close_impl,
+                                                      .connect = pipe_connect_impl,
+                                                      .send = pipe_send_impl,
+                                                      .sendv = pipe_sendv_impl,
+                                                      .get_state = pipe_get_state_impl,
+                                                      .set_multicast_ttl = NULL,
+                                                      .set_multicast_loop = NULL,
+                                                      .name = "pipe"};
 
-static const async_client_transport_ops_t ws_ops = {
-    .setup = ws_setup_impl,
-    .close = ws_close_impl,
-    .connect = ws_connect_impl,
-    .send = ws_send_impl,
-    .sendv = ws_sendv_impl,
-    .get_state = ws_get_state_impl,
-    .set_multicast_ttl = NULL,
-    .set_multicast_loop = NULL,
-    .name = "websocket"
-};
-
+static const async_client_transport_ops_t ws_ops = {.setup = ws_setup_impl,
+                                                    .close = ws_close_impl,
+                                                    .connect = ws_connect_impl,
+                                                    .send = ws_send_impl,
+                                                    .sendv = ws_sendv_impl,
+                                                    .get_state = ws_get_state_impl,
+                                                    .set_multicast_ttl = NULL,
+                                                    .set_multicast_loop = NULL,
+                                                    .name = "websocket"};
 
 CLIENT_COMMON_DEFINE_PIPE_CLIENT_LIST(async, async_client_t);
 #define g_client_list_once g_async_client_list_once
@@ -541,7 +530,8 @@ static async_client_command_t *command_create(async_client_command_type_t type) 
  * @param port The port number to connect to.
  * @return A pointer to the newly created `async_client_command_t` instance, or NULL on failure.
  */
-static async_client_command_t *command_create_connect(async_client_transport_t transport, const char *host, int port) {
+static async_client_command_t *command_create_connect(async_client_transport_t transport,
+                                                      const char *host, int port) {
   if (!host)
     return NULL;
   async_client_command_t *cmd = command_create(COMMAND_CONNECT);
@@ -666,7 +656,6 @@ static async_client_command_t *command_create_sendv_slices(const turbo_arena_sli
   cmd->payload.sendv_slices.slice_count = slice_count;
   return cmd;
 }
-
 
 static async_client_status_t transport_setup(async_client_t *client);
 
@@ -904,9 +893,6 @@ static void loop_thread_main(void *arg) {
 /* ========================================================================
  * Vtable implementations for each transport
  * ======================================================================== */
-
-
-
 
 /* ========================================================================
  * TCP vtable implementations
@@ -2331,8 +2317,8 @@ static void emit_error_message(async_client_t *client, int status, const char *c
 
   TLOG_ERROR("Async client error: {:s} (status: {:d})", buffer[0] ? buffer : "unknown", status);
 
-  emit_event(client, ASYNC_CLIENT_EVENT_ERROR, NULL, 0, status, buffer[0] ? buffer : NULL,
-             NULL, ASYNC_CLIENT_EVENT_FLAG_NONE);
+  emit_event(client, ASYNC_CLIENT_EVENT_ERROR, NULL, 0, status, buffer[0] ? buffer : NULL, NULL,
+             ASYNC_CLIENT_EVENT_FLAG_NONE);
 }
 
 /**
@@ -2460,7 +2446,7 @@ async_client_t *async_client_create(async_client_event_cb callback, void *user_d
   }
   client->config_acquired = 1;
 
-  if (dns_resolver_init() != 0) {
+  if (turbo_dns_init() != 0) {
     client_common_config_release();
     client->config_acquired = 0;
     turbo_arena_free(&client->arena);
@@ -2521,7 +2507,7 @@ void async_client_destroy(async_client_t *client) {
 
   client_list_unregister(client);
 
-  dns_resolver_cleanup();
+  turbo_dns_cleanup();
 
   if (client->config_acquired) {
     client_common_config_release();
@@ -2573,10 +2559,8 @@ async_client_status_t async_client_connect(async_client_t *client, const char *u
   }
 
   /* For pipes, use path instead of host; for others use host */
-  const char *connect_host = (url_transport == ASYNC_CLIENT_TRANSPORT_PIPE) 
-                              ? addr.path 
-                              : addr.host;
-  
+  const char *connect_host = (url_transport == ASYNC_CLIENT_TRANSPORT_PIPE) ? addr.path : addr.host;
+
   /* Create connect command with parsed transport, host and port */
   async_client_command_t *cmd = command_create_connect(url_transport, connect_host, addr.port);
   if (!cmd)
@@ -2867,7 +2851,8 @@ async_client_status_t async_client_set_multicast_ttl(async_client_t *client, int
 
   /* Use vtable - no protocol type checking! */
   if (!client->ops || !client->ops->set_multicast_ttl)
-    return ASYNC_CLIENT_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
+    return ASYNC_CLIENT_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not
+                                                   initialized) */
 
   return client->ops->set_multicast_ttl(client, ttl);
 }
@@ -2884,7 +2869,8 @@ async_client_status_t async_client_set_multicast_loop(async_client_t *client, in
 
   /* Use vtable - no protocol type checking! */
   if (!client->ops || !client->ops->set_multicast_loop)
-    return ASYNC_CLIENT_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
+    return ASYNC_CLIENT_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not
+                                                   initialized) */
 
   return client->ops->set_multicast_loop(client, on);
 }
@@ -3053,6 +3039,12 @@ static void ws_on_close(void *handle) {
     return;
 
   emit_closed(client);
+}
+
+void async_client_set_user_data(async_client_t *client, void *user_data) {
+  if (client) {
+    client->callback_user_data = user_data;
+  }
 }
 
 async_client_status_t async_client_set_ws_config(async_client_t *client,

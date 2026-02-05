@@ -7,11 +7,10 @@
 #include "json_grammar_gen.h"
 #include "json_lexer.h"
 #include "json_types.h"
+#include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stb_sprintf.h>
-
 
 #define MAX_ERROR_LEN 512
 static char g_error[MAX_ERROR_LEN] = {0};
@@ -656,8 +655,7 @@ static bool json_serialize_indent(json_buffer_t *buf, int level) {
   return true;
 }
 
-static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *buf,
-                                        int level) {
+static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *buf, int level) {
   if (!v)
     return json_buffer_append(buf, "null", 4);
 
@@ -666,7 +664,7 @@ static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *bu
     return json_buffer_append(buf, "null", 4);
   case JSON_BOOL:
     return v->data.bool_val ? json_buffer_append(buf, "true", 4)
-                             : json_buffer_append(buf, "false", 5);
+                            : json_buffer_append(buf, "false", 5);
   case JSON_NUMBER: {
     char tmp[64];
     int len = stbsp_snprintf(tmp, sizeof(tmp), "%g", v->data.num_val);
@@ -791,90 +789,86 @@ json_value_t *json_create_null(void) {
 static void json_transfer_to_arena(json_arena_t *dst, json_value_t *val) {
   if (!dst || !val || val->arena == dst)
     return;
-
-  // If the value has its own arena and it's not external, 
-  // we have a problem: we can't easily merge arenas without copying everything.
-  // For this simple builder, we'll assume the value was created with its own arena
-  // and we'll just keep it that way for now, but this is a leak if not careful.
-  
-  // Actually, a better way for this lightweight parser is to just 
-  // allow values to point to different arenas, but json_free only frees the root arena.
-  
-  // FIX: For now, let's keep it simple. The builder will be used to build trees.
 }
 
 void json_object_add(json_value_t *obj, const char *key, json_value_t *val) {
   if (!obj || obj->type != JSON_OBJECT || !key || !val)
     return;
-  
+
   // Transfer value to object's arena if they differ
   // Since we don't have a full tree-copy yet, we'll just link the pools
   if (val->arena != obj->arena) {
-      json_pool_node_t *node = val->arena->head;
-      while (node) {
-          json_pool_node_t *next = node->next;
-          // Link this pool into our arena
-          node->next = obj->arena->head;
-          obj->arena->head = node;
-          node = next;
-      }
-      // val->arena is now empty of pools but the struct itself remains
-      // This is a bit hacky but works with the current pool system
-      val->arena->head = NULL;
-      val->arena->current = NULL;
-      json_arena_free(val->arena);
-      val->arena = obj->arena;
+    json_pool_node_t *node = val->arena->head;
+    while (node) {
+      json_pool_node_t *next = node->next;
+      // Link this pool into our arena
+      node->next = obj->arena->head;
+      obj->arena->head = node;
+      node = next;
+    }
+    // val->arena is now empty of pools but the struct itself remains
+    // This is a bit hacky but works with the current pool system
+    val->arena->head = NULL;
+    val->arena->current = NULL;
+    json_arena_free(val->arena);
+    val->arena = obj->arena;
   }
-  
+
   json_object_set_arena(obj->arena, obj, key, strlen(key), val);
 }
 
 void json_array_add(json_value_t *arr, json_value_t *val) {
   if (!arr || arr->type != JSON_ARRAY || !val)
     return;
-  
+
   if (val->arena != arr->arena) {
-      json_pool_node_t *node = val->arena->head;
-      while (node) {
-          json_pool_node_t *next = node->next;
-          node->next = arr->arena->head;
-          arr->arena->head = node;
-          node = next;
-      }
-      val->arena->head = NULL;
-      val->arena->current = NULL;
-      json_arena_free(val->arena);
-      val->arena = arr->arena;
+    json_pool_node_t *node = val->arena->head;
+    while (node) {
+      json_pool_node_t *next = node->next;
+      node->next = arr->arena->head;
+      arr->arena->head = node;
+      node = next;
+    }
+    val->arena->head = NULL;
+    val->arena->current = NULL;
+    json_arena_free(val->arena);
+    val->arena = arr->arena;
   }
-  
+
   json_array_append_arena(arr->arena, arr, val);
 }
 
 void json_object_set_string(json_value_t *obj, const char *key, const char *val) {
-    if (!obj || obj->type != JSON_OBJECT || !key || !val) return;
-    json_value_t *v = json_value_string_arena(obj->arena, val, strlen(val));
-    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+  if (!obj || obj->type != JSON_OBJECT || !key || !val)
+    return;
+  json_value_t *v = json_value_string_arena(obj->arena, val, strlen(val));
+  if (v)
+    json_object_set_arena(obj->arena, obj, key, strlen(key), v);
 }
 
 void json_object_set_number(json_value_t *obj, const char *key, double val) {
-    if (!obj || obj->type != JSON_OBJECT || !key) return;
-    json_value_t *v = json_value_number_arena(obj->arena, val);
-    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+  if (!obj || obj->type != JSON_OBJECT || !key)
+    return;
+  json_value_t *v = json_value_number_arena(obj->arena, val);
+  if (v)
+    json_object_set_arena(obj->arena, obj, key, strlen(key), v);
 }
 
 void json_object_set_bool(json_value_t *obj, const char *key, bool val) {
-    if (!obj || obj->type != JSON_OBJECT || !key) return;
-    json_value_t *v = json_value_bool_arena(obj->arena, val);
-    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+  if (!obj || obj->type != JSON_OBJECT || !key)
+    return;
+  json_value_t *v = json_value_bool_arena(obj->arena, val);
+  if (v)
+    json_object_set_arena(obj->arena, obj, key, strlen(key), v);
 }
 
 void json_object_set_null(json_value_t *obj, const char *key) {
-    if (!obj || obj->type != JSON_OBJECT || !key) return;
-    json_value_t *v = json_value_null_arena(obj->arena);
-    if (v) json_object_set_arena(obj->arena, obj, key, strlen(key), v);
+  if (!obj || obj->type != JSON_OBJECT || !key)
+    return;
+  json_value_t *v = json_value_null_arena(obj->arena);
+  if (v)
+    json_object_set_arena(obj->arena, obj, key, strlen(key), v);
 }
-
-
 
 /* ============================================================================
  * SAX/Stream Parser - O(1) memory

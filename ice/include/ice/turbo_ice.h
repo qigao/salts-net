@@ -389,11 +389,6 @@ uint32_t ice_calculate_priority(
  */
 CXX_C_API void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow);
 
-/**
- * Process events (drive the event loop)
- * Use this if you are not using an external event loop.
- */
-CXX_C_API void ice_agent_process_events(turbo_ice_agent_t *agent);
 
 /**
  * Get default ICE configuration

@@ -7,9 +7,11 @@
 
 %name CookieParse
 %token_prefix COOKIE_
-%token_type {cookie_token_t*}
+%token_type {cookie_token_t}
 %default_type {void*}
 %extra_argument {cookie_parser_context_t *ctx}
+
+%token_destructor { cookie_token_free(&$$); }
 
 %include {
 #include "cookie_parser.h"
@@ -191,20 +193,21 @@ cookie(A) ::= cookie_name(N) EQUALS cookie_value(V) attribute_list(ATTRS). {
 
 // Cookie name
 cookie_name(A) ::= TOKEN(T). {
-    A = strdup(T->text);
+    A = T.text; // Transfer ownership
 }
 
 // Cookie value (can be token or quoted string)
 cookie_value(A) ::= TOKEN(T). {
-    A = strdup(T->text);
+    A = T.text; // Transfer ownership
 }
 
 cookie_value(A) ::= QUOTED_VALUE(T). {
-    A = unquote_string(T->text);
+    A = unquote_string(T.text);
+    free(T.text);
 }
 
 cookie_value(A) ::= NUMBER(T). {
-    A = strdup(T->text);
+    A = T.text; // Transfer ownership
 }
 
 // Attribute list
@@ -219,31 +222,37 @@ attribute_list(A) ::= attribute_list(L) SEMICOLON attribute(ATTR). {
 
 // Individual attributes
 attribute(A) ::= DOMAIN EQUALS TOKEN(T). {
-    A = cookie_attribute_create(ATTR_DOMAIN, T->text);
+    A = cookie_attribute_create(ATTR_DOMAIN, T.text);
+    free(T.text);
 }
 
 attribute(A) ::= DOMAIN EQUALS QUOTED_VALUE(T). {
-    char *unquoted = unquote_string(T->text);
+    char *unquoted = unquote_string(T.text);
     A = cookie_attribute_create(ATTR_DOMAIN, unquoted);
     free(unquoted);
+    free(T.text);
 }
 
 attribute(A) ::= PATH EQUALS TOKEN(T). {
-    A = cookie_attribute_create(ATTR_PATH, T->text);
+    A = cookie_attribute_create(ATTR_PATH, T.text);
+    free(T.text);
 }
 
 attribute(A) ::= PATH EQUALS QUOTED_VALUE(T). {
-    char *unquoted = unquote_string(T->text);
+    char *unquoted = unquote_string(T.text);
     A = cookie_attribute_create(ATTR_PATH, unquoted);
     free(unquoted);
+    free(T.text);
 }
 
 attribute(A) ::= EXPIRES EQUALS DATE_VALUE(T). {
-    A = cookie_attribute_create(ATTR_EXPIRES, T->text);
+    A = cookie_attribute_create(ATTR_EXPIRES, T.text);
+    free(T.text);
 }
 
 attribute(A) ::= MAX_AGE EQUALS NUMBER(T). {
-    A = cookie_attribute_create(ATTR_MAX_AGE, T->text);
+    A = cookie_attribute_create(ATTR_MAX_AGE, T.text);
+    free(T.text);
 }
 
 attribute(A) ::= SECURE. {
@@ -255,20 +264,26 @@ attribute(A) ::= HTTPONLY. {
 }
 
 attribute(A) ::= SAMESITE EQUALS TOKEN(T). {
-    A = cookie_attribute_create(ATTR_SAMESITE, T->text);
+    A = cookie_attribute_create(ATTR_SAMESITE, T.text);
+    free(T.text);
 }
 
 // Handle unknown attributes gracefully
-attribute(A) ::= TOKEN EQUALS TOKEN. {
+attribute(A) ::= TOKEN(N) EQUALS TOKEN(V). {
     A = NULL; // Ignore unknown attributes
+    free(N.text);
+    free(V.text);
 }
 
-attribute(A) ::= TOKEN EQUALS QUOTED_VALUE. {
+attribute(A) ::= TOKEN(N) EQUALS QUOTED_VALUE(V). {
     A = NULL; // Ignore unknown attributes
+    free(N.text);
+    free(V.text);
 }
 
-attribute(A) ::= TOKEN. {
+attribute(A) ::= TOKEN(T). {
     A = NULL; // Ignore unknown flag attributes
+    free(T.text);
 }
 
 %syntax_error {

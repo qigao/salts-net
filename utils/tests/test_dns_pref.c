@@ -44,17 +44,18 @@ static void close_all_handles(uv_loop_t *loop) {
 
 static void timer_stop_cb(uv_timer_t *t) { uv_stop((uv_loop_t *)t->data); }
 
-void setUp(void) {}
-void tearDown(void) {}
+void setUp(void) { turbo_dns_init(); }
+void tearDown(void) { turbo_dns_cleanup(); }
 
 static void common_dns_setup(uv_loop_t *loop) {
+  (void)loop;
   const char *servers[] = {"8.8.8.8"};
-  int rc = turbo_set_dns_servers(loop, servers, 1);
+  int rc = turbo_dns_set_servers(servers, 1);
   TEST_ASSERT_EQUAL_INT(0, rc);
 
   char got[8][46];
   int cnt = -1;
-  rc = turbo_get_dns_servers(loop, got, 8, &cnt);
+  rc = turbo_dns_get_servers(got, 8, &cnt);
   TEST_ASSERT_EQUAL_INT(0, rc);
   TEST_ASSERT_EQUAL_INT(1, cnt);
   TEST_ASSERT_EQUAL_STRING("8.8.8.8", got[0]);
@@ -66,7 +67,7 @@ void test_resolve_ipv4_only_google(void) {
   common_dns_setup(&loop);
 
   resolve_ctx_t ctx = {0};
-  int rc = turbo_resolve_hostname_pref(&loop, "google.com", TURBO_DNS_IPV4_ONLY, resolve_cb, &ctx);
+  int rc = turbo_dns_resolve_async(&loop, "google.com", TURBO_DNS_IPV4_ONLY, resolve_cb, &ctx);
   TEST_ASSERT_EQUAL_INT(0, rc);
 
   uv_timer_t timer;
@@ -95,7 +96,7 @@ void test_resolve_ipv6_only_google(void) {
   common_dns_setup(&loop);
 
   resolve_ctx_t ctx = {0};
-  int rc = turbo_resolve_hostname_pref(&loop, "google.com", TURBO_DNS_IPV6_ONLY, resolve_cb, &ctx);
+  int rc = turbo_dns_resolve_async(&loop, "google.com", TURBO_DNS_IPV6_ONLY, resolve_cb, &ctx);
   TEST_ASSERT_EQUAL_INT(0, rc);
 
   uv_timer_t timer;
@@ -124,8 +125,7 @@ void test_resolve_prefer_ipv6_google(void) {
   common_dns_setup(&loop);
 
   resolve_ctx_t ctx = {0};
-  int rc =
-      turbo_resolve_hostname_pref(&loop, "google.com", TURBO_DNS_PREFER_IPV6, resolve_cb, &ctx);
+  int rc = turbo_dns_resolve_async(&loop, "google.com", TURBO_DNS_PREFER_IPV6, resolve_cb, &ctx);
   TEST_ASSERT_EQUAL_INT(0, rc);
 
   uv_timer_t timer;

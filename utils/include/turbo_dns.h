@@ -149,52 +149,6 @@ CXX_C_API int turbo_dns_get_servers(char servers[][46], int max_servers, int *co
  */
 CXX_C_API int turbo_dns_parse_address(const char *address, int port, struct sockaddr_storage *addr);
 
-// =============================================================================
-// Backward Compatibility (deprecated - use new names)
-// =============================================================================
-
-/** @deprecated Use turbo_dns_cb */
-typedef turbo_dns_cb turbo_resolve_cb;
-
-/** @deprecated Use turbo_dns_resolve_async */
-#define turbo_resolve_hostname(loop, hostname, cb, ud)                                             \
-  turbo_dns_resolve_async((loop), (hostname), TURBO_DNS_ANY, (cb), (ud))
-
-/** @deprecated Use turbo_dns_resolve_async */
-#define turbo_resolve_hostname_pref(loop, hostname, pref, cb, ud)                                  \
-  turbo_dns_resolve_async((loop), (hostname), (pref), (cb), (ud))
-
-/** @deprecated Use turbo_dns_set_servers */
-#define turbo_set_dns_servers(loop, servers, count) turbo_dns_set_servers((servers), (count))
-
-/** @deprecated Use turbo_dns_get_servers */
-#define turbo_get_dns_servers(loop, servers, max, count)                                           \
-  turbo_dns_get_servers((servers), (max), (count))
-
-/** @deprecated Use turbo_dns_parse_address */
-#define turbo_parse_address(addr, port, out) turbo_dns_parse_address((addr), (port), (out))
-
-/** @deprecated Use turbo_dns_resolve */
-#define dns_resolver_resolve(loop, host, port, out, len)                                           \
-  turbo_dns_resolve((loop), (host), (port), (out), (len))
-
-/** @deprecated Use turbo_dns_init */
-#define dns_resolver_init() turbo_dns_init()
-
-/** @deprecated Use turbo_dns_cleanup */
-#define dns_resolver_cleanup() turbo_dns_cleanup()
-
-/** @deprecated Use turbo_dns_resolve_sync */
-#define dns_resolve_sync(hostname, buf, size, pref)                                                \
-  turbo_dns_resolve_sync((hostname), (buf), (size), (pref))
-
-/** @deprecated Use turbo_dns_set_servers */
-#define dns_resolve_set_servers(servers, count) turbo_dns_set_servers((servers), (count))
-
-/** @deprecated Use turbo_dns_get_servers */
-#define dns_resolve_get_servers(servers, max, count)                                               \
-  turbo_dns_get_servers((servers), (max), (count))
-
 #ifdef __cplusplus
 }
 #endif

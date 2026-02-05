@@ -422,7 +422,7 @@ mdns_ctx_t *mdns_create(void *loop) {
   if (!ctx)
     return NULL;
 
-  ctx->loop = (uv_loop_t *)loop;
+  ctx->loop = loop ? (uv_loop_t *)loop : uv_default_loop();
 
   size_t hostname_len = sizeof(ctx->hostname);
   size_t ip_len = sizeof(ctx->local_ip);

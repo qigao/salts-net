@@ -1,42 +1,29 @@
+#include "bdd-for-c.h"
 #include "http_client.h"
-#include <stdio.h>
-#include <stdlib.h>
 
-int main(void) {
-    // This endpoint returns chunked transfer encoding
-    const char* url = "http://httpbin.org/stream/5";
-    
-    printf("Testing chunked response handling\n");
-    printf("URL: %s\n\n", url);
-    
-    // Create client
-    http_client_t* client = http_client_create();
-    if (!client) {
-        fprintf(stderr, "Failed to create client\n");
-        return 1;
+spec("Chunked Response Test") {
+  static http_client_t *client = NULL;
+
+  before() {
+    client = http_client_create();
+    check(client != NULL);
+  }
+
+  after() {
+    if (client) {
+      http_client_destroy(client);
     }
+  }
+
+  it("should successfully handle chunked transfer encoding") {
+    http_response_t *response = http_get(client, "https://httpbin.org/stream/5");
     
-    // Make request
-    http_response_t* response = http_get(client, url);
+    check(response != NULL);
+    check(response->error == NULL);
+    check(response->status_code == 200);
+    check(response->body_len > 0);
     
-    // Check for errors
-    if (response->error) {
-        fprintf(stderr, "Error: %s\n", response->error);
-        http_response_free(response);
-        http_client_destroy(client);
-        return 1;
-    }
-    
-    // Print response
-    printf("Status: %d\n", response->status_code);
-    printf("Body length: %zu bytes\n", response->body_len);
-    printf("\nBody:\n%s\n", response->body);
-    
-    printf("\nNote: llhttp automatically handles chunked encoding!\n");
-    
-    // Cleanup
     http_response_free(response);
-    http_client_destroy(client);
-    
-    return 0;
+  }
 }
+

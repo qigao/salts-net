@@ -1,11 +1,12 @@
+#include "stb_sprintf.h"
+#include "tlog.h"
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "stb_sprintf.h"
 #include <string.h>
 #include <time.h>
-#include "tlog.h"
+
 
 #include <uv.h>
 
@@ -18,17 +19,18 @@
   #include <sys/socket.h>
 #endif
 
-#include "turbo_async_server.h"
+#include "arena_buffer.h"
 #include "client_common.h"
 #include "config.h"
+#include "turbo_async_server.h"
 #include "turbo_dns.h"
-#include "arena_buffer.h"
 #include "turbo_kcp.h"
 #include "turbo_pipe.h"
 #include "turbo_tcp.h"
 #include "turbo_tls.h"
 #include "turbo_url.h"
 #include "turbo_websocket_server.h"
+
 
 #define ASYNC_SERVER_ERROR_MESSAGE_MAX 128
 #define ASYNC_SERVER_DEFAULT_BACKLOG 128
@@ -51,7 +53,7 @@ typedef enum {
   COMMAND_LISTEN,
   COMMAND_SEND,
   COMMAND_SENDV,
-  COMMAND_SENDV_SLICES,  /* NEW: True zero-copy with arena slices */
+  COMMAND_SENDV_SLICES, /* NEW: True zero-copy with arena slices */
   COMMAND_BROADCAST,
   COMMAND_CLOSE_CONNECTION,
   COMMAND_STOP
@@ -78,7 +80,7 @@ typedef struct async_server_command_s {
     } sendv;
     struct {
       async_server_connection_t *connection;
-      turbo_arena_slice_t *slices;  /* Arena slices with refcount */
+      turbo_arena_slice_t *slices; /* Arena slices with refcount */
       size_t slice_count;
     } sendv_slices;
     struct {
@@ -107,7 +109,7 @@ static void handle_stop_command(async_server_t *server);
 /* Phase 5a: Helper functions for handle_sendv_command refactoring */
 static size_t calculate_iov_total_bytes(const async_server_iovec_t *iov, size_t iovcnt);
 static void update_sendv_stats(async_server_t *server, async_server_connection_t *connection,
-                                size_t total_bytes, size_t iovcnt);
+                               size_t total_bytes, size_t iovcnt);
 static int tcp_sendv_impl(async_server_connection_t *connection, const async_server_iovec_t *iov,
                           size_t iovcnt);
 static int udp_sendv_impl(async_server_t *server, async_server_connection_t *connection,
@@ -163,7 +165,8 @@ static void emit_data_slice(async_server_t *server, async_server_connection_t *c
 static void emit_error_message(async_server_t *server, int status, const char *context);
 static void emit_uv_error(async_server_t *server, int status, const char *context);
 
-/* Static context strings for emit_uv_error to avoid ASan false positives with string literal redzones */
+/* Static context strings for emit_uv_error to avoid ASan false positives with string literal
+ * redzones */
 static const char CTX_TCP_CONNECTION[] = "tcp connection\0\0\0\0";
 static const char CTX_TCP_WRITE[] = "tcp write\0\0\0\0";
 static const char CTX_TCP_READ[] = "tcp read\0\0\0\0";
@@ -271,7 +274,7 @@ struct async_server_connection_s {
 
   int active;
   int closing;
-  int close_callback_registered;  /* NEW: Explicit ownership - did we register close callback? */
+  int close_callback_registered; /* NEW: Explicit ownership - did we register close callback? */
 
   async_server_connection_t *next;
   async_server_connection_t *prev;
@@ -299,15 +302,18 @@ typedef struct async_server_transport_ops_s {
   int (*listen)(async_server_t *server, const char *host, int port, int backlog);
 
   /* Send data to a connection */
-  int (*send)(async_server_t *server, async_server_connection_t *connection, char *data, size_t len);
+  int (*send)(async_server_t *server, async_server_connection_t *connection, char *data,
+              size_t len);
 
   /* Send scatter-gather IOV array to a connection */
   int (*sendv)(async_server_t *server, async_server_connection_t *connection,
                const async_server_iovec_t *iov, size_t iovcnt);
 
   /* Optional protocol-specific methods (NULL if not supported) */
-  async_server_status_t (*join_multicast_group)(async_server_t *server, const char *group_addr, const char *interface_addr);
-  async_server_status_t (*leave_multicast_group)(async_server_t *server, const char *group_addr, const char *interface_addr);
+  async_server_status_t (*join_multicast_group)(async_server_t *server, const char *group_addr,
+                                                const char *interface_addr);
+  async_server_status_t (*leave_multicast_group)(async_server_t *server, const char *group_addr,
+                                                 const char *interface_addr);
   async_server_status_t (*set_multicast_ttl)(async_server_t *server, int ttl);
   async_server_status_t (*set_multicast_loop)(async_server_t *server, int on);
 
@@ -410,7 +416,8 @@ static async_server_t *server_from_pipe(turbo_pipe_server_t *pipe_server) {
   uv_mutex_lock(&g_server_list_lock);
   async_server_t *cursor = g_server_list_head;
   while (cursor) {
-    if (cursor->transport == ASYNC_SERVER_TRANSPORT_PIPE && cursor->proto.pipe.server == pipe_server) {
+    if (cursor->transport == ASYNC_SERVER_TRANSPORT_PIPE &&
+        cursor->proto.pipe.server == pipe_server) {
       uv_mutex_unlock(&g_server_list_lock);
       return cursor;
     }
@@ -506,7 +513,8 @@ static async_server_command_t *command_create(async_server_command_type_t type) 
   return cmd;
 }
 
-static async_server_command_t *command_create_listen(async_server_transport_t transport, const char *host, int port, int backlog) {
+static async_server_command_t *command_create_listen(async_server_transport_t transport,
+                                                     const char *host, int port, int backlog) {
   async_server_command_t *cmd = command_create(COMMAND_LISTEN);
   if (!cmd)
     return NULL;
@@ -573,8 +581,8 @@ static async_server_command_t *command_create_sendv(async_server_connection_t *c
 }
 
 static async_server_command_t *command_create_sendv_slices(async_server_connection_t *connection,
-                                                            const turbo_arena_slice_t *slices,
-                                                            size_t slice_count) {
+                                                           const turbo_arena_slice_t *slices,
+                                                           size_t slice_count) {
   if (!slices || slice_count == 0)
     return NULL;
 
@@ -583,7 +591,8 @@ static async_server_command_t *command_create_sendv_slices(async_server_connecti
     return NULL;
 
   /* Allocate slice array (command owns this array) */
-  cmd->payload.sendv_slices.slices = (turbo_arena_slice_t *)malloc(slice_count * sizeof(turbo_arena_slice_t));
+  cmd->payload.sendv_slices.slices =
+      (turbo_arena_slice_t *)malloc(slice_count * sizeof(turbo_arena_slice_t));
   if (!cmd->payload.sendv_slices.slices) {
     free(cmd);
     return NULL;
@@ -799,42 +808,58 @@ static void loop_thread_main(void *arg) {
 static async_server_status_t server_tcp_setup_impl(async_server_t *server);
 static void server_tcp_close_impl(async_server_t *server);
 static int server_tcp_listen_impl(async_server_t *server, const char *host, int port, int backlog);
-static int server_tcp_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len);
-static int server_tcp_sendv_impl(async_server_t *server, async_server_connection_t *conn, const async_server_iovec_t *iov, size_t iovcnt);
+static int server_tcp_send_impl(async_server_t *server, async_server_connection_t *conn, char *data,
+                                size_t len);
+static int server_tcp_sendv_impl(async_server_t *server, async_server_connection_t *conn,
+                                 const async_server_iovec_t *iov, size_t iovcnt);
 
 static async_server_status_t server_udp_setup_impl(async_server_t *server);
 static void server_udp_close_impl(async_server_t *server);
 static int server_udp_listen_impl(async_server_t *server, const char *host, int port, int backlog);
-static int server_udp_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len);
-static int server_udp_sendv_impl(async_server_t *server, async_server_connection_t *conn, const async_server_iovec_t *iov, size_t iovcnt);
-static async_server_status_t server_udp_join_multicast_group_impl(async_server_t *server, const char *group_addr, const char *interface_addr);
-static async_server_status_t server_udp_leave_multicast_group_impl(async_server_t *server, const char *group_addr, const char *interface_addr);
+static int server_udp_send_impl(async_server_t *server, async_server_connection_t *conn, char *data,
+                                size_t len);
+static int server_udp_sendv_impl(async_server_t *server, async_server_connection_t *conn,
+                                 const async_server_iovec_t *iov, size_t iovcnt);
+static async_server_status_t server_udp_join_multicast_group_impl(async_server_t *server,
+                                                                  const char *group_addr,
+                                                                  const char *interface_addr);
+static async_server_status_t server_udp_leave_multicast_group_impl(async_server_t *server,
+                                                                   const char *group_addr,
+                                                                   const char *interface_addr);
 static async_server_status_t server_udp_set_multicast_ttl_impl(async_server_t *server, int ttl);
 static async_server_status_t server_udp_set_multicast_loop_impl(async_server_t *server, int on);
 
 static async_server_status_t server_kcp_setup_impl(async_server_t *server);
 static void server_kcp_close_impl(async_server_t *server);
 static int server_kcp_listen_impl(async_server_t *server, const char *host, int port, int backlog);
-static int server_kcp_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len);
-static int server_kcp_sendv_impl(async_server_t *server, async_server_connection_t *conn, const async_server_iovec_t *iov, size_t iovcnt);
+static int server_kcp_send_impl(async_server_t *server, async_server_connection_t *conn, char *data,
+                                size_t len);
+static int server_kcp_sendv_impl(async_server_t *server, async_server_connection_t *conn,
+                                 const async_server_iovec_t *iov, size_t iovcnt);
 
 static async_server_status_t server_tls_setup_impl(async_server_t *server);
 static void server_tls_close_impl(async_server_t *server);
 static int server_tls_listen_impl(async_server_t *server, const char *host, int port, int backlog);
-static int server_tls_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len);
-static int server_tls_sendv_impl(async_server_t *server, async_server_connection_t *conn, const async_server_iovec_t *iov, size_t iovcnt);
+static int server_tls_send_impl(async_server_t *server, async_server_connection_t *conn, char *data,
+                                size_t len);
+static int server_tls_sendv_impl(async_server_t *server, async_server_connection_t *conn,
+                                 const async_server_iovec_t *iov, size_t iovcnt);
 
 static async_server_status_t server_pipe_setup_impl(async_server_t *server);
 static void server_pipe_close_impl(async_server_t *server);
 static int server_pipe_listen_impl(async_server_t *server, const char *host, int port, int backlog);
-static int server_pipe_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len);
-static int server_pipe_sendv_impl(async_server_t *server, async_server_connection_t *conn, const async_server_iovec_t *iov, size_t iovcnt);
+static int server_pipe_send_impl(async_server_t *server, async_server_connection_t *conn,
+                                 char *data, size_t len);
+static int server_pipe_sendv_impl(async_server_t *server, async_server_connection_t *conn,
+                                  const async_server_iovec_t *iov, size_t iovcnt);
 
 static async_server_status_t server_ws_setup_impl(async_server_t *server);
 static void server_ws_close_impl(async_server_t *server);
 static int server_ws_listen_impl(async_server_t *server, const char *host, int port, int backlog);
-static int server_ws_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len);
-static int server_ws_sendv_impl(async_server_t *server, async_server_connection_t *conn, const async_server_iovec_t *iov, size_t iovcnt);
+static int server_ws_send_impl(async_server_t *server, async_server_connection_t *conn, char *data,
+                               size_t len);
+static int server_ws_sendv_impl(async_server_t *server, async_server_connection_t *conn,
+                                const async_server_iovec_t *iov, size_t iovcnt);
 
 /* Static vtable instances */
 static const async_server_transport_ops_t server_tcp_ops = {
@@ -897,17 +922,16 @@ static const async_server_transport_ops_t server_pipe_ops = {
     .set_multicast_loop = NULL,    /* Not supported */
     .name = "PIPE\0\0\0\0"};
 
-static const async_server_transport_ops_t server_ws_ops = {
-    .setup = server_ws_setup_impl,
-    .close = server_ws_close_impl,
-    .listen = server_ws_listen_impl,
-    .send = server_ws_send_impl,
-    .sendv = server_ws_sendv_impl,
-    .join_multicast_group = NULL,
-    .leave_multicast_group = NULL,
-    .set_multicast_ttl = NULL,
-    .set_multicast_loop = NULL,
-    .name = "WEBSOCKET\0\0\0\0"};
+static const async_server_transport_ops_t server_ws_ops = {.setup = server_ws_setup_impl,
+                                                           .close = server_ws_close_impl,
+                                                           .listen = server_ws_listen_impl,
+                                                           .send = server_ws_send_impl,
+                                                           .sendv = server_ws_sendv_impl,
+                                                           .join_multicast_group = NULL,
+                                                           .leave_multicast_group = NULL,
+                                                           .set_multicast_ttl = NULL,
+                                                           .set_multicast_loop = NULL,
+                                                           .name = "WEBSOCKET\0\0\0\0"};
 
 /* ========================================================================
  * TCP vtable implementations
@@ -1022,13 +1046,13 @@ static int server_udp_sendv_impl(async_server_t *server, async_server_connection
 
 /* UDP-specific: multicast group join */
 static async_server_status_t server_udp_join_multicast_group_impl(async_server_t *server,
-                                                                   const char *group_addr,
-                                                                   const char *interface_addr) {
+                                                                  const char *group_addr,
+                                                                  const char *interface_addr) {
   if (!group_addr)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
-  int rc = uv_udp_set_membership(&server->proto.udp.handle, group_addr, interface_addr,
-                                  UV_JOIN_GROUP);
+  int rc =
+      uv_udp_set_membership(&server->proto.udp.handle, group_addr, interface_addr, UV_JOIN_GROUP);
   if (rc != 0)
     return ASYNC_SERVER_STATUS_IO_ERROR;
 
@@ -1037,13 +1061,13 @@ static async_server_status_t server_udp_join_multicast_group_impl(async_server_t
 
 /* UDP-specific: multicast group leave */
 static async_server_status_t server_udp_leave_multicast_group_impl(async_server_t *server,
-                                                                    const char *group_addr,
-                                                                    const char *interface_addr) {
+                                                                   const char *group_addr,
+                                                                   const char *interface_addr) {
   if (!group_addr)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
-  int rc = uv_udp_set_membership(&server->proto.udp.handle, group_addr, interface_addr,
-                                  UV_LEAVE_GROUP);
+  int rc =
+      uv_udp_set_membership(&server->proto.udp.handle, group_addr, interface_addr, UV_LEAVE_GROUP);
   if (rc != 0)
     return ASYNC_SERVER_STATUS_IO_ERROR;
 
@@ -1164,7 +1188,8 @@ static void server_pipe_close_impl(async_server_t *server) {
   emit_closed(server);
 }
 
-static int server_pipe_listen_impl(async_server_t *server, const char *host, int port, int backlog) {
+static int server_pipe_listen_impl(async_server_t *server, const char *host, int port,
+                                   int backlog) {
   (void)port;
   (void)backlog;
   return pipe_listen_impl(server, host);
@@ -1352,7 +1377,8 @@ static int udp_listen_impl(async_server_t *server, const char *host, int port) {
 
 static int kcp_listen_impl(async_server_t *server, const char *host, int port) {
   const char *bind_host = host ? host : "0.0.0.0";
-  int rc = turbo_kcp_server_init(&server->proto.kcp.server, &server->loop, bind_host, (unsigned short)port);
+  int rc = turbo_kcp_server_init(&server->proto.kcp.server, &server->loop, bind_host,
+                                 (unsigned short)port);
   if (rc != 0)
     return rc;
   server->proto.kcp.initialized = 1;
@@ -1375,12 +1401,13 @@ static int tls_listen_impl(async_server_t *server, const char *host, int port) {
     server->proto.tls.server_created = 0;
   }
   const char *bind_host = host ? host : "0.0.0.0";
-  int rc = turbo_tls_server_init(server->proto.tls.server, &server->loop, &server->proto.tls.context,
-                                 bind_host, (unsigned short)port);
+  int rc = turbo_tls_server_init(server->proto.tls.server, &server->loop,
+                                 &server->proto.tls.context, bind_host, (unsigned short)port);
   if (rc != 0)
     return rc;
   server->proto.tls.server_created = 1;
-  rc = turbo_tls_server_start(server->proto.tls.server, tls_recv_cb, (turbo_connect_cb)tls_accept_cb, tls_close_cb);
+  rc = turbo_tls_server_start(server->proto.tls.server, tls_recv_cb,
+                              (turbo_connect_cb)tls_accept_cb, tls_close_cb);
   if (rc != 0) {
     turbo_tls_server_stop(server->proto.tls.server);
     server->proto.tls.server = NULL;
@@ -1403,7 +1430,8 @@ static int pipe_listen_impl(async_server_t *server, const char *host) {
     server->proto.pipe.server = NULL;
     return rc;
   }
-  rc = turbo_pipe_server_start(server->proto.pipe.server, pipe_recv_cb, pipe_accept_cb, pipe_close_cb);
+  rc = turbo_pipe_server_start(server->proto.pipe.server, pipe_recv_cb, pipe_accept_cb,
+                               pipe_close_cb);
   if (rc != 0) {
     turbo_pipe_server_stop(server->proto.pipe.server);
     free(server->proto.pipe.server);
@@ -1469,7 +1497,8 @@ static void handle_listen_command(async_server_t *server, async_server_command_t
       emit_uv_error(server, rc, server->ops->name);
     return;
   }
-  TLOG_INFO("Server listening on {:s}:{:d} (backlog: {:d})", host ? host : "0.0.0.0", port, backlog);
+  TLOG_INFO("Server listening on {:s}:{:d} (backlog: {:d})", host ? host : "0.0.0.0", port,
+            backlog);
   emit_listening(server);
 }
 
@@ -1507,7 +1536,7 @@ static size_t calculate_iov_total_bytes(const async_server_iovec_t *iov, size_t 
 }
 
 static void update_sendv_stats(async_server_t *server, async_server_connection_t *connection,
-                                size_t total_bytes, size_t iovcnt) {
+                               size_t total_bytes, size_t iovcnt) {
   uv_mutex_lock(&server->mutex);
   server->stats.scatter_gather_sends++;
   server->stats.total_iov_buffers_sent += iovcnt;
@@ -1577,8 +1606,8 @@ static int udp_sendv_impl(async_server_t *server, async_server_connection_t *con
   }
   send_req->req.data = send_req;
 
-  int rc = uv_udp_send(&send_req->req, &server->proto.udp.handle, send_req->bufs, (unsigned int)iovcnt,
-                       (const struct sockaddr *)&send_req->addr, udp_send_cb);
+  int rc = uv_udp_send(&send_req->req, &server->proto.udp.handle, send_req->bufs,
+                       (unsigned int)iovcnt, (const struct sockaddr *)&send_req->addr, udp_send_cb);
   if (rc != 0) {
     free(send_req->buffers);
     free(send_req->bufs);
@@ -1678,7 +1707,8 @@ static void handle_sendv_slices_command(async_server_t *server, async_server_com
   update_sendv_stats(server, connection, total_bytes, slice_count);
 
   /* Convert arena slices to iovec format for transport layer */
-  async_server_iovec_t *iov = (async_server_iovec_t *)malloc(slice_count * sizeof(async_server_iovec_t));
+  async_server_iovec_t *iov =
+      (async_server_iovec_t *)malloc(slice_count * sizeof(async_server_iovec_t));
   if (!iov) {
     emit_error_message(server, -ASYNC_SERVER_STATUS_ALLOC_FAILED, "failed to allocate iov");
     return;
@@ -1889,7 +1919,8 @@ static void tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
     return;
 
   /* Check if buffer is from arena (has header pointer) */
-  turbo_arena_buffer_t **header_ptr = (turbo_arena_buffer_t **)(buf->base - sizeof(turbo_arena_buffer_t *));
+  turbo_arena_buffer_t **header_ptr =
+      (turbo_arena_buffer_t **)(buf->base - sizeof(turbo_arena_buffer_t *));
   turbo_arena_buffer_t *arena_buf = NULL;
 
   /* Validate if this looks like an arena buffer by checking if header points to valid arena */
@@ -1973,8 +2004,10 @@ static void udp_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *b
 }
 
 /* Safely compare a sockaddr_storage with a sockaddr of unknown size (e.g. from libuv) */
-static int safe_compare_sockaddr(const struct sockaddr_storage *stored, const struct sockaddr *incoming) {
-  if (stored->ss_family != incoming->sa_family) return -1;
+static int safe_compare_sockaddr(const struct sockaddr_storage *stored,
+                                 const struct sockaddr *incoming) {
+  if (stored->ss_family != incoming->sa_family)
+    return -1;
   if (incoming->sa_family == AF_INET6) {
     return memcmp(stored, incoming, sizeof(struct sockaddr_in6));
   } else {
@@ -1992,7 +2025,6 @@ static void safe_copy_sockaddr(struct sockaddr_storage *dest, const struct socka
   }
 }
 
-
 static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
                         const struct sockaddr *addr, unsigned flags) {
   UNUSED(flags);
@@ -2002,7 +2034,8 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     return;
 
   /* Check if buffer is from arena (has header pointer) */
-  turbo_arena_buffer_t **header_ptr = (turbo_arena_buffer_t **)(buf->base - sizeof(turbo_arena_buffer_t *));
+  turbo_arena_buffer_t **header_ptr =
+      (turbo_arena_buffer_t **)(buf->base - sizeof(turbo_arena_buffer_t *));
   turbo_arena_buffer_t *arena_buf = NULL;
 
   /* Validate if this looks like an arena buffer by checking if header points to valid arena */
@@ -2503,7 +2536,7 @@ async_server_t *async_server_create(async_server_event_cb callback, void *user_d
   }
   server->config_acquired = 1;
 
-  if (dns_resolver_init() != 0) {
+  if (turbo_dns_init() != 0) {
     client_common_config_release();
     server->config_acquired = 0;
     turbo_arena_free(&server->arena);
@@ -2558,7 +2591,7 @@ void async_server_destroy(async_server_t *server) {
 
   server_list_unregister(server);
 
-  dns_resolver_cleanup();
+  turbo_dns_cleanup();
 
   turbo_arena_free(&server->arena);
   uv_cond_destroy(&server->cond);
@@ -2605,9 +2638,7 @@ async_server_status_t async_server_listen(async_server_t *server, const char *ur
   }
 
   /* For pipes, use path instead of host; for others use host */
-  const char *bind_host = (url_transport == ASYNC_SERVER_TRANSPORT_PIPE) 
-                           ? addr.path 
-                           : addr.host;
+  const char *bind_host = (url_transport == ASYNC_SERVER_TRANSPORT_PIPE) ? addr.path : addr.host;
 
   /* Create listen command with parsed host and port and transport */
   async_server_command_t *cmd = command_create_listen(url_transport, bind_host, addr.port, backlog);
@@ -2655,9 +2686,9 @@ async_server_status_t async_server_sendv(async_server_t *server,
 }
 
 async_server_status_t async_server_sendv_slices(async_server_t *server,
-                                                 async_server_connection_t *connection,
-                                                 const turbo_arena_slice_t *slices,
-                                                 size_t slice_count) {
+                                                async_server_connection_t *connection,
+                                                const turbo_arena_slice_t *slices,
+                                                size_t slice_count) {
   if (!server || !connection || !slices || slice_count == 0)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
@@ -2679,8 +2710,8 @@ async_server_status_t async_server_sendv_slices(async_server_t *server,
 }
 
 async_server_status_t async_server_send_to(async_server_t *server,
-                                        async_server_connection_t *connection, const char *data,
-                                        size_t len) {
+                                           async_server_connection_t *connection, const char *data,
+                                           size_t len) {
   if (!server || !connection || (!data && len > 0))
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
   if (len == 0)
@@ -2822,8 +2853,9 @@ void *async_server_connection_get_user_data(const async_server_connection_t *con
   return connection->user_data;
 }
 
-async_server_status_t async_server_connection_get_peer_cert_pem(
-    async_server_connection_t *connection, char *buffer, size_t *length) {
+async_server_status_t
+async_server_connection_get_peer_cert_pem(async_server_connection_t *connection, char *buffer,
+                                          size_t *length) {
   if (!connection || !length)
     return ASYNC_SERVER_STATUS_INVALID_PARAM;
 
@@ -2835,7 +2867,8 @@ async_server_status_t async_server_connection_get_peer_cert_pem(
   }
 #if TURBO_WS_SUPPORT
   else if (connection->server->transport == ASYNC_SERVER_TRANSPORT_WEBSOCKET) {
-    /* For WebSocket over TLS (WSS), we'd need to get the underlying TLS client from the WS connection */
+    /* For WebSocket over TLS (WSS), we'd need to get the underlying TLS client from the WS
+     * connection */
     /* This might require an extension to the turbo_websocket_server_t/connection_t interface */
     return ASYNC_SERVER_STATUS_TRANSPORT_ERROR;
   }
@@ -3016,10 +3049,9 @@ void *async_server_connection_get_handle(async_server_connection_t *connection) 
  * @param user_data User-defined data to associate with the connection.
  * @return A pointer to the newly created async_server_connection_t, or NULL on failure.
  */
-async_server_connection_t *async_server_adopt_handle(async_server_t *server,
-                                                      void *client_handle,
-                                                      async_server_event_cb callback,
-                                                      void *user_data) {
+async_server_connection_t *async_server_adopt_handle(async_server_t *server, void *client_handle,
+                                                     async_server_event_cb callback,
+                                                     void *user_data) {
   UNUSED(server);
   UNUSED(client_handle);
   UNUSED(callback);
@@ -3039,7 +3071,8 @@ async_server_status_t async_server_join_multicast_group(async_server_t *server,
 
   /* Use vtable - no protocol type checking! */
   if (!server->ops || !server->ops->join_multicast_group)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not
+                                                   initialized) */
 
   return server->ops->join_multicast_group(server, multicast_addr, interface_addr);
 }
@@ -3055,7 +3088,8 @@ async_server_status_t async_server_leave_multicast_group(async_server_t *server,
 
   /* Use vtable - no protocol type checking! */
   if (!server->ops || !server->ops->leave_multicast_group)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not
+                                                   initialized) */
 
   return server->ops->leave_multicast_group(server, multicast_addr, interface_addr);
 }
@@ -3072,7 +3106,8 @@ async_server_status_t async_server_set_multicast_ttl(async_server_t *server, int
 
   /* Use vtable - no protocol type checking! */
   if (!server->ops || !server->ops->set_multicast_ttl)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not
+                                                   initialized) */
 
   return server->ops->set_multicast_ttl(server, ttl);
 }
@@ -3089,7 +3124,8 @@ async_server_status_t async_server_set_multicast_loop(async_server_t *server, in
 
   /* Use vtable - no protocol type checking! */
   if (!server->ops || !server->ops->set_multicast_loop)
-    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not initialized) */
+    return ASYNC_SERVER_STATUS_TRANSPORT_ERROR; /* Not supported by this transport (or not
+                                                   initialized) */
 
   return server->ops->set_multicast_loop(server, on);
 }
@@ -3144,7 +3180,8 @@ static void server_ws_close_impl(async_server_t *server) {
         } else {
           /* Handle already closing or NULL, clean up now */
           turbo_arena_free(&tcp->arena);
-          if (tcp->handle) free(tcp->handle);
+          if (tcp->handle)
+            free(tcp->handle);
           free(tcp);
         }
       }
@@ -3176,7 +3213,8 @@ static int server_ws_listen_impl(async_server_t *server, const char *host, int p
   server->proto.ws.server = ws;
   ws->user_data = server;
 
-  turbo_websocket_server_set_callbacks(ws, ws_server_on_connection, ws_server_on_recv, ws_server_on_close);
+  turbo_websocket_server_set_callbacks(ws, ws_server_on_connection, ws_server_on_recv,
+                                       ws_server_on_close);
 
   int rc = turbo_websocket_server_listen(ws, host, port, backlog);
   if (rc != 0) {
@@ -3191,7 +3229,8 @@ static int server_ws_listen_impl(async_server_t *server, const char *host, int p
   return 0;
 }
 
-static int server_ws_send_impl(async_server_t *server, async_server_connection_t *conn, char *data, size_t len) {
+static int server_ws_send_impl(async_server_t *server, async_server_connection_t *conn, char *data,
+                               size_t len) {
   (void)server;
 
   if (!conn || !conn->handle.ws_conn) {
@@ -3261,10 +3300,7 @@ static void ws_server_on_connection(void *handle, int status, void *peer) {
   uv_mutex_unlock(&server->mutex);
 
   async_server_event_t event = {
-      .type = ASYNC_SERVER_EVENT_CONNECTION,
-      .connection = conn,
-      .status = 0
-  };
+      .type = ASYNC_SERVER_EVENT_CONNECTION, .connection = conn, .status = 0};
 
   if (server->callback) {
     server->callback(server, &event, server->callback_user_data);
@@ -3290,13 +3326,11 @@ static int ws_server_on_recv(void *handle, const turbo_arena_slice_t *data, void
   server->stats.messages_received++;
   uv_mutex_unlock(&server->mutex);
 
-  async_server_event_t event = {
-      .type = ASYNC_SERVER_EVENT_DATA,
-      .connection = conn,
-      .slice = data,
-      .length = data->length,
-      .flags = ASYNC_SERVER_EVENT_FLAG_ZERO_COPY
-  };
+  async_server_event_t event = {.type = ASYNC_SERVER_EVENT_DATA,
+                                .connection = conn,
+                                .slice = data,
+                                .length = data->length,
+                                .flags = ASYNC_SERVER_EVENT_FLAG_ZERO_COPY};
 
   if (server->callback) {
     server->callback(server, &event, server->callback_user_data);
@@ -3323,10 +3357,7 @@ static void ws_server_on_close(void *handle) {
     server->stats.active_connections--;
   uv_mutex_unlock(&server->mutex);
 
-  async_server_event_t event = {
-      .type = ASYNC_SERVER_EVENT_DISCONNECTION,
-      .connection = conn
-  };
+  async_server_event_t event = {.type = ASYNC_SERVER_EVENT_DISCONNECTION, .connection = conn};
 
   if (server->callback) {
     server->callback(server, &event, server->callback_user_data);

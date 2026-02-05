@@ -226,7 +226,13 @@ static void send_stun_request_internal(turbo_stun_client_t *client) {
 
 static void on_retry_timeout(turbo_timer_t *timer) {
     turbo_stun_client_t *client = (turbo_stun_client_t *)turbo_timer_get_data(timer);
-    if (!client || client->destroying) return;
+    if (!client) return;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->destroying) {
+        turbo_mutex_unlock(&client->lock);
+        return;
+    }
 
     if (client->state == STUN_CLIENT_STATE_WAITING) {
         client->retry_count++;
@@ -245,12 +251,19 @@ static void on_retry_timeout(turbo_timer_t *timer) {
             async_client_close(client->async_client_handle);
         }
     }
+    turbo_mutex_unlock(&client->lock);
 }
 
 
 static void on_client_event(async_client_t *client_handle, const async_client_event_t *event, void *user_data) {
     turbo_stun_client_t *client = (turbo_stun_client_t *)user_data;
-    if (!client || client->destroying) return;
+    if (!client) return;
+
+    turbo_mutex_lock(&client->lock);
+    if (client->destroying) {
+        turbo_mutex_unlock(&client->lock);
+        return;
+    }
 
     switch (event->type) {
         case ASYNC_CLIENT_EVENT_DATA: {
@@ -289,6 +302,7 @@ static void on_client_event(async_client_t *client_handle, const async_client_ev
         default:
             break;
     }
+    turbo_mutex_unlock(&client->lock);
 }
 
 
@@ -300,7 +314,7 @@ turbo_stun_client_t *stun_client_create(const stun_client_config_t *config) {
   turbo_stun_client_t *client = calloc(1, sizeof(turbo_stun_client_t));
   if (!client) return NULL;
 
-  client->loop = uv_default_loop();
+  turbo_mutex_init(&client->lock);
   strncpy(client->server_host, config->server_host, sizeof(client->server_host) - 1);
 
   client->server_port = config->server_port ? config->server_port : STUN_DEFAULT_PORT;
@@ -314,7 +328,7 @@ turbo_stun_client_t *stun_client_create(const stun_client_config_t *config) {
       return NULL;
   }
 
-  client->retry_timer = turbo_timer_create(client->loop);
+  client->retry_timer = turbo_timer_create(NULL);
   if (!client->retry_timer) {
       async_client_destroy(client->async_client_handle);
       free(client);
@@ -339,14 +353,19 @@ void stun_client_destroy(turbo_stun_client_t *client) {
          async_client_close(client->async_client_handle);
          async_client_destroy(client->async_client_handle);
     }
+    
+    turbo_mutex_destroy(&client->lock);
     free(client);
 }
 
 int stun_client_bind(turbo_stun_client_t *client, stun_binding_cb callback, void *user_data) {
     if (!client || !callback)
         return -1;
+        
+    turbo_mutex_lock(&client->lock);
     if (client->state != STUN_CLIENT_STATE_IDLE && client->state != STUN_CLIENT_STATE_DONE &&
         client->state != STUN_CLIENT_STATE_ERROR) {
+        turbo_mutex_unlock(&client->lock);
         return -2; /* Already in progress */
     }
 
@@ -363,9 +382,11 @@ int stun_client_bind(turbo_stun_client_t *client, stun_binding_cb callback, void
     async_client_status_t status = async_client_connect(client->async_client_handle, url);
     if (status != ASYNC_CLIENT_STATUS_OK) {
         client->state = STUN_CLIENT_STATE_ERROR;
+        turbo_mutex_unlock(&client->lock);
         return -3;
     }
 
+    turbo_mutex_unlock(&client->lock);
     return 0;
 }
 
@@ -374,12 +395,14 @@ void stun_client_cancel(turbo_stun_client_t *client) {
     if (!client)
         return;
 
+    turbo_mutex_lock(&client->lock);
     // If a binding is in progress, stop it.
     if (client->state == STUN_CLIENT_STATE_WAITING || client->state == STUN_CLIENT_STATE_RESOLVING) {
         async_client_close(client->async_client_handle); // This will trigger ASYNC_CLIENT_EVENT_CLOSED
         client->state = STUN_CLIENT_STATE_IDLE;
         // Do not call on_binding callback for cancellation.
     }
+    turbo_mutex_unlock(&client->lock);
 }
 
 /* Tick function to handle retries/timeouts */

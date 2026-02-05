@@ -72,6 +72,14 @@ CXX_C_API const char *async_client_status_to_string(async_client_status_t status
  * @return A pointer to the newly created async_client_t instance, or NULL on failure.
  */
 CXX_C_API async_client_t *async_client_create(async_client_event_cb callback, void *user_data);
+
+/**
+ * @brief Sets the user data pointer for the client callback.
+ * 
+ * @param client A pointer to the async_client_t instance.
+ * @param user_data New user data pointer.
+ */
+CXX_C_API void async_client_set_user_data(async_client_t *client, void *user_data);
 /**
  * @brief Destroys an asynchronous client instance and frees associated resources.
  *

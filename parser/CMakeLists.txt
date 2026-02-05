@@ -15,5 +15,7 @@ add_subdirectory(internal/ltv_parser)
 add_subdirectory(internal/soa_parser)
 add_subdirectory(internal/dotenv_parser)
 add_subdirectory(internal/cmd_parser)
+add_subdirectory(internal/toon)
+add_subdirectory(internal/toml)
 add_subdirectory(turbo_parser)
  

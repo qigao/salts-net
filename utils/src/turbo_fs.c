@@ -4,16 +4,17 @@
  */
 #include "platform.h"
 
-#include "turbo_fs.h"
 #include "tlog.h"
+#include "turbo_fs.h"
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 
 // Windows compatibility for POSIX file type macros
 #ifdef _WIN32
-  #include <sys/stat.h>
   #include <io.h>
+  #include <sys/stat.h>
+
   #ifndef S_ISREG
     #define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
   #endif
@@ -32,7 +33,7 @@
 // Synchronous File Operations - simple blocking I/O
 // =============================================================================
 
-int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf) {
+int turbo_fs_read_file(const char *path, turbo_fs_buf_t *buf) {
   if (!path || !buf) {
     return UV_EINVAL;
   }
@@ -94,7 +95,7 @@ int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf) {
   return err < 0 ? err : 0;
 }
 
-int turbo_fs_write_file_sync(const char *path, const turbo_fs_buf_t *buf) {
+int turbo_fs_write_file(const char *path, const turbo_fs_buf_t *buf) {
   if (!path || !buf || !buf->base) {
     return UV_EINVAL;
   }
@@ -132,7 +133,7 @@ int turbo_fs_write_file_sync(const char *path, const turbo_fs_buf_t *buf) {
   return err < 0 ? err : 0;
 }
 
-int turbo_fs_stat_sync(const char *path, turbo_fs_stat_t *stat) {
+int turbo_fs_stat(const char *path, turbo_fs_stat_t *stat) {
   if (!path || !stat) {
     return UV_EINVAL;
   }
@@ -164,7 +165,7 @@ int turbo_fs_stat_sync(const char *path, turbo_fs_stat_t *stat) {
   return err;
 }
 
-int turbo_fs_mkdir_sync(const char *path, int mode) {
+int turbo_fs_mkdir(const char *path, int mode) {
   if (!path) {
     return UV_EINVAL;
   }
@@ -182,7 +183,7 @@ int turbo_fs_mkdir_sync(const char *path, int mode) {
   return err;
 }
 
-int turbo_fs_rmdir_sync(const char *path) {
+int turbo_fs_rmdir(const char *path) {
   if (!path) {
     return UV_EINVAL;
   }
@@ -200,7 +201,7 @@ int turbo_fs_rmdir_sync(const char *path) {
   return err;
 }
 
-int turbo_fs_unlink_sync(const char *path) {
+int turbo_fs_unlink(const char *path) {
   if (!path) {
     return UV_EINVAL;
   }
@@ -411,17 +412,23 @@ int turbo_fs_path_basename(const char *path, char *basename, size_t basename_siz
 static int turbo_fs_flags_to_uv(int flags) {
   int uv_flags = 0;
 
-  if (flags & TURBO_FS_O_RDONLY) uv_flags |= UV_FS_O_RDONLY;
-  if (flags & TURBO_FS_O_WRONLY) uv_flags |= UV_FS_O_WRONLY;
-  if (flags & TURBO_FS_O_RDWR)   uv_flags |= UV_FS_O_RDWR;
-  if (flags & TURBO_FS_O_CREAT)  uv_flags |= UV_FS_O_CREAT;
-  if (flags & TURBO_FS_O_TRUNC)  uv_flags |= UV_FS_O_TRUNC;
-  if (flags & TURBO_FS_O_APPEND) uv_flags |= UV_FS_O_APPEND;
+  if (flags & TURBO_FS_O_RDONLY)
+    uv_flags |= UV_FS_O_RDONLY;
+  if (flags & TURBO_FS_O_WRONLY)
+    uv_flags |= UV_FS_O_WRONLY;
+  if (flags & TURBO_FS_O_RDWR)
+    uv_flags |= UV_FS_O_RDWR;
+  if (flags & TURBO_FS_O_CREAT)
+    uv_flags |= UV_FS_O_CREAT;
+  if (flags & TURBO_FS_O_TRUNC)
+    uv_flags |= UV_FS_O_TRUNC;
+  if (flags & TURBO_FS_O_APPEND)
+    uv_flags |= UV_FS_O_APPEND;
 
   return uv_flags;
 }
 
-turbo_file_t turbo_fs_open_sync(const char *path, int flags, int mode) {
+turbo_file_t turbo_fs_open(const char *path, int flags, int mode) {
   if (!path) {
     return TURBO_INVALID_FILE;
   }
@@ -439,7 +446,7 @@ turbo_file_t turbo_fs_open_sync(const char *path, int flags, int mode) {
   return fd;
 }
 
-int turbo_fs_read_sync(turbo_file_t fd, char *buf, size_t len) {
+int turbo_fs_read(turbo_file_t fd, char *buf, size_t len) {
   if (fd == TURBO_INVALID_FILE || !buf) {
     return UV_EINVAL;
   }
@@ -452,7 +459,7 @@ int turbo_fs_read_sync(turbo_file_t fd, char *buf, size_t len) {
   return err;
 }
 
-int turbo_fs_write_sync(turbo_file_t fd, const char *data, size_t len) {
+int turbo_fs_write(turbo_file_t fd, const char *data, size_t len) {
   if (fd == TURBO_INVALID_FILE || !data) {
     return UV_EINVAL;
   }
@@ -465,7 +472,7 @@ int turbo_fs_write_sync(turbo_file_t fd, const char *data, size_t len) {
   return err;
 }
 
-int turbo_fs_close_sync(turbo_file_t fd) {
+int turbo_fs_close(turbo_file_t fd) {
   if (fd == TURBO_INVALID_FILE) {
     return UV_EINVAL;
   }
@@ -476,7 +483,7 @@ int turbo_fs_close_sync(turbo_file_t fd) {
   return err;
 }
 
-int turbo_fs_fsync_sync(turbo_file_t fd) {
+int turbo_fs_fsync(turbo_file_t fd) {
   if (fd == TURBO_INVALID_FILE) {
     return UV_EINVAL;
   }
@@ -487,7 +494,7 @@ int turbo_fs_fsync_sync(turbo_file_t fd) {
   return err;
 }
 
-int turbo_fs_rename_sync(const char *old_path, const char *new_path) {
+int turbo_fs_rename(const char *old_path, const char *new_path) {
   if (!old_path || !new_path) {
     return UV_EINVAL;
   }
@@ -498,7 +505,7 @@ int turbo_fs_rename_sync(const char *old_path, const char *new_path) {
   return err;
 }
 
-int64_t turbo_fs_tell_sync(turbo_file_t fd) {
+int64_t turbo_fs_tell(turbo_file_t fd) {
   if (fd == TURBO_INVALID_FILE) {
     return UV_EINVAL;
   }
@@ -523,7 +530,7 @@ int64_t turbo_fs_tell_sync(turbo_file_t fd) {
 #endif
 }
 
-int64_t turbo_fs_seek_sync(turbo_file_t fd, int64_t offset, int whence) {
+int64_t turbo_fs_seek(turbo_file_t fd, int64_t offset, int whence) {
   if (fd == TURBO_INVALID_FILE) {
     return UV_EINVAL;
   }
@@ -533,168 +540,4 @@ int64_t turbo_fs_seek_sync(turbo_file_t fd, int64_t offset, int whence) {
 #else
   return lseek(fd, offset, whence);
 #endif
-}
-
-// =============================================================================
-// Asynchronous File Operations - kernel-level async I/O (io_uring/IOCP)
-// =============================================================================
-
-#include "turbo_aio.h"
-
-/* Global async context - lazy initialized */
-static turbo_aio_ctx_t *g_aio_ctx = NULL;
-
-static turbo_aio_ctx_t *turbo_fs_get_aio_ctx(void) {
-    if (!g_aio_ctx) {
-        g_aio_ctx = turbo_aio_create(256);
-    }
-    return g_aio_ctx;
-}
-
-/* Adapter: turbo_aio callback -> turbo_fs callback */
-typedef struct {
-    turbo_fs_cb cb;
-    void *user_data;
-} fs_aio_adapter_t;
-
-static void fs_aio_open_cb(turbo_aio_op_t *op, int result, void *user_data) {
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)user_data;
-    if (adapter->cb) {
-        adapter->cb(result, adapter->user_data);
-    }
-    free(adapter);
-}
-
-static void fs_aio_read_cb(turbo_aio_op_t *op, int result, void *user_data) {
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)user_data;
-    if (adapter->cb) {
-        adapter->cb(result, adapter->user_data);
-    }
-    free(adapter);
-}
-
-static void fs_aio_close_cb(turbo_aio_op_t *op, int result, void *user_data) {
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)user_data;
-    if (adapter->cb) {
-        adapter->cb(result, adapter->user_data);
-    }
-    free(adapter);
-}
-
-static int turbo_fs_flags_to_aio(int flags) {
-    int aio_flags = 0;
-    if (flags & TURBO_FS_O_RDONLY) aio_flags |= TURBO_AIO_O_RDONLY;
-    if (flags & TURBO_FS_O_WRONLY) aio_flags |= TURBO_AIO_O_WRONLY;
-    if (flags & TURBO_FS_O_RDWR)   aio_flags |= TURBO_AIO_O_RDWR;
-    if (flags & TURBO_FS_O_CREAT)  aio_flags |= TURBO_AIO_O_CREAT;
-    if (flags & TURBO_FS_O_TRUNC)  aio_flags |= TURBO_AIO_O_TRUNC;
-    if (flags & TURBO_FS_O_APPEND) aio_flags |= TURBO_AIO_O_APPEND;
-    return aio_flags;
-}
-
-int turbo_fs_open_async(const char *path, int flags, int mode, turbo_fs_cb cb,
-                        void *user_data) {
-    if (!path) return -1;
-
-    turbo_aio_ctx_t *ctx = turbo_fs_get_aio_ctx();
-    if (!ctx) return -1;
-
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)calloc(1, sizeof(fs_aio_adapter_t));
-    if (!adapter) return -1;
-
-    adapter->cb = cb;
-    adapter->user_data = user_data;
-
-    int aio_flags = turbo_fs_flags_to_aio(flags);
-    int err = turbo_aio_open(ctx, path, aio_flags, mode, fs_aio_open_cb, adapter);
-    if (err != TURBO_AIO_OK) {
-        free(adapter);
-        return err;
-    }
-
-    turbo_aio_submit(ctx);
-    return 0;
-}
-
-int turbo_fs_read_async(turbo_file_t fd, char *buf, size_t len, turbo_fs_cb cb,
-                        void *user_data) {
-    if (fd == TURBO_INVALID_FILE || !buf) return -1;
-
-    turbo_aio_ctx_t *ctx = turbo_fs_get_aio_ctx();
-    if (!ctx) return -1;
-
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)calloc(1, sizeof(fs_aio_adapter_t));
-    if (!adapter) return -1;
-
-    adapter->cb = cb;
-    adapter->user_data = user_data;
-
-    int err = turbo_aio_read(ctx, fd, buf, len, -1, fs_aio_read_cb, adapter);
-    if (err != TURBO_AIO_OK) {
-        free(adapter);
-        return err;
-    }
-
-    turbo_aio_submit(ctx);
-    return 0;
-}
-
-int turbo_fs_close_async(turbo_file_t fd, turbo_fs_cb cb, void *user_data) {
-    if (fd == TURBO_INVALID_FILE) return -1;
-
-    turbo_aio_ctx_t *ctx = turbo_fs_get_aio_ctx();
-    if (!ctx) return -1;
-
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)calloc(1, sizeof(fs_aio_adapter_t));
-    if (!adapter) return -1;
-
-    adapter->cb = cb;
-    adapter->user_data = user_data;
-
-    int err = turbo_aio_close(ctx, fd, fs_aio_close_cb, adapter);
-    if (err != TURBO_AIO_OK) {
-        free(adapter);
-        return err;
-    }
-
-    turbo_aio_submit(ctx);
-    return 0;
-}
-
-
-static void fs_aio_write_cb(turbo_aio_op_t *op, int result, void *user_data) {
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)user_data;
-    if (adapter->cb) {
-        adapter->cb(result, adapter->user_data);
-    }
-    free(adapter);
-}
-
-int turbo_fs_write_async(turbo_file_t fd, const char *buf, size_t len, turbo_fs_cb cb,
-                         void *user_data) {
-    if (fd == TURBO_INVALID_FILE || !buf) return -1;
-
-    turbo_aio_ctx_t *ctx = turbo_fs_get_aio_ctx();
-    if (!ctx) return -1;
-
-    fs_aio_adapter_t *adapter = (fs_aio_adapter_t *)calloc(1, sizeof(fs_aio_adapter_t));
-    if (!adapter) return -1;
-
-    adapter->cb = cb;
-    adapter->user_data = user_data;
-
-    int err = turbo_aio_write(ctx, fd, buf, len, -1, fs_aio_write_cb, adapter);
-    if (err != TURBO_AIO_OK) {
-        free(adapter);
-        return err;
-    }
-
-    turbo_aio_submit(ctx);
-    return 0;
-}
-
-int turbo_fs_poll_async(uint32_t min_completions, int timeout_ms) {
-    turbo_aio_ctx_t *ctx = turbo_fs_get_aio_ctx();
-    if (!ctx) return -1;
-    return turbo_aio_poll(ctx, min_completions, timeout_ms);
 }

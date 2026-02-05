@@ -1516,7 +1516,6 @@ void http_client_set_jwt_auth(http_client_t *client, const char *secret, const c
   free(token);
 }
 
-
 void http_client_clear_auth(http_client_t *client) {
   if (!client)
     return;
@@ -1972,7 +1971,7 @@ void http_multipart_form_destroy(http_multipart_form_t *form) {
     /* Clean up streaming context if present */
     if (part->stream_ctx) {
       if (part->stream_ctx->fd != TURBO_INVALID_FILE) {
-        turbo_fs_close_sync(part->stream_ctx->fd);
+        turbo_fs_close(part->stream_ctx->fd);
       }
       free(part->stream_ctx->file_path);
       free(part->stream_ctx->chunk_buf);
@@ -2034,7 +2033,7 @@ int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *f
 
   /* Use turbo_fs to stat the file */
   turbo_fs_stat_t st;
-  if (turbo_fs_stat_sync(file_path, &st) != 0) {
+  if (turbo_fs_stat(file_path, &st) != 0) {
     return -1;
   }
 
@@ -2086,7 +2085,7 @@ int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *f
   return 0;
 }
 
-/* Helper to send data as HTTP chunk: <hex-size>\r\n<data>\r\n 
+/* Helper to send data as HTTP chunk: <hex-size>\r\n<data>\r\n
  * Splits large data into smaller chunks to avoid buffer overflow */
 static void send_sync_http_chunk(sync_client_t *client, const char *data, size_t len) {
   if (len == 0)
@@ -2188,16 +2187,18 @@ static char *build_multipart_body(http_multipart_form_t *form, size_t *body_len)
 
     /* Data */
     if (part->is_stream && part->stream_ctx) {
-      turbo_file_t fd = turbo_fs_open_sync(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
+      turbo_file_t fd = turbo_fs_open(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
       if (fd != TURBO_INVALID_FILE) {
         size_t total_read = 0;
         while (total_read < (size_t)part->stream_ctx->file_size) {
-            int nread = turbo_fs_read_sync(fd, p + total_read, (size_t)part->stream_ctx->file_size - total_read);
-            if (nread <= 0) break;
-            total_read += nread;
+          int nread =
+              turbo_fs_read(fd, p + total_read, (size_t)part->stream_ctx->file_size - total_read);
+          if (nread <= 0)
+            break;
+          total_read += nread;
         }
         p += total_read;
-        turbo_fs_close_sync(fd);
+        turbo_fs_close(fd);
       }
     } else if (part->is_file) {
       memcpy(p, part->data, part->data_len);
@@ -2298,7 +2299,8 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   int uri_port = turbo_uri_port(p_uri);
   const char *uri_scheme = turbo_uri_scheme(p_uri);
   int is_tls = (strcasecmp(uri_scheme, "https") == 0);
-  if (uri_port == 0) uri_port = is_tls ? 443 : 80;
+  if (uri_port == 0)
+    uri_port = is_tls ? 443 : 80;
 
   /* Establish connection */
   if (establish_connection(client, uri_host, uri_port, is_tls) != 0) {
@@ -2314,9 +2316,7 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   /* Build Request Line and Headers */
   char request_line[1024];
   stbsp_snprintf(request_line, sizeof(request_line), "POST %s%s%s HTTP/1.1\r\n",
-                 uri_path[0] ? uri_path : "/",
-                 uri_query[0] ? "?" : "",
-                 uri_query);
+                 uri_path[0] ? uri_path : "/", uri_query[0] ? "?" : "", uri_query);
 
   char host_hdr[512];
   stbsp_snprintf(host_hdr, sizeof(host_hdr), "Host: %s\r\n", uri_host);
@@ -2325,7 +2325,8 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   stbsp_snprintf(ua_hdr, sizeof(ua_hdr), "User-Agent: %s\r\n", client->user_agent);
 
   char ct_hdr[256];
-  stbsp_snprintf(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary=%s\r\n", form->boundary);
+  stbsp_snprintf(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary=%s\r\n",
+                 form->boundary);
 
   char te_hdr[] = "Transfer-Encoding: chunked\r\n";
   char conn_hdr[] = "Connection: keep-alive\r\n\r\n";
@@ -2336,7 +2337,7 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   sync_client_send(client->client, ua_hdr, strlen(ua_hdr));
   sync_client_send(client->client, ct_hdr, strlen(ct_hdr));
   sync_client_send(client->client, te_hdr, strlen(te_hdr));
-  
+
   if (client->auth_header) {
     sync_client_send(client->client, client->auth_header, strlen(client->auth_header));
     sync_client_send(client->client, "\r\n", 2);
@@ -2350,25 +2351,26 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
     char part_header[512];
     if (part->is_file) {
       stbsp_snprintf(part_header, sizeof(part_header),
-                     "--%s\r\nContent-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
+                     "--%s\r\nContent-Disposition: form-data; name=\"%s\"; "
+                     "filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
                      form->boundary, part->name, part->filename, part->content_type);
     } else {
       stbsp_snprintf(part_header, sizeof(part_header),
-                     "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n",
-                     form->boundary, part->name);
+                     "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n", form->boundary,
+                     part->name);
     }
 
     send_sync_http_chunk(client->client, part_header, strlen(part_header));
 
     if (part->is_stream && part->stream_ctx) {
-      turbo_file_t fd = turbo_fs_open_sync(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
+      turbo_file_t fd = turbo_fs_open(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
       if (fd != TURBO_INVALID_FILE) {
         char buf[8192];
         int nread;
-        while ((nread = turbo_fs_read_sync(fd, buf, sizeof(buf))) > 0) {
+        while ((nread = turbo_fs_read(fd, buf, sizeof(buf))) > 0) {
           send_sync_http_chunk(client->client, buf, (size_t)nread);
         }
-        turbo_fs_close_sync(fd);
+        turbo_fs_close(fd);
       }
     } else if (part->data && part->data_len > 0) {
       send_sync_http_chunk(client->client, part->data, part->data_len);
@@ -2388,22 +2390,23 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   /* Receive Response (simplified) */
   /* Reuse logic from http_request_internal is hard, so this is a simplified receive */
   /* In a real implementation we should call http_request_internal with a flag or refactor it */
-  
+
   /* For now, just reuse http_request_internal's receive part by refactoring is better.
      But since I want to just implement it, I'll provide a basic receive loop or better,
      I'll refactor http_request_internal to support "already sent headers/body".
      Actually, let's keep it simple for now and use a generic receive. */
-     
+
   char *full_buffer = NULL;
   size_t total_received = 0;
   size_t buffer_capacity = 65536;
   full_buffer = malloc(buffer_capacity);
-  
+
   int timeout = client->read_timeout_ms > 0 ? client->read_timeout_ms : 5000;
   while (1) {
     char *chunk = NULL;
     size_t chunk_size = 0;
-    sync_client_status_t status = sync_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
+    sync_client_status_t status =
+        sync_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
     if (status != SYNC_CLIENT_STATUS_OK || !chunk || chunk_size == 0) {
       free(chunk);
       break;
@@ -2434,7 +2437,7 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   parser.data = &ctx;
   llhttp_execute(&parser, full_buffer, total_received);
   free(full_buffer);
-  
+
   turbo_free_uri(&p_uri);
   return response;
 }
@@ -2644,8 +2647,8 @@ http_response_t *http_download_file(http_client_t *client, const char *url,
   }
 
   /* Open output file first */
-  turbo_file_t fd = turbo_fs_open_sync(output_path, 
-      TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
+  turbo_file_t fd =
+      turbo_fs_open(output_path, TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
   if (fd == TURBO_INVALID_FILE) {
     http_response_t *response = calloc(1, sizeof(http_response_t));
     response->error = strdup("Failed to open output file");
@@ -2657,13 +2660,13 @@ http_response_t *http_download_file(http_client_t *client, const char *url,
   http_response_t *response = http_get(client, url);
 
   if (response->error || !response->body) {
-    turbo_fs_close_sync(fd);
+    turbo_fs_close(fd);
     return response;
   }
 
   /* Write body to file */
-  int written = turbo_fs_write_sync(fd, response->body, response->body_len);
-  turbo_fs_close_sync(fd);
+  int written = turbo_fs_write(fd, response->body, response->body_len);
+  turbo_fs_close(fd);
 
   if (written < 0 || (size_t)written != response->body_len) {
     response->error = pool_strdup((MemoryPool *)response->pool, "Failed to write file");
@@ -3049,12 +3052,14 @@ http_response_t *http_request_builder_execute(http_request_builder_t *builder) {
   return response;
 }
 
-int http_response_decode_jwt(http_response_t *response, const uint8_t *key, size_t key_len, uint32_t options, void **jwt) {
+int http_response_decode_jwt(http_response_t *response, const uint8_t *key, size_t key_len,
+                             uint32_t options, void **jwt) {
   if (!response || !response->body || !jwt)
     return CJWTE_INVALID_PARAMETERS;
 
   int64_t current_time = (int64_t)time(NULL);
-  return (int)cjwt_decode(response->body, response->body_len, options, key, key_len, current_time, 0, (cjwt_t **)jwt);
+  return (int)cjwt_decode(response->body, response->body_len, options, key, key_len, current_time,
+                          0, (cjwt_t **)jwt);
 }
 
 void http_jwt_destroy(void *jwt) {

@@ -28,22 +28,7 @@
   #define UV_ENOMEM (-12)
 #endif
 
-// Timer structure - opaque to users but defined here
-struct turbo_timer_s {
-  uv_timer_t uv_timer;
-  turbo_timer_cb callback;
-  uint64_t timeout;
-  uint64_t repeat;
-  void *data;
-};
 
-// Internal callback bridge from libuv to our API
-static void turbo_timer_uv_cb(uv_timer_t *uv_timer) {
-  turbo_timer_t *timer = (turbo_timer_t *)uv_timer->data;
-  if (timer && timer->callback) {
-    timer->callback(timer);
-  }
-}
 
 // ============================================================================
 // Mutex utilities - native platform synchronization
@@ -405,63 +390,7 @@ void turbo_sleep_ms(uint32_t ms) {
 #endif
 }
 
-// =============================================================================
-// Timer utilities - non-blocking async timers based on libuv
-// =============================================================================
 
-int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout, uint64_t repeat) {
-  if (timer == NULL || cb == NULL) {
-    return UV_EINVAL;
-  }
-
-  // Store callback and timing info
-  timer->callback = cb;
-  timer->timeout = timeout;
-  timer->repeat = repeat;
-
-  // Start libuv timer
-  int err = uv_timer_start(&timer->uv_timer, turbo_timer_uv_cb, timeout, repeat);
-  if (err != 0) {
-    TLOG_ERROR("uv_timer_start failed: {}", uv_strerror(err));
-    return err;
-  }
-
-  TLOG_DEBUG("Timer started: timeout={} ms, repeat={} ms", (unsigned long long)timeout,
-            (unsigned long long)repeat);
-  return 0;
-}
-
-int turbo_timer_stop(turbo_timer_t *timer) {
-  if (timer == NULL) {
-    return UV_EINVAL;
-  }
-
-  int err = uv_timer_stop(&timer->uv_timer);
-  if (err != 0) {
-    TLOG_ERROR("uv_timer_stop failed: {}", uv_strerror(err));
-    return err;
-  }
-
-  TLOG_DEBUG("Timer stopped");
-  return 0;
-}
-
-void turbo_timer_close(turbo_timer_t *timer) {
-  if (timer == NULL) {
-    return;
-  }
-
-  // Stop timer first
-  uv_timer_stop(&timer->uv_timer);
-
-  // Close handle (this is async, but we don't need callback)
-  uv_close((uv_handle_t *)&timer->uv_timer, NULL);
-
-  // Clear callback to prevent accidental calls
-  timer->callback = NULL;
-
-  TLOG_DEBUG("Timer closed");
-}
 
 // =============================================================================
 // Time utilities - high-resolution native platform timing
@@ -545,79 +474,221 @@ uint64_t turbo_uptime_ms(void) {
     return turbo_ns_to_ms(turbo_hrtime() - start_time);
 }
 
+
+
 // =============================================================================
-// Timer utilities - implement missing functions
+// Native OS Timer - uses system timer facilities (most efficient)
 // =============================================================================
+
+#ifdef _WIN32
+// Windows implementation using CreateTimerQueueTimer
+
+struct turbo_native_timer_s {
+  HANDLE timer_handle;
+  turbo_timer_cb callback;
+  void *data;
+  uint64_t timeout;
+  uint64_t repeat;
+  int active;
+};
+
+// Windows timer callback wrapper
+static VOID CALLBACK native_timer_callback_win32(PVOID lpParameter, BOOLEAN TimerOrWaitFired) {
+  UNUSED(TimerOrWaitFired);
+  turbo_timer_t *timer = (turbo_timer_t *)lpParameter;
+  if (timer && timer->callback) {
+    timer->callback(timer);
+  }
+}
 
 turbo_timer_t *turbo_timer_create(void *loop) {
-  if (loop == NULL) {
-    return NULL;
-  }
-
+  UNUSED(loop);
   turbo_timer_t *timer = malloc(sizeof(turbo_timer_t));
   if (!timer) {
     return NULL;
   }
-
-  if (turbo_timer_init(timer, loop) != 0) {
-    free(timer);
-    return NULL;
-  }
-
+  
+  memset(timer, 0, sizeof(*timer));
+  TLOG_DEBUG("Timer created (Native Windows)");
   return timer;
 }
 
-static void on_timer_destroy_close(uv_handle_t *handle) {
-  turbo_timer_t *timer = (turbo_timer_t *)handle->data;
-  if (timer) {
-    free(timer);
+void turbo_timer_destroy(turbo_timer_t *timer) {
+  if (!timer) {
+    return;
   }
+  
+  turbo_timer_stop(timer);
+  free(timer);
+  TLOG_DEBUG("Timer destroyed");
+}
+
+int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb,
+                      uint64_t timeout, uint64_t repeat) {
+  if (!timer || !cb) {
+    return UV_EINVAL;
+  }
+  
+  // Stop existing timer if running
+  turbo_timer_stop(timer);
+  
+  timer->callback = cb;
+  timer->timeout = timeout;
+  timer->repeat = repeat;
+  
+  // CreateTimerQueueTimer parameters:
+  // - NULL = use default timer queue
+  // - DueTime in ms
+  // - Period in ms (0 for one-shot)
+  // - WT_EXECUTEDEFAULT = execute in timer thread pool
+  BOOL result = CreateTimerQueueTimer(
+    &timer->timer_handle,
+    NULL,  // Use default timer queue
+    native_timer_callback_win32,
+    timer,
+    (DWORD)timeout,
+    (DWORD)repeat,
+    WT_EXECUTEDEFAULT
+  );
+  
+  if (!result) {
+    TLOG_ERROR("CreateTimerQueueTimer failed: {}", GetLastError());
+    return -1;
+  }
+  
+  timer->active = 1;
+  TLOG_DEBUG("Timer started: timeout={} ms, repeat={} ms",
+             (unsigned long long)timeout, (unsigned long long)repeat);
+  return 0;
+}
+
+int turbo_timer_stop(turbo_timer_t *timer) {
+  if (!timer || !timer->active) {
+    return 0;
+  }
+  
+  if (timer->timer_handle) {
+    // Delete timer and wait for callbacks to complete
+    DeleteTimerQueueTimer(NULL, timer->timer_handle, INVALID_HANDLE_VALUE);
+    timer->timer_handle = NULL;
+  }
+  
+  timer->active = 0;
+  TLOG_DEBUG("Timer stopped");
+  return 0;
+}
+
+#else
+// POSIX implementation using timer_create with SIGEV_THREAD
+
+#include <signal.h>
+#include <time.h>
+
+struct turbo_native_timer_s {
+  timer_t timerid;
+  turbo_timer_cb callback;
+  void *data;
+  uint64_t timeout;
+  uint64_t repeat;
+  int active;
+};
+
+// POSIX timer callback wrapper
+static void native_timer_callback_posix(union sigval sv) {
+  turbo_timer_t *timer = (turbo_timer_t *)sv.sival_ptr;
+  if (timer && timer->callback) {
+    timer->callback(timer);
+  }
+}
+
+turbo_timer_t *turbo_timer_create(void *loop) {
+  UNUSED(loop);
+  turbo_timer_t *timer = malloc(sizeof(turbo_timer_t));
+  if (!timer) {
+    return NULL;
+  }
+  
+  memset(timer, 0, sizeof(*timer));
+  
+  // Create POSIX timer with SIGEV_THREAD (callback in new thread)
+  struct sigevent sev;
+  memset(&sev, 0, sizeof(sev));
+  sev.sigev_notify = SIGEV_THREAD;
+  sev.sigev_notify_function = native_timer_callback_posix;
+  sev.sigev_value.sival_ptr = timer;
+  
+  if (timer_create(CLOCK_MONOTONIC, &sev, &timer->timerid) == -1) {
+    TLOG_ERROR("timer_create failed: {}", strerror(errno));
+    free(timer);
+    return NULL;
+  }
+  
+  TLOG_DEBUG("Timer created (Native POSIX)");
+  return timer;
 }
 
 void turbo_timer_destroy(turbo_timer_t *timer) {
-  if (timer == NULL) {
+  if (!timer) {
     return;
   }
-
-  // Stop timer
+  
   turbo_timer_stop(timer);
-
-  // Clear callback
-  timer->callback = NULL;
-
-  // Store pointer for close callback
-  timer->uv_timer.data = timer;
-
-  // Close handle - memory freed in callback
-  if (!uv_is_closing((uv_handle_t *)&timer->uv_timer)) {
-    uv_close((uv_handle_t *)&timer->uv_timer, on_timer_destroy_close);
-  } else {
-    // Already closing, free immediately (shouldn't happen normally)
-    free(timer);
-  }
+  timer_delete(timer->timerid);
+  free(timer);
+  TLOG_DEBUG("Timer destroyed");
 }
 
-int turbo_timer_init(turbo_timer_t *timer, void *loop) {
-  if (timer == NULL || loop == NULL) {
+int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb,
+                      uint64_t timeout, uint64_t repeat) {
+  if (!timer || !cb) {
     return UV_EINVAL;
   }
-
-  // Clear the timer structure
-  memset(timer, 0, sizeof(*timer));
-
-  // Initialize libuv timer with provided loop
-  int err = uv_timer_init((uv_loop_t *)loop, &timer->uv_timer);
-  if (err != 0) {
-    TLOG_ERROR("uv_timer_init failed: {}", uv_strerror(err));
-    return err;
+  
+  timer->callback = cb;
+  timer->timeout = timeout;
+  timer->repeat = repeat;
+  
+  struct itimerspec its;
+  memset(&its, 0, sizeof(its));
+  
+  // Initial expiration
+  its.it_value.tv_sec = timeout / 1000;
+  its.it_value.tv_nsec = (timeout % 1000) * 1000000;
+  
+  // Repeat interval (0 for one-shot)
+  its.it_interval.tv_sec = repeat / 1000;
+  its.it_interval.tv_nsec = (repeat % 1000) * 1000000;
+  
+  if (timer_settime(timer->timerid, 0, &its, NULL) == -1) {
+    TLOG_ERROR("timer_settime failed: {}", strerror(errno));
+    return -1;
   }
-
-  // Link back to our timer
-  timer->uv_timer.data = timer;
-
-  TLOG_DEBUG("Timer initialized with provided loop");
+  
+  timer->active = 1;
+  TLOG_DEBUG("Timer started: timeout={} ms, repeat={} ms",
+             (unsigned long long)timeout, (unsigned long long)repeat);
   return 0;
 }
+
+int turbo_timer_stop(turbo_timer_t *timer) {
+  if (!timer || !timer->active) {
+    return 0;
+  }
+  
+  // Disarm timer by setting it_value to 0
+  struct itimerspec its;
+  memset(&its, 0, sizeof(its));
+  
+  timer_settime(timer->timerid, 0, &its, NULL);
+  timer->active = 0;
+  
+  TLOG_DEBUG("Timer stopped");
+  return 0;
+}
+
+#endif
+
+// Common functions for both platforms
 
 void turbo_timer_set_data(turbo_timer_t *timer, void *data) {
   if (timer) {
@@ -625,21 +696,14 @@ void turbo_timer_set_data(turbo_timer_t *timer, void *data) {
   }
 }
 
-void *turbo_timer_get_data(turbo_timer_t *timer) { return timer ? timer->data : NULL; }
-
-uint64_t turbo_timer_get_due_in(turbo_timer_t *timer) {
-  if (!timer) {
-    return 0;
-  }
-  return uv_timer_get_due_in(&timer->uv_timer);
+void *turbo_timer_get_data(turbo_timer_t *timer) {
+  return timer ? timer->data : NULL;
 }
 
 uint64_t turbo_timer_get_repeat(turbo_timer_t *timer) {
-  if (!timer) {
-    return 0;
-  }
-  return uv_timer_get_repeat(&timer->uv_timer);
+  return timer ? timer->repeat : 0;
 }
+
 
 // =============================================================================
 // String utilities - safe string duplication with padding for stb_sprintf
@@ -714,4 +778,12 @@ char *turbo_url_encode(const char *str) {
   memset(p, 0, 8);
 
   return encoded;
+}
+
+int turbo_getpid(void) {
+#ifdef _WIN32
+  return (int)GetCurrentProcessId();
+#else
+  return (int)getpid();
+#endif
 }

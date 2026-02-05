@@ -33,3 +33,24 @@ foreach(test_name ${HTTP_TESTS})
   # Add as CTest
   add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+# BDD Tests
+set(HTTP_BDD_TESTS
+    test_basic_bdd
+    test_requests_bdd
+    test_parsing_bdd
+    test_headers_auth_bdd)
+
+foreach(test_name ${HTTP_BDD_TESTS})
+  add_executable(${test_name} ${test_name}.c)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::HttpAsyncClient bdd)
+  set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
+  
+  if(WIN32)
+    target_compile_definitions(${test_name} PRIVATE WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+    target_link_libraries(${test_name} PRIVATE ws2_32 advapi32)
+  endif()
+  
+  add_sanitizers(${test_name})
+  add_test(NAME ${test_name} COMMAND ${test_name})
+endforeach()

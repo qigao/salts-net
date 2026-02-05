@@ -41,7 +41,7 @@ typedef struct {
 // =============================================================================
 
 /**
- * @brief Read an entire file synchronously (blocking)
+ * @brief Read an entire file
  *
  * This function reads the entire contents of a file into a buffer.
  * Memory is allocated automatically and must be freed with turbo_fs_buf_free().
@@ -53,10 +53,10 @@ typedef struct {
  * @note Blocks until the entire file is read or an error occurs
  * @note Use turbo_fs_buf_free() to release the buffer when done
  */
-CXX_C_API int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf);
+CXX_C_API int turbo_fs_read_file(const char *path, turbo_fs_buf_t *buf);
 
 /**
- * @brief Write data to a file synchronously (blocking)
+ * @brief Write data to a file
  *
  * This function writes a buffer of data to a file, creating it if necessary.
  *
@@ -67,10 +67,10 @@ CXX_C_API int turbo_fs_read_file_sync(const char *path, turbo_fs_buf_t *buf);
  * @note Blocks until the entire buffer is written or an error occurs
  * @note Creates the file if it doesn't exist, overwrites if it does
  */
-CXX_C_API int turbo_fs_write_file_sync(const char *path, const turbo_fs_buf_t *buf);
+CXX_C_API int turbo_fs_write_file(const char *path, const turbo_fs_buf_t *buf);
 
 /**
- * @brief Get file information synchronously (blocking)
+ * @brief Get file information
  *
  * This function retrieves metadata about a file or directory.
  *
@@ -81,10 +81,10 @@ CXX_C_API int turbo_fs_write_file_sync(const char *path, const turbo_fs_buf_t *b
  * @note Works on both files and directories
  * @note Provides size, permissions, timestamps, and file type information
  */
-CXX_C_API int turbo_fs_stat_sync(const char *path, turbo_fs_stat_t *stat);
+CXX_C_API int turbo_fs_stat(const char *path, turbo_fs_stat_t *stat);
 
 /**
- * @brief Create a directory synchronously (blocking)
+ * @brief Create a directory
  *
  * @param path Directory path to create
  * @param mode Directory permissions (e.g., 0755)
@@ -93,27 +93,27 @@ CXX_C_API int turbo_fs_stat_sync(const char *path, turbo_fs_stat_t *stat);
  * @note Parent directories must exist
  * @note Permissions are ignored on Windows platforms
  */
-CXX_C_API int turbo_fs_mkdir_sync(const char *path, int mode);
+CXX_C_API int turbo_fs_mkdir(const char *path, int mode);
 
 /**
- * @brief Remove a directory synchronously (blocking)
+ * @brief Remove a directory
  *
  * @param path Directory path to remove
  * @return 0 on success, negative error code on failure
  *
  * @note Directory must be empty
  */
-CXX_C_API int turbo_fs_rmdir_sync(const char *path);
+CXX_C_API int turbo_fs_rmdir(const char *path);
 
 /**
- * @brief Delete a file synchronously (blocking)
+ * @brief Delete a file
  *
  * @param path File path to delete
  * @return 0 on success, negative error code on failure
  *
  * @note Only works on files, not directories
  */
-CXX_C_API int turbo_fs_unlink_sync(const char *path);
+CXX_C_API int turbo_fs_unlink(const char *path);
 
 // =============================================================================
 // File System Utilities - cross-platform helpers
@@ -207,34 +207,34 @@ typedef int turbo_file_t;
 // =============================================================================
 
 /**
- * @brief Open a file synchronously
+ * @brief Open a file
  *
  * @param path File path to open
  * @param flags Open flags (TURBO_FS_O_*)
  * @param mode File permissions for new files (e.g., 0644)
  * @return File handle on success, TURBO_INVALID_FILE on failure
  */
-CXX_C_API turbo_file_t turbo_fs_open_sync(const char *path, int flags, int mode);
+CXX_C_API turbo_file_t turbo_fs_open(const char *path, int flags, int mode);
 
 /**
- * @brief Read from an open file synchronously
+ * @brief Read from an open file
  *
- * @param fd File handle from turbo_fs_open_sync
+ * @param fd File handle from turbo_fs_open
  * @param buf Buffer to store read data
  * @param len Maximum number of bytes to read
  * @return Number of bytes read, or negative error code
  */
-CXX_C_API int turbo_fs_read_sync(turbo_file_t fd, char *buf, size_t len);
+CXX_C_API int turbo_fs_read(turbo_file_t fd, char *buf, size_t len);
 
 /**
- * @brief Write to an open file synchronously
+ * @brief Write to an open file
  *
- * @param fd File handle from turbo_fs_open_sync
+ * @param fd File handle from turbo_fs_open
  * @param data Data to write
  * @param len Number of bytes to write
  * @return Number of bytes written, or negative error code
  */
-CXX_C_API int turbo_fs_write_sync(turbo_file_t fd, const char *data, size_t len);
+CXX_C_API int turbo_fs_write(turbo_file_t fd, const char *data, size_t len);
 
 /**
  * @brief Close an open file
@@ -242,7 +242,7 @@ CXX_C_API int turbo_fs_write_sync(turbo_file_t fd, const char *data, size_t len)
  * @param fd File handle to close
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int turbo_fs_close_sync(turbo_file_t fd);
+CXX_C_API int turbo_fs_close(turbo_file_t fd);
 
 /**
  * @brief Flush file buffers to disk
@@ -250,16 +250,16 @@ CXX_C_API int turbo_fs_close_sync(turbo_file_t fd);
  * @param fd File handle to flush
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int turbo_fs_fsync_sync(turbo_file_t fd);
+CXX_C_API int turbo_fs_fsync(turbo_file_t fd);
 
 /**
- * @brief Rename/move a file synchronously
+ * @brief Rename/move a file
  *
  * @param old_path Current file path
  * @param new_path New file path
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int turbo_fs_rename_sync(const char *old_path, const char *new_path);
+CXX_C_API int turbo_fs_rename(const char *old_path, const char *new_path);
 
 /**
  * @brief Get current file position
@@ -267,7 +267,7 @@ CXX_C_API int turbo_fs_rename_sync(const char *old_path, const char *new_path);
  * @param fd File handle
  * @return Current position, or negative error code
  */
-CXX_C_API int64_t turbo_fs_tell_sync(turbo_file_t fd);
+CXX_C_API int64_t turbo_fs_tell(turbo_file_t fd);
 
 /**
  * @brief Seek to position in file
@@ -277,79 +277,7 @@ CXX_C_API int64_t turbo_fs_tell_sync(turbo_file_t fd);
  * @param whence SEEK_SET, SEEK_CUR, or SEEK_END
  * @return New position, or negative error code
  */
-CXX_C_API int64_t turbo_fs_seek_sync(turbo_file_t fd, int64_t offset, int whence);
-
-// =============================================================================
-// Asynchronous File Operations - non-blocking I/O
-// =============================================================================
-
-/**
- * @brief Callback for asynchronous file operations
- *
- * @param result Status code (0 on success, negative on error) or bytes read/written
- * @param user_data User-defined data
- */
-typedef void (*turbo_fs_cb)(int result, void *user_data);
-
-/**
- * @brief Open a file asynchronously
- *
- * @param path File path to open
- * @param flags Open flags (TURBO_FS_O_*)
- * @param mode File permissions for new files (e.g., 0644)
- * @param cb Callback function called when done
- * @param user_data User-defined data passed to callback
- * @return 0 if the operation started successfully, negative on error
- */
-CXX_C_API int turbo_fs_open_async(const char *path, int flags, int mode, turbo_fs_cb cb,
-                                  void *user_data);
-
-/**
- * @brief Read from an open file asynchronously
- *
- * @param fd File handle
- * @param buf Buffer to store read data
- * @param len Maximum number of bytes to read
- * @param cb Callback function called when done (result is number of bytes read)
- * @param user_data User-defined data passed to callback
- * @return 0 if the operation started successfully, negative on error
- */
-CXX_C_API int turbo_fs_read_async(turbo_file_t fd, char *buf, size_t len, turbo_fs_cb cb,
-                                  void *user_data);
-
-/**
- * @brief Close an open file asynchronously
- *
- * @param fd File handle to close
- * @param cb Callback function called when done
- * @param user_data User-defined data passed to callback
- * @return 0 if the operation started successfully, negative on error
- */
-CXX_C_API int turbo_fs_close_async(turbo_file_t fd, turbo_fs_cb cb, void *user_data);
-
-/**
- * @brief Write to an open file asynchronously
- *
- * @param fd File handle
- * @param buf Buffer containing data to write
- * @param len Number of bytes to write
- * @param cb Callback function called when done (result is number of bytes written)
- * @param user_data User-defined data passed to callback
- * @return 0 if the operation started successfully, negative on error
- */
-CXX_C_API int turbo_fs_write_async(turbo_file_t fd, const char *buf, size_t len, turbo_fs_cb cb,
-                                   void *user_data);
-
-/**
- * @brief Poll for async I/O completions
- *
- * Call this to process completed async operations and invoke callbacks.
- *
- * @param min_completions Minimum completions to wait for (0 = non-blocking)
- * @param timeout_ms Timeout in milliseconds (-1 = infinite)
- * @return Number of completions processed, or negative error
- */
-CXX_C_API int turbo_fs_poll_async(uint32_t min_completions, int timeout_ms);
+CXX_C_API int64_t turbo_fs_seek(turbo_file_t fd, int64_t offset, int whence);
 
 #ifdef __cplusplus
 }

@@ -23,10 +23,10 @@ EQUALS = "=";
 SEMICOLON = ";";
 COMMA = ",";
 QUOTED_STRING = ["] ([^"\\] | [\\] .)* ["];
-TOKEN_CHAR = [a-zA-Z0-9!#$%&'*+\-.^_`|~];
+TOKEN_CHAR = [a-zA-Z0-9!#$%&'*+\-.^_`|~/?:@];
 TOKEN = TOKEN_CHAR+;
 DATE_CHAR = [a-zA-Z0-9, :-];
-DATE = DATE_CHAR+;
+DATE = [a-zA-Z0-9] DATE_CHAR*;
 NUMBER = [0-9]+;
 */
 
@@ -120,13 +120,13 @@ loop:
         goto set_token;
     }
     
-    DATE {
-        token->type = COOKIE_DATE_VALUE;
-        goto set_token;
-    }
-    
     TOKEN {
         token->type = COOKIE_TOKEN;
+        goto set_token;
+    }
+
+    DATE {
+        token->type = COOKIE_DATE_VALUE;
         goto set_token;
     }
     

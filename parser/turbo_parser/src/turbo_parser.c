@@ -12,6 +12,8 @@
 #include "uri_parser.h"
 #include "cmd_arger.h"
 #include "dotenv.h"
+#include "toonc.h"
+#include "toml.h"
 
 /* JSON */
 int turbo_parse_json(const uint8_t *data, size_t len, void *out) {
@@ -565,7 +567,7 @@ static void ensure_optional_capacity(turbo_cmd_parser_t *parser) {
   if (parser->optional_count >= parser->optional_capacity) {
     parser->optional_capacity *= 2;
     parser->optional_args = (CmdArgerDesc *)realloc(parser->optional_args, 
-                                                    parser->optional_capacity * sizeof(CmdArgerDesc));
+                                                     parser->optional_capacity * sizeof(CmdArgerDesc));
   }
 }
 
@@ -616,7 +618,7 @@ void turbo_cmd_add_required_string(turbo_cmd_parser_t *parser, char **out,
   if (parser->required_count >= parser->required_capacity) {
     parser->required_capacity *= 2;
     parser->required_args = (CmdArgerDesc *)realloc(parser->required_args, 
-                                                    parser->required_capacity * sizeof(CmdArgerDesc));
+                                                     parser->required_capacity * sizeof(CmdArgerDesc));
   }
   parser->required_args[parser->required_count++] = 
       cmd_arger_desc_string(out, (char*)name, (char*)desc);
@@ -628,7 +630,7 @@ void turbo_cmd_add_required_integer(turbo_cmd_parser_t *parser, int64_t *out,
   if (parser->required_count >= parser->required_capacity) {
     parser->required_capacity *= 2;
     parser->required_args = (CmdArgerDesc *)realloc(parser->required_args, 
-                                                    parser->required_capacity * sizeof(CmdArgerDesc));
+                                                     parser->required_capacity * sizeof(CmdArgerDesc));
   }
   parser->required_args[parser->required_count++] = 
       cmd_arger_desc_integer(out, (char*)name, (char*)desc);
@@ -669,7 +671,7 @@ void turbo_cmd_set_validator(turbo_cmd_parser_t *parser, uint32_t index,
                              turbo_cmd_validator_t validator) {
   if (!parser || index >= parser->optional_count) return;
   parser->optional_args[index] = cmd_arger_with_validator(parser->optional_args[index], 
-                                                          (CmdArgerValidator)validator);
+                                                           (CmdArgerValidator)validator);
 }
 
 void turbo_cmd_set_required(turbo_cmd_parser_t *parser, uint32_t index) {
@@ -679,7 +681,7 @@ void turbo_cmd_set_required(turbo_cmd_parser_t *parser, uint32_t index) {
 
 /* Subcommand support */
 turbo_cmd_subcommand_t *turbo_cmd_add_subcommand(turbo_cmd_parser_t *parser,
-                                                  const char *name, const char *desc) {
+                                                   const char *name, const char *desc) {
   if (!parser) return NULL;
   if (parser->subcommand_count >= parser->subcommand_capacity) {
     parser->subcommand_capacity *= 2;
@@ -739,6 +741,93 @@ void turbo_cmd_sub_add_required_string(turbo_cmd_subcommand_t *sub, char **out,
   }
   sub->required_args[sub->required_count++] = 
       cmd_arger_desc_string(out, (char*)name, (char*)desc);
+}
+
+/* TOON */
+int turbo_parse_toon(const uint8_t *data, size_t len, void *out) {
+  if (!data || !out)
+    return -1;
+  toonObject *doc = TOONc_parseStringLen((const char *)data, len);
+  if (!doc)
+    return -1;
+  *(toonObject **)out = doc;
+  return 0;
+}
+
+void turbo_free_toon(void *out) {
+  if (!out)
+    return;
+  void *ptr = *(void **)out;
+  if (ptr)
+    TOONc_free((toonObject *)ptr);
+  *(void **)out = NULL;
+}
+
+turbo_toon_type_t turbo_toon_type(const turbo_toon_node_t *node) {
+  if (!node) return TURBO_TOON_NULL;
+  return (turbo_toon_type_t)node->kvtype;
+}
+
+bool turbo_toon_is_null(const turbo_toon_node_t *node) {
+  return node && node->kvtype == KV_NULL;
+}
+
+bool turbo_toon_bool(const turbo_toon_node_t *node) {
+  return node && node->kvtype == KV_BOOL ? (bool)node->boolean : false;
+}
+
+double turbo_toon_number(const turbo_toon_node_t *node) {
+  if (!node) return 0.0;
+  if (node->kvtype == KV_DOUBLE) return node->d;
+  if (node->kvtype == KV_INT) return (double)node->i;
+  return 0.0;
+}
+
+int turbo_toon_int(const turbo_toon_node_t *node) {
+  if (!node) return 0;
+  if (node->kvtype == KV_INT) return node->i;
+  if (node->kvtype == KV_DOUBLE) return (int)node->d;
+  return 0;
+}
+
+const char *turbo_toon_string(const turbo_toon_node_t *node) {
+  return node && node->kvtype == KV_STRING ? node->str.ptr : NULL;
+}
+
+size_t turbo_toon_string_len(const turbo_toon_node_t *node) {
+  return node && node->kvtype == KV_STRING ? node->str.len : 0;
+}
+
+turbo_toon_node_t *turbo_toon_get(turbo_toon_node_t *root, const char *path) {
+  return TOONc_get(root, path);
+}
+
+size_t turbo_toon_array_size(const turbo_toon_node_t *arr) {
+  return TOONc_getArrayLength((toonObject *)arr);
+}
+
+turbo_toon_node_t *turbo_toon_array_get(const turbo_toon_node_t *arr, size_t index) {
+  return TOONc_getArrayItem((toonObject *)arr, index);
+}
+
+char *turbo_toon_serialize(const turbo_toon_node_t *node, size_t *out_len) {
+  return TOONc_serialize((const toonObject *)node, out_len);
+}
+
+void turbo_toon_serialize_free(char *str) {
+  TOONc_serializeFree(str);
+}
+
+char *turbo_toon_serialize_json(const turbo_toon_node_t *node, size_t *out_len) {
+  return TOONc_toJSONString((const toonObject *)node, out_len);
+}
+
+void turbo_toon_serialize_json_free(char *str) {
+  TOONc_serializeFree(str);
+}
+
+turbo_toon_node_t *turbo_toon_from_json(const char *json, size_t len) {
+  return TOONc_fromJSONString(json, len);
 }
 
 void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool colors) {
@@ -813,4 +902,126 @@ int turbo_dotenv_load(const char *path, bool overwrite) {
 
 int turbo_dotenv_load_default(bool overwrite) {
   return dotenv_load_default(overwrite);
+}
+
+/* TOML */
+int turbo_parse_toml(const uint8_t *data, size_t len, void *out) {
+  if (!data || !out) return -1;
+  char errbuf[200];
+  char *temp = (char *)malloc(len + 1);
+  if (!temp) return -1;
+  memcpy(temp, data, len);
+  temp[len] = '\0';
+
+  toml_table_t *table = toml_parse(temp, errbuf, sizeof(errbuf));
+  free(temp);
+
+  if (!table) return -1;
+  *(toml_table_t **)out = table;
+  return 0;
+}
+
+void turbo_free_toml(void *out) {
+  if (!out) return;
+  void *ptr = *(void **)out;
+  if (ptr) toml_free((toml_table_t *)ptr);
+  *(void **)out = NULL;
+}
+
+int turbo_toml_len(const turbo_toml_t *table) {
+  return toml_table_len((const toml_table_t *)table);
+}
+
+const char *turbo_toml_key(const turbo_toml_t *table, int index, int *keylen) {
+  return toml_table_key((const toml_table_t *)table, index, keylen);
+}
+
+turbo_toml_value_t turbo_toml_string(const turbo_toml_t *table, const char *key) {
+  toml_value_t v = toml_table_string((const toml_table_t *)table, key);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_bool(const turbo_toml_t *table, const char *key) {
+  toml_value_t v = toml_table_bool((const toml_table_t *)table, key);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_int(const turbo_toml_t *table, const char *key) {
+  toml_value_t v = toml_table_int((const toml_table_t *)table, key);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_double(const turbo_toml_t *table, const char *key) {
+  toml_value_t v = toml_table_double((const toml_table_t *)table, key);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_timestamp(const turbo_toml_t *table, const char *key) {
+  toml_value_t v = toml_table_timestamp((const toml_table_t *)table, key);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_array_t *turbo_toml_array(const turbo_toml_t *table, const char *key) {
+  return (turbo_toml_array_t *)toml_table_array((const toml_table_t *)table, key);
+}
+
+turbo_toml_t *turbo_toml_table(const turbo_toml_t *table, const char *key) {
+  return (turbo_toml_t *)toml_table_table((const toml_table_t *)table, key);
+}
+
+int turbo_toml_array_len(const turbo_toml_array_t *array) {
+  return toml_array_len((const toml_array_t *)array);
+}
+
+turbo_toml_value_t turbo_toml_array_string(const turbo_toml_array_t *array, int idx) {
+  toml_value_t v = toml_array_string((const toml_array_t *)array, idx);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_array_bool(const turbo_toml_array_t *array, int idx) {
+  toml_value_t v = toml_array_bool((const toml_array_t *)array, idx);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_array_int(const turbo_toml_array_t *array, int idx) {
+  toml_value_t v = toml_array_int((const toml_array_t *)array, idx);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_array_double(const turbo_toml_array_t *array, int idx) {
+  toml_value_t v = toml_array_double((const toml_array_t *)array, idx);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_value_t turbo_toml_array_timestamp(const turbo_toml_array_t *array, int idx) {
+  toml_value_t v = toml_array_timestamp((const toml_array_t *)array, idx);
+  turbo_toml_value_t ret;
+  memcpy(&ret, &v, sizeof(v));
+  return ret;
+}
+
+turbo_toml_array_t *turbo_toml_array_array(const turbo_toml_array_t *array, int idx) {
+  return (turbo_toml_array_t *)toml_array_array((const toml_array_t *)array, idx);
+}
+
+turbo_toml_t *turbo_toml_array_table(const turbo_toml_array_t *array, int idx) {
+  return (turbo_toml_t *)toml_array_table((const toml_array_t *)array, idx);
 }

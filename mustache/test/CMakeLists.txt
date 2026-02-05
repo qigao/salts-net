@@ -1,9 +1,4 @@
 # Mustache Tests
-
-if(NOT ENABLE_TESTS)
-  return()
-endif()
-
 # Common configuration
 set(TEST_LIBS TurboNet::Mustache TurboNet::JsonParser)
 set(TEST_INCLUDES

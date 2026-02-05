@@ -11,6 +11,8 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/soa_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/cmd_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/dotenv_parser/include
+          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toon
+          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toml/include
           ${CMAKE_SOURCE_DIR}/common/include # for platform.h used by uri_parser
 )
 
@@ -26,7 +28,9 @@ target_link_libraries(
           ltv_parser
           soa_parser
           dotenv_parser
-          cmd_parser)
+          cmd_parser
+          toon
+          toml_parser)
 
 set_target_properties(
   turbo_parser
@@ -50,7 +54,7 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_parser.h
 
 if(BUILD_TESTING)
   add_executable(test_turbo_parser test/test_turbo_parser.c)
-  target_link_libraries(test_turbo_parser PRIVATE turbo_parser)
+  target_link_libraries(test_turbo_parser PRIVATE turbo_parser unity)
   set_target_properties(test_turbo_parser PROPERTIES FOLDER turbo_parser)
   add_sanitizers(test_turbo_parser)
   add_test(NAME test_turbo_parser COMMAND test_turbo_parser)

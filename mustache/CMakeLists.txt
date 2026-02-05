@@ -17,14 +17,11 @@ add_custom_command(
 # =============================================================================
 # Library
 # =============================================================================
-
+file(GLOB_RECURSE HEADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
+file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 # Build as SHARED library (DLL)
-add_library(
-  mustache SHARED
-  src/mustache.c
-  src/mustache_json.c
-  src/mustache_parser.c
-  ${MUSTACHE_LEXER_GEN})
+add_library(mustache SHARED ${HEADER_FILES} ${MUSTACHE_LEXER_GEN}
+                            ${SOURCE_FILES})
 add_library(TurboNet::Mustache ALIAS mustache)
 
 # DLL export macro - matches pattern from other TurboNet libraries
@@ -33,8 +30,7 @@ target_compile_definitions(mustache PRIVATE SHARED_CXX)
 target_include_directories(
   mustache
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/mustache>
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/mustache>
   PRIVATE ${CMAKE_SOURCE_DIR}/parser/internal/json_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -58,10 +54,7 @@ if(ENABLE_EXAMPLES)
                                                          mustache/examples)
 endif()
 
-# Tests - Include test directory
-if(ENABLE_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
 
 # Install targets
 install(

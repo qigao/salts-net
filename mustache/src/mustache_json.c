@@ -2,7 +2,7 @@
  * @file mustache_json.c
  * @brief JSON data provider implementation for Mustache4C
  */
-
+#include "json_parser.h"
 #include "mustache_json.h"
 #include <stdio.h>
 #include <stdlib.h>

@@ -275,44 +275,41 @@ static inline uint64_t turbo_ns_to_ms(uint64_t ns) { return ns / 1000000ULL; }
 static inline uint64_t turbo_ms_to_ns(uint64_t ms) { return ms * 1000000ULL; }
 
 // =============================================================================
-// Timer utilities - cross-platform async timers
+// Timer utilities - cross-platform async timers (Native OS backend)
 // =============================================================================
 
-// Forward declaration - implementation is opaque
-typedef struct turbo_timer_s turbo_timer_t;
+/**
+ * @brief Cross-platform timer using native OS facilities (CreateTimerQueueTimer/timer_create)
+ * 
+ * This timer does NOT depend on a libuv loop. Callbacks are executed by the OS
+ * thread pool (Windows) or a dedicated thread (POSIX), so they must be thread-safe.
+ */
+typedef struct turbo_native_timer_s turbo_timer_t;
 typedef void (*turbo_timer_cb)(turbo_timer_t *timer);
 
 /**
- * @brief Create and initialize a timer with specified event loop
- * @param loop Event loop to attach timer to (must not be NULL)
+ * @brief Create a timer
+ * @param loop Event loop (IGNORED - kept for API compatibility)
  * @return Timer pointer on success, NULL on failure
  */
 CXX_C_API turbo_timer_t *turbo_timer_create(void *loop);
 
 /**
  * @brief Destroy a timer and free resources
- * @param timer Timer to destroy (stops and closes if running)
+ * @param timer Timer to destroy (stops if running)
  */
 CXX_C_API void turbo_timer_destroy(turbo_timer_t *timer);
 
 /**
- * @brief Initialize a timer with specified event loop
- * @param timer Timer to initialize
- * @param loop Event loop to attach timer to (must not be NULL)
- * @return 0 on success, error code on failure
- */
-CXX_C_API int turbo_timer_init(turbo_timer_t *timer, void *loop);
-
-/**
  * @brief Start a timer
  * @param timer Timer to start
- * @param cb Callback to call when timer fires
+ * @param cb Callback to call when timer fires (thread-safe!)
  * @param timeout Timeout in milliseconds
  * @param repeat Repeat interval in milliseconds (0 for one-shot)
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout,
-                                uint64_t repeat);
+CXX_C_API int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb,
+                                uint64_t timeout, uint64_t repeat);
 
 /**
  * @brief Stop a timer
@@ -320,12 +317,6 @@ CXX_C_API int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_
  * @return 0 on success, error code on failure
  */
 CXX_C_API int turbo_timer_stop(turbo_timer_t *timer);
-
-/**
- * @brief Close a timer and free resources
- * @param timer Timer to close
- */
-CXX_C_API void turbo_timer_close(turbo_timer_t *timer);
 
 /**
  * @brief Set timer user data
@@ -340,13 +331,6 @@ CXX_C_API void turbo_timer_set_data(turbo_timer_t *timer, void *data);
  * @return User data pointer
  */
 CXX_C_API void *turbo_timer_get_data(turbo_timer_t *timer);
-
-/**
- * @brief Get remaining time until timer fires
- * @param timer Timer to query
- * @return Remaining time in milliseconds, 0 if not running
- */
-CXX_C_API uint64_t turbo_timer_get_due_in(turbo_timer_t *timer);
 
 /**
  * @brief Get timer repeat interval
@@ -416,6 +400,12 @@ CXX_C_API void *turbo_malloc_padded(size_t size);
  * @note Caller must free() the returned string
  */
 CXX_C_API char *turbo_url_encode(const char *str);
+
+/**
+ * @brief Get the current process ID
+ * @return Process ID
+ */
+CXX_C_API int turbo_getpid(void);
 
 #ifdef __cplusplus
 }

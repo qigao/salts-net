@@ -159,7 +159,6 @@ typedef struct {
  * TURN client structure
  */
 struct turbo_turn_client_s {
-    void *loop;
     async_client_t *async_client;
     turbo_timer_t *refresh_timer;
     turbo_timer_t *timeout_timer;
@@ -195,6 +194,9 @@ struct turbo_turn_client_s {
     turn_data_cb on_data;
     void *user_data;
 
+    /* Synchronization */
+    turbo_mutex_t lock;
+
     /* Internal */
     int pending_closes;
     int destroying;       /* Set to 1 when destroy is called */
@@ -216,12 +218,6 @@ turbo_turn_client_t *turn_client_create(const turn_client_config_t *config);
  * Destroy TURN client
  */
 void turn_client_destroy(turbo_turn_client_t *client);
-
-/**
- * Process events (drive the event loop)
- * Use this if you are not using an external event loop.
- */
-void turn_client_process_events(turbo_turn_client_t *client);
 
 
 /**

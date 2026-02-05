@@ -150,7 +150,6 @@ typedef enum {
  * STUN client structure
  */
 struct turbo_stun_client_s {
-    void *loop;
     /* Netcore Async Client Handle */
     async_client_t *async_client_handle; 
     /* Retry timer */
@@ -177,6 +176,9 @@ struct turbo_stun_client_s {
 
     /* Result */
     stun_mapped_address_t mapped_address;
+
+    /* Synchronization */
+    turbo_mutex_t lock;
 
     /* Internal */
     int destroying;       /* Set to 1 when destroy is called */

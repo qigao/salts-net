@@ -1,9 +1,9 @@
 /**
  * test_dns.c - DNS resolution test using turbo_dns API
- * 
+ *
  * Demonstrates DNS resolution with IPv4/IPv6 preferences using the
  * turbo_dns module with proper async callbacks.
- * 
+ *
  * Usage:
  *   ./test_dns
  */
@@ -27,16 +27,16 @@ static void resolve_cb(const char *hostname, const char *ip, int status, void *u
   resolve_ctx_t *ctx = (resolve_ctx_t *)user_data;
   ctx->called = 1;
   ctx->status = status;
-  
+
   if (ip) {
     strncpy(ctx->ip, ip, sizeof(ctx->ip) - 1);
     ctx->ip[sizeof(ctx->ip) - 1] = '\0';
   } else {
     ctx->ip[0] = '\0';
   }
-  
+
   (void)hostname;
-  
+
   if (ctx->safety) {
     uv_timer_stop(ctx->safety);
     uv_close((uv_handle_t *)ctx->safety, NULL);
@@ -55,13 +55,11 @@ static void close_all_handles(uv_loop_t *loop) {
   uv_run(loop, UV_RUN_DEFAULT);
 }
 
-static void timer_stop_cb(uv_timer_t *t) {
-  uv_stop((uv_loop_t *)t->data);
-}
+static void timer_stop_cb(uv_timer_t *t) { uv_stop((uv_loop_t *)t->data); }
 
 static void test_resolve(const char *hostname, turbo_dns_pref_t pref, const char *pref_name) {
   printf("Testing %s resolution for %s\n", pref_name, hostname);
-  
+
   uv_loop_t loop;
   if (uv_loop_init(&loop) != 0) {
     printf("    Failed to initialize event loop\n");
@@ -70,7 +68,7 @@ static void test_resolve(const char *hostname, turbo_dns_pref_t pref, const char
 
   /* Set DNS servers */
   const char *servers[] = {"8.8.8.8", "8.8.4.4"};
-  int rc = turbo_set_dns_servers(&loop, servers, 2);
+  int rc = turbo_dns_set_servers(servers, 2);
   if (rc != 0) {
     printf("    Failed to set DNS servers\n");
     uv_loop_close(&loop);
@@ -79,8 +77,8 @@ static void test_resolve(const char *hostname, turbo_dns_pref_t pref, const char
 
   resolve_ctx_t ctx = {0};
   ctx.hostname = hostname;
-  
-  rc = turbo_resolve_hostname_pref(&loop, hostname, pref, resolve_cb, &ctx);
+
+  rc = turbo_dns_resolve_async(&loop, hostname, pref, resolve_cb, &ctx);
   if (rc != 0) {
     printf("    Failed to initiate DNS resolution\n");
     uv_loop_close(&loop);
@@ -96,7 +94,7 @@ static void test_resolve(const char *hostname, turbo_dns_pref_t pref, const char
 
   /* Run event loop until resolution completes or timeout */
   uv_run(&loop, UV_RUN_DEFAULT);
-  
+
   if (uv_loop_alive(&loop))
     close_all_handles(&loop);
 
@@ -112,7 +110,7 @@ static void test_resolve(const char *hostname, turbo_dns_pref_t pref, const char
     unsigned char buf4[16], buf6[16];
     int is_ipv4 = (uv_inet_pton(AF_INET, ctx.ip, buf4) == 0);
     int is_ipv6 = (uv_inet_pton(AF_INET6, ctx.ip, buf6) == 0);
-    
+
     if (is_ipv4 || is_ipv6) {
       printf("    Resolved to %s (%s)\n", ctx.ip, is_ipv4 ? "IPv4" : "IPv6");
     } else {
@@ -126,6 +124,11 @@ static void test_resolve(const char *hostname, turbo_dns_pref_t pref, const char
 int main(void) {
   printf("DNS Resolution Test\n");
   printf("===================\n\n");
+
+  if (turbo_dns_init() != 0) {
+    printf("Failed to initialize DNS subsystem\n");
+    return 1;
+  }
 
   /* Test IPv4-only resolution */
   test_resolve("google.com", TURBO_DNS_IPV4_ONLY, "IPv4-only");
@@ -146,6 +149,8 @@ int main(void) {
   /* Test with httpbin.org */
   test_resolve("httpbin.org", TURBO_DNS_IPV4_ONLY, "IPv4-only");
   printf("\n");
+
+  turbo_dns_cleanup();
 
   printf("All DNS tests completed!\n");
   return 0;

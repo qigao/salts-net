@@ -260,6 +260,39 @@ CXX_C_API void turbo_json_object_set_bool(json_value_t *obj, const char *key, bo
  */
 CXX_C_API void turbo_json_object_set_null(json_value_t *obj, const char *key);
 
+/* XML Parser (cxml) */
+typedef struct _cx_doc_node turbo_xml_doc_t;
+typedef struct _cx_elem_node turbo_xml_node_t;
+
+/**
+ * @brief Parse XML data.
+ * @param data Input buffer.
+ * @param len Buffer length.
+ * @param out Address of a pointer (turbo_xml_doc_t **) to store the result.
+ * @return 0 on success, error code otherwise.
+ */
+CXX_C_API int turbo_parse_xml(const uint8_t *data, size_t len, void *out);
+
+/**
+ * @brief Free XML data and set pointer to NULL.
+ * @param out Address of the pointer (turbo_xml_doc_t **) to free.
+ */
+CXX_C_API void turbo_free_xml(void *out);
+
+/**
+ * @brief Get the root element of an XML document.
+ * @param doc Pointer to the XML document.
+ * @return Pointer to the root element.
+ */
+CXX_C_API turbo_xml_node_t *turbo_xml_root_element(const turbo_xml_doc_t *doc);
+
+/**
+ * @brief Get the name of an XML node.
+ * @param node Pointer to the XML node.
+ * @return Pointer to the name string.
+ */
+CXX_C_API const char *turbo_xml_node_name(const turbo_xml_node_t *node);
+
 /* CSV */
 typedef struct csv_doc_s turbo_csv_doc_t;
 

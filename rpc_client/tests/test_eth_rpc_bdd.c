@@ -12,14 +12,14 @@ spec("Ethereum JSON-RPC Examples (BDD)") {
     static rpc_client_t *client = NULL;
     static rpc_client_config_t config;
 
-    before() {
+    before_each() {
         config = (rpc_client_config_t)RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.timeout_ms = 10000; // 10 seconds
         client = rpc_client_create(&config);
         check(client != NULL);
     }
 
-    after() {
+    after_each() {
         if (client) {
             rpc_client_destroy(client);
             client = NULL;

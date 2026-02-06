@@ -93,8 +93,8 @@ typedef enum {
  * @brief Description of an enum choice.
  */
 typedef struct {
-	char* name;    /**< The string that represents this enum value on the command line */
-	char* info;    /**< Description of this choice (used in help) */
+	const char* name;    /**< The string that represents this enum value on the command line */
+	const char* info;    /**< Description of this choice (used in help) */
 	int64_t value; /**< The integer value this choice maps to */
 } CmdArgerEnumDesc;
 
@@ -145,8 +145,8 @@ typedef struct {
  * @brief Description of a subcommand (e.g., `git commit`).
  */
 typedef struct {
-	char* name;                 /**< Name of the subcommand */
-	char* info;                 /**< Description shown in help message */
+	const char* name;                 /**< Name of the subcommand */
+	const char* info;                 /**< Description shown in help message */
 	CmdArgerDesc* optional_args;    /**< Options specific to this subcommand */
 	uint32_t optional_args_count;   /**< Number of subcommand options */
 	CmdArgerDesc* required_args;    /**< Positional arguments specific to this subcommand */
@@ -277,7 +277,7 @@ extern CmdArgerDesc cmd_arger_required(CmdArgerDesc desc);
  * @param app_name_and_version String shown in help header.
  * @param colors Whether to use ANSI terminal colors in output.
  */
-extern void cmd_arger_parse(CmdArgerDesc* optional_args, uint32_t optional_args_count, CmdArgerDesc* required_args, uint32_t required_args_count, int argc, char** argv, char* app_name_and_version, CmdArgerBool colors);
+extern void cmd_arger_parse(CmdArgerDesc* optional_args, uint32_t optional_args_count, CmdArgerDesc* required_args, uint32_t required_args_count, int argc, char** argv, const char* app_name_and_version, CmdArgerBool colors);
 
 /**
  * @brief Parse arguments with subcommand support.
@@ -296,12 +296,12 @@ extern void cmd_arger_parse_subcommand(
     CmdArgerDesc* global_optional_args, uint32_t global_optional_args_count,
     CmdArgerSubCommand* subcommands, uint32_t subcommands_count,
     int* selected_subcommand_idx,
-    int argc, char** argv, char* app_name_and_version, CmdArgerBool colors);
+    int argc, char** argv, const char* app_name_and_version, CmdArgerBool colors);
 
 /**
  * @brief Display help and exit program.
  */
-extern void cmd_arger_show_help_and_exit(CmdArgerDesc* optional_args, uint32_t optional_args_count, CmdArgerDesc* required_args, uint32_t required_args_count, char* exe_name, char* app_name_and_version, CmdArgerBool colors);
+extern void cmd_arger_show_help_and_exit(CmdArgerDesc* optional_args, uint32_t optional_args_count, CmdArgerDesc* required_args, uint32_t required_args_count, const char* exe_name, const char* app_name_and_version, CmdArgerBool colors);
 
 /**
  * @brief Display detailed help for subcommands and exit.
@@ -311,7 +311,7 @@ extern void cmd_arger_show_subcommand_help_and_exit(
     CmdArgerDesc* active_optional_args, uint32_t active_optional_args_count,
     CmdArgerDesc* active_required_args, uint32_t active_required_args_count,
     CmdArgerSubCommand* all_subcommands, uint32_t all_subcommands_count,
-    char* active_subcommand_name,
-    char* exe_name, char* app_name_and_version, CmdArgerBool colors);
+    const char* active_subcommand_name,
+    const char* exe_name, const char* app_name_and_version, CmdArgerBool colors);
 
 #endif

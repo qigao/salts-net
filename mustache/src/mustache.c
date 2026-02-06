@@ -1080,3 +1080,152 @@ err:
   mustache_buffer_free(&indent_buffer);
   return ret;
 }
+
+/* String renderer implementation */
+static int string_out_verbatim(const char *output, size_t size, void *renderer_data) {
+  MUSTACHE_STRING_RENDERER *renderer = (MUSTACHE_STRING_RENDERER *)renderer_data;
+
+  if (renderer->size + size >= renderer->capacity) {
+    size_t new_capacity = renderer->capacity == 0 ? 1024 : renderer->capacity * 2;
+    while (new_capacity < renderer->size + size + 1) {
+      new_capacity *= 2;
+    }
+
+    char *new_buffer = (char *)realloc(renderer->buffer, new_capacity);
+    if (!new_buffer) {
+      return -1;
+    }
+
+    renderer->buffer = new_buffer;
+    renderer->capacity = new_capacity;
+  }
+
+  memcpy(renderer->buffer + renderer->size, output, size);
+  renderer->size += size;
+
+  return 0;
+}
+
+static int string_out_escaped(const char *output, size_t size, void *renderer_data) {
+  MUSTACHE_STRING_RENDERER *renderer = (MUSTACHE_STRING_RENDERER *)renderer_data;
+  size_t i;
+  size_t needed = 0;
+
+  /* Calculate needed space for escaping */
+  for (i = 0; i < size; i++) {
+    switch (output[i]) {
+    case '<':
+    case '>':
+      needed += 4; /* &lt; or &gt; */
+      break;
+    case '&':
+      needed += 5; /* &amp; */
+      break;
+    case '"':
+      needed += 6; /* &quot; */
+      break;
+    case '\'':
+      needed += 6; /* &#x27; */
+      break;
+    default:
+      needed += 1;
+      break;
+    }
+  }
+
+  if (renderer->size + needed >= renderer->capacity) {
+    size_t new_capacity = renderer->capacity == 0 ? 1024 : renderer->capacity * 2;
+    while (new_capacity < renderer->size + needed + 1) {
+      new_capacity *= 2;
+    }
+
+    char *new_buffer = (char *)realloc(renderer->buffer, new_capacity);
+    if (!new_buffer) {
+      return -1;
+    }
+
+    renderer->buffer = new_buffer;
+    renderer->capacity = new_capacity;
+  }
+
+  /* Perform escaping */
+  for (i = 0; i < size; i++) {
+    switch (output[i]) {
+    case '<':
+      memcpy(renderer->buffer + renderer->size, "&lt;", 4);
+      renderer->size += 4;
+      break;
+    case '>':
+      memcpy(renderer->buffer + renderer->size, "&gt;", 4);
+      renderer->size += 4;
+      break;
+    case '&':
+      memcpy(renderer->buffer + renderer->size, "&amp;", 5);
+      renderer->size += 5;
+      break;
+    case '"':
+      memcpy(renderer->buffer + renderer->size, "&quot;", 6);
+      renderer->size += 6;
+      break;
+    case '\'':
+      memcpy(renderer->buffer + renderer->size, "&#x27;", 6);
+      renderer->size += 6;
+      break;
+    default:
+      renderer->buffer[renderer->size++] = output[i];
+      break;
+    }
+  }
+
+  return 0;
+}
+
+int mustache_string_renderer_init(MUSTACHE_STRING_RENDERER *renderer) {
+  if (!renderer) {
+    return -1;
+  }
+
+  renderer->base.out_verbatim = string_out_verbatim;
+  renderer->base.out_escaped = string_out_escaped;
+  renderer->buffer = (char *)malloc(1024);
+  renderer->size = 0;
+  renderer->capacity = 1024;
+
+  if (!renderer->buffer) {
+    return -1;
+  }
+
+  return 0;
+}
+
+char *mustache_string_renderer_get(MUSTACHE_STRING_RENDERER *renderer) {
+  if (!renderer || !renderer->buffer) {
+    return NULL;
+  }
+
+  /* Null-terminate the string */
+  if (renderer->size + 1 >= renderer->capacity) {
+      char *new_buffer = (char *)realloc(renderer->buffer, renderer->size + 1);
+      if (!new_buffer) return NULL;
+      renderer->buffer = new_buffer;
+      renderer->capacity = renderer->size + 1;
+  }
+  renderer->buffer[renderer->size] = '\0';
+
+  /* Return a copy */
+  char *result = (char *)malloc(renderer->size + 1);
+  if (result) {
+    memcpy(result, renderer->buffer, renderer->size + 1);
+  }
+
+  return result;
+}
+
+void mustache_string_renderer_free(MUSTACHE_STRING_RENDERER *renderer) {
+  if (renderer && renderer->buffer) {
+    free(renderer->buffer);
+    renderer->buffer = NULL;
+    renderer->size = 0;
+    renderer->capacity = 0;
+  }
+}

@@ -477,7 +477,7 @@ static void cmd_arger_parse_internal(CmdArgerDesc *global_optional_args,
                                      CmdArgerDesc *required_args, uint32_t required_args_count,
                                      CmdArgerSubCommand *subcommands, uint32_t subcommands_count,
                                      int *selected_subcommand_idx, int argc, char **argv,
-                                     char *app_name_and_version, CmdArgerBool colors) {
+                                     const char *app_name_and_version, CmdArgerBool colors) {
   // Load .env if it exists, don't overwrite existing environment variables
   dotenv_load_default(false);
 
@@ -661,7 +661,25 @@ static void cmd_arger_parse_internal(CmdArgerDesc *global_optional_args,
                            current_str);
           goto PRINT_HELP;
         }
-        desc = &active_required[required_args_idx++];
+
+        desc = &active_required[required_args_idx];
+        if (desc->kind == CmdArgerDescKind_string_list) {
+          uint32_t count = *desc->spec.list.count_out;
+          if (count >= desc->spec.list.max_count) {
+            required_args_idx++;
+            if (required_args_idx >= active_required_cnt) {
+              cmd_arger_printf(colors,
+                               "{{error}}error:{{reset}} unexpected positional argument '%s'\n\n",
+                               current_str);
+              goto PRINT_HELP;
+            }
+            desc = &active_required[required_args_idx++];
+          }
+          // Note: if it is a list, we DON'T increment required_args_idx yet
+          // so the next positional arg also goes to this list
+        } else {
+          required_args_idx++;
+        }
         value_str = current_str;
       }
     }
@@ -674,9 +692,17 @@ static void cmd_arger_parse_internal(CmdArgerDesc *global_optional_args,
   }
 
   if (required_args_idx < active_required_cnt) {
-    cmd_arger_printf(colors, "{{error}}error:{{reset}} missing required argument '%s'\n\n",
-                     active_required[required_args_idx].name);
-    goto PRINT_HELP;
+    // If we're at a list that has at least one item, it counts as fulfilled
+    if (active_required[required_args_idx].kind == CmdArgerDescKind_string_list &&
+        *active_required[required_args_idx].spec.list.count_out > 0) {
+      required_args_idx++;
+    }
+
+    if (required_args_idx < active_required_cnt) {
+      cmd_arger_printf(colors, "{{error}}error:{{reset}} missing required argument '%s'\n\n",
+                       active_required[required_args_idx].name);
+      goto PRINT_HELP;
+    }
   }
 
   for (uint32_t i = 0; i < global_optional_args_count; i++) {
@@ -729,7 +755,7 @@ PRINT_HELP:
  */
 void cmd_arger_parse(CmdArgerDesc *optional_args, uint32_t optional_args_count,
                      CmdArgerDesc *required_args, uint32_t required_args_count, int argc,
-                     char **argv, char *app_name_and_version, CmdArgerBool colors) {
+                     char **argv, const char *app_name_and_version, CmdArgerBool colors) {
   cmd_arger_parse_internal(optional_args, optional_args_count, required_args, required_args_count,
                            NULL, 0, NULL, argc, argv, app_name_and_version, colors);
 }
@@ -741,7 +767,7 @@ void cmd_arger_parse_subcommand(CmdArgerDesc *global_optional_args,
                                 uint32_t global_optional_args_count,
                                 CmdArgerSubCommand *subcommands, uint32_t subcommands_count,
                                 int *selected_subcommand_idx, int argc, char **argv,
-                                char *app_name_and_version, CmdArgerBool colors) {
+                                const char *app_name_and_version, CmdArgerBool colors) {
   cmd_arger_parse_internal(global_optional_args, global_optional_args_count, NULL, 0, subcommands,
                            subcommands_count, selected_subcommand_idx, argc, argv,
                            app_name_and_version, colors);
@@ -756,7 +782,7 @@ void cmd_arger_parse_subcommand(CmdArgerDesc *global_optional_args,
  */
 void cmd_arger_show_help_and_exit(CmdArgerDesc *optional_args, uint32_t optional_args_count,
                                   CmdArgerDesc *required_args, uint32_t required_args_count,
-                                  char *exe_name, char *app_name_and_version, CmdArgerBool colors) {
+                                  const char *exe_name, const char *app_name_and_version, CmdArgerBool colors) {
   cmd_arger_show_subcommand_help_and_exit(optional_args, optional_args_count, NULL, 0,
                                           required_args, required_args_count, NULL, 0, NULL,
                                           exe_name, app_name_and_version, colors);
@@ -832,7 +858,7 @@ void cmd_arger_show_subcommand_help_and_exit(
     CmdArgerDesc *active_optional_args, uint32_t active_optional_args_count,
     CmdArgerDesc *active_required_args, uint32_t active_required_args_count,
     CmdArgerSubCommand *all_subcommands, uint32_t all_subcommands_count,
-    char *active_subcommand_name, char *exe_name, char *app_name_and_version, CmdArgerBool colors) {
+    const char *active_subcommand_name, const char *exe_name, const char *app_name_and_version, CmdArgerBool colors) {
   const char *base_name = strrchr(exe_name, '/');
   if (!base_name)
     base_name = strrchr(exe_name, '\\');

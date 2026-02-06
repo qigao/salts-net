@@ -32,11 +32,16 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/mustache>
   PRIVATE ${CMAKE_SOURCE_DIR}/parser/internal/json_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
+          ${CMAKE_SOURCE_DIR}/vendor/cxml/include
+          ${CMAKE_CURRENT_SOURCE_DIR}/parser
+          ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Link to json_parser and common
-target_link_libraries(mustache PRIVATE TurboNet::JsonParser)
+target_link_libraries(
+  mustache
+  PRIVATE TurboNet::JsonParser cxml
+  PUBLIC TurboNet::Utils)
 
 set_target_properties(
   mustache
@@ -46,13 +51,15 @@ set_target_properties(
              EXPORT_NAME Mustache)
 
 # Example executable
-if(ENABLE_EXAMPLES)
-  add_executable(mustache_json_example examples/json_example.c)
-  target_link_libraries(mustache_json_example PRIVATE TurboNet::Mustache
-                                                      TurboNet::JsonParser)
-  set_target_properties(mustache_json_example PROPERTIES FOLDER
-                                                         mustache/examples)
-endif()
+
+add_executable(mustache_json_example examples/json_example.c)
+target_link_libraries(mustache_json_example PRIVATE TurboNet::Mustache
+                                                    TurboNet::JsonParser)
+set_target_properties(mustache_json_example PROPERTIES FOLDER mustache/examples)
+
+add_executable(mustache_xml_example examples/xml_example.c)
+target_link_libraries(mustache_xml_example PRIVATE TurboNet::Mustache cxml)
+set_target_properties(mustache_xml_example PROPERTIES FOLDER mustache/examples)
 
 add_subdirectory(test)
 
@@ -64,6 +71,6 @@ install(
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
 
-install(FILES include/mustache.h include/mustache_json.h
+install(FILES include/mustache.h include/mustache_json.h include/mustache_xml.h
               include/mustache_parser.h include/mustache_types.h
               include/mustache_lexer.h DESTINATION include/mustache)

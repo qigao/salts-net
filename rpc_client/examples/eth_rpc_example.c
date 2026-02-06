@@ -18,13 +18,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stb_sprintf.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #define sleep_ms(ms) Sleep(ms)
 #else
 #include <unistd.h>
-#include <stb_sprintf.h>
 #define sleep_ms(ms) usleep((ms)*1000)
 #endif
 

@@ -173,6 +173,36 @@ CXX_C_API int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDER
                      void *renderer_data, const MUSTACHE_DATAPROVIDER *provider,
                      void *provider_data);
 
+/**
+ * Simple string renderer that appends to a buffer
+ */
+typedef struct MUSTACHE_STRING_RENDERER {
+  MUSTACHE_RENDERER base;
+  char *buffer;
+  size_t size;
+  size_t capacity;
+} MUSTACHE_STRING_RENDERER;
+
+/**
+ * Initialize a string renderer
+ * @param renderer The renderer to initialize
+ * @return 0 on success, -1 on error
+ */
+CXX_C_API int mustache_string_renderer_init(MUSTACHE_STRING_RENDERER *renderer);
+
+/**
+ * Get the rendered string (caller must free)
+ * @param renderer The string renderer
+ * @return Allocated string or NULL on error
+ */
+CXX_C_API char *mustache_string_renderer_get(MUSTACHE_STRING_RENDERER *renderer);
+
+/**
+ * Free string renderer resources
+ * @param renderer The renderer to free
+ */
+CXX_C_API void mustache_string_renderer_free(MUSTACHE_STRING_RENDERER *renderer);
+
 #ifdef __cplusplus
 }
 #endif

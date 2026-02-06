@@ -14,6 +14,7 @@
 #include "dotenv.h"
 #include "toonc.h"
 #include "toml.h"
+#include "xml/cxparser.h"
 
 /* JSON */
 int turbo_parse_json(const uint8_t *data, size_t len, void *out) {
@@ -33,6 +34,45 @@ void turbo_free_json(void *out) {
   if (ptr)
     json_free((json_value_t *)ptr);
   *(void **)out = NULL;
+}
+
+/* XML (cxml) */
+int turbo_parse_xml(const uint8_t *data, size_t len, void *out) {
+  if (!data || !out)
+    return -1;
+  
+  // Ensure data is null-terminated for cxml_parse_xml
+  char *temp = (char *)malloc(len + 1);
+  if (!temp)
+    return -1;
+  memcpy(temp, data, len);
+  temp[len] = '\0';
+
+  cxml_root_node *root = cxml_parse_xml(temp);
+  free(temp);
+
+  if (!root)
+    return -1;
+
+  *(cxml_root_node **)out = root;
+  return 0;
+}
+
+void turbo_free_xml(void *out) {
+  if (!out)
+    return;
+  void *ptr = *(void **)out;
+  if (ptr)
+    cxml_root_node_free((cxml_root_node *)ptr);
+  *(void **)out = NULL;
+}
+
+turbo_xml_node_t *turbo_xml_root_element(const turbo_xml_doc_t *doc) {
+  return doc ? (turbo_xml_node_t *)doc->root_element : NULL;
+}
+
+const char *turbo_xml_node_name(const turbo_xml_node_t *node) {
+  return node ? cxml_string_as_raw(&node->name.qname) : NULL;
 }
 
 turbo_json_type_t turbo_json_type(const json_value_t *value) {

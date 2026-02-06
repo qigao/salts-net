@@ -252,6 +252,25 @@ void test_dotenv_integration(void) {
     remove(".env");
 }
 
+void test_variadic_positional_parsing(void) {
+    char* files[10];
+    uint32_t files_count = 0;
+    
+    CmdArgerDesc required_args[] = {
+        cmd_arger_desc_string_list(files, &files_count, 10, "files", "List of files"),
+    };
+    
+    char* argv[] = {"app", "file1.txt", "file2.txt", "file3.txt"};
+    int argc = 4;
+    
+    cmd_arger_parse(NULL, 0, required_args, 1, argc, argv, "app", cmd_arger_false);
+    
+    TEST_ASSERT_EQUAL_INT(3, files_count);
+    TEST_ASSERT_EQUAL_STRING("file1.txt", files[0]);
+    TEST_ASSERT_EQUAL_STRING("file2.txt", files[1]);
+    TEST_ASSERT_EQUAL_STRING("file3.txt", files[2]);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_flag_parsing);
@@ -264,5 +283,6 @@ int main(void) {
     RUN_TEST(test_custom_validator);
     RUN_TEST(test_response_file);
     RUN_TEST(test_dotenv_integration);
+    RUN_TEST(test_variadic_positional_parsing);
     return UNITY_END();
 }

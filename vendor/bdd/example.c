@@ -13,7 +13,7 @@ spec("some feature") {
     }
 
     describe("sub-feature 1") {
-        it("should not work") {
+        it_should_fail("should not work") {
             a = 2;
             b = 2;
             check(a + b == 6, "Adding %i to %i did not equal %i", a, b, 6);

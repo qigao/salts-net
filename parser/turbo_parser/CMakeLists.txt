@@ -13,6 +13,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/dotenv_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toon
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toml/include
+          ${CMAKE_SOURCE_DIR}/vendor/cxml/include
           ${CMAKE_SOURCE_DIR}/common/include # for platform.h used by uri_parser
 )
 
@@ -30,7 +31,8 @@ target_link_libraries(
           dotenv_parser
           cmd_parser
           toon
-          toml_parser)
+          toml_parser
+          cxml)
 
 set_target_properties(
   turbo_parser
@@ -58,4 +60,10 @@ if(BUILD_TESTING)
   set_target_properties(test_turbo_parser PROPERTIES FOLDER turbo_parser)
   add_sanitizers(test_turbo_parser)
   add_test(NAME test_turbo_parser COMMAND test_turbo_parser)
+
+  add_executable(test_turbo_parser_bdd test/test_turbo_parser_bdd.c)
+  target_link_libraries(test_turbo_parser_bdd PRIVATE turbo_parser bdd)
+  set_target_properties(test_turbo_parser_bdd PROPERTIES FOLDER turbo_parser)
+  add_sanitizers(test_turbo_parser_bdd)
+  add_test(NAME test_turbo_parser_bdd COMMAND test_turbo_parser_bdd)
 endif()

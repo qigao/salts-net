@@ -1,34 +1,24 @@
 // SPDX-FileCopyrightText: 2017-2022 Comcast Cable Communications Management, LLC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cunit_to_unity.h"
-
-void setUp(void) {}
-void tearDown(void) {}
+#include "tinytest.h"
 #include <cjson/cJSON.h>
 #include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#include <io.h>
-#include <direct.h>
-#define getcwd _getcwd
 #ifndef SSIZE_T
 typedef intptr_t SSIZE_T;
 #endif
 #ifndef ssize_t
 typedef SSIZE_T ssize_t;
 #endif
-#else
-#include <unistd.h>
 #endif
 
 #include "cjwt.h"
-
+#include "utils.h"
 typedef struct {
     const char *desc;
     const char *filename;
@@ -658,59 +648,32 @@ json_test_case_t json_test_list[] = {
 };
 // clang-format on
 
-int open_input_file(const char *fname)
+static ssize_t read_file(const char *fname, char *buf, size_t buflen)
 {
     char path[1024];
+    size_t size = 0;
 
 #ifdef TEST_DATA_DIR
     snprintf(path, sizeof(path), "%s/new_inputs/%s", TEST_DATA_DIR, fname);
 #else
-    if (getcwd(path, sizeof(path)) != NULL) {
-        strcat(path, "/../tests/new_inputs/");
-    } else {
-        perror("getcwd() error");
-        return -1;
-    }
-
-    if ((fname == NULL) || ((strlen(path) + strlen(fname)) > sizeof(path)))
-    {
-        perror("filename too long error");
-        return -1;
-    }
-    strcat(path, fname);
+    snprintf(path, sizeof(path), "../tests/new_inputs/%s", fname);
 #endif
 
-    int fd = open(path, O_RDONLY);
-
-    if (fd < 0) {
+    char *data = tt_read_file(path, &size);
+    if (!data) {
         printf("File %s open error (path: %s)\n", fname, path);
+        return -1;
     }
 
-    return fd;
+    if (size > buflen) {
+        size = buflen;
+    }
+    memcpy(buf, data, size);
+    free(data);
+    return (ssize_t)size;
 }
 
-ssize_t read_file(const char *fname, char *buf, size_t buflen)
-{
-    ssize_t nbytes = 0;
-    int fd         = open_input_file(fname);
-
-    if (fd < 0) {
-        return fd;
-    }
-
-    nbytes = read(fd, buf, buflen);
-
-    if (nbytes < 0) {
-        printf("Read file %s error\n", fname);
-        close(fd);
-        return nbytes;
-    }
-
-    close(fd);
-    return nbytes;
-}
-
-void test_case(const test_case_t *t)
+static void test_case(__bdd_config_type__ *__bdd_config__, const test_case_t *t)
 {
     int key_len = 0;
     ssize_t jwt_bytes;
@@ -725,7 +688,7 @@ void test_case(const test_case_t *t)
     } else if (t->key_fn) {
         key_len = read_file(t->key_fn, pem_buf, sizeof(pem_buf));
 
-        CU_ASSERT_FATAL(key_len >= 0);
+        check(key_len >= 0);
         key = (uint8_t *) pem_buf;
     }
 
@@ -746,34 +709,34 @@ void test_case(const test_case_t *t)
     }
 
     cjwt_destroy(jwt);
-    CU_ASSERT(t->expected == result);
+    check_int_eq(t->expected, result);
 }
 
-void str_eq(const char *exp, const char *act)
+static void str_eq(__bdd_config_type__ *__bdd_config__, const char *exp, const char *act)
 {
     if (NULL == exp) {
-        CU_ASSERT(exp == act);
+        check(exp == act);
         return;
     }
 
-    CU_ASSERT_FATAL(NULL != exp);
-    CU_ASSERT_FATAL(NULL != exp);
-    CU_ASSERT_STRING_EQUAL(exp, act);
+    check_not_null(exp);
+    check_not_null(exp);
+    check_str_eq(exp, act);
 }
 
-void int64_eq(int64_t *exp, int64_t *act)
+static void int64_eq(__bdd_config_type__ *__bdd_config__, int64_t *exp, int64_t *act)
 {
     if (NULL == exp) {
-        CU_ASSERT(exp == act);
+        check(exp == act);
         return;
     }
 
-    CU_ASSERT_FATAL(NULL != exp);
-    CU_ASSERT_FATAL(NULL != exp);
-    CU_ASSERT_FATAL(*exp == *act);
+    check_not_null(exp);
+    check_not_null(exp);
+    check_int_eq(*exp, *act);
 }
 
-void claims_eq(cJSON *exp, cJSON *act)
+static void claims_eq(__bdd_config_type__ *__bdd_config__, cJSON *exp, cJSON *act)
 {
     cJSON *got = NULL;
     char *text = NULL;
@@ -783,19 +746,19 @@ void claims_eq(cJSON *exp, cJSON *act)
     cJSON_free(text);
 
     if (NULL == exp) {
-        CU_ASSERT(NULL == act);
+        check(act == NULL);
         return;
     }
 
     got = cJSON_GetObjectItemCaseSensitive(act, exp->string);
-    CU_ASSERT(got != NULL);
+    check(got != NULL);
     if (got) {
-        CU_ASSERT(0 == strcmp(exp->valuestring, cJSON_GetStringValue(got)));
+        check(0 == strcmp(exp->valuestring, cJSON_GetStringValue(got)));
     }
     return;
 }
 
-void json_test_case(const json_test_case_t *t)
+static void json_test_case(__bdd_config_type__ *__bdd_config__, const json_test_case_t *t)
 {
     char *b64_h = b64url_encode_with_alloc((uint8_t *) t->header, strlen(t->header), NULL);
     char *b64_p = b64url_encode_with_alloc((uint8_t *) t->payload, strlen(t->payload), NULL);
@@ -804,11 +767,11 @@ void json_test_case(const json_test_case_t *t)
     cjwt_t *jwt = NULL;
     cjwt_code_t result;
 
-    CU_ASSERT_FATAL(NULL != b64_h);
-    CU_ASSERT_FATAL(NULL != b64_p);
+    check_not_null(b64_h);
+    check_not_null(b64_p);
 
     rv = snprintf(buf, sizeof(buf), "%s.%s.", b64_h, b64_p);
-    CU_ASSERT_FATAL((0 < rv) && (rv < (int) sizeof(buf)));
+    check((0 < rv) && (rv < (int) sizeof(buf)));
 
     result = cjwt_decode(buf, rv, t->options, NULL, 0, t->time, t->skew, &jwt);
 
@@ -816,29 +779,29 @@ void json_test_case(const json_test_case_t *t)
         printf("\n\x1B[01;31m--- FAILED: %s.%s\nexp: %d, got: %d\x1B[00m\n",
                t->header, t->payload, t->expected, result);
     }
-    CU_ASSERT_FATAL(result == t->expected);
+    check_int_eq(t->expected, result);
     if (CJWTE_OK == result) {
-        CU_ASSERT(t->jwt.header.alg == jwt->header.alg);
-        str_eq(t->jwt.header.kid, jwt->header.kid);
+        check_int_eq(t->jwt.header.alg, jwt->header.alg);
+        bdd_invoke(str_eq, t->jwt.header.kid, jwt->header.kid);
         printf("kid: %s\n", jwt->header.kid);
-        claims_eq(t->jwt.header.private_headers, jwt->header.private_headers);
+        bdd_invoke(claims_eq, t->jwt.header.private_headers, jwt->header.private_headers);
 
-        str_eq(t->jwt.iss, jwt->iss);
-        str_eq(t->jwt.sub, jwt->sub);
-        str_eq(t->jwt.jti, jwt->jti);
+        bdd_invoke(str_eq, t->jwt.iss, jwt->iss);
+        bdd_invoke(str_eq, t->jwt.sub, jwt->sub);
+        bdd_invoke(str_eq, t->jwt.jti, jwt->jti);
 
-        int64_eq(t->jwt.exp, jwt->exp);
-        int64_eq(t->jwt.nbf, jwt->nbf);
-        int64_eq(t->jwt.iat, jwt->iat);
+        bdd_invoke(int64_eq, t->jwt.exp, jwt->exp);
+        bdd_invoke(int64_eq, t->jwt.nbf, jwt->nbf);
+        bdd_invoke(int64_eq, t->jwt.iat, jwt->iat);
 
-        claims_eq(t->jwt.private_claims, jwt->private_claims);
+        bdd_invoke(claims_eq, t->jwt.private_claims, jwt->private_claims);
 
-        CU_ASSERT_FATAL(t->jwt.aud.count == jwt->aud.count);
+        check_int_eq(t->jwt.aud.count, jwt->aud.count);
         if (0 == t->jwt.aud.count) {
-            CU_ASSERT_FATAL(NULL == t->jwt.aud.names);
+            check(t->jwt.aud.names == NULL);
         }
         for (int i = 0; i < t->jwt.aud.count; i++) {
-            CU_ASSERT_STRING_EQUAL(t->jwt.aud.names[i], jwt->aud.names[i]);
+            check_str_eq(t->jwt.aud.names[i], jwt->aud.names[i]);
         }
     }
 
@@ -853,7 +816,7 @@ void json_test_case(const json_test_case_t *t)
     }
 }
 
-void test_cjwt(void)
+static void run_vectors(__bdd_config_type__ *__bdd_config__)
 {
     // char *header  = "{ \"alg\": \"RS256\" }";
     // char *payload = "{ \"bob\": 123 }";
@@ -869,45 +832,45 @@ void test_cjwt(void)
     cjwt_code_t result;
 
     for (size_t i = 0; i < sizeof(test_list) / sizeof(test_case_t); i++) {
-        test_case(&test_list[i]);
+        bdd_invoke(test_case, &test_list[i]);
     }
     for (size_t i = 0; i < sizeof(json_test_list) / sizeof(json_test_case_t); i++) {
-        json_test_case(&json_test_list[i]);
+        bdd_invoke(json_test_case, &json_test_list[i]);
     }
 
     // printf( "%s.%s.", b64_h, b64_p );
     result = cjwt_decode(bad_h1, strlen(bad_h1), OPT_ALLOW_ALG_NONE, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_HEADER_INVALID_BASE64 == result);
+    check_int_eq(CJWTE_HEADER_INVALID_BASE64, result);
 
     result = cjwt_decode(bad_p1, strlen(bad_p1), OPT_ALLOW_ALG_NONE, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_PAYLOAD_INVALID_BASE64 == result);
+    check_int_eq(CJWTE_PAYLOAD_INVALID_BASE64, result);
 
     result = cjwt_decode(bad_h2, strlen(bad_h2), OPT_ALLOW_ALG_NONE, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_HEADER_MISSING == result);
+    check_int_eq(CJWTE_HEADER_MISSING, result);
 
     result = cjwt_decode(bad_p2, strlen(bad_p2), OPT_ALLOW_ALG_NONE, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_PAYLOAD_MISSING == result);
+    check_int_eq(CJWTE_PAYLOAD_MISSING, result);
 
     result = cjwt_decode(NULL, strlen(bad_p2), 0, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_INVALID_PARAMETERS == result);
+    check_int_eq(CJWTE_INVALID_PARAMETERS, result);
 
     result = cjwt_decode(bad_p2, 0, 0, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_INVALID_PARAMETERS == result);
+    check_int_eq(CJWTE_INVALID_PARAMETERS, result);
 
     result = cjwt_decode(bad_p2, strlen(bad_p2), 0, NULL, 0, 0, 0, NULL);
-    CU_ASSERT(CJWTE_INVALID_PARAMETERS == result);
+    check_int_eq(CJWTE_INVALID_PARAMETERS, result);
 
     result = cjwt_decode(bad_3group, strlen(bad_3group), 0, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_SIGNATURE_MISSING == result);
+    check_int_eq(CJWTE_SIGNATURE_MISSING, result);
 
     result = cjwt_decode(bad_5group, strlen(bad_5group), 0, NULL, 0, 0, 0, &jwt);
-    CU_ASSERT(CJWTE_INVALID_SECTIONS == result);
+    check_int_eq(CJWTE_INVALID_SECTIONS, result);
 }
 
-
-int main(void)
-{
-    UNITY_BEGIN();
-    RUN_TEST(test_cjwt);
-    return UNITY_END();
+suite("cjwt new") {
+  group("decode vectors") {
+    it("runs file vectors and json vectors") {
+      bdd_invoke(run_vectors);
+    }
+  }
 }

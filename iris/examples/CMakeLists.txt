@@ -4,7 +4,7 @@
 add_subdirectory(vendors)
 
 # Castle - Full-featured web application with PostgreSQL
-add_subdirectory(castle)
+# add_subdirectory(castle)
 
 # JWT Example
  

@@ -5,13 +5,11 @@ A C-based Mustache templating engine integrated with TurboNet's JSON parser.
 ## Features
 
 - **Complete Mustache Implementation**: Based on Mustache4C with full spec compliance
-- **Advanced Parser**: Uses re2c + recursive descent for robust lexing and parsing
 - **JSON Integration**: Direct integration with TurboNet's high-performance JSON parser
 - **Memory Efficient**: Minimal memory footprint with streaming capabilities
 - **HTML Escaping**: Built-in HTML escaping for web applications
 - **Partial Templates**: Support for template composition
 - **Thread Safe**: Can be used in multi-threaded environments
-- **AST Support**: Generates Abstract Syntax Tree for advanced template analysis
 
 ## Quick Start
 
@@ -120,51 +118,6 @@ int file_out_verbatim(const char *output, size_t size, void *renderer_data) {
 // Initialize and use...
 ```
 
-## Advanced Parser Features
-
-The mustache module now uses re2c + recursive descent parser, providing:
-
-### Benefits over Manual Parsing
-- **Better Error Messages**: Precise line/column error reporting
-- **Robust Lexing**: Handles edge cases and malformed input gracefully  
-- **Performance**: Generated lexer is faster than manual string parsing
-- **Maintainability**: Grammar is declarative and easier to extend
-- **AST Generation**: Creates Abstract Syntax Tree for advanced use cases
-
-### Parser API
-
-```c
-#include "mustache_types.h"
-
-// Parse template into AST
-mustache_parse_ctx_t ctx;
-if (mustache_parse_template(template_str, strlen(template_str), &ctx) == 0) {
-    // Success - use ctx.root AST
-    mustache_ast_print(ctx.root, 0); // Debug print
-    mustache_ast_free(ctx.root);     // Cleanup
-} else {
-    printf("Parse error: %s at %d:%d\n", ctx.error_message, ctx.error_line, ctx.error_column);
-}
-
-// Tokenize template
-mustache_token_t *tokens;
-size_t token_count;
-if (mustache_tokenize(template_str, strlen(template_str), &tokens, &token_count) == 0) {
-    // Process tokens...
-    free(tokens);
-}
-```
-
-### Grammar Overview
-
-The recursive descent parser supports:
-- Variables: `{{name}}`, `{{{unescaped}}}`, `{{&unescaped}}`
-- Sections: `{{#section}}...{{/section}}`
-- Inverted sections: `{{^missing}}...{{/missing}}`
-- Partials: `{{>partial_name}}`
-- Comments: `{{! comment text }}`
-- Delimiter changes: `{{=<% %>=}}`
-
 ## Performance Notes
 
 - Templates are compiled once and can be reused multiple times
@@ -203,9 +156,6 @@ Run the integration tests:
 ```bash
 # Basic JSON integration tests
 ctest -R mustache_json_integration
-
-# New re2c + recursive descent parser tests  
-ctest -R mustache_new_parser
 
 # Comprehensive mustache specification tests
 ctest -R mustache_specification

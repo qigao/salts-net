@@ -455,7 +455,12 @@ static int ws_server_parse_handshake(turbo_websocket_connection_t *conn, const c
     if (path_end) {
       size_t path_len = path_end - path_start;
       if (path_len > 0) {
-        conn->request_path = turbo_arena_strdup(conn->conn_arena, path_start);
+        char *path_copy = (char *)turbo_arena_alloc(conn->conn_arena, path_len + 1);
+        if (path_copy) {
+          memcpy(path_copy, path_start, path_len);
+          path_copy[path_len] = '\0';
+          conn->request_path = path_copy;
+        }
       }
     }
   }

@@ -56,14 +56,14 @@ install(
 # Tests
 # ============================================================================
 
-if(BUILD_TESTING)
+if(BUILD_TESTS)
   add_executable(test_stun tests/test_stun.c)
-  target_link_libraries(test_stun PRIVATE turbo_ice unity)
+  target_link_libraries(test_stun PRIVATE turbo_ice TurboNet::TinyTest)
   add_test(NAME stun COMMAND test_stun)
   set_target_properties(test_stun PROPERTIES FOLDER ice/tests)
 
   add_executable(test_ice tests/test_ice.c)
-  target_link_libraries(test_ice PRIVATE turbo_ice unity)
+  target_link_libraries(test_ice PRIVATE turbo_ice TurboNet::TinyTest)
   add_test(NAME ice COMMAND test_ice)
   set_target_properties(test_ice PROPERTIES FOLDER ice/tests)
 endif()
@@ -72,7 +72,7 @@ endif()
 # Examples
 # ============================================================================
 
-if(BUILD_TESTING)
+if(BUILD_TESTS)
   add_executable(stun_discovery examples/stun_discovery.c)
   target_link_libraries(stun_discovery PRIVATE turbo_ice)
   set_target_properties(stun_discovery PROPERTIES FOLDER ice/examples)

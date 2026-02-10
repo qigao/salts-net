@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #include "tlog.h"
 
 #include <stc/cstr.h>
@@ -48,6 +51,10 @@ int turbo_config_init(void) {
   if (g_config_init) {
     return 0; /* Already initialized */
   }
+
+#ifndef _WIN32
+  signal(SIGPIPE, SIG_IGN);
+#endif
 
   g_config_map = ConfigMap_init();
   g_config_init = 1;

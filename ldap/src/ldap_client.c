@@ -13,6 +13,7 @@
 #include <uv.h>
 #include <stb_sprintf.h>
 #include "tlog.h"
+#include "turbo_dns.h"
 
 /* Client error codes (match ldap_client.h) */
 #define LDAP_CLIENT_OK              0
@@ -193,7 +194,7 @@ static void on_tcp_connect(void *handle, int status) {
         client->pending_result = LDAP_CLIENT_ERROR_NETWORK;
         stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
                        "Connection failed: %s", uv_strerror(status));
-        TLOG_ERROR("LDAP connection failed to {:s}:{:d}: {:s}", 
+        TLOG_INFO("LDAP connection failed to {:s}:{:d}: {:s}", 
                    client->host, client->port, client->error_msg);
     }
     client->response_received = 1;
@@ -214,7 +215,7 @@ static void on_timeout(uv_timer_t *timer) {
     if (!client->response_received) {
         client->pending_result = LDAP_CLIENT_ERROR_TIMEOUT;
         strcpy(client->error_msg, "Operation timeout");
-        TLOG_ERROR("LDAP operation timeout for {:s}:{:d}", client->host, client->port);
+        TLOG_DEBUG("LDAP operation timeout for {:s}:{:d}", client->host, client->port);
         uv_stop(client->loop);
     }
 }
@@ -295,6 +296,9 @@ ldap_client_t *ldap_client_create(const ldap_client_config_t *config) {
     uv_timer_init(client->loop, &client->timeout_timer);
     client->timeout_timer.data = client;
 
+    /* Initialize DNS subsystem for hostname resolution */
+    turbo_dns_init();
+
     TLOG_INFO("LDAP client created for {:s}:{:d}", client->host, client->port);
 
     return client;
@@ -317,6 +321,10 @@ void ldap_client_destroy(ldap_client_t *client) {
     free(client->loop);
     free(client->recv_buf);
     free(client->host);
+    
+    /* Cleanup DNS subsystem reference */
+    turbo_dns_cleanup();
+
     free(client);
 }
 
@@ -344,6 +352,7 @@ int ldap_client_connect(ldap_client_t *client) {
     if (rc != 0) {
         stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
                        "Connect failed: %s", uv_strerror(rc));
+        TLOG_ERROR("LDAP connect failed immediately: {:s}", client->error_msg);
         return LDAP_CLIENT_ERROR_NETWORK;
     }
 

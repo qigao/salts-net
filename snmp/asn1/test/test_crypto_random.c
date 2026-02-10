@@ -4,67 +4,59 @@
  */
 
 #include "crypto_random.h"
-#include "unity.h"
+#include "tinytest.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+spec("crypto_random") {
+  describe("Basic RNG Functionality") {
+    it("should generate 32 random bytes and they should not be all zero") {
+      uint8_t buf[32];
+      memset(buf, 0, sizeof(buf));
 
-void setUp(void) {}
-void tearDown(void) {}
+      int ret = crypto_random_bytes(buf, 32);
+      check_int_eq(ret, 0);
 
-void test_crypto_random_basic(void) {
-  uint8_t buf[32];
-  memset(buf, 0, sizeof(buf));
+      // Verify buffer is not all zeros (extremely unlikely with CSPRNG)
+      bool all_zero = true;
+      for (int i = 0; i < 32; i++) {
+        if (buf[i] != 0) {
+          all_zero = false;
+          break;
+        }
+      }
+      check(!all_zero);
+    }
 
-  int ret = crypto_random_bytes(buf, 32);
-  TEST_ASSERT_EQUAL(0, ret);
+    it("should produce different results on consecutive calls") {
+      uint8_t buf1[32], buf2[32];
 
-  // Verify buffer is not all zeros (extremely unlikely with CSPRNG)
-  bool all_zero = true;
-  for (int i = 0; i < 32; i++) {
-    if (buf[i] != 0) {
-      all_zero = false;
-      break;
+      check_int_eq(crypto_random_bytes(buf1, 32), 0);
+      check_int_eq(crypto_random_bytes(buf2, 32), 0);
+
+      // Two consecutive calls should produce different results
+      check(memcmp(buf1, buf2, 32) != 0);
     }
   }
-  TEST_ASSERT_FALSE(all_zero);
-}
 
-void test_crypto_random_different_calls(void) {
-  uint8_t buf1[32], buf2[32];
+  describe("Variable Sizes") {
+    it("should successfully generate random bytes for various buffer sizes") {
+      uint8_t buf1[1], buf16[16], buf64[64], buf256[256];
 
-  TEST_ASSERT_EQUAL(0, crypto_random_bytes(buf1, 32));
-  TEST_ASSERT_EQUAL(0, crypto_random_bytes(buf2, 32));
+      check_int_eq(crypto_random_bytes(buf1, 1), 0);
+      check_int_eq(crypto_random_bytes(buf16, 16), 0);
+      check_int_eq(crypto_random_bytes(buf64, 64), 0);
+      check_int_eq(crypto_random_bytes(buf256, 256), 0);
+    }
+  }
 
-  // Two consecutive calls should produce different results
-  TEST_ASSERT_NOT_EQUAL(0, memcmp(buf1, buf2, 32));
-}
-
-void test_crypto_random_various_sizes(void) {
-  uint8_t buf1[1], buf16[16], buf64[64], buf256[256];
-
-  TEST_ASSERT_EQUAL(0, crypto_random_bytes(buf1, 1));
-  TEST_ASSERT_EQUAL(0, crypto_random_bytes(buf16, 16));
-  TEST_ASSERT_EQUAL(0, crypto_random_bytes(buf64, 64));
-  TEST_ASSERT_EQUAL(0, crypto_random_bytes(buf256, 256));
-}
-
-void test_crypto_random_null_check(void) {
-  TEST_ASSERT_EQUAL(-1, crypto_random_bytes(NULL, 32));
-
-  uint8_t buf[32];
-  TEST_ASSERT_EQUAL(-1, crypto_random_bytes(buf, 0));
-}
-
-int main(void) {
-  UNITY_BEGIN();
-
-  RUN_TEST(test_crypto_random_basic);
-  RUN_TEST(test_crypto_random_different_calls);
-  RUN_TEST(test_crypto_random_various_sizes);
-  RUN_TEST(test_crypto_random_null_check);
-
-  return UNITY_END();
+  describe("Edge Cases") {
+     it("should return -1 when given a NULL buffer or zero length") {
+      uint8_t buf[32];
+      check_int_eq(crypto_random_bytes(NULL, 32), -1);
+      check_int_eq(crypto_random_bytes(buf, 0), -1);
+    }
+  }
 }

@@ -64,11 +64,28 @@ static inline uint32_t squid_conn_hash(uint64_t connection_id) {
   return (uint32_t)(connection_id & 0xFFFFFFFF) & (SQUID_CONN_HASH_TABLE_SIZE - 1);
 }
 
+int squid_conn_table_init(squid_master_t *master) {
+  if (!master)
+    return -1;
+  if (master->conn_table)
+    return 0;
+
+  master->conn_table =
+      (squid_conn_entry_t **)calloc(SQUID_CONN_HASH_TABLE_SIZE, sizeof(*master->conn_table));
+  if (!master->conn_table)
+    return -1;
+
+  return 0;
+}
+
 squid_conn_entry_t *squid_conn_table_add(squid_master_t *master,
                                           uint64_t connection_id,
                                           async_server_t *server,
                                           async_server_connection_t *connection,
                                           uint16_t worker_id) {
+  if (!master || !master->conn_table)
+    return NULL;
+
   squid_conn_entry_t *entry = (squid_conn_entry_t *)calloc(1, sizeof(*entry));
   if (!entry)
     return NULL;
@@ -88,6 +105,9 @@ squid_conn_entry_t *squid_conn_table_add(squid_master_t *master,
 }
 
 squid_conn_entry_t *squid_conn_table_find(squid_master_t *master, uint64_t connection_id) {
+  if (!master || !master->conn_table)
+    return NULL;
+
   uint32_t hash = squid_conn_hash(connection_id);
 
   /* Search in hash bucket - average O(1), worst case O(n) for collisions */
@@ -99,6 +119,9 @@ squid_conn_entry_t *squid_conn_table_find(squid_master_t *master, uint64_t conne
 }
 
 void squid_conn_table_remove(squid_master_t *master, uint64_t connection_id) {
+  if (!master || !master->conn_table)
+    return;
+
   uint32_t hash = squid_conn_hash(connection_id);
   squid_conn_entry_t **pp = &master->conn_table[hash];
 
@@ -115,6 +138,9 @@ void squid_conn_table_remove(squid_master_t *master, uint64_t connection_id) {
 }
 
 void squid_conn_table_clear(squid_master_t *master) {
+  if (!master || !master->conn_table)
+    return;
+
   /* Iterate through all hash buckets */
   for (uint32_t i = 0; i < SQUID_CONN_HASH_TABLE_SIZE; i++) {
     squid_conn_entry_t *e = master->conn_table[i];

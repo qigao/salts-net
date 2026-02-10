@@ -1,5 +1,5 @@
 #include "turbo_parser.h"
-#include "bdd-for-c.h"
+#include "tinytest.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>

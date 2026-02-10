@@ -1,6 +1,6 @@
 set(TARGET_NAME NetCore)
 find_package(Stb REQUIRED)
-
+find_package(libuv CONFIG REQUIRED)
 # Add WebSocket parser subdirectory
 add_subdirectory(parser)
 
@@ -22,8 +22,7 @@ target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/netcore>
-         $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/netcore>
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/netcore>
   PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
@@ -32,7 +31,8 @@ add_sanitizers(${TARGET_NAME})
 # Link libraries
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC OpenSSL::SSL OpenSSL::Crypto libuv::uv TurboNet::Utils
+  PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils
+         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
          TurboNet::Parser
   PRIVATE kcp::kcp Threads::Threads llhttp::llhttp_static PkgConfig::STC
           TurboNet::WebSocketParser)
@@ -50,8 +50,7 @@ install(
   RUNTIME DESTINATION bin)
 
 # Install headers preserving directory structure
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/netcore.h
-        DESTINATION include)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/netcore.h DESTINATION include)
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/netcore
   DESTINATION include

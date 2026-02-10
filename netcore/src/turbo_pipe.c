@@ -453,7 +453,11 @@ static void on_pipe_client_connected(uv_connect_t* req, int status) {
         }
     } else {
         turbo_stats_counter_inc_fast(s_pipe_stats.recv_errors);
-        TLOG_ERROR("Pipe connection failed: {:s}", uv_strerror(status));
+        if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET || status == UV_ENOENT) {
+            TLOG_DEBUG("Pipe connection failed: {:s}", uv_strerror(status));
+        } else {
+            TLOG_ERROR("Pipe connection failed: {:s}", uv_strerror(status));
+        }
         
         // Notify caller of connection failure
         if (client->on_connect) {

@@ -10,6 +10,7 @@
 #include <ares.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sds.h"
 #include <uv.h>
 
 #ifdef _WIN32
@@ -53,10 +54,10 @@ static char *strdup_padded(const char *s) {
   if (!s)
     return NULL;
   size_t len = strlen(s);
-  size_t alloc_size = ((len + 1 + 7) / 8) * 8; /* Round up to 8-byte boundary */
-  char *copy = (char *)calloc(1, alloc_size);
-  if (copy)
-    memcpy(copy, s, len + 1);
+  sds copy = sdsnewlen(s, len);
+  if (!copy)
+    return NULL;
+  copy = sdsMakeRoomFor(copy, 8);
   return copy;
 }
 
@@ -170,11 +171,15 @@ static void poll_cb(uv_poll_t *poll, int status, int events) {
   if (!ctx || !ctx->initialized || ctx->closing)
     return;
 
+  uv_os_fd_t fd;
+  if (uv_fileno((uv_handle_t *)poll, &fd) != 0)
+    return;
+
   ares_socket_t rfd = ARES_SOCKET_BAD, wfd = ARES_SOCKET_BAD;
   if (events & UV_READABLE)
-    rfd = poll->socket;
+    rfd = (ares_socket_t)fd;
   if (events & UV_WRITABLE)
-    wfd = poll->socket;
+    wfd = (ares_socket_t)fd;
 
   ares_process_fd(ctx->channel, rfd, wfd);
 
@@ -247,7 +252,7 @@ static void release_parent_ref(turbo_dns_parent_query_t *parent) {
                   ? parent->status_v4
                   : (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0 ? parent->status_v6
                                                                                  : ARES_ENODATA);
-    TLOG_ERROR("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
+    TLOG_DEBUG("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
     parent->callback(parent->hostname, NULL, err, parent->user_data);
   }
 
@@ -267,7 +272,7 @@ static void release_parent_ref(turbo_dns_parent_query_t *parent) {
     ctx->socket_count = 0;
     uv_close((uv_handle_t *)&ctx->timer, on_uv_handle_closed);
   }
-  free(parent->hostname);
+  sdsfree(parent->hostname);
   free(parent);
 }
 
@@ -345,7 +350,7 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
     status = ares_library_init(ARES_LIB_INIT_ALL);
     if (status != ARES_SUCCESS) {
       turbo_mutex_unlock(&g_dns_lock);
-      TLOG_ERROR("ares_library_init failed: {}", ares_strerror(status));
+      TLOG_DEBUG("ares_library_init failed: {}", ares_strerror(status));
       free(ctx);
       return UV_EAI_FAIL;
     }
@@ -382,7 +387,7 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
 
   status = ares_init_options(&ctx->channel, &options, init_flags);
   if (status != ARES_SUCCESS) {
-    TLOG_ERROR("ares_init_options failed: {}", ares_strerror(status));
+    TLOG_DEBUG("ares_init_options failed: {}", ares_strerror(status));
     ctx->closing = 1;
     uv_close((uv_handle_t *)&ctx->timer, on_uv_handle_closed);
     return UV_EAI_FAIL;

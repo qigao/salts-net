@@ -54,15 +54,15 @@ install(
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_parser.h
         DESTINATION include)
 
-if(BUILD_TESTING)
+if(BUILD_TESTS)
   add_executable(test_turbo_parser test/test_turbo_parser.c)
-  target_link_libraries(test_turbo_parser PRIVATE turbo_parser unity)
+  target_link_libraries(test_turbo_parser PRIVATE turbo_parser TurboNet::TinyTest)
   set_target_properties(test_turbo_parser PROPERTIES FOLDER turbo_parser)
   add_sanitizers(test_turbo_parser)
   add_test(NAME test_turbo_parser COMMAND test_turbo_parser)
 
   add_executable(test_turbo_parser_bdd test/test_turbo_parser_bdd.c)
-  target_link_libraries(test_turbo_parser_bdd PRIVATE turbo_parser bdd)
+  target_link_libraries(test_turbo_parser_bdd PRIVATE turbo_parser TurboNet::TinyTest)
   set_target_properties(test_turbo_parser_bdd PROPERTIES FOLDER turbo_parser)
   add_sanitizers(test_turbo_parser_bdd)
   add_test(NAME test_turbo_parser_bdd COMMAND test_turbo_parser_bdd)

@@ -1,5 +1,5 @@
 
-#include "bdd-for-c.h"
+#include "tinytest.h"
 #include "rpc_client.h"
 #include "rpc_error.h"
 #include "rpc_retry.h"

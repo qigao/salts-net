@@ -5,15 +5,18 @@ if(NOT RE2C_EXECUTABLE)
 endif()
 
 # Find lemon (use built-in or system)
+# Check for project-provided lemon target first (prefer direct target over alias)
 if(TARGET lemon)
-    # Using the project-provided lemon
     set(LEMON_EXECUTABLE $<TARGET_FILE:lemon>)
     set(LEMON_DEPENDS lemon)
+    message(STATUS "Using project-provided lemon target")
 else()
-    # Using system lemon
+    # Fallback to system lemon only if project target not available
     find_program(LEMON_EXECUTABLE lemon)
     if(NOT LEMON_EXECUTABLE)
         message(WARNING "lemon not found - some parsers might not be generated")
+    else()
+        message(WARNING "Using system lemon - version mismatch may occur!")
     endif()
     set(LEMON_DEPENDS "")
 endif()

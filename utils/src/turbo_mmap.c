@@ -13,6 +13,7 @@
 #ifdef _WIN32
   #include <io.h>
 #else
+  #include <errno.h>
   #include <fcntl.h>
   #include <sys/mman.h>
   #include <sys/stat.h>
@@ -58,15 +59,15 @@ static int64_t get_file_size_fd(intptr_t fd) {
 // Core Implementation
 // =============================================================================
 
-CXX_C_API void turbo_mmap_init(turbo_mmap_t *mmap) {
-    if (!mmap) return;
-    memset(mmap, 0, sizeof(*mmap));
+CXX_C_API void turbo_mmap_init(turbo_mmap_t *mmap_ptr) {
+    if (!mmap_ptr) return;
+    memset(mmap_ptr, 0, sizeof(*mmap_ptr));
 #ifdef _WIN32
-    mmap->file_handle = INVALID_HANDLE_VALUE;
-    mmap->map_handle = NULL;
+    mmap_ptr->file_handle = INVALID_HANDLE_VALUE;
+    mmap_ptr->map_handle = NULL;
 #else
-    mmap->fd = -1;
-    mmap->owns_fd = false;
+    mmap_ptr->fd = -1;
+    mmap_ptr->owns_fd = false;
 #endif
 }
 
@@ -79,26 +80,26 @@ CXX_C_API size_t turbo_mmap_page_count(size_t size) {
     return (size + page_size - 1) / page_size;
 }
 
-CXX_C_API size_t turbo_mmap_pages(const turbo_mmap_t *mmap) {
-    if (!mmap || !mmap->is_mapped) return 0;
+CXX_C_API size_t turbo_mmap_pages(const turbo_mmap_t *mmap_ptr) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) return 0;
     size_t page_size = get_page_size();
-    return (mmap->length + page_size - 1) / page_size;
+    return (mmap_ptr->length + page_size - 1) / page_size;
 }
 
-CXX_C_API int turbo_mmap_open(turbo_mmap_t *mmap, const char *path, int access) {
-    return turbo_mmap_open_range(mmap, path, 0, 0, access);
+CXX_C_API int turbo_mmap_open(turbo_mmap_t *mmap_ptr, const char *path, int access) {
+    return turbo_mmap_open_range(mmap_ptr, path, 0, 0, access);
 }
 
-CXX_C_API int turbo_mmap_open_range(turbo_mmap_t *mmap, const char *path,
+CXX_C_API int turbo_mmap_open_range(turbo_mmap_t *mmap_ptr, const char *path,
                                     int64_t offset, size_t length, int access) {
-    if (!mmap || !path) {
+    if (!mmap_ptr || !path) {
         return TURBO_MMAP_EINVAL;
     }
-    if (mmap->is_mapped) {
+    if (mmap_ptr->is_mapped) {
         return TURBO_MMAP_EEXIST;
     }
 
-    turbo_mmap_init(mmap);
+    turbo_mmap_init(mmap_ptr);
 
 #ifdef _WIN32
     // Open file
@@ -122,11 +123,11 @@ CXX_C_API int turbo_mmap_open_range(turbo_mmap_t *mmap, const char *path,
         return TURBO_MMAP_EIO;
     }
 
-    mmap->file_handle = hFile;
-    int result = turbo_mmap_from_fd(mmap, (intptr_t)hFile, offset, length, access);
+    mmap_ptr->file_handle = hFile;
+    int result = turbo_mmap_from_fd(mmap_ptr, (intptr_t)hFile, offset, length, access);
     if (result != TURBO_MMAP_OK) {
         CloseHandle(hFile);
-        mmap->file_handle = INVALID_HANDLE_VALUE;
+        mmap_ptr->file_handle = INVALID_HANDLE_VALUE;
     }
     return result;
 
@@ -140,21 +141,21 @@ CXX_C_API int turbo_mmap_open_range(turbo_mmap_t *mmap, const char *path,
         return TURBO_MMAP_EIO;
     }
 
-    mmap->fd = fd;
-    mmap->owns_fd = true;
-    int result = turbo_mmap_from_fd(mmap, fd, offset, length, access);
+    mmap_ptr->fd = fd;
+    mmap_ptr->owns_fd = true;
+    int result = turbo_mmap_from_fd(mmap_ptr, fd, offset, length, access);
     if (result != TURBO_MMAP_OK) {
         close(fd);
-        mmap->fd = -1;
-        mmap->owns_fd = false;
+        mmap_ptr->fd = -1;
+        mmap_ptr->owns_fd = false;
     }
     return result;
 #endif
 }
 
-CXX_C_API int turbo_mmap_from_fd(turbo_mmap_t *mmap, intptr_t fd,
+CXX_C_API int turbo_mmap_from_fd(turbo_mmap_t *mmap_ptr, intptr_t fd,
                                  int64_t offset, size_t length, int access) {
-    if (!mmap) {
+    if (!mmap_ptr) {
         return TURBO_MMAP_EINVAL;
     }
 
@@ -185,11 +186,11 @@ CXX_C_API int turbo_mmap_from_fd(turbo_mmap_t *mmap, intptr_t fd,
     size_t offset_diff = (size_t)(offset - aligned_offset);
     size_t mapped_length = length + offset_diff;
 
-    mmap->offset = offset;
-    mmap->aligned_offset = aligned_offset;
-    mmap->length = length;
-    mmap->mapped_length = mapped_length;
-    mmap->access = access;
+    mmap_ptr->offset = offset;
+    mmap_ptr->aligned_offset = aligned_offset;
+    mmap_ptr->length = length;
+    mmap_ptr->mapped_length = mapped_length;
+    mmap_ptr->access = access;
 
 #ifdef _WIN32
     // Create file mapping
@@ -210,9 +211,9 @@ CXX_C_API int turbo_mmap_from_fd(turbo_mmap_t *mmap, intptr_t fd,
         return TURBO_MMAP_ENOMEM;
     }
 
-    mmap->map_handle = hMap;
-    mmap->data = (char *)ptr + offset_diff;
-    mmap->is_mapped = true;
+    mmap_ptr->map_handle = hMap;
+    mmap_ptr->data = (char *)ptr + offset_diff;
+    mmap_ptr->is_mapped = true;
 
 #else
     // POSIX mmap
@@ -227,32 +228,32 @@ CXX_C_API int turbo_mmap_from_fd(turbo_mmap_t *mmap, intptr_t fd,
         return TURBO_MMAP_EIO;
     }
 
-    mmap->data = (char *)ptr + offset_diff;
-    mmap->is_mapped = true;
+    mmap_ptr->data = (char *)ptr + offset_diff;
+    mmap_ptr->is_mapped = true;
 #endif
 
     return TURBO_MMAP_OK;
 }
 
-CXX_C_API int turbo_mmap_sync(turbo_mmap_t *mmap, bool async) {
-    if (!mmap || !mmap->is_mapped) {
+CXX_C_API int turbo_mmap_sync(turbo_mmap_t *mmap_ptr, bool async) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) {
         return TURBO_MMAP_EINVAL;
     }
-    return turbo_mmap_sync_range(mmap, 0, mmap->length, async);
+    return turbo_mmap_sync_range(mmap_ptr, 0, mmap_ptr->length, async);
 }
 
-CXX_C_API int turbo_mmap_sync_range(turbo_mmap_t *mmap, size_t offset,
+CXX_C_API int turbo_mmap_sync_range(turbo_mmap_t *mmap_ptr, size_t offset,
                                     size_t length, bool async) {
-    if (!mmap || !mmap->is_mapped) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) {
         return TURBO_MMAP_EINVAL;
     }
-    if (offset + length > mmap->length) {
+    if (offset + length > mmap_ptr->length) {
         return TURBO_MMAP_EINVAL;
     }
 
     // Get actual mapped base (before user offset adjustment)
-    size_t offset_diff = (size_t)(mmap->offset - mmap->aligned_offset);
-    char *base = (char *)mmap->data - offset_diff;
+    size_t offset_diff = (size_t)(mmap_ptr->offset - mmap_ptr->aligned_offset);
+    char *base = (char *)mmap_ptr->data - offset_diff;
 
 #ifdef _WIN32
     (void)async; // Windows FlushViewOfFile is always sync
@@ -269,45 +270,45 @@ CXX_C_API int turbo_mmap_sync_range(turbo_mmap_t *mmap, size_t offset,
 #endif
 }
 
-CXX_C_API void turbo_mmap_unmap(turbo_mmap_t *mmap) {
-    if (!mmap || !mmap->is_mapped) {
+CXX_C_API void turbo_mmap_unmap(turbo_mmap_t *mmap_ptr) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) {
         return;
     }
 
     // Get actual mapped base
-    size_t offset_diff = (size_t)(mmap->offset - mmap->aligned_offset);
-    char *base = (char *)mmap->data - offset_diff;
+    size_t offset_diff = (size_t)(mmap_ptr->offset - mmap_ptr->aligned_offset);
+    char *base = (char *)mmap_ptr->data - offset_diff;
 
 #ifdef _WIN32
     UnmapViewOfFile(base);
-    if (mmap->map_handle) {
-        CloseHandle(mmap->map_handle);
-        mmap->map_handle = NULL;
+    if (mmap_ptr->map_handle) {
+        CloseHandle(mmap_ptr->map_handle);
+        mmap_ptr->map_handle = NULL;
     }
 #else
-    munmap(base, mmap->mapped_length);
+    munmap(base, mmap_ptr->mapped_length);
 #endif
 
-    mmap->data = NULL;
-    mmap->is_mapped = false;
+    mmap_ptr->data = NULL;
+    mmap_ptr->is_mapped = false;
 }
 
-CXX_C_API void turbo_mmap_close(turbo_mmap_t *mmap) {
-    if (!mmap) return;
+CXX_C_API void turbo_mmap_close(turbo_mmap_t *mmap_ptr) {
+    if (!mmap_ptr) return;
 
-    turbo_mmap_unmap(mmap);
+    turbo_mmap_unmap(mmap_ptr);
 
 #ifdef _WIN32
-    if (mmap->file_handle != INVALID_HANDLE_VALUE) {
-        CloseHandle(mmap->file_handle);
-        mmap->file_handle = INVALID_HANDLE_VALUE;
+    if (mmap_ptr->file_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(mmap_ptr->file_handle);
+        mmap_ptr->file_handle = INVALID_HANDLE_VALUE;
     }
 #else
-    if (mmap->owns_fd && mmap->fd >= 0) {
-        close(mmap->fd);
+    if (mmap_ptr->owns_fd && mmap_ptr->fd >= 0) {
+        close(mmap_ptr->fd);
     }
-    mmap->fd = -1;
-    mmap->owns_fd = false;
+    mmap_ptr->fd = -1;
+    mmap_ptr->owns_fd = false;
 #endif
 }
 
@@ -315,8 +316,8 @@ CXX_C_API void turbo_mmap_close(turbo_mmap_t *mmap) {
 // Utilities
 // =============================================================================
 
-CXX_C_API int turbo_mmap_advise(turbo_mmap_t *mmap, turbo_mmap_advice_t advice) {
-    if (!mmap || !mmap->is_mapped) {
+CXX_C_API int turbo_mmap_advise(turbo_mmap_t *mmap_ptr, turbo_mmap_advice_t advice) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) {
         return TURBO_MMAP_EINVAL;
     }
 
@@ -334,52 +335,52 @@ CXX_C_API int turbo_mmap_advise(turbo_mmap_t *mmap, turbo_mmap_advice_t advice) 
         default:                    posix_advice = MADV_NORMAL; break;
     }
 
-    size_t offset_diff = (size_t)(mmap->offset - mmap->aligned_offset);
-    char *base = (char *)mmap->data - offset_diff;
+    size_t offset_diff = (size_t)(mmap_ptr->offset - mmap_ptr->aligned_offset);
+    char *base = (char *)mmap_ptr->data - offset_diff;
 
-    if (madvise(base, mmap->mapped_length, posix_advice) != 0) {
+    if (madvise(base, mmap_ptr->mapped_length, posix_advice) != 0) {
         return TURBO_MMAP_EIO;
     }
     return TURBO_MMAP_OK;
 #endif
 }
 
-CXX_C_API int turbo_mmap_lock(turbo_mmap_t *mmap) {
-    if (!mmap || !mmap->is_mapped) {
+CXX_C_API int turbo_mmap_lock(turbo_mmap_t *mmap_ptr) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) {
         return TURBO_MMAP_EINVAL;
     }
 
-    size_t offset_diff = (size_t)(mmap->offset - mmap->aligned_offset);
-    char *base = (char *)mmap->data - offset_diff;
+    size_t offset_diff = (size_t)(mmap_ptr->offset - mmap_ptr->aligned_offset);
+    char *base = (char *)mmap_ptr->data - offset_diff;
 
 #ifdef _WIN32
-    if (!VirtualLock(base, mmap->mapped_length)) {
+    if (!VirtualLock(base, mmap_ptr->mapped_length)) {
         return TURBO_MMAP_EIO;
     }
     return TURBO_MMAP_OK;
 #else
-    if (mlock(base, mmap->mapped_length) != 0) {
+    if (mlock(base, mmap_ptr->mapped_length) != 0) {
         return TURBO_MMAP_EIO;
     }
     return TURBO_MMAP_OK;
 #endif
 }
 
-CXX_C_API int turbo_mmap_unlock(turbo_mmap_t *mmap) {
-    if (!mmap || !mmap->is_mapped) {
+CXX_C_API int turbo_mmap_unlock(turbo_mmap_t *mmap_ptr) {
+    if (!mmap_ptr || !mmap_ptr->is_mapped) {
         return TURBO_MMAP_EINVAL;
     }
 
-    size_t offset_diff = (size_t)(mmap->offset - mmap->aligned_offset);
-    char *base = (char *)mmap->data - offset_diff;
+    size_t offset_diff = (size_t)(mmap_ptr->offset - mmap_ptr->aligned_offset);
+    char *base = (char *)mmap_ptr->data - offset_diff;
 
 #ifdef _WIN32
-    if (!VirtualUnlock(base, mmap->mapped_length)) {
+    if (!VirtualUnlock(base, mmap_ptr->mapped_length)) {
         return TURBO_MMAP_EIO;
     }
     return TURBO_MMAP_OK;
 #else
-    if (munlock(base, mmap->mapped_length) != 0) {
+    if (munlock(base, mmap_ptr->mapped_length) != 0) {
         return TURBO_MMAP_EIO;
     }
     return TURBO_MMAP_OK;

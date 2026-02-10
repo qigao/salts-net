@@ -1,9 +1,6 @@
 /* SPDX-FileCopyrightText: 2021-2022 Comcast Cable Communications Management, LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
-#include "cunit_to_unity.h"
-
-void setUp(void) {}
-void tearDown(void) {}
+#include "tinytest.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,8 +8,9 @@ void tearDown(void) {}
 
 #include "cjwt.h"
 
-void test_map(void)
-{
+suite("cjwt map") {
+  group("alg_string_to_enum") {
+    it("maps known values and rejects unknown") {
     struct vector {
         const char *s;
         size_t len;
@@ -61,20 +59,14 @@ void test_map(void)
         } else {
             alg = alg_none;
         }
-        CU_ASSERT(tests[i].rv == cjwt_alg_string_to_enum(tests[i].s, tests[i].len, &alg));
+        check_int_eq(tests[i].rv, cjwt_alg_string_to_enum(tests[i].s, tests[i].len, &alg));
         if (CJWTE_OK == tests[i].rv) {
-            CU_ASSERT(tests[i].expected == alg);
+            check_int_eq(tests[i].expected, alg);
         }
     }
 
     /* If a NULL alg is passed, check for that. */
-    CU_ASSERT(CJWTE_INVALID_PARAMETERS == cjwt_alg_string_to_enum("none", 4, NULL));
-}
-
-
-int main(void)
-{
-    UNITY_BEGIN();
-    RUN_TEST(test_map);
-    return UNITY_END();
+    check_int_eq(CJWTE_INVALID_PARAMETERS, cjwt_alg_string_to_enum("none", 4, NULL));
+    }
+  }
 }

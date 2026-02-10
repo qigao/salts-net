@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stb_sprintf.h>
+#include "sds.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -507,7 +508,7 @@ void turbo_stats_reset_all(void) {
 
 void turbo_stats_print(void) {
   if (!g_turbo_stats) {
-    TLOG_INFO("Statistics not initialized");
+    TLOG_INFO("Statistics {} initialized", "not");
     return;
   }
 
@@ -516,25 +517,25 @@ void turbo_stats_print(void) {
   while (entry) {
     switch (entry->type) {
     case TURBO_STAT_COUNTER:
-      TLOG_INFO("{:30} counter: {}", entry->name,
+      TLOG_INFO("{:30} counter: {}", (const char *)entry->name,
                (unsigned long long)entry->data.counter);
       break;
     case TURBO_STAT_GAUGE:
-      TLOG_INFO("{:30} gauge: {}", entry->name, (long long)entry->data.gauge);
+      TLOG_INFO("{:30} gauge: {}", (const char *)entry->name, (long long)entry->data.gauge);
       break;
     case TURBO_STAT_HISTOGRAM:
       if (entry->data.histogram.count > 0) {
         double avg = (double)entry->data.histogram.sum / (double)entry->data.histogram.count;
         TLOG_INFO("{:30} histogram: count={}, avg={:.2f}, min={}, max={}",
-                 entry->name, (unsigned long long)entry->data.histogram.count, avg,
+                 (const char *)entry->name, (unsigned long long)entry->data.histogram.count, avg,
                  (unsigned long long)entry->data.histogram.min,
                  (unsigned long long)entry->data.histogram.max);
       } else {
-        TLOG_INFO("{:30} histogram: no data", entry->name);
+        TLOG_INFO("{:30} histogram: no data", (const char *)entry->name);
       }
       break;
     case TURBO_STAT_RATE:
-      TLOG_INFO("{:30} rate: {:.2f}/sec (value={})", entry->name,
+      TLOG_INFO("{:30} rate: {:.2f}/sec (value={})", (const char *)entry->name,
                entry->data.rate.rate, (unsigned long long)entry->data.rate.value);
       break;
     }
@@ -551,60 +552,64 @@ char *turbo_stats_to_json(void) {
     return NULL;
 
   /* Simple JSON generation - in production, use a proper JSON library */
-  size_t buffer_size = 4096;
-  char *json = (char *)malloc(buffer_size);
+  sds json = sdsempty();
   if (!json)
     return NULL;
 
-  size_t pos = 0;
-  pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "{\n");
+  json = sdscat(json, "{\n");
 
   uv_mutex_lock(&g_turbo_stats->map_mutex);
   turbo_stat_entry_t *entry = g_turbo_stats->entries_head;
   int first = 1;
 
-  while (entry && pos < buffer_size - 256) {
+  while (entry) {
     if (!first) {
-      pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), ",\n");
+      json = sdscat(json, ",\n");
     }
     first = 0;
 
-    pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "  \"%s\": {", entry->name);
+    json = sdscatprintf(json, "  \"%s\": {", entry->name);
 
     switch (entry->type) {
     case TURBO_STAT_COUNTER:
-      pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos),
-                            "\"type\":\"counter\",\"value\":%llu",
-                            (unsigned long long)entry->data.counter);
+      json = sdscatprintf(json, "\"type\":\"counter\",\"value\":%llu",
+                          (unsigned long long)entry->data.counter);
       break;
     case TURBO_STAT_GAUGE:
-      pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos),
-                            "\"type\":\"gauge\",\"value\":%lld", (long long)entry->data.gauge);
+      json = sdscatprintf(json, "\"type\":\"gauge\",\"value\":%lld",
+                          (long long)entry->data.gauge);
       break;
     case TURBO_STAT_HISTOGRAM:
-      pos += stbsp_snprintf(
-          json + pos, (int)(buffer_size - pos),
-          "\"type\":\"histogram\",\"count\":%llu,\"sum\":%llu,\"min\":%llu,\"max\":%llu",
-          (unsigned long long)entry->data.histogram.count,
-          (unsigned long long)entry->data.histogram.sum,
-          (unsigned long long)entry->data.histogram.min,
-          (unsigned long long)entry->data.histogram.max);
+      json = sdscatprintf(json,
+                          "\"type\":\"histogram\",\"count\":%llu,\"sum\":%llu,\"min\":%llu,\"max\":%llu",
+                          (unsigned long long)entry->data.histogram.count,
+                          (unsigned long long)entry->data.histogram.sum,
+                          (unsigned long long)entry->data.histogram.min,
+                          (unsigned long long)entry->data.histogram.max);
       break;
     case TURBO_STAT_RATE:
-      pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos),
-                            "\"type\":\"rate\",\"rate\":%.2f,\"value\":%llu", entry->data.rate.rate,
-                            (unsigned long long)entry->data.rate.value);
+      json = sdscatprintf(json, "\"type\":\"rate\",\"rate\":%.2f,\"value\":%llu",
+                          entry->data.rate.rate,
+                          (unsigned long long)entry->data.rate.value);
       break;
     }
 
-    pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "}");
+    json = sdscat(json, "}");
     entry = entry->next;
   }
   uv_mutex_unlock(&g_turbo_stats->map_mutex);
 
-  pos += stbsp_snprintf(json + pos, (int)(buffer_size - pos), "\n}\n");
+  json = sdscat(json, "\n}\n");
 
-  return json;
+  size_t len = sdslen(json);
+  char *out = (char *)malloc(len + 1);
+  if (!out) {
+    sdsfree(json);
+    return NULL;
+  }
+  memcpy(out, json, len + 1);
+  sdsfree(json);
+  return out;
 }
 
 /* --------- Timers --------- */

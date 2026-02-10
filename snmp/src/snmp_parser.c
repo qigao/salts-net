@@ -8,7 +8,7 @@
 #include "asn1_types.h"
 #include <stdlib.h>
 #include <string.h>
-
+#include <stdio.h>
 /* Helper: Parse OID from ASN.1 value */
 static int parse_oid(const asn1_value_t *asn1_oid, snmp_oid_t *oid, MemoryPool *pool) {
   if (!asn1_oid || asn1_oid->type != ASN1_TYPE_OBJECT_IDENTIFIER) {
@@ -210,7 +210,7 @@ static int parse_varbinds(const asn1_value_t *asn1_varbinds, snmp_pdu_t *pdu, Me
 
 /* Helper: Parse PDU */
 static int parse_pdu(const asn1_value_t *asn1_pdu, snmp_pdu_t *pdu, MemoryPool *pool) {
-  if (!asn1_pdu || asn1_pdu->type != ASN1_TYPE_SEQUENCE) {
+  if (!asn1_pdu || (asn1_pdu->type != ASN1_TYPE_SEQUENCE && asn1_pdu->type != TK_CONTEXT_SPECIFIC)) {
     return SNMP_PARSE_ERROR_MALFORMED;
   }
 

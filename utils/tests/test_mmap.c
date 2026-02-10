@@ -5,199 +5,187 @@
 
 #include "turbo_fs.h"
 #include "turbo_mmap.h"
+#include "tinytest.h"
 #include <stdio.h>
 #include <string.h>
-#include <unity.h>
-
 
 static char test_file_path[256];
-static const char *test_data = "Hello, memory-mapped world! This is test data for mmap.";
+static const char *test_data =
+    "Hello, memory-mapped world! This is test data for mmap.";
 
-void setUp(void) {
-  // Create test file
-  turbo_fs_get_tmpdir(test_file_path, sizeof(test_file_path) - 32);
-  strcat(test_file_path, "/turbo_mmap_test.txt");
+spec("MMAP Tests") {
 
-  turbo_fs_buf_t buf = turbo_fs_buf_init((char *)test_data, strlen(test_data));
-  int err = turbo_fs_write_file(test_file_path, &buf);
-  TEST_ASSERT_EQUAL_INT(0, err);
-}
+  before() {
+    // Create test file
+    turbo_fs_get_tmpdir(test_file_path, sizeof(test_file_path) - 32);
+    strcat(test_file_path, "/turbo_mmap_test.txt");
 
-void tearDown(void) { turbo_fs_unlink(test_file_path); }
+    turbo_fs_buf_t buf = turbo_fs_buf_init((char *)test_data, strlen(test_data));
+    int err = turbo_fs_write_file(test_file_path, &buf);
+    check_int_eq(err, 0);
+  }
 
-void test_mmap_init(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+  after() { turbo_fs_unlink(test_file_path); }
 
-  TEST_ASSERT_NULL(mmap.data);
-  TEST_ASSERT_EQUAL_size_t(0, mmap.length);
-  TEST_ASSERT_FALSE(mmap.is_mapped);
-}
+  it("should initialize mmap structure correctly") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-void test_mmap_page_size(void) {
-  size_t page_size = turbo_mmap_page_size();
-  TEST_ASSERT_GREATER_THAN(0, page_size);
-  // Page size should be power of 2
-  TEST_ASSERT_EQUAL_UINT(0, page_size & (page_size - 1));
-}
+    check_null(mmap.data);
+    check_size_eq(mmap.length, 0);
+    check(!mmap.is_mapped);
+  }
 
-void test_mmap_open_read(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+  it("should return a valid page size") {
+    size_t page_size = turbo_mmap_page_size();
+    check_size_gt(page_size, 0);
+    // Page size should be power of 2
+    check_uint_eq(page_size & (page_size - 1), 0);
+  }
 
-  int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
-  TEST_ASSERT_TRUE(turbo_mmap_is_open(&mmap));
-  TEST_ASSERT_NOT_NULL(turbo_mmap_data(&mmap));
-  TEST_ASSERT_EQUAL_size_t(strlen(test_data), turbo_mmap_size(&mmap));
+  it("should open file for reading") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Verify content
-  TEST_ASSERT_EQUAL_MEMORY(test_data, turbo_mmap_data(&mmap), strlen(test_data));
+    int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_OK);
+    check(turbo_mmap_is_open(&mmap));
+    check_not_null(turbo_mmap_data(&mmap));
+    check_size_eq(turbo_mmap_size(&mmap), strlen(test_data));
 
-  turbo_mmap_close(&mmap);
-  TEST_ASSERT_FALSE(turbo_mmap_is_open(&mmap));
-}
+    // Verify content
+    check_ptr_eq(memcmp(test_data, turbo_mmap_data(&mmap), strlen(test_data)),
+                 0);
 
-void test_mmap_open_write(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+    turbo_mmap_close(&mmap);
+    check(!turbo_mmap_is_open(&mmap));
+  }
 
-  int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_WRITE);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+  it("should open file for writing and persist changes") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Modify first byte
-  char *data = (char *)turbo_mmap_data(&mmap);
-  char original = data[0];
-  data[0] = 'X';
+    int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_WRITE);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  // Sync to disk
-  err = turbo_mmap_sync(&mmap, false);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+    // Modify first byte
+    char *data = (char *)turbo_mmap_data(&mmap);
+    char original = data[0];
+    data[0] = 'X';
 
-  turbo_mmap_close(&mmap);
+    // Sync to disk
+    err = turbo_mmap_sync(&mmap, false);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  // Verify change persisted
-  turbo_fs_buf_t buf;
-  err = turbo_fs_read_file(test_file_path, &buf);
-  TEST_ASSERT_EQUAL_INT(0, err);
-  TEST_ASSERT_EQUAL_CHAR('X', buf.base[0]);
-  turbo_fs_buf_free(&buf);
+    turbo_mmap_close(&mmap);
 
-  // Restore original
-  turbo_mmap_init(&mmap);
-  err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_WRITE);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
-  ((char *)turbo_mmap_data(&mmap))[0] = original;
-  turbo_mmap_sync(&mmap, false);
-  turbo_mmap_close(&mmap);
-}
+    // Verify change persisted
+    turbo_fs_buf_t buf;
+    err = turbo_fs_read_file(test_file_path, &buf);
+    check_int_eq(err, 0);
+    check_int_eq(buf.base[0], 'X');
+    turbo_fs_buf_free(&buf);
 
-void test_mmap_open_range(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+    // Restore original
+    turbo_mmap_init(&mmap);
+    err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_WRITE);
+    check_int_eq(err, TURBO_MMAP_OK);
+    ((char *)turbo_mmap_data(&mmap))[0] = original;
+    turbo_mmap_sync(&mmap, false);
+    turbo_mmap_close(&mmap);
+  }
 
-  // Map starting at offset 7 ("memory-mapped world...")
-  int err = turbo_mmap_open_range(&mmap, test_file_path, 7, 15, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
-  TEST_ASSERT_EQUAL_size_t(15, turbo_mmap_size(&mmap));
+  it("should open a specific range of a file") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Verify content at offset
-  TEST_ASSERT_EQUAL_MEMORY("memory-mapped w", turbo_mmap_data(&mmap), 15);
+    // Map starting at offset 7 ("memory-mapped world...")
+    int err =
+        turbo_mmap_open_range(&mmap, test_file_path, 7, 15, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_OK);
+    check_size_eq(turbo_mmap_size(&mmap), 15);
 
-  turbo_mmap_close(&mmap);
-}
+    // Verify content at offset
+    check_ptr_eq(memcmp("memory-mapped w", turbo_mmap_data(&mmap), 15), 0);
 
-void test_mmap_accessors(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+    turbo_mmap_close(&mmap);
+  }
 
-  int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+  it("should provide byte accessors") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Test get accessor
-  TEST_ASSERT_EQUAL_CHAR('H', turbo_mmap_get(&mmap, 0));
-  TEST_ASSERT_EQUAL_CHAR('e', turbo_mmap_get(&mmap, 1));
-  TEST_ASSERT_EQUAL_CHAR('l', turbo_mmap_get(&mmap, 2));
+    int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  turbo_mmap_close(&mmap);
-}
+    // Test get accessor
+    check_int_eq(turbo_mmap_get(&mmap, 0), 'H');
+    check_int_eq(turbo_mmap_get(&mmap, 1), 'e');
+    check_int_eq(turbo_mmap_get(&mmap, 2), 'l');
 
-void test_mmap_file_not_found(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+    turbo_mmap_close(&mmap);
+  }
 
-  int err = turbo_mmap_open(&mmap, "/nonexistent/path/file.txt", TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_ENOENT, err);
-  TEST_ASSERT_FALSE(turbo_mmap_is_open(&mmap));
-}
+  it("should fail when file is not found") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-void test_mmap_double_open(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+    int err =
+        turbo_mmap_open(&mmap, "/nonexistent/path/file.txt", TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_ENOENT);
+    check(!turbo_mmap_is_open(&mmap));
+  }
 
-  int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+  it("should fail on double open") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Try to open again without closing
-  err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_EEXIST, err);
+    int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  turbo_mmap_close(&mmap);
-}
+    // Try to open again without closing
+    err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_EEXIST);
 
-void test_mmap_strerror(void) {
-  TEST_ASSERT_EQUAL_STRING("Success", turbo_mmap_strerror(TURBO_MMAP_OK));
-  TEST_ASSERT_EQUAL_STRING("Invalid argument", turbo_mmap_strerror(TURBO_MMAP_EINVAL));
-  TEST_ASSERT_EQUAL_STRING("File not found", turbo_mmap_strerror(TURBO_MMAP_ENOENT));
-  TEST_ASSERT_EQUAL_STRING("File is empty", turbo_mmap_strerror(TURBO_MMAP_EEMPTY));
-}
+    turbo_mmap_close(&mmap);
+  }
 
-void test_mmap_close_idempotent(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+  it("should return correct error strings") {
+    check_str_eq(turbo_mmap_strerror(TURBO_MMAP_OK), "Success");
+    check_str_eq(turbo_mmap_strerror(TURBO_MMAP_EINVAL), "Invalid argument");
+    check_str_eq(turbo_mmap_strerror(TURBO_MMAP_ENOENT), "File not found");
+    check_str_eq(turbo_mmap_strerror(TURBO_MMAP_EEMPTY), "File is empty");
+  }
 
-  int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+  it("should have idempotent close") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Close multiple times should be safe
-  turbo_mmap_close(&mmap);
-  turbo_mmap_close(&mmap);
-  turbo_mmap_close(&mmap);
+    int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  TEST_ASSERT_FALSE(turbo_mmap_is_open(&mmap));
-}
+    // Close multiple times should be safe
+    turbo_mmap_close(&mmap);
+    turbo_mmap_close(&mmap);
+    turbo_mmap_close(&mmap);
 
-void test_mmap_advise(void) {
-  turbo_mmap_t mmap;
-  turbo_mmap_init(&mmap);
+    check(!turbo_mmap_is_open(&mmap));
+  }
 
-  int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+  it("should handle advise hints") {
+    turbo_mmap_t mmap;
+    turbo_mmap_init(&mmap);
 
-  // Advise should succeed (or be no-op on Windows)
-  err = turbo_mmap_advise(&mmap, TURBO_MMAP_SEQUENTIAL);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+    int err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_READ);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  err = turbo_mmap_advise(&mmap, TURBO_MMAP_RANDOM);
-  TEST_ASSERT_EQUAL_INT(TURBO_MMAP_OK, err);
+    // Advise should succeed (or be no-op on Windows)
+    err = turbo_mmap_advise(&mmap, TURBO_MMAP_SEQUENTIAL);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-  turbo_mmap_close(&mmap);
-}
+    err = turbo_mmap_advise(&mmap, TURBO_MMAP_RANDOM);
+    check_int_eq(err, TURBO_MMAP_OK);
 
-int main(void) {
-  UNITY_BEGIN();
-
-  RUN_TEST(test_mmap_init);
-  RUN_TEST(test_mmap_page_size);
-  RUN_TEST(test_mmap_open_read);
-  RUN_TEST(test_mmap_open_write);
-  RUN_TEST(test_mmap_open_range);
-  RUN_TEST(test_mmap_accessors);
-  RUN_TEST(test_mmap_file_not_found);
-  RUN_TEST(test_mmap_double_open);
-  RUN_TEST(test_mmap_strerror);
-  RUN_TEST(test_mmap_close_idempotent);
-  RUN_TEST(test_mmap_advise);
-
-  return UNITY_END();
+    turbo_mmap_close(&mmap);
+  }
 }

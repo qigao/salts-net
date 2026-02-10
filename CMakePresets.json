@@ -37,6 +37,14 @@
       ]
     },
     {
+      "name": "debug-linux",
+      "displayName": "Build Debug (Linux)",
+      "configurePreset": "dev-linux-ninja",
+      "inherits": [
+        "ISLinux"
+      ]
+    },
+    {
       "name": "default-mac",
       "displayName": "Build (Default, Mac)",
       "configurePreset": "release-mac-ninja",

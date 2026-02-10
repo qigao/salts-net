@@ -533,7 +533,7 @@ int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr,
         TLOG_INFO("Joined multicast group: {:s}", multicast_addr);
     } else {
         turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
-        TLOG_ERROR("Failed to join multicast group {:s}: {:s}", multicast_addr, uv_strerror(rc));
+        TLOG_DEBUG("Failed to join multicast group {:s}: {:s}", multicast_addr, uv_strerror(rc));
     }
     
     return rc;

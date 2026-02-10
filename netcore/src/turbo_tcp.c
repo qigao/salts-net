@@ -532,7 +532,11 @@ static void on_tcp_client_connected(uv_connect_t* req, int status) {
         }
     } else {
         turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
-        TLOG_ERROR("TCP connection failed: {:s}", uv_strerror(status));
+        if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET) {
+            TLOG_DEBUG("TCP connection failed: {:s}", uv_strerror(status));
+        } else {
+            TLOG_ERROR("TCP connection failed: {:s}", uv_strerror(status));
+        }
         turbo_tcp_client_close(client);
     }
 }

@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
 
 #include "arena_buffer.h"
 #include "stats.h"

@@ -1,208 +1,183 @@
-/**
- * @file js_uv_multi_runtime_test.c
- * @brief Test multiple runtime/context creation and destruction cycles
- *
- * This test verifies that:
- * 1. Multiple runtimes can be created and destroyed
- * 2. Class IDs are properly registered per-runtime
- * 3. No use-after-free or memory corruption occurs
- */
-#include "unity.h"
 #include "test_uv_fixture.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-void setUp(void) {
-}
-
-void tearDown(void) {
-}
-
-void test_single_runtime_init_cleanup(void) {
-    JSRuntime *rt = JS_NewRuntime();
-    TEST_ASSERT_NOT_NULL(rt);
-
-    JSContext *ctx = JS_NewContext(rt);
-    TEST_ASSERT_NOT_NULL(ctx);
-
-    int result = js_init_turbo_module(ctx);
-    TEST_ASSERT_EQUAL_INT(0, result);
-
-    JS_FreeContext(ctx);
-    JS_FreeRuntime(rt);
-}
-
-void test_multiple_sequential_runtimes(void) {
-    // Create and destroy multiple runtimes sequentially
-    for (int i = 0; i < 3; i++) {
+spec("js_uv_multi_runtime") {
+    it("should handle single runtime init and cleanup") {
         JSRuntime *rt = JS_NewRuntime();
-        TEST_ASSERT_NOT_NULL_MESSAGE(rt, "Failed to create runtime");
+        check_not_null(rt);
 
         JSContext *ctx = JS_NewContext(rt);
-        TEST_ASSERT_NOT_NULL_MESSAGE(ctx, "Failed to create context");
+        check_not_null(ctx);
 
         int result = js_init_turbo_module(ctx);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(0, result, "Failed to init turbo module");
-
-        // Verify turbo object exists
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue turbo = JS_GetPropertyStr(ctx, global, "turbo");
-        TEST_ASSERT_FALSE(JS_IsUndefined(turbo));
-        TEST_ASSERT_FALSE(JS_IsException(turbo));
-
-        JS_FreeValue(ctx, turbo);
-        JS_FreeValue(ctx, global);
+        check_int_eq(0, result);
 
         JS_FreeContext(ctx);
         JS_FreeRuntime(rt);
     }
-}
 
-void test_multiple_contexts_same_runtime(void) {
-    JSRuntime *rt = JS_NewRuntime();
-    TEST_ASSERT_NOT_NULL(rt);
+    it("should handle multiple sequential runtimes") {
+        // Create and destroy multiple runtimes sequentially
+        for (int i = 0; i < 3; i++) {
+            JSRuntime *rt = JS_NewRuntime();
+            check_not_null(rt);
 
-    // Create multiple contexts on the same runtime
-    for (int i = 0; i < 3; i++) {
-        JSContext *ctx = JS_NewContext(rt);
-        TEST_ASSERT_NOT_NULL_MESSAGE(ctx, "Failed to create context");
+            JSContext *ctx = JS_NewContext(rt);
+            check_not_null(ctx);
 
-        int result = js_init_turbo_module(ctx);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(0, result, "Failed to init turbo module");
+            int result = js_init_turbo_module(ctx);
+            check_int_eq(0, result);
 
-        // Verify turbo object exists
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue turbo = JS_GetPropertyStr(ctx, global, "turbo");
-        TEST_ASSERT_FALSE(JS_IsUndefined(turbo));
+            // Verify turbo object exists
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue turbo = JS_GetPropertyStr(ctx, global, "turbo");
+            check_false(JS_IsUndefined(turbo));
+            check_false(JS_IsException(turbo));
 
-        JS_FreeValue(ctx, turbo);
-        JS_FreeValue(ctx, global);
+            JS_FreeValue(ctx, turbo);
+            JS_FreeValue(ctx, global);
 
-        JS_FreeContext(ctx);
+            JS_FreeContext(ctx);
+            JS_FreeRuntime(rt);
+        }
     }
 
-    JS_FreeRuntime(rt);
-}
+    it("should handle multiple contexts same runtime") {
+        JSRuntime *rt = JS_NewRuntime();
+        check_not_null(rt);
 
-void test_concurrent_runtimes(void) {
-    // Create multiple runtimes that exist at the same time
-    JSRuntime *rt1 = JS_NewRuntime();
-    JSRuntime *rt2 = JS_NewRuntime();
-    TEST_ASSERT_NOT_NULL(rt1);
-    TEST_ASSERT_NOT_NULL(rt2);
+        // Create multiple contexts on the same runtime
+        for (int i = 0; i < 3; i++) {
+            JSContext *ctx = JS_NewContext(rt);
+            check_not_null(ctx);
 
-    JSContext *ctx1 = JS_NewContext(rt1);
-    JSContext *ctx2 = JS_NewContext(rt2);
-    TEST_ASSERT_NOT_NULL(ctx1);
-    TEST_ASSERT_NOT_NULL(ctx2);
+            int result = js_init_turbo_module(ctx);
+            check_int_eq(0, result);
 
-    // Initialize both
-    TEST_ASSERT_EQUAL_INT(0, js_init_turbo_module(ctx1));
-    TEST_ASSERT_EQUAL_INT(0, js_init_turbo_module(ctx2));
+            // Verify turbo object exists
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue turbo = JS_GetPropertyStr(ctx, global, "turbo");
+            check_false(JS_IsUndefined(turbo));
 
-    // Verify both work
-    JSValue global1 = JS_GetGlobalObject(ctx1);
-    JSValue turbo1 = JS_GetPropertyStr(ctx1, global1, "turbo");
-    TEST_ASSERT_FALSE(JS_IsUndefined(turbo1));
+            JS_FreeValue(ctx, turbo);
+            JS_FreeValue(ctx, global);
 
-    JSValue global2 = JS_GetGlobalObject(ctx2);
-    JSValue turbo2 = JS_GetPropertyStr(ctx2, global2, "turbo");
-    TEST_ASSERT_FALSE(JS_IsUndefined(turbo2));
+            JS_FreeContext(ctx);
+        }
 
-    JS_FreeValue(ctx1, turbo1);
-    JS_FreeValue(ctx1, global1);
-    JS_FreeValue(ctx2, turbo2);
-    JS_FreeValue(ctx2, global2);
+        JS_FreeRuntime(rt);
+    }
 
-    // Clean up in different order than creation
-    JS_FreeContext(ctx2);
-    JS_FreeRuntime(rt2);
-    JS_FreeContext(ctx1);
-    JS_FreeRuntime(rt1);
-}
+    it("should handle concurrent runtimes") {
+        // Create multiple runtimes that exist at the same time
+        JSRuntime *rt1 = JS_NewRuntime();
+        JSRuntime *rt2 = JS_NewRuntime();
+        check_not_null(rt1);
+        check_not_null(rt2);
 
-void test_eval_after_init(void) {
-    JSRuntime *rt = JS_NewRuntime();
-    TEST_ASSERT_NOT_NULL(rt);
+        JSContext *ctx1 = JS_NewContext(rt1);
+        JSContext *ctx2 = JS_NewContext(rt2);
+        check_not_null(ctx1);
+        check_not_null(ctx2);
 
-    JSContext *ctx = JS_NewContext(rt);
-    TEST_ASSERT_NOT_NULL(ctx);
+        // Initialize both
+        check_int_eq(0, js_init_turbo_module(ctx1));
+        check_int_eq(0, js_init_turbo_module(ctx2));
 
-    TEST_ASSERT_EQUAL_INT(0, js_init_turbo_module(ctx));
+        // Verify both work
+        JSValue global1 = JS_GetGlobalObject(ctx1);
+        JSValue turbo1 = JS_GetPropertyStr(ctx1, global1, "turbo");
+        check_false(JS_IsUndefined(turbo1));
 
-    // Test basic eval
-    const char *code = "var result = typeof turbo; result;";
-    JSValue val = JS_Eval(ctx, code, strlen(code), "<test>", JS_EVAL_TYPE_GLOBAL);
-    TEST_ASSERT_FALSE(JS_IsException(val));
+        JSValue global2 = JS_GetGlobalObject(ctx2);
+        JSValue turbo2 = JS_GetPropertyStr(ctx2, global2, "turbo");
+        check_false(JS_IsUndefined(turbo2));
 
-    const char *str = JS_ToCString(ctx, val);
-    TEST_ASSERT_NOT_NULL(str);
-    TEST_ASSERT_EQUAL_STRING("object", str);
+        JS_FreeValue(ctx1, turbo1);
+        JS_FreeValue(ctx1, global1);
+        JS_FreeValue(ctx2, turbo2);
+        JS_FreeValue(ctx2, global2);
 
-    JS_FreeCString(ctx, str);
-    JS_FreeValue(ctx, val);
+        // Clean up in different order than creation
+        JS_FreeContext(ctx2);
+        JS_FreeRuntime(rt2);
+        JS_FreeContext(ctx1);
+        JS_FreeRuntime(rt1);
+    }
 
-    JS_FreeContext(ctx);
-    JS_FreeRuntime(rt);
-}
+    it("should eval after init") {
+        JSRuntime *rt = JS_NewRuntime();
+        check_not_null(rt);
 
-void test_turbo_submodules_exist(void) {
-    JSRuntime *rt = JS_NewRuntime();
-    JSContext *ctx = JS_NewContext(rt);
-    TEST_ASSERT_EQUAL_INT(0, js_init_turbo_module(ctx));
+        JSContext *ctx = JS_NewContext(rt);
+        check_not_null(ctx);
 
-    const char *code =
-        "var checks = {"
-        "  hasFs: typeof turbo.fs === 'object',"
-        "  hasDns: typeof turbo.dns === 'object',"
-        "  hasHttp: typeof turbo.http === 'object',"
-        "  hasOs: typeof turbo.os === 'object',"
-        "  hasSignal: typeof turbo.signal === 'object',"
-        "  hasProc: typeof turbo.proc === 'object',"
-        "  hasNet: typeof turbo.net === 'object'"
-        "};"
-        "checks;";
+        check_int_eq(0, js_init_turbo_module(ctx));
 
-    JSValue val = JS_Eval(ctx, code, strlen(code), "<test>", JS_EVAL_TYPE_GLOBAL);
-    TEST_ASSERT_FALSE(JS_IsException(val));
+        // Test basic eval
+        const char *code = "var result = typeof turbo; result;";
+        JSValue val = JS_Eval(ctx, code, strlen(code), "<test>", JS_EVAL_TYPE_GLOBAL);
+        check_false(JS_IsException(val));
 
-    JSValue hasFs = JS_GetPropertyStr(ctx, val, "hasFs");
-    JSValue hasDns = JS_GetPropertyStr(ctx, val, "hasDns");
-    JSValue hasHttp = JS_GetPropertyStr(ctx, val, "hasHttp");
-    JSValue hasOs = JS_GetPropertyStr(ctx, val, "hasOs");
-    JSValue hasSignal = JS_GetPropertyStr(ctx, val, "hasSignal");
-    JSValue hasProc = JS_GetPropertyStr(ctx, val, "hasProc");
-    JSValue hasNet = JS_GetPropertyStr(ctx, val, "hasNet");
+        const char *str = JS_ToCString(ctx, val);
+        check_not_null(str);
+        check_str_eq("object", str);
 
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasFs));
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasDns));
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasHttp));
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasOs));
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasSignal));
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasProc));
-    TEST_ASSERT_TRUE(JS_ToBool(ctx, hasNet));
+        JS_FreeCString(ctx, str);
+        JS_FreeValue(ctx, val);
 
-    JS_FreeValue(ctx, hasFs);
-    JS_FreeValue(ctx, hasDns);
-    JS_FreeValue(ctx, hasHttp);
-    JS_FreeValue(ctx, hasOs);
-    JS_FreeValue(ctx, hasSignal);
-    JS_FreeValue(ctx, hasProc);
-    JS_FreeValue(ctx, hasNet);
-    JS_FreeValue(ctx, val);
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+    }
 
-    JS_FreeContext(ctx);
-    JS_FreeRuntime(rt);
-}
+    it("should verify turbo submodules exist") {
+        JSRuntime *rt = JS_NewRuntime();
+        JSContext *ctx = JS_NewContext(rt);
+        check_int_eq(0, js_init_turbo_module(ctx));
 
-int main(void) {
-    UNITY_BEGIN();
-    RUN_TEST(test_single_runtime_init_cleanup);
-    RUN_TEST(test_multiple_sequential_runtimes);
-    RUN_TEST(test_multiple_contexts_same_runtime);
-    RUN_TEST(test_concurrent_runtimes);
-    RUN_TEST(test_eval_after_init);
-    RUN_TEST(test_turbo_submodules_exist);
-    return UNITY_END();
+        const char *code =
+            "var checks = {"
+            "  hasFs: typeof turbo.fs === 'object',"
+            "  hasDns: typeof turbo.dns === 'object',"
+            "  hasHttp: typeof turbo.http === 'object',"
+            "  hasOs: typeof turbo.os === 'object',"
+            "  hasSignal: typeof turbo.signal === 'object',"
+            "  hasProc: typeof turbo.proc === 'object',"
+            "  hasNet: typeof turbo.net === 'object'"
+            "};"
+            "checks;";
+
+        JSValue val = JS_Eval(ctx, code, strlen(code), "<test>", JS_EVAL_TYPE_GLOBAL);
+        check_false(JS_IsException(val));
+
+        JSValue hasFs = JS_GetPropertyStr(ctx, val, "hasFs");
+        JSValue hasDns = JS_GetPropertyStr(ctx, val, "hasDns");
+        JSValue hasHttp = JS_GetPropertyStr(ctx, val, "hasHttp");
+        JSValue hasOs = JS_GetPropertyStr(ctx, val, "hasOs");
+        JSValue hasSignal = JS_GetPropertyStr(ctx, val, "hasSignal");
+        JSValue hasProc = JS_GetPropertyStr(ctx, val, "hasProc");
+        JSValue hasNet = JS_GetPropertyStr(ctx, val, "hasNet");
+
+        check_true(JS_ToBool(ctx, hasFs));
+        check_true(JS_ToBool(ctx, hasDns));
+        check_true(JS_ToBool(ctx, hasHttp));
+        check_true(JS_ToBool(ctx, hasOs));
+        check_true(JS_ToBool(ctx, hasSignal));
+        check_true(JS_ToBool(ctx, hasProc));
+        check_true(JS_ToBool(ctx, hasNet));
+
+        JS_FreeValue(ctx, hasFs);
+        JS_FreeValue(ctx, hasDns);
+        JS_FreeValue(ctx, hasHttp);
+        JS_FreeValue(ctx, hasOs);
+        JS_FreeValue(ctx, hasSignal);
+        JS_FreeValue(ctx, hasProc);
+        JS_FreeValue(ctx, hasNet);
+        JS_FreeValue(ctx, val);
+
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+    }
 }

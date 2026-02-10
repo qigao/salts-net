@@ -31,7 +31,7 @@
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage:\n", argv[0]);
+        fprintf(stderr, "Usage:\n");
         fprintf(stderr, "  %s <hostname> <family_pref>\n", argv[0]);
         fprintf(stderr, "  %s -s <dns_server> <hostname> <family_pref>\n", argv[0]);
         fprintf(stderr, "  %s --show-servers\n", argv[0]);
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
     if (strcmp(argv[1], "--show-servers") == 0) {
         char servers[8][46];
         int count = 0;
-        int result = dns_resolve_get_servers(servers, 8, &count);
+        int result = turbo_dns_get_servers(servers, 8, &count);
         if (result == 0) {
             printf("Current DNS servers (%d):\n", count);
             for (int i = 0; i < count; i++) {
@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
 
     if (use_custom_dns) {
         printf("Setting custom DNS server: %s\n", dns_server);
-        int result = dns_resolve_set_servers(&dns_server, 1);
+        int result = turbo_dns_set_servers(&dns_server, 1);
         if (result != 0) {
             fprintf(stderr, "Failed to set DNS server (error: %d)\n", result);
             return 1;
@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
 
     printf("Resolving %s (family_pref=%d)...\n", hostname, family_pref);
 
-    int result = dns_resolve_sync(hostname, ip_buffer, sizeof(ip_buffer), family_pref);
+    int result = turbo_dns_resolve_sync(hostname, ip_buffer, sizeof(ip_buffer), family_pref);
 
     if (result == 0) {
         printf("Successfully resolved %s -> %s\n", hostname, ip_buffer);

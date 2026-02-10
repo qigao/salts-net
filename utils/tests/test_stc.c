@@ -1,6 +1,6 @@
 #undef i_static
 #include <stc/cstr.h>
-#include "unity.h"
+#include "tinytest.h"
 
 // Define a vector of integers using i_type to explicitly name the struct
 #define i_static
@@ -15,54 +15,39 @@
 #define i_val int
 #include <stc/hmap.h>
 
-void setUp(void) {
-    // Set up before each test
-}
-
-void tearDown(void) {
-    // Clean up after each test
-}
-
-void test_stc_vec(void) {
+spec("STC Tests") {
+  it("should handle IntVec operations") {
     IntVec vec = IntVec_init();
-    
+
     IntVec_push(&vec, 10);
     IntVec_push(&vec, 20);
     IntVec_push(&vec, 30);
-    
-    TEST_ASSERT_EQUAL(3, IntVec_size(&vec));
-    TEST_ASSERT_EQUAL(10, *IntVec_at(&vec, 0));
-    TEST_ASSERT_EQUAL(20, *IntVec_at(&vec, 1));
-    TEST_ASSERT_EQUAL(30, *IntVec_at(&vec, 2));
-    
-    IntVec_drop(&vec);
-}
 
-void test_stc_hmap(void) {
+    check_int_eq((int)IntVec_size(&vec), 3);
+    check_int_eq(*IntVec_at(&vec, 0), 10);
+    check_int_eq(*IntVec_at(&vec, 1), 20);
+    check_int_eq(*IntVec_at(&vec, 2), 30);
+
+    IntVec_drop(&vec);
+  }
+
+  it("should handle StrIntMap operations") {
     StrIntMap map = StrIntMap_init();
-    
+
     StrIntMap_insert(&map, cstr_from("apple"), 5);
     StrIntMap_insert(&map, cstr_from("banana"), 10);
-    
-    TEST_ASSERT_EQUAL(2, StrIntMap_size(&map));
-    
-    // get takes i_keyraw (const char*)
-    const StrIntMap_value* v1 = StrIntMap_get(&map, "apple");
-    TEST_ASSERT_NOT_NULL(v1);
-    TEST_ASSERT_EQUAL(5, v1->second);
-    
-    const StrIntMap_value* v2 = StrIntMap_get(&map, "banana");
-    TEST_ASSERT_NOT_NULL(v2);
-    TEST_ASSERT_EQUAL(10, v2->second);
-    
-    StrIntMap_drop(&map);
-}
 
-int main(void) {
-    UNITY_BEGIN();
-    
-    RUN_TEST(test_stc_vec);
-    RUN_TEST(test_stc_hmap);
-    
-    return UNITY_END();
+    check_int_eq((int)StrIntMap_size(&map), 2);
+
+    // get takes i_keyraw (const char*)
+    const StrIntMap_value *v1 = StrIntMap_get(&map, "apple");
+    check_not_null(v1);
+    check_int_eq(v1->second, 5);
+
+    const StrIntMap_value *v2 = StrIntMap_get(&map, "banana");
+    check_not_null(v2);
+    check_int_eq(v2->second, 10);
+
+    StrIntMap_drop(&map);
+  }
 }

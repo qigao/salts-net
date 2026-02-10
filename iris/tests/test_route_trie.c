@@ -6,7 +6,8 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include "unity.h"
+#include <stdbool.h>
+#include "tinytest.h"
 #include "route_trie.h"
 #include "arena_buffer.h"
 
@@ -29,437 +30,343 @@ static void handler_b(Req *req, Res *res) {
     (void)res;
 }
 
-void setUp(void) {
-    trie = route_trie_create();
-    turbo_arena_init(&arena, 4096);
-}
-
-void tearDown(void) {
-    if (trie) {
-        route_trie_free(trie);
-        trie = NULL;
+spec("route_trie") {
+    before_each() {
+        trie = route_trie_create();
+        turbo_arena_init(&arena, 4096);
     }
-    turbo_arena_free(&arena);
-}
-
-/* ============================================================================
- * Trie Creation Tests
- * ============================================================================ */
-
-void test_trie_create(void) {
-    TEST_ASSERT_NOT_NULL(trie);
-    TEST_ASSERT_NOT_NULL(trie->root);
-    TEST_ASSERT_EQUAL(0, trie->route_count);
-}
-
-void test_trie_create_multiple(void) {
-    route_trie_t *trie2 = route_trie_create();
-    TEST_ASSERT_NOT_NULL(trie2);
-    TEST_ASSERT_NOT_EQUAL(trie, trie2);
-    route_trie_free(trie2);
-}
-
-/* ============================================================================
- * Route Addition Tests
- * ============================================================================ */
-
-void test_add_simple_route(void) {
-    int result = route_trie_add(trie, "GET", "/users", dummy_handler, NULL);
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(1, trie->route_count);
-}
-
-void test_add_multiple_routes(void) {
-    TEST_ASSERT_EQUAL(0, route_trie_add(trie, "GET", "/users", dummy_handler, NULL));
-    TEST_ASSERT_EQUAL(0, route_trie_add(trie, "POST", "/users", dummy_handler, NULL));
-    TEST_ASSERT_EQUAL(0, route_trie_add(trie, "GET", "/posts", dummy_handler, NULL));
-    TEST_ASSERT_EQUAL(3, trie->route_count);
-}
-
-void test_add_nested_routes(void) {
-    TEST_ASSERT_EQUAL(0, route_trie_add(trie, "GET", "/api/v1/users", dummy_handler, NULL));
-    TEST_ASSERT_EQUAL(0, route_trie_add(trie, "GET", "/api/v1/posts", dummy_handler, NULL));
-    TEST_ASSERT_EQUAL(0, route_trie_add(trie, "GET", "/api/v2/users", dummy_handler, NULL));
-    TEST_ASSERT_EQUAL(3, trie->route_count);
-}
-
-void test_add_route_with_param(void) {
-    int result = route_trie_add(trie, "GET", "/users/:id", dummy_handler, NULL);
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(1, trie->route_count);
-}
-
-void test_add_route_with_multiple_params(void) {
-    int result = route_trie_add(trie, "GET", "/users/:userId/posts/:postId", dummy_handler, NULL);
-    TEST_ASSERT_EQUAL(0, result);
-}
-
-void test_add_route_with_wildcard(void) {
-    int result = route_trie_add(trie, "GET", "/static/*", dummy_handler, NULL);
-    TEST_ASSERT_EQUAL(0, result);
-}
-
-void test_add_root_route(void) {
-    int result = route_trie_add(trie, "GET", "/", dummy_handler, NULL);
-    TEST_ASSERT_EQUAL(0, result);
-}
-
-void test_add_route_null_handler(void) {
-    int result = route_trie_add(trie, "GET", "/test", NULL, NULL);
-    TEST_ASSERT_NOT_EQUAL(0, result);
-}
-
-void test_add_route_null_method(void) {
-    int result = route_trie_add(trie, NULL, "/test", dummy_handler, NULL);
-    TEST_ASSERT_NOT_EQUAL(0, result);
-}
-
-void test_add_route_null_path(void) {
-    int result = route_trie_add(trie, "GET", NULL, dummy_handler, NULL);
-    TEST_ASSERT_NOT_EQUAL(0, result);
-}
-
-/* ============================================================================
- * Route Matching Tests - Exact Match
- * ============================================================================ */
-
-void test_match_simple_route(void) {
-    route_trie_add(trie, "GET", "/users", handler_a, NULL);
-
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/users", &path);
-
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
-
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(handler_a, match.handler);
-    TEST_ASSERT_EQUAL(0, match.param_count);
-}
-
-void test_match_nested_route(void) {
-    route_trie_add(trie, "GET", "/api/v1/users", handler_a, NULL);
-
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/api/v1/users", &path);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+    after_each() {
+        if (trie) {
+            route_trie_free(trie);
+            trie = NULL;
+        }
+        turbo_arena_free(&arena);
+    }
+
+    /* ============================================================================
+     * Trie Creation Tests
+     * ============================================================================ */
+
+    it("should create trie") {
+        check_not_null(trie);
+        check_not_null(trie->root);
+        check_int_eq(trie->route_count, 0);
+    }
+
+    it("should create multiple tries") {
+        route_trie_t *trie2 = route_trie_create();
+        check_not_null(trie2);
+        check_true(trie != trie2);
+        route_trie_free(trie2);
+    }
+
+    /* ============================================================================
+     * Route Addition Tests
+     * ============================================================================ */
+
+    it("should add simple route") {
+        check_int_eq(route_trie_add(trie, "GET", "/users", dummy_handler, NULL), 0);
+        check_int_eq(trie->route_count, 1);
+    }
+
+    it("should add multiple routes") {
+        check_int_eq(route_trie_add(trie, "GET", "/users", dummy_handler, NULL), 0);
+        check_int_eq(route_trie_add(trie, "POST", "/users", dummy_handler, NULL), 0);
+        check_int_eq(route_trie_add(trie, "GET", "/posts", dummy_handler, NULL), 0);
+        check_int_eq(trie->route_count, 3);
+    }
+
+    it("should add nested routes") {
+        check_int_eq(route_trie_add(trie, "GET", "/api/v1/users", dummy_handler, NULL), 0);
+        check_int_eq(route_trie_add(trie, "GET", "/api/v1/posts", dummy_handler, NULL), 0);
+        check_int_eq(route_trie_add(trie, "GET", "/api/v2/users", dummy_handler, NULL), 0);
+        check_int_eq(trie->route_count, 3);
+    }
+
+    it("should add route with param") {
+        check_int_eq(route_trie_add(trie, "GET", "/users/:id", dummy_handler, NULL), 0);
+        check_int_eq(trie->route_count, 1);
+    }
+
+    it("should add route with multiple params") {
+        check_int_eq(route_trie_add(trie, "GET", "/users/:userId/posts/:postId", dummy_handler, NULL), 0);
+    }
+
+    it("should add route with wildcard") {
+        check_int_eq(route_trie_add(trie, "GET", "/static/*", dummy_handler, NULL), 0);
+    }
+
+    it("should add root route") {
+        check_int_eq(route_trie_add(trie, "GET", "/", dummy_handler, NULL), 0);
+    }
+
+    it("should handle null handler in add") {
+        check_int_ne(route_trie_add(trie, "GET", "/test", NULL, NULL), 0);
+    }
+
+    it("should handle null method in add") {
+        check_int_ne(route_trie_add(trie, NULL, "/test", dummy_handler, NULL), 0);
+    }
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(handler_a, match.handler);
-}
+    it("should handle null path in add") {
+        check_int_ne(route_trie_add(trie, "GET", NULL, dummy_handler, NULL), 0);
+    }
 
-void test_match_different_methods(void) {
-    route_trie_add(trie, "GET", "/users", handler_a, NULL);
-    route_trie_add(trie, "POST", "/users", handler_b, NULL);
+    /* ============================================================================
+     * Route Matching Tests - Exact Match
+     * ============================================================================ */
+
+    it("should match simple route") {
+        route_trie_add(trie, "GET", "/users", handler_a, NULL);
+
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/users", &path);
+
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
+
+        check_true(found);
+        check_true(match.handler == handler_a);
+        check_int_eq(match.param_count, 0);
+    }
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/users", &path);
+    it("should match nested route") {
+        route_trie_add(trie, "GET", "/api/v1/users", handler_a, NULL);
 
-    route_match_t match_get, match_post;
-    bool found_get = route_trie_match(trie, "GET", &path, &match_get);
-    bool found_post = route_trie_match(trie, "POST", &path, &match_post);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/api/v1/users", &path);
 
-    TEST_ASSERT_TRUE(found_get);
-    TEST_ASSERT_TRUE(found_post);
-    TEST_ASSERT_EQUAL(handler_a, match_get.handler);
-    TEST_ASSERT_EQUAL(handler_b, match_post.handler);
-}
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-void test_match_root_route(void) {
-    route_trie_add(trie, "GET", "/", handler_a, NULL);
+        check_true(found);
+        check_true(match.handler == handler_a);
+    }
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/", &path);
+    it("should match different methods") {
+        route_trie_add(trie, "GET", "/users", handler_a, NULL);
+        route_trie_add(trie, "POST", "/users", handler_b, NULL);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/users", &path);
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(handler_a, match.handler);
-}
+        route_match_t match_get, match_post;
+        bool found_get = route_trie_match(trie, "GET", &path, &match_get);
+        bool found_post = route_trie_match(trie, "POST", &path, &match_post);
 
-void test_match_not_found(void) {
-    route_trie_add(trie, "GET", "/users", handler_a, NULL);
+        check_true(found_get);
+        check_true(found_post);
+        check_true(match_get.handler == handler_a);
+        check_true(match_post.handler == handler_b);
+    }
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/posts", &path);
+    it("should match root route") {
+        route_trie_add(trie, "GET", "/", handler_a, NULL);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/", &path);
 
-    TEST_ASSERT_FALSE(found);
-}
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-void test_match_wrong_method(void) {
-    route_trie_add(trie, "GET", "/users", handler_a, NULL);
+        check_true(found);
+        check_true(match.handler == handler_a);
+    }
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/users", &path);
+    it("should fail match if not found") {
+        route_trie_add(trie, "GET", "/users", handler_a, NULL);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "POST", &path, &match);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/posts", &path);
 
-    TEST_ASSERT_FALSE(found);
-}
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-/* ============================================================================
- * Route Matching Tests - Parameters
- * ============================================================================ */
+        check_false(found);
+    }
 
-void test_match_single_param(void) {
-    route_trie_add(trie, "GET", "/users/:id", handler_a, NULL);
+    it("should fail match if wrong method") {
+        route_trie_add(trie, "GET", "/users", handler_a, NULL);
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/users/123", &path);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/users", &path);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        route_match_t match;
+        bool found = route_trie_match(trie, "POST", &path, &match);
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(handler_a, match.handler);
-    TEST_ASSERT_EQUAL(1, match.param_count);
-    TEST_ASSERT_EQUAL(2, match.params[0].key.len);
-    TEST_ASSERT_EQUAL_STRING_LEN("id", match.params[0].key.data, 2);
-    TEST_ASSERT_EQUAL(3, match.params[0].value.len);
-    TEST_ASSERT_EQUAL_STRING_LEN("123", match.params[0].value.data, 3);
-}
+        check_false(found);
+    }
 
-void test_match_multiple_params(void) {
-    route_trie_add(trie, "GET", "/users/:userId/posts/:postId", handler_a, NULL);
+    /* ============================================================================
+     * Route Matching Tests - Parameters
+     * ============================================================================ */
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/users/42/posts/99", &path);
+    it("should match single param") {
+        route_trie_add(trie, "GET", "/users/:id", handler_a, NULL);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/users/123", &path);
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(2, match.param_count);
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-    TEST_ASSERT_EQUAL_STRING_LEN("userId", match.params[0].key.data, match.params[0].key.len);
-    TEST_ASSERT_EQUAL_STRING_LEN("42", match.params[0].value.data, match.params[0].value.len);
+        check_true(found);
+        check_true(match.handler == handler_a);
+        check_int_eq(match.param_count, 1);
+        check_int_eq(match.params[0].key.len, 2);
+        check_true(strncmp(match.params[0].key.data, "id", 2) == 0);
+        check_int_eq(match.params[0].value.len, 3);
+        check_true(strncmp(match.params[0].value.data, "123", 3) == 0);
+    }
 
-    TEST_ASSERT_EQUAL_STRING_LEN("postId", match.params[1].key.data, match.params[1].key.len);
-    TEST_ASSERT_EQUAL_STRING_LEN("99", match.params[1].value.data, match.params[1].value.len);
-}
+    it("should match multiple params") {
+        route_trie_add(trie, "GET", "/users/:userId/posts/:postId", handler_a, NULL);
 
-void test_match_param_with_special_chars(void) {
-    route_trie_add(trie, "GET", "/users/:name", handler_a, NULL);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/users/42/posts/99", &path);
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/users/john-doe", &path);
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        check_true(found);
+        check_int_eq(match.param_count, 2);
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(1, match.param_count);
-    TEST_ASSERT_EQUAL_STRING_LEN("john-doe", match.params[0].value.data, match.params[0].value.len);
-}
+        check_true(strncmp(match.params[0].key.data, "userId", match.params[0].key.len) == 0);
+        check_true(strncmp(match.params[0].value.data, "42", match.params[0].value.len) == 0);
 
-void test_match_param_mixed_with_static(void) {
-    route_trie_add(trie, "GET", "/api/users/:id/profile", handler_a, NULL);
+        check_true(strncmp(match.params[1].key.data, "postId", match.params[1].key.len) == 0);
+        check_true(strncmp(match.params[1].value.data, "99", match.params[1].value.len) == 0);
+    }
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/api/users/456/profile", &path);
+    it("should match param with special chars") {
+        route_trie_add(trie, "GET", "/users/:name", handler_a, NULL);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/users/john-doe", &path);
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(1, match.param_count);
-    TEST_ASSERT_EQUAL_STRING_LEN("456", match.params[0].value.data, match.params[0].value.len);
-}
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-/* ============================================================================
- * Route Matching Tests - Wildcard
- * ============================================================================ */
+        check_true(found);
+        check_int_eq(match.param_count, 1);
+        check_int_eq(match.params[0].value.len, 8);
+        check_true(strncmp(match.params[0].value.data, "john-doe", 8) == 0);
+    }
 
-void test_match_wildcard_single_segment(void) {
-    route_trie_add(trie, "GET", "/static/*", handler_a, NULL);
+    it("should match param mixed with static") {
+        route_trie_add(trie, "GET", "/api/users/:id/profile", handler_a, NULL);
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/static/style.css", &path);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/api/users/456/profile", &path);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-    TEST_ASSERT_TRUE(found);
-    TEST_ASSERT_EQUAL(handler_a, match.handler);
-}
+        check_true(found);
+        check_int_eq(match.param_count, 1);
+        check_int_eq(match.params[0].value.len, 3);
+        check_true(strncmp(match.params[0].value.data, "456", 3) == 0);
+    }
 
-void test_match_wildcard_multiple_segments(void) {
-    route_trie_add(trie, "GET", "/static/*", handler_a, NULL);
+    /* ============================================================================
+     * Route Matching Tests - Wildcard
+     * ============================================================================ */
 
-    tokenized_path_t path = {0};
-    tokenize_path(&arena, "/static/css/main.css", &path);
+    it("should match wildcard single segment") {
+        route_trie_add(trie, "GET", "/static/*", handler_a, NULL);
 
-    route_match_t match;
-    bool found = route_trie_match(trie, "GET", &path, &match);
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/static/style.css", &path);
 
-    TEST_ASSERT_TRUE(found);
-}
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-/* ============================================================================
- * Method Index Tests
- * ============================================================================ */
+        check_true(found);
+        check_true(match.handler == handler_a);
+    }
 
-void test_method_index_get(void) {
-    TEST_ASSERT_EQUAL(METHOD_GET, get_method_index("GET"));
-}
+    it("should match wildcard multiple segments") {
+        route_trie_add(trie, "GET", "/static/*", handler_a, NULL);
 
-void test_method_index_post(void) {
-    TEST_ASSERT_EQUAL(METHOD_POST, get_method_index("POST"));
-}
+        tokenized_path_t path = {0};
+        tokenize_path(&arena, "/static/css/main.css", &path);
 
-void test_method_index_put(void) {
-    TEST_ASSERT_EQUAL(METHOD_PUT, get_method_index("PUT"));
-}
+        route_match_t match;
+        bool found = route_trie_match(trie, "GET", &path, &match);
 
-void test_method_index_delete(void) {
-    TEST_ASSERT_EQUAL(METHOD_DELETE, get_method_index("DELETE"));
-}
+        check_true(found);
+    }
 
-void test_method_index_patch(void) {
-    TEST_ASSERT_EQUAL(METHOD_PATCH, get_method_index("PATCH"));
-}
+    /* ============================================================================
+     * Method Index Tests
+     * ============================================================================ */
 
-void test_method_index_head(void) {
-    TEST_ASSERT_EQUAL(METHOD_HEAD, get_method_index("HEAD"));
-}
+    it("should get method index") {
+        check_int_eq(get_method_index("GET"), METHOD_GET);
+        check_int_eq(get_method_index("POST"), METHOD_POST);
+        check_int_eq(get_method_index("PUT"), METHOD_PUT);
+        check_int_eq(get_method_index("DELETE"), METHOD_DELETE);
+        check_int_eq(get_method_index("PATCH"), METHOD_PATCH);
+        check_int_eq(get_method_index("HEAD"), METHOD_HEAD);
+        check_int_eq(get_method_index("OPTIONS"), METHOD_OPTIONS);
+        check_int_eq(get_method_index("INVALID"), METHOD_UNKNOWN);
+        check_int_eq(get_method_index("get"), METHOD_GET);
+        check_int_eq(get_method_index(NULL), METHOD_UNKNOWN);
+    }
 
-void test_method_index_options(void) {
-    TEST_ASSERT_EQUAL(METHOD_OPTIONS, get_method_index("OPTIONS"));
-}
+    /* ============================================================================
+     * Path Tokenization Tests
+     * ============================================================================ */
 
-void test_method_index_unknown(void) {
-    TEST_ASSERT_EQUAL(METHOD_UNKNOWN, get_method_index("INVALID"));
-}
+    it("should tokenize simple path") {
+        tokenized_path_t path = {0};
+        int result = tokenize_path(&arena, "/users", &path);
 
-void test_method_index_case_insensitive(void) {
-    TEST_ASSERT_EQUAL(METHOD_GET, get_method_index("get"));
-    TEST_ASSERT_EQUAL(METHOD_POST, get_method_index("Post"));
-}
+        check_int_eq(result, 0);
+        check_int_eq(path.count, 1);
+        check_int_eq(path.segments[0].len, 5);
+        check_true(strncmp(path.segments[0].start, "users", 5) == 0);
+        check_false(path.segments[0].is_param);
+        check_false(path.segments[0].is_wildcard);
+    }
 
-void test_method_index_null(void) {
-    TEST_ASSERT_EQUAL(METHOD_UNKNOWN, get_method_index(NULL));
-}
+    it("should tokenize nested path") {
+        tokenized_path_t path = {0};
+        int result = tokenize_path(&arena, "/api/v1/users", &path);
 
-/* ============================================================================
- * Path Tokenization Tests
- * ============================================================================ */
-
-void test_tokenize_simple_path(void) {
-    tokenized_path_t path = {0};
-    int result = tokenize_path(&arena, "/users", &path);
-
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(1, path.count);
-    TEST_ASSERT_EQUAL_STRING_LEN("users", path.segments[0].start, path.segments[0].len);
-    TEST_ASSERT_FALSE(path.segments[0].is_param);
-    TEST_ASSERT_FALSE(path.segments[0].is_wildcard);
-}
-
-void test_tokenize_nested_path(void) {
-    tokenized_path_t path = {0};
-    int result = tokenize_path(&arena, "/api/v1/users", &path);
-
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(3, path.count);
-    TEST_ASSERT_EQUAL_STRING_LEN("api", path.segments[0].start, path.segments[0].len);
-    TEST_ASSERT_EQUAL_STRING_LEN("v1", path.segments[1].start, path.segments[1].len);
-    TEST_ASSERT_EQUAL_STRING_LEN("users", path.segments[2].start, path.segments[2].len);
-}
-
-void test_tokenize_root_path(void) {
-    tokenized_path_t path = {0};
-    int result = tokenize_path(&arena, "/", &path);
-
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(0, path.count);
-}
-
-void test_tokenize_param_path(void) {
-    tokenized_path_t path = {0};
-    int result = tokenize_path(&arena, "/users/:id", &path);
-
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(2, path.count);
-    TEST_ASSERT_FALSE(path.segments[0].is_param);
-    TEST_ASSERT_TRUE(path.segments[1].is_param);
-}
-
-void test_tokenize_wildcard_path(void) {
-    tokenized_path_t path = {0};
-    int result = tokenize_path(&arena, "/static/*", &path);
-
-    TEST_ASSERT_EQUAL(0, result);
-    TEST_ASSERT_EQUAL(2, path.count);
-    TEST_ASSERT_FALSE(path.segments[0].is_wildcard);
-    TEST_ASSERT_TRUE(path.segments[1].is_wildcard);
-}
-
-/* ============================================================================
- * Main
- * ============================================================================ */
-
-int main(void) {
-    UNITY_BEGIN();
-
-    /* Trie creation */
-    RUN_TEST(test_trie_create);
-    RUN_TEST(test_trie_create_multiple);
-
-    /* Route addition */
-    RUN_TEST(test_add_simple_route);
-    RUN_TEST(test_add_multiple_routes);
-    RUN_TEST(test_add_nested_routes);
-    RUN_TEST(test_add_route_with_param);
-    RUN_TEST(test_add_route_with_multiple_params);
-    RUN_TEST(test_add_route_with_wildcard);
-    RUN_TEST(test_add_root_route);
-    RUN_TEST(test_add_route_null_handler);
-    RUN_TEST(test_add_route_null_method);
-    RUN_TEST(test_add_route_null_path);
-
-    /* Exact matching */
-    RUN_TEST(test_match_simple_route);
-    RUN_TEST(test_match_nested_route);
-    RUN_TEST(test_match_different_methods);
-    RUN_TEST(test_match_root_route);
-    RUN_TEST(test_match_not_found);
-    RUN_TEST(test_match_wrong_method);
-
-    /* Parameter matching */
-    RUN_TEST(test_match_single_param);
-    RUN_TEST(test_match_multiple_params);
-    RUN_TEST(test_match_param_with_special_chars);
-    RUN_TEST(test_match_param_mixed_with_static);
-
-    /* Wildcard matching */
-    RUN_TEST(test_match_wildcard_single_segment);
-    RUN_TEST(test_match_wildcard_multiple_segments);
-
-    /* Method index */
-    RUN_TEST(test_method_index_get);
-    RUN_TEST(test_method_index_post);
-    RUN_TEST(test_method_index_put);
-    RUN_TEST(test_method_index_delete);
-    RUN_TEST(test_method_index_patch);
-    RUN_TEST(test_method_index_head);
-    RUN_TEST(test_method_index_options);
-    RUN_TEST(test_method_index_unknown);
-    RUN_TEST(test_method_index_case_insensitive);
-    RUN_TEST(test_method_index_null);
-
-    /* Path tokenization */
-    RUN_TEST(test_tokenize_simple_path);
-    RUN_TEST(test_tokenize_nested_path);
-    RUN_TEST(test_tokenize_root_path);
-    RUN_TEST(test_tokenize_param_path);
-    RUN_TEST(test_tokenize_wildcard_path);
-
-    return UNITY_END();
+        check_int_eq(result, 0);
+        check_int_eq(path.count, 3);
+        check_true(strncmp(path.segments[0].start, "api", path.segments[0].len) == 0);
+        check_true(strncmp(path.segments[1].start, "v1", path.segments[1].len) == 0);
+        check_true(strncmp(path.segments[2].start, "users", path.segments[2].len) == 0);
+    }
+
+    it("should tokenize root path") {
+        tokenized_path_t path = {0};
+        int result = tokenize_path(&arena, "/", &path);
+
+        check_int_eq(result, 0);
+        check_int_eq(path.count, 0);
+    }
+
+    it("should tokenize param path") {
+        tokenized_path_t path = {0};
+        int result = tokenize_path(&arena, "/users/:id", &path);
+
+        check_int_eq(result, 0);
+        check_int_eq(path.count, 2);
+        check_false(path.segments[0].is_param);
+        check_true(path.segments[1].is_param);
+    }
+
+    it("should tokenize wildcard path") {
+        tokenized_path_t path = {0};
+        int result = tokenize_path(&arena, "/static/*", &path);
+
+        check_int_eq(result, 0);
+        check_int_eq(path.count, 2);
+        check_false(path.segments[0].is_wildcard);
+        check_true(path.segments[1].is_wildcard);
+    }
 }

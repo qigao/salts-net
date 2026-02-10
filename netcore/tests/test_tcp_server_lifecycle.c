@@ -11,7 +11,7 @@
 
 #include "turbo_async_server.h"
 #include "turbo_async_client.h"
-#include "unity.h"
+#include "tinytest.h"
 
 #define TEST_PORT 18889
 #define TEST_HOST "127.0.0.1"
@@ -43,35 +43,6 @@ typedef struct {
 } test_context_t;
 
 static test_context_t ctx;
-
-void setUp(void) {
-  memset(&ctx, 0, sizeof(ctx));
-  uv_sem_init(&ctx.server_listening, 0);
-  uv_sem_init(&ctx.connection_event, 0);
-  uv_sem_init(&ctx.data_event, 0);
-}
-
-void tearDown(void) {
-  if (ctx.client1) {
-    async_client_destroy(ctx.client1);
-    ctx.client1 = NULL;
-  }
-  if (ctx.client2) {
-    async_client_destroy(ctx.client2);
-    ctx.client2 = NULL;
-  }
-  if (ctx.client3) {
-    async_client_destroy(ctx.client3);
-    ctx.client3 = NULL;
-  }
-  if (ctx.server) {
-    async_server_destroy(ctx.server);
-    ctx.server = NULL;
-  }
-  uv_sem_destroy(&ctx.server_listening);
-  uv_sem_destroy(&ctx.connection_event);
-  uv_sem_destroy(&ctx.data_event);
-}
 
 static void server_event_cb(async_server_t *server, const async_server_event_t *event,
                             void *user_data) {
@@ -110,6 +81,7 @@ static void server_event_cb(async_server_t *server, const async_server_event_t *
 
 static void client_event_cb(async_client_t *client, const async_client_event_t *event,
                             void *user_data) {
+  (void)client;
   client_state_t *state = (client_state_t *)user_data;
 
   switch (event->type) {
@@ -138,246 +110,258 @@ static void client_event_cb(async_client_t *client, const async_client_event_t *
   }
 }
 
-/* Test: Create and destroy server */
-void test_server_create_destroy(void) {
-  async_server_t *server = async_server_create(server_event_cb, &ctx);
-  TEST_ASSERT_NOT_NULL(server);
-  async_server_destroy(server);
-}
+spec("tcp_server_lifecycle") {
+  before_each() {
+    memset(&ctx, 0, sizeof(ctx));
+    uv_sem_init(&ctx.server_listening, 0);
+    uv_sem_init(&ctx.connection_event, 0);
+    uv_sem_init(&ctx.data_event, 0);
+  }
 
-/* Test: Server listen and accept connection */
-void test_server_listen_and_accept(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  TEST_ASSERT_NOT_NULL(ctx.server);
+  after_each() {
+    if (ctx.client1) {
+      async_client_destroy(ctx.client1);
+      ctx.client1 = NULL;
+    }
+    if (ctx.client2) {
+      async_client_destroy(ctx.client2);
+      ctx.client2 = NULL;
+    }
+    if (ctx.client3) {
+      async_client_destroy(ctx.client3);
+      ctx.client3 = NULL;
+    }
+    if (ctx.server) {
+      async_server_destroy(ctx.server);
+      ctx.server = NULL;
+    }
+    uv_sem_destroy(&ctx.server_listening);
+    uv_sem_destroy(&ctx.connection_event);
+    uv_sem_destroy(&ctx.data_event);
+  }
 
-  /* Initial state should be stopped */
-  TEST_ASSERT_EQUAL(ASYNC_SERVER_STATE_STOPPED, async_server_get_state(ctx.server));
-  TEST_ASSERT_EQUAL(0, async_server_is_listening(ctx.server));
+  describe("Lifecycle") {
+    it("should create and destroy server") {
+      async_server_t *server = async_server_create(server_event_cb, &ctx);
+      check_not_null(server);
+      async_server_destroy(server);
+    }
 
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_status_t status = async_server_listen(ctx.server, url, 0);
-  TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
+    it("should listen and accept connections") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      check_not_null(ctx.server);
 
-  uv_sem_wait(&ctx.server_listening);
+      /* Initial state should be stopped */
+      check_int_eq(async_server_get_state(ctx.server), ASYNC_SERVER_STATE_STOPPED);
+      check_int_eq(async_server_is_listening(ctx.server), 0);
 
-  /* Server should be listening */
-  TEST_ASSERT_EQUAL(ASYNC_SERVER_STATE_LISTENING, async_server_get_state(ctx.server));
-  TEST_ASSERT_EQUAL(1, async_server_is_listening(ctx.server));
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_status_t status = async_server_listen(ctx.server, url, 0);
+      check_int_eq(status, ASYNC_SERVER_STATUS_OK);
 
-  /* Connect a client */
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  TEST_ASSERT_NOT_NULL(ctx.client1);
+      uv_sem_wait(&ctx.server_listening);
 
-  async_client_connect(ctx.client1, url);
+      /* Server should be listening */
+      check_int_eq(async_server_get_state(ctx.server), ASYNC_SERVER_STATE_LISTENING);
+      check_int_eq(async_server_is_listening(ctx.server), 1);
 
-  /* Wait for connection event */
-  uv_sem_wait(&ctx.connection_event);
-  TEST_ASSERT_EQUAL(1, ctx.connection_count);
-  TEST_ASSERT_EQUAL(1, async_server_get_connection_count(ctx.server));
-}
+      /* Connect a client */
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      check_not_null(ctx.client1);
 
-/* Test: Multiple client connections */
-void test_multiple_connections(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+      async_client_connect(ctx.client1, url);
 
-  /* Connect three clients */
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  ctx.client2 = async_client_create(client_event_cb, &ctx.client2_state);
-  ctx.client3 = async_client_create(client_event_cb, &ctx.client3_state);
+      /* Wait for connection event */
+      uv_sem_wait(&ctx.connection_event);
+      check_int_eq(ctx.connection_count, 1);
+      check_size_eq(async_server_get_connection_count(ctx.server), 1);
+    }
 
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+    it("should handle multiple connections") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  async_client_connect(ctx.client2, url);
-  uv_sem_wait(&ctx.connection_event);
+      /* Connect three clients */
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      ctx.client2 = async_client_create(client_event_cb, &ctx.client2_state);
+      ctx.client3 = async_client_create(client_event_cb, &ctx.client3_state);
 
-  async_client_connect(ctx.client3, url);
-  uv_sem_wait(&ctx.connection_event);
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  TEST_ASSERT_EQUAL(3, ctx.connection_count);
-  TEST_ASSERT_EQUAL(3, async_server_get_connection_count(ctx.server));
-}
+      async_client_connect(ctx.client2, url);
+      uv_sem_wait(&ctx.connection_event);
 
-/* Test: Send to specific connection */
-void test_send_to_connection(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+      async_client_connect(ctx.client3, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+      check_int_eq(ctx.connection_count, 3);
+      check_size_eq(async_server_get_connection_count(ctx.server), 3);
+    }
+  }
 
-  /* Send data from client to server */
-  async_client_send(ctx.client1, TCP_SERVER_TEST_MESSAGE, strlen(TCP_SERVER_TEST_MESSAGE));
-  uv_sem_wait(&ctx.data_event);
+  describe("Communication") {
+    it("should send data to a specific connection") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  /* Server echoes back - wait for client to receive */
-  uv_sleep(100); /* Give time for echo to arrive */
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  TEST_ASSERT_EQUAL(1, ctx.client1_state.received_data);
-  TEST_ASSERT_EQUAL_MEMORY(TCP_SERVER_TEST_MESSAGE, ctx.client1_state.data, strlen(TCP_SERVER_TEST_MESSAGE));
-}
+      /* Send data from client to server */
+      async_client_send(ctx.client1, TCP_SERVER_TEST_MESSAGE, strlen(TCP_SERVER_TEST_MESSAGE));
+      uv_sem_wait(&ctx.data_event);
 
-/* Test: Broadcast to all connections */
-void test_broadcast(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+      /* Server echoes back - wait for client to receive */
+      uv_sleep(100); /* Give time for echo to arrive */
 
-  /* Connect two clients */
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  ctx.client2 = async_client_create(client_event_cb, &ctx.client2_state);
+      check_int_eq(ctx.client1_state.received_data, 1);
+      check_mem_eq(ctx.client1_state.data, TCP_SERVER_TEST_MESSAGE, strlen(TCP_SERVER_TEST_MESSAGE));
+    }
 
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+    it("should broadcast to all connections") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  async_client_connect(ctx.client2, url);
-  uv_sem_wait(&ctx.connection_event);
+      /* Connect two clients */
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      ctx.client2 = async_client_create(client_event_cb, &ctx.client2_state);
 
-  /* Broadcast message */
-  async_server_status_t status = async_server_broadcast(ctx.server, TCP_SERVER_TEST_BROADCAST, strlen(TCP_SERVER_TEST_BROADCAST));
-  TEST_ASSERT_EQUAL(ASYNC_SERVER_STATUS_OK, status);
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  /* Give time for broadcast to arrive */
-  uv_sleep(100);
+      async_client_connect(ctx.client2, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  /* Both clients should receive the broadcast */
-  TEST_ASSERT_EQUAL(1, ctx.client1_state.received_broadcast);
-  TEST_ASSERT_EQUAL(1, ctx.client2_state.received_broadcast);
-}
+      /* Broadcast message */
+      async_server_status_t status = async_server_broadcast(ctx.server, TCP_SERVER_TEST_BROADCAST, strlen(TCP_SERVER_TEST_BROADCAST));
+      check_int_eq(status, ASYNC_SERVER_STATUS_OK);
 
-/* Test: Close specific connection */
-void test_close_connection(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+      /* Give time for broadcast to arrive */
+      uv_sleep(100);
 
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+      /* Both clients should receive the broadcast */
+      check_int_eq(ctx.client1_state.received_broadcast, 1);
+      check_int_eq(ctx.client2_state.received_broadcast, 1);
+    }
+  }
 
-  async_server_connection_t *conn = ctx.last_connection;
-  TEST_ASSERT_NOT_NULL(conn);
+  describe("Management") {
+    it("should close a specific connection") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  /* Close the connection from server side */
-  async_server_close_connection(ctx.server, conn);
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  /* Give time for close to complete */
-  uv_sleep(100);
+      async_server_connection_t *conn = ctx.last_connection;
+      check_not_null(conn);
 
-  TEST_ASSERT_EQUAL(0, async_server_get_connection_count(ctx.server));
-}
+      /* Close the connection from server side */
+      async_server_close_connection(ctx.server, conn);
 
-/* Test: Server statistics */
-void test_server_statistics(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+      /* Give time for close to complete */
+      uv_sleep(100);
 
-  /* Initial stats should be zero */
-  async_server_stats_t stats;
-  async_server_get_stats(ctx.server, &stats);
-  TEST_ASSERT_EQUAL(0, stats.total_connections);
-  TEST_ASSERT_EQUAL(0, stats.active_connections);
+      check_size_eq(async_server_get_connection_count(ctx.server), 0);
+    }
 
-  /* Connect client */
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+    it("should track server statistics") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  /* Send data */
-  async_client_send(ctx.client1, TCP_SERVER_TEST_MESSAGE, strlen(TCP_SERVER_TEST_MESSAGE));
-  uv_sem_wait(&ctx.data_event);
-  uv_sleep(100);
+      /* Initial stats should be zero */
+      async_server_stats_t stats;
+      async_server_get_stats(ctx.server, &stats);
+      check_size_eq(stats.total_connections, 0);
+      check_size_eq(stats.active_connections, 0);
 
-  /* Verify stats updated */
-  async_server_get_stats(ctx.server, &stats);
-  TEST_ASSERT_EQUAL(1, stats.total_connections);
-  TEST_ASSERT_EQUAL(1, stats.active_connections);
-  TEST_ASSERT_GREATER_THAN(0, stats.bytes_received);
-  TEST_ASSERT_GREATER_THAN(0, stats.bytes_sent);
-}
+      /* Connect client */
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-/* Test: Set max connections */
-void test_max_connections(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
+      /* Send data */
+      async_client_send(ctx.client1, TCP_SERVER_TEST_MESSAGE, strlen(TCP_SERVER_TEST_MESSAGE));
+      uv_sem_wait(&ctx.data_event);
+      uv_sleep(100);
 
-  /* Set max connections to 2 */
-  async_server_set_max_connections(ctx.server, 2);
+      /* Verify stats updated */
+      async_server_get_stats(ctx.server, &stats);
+      check_size_eq(stats.total_connections, 1);
+      check_size_eq(stats.active_connections, 1);
+      check_size_gt(stats.bytes_received, 0);
+      check_size_gt(stats.bytes_sent, 0);
+    }
 
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+    it("should enforce max connections") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
 
-  /* Try to connect 3 clients */
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  ctx.client2 = async_client_create(client_event_cb, &ctx.client2_state);
-  ctx.client3 = async_client_create(client_event_cb, &ctx.client3_state);
+      /* Set max connections to 2 */
+      async_server_set_max_connections(ctx.server, 2);
 
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  async_client_connect(ctx.client2, url);
-  uv_sem_wait(&ctx.connection_event);
+      /* Try to connect 3 clients */
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      ctx.client2 = async_client_create(client_event_cb, &ctx.client2_state);
+      ctx.client3 = async_client_create(client_event_cb, &ctx.client3_state);
 
-  async_client_connect(ctx.client3, url);
-  uv_sleep(100); /* Give time but third should be rejected */
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  /* Should have accepted only 2 connections */
-  TEST_ASSERT_LESS_OR_EQUAL(2, async_server_get_connection_count(ctx.server));
-}
+      async_client_connect(ctx.client2, url);
+      uv_sem_wait(&ctx.connection_event);
 
-/* Test: Connection user data */
-void test_connection_user_data(void) {
-  ctx.server = async_server_create(server_event_cb, &ctx);
-  char url[128];
-  snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
-  async_server_listen(ctx.server, url, 0);
-  uv_sem_wait(&ctx.server_listening);
+      async_client_connect(ctx.client3, url);
+      uv_sleep(100); /* Give time but third should be rejected */
 
-  ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
-  async_client_connect(ctx.client1, url);
-  uv_sem_wait(&ctx.connection_event);
+      /* Should have accepted only 2 connections */
+      check_size_le(async_server_get_connection_count(ctx.server), 2);
+    }
 
-  async_server_connection_t *conn = ctx.last_connection;
-  TEST_ASSERT_NOT_NULL(conn);
+    it("should handle connection user data") {
+      ctx.server = async_server_create(server_event_cb, &ctx);
+      char url[128];
+      snprintf(url, sizeof(url), "tcp://%s:%d", TEST_HOST, TEST_PORT);
+      async_server_listen(ctx.server, url, 0);
+      uv_sem_wait(&ctx.server_listening);
 
-  /* Set and get user data */
-  int test_data = 12345;
-  async_server_connection_set_user_data(conn, &test_data);
+      ctx.client1 = async_client_create(client_event_cb, &ctx.client1_state);
+      async_client_connect(ctx.client1, url);
+      uv_sem_wait(&ctx.connection_event);
 
-  int *retrieved = (int *)async_server_connection_get_user_data(conn);
-  TEST_ASSERT_NOT_NULL(retrieved);
-  TEST_ASSERT_EQUAL(12345, *retrieved);
-}
+      async_server_connection_t *conn = ctx.last_connection;
+      check_not_null(conn);
 
-int main(void) {
-  UNITY_BEGIN();
+      /* Set and get user data */
+      int test_data = 12345;
+      async_server_connection_set_user_data(conn, &test_data);
 
-  RUN_TEST(test_server_create_destroy);
-  RUN_TEST(test_server_listen_and_accept);
-  RUN_TEST(test_multiple_connections);
-  RUN_TEST(test_send_to_connection);
-  RUN_TEST(test_broadcast);
-  RUN_TEST(test_close_connection);
-  RUN_TEST(test_server_statistics);
-  RUN_TEST(test_max_connections);
-  RUN_TEST(test_connection_user_data);
-
-  return UNITY_END();
+      int *retrieved = (int *)async_server_connection_get_user_data(conn);
+      check_not_null(retrieved);
+      check_int_eq(*retrieved, 12345);
+    }
+  }
 }

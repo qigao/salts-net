@@ -10,6 +10,13 @@
 
 static JSClassID js_turbo_context_class_id = 0;
 
+static void js_turbo_close_walk_cb(uv_handle_t *handle, void *arg) {
+    (void)arg;
+    if (!uv_is_closing(handle)) {
+        uv_close(handle, NULL);
+    }
+}
+
 static void js_turbo_context_finalizer(JSRuntime *rt, JSValue val) {
     (void)rt;
     JSTurboContextState *state = JS_GetOpaque(val, js_turbo_context_class_id);
@@ -19,6 +26,12 @@ static void js_turbo_context_finalizer(JSRuntime *rt, JSValue val) {
             http_client_destroy(state->http_client);
         }
         if (state->loop) {
+            /* Close all active handles first */
+            uv_walk((uv_loop_t *)state->loop, js_turbo_close_walk_cb, NULL);
+            /* Run loop until all handles are closed */
+            while (uv_loop_alive((uv_loop_t *)state->loop)) {
+                uv_run((uv_loop_t *)state->loop, UV_RUN_ONCE);
+            }
             uv_loop_close((uv_loop_t *)state->loop);
             free(state->loop);
         }

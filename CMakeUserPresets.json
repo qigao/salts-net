@@ -5,7 +5,7 @@
     ],
     "configurePresets": [
         {
-            "name": "user-paths",
+            "name": "win-paths",
             "hidden": true,
             "cacheVariables": {
                 "EXTERNAL_REPO_ROOT": "c:/projects/cpp/external/",
@@ -18,11 +18,22 @@
             }
         },
         {
+            "name": "linux-paths",
+            "hidden": true,
+            "cacheVariables": {
+              "VCPKG_TARGET_TRIPLET": "x64-linux",
+              "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja"
+            },
+            "environment": {
+              "VCPKG_ROOT": "/vcpkg"
+            }
+        },
+        {
             "name": "win-dev-user",
             "displayName": "Developer Build (Windows, User)",
             "inherits": [
                 "dev-win-msvc-ninja",
-                "user-paths",
+                "win-paths",
                 "pkg-vcpkg"
             ]
         },
@@ -31,7 +42,7 @@
             "displayName": "Release Build (Windows, User)",
             "inherits": [
                 "release-win-msvc-ninja",
-                "user-paths",
+                "win-paths",
                 "pkg-vcpkg"
             ]
         },
@@ -40,8 +51,35 @@
             "displayName": "Developer Build (Windows, ASAN,User)",
             "inherits": [
                 "dev-win-msvc-ninja-asan",
-                "user-paths",
+                "win-paths",
                 "pkg-vcpkg"
+            ]
+        },
+        {
+            "name": "linux-dev-user",
+            "displayName": "Developer Build (Linux, User)",
+            "inherits": [
+              "dev-linux-ninja",
+              "linux-paths",
+              "pkg-vcpkg"
+            ]
+        },
+        {
+            "name": "linux-container",
+            "displayName": "Linux Container Build",
+            "inherits": [
+              "release-linux-ninja",
+              "linux-paths",
+              "pkg-vcpkg"
+            ]
+        },
+        {
+            "name": "linux-debug-container",
+            "displayName": "Linux Container Debug Build",
+            "inherits": [
+              "dev-linux-ninja",
+              "linux-paths",
+              "pkg-vcpkg"
             ]
         }
     ]

@@ -1,5 +1,3 @@
-#include "unity.h"
-
 #include "test_uv_fixture.h"
 
 #include <stdio.h>
@@ -15,20 +13,14 @@
   #include <unistd.h>
 #endif
 
-static JSTurboTestEnv env;
-
-void setUp(void) { js_turbo_test_env_init(&env); }
-
-void tearDown(void) { js_turbo_test_env_cleanup(&env); }
-
-static void make_temp_path(char *out, size_t out_len) {
+static void make_temp_path(__bdd_config_type__ *__bdd_config__, char *out, size_t out_len) {
   char tmpdir[512];
 #ifdef _WIN32
   DWORD len = GetTempPathA(sizeof(tmpdir), tmpdir);
-  TEST_ASSERT_TRUE(len > 0 && len < sizeof(tmpdir));
+  check_true(len > 0 && len < sizeof(tmpdir));
 #else
   const char *tmp = getenv("TMPDIR");
-  if (!tmp) tmp = "/tmp";
+  if (!tmp || strlen(tmp) == 0) tmp = "/tmp";
   strncpy(tmpdir, tmp, sizeof(tmpdir) - 1);
   tmpdir[sizeof(tmpdir) - 1] = '\0';
   size_t len = strlen(tmpdir);
@@ -47,14 +39,14 @@ static void make_temp_path(char *out, size_t out_len) {
   }
 }
 
-static void make_temp_dir(char *out, size_t out_len) {
+static void make_temp_dir(__bdd_config_type__ *__bdd_config__, char *out, size_t out_len) {
   char tmpdir[512];
 #ifdef _WIN32
   DWORD len = GetTempPathA(sizeof(tmpdir), tmpdir);
-  TEST_ASSERT_TRUE(len > 0 && len < sizeof(tmpdir));
+  check_true(len > 0 && len < sizeof(tmpdir));
 #else
   const char *tmp = getenv("TMPDIR");
-  if (!tmp) tmp = "/tmp";
+  if (!tmp || strlen(tmp) == 0) tmp = "/tmp";
   strncpy(tmpdir, tmp, sizeof(tmpdir) - 1);
   tmpdir[sizeof(tmpdir) - 1] = '\0';
   size_t len = strlen(tmpdir);
@@ -73,12 +65,12 @@ static void make_temp_dir(char *out, size_t out_len) {
   } else {
     written = snprintf(out, out_len, "%sturbotest_dir_%llu", tmpdir, unique);
   }
-  TEST_ASSERT_TRUE(written > 0);
-  TEST_ASSERT_TRUE((size_t)written < out_len);
+  check_true(written > 0);
+  check_true((size_t)written < out_len);
 #ifdef _WIN32
-  TEST_ASSERT_EQUAL_INT(0, _mkdir(out));
+  check_int_eq(0, _mkdir(out));
 #else
-  TEST_ASSERT_EQUAL_INT(0, mkdir(out, 0700));
+  check_int_eq(0, mkdir(out, 0700));
 #endif
 }
 
@@ -94,134 +86,149 @@ static void escape_js_string(const char *input, char *output, size_t out_len) {
   output[j] = '\0';
 }
 
-static const char *dup_string_global(const char *name) {
-  JSValue prop = js_turbo_test_global_prop(&env, name);
-  TEST_ASSERT_TRUE(JS_IsString(prop));
+static const char *dup_string_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+  JSValue prop = js_uv_test_global_prop(env, name);
+  check_true(JS_IsString(prop));
   size_t len = 0;
-  const char *str = JS_ToCStringLen(env.ctx, &len, prop);
-  TEST_ASSERT_NOT_NULL(str);
+  const char *str = JS_ToCStringLen(env->ctx, &len, prop);
+  check_not_null(str);
   char *copy = (char *)malloc(len + 1);
-  TEST_ASSERT_NOT_NULL(copy);
-  memcpy(copy, str, len);
-  copy[len] = '\0';
-  JS_FreeCString(env.ctx, str);
-  JS_FreeValue(env.ctx, prop);
+  check_not_null(copy);
+  if (copy) {
+      memcpy(copy, str, len);
+      copy[len] = '\0';
+  }
+  JS_FreeCString(env->ctx, str);
+  JS_FreeValue(env->ctx, prop);
   return copy;
 }
 
-static JSValue get_global(const char *name) {
-  JSValue prop = js_turbo_test_global_prop(&env, name);
-  TEST_ASSERT_FALSE(JS_IsException(prop));
+static JSValue get_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+  JSValue prop = js_uv_test_global_prop(env, name);
+  check_false(JS_IsException(prop));
   return prop;
 }
 
-void test_fs_write_and_read_file(void) {
-  char path[512];
-  make_temp_path(path, sizeof(path));
-  char literal[1024];
-  escape_js_string(path, literal, sizeof(literal));
+spec("js_uv_fs") {
+    it("should write and read file") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-  char script[2048];
-  snprintf(script, sizeof(script),
-           "const fs = turbo.fs;\n"
-           "var fsResult = null;\n"
-           "try {\n"
-           "  fs.writeFile(\"%s\", \"unity_file_data\");\n"
-           "  const data = fs.readFile(\"%s\");\n"
-           "  var fsResult = data;\n"
-           "} catch (err) {\n"
-           "  var fsResult = 'ERROR:' + err.message;\n"
-           "}\n",
-           literal, literal);
-  js_turbo_test_eval(&env, script);
+        char path[512];
+        make_temp_path(__bdd_config__, path, sizeof(path));
+        char literal[1024];
+        escape_js_string(path, literal, sizeof(literal));
 
-  const char *result = dup_string_global("fsResult");
-  TEST_ASSERT_EQUAL_STRING("unity_file_data", result);
-  free((void *)result);
+        char script[2048];
+        snprintf(script, sizeof(script),
+                "const fs = turbo.fs;\n"
+                "var fsResult = null;\n"
+                "try {\n"
+                "  fs.writeFile(\"%s\", \"unity_file_data\");\n"
+                "  const data = fs.readFile(\"%s\");\n"
+                "  var fsResult = data;\n"
+                "} catch (err) {\n"
+                "  var fsResult = 'ERROR:' + err.message;\n"
+                "}\n",
+                literal, literal);
+        js_uv_test_eval(&env, script);
 
-  remove(path);
-}
+        const char *result = dup_string_global(__bdd_config__, &env, "fsResult");
+        check_str_eq("unity_file_data", result);
+        if (result) free((void *)result);
 
-void test_fs_stat_reports_file(void) {
-  char path[512];
-  make_temp_path(path, sizeof(path));
-  FILE *fp = fopen(path, "wb");
-  TEST_ASSERT_NOT_NULL(fp);
-  fputs("stat-data", fp);
-  fclose(fp);
+        remove(path);
+        
+        js_uv_test_env_cleanup(&env);
+    }
 
-  char literal[1024];
-  escape_js_string(path, literal, sizeof(literal));
+    it("should stat file") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-  char script[1024];
-  snprintf(script, sizeof(script),
-           "const fs = turbo.fs;\n"
-           "var statResult = null;\n"
-           "try {\n"
-           "  const info = fs.stat(\"%s\");\n"
-           "  var statResult = info ? info.isFile : false;\n"
-           "} catch (err) {\n"
-           "  var statResult = false;\n"
-           "}\n",
-           literal);
-  js_turbo_test_eval(&env, script);
+        char path[512];
+        make_temp_path(__bdd_config__, path, sizeof(path));
+        FILE *fp = fopen(path, "wb");
+        check_not_null(fp);
+        if (fp) {
+            fputs("stat-data", fp);
+            fclose(fp);
+        }
 
-  JSValue result = get_global("statResult");
-  TEST_ASSERT_TRUE(JS_IsBool(result));
-  TEST_ASSERT_TRUE(JS_ToBool(env.ctx, result));
-  JS_FreeValue(env.ctx, result);
+        char literal[1024];
+        escape_js_string(path, literal, sizeof(literal));
 
-  remove(path);
-}
+        char script[1024];
+        snprintf(script, sizeof(script),
+                "const fs = turbo.fs;\n"
+                "var statResult = null;\n"
+                "try {\n"
+                "  const info = fs.stat(\"%s\");\n"
+                "  var statResult = info ? info.isFile : false;\n"
+                "} catch (err) {\n"
+                "  var statResult = false;\n"
+                "}\n",
+                literal);
+        js_uv_test_eval(&env, script);
 
-void test_fs_readdir_lists_file(void) {
-  char dir[512];
-  make_temp_dir(dir, sizeof(dir));
-#ifdef _WIN32
-  const char sep = '\\';
-#else
-  const char sep = '/';
-#endif
-  const char *filename = "turbo_entry.txt";
-  char file_path[512];
-  snprintf(file_path, sizeof(file_path), "%s%c%s", dir, sep, filename);
-  FILE *fp = fopen(file_path, "wb");
-  TEST_ASSERT_NOT_NULL(fp);
-  fputs("dir-data", fp);
-  fclose(fp);
+        JSValue result = get_global(__bdd_config__, &env, "statResult");
+        check_true(JS_IsBool(result));
+        check_true(JS_ToBool(env.ctx, result));
+        JS_FreeValue(env.ctx, result);
 
-  char literal[1024];
-  escape_js_string(dir, literal, sizeof(literal));
+        remove(path);
 
-  char script[2048];
-  snprintf(script, sizeof(script),
-           "const fs = turbo.fs;\n"
-           "var dirResult = null;\n"
-           "try {\n"
-           "  const entries = fs.readdir(\"%s\");\n"
-           "  var dirResult = entries.sort().join(\",\");\n"
-           "} catch (err) {\n"
-           "  var dirResult = 'ERROR:' + err.message;\n"
-           "}\n",
-           literal);
-  js_turbo_test_eval(&env, script);
+        js_uv_test_env_cleanup(&env);
+    }
 
-  const char *result = dup_string_global("dirResult");
-  TEST_ASSERT_EQUAL_STRING(filename, result);
-  free((void *)result);
+    it("should readdir") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-  TEST_ASSERT_EQUAL_INT(0, remove(file_path));
-#ifdef _WIN32
-  TEST_ASSERT_EQUAL_INT(0, _rmdir(dir));
-#else
-  TEST_ASSERT_EQUAL_INT(0, rmdir(dir));
-#endif
-}
+        char dir[512];
+        make_temp_dir(__bdd_config__, dir, sizeof(dir));
+    #ifdef _WIN32
+        const char sep = '\\';
+    #else
+        const char sep = '/';
+    #endif
+        const char *filename = "turbo_entry.txt";
+        char file_path[512];
+        snprintf(file_path, sizeof(file_path), "%s%c%s", dir, sep, filename);
+        FILE *fp = fopen(file_path, "wb");
+        check_not_null(fp);
+        if (fp) {
+            fputs("dir-data", fp);
+            fclose(fp);
+        }
 
-int main(void) {
-  UNITY_BEGIN();
-  RUN_TEST(test_fs_write_and_read_file);
-  RUN_TEST(test_fs_stat_reports_file);
-  RUN_TEST(test_fs_readdir_lists_file);
-  return UNITY_END();
+        char literal[1024];
+        escape_js_string(dir, literal, sizeof(literal));
+
+        char script[2048];
+        snprintf(script, sizeof(script),
+                "const fs = turbo.fs;\n"
+                "var dirResult = null;\n"
+                "try {\n"
+                "  const entries = fs.readdir(\"%s\");\n"
+                "  var dirResult = entries.sort().join(\",\");\n"
+                "} catch (err) {\n"
+                "  var dirResult = 'ERROR:' + err.message;\n"
+                "}\n",
+                literal);
+        js_uv_test_eval(&env, script);
+
+        const char *result = dup_string_global(__bdd_config__, &env, "dirResult");
+        check_str_eq(filename, result);
+        if (result) free((void *)result);
+
+        check_int_eq(0, remove(file_path));
+    #ifdef _WIN32
+        check_int_eq(0, _rmdir(dir));
+    #else
+        check_int_eq(0, rmdir(dir));
+    #endif
+        
+        js_uv_test_env_cleanup(&env);
+    }
 }

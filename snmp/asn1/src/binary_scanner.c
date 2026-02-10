@@ -99,15 +99,10 @@ static asn1_value_t *parse_constructed(const uint8_t *data, size_t len, asn1_tag
                 return NULL;
         }
     } else {
-        // Context-specific or application tag - treat as SEQUENCE for constructed
-        value = asn1_create_sequence();
-        if (value) {
-            // Override the tag information to preserve context-specific nature
-            value->tag = (tag->tag_class << 6) | (tag->constructed << 5) | tag->tag_number;
-            value->tag_class = tag->tag_class;
-            value->tag_number = tag->tag_number;
-            value->constructed = tag->constructed;
-        }
+        // Context-specific or application tag - treat as SEQUENCE for structural storage
+        // but identify as TK_CONTEXT_SPECIFIC for type
+        value = asn1_create_value(TK_CONTEXT_SPECIFIC, tag->tag_class, 
+                                 tag->constructed, tag->tag_number);
     }
     
     if (!value) return NULL;
@@ -127,7 +122,7 @@ static asn1_value_t *parse_constructed(const uint8_t *data, size_t len, asn1_tag
         if (!child) break;
         
         // Add child to parent
-        if (value->type == ASN1_TYPE_SEQUENCE) {
+        if (value->type == ASN1_TYPE_SEQUENCE || value->type == TK_CONTEXT_SPECIFIC) {
             asn1_sequence_add_child(value, child);
         } else if (value->type == ASN1_TYPE_SET) {
             asn1_set_add_child(value, child);

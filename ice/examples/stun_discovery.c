@@ -9,7 +9,7 @@
  * - stun1.l.google.com:19302
  *
  * Build:
- *   This is automatically built when BUILD_TESTING=ON
+ *   This is automatically built when BUILD_TESTS=ON
  *
  * Usage:
  *   ./stun_discovery

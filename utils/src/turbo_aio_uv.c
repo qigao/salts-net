@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
+#include "sds.h"
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -53,7 +54,7 @@ static int flags_to_uv(int flags) {
 
 static void free_request(aio_request_t *req) {
     if (req) {
-        if (req->path) free(req->path);
+        if (req->path) sdsfree(req->path);
         free(req);
     }
 }
@@ -188,7 +189,7 @@ CXX_C_API int turbo_aio_open(turbo_aio_ctx_t *ctx, const char *path, int flags, 
     aio_request_t *req = (aio_request_t *)calloc(1, sizeof(aio_request_t));
     if (!req) return TURBO_AIO_ENOMEM;
 
-    req->path = strdup(path);
+    req->path = sdsnew(path);
     if (!req->path) {
         free(req);
         return TURBO_AIO_ENOMEM;

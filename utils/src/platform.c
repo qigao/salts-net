@@ -7,6 +7,7 @@
 #include "tlog.h"
 #include <stdlib.h> // For malloc/free
 #include <string.h> // For memset, strlen, memcpy
+#include "sds.h"
 #include <uv.h>
 #ifdef _WIN32
 #include <process.h>
@@ -490,6 +491,7 @@ struct turbo_native_timer_s {
   uint64_t timeout;
   uint64_t repeat;
   int active;
+  volatile DWORD callback_thread_id;
 };
 
 // Windows timer callback wrapper
@@ -497,7 +499,9 @@ static VOID CALLBACK native_timer_callback_win32(PVOID lpParameter, BOOLEAN Time
   UNUSED(TimerOrWaitFired);
   turbo_timer_t *timer = (turbo_timer_t *)lpParameter;
   if (timer && timer->callback) {
+    timer->callback_thread_id = GetCurrentThreadId();
     timer->callback(timer);
+    timer->callback_thread_id = 0;
   }
 }
 
@@ -567,13 +571,26 @@ int turbo_timer_stop(turbo_timer_t *timer) {
     return 0;
   }
   
-  if (timer->timer_handle) {
-    // Delete timer and wait for callbacks to complete
-    DeleteTimerQueueTimer(NULL, timer->timer_handle, INVALID_HANDLE_VALUE);
-    timer->timer_handle = NULL;
+  timer->active = 0;
+  
+  // Atomically swap the handle with NULL to ensure we only call DeleteTimerQueueTimer once
+  HANDLE h = InterlockedExchangePointer(&timer->timer_handle, NULL);
+  if (h) {
+    // Cannot wait for completion (INVALID_HANDLE_VALUE) if called from within the callback
+    // as it would cause a deadlock or crash (double-deletion in some cases).
+    HANDLE completion = INVALID_HANDLE_VALUE;
+    if (GetCurrentThreadId() == timer->callback_thread_id) {
+      completion = NULL;
+    }
+    
+    if (!DeleteTimerQueueTimer(NULL, h, completion)) {
+      DWORD err = GetLastError();
+      if (err != ERROR_IO_PENDING) {
+        TLOG_ERROR("DeleteTimerQueueTimer failed: {}", err);
+      }
+    }
   }
   
-  timer->active = 0;
   TLOG_DEBUG("Timer stopped");
   return 0;
 }
@@ -713,35 +730,37 @@ char *turbo_strdup_padded(const char *s) {
   if (!s)
     return NULL;
   size_t len = strlen(s);
-  char *p = malloc(len + 8);
-  if (p) {
-    memcpy(p, s, len);
-    memset(p + len, 0, 8); // Null terminate and pad with zeros
-  }
-  return p;
+  sds out = sdsnewlen(s, len);
+  if (!out)
+    return NULL;
+  out = sdsMakeRoomFor(out, 8);
+  memset(out + len, 0, 8);
+  return out;
 }
 
 char *turbo_pool_strdup(void *pool, const char *str) {
   if (!pool || !str)
     return NULL;
   size_t len = strlen(str);
-  char *copy = pool_alloc((MemoryPool *)pool, len + 1);
-  if (copy) {
-    memcpy(copy, str, len + 1);
-  }
-  return copy;
+  char *out = (char *)pool_alloc((MemoryPool *)pool, len + 1);
+  if (!out)
+    return NULL;
+  memcpy(out, str, len);
+  out[len] = '\0';
+  return out;
 }
 
 char *turbo_pool_strdup_padded(void *pool, const char *str) {
   if (!pool || !str)
     return NULL;
   size_t len = strlen(str);
-  char *copy = pool_alloc((MemoryPool *)pool, len + 8);
-  if (copy) {
-    memcpy(copy, str, len);
-    memset(copy + len, 0, 8); // Null terminate and pad with zeros
-  }
-  return copy;
+  char *out = (char *)pool_alloc((MemoryPool *)pool, len + 1 + 8);
+  if (!out)
+    return NULL;
+  memcpy(out, str, len);
+  out[len] = '\0';
+  memset(out + len + 1, 0, 8);
+  return out;
 }
 
 void *turbo_malloc_padded(size_t size) { return malloc(size + 8); }

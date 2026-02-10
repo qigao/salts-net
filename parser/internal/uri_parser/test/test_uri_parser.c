@@ -1,153 +1,143 @@
-#include "unity.h"
+#include "tinytest.h"
 #include "uri_parser.h"
 #include <string.h>
 
-void setUp(void) {}
-void tearDown(void) {}
+spec("uri_parser") {
+  describe("Basic HTTP/HTTPS Parsing") {
+    it("should parse a simple HTTP URL correctly") {
+        uri_t uri;
+        int result = uri_parse("http://example.com", &uri);
 
-void test_parse_simple_http_url(void) {
-    uri_t uri;
-    int result = uri_parse("http://example.com", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "http");
+        check_str_eq(uri.host, "example.com");
+        check_int_eq(uri.host_type, URI_HOST_REGNAME);
+    }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("http", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL(URI_HOST_REGNAME, uri.host_type);
-}
+    it("should parse an HTTPS URL correctly") {
+        uri_t uri;
+        int result = uri_parse("https://secure.example.com/login", &uri);
 
-void test_parse_url_with_port(void) {
-    uri_t uri;
-    int result = uri_parse("http://example.com:8080", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "https");
+        check_str_eq(uri.host, "secure.example.com");
+        check_str_eq(uri.path, "/login");
+    }
+  }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("http", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL(8080, uri.port);
-}
+  describe("URL Components") {
+    it("should parse a URL with a port correctly") {
+        uri_t uri;
+        int result = uri_parse("http://example.com:8080", &uri);
 
-void test_parse_url_with_path(void) {
-    uri_t uri;
-    int result = uri_parse("http://example.com/path/to/resource", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "http");
+        check_str_eq(uri.host, "example.com");
+        check_int_eq(uri.port, 8080);
+    }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("http", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL_STRING("/path/to/resource", uri.path);
-}
+    it("should parse a URL with a path correctly") {
+        uri_t uri;
+        int result = uri_parse("http://example.com/path/to/resource", &uri);
 
-void test_parse_url_with_query(void) {
-    uri_t uri;
-    int result = uri_parse("http://example.com/path?foo=bar&baz=qux", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "http");
+        check_str_eq(uri.host, "example.com");
+        check_str_eq(uri.path, "/path/to/resource");
+    }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("http", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL_STRING("/path", uri.path);
-    TEST_ASSERT_EQUAL_STRING("foo=bar&baz=qux", uri.query);
-}
+    it("should parse a URL with a query string correctly") {
+        uri_t uri;
+        int result = uri_parse("http://example.com/path?foo=bar&baz=qux", &uri);
 
-void test_parse_url_with_fragment(void) {
-    uri_t uri;
-    int result = uri_parse("http://example.com/path#section", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "http");
+        check_str_eq(uri.host, "example.com");
+        check_str_eq(uri.path, "/path");
+        check_str_eq(uri.query, "foo=bar&baz=qux");
+    }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL_STRING("http", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL_STRING("/path", uri.path);
-    TEST_ASSERT_EQUAL_STRING("section", uri.fragment);
-}
+    it("should parse a URL with a fragment correctly") {
+        uri_t uri;
+        int result = uri_parse("http://example.com/path#section", &uri);
 
-void test_parse_url_with_userinfo(void) {
-    uri_t uri;
-    int result = uri_parse("http://user:pass@example.com/path", &uri);
+        check_int_eq(result, 1);
+        check_str_eq(uri.scheme, "http");
+        check_str_eq(uri.host, "example.com");
+        check_str_eq(uri.path, "/path");
+        check_str_eq(uri.fragment, "section");
+    }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("http", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("user:pass", uri.userinfo);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL_STRING("/path", uri.path);
-}
+    it("should parse a URL with user info correctly") {
+        uri_t uri;
+        int result = uri_parse("http://user:pass@example.com/path", &uri);
 
-void test_parse_ipv4_address(void) {
-    uri_t uri;
-    int result = uri_parse("http://192.168.1.1:8080/path", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "http");
+        check_str_eq(uri.userinfo, "user:pass");
+        check_str_eq(uri.host, "example.com");
+        check_str_eq(uri.path, "/path");
+    }
+  }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("192.168.1.1", uri.host);
-    TEST_ASSERT_EQUAL(URI_HOST_IPV4ADDR, uri.host_type);
-    TEST_ASSERT_EQUAL(8080, uri.port);
-}
+  describe("IP Address Parsing") {
+    it("should parse IPv4 addresses in URLs correctly") {
+        uri_t uri;
+        int result = uri_parse("http://192.168.1.1:8080/path", &uri);
 
-void test_parse_ipv6_address(void) {
-    uri_t uri;
-    int result = uri_parse("http://[::1]:8080/path", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.host, "192.168.1.1");
+        check_int_eq(uri.host_type, URI_HOST_IPV4ADDR);
+        check_int_eq(uri.port, 8080);
+    }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("::1", uri.host);
-    TEST_ASSERT_EQUAL(URI_HOST_IPV6ADDR, uri.host_type);
-    TEST_ASSERT_EQUAL(8080, uri.port);
-}
+    it("should parse IPv6 addresses in URLs correctly") {
+        uri_t uri;
+        int result = uri_parse("http://[::1]:8080/path", &uri);
 
-void test_parse_https_url(void) {
-    uri_t uri;
-    int result = uri_parse("https://secure.example.com/login", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.host, "::1");
+        check_int_eq(uri.host_type, URI_HOST_IPV6ADDR);
+        check_int_eq(uri.port, 8080);
+    }
+  }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("https", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("secure.example.com", uri.host);
-    TEST_ASSERT_EQUAL_STRING("/login", uri.path);
-}
+  describe("Complex URLs") {
+    it("should parse a full URL with all components correctly") {
+        uri_t uri;
+        int result = uri_parse("https://user:pass@example.com:443/path/to/resource?query=value#fragment", &uri);
 
-void test_parse_full_url(void) {
-    uri_t uri;
-    int result = uri_parse("https://user:pass@example.com:443/path/to/resource?query=value#fragment", &uri);
+        check_int_eq(result, 1);
+        check_int_eq(uri.valid, 1);
+        check_str_eq(uri.scheme, "https");
+        check_str_eq(uri.userinfo, "user:pass");
+        check_str_eq(uri.host, "example.com");
+        check_int_eq(uri.port, 443);
+        check_str_eq(uri.path, "/path/to/resource");
+        check_str_eq(uri.query, "query=value");
+        check_str_eq(uri.fragment, "fragment");
+    }
+  }
 
-    TEST_ASSERT_EQUAL(1, result);
-    TEST_ASSERT_EQUAL(1, uri.valid);
-    TEST_ASSERT_EQUAL_STRING("https", uri.scheme);
-    TEST_ASSERT_EQUAL_STRING("user:pass", uri.userinfo);
-    TEST_ASSERT_EQUAL_STRING("example.com", uri.host);
-    TEST_ASSERT_EQUAL(443, uri.port);
-    TEST_ASSERT_EQUAL_STRING("/path/to/resource", uri.path);
-    TEST_ASSERT_EQUAL_STRING("query=value", uri.query);
-    TEST_ASSERT_EQUAL_STRING("fragment", uri.fragment);
-}
+  describe("Error Handling") {
+    it("should return error for NULL input") {
+        uri_t uri;
+        check_int_eq(uri_parse(NULL, &uri), 0);
+        check_int_eq(uri_parse("http://example.com", NULL), 0);
+    }
 
-void test_parse_null_input(void) {
-    uri_t uri;
-    TEST_ASSERT_EQUAL(0, uri_parse(NULL, &uri));
-    TEST_ASSERT_EQUAL(0, uri_parse("http://example.com", NULL));
-}
-
-void test_parse_invalid_url(void) {
-    uri_t uri;
-    // Missing scheme
-    TEST_ASSERT_EQUAL(0, uri_parse("example.com", &uri));
-}
-
-int main(void) {
-    UNITY_BEGIN();
-
-    RUN_TEST(test_parse_simple_http_url);
-    RUN_TEST(test_parse_url_with_port);
-    RUN_TEST(test_parse_url_with_path);
-    RUN_TEST(test_parse_url_with_query);
-    RUN_TEST(test_parse_url_with_fragment);
-    RUN_TEST(test_parse_url_with_userinfo);
-    RUN_TEST(test_parse_ipv4_address);
-    RUN_TEST(test_parse_ipv6_address);
-    RUN_TEST(test_parse_https_url);
-    RUN_TEST(test_parse_full_url);
-    RUN_TEST(test_parse_null_input);
-    RUN_TEST(test_parse_invalid_url);
-
-    return UNITY_END();
+    it("should return error for URLs missing a scheme") {
+        uri_t uri;
+        /* Missing scheme */
+        check_int_eq(uri_parse("example.com", &uri), 0);
+    }
+  }
 }

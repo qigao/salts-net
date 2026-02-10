@@ -1,0 +1,218 @@
+/**
+ * @file test_fmt.c
+ * @brief Unit tests for fmt.h - C11 _Generic type-safe formatting
+ */
+
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "fmt.h"
+#include "tinytest.h"
+
+#define BUFFER_SIZE 512
+
+spec("FMT Tests") {
+  it("should detect platform support") {
+#if FMT_HAS_GENERIC
+    printf("  _Generic support: YES (GCC/Clang C11 mode)\n");
+#else
+    printf("  _Generic support: NO (MSVC or pre-C11)\n");
+#endif
+    check(1); // Just informative
+  }
+
+  describe("Explicit Type Functions") {
+    it("should correctly identify types in fmt_arg_t") {
+      /* Integer types */
+      fmt_arg_t arg_int = fmt_arg_int(42);
+      check_int_eq(arg_int.type, FMT_TYPE_INT);
+      check_int_eq(arg_int.val.i, 42);
+
+      fmt_arg_t arg_uint = fmt_arg_uint(42u);
+      check_int_eq(arg_uint.type, FMT_TYPE_UINT);
+      check_uint_eq(arg_uint.val.u, 42u);
+
+      fmt_arg_t arg_long = fmt_arg_long(42L);
+      check_int_eq(arg_long.type, FMT_TYPE_LONG);
+      check_int_eq((int)arg_long.val.l, 42);
+
+      fmt_arg_t arg_ulong = fmt_arg_ulong(42UL);
+      check_int_eq(arg_ulong.type, FMT_TYPE_ULONG);
+      check_uint_eq((unsigned int)arg_ulong.val.ul, 42u);
+
+      fmt_arg_t arg_llong = fmt_arg_llong(42LL);
+      check_int_eq(arg_llong.type, FMT_TYPE_LLONG);
+      check_int_eq((int)arg_llong.val.ll, 42);
+
+      fmt_arg_t arg_ullong = fmt_arg_ullong(42ULL);
+      check_int_eq(arg_ullong.type, FMT_TYPE_ULLONG);
+      check_uint_eq((unsigned int)arg_ullong.val.ull, 42u);
+
+      /* Floating point */
+      fmt_arg_t arg_double = fmt_arg_double(3.14);
+      check_int_eq(arg_double.type, FMT_TYPE_DOUBLE);
+      check(fabs(arg_double.val.f - 3.14) < 0.001);
+
+      /* String */
+      const char *str = "hello";
+      fmt_arg_t arg_str = fmt_arg_str(str);
+      check_int_eq(arg_str.type, FMT_TYPE_STR);
+      check_str_eq(arg_str.val.s, "hello");
+
+      /* Pointer */
+      int x = 10;
+      void *ptr = &x;
+      fmt_arg_t arg_ptr = fmt_arg_ptr(ptr);
+      check_int_eq(arg_ptr.type, FMT_TYPE_PTR);
+      check_ptr_eq(arg_ptr.val.p, &x);
+
+      /* Character */
+      fmt_arg_t arg_char = fmt_arg_char('A');
+      check_int_eq(arg_char.type, FMT_TYPE_CHAR);
+      check_int_eq(arg_char.val.c, 'A');
+    }
+  }
+
+  describe("FMT_ARG Macro") {
+#if FMT_HAS_GENERIC
+    it("should correctly identify types via _Generic") {
+      check_int_eq(FMT_ARG(42).type, FMT_TYPE_INT);
+      check_int_eq(FMT_ARG(42u).type, FMT_TYPE_UINT);
+      check_int_eq(FMT_ARG(3.14).type, FMT_TYPE_DOUBLE);
+      check_int_eq(FMT_ARG("hello").type, FMT_TYPE_STR);
+      int x = 10;
+      check_int_eq(FMT_ARG(&x).type, FMT_TYPE_PTR);
+    }
+#else
+    it("should fallback correctly when _Generic is not available") {
+      check_int_eq(FMT_ARG(42).type, FMT_TYPE_INT);
+      check_int_eq(FMT_ARG(42).val.i, 42);
+    }
+#endif
+  }
+
+  describe("Core Formatting") {
+    it("should handle basic formatting") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args1[] = {fmt_arg_int(42)};
+      int len = fmt_print(buf, sizeof(buf), "Value: {}", args1, 1);
+      check(len > 0);
+      check_str_eq(buf, "Value: 42");
+
+      fmt_arg_t args2[] = {fmt_arg_int(10), fmt_arg_int(20)};
+      fmt_print(buf, sizeof(buf), "{} + {} = 30", args2, 2);
+      check_str_eq(buf, "10 + 20 = 30");
+
+      fmt_arg_t args3[] = {fmt_arg_str("World")};
+      fmt_print(buf, sizeof(buf), "Hello, {}!", args3, 1);
+      check_str_eq(buf, "Hello, World!");
+    }
+
+    it("should handle mixed types") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args[] = {fmt_arg_str("Alice"), fmt_arg_int(30),
+                          fmt_arg_double(95.5)};
+      fmt_print(buf, sizeof(buf), "Name: {}, Age: {}, Score: {}", args, 3);
+      check_not_null(strstr(buf, "Name: Alice"));
+      check_not_null(strstr(buf, "Age: 30"));
+      check_not_null(strstr(buf, "Score: "));
+    }
+
+    it("should handle format specifiers") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args1[] = {fmt_arg_uint(255)};
+      fmt_print(buf, sizeof(buf), "Hex: {:x}", args1, 1);
+      check_str_eq(buf, "Hex: ff");
+
+      fmt_print(buf, sizeof(buf), "Hex: {:X}", args1, 1);
+      check_str_eq(buf, "Hex: FF");
+
+      fmt_arg_t args2[] = {fmt_arg_int(42)};
+      fmt_print(buf, sizeof(buf), "Padded: {:05d}", args2, 1);
+      check_str_eq(buf, "Padded: 00042");
+    }
+
+    it("should handle escape sequences") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args[] = {fmt_arg_int(42)};
+      fmt_print(buf, sizeof(buf), "Value {{}} is {}", args, 1);
+      check_str_eq(buf, "Value {} is 42");
+
+      fmt_print(buf, sizeof(buf), "{{{{", NULL, 0);
+      check_str_eq(buf, "{{");
+
+      fmt_print(buf, sizeof(buf), "}}}}", NULL, 0);
+      check_str_eq(buf, "}}");
+    }
+
+    it("should handle null inputs") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args[] = {fmt_arg_str(NULL)};
+      fmt_print(buf, sizeof(buf), "Value: {}", args, 1);
+      check_str_eq(buf, "Value: (null)");
+
+      check_int_eq(fmt_print(NULL, 0, "test", NULL, 0), 0);
+      check_int_eq(fmt_print(buf, sizeof(buf), NULL, NULL, 0), 0);
+    }
+
+    it("should protect against buffer overflow") {
+      char small_buf[10];
+      fmt_arg_t args[] = {
+          fmt_arg_str("This is a very long string that should be truncated")};
+      int len = fmt_print(small_buf, sizeof(small_buf), "{}", args, 1);
+      check(len < (int)sizeof(small_buf));
+      check_int_eq(small_buf[sizeof(small_buf) - 1], '\0');
+      check(strlen(small_buf) < sizeof(small_buf));
+    }
+
+    it("should handle missing arguments") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args[] = {fmt_arg_int(1)};
+      fmt_print(buf, sizeof(buf), "{} {} {}", args, 1);
+      check_not_null(strstr(buf, "1"));
+      check_not_null(strstr(buf, "{}"));
+    }
+
+    it("should handle large numbers") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args1[] = {fmt_arg_llong(9223372036854775807LL)};
+      fmt_print(buf, sizeof(buf), "{}", args1, 1);
+      check_str_eq(buf, "9223372036854775807");
+
+      fmt_arg_t args2[] = {fmt_arg_ullong(18446744073709551615ULL)};
+      fmt_print(buf, sizeof(buf), "{}", args2, 1);
+      check_str_eq(buf, "18446744073709551615");
+    }
+
+    it("should handle pointer formatting") {
+      char buf[BUFFER_SIZE];
+      int x = 42;
+      void *ptr = &x;
+      fmt_arg_t args1[] = {fmt_arg_ptr(ptr)};
+      fmt_print(buf, sizeof(buf), "Ptr: {}", args1, 1);
+      check_not_null(strstr(buf, "Ptr: "));
+      check(strlen(buf) > 5);
+    }
+
+    it("should handle character formatting") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args[] = {fmt_arg_char('X')};
+      fmt_print(buf, sizeof(buf), "Char: {}", args, 1);
+      check_str_eq(buf, "Char: X");
+
+      fmt_arg_t args2[] = {fmt_arg_char('\n')};
+      fmt_print(buf, sizeof(buf), "NL:{}", args2, 1);
+      check_str_eq(buf, "NL:\n");
+    }
+
+    it("should handle text without placeholders") {
+      char buf[BUFFER_SIZE];
+      int len = fmt_print(buf, sizeof(buf), "Hello, World!", NULL, 0);
+      check_int_eq(len, 13);
+      check_str_eq(buf, "Hello, World!");
+    }
+  }
+}

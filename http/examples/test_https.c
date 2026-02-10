@@ -1,5 +1,5 @@
 #include "http_client.h"
-#include "bdd-for-c.h"
+#include "tinytest.h"
 
 
 spec("HTTPS and Redirect Tests") {
@@ -13,6 +13,7 @@ spec("HTTPS and Redirect Tests") {
   after() {
     if (client) {
       http_client_destroy(client);
+      client = NULL;
     }
   }
 

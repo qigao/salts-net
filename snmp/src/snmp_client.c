@@ -107,7 +107,7 @@ static void on_timeout(uv_timer_t *timer) {
     if (!client->response_received) {
         client->pending_result = SNMP_CLIENT_ERROR_TIMEOUT;
         strcpy(client->error_msg, "Request timeout");
-        TLOG_ERROR("SNMP request timeout for {:s}:{:d}", client->host, client->port);
+        TLOG_DEBUG("SNMP request timeout for {:s}:{:d}", client->host, client->port);
 
         /* Stop event loop */
         uv_stop(client->loop);
@@ -259,7 +259,7 @@ static int send_request_and_wait(
 
         if (send_result != 0) {
             pool_destroy(client->response_pool);
-            TLOG_ERROR("SNMP network error: failed to send request to {:s}", client->host);
+            TLOG_DEBUG("SNMP network error: failed to send request to {:s}", client->host);
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 

@@ -1,5 +1,5 @@
 {
-  "name": "vcpkg-example",
+  "name": "vcpkg-turbonet",
   "version-semver": "0.1.0",
   "dependencies": [
     {
@@ -31,10 +31,6 @@
       "version>=": "1.34.1"
     },
     {
-      "name": "libpq",
-      "version>=": "16.0"
-    },
-    {
       "name": "openssl",
       "version>=": "3.2.0"
     },
@@ -52,6 +48,9 @@
     {
       "name": "stc",
       "version>=": "5.0"
+    },
+    {
+      "name": "pkgconf"
     }
   ],
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"

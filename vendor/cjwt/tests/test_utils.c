@@ -1,15 +1,12 @@
 /* SPDX-FileCopyrightText: 2021-2022 Comcast Cable Communications Management, LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
-#include "unity.h"
+#include "tinytest.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../src/utils.h"
-
-void setUp(void) {}
-void tearDown(void) {}
 
 struct test_vector {
     const char *full;
@@ -18,8 +15,9 @@ struct test_vector {
     struct split_jwt goal;
 };
 
-void test_split(void)
-{
+suite("cjwt utils") {
+  group("split") {
+    it("handles all vectors") {
     // clang-format off
     struct test_vector tests[] = {
         {   .full = "abcdefghijkl",
@@ -151,24 +149,25 @@ void test_split(void)
 
         rv = split(tests[i].full, tests[i].len, &got);
 
-        TEST_ASSERT_EQUAL_INT(tests[i].rv, rv);
-        if (0 == tests[i].rv) {
-            TEST_ASSERT_EQUAL_UINT(tests[i].goal.count, got.count);
+        int expected_rv = tests[i].rv;
+        if (expected_rv == 0) {
+            expected_rv = (int)tests[i].goal.count;
+        }
+        check_int_eq(expected_rv, rv);
+        if (rv > 0) {
+            check_size_eq(got.count, tests[i].goal.count);
 
             for (size_t j = 0; j < got.count; j++) {
-                TEST_ASSERT_EQUAL_UINT(tests[i].goal.sections[j].len, got.sections[j].len);
+                check_size_eq(got.sections[j].len, tests[i].goal.sections[j].len);
 
-                for (size_t k = 0; k < tests[i].goal.sections[j].len; k++) {
-                    TEST_ASSERT_EQUAL_INT(tests[i].goal.sections[j].data[k], got.sections[j].data[k]);
+                if (tests[i].goal.sections[j].len > 0) {
+                    check(0 == memcmp(tests[i].goal.sections[j].data,
+                                      got.sections[j].data,
+                                      tests[i].goal.sections[j].len));
                 }
             }
         }
     }
-}
-
-int main(void)
-{
-    UNITY_BEGIN();
-    RUN_TEST(test_split);
-    return UNITY_END();
+    }
+  }
 }

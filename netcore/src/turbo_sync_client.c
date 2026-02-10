@@ -332,8 +332,8 @@ static void update_send_stats_locked(sync_client_t *client, size_t bytes_sent, s
 static void update_error_stats_locked(sync_client_t *client);
 static size_t calculate_iov_total_bytes(const sync_client_iovec_t *iov, size_t iovcnt);
 
-static void tcp_client_connect_cb(turbo_tcp_client_t *tcp_client, int status, void *peer);
-static int tcp_client_recv_cb(turbo_tcp_client_t *tcp_client, const turbo_arena_slice_t *data,
+static void tcp_client_connect_cb(void *handle, int status, void *peer);
+static int tcp_client_recv_cb(void *handle, const turbo_arena_slice_t *data,
                               void *peer);
 static void tcp_client_close_cb(void *handle);
 
@@ -342,18 +342,18 @@ static void udp_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *b
 static void udp_read_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
                         const struct sockaddr *addr, unsigned flags);
 
-static void kcp_connect_cb(turbo_kcp_client_t *kcp_client, int status, void *peer);
+static void kcp_connect_cb(void *handle, int status, void *peer);
 static int kcp_recv_cb(void *handle, const turbo_arena_slice_t *data, void *peer);
 
-static void tls_connect_cb(turbo_tls_client_t *tls_client, int status, void *peer);
+static void tls_connect_cb(void *handle, int status, void *peer);
 static void tls_close_cb(void *handle);
-static void tls_handshake_cb(turbo_tls_client_t *tls_client, int status);
+static void tls_handshake_cb(void *handle, int status);
 static int tls_recv_cb(void *handle, const turbo_arena_slice_t *data, void *peer);
 
 static int pipe_recv_cb(void *handle, const turbo_arena_slice_t *data, void *peer);
-static void pipe_connect_cb(turbo_pipe_client_t *pipe_client, int status, void *peer);
+static void pipe_connect_cb(void *handle, int status, void *peer);
 static void pipe_close_cb(void *handle);
-CLIENT_COMMON_DEFINE_PIPE_CLIENT_LIST(sync, sync_client_t);
+CLIENT_COMMON_DEFINE_PIPE_CLIENT_LIST(sync, sync_client_t)
 #define g_client_list_once g_sync_client_list_once
 #define g_client_list_lock g_sync_client_list_lock
 #define g_client_list_initialized g_sync_client_list_initialized
@@ -503,6 +503,34 @@ static void client_list_unregister(sync_client_t *client) {
   }
   client->global_next = NULL;
   uv_mutex_unlock(&g_client_list_lock);
+}
+
+static void sync_client_accumulate_response_locked(sync_client_t *client, const char *data,
+                                                   size_t len) {
+  if (!data || len == 0)
+    return;
+
+  size_t new_len = client->response_len + len;
+  char *new_resp = (char *)realloc(client->response, new_len);
+  if (!new_resp) {
+    result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED,
+                     "failed to allocate receive buffer");
+    return;
+  }
+
+  memcpy(new_resp + client->response_len, data, len);
+  client->response = new_resp;
+  client->response_len = new_len;
+
+  client->stats.bytes_received += len;
+  client->stats.messages_received++;
+
+  result_reset(client);
+  if (client->awaiting_receive) {
+    client->awaiting_receive = 0;
+    client->done = 1;
+    uv_cond_signal(&client->cond);
+  }
 }
 
 static sync_client_t *client_from_pipe(turbo_pipe_client_t *pipe_client) {
@@ -1360,7 +1388,7 @@ static int tcp_connect_impl(sync_client_t *client, const char *host, int port) {
   client->proto.tcp.connected = 0;
 
   int rc = turbo_tcp_client_connect(client->proto.tcp.client, host, (unsigned short)port,
-                                    tcp_client_recv_cb, tcp_client_connect_cb, tcp_client_close_cb);
+                                    tcp_client_recv_cb, (turbo_connect_cb)tcp_client_connect_cb, tcp_client_close_cb);
   if (rc != 0) {
     uv_mutex_lock(&client->mutex);
     client->stats.connection_failures++;
@@ -1428,7 +1456,7 @@ static int kcp_connect_impl(sync_client_t *client, const char *host, int port) {
     return -1;
   }
   int rc = turbo_kcp_client_connect(&client->proto.kcp.client, host, (unsigned short)port,
-                                    kcp_connect_cb, kcp_recv_cb);
+                                    (turbo_connect_cb)kcp_connect_cb, kcp_recv_cb);
   if (rc != 0) {
     uv_mutex_lock(&client->mutex);
     result_set_uv_error(client, rc);
@@ -1516,7 +1544,7 @@ static int tls_connect_impl(sync_client_t *client, const char *host, int port) {
 
   /* Connect using resolved IP address */
   rc = turbo_tls_client_connect(client->proto.tls.client, ip_str, (unsigned short)port, tls_recv_cb,
-                                tls_connect_cb, tls_close_cb);
+                                (turbo_connect_cb)tls_connect_cb, (turbo_close_cb)tls_close_cb);
   if (rc != 0) {
     turbo_tls_client_close(client->proto.tls.client);
     client->proto.tls.client = NULL;
@@ -1547,8 +1575,8 @@ static int pipe_connect_impl(sync_client_t *client, const char *host, int port) 
     }
   }
 
-  int rc = turbo_pipe_client_connect(client->proto.pipe.client, host, pipe_recv_cb, pipe_connect_cb,
-                                     pipe_close_cb);
+  int rc = turbo_pipe_client_connect(client->proto.pipe.client, host, pipe_recv_cb, (turbo_connect_cb)pipe_connect_cb,
+                                     (turbo_close_cb)pipe_close_cb);
   if (rc != 0) {
     uv_mutex_lock(&client->mutex);
     result_set_uv_error(client, rc);
@@ -1586,40 +1614,13 @@ static void ws_connect_cb(void *client_ptr, int status, void *peer) {
 
 static int ws_recv_cb(void *client_ptr, const turbo_arena_slice_t *data, void *peer) {
   (void)peer;
-  TLOG_DEBUG("ws_recv_cb: client_ptr={} data={}", client_ptr, (void *)data);
   turbo_websocket_client_t *ws_client = (turbo_websocket_client_t *)client_ptr;
   sync_client_t *client = (sync_client_t *)ws_client->user_data;
-  TLOG_DEBUG("ws_recv_cb: client={} data_len={}", (void *)client, data ? data->length : 0);
   if (!client || !data || data->length == 0)
     return 0;
 
-  char *copy = (char *)malloc(data->length);
-  if (!copy) {
-    uv_mutex_lock(&client->mutex);
-    result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "allocation failure");
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-    uv_mutex_unlock(&client->mutex);
-    return 0;
-  }
-  memcpy(copy, data->data, data->length);
-
   uv_mutex_lock(&client->mutex);
-  if (client->response)
-    free(client->response);
-  client->response = copy;
-  client->response_len = data->length;
-
-  client->stats.bytes_received += data->length;
-  client->stats.messages_received++;
-
-  result_reset(client);
-  if (client->awaiting_receive) {
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-  }
+  sync_client_accumulate_response_locked(client, data->data, data->length);
   uv_mutex_unlock(&client->mutex);
   return 0;
 }
@@ -1956,14 +1957,16 @@ static void command_async_cb(uv_async_t *handle) {
   }
 }
 
-static void tcp_client_connect_cb(turbo_tcp_client_t *tcp_client, int status, void *peer) {
+static void tcp_client_connect_cb(void *handle, int status, void *peer) {
   (void)peer;
+  turbo_tcp_client_t *tcp_client = (turbo_tcp_client_t *)handle;
   if (!tcp_client)
     return;
+  sync_client_t *client = (sync_client_t *)tcp_client->user_data;
+  if (!client)
+    return;
+
   if (status != 0) {
-    sync_client_t *client = (sync_client_t *)tcp_client->user_data;
-    if (!client)
-      return;
     uv_mutex_lock(&client->mutex);
     client->stats.connection_failures++;
     result_set_uv_error(client, status);
@@ -1972,9 +1975,6 @@ static void tcp_client_connect_cb(turbo_tcp_client_t *tcp_client, int status, vo
     uv_mutex_unlock(&client->mutex);
     return;
   }
-  sync_client_t *client = (sync_client_t *)tcp_client->user_data;
-  if (!client)
-    return;
 
   uv_mutex_lock(&client->mutex);
   client->proto.tcp.connected = 1;
@@ -1985,44 +1985,18 @@ static void tcp_client_connect_cb(turbo_tcp_client_t *tcp_client, int status, vo
   uv_mutex_unlock(&client->mutex);
 }
 
-static int tcp_client_recv_cb(turbo_tcp_client_t *tcp_client, const turbo_arena_slice_t *data,
+static int tcp_client_recv_cb(void *handle, const turbo_arena_slice_t *data,
                               void *peer) {
   (void)peer;
+  turbo_tcp_client_t *tcp_client = (turbo_tcp_client_t *)handle;
   if (!tcp_client || !data || data->length == 0)
     return 0;
   sync_client_t *client = (sync_client_t *)tcp_client->user_data;
   if (!client)
     return 0;
 
-  char *copy = (char *)malloc(data->length);
-  if (!copy) {
-    uv_mutex_lock(&client->mutex);
-    result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED,
-                     "failed to allocate tcp receive buffer");
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-    uv_mutex_unlock(&client->mutex);
-    return 0;
-  }
-  memcpy(copy, data->data, data->length);
-
   uv_mutex_lock(&client->mutex);
-  if (client->response)
-    free(client->response);
-  client->response = copy;
-  client->response_len = data->length;
-
-  /* Update statistics */
-  client->stats.bytes_received += data->length;
-  client->stats.messages_received++;
-
-  result_reset(client);
-  if (client->awaiting_receive) {
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-  }
+  sync_client_accumulate_response_locked(client, data->data, data->length);
   uv_mutex_unlock(&client->mutex);
   return 0;
 }
@@ -2121,33 +2095,15 @@ static void udp_read_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     return;
   }
 
-  char *data = buf->base;
-  size_t available = buf->len;
-  if ((size_t)nread < available) {
-    char *shrunk = (char *)realloc(data, (size_t)nread);
-    if (shrunk)
-      data = shrunk;
-  }
-
   uv_mutex_lock(&client->mutex);
-  if (client->response)
-    free(client->response);
-  client->response = data;
-  client->response_len = (size_t)nread;
-
-  /* Update statistics */
-  client->stats.bytes_received += (size_t)nread;
-  client->stats.messages_received++;
-
-  result_reset(client);
-  client->awaiting_receive = 0;
-  client->done = 1;
-  uv_cond_signal(&client->cond);
+  sync_client_accumulate_response_locked(client, buf->base, (size_t)nread);
   uv_mutex_unlock(&client->mutex);
+  free(buf->base);
 }
 
-static void kcp_connect_cb(turbo_kcp_client_t *kcp_client, int status, void *peer) {
+static void kcp_connect_cb(void *handle, int status, void *peer) {
   (void)peer;
+  turbo_kcp_client_t *kcp_client = (turbo_kcp_client_t *)handle;
   sync_client_t *client = CONTAINER_OF(kcp_client, sync_client_t, proto.kcp.client);
   uv_mutex_lock(&client->mutex);
   if (status == 0) {
@@ -2162,39 +2118,14 @@ static void kcp_connect_cb(turbo_kcp_client_t *kcp_client, int status, void *pee
 }
 
 static int kcp_recv_cb(void *handle, const turbo_arena_slice_t *data, void *peer) {
-  UNUSED(peer);
+  (void)peer;
   turbo_kcp_client_t *kcp_client = (turbo_kcp_client_t *)handle;
   sync_client_t *client = CONTAINER_OF(kcp_client, sync_client_t, proto.kcp.client);
-
   if (!client || !data || data->length == 0)
     return 0;
 
-  char *copy = (char *)malloc(data->length);
-  if (!copy) {
-    uv_mutex_lock(&client->mutex);
-    result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "allocation failure");
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-    uv_mutex_unlock(&client->mutex);
-    return 0;
-  }
-  memcpy(copy, data->data, data->length);
-
   uv_mutex_lock(&client->mutex);
-  if (client->response)
-    free(client->response);
-  client->response = copy;
-  client->response_len = data->length;
-
-  /* Update statistics */
-  client->stats.bytes_received += data->length;
-  client->stats.messages_received++;
-
-  result_reset(client);
-  client->awaiting_receive = 0;
-  client->done = 1;
-  uv_cond_signal(&client->cond);
+  sync_client_accumulate_response_locked(client, data->data, data->length);
   uv_mutex_unlock(&client->mutex);
   return 0;
 }
@@ -2205,8 +2136,9 @@ static sync_client_t *client_from_tls_impl(turbo_tls_client_t *tls_client) {
   return (sync_client_t *)tls_client->user_data;
 }
 
-static void tls_connect_cb(turbo_tls_client_t *tls_client, int status, void *peer) {
+static void tls_connect_cb(void *handle, int status, void *peer) {
   (void)peer;
+  turbo_tls_client_t *tls_client = (turbo_tls_client_t *)handle;
   sync_client_t *client = client_from_tls_impl(tls_client);
   if (!client)
     return;
@@ -2248,7 +2180,8 @@ static void tls_close_cb(void *handle) {
   client->proto.tls.connected = 0;
 }
 
-static void tls_handshake_cb(turbo_tls_client_t *tls_client, int status) {
+static void tls_handshake_cb(void *handle, int status) {
+  turbo_tls_client_t *tls_client = (turbo_tls_client_t *)handle;
   sync_client_t *client = client_from_tls_impl(tls_client);
   if (!client)
     return;
@@ -2279,77 +2212,32 @@ static int tls_recv_cb(void *handle, const turbo_arena_slice_t *data, void *peer
   if (!client || !data || data->length == 0)
     return 0;
 
-  char *copy = (char *)malloc(data->length);
-  if (!copy) {
-    uv_mutex_lock(&client->mutex);
-    result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "allocation failure");
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-    uv_mutex_unlock(&client->mutex);
-    return 0;
-  }
-  memcpy(copy, data->data, data->length);
-
   uv_mutex_lock(&client->mutex);
-  if (client->response)
-    free(client->response);
-  client->response = copy;
-  client->response_len = data->length;
-
-  /* Update statistics */
-  client->stats.bytes_received += data->length;
-  client->stats.messages_received++;
-
-  result_reset(client);
-  client->awaiting_receive = 0;
-  client->done = 1;
-  uv_cond_signal(&client->cond);
+  sync_client_accumulate_response_locked(client, data->data, data->length);
   uv_mutex_unlock(&client->mutex);
   return 0;
 }
 
 static int pipe_recv_cb(void *handle, const turbo_arena_slice_t *data, void *peer) {
-  UNUSED(peer);
+  (void)peer;
   turbo_pipe_client_t *pipe_client = (turbo_pipe_client_t *)handle;
   sync_client_t *client = client_from_pipe(pipe_client);
-  if (!client || !data || data->length == 0)
-    return 0;
-
-  char *copy = (char *)malloc(data->length);
-  if (!copy) {
-    uv_mutex_lock(&client->mutex);
-    result_set_error(client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "allocation failure");
-    client->awaiting_receive = 0;
-    client->done = 1;
-    uv_cond_signal(&client->cond);
-    uv_mutex_unlock(&client->mutex);
-    turbo_arena_slice_release((turbo_arena_slice_t *)data);
+  if (!client || !data || data->length == 0) {
+    if (data)
+      turbo_arena_slice_release((turbo_arena_slice_t *)data);
     return 0;
   }
-  memcpy(copy, data->data, data->length);
-  turbo_arena_slice_release((turbo_arena_slice_t *)data);
 
   uv_mutex_lock(&client->mutex);
-  if (client->response)
-    free(client->response);
-  client->response = copy;
-  client->response_len = data->length;
-
-  /* Update statistics */
-  client->stats.bytes_received += data->length;
-  client->stats.messages_received++;
-
-  result_reset(client);
-  client->awaiting_receive = 0;
-  client->done = 1;
-  uv_cond_signal(&client->cond);
+  sync_client_accumulate_response_locked(client, data->data, data->length);
   uv_mutex_unlock(&client->mutex);
+  turbo_arena_slice_release((turbo_arena_slice_t *)data);
   return 0;
 }
 
-static void pipe_connect_cb(turbo_pipe_client_t *pipe_client, int status, void *peer) {
+static void pipe_connect_cb(void *handle, int status, void *peer) {
   (void)peer;
+  turbo_pipe_client_t *pipe_client = (turbo_pipe_client_t *)handle;
   sync_client_t *client = client_from_pipe(pipe_client);
   if (!client)
     return;
@@ -2650,7 +2538,7 @@ sync_client_status_t sync_client_connect(sync_client_t *client, const char *url)
   if (!cmd)
     return SYNC_CLIENT_STATUS_ALLOC_FAILED;
 
-  sync_client_status_t submit = submit_command(client, cmd, 0, 0);
+  sync_client_status_t submit = submit_command(client, cmd, 1, 0);
   if (submit != SYNC_CLIENT_STATUS_OK) {
     free_command(cmd);
     return submit;
@@ -2697,7 +2585,7 @@ sync_client_status_t sync_client_send(sync_client_t *client, const char *data, s
   if (!cmd)
     return SYNC_CLIENT_STATUS_ALLOC_FAILED;
 
-  sync_client_status_t submit = submit_command(client, cmd, 0, 0);
+  sync_client_status_t submit = submit_command(client, cmd, 1, 0);
   if (submit != SYNC_CLIENT_STATUS_OK) {
     free_command(cmd);
     return submit;
@@ -2845,7 +2733,7 @@ sync_client_status_t sync_client_sendv(sync_client_t *client, const sync_client_
   if (!cmd)
     return SYNC_CLIENT_STATUS_ALLOC_FAILED;
 
-  sync_client_status_t submit = submit_command(client, cmd, 0, 0);
+  sync_client_status_t submit = submit_command(client, cmd, 1, 0);
   if (submit != SYNC_CLIENT_STATUS_OK) {
     free_command(cmd);
     return submit;
@@ -3077,7 +2965,7 @@ sync_client_status_t sync_client_set_ws_config(sync_client_t *client,
 
   client->proto.ws.config.path = path_copy;
   client->proto.ws.config.origin = origin_copy;
-  client->proto.ws.config.subprotocols = (const char *const *)subp_copy;
+  client->proto.ws.config.subprotocols = (const char **)subp_copy;
   client->proto.ws.config.subprotocol_count = subp_count;
   client->proto.ws.config.use_tls = config->use_tls;
 

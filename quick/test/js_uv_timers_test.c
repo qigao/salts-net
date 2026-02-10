@@ -1,5 +1,3 @@
-#include "unity.h"
-
 #include "test_uv_fixture.h"
 
 #include <stdlib.h>
@@ -10,103 +8,114 @@
   #include <unistd.h>
 #endif
 
-static JSTurboTestEnv env;
-
-void setUp(void) { js_turbo_test_env_init(&env); }
-
-void tearDown(void) { js_turbo_test_env_cleanup(&env); }
-
-static int32_t get_int_global(const char *name) {
-  JSValue prop = js_turbo_test_global_prop(&env, name);
+static int32_t get_int_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+  JSValue prop = js_uv_test_global_prop(env, name);
   int32_t value = 0;
-  TEST_ASSERT_EQUAL_INT(0, JS_ToInt32(env.ctx, &value, prop));
-  JS_FreeValue(env.ctx, prop);
+  check_int_eq(0, JS_ToInt32(env->ctx, &value, prop));
+  JS_FreeValue(env->ctx, prop);
   return value;
 }
 
-static const char *get_string_global(const char *name) {
-  JSValue prop = js_turbo_test_global_prop(&env, name);
-  TEST_ASSERT_TRUE(JS_IsString(prop));
+static const char *get_string_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+  JSValue prop = js_uv_test_global_prop(env, name);
+  check_true(JS_IsString(prop));
   size_t len = 0;
-  const char *str = JS_ToCStringLen(env.ctx, &len, prop);
-  TEST_ASSERT_NOT_NULL(str);
+  const char *str = JS_ToCStringLen(env->ctx, &len, prop);
+  check_not_null(str);
   char *copy = (char *)malloc(len + 1);
-  TEST_ASSERT_NOT_NULL(copy);
-  memcpy(copy, str, len);
-  copy[len] = '\0';
-  JS_FreeCString(env.ctx, str);
-  JS_FreeValue(env.ctx, prop);
+  check_not_null(copy);
+  if (copy) {
+    memcpy(copy, str, len);
+    copy[len] = '\0';
+  }
+  JS_FreeCString(env->ctx, str);
+  JS_FreeValue(env->ctx, prop);
   return copy;
 }
 
-void test_set_timeout_executes_callback(void) {
-  js_turbo_test_eval(&env, "var timerFired = 0;\n"
-                           "turbo.setTimeout(() => { timerFired = 1; }, 5);\n");
+spec("js_uv_timers") {
+  it("should set timeout and execute callback") {
+      JSTurboTestEnv env = {0};
+      js_uv_test_env_init(&env);
 
-  // Process events multiple times to ensure timer execution
-  for (int i = 0; i < 10; i++) {
-    js_turbo_test_process_events(&env);
-    turbo_sleep_ms(10);
+      js_uv_test_eval(&env, "var timerFired = 0;\n"
+                            "turbo.setTimeout(() => { timerFired = 1; }, 5);\n");
+
+      // Process events multiple times to ensure timer execution
+      for (int i = 0; i < 10; i++) {
+        js_uv_test_process_events(&env);
+        turbo_sleep_ms(10);
+      }
+
+      check_int_eq(1, get_int_global(__bdd_config__, &env, "timerFired"));
+      
+      js_uv_test_env_cleanup(&env);
   }
 
-  TEST_ASSERT_EQUAL_INT(1, get_int_global("timerFired"));
-}
+  it("should clear timer and prevent callback") {
+      JSTurboTestEnv env = {0};
+      js_uv_test_env_init(&env);
 
-void test_clear_timer_prevents_callback(void) {
-  js_turbo_test_eval(&env, "var cleared = 0;\n"
-                           "var id = turbo.setTimeout(() => { cleared = 1; }, 5);\n"
-                           "turbo.clearTimeout(id);\n");
+      js_uv_test_eval(&env, "var cleared = 0;\n"
+                            "var id = turbo.setTimeout(() => { cleared = 1; }, 5);\n"
+                            "turbo.clearTimeout(id);\n");
 
-  // Process events multiple times
-  for (int i = 0; i < 10; i++) {
-    js_turbo_test_process_events(&env);
-    turbo_sleep_ms(10);
+      // Process events multiple times
+      for (int i = 0; i < 10; i++) {
+        js_uv_test_process_events(&env);
+        turbo_sleep_ms(10);
+      }
+
+      check_int_eq(0, get_int_global(__bdd_config__, &env, "cleared"));
+      
+      js_uv_test_env_cleanup(&env);
   }
 
-  TEST_ASSERT_EQUAL_INT(0, get_int_global("cleared"));
-}
+  it("should resolve promise on turbo sleep") {
+      JSTurboTestEnv env = {0};
+      js_uv_test_env_init(&env);
 
-void test_turbo_sleep_resolves_promise(void) {
-  // Current js_timers.c implementation of sleep is synchronous for now,
-  // so we don't need a .then() for testing if it blocks correctly.
-  js_turbo_test_eval(&env, "var sleepResult = 'pending';\n"
-                           "turbo.sleep(5);\n"
-                           "sleepResult = 'done';\n");
-  js_turbo_test_process_events(&env);
-  const char *result = get_string_global("sleepResult");
-  TEST_ASSERT_EQUAL_STRING("done", result);
-  free((void *)result);
-}
+      // Current js_timers.c implementation of sleep is synchronous for now,
+      // so we don't need a .then() for testing if it blocks correctly.
+      js_uv_test_eval(&env, "var sleepResult = 'pending';\n"
+                            "turbo.sleep(5);\n"
+                            "sleepResult = 'done';\n");
+      js_uv_test_process_events(&env);
+      const char *result = get_string_global(__bdd_config__, &env, "sleepResult");
+      if (result) {
+        check_str_eq("done", result);
+        free((void *)result);
+      }
+      
+      js_uv_test_env_cleanup(&env);
+  }
 
-void test_set_interval_runs_multiple_times(void) {
-  js_turbo_test_eval(&env, "var intervalTicks = 0;\n"
-                           "var id = turbo.setInterval(() => {\n"
-                           "  intervalTicks += 1;\n"
-                           "  if (intervalTicks >= 3) {\n"
-                           "    turbo.clearInterval(id);\n"
-                           "  }\n"
-                           "}, 5);\n");
+  it("should set interval and run multiple times") {
+      JSTurboTestEnv env = {0};
+      js_uv_test_env_init(&env);
 
-  // Process events multiple times to let interval run
-  for (int i = 0; i < 50; i++) {
-    js_turbo_test_process_events(&env);
+      js_uv_test_eval(&env, "var intervalTicks = 0;\n"
+                            "var id = turbo.setInterval(() => {\n"
+                            "  intervalTicks += 1;\n"
+                            "  if (intervalTicks >= 3) {\n"
+                            "    turbo.clearInterval(id);\n"
+                            "  }\n"
+                            "}, 5);\n");
+
+      // Process events multiple times to let interval run
+      for (int i = 0; i < 50; i++) {
+        js_uv_test_process_events(&env);
 #ifdef _WIN32
-    Sleep(10);
+        Sleep(10);
 #else
-    usleep(10000);
+        usleep(10000);
 #endif
-    if (get_int_global("intervalTicks") >= 3)
-      break;
+        if (get_int_global(__bdd_config__, &env, "intervalTicks") >= 3)
+          break;
+      }
+
+      check_int_eq(3, get_int_global(__bdd_config__, &env, "intervalTicks"));
+      
+      js_uv_test_env_cleanup(&env);
   }
-
-  TEST_ASSERT_EQUAL_INT(3, get_int_global("intervalTicks"));
-}
-
-int main(void) {
-  UNITY_BEGIN();
-  RUN_TEST(test_set_timeout_executes_callback);
-  RUN_TEST(test_clear_timer_prevents_callback);
-  RUN_TEST(test_turbo_sleep_resolves_promise);
-  RUN_TEST(test_set_interval_runs_multiple_times);
-  return UNITY_END();
 }

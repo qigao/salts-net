@@ -26,6 +26,13 @@
             "generator": "Ninja"
         },
         {
+            "name": "dev-linux-ninja",
+            "hidden": true,
+            "displayName": "Developer (Linux, Ninja)",
+            "inherits": "base-developer-linux",
+            "generator": "Ninja"
+        },
+        {
             "name": "release-linux-ninja",
             "displayName": "Release (Linux, Ninja)",
             "inherits": "base-release-linux",

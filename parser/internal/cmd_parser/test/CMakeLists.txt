@@ -7,7 +7,7 @@ add_executable(${TEST_NAME}
 target_link_libraries(${TEST_NAME}
     PRIVATE
         TurboNet::CmdParser
-        unity
+        TurboNet::TinyTest
 )
 
 target_include_directories(${TEST_NAME}

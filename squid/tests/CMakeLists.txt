@@ -1,7 +1,7 @@
 # Squid Tests
 add_executable(test_squid test_squid.c)
 
-target_link_libraries(test_squid PRIVATE squid unity)
+target_link_libraries(test_squid PRIVATE squid TurboNet::TinyTest)
 
 target_include_directories(test_squid PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include

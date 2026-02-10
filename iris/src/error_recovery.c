@@ -89,13 +89,25 @@ void iris_log_error(const iris_error_context_t *ctx) {
         return;
     }
 
-    TLOG_ERROR("{}: {} (code: {:d}) at {}:{:d} in {}()",
-            iris_error_type_string(ctx->error_type),
-            ctx->message,
-            ctx->error_code,
-            ctx->file ? ctx->file : "unknown",
-            ctx->line,
-            ctx->function ? ctx->function : "unknown");
+    if (ctx->error_type == IRIS_ERROR_CONNECTION_FAILED || 
+        ctx->error_type == IRIS_ERROR_TIMEOUT ||
+        ctx->error_type == IRIS_ERROR_PROTOCOL_ERROR) {
+        TLOG_DEBUG("{}: {} (code: {:d}) at {}:{:d} in {}()",
+                iris_error_type_string(ctx->error_type),
+                ctx->message,
+                ctx->error_code,
+                ctx->file ? ctx->file : "unknown",
+                ctx->line,
+                ctx->function ? ctx->function : "unknown");
+    } else {
+        TLOG_ERROR("{}: {} (code: {:d}) at {}:{:d} in {}()",
+                iris_error_type_string(ctx->error_type),
+                ctx->message,
+                ctx->error_code,
+                ctx->file ? ctx->file : "unknown",
+                ctx->line,
+                ctx->function ? ctx->function : "unknown");
+    }
 }
 
 void iris_set_error_handler(iris_error_handler_t handler) {

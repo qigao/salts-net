@@ -70,14 +70,22 @@ static uint8_t *extract_data(const asn1_value_t *val, size_t *out_len) {
 
 /* Get child from sequence by index */
 static asn1_value_t *seq_child(const asn1_value_t *seq, size_t idx) {
-    if (!seq || seq->type != ASN1_TYPE_SEQUENCE) return NULL;
+    if (!seq) return NULL;
+    if (seq->type != ASN1_TYPE_SEQUENCE && 
+        (seq->type != TK_CONTEXT_SPECIFIC || !seq->constructed)) {
+        return NULL;
+    }
     if (idx >= seq->value.sequence.count) return NULL;
     return seq->value.sequence.children[idx];
 }
 
 /* Get sequence child count */
 static size_t seq_count(const asn1_value_t *seq) {
-    if (!seq || seq->type != ASN1_TYPE_SEQUENCE) return 0;
+    if (!seq) return 0;
+    if (seq->type != ASN1_TYPE_SEQUENCE && 
+        (seq->type != TK_CONTEXT_SPECIFIC || !seq->constructed)) {
+        return 0;
+    }
     return seq->value.sequence.count;
 }
 

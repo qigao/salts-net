@@ -76,6 +76,6 @@ set_target_properties(
   toml-c-test PROPERTIES FOLDER turbo_parser/parser/${TARGET_NAME}/examples)
 
 add_executable(test_toml tests/test_toml.c)
-target_link_libraries(test_toml PRIVATE TurboNet::TomlParser unity)
+target_link_libraries(test_toml PRIVATE TurboNet::TomlParser TurboNet::TinyTest)
 set_target_properties(
   test_toml PROPERTIES FOLDER turbo_parser/parser/${TARGET_NAME}/tests)

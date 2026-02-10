@@ -18,7 +18,6 @@
 
 /* Forward declarations */
 typedef struct squid_listener_s squid_listener_t;
-typedef struct squid_dispatch_s squid_dispatch_t;
 typedef struct squid_conn_entry_s squid_conn_entry_t;
 
 /**
@@ -28,8 +27,7 @@ typedef enum {
   SQUID_IPC_CONN_OPEN = 1,   /**< New connection opened */
   SQUID_IPC_CONN_DATA = 2,   /**< Data from connection */
   SQUID_IPC_CONN_CLOSE = 3,  /**< Connection closed */
-  SQUID_IPC_WORKER_SEND = 4, /**< Worker sends data back to connection */
-  SQUID_IPC_HANDLE = 5       /**< TCP handle passed via uv_write2 (legacy) */
+  SQUID_IPC_WORKER_SEND = 4  /**< Worker sends data back to connection */
 } squid_ipc_type_t;
 
 /**
@@ -55,26 +53,6 @@ typedef struct {
   char local_address[64];
   int local_port;
 } squid_ipc_conn_open_t;
-
-/**
- * @brief Legacy IPC message structure (for TCP handle passing)
- */
-typedef struct {
-  char handshake_token;
-  turbo_transport_t transport;
-  union {
-    struct {
-      uint8_t handle_type;
-    } handle;
-    struct {
-      char remote_address[64];
-      int remote_port;
-      char local_address[64];
-      int local_port;
-      uint64_t connection_id;
-    } metadata;
-  } data;
-} squid_ipc_message_t;
 
 /**
  * @brief Connection entry in master's connection table
@@ -135,13 +113,12 @@ struct squid_master_s {
   unsigned int rr_counter;
 
   char worker_executable[1024];
-  char handshake_token;
 
   /* Connection hash table for O(1) data forwarding
    * Each bucket is a linked list for collision resolution
    * Hash function: (connection_id & 0xFFFFFFFF) % SQUID_CONN_HASH_TABLE_SIZE
    */
-  squid_conn_entry_t *conn_table[SQUID_CONN_HASH_TABLE_SIZE];
+  squid_conn_entry_t **conn_table;
   size_t connection_count;
 
   /* TLS configuration */
@@ -152,29 +129,12 @@ struct squid_master_s {
   squid_shm_t *shm;
 };
 
-/**
- * @brief Dispatch structure for IPC writes
- */
-struct squid_dispatch_s {
-  uv_write_t req;
-  async_server_t *server;
-  async_server_connection_t *connection;
-  squid_master_t *master;
-  turbo_transport_t transport;
-  squid_ipc_message_t ipc_msg;
-  char connection_key[128];
-
-  /* For new IPC format */
-  squid_ipc_header_t header;
-  char *payload;
-  size_t payload_len;
-};
-
 /* IPC functions */
 uint64_t squid_generate_connection_id(uint16_t worker_id);
 uint16_t squid_get_worker_id_from_connection(uint64_t connection_id);
 uint64_t squid_get_counter_from_connection(uint64_t connection_id);
 void squid_reset_connection_id_counter(void);
+int squid_conn_table_init(squid_master_t *master);
 
 /* Buffer management helper */
 void squid_alloc_buffer(char **buf_ptr, size_t *size_ptr, size_t *used_ptr,

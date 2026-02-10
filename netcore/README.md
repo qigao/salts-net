@@ -115,8 +115,8 @@ int main(void) {
 
 ## Supported URL Formats
 
-| Protocol   | URL Format                  | Example                          | Description                    |
-|------------|-----------------------------|----------------------------------|--------------------------------|
+| Protocol   | URL Format                  | Example                         | Description                    |
+|------------|-----------------------------|---------------------------------|--------------------------------|
 | TCP        | `tcp://host:port`           | `tcp://127.0.0.1:8080`          | Standard TCP connection        |
 | TLS/SSL    | `tls://host:port`           | `tls://example.com:8883`        | Encrypted TCP with TLS         |
 |            | `https://host:port`         | `https://api.example.com:443`   | HTTPS (same as TLS)            |
@@ -188,6 +188,7 @@ target_link_libraries(your_target TurboNet::Core)
 ## Architecture
 
 The NetCore library leverages efficient data structures from the STC library:
+
 - Hashmap for configuration storage and URL scheme lookup
 - Arrays and queues for connection management
 - Ring buffers for I/O operations
@@ -198,6 +199,7 @@ This provides production-grade performance and reliability for network applicati
 ## Examples
 
 See the `examples/` directory for complete working examples:
+
 - `sync_client.c` - Synchronous blocking client
 - `async_client.c` - Asynchronous event-driven client
 - `tcp_server.c` - TCP echo server
@@ -213,6 +215,7 @@ See the API reference in the `/docs` directory for detailed function documentati
 If you're using the old transport-enum-based API, migration is simple:
 
 **Before:**
+
 ```c
 sync_client_t *client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TCP);
 char url[256];
@@ -221,6 +224,7 @@ sync_client_connect(client, url);
 ```
 
 **After:**
+
 ```c
 sync_client_t *client = sync_client_create();
 sync_client_connect(client, "tcp://example.com:8080");

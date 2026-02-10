@@ -1,27 +1,12 @@
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -DDEBUG")
 
 # =============================================================================
-# re2c Generated Files
-# =============================================================================
-
-set(MUSTACHE_LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/mustache_lexer.re)
-set(MUSTACHE_LEXER_GEN ${CMAKE_CURRENT_BINARY_DIR}/mustache_lexer_gen.c)
-
-add_custom_command(
-  OUTPUT ${MUSTACHE_LEXER_GEN}
-  COMMAND ${RE2C_EXECUTABLE} -o ${MUSTACHE_LEXER_GEN} ${MUSTACHE_LEXER_RE}
-  DEPENDS ${MUSTACHE_LEXER_RE}
-  COMMENT "Generating Mustache lexer with re2c"
-  VERBATIM)
-
-# =============================================================================
 # Library
 # =============================================================================
 file(GLOB_RECURSE HEADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 # Build as SHARED library (DLL)
-add_library(mustache SHARED ${HEADER_FILES} ${MUSTACHE_LEXER_GEN}
-                            ${SOURCE_FILES})
+add_library(mustache SHARED ${HEADER_FILES} ${SOURCE_FILES})
 add_library(TurboNet::Mustache ALIAS mustache)
 
 # DLL export macro - matches pattern from other TurboNet libraries
@@ -32,15 +17,14 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/mustache>
   PRIVATE ${CMAKE_SOURCE_DIR}/parser/internal/json_parser/include
+          ${CMAKE_SOURCE_DIR}/utils/include
           ${CMAKE_SOURCE_DIR}/vendor/cxml/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/parser
-          ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Link to json_parser and common
 target_link_libraries(
   mustache
-  PRIVATE TurboNet::JsonParser cxml
+  PRIVATE TurboNet::JsonParser cxml TurboNet::SDS
   PUBLIC TurboNet::Utils)
 
 set_target_properties(
@@ -72,5 +56,4 @@ install(
   RUNTIME DESTINATION bin)
 
 install(FILES include/mustache.h include/mustache_json.h include/mustache_xml.h
-              include/mustache_parser.h include/mustache_types.h
-              include/mustache_lexer.h DESTINATION include/mustache)
+              DESTINATION include/mustache)

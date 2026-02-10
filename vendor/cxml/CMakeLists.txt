@@ -68,10 +68,10 @@ message(STATUS "[cxml] Build as a shared library: " ${CXML_BUILD_SHARED_LIB})
 
 # add the most minimum required files for the library to at least work.
 
-file(GLOB CORE_SOURCES CONFIGURE_DEPENDS "src/core/*.c")
-file(GLOB XML CONFIGURE_DEPENDS "src/xml/*.c")
-file(GLOB UTILS CONFIGURE_DEPENDS "src/utils/*.c")
-file(GLOB CXML CONFIGURE_DEPENDS "src/cxml/*.c")
+file(GLOB CORE_SOURCES "src/core/*.c")
+file(GLOB XML "src/xml/*.c")
+file(GLOB UTILS "src/utils/*.c")
+file(GLOB CXML "src/cxml/*.c")
 list(APPEND CXML_SOURCES ${CORE_SOURCES} ${XML} ${UTILS} ${CXML})
 
 list(APPEND CXML_BUILD_OPTIONS)
@@ -79,21 +79,21 @@ list(APPEND CXML_INCLUDES "include/cxml" "include/core" "include/utils"
      "include/xml")
 
 if(CXML_USE_QUERY_MOD)
-  file(GLOB QUERY CONFIGURE_DEPENDS "src/query/*.c")
+  file(GLOB QUERY "src/query/*.c")
   list(APPEND CXML_SOURCES ${QUERY})
   list(APPEND CXML_BUILD_OPTIONS "CXML_USE_QUERY_MOD")
   list(APPEND CXML_INCLUDES "include/query")
 endif()
 
 if(CXML_USE_SAX_MOD)
-  file(GLOB SAX CONFIGURE_DEPENDS "src/sax/*.c")
+  file(GLOB SAX "src/sax/*.c")
   list(APPEND CXML_SOURCES ${SAX})
   list(APPEND CXML_BUILD_OPTIONS "CXML_USE_SAX_MOD")
   list(APPEND CXML_INCLUDES "include/sax")
 endif()
 
 if(CXML_USE_XPATH_MOD)
-  file(GLOB XPATH CONFIGURE_DEPENDS "src/xpath/*.c")
+  file(GLOB XPATH "src/xpath/*.c")
   list(APPEND CXML_SOURCES ${XPATH})
   list(APPEND CXML_BUILD_OPTIONS "CXML_USE_XPATH_MOD")
   list(APPEND CXML_INCLUDES "include/xpath")
@@ -141,22 +141,22 @@ endif()
 # ===============================================
 
 # get the minimum required test source files for the tests to be performed
-file(GLOB CORE_TEST CONFIGURE_DEPENDS "tests/core/*.c")
-file(GLOB UTILS_TEST CONFIGURE_DEPENDS "tests/utils/*.c")
-file(GLOB XML_TEST CONFIGURE_DEPENDS "tests/xml/*.c")
+file(GLOB CORE_TEST "tests/core/*.c")
+file(GLOB UTILS_TEST "tests/utils/*.c")
+file(GLOB XML_TEST "tests/xml/*.c")
 list(APPEND CXML_TEST_SOURCES ${CORE_TEST} ${UTILS_TEST} ${XML_TEST})
 list(APPEND CXML_TEST_SOURCES "tests/cxfixture.c")
 
 if(CXML_USE_QUERY_MOD)
-  file(GLOB QUERY_TEST CONFIGURE_DEPENDS "tests/query/*.c")
+  file(GLOB QUERY_TEST "tests/query/*.c")
   list(APPEND CXML_TEST_SOURCES ${QUERY_TEST})
 endif()
 if(CXML_USE_SAX_MOD)
-  file(GLOB SAX_TEST CONFIGURE_DEPENDS "tests/sax/*.c")
+  file(GLOB SAX_TEST "tests/sax/*.c")
   list(APPEND CXML_TEST_SOURCES ${SAX_TEST})
 endif()
 if(CXML_USE_XPATH_MOD)
-  file(GLOB XPATH_TEST CONFIGURE_DEPENDS "tests/xpath/*.c")
+  file(GLOB XPATH_TEST "tests/xpath/*.c")
   list(APPEND CXML_TEST_SOURCES ${XPATH_TEST})
 endif()
 add_executable(cxml_tests tests/test.c ${CXML_TEST_SOURCES})
@@ -170,12 +170,6 @@ target_compile_definitions(cxml_tests PRIVATE ${CXML_BUILD_OPTIONS})
 target_link_libraries(cxml_tests PRIVATE cxml)
 # Add include directories (tests) to a target (cxml_tests).
 target_include_directories(cxml_tests PRIVATE tests)
-add_custom_target(
-  full_test
-  COMMENT "Run tests"
-  COMMAND ${CMAKE_CURRENT_BINARY_DIR}/cxml_tests
-  DEPENDS cxml_tests
-  VERBATIM)
 set_target_properties(cxml_tests PROPERTIES FOLDER vendor/cxml)
 
 install(TARGETS cxml DESTINATION cxml/lib)

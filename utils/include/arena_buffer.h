@@ -5,6 +5,7 @@
 #include <stats.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <assert.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,6 +16,10 @@ typedef struct turbo_arena_s turbo_arena_t;
 typedef struct turbo_arena_buffer_s turbo_arena_buffer_t;
 typedef struct turbo_arena_slice_s turbo_arena_slice_t;
 // typedef struct turbo_arena_stats_s turbo_arena_stats_t;
+
+#ifndef TURBO_ASSERT
+#define TURBO_ASSERT(x) assert(x)
+#endif
 
 /* Arena flags */
 typedef enum {
@@ -256,9 +261,14 @@ CXX_C_API void turbo_arena_get_stats(const turbo_arena_t *arena, turbo_arena_sta
  * @param used The number of bytes currently in use within the buffer.
  */
 static inline void turbo_arena_buffer_set_used(turbo_arena_buffer_t *buffer, size_t used) {
-  if (buffer && used <= buffer->capacity) {
-    buffer->used = used;
+  if (!buffer) {
+    return;
   }
+  if (used > buffer->capacity) {
+    buffer->used = buffer->capacity;
+    return;
+  }
+  buffer->used = used;
 }
 
 /**
@@ -268,7 +278,14 @@ static inline void turbo_arena_buffer_set_used(turbo_arena_buffer_t *buffer, siz
  * @return The number of remaining bytes available in the buffer.
  */
 static inline size_t turbo_arena_buffer_remaining(const turbo_arena_buffer_t *buffer) {
-  return buffer ? (buffer->capacity - buffer->used) : 0;
+  if (!buffer) {
+    return 0;
+  }
+  if (buffer->used > buffer->capacity) {
+    TURBO_ASSERT(0 && "arena buffer used exceeds capacity");
+    return 0;
+  }
+  return buffer->capacity - buffer->used;
 }
 
 /**
@@ -278,7 +295,14 @@ static inline size_t turbo_arena_buffer_remaining(const turbo_arena_buffer_t *bu
  * @return A pointer to the write position, or NULL if the buffer is invalid.
  */
 static inline char *turbo_arena_buffer_write_ptr(turbo_arena_buffer_t *buffer) {
-  return buffer ? (buffer->data + buffer->used) : NULL;
+  if (!buffer) {
+    return NULL;
+  }
+  if (buffer->used > buffer->capacity) {
+    TURBO_ASSERT(0 && "arena buffer used exceeds capacity");
+    return NULL;
+  }
+  return buffer->data + buffer->used;
 }
 
 #ifdef __cplusplus

@@ -14,6 +14,7 @@
 #include <liburing.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sds.h"
 #include <unistd.h>
 
 // =============================================================================
@@ -68,7 +69,7 @@ static aio_request_t *alloc_request(turbo_aio_op_type_t type, int fd,
 
 static void free_request(aio_request_t *req) {
     if (req) {
-        if (req->path) free(req->path);
+        if (req->path) sdsfree(req->path);
         free(req);
     }
 }
@@ -178,7 +179,7 @@ CXX_C_API int turbo_aio_open(turbo_aio_ctx_t *ctx, const char *path, int flags, 
     aio_request_t *req = alloc_request(TURBO_AIO_OP_OPEN, -1, NULL, 0, 0, cb, user_data);
     if (!req) return TURBO_AIO_ENOMEM;
 
-    req->path = strdup(path);
+    req->path = sdsnew(path);
     if (!req->path) {
         free_request(req);
         return TURBO_AIO_ENOMEM;

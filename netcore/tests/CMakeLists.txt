@@ -31,11 +31,11 @@ foreach(TEST_FILE ${TEST_FILES})
     
     # Link common libraries
     target_link_libraries(${TEST_NAME} PRIVATE 
-        unity 
+        TurboNet::TinyTest 
         ${TARGET_NAME} 
         TurboNet::Utils 
         TurboNet::WebSocketParser
-        libuv::uv
+        $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
     )
     
     add_sanitizers(${TEST_NAME})

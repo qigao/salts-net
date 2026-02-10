@@ -9,7 +9,6 @@
 
 typedef struct JSProcessSpawn {
     uv_process_t process;
-    uv_pipe_t stdin_pipe;
     uv_pipe_t stdout_pipe;
     uv_pipe_t stderr_pipe;
     JSContext *ctx;
@@ -19,12 +18,41 @@ typedef struct JSProcessSpawn {
     int64_t exit_code;
     int term_signal;
     int exited;
+    int process_closed;
     int stdout_closed;
     int stderr_closed;
+    int spawn_failed;  /* Set if spawn failed, for cleanup tracking */
+    int pipes_closing; /* Count of pipes still closing */
 } JSProcessSpawn;
 
+static void js_process_maybe_resolve(JSProcessSpawn *ps);
+
+static void js_process_pipe_close_cb(uv_handle_t *handle) {
+    JSProcessSpawn *ps = handle->data;
+    if (!ps) return;
+
+    if (ps->spawn_failed) {
+        ps->pipes_closing--;
+        if (ps->pipes_closing == 0) {
+            /* All pipes closed, safe to free */
+            js_turbo_buffer_free(&ps->stdout_buf);
+            js_turbo_buffer_free(&ps->stderr_buf);
+            free(ps);
+        }
+        return;
+    }
+
+    if ((uv_handle_t *)&ps->stdout_pipe == handle) {
+        ps->stdout_closed = 1;
+    } else if ((uv_handle_t *)&ps->stderr_pipe == handle) {
+        ps->stderr_closed = 1;
+    }
+
+    js_process_maybe_resolve(ps);
+}
+
 static void js_process_maybe_resolve(JSProcessSpawn *ps) {
-    if (!ps->exited || !ps->stdout_closed || !ps->stderr_closed) return;
+    if (!ps->exited || !ps->process_closed || !ps->stdout_closed || !ps->stderr_closed) return;
 
     JSValue result = JS_NewObject(ps->ctx);
     JS_SetPropertyStr(ps->ctx, result, "exitCode", JS_NewInt64(ps->ctx, ps->exit_code));
@@ -51,6 +79,13 @@ static void js_process_maybe_resolve(JSProcessSpawn *ps) {
     free(ps);
 }
 
+static void js_process_close_cb(uv_handle_t *handle) {
+    JSProcessSpawn *ps = handle->data;
+    if (!ps) return;
+    ps->process_closed = 1;
+    js_process_maybe_resolve(ps);
+}
+
 static void js_process_exit_cb(uv_process_t *process, int64_t exit_status, int term_signal) {
     JSProcessSpawn *ps = process->data;
     if (!ps) return;
@@ -59,7 +94,7 @@ static void js_process_exit_cb(uv_process_t *process, int64_t exit_status, int t
     ps->term_signal = term_signal;
     ps->exited = 1;
 
-    uv_close((uv_handle_t *)process, NULL);
+    uv_close((uv_handle_t *)process, js_process_close_cb);
     js_process_maybe_resolve(ps);
 }
 
@@ -80,8 +115,9 @@ static void js_process_stdout_read_cb(uv_stream_t *stream, ssize_t nread, const 
 
     if (nread < 0) {
         if (ps) {
-            ps->stdout_closed = 1;
-            uv_close((uv_handle_t *)stream, NULL);
+            if (!uv_is_closing((uv_handle_t *)stream)) {
+                uv_close((uv_handle_t *)stream, js_process_pipe_close_cb);
+            }
             js_process_maybe_resolve(ps);
         }
     }
@@ -98,8 +134,9 @@ static void js_process_stderr_read_cb(uv_stream_t *stream, ssize_t nread, const 
 
     if (nread < 0) {
         if (ps) {
-            ps->stderr_closed = 1;
-            uv_close((uv_handle_t *)stream, NULL);
+            if (!uv_is_closing((uv_handle_t *)stream)) {
+                uv_close((uv_handle_t *)stream, js_process_pipe_close_cb);
+            }
             js_process_maybe_resolve(ps);
         }
     }
@@ -177,8 +214,7 @@ static JSValue js_proc_spawn(JSContext *ctx, JSValueConst this_val, int argc, JS
     js_turbo_buffer_init(&ps->stdout_buf);
     js_turbo_buffer_init(&ps->stderr_buf);
 
-    // Initialize pipes
-    uv_pipe_init(state->loop, &ps->stdin_pipe, 0);
+    // Initialize pipes for stdout/stderr only (stdin is ignored)
     uv_pipe_init(state->loop, &ps->stdout_pipe, 0);
     uv_pipe_init(state->loop, &ps->stderr_pipe, 0);
 
@@ -205,15 +241,18 @@ static JSValue js_proc_spawn(JSContext *ctx, JSValueConst this_val, int argc, JS
     // Create promise
     JSValue promise;
     if (js_turbo_promise_init(ctx, &ps->promise, &promise) < 0) {
+        /* Close the pipes - they were initialized */
+        ps->spawn_failed = 1;
+        ps->pipes_closing = 2;
+        uv_close((uv_handle_t *)&ps->stdout_pipe, js_process_pipe_close_cb);
+        uv_close((uv_handle_t *)&ps->stderr_pipe, js_process_pipe_close_cb);
         JS_FreeCString(ctx, file);
         if (cwd) JS_FreeCString(ctx, cwd);
         for (int i = 0; i < args_count; i++) {
             if (args[i] != file) JS_FreeCString(ctx, args[i]);
         }
         free(args);
-        js_turbo_buffer_free(&ps->stdout_buf);
-        js_turbo_buffer_free(&ps->stderr_buf);
-        free(ps);
+        /* ps will be freed in close callback */
         return JS_EXCEPTION;
     }
 
@@ -230,10 +269,13 @@ static JSValue js_proc_spawn(JSContext *ctx, JSValueConst this_val, int argc, JS
     free(args);
 
     if (rc != 0) {
+        /* Close the pipes - they were initialized */
+        ps->spawn_failed = 1;
+        ps->pipes_closing = 2;
+        uv_close((uv_handle_t *)&ps->stdout_pipe, js_process_pipe_close_cb);
+        uv_close((uv_handle_t *)&ps->stderr_pipe, js_process_pipe_close_cb);
         js_turbo_promise_reject_message(&ps->promise, uv_strerror(rc));
-        js_turbo_buffer_free(&ps->stdout_buf);
-        js_turbo_buffer_free(&ps->stderr_buf);
-        free(ps);
+        /* ps will be freed in close callback */
         return promise;
     }
 

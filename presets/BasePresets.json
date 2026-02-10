@@ -52,6 +52,17 @@
             "binaryDir": "${sourceDir}/build/linux-gcc-release"
         },
         {
+            "name": "base-developer-linux",
+            "hidden": true,
+            "inherits": [
+                "ISLinux",
+                "developer-mode",
+                "Gcc",
+                "flags-gnu"
+            ],
+            "binaryDir": "${sourceDir}/build/linux-gcc-debug"
+        },
+        {
             "name": "base-release-mac",
             "hidden": true,
             "inherits": [

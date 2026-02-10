@@ -3,9 +3,15 @@
  * Distributed under the terms of the MIT license.
  */
 
+#include <string.h>
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
 #include "core/cxdefs.h"
 #include "xpath/cxxpparser.h"
 #include "xpath/cxxplib.h"
+
+_cxml_xp_parser _xpath_parser;
 
 extern void _cxml_xp_lexer_init(_cxml_xp_lexer *xplexer, const char *expr);
 
@@ -192,10 +198,25 @@ static void _cxml_xp__err(
     // since col_no will count to the end of a token before returning it as a
     // complete token to the parser.
     int col = _col ? (*_col) : (_xpath_parser.lexer.col_no - (token->length - 1));  // -1 to drop at the token's first char
-    fprintf(stderr, raw,
+    fprintf(stderr, "%s", raw);
+    // Explicitly print parts that were intended to be formatted, safely.
+    // However, the 'raw' string itself already contains the formatted output from cxml_string_as_raw
+    // wait, actually 'raw' is just the buffer. We need to use a format string.
+    // The previous code used 'fprintf(stderr, raw, ...)' which is dangerous if 'raw' comes from data.
+    // In this case 'raw' is built from 'context_msg' which has format specifiers.
+    // To fix -Wformat-nonliteral, we should use a literal format string.
+    
+    // Actually, looking at the code, context_msg is built with format specifiers like %d, %.*s, etc.
+    // A better fix is to use a literal format string for fprintf.
+    
+    fprintf(stderr, "Found at least %d valid xpath expression tokens.\n"
+                    "Token `%.*s` that caused this error was found at line: %d, column: %d.\n"
+                    "%s"
+                    "Hence, `%s` is not a valid xpath expression.\n",
             _xpath_parser.consume_cnt,
             token->length, token->start,
             (_line ? *_line : _xpath_parser.lexer.line_no), col,
+            (msg ? msg : ""),
             _xpath_parser.lexer.expr);
     cxml_string_free(&context_msg);
     _cxml_xpath_parser_free();

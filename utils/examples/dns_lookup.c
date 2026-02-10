@@ -69,6 +69,7 @@ typedef struct {
 // DNS result callback
 static void dns_callback(void *arg, int status, int timeouts,
                          struct ares_addrinfo *result) {
+  (void)timeouts;
   const char *query = (const char *)arg;
 
   if (status != ARES_SUCCESS) {
@@ -102,14 +103,20 @@ static void dns_callback(void *arg, int status, int timeouts,
 
 // libuv poll callback - handles actual I/O
 static void poll_cb(uv_poll_t *poll, int status, int events) {
+  (void)status;
   uv_ares *ctx = (uv_ares *)poll->data;
   ares_socket_t rfd = ARES_SOCKET_BAD, wfd = ARES_SOCKET_BAD;
+  ares_socket_t fd;
+
+  if (uv_fileno((uv_handle_t *)poll, (uv_os_fd_t *)&fd) != 0) {
+    return;
+  }
 
   if (events & UV_READABLE) {
-    rfd = poll->socket;
+    rfd = fd;
   }
   if (events & UV_WRITABLE) {
-    wfd = poll->socket;
+    wfd = fd;
   }
 
   ares_process_fd(ctx->channel, rfd, wfd);

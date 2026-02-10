@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "arena_buffer.h"
 
 
 /* Forward declarations */
@@ -17,9 +18,24 @@ static void *json_get_child_by_name(void *node, const char *name, size_t size, v
 static void *json_get_child_by_index(void *node, unsigned index, void *provider_data);
 static MUSTACHE_TEMPLATE *json_get_partial(const char *name, size_t size, void *provider_data);
 
-/* String renderer functions */
-static int string_out_verbatim(const char *output, size_t size, void *renderer_data);
-static int string_out_escaped(const char *output, size_t size, void *renderer_data);
+static int json_is_falsey(json_value_t *json_node) {
+  if (!json_node) {
+    return 1;
+  }
+
+  switch (json_type(json_node)) {
+  case JSON_NULL:
+    return 1;
+  case JSON_BOOL:
+    return json_bool(json_node) ? 0 : 1;
+  case JSON_STRING:
+    return json_string_len(json_node) == 0 ? 1 : 0;
+  case JSON_ARRAY:
+    return json_array_size(json_node) == 0 ? 1 : 0;
+  default:
+    return 0;
+  }
+}
 
 int mustache_json_provider_init(MUSTACHE_JSON_PROVIDER *provider, json_value_t *json_data,
                                 MUSTACHE_TEMPLATE *(*template_loader)(const char *, size_t, void *),
@@ -33,11 +49,25 @@ int mustache_json_provider_init(MUSTACHE_JSON_PROVIDER *provider, json_value_t *
   provider->base.get_child_by_name = json_get_child_by_name;
   provider->base.get_child_by_index = json_get_child_by_index;
   provider->base.get_partial = json_get_partial;
+  provider->base.is_lambda = NULL;
+  provider->base.call_lambda = NULL;
 
   provider->root_data = json_data;
   provider->template_loader = template_loader;
   provider->user_data = user_data;
+  provider->arena = NULL;
 
+  return 0;
+}
+
+int mustache_json_provider_init_arena(MUSTACHE_JSON_PROVIDER *provider, json_value_t *json_data,
+                                      MUSTACHE_TEMPLATE *(*template_loader)(const char *, size_t,
+                                                                            void *),
+                                      void *user_data, turbo_arena_t *arena) {
+  if (mustache_json_provider_init(provider, json_data, template_loader, user_data) != 0) {
+    return -1;
+  }
+  provider->arena = arena;
   return 0;
 }
 
@@ -51,14 +81,10 @@ static int json_dump(void *node, int (*out_fn)(const char *, size_t, void *), vo
 
   switch (json_type(json_node)) {
   case JSON_NULL:
-    return out_fn("null", 4, renderer_data);
+    return 0;
 
   case JSON_BOOL:
-    if (json_bool(json_node)) {
-      return out_fn("true", 4, renderer_data);
-    } else {
-      return out_fn("false", 5, renderer_data);
-    }
+    return json_bool(json_node) ? out_fn("true", 4, renderer_data) : 0;
 
   case JSON_NUMBER: {
     char buffer[64];
@@ -104,13 +130,18 @@ static void *json_get_child_by_name(void *node, const char *name, size_t size,
   json_value_t *json_node = (json_value_t *)node;
   char *key_buffer = NULL;
   json_value_t *result = NULL;
+  MUSTACHE_JSON_PROVIDER *provider = (MUSTACHE_JSON_PROVIDER *)provider_data;
 
   if (!json_node || json_type(json_node) != JSON_OBJECT) {
     return NULL;
   }
 
   /* Create null-terminated key string */
-  key_buffer = malloc(size + 1);
+  if (provider && provider->arena) {
+    key_buffer = turbo_arena_alloc(provider->arena, size + 1);
+  } else {
+    key_buffer = malloc(size + 1);
+  }
   if (!key_buffer) {
     return NULL;
   }
@@ -119,7 +150,9 @@ static void *json_get_child_by_name(void *node, const char *name, size_t size,
   key_buffer[size] = '\0';
 
   result = json_object_get(json_node, key_buffer);
-  free(key_buffer);
+  if (!(provider && provider->arena)) {
+    free(key_buffer);
+  }
 
   return result;
 }
@@ -127,7 +160,7 @@ static void *json_get_child_by_name(void *node, const char *name, size_t size,
 static void *json_get_child_by_index(void *node, unsigned index, void *provider_data) {
   json_value_t *json_node = (json_value_t *)node;
 
-  if (!json_node) {
+  if (!json_node || json_is_falsey(json_node)) {
     return NULL;
   }
 
@@ -139,10 +172,8 @@ static void *json_get_child_by_index(void *node, unsigned index, void *provider_
     return NULL;
 
   case JSON_OBJECT:
-    if (index < json_object_size(json_node)) {
-      return json_object_value(json_node, index);
-    }
-    return NULL;
+    /* Objects are truthy scalars; do not iterate members. */
+    return (index == 0) ? json_node : NULL;
 
   default:
     /* For scalar values, return self for index 0, NULL otherwise */

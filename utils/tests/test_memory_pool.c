@@ -1,34 +1,38 @@
 #include "memory_pool.h"
-#include <assert.h>
+#include "tinytest.h"
 #include <stdio.h>
 #include <string.h>
 
-int main() {
-    printf("Testing MemoryPool...\n");
-
-    // Create pool
+spec("Memory Pool Tests") {
+  it("should create a pool") {
     MemoryPool *pool = pool_create(1024);
-    assert(pool != NULL);
+    check_not_null(pool);
+    pool_destroy(pool);
+  }
 
-    // Test allocation
+  it("should perform allocations") {
+    MemoryPool *pool = pool_create(1024);
     void *p1 = pool_alloc(pool, 100);
-    assert(p1 != NULL);
-    assert(pool_get_used(pool) >= 100);
+    check_not_null(p1);
+    check_size_ge(pool_get_used(pool), 100);
+    pool_destroy(pool);
+  }
 
-    // Test mark/rewind
+  it("should mark and rewind") {
+    MemoryPool *pool = pool_create(1024);
     size_t mark = pool_mark(pool);
     void *p2 = pool_alloc(pool, 50);
-    assert(p2 != NULL);
+    check_not_null(p2);
     pool_rewind(pool, mark);
-    assert(pool_get_used(pool) == mark);
-
-    // Test reset
-    pool_reset(pool);
-    assert(pool_get_used(pool) == 0);
-
-    // Cleanup
+    check_size_eq(pool_get_used(pool), mark);
     pool_destroy(pool);
+  }
 
-    printf("MemoryPool tests passed!\n");
-    return 0;
+  it("should reset the pool") {
+    MemoryPool *pool = pool_create(1024);
+    pool_alloc(pool, 100);
+    pool_reset(pool);
+    check_size_eq(pool_get_used(pool), 0);
+    pool_destroy(pool);
+  }
 }

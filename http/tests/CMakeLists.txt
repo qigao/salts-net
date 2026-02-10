@@ -1,7 +1,6 @@
 # HTTP Client Tests
 set(folder_name http/http_client/tests)
 
-# Test executables
 set(HTTP_TESTS
     test_basic
     test_requests
@@ -17,37 +16,12 @@ set(HTTP_TESTS
 
 foreach(test_name ${HTTP_TESTS})
   add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::HttpAsyncClient unity)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::HttpAsyncClient TurboNet::TinyTest)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
   
-  # Platform-specific fixes
   if(WIN32)
-    # Windows-specific compile definitions
     target_compile_definitions(${test_name} PRIVATE WIN32_LEAN_AND_MEAN
                                                     _CRT_SECURE_NO_WARNINGS)
-    target_link_libraries(${test_name} PRIVATE ws2_32 advapi32)
-  endif()
-  
-  add_sanitizers(${test_name})
-  
-  # Add as CTest
-  add_test(NAME ${test_name} COMMAND ${test_name})
-endforeach()
-
-# BDD Tests
-set(HTTP_BDD_TESTS
-    test_basic_bdd
-    test_requests_bdd
-    test_parsing_bdd
-    test_headers_auth_bdd)
-
-foreach(test_name ${HTTP_BDD_TESTS})
-  add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::HttpAsyncClient bdd)
-  set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
-  
-  if(WIN32)
-    target_compile_definitions(${test_name} PRIVATE WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(${test_name} PRIVATE ws2_32 advapi32)
   endif()
   

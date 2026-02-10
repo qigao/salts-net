@@ -356,7 +356,7 @@ CXX_C_API uint64_t turbo_timer_get_repeat(turbo_timer_t *timer);
  *
  * @param s String to duplicate
  * @return Duplicated string with 8 bytes padding, or NULL on failure
- * @note Caller must free() the returned string
+ * @note Caller must sdsfree() the returned string
  */
 CXX_C_API char *turbo_strdup_padded(const char *s);
 

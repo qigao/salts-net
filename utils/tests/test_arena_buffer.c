@@ -2,208 +2,7 @@
 #include <string.h>
 
 #include "arena_buffer.h"
-#include "unity.h"
-
-static turbo_arena_t arena;
-
-void setUp(void) { turbo_arena_init(&arena, 4096); }
-
-void tearDown(void) { turbo_arena_free(&arena); }
-
-/* Arena initialization tests */
-void test_arena_init_success(void) {
-  turbo_arena_t test_arena;
-  int rc = turbo_arena_init(&test_arena, 1024);
-  TEST_ASSERT_EQUAL(0, rc);
-  TEST_ASSERT_NOT_NULL(test_arena.head);
-  /* Arena always allocates at least 2MB regions for efficiency */
-  TEST_ASSERT_GREATER_OR_EQUAL(1024, test_arena.head->size);
-  TEST_ASSERT_EQUAL(1, test_arena.region_count);
-  turbo_arena_free(&test_arena);
-}
-
-void test_arena_init_zero_size(void) {
-  turbo_arena_t test_arena;
-  /* size=0 is valid - uses default region size (2MB) */
-  int rc = turbo_arena_init(&test_arena, 0);
-  TEST_ASSERT_EQUAL(0, rc);
-  TEST_ASSERT_NOT_NULL(test_arena.head);
-  /* Should get default 2MB region */
-  TEST_ASSERT_GREATER_OR_EQUAL(1024 * 1024, test_arena.head->size);
-  turbo_arena_free(&test_arena);
-}
-
-void test_arena_init_null_arena(void) {
-  int rc = turbo_arena_init(NULL, 1024);
-  TEST_ASSERT_NOT_EQUAL(0, rc);
-}
-
-/* Arena allocation tests */
-void test_arena_alloc_basic(void) {
-  void *ptr = turbo_arena_alloc(&arena, 128);
-  TEST_ASSERT_NOT_NULL(ptr);
-}
-
-void test_arena_alloc_multiple(void) {
-  void *ptr1 = turbo_arena_alloc(&arena, 100);
-  void *ptr2 = turbo_arena_alloc(&arena, 200);
-  void *ptr3 = turbo_arena_alloc(&arena, 300);
-
-  TEST_ASSERT_NOT_NULL(ptr1);
-  TEST_ASSERT_NOT_NULL(ptr2);
-  TEST_ASSERT_NOT_NULL(ptr3);
-  TEST_ASSERT_NOT_EQUAL(ptr1, ptr2);
-  TEST_ASSERT_NOT_EQUAL(ptr2, ptr3);
-}
-
-void test_arena_alloc_zero_size(void) {
-  void *ptr = turbo_arena_alloc(&arena, 0);
-  TEST_ASSERT_NULL(ptr);
-}
-
-void test_arena_alloc_null_arena(void) {
-  void *ptr = turbo_arena_alloc(NULL, 128);
-  TEST_ASSERT_NULL(ptr);
-}
-
-/* Arena strdup tests */
-void test_arena_strdup_basic(void) {
-  const char *original = "Hello, TurboNet!";
-  char *copy = turbo_arena_strdup(&arena, original);
-
-  TEST_ASSERT_NOT_NULL(copy);
-  TEST_ASSERT_EQUAL_STRING(original, copy);
-  TEST_ASSERT_NOT_EQUAL(original, copy);
-}
-
-void test_arena_strdup_empty(void) {
-  char *copy = turbo_arena_strdup(&arena, "");
-  TEST_ASSERT_NOT_NULL(copy);
-  TEST_ASSERT_EQUAL_STRING("", copy);
-}
-
-void test_arena_strdup_null(void) {
-  char *copy = turbo_arena_strdup(&arena, NULL);
-  TEST_ASSERT_NULL(copy);
-}
-
-/* Buffer management tests */
-void test_arena_get_buffer_basic(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-
-  TEST_ASSERT_NOT_NULL(buf);
-  TEST_ASSERT_NOT_NULL(buf->data);
-  TEST_ASSERT_GREATER_OR_EQUAL(256, buf->capacity);
-  TEST_ASSERT_EQUAL(0, buf->used);
-  TEST_ASSERT_EQUAL(1, buf->ref_count);
-
-  turbo_arena_buffer_unref(buf);
-}
-
-void test_arena_buffer_ref_unref(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 128);
-  TEST_ASSERT_EQUAL(1, buf->ref_count);
-
-  turbo_arena_buffer_ref(buf);
-  TEST_ASSERT_EQUAL(2, buf->ref_count);
-
-  turbo_arena_buffer_ref(buf);
-  TEST_ASSERT_EQUAL(3, buf->ref_count);
-
-  turbo_arena_buffer_unref(buf);
-  TEST_ASSERT_EQUAL(2, buf->ref_count);
-
-  turbo_arena_buffer_unref(buf);
-  turbo_arena_buffer_unref(buf);
-}
-
-void test_arena_buffer_set_used(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-
-  turbo_arena_buffer_set_used(buf, 100);
-  TEST_ASSERT_EQUAL(100, buf->used);
-
-  turbo_arena_buffer_set_used(buf, 256);
-  TEST_ASSERT_EQUAL(256, buf->used);
-
-  /* Should not exceed capacity */
-  turbo_arena_buffer_set_used(buf, 1000);
-  TEST_ASSERT_EQUAL(256, buf->used);
-
-  turbo_arena_buffer_unref(buf);
-}
-
-void test_arena_buffer_remaining(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-
-  TEST_ASSERT_EQUAL(256, turbo_arena_buffer_remaining(buf));
-
-  turbo_arena_buffer_set_used(buf, 100);
-  TEST_ASSERT_EQUAL(156, turbo_arena_buffer_remaining(buf));
-
-  turbo_arena_buffer_unref(buf);
-}
-
-void test_arena_buffer_write_ptr(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-
-  char *write_ptr = turbo_arena_buffer_write_ptr(buf);
-  TEST_ASSERT_EQUAL(buf->data, write_ptr);
-
-  turbo_arena_buffer_set_used(buf, 50);
-  write_ptr = turbo_arena_buffer_write_ptr(buf);
-  TEST_ASSERT_EQUAL(buf->data + 50, write_ptr);
-
-  turbo_arena_buffer_unref(buf);
-}
-
-/* Slice tests */
-void test_arena_buffer_slice_basic(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-  memcpy(buf->data, "Hello, World!", 13);
-  turbo_arena_buffer_set_used(buf, 13);
-
-  turbo_arena_slice_t slice = turbo_arena_buffer_slice(buf, 0, 5);
-  TEST_ASSERT_EQUAL(buf->data, slice.data);
-  TEST_ASSERT_EQUAL(5, slice.length);
-  TEST_ASSERT_EQUAL(buf, slice.buffer);
-  TEST_ASSERT_EQUAL(2, buf->ref_count);
-
-  turbo_arena_slice_release(&slice);
-  TEST_ASSERT_EQUAL(1, buf->ref_count);
-
-  turbo_arena_buffer_unref(buf);
-}
-
-void test_arena_buffer_slice_offset(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-  memcpy(buf->data, "Hello, World!", 13);
-  turbo_arena_buffer_set_used(buf, 13);
-
-  turbo_arena_slice_t slice = turbo_arena_buffer_slice(buf, 7, 5);
-  TEST_ASSERT_EQUAL(buf->data + 7, slice.data);
-  TEST_ASSERT_EQUAL(5, slice.length);
-
-  turbo_arena_slice_release(&slice);
-  turbo_arena_buffer_unref(buf);
-}
-
-/* External buffer wrapping tests */
-void test_arena_wrap_external_basic(void) {
-  char *external_data = (char *)malloc(128);
-  strcpy(external_data, "External data");
-
-  turbo_arena_buffer_t *buf = turbo_arena_wrap_external(external_data, 128, NULL, NULL);
-
-  TEST_ASSERT_NOT_NULL(buf);
-  TEST_ASSERT_EQUAL(external_data, buf->data);
-  TEST_ASSERT_EQUAL(128, buf->capacity);
-  TEST_ASSERT_EQUAL(1, buf->ref_count);
-  TEST_ASSERT_EQUAL(1, turbo_arena_buffer_is_external(buf));
-
-  turbo_arena_buffer_unref(buf);
-  free(external_data);
-}
+#include "tinytest.h"
 
 static int free_cb_called = 0;
 static void test_free_cb(void *data, void *user_data) {
@@ -212,96 +11,267 @@ static void test_free_cb(void *data, void *user_data) {
   free_cb_called = 1;
 }
 
-void test_arena_wrap_external_with_callback(void) {
-  char *external_data = (char *)malloc(64);
-  free_cb_called = 0;
+spec("Arena Buffer Tests") {
+  static turbo_arena_t arena;
 
-  turbo_arena_buffer_t *buf = turbo_arena_wrap_external(external_data, 64, test_free_cb, NULL);
-  TEST_ASSERT_NOT_NULL(buf);
-  TEST_ASSERT_EQUAL(0, free_cb_called);
+  before_each() { turbo_arena_init(&arena, 4096); }
 
-  turbo_arena_buffer_unref(buf);
-  TEST_ASSERT_EQUAL(1, free_cb_called);
+  after_each() { turbo_arena_free(&arena); }
 
-  free(external_data);
-}
+  describe("Arena Lifecycle") {
+    it("should initialize arena with success") {
+      turbo_arena_t test_arena;
+      int rc = turbo_arena_init(&test_arena, 1024);
+      check_int_eq(rc, 0);
+      check_not_null(test_arena.head);
+      /* Arena always allocates at least 2MB regions for efficiency */
+      check_size_ge(test_arena.head->size, 1024);
+      check_int_eq(test_arena.region_count, 1);
+      turbo_arena_free(&test_arena);
+    }
 
-/* Arena reset tests */
-void test_arena_reset(void) {
-  turbo_arena_alloc(&arena, 100);
-  turbo_arena_alloc(&arena, 200);
+    it("should initialize with zero size (default)") {
+      turbo_arena_t test_arena;
+      /* size=0 is valid - uses default region size (2MB) */
+      int rc = turbo_arena_init(&test_arena, 0);
+      check_int_eq(rc, 0);
+      check_not_null(test_arena.head);
+      /* Should get default 2MB region */
+      check_size_ge(test_arena.head->size, 1024 * 1024);
+      turbo_arena_free(&test_arena);
+    }
 
-  size_t used_before = arena.total_used;
-  TEST_ASSERT_GREATER_THAN(0, used_before);
+    it("should fail when initializing NULL arena") {
+      int rc = turbo_arena_init(NULL, 1024);
+      check_int_ne(rc, 0);
+    }
+  }
 
-  turbo_arena_reset(&arena);
-  TEST_ASSERT_EQUAL(0, arena.total_used);
-}
+  describe("Arena Allocation") {
+    it("should perform basic allocation") {
+      void *ptr = turbo_arena_alloc(&arena, 128);
+      check_not_null(ptr);
+    }
 
-/* Statistics tests */
-void test_arena_get_stats(void) {
-  turbo_arena_stats_t stats;
-  turbo_arena_alloc(&arena, 512);
+    it("should perform multiple allocations") {
+      void *ptr1 = turbo_arena_alloc(&arena, 100);
+      void *ptr2 = turbo_arena_alloc(&arena, 200);
+      void *ptr3 = turbo_arena_alloc(&arena, 300);
 
-  turbo_arena_get_stats(&arena, &stats);
-  TEST_ASSERT_GREATER_OR_EQUAL(512, stats.total_allocated);
-  TEST_ASSERT_GREATER_OR_EQUAL(1, stats.region_count);
-}
+      check_not_null(ptr1);
+      check_not_null(ptr2);
+      check_not_null(ptr3);
+      check_ptr_ne(ptr1, ptr2);
+      check_ptr_ne(ptr2, ptr3);
+    }
 
-void test_arena_buffer_recycling(void) {
-  turbo_arena_buffer_t *buf = turbo_arena_get_pooled_buffer(&arena, 128);
-  TEST_ASSERT_NOT_NULL(buf);
-  TEST_ASSERT_EQUAL(0, arena.recycle_count); // Should be empty initially
+    it("should return NULL for zero size allocation") {
+      void *ptr = turbo_arena_alloc(&arena, 0);
+      check_null(ptr);
+    }
 
-  turbo_arena_return_buffer(buf);
-  TEST_ASSERT_EQUAL(1, arena.recycle_count);
-  TEST_ASSERT_EQUAL(buf, arena.recycle_head);
+    it("should return NULL when allocating from NULL arena") {
+      void *ptr = turbo_arena_alloc(NULL, 128);
+      check_null(ptr);
+    }
+  }
 
-  turbo_arena_buffer_t *buf2 = turbo_arena_get_pooled_buffer(&arena, 128);
-  TEST_ASSERT_EQUAL(buf, buf2); // Should get the same buffer back
-  TEST_ASSERT_EQUAL(0, arena.recycle_count);
+  describe("Arena strdup") {
+    it("should strdup a string correctly") {
+      const char *original = "Hello, TurboNet!";
+      char *copy = turbo_arena_strdup(&arena, original);
 
-  turbo_arena_buffer_unref(buf2);
-}
+      check_not_null(copy);
+      check_str_eq(copy, original);
+      check_ptr_ne(copy, original);
+    }
 
-int main(void) {
-  UNITY_BEGIN();
+    it("should strdup an empty string correctly") {
+      char *copy = turbo_arena_strdup(&arena, "");
+      check_not_null(copy);
+      check_str_eq(copy, "");
+    }
 
-  /* Arena lifecycle */
-  RUN_TEST(test_arena_init_success);
-  RUN_TEST(test_arena_init_zero_size);
-  RUN_TEST(test_arena_init_null_arena);
+    it("should return NULL when strdup NULL string") {
+      char *copy = turbo_arena_strdup(&arena, NULL);
+      check_null(copy);
+    }
+  }
 
-  /* Arena allocation */
-  RUN_TEST(test_arena_alloc_basic);
-  RUN_TEST(test_arena_alloc_multiple);
-  RUN_TEST(test_arena_alloc_zero_size);
-  RUN_TEST(test_arena_alloc_null_arena);
+  describe("Buffer Management") {
+    it("should get a buffer with basic properties") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
 
-  /* Arena strdup */
-  RUN_TEST(test_arena_strdup_basic);
-  RUN_TEST(test_arena_strdup_empty);
-  RUN_TEST(test_arena_strdup_null);
+      check_not_null(buf);
+      check_not_null(buf->data);
+      check_size_ge(buf->capacity, 256);
+      check_size_eq(buf->used, 0);
+      check_int_eq(buf->ref_count, 1);
 
-  /* Buffer management */
-  RUN_TEST(test_arena_get_buffer_basic);
-  RUN_TEST(test_arena_buffer_ref_unref);
-  RUN_TEST(test_arena_buffer_set_used);
-  RUN_TEST(test_arena_buffer_remaining);
-  RUN_TEST(test_arena_buffer_write_ptr);
-  RUN_TEST(test_arena_buffer_recycling);
+      turbo_arena_buffer_unref(buf);
+    }
 
-  /* Slice operations */
-  RUN_TEST(test_arena_buffer_slice_basic);
-  RUN_TEST(test_arena_buffer_slice_offset);
+    it("should correctly handle ref and unref") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 128);
+      check_int_eq(buf->ref_count, 1);
 
-  /* External buffer wrapping */
-  RUN_TEST(test_arena_wrap_external_basic);
-  RUN_TEST(test_arena_wrap_external_with_callback);
+      turbo_arena_buffer_ref(buf);
+      check_int_eq(buf->ref_count, 2);
 
-  /* Arena reset and stats */
-  RUN_TEST(test_arena_reset);
-  RUN_TEST(test_arena_get_stats);
+      turbo_arena_buffer_ref(buf);
+      check_int_eq(buf->ref_count, 3);
 
-  return UNITY_END();
+      turbo_arena_buffer_unref(buf);
+      check_int_eq(buf->ref_count, 2);
+
+      turbo_arena_buffer_unref(buf);
+      turbo_arena_buffer_unref(buf);
+    }
+
+    it("should set used bytes correctly") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
+
+      turbo_arena_buffer_set_used(buf, 100);
+      check_size_eq(buf->used, 100);
+
+      turbo_arena_buffer_set_used(buf, 256);
+      check_size_eq(buf->used, 256);
+
+      /* Should not exceed capacity */
+      turbo_arena_buffer_set_used(buf, 1000);
+      check_size_eq(buf->used, 256);
+
+      turbo_arena_buffer_unref(buf);
+    }
+
+    it("should calculate remaining space correctly") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
+
+      check_size_eq(turbo_arena_buffer_remaining(buf), 256);
+
+      turbo_arena_buffer_set_used(buf, 100);
+      check_size_eq(turbo_arena_buffer_remaining(buf), 156);
+
+      turbo_arena_buffer_unref(buf);
+    }
+
+    it("should return correct write pointer") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
+
+      char *write_ptr = turbo_arena_buffer_write_ptr(buf);
+      check_ptr_eq(write_ptr, buf->data);
+
+      turbo_arena_buffer_set_used(buf, 50);
+      write_ptr = turbo_arena_buffer_write_ptr(buf);
+      check_ptr_eq(write_ptr, buf->data + 50);
+
+      turbo_arena_buffer_unref(buf);
+    }
+  }
+
+  describe("Slice Operations") {
+    it("should create a basic slice") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
+      memcpy(buf->data, "Hello, World!", 13);
+      turbo_arena_buffer_set_used(buf, 13);
+
+      turbo_arena_slice_t slice = turbo_arena_buffer_slice(buf, 0, 5);
+      check_ptr_eq(slice.data, buf->data);
+      check_size_eq(slice.length, 5);
+      check_ptr_eq(slice.buffer, buf);
+      check_int_eq(buf->ref_count, 2);
+
+      turbo_arena_slice_release(&slice);
+      check_int_eq(buf->ref_count, 1);
+
+      turbo_arena_buffer_unref(buf);
+    }
+
+    it("should create a slice with offset") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
+      memcpy(buf->data, "Hello, World!", 13);
+      turbo_arena_buffer_set_used(buf, 13);
+
+      turbo_arena_slice_t slice = turbo_arena_buffer_slice(buf, 7, 5);
+      check_ptr_eq(slice.data, buf->data + 7);
+      check_size_eq(slice.length, 5);
+
+      turbo_arena_slice_release(&slice);
+      turbo_arena_buffer_unref(buf);
+    }
+  }
+
+  describe("External Buffer Wrapping") {
+    it("should wrap external buffer") {
+      char *external_data = (char *)malloc(128);
+      strcpy(external_data, "External data");
+
+      turbo_arena_buffer_t *buf =
+          turbo_arena_wrap_external(external_data, 128, NULL, NULL);
+
+      check_not_null(buf);
+      check_ptr_eq(buf->data, external_data);
+      check_size_eq(buf->capacity, 128);
+      check_int_eq(buf->ref_count, 1);
+      check(turbo_arena_buffer_is_external(buf));
+
+      turbo_arena_buffer_unref(buf);
+      free(external_data);
+    }
+
+    it("should call free callback when unrefing external buffer") {
+      char *external_data = (char *)malloc(64);
+      free_cb_called = 0;
+
+      turbo_arena_buffer_t *buf =
+          turbo_arena_wrap_external(external_data, 64, test_free_cb, NULL);
+      check_not_null(buf);
+      check_int_eq(free_cb_called, 0);
+
+      turbo_arena_buffer_unref(buf);
+      check_int_eq(free_cb_called, 1);
+
+      free(external_data);
+    }
+  }
+
+  describe("Arena Reset and Stats") {
+    it("should reset arena correctly") {
+      turbo_arena_alloc(&arena, 100);
+      turbo_arena_alloc(&arena, 200);
+
+      size_t used_before = arena.total_used;
+      check_size_gt(used_before, 0);
+
+      turbo_arena_reset(&arena);
+      check_size_eq(arena.total_used, 0);
+    }
+
+    it("should get arena stats") {
+      turbo_arena_stats_t stats;
+      turbo_arena_alloc(&arena, 512);
+
+      turbo_arena_get_stats(&arena, &stats);
+      check_size_ge(stats.total_allocated, 512);
+      check_int_ge(stats.region_count, 1);
+    }
+  }
+
+  describe("Buffer Recycling") {
+    it("should recycle buffers correctly") {
+      turbo_arena_buffer_t *buf = turbo_arena_get_pooled_buffer(&arena, 128);
+      check_not_null(buf);
+      check_int_eq(arena.recycle_count, 0); // Should be empty initially
+
+      turbo_arena_return_buffer(buf);
+      check_int_eq(arena.recycle_count, 1);
+      check_ptr_eq(arena.recycle_head, buf);
+
+      turbo_arena_buffer_t *buf2 = turbo_arena_get_pooled_buffer(&arena, 128);
+      check_ptr_eq(buf2, buf); // Should get the same buffer back
+      check_int_eq(arena.recycle_count, 0);
+
+      turbo_arena_buffer_unref(buf2);
+    }
+  }
 }

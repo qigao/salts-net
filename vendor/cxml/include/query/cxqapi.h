@@ -75,7 +75,7 @@ extern void* (*cxml_next)(void *node);
 
 void *cxml_previous_sibling(void *node);
 
-void* (*cxml_previous)(void *node);
+extern void* (*cxml_previous)(void *node);
 
 void *cxml_find_next_sibling(void *root, const char *query);
 

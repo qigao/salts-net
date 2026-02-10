@@ -1,29 +1,21 @@
 // SPDX-FileCopyrightText: 2017-2022 Comcast Cable Communications Management, LLC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cunit_to_unity.h"
+#include "tinytest.h"
 
-void setUp(void) {}
-void tearDown(void) {}
 #include <cjson/cJSON.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#include <io.h>
-#include <direct.h>
-#define getcwd _getcwd
 #ifndef SSIZE_T
 typedef intptr_t SSIZE_T;
 #endif
 #ifndef ssize_t
 typedef SSIZE_T ssize_t;
 #endif
-#else
-#include <unistd.h>
 #endif
 
 #include "cjwt.h"
@@ -108,62 +100,35 @@ test_case_t test_list[] = {
 
 #define _NUM_TEST_CASES (sizeof(test_list) / sizeof(test_case_t))
 
-int open_input_file(const char *fname)
+static ssize_t read_file(const char *fname, char *buf, size_t buflen)
 {
     char path[1024];
+    size_t size = 0;
 
 #ifdef TEST_DATA_DIR
     snprintf(path, sizeof(path), "%s/inputs/%s", TEST_DATA_DIR, fname);
 #else
-    if (getcwd(path, sizeof(path)) != NULL) {
-        strcat(path, "/../tests/inputs/");
-    } else {
-        perror("getcwd() error");
-        return -1;
-    }
-
-    if ((fname == NULL) || ((strlen(path) + strlen(fname)) > sizeof(path)))
-    {
-        perror("file name too long error");
-        return -1;
-    }
-    strcat(path, fname);
+    snprintf(path, sizeof(path), "../tests/inputs/%s", fname);
 #endif
 
-    int fd = open(path, O_RDONLY);
-
-    if (fd < 0) {
+    char *data = tt_read_file(path, &size);
+    if (!data) {
         printf("File %s open error (path: %s)\n", fname, path);
+        return -1;
     }
 
-    return fd;
-}
-
-ssize_t read_file(const char *fname, char *buf, size_t buflen)
-{
-    ssize_t nbytes = 0;
-    int fd         = open_input_file(fname);
-
-    if (fd < 0) {
-        return fd;
+    if (size > buflen) {
+        size = buflen;
     }
-
-    nbytes = read(fd, buf, buflen);
-
-    if (nbytes < 0) {
-        printf("Read file %s error\n", fname);
-        close(fd);
-        return nbytes;
-    }
-
-    close(fd);
-    return nbytes;
+    memcpy(buf, data, size);
+    free(data);
+    return (ssize_t)size;
 }
 
 static unsigned int pass_cnt = 0;
 static unsigned int fail_cnt = 0;
 
-void test_case(unsigned _i)
+static void test_case(__bdd_config_type__ *__bdd_config__, unsigned _i)
 {
     const char *jwt_fname;
     const char *key_str;
@@ -192,7 +157,7 @@ void test_case(unsigned _i)
             key_str = (const char *) pem_buf;
         } else {
             printf("Error reading pem file\n");
-            CU_ASSERT(0 == 1);
+            check(0);
             fail_cnt += 1;
             return;
         }
@@ -225,32 +190,32 @@ void test_case(unsigned _i)
     if ((0 == expected) && (CJWTE_OK == result)) {
         printf("--- PASSED: %s\n", decode_test_name);
         pass_cnt += 1;
-        CU_ASSERT(CJWTE_OK == result);
+        check_int_eq(CJWTE_OK, result);
     } else if ((0 != expected) && (CJWTE_OK != result)) {
         printf("--- PASSED: %s\n", decode_test_name);
         pass_cnt += 1;
-        CU_ASSERT(CJWTE_OK != result);
+        check(CJWTE_OK != result);
     } else {
         printf("\x1B[01;31m--- FAILED: %s (%d != %d)\x1B[00m\n", decode_test_name, expected, result);
         fail_cnt += 1;
-        CU_ASSERT(0 == 1);
+        check(0);
     }
 
     cjwt_destroy(jwt);
 }
 
 
-void test_cjwt(void)
+static void run_legacy_tests(__bdd_config_type__ *__bdd_config__)
 {
     unsigned i;
     for (i = 0; i < _NUM_TEST_CASES; i++)
-        test_case(i);
+        bdd_invoke(test_case, i);
 }
 
-
-int main(void)
-{
-    UNITY_BEGIN();
-    RUN_TEST(test_cjwt);
-    return UNITY_END();
+suite("cjwt legacy") {
+  group("decode") {
+    it("runs vectors") {
+      bdd_invoke(run_legacy_tests);
+    }
+  }
 }

@@ -4,224 +4,190 @@
  */
 
 #include "turbo_websocket_server.h"
-#include "unity.h"
+#include "tinytest.h"
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 
-void setUp(void) {}
-void tearDown(void) {}
-
-/**
- * Test: Create and destroy WebSocket server
- */
-void test_websocket_server_create_destroy(void) {
-  uv_loop_t *loop = uv_default_loop();
-
-  turbo_websocket_server_config_t config = {
-    .supported_subprotocols = NULL,
-    .subprotocol_count = 0,
-    .max_connections = 100,
-    .max_message_size = 1024 * 1024,
-    .handshake_timeout_ms = 10000
-  };
-
-  turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
-  TEST_ASSERT_NOT_NULL(server);
-
-  turbo_websocket_server_destroy(server);
-}
-
-/**
- * Test: Create server with invalid parameters
- */
-void test_websocket_server_create_invalid_params(void) {
-  uv_loop_t *loop = uv_default_loop();
-
-  turbo_websocket_server_config_t config = {
-    .supported_subprotocols = NULL,
-    .subprotocol_count = 0,
-    .max_connections = 0,
-    .max_message_size = 0,
-    .handshake_timeout_ms = 0
-  };
-
-  // NULL loop should fail
-  turbo_websocket_server_t *server = turbo_websocket_server_create(NULL, 0, &config);
-  TEST_ASSERT_NULL(server);
-
-  // NULL config should fail
-  server = turbo_websocket_server_create(loop, 0, NULL);
-  TEST_ASSERT_NULL(server);
-}
-
-/**
- * Test: Listen on invalid parameters
- */
-void test_websocket_server_listen_invalid(void) {
-  uv_loop_t *loop = uv_default_loop();
-
-  turbo_websocket_server_config_t config = {
-    .supported_subprotocols = NULL,
-    .subprotocol_count = 0,
-    .max_connections = 100,
-    .max_message_size = 1024 * 1024,
-    .handshake_timeout_ms = 10000
-  };
-
-  turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
-  TEST_ASSERT_NOT_NULL(server);
-
-  // NULL server should fail
-  int result = turbo_websocket_server_listen(NULL, "0.0.0.0", 8080, 128);
-  TEST_ASSERT_EQUAL(-1, result);
-
-  turbo_websocket_server_destroy(server);
-}
-
-/**
- * Test: Set callbacks
- */
 static int callback_invoked = 0;
 
 static void test_on_connection(void *handle, int status, void *peer) {
+  (void)handle; (void)status; (void)peer;
   callback_invoked = 1;
 }
 
-static void test_on_recv(void *handle, const turbo_arena_slice_t *data, void *peer) {
+static int test_on_recv(void *handle, const turbo_arena_slice_t *data, void *peer) {
+  (void)handle; (void)data; (void)peer;
   callback_invoked = 2;
+  return 0;
 }
 
 static void test_on_close(void *handle) {
+  (void)handle;
   callback_invoked = 3;
 }
 
-void test_websocket_server_set_callbacks(void) {
-  uv_loop_t *loop = uv_default_loop();
+spec("websocket_server") {
+  describe("Creation and Destruction") {
+    it("should create and destroy WebSocket server") {
+      uv_loop_t *loop = uv_default_loop();
 
-  turbo_websocket_server_config_t config = {
-    .supported_subprotocols = NULL,
-    .subprotocol_count = 0,
-    .max_connections = 100,
-    .max_message_size = 1024 * 1024,
-    .handshake_timeout_ms = 10000
-  };
+      turbo_websocket_server_config_t config = {
+        .supported_subprotocols = NULL,
+        .subprotocol_count = 0,
+        .max_connections = 100,
+        .max_message_size = 1024 * 1024,
+        .handshake_timeout_ms = 10000
+      };
 
-  turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
-  TEST_ASSERT_NOT_NULL(server);
+      turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
+      check_not_null(server);
 
-  callback_invoked = 0;
+      turbo_websocket_server_destroy(server);
+    }
 
-  turbo_websocket_server_set_callbacks(server,
-                                      test_on_connection,
-                                      test_on_recv,
-                                      test_on_close);
+    it("should fail to create server with invalid parameters") {
+      uv_loop_t *loop = uv_default_loop();
 
-  // Callbacks are set but not invoked yet
-  TEST_ASSERT_EQUAL(0, callback_invoked);
+      turbo_websocket_server_config_t config = {
+        .supported_subprotocols = NULL,
+        .subprotocol_count = 0,
+        .max_connections = 0,
+        .max_message_size = 0,
+        .handshake_timeout_ms = 0
+      };
 
-  turbo_websocket_server_destroy(server);
-}
+      // NULL loop should fail
+      turbo_websocket_server_t *server = turbo_websocket_server_create(NULL, 0, &config);
+      check_null(server);
 
-/**
- * Test: Get connection count (should be 0 initially)
- */
-void test_websocket_server_get_connection_count(void) {
-  uv_loop_t *loop = uv_default_loop();
+      // NULL config should fail
+      server = turbo_websocket_server_create(loop, 0, NULL);
+      check_null(server);
+    }
+  }
 
-  turbo_websocket_server_config_t config = {
-    .supported_subprotocols = NULL,
-    .subprotocol_count = 0,
-    .max_connections = 100,
-    .max_message_size = 1024 * 1024,
-    .handshake_timeout_ms = 10000
-  };
+  describe("Listening") {
+    it("should fail to listen with invalid parameters") {
+      uv_loop_t *loop = uv_default_loop();
 
-  turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
-  TEST_ASSERT_NOT_NULL(server);
+      turbo_websocket_server_config_t config = {
+        .supported_subprotocols = NULL,
+        .subprotocol_count = 0,
+        .max_connections = 100,
+        .max_message_size = 1024 * 1024,
+        .handshake_timeout_ms = 10000
+      };
 
-  int count = turbo_websocket_server_get_connection_count(server);
-  TEST_ASSERT_EQUAL(0, count);
+      turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
+      check_not_null(server);
 
-  turbo_websocket_server_destroy(server);
-}
+      // NULL server should fail
+      int result = turbo_websocket_server_listen(NULL, "0.0.0.0", 8080, 128);
+      check_int_eq(result, -1);
 
-/**
- * Test: Send on NULL connection should fail
- */
-void test_websocket_server_send_null_connection(void) {
-  int result = turbo_websocket_server_send(NULL, "test", 4);
-  TEST_ASSERT_EQUAL(-1, result);
-}
+      turbo_websocket_server_destroy(server);
+    }
+  }
 
-/**
- * Test: Send PING on NULL connection should fail
- */
-void test_websocket_server_ping_null_connection(void) {
-  uint8_t payload[] = "ping";
-  int result = turbo_websocket_server_send_ping(NULL, payload, 4);
-  TEST_ASSERT_EQUAL(-1, result);
-}
+  describe("Callbacks and State") {
+    it("should set callbacks correctly") {
+      uv_loop_t *loop = uv_default_loop();
 
-/**
- * Test: Close NULL connection should fail
- */
-void test_websocket_server_close_null_connection(void) {
-  int result = turbo_websocket_server_close_connection(NULL, 1000, "Normal");
-  TEST_ASSERT_EQUAL(-1, result);
-}
+      turbo_websocket_server_config_t config = {
+        .supported_subprotocols = NULL,
+        .subprotocol_count = 0,
+        .max_connections = 100,
+        .max_message_size = 1024 * 1024,
+        .handshake_timeout_ms = 10000
+      };
 
-/**
- * Test: Stop and shutdown
- */
-void test_websocket_server_stop_shutdown(void) {
-  uv_loop_t *loop = uv_default_loop();
+      turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
+      check_not_null(server);
 
-  turbo_websocket_server_config_t config = {
-    .supported_subprotocols = NULL,
-    .subprotocol_count = 0,
-    .max_connections = 100,
-    .max_message_size = 1024 * 1024,
-    .handshake_timeout_ms = 10000
-  };
+      callback_invoked = 0;
 
-  turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
-  TEST_ASSERT_NOT_NULL(server);
+      turbo_websocket_server_set_callbacks(server,
+                                          test_on_connection,
+                                          test_on_recv,
+                                          test_on_close);
 
-  // Stop should not crash
-  turbo_websocket_server_stop(server);
+      // Callbacks are set but not invoked yet
+      check_int_eq(callback_invoked, 0);
 
-  // Shutdown should return 0
-  int result = turbo_websocket_server_shutdown(server, 1000);
-  TEST_ASSERT_EQUAL(0, result);
+      turbo_websocket_server_destroy(server);
+    }
 
-  turbo_websocket_server_destroy(server);
-}
+    it("should return correct initial connection count") {
+      uv_loop_t *loop = uv_default_loop();
 
-/**
- * Test: Connection helper functions with NULL
- */
-void test_websocket_connection_helpers_null(void) {
-  const char *subprotocol = turbo_websocket_connection_get_subprotocol(NULL);
-  TEST_ASSERT_NULL(subprotocol);
+      turbo_websocket_server_config_t config = {
+        .supported_subprotocols = NULL,
+        .subprotocol_count = 0,
+        .max_connections = 100,
+        .max_message_size = 1024 * 1024,
+        .handshake_timeout_ms = 10000
+      };
 
-  const char *path = turbo_websocket_connection_get_path(NULL);
-  TEST_ASSERT_NULL(path);
-}
+      turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
+      check_not_null(server);
 
-int main(void) {
-  UNITY_BEGIN();
+      int count = turbo_websocket_server_get_connection_count(server);
+      check_int_eq(count, 0);
 
-  RUN_TEST(test_websocket_server_create_destroy);
-  RUN_TEST(test_websocket_server_create_invalid_params);
-  RUN_TEST(test_websocket_server_listen_invalid);
-  RUN_TEST(test_websocket_server_set_callbacks);
-  RUN_TEST(test_websocket_server_get_connection_count);
-  RUN_TEST(test_websocket_server_send_null_connection);
-  RUN_TEST(test_websocket_server_ping_null_connection);
-  RUN_TEST(test_websocket_server_close_null_connection);
-  RUN_TEST(test_websocket_server_stop_shutdown);
-  RUN_TEST(test_websocket_connection_helpers_null);
+      turbo_websocket_server_destroy(server);
+    }
+  }
 
-  return UNITY_END();
+  describe("Connection Operations with NULL") {
+    it("should fail to send on NULL connection") {
+      int result = turbo_websocket_server_send(NULL, "test", 4);
+      check_int_eq(result, -1);
+    }
+
+    it("should fail to send PING on NULL connection") {
+      uint8_t payload[] = "ping";
+      int result = turbo_websocket_server_send_ping(NULL, payload, 4);
+      check_int_eq(result, -1);
+    }
+
+    it("should fail to close NULL connection") {
+      int result = turbo_websocket_server_close_connection(NULL, 1000, "Normal");
+      check_int_eq(result, -1);
+    }
+
+    it("should return NULL for connection helpers with NULL") {
+      const char *subprotocol = turbo_websocket_connection_get_subprotocol(NULL);
+      check_null(subprotocol);
+
+      const char *path = turbo_websocket_connection_get_path(NULL);
+      check_null(path);
+    }
+  }
+
+  describe("Lifecycle") {
+    it("should stop and shutdown correctly") {
+      uv_loop_t *loop = uv_default_loop();
+
+      turbo_websocket_server_config_t config = {
+        .supported_subprotocols = NULL,
+        .subprotocol_count = 0,
+        .max_connections = 100,
+        .max_message_size = 1024 * 1024,
+        .handshake_timeout_ms = 10000
+      };
+
+      turbo_websocket_server_t *server = turbo_websocket_server_create(loop, 0, &config);
+      check_not_null(server);
+
+      // Stop should not crash
+      turbo_websocket_server_stop(server);
+
+      // Shutdown should return 0
+      int result = turbo_websocket_server_shutdown(server, 1000);
+      check_int_eq(result, 0);
+
+      turbo_websocket_server_destroy(server);
+    }
+  }
 }

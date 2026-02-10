@@ -5,7 +5,7 @@
 
 function(add_toon_test test_name source_file)
     add_executable(${test_name} ${source_file})
-    target_link_libraries(${test_name} PRIVATE toon unity)
+    target_link_libraries(${test_name} PRIVATE toon TurboNet::TinyTest)
     
     if(UNIX)
         target_link_libraries(${test_name} PRIVATE m)

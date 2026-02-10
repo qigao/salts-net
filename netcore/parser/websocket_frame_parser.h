@@ -23,6 +23,7 @@ typedef enum {
     WS_PARSE_INVALID_RSV,
     WS_PARSE_CONTROL_TOO_LARGE,
     WS_PARSE_FRAGMENTED_CONTROL,
+    WS_PARSE_INVALID_LENGTH,
 } ws_parse_result_t;
 
 /**

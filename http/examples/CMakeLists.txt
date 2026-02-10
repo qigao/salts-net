@@ -25,7 +25,7 @@ set(HTTP_EXAMPLES
 # Build each example
 foreach(example_name ${HTTP_EXAMPLES})
   add_executable(${example_name} ${example_name}.c)
-  target_link_libraries(${example_name} PRIVATE http_client bdd)
+  target_link_libraries(${example_name} PRIVATE http_client TurboNet::TinyTest)
   set_target_properties(${example_name} PROPERTIES FOLDER http/${folder_name})
   add_sanitizers(${example_name})
 # Platform-specific settings

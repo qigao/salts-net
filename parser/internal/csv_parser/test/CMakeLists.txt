@@ -6,7 +6,7 @@ add_executable(${TEST_TARGET}
 
 target_link_libraries(${TEST_TARGET} PRIVATE
     csv_parser 
-    unity
+    TurboNet::TinyTest
 )
 
 add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET})

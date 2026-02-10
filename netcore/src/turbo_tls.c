@@ -192,12 +192,20 @@ static void turbo_tls_arena_pool_destroy(turbo_tls_arena_pool_t *pool) {
 static size_t turbo_tls_arena_pool_available(turbo_tls_arena_pool_t *pool) {
   if (!pool->current_buffer)
     return 0;
+  if (pool->current_buffer->used > pool->current_buffer->capacity) {
+    pool->current_buffer->used = 0;
+    return 0;
+  }
   return pool->current_buffer->used;
 }
 
 static int turbo_tls_arena_pool_read(turbo_tls_arena_pool_t *pool, char *out, int len) {
   if (!pool->current_buffer || pool->current_buffer->used == 0) {
     return 0; /* No data available - return 0, BIO will check pool->ret */
+  }
+  if (pool->current_buffer->used > pool->current_buffer->capacity) {
+    pool->current_buffer->used = 0;
+    return 0;
   }
 
   size_t available = pool->current_buffer->used;
@@ -218,19 +226,36 @@ static void turbo_tls_arena_pool_write(turbo_tls_arena_pool_t *pool, const char 
   if (len <= 0)
     return;
 
+  if (pool->current_buffer && pool->current_buffer->used > pool->current_buffer->capacity) {
+    turbo_arena_buffer_unref(pool->current_buffer);
+    pool->current_buffer = NULL;
+  }
+
+  size_t existing_used = 0;
+  if (pool->current_buffer) {
+    if (pool->current_buffer->used <= pool->current_buffer->capacity) {
+      existing_used = pool->current_buffer->used;
+    } else {
+      turbo_arena_buffer_unref(pool->current_buffer);
+      pool->current_buffer = NULL;
+    }
+  }
+
   /* Ensure we have a current buffer with enough space */
   if (!pool->current_buffer || turbo_arena_buffer_remaining(pool->current_buffer) < (size_t)len) {
 
     /* Get a new buffer */
-    size_t needed_size = (size_t)len > pool->buffer_size ? (size_t)len : pool->buffer_size;
+    size_t needed_size = existing_used + (size_t)len;
+    if (needed_size < pool->buffer_size)
+      needed_size = pool->buffer_size;
     turbo_arena_buffer_t *new_buffer = turbo_arena_get_buffer(&pool->arena, needed_size);
 
     if (!new_buffer)
       return; /* Out of memory */
 
     /* Copy existing data to new buffer if any */
-    if (pool->current_buffer && pool->current_buffer->used > 0) {
-      size_t copy_size = pool->current_buffer->used;
+    if (pool->current_buffer && existing_used > 0) {
+      size_t copy_size = existing_used;
       if (copy_size <= new_buffer->capacity) {
         memcpy(new_buffer->data, pool->current_buffer->data, copy_size);
         new_buffer->used = copy_size;

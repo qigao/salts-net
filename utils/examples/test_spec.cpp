@@ -1,4 +1,4 @@
-#include "fmt_typed.h"
+#include "fmt.h"
 #include <stdio.h>
 
 // Helper macro to get enum name as string

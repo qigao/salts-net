@@ -4,6 +4,7 @@
  */
 
 #include "websocket_frame_parser.h"
+#include <limits.h>
 #include <string.h>
 
 ws_parse_result_t ws_frame_peek_size(const uint8_t *data, size_t len, size_t *out_needed) {
@@ -32,7 +33,10 @@ ws_parse_result_t ws_frame_peek_size(const uint8_t *data, size_t len, size_t *ou
 
     if (masked) header_len += 4;
 
-    *out_needed = header_len + payload_len;
+    if (payload_len > (uint64_t)(SIZE_MAX - header_len)) {
+        return WS_PARSE_INVALID_LENGTH;
+    }
+    *out_needed = header_len + (size_t)payload_len;
     return WS_PARSE_OK;
 }
 
@@ -87,7 +91,10 @@ ws_parse_result_t ws_frame_parse(const uint8_t *data, size_t len, ws_frame_t *fr
     }
 
     /* Check we have complete frame */
-    if (len < header_len + payload_len)
+    if (payload_len > (uint64_t)(SIZE_MAX - header_len)) {
+        return WS_PARSE_INVALID_LENGTH;
+    }
+    if (len < header_len + (size_t)payload_len)
         return WS_PARSE_NEED_MORE;
 
     /* Validate control frames */

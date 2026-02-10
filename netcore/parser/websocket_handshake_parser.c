@@ -21,9 +21,54 @@ typedef struct {
   websocket_handshake_token_value_t *current_value;
   char *current_header_field;
   char *current_header_value;
+  size_t current_header_field_len;
+  size_t current_header_value_len;
+  int last_header_cb;
   int request_line_complete;
   int headers_complete;
 } llhttp_context_t;
+
+enum {
+  LLHTTP_HDR_NONE = 0,
+  LLHTTP_HDR_FIELD = 1,
+  LLHTTP_HDR_VALUE = 2
+};
+
+static int append_header_part(char **buffer, size_t *len, const char *at, size_t length) {
+  char *new_buf = (char *)realloc(*buffer, *len + length + 1);
+  if (!new_buf)
+    return -1;
+  memcpy(new_buf + *len, at, length);
+  *len += length;
+  new_buf[*len] = '\0';
+  *buffer = new_buf;
+  return 0;
+}
+
+static void store_header_pair(llhttp_context_t *ctx) {
+  websocket_handshake_parser_t *parser = ctx->parser;
+  if (!ctx->current_header_field || !ctx->current_header_value)
+    return;
+
+  const char *field = ctx->current_header_field;
+
+  if (strcasecmp(field, "Sec-WebSocket-Key") == 0) {
+    free(parser->ws_key);
+    parser->ws_key = strdup(ctx->current_header_value);
+  } else if (strcasecmp(field, "Sec-WebSocket-Version") == 0) {
+    free(parser->ws_version);
+    parser->ws_version = strdup(ctx->current_header_value);
+  } else if (strcasecmp(field, "Sec-WebSocket-Protocol") == 0) {
+    free(parser->ws_protocol);
+    parser->ws_protocol = strdup(ctx->current_header_value);
+  } else if (strcasecmp(field, "Upgrade") == 0) {
+    free(parser->upgrade);
+    parser->upgrade = strdup(ctx->current_header_value);
+  } else if (strcasecmp(field, "Connection") == 0) {
+    free(parser->connection);
+    parser->connection = strdup(ctx->current_header_value);
+  }
+}
 
 // llhttp callbacks for HTTP request parsing
 static int on_url(llhttp_t *http_parser, const char *at, size_t length) {
@@ -38,53 +83,47 @@ static int on_url(llhttp_t *http_parser, const char *at, size_t length) {
 static int on_header_field(llhttp_t *http_parser, const char *at, size_t length) {
   llhttp_context_t *ctx = (llhttp_context_t *)http_parser->data;
 
-  free(ctx->current_header_field);
-  ctx->current_header_field = malloc(length + 1);
-  if (!ctx->current_header_field) return -1;
+  if (ctx->last_header_cb == LLHTTP_HDR_VALUE) {
+    store_header_pair(ctx);
+    free(ctx->current_header_value);
+    ctx->current_header_value = NULL;
+    ctx->current_header_value_len = 0;
+  }
 
-  memcpy(ctx->current_header_field, at, length);
-  ctx->current_header_field[length] = '\0';
+  if (ctx->last_header_cb != LLHTTP_HDR_FIELD) {
+    free(ctx->current_header_field);
+    ctx->current_header_field = NULL;
+    ctx->current_header_field_len = 0;
+  }
+
+  if (append_header_part(&ctx->current_header_field, &ctx->current_header_field_len, at, length) != 0)
+    return -1;
+
+  ctx->last_header_cb = LLHTTP_HDR_FIELD;
   return 0;
 }
 
 static int on_header_value(llhttp_t *http_parser, const char *at, size_t length) {
   llhttp_context_t *ctx = (llhttp_context_t *)http_parser->data;
-  websocket_handshake_parser_t *parser = ctx->parser;
-
-  free(ctx->current_header_value);
-  ctx->current_header_value = malloc(length + 1);
-  if (!ctx->current_header_value) return -1;
-
-  memcpy(ctx->current_header_value, at, length);
-  ctx->current_header_value[length] = '\0';
-
-  // Store WebSocket-specific headers
-  if (ctx->current_header_field) {
-    const char *field = ctx->current_header_field;
-
-    if (strcasecmp(field, "Sec-WebSocket-Key") == 0) {
-      free(parser->ws_key);
-      parser->ws_key = strdup(ctx->current_header_value);
-    } else if (strcasecmp(field, "Sec-WebSocket-Version") == 0) {
-      free(parser->ws_version);
-      parser->ws_version = strdup(ctx->current_header_value);
-    } else if (strcasecmp(field, "Sec-WebSocket-Protocol") == 0) {
-      free(parser->ws_protocol);
-      parser->ws_protocol = strdup(ctx->current_header_value);
-    } else if (strcasecmp(field, "Upgrade") == 0) {
-      free(parser->upgrade);
-      parser->upgrade = strdup(ctx->current_header_value);
-    } else if (strcasecmp(field, "Connection") == 0) {
-      free(parser->connection);
-      parser->connection = strdup(ctx->current_header_value);
-    }
+  if (ctx->last_header_cb != LLHTTP_HDR_VALUE) {
+    free(ctx->current_header_value);
+    ctx->current_header_value = NULL;
+    ctx->current_header_value_len = 0;
   }
+
+  if (append_header_part(&ctx->current_header_value, &ctx->current_header_value_len, at, length) != 0)
+    return -1;
+
+  ctx->last_header_cb = LLHTTP_HDR_VALUE;
 
   return 0;
 }
 
 static int on_headers_complete(llhttp_t *http_parser) {
   llhttp_context_t *ctx = (llhttp_context_t *)http_parser->data;
+  if (ctx->last_header_cb == LLHTTP_HDR_VALUE) {
+    store_header_pair(ctx);
+  }
   ctx->headers_complete = 1;
   return 0;
 }
@@ -147,6 +186,14 @@ int websocket_handshake_parser_scan(websocket_handshake_parser_t *parser,
   // Parse available data
   size_t remaining = parser->limit - parser->cursor;
   enum llhttp_errno err = llhttp_execute(http_parser, parser->cursor, remaining);
+  if (err == HPE_OK || err == HPE_PAUSED_UPGRADE) {
+    parser->cursor = parser->limit;
+  } else if (err != HPE_OK) {
+    const char *err_pos = llhttp_get_error_pos(http_parser);
+    if (err_pos && err_pos >= parser->data && err_pos <= parser->limit) {
+      parser->cursor = err_pos;
+    }
+  }
 
   if (err == HPE_OK) {
     // Parsing complete
@@ -243,10 +290,11 @@ int websocket_handshake_parser_is_complete(const websocket_handshake_parser_t *p
 }
 
 size_t websocket_handshake_parser_bytes_consumed(const websocket_handshake_parser_t *parser) {
-  if (!parser->http_parser) return 0;
-
-  llhttp_t *http_parser = (llhttp_t *)parser->http_parser;
-  return (size_t)((const char *)llhttp_get_error_pos(http_parser) - parser->data);
+  if (!parser || !parser->data || !parser->cursor)
+    return 0;
+  if (parser->cursor < parser->data)
+    return 0;
+  return (size_t)(parser->cursor - parser->data);
 }
 
 int websocket_handshake_validate(const websocket_handshake_parser_t *parser) {

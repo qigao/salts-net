@@ -1,11 +1,11 @@
 /**
  * @file test_spec_runner.c
- * @brief Comprehensive mustache specification test runner
+ * @brief Comprehensive mustache specification test runner using TinyTest
  * 
  * Loads and runs all tests from the official mustache specification JSON files.
  */
 
-#include "acutest.h"
+#include "tinytest.h"
 #include "mustache.h"
 #include "mustache_json.h"
 #include "json_parser.h"
@@ -14,7 +14,7 @@
 #include <string.h>
 
 typedef struct BUFFER {
-    char data[4096];
+    char data[8192];
     size_t n;
 } BUFFER;
 
@@ -59,6 +59,7 @@ out_escaped(const char* output, size_t n, void* data)
             case '"':   out("&quot;", 6, data); break;
             case '<':   out("&lt;", 4, data); break;
             case '>':   out("&gt;", 4, data); break;
+            case '\'':  out("&#39;", 5, data); break;
             default:    out(output + i, 1, data); break;
         }
     }
@@ -76,10 +77,87 @@ static const MUSTACHE_RENDERER renderer = {
 
 typedef struct PROVIDER_DATA {
     json_value_t* root;
+    json_value_t* partials;
+    int lambda_calls;
 } PROVIDER_DATA;
 
 static int
-dump(void* node, int (*out_fn)(const char*, size_t, void*), void* renderer_data, void* data)
+json_is_falsey(json_value_t* value)
+{
+    if (!value) return 1;
+
+    switch(json_type(value)) {
+    case JSON_NULL:
+        return 1;
+    case JSON_BOOL:
+        return json_bool(value) ? 0 : 1;
+    case JSON_STRING:
+        return json_string_len(value) == 0 ? 1 : 0;
+    case JSON_ARRAY:
+        return json_array_size(value) == 0 ? 1 : 0;
+    default:
+        return 0;
+    }
+}
+
+static int
+is_lambda_node(json_value_t* value)
+{
+    if (!value || json_type(value) != JSON_OBJECT) {
+        return 0;
+    }
+    json_value_t* tag = json_object_get(value, "__tag__");
+    if (!tag || json_type(tag) != JSON_STRING) {
+        return 0;
+    }
+    return strcmp(json_string(tag), "code") == 0;
+}
+
+static const char*
+get_pwsh_code(json_value_t* value)
+{
+    json_value_t* pwsh = json_object_get(value, "pwsh");
+    if (!pwsh || json_type(pwsh) != JSON_STRING) {
+        return NULL;
+    }
+    return json_string(pwsh);
+}
+
+static char*
+dup_subst_args(const char* text, const char* section)
+{
+    size_t text_len = strlen(text);
+    size_t section_len = strlen(section);
+    size_t count = 0;
+    const char* p = text;
+    const char* needle = "$($args[0])";
+    size_t needle_len = strlen(needle);
+
+    while ((p = strstr(p, needle)) != NULL) {
+        count++;
+        p += needle_len;
+    }
+
+    size_t out_len = text_len + (section_len > needle_len ? (section_len - needle_len) * count : 0);
+    char* out = (char*)malloc(out_len + 1);
+    if (!out) return NULL;
+
+    const char* src = text;
+    char* dst = out;
+    while ((p = strstr(src, needle)) != NULL) {
+        size_t n = (size_t)(p - src);
+        memcpy(dst, src, n);
+        dst += n;
+        memcpy(dst, section, section_len);
+        dst += section_len;
+        src = p + needle_len;
+    }
+    strcpy(dst, src);
+    return out;
+}
+
+static int
+dump_val(void* node, int (*out_fn)(const char*, size_t, void*), void* renderer_data, void* data)
 {
     json_value_t* value = (json_value_t*) node;
 
@@ -88,11 +166,7 @@ dump(void* node, int (*out_fn)(const char*, size_t, void*), void* renderer_data,
         return 0;
 
     case JSON_BOOL:
-        if (json_bool(value)) {
-            return out_fn("true", 4, renderer_data);
-        } else {
-            return 0;
-        }
+        return json_bool(value) ? out_fn("true", 4, renderer_data) : 0;
 
     case JSON_ARRAY:
         return out_fn("<<ARRAY>>", 9, renderer_data);
@@ -123,50 +197,46 @@ dump(void* node, int (*out_fn)(const char*, size_t, void*), void* renderer_data,
 }
 
 static void*
-get_root(void* data)
+get_root_val(void* data)
 {
     PROVIDER_DATA* provider_data = (PROVIDER_DATA*) data;
     return provider_data->root;
 }
 
 static void*
-get_named(void* node, const char* name, size_t size, void* data)
+get_named_val(void* node, const char* name, size_t size, void* data)
 {
     json_value_t* value = (json_value_t*) node;
 
     if(json_type(value) != JSON_OBJECT)
         return NULL;
 
-    char* key_buffer = malloc(size + 1);
-    if (!key_buffer) return NULL;
-    
+    char key_buffer[256];
+    if (size >= sizeof(key_buffer)) return NULL;
     memcpy(key_buffer, name, size);
     key_buffer[size] = '\0';
     
     json_value_t* result = json_object_get(value, key_buffer);
-    free(key_buffer);
-    
-    if (!result || json_is_null(result) || 
-        (json_type(result) == JSON_BOOL && !json_bool(result))) {
+
+    if (!result) {
         return NULL;
     }
-    
     return result;
 }
 
 static void*
-get_indexed(void* node, unsigned index, void* data)
+get_indexed_val(void* node, unsigned index, void* data)
 {
     json_value_t* value = (json_value_t*) node;
 
-    if (json_is_null(value) || 
-        (json_type(value) == JSON_BOOL && !json_bool(value))) {
+    if (json_is_falsey(value) && !is_lambda_node(value)) {
         return NULL;
     }
 
     if(json_type(value) == JSON_ARRAY && index < json_array_size(value)) {
         return json_array_get(value, index);
     } else if(json_type(value) != JSON_ARRAY && index == 0) {
+        // For non-arrays, truthy values are treated as a list of one element
         return value;
     }
 
@@ -174,167 +244,182 @@ get_indexed(void* node, unsigned index, void* data)
 }
 
 static MUSTACHE_TEMPLATE*
-get_partial(const char* name, size_t size, void* data)
+get_partial_val(const char* name, size_t size, void* data)
 {
-    // Partials not implemented in this simple runner
-    return NULL;
+    PROVIDER_DATA* provider_data = (PROVIDER_DATA*) data;
+    if (!provider_data->partials) return NULL;
+
+    char key_buffer[256];
+    if (size >= sizeof(key_buffer)) return NULL;
+    memcpy(key_buffer, name, size);
+    key_buffer[size] = '\0';
+
+    json_value_t* p_val = json_object_get(provider_data->partials, key_buffer);
+    if (!p_val || json_type(p_val) != JSON_STRING) return NULL;
+
+    return mustache_compile(json_string(p_val), json_string_len(p_val), NULL, NULL, 0);
+}
+
+static int
+is_lambda(void* node, void* data)
+{
+    return is_lambda_node((json_value_t*)node);
+}
+
+static int
+call_lambda(void* node, const char* text, size_t text_len, char** out_text, size_t* out_len, void* data)
+{
+    PROVIDER_DATA* provider_data = (PROVIDER_DATA*)data;
+    json_value_t* value = (json_value_t*)node;
+    const char* code = get_pwsh_code(value);
+    const char* section = text ? text : "";
+
+    if (!code) {
+        return -1;
+    }
+
+    if (strstr(code, "$script:calls") != NULL) {
+        provider_data->lambda_calls += 1;
+        char buf[16];
+        int n = snprintf(buf, sizeof(buf), "%d", provider_data->lambda_calls);
+        *out_text = (char*)malloc((size_t)n + 1);
+        if (!*out_text) return -1;
+        memcpy(*out_text, buf, (size_t)n + 1);
+        *out_len = (size_t)n;
+        return 0;
+    }
+
+    if (strcmp(code, "$false") == 0) {
+        *out_text = (char*)malloc(1);
+        if (!*out_text) return -1;
+        (*out_text)[0] = '\0';
+        *out_len = 0;
+        return 0;
+    }
+
+    if (strstr(code, "$args[0] -eq \"{{x}}\"") != NULL) {
+        const char* ret = (text_len == strlen("{{x}}") && strncmp(section, "{{x}}", 5) == 0)
+                              ? "yes"
+                              : "no";
+        *out_text = (char*)malloc(strlen(ret) + 1);
+        if (!*out_text) return -1;
+        strcpy(*out_text, ret);
+        *out_len = strlen(ret);
+        return 0;
+    }
+
+    if (code[0] == '"' && code[strlen(code) - 1] == '"') {
+        size_t inner_len = strlen(code) - 2;
+        char* inner = (char*)malloc(inner_len + 1);
+        if (!inner) return -1;
+        memcpy(inner, code + 1, inner_len);
+        inner[inner_len] = '\0';
+
+        char* substituted = dup_subst_args(inner, section);
+        free(inner);
+        if (!substituted) return -1;
+        *out_text = substituted;
+        *out_len = strlen(substituted);
+        return 0;
+    }
+
+    *out_text = (char*)malloc(strlen(code) + 1);
+    if (!*out_text) return -1;
+    strcpy(*out_text, code);
+    *out_len = strlen(code);
+    return 0;
 }
 
 static const MUSTACHE_DATAPROVIDER provider = {
-    dump,
-    get_root,
-    get_named,
-    get_indexed,
-    get_partial
+    dump_val,
+    get_root_val,
+    get_named_val,
+    get_indexed_val,
+    get_partial_val,
+    is_lambda,
+    call_lambda
 };
 
-/*********************************
- *** Test runner functions     ***
- *********************************/
-
-static void run_spec_test(const char* test_name, const char* template_str, 
-                         const char* data_str, const char* expected)
+static void run_spec_test_case(__bdd_config_type__ *__bdd_config__, const char* test_name, const char* template_str, 
+                               json_value_t* data, json_value_t* partials, const char* expected)
 {
-    json_value_t* json_root = NULL;
     MUSTACHE_TEMPLATE* t = NULL;
     BUFFER buf = { 0 };
 
-    // Parse data
-    if (data_str && strlen(data_str) > 0) {
-        json_root = json_parse(data_str, strlen(data_str));
-        TEST_CHECK_(json_root != NULL, "Failed to parse JSON data: %s", data_str);
-        if (!json_root) return;
-    }
-
     // Compile template
     t = mustache_compile(template_str, strlen(template_str), &parser, (void*) &buf, 0);
-    TEST_CHECK_(t != NULL, "Failed to compile template: %s", template_str);
+    check_not_null(t);
+    
     if (!t) {
-        if (json_root) json_free(json_root);
+        // info("Failed to compile template for test '%s'", test_name); // info macro might also need config
+        printf("Failed to compile template for test '%s'\n", test_name);
         return;
     }
 
     // Render
-    PROVIDER_DATA provider_data = { json_root };
-    mustache_process(t, &renderer, (void*) &buf, &provider, &provider_data);
+    PROVIDER_DATA provider_data = { data, partials, 0 };
+    (void)mustache_process(t, &renderer, (void*) &buf, &provider, &provider_data);
 
     // Check result
     buf.data[buf.n] = '\0';
-    TEST_CHECK_(buf.n == strlen(expected) && strcmp(expected, buf.data) == 0,
-               "Test '%s' failed\nTemplate: %s\nData: %s\nExpected: %s\nGot: %s",
-               test_name, template_str, data_str ? data_str : "{}", expected, buf.data);
+    if (strcmp(expected, buf.data) != 0) {
+        printf("Test '%s' failed\n", test_name);
+        printf("Template: %s\n", template_str);
+        printf("Expected: '%s'\n", expected);
+        printf("Got:      '%s'\n", buf.data);
+    }
+    check_str_eq(buf.data, expected);
 
     // Cleanup
-    if (json_root) json_free(json_root);
     mustache_release(t);
 }
 
-static void load_and_run_spec_file(const char* filename)
+static void run_spec_file(__bdd_config_type__ *__bdd_config__, const char* filename)
 {
-    char filepath[256];
+    char filepath[512];
+#ifdef SPEC_JSON_DIR
+    snprintf(filepath, sizeof(filepath), "%s/%s", SPEC_JSON_DIR, filename);
+#else
     snprintf(filepath, sizeof(filepath), "spec/%s", filename);
+#endif
     
-    FILE* f = fopen(filepath, "r");
-    if (!f) {
-        TEST_MSG("Could not open spec file: %s", filepath);
-        return;
-    }
-
-    // Read file
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    char* content = malloc(size + 1);
-    if (!content) {
-        fclose(f);
-        return;
-    }
-    
-    fread(content, 1, size, f);
-    content[size] = '\0';
-    fclose(f);
-
-    // Parse JSON
-    json_value_t* spec = json_parse(content, size);
-    free(content);
-    
+    json_value_t* spec = json_parse_file(filepath);
     if (!spec) {
-        TEST_MSG("Failed to parse spec file: %s", filepath);
+        printf("Could not load/parse spec file: %s\n", filepath);
         return;
     }
 
-    // Get tests array
-    json_value_t* tests = json_object_get(spec, "tests");
-    if (!tests || json_type(tests) != JSON_ARRAY) {
-        json_free(spec);
-        return;
-    }
+    describe(filename) {
+        json_value_t* tests = json_object_get(spec, "tests");
+        if (tests && json_type(tests) == JSON_ARRAY) {
+            size_t test_count = json_array_size(tests);
+            for (size_t i = 0; i < test_count; i++) {
+                json_value_t* test = json_array_get(tests, i);
+                const char* name = json_get_string(test, "name");
+                const char* templ = json_get_string(test, "template");
+                const char* expected = json_get_string(test, "expected");
+                json_value_t* data = json_object_get(test, "data");
+                json_value_t* partials = json_object_get(test, "partials");
 
-    // Run each test
-    size_t test_count = json_array_size(tests);
-    for (size_t i = 0; i < test_count; i++) {
-        json_value_t* test = json_array_get(tests, i);
-        if (!test || json_type(test) != JSON_OBJECT) continue;
-
-        json_value_t* name = json_object_get(test, "name");
-        json_value_t* template_val = json_object_get(test, "template");
-        json_value_t* data = json_object_get(test, "data");
-        json_value_t* expected = json_object_get(test, "expected");
-
-        if (!name || !template_val || !expected) continue;
-
-        // Convert data to JSON string
-        char data_str[1024] = "{}";
-        if (data) {
-            // For simplicity, we'll serialize the data object back to JSON
-            // In a full implementation, you'd want a proper JSON serializer
-            snprintf(data_str, sizeof(data_str), "{}"); // Simplified
+                if (name && templ && expected) {
+                    it(name) {
+                        run_spec_test_case(__bdd_config__, name, templ, data, partials, expected);
+                    }
+                }
+            }
         }
-
-        run_spec_test(json_string(name), 
-                     json_string(template_val),
-                     data_str,
-                     json_string(expected));
     }
 
     json_free(spec);
 }
 
-/*********************************
- *** Test functions            ***
- *********************************/
-
-static void test_comments_spec(void) {
-    load_and_run_spec_file("comments.json");
+spec("mustache spec runner") {
+  bdd_invoke(run_spec_file, "partials.json");
+    bdd_invoke(run_spec_file, "comments.json");
+    bdd_invoke(run_spec_file, "interpolation.json");
+    bdd_invoke(run_spec_file, "sections.json");
+    bdd_invoke(run_spec_file, "inverted.json");
+    bdd_invoke(run_spec_file, "delimiters.json");
+    bdd_invoke(run_spec_file, "lambdas.json");   
+  
 }
-
-static void test_interpolation_spec(void) {
-    load_and_run_spec_file("interpolation.json");
-}
-
-static void test_sections_spec(void) {
-    load_and_run_spec_file("sections.json");
-}
-
-static void test_inverted_spec(void) {
-    load_and_run_spec_file("inverted.json");
-}
-
-static void test_partials_spec(void) {
-    load_and_run_spec_file("partials.json");
-}
-
-static void test_delimiters_spec(void) {
-    load_and_run_spec_file("delimiters.json");
-}
-
-TEST_LIST = {
-    { "comments_spec", test_comments_spec },
-    { "interpolation_spec", test_interpolation_spec },
-    { "sections_spec", test_sections_spec },
-    { "inverted_spec", test_inverted_spec },
-    { "partials_spec", test_partials_spec },
-    { "delimiters_spec", test_delimiters_spec },
-    { 0 }
-};

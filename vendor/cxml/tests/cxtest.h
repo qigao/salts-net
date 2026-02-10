@@ -177,7 +177,7 @@ struct _cxml_g_runner{
     cxml_t_suite *current_suite;
 };
 
-struct _cxml_g_runner _g_runner;
+extern struct _cxml_g_runner _g_runner;
 
 static void _cxml_t_init_suite(
         cxml_t_suite *suite,

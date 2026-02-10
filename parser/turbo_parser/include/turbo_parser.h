@@ -169,7 +169,23 @@ CXX_C_API const char *turbo_json_get_string(const json_value_t *obj, const char 
 CXX_C_API char *turbo_json_serialize(const json_value_t *value, size_t *out_len);
 
 /**
- * @brief Free a string allocated by turbo_json_serialize.
+ * @brief Serialize a JSON value to a pretty-printed string with indentation.
+ * @param value Pointer to the JSON value to serialize.
+ * @param out_len Optional pointer to store the output string length.
+ * @return Pointer to the allocated string (must be freed with turbo_json_serialize_free).
+ */
+CXX_C_API char *turbo_json_serialize_pretty(const json_value_t *value, size_t *out_len);
+
+/**
+ * @brief Serialize a JSON value to a pretty-printed string with CRLF line endings.
+ * @param value Pointer to the JSON value to serialize.
+ * @param out_len Optional pointer to store the output string length.
+ * @return Pointer to the allocated string (must be freed with turbo_json_serialize_free).
+ */
+CXX_C_API char *turbo_json_serialize_pretty_crlf(const json_value_t *value, size_t *out_len);
+
+/**
+ * @brief Free a string allocated by turbo_json_serialize or turbo_json_serialize_pretty.
  * @param str Pointer to the serialized string.
  */
 CXX_C_API void turbo_json_serialize_free(char *str);

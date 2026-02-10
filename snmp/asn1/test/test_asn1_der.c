@@ -3,371 +3,312 @@
  * @brief ASN.1 DER Encoder/Decoder Tests
  */
 
-#include "unity.h"
+#include "tinytest.h"
 #include "asn1_types.h"
 #include <string.h>
 #include <stdio.h>
 
-void setUp(void) {}
-void tearDown(void) {}
+spec("asn1_der") {
+  describe("ASN.1 Value Creation") {
+    it("should create a boolean value correctly") {
+        asn1_value_t *v = asn1_create_boolean(1);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_BOOLEAN);
+        check_int_eq(v->value.boolean, 1);
+        check_int_eq(v->tag, 0x01); // BOOLEAN tag
+        asn1_free(v);
+    }
 
-/* ============================================================================
- * ASN.1 Value Creation Tests
- * ============================================================================ */
+    it("should create an integer value correctly") {
+        asn1_value_t *v = asn1_create_integer(42);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_INTEGER);
+        check_int_eq((int)v->value.integer, 42);
+        check_int_eq(v->tag, 0x02); // INTEGER tag
+        asn1_free(v);
+    }
 
-void test_create_boolean(void) {
-    asn1_value_t *v = asn1_create_boolean(1);
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BOOLEAN, v->type);
-    TEST_ASSERT_EQUAL(1, v->value.boolean);
-    TEST_ASSERT_EQUAL_HEX8(0x01, v->tag); // BOOLEAN tag
-    asn1_free(v);
-}
+    it("should create an octet string value correctly") {
+        uint8_t data[] = {0x01, 0x02, 0x03};
+        asn1_value_t *v = asn1_create_octet_string(data, sizeof(data));
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_OCTET_STRING);
+        check_size_eq(v->value.octet_string.length, 3);
+        check_mem_eq(v->value.octet_string.data, data, 3);
+        check_int_eq(v->tag, 0x04); // OCTET STRING tag
+        asn1_free(v);
+    }
 
-void test_create_integer(void) {
-    asn1_value_t *v = asn1_create_integer(42);
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_INTEGER, v->type);
-    TEST_ASSERT_EQUAL(42, v->value.integer);
-    TEST_ASSERT_EQUAL_HEX8(0x02, v->tag); // INTEGER tag
-    asn1_free(v);
-}
+    it("should create a null value correctly") {
+        asn1_value_t *v = asn1_create_null();
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_NULL);
+        check_int_eq(v->tag, 0x05); // NULL tag
+        asn1_free(v);
+    }
 
-void test_create_octet_string(void) {
-    uint8_t data[] = {0x01, 0x02, 0x03};
-    asn1_value_t *v = asn1_create_octet_string(data, sizeof(data));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_OCTET_STRING, v->type);
-    TEST_ASSERT_EQUAL(3, v->value.octet_string.length);
-    TEST_ASSERT_EQUAL_MEMORY(data, v->value.octet_string.data, 3);
-    TEST_ASSERT_EQUAL_HEX8(0x04, v->tag); // OCTET STRING tag
-    asn1_free(v);
-}
+    it("should create a sequence and add a child correctly") {
+        asn1_value_t *seq = asn1_create_sequence();
+        check_not_null(seq);
+        check_int_eq(seq->type, ASN1_TYPE_SEQUENCE);
+        check_int_eq(seq->tag, 0x30); // SEQUENCE tag (constructed)
 
-void test_create_null(void) {
-    asn1_value_t *v = asn1_create_null();
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_NULL, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x05, v->tag); // NULL tag
-    asn1_free(v);
-}
+        asn1_value_t *child = asn1_create_integer(123);
+        check_int_eq(asn1_sequence_add_child(seq, child), 0);
+        check_size_eq(seq->value.sequence.count, 1);
 
-void test_create_sequence(void) {
-    asn1_value_t *seq = asn1_create_sequence();
-    TEST_ASSERT_NOT_NULL(seq);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_SEQUENCE, seq->type);
-    TEST_ASSERT_EQUAL_HEX8(0x30, seq->tag); // SEQUENCE tag (constructed)
+        asn1_free(seq);
+    }
 
-    asn1_value_t *child = asn1_create_integer(123);
-    TEST_ASSERT_EQUAL(0, asn1_sequence_add_child(seq, child));
-    TEST_ASSERT_EQUAL(1, seq->value.sequence.count);
+    it("should create a set and add a child correctly") {
+        asn1_value_t *set = asn1_create_set();
+        check_not_null(set);
+        check_int_eq(set->type, ASN1_TYPE_SET);
+        check_int_eq(set->tag, 0x31); // SET tag (constructed)
 
-    asn1_free(seq);
-}
+        asn1_value_t *child = asn1_create_boolean(1);
+        check_int_eq(asn1_set_add_child(set, child), 0);
+        check_size_eq(set->value.set.count, 1);
 
-void test_create_set(void) {
-    asn1_value_t *set = asn1_create_set();
-    TEST_ASSERT_NOT_NULL(set);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_SET, set->type);
-    TEST_ASSERT_EQUAL_HEX8(0x31, set->tag); // SET tag (constructed)
+        asn1_free(set);
+    }
+  }
 
-    asn1_value_t *child = asn1_create_boolean(1);
-    TEST_ASSERT_EQUAL(0, asn1_set_add_child(set, child));
-    TEST_ASSERT_EQUAL(1, set->value.set.count);
+  describe("String Type Creation") {
+    it("should create a bit string value correctly") {
+        uint8_t data[] = {0xAB, 0xCD};
+        asn1_value_t *v = asn1_create_bit_string(data, 2, 4);  // 4 unused bits
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_BIT_STRING);
+        check_int_eq(v->tag, 0x03); // BIT STRING tag
+        // First byte should be unused bits count
+        check_int_eq(v->value.octet_string.data[0], 4);
+        check_int_eq(v->value.octet_string.data[1], 0xAB);
+        check_int_eq(v->value.octet_string.data[2], 0xCD);
+        asn1_free(v);
+    }
 
-    asn1_free(set);
-}
+    it("should create an OID from a string correctly") {
+        asn1_value_t *v = asn1_create_oid_from_string("1.2.840.113549");
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_OBJECT_IDENTIFIER);
+        check_int_eq(v->tag, 0x06); // OID tag
+        check_size_eq(v->value.oid.count, 4);
+        check_int_eq((int)v->value.oid.components[0], 1);
+        check_int_eq((int)v->value.oid.components[1], 2);
+        check_int_eq((int)v->value.oid.components[2], 840);
+        check_int_eq((int)v->value.oid.components[3], 113549);
+        asn1_free(v);
+    }
 
-/* ============================================================================
- * String Type Creation Tests
- * ============================================================================ */
+    it("should create a printable string correctly") {
+        asn1_value_t *v = asn1_create_printable_string("Hello World");
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_PRINTABLE_STRING);
+        check_int_eq(v->tag, 0x13); // PrintableString tag
+        check_size_eq(v->value.octet_string.length, 11);
+        check_mem_eq(v->value.octet_string.data, "Hello World", 11);
+        asn1_free(v);
+    }
 
-void test_create_bit_string(void) {
-    uint8_t data[] = {0xAB, 0xCD};
-    asn1_value_t *v = asn1_create_bit_string(data, 2, 4);  // 4 unused bits
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BIT_STRING, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x03, v->tag); // BIT STRING tag
-    // First byte should be unused bits count
-    TEST_ASSERT_EQUAL(4, v->value.octet_string.data[0]);
-    TEST_ASSERT_EQUAL(0xAB, v->value.octet_string.data[1]);
-    TEST_ASSERT_EQUAL(0xCD, v->value.octet_string.data[2]);
-    asn1_free(v);
-}
+    it("should create a UTF8 string correctly") {
+        asn1_value_t *v = asn1_create_utf8_string("UTF8");
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_UTF8_STRING);
+        check_int_eq(v->tag, 0x0C); // UTF8String tag
+        check_size_eq(v->value.octet_string.length, 4);
+        check_mem_eq(v->value.octet_string.data, "UTF8", 4);
+        asn1_free(v);
+    }
 
-void test_create_oid_from_string(void) {
-    asn1_value_t *v = asn1_create_oid_from_string("1.2.840.113549");
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_OBJECT_IDENTIFIER, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x06, v->tag); // OID tag
-    TEST_ASSERT_EQUAL(4, v->value.oid.count);
-    TEST_ASSERT_EQUAL(1, v->value.oid.components[0]);
-    TEST_ASSERT_EQUAL(2, v->value.oid.components[1]);
-    TEST_ASSERT_EQUAL(840, v->value.oid.components[2]);
-    TEST_ASSERT_EQUAL(113549, v->value.oid.components[3]);
-    asn1_free(v);
-}
+    it("should create an IA5 string correctly") {
+        asn1_value_t *v = asn1_create_ia5_string("test@example.com");
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_IA5_STRING);
+        check_int_eq(v->tag, 0x16); // IA5String tag
+        check_size_eq(v->value.octet_string.length, 16);
+        check_mem_eq(v->value.octet_string.data, "test@example.com", 16);
+        asn1_free(v);
+    }
 
-void test_create_printable_string(void) {
-    asn1_value_t *v = asn1_create_printable_string("Hello World");
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_PRINTABLE_STRING, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x13, v->tag); // PrintableString tag
-    TEST_ASSERT_EQUAL(11, v->value.octet_string.length);
-    TEST_ASSERT_EQUAL_MEMORY("Hello World", v->value.octet_string.data, 11);
-    asn1_free(v);
-}
+    it("should create a UTC time string correctly") {
+        asn1_value_t *v = asn1_create_utc_time("231231235959Z");
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_UTC_TIME);
+        check_int_eq(v->tag, 0x17); // UTCTime tag
+        check_size_eq(v->value.octet_string.length, 13);
+        check_mem_eq(v->value.octet_string.data, "231231235959Z", 13);
+        asn1_free(v);
+    }
+  }
 
-void test_create_utf8_string(void) {
-    asn1_value_t *v = asn1_create_utf8_string("UTF8");
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_UTF8_STRING, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x0C, v->tag); // UTF8String tag
-    TEST_ASSERT_EQUAL(4, v->value.octet_string.length);
-    TEST_ASSERT_EQUAL_MEMORY("UTF8", v->value.octet_string.data, 4);
-    asn1_free(v);
-}
+  describe("Binary Parsing") {
+    it("should parse boolean TRUE correctly") {
+        uint8_t data[] = {0x01, 0x01, 0xFF};  // BOOLEAN TRUE
+        asn1_value_t *v = NULL;
+        
+        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_BOOLEAN);
+        check(v->value.boolean);
+        
+        asn1_free(v);
+    }
 
-void test_create_ia5_string(void) {
-    asn1_value_t *v = asn1_create_ia5_string("test@example.com");
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_IA5_STRING, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x16, v->tag); // IA5String tag
-    TEST_ASSERT_EQUAL(16, v->value.octet_string.length);
-    TEST_ASSERT_EQUAL_MEMORY("test@example.com", v->value.octet_string.data, 16);
-    asn1_free(v);
-}
+    it("should parse boolean FALSE correctly") {
+        uint8_t data[] = {0x01, 0x01, 0x00};  // BOOLEAN FALSE
+        asn1_value_t *v = NULL;
+        
+        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_BOOLEAN);
+        check(!v->value.boolean);
+        
+        asn1_free(v);
+    }
 
-void test_create_utc_time(void) {
-    asn1_value_t *v = asn1_create_utc_time("231231235959Z");
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_UTC_TIME, v->type);
-    TEST_ASSERT_EQUAL_HEX8(0x17, v->tag); // UTCTime tag
-    TEST_ASSERT_EQUAL(13, v->value.octet_string.length);
-    TEST_ASSERT_EQUAL_MEMORY("231231235959Z", v->value.octet_string.data, 13);
-    asn1_free(v);
-}
+    it("should parse an integer correctly") {
+        uint8_t data[] = {0x02, 0x01, 0x2A};  // INTEGER 42
+        asn1_value_t *v = NULL;
+        
+        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_INTEGER);
+        check_int_eq((int)v->value.integer, 42);
+        
+        asn1_free(v);
+    }
 
-/* ============================================================================
- * Binary Parsing Tests
- * ============================================================================ */
+    it("should parse an octet string correctly") {
+        uint8_t data[] = {0x04, 0x03, 0xAB, 0xCD, 0xEF};  // OCTET STRING
+        asn1_value_t *v = NULL;
+        
+        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_OCTET_STRING);
+        check_size_eq(v->value.octet_string.length, 3);
+        check_int_eq(v->value.octet_string.data[0], 0xAB);
+        check_int_eq(v->value.octet_string.data[1], 0xCD);
+        check_int_eq(v->value.octet_string.data[2], 0xEF);
+        
+        asn1_free(v);
+    }
 
-void test_parse_boolean_true(void) {
-    uint8_t data[] = {0x01, 0x01, 0xFF};  // BOOLEAN TRUE
-    asn1_value_t *v = NULL;
-    
-    TEST_ASSERT_EQUAL(0, scan_binary_asn1(data, sizeof(data), &v));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BOOLEAN, v->type);
-    TEST_ASSERT_TRUE(v->value.boolean);
-    
-    asn1_free(v);
-}
+    it("should parse a null value correctly") {
+        uint8_t data[] = {0x05, 0x00};  // NULL
+        asn1_value_t *v = NULL;
+        
+        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_NULL);
+        
+        asn1_free(v);
+    }
 
-void test_parse_boolean_false(void) {
-    uint8_t data[] = {0x01, 0x01, 0x00};  // BOOLEAN FALSE
-    asn1_value_t *v = NULL;
-    
-    TEST_ASSERT_EQUAL(0, scan_binary_asn1(data, sizeof(data), &v));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BOOLEAN, v->type);
-    TEST_ASSERT_FALSE(v->value.boolean);
-    
-    asn1_free(v);
-}
+    it("should parse a sequence correctly") {
+        // SEQUENCE { INTEGER 42, BOOLEAN TRUE }
+        // 30 06 02 01 2A 01 01 FF
+        uint8_t data[] = {0x30, 0x06, 0x02, 0x01, 0x2A, 0x01, 0x01, 0xFF};
+        asn1_value_t *v = NULL;
+        
+        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_not_null(v);
+        check_int_eq(v->type, ASN1_TYPE_SEQUENCE);
+        check_size_eq(v->value.sequence.count, 2);
 
-void test_parse_integer(void) {
-    uint8_t data[] = {0x02, 0x01, 0x2A};  // INTEGER 42
-    asn1_value_t *v = NULL;
-    
-    TEST_ASSERT_EQUAL(0, scan_binary_asn1(data, sizeof(data), &v));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_INTEGER, v->type);
-    TEST_ASSERT_EQUAL(42, v->value.integer);
-    
-    asn1_free(v);
-}
+        check_int_eq(v->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+        check_int_eq((int)v->value.sequence.children[0]->value.integer, 42);
 
-void test_parse_octet_string(void) {
-    uint8_t data[] = {0x04, 0x03, 0xAB, 0xCD, 0xEF};  // OCTET STRING
-    asn1_value_t *v = NULL;
-    
-    TEST_ASSERT_EQUAL(0, scan_binary_asn1(data, sizeof(data), &v));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_OCTET_STRING, v->type);
-    TEST_ASSERT_EQUAL(3, v->value.octet_string.length);
-    TEST_ASSERT_EQUAL(0xAB, v->value.octet_string.data[0]);
-    TEST_ASSERT_EQUAL(0xCD, v->value.octet_string.data[1]);
-    TEST_ASSERT_EQUAL(0xEF, v->value.octet_string.data[2]);
-    
-    asn1_free(v);
-}
+        check_int_eq(v->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+        check(v->value.sequence.children[1]->value.boolean);
+        
+        asn1_free(v);
+    }
+  }
 
-void test_parse_null(void) {
-    uint8_t data[] = {0x05, 0x00};  // NULL
-    asn1_value_t *v = NULL;
-    
-    TEST_ASSERT_EQUAL(0, scan_binary_asn1(data, sizeof(data), &v));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_NULL, v->type);
-    
-    asn1_free(v);
-}
+  describe("Complex Structures") {
+    it("should handle nested sequences correctly") {
+        // Create nested structure: SEQUENCE { SEQUENCE { INTEGER 1 }, BOOLEAN TRUE }
+        asn1_value_t *outer = asn1_create_sequence();
+        asn1_value_t *inner = asn1_create_sequence();
+        
+        asn1_sequence_add_child(inner, asn1_create_integer(1));
+        asn1_sequence_add_child(outer, inner);
+        asn1_sequence_add_child(outer, asn1_create_boolean(1));
+        
+        check_size_eq(outer->value.sequence.count, 2);
+        check_int_eq(outer->value.sequence.children[0]->type, ASN1_TYPE_SEQUENCE);
+        check_size_eq(outer->value.sequence.children[0]->value.sequence.count, 1);
+        check_int_eq(outer->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+        
+        asn1_free(outer);
+    }
 
-void test_parse_sequence(void) {
-    // SEQUENCE { INTEGER 42, BOOLEAN TRUE }
-    // 30 06 02 01 2A 01 01 FF
-    uint8_t data[] = {0x30, 0x06, 0x02, 0x01, 0x2A, 0x01, 0x01, 0xFF};
-    asn1_value_t *v = NULL;
-    
-    TEST_ASSERT_EQUAL(0, scan_binary_asn1(data, sizeof(data), &v));
-    TEST_ASSERT_NOT_NULL(v);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_SEQUENCE, v->type);
-    TEST_ASSERT_EQUAL(2, v->value.sequence.count);
+    it("should handle mixed types within a sequence correctly") {
+        asn1_value_t *seq = asn1_create_sequence();
+        
+        asn1_sequence_add_child(seq, asn1_create_integer(123));
+        asn1_sequence_add_child(seq, asn1_create_boolean(0));
+        asn1_sequence_add_child(seq, asn1_create_null());
+        
+        uint8_t data[] = {0x01, 0x02, 0x03};
+        asn1_sequence_add_child(seq, asn1_create_octet_string(data, 3));
+        
+        check_size_eq(seq->value.sequence.count, 4);
+        check_int_eq(seq->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+        check_int_eq(seq->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+        check_int_eq(seq->value.sequence.children[2]->type, ASN1_TYPE_NULL);
+        check_int_eq(seq->value.sequence.children[3]->type, ASN1_TYPE_OCTET_STRING);
+        
+        asn1_free(seq);
+    }
+  }
 
-    TEST_ASSERT_EQUAL(ASN1_TYPE_INTEGER, v->value.sequence.children[0]->type);
-    TEST_ASSERT_EQUAL(42, v->value.sequence.children[0]->value.integer);
+  describe("Error Handling") {
+    it("should fail gracefully when parsing invalid data tag") {
+        uint8_t data[] = {0xFF, 0xFF};  // Invalid tag
+        asn1_value_t *v = NULL;
+        
+        // Should fail gracefully
+        int result = scan_binary_asn1(data, sizeof(data), &v);
+        check(result != 0);
+        check_null(v);
+    }
 
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BOOLEAN, v->value.sequence.children[1]->type);
-    TEST_ASSERT_TRUE(v->value.sequence.children[1]->value.boolean);
-    
-    asn1_free(v);
-}
+    it("should fail gracefully when parsing truncated data") {
+        uint8_t data[] = {0x02, 0x05};  // INTEGER with length 5 but no data
+        asn1_value_t *v = NULL;
+        
+        // Should fail gracefully
+        int result = scan_binary_asn1(data, sizeof(data), &v);
+        check(result != 0);
+        check_null(v);
+    }
+  }
 
-/* ============================================================================
- * Complex Structure Tests
- * ============================================================================ */
+  describe("Utility Functions") {
+    it("should correctly compare OIDs") {
+        asn1_value_t *oid1 = asn1_create_oid_from_string("1.2.3.4");
+        asn1_value_t *oid2 = asn1_create_oid_from_string("1.2.3.4");
+        asn1_value_t *oid3 = asn1_create_oid_from_string("1.2.3.5");
+        
+        check_int_eq(asn1_compare_oid(&oid1->value.oid, &oid2->value.oid), 0);
+        check(asn1_compare_oid(&oid1->value.oid, &oid3->value.oid) != 0);
+        
+        asn1_free(oid1);
+        asn1_free(oid2);
+        asn1_free(oid3);
+    }
 
-void test_nested_sequence(void) {
-    // Create nested structure: SEQUENCE { SEQUENCE { INTEGER 1 }, BOOLEAN TRUE }
-    asn1_value_t *outer = asn1_create_sequence();
-    asn1_value_t *inner = asn1_create_sequence();
-    
-    asn1_sequence_add_child(inner, asn1_create_integer(1));
-    asn1_sequence_add_child(outer, inner);
-    asn1_sequence_add_child(outer, asn1_create_boolean(1));
-    
-    TEST_ASSERT_EQUAL(2, outer->value.sequence.count);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_SEQUENCE, outer->value.sequence.children[0]->type);
-    TEST_ASSERT_EQUAL(1, outer->value.sequence.children[0]->value.sequence.count);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BOOLEAN, outer->value.sequence.children[1]->type);
-    
-    asn1_free(outer);
-}
-
-void test_mixed_types_sequence(void) {
-    asn1_value_t *seq = asn1_create_sequence();
-    
-    asn1_sequence_add_child(seq, asn1_create_integer(123));
-    asn1_sequence_add_child(seq, asn1_create_boolean(0));
-    asn1_sequence_add_child(seq, asn1_create_null());
-    
-    uint8_t data[] = {0x01, 0x02, 0x03};
-    asn1_sequence_add_child(seq, asn1_create_octet_string(data, 3));
-    
-    TEST_ASSERT_EQUAL(4, seq->value.sequence.count);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_INTEGER, seq->value.sequence.children[0]->type);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_BOOLEAN, seq->value.sequence.children[1]->type);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_NULL, seq->value.sequence.children[2]->type);
-    TEST_ASSERT_EQUAL(ASN1_TYPE_OCTET_STRING, seq->value.sequence.children[3]->type);
-    
-    asn1_free(seq);
-}
-
-/* ============================================================================
- * Error Handling Tests
- * ============================================================================ */
-
-void test_parse_invalid_data(void) {
-    uint8_t data[] = {0xFF, 0xFF};  // Invalid tag
-    asn1_value_t *v = NULL;
-    
-    // Should fail gracefully
-    int result = scan_binary_asn1(data, sizeof(data), &v);
-    TEST_ASSERT_NOT_EQUAL(0, result);
-    TEST_ASSERT_NULL(v);
-}
-
-void test_parse_truncated_data(void) {
-    uint8_t data[] = {0x02, 0x05};  // INTEGER with length 5 but no data
-    asn1_value_t *v = NULL;
-    
-    // Should fail gracefully
-    int result = scan_binary_asn1(data, sizeof(data), &v);
-    TEST_ASSERT_NOT_EQUAL(0, result);
-    TEST_ASSERT_NULL(v);
-}
-
-/* ============================================================================
- * Utility Function Tests
- * ============================================================================ */
-
-void test_oid_comparison(void) {
-    asn1_value_t *oid1 = asn1_create_oid_from_string("1.2.3.4");
-    asn1_value_t *oid2 = asn1_create_oid_from_string("1.2.3.4");
-    asn1_value_t *oid3 = asn1_create_oid_from_string("1.2.3.5");
-    
-    TEST_ASSERT_EQUAL(0, asn1_compare_oid(&oid1->value.oid, &oid2->value.oid));
-    TEST_ASSERT_NOT_EQUAL(0, asn1_compare_oid(&oid1->value.oid, &oid3->value.oid));
-    
-    asn1_free(oid1);
-    asn1_free(oid2);
-    asn1_free(oid3);
-}
-
-void test_oid_to_string(void) {
-    asn1_value_t *oid = asn1_create_oid_from_string("2.5.4.3");
-    char *str = asn1_oid_to_string(&oid->value.oid);
-    
-    TEST_ASSERT_NOT_NULL(str);
-    TEST_ASSERT_EQUAL_STRING("2.5.4.3", str);
-    
-    free(str);
-    asn1_free(oid);
-}
-
-/* ============================================================================
- * Main Test Runner
- * ============================================================================ */
-
-int main(void) {
-    UNITY_BEGIN();
-
-    // Value creation tests
-    RUN_TEST(test_create_boolean);
-    RUN_TEST(test_create_integer);
-    RUN_TEST(test_create_octet_string);
-    RUN_TEST(test_create_null);
-    RUN_TEST(test_create_sequence);
-    RUN_TEST(test_create_set);
-
-    // String type tests
-    RUN_TEST(test_create_bit_string);
-    RUN_TEST(test_create_oid_from_string);
-    RUN_TEST(test_create_printable_string);
-    RUN_TEST(test_create_utf8_string);
-    RUN_TEST(test_create_ia5_string);
-    RUN_TEST(test_create_utc_time);
-
-    // Binary parsing tests
-    RUN_TEST(test_parse_boolean_true);
-    RUN_TEST(test_parse_boolean_false);
-    RUN_TEST(test_parse_integer);
-    RUN_TEST(test_parse_octet_string);
-    RUN_TEST(test_parse_null);
-    RUN_TEST(test_parse_sequence);
-
-    // Complex structure tests
-    RUN_TEST(test_nested_sequence);
-    RUN_TEST(test_mixed_types_sequence);
-
-    // Error handling tests
-    RUN_TEST(test_parse_invalid_data);
-    RUN_TEST(test_parse_truncated_data);
-
-    // Utility function tests
-    RUN_TEST(test_oid_comparison);
-    RUN_TEST(test_oid_to_string);
-
-    return UNITY_END();
+    it("should correctly convert OID structured value to string representation") {
+        asn1_value_t *oid = asn1_create_oid_from_string("2.5.4.3");
+        char *str = asn1_oid_to_string(&oid->value.oid);
+        
+        check_not_null(str);
+        check_str_eq(str, "2.5.4.3");
+        
+        free(str);
+        asn1_free(oid);
+    }
+  }
 }

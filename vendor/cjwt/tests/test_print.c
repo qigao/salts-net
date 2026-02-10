@@ -1,6 +1,6 @@
 /* SPDX-FileCopyrightText: 2021-2022 Comcast Cable Communications Management, LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
-#include "unity.h"
+#include "tinytest.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,11 +8,9 @@
 
 #include "cjwt.h"
 
-void setUp(void) {}
-void tearDown(void) {}
-
-void test_print(void)
-{
+suite("cjwt print") {
+  group("cjwt_print") {
+    it("does not crash") {
     // clang-format off
     cjwt_t jwt = {
         .header.alg = alg_rs512,
@@ -39,11 +37,6 @@ void test_print(void)
     memset(&jwt, 0, sizeof(cjwt_t));
 
     cjwt_print(stdout, &jwt);
-}
-
-int main(void)
-{
-    UNITY_BEGIN();
-    RUN_TEST(test_print);
-    return UNITY_END();
+    }
+  }
 }

@@ -8,8 +8,7 @@
  * Data Flow:
  *   Client <--[transport]--> Master <--[IPC pipe]--> Worker
  *
- * For TCP: Can either pass handle (legacy) or forward data (new mode)
- * For UDP/KCP/TLS/PIPE: Always forward data through master
+ * All transports forward data through the master.
  */
 
 #include "squid.h"
@@ -406,10 +405,14 @@ squid_master_t *squid_master_create(uv_loop_t *loop, const char *worker_executab
     return NULL;
 
   master->loop = loop;
-  master->handshake_token = ' ';
+  if (squid_conn_table_init(master) != 0) {
+    free(master);
+    return NULL;
+  }
 
   size_t len = strlen(worker_executable);
   if (len >= sizeof(master->worker_executable)) {
+    free(master->conn_table);
     free(master);
     return NULL;
   }
@@ -419,6 +422,7 @@ squid_master_t *squid_master_create(uv_loop_t *loop, const char *worker_executab
   master->shm = squid_shm_create();
   if (!master->shm) {
     fprintf(stderr, "squid: failed to create shared memory\n");
+    free(master->conn_table);
     free(master);
     return NULL;
   }
@@ -439,6 +443,8 @@ void squid_master_destroy(squid_master_t *master) {
     master->shm = NULL;
   }
 
+  free(master->conn_table);
+  master->conn_table = NULL;
   free(master);
 }
 

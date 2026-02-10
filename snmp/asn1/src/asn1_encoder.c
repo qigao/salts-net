@@ -80,10 +80,7 @@ static int encode_value(const asn1_value_t *value, uint8_t *buffer,
     if (!value || !buffer || !pos) return -1;
     
     // Encode tag
-    uint8_t constructed = 0;
-    if (value->type == ASN1_TYPE_SEQUENCE || value->type == ASN1_TYPE_SET) {
-        constructed = 1;
-    }
+    uint8_t constructed = value->constructed;
     
     if (encode_tag(value->tag_class, constructed, value->tag_number, 
                    buffer, pos, max_len) < 0) {
@@ -146,25 +143,34 @@ static int encode_value(const asn1_value_t *value, uint8_t *buffer,
             break;
             
         case ASN1_TYPE_SEQUENCE:
-            // Encode all children
-            for (size_t i = 0; i < value->value.sequence.count; i++) {
-                if (encode_value(value->value.sequence.children[i], buffer, 
-                               pos, max_len, use_indefinite) < 0) {
-                    return -1;
-                }
-            }
-            content_len = *pos - content_start;
-            break;
-            
         case ASN1_TYPE_SET:
-            // Encode all children (in DER, SET elements must be sorted)
-            for (size_t i = 0; i < value->value.set.count; i++) {
-                if (encode_value(value->value.set.children[i], buffer, 
-                               pos, max_len, use_indefinite) < 0) {
-                    return -1;
+        case TK_CONTEXT_SPECIFIC:
+            if (constructed) {
+                // Encode all children
+                size_t child_count = (value->type == ASN1_TYPE_SET) ? 
+                                     value->value.set.count : value->value.sequence.count;
+                asn1_value_t **children = (value->type == ASN1_TYPE_SET) ? 
+                                         value->value.set.children : value->value.sequence.children;
+                                         
+                for (size_t i = 0; i < child_count; i++) {
+                    if (encode_value(children[i], buffer, 
+                                   pos, max_len, use_indefinite) < 0) {
+                        return -1;
+                    }
                 }
+                content_len = *pos - content_start;
+            } else if (value->type == TK_CONTEXT_SPECIFIC || value->type == BIN_TK_CONTEXT_SPECIFIC) {
+                // Primitive context tag - encode as octet string
+                if (*pos + value->value.octet_string.length > max_len) return -1;
+                if (value->value.octet_string.length > 0 && value->value.octet_string.data) {
+                    memcpy(buffer + *pos, value->value.octet_string.data, 
+                           value->value.octet_string.length);
+                    *pos += value->value.octet_string.length;
+                }
+                content_len = value->value.octet_string.length;
+            } else {
+                return -1;
             }
-            content_len = *pos - content_start;
             break;
             
         default:
@@ -406,16 +412,19 @@ static size_t calculate_encoded_length(const asn1_value_t *value, int use_indefi
             break;
             
         case ASN1_TYPE_SEQUENCE:
-            for (size_t i = 0; i < value->value.sequence.count; i++) {
-                content_len += calculate_encoded_length(value->value.sequence.children[i], 
-                                                       use_indefinite);
-            }
-            break;
-            
         case ASN1_TYPE_SET:
-            for (size_t i = 0; i < value->value.set.count; i++) {
-                content_len += calculate_encoded_length(value->value.set.children[i], 
-                                                       use_indefinite);
+        case TK_CONTEXT_SPECIFIC:
+            if (value->constructed) {
+                size_t child_count = (value->type == ASN1_TYPE_SET) ? 
+                                     value->value.set.count : value->value.sequence.count;
+                asn1_value_t **children = (value->type == ASN1_TYPE_SET) ? 
+                                         value->value.set.children : value->value.sequence.children;
+                                         
+                for (size_t i = 0; i < child_count; i++) {
+                    content_len += calculate_encoded_length(children[i], use_indefinite);
+                }
+            } else if (value->type == TK_CONTEXT_SPECIFIC) {
+                content_len = value->value.octet_string.length;
             }
             break;
             

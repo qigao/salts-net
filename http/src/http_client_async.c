@@ -1177,25 +1177,40 @@ static void send_multipart_headers(http_async_request_t *request) {
   size_t total_content_length = 0;
   if (!use_chunked) {
     http_async_multipart_part_t *part = form->parts;
+    char header[512];
     while (part) {
-      total_content_length += 2 + strlen(form->boundary) + 2;
-      total_content_length += 38 + strlen(part->name);
-      if (part->is_file && part->filename) {
-        total_content_length += 13 + strlen(part->filename);
-        if (part->content_type)
-          total_content_length += 16 + strlen(part->content_type) + 2;
+      if (part->is_file) {
+        int header_len = stbsp_snprintf(
+            header, sizeof(header),
+            "--%s\r\nContent-Disposition: form-data; name=\"%s\"; "
+            "filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
+            form->boundary, part->name, part->filename, part->content_type);
+        if (header_len > 0)
+          total_content_length += (size_t)header_len;
+      } else {
+        int header_len = stbsp_snprintf(
+            header, sizeof(header),
+            "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n",
+            form->boundary, part->name);
+        if (header_len > 0)
+          total_content_length += (size_t)header_len;
       }
-      total_content_length += 2;
+
       if (part->is_stream && part->stream_ctx)
-        total_content_length += part->stream_ctx->file_size;
+        total_content_length += (size_t)part->stream_ctx->file_size;
       else if (part->data && part->data_len > 0)
         total_content_length += part->data_len;
       else if (part->value)
         total_content_length += strlen(part->value);
-      total_content_length += 2;
+
+      total_content_length += 2; /* trailing \r\n */
       part = part->next;
     }
-    total_content_length += 2 + strlen(form->boundary) + 4;
+
+    int final_len =
+        stbsp_snprintf(header, sizeof(header), "--%s--\r\n", form->boundary);
+    if (final_len > 0)
+      total_content_length += (size_t)final_len;
   }
 
   const char *uri_path = turbo_uri_path(request->uri);

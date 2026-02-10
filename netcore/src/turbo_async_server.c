@@ -2413,7 +2413,11 @@ static void emit_error_message(async_server_t *server, int status, const char *c
   } else
     buffer[0] = '\0';
 
-  TLOG_ERROR("Async server error: {:s} (status: {:d})", buffer[0] ? buffer : "unknown", status);
+  if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET || status == UV_EAGAIN) {
+    TLOG_DEBUG("Async server error: {:s} (status: {:d})", buffer[0] ? buffer : "unknown", status);
+  } else {
+    TLOG_ERROR("Async server error: {:s} (status: {:d})", buffer[0] ? buffer : "unknown", status);
+  }
 
   emit_event(server, ASYNC_SERVER_EVENT_ERROR, NULL, NULL, 0, status, buffer[0] ? buffer : NULL,
              NULL, ASYNC_SERVER_EVENT_FLAG_NONE);
@@ -2447,7 +2451,11 @@ static void emit_uv_error(async_server_t *server, int status, const char *contex
     stbsp_snprintf(buffer, (int)sizeof(buffer), FMT_UV_ERR, msg_padded, status);
   }
 
-  TLOG_ERROR("Async server UV error: {:s}", buffer);
+  if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET || status == UV_EAGAIN) {
+    TLOG_DEBUG("Async server UV error: {:s}", buffer);
+  } else {
+    TLOG_ERROR("Async server UV error: {:s}", buffer);
+  }
 
   emit_event(server, ASYNC_SERVER_EVENT_ERROR, NULL, NULL, 0, status, buffer, NULL,
              ASYNC_SERVER_EVENT_FLAG_NONE);

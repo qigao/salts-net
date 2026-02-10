@@ -14,16 +14,3 @@ foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
     
     set_target_properties(${EXAMPLE_NAME} PROPERTIES FOLDER turbo_parser/parser/toon/examples)
 endforeach()
-
-# Copy .toon files to the target directory
-file(GLOB TOON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.toon")
-add_custom_target(copy_toon_examples ALL
-    COMMENT "Copying .toon examples"
-)
-foreach(TOON_FILE ${TOON_FILES})
-    add_custom_command(TARGET copy_toon_examples POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${TOON_FILE}"
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/"
-    )
-endforeach()

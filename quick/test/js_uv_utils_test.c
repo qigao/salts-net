@@ -1,128 +1,154 @@
-#include "unity.h"
 #include "test_uv_fixture.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-static JSTurboTestEnv env;
-
-void setUp(void) {
-    js_turbo_test_env_init(&env);
-}
-
-void tearDown(void) {
-    js_turbo_test_env_cleanup(&env);
-}
-
-static const char *get_string_global(const char *name) {
-    JSValue prop = js_turbo_test_global_prop(&env, name);
-    TEST_ASSERT_TRUE(JS_IsString(prop));
+static const char *get_string_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+    JSValue prop = js_uv_test_global_prop(env, name);
+    check_true(JS_IsString(prop));
     size_t len = 0;
-    const char *str = JS_ToCStringLen(env.ctx, &len, prop);
-    TEST_ASSERT_NOT_NULL(str);
+    const char *str = JS_ToCStringLen(env->ctx, &len, prop);
+    check_not_null(str);
     char *copy = (char *)malloc(len + 1);
-    TEST_ASSERT_NOT_NULL(copy);
-    memcpy(copy, str, len);
-    copy[len] = '\0';
-    JS_FreeCString(env.ctx, str);
-    JS_FreeValue(env.ctx, prop);
+    check_not_null(copy);
+    if (copy) {
+        memcpy(copy, str, len);
+        copy[len] = '\0';
+    }
+    JS_FreeCString(env->ctx, str);
+    JS_FreeValue(env->ctx, prop);
     return copy;
 }
 
-static int get_bool_global(const char *name) {
-    JSValue prop = js_turbo_test_global_prop(&env, name);
-    int result = JS_ToBool(env.ctx, prop);
-    JS_FreeValue(env.ctx, prop);
+static int get_bool_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+    JSValue prop = js_uv_test_global_prop(env, name);
+    int result = JS_ToBool(env->ctx, prop);
+    JS_FreeValue(env->ctx, prop);
     return result;
 }
 
-void test_base64_encode_string(void) {
-    js_turbo_test_eval(&env,
-        "var encoded = turbo.base64Encode('Hello, World!');\n");
+spec("js_uv_utils") {
+    it("should base64 encode string") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-    const char *result = get_string_global("encoded");
-    TEST_ASSERT_EQUAL_STRING("SGVsbG8sIFdvcmxkIQ==", result);
-    free((void *)result);
-}
+        js_uv_test_eval(&env,
+            "var encoded = turbo.base64Encode('Hello, World!');\n");
 
-void test_base64_encode_empty_string(void) {
-    js_turbo_test_eval(&env,
-        "var encoded = turbo.base64Encode('');\n");
+        const char *result = get_string_global(__bdd_config__, &env, "encoded");
+        if (result) {
+            check_str_eq("SGVsbG8sIFdvcmxkIQ==", result);
+            free((void *)result);
+        }
+        
+        js_uv_test_env_cleanup(&env);
+    }
 
-    const char *result = get_string_global("encoded");
-    TEST_ASSERT_EQUAL_STRING("", result);
-    free((void *)result);
-}
+    it("should base64 encode empty string") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-void test_base64_decode_to_string(void) {
-    js_turbo_test_eval(&env,
-        "var decoded = turbo.base64Decode('SGVsbG8sIFdvcmxkIQ==', 'string');\n");
+        js_uv_test_eval(&env,
+            "var encoded = turbo.base64Encode('');\n");
 
-    const char *result = get_string_global("decoded");
-    TEST_ASSERT_EQUAL_STRING("Hello, World!", result);
-    free((void *)result);
-}
+        const char *result = get_string_global(__bdd_config__, &env, "encoded");
+        if (result) {
+            check_str_eq("", result);
+            free((void *)result);
+        }
+        
+        js_uv_test_env_cleanup(&env);
+    }
 
-void test_base64_decode_to_arraybuffer(void) {
-    js_turbo_test_eval(&env,
-        "const decoded = turbo.base64Decode('SGVsbG8=');\n"
-        "var isArrayBuffer = decoded instanceof ArrayBuffer;\n"
-        "var length = decoded.byteLength;\n"
-        "const view = new Uint8Array(decoded);\n"
-        "var firstByte = view[0];\n");
+    it("should base64 decode to string") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-    TEST_ASSERT_TRUE(get_bool_global("isArrayBuffer"));
+        js_uv_test_eval(&env,
+            "var decoded = turbo.base64Decode('SGVsbG8sIFdvcmxkIQ==', 'string');\n");
 
-    JSValue len = js_turbo_test_global_prop(&env, "length");
-    int32_t length = 0;
-    JS_ToInt32(env.ctx, &length, len);
-    JS_FreeValue(env.ctx, len);
-    TEST_ASSERT_EQUAL_INT(5, length);
+        const char *result = get_string_global(__bdd_config__, &env, "decoded");
+        if (result) {
+            check_str_eq("Hello, World!", result);
+            free((void *)result);
+        }
+        
+        js_uv_test_env_cleanup(&env);
+    }
 
-    JSValue fb = js_turbo_test_global_prop(&env, "firstByte");
-    int32_t firstByte = 0;
-    JS_ToInt32(env.ctx, &firstByte, fb);
-    JS_FreeValue(env.ctx, fb);
-    TEST_ASSERT_EQUAL_INT('H', firstByte);
-}
+    it("should base64 decode to arraybuffer") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-void test_base64_roundtrip(void) {
-    js_turbo_test_eval(&env,
-        "const original = 'The quick brown fox jumps over the lazy dog';\n"
-        "const encoded = turbo.base64Encode(original);\n"
-        "const decoded = turbo.base64Decode(encoded, 'string');\n"
-        "var match = (original === decoded);\n");
+        js_uv_test_eval(&env,
+            "const decoded = turbo.base64Decode('SGVsbG8=');\n"
+            "var isArrayBuffer = decoded instanceof ArrayBuffer;\n"
+            "var length = decoded.byteLength;\n"
+            "const view = new Uint8Array(decoded);\n"
+            "var firstByte = view[0];\n");
 
-    TEST_ASSERT_TRUE(get_bool_global("match"));
-}
+        check_int_ne(0, get_bool_global(__bdd_config__, &env, "isArrayBuffer"));
 
-void test_base64_encode_binary_data(void) {
-    js_turbo_test_eval(&env,
-        "const data = new Uint8Array([0x00, 0x01, 0x02, 0xFF, 0xFE]);\n"
-        "var encoded = turbo.base64Encode(data.buffer);\n");
+        JSValue len = js_uv_test_global_prop(&env, "length");
+        int32_t length = 0;
+        JS_ToInt32(env.ctx, &length, len);
+        JS_FreeValue(env.ctx, len);
+        check_int_eq(5, length);
 
-    const char *result = get_string_global("encoded");
-    TEST_ASSERT_EQUAL_STRING("AAEC//4=", result);
-    free((void *)result);
-}
+        JSValue fb = js_uv_test_global_prop(&env, "firstByte");
+        int32_t firstByte = 0;
+        JS_ToInt32(env.ctx, &firstByte, fb);
+        JS_FreeValue(env.ctx, fb);
+        check_int_eq('H', firstByte);
+        
+        js_uv_test_env_cleanup(&env);
+    }
 
-void test_base64_special_characters(void) {
-    js_turbo_test_eval(&env,
-        "var encoded = turbo.base64Encode('Hello\\nWorld\\t!');\n");
+    it("should roundtrip base64 encode/decode") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-    const char *result = get_string_global("encoded");
-    TEST_ASSERT_EQUAL_STRING("SGVsbG8KV29ybGQJIQ==", result);
-    free((void *)result);
-}
+        js_uv_test_eval(&env,
+            "const original = 'The quick brown fox jumps over the lazy dog';\n"
+            "const encoded = turbo.base64Encode(original);\n"
+            "const decoded = turbo.base64Decode(encoded, 'string');\n"
+            "var match = (original === decoded);\n");
 
-int main(void) {
-    UNITY_BEGIN();
-    RUN_TEST(test_base64_encode_string);
-    RUN_TEST(test_base64_encode_empty_string);
-    RUN_TEST(test_base64_decode_to_string);
-    RUN_TEST(test_base64_decode_to_arraybuffer);
-    RUN_TEST(test_base64_roundtrip);
-    RUN_TEST(test_base64_encode_binary_data);
-    RUN_TEST(test_base64_special_characters);
-    return UNITY_END();
+        check_int_ne(0, get_bool_global(__bdd_config__, &env, "match"));
+        
+        js_uv_test_env_cleanup(&env);
+    }
+
+    it("should base64 encode binary data") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
+
+        js_uv_test_eval(&env,
+            "const data = new Uint8Array([0x00, 0x01, 0x02, 0xFF, 0xFE]);\n"
+            "var encoded = turbo.base64Encode(data.buffer);\n");
+
+        const char *result = get_string_global(__bdd_config__, &env, "encoded");
+        if (result) {
+            check_str_eq("AAEC//4=", result);
+            free((void *)result);
+        }
+        
+        js_uv_test_env_cleanup(&env);
+    }
+
+    it("should base64 encode special characters") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
+
+        js_uv_test_eval(&env,
+            "var encoded = turbo.base64Encode('Hello\\nWorld\\t!');\n");
+
+        const char *result = get_string_global(__bdd_config__, &env, "encoded");
+        if (result) {
+            check_str_eq("SGVsbG8KV29ybGQJIQ==", result);
+            free((void *)result);
+        }
+        
+        js_uv_test_env_cleanup(&env);
+    }
 }

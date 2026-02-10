@@ -2,25 +2,12 @@
 #include <string.h>
 
 #include "turbo_async_client.h"
-#include "unity.h"
+#include "tinytest.h"
 
 /* Test fixtures */
 static async_client_t *client = NULL;
 static int event_count = 0;
 
-void setUp(void) {
-  event_count = 0;
-  client = NULL;
-}
-
-void tearDown(void) {
-  if (client) {
-    async_client_destroy(client);
-    client = NULL;
-  }
-}
-
-/* Simple event callback for tests */
 static void test_event_cb(async_client_t *c, const async_client_event_t *event, void *user_data) {
   (void)c;
   (void)event;
@@ -28,260 +15,208 @@ static void test_event_cb(async_client_t *c, const async_client_event_t *event, 
   event_count++;
 }
 
-/* String conversion tests */
-void test_status_to_string(void) {
-  TEST_ASSERT_EQUAL_STRING("ok", async_client_status_to_string(ASYNC_CLIENT_STATUS_OK));
-  TEST_ASSERT_EQUAL_STRING("invalid parameter", async_client_status_to_string(ASYNC_CLIENT_STATUS_INVALID_PARAM));
-  TEST_ASSERT_EQUAL_STRING("allocation failure", async_client_status_to_string(ASYNC_CLIENT_STATUS_ALLOC_FAILED));
-  TEST_ASSERT_EQUAL_STRING("client not ready", async_client_status_to_string(ASYNC_CLIENT_STATUS_NOT_READY));
-  TEST_ASSERT_EQUAL_STRING("client shutting down", async_client_status_to_string(ASYNC_CLIENT_STATUS_SHUTTING_DOWN));
-  TEST_ASSERT_EQUAL_STRING("I/O error", async_client_status_to_string(ASYNC_CLIENT_STATUS_IO_ERROR));
-  TEST_ASSERT_EQUAL_STRING("transport error", async_client_status_to_string(ASYNC_CLIENT_STATUS_TRANSPORT_ERROR));
-  TEST_ASSERT_EQUAL_STRING("internal error", async_client_status_to_string(ASYNC_CLIENT_STATUS_INTERNAL_ERROR));
-  TEST_ASSERT_EQUAL_STRING("unknown error", async_client_status_to_string(999));
-}
+spec("async_client_api") {
+  before_each() {
+    event_count = 0;
+    client = NULL;
+  }
 
-/* test_transport_to_string - REMOVED: transport types no longer exposed in public API */
+  after_each() {
+    if (client) {
+      async_client_destroy(client);
+      client = NULL;
+    }
+  }
 
-/* Client creation tests */
-void test_create_null_callback(void) {
-  async_client_t *c = async_client_create(NULL, NULL);
-  TEST_ASSERT_NULL(c);
-}
+  describe("String conversion") {
+    it("should convert status to string") {
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_OK), "ok");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_INVALID_PARAM), "invalid parameter");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_ALLOC_FAILED), "allocation failure");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_NOT_READY), "client not ready");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_SHUTTING_DOWN), "client shutting down");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_IO_ERROR), "I/O error");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_TRANSPORT_ERROR), "transport error");
+      check_str_eq(async_client_status_to_string(ASYNC_CLIENT_STATUS_INTERNAL_ERROR), "internal error");
+      check_str_eq(async_client_status_to_string(999), "unknown error");
+    }
+  }
 
-void test_create(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
-}
+  describe("Client creation") {
+    it("should return NULL for NULL callback") {
+      async_client_t *c = async_client_create(NULL, NULL);
+      check_null(c);
+    }
 
-void test_create_with_user_data(void) {
-  int user_data = 123;
-  client = async_client_create(test_event_cb, &user_data);
-  TEST_ASSERT_NOT_NULL(client);
-}
+    it("should create a client") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+    }
 
-void test_destroy_null(void) {
-  /* Should not crash */
-  async_client_destroy(NULL);
-}
+    it("should create a client with user data") {
+      int user_data = 123;
+      client = async_client_create(test_event_cb, &user_data);
+      check_not_null(client);
+    }
 
-/* State query tests */
-void test_get_state_null(void) {
-  async_client_state_t state = async_client_get_state(NULL);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATE_DISCONNECTED, state);
-}
+    it("should handle destroying NULL") {
+      /* Should not crash */
+      async_client_destroy(NULL);
+    }
+  }
 
-void test_get_state_disconnected(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
+  describe("State queries") {
+    it("should return disconnected for NULL client") {
+      async_client_state_t state = async_client_get_state(NULL);
+      check_int_eq(state, ASYNC_CLIENT_STATE_DISCONNECTED);
+    }
 
-  async_client_state_t state = async_client_get_state(client);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATE_DISCONNECTED, state);
-}
+    it("should return disconnected for new client") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      async_client_state_t state = async_client_get_state(client);
+      check_int_eq(state, ASYNC_CLIENT_STATE_DISCONNECTED);
+    }
 
-void test_is_connected_null(void) {
-  int connected = async_client_is_connected(NULL);
-  TEST_ASSERT_EQUAL(0, connected);
-}
+    it("should return 0 for is_connected with NULL client") {
+      int connected = async_client_is_connected(NULL);
+      check_int_eq(connected, 0);
+    }
 
-void test_is_connected_disconnected(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
+    it("should return 0 for is_connected with new client") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      int connected = async_client_is_connected(client);
+      check_int_eq(connected, 0);
+    }
+  }
 
-  int connected = async_client_is_connected(client);
-  TEST_ASSERT_EQUAL(0, connected);
-}
+  describe("Operations with NULL client") {
+    it("should fail to connect") {
+      async_client_status_t status = async_client_connect(NULL, "tcp://localhost:8080");
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+    }
 
-/* Operation with NULL client tests */
-void test_connect_null_client(void) {
-  async_client_status_t status = async_client_connect(NULL, "tcp://localhost:8080");
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-}
+    it("should fail to send") {
+      const char *data = "test";
+      async_client_status_t status = async_client_send(NULL, data, 4);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+    }
 
+    it("should fail to sendv") {
+      async_client_iovec_t iov[1];
+      iov[0].data = "test";
+      iov[0].len = 4;
+      async_client_status_t status = async_client_sendv(NULL, iov, 1);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+    }
 
-void test_send_null_client(void) {
-  const char *data = "test";
-  async_client_status_t status = async_client_send(NULL, data, 4);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-}
+    it("should handle closing NULL") {
+      /* Should not crash */
+      async_client_close(NULL);
+    }
+  }
 
+  describe("Timeout configuration") {
+    it("should handle NULL client for connect timeout") {
+      /* Should not crash */
+      async_client_set_connect_timeout(NULL, 5000);
+    }
 
+    it("should set connect timeout") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      /* Should not crash, no return value to test */
+      async_client_set_connect_timeout(client, 5000);
+    }
 
-void test_sendv_null_client(void) {
-  async_client_iovec_t iov[1];
-  iov[0].data = "test";
-  iov[0].len = 4;
+    it("should handle NULL client for operation timeout") {
+      /* Should not crash */
+      async_client_set_operation_timeout(NULL, 5000);
+    }
 
-  async_client_status_t status = async_client_sendv(NULL, iov, 1);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-}
+    it("should set operation timeout") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      /* Should not crash, no return value to test */
+      async_client_set_operation_timeout(client, 5000);
+    }
+  }
 
+  describe("Statistics") {
+    it("should handle NULL client for getting stats") {
+      async_client_stats_t stats;
+      /* Should not crash */
+      async_client_get_stats(NULL, &stats);
+    }
 
+    it("should provide initial stats as zero") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      async_client_stats_t stats;
+      async_client_get_stats(client, &stats);
+      check_int_eq(stats.bytes_sent, 0);
+      check_int_eq(stats.bytes_received, 0);
+      check_int_eq(stats.messages_sent, 0);
+      check_int_eq(stats.messages_received, 0);
+      check_int_eq(stats.connection_attempts, 0);
+      check_int_eq(stats.connection_failures, 0);
+      check_int_eq(stats.send_errors, 0);
+      check_int_eq(stats.receive_errors, 0);
+      check_int_eq(stats.scatter_gather_sends, 0);
+      check_int_eq(stats.total_iov_buffers_sent, 0);
+    }
 
-void test_close_null(void) {
-  /* Should not crash */
-  async_client_close(NULL);
-}
+    it("should handle NULL client for resetting stats") {
+      /* Should not crash */
+      async_client_reset_stats(NULL);
+    }
 
-/* Timeout configuration tests */
-void test_set_connect_timeout_null(void) {
-  /* Should not crash */
-  async_client_set_connect_timeout(NULL, 5000);
-}
+    it("should reset stats") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      /* Should not crash, no way to verify without connecting */
+      async_client_reset_stats(client);
+      async_client_stats_t stats;
+      async_client_get_stats(client, &stats);
+      check_int_eq(stats.bytes_sent, 0);
+    }
+  }
 
-void test_set_connect_timeout(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
+  describe("Multicast configuration") {
+    it("should handle NULL client for multicast TTL") {
+      async_client_status_t status = async_client_set_multicast_ttl(NULL, 32);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+    }
 
-  /* Should not crash, no return value to test */
-  async_client_set_connect_timeout(client, 5000);
-}
+    it("should return error for multicast TTL on wrong transport") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      async_client_connect(client, "tcp://127.0.0.1:8080");
+      async_client_status_t status = async_client_set_multicast_ttl(client, 32);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_TRANSPORT_ERROR);
+    }
 
-void test_set_operation_timeout_null(void) {
-  /* Should not crash */
-  async_client_set_operation_timeout(NULL, 5000);
-}
+    it("should handle invalid multicast TTL values") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      async_client_connect(client, "udp://127.0.0.1:8080");
+      async_client_status_t status = async_client_set_multicast_ttl(client, 0);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+      status = async_client_set_multicast_ttl(client, 256);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+    }
 
-void test_set_operation_timeout(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
+    it("should handle NULL client for multicast loop") {
+      async_client_status_t status = async_client_set_multicast_loop(NULL, 1);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_INVALID_PARAM);
+    }
 
-  /* Should not crash, no return value to test */
-  async_client_set_operation_timeout(client, 5000);
-}
-
-/* Statistics tests */
-void test_get_stats_null_client(void) {
-  async_client_stats_t stats;
-  /* Should not crash */
-  async_client_get_stats(NULL, &stats);
-}
-
-
-void test_get_stats_initial(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
-
-  async_client_stats_t stats;
-  async_client_get_stats(client, &stats);
-
-  /* Initial stats should be zero */
-  TEST_ASSERT_EQUAL(0, stats.bytes_sent);
-  TEST_ASSERT_EQUAL(0, stats.bytes_received);
-  TEST_ASSERT_EQUAL(0, stats.messages_sent);
-  TEST_ASSERT_EQUAL(0, stats.messages_received);
-  TEST_ASSERT_EQUAL(0, stats.connection_attempts);
-  TEST_ASSERT_EQUAL(0, stats.connection_failures);
-  TEST_ASSERT_EQUAL(0, stats.send_errors);
-  TEST_ASSERT_EQUAL(0, stats.receive_errors);
-  TEST_ASSERT_EQUAL(0, stats.scatter_gather_sends);
-  TEST_ASSERT_EQUAL(0, stats.total_iov_buffers_sent);
-}
-
-void test_reset_stats_null(void) {
-  /* Should not crash */
-  async_client_reset_stats(NULL);
-}
-
-void test_reset_stats(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
-
-  /* Should not crash, no way to verify without connecting */
-  async_client_reset_stats(client);
-
-  async_client_stats_t stats;
-  async_client_get_stats(client, &stats);
-  TEST_ASSERT_EQUAL(0, stats.bytes_sent);
-}
-
-/* Multicast configuration tests (UDP only) */
-void test_set_multicast_ttl_null(void) {
-  async_client_status_t status = async_client_set_multicast_ttl(NULL, 32);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-}
-
-void test_set_multicast_ttl_wrong_transport(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
-  
-  /* Connect as TCP */
-  async_client_connect(client, "tcp://127.0.0.1:8080");
-
-  /* Try setting multicast TTL (UDP only) */
-  async_client_status_t status = async_client_set_multicast_ttl(client, 32);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_TRANSPORT_ERROR, status);
-}
-
-void test_set_multicast_ttl_invalid_value(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
-  async_client_connect(client, "udp://127.0.0.1:8080"); // Connect as UDP to allow multicast options
-
-  /* TTL out of range (1-255) */
-  async_client_status_t status = async_client_set_multicast_ttl(client, 0);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-
-  status = async_client_set_multicast_ttl(client, 256);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-}
-
-void test_set_multicast_loop_null(void) {
-  async_client_status_t status = async_client_set_multicast_loop(NULL, 1);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_INVALID_PARAM, status);
-}
-
-void test_set_multicast_loop_wrong_transport(void) {
-  client = async_client_create(test_event_cb, NULL);
-  TEST_ASSERT_NOT_NULL(client);
-
-  async_client_status_t status = async_client_set_multicast_loop(client, 1);
-  TEST_ASSERT_EQUAL(ASYNC_CLIENT_STATUS_TRANSPORT_ERROR, status);
-}
-
-int main(void) {
-  UNITY_BEGIN();
-
-  /* String conversion */
-  RUN_TEST(test_status_to_string);
-  /* test_transport_to_string - REMOVED */
-
-  /* Client creation/destruction */
-  RUN_TEST(test_create_null_callback);
-  RUN_TEST(test_create);
-  RUN_TEST(test_create_with_user_data);
-  RUN_TEST(test_destroy_null);
-
-  /* State queries */
-  RUN_TEST(test_get_state_null);
-  RUN_TEST(test_get_state_disconnected);
-  RUN_TEST(test_is_connected_null);
-  RUN_TEST(test_is_connected_disconnected);
-
-  /* Operations with NULL/invalid parameters */
-  RUN_TEST(test_connect_null_client);
-  RUN_TEST(test_send_null_client);
-  RUN_TEST(test_sendv_null_client);
-  RUN_TEST(test_close_null);
-
-  /* Timeout configuration */
-  RUN_TEST(test_set_connect_timeout_null);
-  RUN_TEST(test_set_connect_timeout);
-  RUN_TEST(test_set_operation_timeout_null);
-  RUN_TEST(test_set_operation_timeout);
-
-  /* Statistics */
-  RUN_TEST(test_get_stats_null_client);
-  RUN_TEST(test_get_stats_initial);
-  RUN_TEST(test_reset_stats_null);
-  RUN_TEST(test_reset_stats);
-
-  /* Multicast configuration */
-  RUN_TEST(test_set_multicast_ttl_null);
-  RUN_TEST(test_set_multicast_ttl_wrong_transport);
-  RUN_TEST(test_set_multicast_ttl_invalid_value);
-  RUN_TEST(test_set_multicast_loop_null);
-  RUN_TEST(test_set_multicast_loop_wrong_transport);
-
-  return UNITY_END();
+    it("should return error for multicast loop on wrong transport") {
+      client = async_client_create(test_event_cb, NULL);
+      check_not_null(client);
+      async_client_status_t status = async_client_set_multicast_loop(client, 1);
+      check_int_eq(status, ASYNC_CLIENT_STATUS_TRANSPORT_ERROR);
+    }
+  }
 }

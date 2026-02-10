@@ -20,18 +20,15 @@
 #include "turbo_async_client.h"
 #include "turbo_async_server.h"
 #include "turbo_tproxy.h"
-#include "client_common.h"
-#include "stats.h"
-
 #define TPROXY_BUFFER_SIZE (64 * 1024)
 #define TPROXY_DEFAULT_MAX_CONNECTIONS 1024
 #define TPROXY_SOCKS5_VERSION 0x05
 #define TPROXY_SOCKS5_CMD_CONNECT 0x01
-#define TPROXY_SOCKS5_CMD_UDP_ASSOCIATE 0x03
 #define TPROXY_SOCKS5_ADDR_TYPE_IPV4 0x01
 #define TPROXY_SOCKS5_ADDR_TYPE_DOMAIN 0x03
 #define TPROXY_SOCKS5_ADDR_TYPE_IPV6 0x04
-#define TPROXY_SOCKS5_REPLY_SUCCESS 0x00
+#define TPROXY_SOCKS5_MIN_REQUEST 10
+#define TPROXY_SOCKS5_MAX_REQUEST 512
 
 typedef enum {
   TPROXY_CONN_STATE_READING_SOCKS5,
@@ -49,13 +46,12 @@ typedef struct tproxy_connection_s {
   tproxy_server_t *server;
   async_server_connection_t *server_conn;
   tproxy_conn_state_t state;
-  char *buffer;
-  size_t buffer_size;
-  size_t buffer_pos;
   char target_host[256];
   int target_port;
   char client_host[64];
   int client_port;
+  unsigned char socks5_buf[TPROXY_SOCKS5_MAX_REQUEST];
+  size_t socks5_len;
   tproxy_upstream_t *upstream;
   uint64_t bytes_received;
   uint64_t bytes_sent;
@@ -83,7 +79,13 @@ static void on_upstream_event(async_client_t *client, const async_client_event_t
                                void *user_data);
 static void close_connection(tproxy_server_t *server, tproxy_connection_t *conn);
 static void free_connection(tproxy_connection_t *conn);
+static tproxy_connection_t *create_connection(tproxy_server_t *server,
+                                              async_server_connection_t *server_conn);
+static void remove_connection(tproxy_server_t *server, tproxy_connection_t *conn);
 static int parse_socks5_request(tproxy_connection_t *conn, const char *data, size_t len);
+static void emit_event(tproxy_server_t *server, tproxy_event_type_t type,
+                       tproxy_connection_t *conn, int status,
+                       const char *message, const char *data, size_t length);
 static int connect_upstream(tproxy_connection_t *conn);
 static void forward_data(tproxy_connection_t *conn, const char *data, size_t len);
 
@@ -189,8 +191,9 @@ void tproxy_server_stop(tproxy_server_t *server) {
   /* Close all connections */
   tproxy_connection_t *conn = server->connections;
   while (conn) {
+    tproxy_connection_t *next = conn->next;
     close_connection(server, conn);
-    conn = conn->next;
+    conn = next;
   }
 
   /* Stop server - this will trigger on_server_event with CLOSED */
@@ -290,50 +293,21 @@ void tproxy_server_get_stats(tproxy_server_t *server,
 static void on_server_event(async_server_t *srv, const async_server_event_t *event,
                             void *user_data) {
   tproxy_server_t *server = (tproxy_server_t *)user_data;
+  (void)srv;
 
   switch (event->type) {
     case ASYNC_SERVER_EVENT_LISTENING: {
-      tproxy_event_t ev = {
-        .type = TPROXY_EVENT_LISTENING,
-        .status = 0
-      };
-      server->callback(server, &ev, server->user_data);
+      emit_event(server, TPROXY_EVENT_LISTENING, NULL, 0, NULL, NULL, 0);
       break;
     }
 
     case ASYNC_SERVER_EVENT_CONNECTION: {
-      tproxy_connection_t *conn = (tproxy_connection_t *)calloc(1, sizeof(tproxy_connection_t));
-      if (!conn) {
+      tproxy_connection_t *conn = create_connection(server, event->connection);
+      if (!conn)
         return;
-      }
-
-      conn->server = server;
-      conn->server_conn = event->connection;
-      conn->buffer_size = server->config.buffer_size;
-      conn->buffer = (char *)malloc(conn->buffer_size);
-      if (!conn->buffer) {
-        free(conn);
-        return;
-      }
-
-      conn->state = server->config.enable_socks5 ? TPROXY_CONN_STATE_READING_SOCKS5 : TPROXY_CONN_STATE_CONNECTING;
-
-      /* Add to connection list */
-      conn->next = server->connections;
-      server->connections = conn;
-      server->active_connections++;
-      server->total_connections++;
-
-      /* Get client address */
-      /* Note: In a real implementation, we would use getsockname/getpeername */
 
       /* Send event */
-      tproxy_event_t ev = {
-        .type = TPROXY_EVENT_CONNECTION,
-        .connection = conn,
-        .status = 0
-      };
-      server->callback(server, &ev, server->user_data);
+      emit_event(server, TPROXY_EVENT_CONNECTION, conn, 0, NULL, NULL, 0);
 
       /* If not using SOCKS5, connect immediately */
       if (!server->config.enable_socks5) {
@@ -343,11 +317,7 @@ static void on_server_event(async_server_t *srv, const async_server_event_t *eve
     }
 
     case ASYNC_SERVER_EVENT_DATA: {
-      /* Find connection by searching the list */
-      tproxy_connection_t *conn = server->connections;
-      while (conn && conn->server_conn != event->connection) {
-        conn = conn->next;
-      }
+      tproxy_connection_t *conn = (tproxy_connection_t *)async_server_connection_get_user_data(event->connection);
       if (!conn) return;
 
       size_t len = event->length;
@@ -356,9 +326,12 @@ static void on_server_event(async_server_t *srv, const async_server_event_t *eve
 
       if (conn->state == TPROXY_CONN_STATE_READING_SOCKS5) {
         /* Parse SOCKS5 request */
-        if (parse_socks5_request(conn, event->data, len) == 0) {
+        int rc = parse_socks5_request(conn, event->data, len);
+        if (rc == 0) {
           conn->state = TPROXY_CONN_STATE_CONNECTING;
           connect_upstream(conn);
+        } else if (rc < 0) {
+          close_connection(server, conn);
         }
       } else if (conn->state == TPROXY_CONN_STATE_CONNECTED) {
         /* Forward data to upstream */
@@ -370,11 +343,7 @@ static void on_server_event(async_server_t *srv, const async_server_event_t *eve
     }
 
     case ASYNC_SERVER_EVENT_DISCONNECTION: {
-      /* Find connection by searching the list */
-      tproxy_connection_t *conn = server->connections;
-      while (conn && conn->server_conn != event->connection) {
-        conn = conn->next;
-      }
+      tproxy_connection_t *conn = (tproxy_connection_t *)async_server_connection_get_user_data(event->connection);
       if (conn) {
         close_connection(server, conn);
       }
@@ -382,21 +351,12 @@ static void on_server_event(async_server_t *srv, const async_server_event_t *eve
     }
 
     case ASYNC_SERVER_EVENT_ERROR: {
-      tproxy_event_t ev = {
-        .type = TPROXY_EVENT_ERROR,
-        .status = event->status,
-        .message = "Server error"
-      };
-      server->callback(server, &ev, server->user_data);
+      emit_event(server, TPROXY_EVENT_ERROR, NULL, event->status, "Server error", NULL, 0);
       break;
     }
 
     case ASYNC_SERVER_EVENT_CLOSED: {
-      tproxy_event_t ev = {
-        .type = TPROXY_EVENT_CLOSED,
-        .status = 0
-      };
-      server->callback(server, &ev, server->user_data);
+      emit_event(server, TPROXY_EVENT_CLOSED, NULL, 0, NULL, NULL, 0);
       break;
     }
   }
@@ -406,6 +366,7 @@ static void on_server_event(async_server_t *srv, const async_server_event_t *eve
 static void on_upstream_event(async_client_t *client, const async_client_event_t *event,
                               void *user_data) {
   tproxy_connection_t *conn = (tproxy_connection_t *)user_data;
+  (void)client;
   if (!conn) return;
 
   switch (event->type) {
@@ -427,12 +388,7 @@ static void on_upstream_event(async_client_t *client, const async_client_event_t
       }
 
       /* Send event */
-      tproxy_event_t ev = {
-        .type = TPROXY_EVENT_UPSTREAM_CONNECTED,
-        .connection = conn,
-        .status = 0
-      };
-      conn->server->callback(conn->server, &ev, conn->server->user_data);
+      emit_event(conn->server, TPROXY_EVENT_UPSTREAM_CONNECTED, conn, 0, NULL, NULL, 0);
       break;
     }
 
@@ -467,14 +423,35 @@ static void close_connection(tproxy_server_t *server, tproxy_connection_t *conn)
   }
 
   /* Send disconnect event */
-  tproxy_event_t ev = {
-    .type = TPROXY_EVENT_DISCONNECT,
-    .connection = conn,
-    .status = 0
-  };
-  server->callback(server, &ev, server->user_data);
+  emit_event(server, TPROXY_EVENT_DISCONNECT, conn, 0, NULL, NULL, 0);
+  remove_connection(server, conn);
 
-  /* Remove from list */
+  server->active_connections--;
+  free_connection(conn);
+}
+
+static tproxy_connection_t *create_connection(tproxy_server_t *server,
+                                              async_server_connection_t *server_conn) {
+  tproxy_connection_t *conn = (tproxy_connection_t *)calloc(1, sizeof(*conn));
+  if (!conn)
+    return NULL;
+
+  conn->server = server;
+  conn->server_conn = server_conn;
+  conn->state =
+      server->config.enable_socks5 ? TPROXY_CONN_STATE_READING_SOCKS5 : TPROXY_CONN_STATE_CONNECTING;
+
+  conn->next = server->connections;
+  server->connections = conn;
+  server->active_connections++;
+  server->total_connections++;
+
+  async_server_connection_set_user_data(server_conn, conn);
+
+  return conn;
+}
+
+static void remove_connection(tproxy_server_t *server, tproxy_connection_t *conn) {
   if (server->connections == conn) {
     server->connections = conn->next;
   } else {
@@ -486,77 +463,78 @@ static void close_connection(tproxy_server_t *server, tproxy_connection_t *conn)
       prev->next = conn->next;
     }
   }
-
-  server->active_connections--;
-  free_connection(conn);
+  async_server_connection_set_user_data(conn->server_conn, NULL);
 }
 
 /* Free connection */
 static void free_connection(tproxy_connection_t *conn) {
   if (!conn) return;
 
-  if (conn->buffer) {
-    free(conn->buffer);
-  }
-
   free(conn);
 }
 
 /* Parse SOCKS5 request */
 static int parse_socks5_request(tproxy_connection_t *conn, const char *data, size_t len) {
-  if (len < 10) {
-    /* Need more data */
+  if (!conn || !data || len == 0)
     return -1;
-  }
 
-  /* Check version */
-  if ((unsigned char)data[0] != TPROXY_SOCKS5_VERSION) {
+  if (conn->socks5_len + len > sizeof(conn->socks5_buf))
     return -1;
-  }
 
-  /* Get command */
-  unsigned char cmd = (unsigned char)data[1];
-  if (cmd != TPROXY_SOCKS5_CMD_CONNECT) {
+  memcpy(conn->socks5_buf + conn->socks5_len, data, len);
+  conn->socks5_len += len;
+
+  if (conn->socks5_len < 4)
+    return 1;
+
+  if (conn->socks5_buf[0] != TPROXY_SOCKS5_VERSION)
     return -1;
-  }
 
-  /* Get address type */
-  unsigned char addr_type = (unsigned char)data[3];
+  if (conn->socks5_buf[1] != TPROXY_SOCKS5_CMD_CONNECT)
+    return -1;
 
+  unsigned char addr_type = conn->socks5_buf[3];
   size_t offset = 4;
-  char *host = conn->target_host;
+  size_t need = 0;
 
   if (addr_type == TPROXY_SOCKS5_ADDR_TYPE_IPV4) {
-    /* IPv4 */
-    if (len < 10) return -1;
+    need = TPROXY_SOCKS5_MIN_REQUEST;
+    if (conn->socks5_len < need)
+      return 1;
     struct in_addr addr;
-    memcpy(&addr, data + offset, 4);
-    inet_ntop(AF_INET, &addr, host, sizeof(conn->target_host));
+    memcpy(&addr, conn->socks5_buf + offset, 4);
+    inet_ntop(AF_INET, &addr, conn->target_host, sizeof(conn->target_host));
     offset += 4;
   } else if (addr_type == TPROXY_SOCKS5_ADDR_TYPE_IPV6) {
-    /* IPv6 */
-    if (len < 22) return -1;
+    need = 22;
+    if (conn->socks5_len < need)
+      return 1;
     struct in6_addr addr;
-    memcpy(&addr, data + offset, 16);
-    inet_ntop(AF_INET6, &addr, host, sizeof(conn->target_host));
+    memcpy(&addr, conn->socks5_buf + offset, 16);
+    inet_ntop(AF_INET6, &addr, conn->target_host, sizeof(conn->target_host));
     offset += 16;
   } else if (addr_type == TPROXY_SOCKS5_ADDR_TYPE_DOMAIN) {
-    /* Domain name */
-    if (len < 5) return -1;
-    unsigned char domain_len = (unsigned char)data[offset];
+    if (conn->socks5_len < 5)
+      return 1;
+    unsigned char domain_len = conn->socks5_buf[offset];
     offset++;
-    if (offset + domain_len + 2 > len) return -1;
-    memcpy(host, data + offset, domain_len);
-    host[domain_len] = '\0';
+    need = 4 + 1 + domain_len + 2;
+    if (need > sizeof(conn->socks5_buf))
+      return -1;
+    if (conn->socks5_len < need)
+      return 1;
+    memcpy(conn->target_host, conn->socks5_buf + offset, domain_len);
+    conn->target_host[domain_len] = '\0';
     offset += domain_len;
   } else {
     return -1;
   }
 
-  /* Get port */
-  if (offset + 2 > len) return -1;
-  conn->target_port = ((unsigned char)data[offset] << 8) | (unsigned char)data[offset + 1];
+  if (offset + 2 > conn->socks5_len)
+    return 1;
 
+  conn->target_port = ((unsigned char)conn->socks5_buf[offset] << 8) |
+                      (unsigned char)conn->socks5_buf[offset + 1];
   return 0;
 }
 
@@ -593,4 +571,21 @@ static void forward_data(tproxy_connection_t *conn, const char *data, size_t len
   async_server_send(conn->server->server, conn->server_conn, data, len);
   conn->bytes_sent += len;
   conn->server->total_bytes_sent += len;
+}
+
+static void emit_event(tproxy_server_t *server, tproxy_event_type_t type,
+                       tproxy_connection_t *conn, int status,
+                       const char *message, const char *data, size_t length) {
+  if (!server || !server->callback)
+    return;
+
+  tproxy_event_t ev = {
+    .type = type,
+    .connection = conn,
+    .data = data,
+    .length = length,
+    .status = status,
+    .message = message
+  };
+  server->callback(server, &ev, server->user_data);
 }

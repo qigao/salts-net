@@ -66,7 +66,7 @@ int main(void) {
   /* Receive response */
   char *response = NULL;
   size_t len = 0;
-  status = sync_client_receive(client, \u0026response, \u0026len);
+  status = sync_client_receive(client, &response, &len);
   if (status != SYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, "Receive failed (%s): %s\\n", 
             sync_client_status_to_string(status),

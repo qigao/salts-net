@@ -78,7 +78,7 @@ void cxml_list_insert_at_index(cxml_list *list, void *item, int index) {
     // prev is GUARANTEED to not be NULL because all 0 index insertions
     // are handled in the condition above, and since prev can only be NULL,
     // when inserting at index 0.
-    prev->next = node;
+    if (prev) prev->next = node;
     node->next = current;
     list->len++;
 }
@@ -206,7 +206,7 @@ static struct _cxml_list__node* _cxml_list__remove(cxml_list* list, bool at_last
                 prev = curr;
                 curr = curr->next;
             }
-            prev->next = NULL;
+            if (prev) prev->next = NULL;
             list->tail = prev;
             _node = curr;
         }
@@ -285,7 +285,7 @@ struct _cxml_list__node* _cxml_list_remove_at_pos(cxml_list* list, int index){
             current = current->next;
         }
         // x, y, cur, z, m
-        prev->next = current->next;
+        if (prev) prev->next = current->next;
         list->len--;
         return current;
     }

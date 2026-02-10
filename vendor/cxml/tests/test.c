@@ -5,6 +5,8 @@
 
 #include "cxfixture.h"
 
+struct _cxml_g_runner _g_runner;
+
 /**Test suites**/
 
 /* cxlist.c test suite */

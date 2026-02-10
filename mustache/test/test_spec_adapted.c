@@ -1,12 +1,9 @@
 /**
  * @file test_spec_adapted.c
- * @brief Mustache specification tests adapted for TurboNet JSON parser
- * 
- * This file contains comprehensive tests based on the official mustache specification,
- * adapted to use TurboNet's json_parser instead of the original json.h library.
+ * @brief Mustache specification tests adapted for TurboNet JSON parser using TinyTest
  */
 
-#include "acutest.h"
+#include "tinytest.h"
 #include "mustache.h"
 #include "mustache_json.h"
 #include "json_parser.h"
@@ -29,7 +26,7 @@ static void
 parse_error(int err_code, const char* msg, unsigned line, unsigned col, void* data)
 {
     BUFFER* buf = (BUFFER*) data;
-    buf->n += sprintf(buf->data, "Error: %u:%u: %s\n", line, col, msg);
+    buf->n += snprintf(buf->data + buf->n, sizeof(buf->data) - buf->n, "Error: %u:%u: %s\n", line, col, msg);
 }
 
 static const MUSTACHE_PARSER parser = {
@@ -44,9 +41,10 @@ static int
 out(const char* output, size_t n, void* data)
 {
     BUFFER* buf = (BUFFER*) data;
-
-    memcpy(buf->data + buf->n, output, n);
-    buf->n += n;
+    if (buf->n + n < sizeof(buf->data)) {
+        memcpy(buf->data + buf->n, output, n);
+        buf->n += n;
+    }
     return 0;
 }
 
@@ -88,22 +86,35 @@ typedef struct PROVIDER_DATA {
 } PROVIDER_DATA;
 
 static int
+json_is_falsey(json_value_t* value)
+{
+    if (!value) return 1;
+
+    switch(json_type(value)) {
+    case JSON_NULL:
+        return 1;
+    case JSON_BOOL:
+        return json_bool(value) ? 0 : 1;
+    case JSON_STRING:
+        return json_string_len(value) == 0 ? 1 : 0;
+    case JSON_ARRAY:
+        return json_array_size(value) == 0 ? 1 : 0;
+    default:
+        return 0;
+    }
+}
+
+static int
 dump(void* node, int (*out_fn)(const char*, size_t, void*), void* renderer_data, void* data)
 {
     json_value_t* value = (json_value_t*) node;
 
     switch(json_type(value)) {
     case JSON_NULL:
-        /* no output. */
         return 0;
 
     case JSON_BOOL:
-        if (json_bool(value)) {
-            return out_fn("<<TRUE>>", strlen("<<TRUE>>"), renderer_data);
-        } else {
-            /* false - no output */
-            return 0;
-        }
+        return json_bool(value) ? out_fn("<<TRUE>>", strlen("<<TRUE>>"), renderer_data) : 0;
 
     case JSON_ARRAY:
         return out_fn("<<ARRAY>>", strlen("<<ARRAY>>"), renderer_data);
@@ -118,7 +129,6 @@ dump(void* node, int (*out_fn)(const char*, size_t, void*), void* renderer_data,
         double num = json_number(value);
         int len;
         
-        /* Check if it's an integer */
         if (num == (long long)num) {
             len = snprintf(buffer, sizeof(buffer), "%lld", (long long)num);
         } else {
@@ -150,7 +160,6 @@ get_named(void* node, const char* name, size_t size, void* data)
     if(json_type(value) != JSON_OBJECT)
         return NULL;
 
-    /* Create null-terminated key string */
     char* key_buffer = malloc(size + 1);
     if (!key_buffer) return NULL;
     
@@ -160,8 +169,7 @@ get_named(void* node, const char* name, size_t size, void* data)
     json_value_t* result = json_object_get(value, key_buffer);
     free(key_buffer);
     
-    if (!result || json_is_null(result) || 
-        (json_type(result) == JSON_BOOL && !json_bool(result))) {
+    if (!result || json_is_falsey(result)) {
         return NULL;
     }
     
@@ -173,8 +181,7 @@ get_indexed(void* node, unsigned index, void* data)
 {
     json_value_t* value = (json_value_t*) node;
 
-    if (json_is_null(value) || 
-        (json_type(value) == JSON_BOOL && !json_bool(value))) {
+    if (json_is_falsey(value)) {
         return NULL;
     }
 
@@ -207,25 +214,25 @@ static const MUSTACHE_DATAPROVIDER provider = {
     get_root,
     get_named,
     get_indexed,
-    get_partial
+    get_partial,
+    NULL,
+    NULL
 };
 
-/*********************************
- *** Main body for test units. ***
- *********************************/
-
 static void
-run(const char* desc, const char* templ, const char* data, const char* partials, const char* expected)
+run_case(__bdd_config_type__ *__bdd_config__, const char* desc, const char* templ, const char* data, const char* partials, const char* expected)
 {
     json_value_t* json_root;
     MUSTACHE_TEMPLATE* t;
     BUFFER buf = { 0 };
 
     json_root = json_parse(data, strlen(data));
-    if(!TEST_CHECK(json_root != NULL))
-        return;
+    check_not_null(json_root);
+    if (!json_root) return;
 
     t = mustache_compile(templ, strlen(templ), &parser, (void*) &buf, 0);
+    check_not_null(t);
+    
     if(t != NULL) {
         PROVIDER_DATA provider_data = { 0 };
         int i;
@@ -236,21 +243,23 @@ run(const char* desc, const char* templ, const char* data, const char* partials,
             json_value_t* json_partials;
 
             json_partials = json_parse(partials, strlen(partials));
-            if(!TEST_CHECK(json_partials != NULL))
-                return;
-            if(!TEST_CHECK(json_type(json_partials) == JSON_OBJECT))
-                return;
-
-            for(i = 0; i < json_object_size(json_partials); i++) {
-                const char* key = json_object_key(json_partials, i);
-                json_value_t* val = json_object_value(json_partials, i);
-                
-                strcpy(provider_data.partial_dict[i].name, key);
-                provider_data.partial_dict[i].templ = mustache_compile(
-                            json_string(val),
-                            json_string_len(val),
-                            NULL, NULL, 0);
-                TEST_CHECK(provider_data.partial_dict[i].templ != NULL);
+            check_not_null(json_partials);
+            
+            if (json_partials) {
+                check_int_eq(json_type(json_partials), JSON_OBJECT);
+                if (json_type(json_partials) == JSON_OBJECT) {
+                    for(i = 0; i < json_object_size(json_partials); i++) {
+                        const char* key = json_object_key(json_partials, i);
+                        json_value_t* val = json_object_value(json_partials, i);
+                        
+                        strncpy(provider_data.partial_dict[i].name, key, sizeof(provider_data.partial_dict[i].name)-1);
+                        provider_data.partial_dict[i].templ = mustache_compile(
+                                    json_string(val),
+                                    json_string_len(val),
+                                    NULL, NULL, 0);
+                        check_not_null(provider_data.partial_dict[i].templ);
+                    }
+                }
             }
         }
 
@@ -262,128 +271,92 @@ run(const char* desc, const char* templ, const char* data, const char* partials,
         }
     }
 
-    if(!TEST_CHECK_(t != NULL &&
-                    buf.n == strlen(expected) &&
-                    memcmp(expected, buf.data, buf.n) == 0, "%s", desc))
-    {
-        TEST_MSG("Template:");
-        TEST_MSG("---------");
-        TEST_MSG("%s", templ);
-        TEST_MSG("\nData:");
-        TEST_MSG("---------");
-        TEST_MSG("%s", data);
-        if(partials != NULL) {
-            TEST_MSG("\nPartials:");
-            TEST_MSG("---------");
-            TEST_MSG("%s", partials);
-        }
-        TEST_MSG("\nExpected:");
-        TEST_MSG("---------");
-        TEST_MSG("%s", expected);
-        TEST_MSG("\nProduced:");
-        TEST_MSG("---------");
-        TEST_MSG("%.*s", (int)buf.n, buf.data);
-    }
+    buf.data[buf.n] = '\0';
+    check_str_eq(buf.data, expected);
 
     json_free(json_root);
     mustache_release(t);
 }
 
-/***********************
- *** Sample test cases ***
- ***********************/
+spec("mustache spec adapted") {
 
-static void
-test_comments_1(void)
-{
-    run(
-        "comment blocks should be removed from the template",
-        "12345{{! Comment Block! }}67890",
-        "{}",
-        NULL,
-        "1234567890"
-    );
+    describe("comments") {
+        it("should remove comment blocks") {
+            run_case(__bdd_config__,
+                "comment blocks should be removed from the template",
+                "12345{{! Comment Block! }}67890",
+                "{}",
+                NULL,
+                "1234567890"
+            );
+        }
+    }
+
+    describe("interpolation") {
+        it("should render mustache-free templates as-is") {
+            run_case(__bdd_config__,
+                "mustache-free templates should render as-is",
+                "Hello from {Mustache}!\n",
+                "{}",
+                NULL,
+                "Hello from {Mustache}!\n"
+            );
+        }
+
+        it("should interpolate unadorned tags") {
+            run_case(__bdd_config__,
+                "unadorned tags should interpolate content into the template",
+                "Hello, {{subject}}!\n",
+                "{\"subject\": \"world\"}",
+                NULL,
+                "Hello, world!\n"
+            );
+        }
+    }
+
+    describe("sections") {
+        it("should render truthy sections") {
+            run_case(__bdd_config__,
+                "truthy sections should have their contents rendered",
+                "\"{{#boolean}}This should be rendered.{{/boolean}}\"",
+                "{\"boolean\": true}",
+                NULL,
+                "\"This should be rendered.\""
+            );
+        }
+
+        it("should omit falsey sections") {
+            run_case(__bdd_config__,
+                "falsey sections should have their contents omitted",
+                "\"{{#boolean}}This should not be rendered.{{/boolean}}\"",
+                "{\"boolean\": false}",
+                NULL,
+                "\"\""
+            );
+        }
+    }
+
+    describe("inverted sections") {
+        it("should render falsey sections") {
+            run_case(__bdd_config__,
+                "falsey sections should have their contents rendered",
+                "\"{{^boolean}}This should be rendered.{{/boolean}}\"",
+                "{\"boolean\": false}",
+                NULL,
+                "\"This should be rendered.\""
+            );
+        }
+    }
+
+    describe("partials") {
+        it("should expand to the named partial") {
+            run_case(__bdd_config__,
+                "the greater-than operator should expand to the named partial",
+                "\"{{>text}}\"",
+                "{}",
+                "{\"text\": \"from partial\"}",
+                "\"from partial\""
+            );
+        }
+    }
 }
-
-static void
-test_interpolation_1(void)
-{
-    run(
-        "mustache-free templates should render as-is",
-        "Hello from {Mustache}!\n",
-        "{}",
-        NULL,
-        "Hello from {Mustache}!\n"
-    );
-}
-
-static void
-test_interpolation_2(void)
-{
-    run(
-        "unadorned tags should interpolate content into the template",
-        "Hello, {{subject}}!\n",
-        "{\"subject\": \"world\"}",
-        NULL,
-        "Hello, world!\n"
-    );
-}
-
-static void
-test_sections_1(void)
-{
-    run(
-        "truthy sections should have their contents rendered",
-        "\"{{#boolean}}This should be rendered.{{/boolean}}\"",
-        "{\"boolean\": true}",
-        NULL,
-        "\"This should be rendered.\""
-    );
-}
-
-static void
-test_sections_2(void)
-{
-    run(
-        "falsey sections should have their contents omitted",
-        "\"{{#boolean}}This should not be rendered.{{/boolean}}\"",
-        "{\"boolean\": false}",
-        NULL,
-        "\"\""
-    );
-}
-
-static void
-test_inverted_1(void)
-{
-    run(
-        "falsey sections should have their contents rendered",
-        "\"{{^boolean}}This should be rendered.{{/boolean}}\"",
-        "{\"boolean\": false}",
-        NULL,
-        "\"This should be rendered.\""
-    );
-}
-
-static void
-test_partials_1(void)
-{
-    run(
-        "the greater-than operator should expand to the named partial",
-        "\"{{>text}}\"",
-        "{}",
-        "{\"text\": \"from partial\"}",
-        "\"from partial\""
-    );
-}
-
-TEST_LIST = {
-    { "comments-1", test_comments_1 },
-    { "interpolation-1", test_interpolation_1 },
-    { "interpolation-2", test_interpolation_2 },
-    { "sections-1", test_sections_1 },
-    { "sections-2", test_sections_2 },
-    { "inverted-1", test_inverted_1 },
-    { "partials-1", test_partials_1 },
-    { 0 }
-};

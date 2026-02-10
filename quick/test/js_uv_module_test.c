@@ -1,56 +1,49 @@
-#include "unity.h"
-
 #include "test_uv_fixture.h"
 
-static JSTurboTestEnv env;
-
-void setUp(void) {
-    js_turbo_test_env_init(&env);
+static void assert_function(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, JSValue value) {
+    check_false(JS_IsException(value));
+    check_true(JS_IsFunction(env->ctx, value));
 }
 
-void tearDown(void) {
-    js_turbo_test_env_cleanup(&env);
-}
+spec("js_uv_module") {
+    it("should verify turbo global object present") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-static void assert_function(JSValue value) {
-    TEST_ASSERT_FALSE(JS_IsException(value));
-    TEST_ASSERT_TRUE(JS_IsFunction(env.ctx, value));
-}
+        JSValue turbo_obj = js_uv_test_global_prop(&env, "turbo");
+        check_true(JS_IsObject(turbo_obj));
 
-void test_turbo_global_object_present(void) {
-    JSValue turbo_obj = js_turbo_test_global_prop(&env, "turbo");
-    TEST_ASSERT_TRUE(JS_IsObject(turbo_obj));
+        JSValue timers = JS_GetPropertyStr(env.ctx, turbo_obj, "setTimeout");
+        assert_function(__bdd_config__, &env, timers);
+        JS_FreeValue(env.ctx, timers);
 
-    JSValue timers = JS_GetPropertyStr(env.ctx, turbo_obj, "setTimeout");
-    assert_function(timers);
-    JS_FreeValue(env.ctx, timers);
+        JSValue fs = JS_GetPropertyStr(env.ctx, turbo_obj, "fs");
+        check_true(JS_IsObject(fs));
+        JS_FreeValue(env.ctx, fs);
 
-    JSValue fs = JS_GetPropertyStr(env.ctx, turbo_obj, "fs");
-    TEST_ASSERT_TRUE(JS_IsObject(fs));
-    JS_FreeValue(env.ctx, fs);
+        JSValue dns = JS_GetPropertyStr(env.ctx, turbo_obj, "dns");
+        check_true(JS_IsObject(dns));
+        JS_FreeValue(env.ctx, dns);
 
-    JSValue dns = JS_GetPropertyStr(env.ctx, turbo_obj, "dns");
-    TEST_ASSERT_TRUE(JS_IsObject(dns));
-    JS_FreeValue(env.ctx, dns);
+        JSValue http = JS_GetPropertyStr(env.ctx, turbo_obj, "http");
+        check_true(JS_IsObject(http));
+        JS_FreeValue(env.ctx, http);
 
-    JSValue http = JS_GetPropertyStr(env.ctx, turbo_obj, "http");
-    TEST_ASSERT_TRUE(JS_IsObject(http));
-    JS_FreeValue(env.ctx, http);
+        JS_FreeValue(env.ctx, turbo_obj);
+        
+        js_uv_test_env_cleanup(&env);
+    }
 
-    JS_FreeValue(env.ctx, turbo_obj);
-}
+    it("should verify legacy uv compatibility") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-void test_legacy_uv_compatibility(void) {
-    // Test that old uv API still works for backward compatibility
-    JSValue uv_obj = js_turbo_test_global_prop(&env, "uv");
-    // Should be undefined since we changed to turbo namespace
-    TEST_ASSERT_TRUE(JS_IsUndefined(uv_obj));
-    JS_FreeValue(env.ctx, uv_obj);
-}
-
-int main(void) {
-    UNITY_BEGIN();
-    RUN_TEST(test_turbo_global_object_present);
-    RUN_TEST(test_legacy_uv_compatibility);
-    return UNITY_END();
+        // Test that old uv API still works for backward compatibility
+        JSValue uv_obj = js_uv_test_global_prop(&env, "uv");
+        // Should be undefined since we changed to turbo namespace
+        check_true(JS_IsUndefined(uv_obj));
+        JS_FreeValue(env.ctx, uv_obj);
+        
+        js_uv_test_env_cleanup(&env);
+    }
 }

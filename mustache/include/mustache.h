@@ -9,6 +9,8 @@ extern "C" {
 #endif
 
 typedef struct MUSTACHE_TEMPLATE MUSTACHE_TEMPLATE;
+typedef struct turbo_arena_s turbo_arena_t;
+typedef struct turbo_arena_buffer_s turbo_arena_buffer_t;
 
 #define MUSTACHE_ERR_SUCCESS (0)
 #define MUSTACHE_ERR_DANGLINGTAGOPENER (1)
@@ -123,6 +125,14 @@ typedef struct MUSTACHE_DATAPROVIDER {
    */
   MUSTACHE_TEMPLATE *(*get_partial)(const char * /*name*/, size_t /*size*/,
                                     void * /*provider_data*/);
+
+  /* Optional lambda support. If is_lambda returns non-zero, call_lambda is used. 
+   * call_lambda should allocate *out_text with malloc; caller will free().
+   * For interpolation lambdas, text is empty. For section lambdas, text is the raw section content.
+   */
+  int (*is_lambda)(void * /*node*/, void * /*provider_data*/);
+  int (*call_lambda)(void * /*node*/, const char * /*text*/, size_t /*text_len*/,
+                     char ** /*out_text*/, size_t * /*out_len*/, void * /*provider_data*/);
 } MUSTACHE_DATAPROVIDER;
 
 /**
@@ -174,13 +184,11 @@ CXX_C_API int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDER
                      void *provider_data);
 
 /**
- * Simple string renderer that appends to a buffer
+ * Simple string renderer that appends to a buffer (uses turbo_string internally)
  */
 typedef struct MUSTACHE_STRING_RENDERER {
   MUSTACHE_RENDERER base;
-  char *buffer;
-  size_t size;
-  size_t capacity;
+  char *buffer;  /* Internal turbo_string - do not access directly */
 } MUSTACHE_STRING_RENDERER;
 
 /**
@@ -202,6 +210,38 @@ CXX_C_API char *mustache_string_renderer_get(MUSTACHE_STRING_RENDERER *renderer)
  * @param renderer The renderer to free
  */
 CXX_C_API void mustache_string_renderer_free(MUSTACHE_STRING_RENDERER *renderer);
+
+/**
+ * Arena-backed string renderer
+ */
+typedef struct MUSTACHE_STRING_RENDERER_ARENA {
+  MUSTACHE_RENDERER base;
+  turbo_arena_buffer_t *buffer;
+} MUSTACHE_STRING_RENDERER_ARENA;
+
+/**
+ * Initialize an arena-backed string renderer
+ * @param renderer The renderer to initialize
+ * @param arena Arena to allocate from
+ * @param min_capacity Minimum buffer size
+ * @return 0 on success, -1 on error
+ */
+CXX_C_API int mustache_string_renderer_init_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer,
+                                                  turbo_arena_t *arena,
+                                                  size_t min_capacity);
+
+/**
+ * Get the rendered string (arena-owned)
+ * @param renderer The arena string renderer
+ * @return Pointer to arena buffer data or NULL on error
+ */
+CXX_C_API char *mustache_string_renderer_get_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer);
+
+/**
+ * Free arena string renderer resources
+ * @param renderer The renderer to free
+ */
+CXX_C_API void mustache_string_renderer_free_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer);
 
 #ifdef __cplusplus
 }

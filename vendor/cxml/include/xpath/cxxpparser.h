@@ -49,7 +49,7 @@ typedef struct {
     struct _cxml_xp_context_state context;
 } _cxml_xp_parser;
 
-_cxml_xp_parser _xpath_parser;
+extern _cxml_xp_parser _xpath_parser;
 
 
 void _cxml_xpath_parser_free();

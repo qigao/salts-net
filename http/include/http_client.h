@@ -42,11 +42,15 @@ typedef struct {
     uint64_t connections_reused;
 } http_client_stats_t;
 
+// Internal header list (parsed from response headers)
+typedef struct http_header_entry_s http_header_entry_t;
+
 // HTTP response
 typedef struct {
     int status_code;           // HTTP status code (200, 404, etc.)
     char* headers;             // Response headers (null-terminated)
     size_t headers_len;        // Length of headers
+    http_header_entry_t* headers_list; // Parsed headers (internal)
     char* body;                // Response body (null-terminated if text)
     size_t body_len;           // Length of body
     char* error;               // Error message if request failed

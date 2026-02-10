@@ -132,6 +132,10 @@ void check_tls_versions() {
     printf("========================================\n");
     
     /* Check TLS version support */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     struct {
         const char *name;
         const SSL_METHOD *(*method)(void);
@@ -142,6 +146,9 @@ void check_tls_versions() {
         {"TLS 1.3", TLS_method},  /* TLS 1.3 uses generic method */
         {NULL, NULL}
     };
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     
     for (int i = 0; tls_versions[i].name; i++) {
         SSL_CTX *ctx = SSL_CTX_new(tls_versions[i].method());

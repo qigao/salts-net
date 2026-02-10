@@ -4,261 +4,8 @@
  */
 
 #include "json_parser.h"
-#include "unity.h"
+#include "tinytest.h"
 #include <string.h>
-
-
-void setUp(void) {}
-void tearDown(void) {}
-
-void test_parse_null(void) {
-  json_value_t *v = json_parse("null", 4);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_NULL, json_type(v));
-  TEST_ASSERT_TRUE(json_is_null(v));
-  json_free(v);
-}
-
-void test_parse_true(void) {
-  json_value_t *v = json_parse("true", 4);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_BOOL, json_type(v));
-  TEST_ASSERT_TRUE(json_bool(v));
-  json_free(v);
-}
-
-void test_parse_false(void) {
-  json_value_t *v = json_parse("false", 5);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_BOOL, json_type(v));
-  TEST_ASSERT_FALSE(json_bool(v));
-  json_free(v);
-}
-
-void test_parse_integer(void) {
-  json_value_t *v = json_parse("42", 2);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_NUMBER, json_type(v));
-  TEST_ASSERT_EQUAL_DOUBLE(42.0, json_number(v));
-  json_free(v);
-}
-
-void test_parse_negative(void) {
-  json_value_t *v = json_parse("-123", 4);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_NUMBER, json_type(v));
-  TEST_ASSERT_EQUAL_DOUBLE(-123.0, json_number(v));
-  json_free(v);
-}
-
-void test_parse_float(void) {
-  json_value_t *v = json_parse("3.14159", 7);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_NUMBER, json_type(v));
-  TEST_ASSERT_DOUBLE_WITHIN(0.00001, 3.14159, json_number(v));
-  json_free(v);
-}
-
-void test_parse_exponent(void) {
-  json_value_t *v = json_parse("1.5e10", 6);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_NUMBER, json_type(v));
-  TEST_ASSERT_EQUAL_DOUBLE(1.5e10, json_number(v));
-  json_free(v);
-}
-
-void test_parse_string(void) {
-  json_value_t *v = json_parse("\"hello\"", 7);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_STRING, json_type(v));
-  TEST_ASSERT_EQUAL_STRING("hello", json_string(v));
-  TEST_ASSERT_EQUAL(5, json_string_len(v));
-  json_free(v);
-}
-
-void test_parse_string_escape(void) {
-  json_value_t *v = json_parse("\"hello\\nworld\"", 14);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_STRING, json_type(v));
-  TEST_ASSERT_EQUAL_STRING("hello\nworld", json_string(v));
-  json_free(v);
-}
-
-void test_parse_string_unicode(void) {
-  json_value_t *v = json_parse("\"\\u0041\\u0042\"", 14);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_STRING, json_type(v));
-  TEST_ASSERT_EQUAL_STRING("AB", json_string(v));
-  json_free(v);
-}
-
-void test_parse_empty_array(void) {
-  json_value_t *v = json_parse("[]", 2);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_ARRAY, json_type(v));
-  TEST_ASSERT_EQUAL(0, json_array_size(v));
-  json_free(v);
-}
-
-void test_parse_array(void) {
-  json_value_t *v = json_parse("[1, 2, 3]", 9);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_ARRAY, json_type(v));
-  TEST_ASSERT_EQUAL(3, json_array_size(v));
-  TEST_ASSERT_EQUAL_DOUBLE(1.0, json_number(json_array_get(v, 0)));
-  TEST_ASSERT_EQUAL_DOUBLE(2.0, json_number(json_array_get(v, 1)));
-  TEST_ASSERT_EQUAL_DOUBLE(3.0, json_number(json_array_get(v, 2)));
-  json_free(v);
-}
-
-void test_parse_nested_array(void) {
-  json_value_t *v = json_parse("[[1, 2], [3, 4]]", 16);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_ARRAY, json_type(v));
-  TEST_ASSERT_EQUAL(2, json_array_size(v));
-
-  json_value_t *inner = json_array_get(v, 0);
-  TEST_ASSERT_EQUAL(JSON_ARRAY, json_type(inner));
-  TEST_ASSERT_EQUAL(2, json_array_size(inner));
-
-  json_free(v);
-}
-
-void test_parse_empty_object(void) {
-  json_value_t *v = json_parse("{}", 2);
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_OBJECT, json_type(v));
-  TEST_ASSERT_EQUAL(0, json_object_size(v));
-  json_free(v);
-}
-
-void test_parse_object(void) {
-  const char *json = "{\"name\": \"test\", \"value\": 42}";
-  json_value_t *v = json_parse(json, strlen(json));
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(JSON_OBJECT, json_type(v));
-  TEST_ASSERT_EQUAL(2, json_object_size(v));
-
-  TEST_ASSERT_EQUAL_STRING("test", json_get_string(v, "name"));
-  TEST_ASSERT_EQUAL(42, json_get_int(v, "value", 0));
-
-  json_free(v);
-}
-
-void test_parse_nested_object(void) {
-  const char *json = "{\"outer\": {\"inner\": 123}}";
-  json_value_t *v = json_parse(json, strlen(json));
-  TEST_ASSERT_NOT_NULL(v);
-
-  json_value_t *outer = json_object_get(v, "outer");
-  TEST_ASSERT_NOT_NULL(outer);
-  TEST_ASSERT_EQUAL(JSON_OBJECT, json_type(outer));
-
-  TEST_ASSERT_EQUAL(123, json_get_int(outer, "inner", 0));
-
-  json_free(v);
-}
-
-void test_parse_mixed(void) {
-  const char *json = "{"
-                     "  \"string\": \"hello\","
-                     "  \"number\": 3.14,"
-                     "  \"bool\": true,"
-                     "  \"null\": null,"
-                     "  \"array\": [1, 2, 3]"
-                     "}";
-
-  json_value_t *v = json_parse(json, strlen(json));
-  TEST_ASSERT_NOT_NULL(v);
-
-  TEST_ASSERT_EQUAL_STRING("hello", json_get_string(v, "string"));
-  TEST_ASSERT_DOUBLE_WITHIN(0.01, 3.14, json_get_double(v, "number", 0));
-  TEST_ASSERT_TRUE(json_get_bool(v, "bool", false));
-  TEST_ASSERT_TRUE(json_is_null(json_object_get(v, "null")));
-
-  json_value_t *arr = json_object_get(v, "array");
-  TEST_ASSERT_EQUAL(3, json_array_size(arr));
-
-  json_free(v);
-}
-
-void test_parse_proxy_config(void) {
-  const char *json = "{"
-                     "  \"listeners\": ["
-                     "    {\"port\": 1883, \"transport\": \"tcp\"},"
-                     "    {\"port\": 8883, \"transport\": \"tls\"}"
-                     "  ],"
-                     "  \"upstreams\": ["
-                     "    {\"host\": \"10.0.0.1\", \"port\": 1883, \"weight\": 3}"
-                     "  ],"
-                     "  \"settings\": {"
-                     "    \"max_clients\": 10000,"
-                     "    \"connect_timeout_ms\": 5000"
-                     "  }"
-                     "}";
-
-  json_value_t *v = json_parse(json, strlen(json));
-  TEST_ASSERT_NOT_NULL(v);
-
-  json_value_t *listeners = json_object_get(v, "listeners");
-  TEST_ASSERT_EQUAL(2, json_array_size(listeners));
-
-  json_value_t *l0 = json_array_get(listeners, 0);
-  TEST_ASSERT_EQUAL(1883, json_get_int(l0, "port", 0));
-  TEST_ASSERT_EQUAL_STRING("tcp", json_get_string(l0, "transport"));
-
-  json_value_t *upstreams = json_object_get(v, "upstreams");
-  TEST_ASSERT_EQUAL(1, json_array_size(upstreams));
-
-  json_value_t *u0 = json_array_get(upstreams, 0);
-  TEST_ASSERT_EQUAL_STRING("10.0.0.1", json_get_string(u0, "host"));
-  TEST_ASSERT_EQUAL(3, json_get_int(u0, "weight", 0));
-
-  json_value_t *settings = json_object_get(v, "settings");
-  TEST_ASSERT_EQUAL(10000, json_get_int(settings, "max_clients", 0));
-
-  json_free(v);
-}
-
-void test_parse_whitespace(void) {
-  const char *json = "  \n\t { \"key\" : \"value\" } \n";
-  json_value_t *v = json_parse(json, strlen(json));
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL_STRING("value", json_get_string(v, "key"));
-  json_free(v);
-}
-
-void test_parse_error_invalid(void) {
-  json_value_t *v = json_parse("invalid", 7);
-  TEST_ASSERT_NULL(v);
-  TEST_ASSERT_NOT_NULL(json_get_error());
-}
-
-void test_parse_error_unclosed_brace(void) {
-  json_value_t *v = json_parse("{\"key\": 1", 9);
-  TEST_ASSERT_NULL(v);
-}
-
-void test_object_iteration(void) {
-  const char *json = "{\"a\": 1, \"b\": 2, \"c\": 3}";
-  json_value_t *v = json_parse(json, strlen(json));
-  TEST_ASSERT_NOT_NULL(v);
-  TEST_ASSERT_EQUAL(3, json_object_size(v));
-
-  TEST_ASSERT_EQUAL_STRING("a", json_object_key(v, 0));
-  TEST_ASSERT_EQUAL_STRING("b", json_object_key(v, 1));
-  TEST_ASSERT_EQUAL_STRING("c", json_object_key(v, 2));
-
-  TEST_ASSERT_EQUAL_DOUBLE(1.0, json_number(json_object_value(v, 0)));
-  TEST_ASSERT_EQUAL_DOUBLE(2.0, json_number(json_object_value(v, 1)));
-  TEST_ASSERT_EQUAL_DOUBLE(3.0, json_number(json_object_value(v, 2)));
-
-  json_free(v);
-}
-
-/* ============================================================================
- * SAX Parser Tests
- * ============================================================================ */
 
 typedef struct {
   int null_count;
@@ -343,117 +90,343 @@ static json_sax_handler_t test_handler = {.on_null = sax_on_null,
                                           .on_array_start = sax_on_array_start,
                                           .on_array_end = sax_on_array_end};
 
-void test_sax_simple_object(void) {
-  const char *json = "{\"name\": \"test\", \"value\": 42}";
-  sax_test_ctx_t ctx = {0};
+spec("json_parser") {
+  describe("Basic Types") {
+    it("should parse null correctly") {
+      json_value_t *v = json_parse("null", 4);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_NULL);
+      check(json_is_null(v));
+      json_free(v);
+    }
 
-  int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
-  TEST_ASSERT_EQUAL(0, ret);
-  TEST_ASSERT_EQUAL(1, ctx.object_start_count);
-  TEST_ASSERT_EQUAL(1, ctx.object_end_count);
-  TEST_ASSERT_EQUAL(2, ctx.key_count);
-  TEST_ASSERT_EQUAL(1, ctx.string_count);
-  TEST_ASSERT_EQUAL(1, ctx.number_count);
-  TEST_ASSERT_EQUAL_DOUBLE(42.0, ctx.last_number);
-}
+    it("should parse true correctly") {
+      json_value_t *v = json_parse("true", 4);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_BOOL);
+      check(json_bool(v));
+      json_free(v);
+    }
 
-void test_sax_array(void) {
-  const char *json = "[1, 2, 3, 4, 5]";
-  sax_test_ctx_t ctx = {0};
+    it("should parse false correctly") {
+      json_value_t *v = json_parse("false", 5);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_BOOL);
+      check(!json_bool(v));
+      json_free(v);
+    }
+  }
 
-  int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
-  TEST_ASSERT_EQUAL(0, ret);
-  TEST_ASSERT_EQUAL(1, ctx.array_start_count);
-  TEST_ASSERT_EQUAL(1, ctx.array_end_count);
-  TEST_ASSERT_EQUAL(5, ctx.number_count);
-  TEST_ASSERT_EQUAL_DOUBLE(5.0, ctx.last_number);
-}
+  describe("Numbers") {
+    it("should parse integers correctly") {
+      json_value_t *v = json_parse("42", 2);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_NUMBER);
+      check_float_eq(json_number(v), 42.0, 0.001);
+      json_free(v);
+    }
 
-void test_sax_nested(void) {
-  const char *json = "{\"arr\": [1, 2], \"obj\": {\"x\": true}}";
-  sax_test_ctx_t ctx = {0};
+    it("should parse negative numbers correctly") {
+      json_value_t *v = json_parse("-123", 4);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_NUMBER);
+      check_float_eq(json_number(v), -123.0, 0.001);
+      json_free(v);
+    }
 
-  int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
-  TEST_ASSERT_EQUAL(0, ret);
-  TEST_ASSERT_EQUAL(2, ctx.object_start_count);
-  TEST_ASSERT_EQUAL(2, ctx.object_end_count);
-  TEST_ASSERT_EQUAL(1, ctx.array_start_count);
-  TEST_ASSERT_EQUAL(1, ctx.array_end_count);
-  TEST_ASSERT_EQUAL(3, ctx.key_count);
-  TEST_ASSERT_EQUAL(2, ctx.number_count);
-  TEST_ASSERT_EQUAL(1, ctx.bool_count);
-}
+    it("should parse floating point numbers correctly") {
+      json_value_t *v = json_parse("3.14159", 7);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_NUMBER);
+      check_float_eq(json_number(v), 3.14159, 0.00001);
+      json_free(v);
+    }
 
-void test_sax_all_types(void) {
-  const char *json =
-      "{\"n\": null, \"b\": false, \"i\": 123, \"s\": \"hello\", \"a\": [], \"o\": {}}";
-  sax_test_ctx_t ctx = {0};
+    it("should parse scientific notation correctly") {
+      json_value_t *v = json_parse("1.5e10", 6);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_NUMBER);
+      check_float_eq(json_number(v), 1.5e10, 0.001);
+      json_free(v);
+    }
+  }
 
-  int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
-  TEST_ASSERT_EQUAL(0, ret);
-  TEST_ASSERT_EQUAL(1, ctx.null_count);
-  TEST_ASSERT_EQUAL(1, ctx.bool_count);
-  TEST_ASSERT_EQUAL(1, ctx.number_count);
-  TEST_ASSERT_EQUAL(1, ctx.string_count);
-  TEST_ASSERT_EQUAL(2, ctx.object_start_count);
-  TEST_ASSERT_EQUAL(2, ctx.object_end_count);
-  TEST_ASSERT_EQUAL(1, ctx.array_start_count);
-  TEST_ASSERT_EQUAL(1, ctx.array_end_count);
-}
+  describe("Strings") {
+    it("should parse simple strings correctly") {
+      json_value_t *v = json_parse("\"hello\"", 7);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_STRING);
+      check_str_eq(json_string(v), "hello");
+      check_size_eq(json_string_len(v), 5);
+      json_free(v);
+    }
 
-void test_sax_empty_object(void) {
-  const char *json = "{}";
-  sax_test_ctx_t ctx = {0};
+    it("should handle escape sequences in strings") {
+      json_value_t *v = json_parse("\"hello\\nworld\"", 14);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_STRING);
+      check_str_eq(json_string(v), "hello\nworld");
+      json_free(v);
+    }
 
-  int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
-  TEST_ASSERT_EQUAL(0, ret);
-  TEST_ASSERT_EQUAL(1, ctx.object_start_count);
-  TEST_ASSERT_EQUAL(1, ctx.object_end_count);
-}
+    it("should handle unicode escape sequences") {
+      json_value_t *v = json_parse("\"\\u0041\\u0042\"", 14);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_STRING);
+      check_str_eq(json_string(v), "AB");
+      json_free(v);
+    }
+  }
 
-void test_sax_empty_array(void) {
-  const char *json = "[]";
-  sax_test_ctx_t ctx = {0};
+  describe("Arrays") {
+    it("should parse empty arrays correctly") {
+      json_value_t *v = json_parse("[]", 2);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_ARRAY);
+      check_size_eq(json_array_size(v), 0);
+      json_free(v);
+    }
 
-  int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
-  TEST_ASSERT_EQUAL(0, ret);
-  TEST_ASSERT_EQUAL(1, ctx.array_start_count);
-  TEST_ASSERT_EQUAL(1, ctx.array_end_count);
-}
+    it("should parse simple arrays correctly") {
+      json_value_t *v = json_parse("[1, 2, 3]", 9);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_ARRAY);
+      check_size_eq(json_array_size(v), 3);
+      check_float_eq(json_number(json_array_get(v, 0)), 1.0, 0.001);
+      check_float_eq(json_number(json_array_get(v, 1)), 2.0, 0.001);
+      check_float_eq(json_number(json_array_get(v, 2)), 3.0, 0.001);
+      json_free(v);
+    }
 
-int main(void) {
-  UNITY_BEGIN();
+    it("should handle nested arrays correctly") {
+      json_value_t *v = json_parse("[[1, 2], [3, 4]]", 16);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_ARRAY);
+      check_size_eq(json_array_size(v), 2);
 
-  RUN_TEST(test_parse_null);
-  RUN_TEST(test_parse_true);
-  RUN_TEST(test_parse_false);
-  RUN_TEST(test_parse_integer);
-  RUN_TEST(test_parse_negative);
-  RUN_TEST(test_parse_float);
-  RUN_TEST(test_parse_exponent);
-  RUN_TEST(test_parse_string);
-  RUN_TEST(test_parse_string_escape);
-  RUN_TEST(test_parse_string_unicode);
-  RUN_TEST(test_parse_empty_array);
-  RUN_TEST(test_parse_array);
-  RUN_TEST(test_parse_nested_array);
-  RUN_TEST(test_parse_empty_object);
-  RUN_TEST(test_parse_object);
-  RUN_TEST(test_parse_nested_object);
-  RUN_TEST(test_parse_mixed);
-  RUN_TEST(test_parse_proxy_config);
-  RUN_TEST(test_parse_whitespace);
-  RUN_TEST(test_parse_error_invalid);
-  RUN_TEST(test_parse_error_unclosed_brace);
-  RUN_TEST(test_object_iteration);
+      json_value_t *inner = json_array_get(v, 0);
+      check_int_eq(json_type(inner), JSON_ARRAY);
+      check_size_eq(json_array_size(inner), 2);
 
-  // SAX tests
-  RUN_TEST(test_sax_simple_object);
-  RUN_TEST(test_sax_array);
-  RUN_TEST(test_sax_nested);
-  RUN_TEST(test_sax_all_types);
-  RUN_TEST(test_sax_empty_object);
-  RUN_TEST(test_sax_empty_array);
+      json_free(v);
+    }
+  }
 
-  return UNITY_END();
+  describe("Objects") {
+    it("should parse empty objects correctly") {
+      json_value_t *v = json_parse("{}", 2);
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_OBJECT);
+      check_size_eq(json_object_size(v), 0);
+      json_free(v);
+    }
+
+    it("should parse simple objects correctly") {
+      const char *json = "{\"name\": \"test\", \"value\": 42}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+      check_int_eq(json_type(v), JSON_OBJECT);
+      check_size_eq(json_object_size(v), 2);
+
+      check_str_eq(json_get_string(v, "name"), "test");
+      check_int_eq(json_get_int(v, "value", 0), 42);
+
+      json_free(v);
+    }
+
+    it("should handle nested objects correctly") {
+      const char *json = "{\"outer\": {\"inner\": 123}}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      json_value_t *outer = json_object_get(v, "outer");
+      check_not_null(outer);
+      check_int_eq(json_type(outer), JSON_OBJECT);
+
+      check_int_eq(json_get_int(outer, "inner", 0), 123);
+
+      json_free(v);
+    }
+
+    it("should handle mixed complex structures") {
+      const char *json = "{"
+                        "  \"string\": \"hello\","
+                        "  \"number\": 3.14,"
+                        "  \"bool\": true,"
+                        "  \"null\": null,"
+                        "  \"array\": [1, 2, 3]"
+                        "}";
+
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      check_str_eq(json_get_string(v, "string"), "hello");
+      check_float_eq(json_get_double(v, "number", 0), 3.14, 0.01);
+      check(json_get_bool(v, "bool", false));
+      check(json_is_null(json_object_get(v, "null")));
+
+      json_value_t *arr = json_object_get(v, "array");
+      check_size_eq(json_array_size(arr), 3);
+
+      json_free(v);
+    }
+
+    it("should parse large configuration-like JSON correctly") {
+      const char *json = "{"
+                        "  \"listeners\": ["
+                        "    {\"port\": 1883, \"transport\": \"tcp\"},"
+                        "    {\"port\": 8883, \"transport\": \"tls\"}"
+                        "  ],"
+                        "  \"upstreams\": ["
+                        "    {\"host\": \"10.0.0.1\", \"port\": 1883, \"weight\": 3}"
+                        "  ],"
+                        "  \"settings\": {"
+                        "    \"max_clients\": 10000,"
+                        "    \"connect_timeout_ms\": 5000"
+                        "  }"
+                        "}";
+
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      json_value_t *listeners = json_object_get(v, "listeners");
+      check_size_eq(json_array_size(listeners), 2);
+
+      json_value_t *l0 = json_array_get(listeners, 0);
+      check_int_eq(json_get_int(l0, "port", 0), 1883);
+      check_str_eq(json_get_string(l0, "transport"), "tcp");
+
+      json_value_t *upstreams = json_object_get(v, "upstreams");
+      check_size_eq(json_array_size(upstreams), 1);
+
+      json_value_t *u0 = json_array_get(upstreams, 0);
+      check_str_eq(json_get_string(u0, "host"), "10.0.0.1");
+      check_int_eq(json_get_int(u0, "weight", 0), 3);
+
+      json_value_t *settings = json_object_get(v, "settings");
+      check_int_eq(json_get_int(settings, "max_clients", 0), 10000);
+
+      json_free(v);
+    }
+  }
+
+  describe("Auxiliary") {
+    it("should handle whitespace around JSON") {
+      const char *json = "  \n\t { \"key\" : \"value\" } \n";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+      check_str_eq(json_get_string(v, "key"), "value");
+      json_free(v);
+    }
+
+    it("should allow iterating over object keys and values") {
+      const char *json = "{\"a\": 1, \"b\": 2, \"c\": 3}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+      check_size_eq(json_object_size(v), 3);
+
+      check_str_eq(json_object_key(v, 0), "a");
+      check_str_eq(json_object_key(v, 1), "b");
+      check_str_eq(json_object_key(v, 2), "c");
+
+      check_float_eq(json_number(json_object_value(v, 0)), 1.0, 0.001);
+      check_float_eq(json_number(json_object_value(v, 1)), 2.0, 0.001);
+      check_float_eq(json_number(json_object_value(v, 2)), 3.0, 0.001);
+
+      json_free(v);
+    }
+  }
+
+  describe("Error Handling") {
+    it("should return NULL and set error for invalid JSON") {
+      json_value_t *v = json_parse("invalid", 7);
+      check_null(v);
+      check_not_null(json_get_error());
+    }
+
+    it("should return NULL for unclosed braces") {
+      json_value_t *v = json_parse("{\"key\": 1", 9);
+      check_null(v);
+    }
+  }
+
+  describe("SAX Parsing") {
+    it("should SAX parse a simple object correctly") {
+      const char *json = "{\"name\": \"test\", \"value\": 42}";
+      sax_test_ctx_t ctx = {0};
+
+      int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
+      check_int_eq(ret, 0);
+      check_int_eq(ctx.object_start_count, 1);
+      check_int_eq(ctx.object_end_count, 1);
+      check_int_eq(ctx.key_count, 2);
+      check_int_eq(ctx.string_count, 1);
+      check_int_eq(ctx.number_count, 1);
+      check_float_eq(ctx.last_number, 42.0, 0.001);
+    }
+
+    it("should SAX parse an array correctly") {
+      const char *json = "[1, 2, 3, 4, 5]";
+      sax_test_ctx_t ctx = {0};
+
+      int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
+      check_int_eq(ret, 0);
+      check_int_eq(ctx.array_start_count, 1);
+      check_int_eq(ctx.array_end_count, 1);
+      check_int_eq(ctx.number_count, 5);
+      check_float_eq(ctx.last_number, 5.0, 0.001);
+    }
+
+    it("should SAX parse nested structures correctly") {
+      const char *json = "{\"arr\": [1, 2], \"obj\": {\"x\": true}}";
+      sax_test_ctx_t ctx = {0};
+
+      int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
+      check_int_eq(ret, 0);
+      check_int_eq(ctx.object_start_count, 2);
+      check_int_eq(ctx.object_end_count, 2);
+      check_int_eq(ctx.array_start_count, 1);
+      check_int_eq(ctx.array_end_count, 1);
+      check_int_eq(ctx.key_count, 3);
+      check_int_eq(ctx.number_count, 2);
+      check_int_eq(ctx.bool_count, 1);
+    }
+
+    it("should SAX parse all JSON types correctly") {
+      const char *json =
+          "{\"n\": null, \"b\": false, \"i\": 123, \"s\": \"hello\", \"a\": [], \"o\": {}}";
+      sax_test_ctx_t ctx = {0};
+
+      int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
+      check_int_eq(ret, 0);
+      check_int_eq(ctx.null_count, 1);
+      check_int_eq(ctx.bool_count, 1);
+      check_int_eq(ctx.number_count, 1);
+      check_int_eq(ctx.string_count, 1);
+      check_int_eq(ctx.object_start_count, 2);
+      check_int_eq(ctx.object_end_count, 2);
+      check_int_eq(ctx.array_start_count, 1);
+      check_int_eq(ctx.array_end_count, 1);
+    }
+
+    it("should handle empty objects in SAX") {
+      const char *json = "{}";
+      sax_test_ctx_t ctx = {0};
+
+      int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
+      check_int_eq(ret, 0);
+      check_int_eq(ctx.object_start_count, 1);
+      check_int_eq(ctx.object_end_count, 1);
+    }
+
+    it("should handle empty arrays in SAX") {
+      const char *json = "[]";
+      sax_test_ctx_t ctx = {0};
+
+      int ret = json_parse_sax(json, strlen(json), &test_handler, &ctx);
+      check_int_eq(ret, 0);
+      check_int_eq(ctx.array_start_count, 1);
+      check_int_eq(ctx.array_end_count, 1);
+    }
+  }
 }

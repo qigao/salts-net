@@ -533,6 +533,22 @@ char *TOONc_toJSONString(const toonObject *obj, size_t *out_len) {
     return sb.buf;
 }
 
+void TOONc_toJSON(toonObject *obj, FILE *fp, int depth) {
+    if (!obj || !fp) return;
+    toon_sb_t sb = {0};
+    if (obj->kvtype == KV_OBJ && !obj->key) {
+        sb_append(&sb, "{\n");
+        serialize_json_sb(obj->child, depth + 1, &sb, false);
+        sb_append(&sb, "\n}");
+    } else {
+        serialize_json_sb(obj, depth, &sb, false);
+    }
+    if (sb.buf) {
+        fwrite(sb.buf, 1, sb.len, fp);
+        tfree(sb.buf);
+    }
+}
+
 // Minimal JSON parser for fromJSONString
 typedef struct {
     const char *p;

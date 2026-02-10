@@ -655,7 +655,7 @@ static bool json_serialize_indent(json_buffer_t *buf, int level) {
   return true;
 }
 
-static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *buf, int level) {
+static bool json_serialize_pretty_value_ex(const json_value_t *v, json_buffer_t *buf, int level, const char *newline, size_t newline_len) {
   if (!v)
     return json_buffer_append(buf, "null", 4);
 
@@ -678,20 +678,24 @@ static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *bu
     if (v->data.array_val.count == 0)
       return json_buffer_append(buf, "[]", 2);
 
-    if (!json_buffer_append(buf, "[\n", 2))
+    if (!json_buffer_append(buf, "[", 1))
+      return false;
+    if (!json_buffer_append(buf, newline, newline_len))
       return false;
     json_element_t *e = v->data.array_val.elements;
     while (e) {
       if (!json_serialize_indent(buf, level + 1))
         return false;
-      if (!json_serialize_pretty_value(e->value, buf, level + 1))
+      if (!json_serialize_pretty_value_ex(e->value, buf, level + 1, newline, newline_len))
         return false;
       e = e->next;
       if (e) {
-        if (!json_buffer_append(buf, ",\n", 2))
+        if (!json_buffer_append(buf, ",", 1))
+          return false;
+        if (!json_buffer_append(buf, newline, newline_len))
           return false;
       } else {
-        if (!json_buffer_append(buf, "\n", 1))
+        if (!json_buffer_append(buf, newline, newline_len))
           return false;
       }
     }
@@ -703,7 +707,9 @@ static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *bu
     if (v->data.object_val.count == 0)
       return json_buffer_append(buf, "{}", 2);
 
-    if (!json_buffer_append(buf, "{\n", 2))
+    if (!json_buffer_append(buf, "{", 1))
+      return false;
+    if (!json_buffer_append(buf, newline, newline_len))
       return false;
     json_pair_t *p = v->data.object_val.pairs;
     while (p) {
@@ -715,14 +721,16 @@ static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *bu
         return false;
       if (!json_buffer_append(buf, "\": ", 3))
         return false;
-      if (!json_serialize_pretty_value(p->value, buf, level + 1))
+      if (!json_serialize_pretty_value_ex(p->value, buf, level + 1, newline, newline_len))
         return false;
       p = p->next;
       if (p) {
-        if (!json_buffer_append(buf, ",\n", 2))
+        if (!json_buffer_append(buf, ",", 1))
+          return false;
+        if (!json_buffer_append(buf, newline, newline_len))
           return false;
       } else {
-        if (!json_buffer_append(buf, "\n", 1))
+        if (!json_buffer_append(buf, newline, newline_len))
           return false;
       }
     }
@@ -735,12 +743,31 @@ static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *bu
   }
 }
 
+static bool json_serialize_pretty_value(const json_value_t *v, json_buffer_t *buf, int level) {
+  return json_serialize_pretty_value_ex(v, buf, level, "\n", 1);
+}
+
 char *json_serialize_pretty(const json_value_t *value, size_t *out_len) {
   json_buffer_t buf;
   if (!json_buffer_init(&buf))
     return NULL;
 
   if (!json_serialize_pretty_value(value, &buf, 0)) {
+    free(buf.data);
+    return NULL;
+  }
+
+  if (out_len)
+    *out_len = buf.size;
+  return buf.data;
+}
+
+char *json_serialize_pretty_crlf(const json_value_t *value, size_t *out_len) {
+  json_buffer_t buf;
+  if (!json_buffer_init(&buf))
+    return NULL;
+
+  if (!json_serialize_pretty_value_ex(value, &buf, 0, "\r\n", 2)) {
     free(buf.data);
     return NULL;
   }

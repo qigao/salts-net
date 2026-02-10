@@ -53,7 +53,7 @@ if(BUILD_EXAMPLES)
 endif()
 
 # Tests
-if(BUILD_TESTING)
+if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 

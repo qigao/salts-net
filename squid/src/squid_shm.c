@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <tlog.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -94,7 +94,7 @@ squid_shm_t *squid_shm_create(void) {
     atomic_store(&shm->ctrl->slots[i].data_len, 0);
   }
 
-  fprintf(stderr, "squid_shm: created %zu bytes at %p\n", shm->total_size, shm->base_addr);
+  TLOG_INFO("squid_shm: {} bytes at {}", shm->total_size, shm->base_addr);
   return shm;
 }
 
@@ -149,7 +149,7 @@ squid_shm_t *squid_shm_attach(void *base_addr) {
   shm->ctrl = (squid_shm_control_t *)shm->base_addr;
   shm->data_region = (char *)shm->base_addr + SQUID_SHM_CTRL_SIZE;
 
-  fprintf(stderr, "squid_shm: attached to %p\n", shm->base_addr);
+  TLOG_INFO("squid_shm: {} attached to {}", "base", shm->base_addr);
   return shm;
 }
 
@@ -237,5 +237,5 @@ void squid_shm_destroy(squid_shm_t *shm) {
   }
 
   free(shm);
-  fprintf(stderr, "squid_shm: destroyed\n");
+  TLOG_INFO("squid_shm: destroyed");
 }

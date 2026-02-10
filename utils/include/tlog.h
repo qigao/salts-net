@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "fmt_typed.h"
+#include "fmt.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -3,65 +3,54 @@
 #include <string.h>
 
 #include "base64_utils.h"
-#include "unity.h"
+#include "tinytest.h"
 
-void setUp(void) {}
+spec("base64_utils") {
+  it("should encode known value") {
+    const uint8_t input[] = "TurboNet";
+    char *encoded = NULL;
 
-void tearDown(void) {}
+    int rc = tn_base64_encode(input, sizeof(input) - 1, &encoded);
+    check_int_eq(rc, 0);
+    check_not_null(encoded);
+    check_str_eq(encoded, "VHVyYm9OZXQ=");
 
-void test_base64_encode_known_value(void) {
-  const uint8_t input[] = "TurboNet";
-  char *encoded = NULL;
+    free(encoded);
+  }
 
-  int rc = tn_base64_encode(input, sizeof(input) - 1, &encoded);
-  TEST_ASSERT_EQUAL(0, rc);
-  TEST_ASSERT_NOT_NULL(encoded);
-  TEST_ASSERT_EQUAL_STRING("VHVyYm9OZXQ=", encoded);
+  it("should decode known value") {
+    const char *encoded = "Zm9vYmFy";
+    uint8_t *decoded = NULL;
+    size_t decoded_len = 0;
 
-  free(encoded);
-}
+    int rc = tn_base64_decode(encoded, &decoded, &decoded_len);
+    check_int_eq(rc, 0);
+    check_not_null(decoded);
+    check_size_eq(decoded_len, 6);
+    check_mem_eq(decoded, "foobar", decoded_len);
 
-void test_base64_decode_known_value(void) {
-  const char *encoded = "Zm9vYmFy";
-  uint8_t *decoded = NULL;
-  size_t decoded_len = 0;
+    free(decoded);
+  }
 
-  int rc = tn_base64_decode(encoded, &decoded, &decoded_len);
-  TEST_ASSERT_EQUAL(0, rc);
-  TEST_ASSERT_NOT_NULL(decoded);
-  TEST_ASSERT_EQUAL_size_t(6, decoded_len);
-  TEST_ASSERT_EQUAL_MEMORY("foobar", decoded, decoded_len);
+  it("should return error for invalid input") {
+    const char *encoded = "invalid*data";
+    uint8_t *decoded = NULL;
+    size_t decoded_len = 0;
 
-  free(decoded);
-}
+    int rc = tn_base64_decode(encoded, &decoded, &decoded_len);
+    check_int_eq(rc, -1);
+    check_null(decoded);
+  }
 
-void test_base64_decode_invalid_input(void) {
-  const char *encoded = "invalid*data";
-  uint8_t *decoded = NULL;
-  size_t decoded_len = 0;
+  it("should handle NULL parameters") {
+    char *encoded = NULL;
+    uint8_t *decoded = NULL;
+    size_t decoded_len = 0;
 
-  int rc = tn_base64_decode(encoded, &decoded, &decoded_len);
-  TEST_ASSERT_EQUAL(-1, rc);
-  TEST_ASSERT_NULL(decoded);
-}
-
-void test_base64_null_parameters(void) {
-  char *encoded = NULL;
-  uint8_t *decoded = NULL;
-  size_t decoded_len = 0;
-
-  TEST_ASSERT_EQUAL(-1, tn_base64_encode(NULL, 4, &encoded));
-  TEST_ASSERT_EQUAL(-1, tn_base64_encode((const uint8_t *)"data", 4, NULL));
-  TEST_ASSERT_EQUAL(-1, tn_base64_decode(NULL, &decoded, &decoded_len));
-  TEST_ASSERT_EQUAL(-1, tn_base64_decode("Zg==", NULL, &decoded_len));
-  TEST_ASSERT_EQUAL(-1, tn_base64_decode("Zg==", &decoded, NULL));
-}
-
-int main(void) {
-  UNITY_BEGIN();
-  RUN_TEST(test_base64_encode_known_value);
-  RUN_TEST(test_base64_decode_known_value);
-  RUN_TEST(test_base64_decode_invalid_input);
-  RUN_TEST(test_base64_null_parameters);
-  return UNITY_END();
+    check_int_eq(tn_base64_encode(NULL, 4, &encoded), -1);
+    check_int_eq(tn_base64_encode((const uint8_t *)"data", 4, NULL), -1);
+    check_int_eq(tn_base64_decode(NULL, &decoded, &decoded_len), -1);
+    check_int_eq(tn_base64_decode("Zg==", NULL, &decoded_len), -1);
+    check_int_eq(tn_base64_decode("Zg==", &decoded, NULL), -1);
+  }
 }

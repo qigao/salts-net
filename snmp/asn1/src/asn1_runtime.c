@@ -104,7 +104,9 @@ asn1_value_t *asn1_create_set(void) {
 }
 
 int asn1_sequence_add_child(asn1_value_t *seq, asn1_value_t *child) {
-    if (!seq || seq->type != ASN1_TYPE_SEQUENCE || !child) return -1;
+    if (!seq || !child) return -1;
+    if (seq->type != ASN1_TYPE_SEQUENCE && seq->type != TK_CONTEXT_SPECIFIC) return -1;
+    if (seq->type == TK_CONTEXT_SPECIFIC && !seq->constructed) return -1;
     
     if (seq->value.sequence.count >= seq->value.sequence.capacity) {
         size_t new_capacity = seq->value.sequence.capacity ? 
@@ -165,6 +167,17 @@ void asn1_free(asn1_value_t *value) {
             }
             free(value->value.set.children);
             break;
+
+        case TK_CONTEXT_SPECIFIC:
+            if (value->constructed) {
+                for (size_t i = 0; i < value->value.sequence.count; i++) {
+                    asn1_free(value->value.sequence.children[i]);
+                }
+                free(value->value.sequence.children);
+            } else {
+                free(value->value.octet_string.data);
+            }
+            break;
     }
     
     free(value);
@@ -213,6 +226,24 @@ void asn1_print_value(const asn1_value_t *value, int indent) {
             printf("SET (%zu elements):\n", value->value.set.count);
             for (size_t i = 0; i < value->value.set.count; i++) {
                 asn1_print_value(value->value.set.children[i], indent + 1);
+            }
+            break;
+            
+        case TK_CONTEXT_SPECIFIC:
+            printf("CONTEXT-SPECIFIC [%u] (%s):\n", (unsigned int)value->tag_number,
+                   value->constructed ? "constructed" : "primitive");
+            if (value->constructed) {
+                for (size_t i = 0; i < value->value.sequence.count; i++) {
+                    asn1_print_value(value->value.sequence.children[i], indent + 1);
+                }
+            } else {
+                for (int i = 0; i < indent + 1; i++) printf("  ");
+                printf("DATA: ");
+                for (size_t i = 0; i < value->value.octet_string.length && i < 16; i++) {
+                    printf("%02X ", value->value.octet_string.data[i]);
+                }
+                if (value->value.octet_string.length > 16) printf("...");
+                printf("\n");
             }
             break;
             

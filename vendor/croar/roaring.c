@@ -2660,7 +2660,7 @@ int run_container_cardinality(const run_container_t *run);
 /* Card > 0?, see run_container_empty for the reverse */
 static inline bool run_container_nonzero_cardinality(
     const run_container_t *run) {
-    return run->n_runs > 0;  // runs never empty
+    return run != NULL && run->n_runs > 0;  // runs never empty
 }
 
 /* Card == 0?, see run_container_nonzero_cardinality for the reverse */
@@ -13980,7 +13980,7 @@ void bitset_container_offset(const bitset_container_t *c, container_t **loc,
 
     if (hic == NULL) {
         // Both hic and loc can't be NULL, so bc is never NULL here
-        if (bc->cardinality == 0) {
+        if (bc != NULL && bc->cardinality == 0) {
             bitset_container_free(bc);
         }
         return;
@@ -19744,7 +19744,7 @@ POSSIBILITY OF SUCH DAMAGE.
 // on these systems. It seems that ClangCL is not affected.
 // https://github.com/RoaringBitmap/CRoaring/pull/603
 #ifndef __clang__
-#if _MSC_VER == 1938
+#if defined(_MSC_VER) && _MSC_VER == 1938
 #define ROARING_DISABLE_AVX 1
 #endif  // _MSC_VER == 1938
 #endif  // __clang__

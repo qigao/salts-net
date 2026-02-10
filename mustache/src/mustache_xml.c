@@ -40,6 +40,8 @@ int mustache_xml_provider_init(MUSTACHE_XML_PROVIDER *provider, void *xml_node,
     provider->base.get_child_by_name = xml_get_child_by_name;
     provider->base.get_child_by_index = xml_get_child_by_index;
     provider->base.get_partial = xml_get_partial;
+    provider->base.is_lambda = NULL;
+    provider->base.call_lambda = NULL;
 
     provider->root_node = xml_node;
     provider->template_loader = template_loader;

@@ -7,10 +7,10 @@
  * 2. Zflex: ldap.zflexsoftware.com:389
  */
 
-#include "unity.h"
 #include "ldap_client.h"
 #include "ldap_parser.h"
 #include "ldap_protocol.h"
+#include "tinytest.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -23,114 +23,6 @@
 /* Test state */
 static ldap_client_t *client = NULL;
 static int entry_count = 0;
-
-void setUp(void) {
-    entry_count = 0;
-}
-
-void tearDown(void) {
-    if (client) {
-        ldap_client_destroy(client);
-        client = NULL;
-    }
-}
-
-/* ============================================================================
- * Connection Tests
- * ============================================================================ */
-
-void test_connect_forumsys(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
-
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL_MESSAGE(client, "Failed to create LDAP client");
-
-    /* Use bind to test connection (connect is called internally) */
-    ldap_result_data_t result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &result);
-    TEST_ASSERT_EQUAL_MESSAGE(0, rc, ldap_err2string(rc));
-
-    printf("  Connected and bound to %s\n", FORUMSYS_URL);
-    ldap_result_free(&result);
-}
-
-/* ============================================================================
- * Bind Tests
- * ============================================================================ */
-
-void test_bind_simple_forumsys(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
-
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
-
-    ldap_result_data_t result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &result);
-
-    TEST_ASSERT_EQUAL_MESSAGE(0, rc, ldap_err2string(rc));
-    TEST_ASSERT_EQUAL_MESSAGE(LDAP_SUCCESS, result.result_code,
-                              ldap_result_code_str(result.result_code));
-
-    printf("  Bind successful: %s\n", FORUMSYS_BIND_DN);
-
-    ldap_result_free(&result);
-}
-
-void test_bind_invalid_credentials(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
-
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
-
-    ldap_result_data_t result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, "wrongpassword", &result);
-
-    /* Should fail with auth error or LDAP invalidCredentials */
-    if (rc == 0) {
-        TEST_ASSERT_EQUAL(LDAP_INVALID_CREDENTIALS, result.result_code);
-        printf("  Got expected invalidCredentials (49)\n");
-    } else {
-        printf("  Got expected auth error: %s\n", ldap_err2string(rc));
-    }
-
-    ldap_result_free(&result);
-}
-
-void test_bind_anonymous(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
-
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
-
-    ldap_result_data_t result = {0};
-    int rc = ldap_client_simple_bind(client, "", "", &result);
-
-    /* Anonymous bind may or may not be allowed */
-    if (rc == 0) {
-        printf("  Anonymous bind result: %s (code %d)\n",
-               ldap_result_code_str(result.result_code), result.result_code);
-    } else {
-        printf("  Anonymous bind failed: %s\n", ldap_err2string(rc));
-    }
-
-    ldap_result_free(&result);
-}
-
-/* ============================================================================
- * Search Tests
- * ============================================================================ */
 
 static void search_callback(ldap_client_t *cli, const ldap_entry_t *entry, void *user_data) {
     (void)cli;
@@ -153,220 +45,291 @@ static void search_callback(ldap_client_t *cli, const ldap_entry_t *entry, void 
     }
 }
 
-void test_search_base_scope(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
+spec("ldap_integration") {
+  before_each() {
+    entry_count = 0;
+  }
 
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
+  after_each() {
+    if (client) {
+        ldap_client_destroy(client);
+        client = NULL;
+    }
+  }
 
-    /* Bind first */
-    ldap_result_data_t bind_result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-    TEST_ASSERT_EQUAL(0, rc);
-    ldap_result_free(&bind_result);
+  describe("LDAP Connection") {
+    it("should successfully connect and bind to ForumSys") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    /* Search base object */
-    ldap_search_params_t params = {
-        .base_dn = FORUMSYS_BASE_DN,
-        .scope = LDAP_SCOPE_BASE,
-        .filter = "(objectClass=*)",
-        .attrs = NULL,
-        .types_only = false,
-        .size_limit = 0,
-        .time_limit = 0
-    };
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-    ldap_result_data_t search_result = {0};
-    rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
+        /* Use bind to test connection (connect is called internally) */
+        ldap_result_data_t result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &result);
+        check_int_eq(rc, 0);
 
-    TEST_ASSERT_EQUAL_MESSAGE(0, rc, ldap_err2string(rc));
-    TEST_ASSERT_EQUAL(LDAP_SUCCESS, search_result.result_code);
-    TEST_ASSERT_EQUAL(1, entry_count);  /* Base scope should return 1 entry */
+        printf("  Connected and bound to %s\n", FORUMSYS_URL);
+        ldap_result_free(&result);
+    }
+  }
 
-    printf("  Base search returned %d entry\n", entry_count);
+  describe("LDAP Bind Operations") {
+    it("should successfully perform simple bind to ForumSys") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    ldap_result_free(&search_result);
-}
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-void test_search_subtree_scope(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
+        ldap_result_data_t result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &result);
 
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
+        check_int_eq(rc, 0);
+        check_int_eq(result.result_code, LDAP_SUCCESS);
 
-    /* Bind first */
-    ldap_result_data_t bind_result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-    TEST_ASSERT_EQUAL(0, rc);
-    ldap_result_free(&bind_result);
+        printf("  Bind successful: %s\n", FORUMSYS_BIND_DN);
 
-    /* Search subtree for persons */
-    ldap_search_params_t params = {
-        .base_dn = FORUMSYS_BASE_DN,
-        .scope = LDAP_SCOPE_SUBTREE,
-        .filter = "(objectClass=person)",
-        .attrs = NULL,
-        .types_only = false,
-        .size_limit = 10,
-        .time_limit = 30
-    };
+        ldap_result_free(&result);
+    }
 
-    ldap_result_data_t search_result = {0};
-    rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
+    it("should return expected failure for invalid credentials") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    TEST_ASSERT_EQUAL_MESSAGE(0, rc, ldap_err2string(rc));
-    /* Accept success or sizeLimitExceeded (server may limit results) */
-    TEST_ASSERT_TRUE(search_result.result_code == LDAP_SUCCESS ||
-                     search_result.result_code == LDAP_SIZELIMIT_EXCEEDED);
-    TEST_ASSERT_TRUE(entry_count > 0);
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-    printf("  Subtree search returned %d entries (result: %s)\n",
-           entry_count, ldap_result_code_str(search_result.result_code));
+        ldap_result_data_t result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, "wrongpassword", &result);
 
-    ldap_result_free(&search_result);
-}
+        /* Should fail with auth error or LDAP invalidCredentials */
+        if (rc == 0) {
+            check_int_eq(result.result_code, LDAP_INVALID_CREDENTIALS);
+            printf("  Got expected invalidCredentials (49)\n");
+        } else {
+            printf("  Got expected auth error: %s\n", ldap_err2string(rc));
+        }
 
-void test_search_with_filter(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
+        ldap_result_free(&result);
+    }
 
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
+    it("should handle anonymous bind attempts") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    /* Bind first */
-    ldap_result_data_t bind_result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-    TEST_ASSERT_EQUAL(0, rc);
-    ldap_result_free(&bind_result);
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-    /* Search for specific user */
-    ldap_search_params_t params = {
-        .base_dn = FORUMSYS_BASE_DN,
-        .scope = LDAP_SCOPE_SUBTREE,
-        .filter = "(uid=einstein)",
-        .attrs = NULL,
-        .types_only = false,
-        .size_limit = 0,
-        .time_limit = 0
-    };
+        ldap_result_data_t result = {0};
+        int rc = ldap_client_simple_bind(client, "", "", &result);
 
-    ldap_result_data_t search_result = {0};
-    rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
+        /* Anonymous bind may or may not be allowed */
+        if (rc == 0) {
+            printf("  Anonymous bind result: %s (code %d)\n",
+                   ldap_result_code_str(result.result_code), result.result_code);
+        } else {
+            printf("  Anonymous bind failed: %s\n", ldap_err2string(rc));
+        }
 
-    TEST_ASSERT_EQUAL_MESSAGE(0, rc, ldap_err2string(rc));
-    TEST_ASSERT_EQUAL(LDAP_SUCCESS, search_result.result_code);
+        ldap_result_free(&result);
+    }
+  }
 
-    printf("  Filter search (uid=einstein) returned %d entries\n", entry_count);
+  describe("LDAP Search Operations") {
+    it("should successfully search with base scope") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    ldap_result_free(&search_result);
-}
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-void test_search_with_attributes(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
+        /* Bind first */
+        ldap_result_data_t bind_result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
+        check_int_eq(rc, 0);
+        ldap_result_free(&bind_result);
 
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
+        /* Search base object */
+        ldap_search_params_t params = {
+            .base_dn = FORUMSYS_BASE_DN,
+            .scope = LDAP_SCOPE_BASE,
+            .filter = "(objectClass=*)",
+            .attrs = NULL,
+            .types_only = false,
+            .size_limit = 0,
+            .time_limit = 0
+        };
 
-    /* Bind first */
-    ldap_result_data_t bind_result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-    TEST_ASSERT_EQUAL(0, rc);
-    ldap_result_free(&bind_result);
+        ldap_result_data_t search_result = {0};
+        rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-    /* Search with specific attributes */
-    const char *attrs[] = {"cn", "mail", "uid", NULL};
+        check_int_eq(rc, 0);
+        check_int_eq(search_result.result_code, LDAP_SUCCESS);
+        check_int_eq(entry_count, 1);  /* Base scope should return 1 entry */
 
-    ldap_search_params_t params = {
-        .base_dn = FORUMSYS_BASE_DN,
-        .scope = LDAP_SCOPE_SUBTREE,
-        .filter = "(objectClass=person)",
-        .attrs = attrs,
-        .types_only = false,
-        .size_limit = 5,
-        .time_limit = 0
-    };
+        printf("  Base search returned %d entry\n", entry_count);
 
-    ldap_result_data_t search_result = {0};
-    rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
+        ldap_result_free(&search_result);
+    }
 
-    TEST_ASSERT_EQUAL_MESSAGE(0, rc, ldap_err2string(rc));
-    /* Accept success or sizeLimitExceeded (server may limit results) */
-    TEST_ASSERT_TRUE(search_result.result_code == LDAP_SUCCESS ||
-                     search_result.result_code == LDAP_SIZELIMIT_EXCEEDED);
+    it("should successfully search with subtree scope") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    printf("  Attribute search returned %d entries (result: %s)\n",
-           entry_count, ldap_result_code_str(search_result.result_code));
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-    ldap_result_free(&search_result);
-}
+        /* Bind first */
+        ldap_result_data_t bind_result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
+        check_int_eq(rc, 0);
+        ldap_result_free(&bind_result);
 
-/* ============================================================================
- * Unbind Test
- * ============================================================================ */
+        /* Search subtree for persons */
+        ldap_search_params_t params = {
+            .base_dn = FORUMSYS_BASE_DN,
+            .scope = LDAP_SCOPE_SUBTREE,
+            .filter = "(objectClass=person)",
+            .attrs = NULL,
+            .types_only = false,
+            .size_limit = 10,
+            .time_limit = 30
+        };
 
-void test_unbind(void) {
-    ldap_client_config_t config = {
-        .url = FORUMSYS_URL,
-        .timeout_ms = 10000
-    };
+        ldap_result_data_t search_result = {0};
+        rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-    client = ldap_client_create(&config);
-    TEST_ASSERT_NOT_NULL(client);
+        check_int_eq(rc, 0);
+        /* Accept success or sizeLimitExceeded (server may limit results) */
+        check(search_result.result_code == LDAP_SUCCESS ||
+              search_result.result_code == LDAP_SIZELIMIT_EXCEEDED);
+        check(entry_count > 0);
 
-    /* Bind */
-    ldap_result_data_t bind_result = {0};
-    int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-    TEST_ASSERT_EQUAL(0, rc);
-    ldap_result_free(&bind_result);
+        printf("  Subtree search returned %d entries (result: %s)\n",
+               entry_count, ldap_result_code_str(search_result.result_code));
 
-    /* Unbind */
-    rc = ldap_client_unbind(client);
-    TEST_ASSERT_EQUAL(0, rc);
+        ldap_result_free(&search_result);
+    }
 
-    printf("  Unbind successful\n");
+    it("should successfully search with a filter") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    /* Client is now disconnected, destroy will handle cleanup */
-    ldap_client_destroy(client);
-    client = NULL;
-}
+        client = ldap_client_create(&config);
+        check_not_null(client);
 
-/* ============================================================================
- * Test Runner
- * ============================================================================ */
+        /* Bind first */
+        ldap_result_data_t bind_result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
+        check_int_eq(rc, 0);
+        ldap_result_free(&bind_result);
 
-int main(void) {
-    printf("\n=== LDAP Integration Tests ===\n");
-    printf("Target: %s\n\n", FORUMSYS_URL);
+        /* Search for specific user */
+        ldap_search_params_t params = {
+            .base_dn = FORUMSYS_BASE_DN,
+            .scope = LDAP_SCOPE_SUBTREE,
+            .filter = "(uid=einstein)",
+            .attrs = NULL,
+            .types_only = false,
+            .size_limit = 0,
+            .time_limit = 0
+        };
 
-    UNITY_BEGIN();
+        ldap_result_data_t search_result = {0};
+        rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-    /* Connection */
-    RUN_TEST(test_connect_forumsys);
+        check_int_eq(rc, 0);
+        check_int_eq(search_result.result_code, LDAP_SUCCESS);
 
-    /* Bind */
-    RUN_TEST(test_bind_simple_forumsys);
-    RUN_TEST(test_bind_invalid_credentials);
-    RUN_TEST(test_bind_anonymous);
+        printf("  Filter search (uid=einstein) returned %d entries\n", entry_count);
 
-    /* Search */
-    RUN_TEST(test_search_base_scope);
-    RUN_TEST(test_search_subtree_scope);
-    RUN_TEST(test_search_with_filter);
-    RUN_TEST(test_search_with_attributes);
+        ldap_result_free(&search_result);
+    }
 
-    /* Unbind */
-    RUN_TEST(test_unbind);
+    it("should search and retrieve specific attributes") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
 
-    return UNITY_END();
+        client = ldap_client_create(&config);
+        check_not_null(client);
+
+        /* Bind first */
+        ldap_result_data_t bind_result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
+        check_int_eq(rc, 0);
+        ldap_result_free(&bind_result);
+
+        /* Search with specific attributes */
+        const char *attrs[] = {"cn", "mail", "uid", NULL};
+
+        ldap_search_params_t params = {
+            .base_dn = FORUMSYS_BASE_DN,
+            .scope = LDAP_SCOPE_SUBTREE,
+            .filter = "(objectClass=person)",
+            .attrs = attrs,
+            .types_only = false,
+            .size_limit = 5,
+            .time_limit = 0
+        };
+
+        ldap_result_data_t search_result = {0};
+        rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
+
+        check_int_eq(rc, 0);
+        /* Accept success or sizeLimitExceeded (server may limit results) */
+        check(search_result.result_code == LDAP_SUCCESS ||
+              search_result.result_code == LDAP_SIZELIMIT_EXCEEDED);
+
+        printf("  Attribute search returned %d entries (result: %s)\n",
+               entry_count, ldap_result_code_str(search_result.result_code));
+
+        ldap_result_free(&search_result);
+    }
+  }
+
+  describe("LDAP Unbind Operation") {
+    it("should successfully unbind and close the connection") {
+        ldap_client_config_t config = {
+            .url = FORUMSYS_URL,
+            .timeout_ms = 10000
+        };
+
+        client = ldap_client_create(&config);
+        check_not_null(client);
+
+        /* Bind */
+        ldap_result_data_t bind_result = {0};
+        int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
+        check_int_eq(rc, 0);
+        ldap_result_free(&bind_result);
+
+        /* Unbind */
+        rc = ldap_client_unbind(client);
+        check_int_eq(rc, 0);
+
+        printf("  Unbind successful\n");
+
+        /* Client is now disconnected, destroy will handle cleanup */
+        ldap_client_destroy(client);
+        client = NULL;
+    }
+  }
 }

@@ -89,7 +89,7 @@ hier_part_host:
         pos += len;
         goto hier_part_port;
       }
-      "[v" [^\]]+ "]" {
+      "[v" [^\]\x00]+ "]" {
         pos++; // shift "["
         int len =  (int)(url_str - src - pos - 1);
         uri->host_type = URI_HOST_IPVFUTURE;
@@ -97,7 +97,7 @@ hier_part_host:
         pos += len + 1;
         goto hier_part_port;
       }
-      "[" [^\]]+ "]" {
+      "[" [^\]\x00]+ "]" {
         pos++; // shift "["
         int len =  (int)(url_str - src - pos - 1); // skip "]"
         uri->host_type = URI_HOST_IPV6ADDR;

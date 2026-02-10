@@ -575,7 +575,7 @@ static int process_handshake_response(turbo_websocket_client_t *client, const ch
 
   // Handshake failed - call on_connect with error
   if (client->on_connect) {
-    TLOG_ERROR("WS Handshake failed. Response:\n{}", client->handshake_recv_buffer->data);
+    TLOG_DEBUG("WS Handshake failed. Response:\n{}", client->handshake_recv_buffer->data);
     client->on_connect(client, -1, NULL);
   }
 

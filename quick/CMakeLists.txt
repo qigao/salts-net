@@ -1,5 +1,5 @@
 find_package(qjs REQUIRED)
-
+find_package(libuv CONFIG REQUIRED)
 set(TARGET_NAME turbo_quick)
 file(GLOB_RECURSE WORK_FLOW_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*
      ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
@@ -11,16 +11,17 @@ add_library(TurboNet::Quick ALIAS ${TARGET_NAME})
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/quick>)
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/quick>)
 
 # Link dependencies
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC qjs TurboNet::HttpClient TurboNet::Core TurboNet::Utils libuv::uv
+  PUBLIC qjs TurboNet::HttpClient TurboNet::Core TurboNet::Utils
+         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE TurboNet::UriParser TurboNet::JsonParser)
 
-target_compile_definitions(${TARGET_NAME}
+target_compile_definitions(
+  ${TARGET_NAME}
   PUBLIC $<$<BOOL:WIN32>:NOMINMAX>
   PRIVATE SHARED_CXX)
 

@@ -51,6 +51,7 @@ const char *json_get_string(const json_value_t *obj, const char *key);
 const char *json_get_error(void);
 char *json_serialize(const json_value_t *value, size_t *out_len);
 char *json_serialize_pretty(const json_value_t *value, size_t *out_len);
+char *json_serialize_pretty_crlf(const json_value_t *value, size_t *out_len);
 void json_serialize_free(char *str);
 
 /* ============================================================================

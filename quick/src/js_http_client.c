@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 /* Helper to convert internal json_value_t to QuickJS JSValue */
 static JSValue json_to_js(JSContext *ctx, json_value_t *val) {
     if (!val) return JS_NULL;
@@ -122,7 +123,7 @@ static JSValue js_http_request_internal(JSContext *ctx, int method, const char *
     if (is_json_payload) {
         bool has_ct = false;
         for(int i=0; i<header_count; i++) {
-            if(strnicmp(headers[i], "Content-Type", 12) == 0) { has_ct = true; break; }
+            if(strncasecmp(headers[i], "Content-Type", 12) == 0) { has_ct = true; break; }
         }
         if (!has_ct) {
             headers = realloc(headers, sizeof(char *) * (header_count + 1));
@@ -168,9 +169,9 @@ JSValue js_http_request(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     const char *method_str = JS_ToCString(ctx, argv[0]);
     const char *url = JS_ToCString(ctx, argv[1]);
     int method = HTTP_GET; // fallback
-    if (stricmp(method_str, "POST") == 0) method = HTTP_POST;
-    else if (stricmp(method_str, "PUT") == 0) method = HTTP_PUT;
-    else if (stricmp(method_str, "DELETE") == 0) method = HTTP_DELETE;
+    if (strcasecmp(method_str, "POST") == 0) method = HTTP_POST;
+    else if (strcasecmp(method_str, "PUT") == 0) method = HTTP_PUT;
+    else if (strcasecmp(method_str, "DELETE") == 0) method = HTTP_DELETE;
     JSValue res = js_http_request_internal(ctx, method, url, (argc > 2) ? argv[2] : JS_UNDEFINED);
     JS_FreeCString(ctx, method_str);
     JS_FreeCString(ctx, url);

@@ -13,7 +13,8 @@
 
 #include "platform.h"
 #include "tlog.h"
-#include "fmt_typed.h"
+#include "sds.h"
+#include "fmt.h"
 #include "log_pattern_lexer.h"
 #include "memory_pool.h"
 #include "stb_sprintf.h"
@@ -318,7 +319,7 @@ static void console_sink_flush(turbo_log_sink_t *sink) {
 static void console_sink_destroy(turbo_log_sink_t *sink) {
   console_sink_t *cs = (console_sink_t *)sink;
   uv_mutex_destroy(&cs->write_mutex);
-  free(cs->pattern);
+  sdsfree(cs->pattern);
   free(sink);
 }
 
@@ -443,8 +444,8 @@ static void file_sink_destroy(turbo_log_sink_t *sink) {
   }
   uv_mutex_unlock(&fs->write_mutex);
   uv_mutex_destroy(&fs->write_mutex);
-  free(fs->path);
-  free(fs->pattern);
+  sdsfree(fs->path);
+  sdsfree(fs->pattern);
   free(fs);
 }
 
@@ -478,8 +479,8 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   sink->fd = turbo_fs_open(opts->path, flags, TURBO_FS_DEFAULT_MODE);
   if (sink->fd == TURBO_INVALID_FILE) {
     uv_mutex_destroy(&sink->write_mutex);
-    free(sink->path);
-    free(sink->pattern);
+    sdsfree(sink->path);
+    sdsfree(sink->pattern);
     free(sink);
     return NULL;
   }
@@ -930,7 +931,7 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
     }
 
     ae->message = ptr;
-    int len = fmt_typed_print(ptr, MAX_MESSAGE_SIZE, fmt, args, arg_count);
+    int len = fmt_print(ptr, MAX_MESSAGE_SIZE, fmt, args, arg_count);
     if (len < 0)
       len = 0;
     if (len >= MAX_MESSAGE_SIZE)
@@ -949,7 +950,7 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
 
     char *message = (char *)pool_alloc(logger->pool, MAX_MESSAGE_SIZE + STRING_PADDING);
     if (message) {
-      int len = fmt_typed_print(message, MAX_MESSAGE_SIZE, fmt, args, arg_count);
+      int len = fmt_print(message, MAX_MESSAGE_SIZE, fmt, args, arg_count);
       if (len < 0)
         len = 0;
       if (len >= MAX_MESSAGE_SIZE)

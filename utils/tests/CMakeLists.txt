@@ -6,7 +6,7 @@ set(TEST_FILES
     test_arena_buffer.c
     test_arena.c
     test_dns_pref.c
-    test_fmt_typed.c
+    test_fmt.c
     test_memory_pool.c
     test_mmap.c
     test_simple_arena.c
@@ -16,6 +16,7 @@ set(TEST_FILES
     test_arena_multithread.c
     test_mutex.c
     test_turbo_fs.c
+    test_turbo_str.c
     test_native_timer.c)
 
 # Create executables and link libraries for each test
@@ -27,7 +28,7 @@ foreach(TEST_FILE ${TEST_FILES})
   add_executable(${TEST_NAME} ${TEST_FILE})
 
   # Link common libraries
-  target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Utils unity
+  target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Utils TurboNet::TinyTest
                                              PkgConfig::STC)
 
   # Add Windows system libraries for tests
@@ -37,11 +38,15 @@ foreach(TEST_FILE ${TEST_FILES})
 
   # Add specific libraries based on test type
   if(TEST_NAME MATCHES "dns")
-    target_link_libraries(${TEST_NAME} PRIVATE libuv::uv c-ares::cares)
+    target_link_libraries(${TEST_NAME} PRIVATE $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv> c-ares::cares)
   endif()
 
-  if(TEST_NAME MATCHES "fmt_re2c|fmt_typed")
+  if(TEST_NAME MATCHES "fmt_re2c|fmt")
     target_link_libraries(${TEST_NAME} PRIVATE fmt_lexer)
+  endif()
+
+  if(TEST_NAME MATCHES "turbo_str")
+    target_link_libraries(${TEST_NAME} PRIVATE TurboNet::SDS)
   endif()
 endforeach()
 

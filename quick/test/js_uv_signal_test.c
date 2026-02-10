@@ -1,62 +1,57 @@
-#include "unity.h"
-
 #include "test_uv_fixture.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-static JSUVTestEnv env;
-
-void setUp(void) {
-    js_uv_test_env_init(&env);
-}
-
-void tearDown(void) {
-    js_uv_test_env_cleanup(&env);
-}
-
-static char *dup_string_global(const char *name) {
-    JSValue prop = js_uv_test_global_prop(&env, name);
-    TEST_ASSERT_TRUE(JS_IsString(prop));
+static char *dup_string_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+    JSValue prop = js_uv_test_global_prop(env, name);
+    check_true(JS_IsString(prop));
     size_t len = 0;
-    const char *str = JS_ToCStringLen(env.ctx, &len, prop);
-    TEST_ASSERT_NOT_NULL(str);
+    const char *str = JS_ToCStringLen(env->ctx, &len, prop);
+    check_not_null(str);
     char *copy = (char *)malloc(len + 1);
-    TEST_ASSERT_NOT_NULL(copy);
-    memcpy(copy, str, len);
-    copy[len] = '\0';
-    JS_FreeCString(env.ctx, str);
-    JS_FreeValue(env.ctx, prop);
+    check_not_null(copy);
+    if (copy) {
+        memcpy(copy, str, len);
+        copy[len] = '\0';
+    }
+    JS_FreeCString(env->ctx, str);
+    JS_FreeValue(env->ctx, prop);
     return copy;
 }
 
-static int get_bool_global(const char *name) {
-    JSValue prop = js_uv_test_global_prop(&env, name);
-    int result = JS_ToBool(env.ctx, prop);
-    JS_FreeValue(env.ctx, prop);
+static int get_bool_global(__bdd_config_type__ *__bdd_config__, JSTurboTestEnv* env, const char *name) {
+    JSValue prop = js_uv_test_global_prop(env, name);
+    int result = JS_ToBool(env->ctx, prop);
+    JS_FreeValue(env->ctx, prop);
     return result;
 }
 
-void test_signal_watch_and_stop_closes_handle(void) {
-    js_uv_test_eval(&env,
-                    "var signalStatus = 'pending';\n"
-                    "var signalClosed = false;\n"
-                    "var watcher = turbo.signal.watch(2, () => { signalStatus = 'fired'; });\n"
-                    "watcher.onClose(() => { signalClosed = true; });\n"
-                    "watcher.stop();\n");
-    js_uv_test_run_loop(&env);
+spec("js_uv_signal") {
+    it("should watch and stop signal and close handle") {
+        JSTurboTestEnv env = {0};
+        js_uv_test_env_init(&env);
 
-    char *status = dup_string_global("signalStatus");
-    TEST_ASSERT_EQUAL_STRING("pending", status);
-    free(status);
-    TEST_ASSERT_NOT_EQUAL(0, get_bool_global("signalClosed"));
+        js_uv_test_eval(&env,
+                        "var signalStatus = 'pending';\n"
+                        "var signalClosed = false;\n"
+                        "var watcher = turbo.signal.watch(2, () => { signalStatus = 'fired'; });\n"
+                        "watcher.onClose(() => { signalClosed = true; });\n"
+                        "watcher.stop();\n");
+        
+        // Run loop until signalClosed becomes true (max 10 iterations)
+        for (int i = 0; i < 10 && !get_bool_global(__bdd_config__, &env, "signalClosed"); i++) {
+             js_uv_test_run_loop(&env);
+        }
 
-    // Clean up the watcher reference
-    js_uv_test_eval(&env, "watcher = null;\n");
-}
+        char *status = dup_string_global(__bdd_config__, &env, "signalStatus");
+        check_str_eq("pending", status);
+        free(status);
+        check_int_ne(0, get_bool_global(__bdd_config__, &env, "signalClosed"));
 
-int main(void) {
-    UNITY_BEGIN();
-    RUN_TEST(test_signal_watch_and_stop_closes_handle);
-    return UNITY_END();
+        // Clean up the watcher reference
+        js_uv_test_eval(&env, "watcher = null;\n");
+
+        js_uv_test_env_cleanup(&env);
+    }
 }

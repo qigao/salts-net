@@ -1,6 +1,6 @@
 set(TARGET_NAME turbo_utils)
 find_package(Stb REQUIRED)
-
+find_package(libuv CONFIG REQUIRED)
 # Add parser subdirectory first (generates lexer)
 add_subdirectory(parser)
 
@@ -43,9 +43,11 @@ target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 # Link dependencies
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC libuv::uv c-ares::cares # DNS resolver uses c-ares
+  PUBLIC  c-ares::cares # DNS resolver uses c-ares
          aklomp::base64 # Base64 utilities
+          $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE ${FMT_LEXER_LIBRARY} PkgConfig::STC # Thread-safe containers
+          TurboNet::SDS # Simple Dynamic Strings
           ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
 )
 
@@ -82,7 +84,7 @@ install(
   FILES_MATCHING
   PATTERN "*.h")
 
-# Install parser headers (fmt_lexer.h is needed by fmt_typed.h)
+# Install parser headers (fmt_lexer.h is needed by fmt.h)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/parser/fmt_lexer.h DESTINATION include)
 
 # Tests

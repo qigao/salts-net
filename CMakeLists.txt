@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-cmake_policy(SET CMP0144 OLD)
-cmake_policy(SET CMP0167 OLD)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5) 
 
 # TurboNet Project - Unified High-Performance Networking Library
 project(
@@ -40,7 +39,9 @@ include(Sanitizers)
 
 # Find common dependencies used by multiple libraries
 find_package(llhttp CONFIG REQUIRED)
+# Find libuv (managed by vcpkg)
 find_package(libuv CONFIG REQUIRED)
+
 find_package(kcp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(qjs REQUIRED)
@@ -48,15 +49,17 @@ find_package(Threads REQUIRED)
 find_package(c-ares CONFIG REQUIRED)
 find_package(cJSON CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
-find_package(PkgConfig REQUIRED)
+find_package(PkgConfig REQUIRED) 
+
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
+
 # Additional components
 add_subdirectory(vendor)
 include(cmake/FindTools.cmake)
 add_subdirectory(utils)
 add_subdirectory(parser)
 add_subdirectory(netcore)
-add_subdirectory(db)
+# add_subdirectory(db)
 add_subdirectory(http)
 add_subdirectory(iris)
 add_subdirectory(rpc_client)

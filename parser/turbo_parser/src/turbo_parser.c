@@ -129,6 +129,14 @@ char *turbo_json_serialize(const json_value_t *value, size_t *out_len) {
   return json_serialize(value, out_len);
 }
 
+char *turbo_json_serialize_pretty(const json_value_t *value, size_t *out_len) {
+  return json_serialize_pretty(value, out_len);
+}
+
+char *turbo_json_serialize_pretty_crlf(const json_value_t *value, size_t *out_len) {
+  return json_serialize_pretty_crlf(value, out_len);
+}
+
 void turbo_json_serialize_free(char *str) { json_serialize_free(str); }
 
 /* JSON Builder/Modifier */

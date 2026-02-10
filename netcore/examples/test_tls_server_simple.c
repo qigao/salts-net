@@ -81,7 +81,11 @@ static void on_close(void *conn, void *user_data) {
 
 int main(void) {
     // Enable TLS debug logging
+#ifdef _WIN32
     _putenv("TURBO_TLS_DEBUG=1");
+#else
+    setenv("TURBO_TLS_DEBUG", "1", 1);
+#endif
 
     printf("Simple TLS Server with ECDSA P-256\n");
     printf("===================================\n\n");

@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "arena_buffer.h"
+#include "turbo_str.h"
 
 
 /* Forward declarations */
@@ -128,7 +129,7 @@ static void *json_get_root(void *provider_data) {
 static void *json_get_child_by_name(void *node, const char *name, size_t size,
                                     void *provider_data) {
   json_value_t *json_node = (json_value_t *)node;
-  char *key_buffer = NULL;
+  tstr_t key_buffer = NULL;
   json_value_t *result = NULL;
   MUSTACHE_JSON_PROVIDER *provider = (MUSTACHE_JSON_PROVIDER *)provider_data;
 
@@ -140,18 +141,15 @@ static void *json_get_child_by_name(void *node, const char *name, size_t size,
   if (provider && provider->arena) {
     key_buffer = turbo_arena_alloc(provider->arena, size + 1);
   } else {
-    key_buffer = malloc(size + 1);
+    key_buffer = tstr_dup_len(name, size);
   }
   if (!key_buffer) {
     return NULL;
   }
 
-  memcpy(key_buffer, name, size);
-  key_buffer[size] = '\0';
-
   result = json_object_get(json_node, key_buffer);
   if (!(provider && provider->arena)) {
-    free(key_buffer);
+    tstr_free(key_buffer);
   }
 
   return result;

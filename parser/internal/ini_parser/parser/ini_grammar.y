@@ -17,19 +17,15 @@
 #include "ini_types.h"
 #include <stdlib.h>
 #include <string.h>
+#include "turbo_str.h"
 
-static char *ini_strndup(const char *s, size_t n) {
-    char *result = (char *)malloc(n + 1);
-    if (result) {
-        memcpy(result, s, n);
-        result[n] = '\0';
-    }
-    return result;
+static tstr_t ini_strndup(const char *s, size_t n) {
+    return tstr_dup_len(s, n);
 }
 
 static ini_section_t *ini_add_section(ini_parse_ctx_t *ctx, const char *name, size_t len) {
     for (ini_section_t *s = ctx->sections; s; s = s->next) {
-        if (strlen(s->name) == len && strncmp(s->name, name, len) == 0) {
+        if (tstr_len(s->name) == len && strncmp(s->name, name, len) == 0) {
             ctx->current = s;
             return s;
         }
@@ -61,10 +57,10 @@ static int ini_add_entry(ini_parse_ctx_t *ctx, const char *key, size_t key_len,
     }
 
     for (ini_entry_t *e = ctx->current->entries; e; e = e->next) {
-        if (strlen(e->key) == key_len && strncmp(e->key, key, key_len) == 0) {
-            char *new_val = ini_strndup(value, value_len);
+        if (tstr_len(e->key) == key_len && strncmp(e->key, key, key_len) == 0) {
+            tstr_t new_val = ini_strndup(value, value_len);
             if (!new_val) return -1;
-            free(e->value);
+            tstr_free(e->value);
             e->value = new_val;
             return 0;
         }
@@ -77,8 +73,8 @@ static int ini_add_entry(ini_parse_ctx_t *ctx, const char *key, size_t key_len,
     entry->value = ini_strndup(value, value_len);
 
     if (!entry->key || !entry->value) {
-        free(entry->key);
-        free(entry->value);
+        tstr_free(entry->key);
+        tstr_free(entry->value);
         free(entry);
         return -1;
     }

@@ -6,6 +6,7 @@
 #include "cookie_parser.h"
 #include "cookie_jar.h"
 #include "turbo_parser.h"
+#include "turbo_str.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -91,7 +92,7 @@ int domain_matches(const char *host, const char *cookie_domain) {
     if (!host || !cookie_domain) return 0;
     
     // Exact match
-    if (strcasecmp(host, cookie_domain) == 0) return 1;
+    if (tstr_casecmp(host, cookie_domain) == 0) return 1;
     
     // Domain attribute must start with '.'
     if (cookie_domain[0] != '.') return 0;
@@ -104,7 +105,7 @@ int domain_matches(const char *host, const char *cookie_domain) {
     
     // Check if host ends with cookie domain
     const char *host_suffix = host + (host_len - domain_len);
-    if (strcasecmp(host_suffix, cookie_domain) != 0) return 0;
+    if (tstr_casecmp(host_suffix, cookie_domain) != 0) return 0;
     
     // Ensure we're matching at a domain boundary
     if (host[host_len - domain_len - 1] != '.') return 0;
@@ -166,7 +167,7 @@ int cookie_matches_request(http_cookie_t *cookie, const char *url) {
     
     // Check secure flag
     if (matches && cookie->secure) {
-        if (strcasecmp(scheme, "https") != 0) {
+        if (tstr_casecmp(scheme, "https") != 0) {
             matches = 0;
         }
     }

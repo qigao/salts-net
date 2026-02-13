@@ -1043,6 +1043,11 @@ err:
   }
 }
 
+MUSTACHE_TEMPLATE *mustache_compile_v(tstr_v templ, const MUSTACHE_PARSER *parser,
+                                      void *parser_data, unsigned flags) {
+  return mustache_compile(templ.data, templ.len, parser, parser_data, flags);
+}
+
 void mustache_release(MUSTACHE_TEMPLATE *t) {
   if (t == NULL)
     return;

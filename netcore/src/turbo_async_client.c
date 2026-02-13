@@ -1,4 +1,5 @@
 #include "stb_sprintf.h"
+#include "fmt.h"
 #include "tlog.h"
 #include <limits.h>
 #include <stddef.h>
@@ -162,6 +163,7 @@ typedef struct async_client_tcp_send_req_s {
   char *buffer;
   size_t length;
   int is_sendv; /* 0 for regular send, 1 for sendv */
+  struct async_client_tcp_send_req_s *next;
 } async_client_tcp_send_req_t;
 
 typedef struct async_client_tcp_sendv_req_s {
@@ -170,6 +172,7 @@ typedef struct async_client_tcp_sendv_req_s {
   size_t bufcnt;
   char **buffers; /* Array of buffer pointers for cleanup */
   int is_sendv;   /* Always 1 */
+  struct async_client_tcp_sendv_req_s *next;
 } async_client_tcp_sendv_req_t;
 
 typedef struct {
@@ -185,6 +188,7 @@ typedef struct async_client_udp_send_req_s {
   char *buffer;
   size_t length;
   int is_sendv; /* 0 for regular send, 1 for sendv */
+  struct async_client_udp_send_req_s *next;
 } async_client_udp_send_req_t;
 
 typedef struct async_client_udp_sendv_req_s {
@@ -193,6 +197,7 @@ typedef struct async_client_udp_sendv_req_s {
   size_t bufcnt;
   char **buffers; /* Array of buffer pointers for cleanup */
   int is_sendv;   /* Always 1 */
+  struct async_client_udp_sendv_req_s *next;
 } async_client_udp_sendv_req_t;
 
 typedef struct {
@@ -309,8 +314,119 @@ struct async_client_s {
   /* Zero-copy arena memory management */
   turbo_arena_t arena;
 
+  /* Small object pools (loop-thread only) */
+  struct {
+    async_client_tcp_send_req_t *tcp_send;
+    async_client_tcp_sendv_req_t *tcp_sendv;
+    async_client_udp_send_req_t *udp_send;
+    async_client_udp_sendv_req_t *udp_sendv;
+  } req_pool;
+
   struct async_client_s *global_next;
 };
+
+static async_client_tcp_send_req_t *tcp_send_req_acquire(async_client_t *client) {
+  async_client_tcp_send_req_t *req = client->req_pool.tcp_send;
+  if (req) {
+    client->req_pool.tcp_send = req->next;
+    memset(req, 0, sizeof(*req));
+    return req;
+  }
+  return (async_client_tcp_send_req_t *)calloc(1, sizeof(async_client_tcp_send_req_t));
+}
+
+static void tcp_send_req_release(async_client_t *client, async_client_tcp_send_req_t *req) {
+  if (!req)
+    return;
+  req->next = client->req_pool.tcp_send;
+  client->req_pool.tcp_send = req;
+}
+
+static async_client_tcp_sendv_req_t *tcp_sendv_req_acquire(async_client_t *client) {
+  async_client_tcp_sendv_req_t *req = client->req_pool.tcp_sendv;
+  if (req) {
+    client->req_pool.tcp_sendv = req->next;
+    memset(req, 0, sizeof(*req));
+    return req;
+  }
+  return (async_client_tcp_sendv_req_t *)calloc(1, sizeof(async_client_tcp_sendv_req_t));
+}
+
+static void tcp_sendv_req_release(async_client_t *client, async_client_tcp_sendv_req_t *req) {
+  if (!req)
+    return;
+  req->next = client->req_pool.tcp_sendv;
+  client->req_pool.tcp_sendv = req;
+}
+
+static async_client_udp_send_req_t *udp_send_req_acquire(async_client_t *client) {
+  async_client_udp_send_req_t *req = client->req_pool.udp_send;
+  if (req) {
+    client->req_pool.udp_send = req->next;
+    memset(req, 0, sizeof(*req));
+    return req;
+  }
+  return (async_client_udp_send_req_t *)calloc(1, sizeof(async_client_udp_send_req_t));
+}
+
+static void udp_send_req_release(async_client_t *client, async_client_udp_send_req_t *req) {
+  if (!req)
+    return;
+  req->next = client->req_pool.udp_send;
+  client->req_pool.udp_send = req;
+}
+
+static async_client_udp_sendv_req_t *udp_sendv_req_acquire(async_client_t *client) {
+  async_client_udp_sendv_req_t *req = client->req_pool.udp_sendv;
+  if (req) {
+    client->req_pool.udp_sendv = req->next;
+    memset(req, 0, sizeof(*req));
+    return req;
+  }
+  return (async_client_udp_sendv_req_t *)calloc(1, sizeof(async_client_udp_sendv_req_t));
+}
+
+static void udp_sendv_req_release(async_client_t *client, async_client_udp_sendv_req_t *req) {
+  if (!req)
+    return;
+  req->next = client->req_pool.udp_sendv;
+  client->req_pool.udp_sendv = req;
+}
+
+static void req_pool_free(async_client_t *client) {
+  async_client_tcp_send_req_t *tcp_send = client->req_pool.tcp_send;
+  while (tcp_send) {
+    async_client_tcp_send_req_t *next = tcp_send->next;
+    free(tcp_send);
+    tcp_send = next;
+  }
+
+  async_client_tcp_sendv_req_t *tcp_sendv = client->req_pool.tcp_sendv;
+  while (tcp_sendv) {
+    async_client_tcp_sendv_req_t *next = tcp_sendv->next;
+    free(tcp_sendv);
+    tcp_sendv = next;
+  }
+
+  async_client_udp_send_req_t *udp_send = client->req_pool.udp_send;
+  while (udp_send) {
+    async_client_udp_send_req_t *next = udp_send->next;
+    free(udp_send);
+    udp_send = next;
+  }
+
+  async_client_udp_sendv_req_t *udp_sendv = client->req_pool.udp_sendv;
+  while (udp_sendv) {
+    async_client_udp_sendv_req_t *next = udp_sendv->next;
+    free(udp_sendv);
+    udp_sendv = next;
+  }
+
+  client->req_pool.tcp_send = NULL;
+  client->req_pool.tcp_sendv = NULL;
+  client->req_pool.udp_send = NULL;
+  client->req_pool.udp_sendv = NULL;
+}
 
 /* ========================================================================
  * Transport vtable definitions
@@ -923,8 +1039,7 @@ static int tcp_connect_impl(async_client_t *client, const char *host, int port) 
 }
 
 static int tcp_send_impl(async_client_t *client, char *data, size_t len) {
-  async_client_tcp_send_req_t *send_req =
-      (async_client_tcp_send_req_t *)calloc(1, sizeof(*send_req));
+  async_client_tcp_send_req_t *send_req = tcp_send_req_acquire(client);
   if (!send_req) {
     free(data);
     return -ASYNC_CLIENT_STATUS_ALLOC_FAILED;
@@ -939,7 +1054,7 @@ static int tcp_send_impl(async_client_t *client, char *data, size_t len) {
       uv_write(&send_req->req, (uv_stream_t *)&client->proto.tcp.handle, &buf, 1, tcp_write_cb);
   if (rc != 0) {
     free(send_req->buffer);
-    free(send_req);
+    tcp_send_req_release(client, send_req);
     return rc;
   }
   return 0;
@@ -989,8 +1104,7 @@ static int udp_send_impl(async_client_t *client, char *data, size_t len) {
     free(data);
     return -ASYNC_CLIENT_STATUS_NOT_READY;
   }
-  async_client_udp_send_req_t *send_req =
-      (async_client_udp_send_req_t *)calloc(1, sizeof(*send_req));
+  async_client_udp_send_req_t *send_req = udp_send_req_acquire(client);
   if (!send_req) {
     free(data);
     return -ASYNC_CLIENT_STATUS_ALLOC_FAILED;
@@ -1005,7 +1119,7 @@ static int udp_send_impl(async_client_t *client, char *data, size_t len) {
   int rc = uv_udp_send(&send_req->req, &client->proto.udp.handle, &buf, 1, addr, udp_send_cb);
   if (rc != 0) {
     free(send_req->buffer);
-    free(send_req);
+    udp_send_req_release(client, send_req);
     return rc;
   }
   return 0;
@@ -1448,8 +1562,7 @@ static void client_update_sendv_stats(async_client_t *client, size_t total_bytes
 
 static int client_tcp_sendv_impl(async_client_t *client, const async_client_iovec_t *iov,
                                  size_t iovcnt) {
-  async_client_tcp_sendv_req_t *send_req =
-      (async_client_tcp_sendv_req_t *)calloc(1, sizeof(*send_req));
+  async_client_tcp_sendv_req_t *send_req = tcp_sendv_req_acquire(client);
   if (!send_req)
     return UV_ENOMEM;
 
@@ -1458,7 +1571,7 @@ static int client_tcp_sendv_impl(async_client_t *client, const async_client_iove
   if (!send_req->bufs || !send_req->buffers) {
     free(send_req->bufs);
     free(send_req->buffers);
-    free(send_req);
+    tcp_sendv_req_release(client, send_req);
     return UV_ENOMEM;
   }
 
@@ -1475,7 +1588,7 @@ static int client_tcp_sendv_impl(async_client_t *client, const async_client_iove
   if (rc != 0) {
     free(send_req->buffers);
     free(send_req->bufs);
-    free(send_req);
+    tcp_sendv_req_release(client, send_req);
   }
   return rc;
 }
@@ -1485,8 +1598,7 @@ static int client_udp_sendv_impl(async_client_t *client, const async_client_iove
   if (!client->proto.udp.connected && client->proto.udp.remote_addr_len == 0)
     return -ASYNC_CLIENT_STATUS_NOT_READY;
 
-  async_client_udp_sendv_req_t *send_req =
-      (async_client_udp_sendv_req_t *)calloc(1, sizeof(*send_req));
+  async_client_udp_sendv_req_t *send_req = udp_sendv_req_acquire(client);
   if (!send_req)
     return UV_ENOMEM;
 
@@ -1495,7 +1607,7 @@ static int client_udp_sendv_impl(async_client_t *client, const async_client_iove
   if (!send_req->bufs || !send_req->buffers) {
     free(send_req->bufs);
     free(send_req->buffers);
-    free(send_req);
+    udp_sendv_req_release(client, send_req);
     return UV_ENOMEM;
   }
 
@@ -1514,7 +1626,7 @@ static int client_udp_sendv_impl(async_client_t *client, const async_client_iove
   if (rc != 0) {
     free(send_req->buffers);
     free(send_req->bufs);
-    free(send_req);
+    udp_sendv_req_release(client, send_req);
   }
   return rc;
 }
@@ -1727,11 +1839,11 @@ static void tcp_write_cb(uv_write_t *req, int status) {
        * DO NOT free them individually - they're freed with the command */
       free(sendv_req->buffers); /* Free pointer array only */
       free(sendv_req->bufs);    /* Free uv_buf_t array only */
-      free(sendv_req);
+      tcp_sendv_req_release(client, sendv_req);
     } else {
       /* Regular send request */
       free(send_req->buffer);
-      free(send_req);
+      tcp_send_req_release(client, send_req);
     }
   }
 
@@ -1866,11 +1978,11 @@ static void udp_send_cb(uv_udp_send_t *req, int status) {
        * DO NOT free them individually - they're freed with the command */
       free(sendv_req->buffers); /* Free pointer array only */
       free(sendv_req->bufs);    /* Free uv_buf_t array only */
-      free(sendv_req);
+      udp_sendv_req_release(client, sendv_req);
     } else {
       /* Regular send request */
       free(send_req->buffer);
-      free(send_req);
+      udp_send_req_release(client, send_req);
     }
   }
 
@@ -2345,20 +2457,11 @@ static void emit_uv_error(async_client_t *client, int status, const char *contex
   const char *uv_msg = uv_strerror(status);
   char buffer[ASYNC_CLIENT_ERROR_MESSAGE_MAX];
 
-  /* Copy to padded buffer to avoid ASan false positives from stb_sprintf 4-byte reads */
-  char msg_padded[128] = {0};
-  if (uv_msg) {
-    strncpy(msg_padded, uv_msg, sizeof(msg_padded) - 1);
-  } else {
-    strncpy(msg_padded, "unknown", sizeof(msg_padded) - 1);
-  }
-
+  const char *msg = uv_msg ? uv_msg : "unknown";
   if (context && context[0] != '\0') {
-    static const char FMT_UV_ERR_CTX[32] = "%s: %s (%d)";
-    stbsp_snprintf(buffer, (int)sizeof(buffer), FMT_UV_ERR_CTX, context, msg_padded, status);
+    fmt(buffer, sizeof(buffer), "{}: {} ({})", context, msg, status);
   } else {
-    static const char FMT_UV_ERR[32] = "%s (%d)";
-    stbsp_snprintf(buffer, (int)sizeof(buffer), FMT_UV_ERR, msg_padded, status);
+    fmt(buffer, sizeof(buffer), "{} ({})", msg, status);
   }
 
   if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET || status == UV_EAGAIN) {
@@ -2522,6 +2625,7 @@ void async_client_destroy(async_client_t *client) {
     client->config_acquired = 0;
   }
 
+  req_pool_free(client);
   turbo_arena_free(&client->arena);
   uv_cond_destroy(&client->cond);
   uv_mutex_destroy(&client->mutex);

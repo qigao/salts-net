@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <turbo_str_view.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,11 +35,15 @@ bool json_bool(const json_value_t *value);
 double json_number(const json_value_t *value);
 const char *json_string(const json_value_t *value);
 size_t json_string_len(const json_value_t *value);
+tstr_v json_string_v(const json_value_t *value);
 
 size_t json_object_size(const json_value_t *obj);
 const char *json_object_key(const json_value_t *obj, size_t index);
+size_t json_object_key_len(const json_value_t *obj, size_t index);
+tstr_v json_object_key_v(const json_value_t *obj, size_t index);
 json_value_t *json_object_value(const json_value_t *obj, size_t index);
 json_value_t *json_object_get(const json_value_t *obj, const char *key);
+json_value_t *json_object_get_v(const json_value_t *obj, tstr_v key);
 
 size_t json_array_size(const json_value_t *arr);
 json_value_t *json_array_get(const json_value_t *arr, size_t index);
@@ -47,6 +52,12 @@ int json_get_int(const json_value_t *obj, const char *key, int def);
 bool json_get_bool(const json_value_t *obj, const char *key, bool def);
 double json_get_double(const json_value_t *obj, const char *key, double def);
 const char *json_get_string(const json_value_t *obj, const char *key);
+tstr_v json_get_string_v(const json_value_t *obj, const char *key);
+
+int json_get_int_v(const json_value_t *obj, tstr_v key, int def);
+bool json_get_bool_v(const json_value_t *obj, tstr_v key, bool def);
+double json_get_double_v(const json_value_t *obj, tstr_v key, double def);
+tstr_v json_get_string_vv(const json_value_t *obj, tstr_v key);
 
 const char *json_get_error(void);
 char *json_serialize(const json_value_t *value, size_t *out_len);

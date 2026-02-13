@@ -43,14 +43,13 @@ add_custom_command(
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${JSON_LEXER_GEN}
-                           ${JSON_GRAMMAR_GEN})
+                                  ${JSON_GRAMMAR_GEN})
 add_library(TurboNet::JsonParser ALIAS ${TARGET_NAME})
 
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<INSTALL_INTERFACE:include>
-         $<INSTALL_INTERFACE:include/json_parser>
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/json_parser>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
@@ -62,16 +61,9 @@ set_target_properties(
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME JsonParser)
 
-if(ENABLE_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
 
-# # Install targets
-# install(TARGETS ${TARGET_NAME}
-#         EXPORT TurboNetTargets
-#         LIBRARY DESTINATION lib
-#         ARCHIVE DESTINATION lib
-#         RUNTIME DESTINATION bin)
+# # Install targets install(TARGETS ${TARGET_NAME} EXPORT TurboNetTargets
+# LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
 
-# install(FILES include/json_parser.h
-#         DESTINATION include/json_parser)
+# install(FILES include/json_parser.h DESTINATION include/json_parser)

@@ -7,19 +7,20 @@
 #define INI_TYPES_H
 
 #include <stddef.h>
+#include "turbo_str.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct ini_entry_s {
-    char *key;
-    char *value;
+    tstr_t key;
+    tstr_t value;
     struct ini_entry_s *next;
 } ini_entry_t;
 
 typedef struct ini_section_s {
-    char *name;
+    tstr_t name;
     ini_entry_t *entries;
     ini_entry_t *entries_tail;
     struct ini_section_s *next;

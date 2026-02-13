@@ -51,7 +51,7 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
-
+target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
 set_target_properties(
   ${TARGET_NAME}
   PROPERTIES FOLDER turbo_parser/parser/${TARGET_NAME}
@@ -74,11 +74,9 @@ else()
     ${TARGET_NAME} PRIVATE -Wno-unused-parameter -Wno-unused-function
                            -Wno-unused-variable -Wno-unused-but-set-variable)
 endif()
- 
+
 # =============================================================================
 # Tests
 # =============================================================================
 
-if(ENABLE_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)

@@ -9,6 +9,7 @@
 #include "middleware.h"
 #include "cors.h"
 #include "server.h"
+#include "arena_buffer.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -32,10 +33,10 @@ iris_app_t *iris_app_create(void) {
         return NULL;
     }
 
-    /* Initialize middleware with default capacity */
-    app->global_middleware = NULL;
+    /* Initialize middleware with inline capacity */
+    app->global_middleware = app->global_middleware_inline;
     app->global_middleware_count = 0;
-    app->global_middleware_capacity = 0;
+    app->global_middleware_capacity = IRIS_INLINE_MW_CAPACITY;
 
     /* CORS and RPC start as NULL */
     app->cors_opts = NULL;
@@ -56,7 +57,7 @@ void iris_app_destroy(iris_app_t *app) {
     }
 
     /* Free global middleware array */
-    if (app->global_middleware) {
+    if (app->global_middleware && app->global_middleware != app->global_middleware_inline) {
         free(app->global_middleware);
         app->global_middleware = NULL;
     }
@@ -115,7 +116,18 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
     }
 
     /* Create middleware info */
-    MiddlewareInfo *middleware_info = calloc(1, sizeof(MiddlewareInfo));
+    MiddlewareInfo *middleware_info = NULL;
+    if (app->route_trie) {
+        middleware_info = (MiddlewareInfo *)turbo_arena_alloc(&app->route_trie->param_arena,
+                                                             sizeof(MiddlewareInfo));
+        if (middleware_info) {
+            memset(middleware_info, 0, sizeof(MiddlewareInfo));
+            middleware_info->arena_owned = 1;
+        }
+    }
+    if (!middleware_info) {
+        middleware_info = calloc(1, sizeof(MiddlewareInfo));
+    }
     if (!middleware_info) {
         TLOG_ERROR("iris_app_route: memory allocation failed");
         return;
@@ -124,11 +136,23 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
     middleware_info->handler = handler;
 
     if (middleware.count > 0 && middleware.handlers) {
-        middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
-        if (!middleware_info->middleware) {
-            TLOG_ERROR("iris_app_route: middleware allocation failed");
-            free(middleware_info);
-            return;
+        if (middleware_info->arena_owned) {
+            middleware_info->middleware =
+                (MiddlewareHandler *)turbo_arena_alloc(&app->route_trie->param_arena,
+                                                      sizeof(MiddlewareHandler) * middleware.count);
+            if (!middleware_info->middleware) {
+                TLOG_ERROR("iris_app_route: middleware allocation failed");
+                return;
+            }
+        } else if (middleware.count <= IRIS_INLINE_ROUTE_MW_CAPACITY) {
+            middleware_info->middleware = middleware_info->middleware_inline;
+        } else {
+            middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
+            if (!middleware_info->middleware) {
+                TLOG_ERROR("iris_app_route: middleware allocation failed");
+                free(middleware_info);
+                return;
+            }
         }
         memcpy(middleware_info->middleware, middleware.handlers,
                sizeof(MiddlewareHandler) * middleware.count);
@@ -146,16 +170,23 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
  * Middleware
  * ============================================================================ */
 
-#define INITIAL_MW_CAPACITY 4
-
 void iris_app_hook(iris_app_t *app, MiddlewareHandler middleware) {
     if (!app || !middleware)
         return;
 
     if (app->global_middleware_count >= app->global_middleware_capacity) {
         int new_cap = app->global_middleware_capacity ? app->global_middleware_capacity * 2
-                                                       : INITIAL_MW_CAPACITY;
-        MiddlewareHandler *tmp = realloc(app->global_middleware, new_cap * sizeof(MiddlewareHandler));
+                                                       : IRIS_INLINE_MW_CAPACITY;
+        MiddlewareHandler *tmp = NULL;
+        if (app->global_middleware == app->global_middleware_inline) {
+            tmp = malloc(new_cap * sizeof(MiddlewareHandler));
+            if (tmp) {
+                memcpy(tmp, app->global_middleware_inline,
+                       app->global_middleware_count * sizeof(MiddlewareHandler));
+            }
+        } else {
+            tmp = realloc(app->global_middleware, new_cap * sizeof(MiddlewareHandler));
+        }
         if (!tmp) {
             TLOG_ERROR("iris_app_hook: realloc failed");
             return;

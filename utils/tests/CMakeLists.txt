@@ -13,11 +13,14 @@ set(TEST_FILES
     test_tlog.c
     test_stc.c
     test_fmt_re2c.c
+    test_fmt_bench.c
+    test_str_bench.c
     test_arena_multithread.c
     test_mutex.c
     test_turbo_fs.c
     test_turbo_str.c
-    test_native_timer.c)
+    test_native_timer.c
+    test_url_codec.c)
 
 # Create executables and link libraries for each test
 foreach(TEST_FILE ${TEST_FILES})
@@ -45,7 +48,7 @@ foreach(TEST_FILE ${TEST_FILES})
     target_link_libraries(${TEST_NAME} PRIVATE fmt_lexer)
   endif()
 
-  if(TEST_NAME MATCHES "turbo_str")
+  if(TEST_NAME MATCHES "turbo_str|str_bench")
     target_link_libraries(${TEST_NAME} PRIVATE TurboNet::SDS)
   endif()
 endforeach()

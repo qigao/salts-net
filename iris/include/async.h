@@ -2,12 +2,13 @@
 #define ASYNC_H
 
 #include <uv.h>
+#include "turbo_str.h"
 
 // Opaque task handle type
 typedef struct async_t async_t;
 
 // Common response handler type
-typedef void (*async_response_handler_t)(void *context, int success, char *error);
+typedef void (*async_response_handler_t)(void *context, int success, tstr_t error);
 
 // Task work function type
 typedef void (*async_work_fn_t)(async_t *task, void *context);
@@ -19,7 +20,7 @@ struct async_t
     void *context; // User provided context data
     int completed; // Flag indicating if task is completed
     int result;    // 1 for success, 0 for failure
-    char *error;   // Error message if result is 0
+    tstr_t error;  // Error message if result is 0
 
     // Task callbacks
     async_work_fn_t work_fn;          // Work to be done in thread pool
@@ -43,7 +44,7 @@ int task(
 void then(
     void *context,
     int success,
-    char *error,
+    tstr_t error,
     async_work_fn_t next_work_fn,
     async_response_handler_t handler);
 

@@ -4,6 +4,7 @@
 #include "platform.h"
 #include "client_common.h"
 #include "arena_buffer.h"
+#include "turbo_str_view.h"
 #include <stddef.h>
 
 
@@ -49,6 +50,21 @@ typedef struct async_client_event_s {
   const char *message;              /* human-readable error/info text */
   async_client_event_flags_t flags; /* Metadata describing payload ownership */
 } async_client_event_t;
+
+/**
+ * @brief Get event data as a string view.
+ *
+ * Convenience function to extract data from an event as tstr_v.
+ * Works with both regular data and zero-copy slices.
+ *
+ * @param event The event to extract data from.
+ * @return A tstr_v containing the event data.
+ */
+static inline tstr_v async_client_event_data_v(const async_client_event_t *event) {
+  if (!event) return tstr_v_from_buf(NULL, 0);
+  if (event->slice) return tstr_v_from_slice(event->slice);
+  return tstr_v_from_buf(event->data, event->length);
+}
 
 typedef void (*async_client_event_cb)(async_client_t *client, const async_client_event_t *event,
                                       void *user_data);
@@ -120,6 +136,20 @@ CXX_C_API async_client_status_t async_client_connect(async_client_t *client, con
  *         or an error code otherwise.
  */
 CXX_C_API async_client_status_t async_client_send(async_client_t *client, const char *data, size_t len);
+
+/**
+ * @brief Sends data from a string view.
+ *
+ * Convenience function that sends data from a tstr_v string view.
+ *
+ * @param client A pointer to the async_client_t instance.
+ * @param data The string view containing data to send.
+ * @return ASYNC_CLIENT_STATUS_OK if the data was queued for sending,
+ *         or an error code otherwise.
+ */
+static inline async_client_status_t async_client_send_v(async_client_t *client, tstr_v data) {
+  return async_client_send(client, data.data, data.len);
+}
 
 /**
  * @brief IO vector structure for scatter-gather operations.

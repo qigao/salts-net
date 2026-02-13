@@ -1,6 +1,7 @@
 #pragma once
 
 #include "quickjs.h"
+#include "platform.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,7 +16,7 @@ extern "C" {
  * @param ctx QuickJS context
  * @return 0 on success, -1 on error
  */
-int js_init_string_utils_module(JSContext *ctx);
+CXX_C_API int js_init_string_utils_module(JSContext *ctx);
 
 #ifdef __cplusplus
 }

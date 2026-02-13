@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <uv.h>
+ 
 
 /* Suppress warnings for stb_sprintf optimization and dynamic format strings */
 #if defined(__GNUC__) || defined(__clang__)
@@ -126,7 +126,12 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
     if (mod_buf[0]) {
       char fb[64];
       snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "s") != NULL) ? "%%%s" : "%%%ss", mod_buf);
-      char *padded = turbo_strdup_padded(s);
+      char *padded = sdsnewlen(s, strlen(s));
+      if (!padded)
+        return 0;
+      padded = sdsMakeRoomFor(padded, 8);
+      if (!padded)
+        return 0;
       written = stbsp_snprintf(temp, sizeof(temp), fb, padded);
       sdsfree(padded);
     } else {
@@ -150,6 +155,15 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
   case FMT_TYPE_BOOL:
     written = stbsp_snprintf(temp, sizeof(temp), P("%s"), arg->val.b ? "true" : "false");
     break;
+
+  case FMT_TYPE_STRV: {
+    const char *s = arg->val.sv.data ? arg->val.sv.data : "(null)";
+    size_t slen = arg->val.sv.data ? arg->val.sv.len : 6;
+    if (dst + slen > end)
+      slen = (size_t)(end - dst);
+    memcpy(dst, s, slen);
+    return (int)slen;
+  }
 
   default:
     written =
@@ -180,21 +194,20 @@ CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t
   char *dst = buf;
   char *end = buf + size - 1; /* Room for null terminator */
   size_t arg_idx = 0;
+  tstr_v token_view = tstr_v_from_buf(NULL, 0);
 
   while (dst < end) {
-    const char *token_start;
-    size_t token_len;
-    fmt_token_t token = fmt_scan(&cursor, &token_start, &token_len);
+    fmt_token_t token = fmt_scan_v(&cursor, &token_view);
 
     switch (token) {
     case FMT_TOKEN_END:
       goto done;
 
     case FMT_TOKEN_TEXT: {
-      size_t len = token_len;
+      size_t len = token_view.len;
       if (dst + len > end)
         len = (size_t)(end - dst);
-      memcpy(dst, token_start, len);
+      memcpy(dst, token_view.data, len);
       dst += len;
       break;
     }
@@ -223,7 +236,7 @@ CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t
     case FMT_TOKEN_SPECIFIER:
       if (arg_idx < arg_count) {
         // token_start points to internal content, length is token_len
-        dst += format_arg_to_buffer(dst, end, &args[arg_idx++], token_start, token_len);
+        dst += format_arg_to_buffer(dst, end, &args[arg_idx++], token_view.data, token_view.len);
       }
       // If arg_idx out of bounds, we simply skip? Or print raw?
       // The re2c version skipped printing it entirely if idx > count.
@@ -233,10 +246,10 @@ CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t
     case FMT_TOKEN_INVALID:
       // Copy exact content
       {
-        size_t len = token_len;
+        size_t len = token_view.len;
         if (dst + len > end)
           len = (size_t)(end - dst);
-        memcpy(dst, token_start, len);
+        memcpy(dst, token_view.data, len);
         dst += len;
       }
       break;

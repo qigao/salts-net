@@ -215,7 +215,4 @@ message("Release flags: ${CMAKE_C_FLAGS_RELEASE}")
 message("----")
 
 # Install
-
-include(GNUInstallDirs)
-
-install(TARGETS ${OUT_FILE} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+ 

@@ -11,36 +11,25 @@
 #include "cookie_jar.h"
 #include "cookie_parser.h"
 #include "tlog.h"
-#include "sds.h"
+#include "turbo_str.h"
 #include <cjwt/cjwt.h>
+#include <json_parser.h>
 #include <turbo_fs.h>
 
 #include <stb_sprintf.h>
+#include "fmt.h"
 
 #define HTTP_REQUEST_POOL_SIZE (1024 * 1024) // 1MB pool for request lifecycle
 
 /*
  * STB_SPRINTF SAFETY NOTE:
- * stb_sprintf reads 4 bytes at a time for performance optimization.
- * This means:
- * 1. Format strings must be in padded static arrays (e.g., static const char FMT[32] = "...")
- * 2. String arguments (%s) must have at least 4 bytes readable after the null terminator
- *
- * Use strdup_padded() or malloc(len + 8) for strings passed to stbsp_snprintf.
+ * All string formatting goes through fmt() which handles padding internally.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-/* Helper to allocate string with padding for ASan/stb_sprintf safety.
- * stb_sprintf reads 4 bytes at a time, so strings need padding after null terminator.
- * Uses turbo_strdup_padded from platform.h */
-#define strdup_padded turbo_strdup_padded
-
-/* Helper to allocate memory with padding for stb_sprintf safety */
-#define malloc_padded turbo_malloc_padded
 
 /* Helper for pool-based string duplication */
 #define pool_strdup(pool, str) turbo_pool_strdup((void *)(pool), (str))
@@ -55,19 +44,12 @@ typedef struct http_interceptor_node_s {
   struct http_interceptor_node_s *next;
 } http_interceptor_node_t;
 
-/* Default/request header entry (uses padded C strings) */
+/* Default/request header entry */
 typedef struct header_entry_s {
   char *name;
   char *value;
   struct header_entry_s *next;
 } header_entry_t;
-
-/* Parsed response header entry (uses SDS) */
-struct http_header_entry_s {
-  sds name;
-  sds value;
-  struct http_header_entry_s *next;
-};
 
 struct http_client_s {
   sync_client_t *client;
@@ -179,9 +161,9 @@ struct http_request_builder_s {
 typedef struct {
   http_response_t *response;
   int headers_complete;
-  sds current_header_field;
-  sds current_header_value;
-  sds headers_accum;
+  tstr_t current_header_field;
+  tstr_t current_header_value;
+  tstr_t headers_accum;
   http_header_entry_t *headers_head;
   http_header_entry_t *headers_tail;
   int headers_oom;
@@ -193,33 +175,33 @@ static int append_current_header(parser_context_t *ctx) {
     return 0;
 
   if (!ctx->current_header_value) {
-    ctx->current_header_value = sdsnewlen("", 0);
+    ctx->current_header_value = tstr_dup_len("", 0);
     if (!ctx->current_header_value)
       ctx->headers_oom = 1;
   }
 
   if (!ctx->headers_accum) {
-    ctx->headers_accum = sdsnewlen("", 0);
+    ctx->headers_accum = tstr_dup_len("", 0);
     if (!ctx->headers_accum)
       ctx->headers_oom = 1;
   }
 
   if (!ctx->headers_oom && ctx->headers_accum) {
-    ctx->headers_accum = sdscatlen(ctx->headers_accum, ctx->current_header_field,
-                                   sdslen(ctx->current_header_field));
+    ctx->headers_accum = tstr_cat_len(ctx->headers_accum, ctx->current_header_field,
+                                      tstr_len(ctx->current_header_field));
     if (!ctx->headers_accum) {
       ctx->headers_oom = 1;
     } else {
-      ctx->headers_accum = sdscatlen(ctx->headers_accum, ": ", 2);
+      ctx->headers_accum = tstr_cat_len(ctx->headers_accum, ": ", 2);
       if (!ctx->headers_accum) {
         ctx->headers_oom = 1;
       } else {
-        ctx->headers_accum = sdscatlen(ctx->headers_accum, ctx->current_header_value,
-                                       sdslen(ctx->current_header_value));
+        ctx->headers_accum = tstr_cat_len(ctx->headers_accum, ctx->current_header_value,
+                                          tstr_len(ctx->current_header_value));
         if (!ctx->headers_accum) {
           ctx->headers_oom = 1;
         } else {
-          ctx->headers_accum = sdscatlen(ctx->headers_accum, "\r\n", 2);
+          ctx->headers_accum = tstr_cat_len(ctx->headers_accum, "\r\n", 2);
           if (!ctx->headers_accum)
             ctx->headers_oom = 1;
         }
@@ -233,13 +215,13 @@ static int append_current_header(parser_context_t *ctx) {
     if (!entry) {
       ctx->headers_oom = 1;
     } else {
-      entry->name = sdsdup(ctx->current_header_field);
-      entry->value = sdsdup(ctx->current_header_value);
+      entry->name = tstr_dup(ctx->current_header_field);
+      entry->value = tstr_dup(ctx->current_header_value);
       if (!entry->name || !entry->value) {
         if (entry->name)
-          sdsfree(entry->name);
+          tstr_free(entry->name);
         if (entry->value)
-          sdsfree(entry->value);
+          tstr_free(entry->value);
         ctx->headers_oom = 1;
       } else {
         entry->next = NULL;
@@ -253,8 +235,8 @@ static int append_current_header(parser_context_t *ctx) {
     }
   }
 
-  sdsfree(ctx->current_header_field);
-  sdsfree(ctx->current_header_value);
+  tstr_free(ctx->current_header_field);
+  tstr_free(ctx->current_header_value);
   ctx->current_header_field = NULL;
   ctx->current_header_value = NULL;
 
@@ -275,9 +257,9 @@ static int on_header_field(llhttp_t *parser, const char *at, size_t length) {
   }
 
   if (!ctx->current_header_field)
-    ctx->current_header_field = sdsnewlen(at, length);
+    ctx->current_header_field = tstr_dup_len(at, length);
   else
-    ctx->current_header_field = sdscatlen(ctx->current_header_field, at, length);
+    ctx->current_header_field = tstr_cat_len(ctx->current_header_field, at, length);
   if (!ctx->current_header_field) {
     ctx->headers_oom = 1;
     return -1;
@@ -288,9 +270,9 @@ static int on_header_field(llhttp_t *parser, const char *at, size_t length) {
 static int on_header_value(llhttp_t *parser, const char *at, size_t length) {
   parser_context_t *ctx = (parser_context_t *)parser->data;
   if (!ctx->current_header_value)
-    ctx->current_header_value = sdsnewlen(at, length);
+    ctx->current_header_value = tstr_dup_len(at, length);
   else
-    ctx->current_header_value = sdscatlen(ctx->current_header_value, at, length);
+    ctx->current_header_value = tstr_cat_len(ctx->current_header_value, at, length);
   if (!ctx->current_header_value) {
     ctx->headers_oom = 1;
     return -1;
@@ -307,7 +289,7 @@ static int on_headers_complete(llhttp_t *parser) {
 
   if (ctx->headers_accum && ctx->response && !ctx->response->headers) {
     MemoryPool *pool = (MemoryPool *)ctx->response->pool;
-    size_t headers_len = sdslen(ctx->headers_accum);
+    size_t headers_len = tstr_len(ctx->headers_accum);
     ctx->response->headers = pool_alloc(pool, headers_len + 1);
     if (ctx->response->headers) {
       memcpy(ctx->response->headers, ctx->headers_accum, headers_len);
@@ -315,7 +297,7 @@ static int on_headers_complete(llhttp_t *parser) {
       ctx->response->headers_len = headers_len;
     }
   }
-  sdsfree(ctx->headers_accum);
+  tstr_free(ctx->headers_accum);
   ctx->headers_accum = NULL;
   ctx->response->headers_list = ctx->headers_head;
   ctx->headers_complete = 1;
@@ -371,7 +353,7 @@ http_client_t *http_client_create(void) {
   client->timeout_ms = 5000;         // 5 seconds default (reasonable for most cases)
   client->connect_timeout_ms = 5000; // 5 seconds for connection
   client->read_timeout_ms = 5000;    // 5 seconds for reading
-  client->user_agent = strdup_padded("TurboHTTP/1.0");
+  client->user_agent = tstr_dup("TurboHTTP/1.0");
   client->follow_redirects = 1;
   client->max_redirects = 10;
   client->base_url = NULL;
@@ -402,18 +384,18 @@ void http_client_destroy(http_client_t *client) {
     return;
   if (client->client)
     sync_client_destroy(client->client);
-  sdsfree(client->user_agent);
+  tstr_free(client->user_agent);
   free(client->current_host);
-  free(client->auth_header);
-  sdsfree(client->base_url);
+  tstr_free(client->auth_header);
+  tstr_free(client->base_url);
   /* Note: cookie_jar is not freed here - user must manage it separately */
 
   /* Free default headers */
   header_entry_t *header = client->default_headers;
   while (header) {
     header_entry_t *next = header->next;
-    sdsfree(header->name);
-    sdsfree(header->value);
+    tstr_free(header->name);
+    tstr_free(header->value);
     free(header);
     header = next;
   }
@@ -457,8 +439,8 @@ void http_client_set_read_timeout(http_client_t *client, int timeout_ms) {
 void http_client_set_user_agent(http_client_t *client, const char *user_agent) {
   if (!client)
     return;
-  sdsfree(client->user_agent);
-  client->user_agent = strdup_padded(user_agent);
+  tstr_free(client->user_agent);
+  client->user_agent = tstr_dup(user_agent);
 }
 
 void http_client_follow_redirects(http_client_t *client, int follow) {
@@ -475,8 +457,8 @@ void http_client_set_base_url(http_client_t *client, const char *base_url) {
   if (!client)
     return;
 
-  sdsfree(client->base_url);
-  client->base_url = base_url ? strdup_padded(base_url) : NULL;
+  tstr_free(client->base_url);
+  client->base_url = base_url ? tstr_dup(base_url) : NULL;
 
   /* Remove trailing slash if present */
   if (client->base_url) {
@@ -493,7 +475,7 @@ const char *http_client_get_base_url(http_client_t *client) {
 
 void http_client_clear_base_url(http_client_t *client) {
   if (client) {
-    sdsfree(client->base_url);
+    tstr_free(client->base_url);
     client->base_url = NULL;
   }
 }
@@ -501,35 +483,22 @@ void http_client_clear_base_url(http_client_t *client) {
 /* Build full URL from base URL and path */
 static char *build_full_url(MemoryPool *pool, http_client_t *client, const char *url) {
   /* If no base URL or URL is already absolute, return as-is */
-  if (!client->base_url || strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
+  tstr_v url_v = tstr_v_from_cstr(url);
+  if (!client->base_url || tstr_v_starts_with(url_v, tstr_v_from_cstr("http://")) ||
+      tstr_v_starts_with(url_v, tstr_v_from_cstr("https://"))) {
     return pool_strdup(pool, url);
   }
 
   /* Build full URL: base_url + url */
-  size_t base_len = strlen(client->base_url);
-  size_t url_len = strlen(url);
-  size_t full_len = base_len + url_len + 2; /* +2 for potential '/' and null */
+  tstr_t tmp = tstr_new();
+  if (url[0] == '/')
+    tmp = tstr_cat_fmt(tmp, "%s%s", client->base_url, url);
+  else
+    tmp = tstr_cat_fmt(tmp, "%s/%s", client->base_url, url);
 
-  char *full_url = pool_alloc(pool, full_len);
-  if (!full_url)
-    return pool_strdup(pool, url);
-
-  /* Create padded copy of url for stb_sprintf safety */
-  char *url_padded = strdup_padded(url);
-  if (!url_padded)
-    return pool_strdup(pool, url);
-
-  /* Add leading slash to path if needed */
-  if (url[0] == '/') {
-    static const char FMT_URL_JOIN[32] = "%s%s";
-    stbsp_snprintf(full_url, (int)full_len, FMT_URL_JOIN, client->base_url, url_padded);
-  } else {
-    static const char FMT_URL_JOIN_SLASH[32] = "%s/%s";
-    stbsp_snprintf(full_url, (int)full_len, FMT_URL_JOIN_SLASH, client->base_url, url_padded);
-  }
-
-  sdsfree(url_padded);
-  return full_url;
+  char *result = pool_strdup(pool, tmp);
+  tstr_free(tmp);
+  return result ? result : pool_strdup(pool, url);
 }
 
 /* ============================================================================
@@ -543,21 +512,21 @@ void http_client_set_default_header(http_client_t *client, const char *name, con
   /* Check if header already exists and update it */
   header_entry_t *entry = client->default_headers;
   while (entry) {
-    if (strcasecmp(entry->name, name) == 0) {
-      sdsfree(entry->value);
-      entry->value = strdup_padded(value);
+    if (tstr_casecmp(entry->name, name) == 0) {
+      tstr_free(entry->value);
+      entry->value = tstr_dup(value);
       return;
     }
     entry = entry->next;
   }
 
-  /* Add new header - use strdup_padded for stb_sprintf safety */
+  /* Add new header */
   entry = malloc(sizeof(header_entry_t));
   if (!entry)
     return;
 
-  entry->name = strdup_padded(name);
-  entry->value = strdup_padded(value);
+  entry->name = tstr_dup(name);
+  entry->value = tstr_dup(value);
   entry->next = client->default_headers;
   client->default_headers = entry;
   client->default_header_count++;
@@ -571,10 +540,10 @@ void http_client_remove_default_header(http_client_t *client, const char *name) 
   header_entry_t *entry = client->default_headers;
 
   while (entry) {
-    if (strcasecmp(entry->name, name) == 0) {
+    if (tstr_casecmp(entry->name, name) == 0) {
       *prev = entry->next;
-      sdsfree(entry->name);
-      sdsfree(entry->value);
+      tstr_free(entry->name);
+      tstr_free(entry->value);
       free(entry);
       client->default_header_count--;
       return;
@@ -591,8 +560,8 @@ void http_client_clear_default_headers(http_client_t *client) {
   header_entry_t *entry = client->default_headers;
   while (entry) {
     header_entry_t *next = entry->next;
-    sdsfree(entry->name);
-    sdsfree(entry->value);
+    tstr_free(entry->name);
+    tstr_free(entry->value);
     free(entry);
     entry = next;
   }
@@ -607,7 +576,7 @@ int http_client_has_default_header(http_client_t *client, const char *name) {
 
   header_entry_t *entry = client->default_headers;
   while (entry) {
-    if (strcasecmp(entry->name, name) == 0) {
+    if (tstr_casecmp(entry->name, name) == 0) {
       return 1;
     }
     entry = entry->next;
@@ -659,9 +628,8 @@ static int establish_connection(http_client_t *client, const char *host, int por
   }
 
   /* Build connection URL - scheme determines transport automatically */
-  char connect_url[512];
   const char *scheme = is_tls ? "tls" : "tcp";
-  stbsp_snprintf(connect_url, sizeof(connect_url), "%s://%s:%d", scheme, host, port);
+  tstr_t connect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d", scheme, host, port);
 
   /* Connect with timeout */
   sync_client_status_t status;
@@ -670,6 +638,8 @@ static int establish_connection(http_client_t *client, const char *host, int por
   } else {
     status = sync_client_connect(client->client, connect_url);
   }
+
+  tstr_free(connect_url);
 
   if (status != SYNC_CLIENT_STATUS_OK) {
     TLOG_DEBUG("HTTP connection failed to {:s}:{:d} (TLS: {:d})", host, port, is_tls);
@@ -701,48 +671,55 @@ static double get_time_seconds(void);
 /* Forward declaration for rate limiting */
 static void apply_rate_limit(http_client_t *client);
 
-/* Helper to extract header value from parsed headers list */
-static char *get_header_value(const http_header_entry_t *headers, const char *header_name) {
+/* Helper to extract header value from parsed headers list (zero-copy view) */
+static tstr_v get_header_value_v(const http_header_entry_t *headers, const char *header_name) {
   if (!headers || !header_name)
-    return NULL;
+    return tstr_v_from_buf(NULL, 0);
 
   for (const http_header_entry_t *p = headers; p; p = p->next) {
-    if (strcasecmp(p->name, header_name) == 0) {
-      size_t value_len = sdslen(p->value);
-      char *value = (char *)malloc(value_len + 1);
-      if (!value)
-        return NULL;
-      memcpy(value, p->value, value_len);
-      value[value_len] = '\0';
-      return value;
+    if (tstr_casecmp(p->name, header_name) == 0) {
+      return tstr_to_v(p->value);
     }
   }
 
-  return NULL;
+  return tstr_v_from_buf(NULL, 0);
 }
 
-static int header_value_has_token(const char *value, const char *token) {
-  size_t token_len = strlen(token);
-  const char *p = value;
+/* Helper to extract header value from parsed headers list (allocates copy) */
+static char *get_header_value(const http_header_entry_t *headers, const char *header_name) {
+  tstr_v v = get_header_value_v(headers, header_name);
+  if (!v.data)
+    return NULL;
+  return tstr_v_to_cstr(v);
+}
 
-  while (*p) {
-    while (*p == ' ' || *p == '\t' || *p == ',')
+static int header_value_has_token_v(tstr_v value, const char *token) {
+  if (!value.data || value.len == 0)
+    return 0;
+
+  tstr_v token_v = tstr_v_from_cstr(token);
+  const char *p = value.data;
+  const char *end_ptr = value.data + value.len;
+
+  while (p < end_ptr) {
+    while (p < end_ptr && (*p == ' ' || *p == '\t' || *p == ','))
       p++;
-    if (!*p)
+    if (p >= end_ptr)
       break;
 
     const char *start = p;
-    while (*p && *p != ',')
+    while (p < end_ptr && *p != ',')
       p++;
     const char *end = p;
 
     while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
       end--;
 
-    if ((size_t)(end - start) == token_len && strncasecmp(start, token, token_len) == 0)
+    tstr_v part = tstr_v_from_buf(start, (size_t)(end - start));
+    if (tstr_v_ieq(part, token_v))
       return 1;
 
-    if (*p == ',')
+    if (p < end_ptr && *p == ',')
       p++;
   }
 
@@ -756,7 +733,7 @@ static void extract_response_cookies(http_client_t *client, http_response_t *res
   }
 
   for (http_header_entry_t *p = response->headers_list; p; p = p->next) {
-    if (strcasecmp(p->name, "Set-Cookie") == 0) {
+    if (tstr_casecmp(p->name, "Set-Cookie") == 0) {
       parse_set_cookie_enhanced(client->cookie_jar, p->value);
       TLOG_DEBUG("Extracted cookie from response: {:s}", p->value);
     }
@@ -843,7 +820,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   int uri_port = turbo_uri_port(p_uri);
 
   /* Determine if TLS is needed */
-  int is_tls = (strcasecmp(uri_scheme, "https") == 0);
+  int is_tls = (tstr_casecmp(uri_scheme, "https") == 0);
 
   /* Set default port if not specified */
   if (uri_port == 0) {
@@ -869,67 +846,15 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     client->stats.connections_reused++;
   }
 
-  /* Create padded copies of URI components for stb_sprintf safety */
-  char *uri_path_padded = strdup_padded(uri_path[0] ? uri_path : "/");
-  char *uri_query_padded = strdup_padded(uri_query);
-  char *uri_host_padded = strdup_padded(uri_host);
-
-  if (!uri_path_padded || !uri_query_padded || !uri_host_padded) {
-    sdsfree(uri_path_padded);
-    sdsfree(uri_query_padded);
-    sdsfree(uri_host_padded);
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    turbo_free_uri(&p_uri);
-    client->stats.failed_requests++;
-    return response;
-  }
-
-  char request_line[1024];
-  static const char FMT_REQ_LINE[64] = "%s %s%s%s HTTP/1.1\r\n";
-  /* Safe padded strings for stb_sprintf which may read 4 bytes */
-  static const char QUESTION_STR[8] = "?";
-  static const char EMPTY_STR[8] = "";
-
-  /* Pad method string for stb_sprintf safety */
-  char *method_padded = strdup_padded(method_to_string(method));
-  if (!method_padded) {
-    sdsfree(uri_path_padded);
-    sdsfree(uri_query_padded);
-    sdsfree(uri_host_padded);
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    turbo_free_uri(&p_uri);
-    client->stats.failed_requests++;
-    return response;
-  }
-
-  stbsp_snprintf(request_line, sizeof(request_line), FMT_REQ_LINE, method_padded, uri_path_padded,
-                 uri_query_padded[0] ? QUESTION_STR : EMPTY_STR, uri_query_padded);
-  sdsfree(method_padded);
-
-  char host_header[512];
-  static const char FMT_HOST_HDR[32] = "Host: %s\r\n";
-  stbsp_snprintf(host_header, sizeof(host_header), FMT_HOST_HDR, uri_host_padded);
-
-  /* Free padded URI components after use */
-  sdsfree(uri_path_padded);
-  sdsfree(uri_query_padded);
-  sdsfree(uri_host_padded);
-
-  char ua_header[256];
-  static const char FMT_UA_HDR[32] = "User-Agent: %s\r\n";
-  stbsp_snprintf(ua_header, sizeof(ua_header), FMT_UA_HDR, client->user_agent);
-
-  char content_length[128] = "";
-  if (body && body_len > 0) {
-    static const char FMT_CL_HDR[32] = "Content-Length: %zu\r\n";
-    stbsp_snprintf(content_length, sizeof(content_length), FMT_CL_HDR, body_len);
-  }
+  /* Build request line and headers using tstr_t */
+  const char *path = uri_path[0] ? uri_path : "/";
+  tstr_t request_line = tstr_cat_fmt(tstr_new(), "%s %s%s%s HTTP/1.1\r\n",
+      method_to_string(method), path, uri_query[0] ? "?" : "", uri_query);
+  tstr_t host_hdr = tstr_cat_fmt(tstr_new(), "Host: %s\r\n", uri_host);
+  tstr_t ua_hdr = tstr_cat_fmt(tstr_new(), "User-Agent: %s\r\n", client->user_agent);
+  tstr_t cl_hdr = NULL;
+  if (body && body_len > 0)
+    cl_hdr = tstr_cat_fmt(tstr_new(), "Content-Length: %zu\r\n", body_len);
 
   /* Use keep-alive if connection is already established, otherwise close */
   const char *connection_header =
@@ -938,25 +863,25 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   sync_client_iovec_t parts[64];
   int part_count = 0;
 
-  parts[part_count].data = (char *)request_line;
-  parts[part_count].len = strlen(request_line);
+  parts[part_count].data = request_line;
+  parts[part_count].len = tstr_len(request_line);
   part_count++;
 
-  parts[part_count].data = (char *)host_header;
-  parts[part_count].len = strlen(host_header);
+  parts[part_count].data = host_hdr;
+  parts[part_count].len = tstr_len(host_hdr);
   part_count++;
 
-  parts[part_count].data = (char *)ua_header;
-  parts[part_count].len = strlen(ua_header);
+  parts[part_count].data = ua_hdr;
+  parts[part_count].len = tstr_len(ua_hdr);
   part_count++;
 
   parts[part_count].data = (char *)connection_header;
   parts[part_count].len = strlen(connection_header);
   part_count++;
 
-  if (content_length[0]) {
-    parts[part_count].data = (char *)content_length;
-    parts[part_count].len = strlen(content_length);
+  if (cl_hdr) {
+    parts[part_count].data = cl_hdr;
+    parts[part_count].len = tstr_len(cl_hdr);
     part_count++;
   }
 
@@ -1002,25 +927,20 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   }
 
   // Add default headers
-  char **default_header_strings = NULL;
+  tstr_t *default_header_strings = NULL;
   int default_headers_added = 0;
   if (client->default_headers) {
-    default_header_strings = malloc(sizeof(char *) * client->default_header_count);
+    default_header_strings = malloc(sizeof(tstr_t) * client->default_header_count);
     if (default_header_strings) {
       header_entry_t *entry = client->default_headers;
       while (entry && part_count < 58) {
-        size_t len = strlen(entry->name) + strlen(entry->value) + 5;
-        char *header_str = malloc(len);
-        if (header_str) {
-          static const char FMT_DEF_HDR[32] = "%s: %s\r\n";
-          stbsp_snprintf(header_str, (int)len, FMT_DEF_HDR, entry->name, entry->value);
-          default_header_strings[default_headers_added] = header_str;
+        tstr_t header_str = tstr_cat_fmt(tstr_new(), "%s: %s\r\n", entry->name, entry->value);
+        default_header_strings[default_headers_added] = header_str;
 
-          parts[part_count].data = header_str;
-          parts[part_count].len = strlen(header_str);
-          part_count++;
-          default_headers_added++;
-        }
+        parts[part_count].data = header_str;
+        parts[part_count].len = tstr_len(header_str);
+        part_count++;
+        default_headers_added++;
         entry = entry->next;
       }
     }
@@ -1058,23 +978,20 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
       http_response_t *response = calloc(1, sizeof(http_response_t));
       response->pool = pool;
       const char *err_msg = sync_client_last_message(client->client);
-      /* Pad error message for stb_sprintf safety */
-      char *err_msg_padded = strdup_padded(err_msg ? err_msg : "unknown error");
-      char error_buf[256];
-      static const char FMT_SEND_FAIL[32] = "Send failed: %s";
-      stbsp_snprintf(error_buf, sizeof(error_buf), FMT_SEND_FAIL,
-                     err_msg_padded ? err_msg_padded : "unknown error");
-      sdsfree(err_msg_padded);
-      response->error = pool_strdup(pool, error_buf);
+      tstr_t err_str = tstr_cat_fmt(tstr_new(), "Send failed: %s",
+                                    err_msg ? err_msg : "unknown error");
+      response->error = pool_strdup(pool, err_str);
+      tstr_free(err_str);
       response->error_code = HTTP_ERROR_SEND_FAILED;
       /* cookie_header is now pool-allocated, no need to free */
       /* Free default header strings before cleanup */
       if (default_header_strings) {
         for (int i = 0; i < default_headers_added; i++) {
-          free(default_header_strings[i]);
+          tstr_free(default_header_strings[i]);
         }
         free(default_header_strings);
       }
+      tstr_free(request_line); tstr_free(host_hdr); tstr_free(ua_hdr); tstr_free(cl_hdr);
       client->stats.failed_requests++;
       turbo_free_uri(&p_uri);
       return response;
@@ -1086,11 +1003,14 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   /* Free default header strings */
   if (default_header_strings) {
     for (int i = 0; i < default_headers_added; i++) {
-      free(default_header_strings[i]);
+      tstr_free(default_header_strings[i]);
     }
     free(default_header_strings);
     default_header_strings = NULL; /* Prevent double-free */
   }
+
+  /* Free tstr_t header strings after sendv */
+  tstr_free(request_line); tstr_free(host_hdr); tstr_free(ua_hdr); tstr_free(cl_hdr);
 
   /* Receive response - may need multiple receives for large responses */
   char *full_buffer = NULL;
@@ -1190,15 +1110,9 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     response->error = pool_strdup(pool, "Memory allocation failed");
     response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
   } else if (err != HPE_OK && err != HPE_PAUSED_UPGRADE && err != HPE_PAUSED) {
-    response->error = pool_alloc(pool, 256);
-    if (response->error) {
-      static const char FMT_PARSE_ERR[32] = "Parse error: %s";
-      /* Pad error name for stb_sprintf safety */
-      char *err_name_padded = strdup_padded(llhttp_errno_name(err));
-      stbsp_snprintf(response->error, 256, FMT_PARSE_ERR,
-                     err_name_padded ? err_name_padded : "unknown");
-      sdsfree(err_name_padded);
-    }
+    tstr_t err_str = tstr_cat_fmt(tstr_new(), "Parse error: %s", llhttp_errno_name(err));
+    response->error = pool_strdup(pool, err_str);
+    tstr_free(err_str);
     response->error_code = HTTP_ERROR_PARSE_FAILED;
   }
 
@@ -1235,50 +1149,18 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     char *location = get_header_value(response->headers_list, "Location");
     if (location) {
       /* Handle relative URLs */
-      char *redirect_url = NULL;
-
-      /* Copy URI components with padding for stb_sprintf safety */
-      char *scheme_padded = strdup_padded(uri_scheme);
-      char *host_padded = strdup_padded(uri_host);
-
-      if (!scheme_padded || !host_padded) {
-        sdsfree(scheme_padded);
-        sdsfree(host_padded);
-        free(location);
-        http_response_free(response);
-        turbo_free_uri(&p_uri);
-        http_response_t *err_response = calloc(1, sizeof(http_response_t));
-        err_response->error = strdup("Memory allocation failed");
-        err_response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-        return err_response;
-      }
+      tstr_t redirect_url;
 
       if (location[0] == '/') {
-        /* Relative path - construct full URL with padding for stb_sprintf */
-        size_t url_len = strlen(uri_scheme) + strlen(uri_host) + strlen(location) + 20;
-        redirect_url = malloc(url_len + 8);
-        static const char FMT_REDIR_LOCAL[32] = "%s://%s:%d%s";
-        stbsp_snprintf(redirect_url, (int)url_len, FMT_REDIR_LOCAL, scheme_padded, host_padded,
-                       uri_port, location);
+        redirect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d%s",
+                                    uri_scheme, uri_host, uri_port, location);
       } else if (strncmp(location, "http://", 7) != 0 && strncmp(location, "https://", 8) != 0) {
-        /* Relative to current path with padding for stb_sprintf */
-        size_t url_len = strlen(uri_scheme) + strlen(uri_host) + strlen(location) + 20;
-        redirect_url = malloc(url_len + 8);
-        static const char FMT_REDIR_REL[32] = "%s://%s:%d/%s";
-        stbsp_snprintf(redirect_url, (int)url_len, FMT_REDIR_REL, scheme_padded, host_padded,
-                       uri_port, location);
+        redirect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d/%s",
+                                    uri_scheme, uri_host, uri_port, location);
       } else {
-        /* Absolute URL - copy with padding for stb_sprintf safety */
-        size_t url_len = strlen(location) + 1;
-        redirect_url = malloc(url_len + 8);
-        if (redirect_url) {
-          memcpy(redirect_url, location, url_len);
-          memset(redirect_url + url_len, 0, 8);
-        }
+        redirect_url = tstr_dup(location);
       }
 
-      sdsfree(scheme_padded);
-      sdsfree(host_padded);
       free(location);
 
       /* For 303, always use GET - save status BEFORE freeing response */
@@ -1296,7 +1178,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
       /* Follow redirect */
       response = http_request_internal(client, redirect_method, redirect_url, headers, header_count,
                                        NULL, 0, redirect_count + 1);
-      free(redirect_url);
+      tstr_free(redirect_url);
       /* Response from recursive call has its own pool, just return it */
       return response;
     }
@@ -1306,12 +1188,11 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   extract_response_cookies(client, response);
 
   /* Check Connection header to determine if we should keep connection alive */
-  char *connection = get_header_value(response->headers_list, "Connection");
-  if (connection) {
-    if (header_value_has_token(connection, "close")) {
+  tstr_v connection = get_header_value_v(response->headers_list, "Connection");
+  if (connection.data) {
+    if (header_value_has_token_v(connection, "close")) {
       client->connection_alive = 0;
     }
-    free(connection);
   } else {
     /* HTTP/1.1 defaults to keep-alive, HTTP/1.0 defaults to close */
     /* For simplicity, we'll close if not explicitly keep-alive */
@@ -1420,6 +1301,24 @@ http_response_t *http_post(http_client_t *client, const char *url, const char *b
   return http_request(client, HTTP_POST, url, NULL, 0, body, body_len);
 }
 
+http_response_t *http_put(http_client_t *client, const char *url, const char *body,
+                          size_t body_len) {
+  return http_request(client, HTTP_PUT, url, NULL, 0, body, body_len);
+}
+
+http_response_t *http_del(http_client_t *client, const char *url) {
+  return http_request(client, HTTP_DELETE, url, NULL, 0, NULL, 0);
+}
+
+http_response_t *http_head_request(http_client_t *client, const char *url) {
+  return http_request(client, HTTP_HEAD, url, NULL, 0, NULL, 0);
+}
+
+http_response_t *http_patch(http_client_t *client, const char *url, const char *body,
+                            size_t body_len) {
+  return http_request(client, HTTP_PATCH, url, NULL, 0, body, body_len);
+}
+
 void http_response_free(http_response_t *response) {
   if (!response)
     return;
@@ -1427,8 +1326,8 @@ void http_response_free(http_response_t *response) {
   /* One-shot destruction: frees headers, error, body, and internal strings via the pool */
   if (response->headers_list) {
     for (http_header_entry_t *p = response->headers_list; p; p = p->next) {
-      sdsfree(p->name);
-      sdsfree(p->value);
+      tstr_free(p->name);
+      tstr_free(p->value);
     }
   }
   if (response->pool)
@@ -1509,96 +1408,38 @@ void http_client_set_basic_auth(http_client_t *client, const char *username, con
   if (!client || !username || !password)
     return;
 
-  /* Padded format strings for stb_sprintf safety */
-  static const char FMT_CREDS[16] = "%s:%s";
-  static const char FMT_BASIC[32] = "Authorization: Basic %s";
-
-  /* Pad user inputs for stb_sprintf safety */
-  char *username_padded = strdup_padded(username);
-  char *password_padded = strdup_padded(password);
-  if (!username_padded || !password_padded) {
-    sdsfree(username_padded);
-    sdsfree(password_padded);
-    return;
-  }
-
-  // Create "username:password" string with padding for stb_sprintf
-  size_t creds_len = strlen(username) + strlen(password) + 2;
-  char *credentials = malloc(creds_len + 8);
-  if (!credentials) {
-    sdsfree(username_padded);
-    sdsfree(password_padded);
-    return;
-  }
-  stbsp_snprintf(credentials, (int)creds_len, FMT_CREDS, username_padded, password_padded);
-  sdsfree(username_padded);
-  sdsfree(password_padded);
+  tstr_t creds = tstr_cat_fmt(tstr_new(), "%s:%s", username, password);
 
   // Base64 encode
   char *encoded = NULL;
-  if (tn_base64_encode((const uint8_t *)credentials, strlen(credentials), &encoded) != 0) {
-    free(credentials);
+  if (tn_base64_encode((const uint8_t *)creds, tstr_len(creds), &encoded) != 0) {
+    tstr_free(creds);
     return;
   }
-  free(credentials);
+  tstr_free(creds);
 
-  // Create Authorization header with padding for stb_sprintf
-  // encoded needs padding for stbsp_snprintf - copy to padded buffer
-  size_t encoded_len = strlen(encoded);
-  char *encoded_padded = malloc(encoded_len + 8);
-  if (!encoded_padded) {
-    free(encoded);
-    return;
-  }
-  memcpy(encoded_padded, encoded, encoded_len);
-  memset(encoded_padded + encoded_len, 0, 8);
+  tstr_t header = tstr_cat_fmt(tstr_new(), "Authorization: Basic %s", encoded);
   free(encoded);
 
-  size_t header_len = strlen("Authorization: Basic ") + encoded_len + 1;
-  char *new_header = malloc(header_len + 8);
-  if (!new_header) {
-    free(encoded_padded);
-    return;
-  }
-  stbsp_snprintf(new_header, (int)header_len, FMT_BASIC, encoded_padded);
-  free(encoded_padded);
-
-  free(client->auth_header);
-  client->auth_header = new_header;
+  tstr_free(client->auth_header);
+  client->auth_header = header;
 }
 
 void http_client_set_bearer_token(http_client_t *client, const char *token) {
   if (!client || !token)
     return;
 
-  // Copy token with padding for stb_sprintf safety
-  size_t token_len = strlen(token);
-  char *token_padded = malloc(token_len + 8);
-  if (!token_padded)
-    return;
-  memcpy(token_padded, token, token_len);
-  memset(token_padded + token_len, 0, 8);
+  tstr_t header = tstr_cat_fmt(tstr_new(), "Authorization: Bearer %s", token);
 
-  size_t header_len = strlen("Authorization: Bearer ") + token_len + 1;
-  char *new_header = malloc(header_len + 8);
-  if (!new_header) {
-    free(token_padded);
-    return;
-  }
-  /* Padded format string for stb_sprintf safety */
-  static const char FMT_BEARER[32] = "Authorization: Bearer %s";
-  stbsp_snprintf(new_header, (int)header_len, FMT_BEARER, token_padded);
-  free(token_padded);
-
-  free(client->auth_header);
-  client->auth_header = new_header;
+  tstr_free(client->auth_header);
+  client->auth_header = header;
 }
 
 void http_client_set_jwt_auth(http_client_t *client, const char *secret, const char *claims_json) {
   if (!client || !secret || !claims_json)
     return;
 
-  cJSON *private_claims = cJSON_Parse(claims_json);
+  json_value_t *private_claims = json_parse(claims_json, strlen(claims_json));
   if (!private_claims) {
     TLOG_ERROR("Failed to parse JWT claims JSON");
     return;
@@ -1610,7 +1451,7 @@ void http_client_set_jwt_auth(http_client_t *client, const char *secret, const c
 
   char *token = NULL;
   cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
-  cJSON_Delete(private_claims);
+  json_free(private_claims);
 
   if (rv != CJWTE_OK) {
     TLOG_ERROR("Failed to encode JWT: {}", ENUM_NAME(rv));
@@ -1625,7 +1466,7 @@ void http_client_clear_auth(http_client_t *client) {
   if (!client)
     return;
 
-  free(client->auth_header);
+  tstr_free(client->auth_header);
   client->auth_header = NULL;
 }
 
@@ -1685,54 +1526,24 @@ void http_params_add(http_params_t *params, const char *key, const char *value) 
   params->count++;
 }
 
-/* URL encode a string - use platform function */
-#define url_encode turbo_url_encode
-
 char *http_params_encode(http_params_t *params) {
   if (!params || !params->head)
     return strdup("");
 
-  /* Calculate required size */
-  size_t size = 0;
+  tstr_t result = tstr_new();
   struct param_entry *entry = params->head;
-  while (entry) {
-    char *key_enc = url_encode(entry->key);
-    char *val_enc = url_encode(entry->value);
-
-    if (key_enc && val_enc) {
-      size += strlen(key_enc) + strlen(val_enc) + 2; /* key=value& */
-    }
-
-    free(key_enc);
-    free(val_enc);
-    entry = entry->next;
-  }
-
-  if (size == 0)
-    return strdup_padded("");
-
-  /* Build encoded string with padding for stb_sprintf safety */
-  char *result = malloc(size + 8);
-  if (!result)
-    return NULL;
-
-  char *p = result;
-  entry = params->head;
   int first = 1;
 
   while (entry) {
-    char *key_enc = url_encode(entry->key);
-    char *val_enc = url_encode(entry->value);
+    char *key_enc = turbo_url_encode(entry->key);
+    char *val_enc = turbo_url_encode(entry->value);
 
     if (key_enc && val_enc) {
-      if (!first) {
-        *p++ = '&';
-      }
-      strcpy(p, key_enc);
-      p += strlen(key_enc);
-      *p++ = '=';
-      strcpy(p, val_enc);
-      p += strlen(val_enc);
+      if (!first)
+        result = tstr_cat(result, "&");
+      result = tstr_cat(result, key_enc);
+      result = tstr_cat(result, "=");
+      result = tstr_cat(result, val_enc);
       first = 0;
     }
 
@@ -1740,9 +1551,8 @@ char *http_params_encode(http_params_t *params) {
     free(val_enc);
     entry = entry->next;
   }
-  memset(p, 0, 8); /* Null terminate and pad */
 
-  return result;
+  return result; /* tstr_t IS char*, caller frees */
 }
 
 void http_params_free(http_params_t *params) {
@@ -1766,39 +1576,21 @@ char *http_build_url(const char *base_url, http_params_t *query_params) {
     return NULL;
 
   if (!query_params || !query_params->head)
-    return strdup_padded(base_url);
+    return tstr_dup(base_url);
 
   char *query_string = http_params_encode(query_params);
   if (!query_string)
-    return strdup_padded(base_url);
-
-  /* Pad base_url for stb_sprintf safety */
-  char *base_url_padded = strdup_padded(base_url);
-  if (!base_url_padded) {
-    free(query_string);
-    return NULL;
-  }
+    return tstr_dup(base_url);
 
   /* Check if base_url already has query params */
   const char *has_query = strchr(base_url, '?');
   char separator = has_query ? '&' : '?';
 
-  size_t url_len = strlen(base_url) + strlen(query_string) + 2;
-  /* Allocate with padding for stb_sprintf safety */
-  char *full_url = malloc(url_len + 8);
-  if (!full_url) {
-    sdsfree(base_url_padded);
-    free(query_string);
-    return NULL;
-  }
-
-  /* Padded format string for stb_sprintf safety */
-  static const char FMT_URL[16] = "%s%c%s";
-  stbsp_snprintf(full_url, (int)url_len, FMT_URL, base_url_padded, separator, query_string);
-  sdsfree(base_url_padded);
+  tstr_t result = tstr_dup(base_url);
+  result = tstr_cat_fmt(result, "%c%s", separator, query_string);
   free(query_string);
 
-  return full_url;
+  return result;
 }
 
 http_response_t *http_post_form(http_client_t *client, const char *url, http_params_t *params) {
@@ -2204,7 +1996,7 @@ static void send_sync_http_chunk(sync_client_t *client, const char *data, size_t
     size_t chunk_size = (len - offset > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : (len - offset);
 
     char chunk_header[32];
-    int header_len = stbsp_snprintf(chunk_header, sizeof(chunk_header), "%zx\r\n", chunk_size);
+    int header_len = fmt(chunk_header, sizeof(chunk_header), "{:x}\r\n", chunk_size);
 
     /* Send chunk size */
     sync_client_send(client, chunk_header, header_len);
@@ -2347,10 +2139,9 @@ http_response_t *http_post_multipart(http_client_t *client, const char *url,
   if (!body)
     return NULL;
 
-  /* Build Content-Type header - padded format string for stb_sprintf safety */
-  static const char FMT_MULTIPART[64] = "Content-Type: multipart/form-data; boundary=%s";
+  /* Build Content-Type header */
   char content_type[256];
-  stbsp_snprintf(content_type, sizeof(content_type), FMT_MULTIPART, form->boundary);
+  fmt(content_type, sizeof(content_type), "Content-Type: multipart/form-data; boundary={}", form->boundary);
 
   const char *headers[] = {content_type};
 
@@ -2403,7 +2194,7 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   const char *uri_query = turbo_uri_query(p_uri);
   int uri_port = turbo_uri_port(p_uri);
   const char *uri_scheme = turbo_uri_scheme(p_uri);
-  int is_tls = (strcasecmp(uri_scheme, "https") == 0);
+  int is_tls = (tstr_casecmp(uri_scheme, "https") == 0);
   if (uri_port == 0)
     uri_port = is_tls ? 443 : 80;
 
@@ -2420,18 +2211,18 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
 
   /* Build Request Line and Headers */
   char request_line[1024];
-  stbsp_snprintf(request_line, sizeof(request_line), "POST %s%s%s HTTP/1.1\r\n",
-                 uri_path[0] ? uri_path : "/", uri_query[0] ? "?" : "", uri_query);
+  fmt(request_line, sizeof(request_line), "POST {}{}{} HTTP/1.1\r\n",
+      uri_path[0] ? uri_path : "/", uri_query[0] ? "?" : "", uri_query);
 
   char host_hdr[512];
-  stbsp_snprintf(host_hdr, sizeof(host_hdr), "Host: %s\r\n", uri_host);
+  fmt(host_hdr, sizeof(host_hdr), "Host: {}\r\n", uri_host);
 
   char ua_hdr[256];
-  stbsp_snprintf(ua_hdr, sizeof(ua_hdr), "User-Agent: %s\r\n", client->user_agent);
+  fmt(ua_hdr, sizeof(ua_hdr), "User-Agent: {}\r\n", client->user_agent);
 
   char ct_hdr[256];
-  stbsp_snprintf(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary=%s\r\n",
-                 form->boundary);
+  fmt(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary={}\r\n",
+      form->boundary);
 
   char te_hdr[] = "Transfer-Encoding: chunked\r\n";
   char conn_hdr[] = "Connection: keep-alive\r\n\r\n";
@@ -2454,15 +2245,17 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   http_multipart_part_t *part = form->parts;
   while (part) {
     char part_header[512];
+    const char *name = part->name ? part->name : "";
     if (part->is_file) {
-      stbsp_snprintf(part_header, sizeof(part_header),
-                     "--%s\r\nContent-Disposition: form-data; name=\"%s\"; "
-                     "filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
-                     form->boundary, part->name, part->filename, part->content_type);
+      const char *filename = part->filename ? part->filename : "";
+      const char *type = part->content_type ? part->content_type : "";
+      fmt(part_header, sizeof(part_header),
+          "--{}\r\nContent-Disposition: form-data; name=\"{}\"; "
+          "filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+          form->boundary, name, filename, type);
     } else {
-      stbsp_snprintf(part_header, sizeof(part_header),
-                     "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n", form->boundary,
-                     part->name);
+      fmt(part_header, sizeof(part_header),
+          "--{}\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n", form->boundary, name);
     }
 
     send_sync_http_chunk(client->client, part_header, strlen(part_header));
@@ -2488,7 +2281,7 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   }
 
   char final_boundary[128];
-  stbsp_snprintf(final_boundary, sizeof(final_boundary), "--%s--\r\n", form->boundary);
+  fmt(final_boundary, sizeof(final_boundary), "--{}--\r\n", form->boundary);
   send_sync_http_chunk(client->client, final_boundary, strlen(final_boundary));
   send_sync_http_chunk_end(client->client);
 
@@ -2876,16 +2669,12 @@ http_response_t *http_get_range(http_client_t *client, const char *url, size_t s
     return response;
   }
 
-  /* Padded format strings for stb_sprintf safety */
-  static const char FMT_RANGE_FULL[32] = "Range: bytes=%zu-%zu";
-  static const char FMT_RANGE_START[32] = "Range: bytes=%zu-";
-
   // Build Range header
   char range_header[128];
   if (end > 0) {
-    stbsp_snprintf(range_header, sizeof(range_header), FMT_RANGE_FULL, start, end);
+    fmt(range_header, sizeof(range_header), "Range: bytes={}-{}", start, end);
   } else {
-    stbsp_snprintf(range_header, sizeof(range_header), FMT_RANGE_START, start);
+    fmt(range_header, sizeof(range_header), "Range: bytes={}-", start);
   }
 
   const char *headers[] = {range_header};
@@ -3017,14 +2806,14 @@ void http_request_builder_destroy(http_request_builder_t *builder) {
   if (!builder)
     return;
 
-  sdsfree(builder->url);
+  tstr_free(builder->url);
   free(builder->body);
 
   header_entry_t *header = builder->headers;
   while (header) {
     header_entry_t *next = header->next;
-    sdsfree(header->name);
-    sdsfree(header->value);
+    tstr_free(header->name);
+    tstr_free(header->value);
     free(header);
     header = next;
   }
@@ -3036,8 +2825,8 @@ http_request_builder_t *http_request_builder_url(http_request_builder_t *builder
   if (!builder || !url)
     return builder;
 
-  sdsfree(builder->url);
-  builder->url = strdup_padded(url);
+  tstr_free(builder->url);
+  builder->url = tstr_dup(url);
   return builder;
 }
 
@@ -3059,9 +2848,9 @@ http_request_builder_t *http_request_builder_header(http_request_builder_t *buil
   if (!entry)
     return builder;
 
-  /* Use strdup_padded for stb_sprintf safety when building headers */
-  entry->name = strdup_padded(name);
-  entry->value = strdup_padded(value);
+  /* Use tstr_dup for header storage */
+  entry->name = tstr_dup(name);
+  entry->value = tstr_dup(value);
   entry->next = builder->headers;
   builder->headers = entry;
   builder->header_count++;
@@ -3076,10 +2865,12 @@ http_request_builder_t *http_request_builder_body(http_request_builder_t *builde
 
   free(builder->body);
   builder->body = malloc(body_len);
-  if (builder->body) {
-    memcpy(builder->body, body, body_len);
-    builder->body_len = body_len;
+  if (!builder->body) {
+    builder->body_len = 0;
+    return builder;
   }
+  memcpy(builder->body, body, body_len);
+  builder->body_len = body_len;
 
   return builder;
 }
@@ -3102,9 +2893,6 @@ http_response_t *http_request_builder_execute(http_request_builder_t *builder) {
     }
     return response;
   }
-
-  /* Padded format string for stb_sprintf safety */
-  static const char FMT_HEADER[16] = "%s: %s";
 
   /* Build headers array */
   const char **headers = NULL;
@@ -3136,7 +2924,7 @@ http_response_t *http_request_builder_execute(http_request_builder_t *builder) {
         }
         return response;
       }
-      stbsp_snprintf(header, (int)len, FMT_HEADER, entry->name, entry->value);
+      fmt(header, (int)len, "{}: {}", entry->name, entry->value);
       headers[headers_built++] = header;
       entry = entry->next;
     }

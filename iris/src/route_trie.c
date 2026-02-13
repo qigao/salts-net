@@ -5,10 +5,73 @@
 #include "route_trie.h"
 #include "compat.h"
 #include "middleware.h"
+#include "arena_buffer.h"
 
 // Forward declarations for re2c functions
 extern http_method_t parse_http_method_re2c(const char *method, size_t len);
 extern int tokenize_path_re2c(turbo_arena_t *arena, const char *path, tokenized_path_t *result);
+
+#define TRIE_NODE_BLOCK_CAPACITY 256
+
+typedef struct trie_node_block_s {
+    trie_node_t *nodes;
+    size_t used;
+    struct trie_node_block_s *next;
+} trie_node_block_t;
+
+typedef struct {
+    trie_node_block_t *blocks;
+} trie_node_pool_t;
+
+static trie_node_pool_t *trie_node_pool_create(void)
+{
+    trie_node_pool_t *pool = (trie_node_pool_t *)calloc(1, sizeof(trie_node_pool_t));
+    return pool;
+}
+
+static void trie_node_pool_free(trie_node_pool_t *pool)
+{
+    if (!pool)
+        return;
+
+    trie_node_block_t *block = pool->blocks;
+    while (block)
+    {
+        trie_node_block_t *next = block->next;
+        free(block->nodes);
+        free(block);
+        block = next;
+    }
+
+    free(pool);
+}
+
+static trie_node_t *trie_node_alloc(route_trie_t *trie)
+{
+    trie_node_pool_t *pool = (trie_node_pool_t *)trie->node_pool;
+    if (!pool)
+        return NULL;
+
+    trie_node_block_t *block = pool->blocks;
+    if (!block || block->used >= TRIE_NODE_BLOCK_CAPACITY)
+    {
+        trie_node_block_t *new_block = (trie_node_block_t *)calloc(1, sizeof(trie_node_block_t));
+        if (!new_block)
+            return NULL;
+        new_block->nodes = (trie_node_t *)calloc(TRIE_NODE_BLOCK_CAPACITY, sizeof(trie_node_t));
+        if (!new_block->nodes)
+        {
+            free(new_block);
+            return NULL;
+        }
+        new_block->used = 0;
+        new_block->next = pool->blocks;
+        pool->blocks = new_block;
+        block = new_block;
+    }
+
+    return &block->nodes[block->used++];
+}
 
 // Splits a path into segments (/users/123/posts -> ["users", "123", "posts"])
 /* Phase IRIS-1: Updated to use turbo_arena_t */
@@ -175,9 +238,9 @@ bool route_trie_match(route_trie_t *trie,
 }
 
 // Create a new trie node
-static trie_node_t *trie_node_create(void)
+static trie_node_t *trie_node_create(route_trie_t *trie)
 {
-    trie_node_t *node = calloc(1, sizeof(trie_node_t));
+    trie_node_t *node = trie_node_alloc(trie);
     if (!node)
         return NULL;
 
@@ -230,10 +293,8 @@ static void trie_node_free(trie_node_t *node)
     // Free param name
     if (node->param_name)
     {
-        free(node->param_name);
+        node->param_name = NULL;
     }
-
-    free(node);
 }
 
 // Get HTTP method index from string
@@ -253,9 +314,25 @@ route_trie_t *route_trie_create(void)
     if (!trie)
         return NULL;
 
-    trie->root = trie_node_create();
+    trie->node_pool = trie_node_pool_create();
+    if (!trie->node_pool)
+    {
+        free(trie);
+        return NULL;
+    }
+
+    if (turbo_arena_init(&trie->param_arena, 4096) != 0)
+    {
+        trie_node_pool_free((trie_node_pool_t *)trie->node_pool);
+        free(trie);
+        return NULL;
+    }
+
+    trie->root = trie_node_create(trie);
     if (!trie->root)
     {
+        turbo_arena_free(&trie->param_arena);
+        trie_node_pool_free((trie_node_pool_t *)trie->node_pool);
         free(trie);
         return NULL;
     }
@@ -264,6 +341,8 @@ route_trie_t *route_trie_create(void)
     if (uv_rwlock_init(&trie->lock) != 0)
     {
         trie_node_free(trie->root);
+        turbo_arena_free(&trie->param_arena);
+        trie_node_pool_free((trie_node_pool_t *)trie->node_pool);
         free(trie);
         return NULL;
     }
@@ -309,7 +388,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
             // Create or navigate to param child
             if (!current->param_child)
             {
-                current->param_child = trie_node_create();
+                current->param_child = trie_node_create(trie);
                 if (!current->param_child)
                 {
                     uv_rwlock_wrunlock(&trie->lock);
@@ -317,7 +396,8 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                 }
 
                 // Store parameter name
-                current->param_child->param_name = malloc(param_len + 1);
+                current->param_child->param_name =
+                    (char *)turbo_arena_alloc(&trie->param_arena, param_len + 1);
                 if (!current->param_child->param_name)
                 {
                     uv_rwlock_wrunlock(&trie->lock);
@@ -333,11 +413,11 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
         // Handle wildcard segments (*)
         else if (*p == '*')
         {
-            if (!current->wildcard_child)
-            {
-                current->wildcard_child = trie_node_create();
                 if (!current->wildcard_child)
                 {
+                    current->wildcard_child = trie_node_create(trie);
+                    if (!current->wildcard_child)
+                    {
                     uv_rwlock_wrunlock(&trie->lock);
                     return -1;
                 }
@@ -357,7 +437,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                 // Create child if doesn't exist
                 if (!current->children[c])
                 {
-                    current->children[c] = trie_node_create();
+                    current->children[c] = trie_node_create(trie);
                     if (!current->children[c])
                     {
                         uv_rwlock_wrunlock(&trie->lock);
@@ -376,7 +456,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
             unsigned char c = (unsigned char)'/';
             if (!current->children[c])
             {
-                current->children[c] = trie_node_create();
+                current->children[c] = trie_node_create(trie);
                 if (!current->children[c])
                 {
                     uv_rwlock_wrunlock(&trie->lock);
@@ -410,5 +490,7 @@ void route_trie_free(route_trie_t *trie)
     uv_rwlock_wrunlock(&trie->lock);
 
     uv_rwlock_destroy(&trie->lock);
+    turbo_arena_free(&trie->param_arena);
+    trie_node_pool_free((trie_node_pool_t *)trie->node_pool);
     free(trie);
 }

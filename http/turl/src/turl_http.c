@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cjwt/cjwt.h>
+#include <json_parser.h>
 #include "history/turl_history.h"
 
 // Forward declarations
@@ -116,29 +117,42 @@ int turl_execute_http_request(const turl_http_config_t *config) {
     } else if (config->jwt_secret && config->jwt_claims) {
         // Generate JWT from secret and claims
         char *rendered_claims = turl_render_template(config->jwt_claims, config->mustache_context);
-        cJSON *claims_json = cJSON_Parse(rendered_claims);
+        json_value_t *claims_json = json_parse(rendered_claims, strlen(rendered_claims));
         if (claims_json) {
             cjwt_t jwt = {0};
             jwt.header.alg = alg_hs256; // Default to HS256 for simple secret-based generation
 
             // Populate standard claims if they exist
-            cJSON *iss = cJSON_GetObjectItemCaseSensitive(claims_json, "iss");
-            if (iss && cJSON_IsString(iss)) jwt.iss = strdup(iss->valuestring);
-            
-            cJSON *sub = cJSON_GetObjectItemCaseSensitive(claims_json, "sub");
-            if (sub && cJSON_IsString(sub)) jwt.sub = strdup(sub->valuestring);
-            
-            cJSON *exp = cJSON_GetObjectItemCaseSensitive(claims_json, "exp");
-            if (exp && cJSON_IsNumber(exp)) {
+            json_value_t *iss = json_object_get(claims_json, "iss");
+            if (iss && json_type(iss) == JSON_STRING) jwt.iss = strdup(json_string(iss));
+
+            json_value_t *sub = json_object_get(claims_json, "sub");
+            if (sub && json_type(sub) == JSON_STRING) jwt.sub = strdup(json_string(sub));
+
+            json_value_t *exp = json_object_get(claims_json, "exp");
+            if (exp && json_type(exp) == JSON_NUMBER) {
                 jwt.exp = malloc(sizeof(int64_t));
-                *jwt.exp = (int64_t)exp->valuedouble;
+                *jwt.exp = (int64_t)json_number(exp);
             }
 
-            // Everything else goes to private claims
-            cJSON_DeleteItemFromObjectCaseSensitive(claims_json, "iss");
-            cJSON_DeleteItemFromObjectCaseSensitive(claims_json, "sub");
-            cJSON_DeleteItemFromObjectCaseSensitive(claims_json, "exp");
-            jwt.private_claims = claims_json;
+            // Build private claims without standard fields
+            json_value_t *private_claims = json_create_object();
+            size_t obj_size = json_object_size(claims_json);
+            for (size_t ci = 0; ci < obj_size; ci++) {
+                const char *key = json_object_key(claims_json, ci);
+                if (strcmp(key, "iss") == 0 || strcmp(key, "sub") == 0 || strcmp(key, "exp") == 0)
+                    continue;
+                json_value_t *val = json_object_value(claims_json, ci);
+                // Re-serialize and re-parse to create an independent copy
+                size_t vlen = 0;
+                char *vs = json_serialize(val, &vlen);
+                if (vs) {
+                    json_value_t *copy = json_parse(vs, vlen);
+                    if (copy) json_object_add(private_claims, key, copy);
+                    json_serialize_free(vs);
+                }
+            }
+            jwt.private_claims = private_claims;
 
             char *token = NULL;
             if (cjwt_encode(&jwt, (const uint8_t *)config->jwt_secret, strlen(config->jwt_secret), &token) == CJWTE_OK) {
@@ -155,8 +169,8 @@ int turl_execute_http_request(const turl_http_config_t *config) {
             if (jwt.iss) free(jwt.iss);
             if (jwt.sub) free(jwt.sub);
             if (jwt.exp) free(jwt.exp);
-            // jwt.private_claims (which is claims_json) is freed by cjwt_destroy or manually
-            cJSON_Delete(claims_json);
+            json_free(private_claims);
+            json_free(claims_json);
         } else {
             TLOG_ERROR("Failed to parse JWT claims as JSON: {}", rendered_claims);
         }
@@ -417,12 +431,12 @@ static void decode_and_print_jwt(const char *jwt_str, const char *label) {
         memcpy(json_str, decoded, decoded_len);
         json_str[decoded_len] = '\0';
         
-        cJSON *json = cJSON_Parse(json_str);
+        json_value_t *json = json_parse(json_str, decoded_len);
         if (json) {
-            char *pretty = cJSON_Print(json);
+            char *pretty = json_serialize_pretty(json, NULL);
             TLOG_INFO("{}", pretty);
-            free(pretty);
-            cJSON_Delete(json);
+            json_serialize_free(pretty);
+            json_free(json);
         } else {
             TLOG_INFO("{}", json_str);
         }

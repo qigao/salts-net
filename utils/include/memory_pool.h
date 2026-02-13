@@ -1,7 +1,7 @@
 #ifndef MEMORY_POOL_H
 #define MEMORY_POOL_H
 
-#include <platform.h>
+#include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
 // Simple and easy Memory pool for zero-allocation parsing

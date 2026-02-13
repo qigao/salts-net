@@ -38,29 +38,29 @@ void edit_category(Req *req, Res *res)
         return;
     }
 
-    cJSON *json = cJSON_Parse(req->body);
+    json_value_t *json = json_parse(req->body, req->body_len);
     if (!json)
     {
         send_text(res, 400, "Invalid JSON");
         return;
     }
 
-    const cJSON *jcategory = cJSON_GetObjectItem(json, "category");
+    const json_value_t *jcategory = json_object_get(json, "category");
 
-    if (!jcategory || !jcategory->valuestring)
+    if (json_type(jcategory) != JSON_STRING)
     {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 400, "Category field is missing");
         return;
     }
 
     const char *author_id = auth_ctx->id;
-    const char *category = jcategory->valuestring;
+    const char *category = json_string(jcategory);
 
     char *new_slug = slugify(category, NULL);
     if (!new_slug)
     {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Memory allocation error in slugify");
         return;
     }
@@ -68,7 +68,7 @@ void edit_category(Req *req, Res *res)
     // Create separate arena for async operation
     turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
-        cJSON_Delete(json);
+        json_free(json);
         free(new_slug);
         send_text(res, 500, "Arena allocation failed");
         return;
@@ -77,7 +77,7 @@ void edit_category(Req *req, Res *res)
     // Create context to hold all the data for async operation
     ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
-        cJSON_Delete(json);
+        json_free(json);
         free(new_slug);
         send_text(res, 500, "Context allocation failed");
         return;
@@ -90,7 +90,7 @@ void edit_category(Req *req, Res *res)
     if (!ctx->res)
     {
         free_ctx(ctx->pool);
-        cJSON_Delete(json);
+        json_free(json);
         free(new_slug);
         send_text(res, 500, "Response copy failed");
         return;
@@ -106,12 +106,12 @@ void edit_category(Req *req, Res *res)
     if (!ctx->category || !ctx->author_id)
     {
         free_ctx(ctx->pool);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Memory allocation failed");
         return;
     }
 
-    cJSON_Delete(json);
+    json_free(json);
 
     pg_async_t *pg = pquv_create(db, ctx);
     if (!pg)

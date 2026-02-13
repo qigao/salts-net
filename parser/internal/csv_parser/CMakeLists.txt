@@ -61,11 +61,8 @@ set_target_properties(
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME CsvParser)
 
-
 # =============================================================================
 # Tests
 # =============================================================================
 
-if(ENABLE_TESTS)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)

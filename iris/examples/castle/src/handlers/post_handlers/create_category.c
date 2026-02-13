@@ -21,24 +21,24 @@ void create_category(Req *req, Res *res)
 {
     auth_context_t *auth_ctx = (auth_context_t *)get_context(req);
 
-    cJSON *json = cJSON_Parse(req->body);
+    json_value_t *json = json_parse(req->body, req->body_len);
     if (!json)
     {
         send_text(res, 400, "Invalid JSON");
         return;
     }
 
-    const cJSON *jcategory = cJSON_GetObjectItem(json, "category");
+    const json_value_t *jcategory = json_object_get(json, "category");
 
-    if (!jcategory || !jcategory->valuestring)
+    if (json_type(jcategory) != JSON_STRING)
     {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 400, "Category field is missing");
         return;
     }
 
     const char *author_id = auth_ctx->id;
-    const char *category = jcategory->valuestring;
+    const char *category = json_string(jcategory);
 
     char *slug = slugify(category, NULL);
 
@@ -46,7 +46,7 @@ void create_category(Req *req, Res *res)
     turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         free(slug);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Arena allocation failed");
         return;
     }
@@ -55,7 +55,7 @@ void create_category(Req *req, Res *res)
     ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         free(slug);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Context allocation failed");
         return;
     }
@@ -68,7 +68,7 @@ void create_category(Req *req, Res *res)
     {
         free_ctx(ctx->pool);
         free(slug);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Response copy failed");
         return;
     }
@@ -78,7 +78,7 @@ void create_category(Req *req, Res *res)
     ctx->author_id = turbo_arena_strdup(async_pool, author_id);
 
     free(slug);
-    cJSON_Delete(json);
+    json_free(json);
 
     if (!ctx->category || !ctx->slug || !ctx->author_id)
     {

@@ -1,7 +1,7 @@
 #include "rpc_client.h"
 #include "tlog.h"
 #include "rpc_error.h"
-#include "cjson/cJSON.h"
+#include <json_parser.h>
 #include <http_client_async.h>
 #include <platform.h>
 #include <stdarg.h>
@@ -53,66 +53,62 @@ static const char *build_url(rpc_client_t *client) {
   return client->config.url;
 }
 
-/* Build JSON-RPC request using cJSON */
+/* Build JSON-RPC request using json_parser */
 static char *build_jsonrpc_request(const char *method, const char *params, const char *id,
                                    size_t *request_len) {
   if (!method || !request_len)
     return NULL;
 
-  cJSON *root = cJSON_CreateObject();
+  json_value_t *root = json_create_object();
   if (!root)
     return NULL;
 
-  cJSON_AddStringToObject(root, "jsonrpc", "2.0");
-  cJSON_AddStringToObject(root, "method", method);
+  json_object_set_string(root, "jsonrpc", "2.0");
+  json_object_set_string(root, "method", method);
 
   /* Add params if provided */
   if (params && params[0] != '\0') {
-    cJSON *params_obj = cJSON_Parse(params);
+    json_value_t *params_obj = json_parse(params, strlen(params));
     if (params_obj) {
-      cJSON_AddItemToObject(root, "params", params_obj);
+      json_object_add(root, "params", params_obj);
     }
   }
 
   /* Add ID if provided (regular request), otherwise it's a notification */
   if (id) {
-    cJSON_AddStringToObject(root, "id", id);
+    json_object_set_string(root, "id", id);
   }
 
-  char *request = cJSON_PrintUnformatted(root);
-  cJSON_Delete(root);
+  char *request = json_serialize(root, request_len);
+  json_free(root);
 
-  if (!request)
-    return NULL;
-
-  *request_len = strlen(request);
   return request;
 }
 
-/* JSON value extraction using cJSON */
+/* JSON value extraction using json_parser */
 static char *json_extract_string(const char *json, const char *key) {
   if (!json)
     return NULL;
 
-  cJSON *root = cJSON_Parse(json);
+  json_value_t *root = json_parse(json, strlen(json));
   if (!root)
     return NULL;
 
   char *result = NULL;
 
   if (key) {
-    cJSON *item = cJSON_GetObjectItem(root, key);
-    if (item && cJSON_IsString(item)) {
-      result = strdup(item->valuestring);
+    json_value_t *item = json_object_get(root, key);
+    if (item && json_type(item) == JSON_STRING) {
+      result = strdup(json_string(item));
     }
   } else {
     /* Root value */
-    if (cJSON_IsString(root)) {
-      result = strdup(root->valuestring);
+    if (json_type(root) == JSON_STRING) {
+      result = strdup(json_string(root));
     }
   }
 
-  cJSON_Delete(root);
+  json_free(root);
   return result;
 }
 
@@ -120,26 +116,26 @@ static int json_extract_int(const char *json, const char *key, int64_t *value) {
   if (!json || !value)
     return -1;
 
-  cJSON *root = cJSON_Parse(json);
+  json_value_t *root = json_parse(json, strlen(json));
   if (!root)
     return -1;
 
   int ret = -1;
 
   if (key) {
-    cJSON *item = cJSON_GetObjectItem(root, key);
-    if (item && cJSON_IsNumber(item)) {
-      *value = (int64_t)item->valuedouble;
+    json_value_t *item = json_object_get(root, key);
+    if (item && json_type(item) == JSON_NUMBER) {
+      *value = (int64_t)json_number(item);
       ret = 0;
     }
   } else {
-    if (cJSON_IsNumber(root)) {
-      *value = (int64_t)root->valuedouble;
+    if (json_type(root) == JSON_NUMBER) {
+      *value = (int64_t)json_number(root);
       ret = 0;
     }
   }
 
-  cJSON_Delete(root);
+  json_free(root);
   return ret;
 }
 
@@ -147,26 +143,26 @@ static int json_extract_bool(const char *json, const char *key, int *value) {
   if (!json || !value)
     return -1;
 
-  cJSON *root = cJSON_Parse(json);
+  json_value_t *root = json_parse(json, strlen(json));
   if (!root)
     return -1;
 
   int ret = -1;
 
   if (key) {
-    cJSON *item = cJSON_GetObjectItem(root, key);
-    if (item && cJSON_IsBool(item)) {
-      *value = cJSON_IsTrue(item) ? 1 : 0;
+    json_value_t *item = json_object_get(root, key);
+    if (item && json_type(item) == JSON_BOOL) {
+      *value = json_bool(item) ? 1 : 0;
       ret = 0;
     }
   } else {
-    if (cJSON_IsBool(root)) {
-      *value = cJSON_IsTrue(root) ? 1 : 0;
+    if (json_type(root) == JSON_BOOL) {
+      *value = json_bool(root) ? 1 : 0;
       ret = 0;
     }
   }
 
-  cJSON_Delete(root);
+  json_free(root);
   return ret;
 }
 
@@ -174,73 +170,73 @@ static int json_extract_double(const char *json, const char *key, double *value)
   if (!json || !value)
     return -1;
 
-  cJSON *root = cJSON_Parse(json);
+  json_value_t *root = json_parse(json, strlen(json));
   if (!root)
     return -1;
 
   int ret = -1;
 
   if (key) {
-    cJSON *item = cJSON_GetObjectItem(root, key);
-    if (item && cJSON_IsNumber(item)) {
-      *value = item->valuedouble;
+    json_value_t *item = json_object_get(root, key);
+    if (item && json_type(item) == JSON_NUMBER) {
+      *value = json_number(item);
       ret = 0;
     }
   } else {
-    if (cJSON_IsNumber(root)) {
-      *value = root->valuedouble;
+    if (json_type(root) == JSON_NUMBER) {
+      *value = json_number(root);
       ret = 0;
     }
   }
 
-  cJSON_Delete(root);
+  json_free(root);
   return ret;
 }
 
-/* Parse JSON-RPC response using cJSON */
+/* Parse JSON-RPC response using json_parser */
 static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
   if (!body || !result)
     return -1;
 
   /* Note: caller should memset result before calling this function */
 
-  cJSON *root = cJSON_Parse(body);
+  json_value_t *root = json_parse(body, strlen(body));
   if (!root)
     return -1;
 
   /* Extract ID */
-  cJSON *id_item = cJSON_GetObjectItem(root, "id");
-  if (id_item && cJSON_IsString(id_item)) {
-    result->id = strdup(id_item->valuestring);
+  json_value_t *id_item = json_object_get(root, "id");
+  if (id_item && json_type(id_item) == JSON_STRING) {
+    result->id = strdup(json_string(id_item));
   }
 
   /* Check for error */
-  cJSON *error = cJSON_GetObjectItem(root, "error");
-  if (error) {
+  json_value_t *error = json_object_get(root, "error");
+  if (error && json_type(error) == JSON_OBJECT) {
     result->success = 0;
 
     /* Extract error code */
-    cJSON *code = cJSON_GetObjectItem(error, "code");
-    if (code && cJSON_IsNumber(code)) {
-      result->error_code = (int)code->valuedouble;
+    json_value_t *code = json_object_get(error, "code");
+    if (code && json_type(code) == JSON_NUMBER) {
+      result->error_code = (int)json_number(code);
     }
 
     /* Extract error message */
-    cJSON *message = cJSON_GetObjectItem(error, "message");
-    if (message && cJSON_IsString(message)) {
-      result->error_message = strdup(message->valuestring);
+    json_value_t *message = json_object_get(error, "message");
+    if (message && json_type(message) == JSON_STRING) {
+      result->error_message = strdup(json_string(message));
     }
   } else {
     result->success = 1;
 
     /* Extract result */
-    cJSON *result_item = cJSON_GetObjectItem(root, "result");
+    json_value_t *result_item = json_object_get(root, "result");
     if (result_item) {
-      result->result = cJSON_PrintUnformatted(result_item);
+      result->result = json_serialize(result_item, NULL);
     }
   }
 
-  cJSON_Delete(root);
+  json_free(root);
   return 0;
 }
 
@@ -396,7 +392,7 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
   http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
                                                   NULL, 0, jsonrpc_body, jsonrpc_len,
                                                   sync_call_callback, &ctx);
-  free(jsonrpc_body);
+  json_serialize_free(jsonrpc_body);
 
   if (!req)
     return -1;
@@ -439,7 +435,7 @@ int rpc_client_notify(rpc_client_t *client, const char *method, const char *para
   http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
                                                   NULL, 0, jsonrpc_body, jsonrpc_len,
                                                   notify_callback, NULL);
-  free(jsonrpc_body);
+  json_serialize_free(jsonrpc_body);
 
   return req ? 0 : -1;
 }
@@ -567,7 +563,7 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
   /* Create async context */
   async_call_context_t *ctx = (async_call_context_t *)malloc(sizeof(async_call_context_t));
   if (!ctx) {
-    free(jsonrpc_body);
+    json_serialize_free(jsonrpc_body);
     return -1;
   }
 
@@ -576,7 +572,7 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
   ctx->result = (rpc_call_result_t *)calloc(1, sizeof(rpc_call_result_t));
   if (!ctx->result) {
     free(ctx);
-    free(jsonrpc_body);
+    json_serialize_free(jsonrpc_body);
     return -1;
   }
 
@@ -587,7 +583,7 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
   http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
                                                   NULL, 0, jsonrpc_body, jsonrpc_len,
                                                   async_call_callback, ctx);
-  free(jsonrpc_body);
+  json_serialize_free(jsonrpc_body);
 
   if (!req) {
     free(ctx->result);
@@ -676,14 +672,14 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
     }
 
     if (pos + req_len + 2 >= batch_size) {
-      free(req);
+      json_serialize_free(req);
       free(batch_json);
       return -1;
     }
 
     memcpy(batch_json + pos, req, req_len);
     pos += req_len;
-    free(req);
+    json_serialize_free(req);
   }
 
   batch_json[pos++] = ']';
@@ -873,7 +869,7 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   /* Create stream context */
   rpc_stream_context_t *ctx = (rpc_stream_context_t *)calloc(1, sizeof(rpc_stream_context_t));
   if (!ctx) {
-    free(jsonrpc_body);
+    json_serialize_free(jsonrpc_body);
     return -1;
   }
   ctx->result_cb = result_cb;
@@ -889,7 +885,7 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url, headers, 2,
                                                   jsonrpc_body, jsonrpc_len,
                                                   rpc_stream_complete_callback, ctx);
-  free(jsonrpc_body);
+  json_serialize_free(jsonrpc_body);
 
   if (!req) {
     free(ctx);

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
 #ifndef _WIN32
 #include <signal.h>
 #endif
@@ -18,6 +19,29 @@
 /* Global configuration hashmap */
 static ConfigMap g_config_map = {0};
 static int g_config_init = 0;
+static uv_mutex_t g_config_lock;
+static uv_once_t g_config_lock_once = UV_ONCE_INIT;
+
+#if defined(_MSC_VER)
+#define TURBO_THREAD_LOCAL __declspec(thread)
+#else
+#define TURBO_THREAD_LOCAL _Thread_local
+#endif
+
+static TURBO_THREAD_LOCAL char g_config_string_buf[256];
+
+static void init_config_lock_once(void) {
+  uv_mutex_init(&g_config_lock);
+}
+
+static void config_lock(void) {
+  uv_once(&g_config_lock_once, init_config_lock_once);
+  uv_mutex_lock(&g_config_lock);
+}
+
+static void config_unlock(void) {
+  uv_mutex_unlock(&g_config_lock);
+}
 
 /* Parse size env like 64K/1M/2G or plain integer; returns def on failure */
 static size_t parse_env_size(const char *name, size_t def) {
@@ -47,8 +71,24 @@ static size_t parse_env_size(const char *name, size_t def) {
   return n > 0 ? n : def;
 }
 
+static size_t parse_env_size_compat(const char *primary, const char *legacy,
+                                    size_t def) {
+  const char *value = getenv(primary);
+  if (value && *value) {
+    return parse_env_size(primary, def);
+  }
+
+  if (legacy && legacy[0]) {
+    return parse_env_size(legacy, def);
+  }
+
+  return def;
+}
+
 int turbo_config_init(void) {
+  config_lock();
   if (g_config_init) {
+    config_unlock();
     return 0; /* Already initialized */
   }
 
@@ -58,6 +98,7 @@ int turbo_config_init(void) {
 
   g_config_map = ConfigMap_init();
   g_config_init = 1;
+  config_unlock();
 
   /* Initialize TCP defaults */
   turbo_tcp_config_init_defaults();
@@ -77,15 +118,21 @@ int turbo_config_init(void) {
 }
 
 void turbo_config_cleanup(void) {
+  config_lock();
   if (g_config_init) {
     ConfigMap_drop(&g_config_map);
     g_config_init = 0;
   }
+  config_unlock();
 }
 
 int turbo_config_set_int(const char *key, int64_t value) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return -1;
+    }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -93,12 +140,17 @@ int turbo_config_set_int(const char *key, int64_t value) {
   entry.value.int_val = value;
 
   ConfigMap_insert_or_assign(&g_config_map, cstr_from(key), entry);
+  config_unlock();
   return 0;
 }
 
 int turbo_config_set_uint(const char *key, uint64_t value) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return -1;
+    }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -106,12 +158,17 @@ int turbo_config_set_uint(const char *key, uint64_t value) {
   entry.value.uint_val = value;
 
   ConfigMap_insert_or_assign(&g_config_map, cstr_from(key), entry);
+  config_unlock();
   return 0;
 }
 
 int turbo_config_set_float(const char *key, double value) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return -1;
+    }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -119,12 +176,17 @@ int turbo_config_set_float(const char *key, double value) {
   entry.value.float_val = value;
 
   ConfigMap_insert_or_assign(&g_config_map, cstr_from(key), entry);
+  config_unlock();
   return 0;
 }
 
 int turbo_config_set_string(const char *key, const char *value) {
+  config_lock();
   if (!g_config_init || !key || !value)
+    {
+    config_unlock();
     return -1;
+    }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -132,55 +194,86 @@ int turbo_config_set_string(const char *key, const char *value) {
   strncpy(entry.value.str_val, value, sizeof(entry.value.str_val) - 1);
 
   ConfigMap_insert_or_assign(&g_config_map, cstr_from(key), entry);
+  config_unlock();
   return 0;
 }
 
 int64_t turbo_config_get_int(const char *key, int64_t default_val) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return default_val;
+    }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_INT) {
+    config_unlock();
     return default_val;
   }
 
-  return entry->second.value.int_val;
+  int64_t value = entry->second.value.int_val;
+  config_unlock();
+  return value;
 }
 
 uint64_t turbo_config_get_uint(const char *key, uint64_t default_val) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return default_val;
+    }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_UINT) {
+    config_unlock();
     return default_val;
   }
 
-  return entry->second.value.uint_val;
+  uint64_t value = entry->second.value.uint_val;
+  config_unlock();
+  return value;
 }
 
 double turbo_config_get_float(const char *key, double default_val) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return default_val;
+    }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_FLOAT) {
+    config_unlock();
     return default_val;
   }
 
-  return entry->second.value.float_val;
+  double value = entry->second.value.float_val;
+  config_unlock();
+  return value;
 }
 
 const char *turbo_config_get_string(const char *key, const char *default_val) {
+  config_lock();
   if (!g_config_init || !key)
+    {
+    config_unlock();
     return default_val;
+    }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_STRING) {
+    config_unlock();
     return default_val;
   }
 
-  return entry->second.value.str_val;
+  strncpy(g_config_string_buf, entry->second.value.str_val,
+          sizeof(g_config_string_buf) - 1);
+  g_config_string_buf[sizeof(g_config_string_buf) - 1] = '\0';
+  config_unlock();
+  return g_config_string_buf;
 }
 
 void turbo_tcp_config_init_defaults(void) {
@@ -202,17 +295,23 @@ void turbo_tcp_config_init_defaults(void) {
 
   /* Pool and buffer sizes with environment variable support */
   turbo_config_set_uint(TURBO_TCP_POOL_CHUNK_SIZE,
-                       parse_env_size("turbo_TCP_POOL_CHUNK", 64 * 1024));
+                       parse_env_size_compat("TURBO_TCP_POOL_CHUNK",
+                                             "turbo_TCP_POOL_CHUNK",
+                                             64 * 1024));
 
   turbo_config_set_uint(TURBO_TCP_READ_BUF_MIN,
-                       parse_env_size("turbo_TCP_READ_BUF_MIN", 16 * 1024));
+                       parse_env_size_compat("TURBO_TCP_READ_BUF_MIN",
+                                             "turbo_TCP_READ_BUF_MIN",
+                                             16 * 1024));
 
   turbo_config_set_uint(
       TURBO_TCP_READ_BUF_MAX,
-      parse_env_size("turbo_TCP_READ_BUF_MAX", 4 * 1024 * 1024));
+      parse_env_size_compat("TURBO_TCP_READ_BUF_MAX", "turbo_TCP_READ_BUF_MAX",
+                            4 * 1024 * 1024));
 
   turbo_config_set_uint(TURBO_TCP_READ_BUF_SIZE,
-                       parse_env_size("turbo_TCP_READ_BUF", 64 * 1024));
+                       parse_env_size_compat("TURBO_TCP_READ_BUF",
+                                             "turbo_TCP_READ_BUF", 64 * 1024));
 
   /* Client buffer and IOV configuration */
   turbo_config_set_uint(TURBO_TCP_CLIENT_BUFFER_SIZE, 8192);
@@ -433,10 +532,14 @@ void turbo_pipe_config_init_defaults(void) {
 
   /* Pool and buffer sizes with environment variable support */
   turbo_config_set_uint(TURBO_PIPE_POOL_CHUNK_SIZE,
-                       parse_env_size("turbo_PIPE_POOL_CHUNK", 64 * 1024));
+                       parse_env_size_compat("TURBO_PIPE_POOL_CHUNK",
+                                             "turbo_PIPE_POOL_CHUNK",
+                                             64 * 1024));
 
   turbo_config_set_uint(TURBO_PIPE_READ_BUF_MIN,
-                       parse_env_size("turbo_PIPE_READ_BUF_MIN", 16 * 1024));
+                       parse_env_size_compat("TURBO_PIPE_READ_BUF_MIN",
+                                             "turbo_PIPE_READ_BUF_MIN",
+                                             16 * 1024));
 
   turbo_config_set_uint(
       TURBO_PIPE_READ_BUF_MAX,
@@ -471,14 +574,19 @@ void turbo_udp_config_init_defaults(void) {
 
   /* Pool configuration */
   turbo_config_set_uint(TURBO_UDP_POOL_CHUNK_SIZE,
-                       parse_env_size("turbo_UDP_POOL_CHUNK", 32 * 1024));
+                       parse_env_size_compat("TURBO_UDP_POOL_CHUNK",
+                                             "turbo_UDP_POOL_CHUNK",
+                                             32 * 1024));
 
   /* Receive buffer configuration */
   turbo_config_set_uint(TURBO_UDP_RECV_BUF_SIZE,
-                       parse_env_size("turbo_UDP_RECV_BUF", 64 * 1024));
+                       parse_env_size_compat("TURBO_UDP_RECV_BUF",
+                                             "turbo_UDP_RECV_BUF", 64 * 1024));
 
   turbo_config_set_uint(TURBO_UDP_RECV_BUF_MIN,
-                       parse_env_size("turbo_UDP_RECV_BUF_MIN", 8 * 1024));
+                       parse_env_size_compat("TURBO_UDP_RECV_BUF_MIN",
+                                             "turbo_UDP_RECV_BUF_MIN",
+                                             8 * 1024));
 
   turbo_config_set_uint(
       TURBO_UDP_RECV_BUF_MAX,

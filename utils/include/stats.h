@@ -1,7 +1,8 @@
 #ifndef TURBO_STATS_H
 #define TURBO_STATS_H
 
-#include <platform.h>
+#include "platform.h"
+#include "turbo_str_view.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -133,6 +134,14 @@ typedef int32_t turbo_stat_id_t;
  * @return The statistic ID (>= 0), or -1 on error.
  */
 CXX_C_API turbo_stat_id_t turbo_stats_register(const char *name, turbo_stat_type_t type);
+/**
+ * @brief Registers a statistic using a string view.
+ *
+ * @param name The statistic name view (does not need to be null-terminated).
+ * @param type The type of the statistic.
+ * @return The statistic ID (>= 0), or -1 on error.
+ */
+CXX_C_API turbo_stat_id_t turbo_stats_register_v(tstr_v name, turbo_stat_type_t type);
 
 /* Fast update API using ID (lock-free lookup, only locks queue) */
 /**
@@ -201,6 +210,15 @@ CXX_C_API int turbo_stats_histogram_record(const char *name, uint64_t value);
  * @return 0 on success, or a non-zero error code if the statistic is not found or type mismatch.
  */
 CXX_C_API int turbo_stats_rate_record(const char *name, uint64_t value);
+/**
+ * @brief String-view variants of the string-based APIs.
+ */
+CXX_C_API int turbo_stats_counter_add_v(tstr_v name, uint64_t value);
+CXX_C_API int turbo_stats_counter_inc_v(tstr_v name);
+CXX_C_API int turbo_stats_gauge_set_v(tstr_v name, int64_t value);
+CXX_C_API int turbo_stats_gauge_add_v(tstr_v name, int64_t delta);
+CXX_C_API int turbo_stats_histogram_record_v(tstr_v name, uint64_t value);
+CXX_C_API int turbo_stats_rate_record_v(tstr_v name, uint64_t value);
 
 /* Get statistics (main thread only) */
 /**
@@ -210,6 +228,10 @@ CXX_C_API int turbo_stats_rate_record(const char *name, uint64_t value);
  * @return A pointer to the `turbo_stat_entry_t` if found, or NULL otherwise.
  */
 CXX_C_API turbo_stat_entry_t *turbo_stats_get(const char *name);
+/**
+ * @brief Retrieves a statistic entry by string view (main thread only).
+ */
+CXX_C_API turbo_stat_entry_t *turbo_stats_get_v(tstr_v name);
 /**
  * @brief Retrieves the head of the linked list of all statistic entries (main thread only).
  *

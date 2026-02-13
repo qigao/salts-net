@@ -79,4 +79,11 @@ spec("url") {
     check_str_eq(a.path, "/tmp/my_service");
 #endif
   }
+
+  it("should reject invalid pipe URL without service name") {
+    turbo_address_t a;
+    int rc = parse_transport_url("pipe://", &a);
+    check_int_ne(rc, 0);
+    check(!a.valid);
+  }
 }

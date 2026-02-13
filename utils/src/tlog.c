@@ -5,7 +5,6 @@
  * Design:
  * - Sync mode: Direct write to all sinks
  * - Async mode: Lock-free queue + background thread, fully non-blocking
- * - Memory pool for zero-alloc formatting
  * - Thread-safe default logger initialization
  * - Bounded queue with backpressure handling
  * - Proper flush with drain synchronization
@@ -13,10 +12,10 @@
 
 #include "platform.h"
 #include "tlog.h"
-#include "sds.h"
 #include "fmt.h"
 #include "log_pattern_lexer.h"
 #include "memory_pool.h"
+#include "sds.h"
 #include "stb_sprintf.h"
 #include "turbo_atomic.h"
 #include "turbo_fs.h"
@@ -24,6 +23,7 @@
 #include <string.h>
 #include <time.h>
 #include <uv.h>
+
 
 #ifdef _WIN32
   #include <windows.h>
@@ -215,7 +215,7 @@ static int format_with_pattern(char *buf, size_t buf_size, const char *pattern,
       char ts[32];
       strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
       char temp[64];
-      turbo_fmt(temp, sizeof(temp), "{}.{:03}", ts, (unsigned)(entry->timestamp_ms % 1000));
+      fmt(temp, sizeof(temp), "{}.{:03}", ts, (unsigned)(entry->timestamp_ms % 1000));
       written = (int)strlen(temp);
       if (written > 0 && dst + written < end) {
         memcpy(dst, temp, written);
@@ -248,7 +248,7 @@ static int format_with_pattern(char *buf, size_t buf_size, const char *pattern,
       break;
     case LOG_TOKEN_LINE: {
       char temp[16];
-      turbo_fmt(temp, sizeof(temp), "{}", entry->line);
+      fmt(temp, sizeof(temp), "{}", entry->line);
       written = (int)strlen(temp);
       if (written > 0 && dst + written < end) {
         memcpy(dst, temp, written);
@@ -257,7 +257,7 @@ static int format_with_pattern(char *buf, size_t buf_size, const char *pattern,
     }
     case LOG_TOKEN_THREAD: {
       char temp[16];
-      turbo_fmt(temp, sizeof(temp), "{}", entry->thread_id);
+      fmt(temp, sizeof(temp), "{}", entry->thread_id);
       written = (int)strlen(temp);
       if (written > 0 && dst + written < end) {
         memcpy(dst, temp, written);
@@ -342,16 +342,16 @@ turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opt
     sink->output = opts->output ? opts->output : stdout;
     sink->use_colors = opts->use_colors;
     if (opts->pattern) {
-      sink->pattern = turbo_strdup_padded(opts->pattern);
+      sink->pattern = tstr_dup(opts->pattern);
     } else if (opts->include_file_line) {
-      sink->pattern = turbo_strdup_padded(TURBO_LOG_FULL_PATTERN);
+      sink->pattern = tstr_dup(TURBO_LOG_FULL_PATTERN);
     } else {
-      sink->pattern = turbo_strdup_padded(TURBO_LOG_DEFAULT_PATTERN);
+      sink->pattern = tstr_dup(TURBO_LOG_DEFAULT_PATTERN);
     }
   } else {
     sink->output = stdout;
     sink->use_colors = 1;
-    sink->pattern = turbo_strdup_padded(TURBO_LOG_DEFAULT_PATTERN);
+    sink->pattern = tstr_dup(TURBO_LOG_DEFAULT_PATTERN);
   }
 
   return &sink->base;
@@ -382,11 +382,11 @@ static void file_sink_rotate_unlocked(file_sink_t *fs) {
   char old_path[512], new_path[512];
   for (int i = fs->max_files - 1; i >= 0; i--) {
     if (i == 0) {
-      turbo_fmt(old_path, sizeof(old_path), "{}", fs->path);
+      fmt(old_path, sizeof(old_path), "{}", fs->path);
     } else {
-      turbo_fmt(old_path, sizeof(old_path), "{}.{}", fs->path, i);
+      fmt(old_path, sizeof(old_path), "{}.{}", fs->path, i);
     }
-    turbo_fmt(new_path, sizeof(new_path), "{}.{}", fs->path, i + 1);
+    fmt(new_path, sizeof(new_path), "{}.{}", fs->path, i + 1);
     turbo_fs_rename(old_path, new_path);
   }
 
@@ -467,12 +467,11 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   sink->base.destroy = file_sink_destroy;
   sink->base.min_level = TURBO_LOG_LEVEL_DEBUG;
 
-  sink->path = turbo_strdup_padded(opts->path);
-  sink->pattern = turbo_strdup_padded(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN);
+  sink->path = tstr_dup(opts->path);
+  sink->pattern = tstr_dup(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN);
   sink->max_size = opts->max_size;
   sink->max_files = opts->max_files;
   sink->fd = TURBO_INVALID_FILE;
-
   int flags = TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT;
   flags |= opts->append ? TURBO_FS_O_APPEND : TURBO_FS_O_TRUNC;
 

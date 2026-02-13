@@ -33,33 +33,33 @@ void create_post(Req *req, Res *res)
 {
     auth_context_t *auth_ctx = (auth_context_t *)get_context(req);
 
-    cJSON *json = cJSON_Parse(req->body);
+    json_value_t *json = json_parse(req->body, req->body_len);
     if (!json)
     {
         send_text(res, 400, "Invalid JSON");
         return;
     }
 
-    const cJSON *jheader = cJSON_GetObjectItem(json, "header");
-    const cJSON *jcontent = cJSON_GetObjectItem(json, "content");
-    const cJSON *jis_hidden = cJSON_GetObjectItem(json, "is_hidden");
+    const json_value_t *jheader = json_object_get(json, "header");
+    const json_value_t *jcontent = json_object_get(json, "content");
+    const json_value_t *jis_hidden = json_object_get(json, "is_hidden");
 
-    if (!jheader || !jcontent || !jheader->valuestring || !jcontent->valuestring)
+    if (json_type(jheader) != JSON_STRING || json_type(jcontent) != JSON_STRING)
     {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 400, "Header or content is missing");
         return;
     }
 
     const char *author_id = auth_ctx->id;
-    const char *header = jheader->valuestring;
-    const char *content = jcontent->valuestring;
-    bool is_hidden = jis_hidden ? jis_hidden->valueint : false;
+    const char *header = json_string(jheader);
+    const char *content = json_string(jcontent);
+    bool is_hidden = jis_hidden ? (int)json_number(jis_hidden) : false;
 
     char *slug = slugify(header, NULL);
     if (!slug)
     {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Memory allocation error in slugify");
         return;
     }
@@ -70,7 +70,7 @@ void create_post(Req *req, Res *res)
     turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         free(slug);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Arena allocation failed");
         return;
     }
@@ -79,7 +79,7 @@ void create_post(Req *req, Res *res)
     ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         free(slug);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Context allocation failed");
         return;
     }
@@ -92,7 +92,7 @@ void create_post(Req *req, Res *res)
     {
         free_ctx(ctx->pool);
         free(slug);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Response copy failed");
         return;
     }
@@ -112,7 +112,7 @@ void create_post(Req *req, Res *res)
     if (!ctx->header || !ctx->content || !ctx->slug || !ctx->author_id)
     {
         free_ctx(ctx->pool);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Memory allocation failed");
         return;
     }
@@ -122,17 +122,17 @@ void create_post(Req *req, Res *res)
     ctx->category_count = 0;
 
     // Process categories
-    const cJSON *jcategories = cJSON_GetObjectItem(json, "categories");
-    if (jcategories && cJSON_IsArray(jcategories))
+    const json_value_t *jcategories = json_object_get(json, "categories");
+    if (jcategories && json_type(jcategories) == JSON_ARRAY)
     {
-        int n = cJSON_GetArraySize(jcategories);
+        int n = (int)json_array_size(jcategories);
         if (n > 0)
         {
             ctx->category_ids = malloc(n * sizeof(int));
             if (!ctx->category_ids)
             {
                 free_ctx(ctx->pool);
-                cJSON_Delete(json);
+                json_free(json);
                 send_text(res, 500, "Memory allocation failed for categories");
                 return;
             }
@@ -140,10 +140,10 @@ void create_post(Req *req, Res *res)
             ctx->category_count = 0;
             for (int i = 0; i < n; i++)
             {
-                const cJSON *item = cJSON_GetArrayItem(jcategories, i);
-                if (cJSON_IsNumber(item))
+                const json_value_t *item = json_array_get(jcategories, i);
+                if (json_type(item) == JSON_NUMBER)
                 {
-                    ctx->category_ids[ctx->category_count] = item->valueint;
+                    ctx->category_ids[ctx->category_count] = (int)json_number(item);
                     ctx->category_count++;
                 }
             }
@@ -156,7 +156,7 @@ void create_post(Req *req, Res *res)
         }
     }
 
-    cJSON_Delete(json);
+    json_free(json);
 
     pg_async_t *pg = pquv_create(db, ctx);
     if (!pg)

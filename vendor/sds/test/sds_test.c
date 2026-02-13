@@ -105,6 +105,62 @@ spec("SDS library tests") {
 
             sds_free_all(s1, s2, s3, s4);
         }
+
+        it("case-insensitive comparison") {
+            check_int_eq(sdscasecmp("Hello", "hello"), 0);
+            check_int_eq(sdscasecmp("ABC", "abc"), 0);
+            check_int_eq(sdscasecmp("abc", "ABC"), 0);
+            check(sdscasecmp("abc", "abd") < 0);
+            check(sdscasecmp("abd", "abc") > 0);
+            check_int_eq(sdscasecmp(NULL, NULL), 0);
+            check(sdscasecmp(NULL, "a") < 0);
+            check(sdscasecmp("a", NULL) > 0);
+        }
+
+        it("case-insensitive comparison with length") {
+            check_int_eq(sdsncasecmp("Hello", "hello", 5), 0);
+            check_int_eq(sdsncasecmp("HelloWorld", "HelloPlanet", 5), 0);
+            check(sdsncasecmp("HelloWorld", "HelloPlanet", 6) != 0);
+            check_int_eq(sdsncasecmp("abc", "abd", 0), 0);
+            check_int_eq(sdsncasecmp(NULL, NULL, 5), 0);
+        }
+
+        it("starts with prefix") {
+            check(sdsstartswith("Hello World", "Hello"));
+            check(sdsstartswith("Hello", "Hello"));
+            check(!sdsstartswith("Hello", "hello"));
+            check(!sdsstartswith("Hi", "Hello"));
+            check(sdsstartswith("abc", ""));
+            check(!sdsstartswith(NULL, "a"));
+            check(!sdsstartswith("a", NULL));
+        }
+
+        it("starts with prefix (case-insensitive)") {
+            check(sdsistartswith("Hello World", "hello"));
+            check(sdsistartswith("HELLO", "hello"));
+            check(sdsistartswith("hello", "HELLO"));
+            check(!sdsistartswith("Hi", "Hello"));
+        }
+
+        it("ends with suffix") {
+            check(sdsendswith("Hello World", "World"));
+            check(sdsendswith("Hello", "Hello"));
+            check(!sdsendswith("Hello", "hello"));
+            check(!sdsendswith("Hi", "Hello"));
+            check(sdsendswith("abc", ""));
+            check(!sdsendswith(NULL, "a"));
+            check(!sdsendswith("a", NULL));
+        }
+
+        it("contains substring") {
+            check(sdscontains("Hello World", "World"));
+            check(sdscontains("Hello World", "o W"));
+            check(sdscontains("Hello", "Hello"));
+            check(!sdscontains("Hello", "world"));
+            check(sdscontains("abc", ""));
+            check(!sdscontains(NULL, "a"));
+            check(!sdscontains("a", NULL));
+        }
     }
 
     describe("Copying") {
@@ -398,6 +454,59 @@ spec("SDS library tests") {
             sds_free_all(sa, sb, NULL, NULL);
             free(a);
             free(b);
+        }
+
+        bench("case-insensitive compare performance") {
+            const char *c1 = "Hello World Test String";
+            const char *c2 = "hello world test string";
+            const char *c3 = "HELLO WORLD TEST STRING";
+
+            benchmark("sdscasecmp (equal)", iters) {
+                int res = sdscasecmp(c1, c2);
+                (void)res;
+            }
+
+            benchmark("STRICMP (equal)", iters) {
+                int res = STRICMP(c1, c2);
+                (void)res;
+            }
+
+            benchmark("sdsncasecmp (10 chars)", iters) {
+                int res = sdsncasecmp(c1, c3, 10);
+                (void)res;
+            }
+        }
+
+        bench("startswith/endswith/contains performance") {
+            const char *s = "The quick brown fox jumps over the lazy dog";
+            const char *prefix = "The quick";
+            const char *suffix = "lazy dog";
+            const char *substr = "brown fox";
+
+            benchmark("sdsstartswith", iters) {
+                int res = sdsstartswith(s, prefix);
+                (void)res;
+            }
+
+            benchmark("sdsistartswith", iters) {
+                int res = sdsistartswith(s, "THE QUICK");
+                (void)res;
+            }
+
+            benchmark("sdsendswith", iters) {
+                int res = sdsendswith(s, suffix);
+                (void)res;
+            }
+
+            benchmark("sdscontains", iters) {
+                int res = sdscontains(s, substr);
+                (void)res;
+            }
+
+            benchmark("strstr (contains)", iters) {
+                int res = strstr(s, substr) != NULL;
+                (void)res;
+            }
         }
 
         bench("case conversion performance") {

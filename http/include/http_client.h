@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <platform.h>
+#include <turbo_str.h>
 #include <turbo_parser.h>
 
 
@@ -42,7 +43,12 @@ typedef struct {
     uint64_t connections_reused;
 } http_client_stats_t;
 
-// Internal header list (parsed from response headers)
+// Parsed response header entry
+struct http_header_entry_s {
+    tstr_t name;
+    tstr_t value;
+    struct http_header_entry_s* next;
+};
 typedef struct http_header_entry_s http_header_entry_t;
 
 // HTTP response
@@ -116,14 +122,19 @@ CXX_C_API http_response_t* http_request(http_client_t* client, http_method_t met
 CXX_C_API http_response_t* http_post(http_client_t* client, const char* url, 
                            const char* body, size_t body_len);
 
-// Generic request with custom headers
-CXX_C_API http_response_t* http_request(http_client_t* client,
-                              http_method_t method,
-                              const char* url,
-                              const char** headers,  // Array of "Key: Value" strings
-                              int header_count,
-                              const char* body,
-                              size_t body_len);
+// Simple PUT request
+CXX_C_API http_response_t* http_put(http_client_t* client, const char* url,
+                           const char* body, size_t body_len);
+
+// Simple DELETE request
+CXX_C_API http_response_t* http_del(http_client_t* client, const char* url);
+
+// Simple HEAD request (response has no body, only headers/status)
+CXX_C_API http_response_t* http_head_request(http_client_t* client, const char* url);
+
+// Simple PATCH request
+CXX_C_API http_response_t* http_patch(http_client_t* client, const char* url,
+                            const char* body, size_t body_len);
 
 // Free response
 CXX_C_API void http_response_free(http_response_t* response);

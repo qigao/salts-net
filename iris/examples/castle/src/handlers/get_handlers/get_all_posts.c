@@ -115,8 +115,8 @@ static void posts_result_callback(pg_async_t *pg, PGresult *result, void *data)
     }
 
     int rows = PQntuples(result);
-    cJSON *root = cJSON_CreateObject();
-    cJSON *posts = cJSON_CreateArray();
+    json_value_t *root = json_create_object();
+    json_value_t *posts = json_create_array();
 
     for (int i = 0; i < rows; i++)
     {
@@ -127,28 +127,28 @@ static void posts_result_callback(pg_async_t *pg, PGresult *result, void *data)
             continue;
         }
 
-        cJSON *obj = cJSON_CreateObject();
+        json_value_t *obj = json_create_object();
 
         // Add string fields
-        cJSON_AddStringToObject(obj, "header", PQgetvalue(result, i, PQfnumber(result, "header")));
-        cJSON_AddStringToObject(obj, "slug", PQgetvalue(result, i, PQfnumber(result, "slug")));
-        cJSON_AddStringToObject(obj, "content", PQgetvalue(result, i, PQfnumber(result, "content")));
-        cJSON_AddStringToObject(obj, "username", PQgetvalue(result, i, PQfnumber(result, "username")));
-        cJSON_AddStringToObject(obj, "created_at", PQgetvalue(result, i, PQfnumber(result, "created_at")));
-        cJSON_AddStringToObject(obj, "updated_at", PQgetvalue(result, i, PQfnumber(result, "updated_at")));
+        json_object_set_string(obj, "header", PQgetvalue(result, i, PQfnumber(result, "header")));
+        json_object_set_string(obj, "slug", PQgetvalue(result, i, PQfnumber(result, "slug")));
+        json_object_set_string(obj, "content", PQgetvalue(result, i, PQfnumber(result, "content")));
+        json_object_set_string(obj, "username", PQgetvalue(result, i, PQfnumber(result, "username")));
+        json_object_set_string(obj, "created_at", PQgetvalue(result, i, PQfnumber(result, "created_at")));
+        json_object_set_string(obj, "updated_at", PQgetvalue(result, i, PQfnumber(result, "updated_at")));
 
         // Add integer fields
-        cJSON_AddNumberToObject(obj, "reading_time", atoi(PQgetvalue(result, i, PQfnumber(result, "reading_time"))));
-        cJSON_AddNumberToObject(obj, "author_id", atoi(PQgetvalue(result, i, PQfnumber(result, "author_id"))));
+        json_object_set_number(obj, "reading_time", atoi(PQgetvalue(result, i, PQfnumber(result, "reading_time"))));
+        json_object_set_number(obj, "author_id", atoi(PQgetvalue(result, i, PQfnumber(result, "author_id"))));
 
         // Add boolean field
-        cJSON_AddBoolToObject(obj, "is_hidden", strcmp(PQgetvalue(result, i, PQfnumber(result, "is_hidden")), "t") == 0);
+        json_object_set_bool(obj, "is_hidden", strcmp(PQgetvalue(result, i, PQfnumber(result, "is_hidden")), "t") == 0);
 
         char *categories_str = PQgetvalue(result, i, PQfnumber(result, "categories"));
         char *category_slugs_str = PQgetvalue(result, i, PQfnumber(result, "category_slugs"));
         char *category_ids_str = PQgetvalue(result, i, PQfnumber(result, "category_ids"));
 
-        cJSON *categories_array = cJSON_CreateArray();
+        json_value_t *categories_array = json_create_array();
 
         if (strlen(categories_str) > 0)
         {
@@ -165,11 +165,11 @@ static void posts_result_callback(pg_async_t *pg, PGresult *result, void *data)
 
             while (cat_tok && slug_tok && id_tok)
             {
-                cJSON *category_obj = cJSON_CreateObject();
-                cJSON_AddNumberToObject(category_obj, "id", atoi(id_tok));
-                cJSON_AddStringToObject(category_obj, "category", cat_tok);
-                cJSON_AddStringToObject(category_obj, "slug", slug_tok);
-                cJSON_AddItemToArray(categories_array, category_obj);
+                json_value_t *category_obj = json_create_object();
+                json_object_set_number(category_obj, "id", atoi(id_tok));
+                json_object_set_string(category_obj, "category", cat_tok);
+                json_object_set_string(category_obj, "slug", slug_tok);
+                json_array_add(categories_array, category_obj);
 
                 cat_tok = strtok_r(NULL, ",", &cat_saveptr);
                 slug_tok = strtok_r(NULL, ",", &slug_saveptr);
@@ -181,15 +181,16 @@ static void posts_result_callback(pg_async_t *pg, PGresult *result, void *data)
             free(ids_copy);
         }
 
-        cJSON_AddItemToObject(obj, "categories", categories_array);
-        cJSON_AddItemToArray(posts, obj);
+        json_object_add(obj, "categories", categories_array);
+        json_array_add(posts, obj);
     }
 
-    cJSON_AddItemToObject(root, "posts", posts);
-    char *out = cJSON_PrintUnformatted(root);
+    json_object_add(root, "posts", posts);
+    size_t out_len = 0;
+    char *out = json_serialize(root, &out_len);
     send_json(ctx->res, 200, out);
 
-    cJSON_Delete(root);
-    free(out);
+    json_free(root);
+    json_serialize_free(out);
     free_ctx(ctx->pool);
 }

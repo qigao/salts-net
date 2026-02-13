@@ -7,6 +7,7 @@
 #define FMT_LEXER_H
 
 #include <stddef.h>
+#include "../include/turbo_str_view.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +31,14 @@ typedef enum {
  * @return Token type
  */
 fmt_token_t fmt_scan(const char **cursor, const char **token_start, size_t *token_len);
+
+/**
+ * @brief Scan next token, returning a non-owning view for token payload
+ * @param cursor Pointer to current position (updated on return)
+ * @param token Set to token payload view (inner content for SPECIFIER)
+ * @return Token type
+ */
+fmt_token_t fmt_scan_v(const char **cursor, tstr_v *token);
 
 #ifdef __cplusplus
 }

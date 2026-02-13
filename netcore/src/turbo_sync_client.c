@@ -1,4 +1,5 @@
 #include "stb_sprintf.h"
+#include "fmt.h"
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -450,16 +451,10 @@ static void result_set_uv_error(sync_client_t *client, int uv_status) {
   client->uv_status = uv_status;
   const char *msg = uv_strerror(uv_status);
   if (msg) {
-    /* Copy to padded buffer to avoid ASan false positives from stb_sprintf 4-byte reads */
-    char msg_padded[128] = {0};
-    strncpy(msg_padded, msg, sizeof(msg_padded) - 1);
-    static const char FMT_NET_ERR_MSG[32] = "network error: %s (%d)";
-    stbsp_snprintf(client->error_message, (int)sizeof(client->error_message), FMT_NET_ERR_MSG,
-                   msg_padded, uv_status);
+    fmt(client->error_message, sizeof(client->error_message), "network error: {} ({})", msg,
+        uv_status);
   } else {
-    static const char FMT_NET_ERR_CODE[32] = "network error (code %d)";
-    stbsp_snprintf(client->error_message, (int)sizeof(client->error_message), FMT_NET_ERR_CODE,
-                   uv_status);
+    fmt(client->error_message, sizeof(client->error_message), "network error (code {})", uv_status);
   }
 }
 

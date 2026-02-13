@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sds.h"
+#include "turbo_str.h"
 #include <uv.h>
 
 #ifdef _WIN32
@@ -48,18 +49,6 @@ typedef struct {
   int closing;
   int open_handles;
 } turbo_ares_t;
-
-/* strdup with padding to avoid ASan false positives from stb_sprintf 4-byte reads */
-static char *strdup_padded(const char *s) {
-  if (!s)
-    return NULL;
-  size_t len = strlen(s);
-  sds copy = sdsnewlen(s, len);
-  if (!copy)
-    return NULL;
-  copy = sdsMakeRoomFor(copy, 8);
-  return copy;
-}
 
 // Dual-stack query coordination
 typedef struct turbo_dns_parent_query_s {
@@ -654,7 +643,7 @@ int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t p
     return UV_ENOMEM;
   }
 
-  parent->hostname = strdup_padded(hostname);
+  parent->hostname = tstr_dup(hostname);
   parent->callback = callback;
   parent->user_data = user_data;
   parent->pref = pref;

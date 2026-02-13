@@ -303,6 +303,15 @@ spec("request_parsing") {
         check_str_eq(get_req(&query, "email"), "test%40example.com");
     }
 
+    it("should ignore empty query segments") {
+        request_t query = {0};
+        parse_query(&arena, "a=1&&b=2&", &query);
+
+        check_int_eq(query.count, 2);
+        check_str_eq(get_req(&query, "a"), "1");
+        check_str_eq(get_req(&query, "b"), "2");
+    }
+
     /* ============================================================================
      * get_req Tests
      * ============================================================================ */

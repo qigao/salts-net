@@ -1,5 +1,6 @@
 #include "dotenv.h"
 #include "dotenv_lexer.h"
+#include "turbo_str.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -26,26 +27,21 @@ static int setenv(const char *name, const char *value, int overwrite)
 }
 #endif
 
-static char *concat(char *buffer, const char *string)
+static tstr_t concat(tstr_t buffer, const char *string)
 {
     if (!string) return buffer;
-    if (!buffer) return strdup(string);
-
-    size_t length = strlen(buffer) + strlen(string) + 1;
-    char *new_buf = realloc(buffer, length);
-    if (!new_buf) return buffer;
-    strcat(new_buf, string);
-    return new_buf;
+    tstr_t updated = tstr_cat(buffer, string);
+    return updated ? updated : buffer;
 }
 
-static char *resolve_nested(const char *value)
+static tstr_t resolve_nested(const char *value)
 {
     if (!value) return NULL;
     
     // Simple check for ${}
-    if (!strstr(value, "${")) return strdup(value);
+    if (!strstr(value, "${")) return tstr_dup(value);
 
-    char *result = NULL;
+    tstr_t result = NULL;
     const char *ptr = value;
     const char *start;
 
@@ -53,26 +49,24 @@ static char *resolve_nested(const char *value)
         // Concat everything before ${
         if (start > ptr) {
             size_t len = start - ptr;
-            char *tmp = malloc(len + 1);
-            memcpy(tmp, ptr, len);
-            tmp[len] = '\0';
-            result = concat(result, tmp);
-            free(tmp);
+            tstr_t updated = tstr_cat_len(result, ptr, len);
+            if (updated) {
+                result = updated;
+            }
         }
 
         const char *end = strstr(start, "}");
         if (!end) break; // Unterminated ${
 
         size_t name_len = end - (start + 2);
-        char *name = malloc(name_len + 1);
-        memcpy(name, start + 2, name_len);
-        name[name_len] = '\0';
+        tstr_t name = tstr_dup_len(start + 2, name_len);
+        if (!name) break;
 
         const char *env_val = getenv(name);
         if (env_val) {
             result = concat(result, env_val);
         }
-        free(name);
+        tstr_free(name);
         ptr = end + 1;
     }
 
@@ -80,7 +74,7 @@ static char *resolve_nested(const char *value)
         result = concat(result, ptr);
     }
 
-    return result ? result : strdup("");
+    return result ? result : tstr_new();
 }
 
 int dotenv_load(const char *path, bool overwrite)
@@ -122,25 +116,27 @@ int dotenv_load(const char *path, bool overwrite)
     dotenv_lexer_init(&lexer, buffer, read_len);
 
     dotenv_token_t token;
-    char *current_key = NULL;
+    tstr_t current_key = NULL;
 
     while (dotenv_lexer_next(&lexer, &token) > 0) {
         if (token.type == DOTENV_TOKEN_KEY) {
-            current_key = malloc(token.length + 1);
-            memcpy(current_key, token.value, token.length);
-            current_key[token.length] = '\0';
+            tstr_free(current_key);
+            current_key = tstr_dup_len(token.value, token.length);
         } else if (token.type == DOTENV_TOKEN_VALUE) {
             if (current_key) {
-                char *raw_val = malloc(token.length + 1);
-                memcpy(raw_val, token.value, token.length);
-                raw_val[token.length] = '\0';
+                tstr_t raw_val = tstr_dup_len(token.value, token.length);
+                if (!raw_val) {
+                    tstr_free(current_key);
+                    current_key = NULL;
+                    continue;
+                }
 
-                char *final_val = resolve_nested(raw_val);
+                tstr_t final_val = resolve_nested(raw_val);
                 setenv(current_key, final_val, overwrite ? 1 : 0);
 
-                free(raw_val);
-                free(final_val);
-                free(current_key);
+                tstr_free(raw_val);
+                tstr_free(final_val);
+                tstr_free(current_key);
                 current_key = NULL;
             }
         } else if (token.type == DOTENV_TOKEN_EOF) {
@@ -148,7 +144,7 @@ int dotenv_load(const char *path, bool overwrite)
         }
     }
 
-    if (current_key) free(current_key);
+    tstr_free(current_key);
     free(buffer);
 
     return 0;

@@ -352,6 +352,12 @@ size_t csv_get_len(const csv_doc_t *doc, size_t row, size_t col) {
     return f ? f->length : 0;
 }
 
+tstr_v csv_get_v(const csv_doc_t *doc, size_t row, size_t col) {
+    csv_row_node_t *r = get_row_at(doc, row);
+    csv_field_node_t *f = get_field_at(r, col);
+    return f ? tstr_v_from_buf(f->value, f->length) : tstr_v_from_buf(NULL, 0);
+}
+
 const char *csv_header_get(const csv_doc_t *doc, size_t col) {
     if (!doc || !doc->header) return NULL;
     csv_field_node_t *f = get_field_at(doc->header, col);
@@ -362,6 +368,12 @@ size_t csv_header_get_len(const csv_doc_t *doc, size_t col) {
     if (!doc || !doc->header) return 0;
     csv_field_node_t *f = get_field_at(doc->header, col);
     return f ? f->length : 0;
+}
+
+tstr_v csv_header_get_v(const csv_doc_t *doc, size_t col) {
+    if (!doc || !doc->header) return tstr_v_from_buf(NULL, 0);
+    csv_field_node_t *f = get_field_at(doc->header, col);
+    return f ? tstr_v_from_buf(f->value, f->length) : tstr_v_from_buf(NULL, 0);
 }
 
 int csv_get_int(const csv_doc_t *doc, size_t row, size_t col, int def) {
@@ -388,11 +400,16 @@ bool csv_get_bool(const csv_doc_t *doc, size_t row, size_t col, bool def) {
 
 size_t csv_find_column(const csv_doc_t *doc, const char *header_name) {
     if (!doc || !doc->header || !header_name) return (size_t)-1;
+    return csv_find_column_v(doc, tstr_v_from_cstr(header_name));
+}
+
+size_t csv_find_column_v(const csv_doc_t *doc, tstr_v header_name) {
+    if (!doc || !doc->header || !header_name.data) return (size_t)-1;
 
     size_t col = 0;
     csv_field_node_t *f = doc->header->fields;
     while (f) {
-        if (f->value && strcmp(f->value, header_name) == 0) {
+        if (f->value && tstr_v_eq(tstr_v_from_buf(f->value, f->length), header_name)) {
             return col;
         }
         f = f->next;
@@ -405,6 +422,12 @@ const char *csv_get_by_name(const csv_doc_t *doc, size_t row, const char *col_na
     size_t col = csv_find_column(doc, col_name);
     if (col == (size_t)-1) return NULL;
     return csv_get(doc, row, col);
+}
+
+tstr_v csv_get_by_name_v(const csv_doc_t *doc, size_t row, tstr_v col_name) {
+    size_t col = csv_find_column_v(doc, col_name);
+    if (col == (size_t)-1) return tstr_v_from_buf(NULL, 0);
+    return csv_get_v(doc, row, col);
 }
 
 const char *csv_get_error(void) {
@@ -671,6 +694,11 @@ const char *csv_iter_field(const csv_iter_t *iter, size_t col) {
 size_t csv_iter_field_len(const csv_iter_t *iter, size_t col) {
     if (!iter || col >= iter->field_count) return 0;
     return iter->field_lens[col];
+}
+
+tstr_v csv_iter_field_v(const csv_iter_t *iter, size_t col) {
+    if (!iter || col >= iter->field_count) return tstr_v_from_buf(NULL, 0);
+    return tstr_v_from_buf(iter->fields[col], iter->field_lens[col]);
 }
 
 size_t csv_iter_row_index(const csv_iter_t *iter) {

@@ -415,6 +415,12 @@ size_t json_string_len(const json_value_t *value) {
   return value && value->type == JSON_STRING ? value->data.string_val.len : 0;
 }
 
+tstr_v json_string_v(const json_value_t *value) {
+  if (!value || value->type != JSON_STRING)
+    return tstr_v_from_buf(NULL, 0);
+  return tstr_v_from_buf(value->data.string_val.str, value->data.string_val.len);
+}
+
 size_t json_object_size(const json_value_t *obj) {
   return obj && obj->type == JSON_OBJECT ? obj->data.object_val.count : 0;
 }
@@ -428,6 +434,28 @@ const char *json_object_key(const json_value_t *obj, size_t index) {
     pair = pair->next;
   }
   return pair ? pair->key : NULL;
+}
+
+size_t json_object_key_len(const json_value_t *obj, size_t index) {
+  if (!obj || obj->type != JSON_OBJECT)
+    return 0;
+
+  json_pair_t *pair = obj->data.object_val.pairs;
+  for (size_t i = 0; pair && i < index; i++) {
+    pair = pair->next;
+  }
+  return pair ? pair->key_len : 0;
+}
+
+tstr_v json_object_key_v(const json_value_t *obj, size_t index) {
+  if (!obj || obj->type != JSON_OBJECT)
+    return tstr_v_from_buf(NULL, 0);
+
+  json_pair_t *pair = obj->data.object_val.pairs;
+  for (size_t i = 0; pair && i < index; i++) {
+    pair = pair->next;
+  }
+  return pair ? tstr_v_from_buf(pair->key, pair->key_len) : tstr_v_from_buf(NULL, 0);
 }
 
 json_value_t *json_object_value(const json_value_t *obj, size_t index) {
@@ -444,10 +472,15 @@ json_value_t *json_object_value(const json_value_t *obj, size_t index) {
 json_value_t *json_object_get(const json_value_t *obj, const char *key) {
   if (!obj || obj->type != JSON_OBJECT || !key)
     return NULL;
+  return json_object_get_v(obj, tstr_v_from_cstr(key));
+}
 
-  size_t key_len = strlen(key);
+json_value_t *json_object_get_v(const json_value_t *obj, tstr_v key) {
+  if (!obj || obj->type != JSON_OBJECT || !key.data)
+    return NULL;
+
   for (json_pair_t *pair = obj->data.object_val.pairs; pair; pair = pair->next) {
-    if (pair->key_len == key_len && memcmp(pair->key, key, key_len) == 0) {
+    if (pair->key_len == key.len && memcmp(pair->key, key.data, key.len) == 0) {
       return pair->value;
     }
   }
@@ -487,6 +520,31 @@ double json_get_double(const json_value_t *obj, const char *key, double def) {
 const char *json_get_string(const json_value_t *obj, const char *key) {
   json_value_t *v = json_object_get(obj, key);
   return v && v->type == JSON_STRING ? v->data.string_val.str : NULL;
+}
+
+tstr_v json_get_string_v(const json_value_t *obj, const char *key) {
+  json_value_t *v = json_object_get(obj, key);
+  return json_string_v(v);
+}
+
+int json_get_int_v(const json_value_t *obj, tstr_v key, int def) {
+  json_value_t *v = json_object_get_v(obj, key);
+  return v && v->type == JSON_NUMBER ? (int)v->data.num_val : def;
+}
+
+bool json_get_bool_v(const json_value_t *obj, tstr_v key, bool def) {
+  json_value_t *v = json_object_get_v(obj, key);
+  return v && v->type == JSON_BOOL ? v->data.bool_val : def;
+}
+
+double json_get_double_v(const json_value_t *obj, tstr_v key, double def) {
+  json_value_t *v = json_object_get_v(obj, key);
+  return v && v->type == JSON_NUMBER ? v->data.num_val : def;
+}
+
+tstr_v json_get_string_vv(const json_value_t *obj, tstr_v key) {
+  json_value_t *v = json_object_get_v(obj, key);
+  return json_string_v(v);
 }
 
 const char *json_get_error(void) { return g_error[0] ? g_error : NULL; }

@@ -2,7 +2,6 @@
 #include <stdbool.h>
 #include "middlewares.h"
 #include "session.h"
-#include <cjson/cJSON.h>
 #include "context.h"
 
 int body_checker(Req *req, Res *res, Chain *chain)

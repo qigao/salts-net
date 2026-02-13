@@ -11,6 +11,9 @@ extern "C" {
 // Forward declaration of Chain structure
 typedef struct Chain Chain;
 
+#define INITIAL_MW_CAPACITY 4
+#define IRIS_INLINE_ROUTE_MW_CAPACITY 4
+
 // Function pointer type for middleware
 typedef int (*MiddlewareHandler)(Req *req, Res *res, Chain *chain);
 
@@ -24,8 +27,10 @@ struct Chain {
 
 typedef struct MiddlewareInfo {
   MiddlewareHandler *middleware;
+  MiddlewareHandler middleware_inline[IRIS_INLINE_ROUTE_MW_CAPACITY];
   int middleware_count;
   RequestHandler handler;
+  int arena_owned;
 } MiddlewareInfo;
 
 typedef struct {
@@ -39,8 +44,6 @@ typedef struct {
                          sizeof((MiddlewareHandler[]){__VA_ARGS__}) / sizeof(MiddlewareHandler)})
 
 #define NO_MW ((MiddlewareArray){.handlers = NULL, .count = 0})
-
-#define INITIAL_MW_CAPACITY 4
 
 // Function to add global middleware
 CXX_C_API void hook(MiddlewareHandler middleware_handler);

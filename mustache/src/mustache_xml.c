@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "turbo_str.h"
 
 #define SURROGATE_LIST_TYPE 100
 
@@ -154,9 +155,10 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
     _cxml_node_t type = _cxml_get_node_type(node);
     if (type != CXML_ELEM_NODE && type != CXML_ROOT_NODE) return NULL;
 
-    char *key = malloc(size + 1);
-    memcpy(key, name, size);
-    key[size] = '\0';
+    tstr_t key = tstr_dup_len(name, size);
+    if (!key) {
+        return NULL;
+    }
 
     void *result = NULL;
 
@@ -176,7 +178,7 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
                 }
             }
             if (attr) {
-                free(key);
+                tstr_free(key);
                 return attr;
             }
         }
@@ -225,7 +227,7 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
         result = slist;
     }
 
-    free(key);
+    tstr_free(key);
     return result;
 }
 

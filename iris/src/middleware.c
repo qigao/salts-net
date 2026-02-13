@@ -13,9 +13,11 @@
 
 /* Legacy global middleware - for backward compatibility.
  * New code should use iris_app_hook() instead. */
-MiddlewareHandler* global_middleware = NULL;
+static MiddlewareHandler global_middleware_inline[INITIAL_MW_CAPACITY];
+MiddlewareHandler* global_middleware = global_middleware_inline;
 int global_middleware_count = 0;
-int global_middleware_capacity = 0;
+int global_middleware_capacity = INITIAL_MW_CAPACITY;
+static int global_middleware_legacy_owned = 0;
 
 /* Add middleware to global chain (legacy API) */
 void hook(MiddlewareHandler middleware_handler)
@@ -28,11 +30,21 @@ void hook(MiddlewareHandler middleware_handler)
     global_middleware = app->global_middleware;
     global_middleware_count = app->global_middleware_count;
     global_middleware_capacity = app->global_middleware_capacity;
+    global_middleware_legacy_owned = 0;
   } else {
     /* Fallback to legacy behavior */
     if (global_middleware_count >= global_middleware_capacity) {
       int new_cap = global_middleware_capacity ? global_middleware_capacity * 2 : INITIAL_MW_CAPACITY;
-      MiddlewareHandler* tmp = realloc(global_middleware, new_cap * sizeof *tmp);
+      MiddlewareHandler* tmp = NULL;
+      if (global_middleware == global_middleware_inline) {
+        tmp = malloc(new_cap * sizeof *tmp);
+        if (tmp) {
+          memcpy(tmp, global_middleware_inline,
+                 sizeof(MiddlewareHandler) * global_middleware_count);
+        }
+      } else {
+        tmp = realloc(global_middleware, new_cap * sizeof *tmp);
+      }
       if (!tmp) {
         TLOG_ERROR("Failed to reallocate global middleware array");
         return;
@@ -41,6 +53,7 @@ void hook(MiddlewareHandler middleware_handler)
       global_middleware_capacity = new_cap;
     }
     global_middleware[global_middleware_count++] = middleware_handler;
+    global_middleware_legacy_owned = 1;
   }
 }
 
@@ -82,11 +95,13 @@ int next(Chain* chain, Req* req, Res* res)
 void free_middleware_info(MiddlewareInfo* info)
 {
   if (info) {
-    if (info->middleware) {
+    if (!info->arena_owned && info->middleware && info->middleware != info->middleware_inline) {
       free(info->middleware);
       info->middleware = NULL;
     }
-    free(info);
+    if (!info->arena_owned) {
+      free(info);
+    }
   }
 }
 
@@ -178,7 +193,18 @@ void register_route(const char* method,
     return;
   }
 
-  MiddlewareInfo* middleware_info = calloc(1, sizeof(MiddlewareInfo));
+  MiddlewareInfo* middleware_info = NULL;
+  if (global_route_trie) {
+    middleware_info =
+        (MiddlewareInfo *)turbo_arena_alloc(&global_route_trie->param_arena, sizeof(MiddlewareInfo));
+    if (middleware_info) {
+      memset(middleware_info, 0, sizeof(MiddlewareInfo));
+      middleware_info->arena_owned = 1;
+    }
+  }
+  if (!middleware_info) {
+    middleware_info = calloc(1, sizeof(MiddlewareInfo));
+  }
   if (!middleware_info) {
     TLOG_ERROR("Memory allocation failed for middleware info");
     return;
@@ -187,11 +213,22 @@ void register_route(const char* method,
   middleware_info->handler = handler;
 
   if (middleware.count > 0 && middleware.handlers) {
-    middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
-    if (!middleware_info->middleware) {
-      TLOG_ERROR("Memory allocation failed for middleware handlers");
-      free(middleware_info);
-      return;
+    if (middleware_info->arena_owned) {
+      middleware_info->middleware = (MiddlewareHandler *)turbo_arena_alloc(
+          &global_route_trie->param_arena, sizeof(MiddlewareHandler) * middleware.count);
+      if (!middleware_info->middleware) {
+        TLOG_ERROR("Memory allocation failed for middleware handlers");
+        return;
+      }
+    } else if (middleware.count <= IRIS_INLINE_ROUTE_MW_CAPACITY) {
+      middleware_info->middleware = middleware_info->middleware_inline;
+    } else {
+      middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
+      if (!middleware_info->middleware) {
+        TLOG_ERROR("Memory allocation failed for middleware handlers");
+        free(middleware_info);
+        return;
+      }
     }
     memcpy(middleware_info->middleware,
            middleware.handlers,
@@ -228,7 +265,12 @@ void reset_middleware(void)
    * - If iris_app_reset_default was called, the memory is already freed
    * - Just clear our pointers without freeing */
 
-  global_middleware = NULL;
+  if (global_middleware_legacy_owned &&
+      global_middleware && global_middleware != global_middleware_inline) {
+    free(global_middleware);
+  }
+  global_middleware = global_middleware_inline;
   global_middleware_count = 0;
-  global_middleware_capacity = 0;
+  global_middleware_capacity = INITIAL_MW_CAPACITY;
+  global_middleware_legacy_owned = 0;
 }

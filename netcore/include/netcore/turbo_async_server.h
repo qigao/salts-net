@@ -4,6 +4,7 @@
 #include "platform.h"
 #include "client_common.h"
 #include "arena_buffer.h"
+#include "turbo_str_view.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -58,6 +59,21 @@ typedef struct async_server_event_s {
   const char *message;                   /* human-readable error/info text */
   async_server_event_flags_t flags;      /* Metadata describing payload ownership */
 } async_server_event_t;
+
+/**
+ * @brief Get event data as a string view.
+ *
+ * Convenience function to extract data from an event as tstr_v.
+ * Works with both regular data and zero-copy slices.
+ *
+ * @param event The event to extract data from.
+ * @return A tstr_v containing the event data.
+ */
+static inline tstr_v async_server_event_data_v(const async_server_event_t *event) {
+  if (!event) return tstr_v_from_buf(NULL, 0);
+  if (event->slice) return tstr_v_from_slice(event->slice);
+  return tstr_v_from_buf(event->data, event->length);
+}
 
 typedef void (*async_server_event_cb)(async_server_t *server, const async_server_event_t *event,
                                       void *user_data);
@@ -124,6 +140,22 @@ CXX_C_API async_server_status_t async_server_listen(async_server_t *server, cons
 CXX_C_API async_server_status_t async_server_send(async_server_t *server,
                                         async_server_connection_t *connection, const char *data,
                                         size_t len);
+
+/**
+ * @brief Sends data from a string view to a specific connection.
+ *
+ * Convenience function that sends data from a tstr_v string view.
+ *
+ * @param server A pointer to the async_server_t instance.
+ * @param connection A pointer to the async_server_connection_t to send data to.
+ * @param data The string view containing data to send.
+ * @return ASYNC_SERVER_STATUS_OK if the data was queued for sending,
+ *         or an error code otherwise.
+ */
+static inline async_server_status_t async_server_send_v(async_server_t *server,
+                                        async_server_connection_t *connection, tstr_v data) {
+  return async_server_send(server, connection, data.data, data.len);
+}
 
 /**
  * @brief IO vector structure for scatter-gather operations.
@@ -220,6 +252,20 @@ CXX_C_API async_server_status_t async_server_sendv_slices(async_server_t *server
  *         or an error code otherwise.
  */
 CXX_C_API async_server_status_t async_server_broadcast(async_server_t *server, const char *data, size_t len);
+
+/**
+ * @brief Broadcasts data from a string view to all active connections.
+ *
+ * Convenience function that broadcasts data from a tstr_v string view.
+ *
+ * @param server A pointer to the async_server_t instance.
+ * @param data The string view containing data to broadcast.
+ * @return ASYNC_SERVER_STATUS_OK if the data was queued for broadcasting,
+ *         or an error code otherwise.
+ */
+static inline async_server_status_t async_server_broadcast_v(async_server_t *server, tstr_v data) {
+  return async_server_broadcast(server, data.data, data.len);
+}
 
 /**
  * @brief Sends data to a specific connection.

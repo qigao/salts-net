@@ -16,6 +16,7 @@
 #include <platform.h>
 
 #include "turbo_dns.h"
+#include "turbo_str.h"
 #include "tlog.h"
 #include "turbo_mdns.h"
 #include "turbo_async_client.h"
@@ -31,7 +32,7 @@
   #include <winsock2.h>
   #include <ws2tcpip.h>
   #pragma comment(lib, "iphlpapi.lib")
-  #define strncasecmp _strnicmp
+  #define tstr_ncasecmp _strnicmp
 #else
   #include <arpa/inet.h>
   #include <ifaddrs.h>
@@ -1618,9 +1619,9 @@ int ice_candidate_parse(const char *sdp_str, ice_candidate_t *candidate) {
     p++;
 
   /* Parse transport */
-  if (strncasecmp(p, "UDP", 3) == 0) {
+  if (tstr_ncasecmp(p, "UDP", 3) == 0) {
     candidate->transport = ICE_TRANSPORT_UDP;
-  } else if (strncasecmp(p, "TCP", 3) == 0) {
+  } else if (tstr_ncasecmp(p, "TCP", 3) == 0) {
     candidate->transport = ICE_TRANSPORT_TCP;
   }
   while (*p && !isspace(*p))

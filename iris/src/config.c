@@ -11,6 +11,7 @@
 #include "arena_buffer.h"
 #include "tlog.h"
 #include "turbo_parser.h"
+#include "turbo_str.h"
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -259,13 +260,13 @@ static bool get_env_bool(const char *name, bool default_value) {
     return default_value;
   }
 
-  if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0 ||
-      strcasecmp(value, "yes") == 0 || strcasecmp(value, "on") == 0) {
+  if (tstr_casecmp(value, "true") == 0 || tstr_casecmp(value, "1") == 0 ||
+      tstr_casecmp(value, "yes") == 0 || tstr_casecmp(value, "on") == 0) {
     return true;
   }
 
-  if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0 ||
-      strcasecmp(value, "no") == 0 || strcasecmp(value, "off") == 0) {
+  if (tstr_casecmp(value, "false") == 0 || tstr_casecmp(value, "0") == 0 ||
+      tstr_casecmp(value, "no") == 0 || tstr_casecmp(value, "off") == 0) {
     return false;
   }
 
@@ -312,17 +313,17 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
   /* Load logging */
   const char *log_level_str = getenv("IRIS_LOG_LEVEL");
   if (log_level_str) {
-    if (strcasecmp(log_level_str, "NONE") == 0)
+    if (tstr_casecmp(log_level_str, "NONE") == 0)
       config->log_level = IRIS_LOG_LEVEL_NONE;
-    else if (strcasecmp(log_level_str, "ERROR") == 0)
+    else if (tstr_casecmp(log_level_str, "ERROR") == 0)
       config->log_level = IRIS_LOG_LEVEL_ERROR;
-    else if (strcasecmp(log_level_str, "WARN") == 0)
+    else if (tstr_casecmp(log_level_str, "WARN") == 0)
       config->log_level = IRIS_LOG_LEVEL_WARN;
-    else if (strcasecmp(log_level_str, "INFO") == 0)
+    else if (tstr_casecmp(log_level_str, "INFO") == 0)
       config->log_level = IRIS_LOG_LEVEL_INFO;
-    else if (strcasecmp(log_level_str, "DEBUG") == 0)
+    else if (tstr_casecmp(log_level_str, "DEBUG") == 0)
       config->log_level = IRIS_LOG_LEVEL_DEBUG;
-    else if (strcasecmp(log_level_str, "TRACE") == 0)
+    else if (tstr_casecmp(log_level_str, "TRACE") == 0)
       config->log_level = IRIS_LOG_LEVEL_TRACE;
   }
 
@@ -448,17 +449,17 @@ static void parse_json_logging(json_value_t *root, iris_config_t *config) {
 
   const char *log_level_str = turbo_json_get_string(logging, "log_level");
   if (log_level_str) {
-    if (strcasecmp(log_level_str, "NONE") == 0)
+    if (tstr_casecmp(log_level_str, "NONE") == 0)
       config->log_level = IRIS_LOG_LEVEL_NONE;
-    else if (strcasecmp(log_level_str, "ERROR") == 0)
+    else if (tstr_casecmp(log_level_str, "ERROR") == 0)
       config->log_level = IRIS_LOG_LEVEL_ERROR;
-    else if (strcasecmp(log_level_str, "WARN") == 0)
+    else if (tstr_casecmp(log_level_str, "WARN") == 0)
       config->log_level = IRIS_LOG_LEVEL_WARN;
-    else if (strcasecmp(log_level_str, "INFO") == 0)
+    else if (tstr_casecmp(log_level_str, "INFO") == 0)
       config->log_level = IRIS_LOG_LEVEL_INFO;
-    else if (strcasecmp(log_level_str, "DEBUG") == 0)
+    else if (tstr_casecmp(log_level_str, "DEBUG") == 0)
       config->log_level = IRIS_LOG_LEVEL_DEBUG;
-    else if (strcasecmp(log_level_str, "TRACE") == 0)
+    else if (tstr_casecmp(log_level_str, "TRACE") == 0)
       config->log_level = IRIS_LOG_LEVEL_TRACE;
   }
 
@@ -997,17 +998,17 @@ iris_config_result_t iris_config_update_runtime(iris_config_t *config, const cha
   }
 
   if (strcmp(parameter_name, "log_level") == 0) {
-    if (strcasecmp(value, "NONE") == 0)
+    if (tstr_casecmp(value, "NONE") == 0)
       config->log_level = IRIS_LOG_LEVEL_NONE;
-    else if (strcasecmp(value, "ERROR") == 0)
+    else if (tstr_casecmp(value, "ERROR") == 0)
       config->log_level = IRIS_LOG_LEVEL_ERROR;
-    else if (strcasecmp(value, "WARN") == 0)
+    else if (tstr_casecmp(value, "WARN") == 0)
       config->log_level = IRIS_LOG_LEVEL_WARN;
-    else if (strcasecmp(value, "INFO") == 0)
+    else if (tstr_casecmp(value, "INFO") == 0)
       config->log_level = IRIS_LOG_LEVEL_INFO;
-    else if (strcasecmp(value, "DEBUG") == 0)
+    else if (tstr_casecmp(value, "DEBUG") == 0)
       config->log_level = IRIS_LOG_LEVEL_DEBUG;
-    else if (strcasecmp(value, "TRACE") == 0)
+    else if (tstr_casecmp(value, "TRACE") == 0)
       config->log_level = IRIS_LOG_LEVEL_TRACE;
     else
       return IRIS_CONFIG_ERROR_INVALID_VALUE;
@@ -1026,25 +1027,25 @@ iris_config_result_t iris_config_update_runtime(iris_config_t *config, const cha
     }
     config->connections_per_ip = (int)val;
   } else if (strcmp(parameter_name, "enable_compression") == 0) {
-    if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+    if (tstr_casecmp(value, "true") == 0 || tstr_casecmp(value, "1") == 0) {
       config->enable_compression = true;
-    } else if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+    } else if (tstr_casecmp(value, "false") == 0 || tstr_casecmp(value, "0") == 0) {
       config->enable_compression = false;
     } else {
       return IRIS_CONFIG_ERROR_INVALID_VALUE;
     }
   } else if (strcmp(parameter_name, "enable_health_check") == 0) {
-    if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+    if (tstr_casecmp(value, "true") == 0 || tstr_casecmp(value, "1") == 0) {
       config->enable_health_check = true;
-    } else if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+    } else if (tstr_casecmp(value, "false") == 0 || tstr_casecmp(value, "0") == 0) {
       config->enable_health_check = false;
     } else {
       return IRIS_CONFIG_ERROR_INVALID_VALUE;
     }
   } else if (strcmp(parameter_name, "enable_cors") == 0) {
-    if (strcasecmp(value, "true") == 0 || strcasecmp(value, "1") == 0) {
+    if (tstr_casecmp(value, "true") == 0 || tstr_casecmp(value, "1") == 0) {
       config->enable_cors = true;
-    } else if (strcasecmp(value, "false") == 0 || strcasecmp(value, "0") == 0) {
+    } else if (tstr_casecmp(value, "false") == 0 || tstr_casecmp(value, "0") == 0) {
       config->enable_cors = false;
     } else {
       return IRIS_CONFIG_ERROR_INVALID_VALUE;

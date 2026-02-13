@@ -1,8 +1,7 @@
 #ifndef TURBO_ARENA_BUFFER_H
 #define TURBO_ARENA_BUFFER_H
 
-#include <platform.h>
-#include <stats.h>
+#include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <assert.h>
@@ -15,7 +14,7 @@ typedef struct turbo_arena_region_s turbo_arena_region_t;
 typedef struct turbo_arena_s turbo_arena_t;
 typedef struct turbo_arena_buffer_s turbo_arena_buffer_t;
 typedef struct turbo_arena_slice_s turbo_arena_slice_t;
-// typedef struct turbo_arena_stats_s turbo_arena_stats_t;
+typedef struct turbo_arena_stats_s turbo_arena_stats_t;
 
 #ifndef TURBO_ASSERT
 #define TURBO_ASSERT(x) assert(x)

@@ -8,6 +8,7 @@
 #include "platform.h"
 #include "stats.h"
 #include "turbo_callbacks.h"
+#include "turbo_str_view.h"
 
 #include "arena_buffer.h"
 
@@ -225,6 +226,19 @@ CXX_C_API void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_arena_
  * @return 0 on success, error code on failure.
  */
 CXX_C_API int turbo_tcp_send(turbo_tcp_client_t* client, const char* data, size_t length);
+
+/**
+ * @brief Send data from a string view.
+ *
+ * Convenience function that sends data from a tstr_v string view.
+ *
+ * @param client The TCP client.
+ * @param data The string view containing data to send.
+ * @return 0 on success, error code on failure.
+ */
+static inline int turbo_tcp_send_v(turbo_tcp_client_t* client, tstr_v data) {
+  return turbo_tcp_send(client, data.data, data.len);
+}
 
 /**
  * @brief Flush pending writes.

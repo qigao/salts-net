@@ -1,5 +1,6 @@
 #include "turbo_mdns.h"
 #include "tlog.h"
+#include "turbo_str_view.h"
 #include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -256,6 +257,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
   /* Parse all records and look for service information */
   mdns_service_t found_service = {0};
   strcpy(found_service.service_type, ctx->target_service);
+  tstr_v target_service_v = tstr_v_from_cstr(ctx->target_service);
 
   for (i = 0; i < answers + authority + additional; i++) {
     if (offset >= len)
@@ -280,10 +282,12 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
       decode_name(packet, len, offset, ptr_target, sizeof(ptr_target));
       TLOG_DEBUG("  PTR points to: {}", ptr_target);
 
-      if (strstr(name, ctx->target_service)) {
+      if (tstr_v_contains(tstr_v_from_cstr(name), target_service_v)) {
         /* Extract instance name from full service name */
-        char *service_start = strstr(ptr_target, ctx->target_service);
-        if (service_start && service_start > ptr_target) {
+        tstr_v ptr_target_v = tstr_v_from_cstr(ptr_target);
+        size_t service_pos = tstr_v_find(ptr_target_v, target_service_v);
+        if (service_pos != TSTR_V_NPOS && service_pos > 0) {
+          char *service_start = ptr_target + service_pos;
           *(service_start - 1) = 0; /* Remove the dot before service */
           strcpy(found_service.instance, ptr_target);
 
@@ -306,10 +310,12 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
 
         TLOG_DEBUG("  SRV: Port={}, Target={}", port, hostname);
 
-        if (strstr(name, ctx->target_service)) {
+        if (tstr_v_contains(tstr_v_from_cstr(name), target_service_v)) {
           /* Extract instance name from SRV record name */
-          char *service_start = strstr(name, ctx->target_service);
-          if (service_start && service_start > name) {
+          tstr_v name_v = tstr_v_from_cstr(name);
+          size_t service_pos = tstr_v_find(name_v, target_service_v);
+          if (service_pos != TSTR_V_NPOS && service_pos > 0) {
+            char *service_start = name + service_pos;
             *(service_start - 1) = 0;
             strcpy(found_service.instance, name);
           }
@@ -333,7 +339,9 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
       TLOG_DEBUG("  A record: {} -> {}", name, ip_str);
 
       /* If this A record matches our target hostname, update service info */
-      if (strlen(found_service.hostname) > 0 && strstr(name, found_service.hostname)) {
+      tstr_v found_host_v = tstr_v_from_cstr(found_service.hostname);
+      if (!tstr_v_empty(found_host_v) &&
+          tstr_v_contains(tstr_v_from_cstr(name), found_host_v)) {
         strcpy(found_service.ip, ip_str);
         if (ctx->discover_callback) {
           found_service.ttl = 120;

@@ -723,20 +723,8 @@ uint64_t turbo_timer_get_repeat(turbo_timer_t *timer) {
 
 
 // =============================================================================
-// String utilities - safe string duplication with padding for stb_sprintf
+// String utilities - safe string duplication
 // =============================================================================
-
-char *turbo_strdup_padded(const char *s) {
-  if (!s)
-    return NULL;
-  size_t len = strlen(s);
-  sds out = sdsnewlen(s, len);
-  if (!out)
-    return NULL;
-  out = sdsMakeRoomFor(out, 8);
-  memset(out + len, 0, 8);
-  return out;
-}
 
 char *turbo_pool_strdup(void *pool, const char *str) {
   if (!pool || !str)
@@ -750,27 +738,44 @@ char *turbo_pool_strdup(void *pool, const char *str) {
   return out;
 }
 
-char *turbo_pool_strdup_padded(void *pool, const char *str) {
-  if (!pool || !str)
-    return NULL;
-  size_t len = strlen(str);
-  char *out = (char *)pool_alloc((MemoryPool *)pool, len + 1 + 8);
-  if (!out)
-    return NULL;
-  memcpy(out, str, len);
-  out[len] = '\0';
-  memset(out + len + 1, 0, 8);
-  return out;
-}
+/* Lookup table: 1 = unreserved (RFC 3986), 2 = space, 0 = must encode */
+static const uint8_t url_encode_tbl[256] = {
+  /*       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F */
+  /* 0 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  /* 1 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  /* 2 */  2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, /* sp - . */
+  /* 3 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, /* 0-9 */
+  /* 4 */  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* A-O */
+  /* 5 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, /* P-Z _ */
+  /* 6 */  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* a-o */
+  /* 7 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, /* p-z ~ */
+  /* 8+ all zeros (high bytes always encoded) */
+};
 
-void *turbo_malloc_padded(size_t size) { return malloc(size + 8); }
+/* Lookup table: hex char -> nibble value, 0xFF = invalid */
+static const uint8_t hex_decode_tbl[256] = {
+  ['0'] = 0,  ['1'] = 1,  ['2'] = 2,  ['3'] = 3,
+  ['4'] = 4,  ['5'] = 5,  ['6'] = 6,  ['7'] = 7,
+  ['8'] = 8,  ['9'] = 9,
+  ['A'] = 10, ['B'] = 11, ['C'] = 12, ['D'] = 13, ['E'] = 14, ['F'] = 15,
+  ['a'] = 10, ['b'] = 11, ['c'] = 12, ['d'] = 13, ['e'] = 14, ['f'] = 15,
+};
+/* We need invalid entries to be distinguishable. Since designated initializers
+   zero-fill, and '0' maps to 0, we use a separate validity table. */
+static const uint8_t hex_valid_tbl[256] = {
+  ['0'] = 1, ['1'] = 1, ['2'] = 1, ['3'] = 1, ['4'] = 1,
+  ['5'] = 1, ['6'] = 1, ['7'] = 1, ['8'] = 1, ['9'] = 1,
+  ['A'] = 1, ['B'] = 1, ['C'] = 1, ['D'] = 1, ['E'] = 1, ['F'] = 1,
+  ['a'] = 1, ['b'] = 1, ['c'] = 1, ['d'] = 1, ['e'] = 1, ['f'] = 1,
+};
+
+static const char hex_chars[] = "0123456789ABCDEF";
 
 char *turbo_url_encode(const char *str) {
   if (!str)
     return NULL;
 
   size_t len = strlen(str);
-  /* Worst case: every char becomes %XX (3 bytes) + padding */
   char *encoded = malloc(len * 3 + 1 + 8);
   if (!encoded)
     return NULL;
@@ -778,25 +783,46 @@ char *turbo_url_encode(const char *str) {
   char *p = encoded;
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)str[i];
-
-    /* Unreserved characters (RFC 3986) */
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
-        c == '_' || c == '.' || c == '~') {
-      *p++ = c;
-    } else if (c == ' ') {
+    uint8_t flag = url_encode_tbl[c];
+    if (flag == 1) {
+      *p++ = (char)c;
+    } else if (flag == 2) {
       *p++ = '+';
     } else {
-      /* Direct hex encoding - no sprintf/stbsp needed */
       p[0] = '%';
-      p[1] = "0123456789ABCDEF"[c >> 4];
-      p[2] = "0123456789ABCDEF"[c & 0x0F];
+      p[1] = hex_chars[c >> 4];
+      p[2] = hex_chars[c & 0x0F];
       p += 3;
     }
   }
-  /* Null terminate and pad for stb_sprintf safety */
   memset(p, 0, 8);
-
   return encoded;
+}
+
+char *turbo_url_decode(const char *str) {
+  if (!str)
+    return NULL;
+
+  size_t len = strlen(str);
+  char *decoded = malloc(len + 1 + 8);
+  if (!decoded)
+    return NULL;
+
+  char *p = decoded;
+  for (size_t i = 0; i < len; i++) {
+    if (str[i] == '%' && i + 2 < len) {
+      unsigned char hi = (unsigned char)str[i + 1];
+      unsigned char lo = (unsigned char)str[i + 2];
+      if (hex_valid_tbl[hi] && hex_valid_tbl[lo]) {
+        *p++ = (char)((hex_decode_tbl[hi] << 4) | hex_decode_tbl[lo]);
+        i += 2;
+        continue;
+      }
+    }
+    *p++ = (str[i] == '+') ? ' ' : str[i];
+  }
+  memset(p, 0, 8);
+  return decoded;
 }
 
 int turbo_getpid(void) {

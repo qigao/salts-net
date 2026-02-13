@@ -51,7 +51,6 @@ target_link_libraries(
   PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Core
   $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE llhttp::llhttp_static
-          cjson
           kcp::kcp
           c-ares::cares
           TurboNet::Parser

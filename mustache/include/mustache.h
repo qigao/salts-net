@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include "platform.h"
+#include "turbo_str_view.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -152,6 +153,17 @@ typedef struct MUSTACHE_DATAPROVIDER {
 CXX_C_API MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
                                     const MUSTACHE_PARSER *parser, void *parser_data,
                                     unsigned flags);
+/**
+ * Compile template text from a string view.
+ *
+ * @param templ The template view (does not need to be null-terminated).
+ * @param parser Pointer to structure with parser callbacks. May be @c NULL.
+ * @param parser_data Pointer just propagated into the parser callbacks.
+ * @param flags Unused, use zero.
+ * @return Pointer to the compiled template, or @c NULL on an error.
+ */
+CXX_C_API MUSTACHE_TEMPLATE *mustache_compile_v(tstr_v templ, const MUSTACHE_PARSER *parser,
+                                    void *parser_data, unsigned flags);
 
 /**
  * Release the template compiled with @c mustache_compile().

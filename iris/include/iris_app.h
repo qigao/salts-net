@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+#define IRIS_INLINE_MW_CAPACITY 4
+
 /**
  * @brief Iris application instance
  *
@@ -22,6 +24,7 @@ typedef struct iris_app {
 
     /* Middleware */
     MiddlewareHandler *global_middleware;
+    MiddlewareHandler global_middleware_inline[IRIS_INLINE_MW_CAPACITY];
     int global_middleware_count;
     int global_middleware_capacity;
 

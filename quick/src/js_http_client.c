@@ -6,6 +6,7 @@
 #include "js_internal.h"
 #include "http_client.h"
 #include "turbo_parser.h"
+#include "turbo_str.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,7 +124,7 @@ static JSValue js_http_request_internal(JSContext *ctx, int method, const char *
     if (is_json_payload) {
         bool has_ct = false;
         for(int i=0; i<header_count; i++) {
-            if(strncasecmp(headers[i], "Content-Type", 12) == 0) { has_ct = true; break; }
+            if(tstr_ncasecmp(headers[i], "Content-Type", 12) == 0) { has_ct = true; break; }
         }
         if (!has_ct) {
             headers = realloc(headers, sizeof(char *) * (header_count + 1));
@@ -169,9 +170,9 @@ JSValue js_http_request(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     const char *method_str = JS_ToCString(ctx, argv[0]);
     const char *url = JS_ToCString(ctx, argv[1]);
     int method = HTTP_GET; // fallback
-    if (strcasecmp(method_str, "POST") == 0) method = HTTP_POST;
-    else if (strcasecmp(method_str, "PUT") == 0) method = HTTP_PUT;
-    else if (strcasecmp(method_str, "DELETE") == 0) method = HTTP_DELETE;
+    if (tstr_casecmp(method_str, "POST") == 0) method = HTTP_POST;
+    else if (tstr_casecmp(method_str, "PUT") == 0) method = HTTP_PUT;
+    else if (tstr_casecmp(method_str, "DELETE") == 0) method = HTTP_DELETE;
     JSValue res = js_http_request_internal(ctx, method, url, (argc > 2) ? argv[2] : JS_UNDEFINED);
     JS_FreeCString(ctx, method_str);
     JS_FreeCString(ctx, url);

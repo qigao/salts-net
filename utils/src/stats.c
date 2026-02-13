@@ -1,5 +1,6 @@
 #include "platform.h"
 #include "stats.h"
+#include "turbo_str_view.h"
 
 #include <assert.h>
 #include <stb_sprintf.h>
@@ -92,11 +93,14 @@ static inline int bitmap_test(const uint64_t *bm, size_t idx) {
 /* Forward declarations */
 static void on_async_update(uv_async_t *handle);
 static void on_rate_timer(uv_timer_t *handle);
+static turbo_stat_entry_t *find_or_create_entry_v(tstr_v name, turbo_stat_type_t type,
+                                                  uint32_t *slot_out);
 static turbo_stat_entry_t *find_or_create_entry(const char *name, turbo_stat_type_t type,
                                                 uint32_t *slot_out);
 static void process_update_queue(void);
 static uint64_t get_timestamp_ms(void);
 static uint32_t alloc_slot(void);
+static int copy_name_from_view(tstr_v name, char *buf, size_t buf_size);
 
 int turbo_stats_init(void *loop, size_t update_pool_size) {
   (void)update_pool_size; /* legacy arg ignored in ringbuffer mode */
@@ -204,6 +208,21 @@ turbo_stat_id_t turbo_stats_register(const char *name, turbo_stat_type_t type) {
   return (turbo_stat_id_t)slot;
 }
 
+turbo_stat_id_t turbo_stats_register_v(tstr_v name, turbo_stat_type_t type) {
+  if (!g_turbo_stats || !g_turbo_stats->initialized)
+    return -1;
+
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
+  uint32_t slot = UINT32_MAX;
+  turbo_stat_entry_t *entry = find_or_create_entry_v(name, type, &slot);
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
+
+  if (!entry)
+    return -1;
+
+  return (turbo_stat_id_t)slot;
+}
+
 static int post_update_fast(turbo_stat_id_t id, turbo_stat_type_t type, int64_t value,
                             int operation) {
   if (!g_turbo_stats || !g_turbo_stats->initialized)
@@ -235,6 +254,13 @@ static int post_update_fast(turbo_stat_id_t id, turbo_stat_type_t type, int64_t 
 
 static int post_update(const char *name, turbo_stat_type_t type, int64_t value, int operation) {
   turbo_stat_id_t id = turbo_stats_register(name, type);
+  if (id < 0)
+    return -1;
+  return post_update_fast(id, type, value, operation);
+}
+
+static int post_update_v(tstr_v name, turbo_stat_type_t type, int64_t value, int operation) {
+  turbo_stat_id_t id = turbo_stats_register_v(name, type);
   if (id < 0)
     return -1;
   return post_update_fast(id, type, value, operation);
@@ -290,6 +316,30 @@ int turbo_stats_histogram_record(const char *name, uint64_t value) {
 
 int turbo_stats_rate_record(const char *name, uint64_t value) {
   return post_update(name, TURBO_STAT_RATE, (int64_t)value, 0);
+}
+
+int turbo_stats_counter_add_v(tstr_v name, uint64_t value) {
+  return post_update_v(name, TURBO_STAT_COUNTER, (int64_t)value, 1);
+}
+
+int turbo_stats_counter_inc_v(tstr_v name) {
+  return post_update_v(name, TURBO_STAT_COUNTER, 1, 1);
+}
+
+int turbo_stats_gauge_set_v(tstr_v name, int64_t value) {
+  return post_update_v(name, TURBO_STAT_GAUGE, value, 0);
+}
+
+int turbo_stats_gauge_add_v(tstr_v name, int64_t delta) {
+  return post_update_v(name, TURBO_STAT_GAUGE, delta, 1);
+}
+
+int turbo_stats_histogram_record_v(tstr_v name, uint64_t value) {
+  return post_update_v(name, TURBO_STAT_HISTOGRAM, (int64_t)value, 0);
+}
+
+int turbo_stats_rate_record_v(tstr_v name, uint64_t value) {
+  return post_update_v(name, TURBO_STAT_RATE, (int64_t)value, 0);
 }
 
 static void on_async_update(uv_async_t *handle) {
@@ -399,12 +449,31 @@ static uint32_t alloc_slot(void) {
   return UINT32_MAX;
 }
 
-static turbo_stat_entry_t *find_or_create_entry(const char *name, turbo_stat_type_t type,
-                                                uint32_t *slot_out) {
-  if (!name || !g_turbo_stats)
+static int copy_name_from_view(tstr_v name, char *buf, size_t buf_size) {
+  if (!buf || buf_size == 0)
+    return 0;
+  if (!name.data || name.len == 0) {
+    buf[0] = '\0';
+    return 0;
+  }
+  size_t n = name.len;
+  if (n >= buf_size)
+    n = buf_size - 1;
+  memcpy(buf, name.data, n);
+  buf[n] = '\0';
+  return 1;
+}
+
+static turbo_stat_entry_t *find_or_create_entry_v(tstr_v name, turbo_stat_type_t type,
+                                                  uint32_t *slot_out) {
+  if (!name.data || !g_turbo_stats)
     return NULL;
 
-  const NameIndex_value *val = NameIndex_get(&g_turbo_stats->name_index, name);
+  char name_buf[sizeof(((turbo_stat_entry_t *)0)->name)];
+  if (!copy_name_from_view(name, name_buf, sizeof(name_buf)))
+    return NULL;
+
+  const NameIndex_value *val = NameIndex_get(&g_turbo_stats->name_index, name_buf);
   uint32_t slot = UINT32_MAX;
   if (val) {
     slot = val->second;
@@ -416,13 +485,13 @@ static turbo_stat_entry_t *find_or_create_entry(const char *name, turbo_stat_typ
     /* copy name into entry and hash table key */
     turbo_stat_entry_t *entry = &g_turbo_stats->entries[slot];
     memset(entry, 0, sizeof(*entry));
-    strncpy(entry->name, name, sizeof(entry->name) - 1);
+    strncpy(entry->name, name_buf, sizeof(entry->name) - 1);
     entry->type = type;
     entry->next = g_turbo_stats->entries_head;
     g_turbo_stats->entries_head = entry;
     g_turbo_stats->entry_count++;
 
-    NameIndex_insert(&g_turbo_stats->name_index, cstr_from(name), slot);
+    NameIndex_insert(&g_turbo_stats->name_index, cstr_from(name_buf), slot);
   }
 
   turbo_stat_entry_t *entry = &g_turbo_stats->entries[slot];
@@ -430,6 +499,13 @@ static turbo_stat_entry_t *find_or_create_entry(const char *name, turbo_stat_typ
   if (slot_out)
     *slot_out = slot;
   return entry;
+}
+
+static turbo_stat_entry_t *find_or_create_entry(const char *name, turbo_stat_type_t type,
+                                                uint32_t *slot_out) {
+  if (!name)
+    return NULL;
+  return find_or_create_entry_v(tstr_v_from_cstr(name), type, slot_out);
 }
 
 /* --------- Public getters / utils --------- */
@@ -454,6 +530,29 @@ turbo_stat_entry_t *turbo_stats_get(const char *name) {
   return entry;
 }
 
+turbo_stat_entry_t *turbo_stats_get_v(tstr_v name) {
+  if (!g_turbo_stats)
+    return NULL;
+
+  char name_buf[sizeof(((turbo_stat_entry_t *)0)->name)];
+  if (!copy_name_from_view(name, name_buf, sizeof(name_buf)))
+    return NULL;
+
+  uv_mutex_lock(&g_turbo_stats->map_mutex);
+  const NameIndex_value *val = NameIndex_get(&g_turbo_stats->name_index, name_buf);
+  if (!val) {
+    uv_mutex_unlock(&g_turbo_stats->map_mutex);
+    return NULL;
+  }
+  uint32_t slot = val->second;
+  if (slot >= g_turbo_stats->entry_capacity || !bitmap_test(g_turbo_stats->used_bitmap, slot)) {
+    uv_mutex_unlock(&g_turbo_stats->map_mutex);
+    return NULL;
+  }
+  turbo_stat_entry_t *entry = &g_turbo_stats->entries[slot];
+  uv_mutex_unlock(&g_turbo_stats->map_mutex);
+  return entry;
+}
 turbo_stat_entry_t *turbo_stats_get_all(void) {
   return g_turbo_stats ? g_turbo_stats->entries_head : NULL;
 }

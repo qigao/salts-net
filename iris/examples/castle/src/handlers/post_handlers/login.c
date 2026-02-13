@@ -26,20 +26,20 @@ void login(Req *req, Res *res)
     }
 
     // Parse JSON
-    cJSON *json = cJSON_Parse(req->body);
+    json_value_t *json = json_parse(req->body, req->body_len);
     if (!json)
     {
         send_text(res, 400, "Invalid JSON");
         return;
     }
 
-    const cJSON *juser = cJSON_GetObjectItem(json, "username");
-    const cJSON *jpass = cJSON_GetObjectItem(json, "password");
+    const json_value_t *juser = json_object_get(json, "username");
+    const json_value_t *jpass = json_object_get(json, "password");
 
-    if (!juser || !jpass || !juser->valuestring || !jpass->valuestring)
+    if (json_type(juser) != JSON_STRING || json_type(jpass) != JSON_STRING)
     {
         printf("ERROR: Username or password missing\n");
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 400, "Username or password is missing");
         return;
     }
@@ -47,7 +47,7 @@ void login(Req *req, Res *res)
     // Create separate arena for async operation
     turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Arena allocation failed");
         return;
     }
@@ -55,7 +55,7 @@ void login(Req *req, Res *res)
     // Allocate login context
     ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Context allocation failed");
         return;
     }
@@ -67,14 +67,14 @@ void login(Req *req, Res *res)
     if (!ctx->res)
     {
         free_ctx(ctx->pool);
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Response copy failed");
         return;
     }
 
-    ctx->username = turbo_arena_strdup(async_pool, juser->valuestring);
-    ctx->password = turbo_arena_strdup(async_pool, jpass->valuestring);
-    cJSON_Delete(json);
+    ctx->username = turbo_arena_strdup(async_pool, json_string(juser));
+    ctx->password = turbo_arena_strdup(async_pool, json_string(jpass));
+    json_free(json);
 
     // Create PostgreSQL async context
     pg_async_t *pg = pquv_create(db, ctx);

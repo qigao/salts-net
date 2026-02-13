@@ -11,6 +11,22 @@
 #include <string.h>
 
 /* ============================================================================
+ * tstr_t <-> tstr_v conversion
+ * ========================================================================= */
+
+tstr_t tstr_from_v(tstr_v v) {
+  if (!v.data || v.len == 0) return sdsempty();
+  return sdsnewlen(v.data, v.len);
+}
+
+tstr_v tstr_to_v(tstr_t s) {
+  tstr_v v;
+  v.data = s;
+  v.len = s ? sdslen(s) : 0;
+  return v;
+}
+
+/* ============================================================================
  * Creation / Destruction
  * ========================================================================= */
 
@@ -72,6 +88,12 @@ tstr_t tstr_cat_str(tstr_t s, tstr_t t) {
   return sdscatsds(s, t);
 }
 
+tstr_t tstr_cat_v(tstr_t s, tstr_v v) {
+  if (!s) s = sdsempty();
+  if (!v.data || v.len == 0) return s;
+  return sdscatlen(s, v.data, v.len);
+}
+
 tstr_t tstr_cat_fmt(tstr_t s, const char *fmt, ...) {
   if (!s) s = sdsempty();
   if (!fmt) return s;
@@ -111,6 +133,10 @@ tstr_t tstr_cpy_len(tstr_t s, const char *t, size_t n) {
   return sdscpylen(s, t, n);
 }
 
+tstr_t tstr_cpy_v(tstr_t s, tstr_v v) {
+  return tstr_cpy_len(s, v.data, v.len);
+}
+
 void tstr_clear(tstr_t s) {
   if (s) sdsclear(s);
 }
@@ -124,6 +150,82 @@ int tstr_cmp(tstr_t s1, tstr_t s2) {
   if (!s1) return -1;
   if (!s2) return 1;
   return sdscmp(s1, s2);
+}
+
+int tstr_cmp_v(tstr_t s, tstr_v v) {
+  tstr_v sv = tstr_to_v(s);
+  if (sv.len < v.len) return -1;
+  if (sv.len > v.len) return 1;
+  if (sv.len == 0) return 0;
+  return memcmp(sv.data, v.data, sv.len);
+}
+
+int tstr_casecmp(const char *s1, const char *s2) {
+  return sdscasecmp(s1, s2);
+}
+
+int tstr_ncasecmp(const char *s1, const char *s2, size_t n) {
+#ifdef _MSC_VER
+  return _strnicmp(s1, s2, n);
+#else
+  return strncasecmp(s1, s2, n);
+#endif
+}
+
+int tstr_eq_v(tstr_t s, tstr_v v) {
+  return tstr_v_eq(tstr_to_v(s), v);
+}
+
+int tstr_ieq_v(tstr_t s, tstr_v v) {
+  return tstr_v_ieq(tstr_to_v(s), v);
+}
+
+int tstr_starts_with(const char *s, const char *prefix) {
+  return sdsstartswith(s, prefix);
+}
+
+int tstr_starts_with_v(tstr_t s, tstr_v prefix) {
+  return tstr_v_starts_with(tstr_to_v(s), prefix);
+}
+
+int tstr_istarts_with(const char *s, const char *prefix) {
+  return sdsistartswith(s, prefix);
+}
+
+int tstr_ends_with(const char *s, const char *suffix) {
+  return sdsendswith(s, suffix);
+}
+
+int tstr_ends_with_v(tstr_t s, tstr_v suffix) {
+  return tstr_v_ends_with(tstr_to_v(s), suffix);
+}
+
+int tstr_contains(const char *s, const char *substr) {
+  return sdscontains(s, substr);
+}
+
+int tstr_contains_v(tstr_t s, tstr_v needle) {
+  return tstr_v_contains(tstr_to_v(s), needle);
+}
+
+/* ============================================================================
+ * Search
+ * ========================================================================= */
+
+size_t tstr_find_v(tstr_t s, tstr_v needle) {
+  return tstr_v_find(tstr_to_v(s), needle);
+}
+
+size_t tstr_find_char(tstr_t s, char c) {
+  return tstr_v_find_char(tstr_to_v(s), c);
+}
+
+size_t tstr_rfind_v(tstr_t s, tstr_v needle) {
+  return tstr_v_rfind(tstr_to_v(s), needle);
+}
+
+size_t tstr_rfind_char(tstr_t s, char c) {
+  return tstr_v_rfind_char(tstr_to_v(s), c);
 }
 
 /* ============================================================================

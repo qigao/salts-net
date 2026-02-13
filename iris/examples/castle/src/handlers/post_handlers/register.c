@@ -21,39 +21,39 @@ static void add_user_result(pg_async_t *pg, PGresult *result, void *data);
 
 void add_user(Req *req, Res *res)
 {
-    cJSON *json = cJSON_Parse(req->body);
+    json_value_t *json = json_parse(req->body, req->body_len);
     if (!json)
     {
         send_text(res, 400, "Invalid JSON");
         return;
     }
 
-    cJSON *j_name = cJSON_GetObjectItem(json, "name");
-    cJSON *j_username = cJSON_GetObjectItem(json, "username");
-    cJSON *j_password = cJSON_GetObjectItem(json, "password");
-    cJSON *j_email = cJSON_GetObjectItem(json, "email");
-    cJSON *j_about = cJSON_GetObjectItem(json, "about");
+    json_value_t *j_name = json_object_get(json, "name");
+    json_value_t *j_username = json_object_get(json, "username");
+    json_value_t *j_password = json_object_get(json, "password");
+    json_value_t *j_email = json_object_get(json, "email");
+    json_value_t *j_about = json_object_get(json, "about");
 
-    if (!cJSON_IsString(j_name) ||
-        !cJSON_IsString(j_username) ||
-        !cJSON_IsString(j_password) ||
-        !cJSON_IsString(j_email))
+    if (json_type(j_name) != JSON_STRING ||
+        json_type(j_username) != JSON_STRING ||
+        json_type(j_password) != JSON_STRING ||
+        json_type(j_email) != JSON_STRING)
     {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 400, "Missing or invalid fields");
         return;
     }
 
-    const char *name = j_name->valuestring;
-    const char *username = j_username->valuestring;
-    const char *password = j_password->valuestring;
-    const char *email = j_email->valuestring;
-    const char *about = cJSON_IsString(j_about) ? j_about->valuestring : "";
+    const char *name = json_string(j_name);
+    const char *username = json_string(j_username);
+    const char *password = json_string(j_password);
+    const char *email = json_string(j_email);
+    const char *about = json_type(j_about) == JSON_STRING ? json_string(j_about) : "";
 
     // Create separate arena for async operation
     turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Arena allocation failed");
         return;
     }
@@ -61,7 +61,7 @@ void add_user(Req *req, Res *res)
     // Create context to hold all the data for async operation
     ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Context allocation failed");
         return;
     }
@@ -73,7 +73,7 @@ void add_user(Req *req, Res *res)
     if (!ctx->res)
     {
         free_ctx(ctx->pool);;
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Response copy failed");
         return;
     }
@@ -88,7 +88,7 @@ void add_user(Req *req, Res *res)
     if (!ctx->name || !ctx->username || !ctx->password || !ctx->email || !ctx->about)
     {
         free_ctx(ctx->pool);;
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Memory allocation failed");
         return;
     }
@@ -98,7 +98,7 @@ void add_user(Req *req, Res *res)
     if (!ctx->hashpw)
     {
         free_ctx(ctx->pool);;
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Memory allocation failed");
         return;
     }
@@ -106,12 +106,12 @@ void add_user(Req *req, Res *res)
     if (password_hash(ctx->hashpw, password, strlen(password)) != 0)
     {
         free_ctx(ctx->pool);;
-        cJSON_Delete(json);
+        json_free(json);
         send_text(res, 500, "Password hashing failed");
         return;
     }
 
-    cJSON_Delete(json);
+    json_free(json);
 
     // Create async PostgreSQL context
     pg_async_t *pg = pquv_create(db, ctx);

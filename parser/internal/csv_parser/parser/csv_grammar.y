@@ -22,6 +22,7 @@
 #include "csv_lexer.h"
 #include "csv_types.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 static char *unescape_quotes(csv_arena_t *arena, const char *src, size_t len, size_t *out_len) {

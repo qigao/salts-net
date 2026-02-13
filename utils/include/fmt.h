@@ -8,6 +8,7 @@
 
 #include "platform.h"
 #include "fmt_lexer.h"
+#include "turbo_str.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -36,7 +37,8 @@ typedef enum {
   FMT_TYPE_STR,
   FMT_TYPE_PTR,
   FMT_TYPE_SIZE,
-  FMT_TYPE_BOOL
+  FMT_TYPE_BOOL,
+  FMT_TYPE_STRV
 } fmt_type_t;
 
 /* ============================================================================
@@ -58,6 +60,7 @@ typedef struct {
     const void *p;
     size_t sz;
     int b; /* bool stored as int */
+    tstr_v sv;
   } val;
 } fmt_arg_t;
 
@@ -89,6 +92,7 @@ static inline fmt_arg_t fmt_arg_str(const char *x) { FMT_MAKE_ARG(FMT_TYPE_STR, 
 static inline fmt_arg_t fmt_arg_ptr(const void *x) { FMT_MAKE_ARG(FMT_TYPE_PTR, p, x) }
 static inline fmt_arg_t fmt_arg_bool(int x) { FMT_MAKE_ARG(FMT_TYPE_BOOL, b, x) }
 static inline fmt_arg_t fmt_arg_size(size_t x) { FMT_MAKE_ARG(FMT_TYPE_SIZE, sz, x) }
+static inline fmt_arg_t fmt_arg_strv(tstr_v x) { FMT_MAKE_ARG(FMT_TYPE_STRV, sv, x) }
 
 #undef FMT_MAKE_ARG
 
@@ -111,6 +115,12 @@ static inline fmt_arg_t fmt_arg_detect(long x) { return fmt_arg_long(x); }
 static inline fmt_arg_t fmt_arg_detect(unsigned long x) { return fmt_arg_ulong(x); }
 static inline fmt_arg_t fmt_arg_detect(long long x) { return fmt_arg_llong(x); }
 static inline fmt_arg_t fmt_arg_detect(unsigned long long x) { return fmt_arg_ullong(x); }
+/* size_t overload: only enabled when size_t is a distinct type from unsigned long/unsigned long long */
+template <typename T = size_t>
+static inline typename std::enable_if<
+    !std::is_same<T, unsigned long>::value && !std::is_same<T, unsigned long long>::value,
+    fmt_arg_t>::type
+fmt_arg_detect(T x) { return fmt_arg_size(x); }
 static inline fmt_arg_t fmt_arg_detect(float x) { return fmt_arg_double((double)x); }
 static inline fmt_arg_t fmt_arg_detect(double x) { return fmt_arg_double(x); }
 static inline fmt_arg_t fmt_arg_detect(bool x) { return fmt_arg_bool(x); }
@@ -118,6 +128,7 @@ static inline fmt_arg_t fmt_arg_detect(char *x) { return fmt_arg_str(x); }
 static inline fmt_arg_t fmt_arg_detect(const char *x) { return fmt_arg_str(x); }
 static inline fmt_arg_t fmt_arg_detect(void *x) { return fmt_arg_ptr(x); }
 static inline fmt_arg_t fmt_arg_detect(const void *x) { return fmt_arg_ptr(x); }
+static inline fmt_arg_t fmt_arg_detect(tstr_v x) { return fmt_arg_strv(x); }
 
 /* Template for classes with c_str() member (e.g. std::string) */
 template <typename T>
@@ -157,6 +168,7 @@ extern "C" { /* Re-open extern "C" */
            float: fmt_arg_double,                                                                  \
            void *: fmt_arg_ptr,                                                                    \
            const void *: fmt_arg_ptr,                                                              \
+           tstr_v: fmt_arg_strv,                                                                   \
            char: fmt_arg_char,                                                                     \
            int: fmt_arg_int,                                                                       \
            unsigned int: fmt_arg_uint,                                                             \
@@ -191,6 +203,7 @@ extern "C" { /* Re-open extern "C" */
           const char *: fmt_arg_str,                                                               \
           void *: fmt_arg_ptr,                                                                     \
           const void *: fmt_arg_ptr,                                                               \
+          tstr_v: fmt_arg_strv,                                                                    \
           _Bool: fmt_arg_bool,                                                                     \
           default: fmt_arg_ptr)(x)
   #endif
@@ -207,13 +220,10 @@ extern "C" { /* Re-open extern "C" */
 /* Use a helper to force macro expansion on MSVC */
 #define FMT_EXPAND(x) x
 
-/* Count arguments (up to 16). MSVC compatible 0-arg detection. */
-#define FMT_NARGS_IMPL(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16,  \
-                       N, ...)                                                                     \
-  N
+/* Count arguments (up to 8). MSVC compatible 0-arg detection. */
+#define FMT_NARGS_IMPL(_0, _1, _2, _3, _4, _5, _6, _7, _8, N, ...) N
 #define FMT_NARGS(...)                                                                             \
-  FMT_EXPAND(                                                                                      \
-      FMT_NARGS_IMPL(0, ##__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0))
+  FMT_EXPAND(FMT_NARGS_IMPL(0, ##__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0))
 
 /* Expand each argument with FMT_ARG */
 #define FMT_WRAP_0() {FMT_TYPE_NONE}
@@ -224,8 +234,10 @@ extern "C" { /* Re-open extern "C" */
 #define FMT_WRAP_5(a, b, c, d, e) FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e)
 #define FMT_WRAP_6(a, b, c, d, e, f)                                                               \
   FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e), FMT_ARG(f)
-#define FMT_WRAP_7(a, b, c, d, e, f, g) FMT_WRAP_6(a, b, c, d, e, f), FMT_ARG(g)
-#define FMT_WRAP_8(a, b, c, d, e, f, g, h) FMT_WRAP_7(a, b, c, d, e, f, g), FMT_ARG(h)
+#define FMT_WRAP_7(a, b, c, d, e, f, g)                                                            \
+  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e), FMT_ARG(f), FMT_ARG(g)
+#define FMT_WRAP_8(a, b, c, d, e, f, g, h)                                                         \
+  FMT_ARG(a), FMT_ARG(b), FMT_ARG(c), FMT_ARG(d), FMT_ARG(e), FMT_ARG(f), FMT_ARG(g), FMT_ARG(h)
 
 /* Dispatch to correct wrapper based on count */
 #define FMT_WRAP_N_INNER(N, ...) FMT_WRAP_##N(__VA_ARGS__)
@@ -242,9 +254,8 @@ extern "C" { /* Re-open extern "C" */
 /**
  * @brief Simple macro for buffer formatting using type-safe logic
  */
-#define turbo_fmt(buf, size, fmt, ...)                                                             \
+#define fmt(buf, size, fmt, ...)                                                                   \
   fmt_print((buf), (size), (fmt), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
-
 
 /**
  * @brief Format a string using typed arguments
@@ -259,6 +270,22 @@ extern "C" { /* Re-open extern "C" */
 CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t *args,
                         size_t arg_count);
 
+/* ============================================================================
+ * tstr_t Integration
+ * ============================================================================ */
+
+static inline tstr_t tstr_cat_typed_impl(tstr_t s, const char *format, const fmt_arg_t *args,
+                                          size_t count) {
+  char tmp[1024];
+  int n = fmt_print(tmp, sizeof(tmp), format, args, count);
+  if (n > 0)
+    return tstr_cat_len(s, tmp, (size_t)n);
+  return s;
+}
+
+#define tstr_cat_typed(s, format, ...)                                                             \
+  tstr_cat_typed_impl((s), (format), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
+
 #ifdef __cplusplus
 } /* End extern "C" */
 
@@ -266,18 +293,26 @@ CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t
  * @brief C++ Helper for type-safe formatting
  */
 template <typename... Args>
-inline int turbo_fmt_cpp_wrapper(char *buf, size_t size, const char *fmt, const Args &...args) {
-  if constexpr (sizeof...(Args) > 0) {
-    const fmt_arg_t arg_array[] = {FMT_ARG(args)...};
-    return fmt_print(buf, size, fmt, arg_array, sizeof...(Args));
-  } else {
-    return fmt_print(buf, size, fmt, NULL, 0);
-  }
+inline int fmt_cpp_wrapper(char *buf, size_t size, const char *fmt, const Args &...args) {
+  const fmt_arg_t arg_array[] = {FMT_ARG(args)..., {FMT_TYPE_NONE}};
+  return fmt_print(buf, size, fmt, arg_array, sizeof...(Args));
 }
 
 /* Override macro for C++ */
-#undef turbo_fmt
-#define turbo_fmt(buf, size, fmt, ...) turbo_fmt_cpp_wrapper((buf), (size), (fmt), ##__VA_ARGS__)
+#undef fmt
+#define fmt(buf, size, fmt, ...) fmt_cpp_wrapper((buf), (size), (fmt), ##__VA_ARGS__)
+
+template <typename... Args>
+inline tstr_t tstr_cat_typed_cpp(tstr_t s, const char *format, const Args &...args) {
+  char tmp[1024];
+  int n = fmt_cpp_wrapper(tmp, sizeof(tmp), format, args...);
+  if (n > 0)
+    return tstr_cat_len(s, tmp, (size_t)n);
+  return s;
+}
+
+#undef tstr_cat_typed
+#define tstr_cat_typed(s, format, ...) tstr_cat_typed_cpp((s), (format), ##__VA_ARGS__)
 #endif
 
 #endif /* FMT_H */

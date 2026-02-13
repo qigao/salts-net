@@ -93,7 +93,7 @@ static void users_result_callback(pg_async_t *pg, PGresult *result, void *data)
     }
 
     int rows = PQntuples(result);
-    cJSON *json_array = cJSON_CreateArray();
+    json_value_t *json_array = json_create_array();
 
     for (int i = 0; i < rows; i++)
     {
@@ -101,20 +101,21 @@ static void users_result_callback(pg_async_t *pg, PGresult *result, void *data)
         const char *name = PQgetvalue(result, i, 1);
         const char *username = PQgetvalue(result, i, 2);
 
-        cJSON *user_json = cJSON_CreateObject();
-        cJSON_AddNumberToObject(user_json, "id", id);
-        cJSON_AddStringToObject(user_json, "name", name);
-        cJSON_AddStringToObject(user_json, "username", username);
+        json_value_t *user_json = json_create_object();
+        json_object_set_number(user_json, "id", id);
+        json_object_set_string(user_json, "name", name);
+        json_object_set_string(user_json, "username", username);
 
-        cJSON_AddItemToArray(json_array, user_json);
+        json_array_add(json_array, user_json);
     }
 
-    char *json_string = cJSON_PrintUnformatted(json_array);
+    size_t json_string_len = 0;
+    char *json_string = json_serialize(json_array, &json_string_len);
     send_json(ctx->res, 200, json_string);
 
     // Cleanup
-    cJSON_Delete(json_array);
-    free(json_string);
+    json_free(json_array);
+    json_serialize_free(json_string);
     free_ctx(ctx->pool);
 
     printf("users_result_callback: Response sent successfully\n");

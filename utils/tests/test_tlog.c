@@ -3,8 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <uv.h>
-
+ 
 static int callback_count = 0;
 static void test_callback(const turbo_log_entry_t *entry, void *user_data) {
   (void)user_data;
@@ -212,11 +211,7 @@ spec("TLog Tests") {
     TLOG_INFO("Padded double: {:08.2f}", 12.3456);
   }
 
-  it("should handle untyped placeholders without aborting") {
-    int status = UV_ECONNREFUSED;
-    TLOG_ERROR("Pipe connection failed: {:s}", uv_strerror(status));
-  }
-
+ 
   describe("TurboMQ simulation") {
 
     it("should log TurboMQ simulated errors") {

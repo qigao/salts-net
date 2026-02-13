@@ -1,7 +1,7 @@
 #include "rpc.h"
 #include "iris.h"
 #include "security.h"
-#include <cjson/cJSON.h>
+#include <json_parser.h>
 #include <stdlib.h>
 #include <string.h>
 #include "tlog.h"
@@ -12,7 +12,7 @@ static rpc_context_t *g_rpc_context = NULL;
 
 /* Cached params object to avoid re-parsing */
 typedef struct {
-  cJSON *params_obj;
+  json_value_t *params_obj;
   int cached;
 } rpc_params_cache_t;
 
@@ -128,57 +128,58 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
   rpc_req->protocol = RPC_PROTOCOL_JSON;
 
   /* Parse JSON */
-  cJSON *root = cJSON_Parse(req->body);
+  json_value_t *root = json_parse(req->body, req->body_len);
   if (!root)
     return RPC_ERROR_PARSE;
 
   /* Extract jsonrpc version */
-  cJSON *jsonrpc = cJSON_GetObjectItem(root, "jsonrpc");
-  if (jsonrpc && cJSON_IsString(jsonrpc)) {
-    rpc_req->jsonrpc = turbo_arena_strdup(req->arena, jsonrpc->valuestring);
+  json_value_t *jsonrpc = json_object_get(root, "jsonrpc");
+  if (jsonrpc && json_type(jsonrpc) == JSON_STRING) {
+    rpc_req->jsonrpc = turbo_arena_strdup(req->arena, json_string(jsonrpc));
   }
 
   /* Extract method (required) */
-  cJSON *method = cJSON_GetObjectItem(root, "method");
-  if (!method || !cJSON_IsString(method)) {
-    cJSON_Delete(root);
+  json_value_t *method = json_object_get(root, "method");
+  if (!method || json_type(method) != JSON_STRING) {
+    json_free(root);
     return RPC_ERROR_INVALID_REQUEST;
   }
-  rpc_req->method = turbo_arena_strdup(req->arena, method->valuestring);
+  rpc_req->method = turbo_arena_strdup(req->arena, json_string(method));
 
   /* Extract params (optional) */
-  cJSON *params = cJSON_GetObjectItem(root, "params");
+  json_value_t *params = json_object_get(root, "params");
   if (params) {
-    char *params_str = cJSON_PrintUnformatted(params);
+    size_t params_len = 0;
+    char *params_str = json_serialize(params, &params_len);
     if (params_str) {
       rpc_req->params = turbo_arena_strdup(req->arena, params_str);
-      cJSON_free(params_str);
+      json_serialize_free(params_str);
     }
   }
 
   /* Extract id (optional for notifications) */
-  cJSON *id = cJSON_GetObjectItem(root, "id");
+  json_value_t *id = json_object_get(root, "id");
   if (id) {
-    if (cJSON_IsString(id)) {
+    if (json_type(id) == JSON_STRING) {
       /* Phase IRIS-1: Replace arena_sprintf with turbo_arena_alloc + stbsp_snprintf */
-      size_t len = strlen(id->valuestring) + 3; /* quotes + null */
+      size_t len = strlen(json_string(id)) + 3; /* quotes + null */
       rpc_req->id = turbo_arena_alloc(req->arena, len);
       if (rpc_req->id) {
-        stbsp_snprintf((char *)rpc_req->id, len, "\"%s\"", id->valuestring);
+        stbsp_snprintf((char *)rpc_req->id, len, "\"%s\"", json_string(id));
       }
-    } else if (cJSON_IsNumber(id)) {
+    } else if (json_type(id) == JSON_NUMBER) {
       /* Phase IRIS-1: Replace arena_sprintf with turbo_arena_alloc + stbsp_snprintf */
       size_t len = 32; /* enough for int */
       rpc_req->id = turbo_arena_alloc(req->arena, len);
       if (rpc_req->id) {
-        stbsp_snprintf((char *)rpc_req->id, len, "%d", id->valueint);
+        stbsp_snprintf((char *)rpc_req->id, len, "%d", (int)json_number(id));
       }
-    } else if (cJSON_IsNull(id)) {
+    } else if (json_is_null(id)) {
       rpc_req->id = turbo_arena_strdup(req->arena, "null");
     }
   }
 
-  cJSON_Delete(root);
+  json_free(root);
   return 0;
 }
 
@@ -191,88 +192,89 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
   if (!arena)
     return -1;
 
-  /* Build JSON-RPC response using cJSON */
-  cJSON *root = cJSON_CreateObject();
+  /* Build JSON-RPC response using json_parser */
+  json_value_t *root = json_create_object();
   if (!root)
     return -1;
 
-  cJSON_AddStringToObject(root, "jsonrpc", "2.0");
+  json_object_set_string(root, "jsonrpc", "2.0");
 
   if (rpc_res->error_code != 0) {
     /* Error response */
-    cJSON *error = cJSON_CreateObject();
-    cJSON_AddNumberToObject(error, "code", rpc_res->error_code);
-    
+    json_value_t *error = json_create_object();
+    json_object_set_number(error, "code", rpc_res->error_code);
+
     // Escape error message to prevent injection
     if (rpc_res->error_message) {
       char *escaped_message = malloc(strlen(rpc_res->error_message) * 2 + 256);
       if (escaped_message) {
         iris_security_result_t escape_result = iris_escape_json(rpc_res->error_message, escaped_message, strlen(rpc_res->error_message) * 2 + 256);
         if (escape_result == IRIS_SECURITY_OK) {
-          cJSON_AddStringToObject(error, "message", escaped_message);
+          json_object_set_string(error, "message", escaped_message);
         } else {
           // Fallback to original message if escaping fails
           TLOG_WARN("Failed to escape RPC error message: {:s}", iris_security_error_string(escape_result));
-          cJSON_AddStringToObject(error, "message", rpc_res->error_message);
+          json_object_set_string(error, "message", rpc_res->error_message);
         }
         free(escaped_message);
       } else {
-        cJSON_AddStringToObject(error, "message", rpc_res->error_message);
+        json_object_set_string(error, "message", rpc_res->error_message);
       }
     } else {
-      cJSON_AddStringToObject(error, "message", "Unknown error");
+      json_object_set_string(error, "message", "Unknown error");
     }
-    
-    cJSON_AddItemToObject(root, "error", error);
+
+    json_object_add(root, "error", error);
   } else {
     /* Success response */
     if (rpc_res->result) {
-      cJSON *result = cJSON_Parse(rpc_res->result);
+      json_value_t *result = json_parse(rpc_res->result, strlen(rpc_res->result));
       if (result) {
-        cJSON_AddItemToObject(root, "result", result);
+        json_object_add(root, "result", result);
       } else {
         // If result is not valid JSON, escape it as a string
         char *escaped_result = malloc(strlen(rpc_res->result) * 2 + 256);
         if (escaped_result) {
           iris_security_result_t escape_result = iris_escape_json(rpc_res->result, escaped_result, strlen(rpc_res->result) * 2 + 256);
           if (escape_result == IRIS_SECURITY_OK) {
-            cJSON_AddStringToObject(root, "result", escaped_result);
+            json_object_set_string(root, "result", escaped_result);
           } else {
             // Fallback to original result if escaping fails
             TLOG_WARN("Failed to escape RPC result: {:s}", iris_security_error_string(escape_result));
-            cJSON_AddStringToObject(root, "result", rpc_res->result);
+            json_object_set_string(root, "result", rpc_res->result);
           }
           free(escaped_result);
         } else {
-          cJSON_AddStringToObject(root, "result", rpc_res->result);
+          json_object_set_string(root, "result", rpc_res->result);
         }
       }
     } else {
-      cJSON_AddNullToObject(root, "result");
+      json_object_set_null(root, "result");
     }
   }
 
   /* Add id */
   if (rpc_res->id) {
-    cJSON *id = cJSON_Parse(rpc_res->id);
+    json_value_t *id = json_parse(rpc_res->id, strlen(rpc_res->id));
     if (id) {
-      cJSON_AddItemToObject(root, "id", id);
+      json_object_add(root, "id", id);
     } else {
-      cJSON_AddStringToObject(root, "id", rpc_res->id);
+      json_object_set_string(root, "id", rpc_res->id);
     }
   } else {
-    cJSON_AddNullToObject(root, "id");
+    json_object_set_null(root, "id");
   }
 
-  char *json_str = cJSON_PrintUnformatted(root);
-  cJSON_Delete(root);
+  size_t json_len = 0;
+  char *json_str = json_serialize(root, &json_len);
+  json_free(root);
 
   if (!json_str)
     return -1;
 
   *output = turbo_arena_strdup(arena, json_str);
-  *output_len = strlen(json_str);
-  cJSON_free(json_str);
+  *output_len = json_len;
+  json_serialize_free(json_str);
 
   return 0;
 }
@@ -315,7 +317,7 @@ void rpc_send_error(Res *res, int error_code, const char *error_message, const c
   if (!res)
     return;
 
-  cJSON *root = cJSON_CreateObject();
+  json_value_t *root = json_create_object();
   if (!root) {
     send_json(res, 500,
               "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal "
@@ -323,50 +325,51 @@ void rpc_send_error(Res *res, int error_code, const char *error_message, const c
     return;
   }
 
-  cJSON_AddStringToObject(root, "jsonrpc", "2.0");
+  json_object_set_string(root, "jsonrpc", "2.0");
 
-  cJSON *error = cJSON_CreateObject();
-  cJSON_AddNumberToObject(error, "code", error_code);
-  
+  json_value_t *error = json_create_object();
+  json_object_set_number(error, "code", error_code);
+
   // Escape error message to prevent injection
   if (error_message) {
     char *escaped_message = malloc(strlen(error_message) * 2 + 256);
     if (escaped_message) {
       iris_security_result_t escape_result = iris_escape_json(error_message, escaped_message, strlen(error_message) * 2 + 256);
       if (escape_result == IRIS_SECURITY_OK) {
-        cJSON_AddStringToObject(error, "message", escaped_message);
+        json_object_set_string(error, "message", escaped_message);
       } else {
         // Fallback to original message if escaping fails
         TLOG_WARN("Failed to escape RPC error message: {:s}", iris_security_error_string(escape_result));
-        cJSON_AddStringToObject(error, "message", error_message);
+        json_object_set_string(error, "message", error_message);
       }
       free(escaped_message);
     } else {
-      cJSON_AddStringToObject(error, "message", error_message);
+      json_object_set_string(error, "message", error_message);
     }
   } else {
-    cJSON_AddStringToObject(error, "message", "Unknown error");
+    json_object_set_string(error, "message", "Unknown error");
   }
-  
-  cJSON_AddItemToObject(root, "error", error);
+
+  json_object_add(root, "error", error);
 
   if (id) {
-    cJSON *id_obj = cJSON_Parse(id);
+    json_value_t *id_obj = json_parse(id, strlen(id));
     if (id_obj) {
-      cJSON_AddItemToObject(root, "id", id_obj);
+      json_object_add(root, "id", id_obj);
     } else {
-      cJSON_AddStringToObject(root, "id", id);
+      json_object_set_string(root, "id", id);
     }
   } else {
-    cJSON_AddNullToObject(root, "id");
+    json_object_set_null(root, "id");
   }
 
-  char *response = cJSON_PrintUnformatted(root);
-  cJSON_Delete(root);
+  size_t response_len = 0;
+  char *response = json_serialize(root, &response_len);
+  json_free(root);
 
   if (response) {
     send_json(res, 200, response);
-    cJSON_free(response);
+    json_serialize_free(response);
   } else {
     send_json(res, 500,
               "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal "
@@ -395,12 +398,12 @@ void rpc_set_error(rpc_response_t *rpc_res, int error_code, const char *error_me
 /* No external declarations needed - post macro is in iris.h */
 
 /* Get or create cached params object */
-static cJSON *rpc_get_params_object(rpc_request_t *rpc_req) {
+static json_value_t *rpc_get_params_object(rpc_request_t *rpc_req) {
   if (!rpc_req || !rpc_req->params)
     return NULL;
 
   /* Parse params */
-  cJSON *params = cJSON_Parse(rpc_req->params);
+  json_value_t *params = json_parse(rpc_req->params, strlen(rpc_req->params));
   return params;
 }
 
@@ -408,18 +411,18 @@ const char *rpc_get_param_string(rpc_request_t *rpc_req, const char *key) {
   if (!rpc_req || !key)
     return NULL;
 
-  cJSON *params = rpc_get_params_object(rpc_req);
+  json_value_t *params = rpc_get_params_object(rpc_req);
   if (!params)
     return NULL;
 
-  cJSON *item = cJSON_GetObjectItem(params, key);
+  json_value_t *item = json_object_get(params, key);
   const char *result = NULL;
 
-  if (item && cJSON_IsString(item)) {
-    result = turbo_arena_strdup(rpc_req->arena, item->valuestring);
+  if (item && json_type(item) == JSON_STRING) {
+    result = turbo_arena_strdup(rpc_req->arena, json_string(item));
   }
 
-  cJSON_Delete(params);
+  json_free(params);
   return result;
 }
 
@@ -427,19 +430,19 @@ int rpc_get_param_int(rpc_request_t *rpc_req, const char *key, int64_t *value) {
   if (!rpc_req || !key || !value)
     return -1;
 
-  cJSON *params = rpc_get_params_object(rpc_req);
+  json_value_t *params = rpc_get_params_object(rpc_req);
   if (!params)
     return -1;
 
-  cJSON *item = cJSON_GetObjectItem(params, key);
+  json_value_t *item = json_object_get(params, key);
   int result = -1;
 
-  if (item && cJSON_IsNumber(item)) {
-    *value = (int64_t)item->valuedouble;
+  if (item && json_type(item) == JSON_NUMBER) {
+    *value = (int64_t)json_number(item);
     result = 0;
   }
 
-  cJSON_Delete(params);
+  json_free(params);
   return result;
 }
 
@@ -447,19 +450,19 @@ int rpc_get_param_bool(rpc_request_t *rpc_req, const char *key, int *value) {
   if (!rpc_req || !key || !value)
     return -1;
 
-  cJSON *params = rpc_get_params_object(rpc_req);
+  json_value_t *params = rpc_get_params_object(rpc_req);
   if (!params)
     return -1;
 
-  cJSON *item = cJSON_GetObjectItem(params, key);
+  json_value_t *item = json_object_get(params, key);
   int result = -1;
 
-  if (item && cJSON_IsBool(item)) {
-    *value = cJSON_IsTrue(item) ? 1 : 0;
+  if (item && json_type(item) == JSON_BOOL) {
+    *value = json_bool(item) ? 1 : 0;
     result = 0;
   }
 
-  cJSON_Delete(params);
+  json_free(params);
   return result;
 }
 
@@ -544,31 +547,32 @@ static int rpc_introspection_handler(Req *req, Res *res, rpc_request_t *rpc_req,
     return -1;
   }
 
-  /* Build method list using cJSON */
-  cJSON *methods_array = cJSON_CreateArray();
+  /* Build method list using json_parser */
+  json_value_t *methods_array = json_create_array();
   if (!methods_array) {
     rpc_set_error(rpc_res, RPC_ERROR_INTERNAL, "Failed to create response");
     return -1;
   }
 
   for (size_t i = 0; i < ctx->method_count; i++) {
-    cJSON *method_obj = cJSON_CreateObject();
+    json_value_t *method_obj = json_create_object();
     if (!method_obj) {
-      cJSON_Delete(methods_array);
+      json_free(methods_array);
       rpc_set_error(rpc_res, RPC_ERROR_INTERNAL, "Failed to create response");
       return -1;
     }
 
-    cJSON_AddStringToObject(method_obj, "name", ctx->methods[i].name);
-    cJSON_AddStringToObject(method_obj, "description",
+    json_object_set_string(method_obj, "name", ctx->methods[i].name);
+    json_object_set_string(method_obj, "description",
                             ctx->methods[i].description ? ctx->methods[i].description : "");
-    cJSON_AddBoolToObject(method_obj, "requires_auth", ctx->methods[i].requires_auth);
+    json_object_set_bool(method_obj, "requires_auth", ctx->methods[i].requires_auth);
 
-    cJSON_AddItemToArray(methods_array, method_obj);
+    json_array_add(methods_array, method_obj);
   }
 
-  char *result = cJSON_PrintUnformatted(methods_array);
-  cJSON_Delete(methods_array);
+  size_t result_len = 0;
+  char *result = json_serialize(methods_array, &result_len);
+  json_free(methods_array);
 
   if (!result) {
     rpc_set_error(rpc_res, RPC_ERROR_INTERNAL, "Failed to serialize response");
@@ -576,7 +580,7 @@ static int rpc_introspection_handler(Req *req, Res *res, rpc_request_t *rpc_req,
   }
 
   rpc_set_result(rpc_res, result);
-  cJSON_free(result);
+  json_serialize_free(result);
   return 0;
 }
 

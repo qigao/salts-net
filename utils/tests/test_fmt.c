@@ -215,4 +215,66 @@ spec("FMT Tests") {
       check_str_eq(buf, "Hello, World!");
     }
   }
+
+  describe("tstr_v Formatting") {
+    it("should format tstr_v from cstr") {
+      char buf[BUFFER_SIZE];
+      tstr_v name = tstr_v_from_cstr("alice");
+      fmt_arg_t args[] = {fmt_arg_strv(name)};
+      fmt_print(buf, sizeof(buf), "user={}", args, 1);
+      check_str_eq(buf, "user=alice");
+    }
+
+    it("should format tstr_v with partial length") {
+      char buf[BUFFER_SIZE];
+      tstr_v sub = tstr_v_from_buf("hello world", 5);
+      fmt_arg_t args[] = {fmt_arg_strv(sub)};
+      fmt_print(buf, sizeof(buf), "say {}", args, 1);
+      check_str_eq(buf, "say hello");
+    }
+
+    it("should format null tstr_v as (null)") {
+      char buf[BUFFER_SIZE];
+      tstr_v empty = tstr_v_from_buf(NULL, 0);
+      fmt_arg_t args[] = {fmt_arg_strv(empty)};
+      fmt_print(buf, sizeof(buf), "val={}", args, 1);
+      check_str_eq(buf, "val=(null)");
+    }
+
+#if FMT_HAS_GENERIC
+    it("should auto-detect tstr_v via _Generic") {
+      char buf[BUFFER_SIZE];
+      tstr_v v = tstr_v_from_cstr("typed");
+      check_int_eq(FMT_ARG(v).type, FMT_TYPE_STRV);
+      fmt(buf, sizeof(buf), "v={}", v);
+      check_str_eq(buf, "v=typed");
+    }
+#endif
+  }
+
+  describe("tstr_cat_typed") {
+    it("should append formatted content to tstr_t") {
+      tstr_t s = tstr_new();
+      s = tstr_cat_typed(s, "id={} name={}", 42, "alice");
+      check_str_eq(s, "id=42 name=alice");
+      tstr_free(s);
+    }
+
+    it("should chain multiple appends") {
+      tstr_t s = tstr_new();
+      s = tstr_cat_typed(s, "a={}", 1);
+      s = tstr_cat_typed(s, " b={}", 2);
+      s = tstr_cat_typed(s, " c={}", 3);
+      check_str_eq(s, "a=1 b=2 c=3");
+      tstr_free(s);
+    }
+
+    it("should work with tstr_v argument") {
+      tstr_t s = tstr_new();
+      tstr_v role = tstr_v_from_cstr("admin");
+      s = tstr_cat_typed(s, "role={}", role);
+      check_str_eq(s, "role=admin");
+      tstr_free(s);
+    }
+  }
 }

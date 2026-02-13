@@ -5,6 +5,7 @@
 #include "route_trie.h"
 #include "security.h"
 #include "turbo_async_server.h"
+#include "turbo_str.h"
 #include "tlog.h"
 #include <ctype.h>
 #include <stb_sprintf.h>
@@ -1024,7 +1025,7 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
   // Find the Cookie header
   const char *cookie_header = NULL;
   for (int i = 0; i < ctx->headers.count; i++) {
-    if (ctx->headers.items[i].key && strcasecmp(ctx->headers.items[i].key, "Cookie") == 0) {
+    if (ctx->headers.items[i].key && tstr_casecmp(ctx->headers.items[i].key, "Cookie") == 0) {
       cookie_header = ctx->headers.items[i].value;
       break;
     }

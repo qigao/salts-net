@@ -140,7 +140,7 @@ static void on_query_posts(pg_async_t* pg, PGresult* result, void* data)
     return;
   }
 
-  cJSON* response = cJSON_CreateObject();
+  json_value_t* response = json_create_object();
   if (!response) {
     free_ctx(ctx->pool);
     return;
@@ -150,39 +150,39 @@ static void on_query_posts(pg_async_t* pg, PGresult* result, void* data)
   char* reading_time_val = PQgetvalue(result, 0, PQfnumber(result, "reading_time"));
   char* author_id_val = PQgetvalue(result, 0, PQfnumber(result, "author_id"));
 
-  cJSON_AddNumberToObject(response, "id", atoi(id_val));
-  cJSON_AddNumberToObject(response, "reading_time", atoi(reading_time_val));
-  cJSON_AddNumberToObject(response, "author_id", atoi(author_id_val));
+  json_object_set_number(response, "id", atoi(id_val));
+  json_object_set_number(response, "reading_time", atoi(reading_time_val));
+  json_object_set_number(response, "author_id", atoi(author_id_val));
 
   char* header_val = PQgetvalue(result, 0, PQfnumber(result, "header"));
-  cJSON_AddStringToObject(response, "header", header_val);
+  json_object_set_string(response, "header", header_val);
 
   char* slug_val = PQgetvalue(result, 0, PQfnumber(result, "slug"));
-  cJSON_AddStringToObject(response, "slug", slug_val);
+  json_object_set_string(response, "slug", slug_val);
 
   char* content_val = PQgetvalue(result, 0, PQfnumber(result, "content"));
-  cJSON_AddStringToObject(response, "content", content_val);
+  json_object_set_string(response, "content", content_val);
 
   char* username_val = PQgetvalue(result, 0, PQfnumber(result, "username"));
-  cJSON_AddStringToObject(response, "username", username_val);
+  json_object_set_string(response, "username", username_val);
 
   char* created_at_val = PQgetvalue(result, 0, PQfnumber(result, "created_at"));
-  cJSON_AddStringToObject(response, "created_at", created_at_val);
+  json_object_set_string(response, "created_at", created_at_val);
 
   char* updated_at_val = PQgetvalue(result, 0, PQfnumber(result, "updated_at"));
-  cJSON_AddStringToObject(response, "updated_at", updated_at_val);
+  json_object_set_string(response, "updated_at", updated_at_val);
 
   char* is_hidden_val = PQgetvalue(result, 0, PQfnumber(result, "is_hidden"));
 
-  cJSON_AddBoolToObject(response, "is_hidden", strcmp(is_hidden_val, "t") == 0);
+  json_object_set_bool(response, "is_hidden", strcmp(is_hidden_val, "t") == 0);
 
   char* cats = PQgetvalue(result, 0, PQfnumber(result, "categories"));
   char* slugs = PQgetvalue(result, 0, PQfnumber(result, "category_slugs"));
   char* ids = PQgetvalue(result, 0, PQfnumber(result, "category_ids"));
 
-  cJSON* arr = cJSON_CreateArray();
+  json_value_t* arr = json_create_array();
   if (!arr) {
-    cJSON_Delete(response);
+    json_free(response);
     free_ctx(ctx->pool);
     return;
   }
@@ -193,8 +193,8 @@ static void on_query_posts(pg_async_t* pg, PGresult* result, void* data)
       free(c_copy);
       free(s_copy);
       free(i_copy);
-      cJSON_Delete(arr);
-      cJSON_Delete(response);
+      json_free(arr);
+      json_free(response);
       free_ctx(ctx->pool);
       return;
     }
@@ -207,11 +207,11 @@ static void on_query_posts(pg_async_t* pg, PGresult* result, void* data)
     itok = strtok_r(i_copy, ",", &save3);
 
     while (ctok && stok && itok) {
-      cJSON* o = cJSON_CreateObject();
-      cJSON_AddNumberToObject(o, "id", atoi(itok));
-      cJSON_AddStringToObject(o, "category", ctok);
-      cJSON_AddStringToObject(o, "slug", stok);
-      cJSON_AddItemToArray(arr, o);
+      json_value_t* o = json_create_object();
+      json_object_set_number(o, "id", atoi(itok));
+      json_object_set_string(o, "category", ctok);
+      json_object_set_string(o, "slug", stok);
+      json_array_add(arr, o);
 
       ctok = strtok_r(NULL, ",", &save1);
       stok = strtok_r(NULL, ",", &save2);
@@ -223,17 +223,18 @@ static void on_query_posts(pg_async_t* pg, PGresult* result, void* data)
     free(i_copy);
   }
 
-  cJSON_AddItemToObject(response, "categories", arr);
+  json_object_add(response, "categories", arr);
 
-  char* json_str = cJSON_PrintUnformatted(response);
+  size_t json_str_len = 0;
+  char* json_str = json_serialize(response, &json_str_len);
   if (!json_str) {
-    cJSON_Delete(response);
+    json_free(response);
     free_ctx(ctx->pool);
     return;
   }
 
   send_json(ctx->res, OK, json_str);
-  free(json_str);
-  cJSON_Delete(response);
+  json_serialize_free(json_str);
+  json_free(response);
   free_ctx(ctx->pool);
 }

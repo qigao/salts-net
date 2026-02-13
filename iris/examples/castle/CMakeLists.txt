@@ -36,7 +36,6 @@ target_link_libraries(castle PRIVATE
     TurboNet::PostgreSQL
     OpenSSL::SSL
     OpenSSL::Crypto
-    cjson
 )
 
 # Compiler settings

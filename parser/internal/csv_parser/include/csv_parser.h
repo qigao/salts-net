@@ -8,6 +8,7 @@
  * - Streaming (SAX-like) API for O(1) memory
  * - Batch API for convenient access
  * - Arena-based memory management
+ * - tstr_v (string view) support for zero-copy field access
  */
 
 #ifndef CSV_PARSER_H
@@ -15,6 +16,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <turbo_str_view.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,16 +49,20 @@ bool        csv_has_header(const csv_doc_t *doc);
 
 const char *csv_get(const csv_doc_t *doc, size_t row, size_t col);
 size_t      csv_get_len(const csv_doc_t *doc, size_t row, size_t col);
+tstr_v      csv_get_v(const csv_doc_t *doc, size_t row, size_t col);
 
 const char *csv_header_get(const csv_doc_t *doc, size_t col);
 size_t      csv_header_get_len(const csv_doc_t *doc, size_t col);
+tstr_v      csv_header_get_v(const csv_doc_t *doc, size_t col);
 
 int         csv_get_int(const csv_doc_t *doc, size_t row, size_t col, int def);
 double      csv_get_double(const csv_doc_t *doc, size_t row, size_t col, double def);
 bool        csv_get_bool(const csv_doc_t *doc, size_t row, size_t col, bool def);
 
 size_t      csv_find_column(const csv_doc_t *doc, const char *header_name);
+size_t      csv_find_column_v(const csv_doc_t *doc, tstr_v header_name);
 const char *csv_get_by_name(const csv_doc_t *doc, size_t row, const char *col_name);
+tstr_v      csv_get_by_name_v(const csv_doc_t *doc, size_t row, tstr_v col_name);
 
 const char *csv_get_error(void);
 
@@ -92,6 +98,7 @@ bool        csv_iter_next(csv_iter_t *iter);
 size_t      csv_iter_field_count(const csv_iter_t *iter);
 const char *csv_iter_field(const csv_iter_t *iter, size_t col);
 size_t      csv_iter_field_len(const csv_iter_t *iter, size_t col);
+tstr_v      csv_iter_field_v(const csv_iter_t *iter, size_t col);
 size_t      csv_iter_row_index(const csv_iter_t *iter);
 
 #ifdef __cplusplus

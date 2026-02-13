@@ -122,7 +122,7 @@ static int get_transport_info(const char *scheme, int *default_port, turbo_trans
   return 0;
 }
 
-static void build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
+static int build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
   addr->path[0] = '\0';
   const char *host = turbo_uri_host(parsed_url);
   const char *path = turbo_uri_path(parsed_url);
@@ -138,12 +138,12 @@ static void build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
     } else {
       TLOG_ERROR("Invalid pipe URL: {}. Expected pipe://service_name",
                  turbo_uri_scheme(parsed_url));
-      return;
+      return TURBO_EINVAL_TRANSPORT;
     }
     addr->path[sizeof(addr->path) - 1] = '\0';
   } else {
     if ((!path || path[0] == '\0') && (!query || query[0] == '\0')) {
-      return;
+      return 0;
     }
     if (!query || query[0] == '\0') {
       strncpy(addr->path, path, sizeof(addr->path) - 1);
@@ -153,6 +153,8 @@ static void build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
     }
     addr->path[sizeof(addr->path) - 1] = '\0';
   }
+
+  return 0;
 }
 
 // Parse URL into transport and connection details
@@ -189,7 +191,11 @@ int parse_transport_url(const char *url, turbo_address_t *addr) {
   int port = turbo_uri_port(parsed_url);
   addr->port = (port > 0) ? port : default_port;
 
-  build_address_path(addr, parsed_url);
+  err = build_address_path(addr, parsed_url);
+  if (err) {
+    turbo_free_uri(&parsed_url);
+    return err;
+  }
 
   addr->valid = true;
   turbo_free_uri(&parsed_url);

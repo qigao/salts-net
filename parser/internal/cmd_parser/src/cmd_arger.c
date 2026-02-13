@@ -1,14 +1,10 @@
 #include "cmd_arger.h"
 #include "cmd_arger_internal.h"
+#include "turbo_str.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-
-#ifdef _WIN32
-  #define strcasecmp _stricmp
-#endif
 
 #include <dotenv.h>
 
@@ -250,8 +246,8 @@ static void cmd_arger_apply_env_vars(CmdArgerDesc *args, uint32_t count) {
 
     switch (args[i].kind) {
     case CmdArgerDescKind_flag: {
-      if (strcasecmp(env_val, "1") == 0 || strcasecmp(env_val, "true") == 0 ||
-          strcasecmp(env_val, "yes") == 0 || strcasecmp(env_val, "on") == 0) {
+      if (tstr_casecmp(env_val, "1") == 0 || tstr_casecmp(env_val, "true") == 0 ||
+          tstr_casecmp(env_val, "yes") == 0 || tstr_casecmp(env_val, "on") == 0) {
         *(CmdArgerBool *)args[i].value_out = cmd_arger_true;
       } else {
         *(CmdArgerBool *)args[i].value_out = cmd_arger_false;
@@ -323,10 +319,14 @@ static void expand_args(int *argc_out, char ***argv_out, int argc_in, char **arg
         size_t len;
 
         while ((len = lex_next_arg(&p, &token_start)) > 0) {
-          char *token = malloc(len + 1);
-          strncpy(token, token_start, len);
-          token[len] = '\0';
-          arg_list_add(&list, token);
+          tstr_t token = tstr_dup_len(token_start, len);
+          if (token) {
+            char *token_cstr = tstr_to_cstr(token);
+            tstr_free(token);
+            if (token_cstr) {
+              arg_list_add(&list, token_cstr);
+            }
+          }
         }
         free(content);
       } else {
@@ -436,7 +436,7 @@ static CmdArgerBool apply_value(CmdArgerDesc *desc, const char *value_str, CmdAr
   case CmdArgerDescKind_enum: {
     int found = 0;
     for (uint32_t i = 0; i < desc->spec.enums.count; i++) {
-      if (strcasecmp(value_str, desc->spec.enums.descs[i].name) == 0) {
+      if (tstr_casecmp(value_str, desc->spec.enums.descs[i].name) == 0) {
         *(int64_t *)desc->value_out = desc->spec.enums.descs[i].value;
         found = 1;
         break;

@@ -1,5 +1,4 @@
 #include <stdlib.h>
-#include <string.h>
 #include <stdio.h>
 #include "compat.h"
 #include "async.h"
@@ -25,8 +24,8 @@ static void _async_after_work_cb(uv_work_t *req, int status)
         char error_buf[128];
         stbsp_snprintf(error_buf, sizeof(error_buf), "libuv error: %s", uv_strerror(status));
 
-        // Allocate error using malloc since we're in completion callback
-        task->error = strdup(error_buf);
+        // Allocate error using tstr since we're in completion callback
+        task->error = tstr_dup(error_buf);
         task->result = 0;
     }
 
@@ -36,10 +35,10 @@ static void _async_after_work_cb(uv_work_t *req, int status)
         task->handler(task->context, task->result, task->error);
     }
 
-    // Free error message if it was malloc'd
+    // Free error message if it was allocated
     if (task->error)
     {
-        free(task->error);
+        tstr_free(task->error);
         task->error = NULL;
     }
 
@@ -65,18 +64,18 @@ void fail(async_t *task, const char *error_msg)
     // Free existing error if any
     if (task->error)
     {
-        free(task->error);
+        tstr_free(task->error);
         task->error = NULL;
     }
 
     // Set new error message
     if (error_msg)
     {
-        task->error = strdup(error_msg);
+        task->error = tstr_dup(error_msg);
     }
     else
     {
-        task->error = strdup("Unknown error");
+        task->error = tstr_dup("Unknown error");
     }
 }
 
@@ -127,7 +126,7 @@ int task(
 void then(
     void *context,                    // User context
     int success,                      // Whether previous task was successful
-    char *error,                      // Error message if previous task failed
+    tstr_t error,                     // Error message if previous task failed
     async_work_fn_t next_work_fn,     // Next work function to execute if successful
     async_response_handler_t handler) // Response handler for the next task
 {

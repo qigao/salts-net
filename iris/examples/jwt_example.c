@@ -71,9 +71,9 @@ int acl_middleware(Req *req, Res *res, Chain *chain) {
     }
 
     cjwt_t *jwt = (cjwt_t *)claims_ptr;
-    cJSON *admin_claim = cJSON_GetObjectItem(jwt->private_claims, "admin");
+    json_value_t *admin_claim = json_object_get(jwt->private_claims, "admin");
 
-    if (!cJSON_IsBool(admin_claim) || !cJSON_IsTrue(admin_claim)) {
+    if (!(json_type(admin_claim) == JSON_BOOL) || !json_bool(admin_claim)) {
         send_json(res, 403, "{\"error\":\"Forbidden\", \"message\":\"Admin access required\"}");
         return 1;
     }

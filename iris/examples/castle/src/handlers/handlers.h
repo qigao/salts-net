@@ -2,7 +2,7 @@
 #define HANDLERS_H
 
 #include "iris.h"
-#include "cjson/cJSON.h"
+#include <json_parser.h>
 #include "pquv.h"
 #include "db.h" // extern PGconn *db;
 #include "connection.h"

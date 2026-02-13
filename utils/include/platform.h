@@ -61,12 +61,6 @@
 typedef intptr_t ssize_t;
     #define _SSIZE_T_DEFINED
   #endif
-
-  // Cross-platform string duplication
-  #define strdup _strdup
-  #define strcasecmp _stricmp
-  #define strncasecmp _strnicmp
-  #define strtok_r strtok_s
 #else
   #define TURBO_UNIX 1
   #include <arpa/inet.h>
@@ -349,18 +343,6 @@ CXX_C_API uint64_t turbo_timer_get_repeat(turbo_timer_t *timer);
 // =============================================================================
 
 /**
- * @brief Duplicate a string with padding for stb_sprintf safety.
- *
- * stb_sprintf reads 4 bytes at a time, so strings need padding after
- * the null terminator to avoid buffer overreads.
- *
- * @param s String to duplicate
- * @return Duplicated string with 8 bytes padding, or NULL on failure
- * @note Caller must sdsfree() the returned string
- */
-CXX_C_API char *turbo_strdup_padded(const char *s);
-
-/**
  * @brief Duplicate a string using a memory pool.
  *
  * @param pool Memory pool to allocate from (MemoryPool*)
@@ -369,25 +351,6 @@ CXX_C_API char *turbo_strdup_padded(const char *s);
  * @note Memory is managed by the pool, do not free() directly
  */
 CXX_C_API char *turbo_pool_strdup(void *pool, const char *str);
-
-/**
- * @brief Duplicate a string using a memory pool with padding for stb_sprintf.
- *
- * @param pool Memory pool to allocate from (MemoryPool*)
- * @param str String to duplicate
- * @return Duplicated string with padding, or NULL on failure
- * @note Memory is managed by the pool, do not free() directly
- */
-CXX_C_API char *turbo_pool_strdup_padded(void *pool, const char *str);
-
-/**
- * @brief Allocate memory with padding for stb_sprintf safety.
- *
- * @param size Number of bytes to allocate
- * @return Pointer to allocated memory (size + 8 bytes), or NULL on failure
- * @note Caller must free() the returned pointer
- */
-CXX_C_API void *turbo_malloc_padded(size_t size);
 
 /**
  * @brief URL-encode a string per RFC 3986.
@@ -400,6 +363,17 @@ CXX_C_API void *turbo_malloc_padded(size_t size);
  * @note Caller must free() the returned string
  */
 CXX_C_API char *turbo_url_encode(const char *str);
+
+/**
+ * @brief URL-decode a string per RFC 3986.
+ *
+ * Decodes %XX hex sequences back to bytes. '+' becomes space.
+ *
+ * @param str String to decode
+ * @return URL-decoded string, or NULL on failure
+ * @note Caller must free() the returned string
+ */
+CXX_C_API char *turbo_url_decode(const char *str);
 
 /**
  * @brief Get the current process ID

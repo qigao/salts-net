@@ -83,23 +83,24 @@ static void on_result(pg_async_t *pg, PGresult *result, void *data)
         return;
     }
 
-    cJSON *resp = cJSON_CreateObject();
+    json_value_t *resp = json_create_object();
 
     // Add integer field
-    cJSON_AddNumberToObject(resp, "id", atoi(PQgetvalue(result, 0, PQfnumber(result, "id"))));
+    json_object_set_number(resp, "id", atoi(PQgetvalue(result, 0, PQfnumber(result, "id"))));
 
     // Add string fields
-    cJSON_AddStringToObject(resp, "name", PQgetvalue(result, 0, PQfnumber(result, "name")));
-    cJSON_AddStringToObject(resp, "email", PQgetvalue(result, 0, PQfnumber(result, "email")));
-    cJSON_AddStringToObject(resp, "about", PQgetvalue(result, 0, PQfnumber(result, "about")));
+    json_object_set_string(resp, "name", PQgetvalue(result, 0, PQfnumber(result, "name")));
+    json_object_set_string(resp, "email", PQgetvalue(result, 0, PQfnumber(result, "email")));
+    json_object_set_string(resp, "about", PQgetvalue(result, 0, PQfnumber(result, "about")));
 
     // Add boolean field
-    cJSON_AddBoolToObject(resp, "is_author", ctx->is_author);
+    json_object_set_bool(resp, "is_author", ctx->is_author);
 
-    char *json_str = cJSON_PrintUnformatted(resp);
+    size_t json_str_len = 0;
+    char *json_str = json_serialize(resp, &json_str_len);
     send_json(ctx->res, 200, json_str);
 
-    free(json_str);
-    cJSON_Delete(resp);
+    json_serialize_free(json_str);
+    json_free(resp);
     free_ctx(ctx->pool);
 }

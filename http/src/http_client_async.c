@@ -4,24 +4,18 @@
 #include <llhttp.h>
 #include "http_client_async.h"
 #include <cjwt/cjwt.h>
+#include <json_parser.h>
 #include "turbo_parser.h"
 // clang-format on
 #include "arena_buffer.h"
 #include "base64_utils.h"
+#include "turbo_str.h"
 #include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <turbo_fs.h>
-
-#ifdef _WIN32
-  #define strdup _strdup
-  #define strcasecmp _stricmp
-  #define strncasecmp _strnicmp
-#else
-  #include <strings.h>
-#endif
 
 /* Header entry structure */
 typedef struct header_entry_s {
@@ -38,8 +32,8 @@ struct http_async_request_s;
 typedef struct {
   http_async_response_t *response;
   int headers_complete;
-  char *current_header_field;
-  char *current_header_value;
+  tstr_t current_header_field;
+  tstr_t current_header_value;
   struct http_async_request_s *request; /* Backpointer for callbacks */
 } parser_context_t;
 
@@ -56,7 +50,7 @@ typedef enum {
 
 /* Stream state for file uploads */
 typedef struct http_async_multipart_file_stream_s {
-  char *file_path;
+  tstr_t file_path;
   turbo_file_t fd; /* turbo_fs file descriptor */
   int64_t file_size;
   int64_t offset;
@@ -75,10 +69,10 @@ typedef enum {
 
 /* Multipart form part */
 typedef struct http_async_multipart_part_s {
-  char *name;
-  char *filename;
-  char *content_type;
-  char *value;
+  tstr_t name;
+  tstr_t filename;
+  tstr_t content_type;
+  tstr_t value;
   void *data;
   size_t data_len;
   int is_file;
@@ -147,10 +141,10 @@ struct http_async_request_s {
 
 /* Cookie structure */
 typedef struct http_async_cookie_s {
-  char *name;
-  char *value;
-  char *domain;
-  char *path;
+  tstr_t name;
+  tstr_t value;
+  tstr_t domain;
+  tstr_t path;
   int secure;
   int http_only;
   struct http_async_cookie_s *next;
@@ -165,8 +159,8 @@ struct http_async_cookie_jar_s {
 /* URL parameters structure */
 struct http_async_params_s {
   struct param_entry {
-    char *key;
-    char *value;
+    tstr_t key;
+    tstr_t value;
     struct param_entry *next;
   } *head;
   int count;
@@ -222,6 +216,28 @@ struct http_async_client_s {
    * Single turbo_arena_free() cleans up everything */
   turbo_arena_t client_arena;
 };
+
+static char *dup_cstr(const char *src) {
+  if (!src)
+    return NULL;
+  size_t len = strlen(src);
+  char *dst = (char *)malloc(len + 1);
+  if (!dst)
+    return NULL;
+  memcpy(dst, src, len);
+  dst[len] = '\0';
+  return dst;
+}
+
+static const char *find_header_delim(const char *buf, size_t len) {
+  if (!buf || len < 4)
+    return NULL;
+  for (size_t i = 0; i + 3 < len; i++) {
+    if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n')
+      return buf + i;
+  }
+  return NULL;
+}
 
 /* Forward declarations */
 static void async_event_handler(async_client_t *client, const async_client_event_t *event,
@@ -351,7 +367,7 @@ void http_async_client_set_default_header(http_async_client_t *client, const cha
 
   header_entry_t *entry = client->default_headers;
   while (entry) {
-    if (strcasecmp(entry->name, name) == 0) {
+    if (tstr_casecmp(entry->name, name) == 0) {
       /* Phase HTTP-1: No need to free old value - arena owns it */
       entry->value = turbo_arena_strdup(&client->client_arena, value);
       return;
@@ -423,10 +439,8 @@ void http_async_client_set_jwt_auth(http_async_client_t *client, const char *sec
   if (!client || !secret || !claims_json)
     return;
 
-  cJSON *private_claims = cJSON_Parse(claims_json);
+  json_value_t *private_claims = json_parse(claims_json, strlen(claims_json));
   if (!private_claims) {
-    // TLOG not used in async client yet? Let's check.
-    // Actually async client uses printf for now based on previous view.
     printf("[ERROR] Failed to parse JWT claims JSON\n");
     return;
   }
@@ -437,7 +451,7 @@ void http_async_client_set_jwt_auth(http_async_client_t *client, const char *sec
 
   char *token = NULL;
   cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
-  cJSON_Delete(private_claims);
+  json_free(private_claims);
 
   if (rv != CJWTE_OK) {
     printf("[ERROR] Failed to encode JWT: %d\n", rv);
@@ -504,10 +518,12 @@ http_async_request_t *http_async_request(http_async_client_t *client, http_metho
     request->body_len = body_len;
   }
 
-  /* Phase HTTP-1: Allocate response from arena */
-  request->response = (http_async_response_t *)turbo_arena_alloc(&request->request_arena,
-                                                                 sizeof(http_async_response_t));
-  memset(request->response, 0, sizeof(http_async_response_t));
+  request->response = (http_async_response_t *)calloc(1, sizeof(http_async_response_t));
+  if (!request->response) {
+    turbo_arena_free(&request->request_arena);
+    free(request);
+    return NULL;
+  }
 
   /* Phase HTTP-1: Initialize receive buffer from arena */
   request->receive_buffer_size = 65536;
@@ -616,12 +632,8 @@ static int on_header_field(llhttp_t *parser, const char *at, size_t length) {
     return 0;
 
   /* Free previous incomplete header field */
-  free(ctx->current_header_field);
-  ctx->current_header_field = malloc(length + 1);
-  if (ctx->current_header_field) {
-    memcpy(ctx->current_header_field, at, length);
-    ctx->current_header_field[length] = '\0';
-  }
+  tstr_free(ctx->current_header_field);
+  ctx->current_header_field = tstr_dup_len(at, length);
   return 0;
 }
 
@@ -631,12 +643,8 @@ static int on_header_value(llhttp_t *parser, const char *at, size_t length) {
     return 0;
 
   /* Free previous incomplete header value */
-  free(ctx->current_header_value);
-  ctx->current_header_value = malloc(length + 1);
-  if (ctx->current_header_value) {
-    memcpy(ctx->current_header_value, at, length);
-    ctx->current_header_value[length] = '\0';
-  }
+  tstr_free(ctx->current_header_value);
+  ctx->current_header_value = tstr_dup_len(at, length);
   return 0;
 }
 
@@ -663,18 +671,28 @@ static int on_body(llhttp_t *parser, const char *at, size_t length) {
     if (response->body) {
       /* Existing body */
       char *new_body = realloc(response->body, response->body_len + length + 1);
-      if (new_body) {
-        memcpy(new_body + response->body_len, at, length);
-        new_body[response->body_len + length] = '\0';
-        response->body = new_body;
+      if (!new_body) {
+        if (!response->error) {
+          response->error = dup_cstr("Memory allocation failed");
+          response->error_code = HTTP_ASYNC_ERROR_MEMORY_ALLOCATION;
+        }
+        return 0;
       }
+      memcpy(new_body + response->body_len, at, length);
+      new_body[response->body_len + length] = '\0';
+      response->body = new_body;
     } else {
       /* New body */
       response->body = malloc(length + 1);
-      if (response->body) {
-        memcpy(response->body, at, length);
-        response->body[length] = '\0';
+      if (!response->body) {
+        if (!response->error) {
+          response->error = dup_cstr("Memory allocation failed");
+          response->error_code = HTTP_ASYNC_ERROR_MEMORY_ALLOCATION;
+        }
+        return 0;
       }
+      memcpy(response->body, at, length);
+      response->body[length] = '\0';
     }
   }
 
@@ -743,9 +761,8 @@ static void async_event_handler(async_client_t *client, const async_client_event
     if (request) {
       request->state = REQUEST_STATE_ERROR;
       if (!request->response->error) {
-        /* Phase HTTP-1: Allocate error from arena */
         const char *error_msg = event->message ? event->message : "Connection error";
-        request->response->error = turbo_arena_strdup(&request->request_arena, error_msg);
+        request->response->error = dup_cstr(error_msg);
         request->response->error_code = HTTP_ASYNC_ERROR_CONNECTION_FAILED;
       }
       complete_request(request);
@@ -767,11 +784,10 @@ static void process_response_data(http_async_request_t *request, const char *dat
     size_t new_size = (request->receive_buffer_used + len) * 2;
     char *new_buffer = (char *)turbo_arena_alloc(&request->request_arena, new_size);
     if (!new_buffer) {
-      /* Arena allocation failed - cannot continue */
-      request->response->error = (char *)turbo_arena_alloc(&request->request_arena, 64);
-      if (request->response->error) {
-        stbsp_snprintf(request->response->error, 64, "Arena allocation failed for receive buffer");
+      if (!request->response->error) {
+        request->response->error = dup_cstr("Arena allocation failed for receive buffer");
       }
+      request->response->error_code = HTTP_ASYNC_ERROR_MEMORY_ALLOCATION;
       request->state = REQUEST_STATE_ERROR;
       return;
     }
@@ -798,10 +814,11 @@ static void process_response_data(http_async_request_t *request, const char *dat
 
   if (err != HPE_OK && err != HPE_PAUSED_UPGRADE && err != HPE_PAUSED) {
     printf("[DEBUG] Parse error detected\n");
-    /* Phase HTTP-1: Allocate error from arena */
-    request->response->error = (char *)turbo_arena_alloc(&request->request_arena, 256);
-    if (request->response->error) {
-      stbsp_snprintf(request->response->error, 256, "Parse error: %s", llhttp_errno_name(err));
+    if (!request->response->error) {
+      request->response->error = (char *)malloc(256);
+      if (request->response->error) {
+        stbsp_snprintf(request->response->error, 256, "Parse error: %s", llhttp_errno_name(err));
+      }
     }
     request->response->error_code = HTTP_ASYNC_ERROR_PARSE_FAILED;
     request->state = REQUEST_STATE_ERROR;
@@ -811,12 +828,10 @@ static void process_response_data(http_async_request_t *request, const char *dat
 
   /* Extract headers if complete */
   if (request->parser_ctx.headers_complete && !request->response->headers) {
-    const char *headers_end = strstr(request->receive_buffer, "\r\n\r\n");
+    const char *headers_end = find_header_delim(request->receive_buffer, request->receive_buffer_used);
     if (headers_end) {
       size_t headers_len = headers_end - request->receive_buffer;
-      /* Phase HTTP-1: Allocate headers from arena */
-      request->response->headers =
-          (char *)turbo_arena_alloc(&request->request_arena, headers_len + 1);
+      request->response->headers = (char *)malloc(headers_len + 1);
       if (request->response->headers) {
         memcpy(request->response->headers, request->receive_buffer, headers_len);
         request->response->headers[headers_len] = '\0';
@@ -870,7 +885,7 @@ static char *get_header_value(const char *headers, const char *header_name) {
   const char *p = headers;
 
   while (*p) {
-    if (strncasecmp(p, header_name, name_len) == 0 && p[name_len] == ':') {
+    if (tstr_ncasecmp(p, header_name, name_len) == 0 && p[name_len] == ':') {
       p += name_len + 1;
       while (*p == ' ' || *p == '\t')
         p++;
@@ -896,13 +911,15 @@ static char *get_header_value(const char *headers, const char *header_name) {
 }
 
 static char *build_full_url(http_async_client_t *client, const char *url, turbo_arena_t *arena) {
-  if (!client->base_url || strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
+  tstr_v url_v = tstr_v_from_cstr(url);
+  if (!client->base_url ||
+      tstr_v_starts_with(url_v, tstr_v_from_cstr("http://")) ||
+      tstr_v_starts_with(url_v, tstr_v_from_cstr("https://"))) {
     return NULL;
   }
 
   size_t base_len = strlen(client->base_url);
-  size_t url_len = strlen(url);
-  size_t full_len = base_len + url_len + 2;
+  size_t full_len = base_len + url_v.len + 2;
 
   /* Phase HTTP-1: Allocate from arena instead of malloc */
   char *full_url = (char *)turbo_arena_alloc(arena, full_len);
@@ -928,7 +945,7 @@ static void initiate_request(http_async_request_t *request) {
   if (turbo_parse_uri((const uint8_t *)request->url, strlen(request->url), &request->uri) != 0) {
     printf("[DEBUG] URL parse failed\n");
     /* Phase HTTP-1: Allocate error from arena */
-    request->response->error = turbo_arena_strdup(&request->request_arena, "Failed to parse URL");
+    request->response->error = dup_cstr("Failed to parse URL");
     request->response->error_code = HTTP_ASYNC_ERROR_INVALID_URL;
     request->state = REQUEST_STATE_ERROR;
     complete_request(request);
@@ -939,7 +956,7 @@ static void initiate_request(http_async_request_t *request) {
   const char *uri_host = turbo_uri_host(request->uri);
   int uri_port = turbo_uri_port(request->uri);
 
-  int is_tls = (strcasecmp(uri_scheme, "https") == 0);
+  int is_tls = (tstr_casecmp(uri_scheme, "https") == 0);
   printf("[DEBUG] Parsed URL - host: %s, port: %d, scheme: %s, TLS: %d\n", uri_host, uri_port,
          uri_scheme, is_tls);
 
@@ -979,8 +996,7 @@ static void initiate_request(http_async_request_t *request) {
   if (status != ASYNC_CLIENT_STATUS_OK) {
     printf("[DEBUG] Connection failed with status %d\n", status);
     /* Phase HTTP-1: Allocate error from arena */
-    request->response->error =
-        turbo_arena_strdup(&request->request_arena, "Failed to initiate connection");
+    request->response->error = dup_cstr("Failed to initiate connection");
     request->response->error_code = HTTP_ASYNC_ERROR_CONNECTION_FAILED;
     request->state = REQUEST_STATE_ERROR;
     complete_request(request);
@@ -1125,8 +1141,7 @@ static void send_http_request(http_async_request_t *request) {
     request->state = REQUEST_STATE_RECEIVING;
     request->client->stats.bytes_sent += request->body_len;
   } else {
-    request->response->error =
-        turbo_arena_strdup(&request->request_arena, "Failed to send request");
+    request->response->error = dup_cstr("Failed to send request");
     request->response->error_code = HTTP_ASYNC_ERROR_SEND_FAILED;
     request->state = REQUEST_STATE_ERROR;
     complete_request(request);
@@ -1201,7 +1216,7 @@ static void send_multipart_headers(http_async_request_t *request) {
       else if (part->data && part->data_len > 0)
         total_content_length += part->data_len;
       else if (part->value)
-        total_content_length += strlen(part->value);
+        total_content_length += tstr_len(part->value);
 
       total_content_length += 2; /* trailing \r\n */
       part = part->next;
@@ -1269,7 +1284,7 @@ static void send_multipart_headers(http_async_request_t *request) {
 
 static void on_fs_read_complete(http_async_request_t *request, int nread) {
   if (nread < 0) {
-    request->response->error = turbo_arena_strdup(&request->request_arena, "File read error");
+    request->response->error = dup_cstr("File read error");
     request->state = REQUEST_STATE_ERROR;
     complete_request(request);
     return;
@@ -1295,7 +1310,7 @@ static void on_fs_read_complete(http_async_request_t *request, int nread) {
 
 static void on_fs_open_complete(http_async_request_t *request, int result) {
   if (result < 0) {
-    request->response->error = turbo_arena_strdup(&request->request_arena, "File open error");
+    request->response->error = dup_cstr("File open error");
     request->state = REQUEST_STATE_ERROR;
     complete_request(request);
     return;
@@ -1352,7 +1367,7 @@ static void continue_multipart_sending(http_async_request_t *request) {
       return;
     } else {
       const char *data = part->data ? part->data : (part->value ? part->value : "");
-      size_t len = part->data ? part->data_len : (part->value ? strlen(part->value) : 0);
+      size_t len = part->data ? part->data_len : (part->value ? tstr_len(part->value) : 0);
 
       if (request->use_chunked_encoding)
         send_http_chunk(request->client->client, data, len);
@@ -1406,7 +1421,7 @@ static void complete_request(http_async_request_t *request) {
 
   if (request->state == REQUEST_STATE_CANCELLED) {
     /* Phase HTTP-1: Allocate error from arena */
-    request->response->error = turbo_arena_strdup(&request->request_arena, "Request cancelled");
+    request->response->error = dup_cstr("Request cancelled");
     request->response->error_code = HTTP_ASYNC_ERROR_CANCELLED;
   }
 
@@ -1446,8 +1461,8 @@ static void complete_request(http_async_request_t *request) {
   }
 
   /* Cleanup */
-  free(request->parser_ctx.current_header_field);
-  free(request->parser_ctx.current_header_value);
+  tstr_free(request->parser_ctx.current_header_field);
+  tstr_free(request->parser_ctx.current_header_value);
 
   printf("[DEBUG] Removing request from active list\n");
   remove_request(request->client, request);
@@ -1471,19 +1486,14 @@ static void remove_request(http_async_client_t *client, http_async_request_t *re
 
   client->stats.active_requests--;
 
-  /* Phase HTTP-1 Optimization: Single arena_free() replaces 10+ individual free() calls!
-   * This frees: url, body, receive_buffer, headers array, all header strings, response,
-   * response->headers, response->error
-   * Before: free(url) + free(body) + free(receive_buffer) + free_parsed_url(4 frees) +
-   *         loop free(headers[i]) + free(headers) = 10+ free() calls
-   * After: ONE call frees everything! */
+  /* Phase HTTP-1 Optimization: arena_free() releases request-owned data
+   * This frees: url, request body, receive_buffer, headers array, header strings. */
   if (request->uri) {
     turbo_free_uri(&request->uri);
   }
   turbo_arena_free(&request->request_arena);
 
-  /* Note: response is not freed here - caller owns it after callback
-   * But response data (headers, error) was allocated from arena and already freed above */
+  /* Note: response is not freed here - caller owns it after callback */
   free(request);
 }
 
@@ -1549,8 +1559,8 @@ void http_async_params_add(http_async_params_t *params, const char *key, const c
   if (!entry)
     return;
 
-  entry->key = strdup(key);
-  entry->value = strdup(value);
+  entry->key = tstr_dup(key);
+  entry->value = tstr_dup(value);
   entry->next = params->head;
   params->head = entry;
   params->count++;
@@ -1585,8 +1595,14 @@ static char *url_encode(const char *str) {
 }
 
 char *http_async_params_encode(http_async_params_t *params) {
-  if (!params || !params->head)
-    return strdup("");
+  if (!params || !params->head) {
+    tstr_t empty = tstr_new();
+    if (!empty)
+      return NULL;
+    char *out = tstr_to_cstr(empty);
+    tstr_free(empty);
+    return out;
+  }
 
   size_t size = 0;
   struct param_entry *entry = params->head;
@@ -1603,8 +1619,14 @@ char *http_async_params_encode(http_async_params_t *params) {
     entry = entry->next;
   }
 
-  if (size == 0)
-    return strdup("");
+  if (size == 0) {
+    tstr_t empty = tstr_new();
+    if (!empty)
+      return NULL;
+    char *out = tstr_to_cstr(empty);
+    tstr_free(empty);
+    return out;
+  }
 
   char *result = malloc(size + 1);
   if (!result)
@@ -1646,8 +1668,8 @@ void http_async_params_free(http_async_params_t *params) {
   struct param_entry *entry = params->head;
   while (entry) {
     struct param_entry *next = entry->next;
-    free(entry->key);
-    free(entry->value);
+    tstr_free(entry->key);
+    tstr_free(entry->value);
     free(entry);
     entry = next;
   }
@@ -1659,12 +1681,24 @@ char *http_async_build_url(const char *base_url, http_async_params_t *query_para
   if (!base_url)
     return NULL;
 
-  if (!query_params || !query_params->head)
-    return strdup(base_url);
+  if (!query_params || !query_params->head) {
+    tstr_t base_copy = tstr_dup(base_url);
+    if (!base_copy)
+      return NULL;
+    char *out = tstr_to_cstr(base_copy);
+    tstr_free(base_copy);
+    return out;
+  }
 
   char *query_string = http_async_params_encode(query_params);
-  if (!query_string)
-    return strdup(base_url);
+  if (!query_string) {
+    tstr_t base_copy = tstr_dup(base_url);
+    if (!base_copy)
+      return NULL;
+    char *out = tstr_to_cstr(base_copy);
+    tstr_free(base_copy);
+    return out;
+  }
 
   const char *has_query = strchr(base_url, '?');
   char separator = has_query ? '&' : '?';
@@ -1717,10 +1751,10 @@ void http_async_cookie_jar_destroy(http_async_cookie_jar_t *jar) {
   http_async_cookie_t *cookie = jar->cookies;
   while (cookie) {
     http_async_cookie_t *next = cookie->next;
-    free(cookie->name);
-    free(cookie->value);
-    free(cookie->domain);
-    free(cookie->path);
+    tstr_free(cookie->name);
+    tstr_free(cookie->value);
+    tstr_free(cookie->domain);
+    tstr_free(cookie->path);
     free(cookie);
     cookie = next;
   }
@@ -1735,8 +1769,8 @@ void http_async_cookie_jar_set(http_async_cookie_jar_t *jar, const char *name, c
   http_async_cookie_t *cookie = jar->cookies;
   while (cookie) {
     if (strcmp(cookie->name, name) == 0) {
-      free(cookie->value);
-      cookie->value = strdup(value);
+      tstr_free(cookie->value);
+      cookie->value = tstr_dup(value);
       return;
     }
     cookie = cookie->next;
@@ -1746,8 +1780,8 @@ void http_async_cookie_jar_set(http_async_cookie_jar_t *jar, const char *name, c
   if (!cookie)
     return;
 
-  cookie->name = strdup(name);
-  cookie->value = strdup(value);
+  cookie->name = tstr_dup(name);
+  cookie->value = tstr_dup(value);
   cookie->next = jar->cookies;
   jar->cookies = cookie;
   jar->count++;
@@ -1778,10 +1812,10 @@ void http_async_cookie_jar_remove(http_async_cookie_jar_t *jar, const char *name
   while (cookie) {
     if (strcmp(cookie->name, name) == 0) {
       *prev = cookie->next;
-      free(cookie->name);
-      free(cookie->value);
-      free(cookie->domain);
-      free(cookie->path);
+      tstr_free(cookie->name);
+      tstr_free(cookie->value);
+      tstr_free(cookie->domain);
+      tstr_free(cookie->path);
       free(cookie);
       jar->count--;
       return;
@@ -1798,10 +1832,10 @@ void http_async_cookie_jar_clear(http_async_cookie_jar_t *jar) {
   http_async_cookie_t *cookie = jar->cookies;
   while (cookie) {
     http_async_cookie_t *next = cookie->next;
-    free(cookie->name);
-    free(cookie->value);
-    free(cookie->domain);
-    free(cookie->path);
+    tstr_free(cookie->name);
+    tstr_free(cookie->value);
+    tstr_free(cookie->domain);
+    tstr_free(cookie->path);
     free(cookie);
     cookie = next;
   }
@@ -1856,10 +1890,10 @@ void http_async_multipart_form_destroy(http_async_multipart_form_t *form) {
   http_async_multipart_part_t *part = form->parts;
   while (part) {
     http_async_multipart_part_t *next = part->next;
-    free(part->name);
-    free(part->filename);
-    free(part->content_type);
-    free(part->value);
+    tstr_free(part->name);
+    tstr_free(part->filename);
+    tstr_free(part->content_type);
+    tstr_free(part->value);
     free(part->data);
 
     /* Clean up streaming context if present */
@@ -1867,7 +1901,7 @@ void http_async_multipart_form_destroy(http_async_multipart_form_t *form) {
       if (part->stream_ctx->fd != TURBO_INVALID_FILE) {
         turbo_fs_close(part->stream_ctx->fd);
       }
-      free(part->stream_ctx->file_path);
+      tstr_free(part->stream_ctx->file_path);
       free(part->stream_ctx);
     }
 
@@ -1887,8 +1921,8 @@ void http_async_multipart_form_add_field(http_async_multipart_form_t *form, cons
   if (!part)
     return;
 
-  part->name = strdup(name);
-  part->value = strdup(value);
+  part->name = tstr_dup(name);
+  part->value = tstr_dup(value);
   part->is_file = 0;
   part->next = form->parts;
   form->parts = part;
@@ -1905,9 +1939,9 @@ void http_async_multipart_form_add_file(http_async_multipart_form_t *form, const
   if (!part)
     return;
 
-  part->name = strdup(field_name);
-  part->filename = strdup(filename);
-  part->content_type = content_type ? strdup(content_type) : strdup("application/octet-stream");
+  part->name = tstr_dup(field_name);
+  part->filename = tstr_dup(filename);
+  part->content_type = content_type ? tstr_dup(content_type) : tstr_dup("application/octet-stream");
   part->data = malloc(data_len);
   if (part->data) {
     memcpy(part->data, data, data_len);
@@ -1940,30 +1974,30 @@ int http_async_multipart_form_add_file_path(http_async_multipart_form_t *form,
   if (!part)
     return -1;
 
-  part->name = strdup(field_name);
+  part->name = tstr_dup(field_name);
   // Extract filename from path
   char basename[256];
   if (turbo_fs_path_basename(file_path, basename, sizeof(basename)) == 0) {
-    part->filename = strdup(basename);
+    part->filename = tstr_dup(basename);
   } else {
-    part->filename = strdup("file");
+    part->filename = tstr_dup("file");
   }
 
-  part->content_type = content_type ? strdup(content_type) : strdup("application/octet-stream");
+  part->content_type = content_type ? tstr_dup(content_type) : tstr_dup("application/octet-stream");
   part->is_file = 1;
   part->is_stream = 1; /* Mark as streaming part */
 
   /* Initialize stream context */
   part->stream_ctx = calloc(1, sizeof(http_async_multipart_file_stream_t));
   if (!part->stream_ctx) {
-    free(part->name);
-    free(part->filename);
-    free(part->content_type);
+    tstr_free(part->name);
+    tstr_free(part->filename);
+    tstr_free(part->content_type);
     free(part);
     return -1;
   }
 
-  part->stream_ctx->file_path = strdup(file_path);
+  part->stream_ctx->file_path = tstr_dup(file_path);
   part->stream_ctx->file_size = st.size;
   part->stream_ctx->offset = 0;
   part->stream_ctx->fd = TURBO_INVALID_FILE; /* Open lazily during send */
@@ -1997,18 +2031,18 @@ static char *build_multipart_body(http_async_multipart_form_t *form, size_t *bod
 
   while (part) {
     total_size += strlen(form->boundary) + 4;
-    total_size += 100 + strlen(part->name);
+    total_size += 100 + tstr_len(part->name);
     if (part->filename) {
-      total_size += strlen(part->filename) + 20;
+      total_size += tstr_len(part->filename) + 20;
     }
     if (part->is_file && part->content_type) {
-      total_size += strlen(part->content_type) + 20;
+      total_size += tstr_len(part->content_type) + 20;
     }
     total_size += 2;
     if (part->is_file) {
       total_size += part->data_len;
     } else {
-      total_size += strlen(part->value);
+      total_size += tstr_len(part->value);
     }
     total_size += 2;
     part = part->next;
@@ -2040,8 +2074,9 @@ static char *build_multipart_body(http_async_multipart_form_t *form, size_t *bod
       memcpy(p, part->data, part->data_len);
       p += part->data_len;
     } else {
-      strcpy(p, part->value);
-      p += strlen(part->value);
+      size_t value_len = tstr_len(part->value);
+      memcpy(p, part->value, value_len);
+      p += value_len;
     }
 
     p += sprintf(p, "\r\n");
@@ -2090,10 +2125,12 @@ static http_async_request_t *create_streaming_multipart_request(
   request->headers_sent = 0;
   request->use_chunked_encoding = use_chunked_encoding;
 
-  /* Allocate response from arena */
-  request->response = (http_async_response_t *)turbo_arena_alloc(&request->request_arena,
-                                                                 sizeof(http_async_response_t));
-  memset(request->response, 0, sizeof(http_async_response_t));
+  request->response = (http_async_response_t *)calloc(1, sizeof(http_async_response_t));
+  if (!request->response) {
+    turbo_arena_free(&request->request_arena);
+    free(request);
+    return NULL;
+  }
 
   /* Initialize receive buffer from arena */
   request->receive_buffer_size = 65536;

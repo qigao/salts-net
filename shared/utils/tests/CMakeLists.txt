@@ -1,0 +1,64 @@
+# Common module tests
+
+# Define list of test files
+set(TEST_FILES
+    test_aio.c
+    test_arena_buffer.c
+    test_arena.c
+    test_dns_pref.c
+    test_fmt.c
+    test_memory_pool.c
+    test_mmap.c
+    test_simple_arena.c
+    test_tlog.c
+    test_stc.c
+    test_fmt_re2c.c
+    test_fmt_bench.c
+    test_str_bench.c
+    test_arena_multithread.c
+    test_mutex.c
+    test_turbo_fs.c
+    test_turbo_str.c
+    test_native_timer.c
+    test_url_codec.c)
+
+# Create executables and link libraries for each test
+foreach(TEST_FILE ${TEST_FILES})
+  # Get the test name by removing the .c extension
+  get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+
+  # Create executable
+  add_executable(${TEST_NAME} ${TEST_FILE})
+
+  # Link common libraries
+  target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Utils TurboNet::TinyTest
+                                             PkgConfig::STC)
+
+  # Add Windows system libraries for tests
+  if(WIN32)
+    target_link_libraries(${TEST_NAME} PRIVATE psapi iphlpapi userenv ws2_32)
+  endif()
+
+  # Add specific libraries based on test type
+  if(TEST_NAME MATCHES "dns")
+    target_link_libraries(${TEST_NAME} PRIVATE $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv> c-ares::cares)
+  endif()
+
+  if(TEST_NAME MATCHES "fmt_re2c|fmt")
+    target_link_libraries(${TEST_NAME} PRIVATE fmt_lexer)
+  endif()
+
+  if(TEST_NAME MATCHES "turbo_str|str_bench")
+    target_link_libraries(${TEST_NAME} PRIVATE TurboNet::SDS)
+  endif()
+endforeach()
+
+# Convert test file names to target names for set_target_properties
+set(TEST_TARGETS)
+foreach(TEST_FILE ${TEST_FILES})
+  get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+  list(APPEND TEST_TARGETS ${TEST_NAME})
+endforeach()
+
+# Set folder properties for all test targets
+set_target_properties(${TEST_TARGETS} PROPERTIES FOLDER "shared/utils/tests")

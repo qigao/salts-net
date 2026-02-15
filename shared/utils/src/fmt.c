@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
  
 
 /* Suppress warnings for stb_sprintf optimization and dynamic format strings */
@@ -163,6 +164,23 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
       slen = (size_t)(end - dst);
     memcpy(dst, s, slen);
     return (int)slen;
+  }
+
+  case FMT_TYPE_TIME: {
+    time_t sec = (time_t)arg->val.tv.tv_sec;
+    struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &sec);
+#else
+    localtime_r(&sec, &tm_buf);
+#endif
+    const char *time_fmt = (mod_buf[0]) ? mod_buf : "%Y-%m-%d %H:%M:%S";
+    written = (int)strftime(temp, sizeof(temp), time_fmt, &tm_buf);
+    if (written > 0 && !mod_buf[0] && arg->val.tv.tv_usec > 0) {
+      int ms = arg->val.tv.tv_usec / 1000;
+      written += snprintf(temp + written, sizeof(temp) - (size_t)written, ".%03d", ms);
+    }
+    break;
   }
 
   default:

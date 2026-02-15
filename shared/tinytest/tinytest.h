@@ -134,11 +134,11 @@ static inline double __bdd_get_time_ms__(void) {
   LARGE_INTEGER frequency, counter;
   QueryPerformanceFrequency(&frequency);
   QueryPerformanceCounter(&counter);
-  return __BDD_CAST(double, (counter.QuadPart * 1000.0)) / frequency.QuadPart;
+  return __BDD_CAST(double, counter.QuadPart) * 1000.0 / __BDD_CAST(double, frequency.QuadPart);
 #else
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  return __BDD_CAST(double, (ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0));
+  return __BDD_CAST(double, ts.tv_sec) * 1000.0 + __BDD_CAST(double, ts.tv_nsec) / 1000000.0;
 #endif
 }
 
@@ -1190,7 +1190,7 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
   /* Count skipped tests */
   size_t skipped_count = 0;
   for (size_t i = 0; i < steps->size; ++i) {
-    __bdd_test_step__ *step = (__bdd_test_step__ *)steps->values[i];
+    __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, steps->values[i]);
     if (step->type == __BDD_NODE_TEST__ && (step->flags & __bdd_node_flags_skip__)) {
       ++skipped_count;
     }
@@ -1208,7 +1208,7 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
           test_count, config->failed_test_count, skipped_count, timestamp);
 
   for (size_t i = 0; i < steps->size; ++i) {
-    __bdd_test_step__ *step = (__bdd_test_step__ *)steps->values[i];
+    __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, steps->values[i]);
     if (step->type == __BDD_NODE_TEST__) {
       fprintf(f, "    <testcase name=\"");
       __bdd_xml_escape__(f, step->name);
@@ -1267,7 +1267,8 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
 #ifndef TINYTEST_NO_MAIN
 int main(int argc, char **argv) {
   double __bdd_start_time__ = __bdd_get_time_ms__();
-  struct __bdd_config_type__ config = {0};
+  struct __bdd_config_type__ config;
+  memset(&config, 0, sizeof(config));
   config.run = __BDD_INIT_RUN__;
 
   /* Parse command-line arguments */
@@ -1364,7 +1365,7 @@ int main(int argc, char **argv) {
     int stack_depth = 0;
 
     for (size_t i = 0; i < steps->size; ++i) {
-      __bdd_test_step__ *step = (__bdd_test_step__ *)steps->values[i];
+      __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, steps->values[i]);
 
       while (stack_depth > 0 && group_stack[stack_depth - 1]->level >= step->level) {
         stack_depth--;
@@ -1401,7 +1402,7 @@ int main(int argc, char **argv) {
 
   if (config.list_only) {
     for (size_t i = 0; i < all_steps->size; ++i) {
-      __bdd_test_step__ *step = (__bdd_test_step__ *)all_steps->values[i];
+      __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, all_steps->values[i]);
       if (step->type == __BDD_NODE_GROUP__) {
         __bdd_indent__(stdout, step->level);
         printf("%s\n", step->name);
@@ -1419,21 +1420,21 @@ int main(int argc, char **argv) {
     }
 
     for (size_t i = 0; i < all_nodes->size; ++i) {
-      __bdd_array__ *nodes = (__bdd_array__ *)all_nodes->values[i];
+      __bdd_array__ *nodes = __BDD_CAST(__bdd_array__ *, all_nodes->values[i]);
       for (size_t j = 0; j < nodes->size; ++j) {
-        __bdd_node_free__((__bdd_node__ *)nodes->values[j]);
+        __bdd_node_free__(__BDD_CAST(__bdd_node__ *, nodes->values[j]));
       }
       __bdd_array_free__(nodes);
-      __bdd_array_free__((__bdd_array__ *)all_stacks->values[i]);
-      __bdd_node__ *root = (__bdd_node__ *)all_roots->values[i];
+      __bdd_array_free__(__BDD_CAST(__bdd_array__ *, all_stacks->values[i]));
+      __bdd_node__ *root = __BDD_CAST(__bdd_node__ *, all_roots->values[i]);
       root->name = NULL;
       __bdd_node_free__(root);
     }
     for (size_t i = 0; i < all_steps->size; ++i) {
-      __bdd_test_step_free__((__bdd_test_step__ *)all_steps->values[i]);
+      __bdd_test_step_free__(__BDD_CAST(__bdd_test_step__ *, all_steps->values[i]));
     }
     for (size_t i = 0; i < all_step_arrays->size; ++i) {
-      __bdd_array_free__((__bdd_array__ *)all_step_arrays->values[i]);
+      __bdd_array_free__(__BDD_CAST(__bdd_array__ *, all_step_arrays->values[i]));
     }
     __bdd_array_free__(all_roots);
     __bdd_array_free__(all_nodes);
@@ -1452,13 +1453,13 @@ int main(int argc, char **argv) {
   config.has_focus_nodes = has_focus_any;
 
   for (size_t i = 0; i < all_step_arrays->size; ++i) {
-    __bdd_array__ *steps = (__bdd_array__ *)all_step_arrays->values[i];
-    __bdd_spec_entry__ *spec = (__bdd_spec_entry__ *)all_specs->values[i];
+    __bdd_array__ *steps = __BDD_CAST(__bdd_array__ *, all_step_arrays->values[i]);
+    __bdd_spec_entry__ *spec = __BDD_CAST(__bdd_spec_entry__ *, all_specs->values[i]);
     __bdd_current_spec_fn__ = spec ? spec->fn : NULL;
-    config.node_stack = (__bdd_array__ *)all_stacks->values[i];
-    config.nodes = (__bdd_array__ *)all_nodes->values[i];
+    config.node_stack = __BDD_CAST(__bdd_array__ *, all_stacks->values[i]);
+    config.nodes = __BDD_CAST(__bdd_array__ *, all_nodes->values[i]);
     for (size_t j = 0; j < steps->size; ++j) {
-      __bdd_test_step__ *step = (__bdd_test_step__ *)steps->values[j];
+      __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, steps->values[j]);
       config.node_stack->size = 1;
       config.id = 0;
       config.current_test = step;
@@ -1473,7 +1474,7 @@ int main(int argc, char **argv) {
   size_t skipped_count = 0;
   size_t todo_count = 0;
   for (size_t i = 0; i < all_steps->size; ++i) {
-    __bdd_test_step__ *step = (__bdd_test_step__ *)all_steps->values[i];
+    __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, all_steps->values[i]);
     if (step->type != __BDD_NODE_TEST__)
       continue;
     if (step->flags & __bdd_node_flags_skip__) {
@@ -1521,13 +1522,13 @@ int main(int argc, char **argv) {
   }
 
   for (size_t i = 0; i < all_nodes->size; ++i) {
-    __bdd_array__ *nodes = (__bdd_array__ *)all_nodes->values[i];
+    __bdd_array__ *nodes = __BDD_CAST(__bdd_array__ *, all_nodes->values[i]);
     for (size_t j = 0; j < nodes->size; ++j) {
-      __bdd_node_free__((__bdd_node__ *)nodes->values[j]);
+      __bdd_node_free__(__BDD_CAST(__bdd_node__ *, nodes->values[j]));
     }
     __bdd_array_free__(nodes);
-    __bdd_array_free__((__bdd_array__ *)all_stacks->values[i]);
-    __bdd_node__ *root = (__bdd_node__ *)all_roots->values[i];
+    __bdd_array_free__(__BDD_CAST(__bdd_array__ *, all_stacks->values[i]));
+    __bdd_node__ *root = __BDD_CAST(__bdd_node__ *, all_roots->values[i]);
     root->name = NULL;
     __bdd_node_free__(root);
   }
@@ -1535,7 +1536,7 @@ int main(int argc, char **argv) {
     free(all_steps->values[i]);
   }
   for (size_t i = 0; i < all_step_arrays->size; ++i) {
-    __bdd_array_free__((__bdd_array__ *)all_step_arrays->values[i]);
+    __bdd_array_free__(__BDD_CAST(__bdd_array__ *, all_step_arrays->values[i]));
   }
   __bdd_array_free__(all_roots);
   __bdd_array_free__(all_nodes);
@@ -1873,21 +1874,25 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
 
 #define check_str_eq(actual, expected)                                                             \
   __BDD_CHECK__(__bdd_str_eq__((actual), (expected)),                                               \
-                "expected \"%s\" but got \"%s\"", (expected) ? (expected) : "(null)",              \
-                (actual) ? (actual) : "(null)")
+                "expected \"%s\" but got \"%s\"",                                                   \
+                (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
+                (const char*)(actual) ? (const char*)(actual) : "(null)")
 #define check_str_eq_warn(actual, expected)                                                        \
   __BDD_WARN__(__bdd_str_eq__((actual), (expected)),                                                \
-               "expected \"%s\" but got \"%s\"", (expected) ? (expected) : "(null)",               \
-               (actual) ? (actual) : "(null)")
+               "expected \"%s\" but got \"%s\"",                                                   \
+               (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
+               (const char*)(actual) ? (const char*)(actual) : "(null)")
 
 #define check_str_ne(actual, expected)                                                             \
   __BDD_CHECK__(__bdd_str_ne__((actual), (expected)),                                               \
-                "expected != \"%s\" but got \"%s\"", (expected) ? (expected) : "(null)",           \
-                (actual) ? (actual) : "(null)")
+                "expected != \"%s\" but got \"%s\"",                                                \
+                (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
+                (const char*)(actual) ? (const char*)(actual) : "(null)")
 #define check_str_ne_warn(actual, expected)                                                        \
   __BDD_WARN__(__bdd_str_ne__((actual), (expected)),                                                \
-               "expected != \"%s\" but got \"%s\"", (expected) ? (expected) : "(null)",            \
-               (actual) ? (actual) : "(null)")
+               "expected != \"%s\" but got \"%s\"",                                                \
+               (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
+               (const char*)(actual) ? (const char*)(actual) : "(null)")
 
 #define check_str_contains(haystack, needle)                                                       \
   __BDD_CHECK__(__bdd_str_contains__((haystack), (needle)),                                         \

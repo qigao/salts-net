@@ -242,8 +242,8 @@ static JSValue js_template(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 }
 
 // Module initialization
-int js_init_string_utils_module(JSContext *ctx) {
-    JSValue global = JS_GetGlobalObject(ctx);
+// Module initialization
+int js_init_string_utils_module(JSContext *ctx, JSValue turbo_obj) {
     JSValue strUtils = JS_NewObject(ctx);
     
     // Add functions to the strUtils object
@@ -253,7 +253,11 @@ int js_init_string_utils_module(JSContext *ctx) {
     JS_SetPropertyStr(ctx, strUtils, "hash", JS_NewCFunction(ctx, js_hash, "hash", 1));
     JS_SetPropertyStr(ctx, strUtils, "template", JS_NewCFunction(ctx, js_template, "template", 2));
     
-    // Add strUtils to global scope
+    // Add strUtils to turbo object as turbo.string
+    JS_SetPropertyStr(ctx, turbo_obj, "string", JS_DupValue(ctx, strUtils));
+
+    // Also keep global strUtils for backward compatibility
+    JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "strUtils", strUtils);
     
     JS_FreeValue(ctx, global);

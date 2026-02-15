@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "arena_buffer.h"
+#include "stats.h"
 #include "tinytest.h"
 
 static int free_cb_called = 0;

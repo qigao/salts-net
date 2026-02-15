@@ -22,10 +22,6 @@ set(CSV_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/csv_grammar.y)
 set(CSV_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/csv_grammar_gen.c)
 set(CSV_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/csv_grammar_gen.h)
 
-if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
-endif()
-
 add_custom_command(
   OUTPUT ${CSV_GRAMMAR_GEN} ${CSV_GRAMMAR_H}
   COMMAND ${CMAKE_COMMAND} -E copy ${CSV_GRAMMAR_Y}

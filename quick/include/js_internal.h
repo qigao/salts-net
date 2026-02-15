@@ -64,10 +64,19 @@ int js_turbo_buffer_append(JSTurboByteBuffer *buf, const uint8_t *data, size_t l
 
 int js_turbo_collect_data(JSContext *ctx, JSValueConst value, uint8_t **out_data, size_t *out_len);
 
+// Module registration functions
 int js_turbo_register_timers(JSContext *ctx, JSValue turbo_obj);
 int js_turbo_register_fs(JSContext *ctx, JSValue turbo_obj);
 int js_turbo_register_dns(JSContext *ctx, JSValue turbo_obj);
 int js_turbo_register_http(JSContext *ctx, JSValue turbo_obj);
+int js_turbo_register_utils(JSContext *ctx, JSValue turbo_obj);
+int js_turbo_register_net(JSContext *ctx, JSValue turbo_obj);
+int js_turbo_register_os(JSContext *ctx, JSValue turbo_obj);
+int js_turbo_register_signal(JSContext *ctx, JSValue turbo_obj);
+int js_turbo_register_proc(JSContext *ctx, JSValue turbo_obj);
+
+// String utils module initialization
+int js_init_string_utils_module(JSContext *ctx, JSValue turbo_obj);
 
 // Timer processing function
 void js_turbo_process_timers(JSContext *ctx);
@@ -76,5 +85,6 @@ void js_turbo_cleanup_timers(JSTurboContextState *state);
 #ifdef __cplusplus
 }
 #endif
+
 
 #endif /* JS_TURBO_INTERNAL_H */

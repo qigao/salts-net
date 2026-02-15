@@ -171,7 +171,7 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
                 /* Case-insensitive lookup for attributes */
                 cxml_for_each(at_node, &elem->attributes->keys) {
                     const char *attr_key = (const char *)at_node;
-                    if (_stricmp(attr_key, key) == 0) {
+                    if (tstr_casecmp(attr_key, key) == 0) {
                         attr = cxml_table_get(elem->attributes, attr_key);
                         break;
                     }
@@ -193,7 +193,7 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
             cxml_elem_node *e = (cxml_elem_node *)child;
             const char *qname = cxml_string_as_raw(&e->name.qname);
             const char *lname = e->name.lname;
-            if (_stricmp(qname, key) == 0 || (lname && _stricmp(lname, key) == 0)) {
+            if (tstr_casecmp(qname, key) == 0 || (lname && tstr_casecmp(lname, key) == 0)) {
                 count++;
             }
         }
@@ -205,7 +205,7 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
                 cxml_elem_node *e = (cxml_elem_node *)child;
                 const char *qname = cxml_string_as_raw(&e->name.qname);
                 const char *lname = e->name.lname;
-                if (_stricmp(qname, key) == 0 || (lname && _stricmp(lname, key) == 0)) {
+                if (tstr_casecmp(qname, key) == 0 || (lname && tstr_casecmp(lname, key) == 0)) {
                     result = e;
                     break;
                 }
@@ -219,7 +219,7 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
                 cxml_elem_node *e = (cxml_elem_node *)child;
                 const char *qname = cxml_string_as_raw(&e->name.qname);
                 const char *lname = e->name.lname;
-                if (_stricmp(qname, key) == 0 || (lname && _stricmp(lname, key) == 0)) {
+                if (tstr_casecmp(qname, key) == 0 || (lname && tstr_casecmp(lname, key) == 0)) {
                     slist->items[i++] = e;
                 }
             }

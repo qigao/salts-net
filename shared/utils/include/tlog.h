@@ -286,7 +286,12 @@ inline void turbo_log_cpp_wrapper(tlog_t* logger, turbo_log_level_t level,
 }
 
 #define TURBO_LOG_TYPED(logger, lvl, comp, fmt, ...)                                               \
-  turbo_log_cpp_wrapper((logger), (lvl), (comp), __FILE__, __LINE__, (fmt), ##__VA_ARGS__)
+  do {                                                                                             \
+    tlog_t* _tlog_ptr = (logger);                                                                  \
+    if (_tlog_ptr && (lvl) >= tlog_get_level(_tlog_ptr)) {                                         \
+      turbo_log_cpp_wrapper(_tlog_ptr, (lvl), (comp), __FILE__, __LINE__, (fmt), ##__VA_ARGS__);   \
+    }                                                                                              \
+  } while (0)
 
 #else
 

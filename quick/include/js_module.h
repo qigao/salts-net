@@ -11,7 +11,10 @@ extern "C" {
  * Initialize TurboNet modules for a QuickJS context.
  *
  * This registers the global 'turbo' object with all sub-modules:
- *   turbo.dns, turbo.fs, turbo.http, turbo.timers
+ * This registers the global 'turbo' object with all sub-modules:
+ *   turbo.dns, turbo.fs, turbo.http, turbo.net, turbo.os,
+ *   turbo.proc, turbo.signal, turbo.string, turbo.timers,
+ *   turbo.base64Encode, turbo.base64Decode
  *
  * Also sets up the ES6 module loader for dynamic imports:
  *   import dns from 'turbo:dns'

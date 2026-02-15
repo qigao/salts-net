@@ -22,10 +22,6 @@ set(INI_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/ini_grammar.y)
 set(INI_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/ini_grammar_gen.c)
 set(INI_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/ini_grammar_gen.h)
 
-if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
-endif()
-
 add_custom_command(
   OUTPUT ${INI_GRAMMAR_GEN} ${INI_GRAMMAR_H}
   COMMAND ${CMAKE_COMMAND} -E copy ${INI_GRAMMAR_Y}

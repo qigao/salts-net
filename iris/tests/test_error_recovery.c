@@ -2,6 +2,12 @@
 #include "error_recovery.h"
 #include <string.h>
 
+/* Custom error handler for testing */
+static iris_recovery_action_t test_error_handler(const iris_error_context_t *ctx) {
+    (void)ctx; /* Unused parameter */
+    return IRIS_RECOVERY_FALLBACK;
+}
+
 spec("error_recovery") {
     before_each() {
         iris_error_recovery_init();
@@ -59,12 +65,6 @@ spec("error_recovery") {
         
         /* Security errors should reject the request */
         check_int_eq(action, IRIS_RECOVERY_REJECT_REQUEST);
-    }
-
-    /* Custom error handler for testing */
-    static iris_recovery_action_t test_error_handler(const iris_error_context_t *ctx) {
-        (void)ctx; /* Unused parameter */
-        return IRIS_RECOVERY_FALLBACK;
     }
 
     it("should use custom error handler") {

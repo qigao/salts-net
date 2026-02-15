@@ -1,5 +1,6 @@
-#include "arena_buffer.h"
 #include "platform.h"
+#include "arena_buffer.h"
+#include "stats.h"
 #include "tinytest.h"
 #include "turbo_atomic.h"
 #include <stdio.h>
@@ -72,8 +73,7 @@ spec("Arena Multithread Tests") {
     // Start threads
     for (int i = 0; i < THREAD_COUNT; i++) {
       thread_ids[i] = i;
-      int rc =
-          turbo_thread_create(&threads[i], buffer_churn_thread, &thread_ids[i]);
+      int rc = turbo_thread_create(&threads[i], buffer_churn_thread, &thread_ids[i]);
       check_int_eq(rc, 0);
     }
 
@@ -85,7 +85,7 @@ spec("Arena Multithread Tests") {
     // Verify arena integrity (basic check)
     turbo_arena_stats_t stats;
     turbo_arena_get_stats(&arena, &stats);
-    printf("Test complete. Total allocated: %zu, Regions: %zu\n",
-           stats.total_allocated, stats.region_count);
+    printf("Test complete. Total allocated: %zu, Regions: %zu\n", stats.total_allocated,
+           stats.region_count);
   }
 }

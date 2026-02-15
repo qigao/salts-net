@@ -12,11 +12,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 #define ENUM_NAME(x) #x
 
 #ifdef __cplusplus
 #include <type_traits>
+#include <chrono>
 extern "C" {
 #endif
 
@@ -38,7 +40,8 @@ typedef enum {
   FMT_TYPE_PTR,
   FMT_TYPE_SIZE,
   FMT_TYPE_BOOL,
-  FMT_TYPE_STRV
+  FMT_TYPE_STRV,
+  FMT_TYPE_TIME
 } fmt_type_t;
 
 /* ============================================================================
@@ -61,6 +64,7 @@ typedef struct {
     size_t sz;
     int b; /* bool stored as int */
     tstr_v sv;
+    turbo_timeval_t tv;
   } val;
 } fmt_arg_t;
 
@@ -93,6 +97,21 @@ static inline fmt_arg_t fmt_arg_ptr(const void *x) { FMT_MAKE_ARG(FMT_TYPE_PTR, 
 static inline fmt_arg_t fmt_arg_bool(int x) { FMT_MAKE_ARG(FMT_TYPE_BOOL, b, x) }
 static inline fmt_arg_t fmt_arg_size(size_t x) { FMT_MAKE_ARG(FMT_TYPE_SIZE, sz, x) }
 static inline fmt_arg_t fmt_arg_strv(tstr_v x) { FMT_MAKE_ARG(FMT_TYPE_STRV, sv, x) }
+static inline fmt_arg_t fmt_arg_timeval(turbo_timeval_t x) { FMT_MAKE_ARG(FMT_TYPE_TIME, tv, x) }
+
+static inline fmt_arg_t fmt_arg_time(time_t x) {
+#ifdef __cplusplus
+  fmt_arg_t arg;
+  arg.type = FMT_TYPE_TIME;
+  arg.val.tv.tv_sec = (int64_t)x;
+  arg.val.tv.tv_usec = 0;
+  return arg;
+#else
+  return (fmt_arg_t){FMT_TYPE_TIME, {.tv = {(int64_t)x, 0}}};
+#endif
+}
+
+#define FMT_TIME(t) fmt_arg_time(t)
 
 #undef FMT_MAKE_ARG
 
@@ -130,11 +149,36 @@ static inline fmt_arg_t fmt_arg_detect(const char *x) { return fmt_arg_str(x); }
 static inline fmt_arg_t fmt_arg_detect(void *x) { return fmt_arg_ptr(x); }
 static inline fmt_arg_t fmt_arg_detect(const void *x) { return fmt_arg_ptr(x); }
 static inline fmt_arg_t fmt_arg_detect(tstr_v x) { return fmt_arg_strv(x); }
+static inline fmt_arg_t fmt_arg_detect(turbo_timeval_t x) { return fmt_arg_timeval(x); }
+static inline fmt_arg_t fmt_arg_detect(std::chrono::system_clock::time_point tp) {
+  auto dur = tp.time_since_epoch();
+  auto sec = std::chrono::duration_cast<std::chrono::seconds>(dur);
+  auto usec = std::chrono::duration_cast<std::chrono::microseconds>(dur - sec);
+  turbo_timeval_t tv;
+  tv.tv_sec = (int64_t)sec.count();
+  tv.tv_usec = (int32_t)usec.count();
+  return fmt_arg_timeval(tv);
+}
 
 /* Template for classes with c_str() member (e.g. std::string) */
 template <typename T>
 static inline auto fmt_arg_detect(const T &x) -> decltype(fmt_arg_str(x.c_str())) {
   return fmt_arg_str(x.c_str());
+}
+
+/* Template for classes with data()+size() but no c_str() (e.g. std::string_view) */
+namespace __fmt_detail {
+  template <typename T, typename = void> struct has_c_str : std::false_type {};
+  template <typename T> struct has_c_str<T, decltype(void(std::declval<T>().c_str()))> : std::true_type {};
+}
+template <typename T>
+static inline auto fmt_arg_detect(const T &x)
+    -> typename std::enable_if<!__fmt_detail::has_c_str<T>::value,
+                               decltype(x.data(), x.size(), fmt_arg_t{})>::type {
+  tstr_v sv;
+  sv.data = x.data();
+  sv.len = x.size();
+  return fmt_arg_strv(sv);
 }
 
 /* Template catches all other pointer types */
@@ -170,6 +214,7 @@ extern "C" { /* Re-open extern "C" */
            void *: fmt_arg_ptr,                                                                    \
            const void *: fmt_arg_ptr,                                                              \
            tstr_v: fmt_arg_strv,                                                                   \
+           turbo_timeval_t: fmt_arg_timeval,                                                       \
            char: fmt_arg_char,                                                                     \
            int: fmt_arg_int,                                                                       \
            unsigned int: fmt_arg_uint,                                                             \
@@ -205,6 +250,7 @@ extern "C" { /* Re-open extern "C" */
           void *: fmt_arg_ptr,                                                                     \
           const void *: fmt_arg_ptr,                                                               \
           tstr_v: fmt_arg_strv,                                                                    \
+          turbo_timeval_t: fmt_arg_timeval,                                                        \
           _Bool: fmt_arg_bool,                                                                     \
           default: fmt_arg_ptr)(x)
   #endif
@@ -289,6 +335,75 @@ static inline tstr_t tstr_cat_typed_impl(tstr_t s, const char *format, const fmt
 
 #ifdef __cplusplus
 } /* End extern "C" */
+
+/* ============================================================================
+ * Custom Formatter Support (ADL-based)
+ * ============================================================================ */
+
+/**
+ * @brief Buffer for custom formatters - wraps char* with position tracking
+ */
+struct fmt_buffer_t {
+  char* data;
+  size_t size;
+  size_t pos;
+
+  fmt_buffer_t(char* d, size_t s) : data(d), size(s), pos(0) {}
+
+  void write(const char* str, size_t len) {
+    if (pos + len < size) {
+      memcpy(data + pos, str, len);
+      pos += len;
+      data[pos] = '\0';
+    }
+  }
+
+  void write(const char* str) { write(str, strlen(str)); }
+
+  template <typename... Args>
+  void print(const char* format, const Args&... args) {
+    if (pos < size) {
+      int n = fmt_cpp_wrapper(data + pos, size - pos, format, args...);
+      if (n > 0) pos += (size_t)n;
+    }
+  }
+};
+
+/**
+ * @brief SFINAE helper to detect ADL fmt_format(fmt_buffer_t&, const T&)
+ */
+namespace __fmt_detail {
+  template <typename T, typename = void>
+  struct has_adl_format : std::false_type {};
+
+  template <typename T>
+  struct has_adl_format<T, decltype(void(
+      fmt_format(std::declval<fmt_buffer_t&>(), std::declval<const T&>())
+  ))> : std::true_type {};
+}
+
+/**
+ * @brief fmt_arg_detect for types with ADL fmt_format()
+ *
+ * Usage: Define in same namespace as your type:
+ *   void fmt_format(fmt_buffer_t& buf, const YourType& val) {
+ *       buf.print("{}:{}", val.field1, val.field2);
+ *   }
+ */
+template <typename T>
+static inline auto fmt_arg_detect(const T& x)
+    -> typename std::enable_if<
+        __fmt_detail::has_adl_format<T>::value &&
+        !__fmt_detail::has_c_str<T>::value,
+        fmt_arg_t>::type {
+  thread_local char buf[512];
+  fmt_buffer_t fb(buf, sizeof(buf));
+  fmt_format(fb, x);
+  tstr_v sv;
+  sv.data = buf;
+  sv.len = fb.pos;
+  return fmt_arg_strv(sv);
+}
 
 /**
  * @brief C++ Helper for type-safe formatting

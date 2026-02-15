@@ -28,7 +28,7 @@ set(ASN1_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/parser.c)
 set(ASN1_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/parser.h)
 
 if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
+  set(LEMPAR ${CMAKE_SOURCE_DIR}/tools/lemon/lempar.c)
 endif()
 
 add_custom_command(

@@ -4,13 +4,16 @@
  * Verifies C++ integration with TLog:
  * - Automatic type detection via function overloads (no _Generic)
  * - std::string auto-detection
+ * - std::string_view auto-detection (length-bounded, no null required)
  * - Class logging via helpers
  */
 
 #include <iostream>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
+#include <chrono>
 
 
 // Include the C header (it has extern "C" wrappers)
@@ -57,6 +60,15 @@ int main() {
   std::string cpp_str = "std::string content";
   TLOG_INFO("std::string: {}", cpp_str);
 
+  // 3b. Test std::string_view
+  std::string_view sv = "std::string_view content";
+  TLOG_INFO("string_view: {}", sv);
+
+  // 3c. Test std::string_view from substring (no null terminator)
+  std::string base = "hello world";
+  std::string_view partial = std::string_view(base).substr(0, 5);
+  TLOG_INFO("string_view substr: {}", partial);
+
   // 4. Test Mixed
   TLOG_INFO("Mixed: {} | {} | {}", i, cpp_str, b);
 
@@ -92,6 +104,20 @@ int main() {
   std::map<std::string, std::vector<int>> user_data = {{"User1", {10, 20}},
                                                        {"User2", {30, 40, 50}}};
   TLOG_INFO("User Data: {}", tlog::format(user_data));
+
+  // 8. Test Time Types
+  // std::chrono::system_clock::now() auto-detection
+  auto now = std::chrono::system_clock::now();
+  TLOG_INFO("Chrono now: {}", now);
+
+  // Custom format with chrono
+  TLOG_INFO("Chrono HH:MM:SS: {:%H:%M:%S}", now);
+
+  // turbo_timeval_t auto-detection
+  turbo_timeval_t tv;
+  tv.tv_sec = 1700000000;
+  tv.tv_usec = 123000;
+  TLOG_INFO("turbo_timeval_t: {}", tv);
 
   TLOG_INFO("=== Test Complete ===");
 

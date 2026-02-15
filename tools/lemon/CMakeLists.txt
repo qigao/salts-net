@@ -1,7 +1,3 @@
-set(LEMPAR
-    ${CMAKE_CURRENT_SOURCE_DIR}/lempar.c
-    CACHE PATH "LEMON parser template"
-)
 add_executable(lemon lemon.c)
 add_executable(TurboNet::Lemon ALIAS lemon)
 target_compile_features(lemon PRIVATE c_std_11)

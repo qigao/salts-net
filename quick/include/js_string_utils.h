@@ -16,7 +16,7 @@ extern "C" {
  * @param ctx QuickJS context
  * @return 0 on success, -1 on error
  */
-CXX_C_API int js_init_string_utils_module(JSContext *ctx);
+CXX_C_API int js_init_string_utils_module(JSContext *ctx, JSValue turbo_obj);
 
 #ifdef __cplusplus
 }

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "fmt.h"
 #include "tinytest.h"
@@ -276,5 +277,64 @@ spec("FMT Tests") {
       check_str_eq(s, "role=admin");
       tstr_free(s);
     }
+  }
+
+  describe("Time Formatting") {
+    it("should format turbo_timeval_t with milliseconds") {
+      char buf[BUFFER_SIZE];
+      turbo_timeval_t tv;
+      tv.tv_sec = 1700000000; /* 2023-11-14 22:13:20 UTC */
+      tv.tv_usec = 123000;    /* 123ms */
+      fmt_arg_t args[] = {fmt_arg_timeval(tv)};
+      fmt_print(buf, sizeof(buf), "{}", args, 1);
+      check_not_null(strstr(buf, ".123"));
+      check_not_null(strstr(buf, "2023"));
+      printf("  turbo_timeval_t: %s\n", buf);
+    }
+
+    it("should format time_t without decimal point") {
+      char buf[BUFFER_SIZE];
+      time_t t = 1700000000;
+      fmt_arg_t args[] = {fmt_arg_time(t)};
+      fmt_print(buf, sizeof(buf), "{}", args, 1);
+      check(strstr(buf, ".") == NULL);
+      check_not_null(strstr(buf, "2023"));
+      printf("  time_t: %s\n", buf);
+    }
+
+    it("should format time_t via FMT_TIME macro") {
+      char buf[BUFFER_SIZE];
+      time_t t = 1700000000;
+      fmt_arg_t args[] = {FMT_TIME(t)};
+      fmt_print(buf, sizeof(buf), "{}", args, 1);
+      check(strstr(buf, ".") == NULL);
+      check_not_null(strstr(buf, "2023"));
+    }
+
+    it("should use custom strftime modifier") {
+      char buf[BUFFER_SIZE];
+      turbo_timeval_t tv;
+      tv.tv_sec = 1700000000;
+      tv.tv_usec = 500000;
+      fmt_arg_t args[] = {fmt_arg_timeval(tv)};
+      fmt_print(buf, sizeof(buf), "{:%H:%M}", args, 1);
+      check(strlen(buf) > 0);
+      check(strstr(buf, ".") == NULL); /* custom format suppresses ms */
+      printf("  custom format: %s\n", buf);
+    }
+
+#if FMT_HAS_GENERIC
+    it("should auto-detect turbo_timeval_t via _Generic") {
+      char buf[BUFFER_SIZE];
+      turbo_timeval_t tv;
+      tv.tv_sec = 1700000000;
+      tv.tv_usec = 456000;
+      check_int_eq(FMT_ARG(tv).type, FMT_TYPE_TIME);
+      fmt(buf, sizeof(buf), "time={}", tv);
+      check_not_null(strstr(buf, "time="));
+      check_not_null(strstr(buf, ".456"));
+      printf("  auto-detect: %s\n", buf);
+    }
+#endif
   }
 }

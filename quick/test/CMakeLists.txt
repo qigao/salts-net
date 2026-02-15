@@ -9,6 +9,7 @@ file(GLOB TEST_SOURCES
     js_uv_os_test.c
     js_uv_process_test.c
     js_uv_signal_test.c
+    js_uv_string_test.c
     js_uv_timers_test.c
     js_uv_utils_test.c
 )

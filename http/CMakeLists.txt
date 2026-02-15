@@ -22,7 +22,7 @@ set(COOKIE_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/cookie_parser_gen.c)
 set(COOKIE_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/cookie_parser_gen.h)
 
 if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
+  set(LEMPAR ${CMAKE_SOURCE_DIR}/tools/lemon/lempar.c)
 endif()
 
 add_custom_command(

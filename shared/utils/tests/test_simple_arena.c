@@ -1,4 +1,5 @@
 #include "arena_buffer.h"
+#include "stats.h"
 #include "tinytest.h"
 #include <stdint.h>
 #include <string.h>

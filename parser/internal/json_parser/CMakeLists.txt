@@ -22,10 +22,6 @@ set(JSON_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/json_grammar.y)
 set(JSON_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/json_grammar_gen.c)
 set(JSON_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/json_grammar_gen.h)
 
-if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
-endif()
-
 add_custom_command(
   OUTPUT ${JSON_GRAMMAR_GEN} ${JSON_GRAMMAR_H}
   COMMAND ${CMAKE_COMMAND} -E copy ${JSON_GRAMMAR_Y}

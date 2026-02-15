@@ -22,10 +22,6 @@ set(TOON_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/toon_grammar.y)
 set(TOON_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/toon_grammar_gen.c)
 set(TOON_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/toon_grammar_gen.h)
 
-if(NOT LEMPAR)
-  set(LEMPAR ${CMAKE_SOURCE_DIR}/vendor/lemon/lempar.c)
-endif()
-
 add_custom_command(
   OUTPUT ${TOON_GRAMMAR_GEN} ${TOON_GRAMMAR_H}
   COMMAND ${CMAKE_COMMAND} -E copy ${TOON_GRAMMAR_Y}

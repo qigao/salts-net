@@ -1,4 +1,5 @@
 find_package(libuv CONFIG REQUIRED)
+find_package(zlib-ng CONFIG REQUIRED)
 # =============================================================================
 # re2c Generated Files
 # =============================================================================
@@ -52,7 +53,7 @@ set(HTTP_HEADERS include/http_client.h include/cookie_parser.h
 add_library(http_client SHARED ${HTTP_SOURCES} ${HTTP_HEADERS})
 add_library(TurboNet::HttpClient ALIAS http_client)
 # DLL export macro - matches pattern from other TurboNet libraries
-target_compile_definitions(http_client PRIVATE SHARED_CXX)
+target_compile_definitions(http_client PRIVATE SHARED_CXX HTTP_NO_DEPRECATION_WARNING)
 # Include directories
 target_include_directories(
   http_client
@@ -79,13 +80,13 @@ set_target_properties(
 # Create HTTP Async Library
 # =============================================================================
 
-set(HTTP_ASYNC_SOURCES src/http_client_async.c src/stb_sprintf.c)
-set(HTTP_ASYNC_HEADERS include/http_client_async.h)
+set(HTTP_ASYNC_SOURCES src/http_client_async.c src/http_common.c src/stb_sprintf.c)
+set(HTTP_ASYNC_HEADERS include/http_client_async.h include/http_common.h)
 
 add_library(http_client_async SHARED ${HTTP_ASYNC_SOURCES}
                                      ${HTTP_ASYNC_HEADERS})
 add_library(TurboNet::HttpAsyncClient ALIAS http_client_async)
-target_compile_definitions(http_client_async PRIVATE SHARED_CXX)
+target_compile_definitions(http_client_async PRIVATE SHARED_CXX HTTP_NO_DEPRECATION_WARNING)
 
 target_include_directories(
   http_client_async
@@ -107,6 +108,37 @@ set_target_properties(
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME HTTPAsync)
 
+# =============================================================================
+# Create HTTP Coro Library
+# =============================================================================
+
+set(HTTP_CORO_SOURCES src/http_coro_client.c src/http_common.c src/stb_sprintf.c)
+set(HTTP_CORO_HEADERS include/http_coro_client.h include/http_common.h)
+
+add_library(http_coro_client SHARED ${HTTP_CORO_SOURCES} ${HTTP_CORO_HEADERS})
+add_library(TurboNet::HttpCoroClient ALIAS http_coro_client)
+target_compile_definitions(http_coro_client PRIVATE SHARED_CXX HTTP_NO_DEPRECATION_WARNING)
+
+target_include_directories(
+  http_coro_client
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/http>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+          ${Stb_INCLUDE_DIR})
+
+target_link_libraries(
+  http_coro_client
+  PUBLIC TurboNet::Utils TurboNet::Core $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
+  PRIVATE llhttp::llhttp_static cjwt sds zlib-ng::zlib)
+
+set_target_properties(
+  http_coro_client
+  PROPERTIES FOLDER http/http_client
+             VERSION ${PROJECT_VERSION}
+             SOVERSION ${PROJECT_VERSION_MAJOR}
+             EXPORT_NAME HTTPCoro)
+
 # Tests
 add_subdirectory(examples)
 add_subdirectory(turl)
@@ -114,10 +146,11 @@ add_subdirectory(tests)
 
 # Installation
 install(
-  TARGETS http_client http_client_async
+  TARGETS http_client http_client_async http_coro_client
   EXPORT TurboNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
 
-install(FILES ${HTTP_HEADERS} ${HTTP_ASYNC_HEADERS} DESTINATION include/http)
+install(FILES ${HTTP_HEADERS} ${HTTP_ASYNC_HEADERS} ${HTTP_CORO_HEADERS}
+        DESTINATION include/http)

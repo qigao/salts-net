@@ -12,6 +12,7 @@
 #endif
 #include <uv.h>
 #include "ice/turbo_stun.h"
+#include <turbo_thread.h>
 
 #include "turbo_dns.h"
 #include "turbo_async_client.h" // New include for netcore async client

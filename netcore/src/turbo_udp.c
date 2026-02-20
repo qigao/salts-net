@@ -174,6 +174,11 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     /* Call user callback with zero-copy slice */
     server->on_recv(server, &slice, (void *)addr);
 
+    /* Check if server was destroyed during callback */
+    if (handle->data == NULL) {
+      return;
+    }
+
     /* Release the slice (user should have ref'd it if needed) */
     turbo_arena_slice_release(&slice);
   }
@@ -269,6 +274,7 @@ void turbo_udp_server_stop(turbo_udp_server_t *server) {
 
   if (server->handle) {
     uv_udp_recv_stop(server->handle);
+    server->handle->data = NULL; /* Signal callbacks that server is stopping */
     if (!uv_is_closing((uv_handle_t *)server->handle)) {
       uv_close((uv_handle_t *)server->handle, on_handle_closed);
     }

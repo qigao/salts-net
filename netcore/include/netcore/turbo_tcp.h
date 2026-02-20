@@ -68,6 +68,8 @@ struct turbo_tcp_client_s {
     /* Client state */
     int is_client_mode;                      /**< Flag indicating client mode */
     int closing;                             /**< Flag indicating connection is closing */
+    int conn_state;                          /**< Connection state (0:Init, 1:Resolving, 2:Connecting, 3:Connected) */
+    int dns_initialized;                     /**< Flag indicating if DNS was initialized */
     void* user_data;                         /**< User-defined data */
 };
 

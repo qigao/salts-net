@@ -13,5 +13,8 @@
 #include <netcore/turbo_url.h>
 #include <netcore/turbo_websocket_client.h>
 #include <netcore/turbo_websocket_server.h>
+#include <netcore/turbo_coro_context.h>
+#include <netcore/turbo_coro_client.h>
+#include <netcore/turbo_coro_server.h>
 
 #endif // TURBO_NETCORE_H

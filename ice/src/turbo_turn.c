@@ -11,6 +11,7 @@
 #include <unistd.h>
 #endif 
 #include "ice/turbo_turn.h"
+#include <turbo_thread.h>
 
 #include "turbo_dns.h"
 #include <stdlib.h>

@@ -194,7 +194,7 @@ bool route_trie_match(route_trie_t *trie,
     if (method_idx == METHOD_UNKNOWN)
         return false;
 
-    uv_rwlock_rdlock(&trie->lock);
+    turbo_rwlock_rdlock(&trie->lock);
 
     // Initialize match result
     match->handler = NULL;
@@ -229,11 +229,11 @@ bool route_trie_match(route_trie_t *trie,
     {
         match->handler = matched_node->handlers[method_idx];
         match->middleware_ctx = matched_node->middleware_ctx[method_idx];
-        uv_rwlock_rdunlock(&trie->lock);
+        turbo_rwlock_rdunlock(&trie->lock);
         return true;
     }
 
-    uv_rwlock_rdunlock(&trie->lock);
+    turbo_rwlock_rdunlock(&trie->lock);
     return false;
 }
 
@@ -338,7 +338,7 @@ route_trie_t *route_trie_create(void)
     }
 
     // Initialize read-write lock for thread safety
-    if (uv_rwlock_init(&trie->lock) != 0)
+    if (turbo_rwlock_init(&trie->lock) != 0)
     {
         trie_node_free(trie->root);
         turbo_arena_free(&trie->param_arena);
@@ -362,7 +362,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
         return -1;
 
     // Write lock for thread safety
-    uv_rwlock_wrlock(&trie->lock);
+    turbo_rwlock_wrlock(&trie->lock);
 
     trie_node_t *current = trie->root;
     const char *p = path;
@@ -391,7 +391,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                 current->param_child = trie_node_create(trie);
                 if (!current->param_child)
                 {
-                    uv_rwlock_wrunlock(&trie->lock);
+                    turbo_rwlock_wrunlock(&trie->lock);
                     return -1;
                 }
 
@@ -400,7 +400,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                     (char *)turbo_arena_alloc(&trie->param_arena, param_len + 1);
                 if (!current->param_child->param_name)
                 {
-                    uv_rwlock_wrunlock(&trie->lock);
+                    turbo_rwlock_wrunlock(&trie->lock);
                     return -1;
                 }
 
@@ -418,7 +418,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                     current->wildcard_child = trie_node_create(trie);
                     if (!current->wildcard_child)
                     {
-                    uv_rwlock_wrunlock(&trie->lock);
+                    turbo_rwlock_wrunlock(&trie->lock);
                     return -1;
                 }
             }
@@ -440,7 +440,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                     current->children[c] = trie_node_create(trie);
                     if (!current->children[c])
                     {
-                        uv_rwlock_wrunlock(&trie->lock);
+                        turbo_rwlock_wrunlock(&trie->lock);
                         return -1;
                     }
                 }
@@ -459,7 +459,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                 current->children[c] = trie_node_create(trie);
                 if (!current->children[c])
                 {
-                    uv_rwlock_wrunlock(&trie->lock);
+                    turbo_rwlock_wrunlock(&trie->lock);
                     return -1;
                 }
             }
@@ -474,7 +474,7 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
     current->middleware_ctx[method_idx] = middleware_ctx;
     trie->route_count++;
 
-    uv_rwlock_wrunlock(&trie->lock);
+    turbo_rwlock_wrunlock(&trie->lock);
     return 0;
 }
 
@@ -484,12 +484,12 @@ void route_trie_free(route_trie_t *trie)
     if (!trie)
         return;
 
-    uv_rwlock_wrlock(&trie->lock);
+    turbo_rwlock_wrlock(&trie->lock);
     trie_node_free(trie->root);
     trie->root = NULL;
-    uv_rwlock_wrunlock(&trie->lock);
+    turbo_rwlock_wrunlock(&trie->lock);
 
-    uv_rwlock_destroy(&trie->lock);
+    turbo_rwlock_destroy(&trie->lock);
     turbo_arena_free(&trie->param_arena);
     trie_node_pool_free((trie_node_pool_t *)trie->node_pool);
     free(trie);

@@ -6,6 +6,7 @@
 #ifndef CXML_CXPARSER_H
 #define CXML_CXPARSER_H
 
+#include <setjmp.h>
 #include "xml/cxlexer.h"
 #include "core/cxstack.h"
 #include "xml/cxscope.h"
@@ -38,6 +39,9 @@ typedef struct _cxml_parser{
     cxml_config cfg;
     // namespace scope lookup - for namespace scoping and resolution
     struct _cxml_scope_table *current_scope;
+    // error recovery: longjmp target for parse errors (instead of exit)
+    jmp_buf error_jmp;
+    bool has_error;
 }_cxml_parser;
 
 

@@ -280,4 +280,34 @@ spec("turbo_parser") {
       check_null(root);
     }
   }
+
+  describe("Datetime") {
+    it("should parse various datetime formats correctly") {
+      turbo_datetime_t dt;
+      const char *dt_str = "2006-03-14T13:27:54.123+03:45";
+      int rc = turbo_parse_datetime(dt_str, strlen(dt_str), &dt);
+
+      check_int_eq(rc, 0);
+      check_int_eq(dt.year, 2006);
+      check_int_eq(dt.month, 3);
+      check_int_eq(dt.day, 14);
+      check_int_eq(dt.hour, 13);
+      check_int_eq(dt.minute, 27);
+      check_int_eq(dt.second, 54);
+      check_int_eq(dt.millisecond, 123);
+      check_int_eq(dt.tz_offset, 225);
+      check(dt.has_tz);
+
+      // Test conversion to time_t
+      time_t t = turbo_datetime_to_time(&dt);
+      check(t != (time_t)-1);
+
+      // Test RFC 822 formatting
+      char buf[64];
+      rc = turbo_datetime_format_rfc822(t, buf, sizeof(buf));
+      check(rc > 0);
+      check(strstr(buf, "2006") != NULL);
+      check(strstr(buf, "Mar") != NULL);
+    }
+  }
 }

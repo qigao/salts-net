@@ -4,20 +4,135 @@
  */
 
 #include "cmd_arger.h"
-#include "history/turl_collection.h"
+#include "collection/turl_collection.h"
 #include "turl_batch.h"
 #include "turl_common.h"
 #include "turl_http.h"
 #include "turl_websocket.h"
 #include <dotenv.h>
-#include <js_internal.h>
-#include <js_module.h>
 #include <json_parser.h>
+#include <netcore/turbo_coro_context.h>
+#include <turbo_coro.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tlog.h>
 
+typedef struct {
+  turbo_coro_context_t *coro_ctx;
+  int verbose;
+  int follow_redirects;
+  int show_stats;
+  int decode_jwt;
+  int64_t retry_count;
+  int64_t retry_delay_ms;
+  int64_t concurrency;
+  char *method_str;
+  char *raw_body;
+  char *raw_binary_body;
+  char *context_str;
+  char *output_path;
+  char *user_pass;
+  char *bearer_token;
+  char *jwt_secret;
+  char *jwt_claims;
+  char *test_path;
+  char *collection_path;
+  char *input_file;
+  char *raw_url;
+  char **raw_headers;
+  uint32_t header_count;
+  char **raw_forms;
+  uint32_t form_count;
+  json_value_t *mustache_context;
+  int ret;
+} turl_coro_args_t;
+
+static void turl_main_coro(turbo_coro_t *co, void *arg) {
+  turl_coro_args_t *a = (turl_coro_args_t *)arg;
+
+  // Handle batch mode
+  if (a->input_file) {
+    a->ret = turl_batch_download(a->input_file, a->concurrency, a->raw_headers,
+                                  a->header_count, a->mustache_context,
+                                  a->output_path, a->follow_redirects,
+                                  a->verbose, a->coro_ctx);
+    return;
+  }
+
+  // Handle collection mode
+  if (a->collection_path) {
+    turl_http_config_t global_cfg = {.headers = a->raw_headers,
+                                      .header_count = a->header_count,
+                                      .user_pass = a->user_pass,
+                                      .bearer_token = a->bearer_token,
+                                      .jwt_secret = a->jwt_secret,
+                                      .jwt_claims = a->jwt_claims,
+                                      .decode_jwt = a->decode_jwt,
+                                      .retry_count = (int)a->retry_count,
+                                      .retry_delay_ms = (int)a->retry_delay_ms,
+                                      .show_stats = a->show_stats,
+                                      .verbose = a->verbose,
+                                      .mustache_context = a->mustache_context,
+                                      .follow_redirects = a->follow_redirects,
+                                      .coro_ctx = a->coro_ctx};
+    a->ret = turl_run_collection(a->collection_path, &global_cfg);
+    return;
+  }
+
+  // Handle binary body
+  char *body_to_send = a->raw_body;
+  size_t body_len = 0;
+
+  if (a->raw_binary_body) {
+    if (a->raw_binary_body[0] == '@') {
+      FILE *f = fopen(a->raw_binary_body + 1, "rb");
+      if (f) {
+        fseek(f, 0, SEEK_END);
+        body_len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        body_to_send = (char *)malloc(body_len);
+        fread(body_to_send, 1, body_len, f);
+        fclose(f);
+      } else {
+        TLOG_ERROR("Failed to open binary file: {}", a->raw_binary_body + 1);
+        a->ret = 1;
+        return;
+      }
+    } else {
+      body_to_send = a->raw_binary_body;
+      body_len = strlen(a->raw_binary_body);
+    }
+  }
+
+  // Execute HTTP request
+  turl_http_config_t http_config = {.url = a->raw_url,
+                                     .method_str = a->method_str,
+                                     .body = body_to_send,
+                                     .body_len = body_len,
+                                     .headers = a->raw_headers,
+                                     .header_count = a->header_count,
+                                     .forms = a->raw_forms,
+                                     .form_count = a->form_count,
+                                     .user_pass = a->user_pass,
+                                     .bearer_token = a->bearer_token,
+                                     .jwt_secret = a->jwt_secret,
+                                     .jwt_claims = a->jwt_claims,
+                                     .decode_jwt = a->decode_jwt,
+                                     .retry_count = (int)a->retry_count,
+                                     .retry_delay_ms = (int)a->retry_delay_ms,
+                                     .show_stats = a->show_stats,
+                                     .output_path = a->output_path,
+                                     .follow_redirects = a->follow_redirects,
+                                     .verbose = a->verbose,
+                                     .mustache_context = a->mustache_context,
+                                     .coro_ctx = a->coro_ctx};
+
+  a->ret = turl_execute_http_request(&http_config);
+
+  if (a->raw_binary_body && a->raw_binary_body[0] == '@' && body_to_send != a->raw_binary_body)
+    free(body_to_send);
+}
 
 int main(int argc, char *argv[]) {
   char *env_name = NULL;
@@ -203,187 +318,59 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Handle batch mode if input_file is provided
-  if (input_file) {
-    int ret = turl_batch_download(input_file, concurrency, raw_headers, header_count,
-                                  mustache_context, output_path, follow_redirects, verbose);
+  // Check for WebSocket — handled outside coroutine (uses sync_client)
+  if (raw_url && (strncmp(raw_url, "ws://", 5) == 0 || strncmp(raw_url, "wss://", 6) == 0)) {
+    int ret = turl_handle_websocket(raw_url, raw_body, raw_body ? strlen(raw_body) : 0, verbose, send_ping);
     if (mustache_context)
       json_free(mustache_context);
     turl_cleanup_logger();
     return ret;
   }
 
-  // Handle collection mode
-  if (collection_path) {
-    turl_http_config_t global_cfg = {.headers = raw_headers,
-                                     .header_count = header_count,
-                                     .user_pass = user_pass,
-                                     .bearer_token = bearer_token,
-                                     .jwt_secret = jwt_secret,
-                                     .jwt_claims = jwt_claims,
-                                     .decode_jwt = (int)decode_jwt,
-                                     .retry_count = (int)retry_count,
-                                     .retry_delay_ms = (int)retry_delay_ms,
-                                     .show_stats = (int)show_stats,
-                                     .verbose = verbose,
-                                     .mustache_context = mustache_context,
-                                     .follow_redirects = (int)follow_redirects};
-    int ret = turl_run_collection(collection_path, &global_cfg);
-    if (mustache_context)
-      json_free(mustache_context);
-    turl_cleanup_logger();
-    return ret;
-  }
+  // Create coroutine context and run HTTP/batch/collection inside it
+  turbo_coro_context_t *coro_ctx = turbo_coro_context_create();
 
-  // QuickJS integration for scripts
-  JSRuntime *rt = NULL;
-  JSContext *js_ctx = NULL;
-  JSValue global_obj = JS_UNDEFINED;
+  turl_coro_args_t coro_args = {
+      .coro_ctx = coro_ctx,
+      .verbose = verbose,
+      .follow_redirects = follow_redirects,
+      .show_stats = show_stats,
+      .decode_jwt = decode_jwt,
+      .retry_count = retry_count,
+      .retry_delay_ms = retry_delay_ms,
+      .concurrency = concurrency,
+      .method_str = method_str,
+      .raw_body = raw_body,
+      .raw_binary_body = raw_binary_body,
+      .context_str = context_str,
+      .output_path = output_path,
+      .user_pass = user_pass,
+      .bearer_token = bearer_token,
+      .jwt_secret = jwt_secret,
+      .jwt_claims = jwt_claims,
+      .test_path = test_path,
+      .collection_path = collection_path,
+      .input_file = input_file,
+      .raw_url = raw_url,
+      .raw_headers = raw_headers,
+      .header_count = header_count,
+      .raw_forms = raw_forms,
+      .form_count = form_count,
+      .mustache_context = mustache_context,
+      .ret = 0,
+  };
 
-  if (script_path || test_path) {
-    rt = JS_NewRuntime();
-    js_ctx = JS_NewContext(rt);
-    js_init_turbo_module(js_ctx);
-    js_turbo_init_state(js_ctx);
+  turbo_coro_t *co = turbo_coro_create(turl_main_coro, &coro_args, NULL);
+  turbo_coro_resume(co);
+  turbo_coro_context_run(coro_ctx);
+  turbo_coro_destroy(co);
+  turbo_coro_context_destroy(coro_ctx);
 
-    global_obj = JS_GetGlobalObject(js_ctx);
-    JSValue env_obj;
-
-    if (mustache_context) {
-      char *json_str = json_serialize(mustache_context, NULL);
-      env_obj = JS_ParseJSON(js_ctx, json_str, strlen(json_str), "<env>");
-      json_serialize_free(json_str);
-    } else {
-      env_obj = JS_NewObject(js_ctx);
-    }
-    JS_SetPropertyStr(js_ctx, global_obj, "env", env_obj);
-
-    // Add assertion helper
-    const char *assert_js = "globalThis.assert = function(cond, msg) { if (!cond) throw new "
-                            "Error('Assertion Failed: ' + (msg || '')); }";
-    JS_Eval(js_ctx, assert_js, strlen(assert_js), "<assert>", JS_EVAL_TYPE_GLOBAL);
-
-    if (script_path) {
-      FILE *f = fopen(script_path, "rb");
-      if (f) {
-        fseek(f, 0, SEEK_END);
-        size_t size = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        char *script = (char *)malloc(size + 1);
-        fread(script, 1, size, f);
-        script[size] = '\0';
-        fclose(f);
-
-        JSValue val = JS_Eval(js_ctx, script, size, script_path, JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(val)) {
-          js_turbo_dump_error(js_ctx);
-        }
-        JS_FreeValue(js_ctx, val);
-        free(script);
-
-        // Extract modified context back
-        JSValue env_val = JS_GetPropertyStr(js_ctx, global_obj, "env");
-        JSValue env_json = JS_JSONStringify(js_ctx, env_val, JS_UNDEFINED, JS_UNDEFINED);
-        const char *env_str = JS_ToCString(js_ctx, env_json);
-
-        if (mustache_context)
-          json_free(mustache_context);
-        mustache_context = json_parse(env_str, strlen(env_str));
-
-        JS_FreeCString(js_ctx, env_str);
-        JS_FreeValue(js_ctx, env_json);
-        JS_FreeValue(js_ctx, env_val);
-      } else {
-        TLOG_ERROR("Failed to open script file: {}", script_path);
-      }
-    }
-  }
-
-  // Handle binary body
-  char *body_to_send = raw_body;
-  size_t body_len = 0;
-
-  if (raw_binary_body) {
-    if (raw_binary_body[0] == '@') {
-      FILE *f = fopen(raw_binary_body + 1, "rb");
-      if (f) {
-        fseek(f, 0, SEEK_END);
-        body_len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        body_to_send = (char *)malloc(body_len);
-        fread(body_to_send, 1, body_len, f);
-        fclose(f);
-      } else {
-        TLOG_ERROR("Failed to open binary file: {}", raw_binary_body + 1);
-        turl_cleanup_logger();
-        if (js_ctx) {
-          JS_FreeValue(js_ctx, global_obj);
-          JS_FreeContext(js_ctx);
-          JS_FreeRuntime(rt);
-        }
-        if (mustache_context)
-          json_free(mustache_context);
-        return 1;
-      }
-    } else {
-      body_to_send = raw_binary_body;
-      body_len = strlen(raw_binary_body);
-    }
-  }
-
-  // Check for WebSocket
-  if (strncmp(raw_url, "ws://", 5) == 0 || strncmp(raw_url, "wss://", 6) == 0) {
-    int ret = turl_handle_websocket(raw_url, body_to_send, body_len, verbose, send_ping);
-
-    // Cleanup
-    if (mustache_context)
-      json_free(mustache_context);
-    if (raw_binary_body && raw_binary_body[0] == '@' && body_to_send != raw_binary_body)
-      free(body_to_send);
-
-    turl_cleanup_logger();
-    return ret;
-  }
-
-  // Execute HTTP request
-  turl_http_config_t http_config = {.url = raw_url,
-                                    .method_str = method_str,
-                                    .body = body_to_send,
-                                    .body_len = body_len,
-                                    .headers = raw_headers,
-                                    .header_count = header_count,
-                                    .forms = raw_forms,
-                                    .form_count = form_count,
-                                    .user_pass = user_pass,
-                                    .bearer_token = bearer_token,
-                                    .jwt_secret = jwt_secret,
-                                    .jwt_claims = jwt_claims,
-                                    .decode_jwt = decode_jwt,
-                                    .retry_count = (int)retry_count,
-                                    .retry_delay_ms = (int)retry_delay_ms,
-                                    .show_stats = (int)show_stats,
-                                    .output_path = output_path,
-                                    .follow_redirects = follow_redirects,
-                                    .verbose = verbose,
-                                    .mustache_context = mustache_context,
-                                    .js_ctx = js_ctx,
-                                    .global_obj = global_obj,
-                                    .test_path = test_path};
-
-  int ret = turl_execute_http_request(&http_config);
+  int ret = coro_args.ret;
 
   // Cleanup
-  if (js_ctx) {
-    JS_FreeValue(js_ctx, global_obj);
-    JS_FreeContext(js_ctx);
-    JS_FreeRuntime(rt);
-  }
-
   if (mustache_context)
     json_free(mustache_context);
-
-  if (raw_binary_body && raw_binary_body[0] == '@' && body_to_send != raw_binary_body)
-    free(body_to_send);
 
   turl_cleanup_logger();
   return ret;

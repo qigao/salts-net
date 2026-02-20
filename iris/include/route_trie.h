@@ -3,7 +3,6 @@
 
 #include <stddef.h>
 #include <stdbool.h>
-#include <uv.h> 
 
 #include "router.h"
 #include "platform.h"
@@ -44,7 +43,7 @@ typedef struct
 {
     trie_node_t *root;
     size_t route_count;
-    uv_rwlock_t lock;
+    turbo_rwlock_t lock;
     void *node_pool;
     turbo_arena_t param_arena;
 } route_trie_t;

@@ -1,9 +1,21 @@
 #ifndef HTTP_CLIENT_ASYNC_H
 #define HTTP_CLIENT_ASYNC_H
 
+// DEPRECATED: Use http_coro_client.h instead. This header will be removed in v2.0.
+#if !defined(HTTP_NO_DEPRECATION_WARNING)
+#if defined(__GNUC__) || defined(__clang__)
+#pragma message("http_client_async.h is deprecated. Migrate to http_coro_client.h")
+#elif defined(_MSC_VER)
+#pragma message("http_client_async.h is deprecated. Migrate to http_coro_client.h")
+#endif
+#endif
+
 #include <platform.h>
 #include <stddef.h>
 #include <stdint.h>
+
+// Shared HTTP types (methods, errors, params, cookies, interceptors, etc.)
+#include "http_common.h"
 
 // JSON helpers
 #include <turbo_parser.h>
@@ -16,44 +28,6 @@ extern "C" {
 typedef struct http_async_client_s http_async_client_t;
 typedef struct http_async_request_s http_async_request_t;
 typedef struct json_value_s json_value_t;
-
-// HTTP methods (same as sync version)
-typedef int http_method_t;
-
-#define HTTP_DELETE 0
-#define HTTP_GET 1
-#define HTTP_HEAD 2
-#define HTTP_POST 3
-#define HTTP_PUT 4
-#define HTTP_PATCH 28
-
-// Error codes
-typedef enum {
-  HTTP_ASYNC_ERROR_NONE = 0,
-  HTTP_ASYNC_ERROR_INVALID_URL,
-  HTTP_ASYNC_ERROR_INVALID_PARAMS,
-  HTTP_ASYNC_ERROR_DNS_FAILED,
-  HTTP_ASYNC_ERROR_CONNECTION_FAILED,
-  HTTP_ASYNC_ERROR_TIMEOUT,
-  HTTP_ASYNC_ERROR_TLS_HANDSHAKE_FAILED,
-  HTTP_ASYNC_ERROR_SEND_FAILED,
-  HTTP_ASYNC_ERROR_RECEIVE_FAILED,
-  HTTP_ASYNC_ERROR_PARSE_FAILED,
-  HTTP_ASYNC_ERROR_TOO_MANY_REDIRECTS,
-  HTTP_ASYNC_ERROR_MEMORY_ALLOCATION,
-  HTTP_ASYNC_ERROR_CANCELLED
-} http_async_error_code_t;
-
-// Response structure
-typedef struct {
-  int status_code;
-  char *headers;
-  size_t headers_len;
-  char *body;
-  size_t body_len;
-  char *error;
-  http_async_error_code_t error_code;
-} http_async_response_t;
 
 // Callback types
 typedef void (*http_async_response_cb)(http_async_request_t *request,
@@ -144,31 +118,9 @@ CXX_C_API int http_async_response_is_text(http_async_response_t *response);
 CXX_C_API int http_async_response_is_sse(http_async_response_t *response);
 
 // Statistics
-typedef struct {
-  uint64_t total_requests;
-  uint64_t successful_requests;
-  uint64_t failed_requests;
-  uint64_t active_requests;
-  uint64_t redirects_followed;
-  uint64_t bytes_sent;
-  uint64_t bytes_received;
-} http_async_client_stats_t;
-
 CXX_C_API void http_async_client_get_stats(http_async_client_t *client,
                                            http_async_client_stats_t *stats);
 CXX_C_API void http_async_client_reset_stats(http_async_client_t *client);
-
-// URL-encoded form data
-typedef struct http_async_params_s http_async_params_t;
-
-CXX_C_API http_async_params_t *http_async_params_create(void);
-CXX_C_API void http_async_params_add(http_async_params_t *params, const char *key,
-                                     const char *value);
-CXX_C_API char *http_async_params_encode(http_async_params_t *params);
-CXX_C_API void http_async_params_free(http_async_params_t *params);
-
-// URL building with query parameters
-CXX_C_API char *http_async_build_url(const char *base_url, http_async_params_t *query_params);
 
 // POST with URL-encoded form data
 CXX_C_API http_async_request_t *http_async_post_form(http_async_client_t *client, const char *url,
@@ -176,38 +128,12 @@ CXX_C_API http_async_request_t *http_async_post_form(http_async_client_t *client
                                                      http_async_response_cb callback,
                                                      void *user_data);
 
-// Cookie management
-typedef struct http_async_cookie_jar_s http_async_cookie_jar_t;
-
-CXX_C_API http_async_cookie_jar_t *http_async_cookie_jar_create(void);
-CXX_C_API void http_async_cookie_jar_destroy(http_async_cookie_jar_t *jar);
-CXX_C_API void http_async_cookie_jar_set(http_async_cookie_jar_t *jar, const char *name,
-                                         const char *value);
-CXX_C_API const char *http_async_cookie_jar_get(http_async_cookie_jar_t *jar, const char *name);
-CXX_C_API void http_async_cookie_jar_remove(http_async_cookie_jar_t *jar, const char *name);
-CXX_C_API void http_async_cookie_jar_clear(http_async_cookie_jar_t *jar);
-CXX_C_API int http_async_cookie_jar_count(http_async_cookie_jar_t *jar);
-
 // Attach cookie jar to client
 CXX_C_API void http_async_client_set_cookie_jar(http_async_client_t *client,
                                                 http_async_cookie_jar_t *jar);
 CXX_C_API http_async_cookie_jar_t *http_async_client_get_cookie_jar(http_async_client_t *client);
 
-// Multipart form data
-typedef struct http_async_multipart_form_s http_async_multipart_form_t;
-
-CXX_C_API http_async_multipart_form_t *http_async_multipart_form_create(void);
-CXX_C_API void http_async_multipart_form_destroy(http_async_multipart_form_t *form);
-CXX_C_API void http_async_multipart_form_add_field(http_async_multipart_form_t *form,
-                                                   const char *name, const char *value);
-CXX_C_API void http_async_multipart_form_add_file(http_async_multipart_form_t *form,
-                                                  const char *field_name, const char *filename,
-                                                  const char *content_type, const void *data,
-                                                  size_t data_len);
-CXX_C_API int http_async_multipart_form_add_file_path(http_async_multipart_form_t *form,
-                                                      const char *field_name, const char *file_path,
-                                                      const char *content_type);
-
+// Multipart form posting
 CXX_C_API http_async_request_t *http_async_post_multipart(http_async_client_t *client,
                                                           const char *url,
                                                           http_async_multipart_form_t *form,
@@ -232,26 +158,7 @@ CXX_C_API http_async_request_t *http_async_download_file(http_async_client_t *cl
                                                          http_async_response_cb callback,
                                                          void *user_data);
 
-// Request/Response Interceptors
-typedef struct http_async_request_context_s {
-  http_method_t method;
-  const char *url;
-  const char **headers;
-  int header_count;
-  const char *body;
-  size_t body_len;
-  void *user_data;
-} http_async_request_context_t;
-
-typedef struct http_async_response_context_s {
-  http_async_response_t *response;
-  const char *url;
-  void *user_data;
-} http_async_response_context_t;
-
-typedef int (*http_async_request_interceptor_t)(http_async_request_context_t *ctx);
-typedef void (*http_async_response_interceptor_t)(http_async_response_context_t *ctx);
-
+// Interceptors (uses types from http_common.h via backward-compat aliases)
 CXX_C_API void http_async_client_add_request_interceptor(
     http_async_client_t *client, http_async_request_interceptor_t interceptor, void *user_data);
 CXX_C_API void http_async_client_add_response_interceptor(
@@ -259,17 +166,6 @@ CXX_C_API void http_async_client_add_response_interceptor(
 CXX_C_API void http_async_client_clear_interceptors(http_async_client_t *client);
 
 // Retry policy
-typedef struct {
-  int max_retries;
-  int initial_delay_ms;
-  int max_delay_ms;
-  int exponential_backoff;
-  int retry_on_timeout;
-  int retry_on_connection_error;
-  int retry_on_5xx;
-  double jitter_factor;
-} http_async_retry_policy_t;
-
 CXX_C_API void http_async_client_set_retry_policy(http_async_client_t *client,
                                                   const http_async_retry_policy_t *policy);
 CXX_C_API void http_async_client_get_retry_policy(http_async_client_t *client,
@@ -282,11 +178,6 @@ CXX_C_API void http_async_client_enable_compression(http_async_client_t *client,
 CXX_C_API int http_async_client_is_compression_enabled(http_async_client_t *client);
 
 // Rate limiting
-typedef struct {
-  int requests_per_second;
-  int burst_size;
-} http_async_rate_limit_t;
-
 CXX_C_API void http_async_client_set_rate_limit(http_async_client_t *client,
                                                 const http_async_rate_limit_t *limit);
 CXX_C_API void http_async_client_clear_rate_limit(http_async_client_t *client);

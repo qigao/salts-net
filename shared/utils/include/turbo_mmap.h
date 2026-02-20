@@ -10,7 +10,7 @@
 #ifndef TURBO_MMAP_H
 #define TURBO_MMAP_H
 
-#include <platform.h>
+#include "platform.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -231,6 +231,45 @@ CXX_C_API int turbo_mmap_lock(turbo_mmap_t *mmap);
  * @return 0 on success, negative error code on failure
  */
 CXX_C_API int turbo_mmap_unlock(turbo_mmap_t *mmap);
+
+// =============================================================================
+// Group Mapping (Map multiple files into one contiguous address space)
+// =============================================================================
+
+/**
+ * @brief Group of mapped files, appearing as one contiguous buffer
+ */
+typedef struct {
+    void    *data;           /**< Start of contiguous virtual memory */
+    size_t   total_size;     /**< Total size of all mapped files combined */
+    size_t   count;          /**< Number of files in the group */
+    turbo_mmap_t *mappings;  /**< Individual mappings */
+} turbo_mmap_group_t;
+
+/**
+ * @brief Initialize a group handle
+ */
+CXX_C_API void turbo_mmap_group_init(turbo_mmap_group_t *group);
+
+/**
+ * @brief Map several files into one contiguous block of virtual memory
+ *
+ * @param group Group handle to initialize
+ * @param paths Array of file paths
+ * @param count Number of paths
+ * @param access Access mode (READ or WRITE)
+ * @return 0 on success, negative error code on failure
+ *
+ * @note This is highly efficient for segmented logs or datasets.
+ *       The resulting 'group->data' can be treated as one huge array.
+ */
+CXX_C_API int turbo_mmap_group_open(turbo_mmap_group_t *group, const char **paths,
+                                     size_t count, int access);
+
+/**
+ * @brief Close all mappings in the group and release the address space
+ */
+CXX_C_API void turbo_mmap_group_close(turbo_mmap_group_t *group);
 
 // =============================================================================
 // Error codes (negative values)

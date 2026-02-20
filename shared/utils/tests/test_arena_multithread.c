@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "turbo_thread.h"
 #include "arena_buffer.h"
 #include "stats.h"
 #include "tinytest.h"

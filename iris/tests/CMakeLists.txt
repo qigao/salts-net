@@ -133,6 +133,17 @@ add_test(NAME IrisRouteParserRe2c COMMAND test_iris_route_parser_re2c)
 set_target_properties(test_iris_route_parser_re2c PROPERTIES FOLDER
                                                              "iris/tests")
 
+# Test for coroutine integration
+add_executable(test_iris_coro_integration test_coro_integration.c)
+
+target_link_libraries(test_iris_coro_integration
+                      PRIVATE TurboNet::Iris TurboNet::Utils tinytest)
+
+add_test(NAME IrisCoroIntegration COMMAND test_iris_coro_integration)
+
+set_target_properties(test_iris_coro_integration PROPERTIES FOLDER
+                                                            "iris/tests")
+
 # Benchmark for re2c-based security validators (optional)
 if(BUILD_BENCHMARKS)
   add_executable(benchmark_iris_security_re2c benchmark_security_re2c.c)

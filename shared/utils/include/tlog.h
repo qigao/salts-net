@@ -12,7 +12,7 @@
 #ifndef tlog_h
 #define tlog_h
 
-#include <platform.h>
+#include "platform.h"
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -117,6 +117,16 @@ typedef struct {
 } turbo_file_sink_opts_t;
 
 /**
+ * @brief Memory-Mapped File Sink options
+ */
+typedef struct {
+  const char *path;      // Log file path
+  size_t file_size;      // Total size to map (default: 10MB)
+  int circular;          // If 1, wrap to start on reaching file_size. If 0, stop or rotate.
+  const char *pattern;   // Format pattern
+} turbo_mmap_sink_opts_t;
+
+/**
  * @brief Callback sink - custom log handling
  */
 typedef void (*turbo_log_callback_fn)(const turbo_log_entry_t *entry, void *user_data);
@@ -127,9 +137,14 @@ typedef void (*turbo_log_callback_fn)(const turbo_log_entry_t *entry, void *user
 CXX_C_API turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opts);
 
 /**
- * @brief Create file sink with optional rotation
+ * @brief Create file sink with optional rotation (standard I/O)
  */
 CXX_C_API turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts);
+
+/**
+ * @brief Create memory-mapped file sink (ultra-high performance)
+ */
+CXX_C_API turbo_log_sink_t *turbo_sink_mmap_create(const turbo_mmap_sink_opts_t *opts);
 
 /**
  * @brief Create callback sink for custom handling
@@ -295,10 +310,15 @@ inline void turbo_log_cpp_wrapper(tlog_t* logger, turbo_log_level_t level,
 
 #else
 
-// Standard C Implementation using Compound Literals (C99)
+// Standard C Implementation - Add level check to macro for performance
 #define TURBO_LOG_TYPED(logger, lvl, comp, fmt, ...)                                               \
-  turbo_log_typed((logger), (lvl), (comp), __FILE__, __LINE__, (fmt), FMT_ARGS(__VA_ARGS__),       \
-                  FMT_NARGS(__VA_ARGS__))
+  do {                                                                                             \
+    tlog_t* _log_ptr = (logger);                                                                   \
+    if (_log_ptr && (lvl) >= tlog_get_level(_log_ptr)) {                                           \
+      turbo_log_typed(_log_ptr, (lvl), (comp), __FILE__, __LINE__, (fmt),                          \
+                      FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__));                              \
+    }                                                                                              \
+  } while (0)
 
 #endif
 

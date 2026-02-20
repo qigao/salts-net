@@ -321,6 +321,7 @@ s3_credential_provider_t* s3_creds_minio_client_config(const char* filename, con
 // ── STS Assume Role Provider ──
 
 typedef struct {
+    turbo_coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t access_key;
     tstr_t secret_key;
@@ -405,7 +406,7 @@ static s3_error_t assume_role_fetch(void* ctx, s3_credentials_t* out) {
         return err;
     }
 
-    s3_http_response_t hres = s3_http_execute(&req);
+    s3_http_response_t hres = s3_http_execute(c->coro_ctx, &req);
     tstr_free(body);
     S3Headers_drop(&req.headers);
 
@@ -442,21 +443,23 @@ static void assume_role_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_assume_role(const char* sts_endpoint, const char* access_key,
+s3_credential_provider_t* s3_creds_assume_role(turbo_coro_context_t *ctx,
+                                                      const char* sts_endpoint, const char* access_key,
                                                       const char* secret_key, const char* region,
                                                       const char* role_arn, const char* session_name,
                                                       int duration_secs) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
-    assume_role_ctx_t* ctx = calloc(1, sizeof(assume_role_ctx_t));
-    ctx->sts_endpoint = tstr_dup(sts_endpoint);
-    ctx->access_key = tstr_dup(access_key);
-    ctx->secret_key = tstr_dup(secret_key);
-    ctx->region = region ? tstr_dup(region) : tstr_dup("us-east-1");
-    ctx->role_arn = tstr_dup(role_arn);
-    ctx->session_name = session_name ? tstr_dup(session_name) : NULL;
-    ctx->duration_secs = duration_secs;
+    assume_role_ctx_t* actx = calloc(1, sizeof(assume_role_ctx_t));
+    actx->coro_ctx = ctx;
+    actx->sts_endpoint = tstr_dup(sts_endpoint);
+    actx->access_key = tstr_dup(access_key);
+    actx->secret_key = tstr_dup(secret_key);
+    actx->region = region ? tstr_dup(region) : tstr_dup("us-east-1");
+    actx->role_arn = tstr_dup(role_arn);
+    actx->session_name = session_name ? tstr_dup(session_name) : NULL;
+    actx->duration_secs = duration_secs;
     p->fetch = assume_role_fetch;
-    p->ctx = ctx;
+    p->ctx = actx;
     p->destroy = assume_role_destroy;
     return p;
 }
@@ -464,6 +467,7 @@ s3_credential_provider_t* s3_creds_assume_role(const char* sts_endpoint, const c
 // ── Web Identity Provider ──
 
 typedef struct {
+    turbo_coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t region;
     tstr_t role_arn;
@@ -500,7 +504,7 @@ static s3_error_t web_identity_fetch(void* ctx, s3_credentials_t* out) {
     req.headers = S3Headers_init();
     s3_headers_add(&req.headers, "Content-Type", "application/x-www-form-urlencoded");
 
-    s3_http_response_t hres = s3_http_execute(&req);
+    s3_http_response_t hres = s3_http_execute(c->coro_ctx, &req);
     tstr_free(body);
     S3Headers_drop(&req.headers);
 
@@ -535,16 +539,18 @@ static void web_identity_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_web_identity(const char* sts_endpoint, const char* region,
+s3_credential_provider_t* s3_creds_web_identity(turbo_coro_context_t *ctx,
+                                                       const char* sts_endpoint, const char* region,
                                                        const char* role_arn,
-                                                       tstr_t (*token_fn)(void* ctx), void* ctx) {
+                                                       tstr_t (*token_fn)(void* ctx), void* token_ctx) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
     web_identity_ctx_t* wctx = calloc(1, sizeof(web_identity_ctx_t));
+    wctx->coro_ctx = ctx;
     wctx->sts_endpoint = tstr_dup(sts_endpoint);
     wctx->region = region ? tstr_dup(region) : tstr_dup("us-east-1");
     wctx->role_arn = tstr_dup(role_arn);
     wctx->token_fn = token_fn;
-    wctx->token_ctx = ctx;
+    wctx->token_ctx = token_ctx;
     p->fetch = web_identity_fetch;
     p->ctx = wctx;
     p->destroy = web_identity_destroy;
@@ -554,6 +560,7 @@ s3_credential_provider_t* s3_creds_web_identity(const char* sts_endpoint, const 
 // ── IAM AWS Provider (EC2 instance metadata) ──
 
 typedef struct {
+    turbo_coro_context_t *coro_ctx;
     tstr_t endpoint;
     s3_credentials_t cached;
     time_t cached_expiry;
@@ -578,7 +585,7 @@ static s3_error_t iam_fetch(void* ctx, s3_credentials_t* out) {
     req.method = "GET";
     req.url = role_url;
     req.headers = S3Headers_init();
-    s3_http_response_t hres = s3_http_execute(&req);
+    s3_http_response_t hres = s3_http_execute(c->coro_ctx, &req);
     tstr_free(role_url);
     S3Headers_drop(&req.headers);
 
@@ -598,7 +605,7 @@ static s3_error_t iam_fetch(void* ctx, s3_credentials_t* out) {
     req.method = "GET";
     req.url = cred_url;
     req.headers = S3Headers_init();
-    hres = s3_http_execute(&req);
+    hres = s3_http_execute(c->coro_ctx, &req);
     tstr_free(cred_url);
     S3Headers_drop(&req.headers);
 
@@ -648,12 +655,13 @@ static void iam_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_iam_aws(const char* custom_endpoint) {
+s3_credential_provider_t* s3_creds_iam_aws(turbo_coro_context_t *ctx, const char* custom_endpoint) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
-    iam_ctx_t* ctx = calloc(1, sizeof(iam_ctx_t));
-    ctx->endpoint = custom_endpoint ? tstr_dup(custom_endpoint) : NULL;
+    iam_ctx_t* ictx = calloc(1, sizeof(iam_ctx_t));
+    ictx->coro_ctx = ctx;
+    ictx->endpoint = custom_endpoint ? tstr_dup(custom_endpoint) : NULL;
     p->fetch = iam_fetch;
-    p->ctx = ctx;
+    p->ctx = ictx;
     p->destroy = iam_destroy;
     return p;
 }
@@ -661,6 +669,7 @@ s3_credential_provider_t* s3_creds_iam_aws(const char* custom_endpoint) {
 // ── LDAP Identity Provider ──
 
 typedef struct {
+    turbo_coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t ldap_username;
     tstr_t ldap_password;
@@ -691,7 +700,7 @@ static s3_error_t ldap_fetch(void* ctx, s3_credentials_t* out) {
     req.headers = S3Headers_init();
     s3_headers_add(&req.headers, "Content-Type", "application/x-www-form-urlencoded");
 
-    s3_http_response_t hres = s3_http_execute(&req);
+    s3_http_response_t hres = s3_http_execute(c->coro_ctx, &req);
     tstr_free(body);
     S3Headers_drop(&req.headers);
 
@@ -726,15 +735,17 @@ static void ldap_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_ldap_identity(const char* sts_endpoint,
+s3_credential_provider_t* s3_creds_ldap_identity(turbo_coro_context_t *ctx,
+                                                        const char* sts_endpoint,
                                                         const char* ldap_username, const char* ldap_password) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
-    ldap_ctx_t* ctx = calloc(1, sizeof(ldap_ctx_t));
-    ctx->sts_endpoint = tstr_dup(sts_endpoint);
-    ctx->ldap_username = tstr_dup(ldap_username);
-    ctx->ldap_password = tstr_dup(ldap_password);
+    ldap_ctx_t* lctx = calloc(1, sizeof(ldap_ctx_t));
+    lctx->coro_ctx = ctx;
+    lctx->sts_endpoint = tstr_dup(sts_endpoint);
+    lctx->ldap_username = tstr_dup(ldap_username);
+    lctx->ldap_password = tstr_dup(ldap_password);
     p->fetch = ldap_fetch;
-    p->ctx = ctx;
+    p->ctx = lctx;
     p->destroy = ldap_destroy;
     return p;
 }
@@ -742,6 +753,7 @@ s3_credential_provider_t* s3_creds_ldap_identity(const char* sts_endpoint,
 // ── Certificate Identity Provider ──
 
 typedef struct {
+    turbo_coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t cert_file;
     tstr_t key_file;
@@ -773,7 +785,7 @@ static s3_error_t cert_fetch(void* ctx, s3_credentials_t* out) {
     req.headers = S3Headers_init();
     s3_headers_add(&req.headers, "Content-Type", "application/x-www-form-urlencoded");
 
-    s3_http_response_t hres = s3_http_execute(&req);
+    s3_http_response_t hres = s3_http_execute(c->coro_ctx, &req);
     S3Headers_drop(&req.headers);
 
     if (!s3_is_ok(hres.error)) {
@@ -807,15 +819,17 @@ static void cert_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_cert_identity(const char* sts_endpoint,
+s3_credential_provider_t* s3_creds_cert_identity(turbo_coro_context_t *ctx,
+                                                        const char* sts_endpoint,
                                                         const char* cert_file, const char* key_file) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
-    cert_ctx_t* ctx = calloc(1, sizeof(cert_ctx_t));
-    ctx->sts_endpoint = tstr_dup(sts_endpoint);
-    ctx->cert_file = tstr_dup(cert_file);
-    ctx->key_file = tstr_dup(key_file);
+    cert_ctx_t* cctx = calloc(1, sizeof(cert_ctx_t));
+    cctx->coro_ctx = ctx;
+    cctx->sts_endpoint = tstr_dup(sts_endpoint);
+    cctx->cert_file = tstr_dup(cert_file);
+    cctx->key_file = tstr_dup(key_file);
     p->fetch = cert_fetch;
-    p->ctx = ctx;
+    p->ctx = cctx;
     p->destroy = cert_destroy;
     return p;
 }

@@ -8,19 +8,24 @@
 #include <string.h>
 #include <stdio.h>
 #include <turbo_str.h>
+#include <turbo_fs.h>
 #include <fmt.h>
+#include <turbo_coro.h>
 #include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
 
 #define S3_PART_SIZE (5 * 1024 * 1024) // 5MB
+#define S3_PARALLEL_PARTS 10
 
 // ── Client lifecycle ──
 
-s3_client_t* s3_client_create(const s3_base_url_t* base_url,
+s3_client_t* s3_client_create(turbo_coro_context_t *ctx,
+                                   const s3_base_url_t* base_url,
                                    s3_credential_provider_t* provider) {
     s3_client_t* client = calloc(1, sizeof(s3_client_t));
     if (!client) return NULL;
+    client->coro_ctx = ctx;
     client->base_url.host = tstr_dup(base_url->host);
     client->base_url.port = base_url->port;
     client->base_url.is_https = base_url->is_https;
@@ -35,6 +40,10 @@ void s3_client_destroy(s3_client_t* client) {
     tstr_free(client->base_url.host);
     tstr_free(client->base_url.region);
     free(client);
+}
+
+void s3_client_set_part_size(s3_client_t* client, size_t part_size) {
+    if (client) client->part_size = part_size;
 }
 
 void s3_base_url_free(s3_base_url_t* url) {
@@ -176,7 +185,9 @@ int s3_bucket_exists(s3_client_t* client, const char* bucket, s3_error_t* err) {
     S3Headers_drop(&qp);
 
     int exists = 0;
-    if (hres.status_code == 200) {
+    if (!s3_is_ok(hres.error)) {
+        if (err) { *err = hres.error; hres.error = S3_OK; }
+    } else if (hres.status_code == 200) {
         exists = 1;
         if (err) *err = S3_OK;
     } else if (hres.status_code == 404) {
@@ -236,7 +247,9 @@ s3_stat_object_response_t s3_stat_object(s3_client_t* client, const char* bucket
     tstr_free(uri);
     S3Headers_drop(&qp);
 
-    if (hres.status_code == 200) {
+    if (!s3_is_ok(hres.error)) {
+        res.error = hres.error; hres.error = S3_OK;
+    } else if (hres.status_code == 200) {
         const char* cl = s3_headers_get(&hres.headers, "Content-Length");
         res.size = cl ? (size_t)atoll(cl) : 0;
         const char* et = s3_headers_get(&hres.headers, "ETag");
@@ -254,51 +267,201 @@ s3_stat_object_response_t s3_stat_object(s3_client_t* client, const char* bucket
     return res;
 }
 
+// ── Parallel multipart upload (coroutine fan-out) ──
+
+typedef struct {
+    s3_client_t*    client;
+    const char*     bucket;
+    const char*     object;
+    const char*     upload_id;
+    int             part_number;
+    const char*     data;       // in-memory mode
+    turbo_file_t    fd;         // file mode (TURBO_INVALID_FILE if unused)
+    int64_t         file_offset;
+    size_t          len;
+    char*           etag;
+    s3_error_t      error;
+    int*            abort_flag;
+    int*            remaining;      // shared counter (single-threaded, no atomic)
+    turbo_coro_t*   parent;         // parent coro to resume when all done
+} s3_part_coro_task_t;
+
+static void s3_upload_part_coro(turbo_coro_t* co, void* arg) {
+    (void)co;
+    s3_part_coro_task_t* t = (s3_part_coro_task_t*)arg;
+    if (*t->abort_flag) goto done;
+
+    const char* buf = t->data;
+    char* alloc_buf = NULL;
+
+    if (t->fd != TURBO_INVALID_FILE) {
+        alloc_buf = malloc(t->len);
+        if (!alloc_buf) {
+            t->error = s3_error_make(-1, "Memory allocation failed");
+            *t->abort_flag = 1;
+            goto done;
+        }
+        int nread = turbo_fs_pread(t->fd, alloc_buf, t->len, t->file_offset);
+        if (nread < 0 || (size_t)nread != t->len) {
+            free(alloc_buf);
+            t->error = s3_error_make(-1, "Failed to read file chunk");
+            *t->abort_flag = 1;
+            goto done;
+        }
+        buf = alloc_buf;
+    }
+
+    {
+        s3_upload_part_response_t pr = s3_upload_part(
+            t->client, t->bucket, t->object,
+            t->upload_id, t->part_number, buf, t->len);
+
+        free(alloc_buf);
+
+        if (!s3_is_ok(pr.error)) {
+            t->error = pr.error; pr.error = S3_OK;
+            *t->abort_flag = 1;
+        } else {
+            t->etag = pr.etag; pr.etag = NULL;
+        }
+        s3_upload_part_response_free(&pr);
+    }
+
+done:
+    if (--(*t->remaining) == 0) {
+        turbo_coro_resume(t->parent);
+    }
+}
+
+// Shared multipart logic: dispatches parts from either memory or fd
+static s3_error_t s3_multipart_upload_parts(s3_client_t* client,
+                                            const char* bucket, const char* object,
+                                            const char* content_type,
+                                            const char* data, turbo_file_t fd,
+                                            size_t total_len) {
+    size_t part_size = client->part_size > 0 ? client->part_size : S3_PART_SIZE;
+    s3_create_multipart_response_t cr = s3_create_multipart_upload(client, bucket, object, content_type, NULL);
+    if (!s3_is_ok(cr.error)) {
+        s3_error_t e = cr.error; cr.error = S3_OK;
+        s3_create_multipart_response_free(&cr);
+        return e;
+    }
+
+    // Pre-fetch credentials, create a static provider + temp client
+    s3_credentials_t creds = {0};
+    s3_error_t fetch_err = client->provider->fetch(client->provider->ctx, &creds);
+    if (!s3_is_ok(fetch_err)) {
+        s3_abort_multipart_upload(client, bucket, object, cr.upload_id);
+        s3_create_multipart_response_free(&cr);
+        return fetch_err;
+    }
+
+    s3_credential_provider_t* tmp_provider = s3_creds_static(
+        creds.access_key, creds.secret_key, creds.session_token);
+    s3_credentials_clear(&creds);
+
+    s3_client_t* tmp_client = s3_client_create(client->coro_ctx, &client->base_url, tmp_provider);
+    tmp_client->part_size = client->part_size;
+
+    int part_count = (int)((total_len + part_size - 1) / part_size);
+    int abort_flag = 0;
+    int remaining = part_count;
+    turbo_coro_t* parent = turbo_coro_running();
+    s3_part_coro_task_t* tasks = calloc((size_t)part_count, sizeof(s3_part_coro_task_t));
+    turbo_coro_t** coros = calloc((size_t)part_count, sizeof(turbo_coro_t*));
+
+    for (int i = 0; i < part_count; i++) {
+        size_t offset = (size_t)i * part_size;
+        size_t chunk = (offset + part_size > total_len) ? total_len - offset : part_size;
+        tasks[i] = (s3_part_coro_task_t){
+            .client      = tmp_client,
+            .bucket      = bucket,
+            .object      = object,
+            .upload_id   = cr.upload_id,
+            .part_number = i + 1,
+            .data        = data ? data + offset : NULL,
+            .fd          = fd,
+            .file_offset = (int64_t)offset,
+            .len         = chunk,
+            .abort_flag  = &abort_flag,
+            .remaining   = &remaining,
+            .parent      = parent,
+        };
+    }
+
+    // Spawn coroutines in batches of S3_PARALLEL_PARTS
+    for (int i = 0; i < part_count; i++) {
+        coros[i] = turbo_coro_create(s3_upload_part_coro, &tasks[i], NULL);
+        turbo_coro_resume(coros[i]);
+    }
+
+    // Yield until all part coros complete (last one resumes us)
+    if (remaining > 0) {
+        turbo_coro_yield();
+    }
+
+    // Scan for first error
+    s3_error_t err = S3_OK;
+    for (int i = 0; i < part_count; i++) {
+        if (!s3_is_ok(tasks[i].error)) {
+            err = tasks[i].error; tasks[i].error = S3_OK;
+            for (int j = i + 1; j < part_count; j++)
+                s3_error_free(&tasks[j].error);
+            break;
+        }
+    }
+
+    if (!s3_is_ok(err)) {
+        s3_abort_multipart_upload(client, bucket, object, cr.upload_id);
+    } else {
+        const char** etags = calloc((size_t)part_count, sizeof(char*));
+        for (int i = 0; i < part_count; i++)
+            etags[i] = tasks[i].etag;
+
+        s3_complete_multipart_response_t cmr = s3_complete_multipart_upload(
+            client, bucket, object, cr.upload_id, etags, part_count);
+        err = cmr.error; cmr.error = S3_OK;
+        s3_complete_multipart_response_free(&cmr);
+        free(etags);
+    }
+
+    for (int i = 0; i < part_count; i++) {
+        tstr_free(tasks[i].etag);
+        turbo_coro_destroy(coros[i]);
+    }
+    free(coros);
+    free(tasks);
+    s3_client_destroy(tmp_client);
+    s3_credential_provider_destroy(tmp_provider);
+    s3_create_multipart_response_free(&cr);
+    return err;
+}
+
+static s3_error_t s3_put_object_multipart(s3_client_t* client,
+                                          const char* bucket, const char* object,
+                                          const char* data, size_t len,
+                                          const char* content_type) {
+    return s3_multipart_upload_parts(client, bucket, object, content_type,
+                                    data, TURBO_INVALID_FILE, len);
+}
+
+static s3_error_t s3_put_object_multipart_fd(s3_client_t* client,
+                                             const char* bucket, const char* object,
+                                             turbo_file_t fd, size_t file_size,
+                                             const char* content_type) {
+    return s3_multipart_upload_parts(client, bucket, object, content_type,
+                                    NULL, fd, file_size);
+}
+
 s3_error_t s3_put_object(s3_client_t* client,
                               const char* bucket, const char* object,
                               const char* data, size_t len,
                               const char* content_type) {
     if (!client || !bucket || !object) return s3_error_make(-1, "Invalid params");
 
-    // Auto multipart for >5MB
-    if (len > S3_PART_SIZE) {
-        s3_create_multipart_response_t cr = s3_create_multipart_upload(client, bucket, object, content_type, NULL);
-        if (!s3_is_ok(cr.error)) { s3_error_t e = cr.error; cr.error = S3_OK; s3_create_multipart_response_free(&cr); return e; }
-
-        int part_count = (int)((len + S3_PART_SIZE - 1) / S3_PART_SIZE);
-        const char** etags = calloc((size_t)part_count, sizeof(char*));
-
-        s3_error_t err = S3_OK;
-        for (int i = 0; i < part_count; i++) {
-            size_t offset = (size_t)i * S3_PART_SIZE;
-            size_t plen = (offset + S3_PART_SIZE > len) ? len - offset : S3_PART_SIZE;
-            s3_upload_part_response_t pr = s3_upload_part(client, bucket, object, cr.upload_id, i + 1, data + offset, plen);
-            if (!s3_is_ok(pr.error)) {
-                err = pr.error;
-                pr.error = S3_OK;
-                s3_upload_part_response_free(&pr);
-                // Abort on failure
-                s3_abort_multipart_upload(client, bucket, object, cr.upload_id);
-                for (int j = 0; j < i; j++) free((void*)etags[j]);
-                free(etags);
-                s3_create_multipart_response_free(&cr);
-                return err;
-            }
-            etags[i] = pr.etag;
-            pr.etag = NULL; // transfer ownership
-            s3_upload_part_response_free(&pr);
-        }
-
-        s3_complete_multipart_response_t cmr = s3_complete_multipart_upload(client, bucket, object, cr.upload_id, etags, part_count);
-        err = cmr.error;
-        cmr.error = S3_OK;
-        s3_complete_multipart_response_free(&cmr);
-
-        for (int i = 0; i < part_count; i++) free((void*)etags[i]);
-        free(etags);
-        s3_create_multipart_response_free(&cr);
-        return err;
-    }
+    size_t part_size = client->part_size > 0 ? client->part_size : S3_PART_SIZE;
+    if (len > part_size)
+        return s3_put_object_multipart(client, bucket, object, data, len, content_type);
 
     // Simple PUT for small objects
     tstr_t uri = tstr_cat_fmt(tstr_new(), "/%s/%s", bucket, object);
@@ -355,20 +518,31 @@ s3_error_t s3_remove_object(s3_client_t* client, const char* bucket, const char*
 s3_error_t s3_upload_object(s3_client_t* client,
                                  const char* bucket, const char* object,
                                  const char* filename) {
-    if (!filename) return s3_error_make(-1, "Null filename");
-    FILE* fp = fopen(filename, "rb");
-    if (!fp) return s3_error_make(-1, "Failed to open file for reading");
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    if (size < 0) { fclose(fp); return s3_error_make(-1, "Failed to get file size"); }
-    char* buf = malloc(size > 0 ? (size_t)size : 1);
-    if (!buf) { fclose(fp); return s3_error_make(-1, "Memory allocation failed"); }
-    size_t read_bytes = size > 0 ? fread(buf, 1, (size_t)size, fp) : 0;
-    fclose(fp);
-    if (size > 0 && read_bytes != (size_t)size) { free(buf); return s3_error_make(-1, "Failed to read file"); }
-    s3_error_t err = s3_put_object(client, bucket, object, buf, read_bytes, NULL);
-    free(buf);
+    if (!client || !bucket || !object || !filename)
+        return s3_error_make(-1, "Invalid params");
+
+    turbo_fs_stat_t st;
+    if (turbo_fs_stat(filename, &st) != 0)
+        return s3_error_make(-1, "Failed to stat file");
+
+    size_t part_size = client->part_size > 0 ? client->part_size : S3_PART_SIZE;
+
+    if (st.size <= part_size) {
+        turbo_fs_buf_t buf;
+        if (turbo_fs_read_file(filename, &buf) != 0)
+            return s3_error_make(-1, "Failed to read file");
+        s3_error_t err = s3_put_object(client, bucket, object, buf.base, buf.len, NULL);
+        turbo_fs_buf_free(&buf);
+        return err;
+    }
+
+    turbo_file_t fd = turbo_fs_open(filename, TURBO_FS_O_RDONLY, 0);
+    if (fd == TURBO_INVALID_FILE)
+        return s3_error_make(-1, "Failed to open file");
+
+    s3_error_t err = s3_put_object_multipart_fd(client, bucket, object,
+                                                 fd, (size_t)st.size, NULL);
+    turbo_fs_close(fd);
     return err;
 }
 
@@ -537,7 +711,15 @@ s3_upload_part_response_t s3_upload_part(
     res.error = check_response(&hres, 200);
     if (s3_is_ok(res.error)) {
         const char* etag = s3_headers_get(&hres.headers, "ETag");
-        res.etag = tstr_dup(etag ? etag : "");
+        if (etag && etag[0] == '"') {
+            size_t elen = strlen(etag);
+            if (elen >= 2 && etag[elen - 1] == '"')
+                res.etag = tstr_dup_len(etag + 1, elen - 2);
+            else
+                res.etag = tstr_dup(etag + 1);
+        } else {
+            res.etag = tstr_dup(etag ? etag : "");
+        }
     }
     s3_http_response_free(&hres);
     return res;

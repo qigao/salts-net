@@ -1,44 +1,41 @@
 #include "router_adapter.h"
 #include "router.h"
-#include "turbo_async_server.h"
+#include "netcore/turbo_coro_client.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /**
- * @brief Process HTTP request through router using async_server connection
+ * @brief Process HTTP request through router using turbo_coro_client
  * 
- * This function serves as the bridge between NetCore's async_server and the 
+ * This function serves as the bridge between NetCore's turbo_coro_client and the 
  * Iris router system. It takes the raw HTTP request data from a NetCore connection
  * and passes it to the router for processing.
  * 
- * @param server The async server instance
- * @param connection The connection that received the data
+ * @param client The coroutine client instance
  * @param request_data The HTTP request data
  * @param request_len Length of the request data
  * @return 1 if connection should be closed, 0 to keep alive
  */
-int router_process_request(async_server_t *server, async_server_connection_t *connection,
-                           const char *request_data, size_t request_len) {
+int router_process_request(turbo_coro_client_t *client, const char *request_data, size_t request_len) {
   // Call the main router function with NetCore connection
-  return router(server, connection, request_data, request_len);
+  return router(client, request_data, request_len);
 }
 
 /**
- * @brief Send HTTP response through async_server connection
+ * @brief Send HTTP response through turbo_coro_client
  * 
  * This function provides a way to send responses through NetCore connections.
  * Currently, the router handles response sending internally through the reply() function,
  * so this is mainly for future extensibility.
  * 
- * @param server The async server instance
- * @param connection The connection to send response to
+ * @param client The coroutine client instance
  * @param res The response structure
  */
-void router_send_response(async_server_t *server, async_server_connection_t *connection, Res *res) {
-  (void)server; // Server parameter not currently used
+void router_send_response(turbo_coro_client_t *client, Res *res) {
+  (void)client; // Client parameter not currently used
   
-  if (!connection || !res) {
+  if (!client || !res) {
     return;
   }
 

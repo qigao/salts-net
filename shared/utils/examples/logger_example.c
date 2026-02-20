@@ -12,12 +12,12 @@
 
 #include "tlog.h"
 #include "platform.h"
+#include "turbo_fs.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-// =============================================================================
-// Custom callback sink example - could send to network, database, etc.
-// =============================================================================
+// ... (existing code) ...
 
 static int g_error_count = 0;
 
@@ -375,6 +375,53 @@ static void example_async_throughput(void) {
   tlog_destroy(logger);
   printf("  Check throughput.log for output\n");
 }
+ 
+// =============================================================================
+// Example 9: Mmap Sink (High Performance)
+// =============================================================================
+
+static void example_mmap_logging(void) {
+  printf("\n=== Example 9: Mmap Sink (High Performance) ===\n");
+
+  tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+  tlog_t *logger = tlog_create(&config);
+
+  char tmp_path[256];
+  turbo_fs_get_tmpdir(tmp_path, sizeof(tmp_path) - 32);
+  strcat(tmp_path, "/example_mmap.log");
+
+  // Create mmap sink
+  turbo_mmap_sink_opts_t mmap_opts = {
+    .path = tmp_path,
+    .file_size = 10 * 1024 * 1024, // 10MB pre-allocated
+    .circular = 1,                 // Circular buffer mode
+    .pattern = TURBO_LOG_FULL_PATTERN
+  };
+  turbo_log_sink_t *sink = turbo_sink_mmap_create(&mmap_opts);
+  
+  if (sink) {
+    tlog_add_sink(logger, sink);
+    
+    printf("  Logging to memory-mapped file: %s\n", tmp_path);
+    TURBO_LOG_INFO(logger, "Mmap", "This is written directly to memory!");
+    TURBO_LOG_WARN(logger, "Mmap", "High-speed logging enabled");
+    
+    for (int i = 0; i < 5; i++) {
+       TURBO_LOG_DEBUG(logger, "Mmap", "Fast log #{}", i);
+    }
+    
+    // Explicit flush not strictly required for mmap persistence (OS handles it),
+    // but good practice to sync before exit.
+    tlog_flush(logger);
+  } else {
+    printf("  Failed to create mmap sink (platform might not support it)\n");
+  }
+
+  tlog_destroy(logger);
+  
+  // Cleanup the file for the example
+  turbo_fs_unlink(tmp_path);
+}
 
 // =============================================================================
 // Main
@@ -392,7 +439,9 @@ int main(void) {
   example_format_patterns();
   example_async_logging();
   example_async_throughput();
+  example_mmap_logging();
 
   printf("\n=== All examples completed ===\n");
   return 0;
 }
+// =============================================================================

@@ -6,16 +6,71 @@
 #include <string.h>
 #include <stdio.h>
 
-s3_http_response_t s3_http_execute(s3_http_request_t* req) {
+// Parse raw "Name: Value\r\n" header string into S3Headers
+static void parse_raw_headers_into_s3headers(const char* raw, size_t raw_len, S3Headers* out) {
+    if (!raw || raw_len == 0) return;
+    const char* p = raw;
+    const char* end = raw + raw_len;
+    while (p < end) {
+        const char* line_end = p;
+        while (line_end < end && *line_end != '\r' && *line_end != '\n') line_end++;
+        if (line_end == p) { // empty line
+            while (line_end < end && (*line_end == '\r' || *line_end == '\n')) line_end++;
+            p = line_end;
+            continue;
+        }
+        const char* colon = memchr(p, ':', (size_t)(line_end - p));
+        if (colon) {
+            // Name
+            size_t name_len = (size_t)(colon - p);
+            char* name = malloc(name_len + 1);
+            memcpy(name, p, name_len);
+            name[name_len] = '\0';
+            // Value (skip ": " prefix)
+            const char* val = colon + 1;
+            while (val < line_end && *val == ' ') val++;
+            size_t val_len = (size_t)(line_end - val);
+            char* value = malloc(val_len + 1);
+            memcpy(value, val, val_len);
+            value[val_len] = '\0';
+            s3_headers_add(out, name, value);
+            free(name);
+            free(value);
+        }
+        // Advance past \r\n
+        p = line_end;
+        while (p < end && (*p == '\r' || *p == '\n')) p++;
+    }
+}
+
+s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t* req) {
     s3_http_response_t res = {0};
     res.headers = S3Headers_init();
 
-    http_client_t* client = http_client_create();
+    http_coro_client_t *client = http_coro_client_create(ctx);
     if (!client) {
-        res.error = s3_error_make(-1, "Failed to create HTTP client");
+        res.error = s3_error_make(-1, "Failed to create HTTP coro client");
         return res;
     }
-    http_client_follow_redirects(client, 0);
+    http_coro_client_follow_redirects(client, 0);
+
+    http_async_retry_policy_t policy = {0};
+    policy.max_retries = 3;
+    policy.initial_delay_ms = 1000;
+    policy.max_delay_ms = 30000;
+    policy.exponential_backoff = 1;
+    policy.retry_on_timeout = 0;
+    policy.retry_on_connection_error = 1;
+    policy.retry_on_5xx = 1;
+    policy.jitter_factor = 0.1;
+    http_coro_client_set_retry_policy(client, &policy);
+
+    // Base 30s + 30s per MB of body to accommodate large uploads on slow networks
+    int timeout_ms = 30000;
+    if (req->body_len > 0) {
+        timeout_ms += (int)((req->body_len / (1024 * 1024)) + 1) * 30000;
+    }
+    http_coro_client_set_timeout(client, timeout_ms);
 
     int hdr_count = 0;
     const char** hdrs = s3_headers_to_http_array(&req->headers, &hdr_count);
@@ -27,17 +82,17 @@ s3_http_response_t s3_http_execute(s3_http_request_t* req) {
     else if (strcmp(req->method, "DELETE") == 0) method = HTTP_DELETE;
     else if (strcmp(req->method, "HEAD") == 0) method = HTTP_HEAD;
 
-
-    http_response_t* hresp = http_request(client, method, req->url, hdrs, hdr_count, req->body, req->body_len);
+    http_coro_response_t *hresp = http_coro_request(client, method, req->url,
+                                                     hdrs, hdr_count,
+                                                     req->body, req->body_len);
 
     if (hresp) {
         res.status_code = hresp->status_code;
         res.body = hresp->body ? tstr_dup(hresp->body) : tstr_new();
 
-        // Parse response headers into S3Headers
-        // http_response_t has headers_list (http_header_entry_t*)
-        for (http_header_entry_t* p = hresp->headers_list; p; p = p->next) {
-            s3_headers_add(&res.headers, p->name, p->value);
+        // Parse raw headers string into S3Headers
+        if (hresp->headers && hresp->headers_len > 0) {
+            parse_raw_headers_into_s3headers(hresp->headers, hresp->headers_len, &res.headers);
         }
 
         if (hresp->error) {
@@ -45,7 +100,7 @@ s3_http_response_t s3_http_execute(s3_http_request_t* req) {
         } else {
             res.error = S3_OK;
         }
-        http_response_free(hresp);
+        http_coro_response_free(hresp);
     } else {
         res.error = s3_error_make(-1, "HTTP request failed (no response)");
     }
@@ -56,7 +111,7 @@ s3_http_response_t s3_http_execute(s3_http_request_t* req) {
         free(hdrs);
     }
 
-    http_client_destroy(client);
+    http_coro_client_destroy(client);
     return res;
 }
 
@@ -148,7 +203,7 @@ s3_http_response_t s3_execute_signed(s3_client_t* client,
 
     s3_http_response_t result;
     if (s3_is_ok(err)) {
-        result = s3_http_execute(&req);
+        result = s3_http_execute(client->coro_ctx, &req);
     } else {
         result.status_code = 0;
         result.body = NULL;

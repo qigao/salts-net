@@ -4,7 +4,8 @@
 #include "middleware.h"
 #include "route_trie.h"
 #include "security.h"
-#include "turbo_async_server.h"
+#include "security.h"
+#include "netcore/turbo_coro_client.h"
 #include "turbo_str.h"
 #include "tlog.h"
 #include <ctype.h>
@@ -22,7 +23,7 @@ struct http_parser_impl {
 
 /* Forward declaration of connection context structure from server_refactored.c */
 typedef struct {
-  async_server_connection_t *connection;
+  turbo_coro_client_t *client;
   char buffer[8192]; /* READ_BUF_SIZE */
   size_t buffer_used;
   int keep_alive;
@@ -33,15 +34,15 @@ typedef struct {
 } iris_connection_ctx_t;
 
 // Write request structure definition (forward declared in router.h)
+// Write request structure definition (forward declared in router.h)
 struct write_req_s {
-  async_server_t *server;
-  async_server_connection_t *connection;
+  turbo_coro_client_t *client;
   char *data; // Heap allocated (managed by caller)
 };
 
 // Sends error responses (400, 413, 414, or 500) - uses NetCore send
-static void send_error(async_server_t *server, async_server_connection_t *connection, int error_code) {
-  if (!connection)
+static void send_error(turbo_coro_client_t *client, int error_code) {
+  if (!client)
     return;
 
   const char *err = NULL;
@@ -85,9 +86,9 @@ static void send_error(async_server_t *server, async_server_connection_t *connec
     return;
 
   size_t len = strlen(err);
-  async_server_status_t status = async_server_send(server, connection, err, len);
-  if (status != ASYNC_SERVER_STATUS_OK) {
-    TLOG_ERROR("Send error: {}", async_server_status_to_string(status));
+  int status = turbo_coro_client_send(client, err, len);
+  if (status != 0) {
+    TLOG_ERROR("Send error: %d", status);
   }
 }
 
@@ -206,18 +207,18 @@ void *get_context(Req *req) {
 
 /**
  * @brief Set middleware-specific data on a connection
- * @param connection The connection to attach data to
+ * @param client The connection to attach data to
  * @param data The data to attach
  * @param cleanup Cleanup function to call when connection is closed
  */
-void set_connection_context(async_server_connection_t *connection, void *data,
+void set_connection_context(turbo_coro_client_t *client, void *data,
                             void (*cleanup)(void *)) {
-  if (!connection) {
+  if (!client) {
     return;
   }
 
   /* Get the connection context from NetCore */
-  void *ctx_ptr = async_server_connection_get_user_data(connection);
+  void *ctx_ptr = turbo_coro_client_get_user_data(client);
   if (!ctx_ptr) {
     /* No connection context exists - this shouldn't happen in normal operation */
     TLOG_ERROR("Warning: Attempting to set connection context on connection without context");
@@ -239,16 +240,16 @@ void set_connection_context(async_server_connection_t *connection, void *data,
 
 /**
  * @brief Get middleware-specific data from a connection
- * @param connection The connection to get data from
+ * @param client The connection to get data from
  * @return The middleware data, or NULL if none set
  */
-void *get_connection_context(async_server_connection_t *connection) {
-  if (!connection) {
+void *get_connection_context(turbo_coro_client_t *client) {
+  if (!client) {
     return NULL;
   }
 
   /* Get the connection context from NetCore */
-  void *ctx_ptr = async_server_connection_get_user_data(connection);
+  void *ctx_ptr = turbo_coro_client_get_user_data(client);
   if (!ctx_ptr) {
     return NULL;
   }
@@ -260,7 +261,7 @@ void *get_connection_context(async_server_connection_t *connection) {
 
 // Create and initialize Req
 /* Phase IRIS-1: Updated to use turbo_arena_t */
-static Req *create_req(turbo_arena_t *arena, async_server_t *server, async_server_connection_t *connection) {
+static Req *create_req(turbo_arena_t *arena, turbo_coro_client_t *client) {
   if (!arena)
     return NULL;
 
@@ -271,8 +272,7 @@ static Req *create_req(turbo_arena_t *arena, async_server_t *server, async_serve
 
   memset(req, 0, sizeof(Req));
   req->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
-  req->server = server;
-  req->connection = connection; /* NetCore migration: use connection instead of client_socket */
+  req->client = client;         /* NetCore migration: use client */
   req->method = NULL;
   req->path = NULL;
   req->body = NULL;
@@ -302,7 +302,7 @@ static Req *create_req(turbo_arena_t *arena, async_server_t *server, async_serve
 
 // Create and initialize Res
 /* Phase IRIS-1: Updated to use turbo_arena_t */
-static Res *create_res(turbo_arena_t *arena, async_server_t *server, async_server_connection_t *connection) {
+static Res *create_res(turbo_arena_t *arena, turbo_coro_client_t *client) {
   if (!arena)
     return NULL;
 
@@ -313,8 +313,7 @@ static Res *create_res(turbo_arena_t *arena, async_server_t *server, async_serve
 
   memset(res, 0, sizeof(Res));
   res->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
-  res->server = server;
-  res->connection = connection; /* NetCore migration: use connection instead of client_socket */
+  res->client = client;         /* NetCore migration: use client */
   res->status = 200;
   res->content_type = turbo_arena_strdup(arena, "text/plain"); /* Phase IRIS-1: Updated */
   res->body = NULL;
@@ -555,7 +554,7 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
 
 // Composes and sends the response (headers + body) using NetCore send
 void reply(Res *res, int status, const char *content_type, const void *body, size_t body_len) {
-  if (!res || !res->connection) {
+  if (!res || !res->client) {
     return;
   }
 
@@ -653,7 +652,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   // Allocate and fill entire header string using malloc
   char *all_headers = malloc(headers_size + 1);
   if (!all_headers) {
-    send_error(res->server, res->connection, 500);
+    send_error(res->client, 500);
     return;
   }
 
@@ -666,7 +665,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
         pos += n;
       } else {
         free(all_headers);
-        send_error(res->server, res->connection, 500);
+        send_error(res->client, 500);
         return;
       }
     }
@@ -690,7 +689,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     free(all_headers);
     if (escaped_buffer)
       free(escaped_buffer);
-    send_error(res->server, res->connection, 500);
+    send_error(res->client, 500);
     return;
   }
 
@@ -702,7 +701,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     free(all_headers);
     if (escaped_buffer)
       free(escaped_buffer);
-    send_error(res->server, res->connection, 500);
+    send_error(res->client, 500);
     return;
   }
 
@@ -724,7 +723,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     free(response);
     if (escaped_buffer)
       free(escaped_buffer);
-    send_error(res->server, res->connection, 500);
+    send_error(res->client, 500);
     return;
   }
 
@@ -733,9 +732,9 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   }
 
   // Send using NetCore API
-  async_server_status_t result = async_server_send(res->server, res->connection, response, total_len);
-  if (result != ASYNC_SERVER_STATUS_OK) {
-    TLOG_ERROR("Send error: {}", async_server_status_to_string(result));
+  int result = turbo_coro_client_send(res->client, response, total_len);
+  if (result != 0) {
+    TLOG_ERROR("Send error: %d", result);
   }
 
   // Free the response buffer immediately since NetCore copies the data
@@ -750,7 +749,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
 // Streaming (SSE) support implementation
 
 void reply_stream_start(Res *res, int status) {
-  if (!res || !res->connection)
+  if (!res || !res->client)
     return;
 
   // Get current date
@@ -775,12 +774,12 @@ void reply_stream_start(Res *res, int status) {
                          status, date_str);
 
   if (n > 0) {
-    async_server_send(res->server, res->connection, headers, n);
+    turbo_coro_client_send(res->client, headers, n);
   }
 }
 
 void reply_stream_chunk(Res *res, const char *data) {
-  if (!res || !res->connection || !data)
+  if (!res || !res->client || !data)
     return;
 
   // Format the SSE payload: "data: <content>\n\n"
@@ -801,23 +800,23 @@ void reply_stream_chunk(Res *res, const char *data) {
   stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", payload_len);
   
   // Send length
-  async_server_send(res->server, res->connection, hex_len, strlen(hex_len));
+  turbo_coro_client_send(res->client, hex_len, strlen(hex_len));
   // Send payload
-  async_server_send(res->server, res->connection, payload, payload_len);
+  turbo_coro_client_send(res->client, payload, payload_len);
   // Send trailing CRLF
-  async_server_send(res->server, res->connection, "\r\n", 2);
+  turbo_coro_client_send(res->client, "\r\n", 2);
   
   free(payload);
 }
 
 void reply_stream_end(Res *res) {
-  if (!res || !res->connection)
+  if (!res || !res->client)
     return;
     
   // Send the zero-length chunk to signal end of stream
   // Format: 0\r\n\r\n
   const char *end_chunk = "0\r\n\r\n";
-  async_server_send(res->server, res->connection, end_chunk, strlen(end_chunk));
+  turbo_coro_client_send(res->client, end_chunk, strlen(end_chunk));
 }
 
 // =============================================================================
@@ -846,12 +845,12 @@ static void send_headers_only(Res *res, int status, const char *content_type,
                          res->keep_alive ? "keep-alive" : "close");
 
   if (n > 0) {
-    async_server_send(res->server, res->connection, headers, n);
+    turbo_coro_client_send(res->client, headers, n);
   }
 }
 
 int reply_file(Res *res, int status, const char *content_type, const char *file_path) {
-  if (!res || !res->connection || !file_path)
+  if (!res || !res->client || !file_path)
     return -1;
 
   FILE *fp = fopen(file_path, "rb");
@@ -882,13 +881,13 @@ int reply_file(Res *res, int status, const char *content_type, const char *file_
   }
 
   send_headers_only(res, status, content_type, (size_t)file_size, NULL);
-  async_server_send(res->server, res->connection, data, (size_t)file_size);
+  turbo_coro_client_send(res->client, data, (size_t)file_size);
   free(data);
   return 0;
 }
 
 int reply_download(Res *res, const char *file_path, const char *download_name) {
-  if (!res || !res->connection || !file_path)
+  if (!res || !res->client || !file_path)
     return -1;
 
   // Extract filename from path if download_name not provided
@@ -931,13 +930,13 @@ int reply_download(Res *res, const char *file_path, const char *download_name) {
                  "Content-Disposition: attachment; filename=\"%s\"\r\n", filename);
 
   send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra);
-  async_server_send(res->server, res->connection, data, (size_t)file_size);
+  turbo_coro_client_send(res->client, data, (size_t)file_size);
   free(data);
   return 0;
 }
 
 void reply_chunked_start(Res *res, int status, const char *content_type) {
-  if (!res || !res->connection)
+  if (!res || !res->client)
     return;
 
   time_t now = time(NULL);
@@ -958,35 +957,35 @@ void reply_chunked_start(Res *res, int status, const char *content_type) {
                          res->keep_alive ? "keep-alive" : "close");
 
   if (n > 0) {
-    async_server_send(res->server, res->connection, headers, n);
+    turbo_coro_client_send(res->client, headers, n);
   }
 }
 
 void reply_chunked_write(Res *res, const void *data, size_t len) {
-  if (!res || !res->connection || !data || len == 0)
+  if (!res || !res->client || !data || len == 0)
     return;
 
   char hex_len[32];
   int n = stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", len);
   if (n > 0) {
-    async_server_send(res->server, res->connection, hex_len, n);
-    async_server_send(res->server, res->connection, data, len);
-    async_server_send(res->server, res->connection, "\r\n", 2);
+    turbo_coro_client_send(res->client, hex_len, n);
+    turbo_coro_client_send(res->client, data, len);
+    turbo_coro_client_send(res->client, "\r\n", 2);
   }
 }
 
 void reply_chunked_end(Res *res) {
-  if (!res || !res->connection)
+  if (!res || !res->client)
     return;
 
-  async_server_send(res->server, res->connection, "0\r\n\r\n", 5);
+  turbo_coro_client_send(res->client, "0\r\n\r\n", 5);
 }
 
 #define DEFAULT_CHUNK_SIZE (64 * 1024)
 
 int reply_file_chunked(Res *res, int status, const char *content_type,
                        const char *file_path, size_t chunk_size) {
-  if (!res || !res->connection || !file_path)
+  if (!res || !res->client || !file_path)
     return -1;
 
   FILE *fp = fopen(file_path, "rb");
@@ -1126,17 +1125,17 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
 }
 
 // Main router function
-int router(async_server_t *server, async_server_connection_t *connection, const char *request_data, size_t request_len) {
-  if (!connection || !request_data || request_len == 0) {
-    if (connection)
-      send_error(server, connection, 400);
+int router(turbo_coro_client_t *client, const char *request_data, size_t request_len) {
+  if (!client || !request_data || request_len == 0) {
+    if (client)
+      send_error(client, 400);
     return 1;
   }
 
   // Phase IRIS-1: Create request arena (8KB initial - enough for typical HTTP request)
   turbo_arena_t arena;
   if (turbo_arena_init(&arena, 8192) != 0) {
-    send_error(server, connection, 500);
+    send_error(client, 500);
     return 1; // Close connection on arena init failure
   }
 
@@ -1152,8 +1151,8 @@ int router(async_server_t *server, async_server_connection_t *connection, const 
 
   // Create resources
   ctx = create_http_context(&arena);
-  req = create_req(&arena, server, connection);
-  res = create_res(&arena, server, connection);
+  req = create_req(&arena, client);
+  res = create_res(&arena, client);
 
   if (!ctx || !req || !res) {
     error_code = 500;
@@ -1296,7 +1295,7 @@ int router(async_server_t *server, async_server_connection_t *connection, const 
 cleanup:
   // Send error responses if needed
   if (send_error_response && error_code > 0) {
-    send_error(server, connection, error_code);
+    send_error(client, error_code);
   } else if (send_404_response) {
     const char *not_found_msg = "404 Not Found";
     reply(res, 404, "text/plain", not_found_msg, strlen(not_found_msg));
@@ -1376,7 +1375,7 @@ Res *copy_res(const Res *original) {
   // Copy primitive fields
   *copy = *original;
   copy->arena = NULL;
-  copy->server = original->server;
+  copy->client = original->client;
   copy->body = original->body; // pointer only, not deep copied
   copy->content_type = original->content_type;
 
@@ -1429,8 +1428,7 @@ Req *copy_req(const Req *original) {
 
   // Copy primitive fields
   copy->arena = NULL;
-  copy->connection = original->connection; /* NetCore migration: use connection */
-  copy->server = original->server;
+  copy->client = original->client; /* NetCore migration: use client */
   copy->body_len = original->body_len;
 
   // Deep copy method string
@@ -1519,8 +1517,7 @@ Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original) {
 
   // Copy primitive fields
   copy->arena = target_arena;
-  copy->connection = original->connection; /* NetCore migration: use connection */
-  copy->server = original->server;
+  copy->client = original->client; /* NetCore migration: use client */
   copy->body_len = original->body_len;
 
   // Deep copy strings using target arena
@@ -1573,7 +1570,7 @@ Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original) {
   // Copy primitive fields
   *copy = *original;
   copy->arena = target_arena;
-  copy->server = original->server;
+  copy->client = original->client;
 
   if (original->content_type)
     copy->content_type = turbo_arena_strdup(target_arena, original->content_type);

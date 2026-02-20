@@ -1,7 +1,7 @@
 # HTTP Client Examples
 set(folder_name ${TARGET_NAME}/examples)
 
-# List of example programs (sync client)
+# List of example programs (coro client)
 set(HTTP_EXAMPLES
     simple_get
     post_json
@@ -20,12 +20,13 @@ set(HTTP_EXAMPLES
     advanced_features_example
     login_request
     asan_verify
-    jwt_auth_example)
+    jwt_auth_example
+    coro_http_example)
 
 # Build each example
 foreach(example_name ${HTTP_EXAMPLES})
   add_executable(${example_name} ${example_name}.c)
-  target_link_libraries(${example_name} PRIVATE http_client TurboNet::TinyTest)
+  target_link_libraries(${example_name} PRIVATE http_coro_client TurboNet::TinyTest)
   set_target_properties(${example_name} PROPERTIES FOLDER http/${folder_name})
   add_sanitizers(${example_name})
 # Platform-specific settings

@@ -7,8 +7,10 @@
 // Internal definition of the opaque client struct.
 // Only used by s3_client.c and s3_http.c.
 struct s3_client_s {
+    turbo_coro_context_t *coro_ctx;
     s3_base_url_t base_url;
     s3_credential_provider_t* provider;
+    size_t part_size;  // multipart part size, 0 = default (5MB)
 };
 
 #endif // SRC_S3_CLIENT_INTERNAL_H

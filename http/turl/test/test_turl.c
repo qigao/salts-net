@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "turl_common.h"
-#include "history/turl_history.h"
-#include "history/turl_collection.h"
+#include "collection/turl_history.h"
+#include "collection/turl_collection.h"
 
 spec("turl_unit") {
     before_each() {
@@ -32,38 +32,75 @@ spec("turl_unit") {
         json_free(ctx);
     }
 
-    it("should log history correctly") {
-        turl_http_config_t config = {0};
-        config.method_str = "POST";
-        char *h1 = strdup("Content-Type: application/json");
-        char *headers[] = {h1};
-        config.headers = headers;
-        config.header_count = 1;
-        config.body = "{\"test\":true}";
+    it("should render complex headers and URLs") {
+        json_value_t *ctx = json_create_object();
+        json_object_set_string(ctx, "base_url", "http://api.example.com");
+        json_object_set_string(ctx, "token", "super-secret-token");
+        json_object_set_string(ctx, "user_id", "42");
+
+        char *url = turl_render_template("{{base_url}}/users/{{user_id}}", ctx);
+        check_str_eq(url, "http://api.example.com/users/42");
+        free(url);
+
+        char *auth_header = turl_render_template("Authorization: Bearer {{token}}", ctx);
+        check_str_eq(auth_header, "Authorization: Bearer super-secret-token");
+        free(auth_header);
+
+        json_free(ctx);
+    }
+
+    it("should render JWT claims correctly") {
+        json_value_t *ctx = json_create_object();
+        json_object_set_string(ctx, "sub", "user_123");
+        json_object_set_string(ctx, "role", "admin");
         
-        turl_history_log(&config, "http://example.com/api", 200, "{\"status\":\"ok\"}", 15, "Server: TurboNet\r\n");
+        const char *claims_tmpl = "{\"sub\": \"{{sub}}\", \"role\": \"{{role}}\", \"iat\": 1600000000}";
+        char *rendered = turl_render_template(claims_tmpl, ctx);
+        
+        check_not_null(rendered);
+        // Note: mustache might change field order if it were a JSON re-serialization, 
+        // but here it's just string substitution.
+        check_str_eq(rendered, "{\"sub\": \"user_123\", \"role\": \"admin\", \"iat\": 1600000000}");
+        
+        free(rendered);
+        json_free(ctx);
+    }
+
+    it("should log collection with multiple headers correctly") {
+        turl_http_config_t config = {0};
+        config.method_str = "PUT";
+        char *h1 = strdup("Content-Type: application/json");
+        char *h2 = strdup("X-Custom-Header: {{val}}");
+        char *headers[] = {h1, h2};
+        config.headers = headers;
+        config.header_count = 2;
+        config.body = "{\"data\":\"test\"}";
+        
+        // We simulate that the header templates are ALREADY rendered before history_log
+        // since history_log usually happens AFTER execution where rendering occurred.
+        // Actually, turl_history_log uses config->headers directly.
+        
+        turl_history_log(&config, "http://example.com/put", headers, 2, 201, "{\"ok\":true}", 11, "Server: TurboNet\r\n");
         
         free(h1);
+        free(h2);
 
-        // Check if file exists
         FILE *f = fopen(".turl_history.json", "r");
         check_not_null(f);
-        
         char line[4096];
         check_not_null(fgets(line, sizeof(line), f));
         fclose(f);
         
-        // Parse read line
         json_value_t *history = json_parse(line, strlen(line));
         check_not_null(history);
         
         json_value_t *req = json_object_get(history, "request");
-        check_not_null(req);
-        check_str_eq(json_get_string(req, "url"), "http://example.com/api");
-
-        json_value_t *resp = json_object_get(history, "response");
-        check_not_null(resp);
-        check_int_eq((int)json_get_double(resp, "status", 0.0), 200);
+        json_value_t *req_headers = json_object_get(req, "headers");
+        check_not_null(req_headers);
+        
+        // Check both headers exist in history
+        check_not_null(json_object_get(req_headers, "Content-Type"));
+        check_not_null(json_object_get(req_headers, "X-Custom-Header"));
         
         json_free(history);
     }

@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include "netcore.h"
 #include "platform.h"
+#include "turbo_thread.h"
 
 
 #ifdef __cplusplus

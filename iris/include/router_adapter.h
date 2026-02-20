@@ -1,34 +1,25 @@
 #ifndef ROUTER_ADAPTER_H
 #define ROUTER_ADAPTER_H
 
-#include "turbo_async_server.h"
 #include "router.h"
+#include "netcore/turbo_coro_client.h"
 #include "platform.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * @brief Process HTTP request through router using async_server connection
- * 
- * @param server The async server instance
- * @param connection The connection that received the data
- * @param request_data The HTTP request data
- * @param request_len Length of the request data
- * @return 1 if connection should be closed, 0 to keep alive
- */
-CXX_C_API int router_process_request(async_server_t *server, async_server_connection_t *connection,
-                           const char *request_data, size_t request_len);
+// Process an incoming request from the async server
+// Returns 1 if connection should be closed, 0 otherwise
+CXX_C_API int router_process_request(turbo_coro_client_t *client, const char *data, size_t len);
 
 /**
- * @brief Send HTTP response through async_server connection
+ * @brief Send HTTP response through turbo_coro_client
  * 
- * @param server The async server instance
- * @param connection The connection to send response to
+ * @param client The coroutine client instance
  * @param res The response structure
  */
-CXX_C_API void router_send_response(async_server_t *server, async_server_connection_t *connection, Res *res);
+CXX_C_API void router_send_response(turbo_coro_client_t *client, Res *res);
 
 #ifdef __cplusplus
 }

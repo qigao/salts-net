@@ -1,4 +1,4 @@
-#include "history/turl_history.h"
+#include "collection/turl_history.h"
 #include "turl_common.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +10,7 @@
 #define HISTORY_FILE ".turl_history.json"
 
 void turl_history_log(const turl_http_config_t *config, const char *rendered_url,
+                      char **rendered_headers, uint32_t rendered_header_count,
                       int status_code, const char *response_body, size_t response_len,
                       const char *response_headers) {
     
@@ -27,14 +28,17 @@ void turl_history_log(const turl_http_config_t *config, const char *rendered_url
     json_object_add(req, "method", json_create_string(config->method_str ? config->method_str : "GET"));
     json_object_add(req, "url", json_create_string(rendered_url));
     
-    if (config->header_count > 0) {
+    if (rendered_header_count > 0 && rendered_headers) {
         json_value_t *req_headers = json_create_object();
-        for (uint32_t i = 0; i < config->header_count; i++) {
-            char *h = config->headers[i];
+        for (uint32_t i = 0; i < rendered_header_count; i++) {
+            char *h = rendered_headers[i];
+            if (!h) continue;
             char *colon = strchr(h, ':');
             if (colon) {
                 *colon = '\0';
-                json_object_add(req_headers, h, json_create_string(colon + 1));
+                const char *val = colon + 1;
+                while (*val == ' ') val++;
+                json_object_add(req_headers, h, json_create_string(val));
                 *colon = ':'; // restore
             }
         }

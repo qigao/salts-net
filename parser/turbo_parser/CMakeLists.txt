@@ -11,6 +11,7 @@ target_include_directories(
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/soa_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/cmd_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/dotenv_parser/include
+          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/datetime_parser/include
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toon
           ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toml/include
           ${CMAKE_SOURCE_DIR}/vendor/cxml/include
@@ -32,6 +33,7 @@ target_link_libraries(
           cmd_parser
           toon
           toml_parser
+          datetime_parser
           cxml)
 
 set_target_properties(

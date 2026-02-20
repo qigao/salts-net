@@ -95,6 +95,7 @@ struct turbo_websocket_client_s {
   int close_received;            /**< 1 if close frame received */
   uint16_t close_code;           /**< Close code */
   int pending_destroy;           /**< 1 if destroy was called, defer free to close callback */
+  int in_close_callback;         /**< 1 if currently executing on_close callback */
 
   /* Arena for connection lifetime allocations */
   turbo_arena_t *conn_arena;     /**< Arena for config, buffers, etc. */

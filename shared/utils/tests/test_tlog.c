@@ -1,4 +1,5 @@
 #include "tlog.h"
+#include "turbo_fs.h"
 #include "tinytest.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -225,5 +226,55 @@ spec("TLog Tests") {
       // Restoration
       tlog_set_level(tlog_get_default(), TURBO_LOG_LEVEL_INFO);
     }
+  }
+
+  it("should handle mmap sink") {
+    char tmp_path[256];
+    char* sep = "/";
+#ifdef _WIN32
+    sep = "\\";
+#endif
+    turbo_fs_get_tmpdir(tmp_path, sizeof(tmp_path) - 32);
+    strcat(tmp_path, sep);
+    strcat(tmp_path, "test_tlog_mmap.log");
+
+    // Remove existing file if any
+    turbo_fs_unlink(tmp_path);
+
+    tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+    tlog_t *logger = tlog_create(&config);
+    check_not_null(logger);
+
+    turbo_mmap_sink_opts_t opts = {
+        .path = tmp_path,
+        .file_size = 64 * 1024, // 64KB
+        .circular = 0,
+        .pattern = "{message}" // Simplify pattern for easy verification
+    };
+    turbo_log_sink_t *sink = turbo_sink_mmap_create(&opts);
+    check_not_null(sink);
+    tlog_add_sink(logger, sink);
+
+    const char *msg = "This is a memory-mapped log message";
+    TURBO_LOG_INFO(logger, "mmap", msg);
+
+    // Flush to ensure data hits disk/file-system for reading
+    tlog_flush(logger);
+    
+    // Clean up logger to ensure mmap unmap/close happens
+    tlog_destroy(logger);
+
+    // Verify file content
+    turbo_fs_buf_t buf;
+    int err = turbo_fs_read_file(tmp_path, &buf);
+    check_int_eq(err, 0);
+    
+    // Check if message is in the file (plus newline)
+    check_size_gt(buf.len, strlen(msg));
+    buf.base[buf.len] = '\0'; // Ensure null-termination for strstr
+    check_not_null(strstr(buf.base, msg));
+
+    turbo_fs_buf_free(&buf);
+    turbo_fs_unlink(tmp_path);
   }
 }

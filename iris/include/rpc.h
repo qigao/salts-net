@@ -23,7 +23,7 @@ extern "C" {
 typedef enum {
   RPC_PROTOCOL_JSON = 0, /**< JSON-RPC 2.0 */
   RPC_PROTOCOL_MSGPACK,  /**< MessagePack-RPC */
-  RPC_PROTOCOL_CBOR,     /**< CBOR-RPC */
+
   RPC_PROTOCOL_PROTOBUF  /**< Protocol Buffers */
 } rpc_protocol_t;
 

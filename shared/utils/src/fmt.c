@@ -153,9 +153,14 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
     written = stbsp_snprintf(temp, sizeof(temp), P("%zu"), arg->val.sz);
     break;
 
-  case FMT_TYPE_BOOL:
-    written = stbsp_snprintf(temp, sizeof(temp), P("%s"), arg->val.b ? "true" : "false");
-    break;
+  case FMT_TYPE_BOOL: {
+    const char *bstr = arg->val.b ? "true" : "false";
+    size_t blen = arg->val.b ? 4 : 5;
+    if (dst + blen > end)
+      blen = (size_t)(end - dst);
+    memcpy(dst, bstr, blen);
+    return (int)blen;
+  }
 
   case FMT_TYPE_STRV: {
     const char *s = arg->val.sv.data ? arg->val.sv.data : "(null)";

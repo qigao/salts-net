@@ -446,6 +446,17 @@ turbo_file_t turbo_fs_open(const char *path, int flags, int mode) {
   return fd;
 }
 
+int turbo_fs_ftruncate(turbo_file_t fd, int64_t length) {
+  if (fd == TURBO_INVALID_FILE) {
+    return UV_EINVAL;
+  }
+
+  uv_fs_t req;
+  int err = uv_fs_ftruncate(NULL, &req, (uv_file)fd, length, NULL);
+  uv_fs_req_cleanup(&req);
+  return err;
+}
+
 int turbo_fs_read(turbo_file_t fd, char *buf, size_t len) {
   if (fd == TURBO_INVALID_FILE || !buf) {
     return UV_EINVAL;
@@ -454,6 +465,19 @@ int turbo_fs_read(turbo_file_t fd, char *buf, size_t len) {
   uv_fs_t req;
   uv_buf_t uv_buf = uv_buf_init(buf, (unsigned int)len);
   int err = uv_fs_read(NULL, &req, (uv_file)fd, &uv_buf, 1, -1, NULL);
+
+  uv_fs_req_cleanup(&req);
+  return err;
+}
+
+int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t offset) {
+  if (fd == TURBO_INVALID_FILE || !buf) {
+    return UV_EINVAL;
+  }
+
+  uv_fs_t req;
+  uv_buf_t uv_buf = uv_buf_init(buf, (unsigned int)len);
+  int err = uv_fs_read(NULL, &req, (uv_file)fd, &uv_buf, 1, offset, NULL);
 
   uv_fs_req_cleanup(&req);
   return err;

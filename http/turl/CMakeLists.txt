@@ -16,11 +16,10 @@ target_link_libraries(
          TurboNet::Mustache
          TurboNet::JsonParser
          TurboNet::CmdParser
-         TurboNet::Quick
          TurboNet::Utils
-         qjs
+         http_coro_client
   PRIVATE 
-         cjwt http_client_async
+         cjwt qjs
          )  
 
 target_include_directories(

@@ -143,12 +143,13 @@ static void add_client_mapping(uint32_t conv_id, turbo_kcp_client_t *client) {
 
   mapping->conv_id = conv_id;
   mapping->client = client;
+  
+  /* Insert at head of the bucket list */
+  mapping->next = g_client_map[hash];
   g_client_map[hash] = mapping;
   
   /* Update active connections (simplified for now, ideally track with atomic or context) */
   /* turbo_stats_gauge_set_fast(s_kcp_stats.active_connections, ...); */
-
-  g_client_map[hash] = mapping;
 }
 
 /* Remove client mapping */
@@ -256,6 +257,9 @@ static int ikcp_output_callback(const char *buf, int len, ikcpcb *kcp, void *use
     return -1;
   }
 
+  /* TLOG_DEBUG("KCP output: %d bytes", len); */
+  // printf("DEBUG: KCP output: %d bytes\n", len);
+
   uv_buf_t uv_buf = uv_buf_init(op->slice.data, (unsigned int)op->slice.length);
   int rc = uv_udp_send(&op->req, client->server->handle, &uv_buf, 1,
                        (const struct sockaddr *)&client->peer_addr, on_send_complete);
@@ -263,6 +267,7 @@ static int ikcp_output_callback(const char *buf, int len, ikcpcb *kcp, void *use
   turbo_arena_buffer_unref(buffer);
 
   if (rc != 0) {
+    printf("DEBUG: uv_udp_send failed: %d\n", rc);
     return_send_op(op);
     return -1;
   }
@@ -481,6 +486,10 @@ static int handle_connection_ack(turbo_kcp_server_t *server, const char *data, s
   if (client->on_connect) {
     client->on_connect(client, 0, NULL);
   }
+  
+  /* Register client in global map so on_kcp_recv can find it by conv_id */
+  add_client_mapping(conv_id, client);
+  
   return 1;
 }
 
@@ -505,6 +514,11 @@ static void process_kcp_recv(turbo_kcp_server_t *server, turbo_kcp_client_t *cli
     }
 
     turbo_arena_buffer_unref(buffer);
+
+    /* Check if client was closed in the callback */
+    if (!client->kcp_ctx) {
+      break;
+    }
   }
 }
 
@@ -862,6 +876,21 @@ int turbo_kcp_client_connect(turbo_kcp_client_t *client, const char *host, unsig
 void turbo_kcp_client_close(turbo_kcp_client_t *client) {
   if (!client) return;
 
+  /* Check if we are closing a copy (e.g. from turbo_coro_client).
+     If so, find the original client and close IT instead. */
+  if (client->conv_id != 0) {
+    turbo_kcp_client_t *original = find_client_by_conv_id(client->conv_id);
+    if (original && original != client) {
+      turbo_kcp_client_close(original);
+      
+      /* Clear the copy's pointers so we don't double-free later */
+      client->kcp_ctx = NULL;
+      client->server = NULL;
+      client->timer_active = 0;
+      return;
+    }
+  }
+
   if (client->timer_active) {
     uv_timer_stop(&client->update_timer);
     uv_close((uv_handle_t *)&client->update_timer, NULL);
@@ -878,14 +907,18 @@ void turbo_kcp_client_close(turbo_kcp_client_t *client) {
   }
 
   if (client->server) {
-    if (client->server->handle) {
-      uv_udp_recv_stop(client->server->handle);
-      if (!uv_is_closing((uv_handle_t *)client->server->handle)) {
-        uv_close((uv_handle_t *)client->server->handle, on_handle_closed);
+    /* Only close the server handle and free the server structure if we are a standalone client.
+       Server-side clients share the server structure which is managed by turbo_kcp_server_stop. */
+    if (client->is_client_mode) {
+      if (client->server->handle) {
+        uv_udp_recv_stop(client->server->handle);
+        if (!uv_is_closing((uv_handle_t *)client->server->handle)) {
+          uv_close((uv_handle_t *)client->server->handle, on_handle_closed);
+        }
       }
+      turbo_arena_free(&client->server->arena);
+      free(client->server);
     }
-    turbo_arena_free(&client->server->arena);
-    free(client->server);
     client->server = NULL;
   }
 

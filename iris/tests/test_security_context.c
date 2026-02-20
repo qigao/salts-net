@@ -6,13 +6,8 @@
 #include "tinytest.h"
 #include "router.h"
 #include "arena_buffer.h"
-#include "turbo_async_server.h"
+#include "netcore/turbo_coro_client.h"
 #include "security.h"
-
-// Mock NetCore structures for testing
-struct async_server_connection_s {
-    int dummy;
-};
 
 spec("security_context") {
     before_each() {
@@ -28,9 +23,6 @@ spec("security_context") {
         turbo_arena_t arena;
         check_int_eq(turbo_arena_init(&arena, 4096), 0);
         
-        // Create mock connection
-        async_server_connection_t mock_connection = {0};
-        
         // Create request using arena allocation (simulating create_req)
         Req *req = turbo_arena_alloc(&arena, sizeof(Req));
         check_not_null(req);
@@ -38,7 +30,7 @@ spec("security_context") {
         // Initialize request structure (simulating create_req logic)
         memset(req, 0, sizeof(Req));
         req->arena = &arena;
-        req->connection = &mock_connection;
+        req->client = NULL; // Mock client
         
         // Initialize security context
         req->security = turbo_arena_alloc(&arena, sizeof(iris_security_context_t));

@@ -1,77 +1,128 @@
 #include "tinytest.h"
-#include "http_client_async.h"
+#include "http_coro_client.h"
+#include <turbo_coro.h>
 #include <string.h>
-#include <stdio.h>
-#include <platform.h>
 
-typedef struct {
-    int done;
-    int data_chunks;
-    size_t total_received;
-    int status_code;
-    int is_sse;
-    char last_error[256];
-} test_ctx_t;
+/* ── Coro test harness ────────────────────────────────────────────── */
 
-static void on_data(http_async_request_t *request, const char *data, size_t len, void *user_data) {
-    test_ctx_t *ctx = (test_ctx_t *)user_data;
-    ctx->data_chunks++;
-    ctx->total_received += len;
+typedef struct { turbo_coro_context_t *ctx; void (*test_fn)(turbo_coro_context_t *ctx); } coro_test_ctx_t;
+
+static void coro_test_entry(turbo_coro_t *co, void *arg) {
+  UNUSED(co);
+  coro_test_ctx_t *tctx = (coro_test_ctx_t *)arg;
+  tctx->test_fn(tctx->ctx);
 }
 
-static void on_complete(http_async_request_t *request, http_async_response_t *response, void *user_data) {
-    test_ctx_t *ctx = (test_ctx_t *)user_data;
-    ctx->status_code = response->status_code;
-    ctx->done = 1;
-    ctx->is_sse = http_async_response_is_sse(response);
-    if (response->error)
-        strncpy(ctx->last_error, response->error, sizeof(ctx->last_error) - 1);
+static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
+  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
+  turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
+  turbo_coro_spawn(sched, coro_test_entry, &tctx);
+  turbo_coro_scheduler_run(sched);
+  turbo_coro_scheduler_destroy(sched);
+  turbo_coro_context_destroy(ctx);
+}
+
+/* ── Stream callback ──────────────────────────────────────────────── */
+
+static size_t s_stream_total = 0;
+static int s_stream_chunks = 0;
+
+static void stream_cb(const char *data, size_t len, void *ud) {
+  UNUSED(ud);
+  UNUSED(data);
+  s_stream_chunks++;
+  s_stream_total += len;
+}
+
+/* ── Result struct ────────────────────────────────────────────────── */
+
+static struct {
+  int ran, skipped, status_code;
+  int data_chunks;
+  size_t total_received;
+  int body_null;
+} g_result;
+
+static int is_network_error(http_coro_response_t *r) {
+  if (!r) return 1;
+  return (r->error_code == HTTP_ERROR_CONNECTION_FAILED ||
+          r->error_code == HTTP_ERROR_TIMEOUT ||
+          r->error_code == HTTP_ERROR_DNS_FAILED);
+}
+
+/* ── Coro test functions ──────────────────────────────────────────── */
+
+static void test_stream_get(turbo_coro_context_t *ctx) {
+  memset(&g_result, 0, sizeof(g_result));
+  g_result.ran = 1;
+  s_stream_total = 0;
+  s_stream_chunks = 0;
+
+  http_coro_client_t *c = http_coro_client_create(ctx);
+  http_coro_client_set_timeout(c, 15000);
+
+  http_coro_response_t *r = http_coro_stream_get(
+      c, "https://httpbin.org/stream/5", stream_cb, NULL);
+  if (is_network_error(r)) {
+    g_result.skipped = 1;
+    http_coro_response_free(r);
+    http_coro_client_destroy(c);
+    return;
+  }
+
+  g_result.status_code = r->status_code;
+  g_result.data_chunks = s_stream_chunks;
+  g_result.total_received = s_stream_total;
+  g_result.body_null = (r->body == NULL);
+
+  http_coro_response_free(r);
+  http_coro_client_destroy(c);
+}
+
+static void test_stream_no_accumulate(turbo_coro_context_t *ctx) {
+  memset(&g_result, 0, sizeof(g_result));
+  g_result.ran = 1;
+  s_stream_total = 0;
+  s_stream_chunks = 0;
+
+  http_coro_client_t *c = http_coro_client_create(ctx);
+  http_coro_client_set_timeout(c, 10000);
+
+  http_coro_response_t *r = http_coro_stream_get(
+      c, "https://httpbin.org/bytes/500", stream_cb, NULL);
+  if (is_network_error(r)) {
+    g_result.skipped = 1;
+    http_coro_response_free(r);
+    http_coro_client_destroy(c);
+    return;
+  }
+
+  g_result.status_code = r->status_code;
+  g_result.total_received = s_stream_total;
+
+  http_coro_response_free(r);
+  http_coro_client_destroy(c);
 }
 
 spec("http async streaming") {
 
     it("should stream GET from httpbin") {
-        http_async_client_t *client = http_async_client_create();
-        check_not_null(client);
-
-        test_ctx_t ctx = {0};
-        http_async_request_t *req = http_async_stream_get(
-            client, "https://httpbin.org/stream/5", on_data, on_complete, &ctx);
-        check_not_null(req);
-
-        int timeout_ms = 15000;
-        while (!ctx.done && timeout_ms > 0) {
-            turbo_sleep_ms(100);
-            timeout_ms -= 100;
+        run_in_coro(test_stream_get);
+        check_int_eq(g_result.ran, 1);
+        if (!g_result.skipped) {
+            check_int_eq(g_result.status_code, 200);
+            check(g_result.data_chunks > 0);
+            check(g_result.total_received > 0);
         }
-
-        check(ctx.done, "request should complete within timeout");
-        check_int_eq(ctx.status_code, 200);
-        check(ctx.data_chunks > 0, "should receive at least one chunk");
-        check(ctx.total_received > 0, "should receive body data");
-
-        http_async_client_destroy(client);
     }
 
     it("should not accumulate body in stream mode") {
-        http_async_client_t *client = http_async_client_create();
-        check_not_null(client);
-
-        test_ctx_t ctx = {0};
-        http_async_request_t *req = http_async_stream_get(
-            client, "https://httpbin.org/bytes/500", on_data, on_complete, &ctx);
-        check_not_null(req);
-
-        int timeout_ms = 10000;
-        while (!ctx.done && timeout_ms > 0) {
-            turbo_sleep_ms(100);
-            timeout_ms -= 100;
+        run_in_coro(test_stream_no_accumulate);
+        check_int_eq(g_result.ran, 1);
+        if (!g_result.skipped) {
+            check_int_eq(g_result.status_code, 200);
+            check_size_eq(g_result.total_received, 500);
         }
-
-        check(ctx.done, "request should complete");
-        check_int_eq(ctx.status_code, 200);
-        check_size_eq(ctx.total_received, 500);
-
-        http_async_client_destroy(client);
     }
 }

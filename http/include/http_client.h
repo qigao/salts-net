@@ -1,6 +1,15 @@
 #ifndef HTTP_CLIENT_H
 #define HTTP_CLIENT_H
 
+// DEPRECATED: Use http_coro_client.h instead. This header will be removed in v2.0.
+#if !defined(HTTP_NO_DEPRECATION_WARNING)
+#if defined(__GNUC__) || defined(__clang__)
+#pragma message("http_client.h is deprecated. Migrate to http_coro_client.h")
+#elif defined(_MSC_VER)
+#pragma message("http_client.h is deprecated. Migrate to http_coro_client.h")
+#endif
+#endif
+
 #include <stdint.h>
 #include <platform.h>
 #include <turbo_str.h>

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <platform.h>
+#include <turbo_thread.h>
 #include <http_client_async.h>
 #include <rpc_client.h>
 

@@ -250,8 +250,9 @@ static void turbo_tls_arena_pool_write(turbo_tls_arena_pool_t *pool, const char 
       needed_size = pool->buffer_size;
     turbo_arena_buffer_t *new_buffer = turbo_arena_get_buffer(&pool->arena, needed_size);
 
-    if (!new_buffer)
+    if (!new_buffer) {
       return; /* Out of memory */
+    }
 
     /* Copy existing data to new buffer if any */
     if (pool->current_buffer && existing_used > 0) {
@@ -1556,12 +1557,18 @@ int turbo_tls_read_start(turbo_tls_client_t *client,
 
   do_tls_read(client); /* Process existing data */
 
+  /* If do_tls_read delivered data synchronously, on_recv was cleared by read_stop.
+     Skip uv_read_start — the coroutine already has its data. */
+  if (!client->on_recv)
+    return 0;
+
   return uv_read_start((uv_stream_t *)&client->handle, alloc_tls_recv_buffer, on_tls_read);
 }
 
 int turbo_tls_read_stop(turbo_tls_client_t *client) {
   if (!client)
     return UV_EINVAL;
+  client->on_recv = NULL;
   return uv_read_stop((uv_stream_t *)&client->handle);
 }
 
@@ -1579,31 +1586,27 @@ int turbo_tls_flush(turbo_tls_client_t *client) {
                                      outgoing->current_buffer ? outgoing->current_buffer->used : 0};
   size_t start_size = turbo_tls_arena_pool_available(outgoing);
 
-  /* Encrypt all queued data through SSL_write */
-  size_t total_plaintext_bytes = 0;
+  /* Encrypt only the first queued entry to avoid arena overflow on large payloads.
+     on_tls_write_complete will call flush again for remaining entries. */
   turbo_arena_buffer_t *current = client->send_queue_head;
-  while (current) {
-    TLOG_DEBUG("SSL_write encrypting %zu bytes for client={}", current->used, (void *)client);
-    int ssl_written = SSL_write(session->ssl, current->data, (int)current->used);
-    if (ssl_written <= 0) {
-      int ssl_error = SSL_get_error(session->ssl, ssl_written);
-      TLOG_DEBUG("SSL_write failed for client={} err={}", (void *)client, ssl_error);
-      turbo_tls_debug_ssl_errors("SSL_write error detail");
-      return TURBO_TLS_EHANDSHAKE; /* Reuse error code */
-    }
-    total_plaintext_bytes += current->used;
-
-    turbo_arena_buffer_t *next = current->next;
-    turbo_arena_buffer_unref(current);
-    current = next;
+  TLOG_DEBUG("SSL_write encrypting %zu bytes for client={}", current->used, (void *)client);
+  int ssl_written = SSL_write(session->ssl, current->data, (int)current->used);
+  if (ssl_written <= 0) {
+    int ssl_error = SSL_get_error(session->ssl, ssl_written);
+    TLOG_DEBUG("SSL_write failed for client={} err={}", (void *)client, ssl_error);
+    turbo_tls_debug_ssl_errors("SSL_write error detail");
+    return TURBO_TLS_EHANDSHAKE;
   }
+  size_t plaintext_bytes = current->used;
 
-  /* Clear the send queue since we've processed all data */
-  client->send_queue_head = NULL;
-  client->send_queue_tail = NULL;
-  client->send_queue_bytes = 0;
+  /* Advance send queue past the processed entry */
+  client->send_queue_head = current->next;
+  if (!client->send_queue_head)
+    client->send_queue_tail = NULL;
+  client->send_queue_bytes -= current->used;
+  turbo_arena_buffer_unref(current);
 
-  TLOG_DEBUG("encrypted %zu plaintext bytes for client={}", total_plaintext_bytes, (void *)client);
+  TLOG_DEBUG("encrypted %zu plaintext bytes for client={}", plaintext_bytes, (void *)client);
 
   /* Check if SSL generated encrypted data to send */
   size_t new_size = turbo_tls_arena_pool_available(outgoing);

@@ -9,7 +9,7 @@
 #include "arena_buffer.h"
 #include "request.h"
 #include "platform.h"
-#include "netcore/turbo_async_server.h"
+#include "netcore/turbo_coro_client.h"
 #include "security.h"
 
 #ifdef __cplusplus
@@ -102,8 +102,7 @@ typedef struct {
 // Arena-aware Request structure
 typedef struct Req {
   turbo_arena_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
-  async_server_connection_t *connection; /* NetCore migration: replaced uv_tcp_t* */
-  async_server_t *server; /* NetCore server instance */
+  turbo_coro_client_t *client; /* Coroutine client connection */
   char *method;
   char *path;
   char *body;
@@ -127,8 +126,7 @@ typedef struct {
 // Arena-aware Response structure
 typedef struct Res {
   turbo_arena_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
-  async_server_connection_t *connection; /* NetCore migration: replaced uv_tcp_t* */
-  async_server_t *server; /* NetCore server instance */
+  turbo_coro_client_t *client; /* Coroutine client connection */
   int status;
   char *content_type; // Arena allocated string
   void *body;         // Arena allocated if owned by Res
@@ -158,7 +156,7 @@ typedef struct MiddlewareInfo MiddlewareInfo;
 CXX_C_API void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
 
 // Function declarations
-CXX_C_API int router(async_server_t *server, async_server_connection_t *connection, const char *request_data, size_t request_len);
+CXX_C_API int router(turbo_coro_client_t *client, const char *request_data, size_t request_len);
 CXX_C_API Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Req *copy_req(const Req *original);
@@ -174,8 +172,8 @@ CXX_C_API void set_context(Req *req, void *data, size_t size, void (*cleanup)(vo
 CXX_C_API void *get_context(Req *req);
 
 // Connection context management functions
-CXX_C_API void set_connection_context(async_server_connection_t *connection, void *data, void (*cleanup)(void *));
-CXX_C_API void *get_connection_context(async_server_connection_t *connection);
+CXX_C_API void set_connection_context(turbo_coro_client_t *client, void *data, void (*cleanup)(void *));
+CXX_C_API void *get_connection_context(turbo_coro_client_t *client);
 
 // Convenience response functions
 static inline void send_text(Res *res, int status, const char *body) {
@@ -190,9 +188,7 @@ static inline void send_json(Res *res, int status, const char *body) {
   reply(res, status, "application/json", body, strlen(body));
 }
 
-static inline void send_cbor(Res *res, int status, const char *body, size_t body_len) {
-  reply(res, status, "application/cbor", body, body_len);
-}
+
 
 // Streaming (SSE) support
 CXX_C_API void reply_stream_start(Res *res, int status);

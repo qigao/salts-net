@@ -3,6 +3,7 @@
 
 #include <turbo_str.h>
 #include <platform.h>
+#include <netcore/turbo_coro_context.h>
 #include <time.h>
 #include "s3_error.h"
 
@@ -35,17 +36,22 @@ CXX_C_API s3_credential_provider_t* s3_creds_chain(s3_credential_provider_t** pr
 
 // STS / IAM providers
 CXX_C_API s3_credential_provider_t* s3_creds_minio_client_config(const char* filename, const char* alias);
-CXX_C_API s3_credential_provider_t* s3_creds_assume_role(const char* sts_endpoint, const char* access_key,
+CXX_C_API s3_credential_provider_t* s3_creds_assume_role(turbo_coro_context_t *ctx,
+                                                      const char* sts_endpoint, const char* access_key,
                                                       const char* secret_key, const char* region,
                                                       const char* role_arn, const char* session_name,
                                                       int duration_secs);
-CXX_C_API s3_credential_provider_t* s3_creds_web_identity(const char* sts_endpoint, const char* region,
+CXX_C_API s3_credential_provider_t* s3_creds_web_identity(turbo_coro_context_t *ctx,
+                                                       const char* sts_endpoint, const char* region,
                                                        const char* role_arn,
-                                                       tstr_t (*token_fn)(void* ctx), void* ctx);
-CXX_C_API s3_credential_provider_t* s3_creds_iam_aws(const char* custom_endpoint);
-CXX_C_API s3_credential_provider_t* s3_creds_ldap_identity(const char* sts_endpoint,
+                                                       tstr_t (*token_fn)(void* ctx), void* token_ctx);
+CXX_C_API s3_credential_provider_t* s3_creds_iam_aws(turbo_coro_context_t *ctx,
+                                                      const char* custom_endpoint);
+CXX_C_API s3_credential_provider_t* s3_creds_ldap_identity(turbo_coro_context_t *ctx,
+                                                        const char* sts_endpoint,
                                                         const char* ldap_username, const char* ldap_password);
-CXX_C_API s3_credential_provider_t* s3_creds_cert_identity(const char* sts_endpoint,
+CXX_C_API s3_credential_provider_t* s3_creds_cert_identity(turbo_coro_context_t *ctx,
+                                                        const char* sts_endpoint,
                                                         const char* cert_file, const char* key_file);
 
 // Helper to free a credentials struct (clears tstr_t fields)

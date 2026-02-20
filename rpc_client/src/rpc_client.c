@@ -2,19 +2,14 @@
 #include "tlog.h"
 #include "rpc_error.h"
 #include <json_parser.h>
-#include <http_client_async.h>
+#include <http_coro_client.h>
+#include <turbo_coro.h>
 #include <platform.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stb_sprintf.h>
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-
-#endif
 
 #define RPC_CLIENT_VERSION "1.0.0"
 #define MAX_REQUEST_SIZE 65536
@@ -23,26 +18,9 @@
 struct rpc_client_s {
   rpc_client_config_t config;
   rpc_client_state_t state;
-  http_async_client_t *http_client;
+  http_coro_client_t *http_client;
   int request_id_counter;
 };
-
-/* Async call context */
-typedef struct {
-  rpc_callback_t user_callback;
-  void *user_data;
-  rpc_call_result_t *result;
-} async_call_context_t;
-
-/* Stream call context */
-typedef struct {
-  rpc_callback_t result_cb;
-  rpc_callback_t complete_cb;
-  void *user_data;
-  char *buffer;
-  size_t buffer_size;
-  size_t buffer_used;
-} rpc_stream_context_t;
 
 /* ============================================================================
  * Internal Helpers
@@ -240,6 +218,27 @@ static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
   return 0;
 }
 
+/* Process a coro response into an rpc_call_result_t */
+static void process_coro_response(http_coro_response_t *resp, rpc_call_result_t *result) {
+  memset(result, 0, sizeof(rpc_call_result_t));
+  result->http_status = resp->status_code;
+
+  if (resp->error_code != HTTP_ERROR_NONE) {
+    result->success = 0;
+    result->error_code = RPC_ERROR_INTERNAL;
+    if (resp->error) {
+      result->error_message = strdup(resp->error);
+    }
+  } else if (resp->body && resp->body_len > 0) {
+    parse_jsonrpc_response(resp->body, result);
+    result->http_status = resp->status_code;
+  } else {
+    result->success = 0;
+    result->error_code = RPC_ERROR_INTERNAL;
+    result->error_message = strdup("Empty response");
+  }
+}
+
 /* ============================================================================
  * Public API Implementation
  * ============================================================================ */
@@ -257,7 +256,7 @@ rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
   client->request_id_counter = 1;
 
   /* Create HTTP client */
-  client->http_client = http_async_client_create();
+  client->http_client = http_coro_client_create(config->coro_ctx);
   if (!client->http_client) {
     free(client);
     return NULL;
@@ -265,18 +264,18 @@ rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
 
   /* Configure HTTP client */
   if (config->timeout_ms > 0) {
-    http_async_client_set_timeout(client->http_client, config->timeout_ms);
+    http_coro_client_set_timeout(client->http_client, config->timeout_ms);
   }
 
   if (config->user_agent) {
-    http_async_client_set_user_agent(client->http_client, config->user_agent);
+    http_coro_client_set_user_agent(client->http_client, config->user_agent);
   }
 
   /* Set default headers */
-  http_async_client_set_default_header(client->http_client, "Content-Type", "application/json");
+  http_coro_client_set_default_header(client->http_client, "Content-Type", "application/json");
 
   if (config->keep_alive) {
-    http_async_client_set_default_header(client->http_client, "Connection", "keep-alive");
+    http_coro_client_set_default_header(client->http_client, "Connection", "keep-alive");
   }
 
   return client;
@@ -287,7 +286,7 @@ void rpc_client_destroy(rpc_client_t *client) {
     return;
 
   if (client->http_client) {
-    http_async_client_destroy(client->http_client);
+    http_coro_client_destroy(client->http_client);
   }
 
   free(client);
@@ -316,57 +315,6 @@ rpc_client_state_t rpc_client_get_state(rpc_client_t *client) {
   return client->state;
 }
 
-/* Synchronous call helper - uses async internally with blocking */
-typedef struct {
-  int done;
-  rpc_call_result_t *result;
-} sync_call_context_t;
-
-static void sync_call_callback(http_async_request_t *request, http_async_response_t *response,
-                               void *user_data) {
-  (void)request;
-  sync_call_context_t *ctx = (sync_call_context_t *)user_data;
-
-  TLOG_DEBUG("sync_call_callback called (ctx={}, response={})", (void*)ctx, (void*)response);
-
-  if (!ctx || !ctx->result) {
-    TLOG_DEBUG("ERROR: Invalid ctx or result");
-    return;
-  }
-
-  TLOG_DEBUG("HTTP status: {}, error_code: {}, body_len: {}",
-         (int)response->status_code, (int)response->error_code, (unsigned long long)response->body_len);
-
-  memset(ctx->result, 0, sizeof(rpc_call_result_t));
-
-  if (response->error_code != HTTP_ASYNC_ERROR_NONE) {
-    /* Network/HTTP error */
-    TLOG_DEBUG("HTTP error detected");
-    ctx->result->success = 0;
-    ctx->result->error_code = RPC_ERROR_INTERNAL;
-    if (response->error) {
-      ctx->result->error_message = strdup(response->error);
-    }
-  } else if (response->body && response->body_len > 0) {
-    /* Parse JSON-RPC response */
-    TLOG_DEBUG("Parsing JSON-RPC response ({} bytes)", (unsigned long long)response->body_len);
-    parse_jsonrpc_response(response->body, ctx->result);
-  } else {
-    /* Empty response */
-    TLOG_DEBUG("Empty response");
-    ctx->result->success = 0;
-    ctx->result->error_code = RPC_ERROR_INTERNAL;
-    ctx->result->error_message = strdup("Empty response");
-  }
-
-  /* Set HTTP status AFTER parsing (parse may memset the result) */
-  ctx->result->http_status = response->status_code;
-
-  TLOG_DEBUG("Setting ctx->done = 1");
-  ctx->done = 1;
-  TLOG_DEBUG("sync_call_callback finished");
-}
-
 int rpc_client_call(rpc_client_t *client, const char *method, const char *params,
                     rpc_call_result_t *result) {
   if (!client || !method || !result)
@@ -385,37 +333,18 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
   /* Build URL */
   const char *url = build_url(client);
 
-  /* Create sync context */
-  sync_call_context_t ctx = {0, result};
-
-  /* Make async HTTP POST request (Content-Type already set as default header) */
-  http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, jsonrpc_body, jsonrpc_len,
-                                                  sync_call_callback, &ctx);
+  /* Direct coroutine call — blocks this coroutine, not the thread */
+  http_coro_response_t *resp = http_coro_request(client->http_client, HTTP_POST, url,
+                                                  NULL, 0, jsonrpc_body, jsonrpc_len);
   json_serialize_free(jsonrpc_body);
 
-  if (!req)
+  if (!resp)
     return -1;
 
-  /* Wait for completion - async_client runs its own thread with libuv event loop */
-  while (!ctx.done) {
-    /* Sleep briefly to avoid busy-wait CPU burn */
-    #ifdef _WIN32
-    Sleep(1); /* 1ms sleep on Windows */
-    #else
-    usleep(1000); /* 1ms sleep on Unix */
-    #endif
-  }
+  process_coro_response(resp, result);
+  http_coro_response_free(resp);
 
   return 0;
-}
-
-static void notify_callback(http_async_request_t *request, http_async_response_t *response,
-                            void *user_data) {
-  (void)request;
-  (void)response;
-  (void)user_data;
-  /* Notifications don't care about responses */
 }
 
 int rpc_client_notify(rpc_client_t *client, const char *method, const char *params) {
@@ -431,13 +360,15 @@ int rpc_client_notify(rpc_client_t *client, const char *method, const char *para
   /* Build URL */
   const char *url = build_url(client);
 
-  /* Make async HTTP POST request (fire and forget, Content-Type already set as default header) */
-  http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, jsonrpc_body, jsonrpc_len,
-                                                  notify_callback, NULL);
+  /* Fire and forget — send request, ignore response */
+  http_coro_response_t *resp = http_coro_request(client->http_client, HTTP_POST, url,
+                                                  NULL, 0, jsonrpc_body, jsonrpc_len);
   json_serialize_free(jsonrpc_body);
 
-  return req ? 0 : -1;
+  if (resp)
+    http_coro_response_free(resp);
+
+  return 0;
 }
 
 void rpc_result_free(rpc_call_result_t *result) {
@@ -511,38 +442,44 @@ int rpc_result_get_double(const rpc_call_result_t *result, const char *key, doub
   return json_extract_double(result->result, key, value);
 }
 
-static void async_call_callback(http_async_request_t *request, http_async_response_t *response,
-                                void *user_data) {
-  (void)request;
-  async_call_context_t *ctx = (async_call_context_t *)user_data;
+/* Async call — spawn a coroutine that does the request and calls the user callback */
+typedef struct {
+  rpc_client_t *client;
+  char *method;
+  char *params;
+  char *id;
+  rpc_callback_t user_callback;
+  void *user_data;
+} async_coro_args_t;
 
-  if (!ctx || !ctx->result)
-    return;
+static void async_call_coro(turbo_coro_t *co, void *arg) {
+  async_coro_args_t *a = (async_coro_args_t *)arg;
 
-  memset(ctx->result, 0, sizeof(rpc_call_result_t));
-  ctx->result->http_status = response->status_code;
+  size_t jsonrpc_len = 0;
+  char *jsonrpc_body = build_jsonrpc_request(a->method, a->params, a->id, &jsonrpc_len);
 
-  if (response->error_code != HTTP_ASYNC_ERROR_NONE) {
-    /* Network/HTTP error */
-    ctx->result->success = 0;
-    ctx->result->error_code = RPC_ERROR_INTERNAL;
-    if (response->error) {
-      ctx->result->error_message = strdup(response->error);
+  if (jsonrpc_body) {
+    const char *url = build_url(a->client);
+    http_coro_response_t *resp = http_coro_request(a->client->http_client, HTTP_POST, url,
+                                                    NULL, 0, jsonrpc_body, jsonrpc_len);
+    json_serialize_free(jsonrpc_body);
+
+    if (resp) {
+      rpc_call_result_t result;
+      process_coro_response(resp, &result);
+      http_coro_response_free(resp);
+
+      if (a->user_callback) {
+        a->user_callback(&result, a->user_data);
+      }
+      rpc_result_free(&result);
     }
-  } else if (response->body && response->body_len > 0) {
-    /* Parse JSON-RPC response */
-    parse_jsonrpc_response(response->body, ctx->result);
   }
 
-  /* Call user callback */
-  if (ctx->user_callback) {
-    ctx->user_callback(ctx->result, ctx->user_data);
-  }
-
-  /* Cleanup */
-  rpc_result_free(ctx->result);
-  free(ctx->result);
-  free(ctx);
+  free(a->method);
+  free(a->params);
+  free(a->id);
+  free(a);
 }
 
 int rpc_client_call_async(rpc_client_t *client, const char *method, const char *params,
@@ -554,85 +491,29 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
   char id[32];
   stbsp_snprintf(id, sizeof(id), "%d", client->request_id_counter++);
 
-  /* Build JSON-RPC request */
-  size_t jsonrpc_len = 0;
-  char *jsonrpc_body = build_jsonrpc_request(method, params, id, &jsonrpc_len);
-  if (!jsonrpc_body)
+  /* Create args for the coroutine (must be heap-allocated, outlives this call) */
+  async_coro_args_t *args = (async_coro_args_t *)malloc(sizeof(async_coro_args_t));
+  if (!args)
     return -1;
 
-  /* Create async context */
-  async_call_context_t *ctx = (async_call_context_t *)malloc(sizeof(async_call_context_t));
-  if (!ctx) {
-    json_serialize_free(jsonrpc_body);
-    return -1;
-  }
+  args->client = client;
+  args->method = strdup(method);
+  args->params = params ? strdup(params) : NULL;
+  args->id = strdup(id);
+  args->user_callback = callback;
+  args->user_data = user_data;
 
-  ctx->user_callback = callback;
-  ctx->user_data = user_data;
-  ctx->result = (rpc_call_result_t *)calloc(1, sizeof(rpc_call_result_t));
-  if (!ctx->result) {
-    free(ctx);
-    json_serialize_free(jsonrpc_body);
-    return -1;
-  }
-
-  /* Build URL */
-  const char *url = build_url(client);
-
-  /* Make async HTTP POST request (Content-Type already set as default header) */
-  http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, jsonrpc_body, jsonrpc_len,
-                                                  async_call_callback, ctx);
-  json_serialize_free(jsonrpc_body);
-
-  if (!req) {
-    free(ctx->result);
-    free(ctx);
+  turbo_coro_t *co = turbo_coro_create(async_call_coro, args, NULL);
+  if (!co) {
+    free(args->method);
+    free(args->params);
+    free(args->id);
+    free(args);
     return -1;
   }
 
+  turbo_coro_resume(co);
   return 0;
-}
-
-typedef struct {
-  int done;
-  rpc_call_result_t *results;
-  size_t count;
-} batch_call_context_t;
-
-static void batch_call_callback(http_async_request_t *request, http_async_response_t *response,
-                                void *user_data) {
-  (void)request;
-  batch_call_context_t *ctx = (batch_call_context_t *)user_data;
-
-  if (!ctx || !ctx->results)
-    return;
-
-  /* For simplicity, parse batch response as array and extract results */
-  /* A full implementation would properly parse the JSON array */
-  if (response->error_code != HTTP_ASYNC_ERROR_NONE || !response->body) {
-    /* Mark all as failed */
-    for (size_t i = 0; i < ctx->count; i++) {
-      memset(&ctx->results[i], 0, sizeof(rpc_call_result_t));
-      ctx->results[i].success = 0;
-      ctx->results[i].error_code = RPC_ERROR_INTERNAL;
-      ctx->results[i].http_status = response->status_code;
-      if (response->error) {
-        ctx->results[i].error_message = strdup(response->error);
-      }
-    }
-  } else {
-    /* Simple batch parsing - assumes responses in order */
-    /* TODO: Implement proper JSON array parsing */
-    for (size_t i = 0; i < ctx->count; i++) {
-      memset(&ctx->results[i], 0, sizeof(rpc_call_result_t));
-      ctx->results[i].success = 1;
-      ctx->results[i].result = strdup("{}");
-      ctx->results[i].http_status = response->status_code;
-    }
-  }
-
-  ctx->done = 1;
 }
 
 int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char **params,
@@ -688,28 +569,36 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   /* Build URL */
   const char *url = build_url(client);
 
-  /* Create batch context */
-  batch_call_context_t ctx = {0, results, count};
-
-  /* Make async HTTP POST request (Content-Type already set as default header) */
-  http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, batch_json, pos,
-                                                  batch_call_callback, &ctx);
+  /* Direct coroutine call */
+  http_coro_response_t *resp = http_coro_request(client->http_client, HTTP_POST, url,
+                                                  NULL, 0, batch_json, pos);
   free(batch_json);
 
-  if (!req)
+  if (!resp)
     return -1;
 
-  /* Wait for completion - async_client runs its own thread with libuv event loop */
-  while (!ctx.done) {
-    /* Sleep briefly to avoid busy-wait CPU burn */
-    #ifdef _WIN32
-    Sleep(1); /* 1ms sleep on Windows */
-    #else
-    usleep(1000); /* 1ms sleep on Unix */
-    #endif
+  if (resp->error_code != HTTP_ERROR_NONE || !resp->body) {
+    /* Mark all as failed */
+    for (size_t i = 0; i < count; i++) {
+      memset(&results[i], 0, sizeof(rpc_call_result_t));
+      results[i].success = 0;
+      results[i].error_code = RPC_ERROR_INTERNAL;
+      results[i].http_status = resp->status_code;
+      if (resp->error) {
+        results[i].error_message = strdup(resp->error);
+      }
+    }
+  } else {
+    /* Simple batch parsing - assumes responses in order */
+    for (size_t i = 0; i < count; i++) {
+      memset(&results[i], 0, sizeof(rpc_call_result_t));
+      results[i].success = 1;
+      results[i].result = strdup("{}");
+      results[i].http_status = resp->status_code;
+    }
   }
 
+  http_coro_response_free(resp);
   return 0;
 }
 
@@ -717,7 +606,17 @@ const char *rpc_client_version(void) { return RPC_CLIENT_VERSION; }
 
 /* ============================================================================
  * Streaming (SSE) Implementation
- * ========================================================================= */
+ * ============================================================================ */
+
+/* Stream call context */
+typedef struct {
+  rpc_callback_t result_cb;
+  rpc_callback_t complete_cb;
+  void *user_data;
+  char *buffer;
+  size_t buffer_size;
+  size_t buffer_used;
+} rpc_stream_context_t;
 
 static void process_sse_event(rpc_stream_context_t *ctx, const char *event_data) {
   if (!event_data || event_data[0] == '\0')
@@ -734,9 +633,7 @@ static void process_sse_event(rpc_stream_context_t *ctx, const char *event_data)
   rpc_result_free(&result);
 }
 
-static void rpc_stream_data_callback(http_async_request_t *request, const char *data, size_t len,
-                                     void *user_data) {
-  (void)request;
+static void rpc_stream_data_callback(const char *data, size_t len, void *user_data) {
   rpc_stream_context_t *ctx = (rpc_stream_context_t *)user_data;
   if (!ctx || !data || len == 0)
     return;
@@ -779,11 +676,6 @@ static void rpc_stream_data_callback(http_async_request_t *request, const char *
       if (!next_line)
         next_line = event_end;
 
-      /* Trim leading \r if present */
-      if (next_line > line && *(next_line - 1) == '\r') {
-          // Adjust for CRLF if needed, but the prefix check will handle it
-      }
-
       if (strncmp(line, data_prefix, prefix_len) == 0) {
         size_t line_len = next_line - (line + prefix_len);
         /* Strip trailing \r if present */
@@ -820,35 +712,58 @@ static void rpc_stream_data_callback(http_async_request_t *request, const char *
   }
 }
 
-static void rpc_stream_complete_callback(http_async_request_t *request,
-                                         http_async_response_t *response, void *user_data) {
-  (void)request;
-  rpc_stream_context_t *ctx = (rpc_stream_context_t *)user_data;
-  if (!ctx)
-    return;
+/* Coroutine args for streaming */
+typedef struct {
+  rpc_client_t *client;
+  char *jsonrpc_body;
+  size_t jsonrpc_len;
+  rpc_stream_context_t *stream_ctx;
+} stream_coro_args_t;
 
+static void stream_call_coro(turbo_coro_t *co, void *arg) {
+  stream_coro_args_t *a = (stream_coro_args_t *)arg;
+  rpc_stream_context_t *ctx = a->stream_ctx;
+
+  const char *url = build_url(a->client);
+  const char *headers[] = {"Accept: text/event-stream", "Cache-Control: no-cache"};
+
+  http_coro_response_t *resp = http_coro_stream_post(
+      a->client->http_client, url, a->jsonrpc_body, a->jsonrpc_len,
+      rpc_stream_data_callback, ctx);
+
+  json_serialize_free(a->jsonrpc_body);
+
+  /* Stream finished — call complete callback */
   if (ctx->complete_cb) {
     rpc_call_result_t result;
     memset(&result, 0, sizeof(result));
-    result.http_status = response->status_code;
 
-    if (response->error_code != HTTP_ASYNC_ERROR_NONE) {
-      result.success = 0;
-      result.error_code = RPC_ERROR_INTERNAL;
-      if (response->error) {
-        result.error_message = strdup(response->error);
+    if (resp) {
+      result.http_status = resp->status_code;
+      if (resp->error_code != HTTP_ERROR_NONE) {
+        result.success = 0;
+        result.error_code = RPC_ERROR_INTERNAL;
+        if (resp->error) {
+          result.error_message = strdup(resp->error);
+        }
+      } else {
+        result.success = 1;
       }
     } else {
-      result.success = 1;
+      result.success = 0;
+      result.error_code = RPC_ERROR_INTERNAL;
+      result.error_message = strdup("No response");
     }
 
     ctx->complete_cb(&result, ctx->user_data);
     rpc_result_free(&result);
   }
 
-  /* Cleanup context */
+  if (resp)
+    http_coro_response_free(resp);
   free(ctx->buffer);
   free(ctx);
+  free(a);
 }
 
 int rpc_client_call_stream(rpc_client_t *client, const char *method, const char *params,
@@ -876,25 +791,26 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   ctx->complete_cb = complete_cb;
   ctx->user_data = user_data;
 
-  /* Build URL */
-  const char *url = build_url(client);
-
-  /* Make async HTTP POST request (Content-Type already set as default header) */
-  const char *headers[] = {"Accept: text/event-stream", "Cache-Control: no-cache"};
-
-  http_async_request_t *req = http_async_request(client->http_client, HTTP_POST, url, headers, 2,
-                                                  jsonrpc_body, jsonrpc_len,
-                                                  rpc_stream_complete_callback, ctx);
-  json_serialize_free(jsonrpc_body);
-
-  if (!req) {
+  /* Create coroutine args */
+  stream_coro_args_t *args = (stream_coro_args_t *)malloc(sizeof(stream_coro_args_t));
+  if (!args) {
     free(ctx);
+    json_serialize_free(jsonrpc_body);
+    return -1;
+  }
+  args->client = client;
+  args->jsonrpc_body = jsonrpc_body;
+  args->jsonrpc_len = jsonrpc_len;
+  args->stream_ctx = ctx;
+
+  turbo_coro_t *co = turbo_coro_create(stream_call_coro, args, NULL);
+  if (!co) {
+    free(ctx);
+    free(args);
+    json_serialize_free(jsonrpc_body);
     return -1;
   }
 
-  /* Enable streaming mode in HTTP client to prevent memory accumulation */
-  http_async_request_set_stream_only(req, 1);
-  http_async_request_set_data_callback(req, rpc_stream_data_callback, ctx);
-
+  turbo_coro_resume(co);
   return 0;
 }

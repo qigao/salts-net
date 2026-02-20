@@ -5,7 +5,6 @@
 #include "s3_error.h"
 #include "s3_multimap.h"
 #include "s3_time.h"
-#include <http_client.h>
 
 #ifdef __cplusplus
 extern "C" {

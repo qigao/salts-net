@@ -17,5 +17,10 @@ add_subdirectory(internal/dotenv_parser)
 add_subdirectory(internal/cmd_parser)
 add_subdirectory(internal/toon)
 add_subdirectory(internal/toml)
+add_subdirectory(internal/datetime_parser)
+add_subdirectory(internal/exprtk_parser)
+add_subdirectory(internal/strtk_parser)
+add_subdirectory(internal/turbo_script)
+
 add_subdirectory(turbo_parser)
  

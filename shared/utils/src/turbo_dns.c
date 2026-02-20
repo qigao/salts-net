@@ -6,6 +6,7 @@
  * - Sync: Wraps async API with temporary event loop
  */
 #include "turbo_dns.h"
+#include "turbo_thread.h"
 #include "tlog.h"
 #include <ares.h>
 #include <stdlib.h>
@@ -50,13 +51,14 @@ typedef struct {
   int open_handles;
 } turbo_ares_t;
 
-// Dual-stack query coordination
-typedef struct turbo_dns_parent_query_s {
+// Dual-stack query coordination (turbo_dns_query_t in public header)
+typedef struct turbo_dns_query_s {
   char *hostname;
   turbo_dns_cb callback;
   void *user_data;
   int ref_count;
   int delivered;
+  int cancelled;
   int status_v4;
   int status_v6;
   turbo_ares_t *ares;
@@ -359,7 +361,9 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
   struct ares_options options = {0};
   options.sock_state_cb_data = ctx;
   options.sock_state_cb = uv_ares_sock_state_cb;
-  int init_flags = ARES_OPT_SOCK_STATE_CB;
+  options.timeout = 3000;
+  options.tries = 2;
+  int init_flags = ARES_OPT_SOCK_STATE_CB | ARES_OPT_TIMEOUTMS | ARES_OPT_TRIES;
 
   if (valid_dns > 0) {
     options.servers = dns_addrs;
@@ -380,6 +384,12 @@ static int init_ares_context(uv_loop_t *loop, turbo_ares_t **out_ctx) {
     ctx->closing = 1;
     uv_close((uv_handle_t *)&ctx->timer, on_uv_handle_closed);
     return UV_EAI_FAIL;
+  }
+
+  /* If no custom servers were set, use public DNS as fallback.
+     c-ares may fail to read system DNS on Windows. */
+  if (valid_dns == 0) {
+    ares_set_servers_csv(ctx->channel, "8.8.8.8,8.8.4.4");
   }
 
   ctx->initialized = true;
@@ -619,8 +629,10 @@ int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer, size_t buffer_
 // Public API: Asynchronous Resolution
 // =============================================================================
 
-int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t pref,
-                            turbo_dns_cb callback, void *user_data) {
+int turbo_dns_resolve_async2(void *loop, const char *hostname, turbo_dns_pref_t pref,
+                             turbo_dns_cb callback, void *user_data,
+                             turbo_dns_query_t **out_query) {
+  if (out_query) *out_query = NULL;
   if (!loop || !hostname || !callback)
     return UV_EINVAL;
 
@@ -700,9 +712,29 @@ int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t p
     }
   }
 
+  if (out_query) {
+    parent->ref_count++; /* Caller holds a cancellation reference */
+    *out_query = parent;
+  }
+
   TLOG_DEBUG("Started DNS lookup for {}  ", hostname);
   release_parent_ref(parent); /* Release initial reference */
   return 0;
+}
+
+int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t pref,
+                            turbo_dns_cb callback, void *user_data) {
+  return turbo_dns_resolve_async2(loop, hostname, pref, callback, user_data, NULL);
+}
+
+void turbo_dns_cancel(turbo_dns_query_t *query) {
+  if (!query) return;
+  turbo_dns_parent_query_t *parent = (turbo_dns_parent_query_t *)query;
+  if (!parent->cancelled && parent->ares && parent->ares->initialized) {
+    parent->cancelled = 1;
+    ares_cancel(parent->ares->channel);
+  }
+  release_parent_ref(parent); /* Release cancellation reference */
 }
 
 // =============================================================================

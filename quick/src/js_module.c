@@ -3,6 +3,7 @@
  * @brief Main registration point for JavaScript modules in TurboNet.
  */
 #include "js_internal.h"
+#include "js_http_client.h"
 #include "tlog.h"
 #include <uv.h>
 #include <stdlib.h>
@@ -78,4 +79,7 @@ void js_turbo_process_events(JSContext *ctx) {
 
     // Process timers
     js_turbo_process_timers(ctx);
+
+    // Poll completed async HTTP requests
+    js_http_poll_async(ctx);
 }

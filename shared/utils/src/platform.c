@@ -5,393 +5,18 @@
 #include "platform.h"
 #include "memory_pool.h"
 #include "tlog.h"
-#include <stdlib.h> // For malloc/free
-#include <string.h> // For memset, strlen, memcpy
+#include <stdlib.h>
+#include <string.h>
 #include "sds.h"
-#include <uv.h>
-#ifdef _WIN32
-#include <process.h>
-#endif
-
-#ifndef TURBO_WIN32
-  #include <unistd.h> // For usleep
-  #include <time.h>   // For clock_gettime
-#endif
-
-// Define error codes if not available from libuv
-#ifndef UV_EINVAL
-  #define UV_EINVAL (-22)
-#endif
-#ifndef UV_ETIMEDOUT
-  #define UV_ETIMEDOUT (-110)
-#endif
-#ifndef UV_ENOMEM
-  #define UV_ENOMEM (-12)
-#endif
-
-
-
-// ============================================================================
-// Mutex utilities - native platform synchronization
-// =============================================================================
 
 #ifdef _WIN32
 #include <windows.h>
-
-void turbo_mutex_init(turbo_mutex_t *mutex) {
-  if (mutex == NULL) {
-    return;
-  }
-  // Use Windows SRW Lock for better performance
-  PSRWLOCK srw_lock = malloc(sizeof(SRWLOCK));
-  if (srw_lock == NULL) {
-    return;
-  }
-  InitializeSRWLock(srw_lock);
-  *mutex = srw_lock;
-}
-
-void turbo_mutex_destroy(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) {
-    return;
-  }
-  // SRW locks don't need explicit cleanup, just free memory
-  free(*mutex);
-  *mutex = NULL;
-}
-
-void turbo_mutex_lock(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) {
-    return;
-  }
-  AcquireSRWLockExclusive((PSRWLOCK)*mutex);
-}
-
-void turbo_mutex_unlock(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) {
-    return;
-  }
-  ReleaseSRWLockExclusive((PSRWLOCK)*mutex);
-}
-
 #else
-#include <pthread.h>
-#include <errno.h>
+#include <unistd.h>
 #include <time.h>
-
-void turbo_mutex_init(turbo_mutex_t *mutex) {
-  if (mutex == NULL) {
-    return;
-  }
-  pthread_mutex_t *pthread_mutex = malloc(sizeof(pthread_mutex_t));
-  if (pthread_mutex == NULL) {
-    return;
-  }
-  pthread_mutex_init(pthread_mutex, NULL);
-  *mutex = pthread_mutex;
-}
-
-void turbo_mutex_destroy(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL) {
-    return;
-  }
-  pthread_mutex_t *pthread_mutex = (pthread_mutex_t *)*mutex;
-  pthread_mutex_destroy(pthread_mutex);
-  free(pthread_mutex);
-  *mutex = NULL;
-}
-
-void turbo_mutex_lock(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL) {
-    return;
-  }
-  pthread_mutex_lock((pthread_mutex_t *)*mutex);
-}
-
-void turbo_mutex_unlock(turbo_mutex_t *mutex) {
-  if (mutex == NULL || *mutex == NULL) {
-    return;
-  }
-  pthread_mutex_unlock((pthread_mutex_t *)*mutex);
-}
-
+#include <signal.h>
+#include <errno.h>
 #endif
-
-// =============================================================================
-// Condition variables - native platform synchronization
-// =============================================================================
-
-#ifdef _WIN32
-
-void turbo_cond_init(turbo_cond_t *cond) {
-  if (cond == NULL) {
-    return;
-  }
-  PCONDITION_VARIABLE cv = malloc(sizeof(CONDITION_VARIABLE));
-  if (cv == NULL) {
-    return;
-  }
-  InitializeConditionVariable(cv);
-  *cond = cv;
-}
-
-void turbo_cond_destroy(turbo_cond_t *cond) {
-  if (cond == NULL || *cond == NULL) {
-    return;
-  }
-  // Condition variables don't need explicit cleanup on Windows
-  free(*cond);
-  *cond = NULL;
-}
-
-void turbo_cond_signal(turbo_cond_t *cond) {
-  if (cond == NULL || *cond == NULL) {
-    return;
-  }
-  WakeConditionVariable((PCONDITION_VARIABLE)*cond);
-}
-
-void turbo_cond_broadcast(turbo_cond_t *cond) {
-  if (cond == NULL || *cond == NULL) {
-    return;
-  }
-  WakeAllConditionVariable((PCONDITION_VARIABLE)*cond);
-}
-
-void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex) {
-  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL ||
-      *mutex == (turbo_mutex_t)(uintptr_t)-1) {
-    return;
-  }
-  SleepConditionVariableSRW((PCONDITION_VARIABLE)*cond, (PSRWLOCK)*mutex, INFINITE, 0);
-}
-
-int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns) {
-  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL ||
-      *mutex == (turbo_mutex_t)(uintptr_t)-1) {
-    return UV_EINVAL;
-  }
-  DWORD timeout_ms = (DWORD)(timeout_ns / 1000000ULL); // Convert ns to ms
-  BOOL result = SleepConditionVariableSRW((PCONDITION_VARIABLE)*cond, (PSRWLOCK)*mutex, timeout_ms, 0);
-  return result ? 0 : UV_ETIMEDOUT;
-}
-
-#else
-
-void turbo_cond_init(turbo_cond_t *cond) {
-  if (cond == NULL) {
-    return;
-  }
-  pthread_cond_t *pthread_cond = malloc(sizeof(pthread_cond_t));
-  if (pthread_cond == NULL) {
-    return;
-  }
-  pthread_cond_init(pthread_cond, NULL);
-  *cond = pthread_cond;
-}
-
-void turbo_cond_destroy(turbo_cond_t *cond) {
-  if (cond == NULL || *cond == NULL) {
-    return;
-  }
-  pthread_cond_t *pthread_cond = (pthread_cond_t *)*cond;
-  pthread_cond_destroy(pthread_cond);
-  free(pthread_cond);
-  *cond = NULL;
-}
-
-void turbo_cond_signal(turbo_cond_t *cond) {
-  if (cond == NULL || *cond == NULL) {
-    return;
-  }
-  pthread_cond_signal((pthread_cond_t *)*cond);
-}
-
-void turbo_cond_broadcast(turbo_cond_t *cond) {
-  if (cond == NULL || *cond == NULL) {
-    return;
-  }
-  pthread_cond_broadcast((pthread_cond_t *)*cond);
-}
-
-void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex) {
-  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL) {
-    return;
-  }
-  pthread_cond_wait((pthread_cond_t *)*cond, (pthread_mutex_t *)*mutex);
-}
-
-int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns) {
-  if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL) {
-    return UV_EINVAL;
-  }
-  
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-  
-  // Add timeout to current time
-  ts.tv_nsec += timeout_ns;
-  if (ts.tv_nsec >= 1000000000ULL) {
-    ts.tv_sec += ts.tv_nsec / 1000000000ULL;
-    ts.tv_nsec %= 1000000000ULL;
-  }
-  
-  int result = pthread_cond_timedwait((pthread_cond_t *)*cond, (pthread_mutex_t *)*mutex, &ts);
-  return (result == ETIMEDOUT) ? UV_ETIMEDOUT : 0;
-}
-
-#endif
-
-#ifdef _WIN32
-static BOOL CALLBACK InitOnceCallback(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context) {
-  void (*callback)(void) = (void (*)(void))Parameter;
-  callback();
-  return TRUE;
-}
-
-void turbo_once(turbo_once_t *guard, void (*callback)(void)) {
-  InitOnceExecuteOnce(guard, InitOnceCallback, (PVOID)callback, NULL);
-}
-#else
-void turbo_once(turbo_once_t *guard, void (*callback)(void)) {
-  pthread_once(guard, callback);
-}
-#endif
-
-#ifdef _WIN32
-
-struct turbo_thread_wrapper_ctx {
-  turbo_thread_cb entry;
-  void *arg;
-};
-
-static unsigned __stdcall turbo_thread_entry_wrapper(void *arg) {
-  struct turbo_thread_wrapper_ctx *ctx = (struct turbo_thread_wrapper_ctx *)arg;
-  turbo_thread_cb entry = ctx->entry;
-  void *real_arg = ctx->arg;
-  free(ctx);
-  entry(real_arg);
-  return 0;
-}
-
-int turbo_thread_create(turbo_thread_t *thread, turbo_thread_cb entry, void *arg) {
-  if (thread == NULL || entry == NULL) {
-    return UV_EINVAL;
-  }
-
-  struct turbo_thread_wrapper_ctx *ctx = malloc(sizeof(struct turbo_thread_wrapper_ctx));
-  if (!ctx) {
-    return UV_ENOMEM;
-  }
-  ctx->entry = entry;
-  ctx->arg = arg;
-
-  HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, turbo_thread_entry_wrapper, ctx, 0, NULL);
-  if (hThread == NULL) {
-    free(ctx);
-    return -1;
-  }
-
-  *thread = (turbo_thread_t)hThread;
-  return 0;
-}
-
-int turbo_thread_join(turbo_thread_t *thread) {
-  if (thread == NULL || *thread == NULL) {
-    return UV_EINVAL;
-  }
-  HANDLE hThread = (HANDLE)*thread;
-  WaitForSingleObject(hThread, INFINITE);
-  CloseHandle(hThread);
-  *thread = NULL;
-  return 0;
-}
-
-void turbo_thread_destroy(turbo_thread_t *thread) {
-  if (thread == NULL || *thread == NULL) {
-    return;
-  }
-  HANDLE hThread = (HANDLE)*thread;
-  CloseHandle(hThread);
-  *thread = NULL;
-}
-
-#else
-
-struct turbo_thread_wrapper_ctx {
-  turbo_thread_cb entry;
-  void *arg;
-};
-
-static void *turbo_thread_entry_wrapper_pthread(void *arg) {
-  struct turbo_thread_wrapper_ctx *ctx = (struct turbo_thread_wrapper_ctx *)arg;
-  turbo_thread_cb entry = ctx->entry;
-  void *real_arg = ctx->arg;
-  free(ctx);
-  entry(real_arg);
-  return NULL;
-}
-
-int turbo_thread_create(turbo_thread_t *thread, turbo_thread_cb entry, void *arg) {
-  if (thread == NULL || entry == NULL) {
-    return UV_EINVAL;
-  }
-
-  struct turbo_thread_wrapper_ctx *ctx = malloc(sizeof(struct turbo_thread_wrapper_ctx));
-  if (!ctx) {
-    return UV_ENOMEM;
-  }
-  ctx->entry = entry;
-  ctx->arg = arg;
-
-  pthread_t *pt = malloc(sizeof(pthread_t));
-  if (!pt) {
-    free(ctx);
-    return UV_ENOMEM;
-  }
-
-  if (pthread_create(pt, NULL, turbo_thread_entry_wrapper_pthread, ctx) != 0) {
-    free(ctx);
-    free(pt);
-    return -1;
-  }
-
-  *thread = (turbo_thread_t)pt;
-  return 0;
-}
-
-int turbo_thread_join(turbo_thread_t *thread) {
-  if (thread == NULL || *thread == NULL) {
-    return UV_EINVAL;
-  }
-  pthread_t *pt = (pthread_t *)*thread;
-  pthread_join(*pt, NULL);
-  free(pt);
-  *thread = NULL;
-  return 0;
-}
-
-void turbo_thread_destroy(turbo_thread_t *thread) {
-  if (thread == NULL || *thread == NULL) {
-    return;
-  }
-  pthread_t *pt = (pthread_t *)*thread;
-  pthread_detach(*pt);
-  free(pt);
-  *thread = NULL;
-}
-
-#endif
-
-void turbo_sleep_ms(uint32_t ms) {
-#ifdef TURBO_WIN32
-  Sleep(ms);
-#else
-  usleep(ms * 1000); // usleep takes microseconds
-#endif
-}
-
-
 
 // =============================================================================
 // Time utilities - high-resolution native platform timing
@@ -530,7 +155,7 @@ void turbo_timer_destroy(turbo_timer_t *timer) {
 int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb,
                       uint64_t timeout, uint64_t repeat) {
   if (!timer || !cb) {
-    return UV_EINVAL;
+    return -1;
   }
   
   // Stop existing timer if running
@@ -658,7 +283,7 @@ void turbo_timer_destroy(turbo_timer_t *timer) {
 int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb,
                       uint64_t timeout, uint64_t repeat) {
   if (!timer || !cb) {
-    return UV_EINVAL;
+    return -1;
   }
   
   timer->callback = cb;
@@ -720,6 +345,67 @@ void *turbo_timer_get_data(turbo_timer_t *timer) {
 uint64_t turbo_timer_get_repeat(turbo_timer_t *timer) {
   return timer ? timer->repeat : 0;
 }
+
+// =============================================================================
+// Read-Write Lock - cross-platform rwlock abstraction
+// =============================================================================
+
+#ifdef _WIN32
+
+int turbo_rwlock_init(turbo_rwlock_t *lock) {
+  if (!lock) return -1;
+  InitializeSRWLock(&lock->lock);
+  return 0;
+}
+
+void turbo_rwlock_destroy(turbo_rwlock_t *lock) {
+  (void)lock; /* SRWLOCK needs no cleanup */
+}
+
+void turbo_rwlock_rdlock(turbo_rwlock_t *lock) {
+  AcquireSRWLockShared(&lock->lock);
+}
+
+void turbo_rwlock_rdunlock(turbo_rwlock_t *lock) {
+  ReleaseSRWLockShared(&lock->lock);
+}
+
+void turbo_rwlock_wrlock(turbo_rwlock_t *lock) {
+  AcquireSRWLockExclusive(&lock->lock);
+}
+
+void turbo_rwlock_wrunlock(turbo_rwlock_t *lock) {
+  ReleaseSRWLockExclusive(&lock->lock);
+}
+
+#else
+
+int turbo_rwlock_init(turbo_rwlock_t *lock) {
+  if (!lock) return -1;
+  return pthread_rwlock_init(&lock->lock, NULL);
+}
+
+void turbo_rwlock_destroy(turbo_rwlock_t *lock) {
+  if (lock) pthread_rwlock_destroy(&lock->lock);
+}
+
+void turbo_rwlock_rdlock(turbo_rwlock_t *lock) {
+  pthread_rwlock_rdlock(&lock->lock);
+}
+
+void turbo_rwlock_rdunlock(turbo_rwlock_t *lock) {
+  pthread_rwlock_unlock(&lock->lock);
+}
+
+void turbo_rwlock_wrlock(turbo_rwlock_t *lock) {
+  pthread_rwlock_wrlock(&lock->lock);
+}
+
+void turbo_rwlock_wrunlock(turbo_rwlock_t *lock) {
+  pthread_rwlock_unlock(&lock->lock);
+}
+
+#endif
 
 
 // =============================================================================

@@ -131,9 +131,9 @@ static int build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
   if (addr->transport == TURBO_PIPE) {
     if (host && host[0] && strcmp(host, ".") != 0) {
 #ifdef _WIN32
-      stbsp_snprintf(addr->path, (int)sizeof(addr->path), "\\\\.\\pipe\\%s", host);
+      snprintf(addr->path, sizeof(addr->path), "\\\\.\\pipe\\%s", host);
 #else
-      stbsp_snprintf(addr->path, (int)sizeof(addr->path), "/tmp/%s", host);
+      snprintf(addr->path, sizeof(addr->path), "/tmp/%s", host);
 #endif
     } else {
       TLOG_ERROR("Invalid pipe URL: {}. Expected pipe://service_name",
@@ -149,7 +149,7 @@ static int build_address_path(turbo_address_t *addr, const uri_t *parsed_url) {
       strncpy(addr->path, path, sizeof(addr->path) - 1);
     } else {
       static const char FMT_PATH_QUERY[32] = "%s?%s";
-      stbsp_snprintf(addr->path, (int)sizeof(addr->path), FMT_PATH_QUERY, path ? path : "", query);
+      snprintf(addr->path, sizeof(addr->path), FMT_PATH_QUERY, path ? path : "", query);
     }
     addr->path[sizeof(addr->path) - 1] = '\0';
   }
@@ -261,7 +261,7 @@ int turbo_url_build(const char *scheme, const char *host, int port, const char *
     if (!path || !path[0]) {
       return TURBO_EINVAL_TRANSPORT;
     }
-    stbsp_snprintf(url_buf, (int)buf_size, "pipe://%s", path);
+    snprintf(url_buf, buf_size, "pipe://%s", path);
     return 0;
   }
 
@@ -275,16 +275,16 @@ int turbo_url_build(const char *scheme, const char *host, int port, const char *
     // Ensure path starts with /
     const char *path_prefix = (path[0] == '/') ? "" : "/";
     if (port > 0) {
-      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s:%d%s%s", lower_scheme, host, port,
+      snprintf(url_buf, buf_size, "%s://%s:%d%s%s", lower_scheme, host, port,
                      path_prefix, path);
     } else {
-      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s%s%s", lower_scheme, host, path_prefix, path);
+      snprintf(url_buf, buf_size, "%s://%s%s%s", lower_scheme, host, path_prefix, path);
     }
   } else {
     if (port > 0) {
-      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s:%d", lower_scheme, host, port);
+      snprintf(url_buf, buf_size, "%s://%s:%d", lower_scheme, host, port);
     } else {
-      stbsp_snprintf(url_buf, (int)buf_size, "%s://%s", lower_scheme, host);
+      snprintf(url_buf, buf_size, "%s://%s", lower_scheme, host);
     }
   }
 

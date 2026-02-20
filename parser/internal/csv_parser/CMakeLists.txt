@@ -48,7 +48,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
-target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils PRIVATE TurboNet::exprtkParser TurboNet::strtkParser)
 
 set_target_properties(
   ${TARGET_NAME}

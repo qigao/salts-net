@@ -387,6 +387,161 @@ CXX_C_API int turbo_mmap_unlock(turbo_mmap_t *mmap_ptr) {
 #endif
 }
 
+// =============================================================================
+// Group Mapping Implementation
+// =============================================================================
+
+CXX_C_API void turbo_mmap_group_init(turbo_mmap_group_t *group) {
+    if (!group) return;
+    memset(group, 0, sizeof(*group));
+}
+
+CXX_C_API int turbo_mmap_group_open(turbo_mmap_group_t *group, const char **paths,
+                                     size_t count, int access) {
+    if (!group || !paths || count == 0) return TURBO_MMAP_EINVAL;
+    if (group->data) return TURBO_MMAP_EEXIST;
+
+    size_t page_size = get_page_size();
+    size_t total_mapped_size = 0;
+    int result = TURBO_MMAP_OK;
+    
+    // First pass: calculate total size and get file handles
+    group->mappings = (turbo_mmap_t *)calloc(count, sizeof(turbo_mmap_t));
+    if (!group->mappings) return TURBO_MMAP_ENOMEM;
+
+    for (size_t i = 0; i < count; i++) {
+        turbo_mmap_init(&group->mappings[i]);
+#ifdef _WIN32
+        HANDLE hFile = CreateFileA(paths[i], GENERIC_READ | (access & TURBO_MMAP_WRITE ? GENERIC_WRITE : 0),
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            result = TURBO_MMAP_ENOENT;
+            goto cleanup;
+        }
+        group->mappings[i].file_handle = hFile;
+        int64_t size = get_file_size_fd((intptr_t)hFile);
+#else
+        int fd = open(paths[i], (access & TURBO_MMAP_WRITE ? O_RDWR : O_RDONLY));
+        if (fd < 0) {
+            result = TURBO_MMAP_ENOENT;
+            goto cleanup;
+        }
+        group->mappings[i].fd = fd;
+        group->mappings[i].owns_fd = true;
+        int64_t size = get_file_size_fd(fd);
+#endif
+        if (size <= 0) {
+            result = TURBO_MMAP_EEMPTY;
+            goto cleanup;
+        }
+        
+        group->mappings[i].length = (size_t)size;
+        // Each mapping must start on a page boundary for the next one to be aligned
+        group->mappings[i].mapped_length = (size_t)((size + page_size - 1) & ~(page_size - 1));
+        total_mapped_size += group->mappings[i].mapped_length;
+    }
+
+    // Second pass: Reserve address space to find a contiguous hole
+#ifdef _WIN32
+    void *base = VirtualAlloc(NULL, total_mapped_size, MEM_RESERVE, PAGE_NOACCESS);
+    if (!base) {
+        result = TURBO_MMAP_ENOMEM;
+        goto cleanup;
+    }
+    // Paradoxically, on Windows we MUST release the reservation before MapViewOfFileEx can use the address.
+    // The reservation just served to "find" a suitable hole of total_mapped_size.
+    VirtualFree(base, 0, MEM_RELEASE);
+#else
+    void *base = mmap(NULL, total_mapped_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED) {
+        result = TURBO_MMAP_ENOMEM;
+        goto cleanup;
+    }
+#endif
+
+    group->data = base;
+    group->total_size = total_mapped_size;
+    group->count = count;
+
+    // Third pass: Map each file into the reserved space
+    char *curr = (char *)base;
+    for (size_t i = 0; i < count; i++) {
+        turbo_mmap_t *m = &group->mappings[i];
+#ifdef _WIN32
+        DWORD protect = (access & TURBO_MMAP_WRITE) ? PAGE_READWRITE : PAGE_READONLY;
+        m->map_handle = CreateFileMappingA(m->file_handle, NULL, protect, 0, 0, NULL);
+        if (!m->map_handle) {
+            result = TURBO_MMAP_ENOMEM;
+            goto cleanup;
+        }
+
+        DWORD map_access = (access & TURBO_MMAP_WRITE) ? FILE_MAP_WRITE : FILE_MAP_READ;
+        // MapViewOfFileEx will fail if the address is already "owned" (even if just reserved),
+        // which is why we freed it above.
+        void *view = MapViewOfFileEx(m->map_handle, map_access, 0, 0, m->length, curr);
+        if (!view) {
+            result = TURBO_MMAP_ENOMEM;
+            goto cleanup;
+        }
+        m->data = view;
+#else
+        int prot = PROT_READ | (access & TURBO_MMAP_WRITE ? PROT_WRITE : 0);
+        // On POSIX, MAP_FIXED will overwrite the anonymous mapping created earlier.
+        void *view = mmap(curr, m->length, prot, MAP_SHARED | MAP_FIXED, m->fd, 0);
+        if (view == MAP_FAILED) {
+            result = TURBO_MMAP_EIO;
+            goto cleanup;
+        }
+        m->data = view;
+#endif
+        m->is_mapped = true;
+        curr += m->mapped_length;
+    }
+
+    return TURBO_MMAP_OK;
+
+cleanup:
+    // If we have group->data and are on POSIX, we might need to munmap the whole thing
+    // if we haven't mapped segments over it yet.
+#ifndef _WIN32
+    if (group->data && group->total_size > 0) {
+        munmap(group->data, group->total_size);
+    }
+#endif
+
+    if (group->mappings) {
+        for (size_t i = 0; i < count; i++) {
+            turbo_mmap_close(&group->mappings[i]);
+        }
+        free(group->mappings);
+        group->mappings = NULL;
+    }
+    group->data = NULL;
+    group->total_size = 0;
+    group->count = 0;
+    return result;
+}
+
+CXX_C_API void turbo_mmap_group_close(turbo_mmap_group_t *group) {
+    if (!group || !group->data) return;
+
+    for (size_t i = 0; i < group->count; i++) {
+        turbo_mmap_close(&group->mappings[i]);
+    }
+
+    // On Windows, VirtualFree is only needed if not all views are unmapped, 
+    // but here we unmapped them all via turbo_mmap_close.
+    // However, the reservation itself might need release.
+#ifdef _WIN32
+    VirtualFree(group->data, 0, MEM_RELEASE);
+#else
+    munmap(group->data, group->total_size);
+#endif
+
+    free(group->mappings);
+    memset(group, 0, sizeof(*group));
+}
+
 CXX_C_API const char *turbo_mmap_strerror(int err) {
     switch (err) {
         case TURBO_MMAP_OK:     return "Success";

@@ -10,7 +10,7 @@
 #ifndef TURBONET_FS_H
 #define TURBONET_FS_H
 
-#include <platform.h>
+#include "platform.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -227,6 +227,20 @@ CXX_C_API turbo_file_t turbo_fs_open(const char *path, int flags, int mode);
 CXX_C_API int turbo_fs_read(turbo_file_t fd, char *buf, size_t len);
 
 /**
+ * @brief Read from an open file at a specific offset (thread-safe)
+ *
+ * Uses positional read — does not modify the file descriptor's position.
+ * Safe to call concurrently from multiple threads on the same fd.
+ *
+ * @param fd File handle from turbo_fs_open
+ * @param buf Buffer to store read data
+ * @param len Maximum number of bytes to read
+ * @param offset Byte offset in the file to read from
+ * @return Number of bytes read, or negative error code
+ */
+CXX_C_API int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t offset);
+
+/**
  * @brief Write to an open file
  *
  * @param fd File handle from turbo_fs_open
@@ -243,6 +257,15 @@ CXX_C_API int turbo_fs_write(turbo_file_t fd, const char *data, size_t len);
  * @return 0 on success, negative error code on failure
  */
 CXX_C_API int turbo_fs_close(turbo_file_t fd);
+
+/**
+ * @brief Truncate or extend a file to a specified length
+ *
+ * @param fd File handle
+ * @param length New length in bytes
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_fs_ftruncate(turbo_file_t fd, int64_t length);
 
 /**
  * @brief Flush file buffers to disk

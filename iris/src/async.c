@@ -1,220 +1,193 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include "compat.h"
+/**
+ * @file async.c
+ * @brief Iris async task implementation
+ *
+ * Thread pool for blocking work. iris_await() bridges thread pool completions
+ * back to the event loop via turbo_coro_post(), so it works correctly inside
+ * coro server handlers.
+ */
+
 #include "async.h"
+#include "turbo_thread.h"
+#include "turbo_coro.h"
 #include "tlog.h"
-#include <stb_sprintf.h>
+#include <stdlib.h>
+#include <string.h>
 
-// Thread pool work callback
-static void _async_work_cb(uv_work_t *req)
-{
-    async_t *task = (async_t *)req->data;
-    task->work_fn(task, task->context);
-}
+// =============================================================================
+// Task Structure
+// =============================================================================
 
-// Completion callback after thread work is done
-static void _async_after_work_cb(uv_work_t *req, int status)
-{
-    async_t *task = (async_t *)req->data;
-    task->completed = 1;
+struct iris_async_task_s {
+    void *context;
+    iris_async_work_fn work_fn;
+    iris_async_done_fn done_fn;
+    int result;
+    char *error;
+    turbo_coro_t *awaiting_coro;
+    turbo_coro_context_t *coro_ctx;
+};
 
-    // Store status code from libuv if there was an issue
-    if (status < 0)
-    {
-        char error_buf[128];
-        stbsp_snprintf(error_buf, sizeof(error_buf), "libuv error: %s", uv_strerror(status));
+// =============================================================================
+// Globals
+// =============================================================================
 
-        // Allocate error using tstr since we're in completion callback
-        task->error = tstr_dup(error_buf);
-        task->result = 0;
+static turbo_threadpool_t *g_pool = NULL;
+static turbo_mutex_t g_pool_mutex;
+static int g_pool_initialized = 0;
+
+// =============================================================================
+// Internal
+// =============================================================================
+
+static void task_worker(void *arg) {
+    iris_async_task_t *task = (iris_async_task_t *)arg;
+
+    if (task->work_fn) {
+        task->work_fn(task, task->context);
     }
 
-    // Call the response handler with result
-    if (task->handler)
-    {
-        task->handler(task->context, task->result, task->error);
-    }
-
-    // Free error message if it was allocated
-    if (task->error)
-    {
-        tstr_free(task->error);
-        task->error = NULL;
-    }
-
-    // Free the task itself (always malloc'd)
-    free(task);
-}
-
-// Mark task as successfully completed
-void ok(async_t *task)
-{
-    if (!task)
-        return;
-    task->result = 1;
-}
-
-// Mark task as failed with an error message
-void fail(async_t *task, const char *error_msg)
-{
-    if (!task)
-        return;
-    task->result = 0;
-
-    // Free existing error if any
-    if (task->error)
-    {
-        tstr_free(task->error);
-        task->error = NULL;
-    }
-
-    // Set new error message
-    if (error_msg)
-    {
-        task->error = tstr_dup(error_msg);
-    }
-    else
-    {
-        task->error = tstr_dup("Unknown error");
-    }
-}
-
-// Creates and executes an async task
-int task(
-    void *context,                    // User context to pass to callbacks
-    async_work_fn_t work_fn,          // Function to execute in the thread pool
-    async_response_handler_t handler) // Response handler called after task completion
-{
-    if (!work_fn)
-        return -1;
-
-    // Create task using malloc (managed by libuv)
-    async_t *task = (async_t *)malloc(sizeof(async_t));
-    if (!task)
-    {
-        TLOG_ERROR("Failed to allocate memory for async task");
-        return -1;
-    }
-
-    // Initialize task
-    task->work.data = task;
-    task->context = context;
-    task->completed = 0;
-    task->result = 0;
-    task->error = NULL;
-    task->work_fn = work_fn;
-    task->handler = handler;
-
-    // Queue work
-    int result = uv_queue_work(
-        uv_default_loop(),
-        &task->work,
-        _async_work_cb,
-        _async_after_work_cb);
-
-    if (result != 0)
-    {
-        TLOG_ERROR("Failed to queue async work: {:s}", uv_strerror(result));
+    if (task->awaiting_coro) {
+        turbo_coro_post(task->coro_ctx, (turbo_coro_post_fn)turbo_coro_resume,
+                        task->awaiting_coro);
+    } else if (task->done_fn) {
+        task->done_fn(task->context, task->result, task->error);
+        if (task->error) free(task->error);
         free(task);
-        return result;
+    }
+}
+
+static void ensure_pool(void) {
+    if (!g_pool_initialized) {
+        iris_async_init(0);
+    }
+}
+
+// =============================================================================
+// Thread Pool API
+// =============================================================================
+
+int iris_async_init(int num_threads) {
+    if (g_pool_initialized) return 0;
+
+    turbo_mutex_init(&g_pool_mutex);
+
+    g_pool = turbo_threadpool_create(num_threads);
+    if (!g_pool) {
+        TLOG_ERROR("Failed to create Iris thread pool");
+        turbo_mutex_destroy(&g_pool_mutex);
+        return -1;
     }
 
+    g_pool_initialized = 1;
+    TLOG_INFO("Iris async initialized: {} workers", turbo_threadpool_size(g_pool));
     return 0;
 }
 
-// Chains another async task after a successful response
-void then(
-    void *context,                    // User context
-    int success,                      // Whether previous task was successful
-    tstr_t error,                     // Error message if previous task failed
-    async_work_fn_t next_work_fn,     // Next work function to execute if successful
-    async_response_handler_t handler) // Response handler for the next task
-{
-    if (success)
-    {
-        // Previous task was successful, chain the next task
-        task(context, next_work_fn, handler);
+void iris_async_shutdown(void) {
+    if (!g_pool_initialized) return;
+
+    iris_async_drain();
+
+    turbo_mutex_lock(&g_pool_mutex);
+    if (g_pool) {
+        turbo_threadpool_destroy(g_pool);
+        g_pool = NULL;
     }
-    else
-    {
-        // Previous task failed, call the handler with failure
-        if (handler)
-        {
-            handler(context, 0, error);
-        }
-    }
+    turbo_mutex_unlock(&g_pool_mutex);
+
+    turbo_mutex_destroy(&g_pool_mutex);
+
+    g_pool_initialized = 0;
 }
 
-/*
-Example usage with arena pattern:
-
-typedef struct {
-    turbo_arena_t *arena;        // Arena reference for cleanup
-    Res *res;           // Copied in arena
-    char *operation_name; // Allocated in arena
-    int user_id;
-} async_context_t;
-
-void arena_async_handler(Req *req, Res *res)
-{
-    // Create separate arena for async operation
-    turbo_arena_t *async_arena = malloc(sizeof(Arena));
-    if (!async_arena) {
-        send_text(res, 500, "Arena allocation failed");
-        return;
-    }
-    memset(async_arena, 0, sizeof(Arena));
-
-    // Allocate context in arena
-    async_context_t *ctx = turbo_arena_alloc(async_arena, sizeof(async_context_t));
-    if (!ctx) {
-        arena_free(async_arena);
-        free(async_arena);
-        send_text(res, 500, "Context allocation failed");
-        return;
-    }
-
-    // Store arena reference and copy data to arena
-    ctx->arena = async_arena;
-    ctx->res = arena_copy_res(async_arena, res);
-    ctx->operation_name = arena_strdup(async_arena, "database_query");
-    ctx->user_id = 123;
-
-    // Check if arena allocations succeeded
-    if (!ctx->res || !ctx->operation_name) {
-        arena_free(async_arena);
-        free(async_arena);
-        send_text(res, 500, "Arena allocation failed");
-        return;
-    }
-
-    // Use regular task() function
-    task(ctx, arena_async_work, arena_async_response);
+void iris_async_drain(void) {
+    if (!g_pool) return;
+    turbo_threadpool_wait(g_pool);
 }
 
-void arena_async_work(async_t *task, void *context)
-{
-    async_context_t *ctx = (async_context_t *)context;
-
-    // Simulate work
-    TLOG_INFO("Performing {:s} for user {:d}", ctx->operation_name, ctx->user_id);
-
-    ok(task);
+int iris_async_pending(void) {
+    if (!g_pool) return 0;
+    return turbo_threadpool_pending(g_pool);
 }
 
-void arena_async_response(void *context, int success, char *error)
-{
-    async_context_t *ctx = (async_context_t *)context;
+void iris_async_ok(iris_async_task_t *task) {
+    if (task) task->result = 1;
+}
 
+void iris_async_fail(iris_async_task_t *task, const char *error) {
+    if (!task) return;
+    task->result = 0;
+    if (task->error) free(task->error);
+    task->error = error ? strdup(error) : strdup("Unknown error");
+}
+
+int iris_async_submit(void *context, iris_async_work_fn work_fn, iris_async_done_fn done_fn) {
+    if (!work_fn) return -1;
+    ensure_pool();
+
+    iris_async_task_t *task = calloc(1, sizeof(iris_async_task_t));
+    if (!task) return -1;
+
+    task->context = context;
+    task->work_fn = work_fn;
+    task->done_fn = done_fn;
+
+    if (turbo_threadpool_submit(g_pool, task_worker, task) != 0) {
+        free(task);
+        return -1;
+    }
+    return 0;
+}
+
+void iris_async_then(void *context, int success, const char *error,
+                     iris_async_work_fn next_work_fn, iris_async_done_fn done_fn) {
     if (success) {
-        send_json(ctx->res, 200, "{\"result\": \"success\"}");
-    } else {
-        send_text(ctx->res, 500, error);
+        iris_async_submit(context, next_work_fn, done_fn);
+    } else if (done_fn) {
+        done_fn(context, 0, error);
+    }
+}
+
+// =============================================================================
+// Coroutine-aware await
+// =============================================================================
+
+iris_await_result_t iris_await(turbo_coro_context_t *ctx,
+                               iris_async_work_fn work_fn, void *context) {
+    iris_await_result_t fail = {0, "not in coroutine"};
+    turbo_coro_t *co = turbo_coro_running();
+    if (!co || !work_fn || !ctx) return fail;
+
+    ensure_pool();
+
+    iris_async_task_t *task = calloc(1, sizeof(iris_async_task_t));
+    if (!task) {
+        fail.error = "alloc failed";
+        return fail;
     }
 
-    // Single arena cleanup
-    turbo_arena_t *arena = ctx->arena;
-    arena_free(arena);
-    free(arena);
+    task->context = context;
+    task->work_fn = work_fn;
+    task->awaiting_coro = co;
+    task->coro_ctx = ctx;
+
+    if (turbo_threadpool_submit(g_pool, task_worker, task) != 0) {
+        free(task);
+        fail.error = "submit failed";
+        return fail;
+    }
+
+    turbo_coro_yield();
+
+    iris_await_result_t result;
+    result.success = task->result;
+    result.error = task->error;
+
+    char *err_copy = task->error ? strdup(task->error) : NULL;
+    if (task->error) free(task->error);
+    free(task);
+
+    result.error = err_copy;
+    return result;
 }
-*/

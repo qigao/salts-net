@@ -20,7 +20,15 @@ set(TEST_FILES
     test_turbo_fs.c
     test_turbo_str.c
     test_native_timer.c
-    test_url_codec.c)
+    test_url_codec.c
+    test_threadpool.c
+    test_coro.c
+    bench_tlog.c
+    test_mmap_group.c)
+
+# C++ test files
+set(CXX_TEST_FILES
+    test_tlog_cpp.cpp)
 
 # Create executables and link libraries for each test
 foreach(TEST_FILE ${TEST_FILES})
@@ -53,9 +61,25 @@ foreach(TEST_FILE ${TEST_FILES})
   endif()
 endforeach()
 
+# Create C++ test executables
+foreach(TEST_FILE ${CXX_TEST_FILES})
+  get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+  add_executable(${TEST_NAME} ${TEST_FILE})
+  target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Utils TurboNet::TinyTest
+                                             PkgConfig::STC)
+  if(WIN32)
+    target_link_libraries(${TEST_NAME} PRIVATE psapi iphlpapi userenv ws2_32)
+  endif()
+endforeach()
+
 # Convert test file names to target names for set_target_properties
 set(TEST_TARGETS)
 foreach(TEST_FILE ${TEST_FILES})
+  get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
+  list(APPEND TEST_TARGETS ${TEST_NAME})
+endforeach()
+
+foreach(TEST_FILE ${CXX_TEST_FILES})
   get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
   list(APPEND TEST_TARGETS ${TEST_NAME})
 endforeach()

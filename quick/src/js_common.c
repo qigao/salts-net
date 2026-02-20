@@ -3,6 +3,7 @@
  * @brief Common state management for JS TurboNet modules.
  */
 #include "js_internal.h"
+#include "js_http_client.h"
 #include "tlog.h"
 #include <uv.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@ static void js_turbo_context_finalizer(JSRuntime *rt, JSValue val) {
     JSTurboContextState *state = JS_GetOpaque(val, js_turbo_context_class_id);
     if (state) {
         js_turbo_cleanup_timers(state);
+        js_http_async_shutdown();
         if (state->http_client) {
             http_client_destroy(state->http_client);
         }

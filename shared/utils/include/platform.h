@@ -62,7 +62,6 @@ typedef intptr_t ssize_t;
     #define _SSIZE_T_DEFINED
   #endif
 #else
-  #define TURBO_UNIX 1
   #include <arpa/inet.h>
   #include <netinet/in.h>
   #include <strings.h>
@@ -78,125 +77,6 @@ typedef intptr_t ssize_t;
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// =============================================================================
-// Threading primitives - backed by libuv
-// =============================================================================
-
-// Opaque types to hide internal implementation (libuv)
-// Opaque types to hide internal implementation (libuv)
-typedef void *turbo_mutex_t;
-typedef void *turbo_cond_t;
-typedef void *turbo_thread_t;
-// One-time initialization guard
-#ifdef _WIN32
-typedef INIT_ONCE turbo_once_t;
-#define TURBO_ONCE_INIT INIT_ONCE_STATIC_INIT
-#else
-#include <pthread.h>
-typedef pthread_once_t turbo_once_t;
-#define TURBO_ONCE_INIT PTHREAD_ONCE_INIT
-#endif
-
-// Thread entry point callback type
-typedef void (*turbo_thread_cb)(void *arg);
-
-/**
- * @brief Initialize a mutex
- * @param mutex Mutex to initialize
- */
-CXX_C_API void turbo_mutex_init(turbo_mutex_t *mutex);
-
-/**
- * @brief Destroy a mutex
- * @param mutex Mutex to destroy
- */
-CXX_C_API void turbo_mutex_destroy(turbo_mutex_t *mutex);
-
-/**
- * @brief Lock a mutex
- * @param mutex Mutex to lock
- */
-CXX_C_API void turbo_mutex_lock(turbo_mutex_t *mutex);
-
-/**
- * @brief Unlock a mutex
- * @param mutex Mutex to unlock
- */
-CXX_C_API void turbo_mutex_unlock(turbo_mutex_t *mutex);
-
-/**
- * @brief Initialize a condition variable
- * @param cond Condition variable to initialize
- */
-CXX_C_API void turbo_cond_init(turbo_cond_t *cond);
-
-/**
- * @brief Destroy a condition variable
- * @param cond Condition variable to destroy
- */
-CXX_C_API void turbo_cond_destroy(turbo_cond_t *cond);
-
-/**
- * @brief Signal a condition variable (wake one waiting thread)
- * @param cond Condition variable to signal
- */
-CXX_C_API void turbo_cond_signal(turbo_cond_t *cond);
-
-/**
- * @brief Broadcast a condition variable (wake all waiting threads)
- * @param cond Condition variable to broadcast
- */
-CXX_C_API void turbo_cond_broadcast(turbo_cond_t *cond);
-
-/**
- * @brief Wait for a condition variable
- * @param cond Condition variable to wait on
- * @param mutex Mutex to hold while waiting (released while waiting, re-acquired before return)
- */
-CXX_C_API void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex);
-
-/**
- * @brief Wait for a condition variable with timeout
- * @param cond Condition variable to wait on
- * @param mutex Mutex to hold while waiting (released while waiting, re-acquired before return)
- * @param timeout_ns Timeout in nanoseconds
- * @return 0 on success, UV_ETIMEDOUT on timeout
- */
-CXX_C_API int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns);
-
-// =============================================================================
-// Thread utilities - cross-platform threading (via libuv)
-// =============================================================================
-
-/**
- * @brief Create a new thread
- * @param thread Thread handle (allocated by caller, initialized by function)
- * @param entry Entry point function
- * @param arg Argument passed to entry point
- * @return 0 on success, < 0 on failure
- */
-CXX_C_API int turbo_thread_create(turbo_thread_t *thread, turbo_thread_cb entry, void *arg);
-
-/**
- * @brief Wait for a thread to terminate
- * @param thread Thread handle
- * @return 0 on success, < 0 on failure
- */
-CXX_C_API int turbo_thread_join(turbo_thread_t *thread);
-
-/**
- * @brief Run a function exactly once
- * @param guard Control variable
- * @param callback Function to run
- */
-CXX_C_API void turbo_once(turbo_once_t *guard, void (*callback)(void));
-
-/**
- * @brief Destroy a thread handle (frees memory)
- * @param thread Thread handle
- */
-CXX_C_API void turbo_thread_destroy(turbo_thread_t *thread);
 
 // =============================================================================
 // Time utilities - platform-independent high-resolution timing
@@ -243,14 +123,6 @@ CXX_C_API int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz);
  * @return Current time in nanoseconds (monotonic)
  */
 CXX_C_API uint64_t turbo_hrtime(void);
-
-/**
- * @brief Sleep for specified number of milliseconds
- * @param ms Number of milliseconds to sleep
- *
- * @note This is blocking sleep, use timers for non-blocking delays
- */
-CXX_C_API void turbo_sleep_ms(uint32_t ms);
 
 /**
  * @brief Get uptime in milliseconds since process start
@@ -333,10 +205,43 @@ CXX_C_API void *turbo_timer_get_data(turbo_timer_t *timer);
  */
 CXX_C_API uint64_t turbo_timer_get_repeat(turbo_timer_t *timer);
 
+// =============================================================================
+// Read-Write Lock - cross-platform rwlock abstraction
+// =============================================================================
+
+#ifdef _WIN32
+typedef struct turbo_rwlock_s {
+    SRWLOCK lock;
+} turbo_rwlock_t;
+#else
+#include <pthread.h>
+typedef struct turbo_rwlock_s {
+    pthread_rwlock_t lock;
+} turbo_rwlock_t;
+#endif
+
+CXX_C_API int  turbo_rwlock_init(turbo_rwlock_t *lock);
+CXX_C_API void turbo_rwlock_destroy(turbo_rwlock_t *lock);
+CXX_C_API void turbo_rwlock_rdlock(turbo_rwlock_t *lock);
+CXX_C_API void turbo_rwlock_rdunlock(turbo_rwlock_t *lock);
+CXX_C_API void turbo_rwlock_wrlock(turbo_rwlock_t *lock);
+CXX_C_API void turbo_rwlock_wrunlock(turbo_rwlock_t *lock);
+
 /**
  * @brief Mark a variable as unused to suppress compiler warnings
  */
 #define UNUSED(x) (void)(x)
+ 
+// =============================================================================
+// Cache / Branch Prediction Hints
+// =============================================================================
+#if defined(__GNUC__) || defined(__clang__)
+  #define likely(x)       __builtin_expect(!!(x), 1)
+  #define unlikely(x)     __builtin_expect(!!(x), 0)
+#else
+  #define likely(x)       (x)
+  #define unlikely(x)     (x)
+#endif
 
 // =============================================================================
 // String utilities - safe string duplication with padding for stb_sprintf

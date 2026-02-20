@@ -2,6 +2,7 @@
 #define TURBO_ARENA_BUFFER_H
 
 #include "platform.h"
+#include "turbo_thread.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <assert.h>

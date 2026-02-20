@@ -64,7 +64,7 @@ target_include_directories(
 
 target_link_libraries(
   s3_client
-  PUBLIC TurboNet::HttpClient TurboNet::Utils OpenSSL::SSL OpenSSL::Crypto
+  PUBLIC TurboNet::HttpCoroClient TurboNet::Utils OpenSSL::SSL OpenSSL::Crypto
   PRIVATE cxml ini_parser turbo_parser uri_parser zlib-ng::zlib PkgConfig::STC)
 
 set_target_properties(s3_client PROPERTIES POSITION_INDEPENDENT_CODE ON
@@ -92,3 +92,9 @@ target_link_libraries(test_s3_client PRIVATE TurboNet::S3
                                                 TurboNet::TinyTest)
 set_target_properties(test_s3_client PROPERTIES FOLDER "shared/s3/tests")
 add_test(NAME test_s3_client COMMAND test_s3_client)
+
+add_executable(test_cxml_s3 examples/test_cxml_s3.c)
+target_link_libraries(test_cxml_s3 PRIVATE TurboNet::S3
+                                              TurboNet::TinyTest)
+set_target_properties(test_cxml_s3 PROPERTIES FOLDER "shared/s3/tests")
+add_test(NAME test_cxml_s3 COMMAND test_cxml_s3)

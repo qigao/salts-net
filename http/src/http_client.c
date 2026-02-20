@@ -10,14 +10,14 @@
 #include "base64_utils.h"
 #include "cookie_jar.h"
 #include "cookie_parser.h"
+#include "fmt.h"
 #include "tlog.h"
 #include "turbo_str.h"
 #include <cjwt/cjwt.h>
 #include <json_parser.h>
-#include <turbo_fs.h>
-
 #include <stb_sprintf.h>
-#include "fmt.h"
+#include <turbo_fs.h>
+#include <turbo_thread.h>
 
 #define HTTP_REQUEST_POOL_SIZE (1024 * 1024) // 1MB pool for request lifecycle
 
@@ -848,8 +848,8 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
 
   /* Build request line and headers using tstr_t */
   const char *path = uri_path[0] ? uri_path : "/";
-  tstr_t request_line = tstr_cat_fmt(tstr_new(), "%s %s%s%s HTTP/1.1\r\n",
-      method_to_string(method), path, uri_query[0] ? "?" : "", uri_query);
+  tstr_t request_line = tstr_cat_fmt(tstr_new(), "%s %s%s%s HTTP/1.1\r\n", method_to_string(method),
+                                     path, uri_query[0] ? "?" : "", uri_query);
   tstr_t host_hdr = tstr_cat_fmt(tstr_new(), "Host: %s\r\n", uri_host);
   tstr_t ua_hdr = tstr_cat_fmt(tstr_new(), "User-Agent: %s\r\n", client->user_agent);
   tstr_t cl_hdr = NULL;
@@ -978,8 +978,8 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
       http_response_t *response = calloc(1, sizeof(http_response_t));
       response->pool = pool;
       const char *err_msg = sync_client_last_message(client->client);
-      tstr_t err_str = tstr_cat_fmt(tstr_new(), "Send failed: %s",
-                                    err_msg ? err_msg : "unknown error");
+      tstr_t err_str =
+          tstr_cat_fmt(tstr_new(), "Send failed: %s", err_msg ? err_msg : "unknown error");
       response->error = pool_strdup(pool, err_str);
       tstr_free(err_str);
       response->error_code = HTTP_ERROR_SEND_FAILED;
@@ -991,7 +991,10 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
         }
         free(default_header_strings);
       }
-      tstr_free(request_line); tstr_free(host_hdr); tstr_free(ua_hdr); tstr_free(cl_hdr);
+      tstr_free(request_line);
+      tstr_free(host_hdr);
+      tstr_free(ua_hdr);
+      tstr_free(cl_hdr);
       client->stats.failed_requests++;
       turbo_free_uri(&p_uri);
       return response;
@@ -1010,7 +1013,10 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   }
 
   /* Free tstr_t header strings after sendv */
-  tstr_free(request_line); tstr_free(host_hdr); tstr_free(ua_hdr); tstr_free(cl_hdr);
+  tstr_free(request_line);
+  tstr_free(host_hdr);
+  tstr_free(ua_hdr);
+  tstr_free(cl_hdr);
 
   /* Receive response - may need multiple receives for large responses */
   char *full_buffer = NULL;
@@ -1028,9 +1034,10 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     return response;
   }
 
-  /* Use configured read timeout for first receive, shorter for subsequent */
+  /* Use configured read timeout for first receive, proportional for subsequent */
   int first_chunk_timeout = client->read_timeout_ms > 0 ? client->read_timeout_ms : 5000;
-  int subsequent_timeout = 2000; // 2 seconds for subsequent chunks
+  int subsequent_timeout = first_chunk_timeout / 5;
+  if (subsequent_timeout < 2000) subsequent_timeout = 2000;
   int is_first_chunk = 1;
 
   /* Keep receiving until we get all data or timeout */
@@ -1152,11 +1159,11 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
       tstr_t redirect_url;
 
       if (location[0] == '/') {
-        redirect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d%s",
-                                    uri_scheme, uri_host, uri_port, location);
+        redirect_url =
+            tstr_cat_fmt(tstr_new(), "%s://%s:%d%s", uri_scheme, uri_host, uri_port, location);
       } else if (strncmp(location, "http://", 7) != 0 && strncmp(location, "https://", 8) != 0) {
-        redirect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d/%s",
-                                    uri_scheme, uri_host, uri_port, location);
+        redirect_url =
+            tstr_cat_fmt(tstr_new(), "%s://%s:%d/%s", uri_scheme, uri_host, uri_port, location);
       } else {
         redirect_url = tstr_dup(location);
       }
@@ -2141,7 +2148,8 @@ http_response_t *http_post_multipart(http_client_t *client, const char *url,
 
   /* Build Content-Type header */
   char content_type[256];
-  fmt(content_type, sizeof(content_type), "Content-Type: multipart/form-data; boundary={}", form->boundary);
+  fmt(content_type, sizeof(content_type), "Content-Type: multipart/form-data; boundary={}",
+      form->boundary);
 
   const char *headers[] = {content_type};
 
@@ -2211,8 +2219,8 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
 
   /* Build Request Line and Headers */
   char request_line[1024];
-  fmt(request_line, sizeof(request_line), "POST {}{}{} HTTP/1.1\r\n",
-      uri_path[0] ? uri_path : "/", uri_query[0] ? "?" : "", uri_query);
+  fmt(request_line, sizeof(request_line), "POST {}{}{} HTTP/1.1\r\n", uri_path[0] ? uri_path : "/",
+      uri_query[0] ? "?" : "", uri_query);
 
   char host_hdr[512];
   fmt(host_hdr, sizeof(host_hdr), "Host: {}\r\n", uri_host);
@@ -2221,8 +2229,7 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   fmt(ua_hdr, sizeof(ua_hdr), "User-Agent: {}\r\n", client->user_agent);
 
   char ct_hdr[256];
-  fmt(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary={}\r\n",
-      form->boundary);
+  fmt(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary={}\r\n", form->boundary);
 
   char te_hdr[] = "Transfer-Encoding: chunked\r\n";
   char conn_hdr[] = "Connection: keep-alive\r\n\r\n";

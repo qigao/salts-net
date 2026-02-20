@@ -14,6 +14,7 @@
 #include "ice/turbo_stun.h"
 #include "ice/turbo_turn.h"
 #include <platform.h>
+#include <turbo_thread.h>
 
 #include "turbo_dns.h"
 #include "turbo_str.h"

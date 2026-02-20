@@ -1,145 +1,118 @@
 /**
  * @file turl_batch.c
- * @brief Batch download implementation with concurrent requests
+ * @brief Batch download implementation with concurrent coroutines
  */
 
 #include "turl_batch.h"
 #include "turl_common.h"
-#include <http_client_async.h>
+#include <http_coro_client.h>
+#include <turbo_coro.h>
 #include <platform.h>
 #include <tlog.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Mutex wrapper using platform.h
-typedef turbo_mutex_t turl_mutex_t;
-#define TURL_MUTEX_INIT(m) turbo_mutex_init((turbo_mutex_t*)(m))
-#define TURL_MUTEX_LOCK(m) turbo_mutex_lock((turbo_mutex_t*)(m))
-#define TURL_MUTEX_UNLOCK(m) turbo_mutex_unlock((turbo_mutex_t*)(m))
-#define TURL_MUTEX_DESTROY(m) turbo_mutex_destroy((turbo_mutex_t*)(m))
-
 /**
- * Batch download state
+ * Batch download state (single-threaded, no mutex needed)
  */
 typedef struct {
   char **urls;
   int url_count;
   int current_index;
-  int active_requests;
-  int64_t concurrency;
-  int verbose;
   int completed;
-  turl_mutex_t mutex;
+  int verbose;
+  int follow_redirects;
   const char **headers;
   uint32_t header_count;
   json_value_t *context;
   char *output_directory;
+  turbo_coro_context_t *coro_ctx;
 } batch_download_ctx_t;
 
-static void start_next_batch_request(batch_download_ctx_t *ctx, http_async_client_t *client);
+static void batch_worker(turbo_coro_t *co, void *arg) {
+  batch_download_ctx_t *ctx = (batch_download_ctx_t *)arg;
 
-typedef struct {
-  batch_download_ctx_t *batch;
-  char *url;
-  http_async_client_t *client;
-} per_request_ctx_t;
-
-static void batch_callback_wrapper(http_async_request_t *request, http_async_response_t *response,
-                                   void *user_data) {
-  per_request_ctx_t *req_ctx = (per_request_ctx_t *)user_data;
-  batch_download_ctx_t *ctx = req_ctx->batch;
-  char *url = req_ctx->url;
-  http_async_client_t *client = req_ctx->client;
-
-  TURL_MUTEX_LOCK(&ctx->mutex);
-  ctx->active_requests--;
-  ctx->completed++;
-  TURL_MUTEX_UNLOCK(&ctx->mutex);
-
-  if (response->error) {
-    TLOG_ERROR("Download failed [{}]: {} (code: {})", url, response->error,ENUM_NAME(response->error_code));
-  } else {
-    if (ctx->verbose) {
-      TLOG_INFO("Download finished [{}]: {} OK ({} bytes)", url, response->status_code, response->body_len);
-    }
-
-    const char *filename = strrchr(url, '/');
-    if (filename)
-      filename++;
-    else
-      filename = "downloaded_file";
-    if (!filename || !filename[0] || filename[0] == '?')
-      filename = "index.html";
-
-    // Strip query params if any for filename
-    char *q = strchr(filename, '?');
-    size_t name_len = q ? (size_t)(q - filename) : strlen(filename);
-    char safe_name[256];
-    if (name_len >= sizeof(safe_name))
-      name_len = sizeof(safe_name) - 1;
-    strncpy(safe_name, filename, name_len);
-    safe_name[name_len] = '\0';
-
-    char path[1024];
-    if (ctx->output_directory) {
-      turl_ensure_directory_exists(ctx->output_directory);
-      snprintf(path, sizeof(path), "%s/%s", ctx->output_directory, safe_name);
-    } else {
-      strncpy(path, safe_name, sizeof(path));
-    }
-
-    FILE *f = fopen(path, "wb");
-    if (f) {
-      fwrite(response->body, 1, response->body_len, f);
-      fclose(f);
-      if (ctx->verbose)
-        TLOG_INFO("* Written to {}", path);
-    } else {
-      TLOG_ERROR("Failed to open output file: {}", path);
-    }
-  }
-
-  free(url);
-  free(req_ctx);
-  
-  // Reuse this client for the next request
-  start_next_batch_request(ctx, client);
-}
-
-static void start_next_batch_request(batch_download_ctx_t *ctx, http_async_client_t *client) {
-  char *raw_url = NULL;
-  
-  TURL_MUTEX_LOCK(&ctx->mutex);
-  if (ctx->current_index < ctx->url_count) {
-    if (ctx->verbose) {
-      TLOG_INFO("Starting download [{}/{}]: {}", ctx->current_index + 1, ctx->url_count, ctx->urls[ctx->current_index]);
-    }
-    raw_url = ctx->urls[ctx->current_index++];
-    ctx->active_requests++;
-  }
-  TURL_MUTEX_UNLOCK(&ctx->mutex);
-
-  if (!raw_url) {
+  http_coro_client_t *client = http_coro_client_create(ctx->coro_ctx);
+  if (!client) {
+    TLOG_ERROR("Failed to create HTTP client for batch worker");
     return;
   }
+  http_coro_client_follow_redirects(client, ctx->follow_redirects);
 
-  char *rendered_url = turl_render_template(raw_url, ctx->context);
-  
-  per_request_ctx_t *req_ctx = malloc(sizeof(per_request_ctx_t));
-  req_ctx->batch = ctx;
-  req_ctx->url = rendered_url;
-  req_ctx->client = client;
+  while (ctx->current_index < ctx->url_count) {
+    int idx = ctx->current_index++;
+    char *raw_url = ctx->urls[idx];
 
-  http_async_request(client, HTTP_GET, rendered_url, ctx->headers, ctx->header_count, NULL, 0,
-                      batch_callback_wrapper, req_ctx);
+    if (ctx->verbose) {
+      TLOG_INFO("Starting download [{}/{}]: {}", idx + 1, ctx->url_count, raw_url);
+    }
+
+    char *rendered_url = turl_render_template(raw_url, ctx->context);
+
+    http_coro_response_t *resp = http_coro_request(
+        client, HTTP_GET, rendered_url, ctx->headers, ctx->header_count, NULL, 0);
+
+    if (resp->error) {
+      TLOG_ERROR("Download failed [{}]: {} (code: {})", rendered_url, resp->error,
+                 ENUM_NAME(resp->error_code));
+    } else {
+      if (ctx->verbose) {
+        TLOG_INFO("Download finished [{}]: {} OK ({} bytes)", rendered_url,
+                  resp->status_code, resp->body_len);
+      }
+
+      const char *filename = strrchr(rendered_url, '/');
+      if (filename)
+        filename++;
+      else
+        filename = "downloaded_file";
+      if (!filename || !filename[0] || filename[0] == '?')
+        filename = "index.html";
+
+      // Strip query params if any for filename
+      char *q = strchr(filename, '?');
+      size_t name_len = q ? (size_t)(q - filename) : strlen(filename);
+      char safe_name[256];
+      if (name_len >= sizeof(safe_name))
+        name_len = sizeof(safe_name) - 1;
+      strncpy(safe_name, filename, name_len);
+      safe_name[name_len] = '\0';
+
+      char path[1024];
+      if (ctx->output_directory) {
+        turl_ensure_directory_exists(ctx->output_directory);
+        snprintf(path, sizeof(path), "%s/%s", ctx->output_directory, safe_name);
+      } else {
+        strncpy(path, safe_name, sizeof(path));
+      }
+
+      FILE *f = fopen(path, "wb");
+      if (f) {
+        fwrite(resp->body, 1, resp->body_len, f);
+        fclose(f);
+        if (ctx->verbose)
+          TLOG_INFO("* Written to {}", path);
+      } else {
+        TLOG_ERROR("Failed to open output file: {}", path);
+      }
+    }
+
+    http_coro_response_free(resp);
+    free(rendered_url);
+
+    ctx->completed++;
+  }
+
+  http_coro_client_destroy(client);
 }
 
 int turl_batch_download(const char *input_file, int64_t concurrency,
                         char **headers, uint32_t header_count,
                         json_value_t *mustache_context,
                         const char *output_directory,
-                        int follow_redirects, int verbose) {
+                        int follow_redirects, int verbose,
+                        turbo_coro_context_t *coro_ctx) {
     FILE *f = fopen(input_file, "r");
     if (!f) {
       TLOG_ERROR("Failed to open input file: {}", input_file);
@@ -173,55 +146,52 @@ int turl_batch_download(const char *input_file, int64_t concurrency,
         rendered_headers[i] = turl_render_template(headers[i], mustache_context);
     }
 
-    http_async_client_t **clients = calloc(concurrency, sizeof(http_async_client_t *));
     batch_download_ctx_t batch_ctx = {
         .urls = urls,
         .url_count = url_count,
         .current_index = 0,
-        .active_requests = 0,
-        .concurrency = concurrency,
-        .verbose = verbose,
         .completed = 0,
+        .verbose = verbose,
+        .follow_redirects = follow_redirects,
         .headers = (header_count > 0) ? (const char **)rendered_headers : NULL,
         .header_count = header_count,
         .context = mustache_context,
-        .output_directory = (char*)output_directory
+        .output_directory = (char *)output_directory,
+        .coro_ctx = coro_ctx,
     };
-    TURL_MUTEX_INIT(&batch_ctx.mutex);
 
-    // Initialize clients and start requests
-    for (int i = 0; i < concurrency; i++) {
-        clients[i] = http_async_client_create();
-        http_async_client_follow_redirects(clients[i], follow_redirects);
-        start_next_batch_request(&batch_ctx, clients[i]);
+    // Spawn worker coroutines
+    int worker_count = (int)(concurrency < url_count ? concurrency : url_count);
+    turbo_coro_t **workers = calloc(worker_count, sizeof(turbo_coro_t *));
+    for (int i = 0; i < worker_count; i++) {
+        workers[i] = turbo_coro_create(batch_worker, &batch_ctx, NULL);
+        turbo_coro_resume(workers[i]);
     }
 
-    // Wait for all requests to complete
-    while (1) {
-      int done = 0;
-      TURL_MUTEX_LOCK(&batch_ctx.mutex);
-      if (batch_ctx.completed >= batch_ctx.url_count)
-        done = 1;
-      TURL_MUTEX_UNLOCK(&batch_ctx.mutex);
-      
-      if (done) break;
-
-      // Sleep briefly
-      turbo_sleep_ms(10);
+    // Yield until all workers finish
+    int alive = 1;
+    while (alive) {
+        alive = 0;
+        for (int i = 0; i < worker_count; i++) {
+            if (turbo_coro_alive(workers[i])) {
+                turbo_coro_resume(workers[i]);
+                alive = 1;
+            }
+        }
+        if (alive)
+            turbo_coro_yield();
     }
 
-    // Cleanup batch resources
+    // Cleanup
+    for (int i = 0; i < worker_count; i++)
+        turbo_coro_destroy(workers[i]);
+    free(workers);
+
     for (int i = 0; i < url_count; i++)
       free(urls[i]);
     free(urls);
     for (uint32_t i = 0; i < header_count; i++)
         free(rendered_headers[i]);
-        
-    for (int i = 0; i < concurrency; i++) {
-        http_async_client_destroy(clients[i]);
-    }
-    free(clients);
-    TURL_MUTEX_DESTROY(&batch_ctx.mutex);
 
     if (verbose)
       TLOG_INFO("Batch download complete. {} files processed.", batch_ctx.completed);

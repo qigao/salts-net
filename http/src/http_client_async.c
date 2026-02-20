@@ -3,6 +3,7 @@
 #include "turbo_async_client.h"
 #include <llhttp.h>
 #include "http_client_async.h"
+#include "http_common_internal.h"
 #include <cjwt/cjwt.h>
 #include <json_parser.h>
 #include "turbo_parser.h"
@@ -28,7 +29,6 @@ typedef struct header_entry_s {
 struct http_async_request_s;
 
 /* Parser context for llhttp */
-/* Parser context for llhttp */
 typedef struct {
   http_async_response_t *response;
   int headers_complete;
@@ -48,15 +48,6 @@ typedef enum {
   REQUEST_STATE_ERROR
 } request_state_t;
 
-/* Stream state for file uploads */
-typedef struct http_async_multipart_file_stream_s {
-  tstr_t file_path;
-  turbo_file_t fd; /* turbo_fs file descriptor */
-  int64_t file_size;
-  int64_t offset;
-  char chunk_buf[16384]; /* 16KB chunks */
-} http_async_multipart_file_stream_t;
-
 /* Multipart sending states */
 typedef enum {
   MP_STATE_HEADERS,
@@ -66,27 +57,6 @@ typedef enum {
   MP_STATE_FINAL_BOUNDARY,
   MP_STATE_DONE
 } mp_sending_state_t;
-
-/* Multipart form part */
-typedef struct http_async_multipart_part_s {
-  tstr_t name;
-  tstr_t filename;
-  tstr_t content_type;
-  tstr_t value;
-  void *data;
-  size_t data_len;
-  int is_file;
-  int is_stream;
-  http_async_multipart_file_stream_t *stream_ctx;
-  struct http_async_multipart_part_s *next;
-} http_async_multipart_part_t;
-
-/* Multipart form structure */
-typedef struct http_async_multipart_form_s {
-  http_async_multipart_part_t *parts;
-  char boundary[48];
-  int part_count;
-} http_async_multipart_form_t;
 
 /* Async request structure */
 struct http_async_request_s {
@@ -137,33 +107,6 @@ struct http_async_request_s {
    * All request data (url, headers, body, receive_buffer, response) allocated from here
    * Single turbo_arena_free() cleans up everything */
   turbo_arena_t request_arena;
-};
-
-/* Cookie structure */
-typedef struct http_async_cookie_s {
-  tstr_t name;
-  tstr_t value;
-  tstr_t domain;
-  tstr_t path;
-  int secure;
-  int http_only;
-  struct http_async_cookie_s *next;
-} http_async_cookie_t;
-
-/* Cookie jar structure */
-struct http_async_cookie_jar_s {
-  http_async_cookie_t *cookies;
-  int count;
-};
-
-/* URL parameters structure */
-struct http_async_params_s {
-  struct param_entry {
-    tstr_t key;
-    tstr_t value;
-    struct param_entry *next;
-  } *head;
-  int count;
 };
 
 /* Interceptor list node */
@@ -1542,180 +1485,6 @@ int http_async_response_is_text(http_async_response_t *response) {
   return is_text;
 }
 
-/* ============================================================================
- * URL Parameters / Form Data
- * ========================================================================= */
-
-http_async_params_t *http_async_params_create(void) {
-  http_async_params_t *params = calloc(1, sizeof(http_async_params_t));
-  return params;
-}
-
-void http_async_params_add(http_async_params_t *params, const char *key, const char *value) {
-  if (!params || !key || !value)
-    return;
-
-  struct param_entry *entry = malloc(sizeof(struct param_entry));
-  if (!entry)
-    return;
-
-  entry->key = tstr_dup(key);
-  entry->value = tstr_dup(value);
-  entry->next = params->head;
-  params->head = entry;
-  params->count++;
-}
-
-static char *url_encode(const char *str) {
-  if (!str)
-    return NULL;
-
-  size_t len = strlen(str);
-  char *encoded = malloc(len * 3 + 1);
-  if (!encoded)
-    return NULL;
-
-  char *p = encoded;
-  for (size_t i = 0; i < len; i++) {
-    unsigned char c = (unsigned char)str[i];
-
-    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
-        c == '_' || c == '.' || c == '~') {
-      *p++ = c;
-    } else if (c == ' ') {
-      *p++ = '+';
-    } else {
-      sprintf(p, "%%%02X", c);
-      p += 3;
-    }
-  }
-  *p = '\0';
-
-  return encoded;
-}
-
-char *http_async_params_encode(http_async_params_t *params) {
-  if (!params || !params->head) {
-    tstr_t empty = tstr_new();
-    if (!empty)
-      return NULL;
-    char *out = tstr_to_cstr(empty);
-    tstr_free(empty);
-    return out;
-  }
-
-  size_t size = 0;
-  struct param_entry *entry = params->head;
-  while (entry) {
-    char *key_enc = url_encode(entry->key);
-    char *val_enc = url_encode(entry->value);
-
-    if (key_enc && val_enc) {
-      size += strlen(key_enc) + strlen(val_enc) + 2;
-    }
-
-    free(key_enc);
-    free(val_enc);
-    entry = entry->next;
-  }
-
-  if (size == 0) {
-    tstr_t empty = tstr_new();
-    if (!empty)
-      return NULL;
-    char *out = tstr_to_cstr(empty);
-    tstr_free(empty);
-    return out;
-  }
-
-  char *result = malloc(size + 1);
-  if (!result)
-    return NULL;
-
-  char *p = result;
-  entry = params->head;
-  int first = 1;
-
-  while (entry) {
-    char *key_enc = url_encode(entry->key);
-    char *val_enc = url_encode(entry->value);
-
-    if (key_enc && val_enc) {
-      if (!first) {
-        *p++ = '&';
-      }
-      strcpy(p, key_enc);
-      p += strlen(key_enc);
-      *p++ = '=';
-      strcpy(p, val_enc);
-      p += strlen(val_enc);
-      first = 0;
-    }
-
-    free(key_enc);
-    free(val_enc);
-    entry = entry->next;
-  }
-  *p = '\0';
-
-  return result;
-}
-
-void http_async_params_free(http_async_params_t *params) {
-  if (!params)
-    return;
-
-  struct param_entry *entry = params->head;
-  while (entry) {
-    struct param_entry *next = entry->next;
-    tstr_free(entry->key);
-    tstr_free(entry->value);
-    free(entry);
-    entry = next;
-  }
-
-  free(params);
-}
-
-char *http_async_build_url(const char *base_url, http_async_params_t *query_params) {
-  if (!base_url)
-    return NULL;
-
-  if (!query_params || !query_params->head) {
-    tstr_t base_copy = tstr_dup(base_url);
-    if (!base_copy)
-      return NULL;
-    char *out = tstr_to_cstr(base_copy);
-    tstr_free(base_copy);
-    return out;
-  }
-
-  char *query_string = http_async_params_encode(query_params);
-  if (!query_string) {
-    tstr_t base_copy = tstr_dup(base_url);
-    if (!base_copy)
-      return NULL;
-    char *out = tstr_to_cstr(base_copy);
-    tstr_free(base_copy);
-    return out;
-  }
-
-  const char *has_query = strchr(base_url, '?');
-  char separator = has_query ? '&' : '?';
-
-  size_t url_len = strlen(base_url) + strlen(query_string) + 2;
-  char *full_url = malloc(url_len);
-  if (!full_url) {
-    free(query_string);
-    return NULL;
-  }
-
-  stbsp_snprintf(full_url, (int)url_len, "%s%c%s", base_url, separator, query_string);
-  free(query_string);
-
-  return full_url;
-}
-
 http_async_request_t *http_async_post_form(http_async_client_t *client, const char *url,
                                            http_async_params_t *params,
                                            http_async_response_cb callback, void *user_data) {
@@ -1735,117 +1504,6 @@ http_async_request_t *http_async_post_form(http_async_client_t *client, const ch
   return request;
 }
 
-/* ============================================================================
- * Cookie Management
- * ========================================================================= */
-
-http_async_cookie_jar_t *http_async_cookie_jar_create(void) {
-  http_async_cookie_jar_t *jar = calloc(1, sizeof(http_async_cookie_jar_t));
-  return jar;
-}
-
-void http_async_cookie_jar_destroy(http_async_cookie_jar_t *jar) {
-  if (!jar)
-    return;
-
-  http_async_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    http_async_cookie_t *next = cookie->next;
-    tstr_free(cookie->name);
-    tstr_free(cookie->value);
-    tstr_free(cookie->domain);
-    tstr_free(cookie->path);
-    free(cookie);
-    cookie = next;
-  }
-
-  free(jar);
-}
-
-void http_async_cookie_jar_set(http_async_cookie_jar_t *jar, const char *name, const char *value) {
-  if (!jar || !name || !value)
-    return;
-
-  http_async_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    if (strcmp(cookie->name, name) == 0) {
-      tstr_free(cookie->value);
-      cookie->value = tstr_dup(value);
-      return;
-    }
-    cookie = cookie->next;
-  }
-
-  cookie = calloc(1, sizeof(http_async_cookie_t));
-  if (!cookie)
-    return;
-
-  cookie->name = tstr_dup(name);
-  cookie->value = tstr_dup(value);
-  cookie->next = jar->cookies;
-  jar->cookies = cookie;
-  jar->count++;
-}
-
-const char *http_async_cookie_jar_get(http_async_cookie_jar_t *jar, const char *name) {
-  if (!jar || !name)
-    return NULL;
-
-  http_async_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    if (strcmp(cookie->name, name) == 0) {
-      return cookie->value;
-    }
-    cookie = cookie->next;
-  }
-
-  return NULL;
-}
-
-void http_async_cookie_jar_remove(http_async_cookie_jar_t *jar, const char *name) {
-  if (!jar || !name)
-    return;
-
-  http_async_cookie_t **prev = &jar->cookies;
-  http_async_cookie_t *cookie = jar->cookies;
-
-  while (cookie) {
-    if (strcmp(cookie->name, name) == 0) {
-      *prev = cookie->next;
-      tstr_free(cookie->name);
-      tstr_free(cookie->value);
-      tstr_free(cookie->domain);
-      tstr_free(cookie->path);
-      free(cookie);
-      jar->count--;
-      return;
-    }
-    prev = &cookie->next;
-    cookie = cookie->next;
-  }
-}
-
-void http_async_cookie_jar_clear(http_async_cookie_jar_t *jar) {
-  if (!jar)
-    return;
-
-  http_async_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    http_async_cookie_t *next = cookie->next;
-    tstr_free(cookie->name);
-    tstr_free(cookie->value);
-    tstr_free(cookie->domain);
-    tstr_free(cookie->path);
-    free(cookie);
-    cookie = next;
-  }
-
-  jar->cookies = NULL;
-  jar->count = 0;
-}
-
-int http_async_cookie_jar_count(http_async_cookie_jar_t *jar) { return jar ? jar->count : 0; }
-
 void http_async_client_set_cookie_jar(http_async_client_t *client, http_async_cookie_jar_t *jar) {
   if (client) {
     client->cookie_jar = jar;
@@ -1854,160 +1512,6 @@ void http_async_client_set_cookie_jar(http_async_client_t *client, http_async_co
 
 http_async_cookie_jar_t *http_async_client_get_cookie_jar(http_async_client_t *client) {
   return client ? client->cookie_jar : NULL;
-}
-
-/* ============================================================================
- * Multipart Form Data
- * ========================================================================= */
-
-static void generate_boundary(char *boundary, size_t len) {
-  const char *chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  size_t chars_len = strlen(chars);
-
-  strcpy(boundary, "----WebKitFormBoundary");
-  size_t prefix_len = strlen(boundary);
-
-  for (size_t i = prefix_len; i < len - 1; i++) {
-    boundary[i] = chars[rand() % chars_len];
-  }
-  boundary[len - 1] = '\0';
-}
-
-http_async_multipart_form_t *http_async_multipart_form_create(void) {
-  http_async_multipart_form_t *form = calloc(1, sizeof(http_async_multipart_form_t));
-  if (!form)
-    return NULL;
-
-  generate_boundary(form->boundary, sizeof(form->boundary));
-
-  return form;
-}
-
-void http_async_multipart_form_destroy(http_async_multipart_form_t *form) {
-  if (!form)
-    return;
-
-  http_async_multipart_part_t *part = form->parts;
-  while (part) {
-    http_async_multipart_part_t *next = part->next;
-    tstr_free(part->name);
-    tstr_free(part->filename);
-    tstr_free(part->content_type);
-    tstr_free(part->value);
-    free(part->data);
-
-    /* Clean up streaming context if present */
-    if (part->stream_ctx) {
-      if (part->stream_ctx->fd != TURBO_INVALID_FILE) {
-        turbo_fs_close(part->stream_ctx->fd);
-      }
-      tstr_free(part->stream_ctx->file_path);
-      free(part->stream_ctx);
-    }
-
-    free(part);
-    part = next;
-  }
-
-  free(form);
-}
-
-void http_async_multipart_form_add_field(http_async_multipart_form_t *form, const char *name,
-                                         const char *value) {
-  if (!form || !name || !value)
-    return;
-
-  http_async_multipart_part_t *part = calloc(1, sizeof(http_async_multipart_part_t));
-  if (!part)
-    return;
-
-  part->name = tstr_dup(name);
-  part->value = tstr_dup(value);
-  part->is_file = 0;
-  part->next = form->parts;
-  form->parts = part;
-  form->part_count++;
-}
-
-void http_async_multipart_form_add_file(http_async_multipart_form_t *form, const char *field_name,
-                                        const char *filename, const char *content_type,
-                                        const void *data, size_t data_len) {
-  if (!form || !field_name || !filename || !data)
-    return;
-
-  http_async_multipart_part_t *part = calloc(1, sizeof(http_async_multipart_part_t));
-  if (!part)
-    return;
-
-  part->name = tstr_dup(field_name);
-  part->filename = tstr_dup(filename);
-  part->content_type = content_type ? tstr_dup(content_type) : tstr_dup("application/octet-stream");
-  part->data = malloc(data_len);
-  if (part->data) {
-    memcpy(part->data, data, data_len);
-    part->data_len = data_len;
-  }
-  part->is_file = 1;
-  part->next = form->parts;
-  form->parts = part;
-  form->part_count++;
-}
-
-int http_async_multipart_form_add_file_path(http_async_multipart_form_t *form,
-                                            const char *field_name, const char *file_path,
-                                            const char *content_type) {
-  if (!form || !field_name || !file_path)
-    return -1;
-
-  turbo_fs_stat_t st;
-  if (turbo_fs_stat(file_path, &st) != 0) {
-    return -1;
-  }
-
-  if (st.is_directory) {
-    return -1;
-  }
-
-  // Large files (>2GB) supported via streaming
-
-  http_async_multipart_part_t *part = calloc(1, sizeof(http_async_multipart_part_t));
-  if (!part)
-    return -1;
-
-  part->name = tstr_dup(field_name);
-  // Extract filename from path
-  char basename[256];
-  if (turbo_fs_path_basename(file_path, basename, sizeof(basename)) == 0) {
-    part->filename = tstr_dup(basename);
-  } else {
-    part->filename = tstr_dup("file");
-  }
-
-  part->content_type = content_type ? tstr_dup(content_type) : tstr_dup("application/octet-stream");
-  part->is_file = 1;
-  part->is_stream = 1; /* Mark as streaming part */
-
-  /* Initialize stream context */
-  part->stream_ctx = calloc(1, sizeof(http_async_multipart_file_stream_t));
-  if (!part->stream_ctx) {
-    tstr_free(part->name);
-    tstr_free(part->filename);
-    tstr_free(part->content_type);
-    free(part);
-    return -1;
-  }
-
-  part->stream_ctx->file_path = tstr_dup(file_path);
-  part->stream_ctx->file_size = st.size;
-  part->stream_ctx->offset = 0;
-  part->stream_ctx->fd = TURBO_INVALID_FILE; /* Open lazily during send */
-  /* Chunk buffer allocated during send */
-
-  part->next = form->parts;
-  form->parts = part;
-  form->part_count++;
-
-  return 0;
 }
 
 static char *build_multipart_body(http_async_multipart_form_t *form, size_t *body_len) {
@@ -2277,7 +1781,7 @@ http_async_retry_policy_t http_async_retry_policy_default(void) {
                                       .initial_delay_ms = 1000,
                                       .max_delay_ms = 30000,
                                       .exponential_backoff = 1,
-                                      .retry_on_timeout = 1,
+                                      .retry_on_timeout = 0,
                                       .retry_on_connection_error = 1,
                                       .retry_on_5xx = 1,
                                       .jitter_factor = 0.1};

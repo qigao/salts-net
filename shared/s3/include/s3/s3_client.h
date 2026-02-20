@@ -3,7 +3,7 @@
 
 #include <turbo_str.h>
 #include <platform.h>
-#include <http_client.h>
+#include <netcore/turbo_coro_context.h>
 #include "s3_types.h"
 #include "s3_credentials.h"
 #include "s3_error.h"
@@ -27,9 +27,11 @@ typedef struct {
 CXX_C_API void s3_base_url_free(s3_base_url_t* url);
 
 // Client lifecycle
-CXX_C_API s3_client_t* s3_client_create(const s3_base_url_t* base_url,
+CXX_C_API s3_client_t* s3_client_create(turbo_coro_context_t *ctx,
+                                   const s3_base_url_t* base_url,
                                    s3_credential_provider_t* provider);
 CXX_C_API void            s3_client_destroy(s3_client_t* client);
+CXX_C_API void            s3_client_set_part_size(s3_client_t* client, size_t part_size);
 
 // ── Bucket operations ──
 

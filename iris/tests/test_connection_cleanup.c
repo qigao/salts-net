@@ -16,7 +16,7 @@
 #endif
 
 #include "router.h"
-#include "turbo_async_server.h"
+#include "netcore/turbo_coro_client.h"
 #include "error_recovery.h"
 
 /* Test data structure for middleware context */
@@ -49,14 +49,6 @@ static void test_cleanup_function(void *data) {
     }
 }
 
-/* Test server event callback */
-static void test_server_event_cb(async_server_t *server, const async_server_event_t *event, void *user_data) {
-    (void)server;
-    (void)event;
-    (void)user_data;
-    /* Minimal callback for testing */
-}
-
 spec("connection_cleanup") {
     before_each() {
         /* Reset global test state */
@@ -77,21 +69,14 @@ spec("connection_cleanup") {
      * @brief Test that connection context can be set and retrieved
      */
     it("should set and get connection context") {
-        /* Create a test server and connection */
-        async_server_t *server = async_server_create(test_server_event_cb, NULL);
-        check_not_null(server);
+        /* For this test, we'll simulate a connection by creating a mock client
+         * Since we can't easily create a real client in a unit test without loop, we'll test
+         * the connection context functions with a NULL client to verify error handling */
         
-        /* For this test, we'll simulate a connection by creating a mock connection
-         * Since we can't easily create a real connection in a unit test, we'll test
-         * the connection context functions with a NULL connection to verify error handling */
-        
-        /* Test with NULL connection - should handle gracefully */
+        /* Test with NULL client - should handle gracefully */
         set_connection_context(NULL, NULL, NULL);
         void *result = get_connection_context(NULL);
         check_null(result);
-        
-        /* Cleanup */
-        async_server_destroy(server);
     }
 
     /**
@@ -172,10 +157,10 @@ spec("connection_cleanup") {
      * @brief Test connection context error handling
      */
     it("should handle connection context errors") {
-        /* Test setting context with NULL connection */
+        /* Test setting context with NULL client */
         set_connection_context(NULL, (void*)0x12345, test_cleanup_function);
         
-        /* Test getting context with NULL connection */
+        /* Test getting context with NULL client */
         void *result = get_connection_context(NULL);
         check_null(result);
         

@@ -247,6 +247,12 @@ static void on_tcp_handle_closed(uv_handle_t* handle) {
     }
     
     turbo_arena_free(&client->arena);
+    
+    if (client->dns_initialized) {
+        turbo_dns_cleanup();
+        client->dns_initialized = 0;
+    }
+    
     free(client);
 }
 
@@ -473,7 +479,20 @@ static void on_connect_dns_resolved(const char* hostname, const char* ip, int st
     turbo_connect_ctx_t* ctx = (turbo_connect_ctx_t*)user_data;
     turbo_tcp_client_t* client = ctx->client;
     
+    /* Guard against duplicate callbacks or invalid state */
+    if (client->conn_state != 1) {
+        /* If we are not in 'Resolving' state, ignore this callback.
+           If we are already Connecting (2) or Connected (3), this is a duplicate or late callback.
+           Do NOT free ctx here if we suspect multiple callbacks share it, 
+           BUT usually we own ctx. If this is a race, leaking ctx is better than double-free. 
+           However, let's assume valid flow is one callback. */
+        TLOG_DEBUG("on_connect_dns_resolved: ignoring callback in state {:d}", client->conn_state);
+        // free(ctx); // Dangerous if multiple calls share ctx
+        return;
+    }
+
     if (status != 0 || !ip) {
+        client->conn_state = 0;
         if (client->on_connect) {
             client->on_connect(client, status ? status : UV_EAI_FAIL, NULL);
         }
@@ -483,6 +502,7 @@ static void on_connect_dns_resolved(const char* hostname, const char* ip, int st
 
     struct sockaddr_storage addr;
     if (turbo_dns_parse_address(ip, (int)ctx->port, &addr) != 0) {
+        client->conn_state = 0;
         if (client->on_connect) {
             client->on_connect(client, UV_EAI_FAIL, NULL);
         }
@@ -493,6 +513,7 @@ static void on_connect_dns_resolved(const char* hostname, const char* ip, int st
     /* We have an address, now connect */
     uv_connect_t* connect_req = (uv_connect_t*)malloc(sizeof(uv_connect_t));
     if (!connect_req) {
+        client->conn_state = 0;
         if (client->on_connect) {
             client->on_connect(client, UV_ENOMEM, NULL);
         }
@@ -503,8 +524,10 @@ static void on_connect_dns_resolved(const char* hostname, const char* ip, int st
     /* Store client in request handle data (uv_tcp_connect uses client->handle) */
     /* Wait, uv_tcp_connect takes handle. req->handle will point to client->handle after connect starts */
 
+    client->conn_state = 2; /* Connecting */
     int rc = uv_tcp_connect(connect_req, &client->handle, (const struct sockaddr*)&addr, on_tcp_client_connected);
     if (rc != 0) {
+        client->conn_state = 0;
         free(connect_req);
         if (client->on_connect) {
             client->on_connect(client, rc, NULL);
@@ -519,7 +542,11 @@ static void on_tcp_client_connected(uv_connect_t* req, int status) {
     turbo_tcp_client_t* client = (turbo_tcp_client_t*)req->handle->data;
     if (!client) return;
     
+    // Cleanup connect req
+    free(req);
+
     if (status == 0) {
+        client->conn_state = 3; /* Connected */
         /* Enable TCP_NODELAY */
         uv_tcp_nodelay(&client->handle, 1);
         
@@ -531,12 +558,26 @@ static void on_tcp_client_connected(uv_connect_t* req, int status) {
             client->on_connect(client, 0, NULL);
         }
     } else {
+        client->conn_state = 0;
         turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
         if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET) {
             TLOG_DEBUG("TCP connection failed: {:s}", uv_strerror(status));
         } else {
             TLOG_ERROR("TCP connection failed: {:s}", uv_strerror(status));
         }
+        /* Notify user of failure (on_connect) implies we don't close? 
+           But turbo_tcp_client_connect usually expects on_connect called.
+           Actually the pattern used here is to call on_connect with error? 
+           Wait, existing code called turbo_tcp_client_close(client). */
+        
+        /* Check if on_connect has been called? 
+           If status != 0, we received an error callback. We should notify user. */
+        if (client->on_connect) {
+            client->on_connect(client, status, NULL);
+        }
+        
+        /* Don't close immediately if we want to allow retry? 
+           But turbo_tcp_client_close was called in original code. */
         turbo_tcp_client_close(client);
     }
 }
@@ -549,10 +590,10 @@ int turbo_tcp_client_connect(turbo_tcp_client_t* client,
                                     turbo_close_cb on_close) {
     if (!client || !host) return UV_EINVAL;
     
-    client->on_recv = on_recv;
-    client->on_connect = on_connect;
-    client->on_close = on_close;
-    
+    if (client->conn_state != 0) {
+        return UV_EALREADY;
+    }
+
     client->on_recv = on_recv;
     client->on_connect = on_connect;
     client->on_close = on_close;
@@ -563,10 +604,27 @@ int turbo_tcp_client_connect(turbo_tcp_client_t* client,
     ctx->client = client;
     ctx->port = port;
 
-    /* Use async DNS resolution to avoid blocking the event loop */
-    int rc = turbo_dns_resolve_async(client->handle.loop, host, TURBO_DNS_ANY, on_connect_dns_resolved, ctx);
+    /* Initialize DNS subsystem */
+    int rc = turbo_dns_init();
     if (rc != 0) {
         free(ctx);
+        return rc;
+    }
+    client->dns_initialized = 1;
+
+    /* Use async DNS resolution to avoid blocking the event loop */
+    client->conn_state = 1; /* Resolving */
+    rc = turbo_dns_resolve_async(client->handle.loop, host, TURBO_DNS_ANY, on_connect_dns_resolved, ctx);
+    if (rc != 0) {
+        client->conn_state = 0;
+        free(ctx);
+        /* Cleanup DNS if we failed to start resolution */
+        /* wait, if we return error, user might call close? 
+           If we return error, client is still allocated. user should call close.
+           But usually user calls create, then connect. If connect fails:
+             client = turbo_tcp_client_create()
+             if (turbo_tcp_client_connect() != 0) { turbo_tcp_client_close(client); }
+           So cleanup will happen in on_tcp_handle_closed. */
         return rc;
     }
     
@@ -577,11 +635,15 @@ int turbo_tcp_client_connect(turbo_tcp_client_t* client,
 void turbo_tcp_client_close(turbo_tcp_client_t* client) {
     if (!client || client->closing) return;
     
+    client->conn_state = 0;
     client->closing = 1;
     uv_read_stop((uv_stream_t*)&client->handle);
     
     if (!uv_is_closing((uv_handle_t*)&client->handle)) {
         uv_close((uv_handle_t*)&client->handle, on_tcp_handle_closed);
+    } else {
+        /* Already closing? We might need to ensure callback is called? 
+           uv_close guarantees callback. If already closing, callback is pending. */
     }
 }
 

@@ -116,7 +116,7 @@ turl https://httpbin.org/get  # Will be verbose automatically
 
 Create a file named `request.txt`:
 
-```
+```bash
 --verbose
 --request POST
 --header "Content-Type: application/json"
@@ -341,7 +341,7 @@ turl --help
 
 Output example:
 
-```
+```bash
 ------ turl 1.0 - turbonet HTTP/WebSocket client help ------
 usage: turl [OPTIONS...] URL
 
@@ -426,7 +426,6 @@ Use the `--verbose` flag to see request details and response headers:
 
 ```bash
 turl --verbose https://httpbin.org/ip
-```
 
 Output:
 
@@ -459,6 +458,7 @@ Content-Type: application/json
 `turl` is designed for reliable and observable testing.
 
 ### Retry Logic
+
 Automatically retry failed requests (timeout, 5xx, connection error) with exponential backoff.
 
 ```bash
@@ -467,6 +467,7 @@ turl --retry 3 --retry-delay 500 https://unstable.api.com/data
 ```
 
 ### Performance Stats
+
 Get a printed summary of request timing and data transfer.
 
 ```bash
@@ -474,6 +475,7 @@ turl --stats https://google.com
 ```
 
 Output:
+
 ```text
 ------------------ Performance Stats ------------------
   Total Time:   45.20 ms
@@ -489,7 +491,9 @@ Output:
 Move beyond single commands by defining **Request Collections** in JSON. This allows you to run entire workflows (e.g., "Login -> Get Profile -> Logout") in one go.
 
 ### 1. Create a Collection File
+
 `api_test.json`:
+
 ```json
 {
   "name": "User Workflow",
@@ -510,11 +514,13 @@ Move beyond single commands by defining **Request Collections** in JSON. This al
 ```
 
 ### 2. Run the Collection
+
 ```bash
 turl --collection api_test.json
 ```
 
 ### 3. Collections + Environments
+
 Collections support templating! Create `.env.local` and `.env.prod`:
 
 `.env.local`: `BASE_URL=http://localhost:8080`
@@ -523,11 +529,13 @@ Collections support templating! Create `.env.local` and `.env.prod`:
 Update your collection URL to `{{BASE_URL}}/health`.
 
 Run against local:
+
 ```bash
 turl --collection api_test.json -e local
 ```
 
 Run against prod:
+
 ```bash
 turl --collection api_test.json --use-env prod
 ```
@@ -539,19 +547,23 @@ turl --collection api_test.json --use-env prod
 `turl` has native support for generating and debugging JSON Web Tokens (JWT).
 
 ### 1. Generate Signed JWT on-the-fly
+
 No need for external tools to create bearer tokens.
 
 ```bash
 turl --jwt-secret "my_secret_key" --jwt-claims "{\"sub\":\"123\", \"role\":\"admin\"}" https://api.com/protected
 ```
+
 This automatically generates a valid HS256 token and attaches it as `Authorization: Bearer <token>`.
 
 ### 2. Decode & Inspect JWT
+
 Debug tokens returned by your API instantly.
 
 ```bash
 turl --decode-jwt -X POST -d "align='center' creds..." https://api.com/login
 ```
+
 If the response (or request) contains a JWT, `turl` will automatically find, decode, and pretty-print the claims to the console.
 
 ---
@@ -563,6 +575,7 @@ If the response (or request) contains a JWT, `turl` will automatically find, dec
 ### Basic Batch Download
 
 Create a file `urls.txt`:
+
 ```text
 https://example.com/file1.zip
 https://example.com/file2.zip
@@ -581,6 +594,7 @@ turl -i urls.txt -j 5
 You can use Mustache templates in your URL list to make batch downloads dynamic based on a context file.
 
 **urls.txt:**
+
 ```text
 {{base_url}}/img/{{category}}/001.jpg
 {{base_url}}/img/{{category}}/002.jpg
@@ -588,6 +602,7 @@ You can use Mustache templates in your URL list to make batch downloads dynamic 
 ```
 
 **context.json:**
+
 ```json
 {
   "base_url": "https://cdn.example.com",
@@ -597,18 +612,21 @@ You can use Mustache templates in your URL list to make batch downloads dynamic 
 ```
 
 **Command:**
+
 ```bash
 turl -i urls.txt --context context.json -j 10 --output downloads/
 ```
 
 This will download:
-- `https://cdn.example.com/img/nature/001.jpg`
-- `https://cdn.example.com/img/nature/002.jpg`
-- `https://cdn.example.com/docs/manual-v2.pdf`
+
+* `https://cdn.example.com/img/nature/001.jpg`
+* `https://cdn.example.com/img/nature/002.jpg`
+* `https://cdn.example.com/docs/manual-v2.pdf`
 
 And save them to the `downloads/` directory.
 
 ### Key Features
-- **Concurrency Control**: Use `-j <N>` to limit valid simultaneous connections.
-- **Output Directory**: Use `-o <dir>` to save all downloaded files into a specific folder. The folder is created automatically if it doesn't exist.
-- **Smart Filenames**: `turl` automatically extracts the filename from the URL (e.g., `image.png` from `http://site.com/image.png?v=1`).
+
+* **Concurrency Control**: Use `-j <N>` to limit valid simultaneous connections.
+* **Output Directory**: Use `-o <dir>` to save all downloaded files into a specific folder. The folder is created automatically if it doesn't exist.
+* **Smart Filenames**: `turl` automatically extracts the filename from the URL (e.g., `image.png` from `http://site.com/image.png?v=1`).

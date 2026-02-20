@@ -4,6 +4,7 @@
 
 // Parsers headers
 #include "csv_parser.h"
+#include "datetime_parser.h"
 #include "frame_parser.h" // for TLV
 #include "ini_parser.h"
 #include "json_parser.h"
@@ -1072,4 +1073,17 @@ turbo_toml_array_t *turbo_toml_array_array(const turbo_toml_array_t *array, int 
 
 turbo_toml_t *turbo_toml_array_table(const turbo_toml_array_t *array, int idx) {
   return (turbo_toml_t *)toml_array_table((const toml_array_t *)array, idx);
+}
+
+/* Datetime */
+int turbo_parse_datetime(const char *str, size_t len, turbo_datetime_t *out) {
+  return datetime_parse(str, len, (datetime_t *)out);
+}
+
+time_t turbo_datetime_to_time(const turbo_datetime_t *dt) {
+  return datetime_to_time((const datetime_t *)dt);
+}
+
+int turbo_datetime_format_rfc822(time_t t, char *buf, size_t buf_len) {
+  return datetime_format_rfc822(t, buf, buf_len);
 }

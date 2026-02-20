@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "turbo_thread.h"
 #include "tinytest.h"
 #include "turbo_atomic.h"
 #include <stdio.h>

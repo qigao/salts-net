@@ -148,7 +148,18 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
     // Resolve hostname to IP address (TLS client requires IP)
     struct sockaddr_storage addr;
     int addr_len = 0;
-    int rc = turbo_dns_resolve(NULL, host, port, &addr, &addr_len);
+    
+    // Initialize DNS for this resolution
+    int rc = turbo_dns_init();
+    if (rc != 0) {
+      return rc;
+    }
+
+    rc = turbo_dns_resolve(NULL, host, port, &addr, &addr_len);
+    
+    // Cleanup DNS (refcount decrement)
+    turbo_dns_cleanup();
+
     if (rc != 0) {
       return rc;
     }
@@ -181,6 +192,7 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
     int result = turbo_tls_client_connect(tls, ip_str, (unsigned short)port, on_tls_recv_internal,
                                           on_tls_connect_internal, on_tls_close_internal);
     if (result != 0) {
+      tls->user_data = NULL; // Detach before close/free
       turbo_tls_client_close(tls);
       client->transport = NULL;
       return result;
@@ -206,6 +218,7 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
                                           on_tcp_connect_internal, on_tcp_close_internal);
     TLOG_DEBUG("turbo_websocket_client_connect: turbo_tcp_client_connect returned {}", result);
     if (result != 0) {
+      tcp->user_data = NULL; // Detach before close/free
       turbo_tcp_client_close(tcp);
       client->transport = NULL;
       return result;
@@ -288,8 +301,8 @@ void turbo_websocket_client_destroy(turbo_websocket_client_t *client) {
   if (!client)
     return;
 
-  /* If already closed, free immediately */
-  if (client->state == TURBO_WS_STATE_CLOSED || !client->transport) {
+  /* If already closed, free immediately, UNLESS we are in the close callback */
+  if ((client->state == TURBO_WS_STATE_CLOSED || !client->transport) && !client->in_close_callback) {
     websocket_client_free(client);
     return;
   }
@@ -391,10 +404,22 @@ static void on_tcp_close_internal(void *handle) {
   if (!client) return;
 
   client->state = TURBO_WS_STATE_CLOSED;
+  client->in_close_callback = 1;
 
   if (client->on_close) {
     client->on_close(client);
   }
+  
+  // Guard against client being freed in callback
+  // Use a way to detect if client is still valid is impossible if freed.
+  // BUT client->pending_destroy should only be processed if client is still alive.
+  // If destroy was called during pending_destroy, destroy would have freed it if state was closed.
+  // But wait, destroy sets pending_destroy=1 if we are 'in use'.
+  // We need destroy to NOT free if in_close_callback is set. 
+  
+  // So proceed assuming destroy modified to respect in_close_callback.
+  
+  client->in_close_callback = 0;
 
   /* Deferred cleanup from turbo_websocket_client_destroy */
   if (client->pending_destroy) {
@@ -452,10 +477,13 @@ static void on_tls_close_internal(void *handle) {
   if (!client) return;
 
   client->state = TURBO_WS_STATE_CLOSED;
+  client->in_close_callback = 1;
 
   if (client->on_close) {
     client->on_close(client);
   }
+  
+  client->in_close_callback = 0;
 
   /* Deferred cleanup from turbo_websocket_client_destroy */
   if (client->pending_destroy) {

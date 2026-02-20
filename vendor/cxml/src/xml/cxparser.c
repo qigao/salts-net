@@ -8,8 +8,8 @@
 
 #define parse__error(_p, ...)           \
 fprintf(stderr, __VA_ARGS__);           \
-_cxml_parser_free(_p);                  \
-exit(EXIT_FAILURE);
+(_p)->has_error = true;                 \
+longjmp((_p)->error_jmp, 1);
 
 extern _cxml_token cxml_get_token(_cxml_lexer *cxlexer);
 
@@ -58,6 +58,7 @@ void _cxml_parser_init(
     _cxml_stack_init(&parser->_cx_stack);  // init stack
     parser->pos_c = 0;
     parser->cfg = cxml_get_config();
+    parser->has_error = false;
 }
 
 void _cxml_parser_free(_cxml_parser *cxparser) {
@@ -89,7 +90,7 @@ void cxml_free_attr_checker(cxml_table *attr_checker){
     cxml_table_free(attr_checker);
 }
 
-_CX_ATR_NORETURN static void
+static void
 _cxml_p__handle_error(_cxml_parser *cxparser, _cxml_token *token) {
     /*
      * handle error by emitting a helpful error message, and exiting
@@ -846,7 +847,7 @@ static void x__wrap_elem(_cxml_parser *cxparser, cxml_elem_node *node) {
     _backtrack_ns_scope(cxparser);
 }
 
-_CX_ATR_NORETURN static void _cxml_ns_error(
+static void _cxml_ns_error(
         _cxml_parser *parser,
         cxml_name *name,
         const char *_for)
@@ -1229,6 +1230,14 @@ cxml_root_node* cxml_parse_xml_lazy(const char *file_name) {
     cxml__assert(file_name, "Expected file name.")
     _cxml_parser cxparser;
     _cxml_parser_init(&cxparser, NULL, file_name, true);
+    if (setjmp(cxparser.error_jmp)) {
+        // parse error: clean up and return NULL
+        cxml_root_node *root = cxparser.root_node;
+        _cxml_lexer_close(&cxparser.cxlexer);
+        _cxml_parser_free(&cxparser);
+        if (root) cxml_root_node_free(root);
+        return NULL;
+    }
     x__document(&cxparser);
     _cxml_lexer_close(&cxparser.cxlexer);
     cxml_root_node *root = cxparser.root_node;
@@ -1243,6 +1252,14 @@ cxml_root_node* cxml_parse_xml(const char *src) {
     cxml__assert(src, "Expected source string.")
     _cxml_parser cxparser;
     _cxml_parser_init(&cxparser, src, NULL, false);
+    if (setjmp(cxparser.error_jmp)) {
+        // parse error: clean up and return NULL
+        cxml_root_node *root = cxparser.root_node;
+        _cxml_lexer_close(&cxparser.cxlexer);
+        _cxml_parser_free(&cxparser);
+        if (root) cxml_root_node_free(root);
+        return NULL;
+    }
     x__document(&cxparser);
     _cxml_lexer_close(&cxparser.cxlexer);
     cxml_root_node *root = cxparser.root_node;

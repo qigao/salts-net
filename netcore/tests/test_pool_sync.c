@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "platform.h"
+#include "turbo_thread.h"
 #include "tinytest.h"
 
 /* Declarations for pool_sync functions */

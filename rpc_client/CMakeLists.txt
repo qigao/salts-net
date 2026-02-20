@@ -1,4 +1,4 @@
-# RPC Client - JSON-RPC 2.0 client library Built on top of http_client_async for
+# RPC Client - JSON-RPC 2.0 client library Built on top of http_coro_client for
 # robust HTTP transport
 
 # Library (respects BUILD_SHARED_LIBS)
@@ -10,8 +10,8 @@ target_include_directories(
   rpc_client PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                     $<INSTALL_INTERFACE:include>)
 
-# Link with dependencies http_client_async and json_parser are required dependencies
-target_link_libraries(rpc_client PUBLIC http_client_async TurboNet::JsonParser TurboNet::Core)
+# Link with dependencies http_coro_client and json_parser are required dependencies
+target_link_libraries(rpc_client PUBLIC http_coro_client TurboNet::JsonParser TurboNet::Core)
 
 # Set folder for IDE organization
 set_target_properties(

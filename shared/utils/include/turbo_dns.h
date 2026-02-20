@@ -32,6 +32,11 @@ typedef enum {
 } turbo_dns_pref_t;
 
 /**
+ * @brief Opaque handle for a pending DNS query (used for cancellation).
+ */
+typedef struct turbo_dns_query_s turbo_dns_query_t;
+
+/**
  * @brief Callback for asynchronous DNS resolution.
  *
  * @param hostname The original hostname that was resolved
@@ -109,6 +114,34 @@ CXX_C_API int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer, size
  */
 CXX_C_API int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t pref,
                                       turbo_dns_cb callback, void *user_data);
+
+/**
+ * @brief Start asynchronous DNS resolution with cancellation support.
+ *
+ * Same as turbo_dns_resolve_async but returns a query handle that can be
+ * passed to turbo_dns_cancel() to abort the query early.
+ *
+ * @param loop      Event loop for resolution (opaque pointer)
+ * @param hostname  Hostname to resolve
+ * @param pref      Address family preference
+ * @param callback  Callback invoked on completion
+ * @param user_data User context passed to callback
+ * @param out_query Output: query handle for cancellation (NULL if not needed)
+ * @return 0 on success (resolution started), error code on failure
+ */
+CXX_C_API int turbo_dns_resolve_async2(void *loop, const char *hostname, turbo_dns_pref_t pref,
+                                       turbo_dns_cb callback, void *user_data,
+                                       turbo_dns_query_t **out_query);
+
+/**
+ * @brief Cancel a pending asynchronous DNS query.
+ *
+ * Triggers the callback with ARES_ECANCELLED status and cleans up resources.
+ * Safe to call with NULL.
+ *
+ * @param query Query handle from turbo_dns_resolve_async2
+ */
+CXX_C_API void turbo_dns_cancel(turbo_dns_query_t *query);
 
 // =============================================================================
 // DNS Server Configuration

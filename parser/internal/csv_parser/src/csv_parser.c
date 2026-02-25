@@ -435,6 +435,110 @@ const char *csv_get_error(void) {
 }
 
 /* ============================================================================
+ * Serialization — csv_to_string / csv_write_file (RFC 4180)
+ * ============================================================================ */
+
+static bool csv_field_needs_quoting(const char *s, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        char c = s[i];
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') return true;
+    }
+    return false;
+}
+
+static size_t csv_field_quoted_len(const char *s, size_t len) {
+    size_t n = 2;
+    for (size_t i = 0; i < len; ++i)
+        n += (s[i] == '"') ? 2 : 1;
+    return n;
+}
+
+static size_t csv_write_field(char *buf, const char *s, size_t len, bool quote) {
+    size_t pos = 0;
+    if (quote) {
+        buf[pos++] = '"';
+        for (size_t i = 0; i < len; ++i) {
+            if (s[i] == '"') buf[pos++] = '"';
+            buf[pos++] = s[i];
+        }
+        buf[pos++] = '"';
+    } else {
+        memcpy(buf + pos, s, len);
+        pos += len;
+    }
+    return pos;
+}
+
+static size_t csv_row_serialized_len(csv_row_node_t *row) {
+    size_t total = 0;
+    size_t col = 0;
+    for (csv_field_node_t *f = row->fields; f; f = f->next, ++col) {
+        if (col > 0) total += 1; /* comma */
+        const char *s = f->value ? f->value : "";
+        size_t len = f->value ? f->length : 0;
+        if (csv_field_needs_quoting(s, len))
+            total += csv_field_quoted_len(s, len);
+        else
+            total += len;
+    }
+    total += 1; /* newline */
+    return total;
+}
+
+static size_t csv_row_write(char *buf, csv_row_node_t *row) {
+    size_t pos = 0;
+    size_t col = 0;
+    for (csv_field_node_t *f = row->fields; f; f = f->next, ++col) {
+        if (col > 0) buf[pos++] = ',';
+        const char *s = f->value ? f->value : "";
+        size_t len = f->value ? f->length : 0;
+        bool quote = csv_field_needs_quoting(s, len);
+        pos += csv_write_field(buf + pos, s, len, quote);
+    }
+    buf[pos++] = '\n';
+    return pos;
+}
+
+char *csv_to_string(const csv_doc_t *doc) {
+    if (!doc) return NULL;
+
+    /* Pass 1: compute total size */
+    size_t total = 0;
+    if (doc->header) total += csv_row_serialized_len(doc->header);
+    for (csv_row_node_t *r = doc->rows; r; r = r->next)
+        total += csv_row_serialized_len(r);
+
+    char *buf = (char *)malloc(total + 1);
+    if (!buf) return NULL;
+
+    /* Pass 2: fill buffer */
+    size_t pos = 0;
+    if (doc->header) pos += csv_row_write(buf + pos, doc->header);
+    for (csv_row_node_t *r = doc->rows; r; r = r->next)
+        pos += csv_row_write(buf + pos, r);
+
+    buf[pos] = '\0';
+    return buf;
+}
+
+int csv_write_file(const csv_doc_t *doc, const char *filename) {
+    if (!doc || !filename) return -1;
+
+    char *str = csv_to_string(doc);
+    if (!str) return -1;
+
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) { free(str); return -1; }
+
+    size_t len = strlen(str);
+    size_t written = fwrite(str, 1, len, fp);
+    fclose(fp);
+    free(str);
+
+    return (written == len) ? 0 : -1;
+}
+
+/* ============================================================================
  * Streaming/SAX API
  * ============================================================================ */
 

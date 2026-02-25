@@ -176,7 +176,7 @@ int iris_server_run(unsigned short PORT) {
     return -1;
   }
 
-  g_coro_ctx = turbo_coro_context_create();
+  g_coro_ctx = turbo_coro_context_create(NULL);
   if (!g_coro_ctx) {
     TLOG_ERROR("Failed to create coro context");
     iris_error_recovery_cleanup();
@@ -209,7 +209,7 @@ int iris_server_run(unsigned short PORT) {
   TLOG_INFO("Server is running on http://localhost:{}", PORT);
 
   /* Run the loop */
-  turbo_coro_context_run(g_coro_ctx);
+  turbo_coro_context_run(g_coro_ctx, TURBO_RUN_DEFAULT);
 
   /* Cleanup */
   TLOG_INFO("Shutting down server...");

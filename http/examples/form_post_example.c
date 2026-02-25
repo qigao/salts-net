@@ -14,7 +14,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -47,15 +47,15 @@ static void test_form_post(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 10000);
 
-  http_async_params_t *params = http_async_params_create();
-  http_async_params_add(params, "name", "John Doe");
-  http_async_params_add(params, "message", "Hello from HTTP client!");
+  http_params_t *params = http_params_create();
+  http_params_add(params, "name", "John Doe");
+  http_params_add(params, "message", "Hello from HTTP client!");
 
   http_coro_response_t *response = http_coro_post_form(client, "https://httpbin.org/post", params);
   if (is_network_error(response)) {
     g_result.skipped = 1;
     http_coro_response_free(response);
-    http_async_params_free(params);
+    http_params_free(params);
     http_coro_client_destroy(client);
     return;
   }
@@ -64,7 +64,7 @@ static void test_form_post(turbo_coro_context_t *ctx) {
   g_result.body_contains_name = (response->body && strstr(response->body, "John Doe") != NULL);
 
   http_coro_response_free(response);
-  http_async_params_free(params);
+  http_params_free(params);
   http_coro_client_destroy(client);
 }
 
@@ -75,18 +75,18 @@ static void test_build_url(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 10000);
 
-  http_async_params_t *query = http_async_params_create();
-  http_async_params_add(query, "search", "http client");
-  http_async_params_add(query, "page", "1");
+  http_params_t *query = http_params_create();
+  http_params_add(query, "search", "http client");
+  http_params_add(query, "page", "1");
 
-  char *url = http_async_build_url("https://httpbin.org/get", query);
+  char *url = http_build_url("https://httpbin.org/get", query);
   g_result.body_contains_search = (url != NULL && strstr(url, "search=http+client") != NULL);
 
   http_coro_response_t *response = http_coro_get(client, url);
   if (is_network_error(response)) {
     g_result.skipped = 1;
     http_coro_response_free(response);
-    http_async_params_free(query);
+    http_params_free(query);
     free(url);
     http_coro_client_destroy(client);
     return;
@@ -95,7 +95,7 @@ static void test_build_url(turbo_coro_context_t *ctx) {
   g_result.status_code = response->status_code;
 
   http_coro_response_free(response);
-  http_async_params_free(query);
+  http_params_free(query);
   free(url);
   http_coro_client_destroy(client);
 }

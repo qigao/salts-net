@@ -13,7 +13,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -55,7 +55,7 @@ static void test_track_stats(turbo_coro_context_t *ctx) {
   }
   http_coro_response_free(response);
 
-  http_async_client_stats_t stats;
+  http_client_stats_t stats;
   http_coro_client_get_stats(client, &stats);
   g_result.total_requests = stats.total_requests;
   g_result.successful_requests = stats.successful_requests;
@@ -81,7 +81,7 @@ static void test_track_redirects(turbo_coro_context_t *ctx) {
   }
   http_coro_response_free(response);
 
-  http_async_client_stats_t stats;
+  http_client_stats_t stats;
   http_coro_client_get_stats(client, &stats);
   g_result.redirects = stats.redirects_followed;
 
@@ -106,7 +106,7 @@ static void test_reset_stats(turbo_coro_context_t *ctx) {
 
   http_coro_client_reset_stats(client);
 
-  http_async_client_stats_t stats;
+  http_client_stats_t stats;
   http_coro_client_get_stats(client, &stats);
   g_result.total_requests = stats.total_requests;
 

@@ -4,7 +4,7 @@
  */
 
 #include "snmp_client.h"
-#include "turbo_udp.h"
+#include "turbo_client.h"
 #include "arena_buffer.h"
 #include "memory_pool.h"
 #include <stdlib.h>
@@ -37,15 +37,8 @@ struct snmp_client_s {
     int32_t next_request_id;
     char error_msg[256];
 
-    /* UDP client */
-    turbo_udp_client_t udp;
-    uv_loop_t *loop;
-
-    /* Response state (for synchronous wait) */
-    snmp_message_t *pending_response;
-    int pending_result;
-    int response_received;
-    uv_timer_t *timeout_timer;
+    /* High-level synchronous client */
+    turbo_client_t *client;
     MemoryPool *response_pool;
 };
 
@@ -68,51 +61,7 @@ static void init_default_config(snmp_client_config_t *config) {
     config->security_level = SNMP_SEC_LEVEL_NOAUTH_NOPRIV;
 }
 
-/* UDP receive callback */
-static int on_udp_recv(
-    void *handle,
-    const turbo_arena_slice_t *slice,
-    void *peer
-) {
-    (void)peer;
-
-    snmp_client_t *client = (snmp_client_t *)handle;
-
-    if (!client->response_received && slice && slice->data && slice->length > 0) {
-        /* Parse SNMP response */
-        int result = snmp_parse(
-            (const uint8_t *)slice->data,
-            slice->length,
-            client->pending_response,
-            client->response_pool
-        );
-
-        if (result > 0) {
-            client->pending_result = SNMP_CLIENT_OK;
-            client->response_received = 1;
-            TLOG_DEBUG("SNMP response received ({:d} bytes)", slice->length);
-
-            /* Stop event loop */
-            uv_stop(client->loop);
-        }
-    }
-
-    return 0;  /* Don't close connection */
-}
-
-/* Timeout callback */
-static void on_timeout(uv_timer_t *timer) {
-    snmp_client_t *client = (snmp_client_t *)timer->data;
-
-    if (!client->response_received) {
-        client->pending_result = SNMP_CLIENT_ERROR_TIMEOUT;
-        strcpy(client->error_msg, "Request timeout");
-        TLOG_DEBUG("SNMP request timeout for {:s}:{:d}", client->host, client->port);
-
-        /* Stop event loop */
-        uv_stop(client->loop);
-    }
-}
+/* No longer needed: on_udp_recv, on_timeout */
 
 /* Create client */
 snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
@@ -176,42 +125,30 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
         }
     }
 
-    /* Create event loop */
-    client->loop = (uv_loop_t *)malloc(sizeof(uv_loop_t));
-    if (!client->loop || uv_loop_init(client->loop) != 0) {
-        free(client->host);
-        free(client->community);
-        free(client->loop);
-        free(client);
-        return NULL;
-    }
-
-    /* Initialize UDP client */
-    if (turbo_udp_server_init(&client->udp, client->loop, "0.0.0.0", 0) != 0) {
-        uv_loop_close(client->loop);
-        free(client->loop);
+    /* Initialize synchronous client */
+    client->client = turbo_client_create();
+    if (!client->client) {
         free(client->host);
         free(client->community);
         free(client);
         return NULL;
     }
 
-    /* Connect to target */
-    if (turbo_udp_connect(&client->udp, client->host, client->port) != 0) {
-        turbo_udp_server_stop(&client->udp);
-        uv_loop_close(client->loop);
-        free(client->loop);
+    /* Connect to target using UDP URL */
+    char url[256];
+    stbsp_snprintf(url, sizeof(url), "udp://%s:%u", client->host, client->port);
+    
+    if (turbo_client_connect(client->client, url) != SYNC_CLIENT_STATUS_OK) {
+        TLOG_ERROR("SNMP failed to connect to {:s}: {:s}", url, turbo_client_last_message(client->client));
+        turbo_client_destroy(client->client);
         free(client->host);
         free(client->community);
         free(client);
         return NULL;
     }
 
-    /* Start receiving */
-    turbo_udp_server_start(&client->udp, on_udp_recv);
-
-    TLOG_INFO("SNMP client created for {:s}:{:d} (version: {:d})", 
-              client->host, client->port, (int)client->version);
+    TLOG_INFO("SNMP client created for {:s} (version: {:d})", 
+              url, (int)client->version);
 
     return client;
 }
@@ -220,10 +157,7 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
 void snmp_client_destroy(snmp_client_t *client) {
     if (!client) return;
 
-    turbo_udp_server_stop(&client->udp);
-    uv_loop_close(client->loop);
-
-    free(client->loop);
+    turbo_client_destroy(client->client);
     free(client->host);
     free(client->community);
     free(client);
@@ -239,61 +173,52 @@ static int send_request_and_wait(
     uint32_t attempt = 0;
 
     while (attempt <= client->retries) {
-        /* Create memory pool for response */
-        client->response_pool = pool_create(client->recv_buffer_size);
-        if (!client->response_pool) {
-            return SNMP_CLIENT_ERROR_MEMORY;
-        }
-
-        /* Reset state */
-        client->pending_response = response;
-        client->pending_result = SNMP_CLIENT_ERROR_TIMEOUT;
-        client->response_received = 0;
-
         /* Send request */
-        int send_result = turbo_udp_send_connected(
-            &client->udp,
-            (const char *)request,
-            request_len
-        );
-
-        if (send_result != 0) {
-            pool_destroy(client->response_pool);
-            TLOG_DEBUG("SNMP network error: failed to send request to {:s}", client->host);
+        if (turbo_client_send(client->client, (const char *)request, request_len) != SYNC_CLIENT_STATUS_OK) {
+            TLOG_DEBUG("SNMP send error: {:s}", turbo_client_last_message(client->client));
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 
-        /* Create timeout timer */
-        uv_timer_t timeout_timer;
-        uv_timer_init(client->loop, &timeout_timer);
-        timeout_timer.data = client;
-        client->timeout_timer = &timeout_timer;
+        /* Receive response with timeout */
+        char *data = NULL;
+        size_t len = 0;
+        turbo_client_status_t st = turbo_client_receive_timeout(client->client, &data, &len, client->timeout_ms);
 
-        uv_timer_start(&timeout_timer, on_timeout, client->timeout_ms, 0);
+        if (st == SYNC_CLIENT_STATUS_OK) {
+            /* Create memory pool for response */
+            client->response_pool = pool_create(client->recv_buffer_size);
+            if (!client->response_pool) {
+                free(data);
+                return SNMP_CLIENT_ERROR_MEMORY;
+            }
 
-        /* Run event loop until response or timeout */
-        uv_run(client->loop, UV_RUN_DEFAULT);
+            /* Parse SNMP response */
+            int result = snmp_parse((const uint8_t *)data, len, response, client->response_pool);
+            free(data);
 
-        /* Stop timer */
-        uv_timer_stop(&timeout_timer);
-        uv_close((uv_handle_t *)&timeout_timer, NULL);
-        uv_run(client->loop, UV_RUN_NOWAIT);  /* Process close callback */
-
-        /* Check result */
-        if (client->response_received) {
-            /* Success - keep pool alive for response data */
-            return SNMP_CLIENT_OK;
+            if (result > 0) {
+                TLOG_DEBUG("SNMP response received ({:d} bytes)", len);
+                return SNMP_CLIENT_OK;
+            } else {
+                TLOG_DEBUG("SNMP parse error in response from {:s}", client->host);
+                pool_destroy(client->response_pool);
+                client->response_pool = NULL;
+                /* Might be a malformed packet, try next attempt */
+            }
+        } else if (st != SYNC_CLIENT_STATUS_IO_ERROR && st != SYNC_CLIENT_STATUS_NOT_READY) {
+            /* For actual non-timeout errors, fail immediately */
+            TLOG_DEBUG("SNMP network error: {:s}", turbo_client_last_message(client->client));
+            return SNMP_CLIENT_ERROR_NETWORK;
         }
 
-        /* Failed - cleanup and retry */
-        pool_destroy(client->response_pool);
-        client->response_pool = NULL;
+        /* Timeout or parsing error - retry */
+        TLOG_DEBUG("SNMP attempt {:d} failed for {:s}", attempt + 1, client->host);
         attempt++;
     }
 
     /* All retries exhausted */
     stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
-             "Request timeout after %u retries", client->retries);
+                   "Request timeout after %u retries", client->retries);
     return SNMP_CLIENT_ERROR_TIMEOUT;
 }
 

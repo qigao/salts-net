@@ -2,16 +2,13 @@
  * @file turbo_coro_context.c
  * @brief Implementation of the opaque event-loop context.
  *
- * This is the ONLY translation unit that touches uv_loop_t on behalf
- * of the public coro API.  Internal code accesses the loop through
- * turbo_coro_context_loop() declared in turbo_coro_internal.h.
  */
 
 #include "turbo_coro_context.h"
 #include <uv.h>
 #include <stdlib.h>
-#include "turbo_coro_internal.h"
 #include "turbo_thread.h"
+#include "turbo_coro_internal.h"
 /* Compile-time guarantee: turbo error codes == libuv error codes.
    MSVC C11 mode uses _Static_assert; C23/C++ use static_assert. */
 #ifndef __cplusplus
@@ -28,37 +25,51 @@ _Static_assert(TURBO_ECONNREFUSED == UV_ECONNREFUSED, "TURBO_ECONNREFUSED mismat
 _Static_assert(TURBO_EPROTONOSUPPORT == UV_EPROTONOSUPPORT, "TURBO_EPROTONOSUPPORT mismatch");
 _Static_assert(TURBO_EALREADY == UV_EALREADY, "TURBO_EALREADY mismatch");
 
-typedef struct turbo_coro_post_node_s {
-    turbo_coro_post_fn fn;
-    void *arg;
-    struct turbo_coro_post_node_s *next;
-} turbo_coro_post_node_t;
 
-struct turbo_coro_context_s {
-    uv_loop_t* loop;
-    int owns_loop;
-    /* Thread-safe post queue */
-    uv_async_t post_async;
-    int post_initialized;
-    turbo_mutex_t post_mutex;
-    turbo_coro_post_node_t *post_head;
-    turbo_coro_post_node_t *post_tail;
-};
 
-turbo_coro_context_t* turbo_coro_context_create(void) {
-    turbo_coro_context_t* ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) return NULL;
-    ctx->loop = uv_default_loop();
+turbo_coro_context_t *turbo_coro_context_create(void *loop) {
+  turbo_coro_context_t *ctx = calloc(1, sizeof(*ctx));
+  if (!ctx)
+    return NULL;
+
+  if (loop) {
+    ctx->loop = (uv_loop_t *)loop;
     ctx->owns_loop = 0;
-    return ctx;
+  } else {
+    ctx->loop = malloc(sizeof(uv_loop_t));
+    if (!ctx->loop) {
+      free(ctx);
+      return NULL;
+    }
+    uv_loop_init(ctx->loop);
+    ctx->owns_loop = 1;
+  }
+  
+  /* Coroutine contexts are strictly single-threaded/cooperative per loop.
+     Disable global synchronization overhead to improve performance. */
+  turbo_sync_set_single_threaded(1);
+  
+  return ctx;
 }
 
-int turbo_coro_context_run(turbo_coro_context_t* ctx) {
-    return uv_run(ctx->loop, UV_RUN_DEFAULT);
+int turbo_coro_context_run(turbo_coro_context_t *ctx, turbo_run_mode_t mode) {
+  if (!ctx || !ctx->loop)
+    return 0;
+  return uv_run(ctx->loop, (uv_run_mode)mode);
 }
 
 void turbo_coro_context_stop(turbo_coro_context_t* ctx) {
     if (ctx) uv_stop(ctx->loop);
+}
+
+int turbo_coro_context_alive(turbo_coro_context_t* ctx) {
+    if (!ctx) return 0;
+    return uv_loop_alive(ctx->loop);
+}
+
+uint64_t turbo_coro_context_now(turbo_coro_context_t* ctx) {
+    if (!ctx) return 0;
+    return uv_now(ctx->loop);
 }
 
 void turbo_coro_context_destroy(turbo_coro_context_t* ctx) {
@@ -142,14 +153,4 @@ int turbo_coro_post(turbo_coro_context_t *ctx, turbo_coro_post_fn fn, void *arg)
     return uv_async_send(&ctx->post_async);
 }
 
-turbo_coro_context_t* turbo_coro_context_create_with_loop(void* loop) {
-    turbo_coro_context_t* ctx = calloc(1, sizeof(*ctx));
-    if (ctx) { ctx->loop = (uv_loop_t*)loop; ctx->owns_loop = 0; }
-    return ctx;
-}
 
-/* ── Internal-only: extract raw loop pointer ── */
-
-uv_loop_t* turbo_coro_context_loop(turbo_coro_context_t* ctx) {
-    return ctx ? ctx->loop : NULL;
-}

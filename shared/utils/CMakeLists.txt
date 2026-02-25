@@ -43,16 +43,18 @@ target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 # Link dependencies
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC  c-ares::cares # DNS resolver uses c-ares
+  PUBLIC c-ares::cares # DNS resolver uses c-ares
          aklomp::base64 # Base64 utilities
-          $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
+         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE ${FMT_LEXER_LIBRARY} PkgConfig::STC # Thread-safe containers
           TurboNet::SDS # Simple Dynamic Strings
-          ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
+          uri_parser ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
 )
 
 # Linux: link liburing for io_uring async I/O
-if(NOT WIN32 AND NOT APPLE AND NOT ANDROID)
+if(NOT WIN32
+   AND NOT APPLE
+   AND NOT ANDROID)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(URING REQUIRED liburing)
   target_include_directories(${TARGET_NAME} PRIVATE ${URING_INCLUDE_DIRS})
@@ -85,7 +87,8 @@ install(
   PATTERN "*.h")
 
 # Install parser headers (fmt_lexer.h is needed by fmt.h)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/parser/fmt_lexer.h DESTINATION include)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/parser/fmt_lexer.h
+        DESTINATION include)
 
 # Tests
 add_subdirectory(tests)

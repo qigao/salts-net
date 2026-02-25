@@ -22,11 +22,11 @@ static void coro_test_wrapper(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(coro_test_fn fn) {
-    turbo_coro_context_t *ctx = turbo_coro_context_create();
+    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
     coro_test_args_t args = { .fn = fn, .ctx = ctx };
     turbo_coro_t *co = turbo_coro_create(coro_test_wrapper, &args, NULL);
     turbo_coro_resume(co);
-    turbo_coro_context_run(ctx);
+    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
     turbo_coro_destroy(co);
     turbo_coro_context_destroy(ctx);
 }

@@ -328,7 +328,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Create coroutine context and run HTTP/batch/collection inside it
-  turbo_coro_context_t *coro_ctx = turbo_coro_context_create();
+  turbo_coro_context_t *coro_ctx = turbo_coro_context_create(NULL);
 
   turl_coro_args_t coro_args = {
       .coro_ctx = coro_ctx,
@@ -362,7 +362,7 @@ int main(int argc, char *argv[]) {
 
   turbo_coro_t *co = turbo_coro_create(turl_main_coro, &coro_args, NULL);
   turbo_coro_resume(co);
-  turbo_coro_context_run(coro_ctx);
+  turbo_coro_context_run(coro_ctx, TURBO_RUN_DEFAULT);
   turbo_coro_destroy(co);
   turbo_coro_context_destroy(coro_ctx);
 

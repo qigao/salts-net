@@ -13,7 +13,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -41,13 +41,13 @@ static int is_network_error(http_coro_response_t *r) {
 static int s_req_called = 0;
 static int s_resp_called = 0;
 
-static int log_request(http_async_request_context_t *ctx) {
+static int log_request(http_request_context_t *ctx) {
   (void)ctx;
   s_req_called++;
   return 0;
 }
 
-static void log_response(http_async_response_context_t *ctx) {
+static void log_response(http_response_context_t *ctx) {
   (void)ctx;
   s_resp_called++;
 }

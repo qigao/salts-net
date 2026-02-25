@@ -35,7 +35,7 @@ target_include_directories(
 )
 
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
-
+ 
 set_target_properties(
   ${TARGET_NAME} PROPERTIES FOLDER turbo_parser/parser/${TARGET_NAME}
                              EXPORT_NAME DotEnvParser)

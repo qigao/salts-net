@@ -933,7 +933,8 @@ static void __bdd_report_skip__(__bdd_config_type__ *config, __bdd_test_step__ *
           printf("skipped %zu - %s\n", config->test_tap_index, step->name);
         }
       } else {
-        printf("%s(SKIP)%s\n", config->use_color ? __BDD_COLOR_YELLOW__ : "",
+        __bdd_indent__(stdout, step->level);
+        printf("%s[ SKIP  ]%s\n", config->use_color ? __BDD_COLOR_YELLOW__ : "",
                config->use_color ? __BDD_COLOR_RESET__ : "");
       }
     }
@@ -950,8 +951,13 @@ static void __bdd_report_pass__(__bdd_config_type__ *config, __bdd_test_step__ *
       if (step->flags & __bdd_node_flags_benchmark__) {
         return;
       }
-      printf("%s(OK)%s\n", config->use_color ? __BDD_COLOR_GREEN__ : "",
+      __bdd_indent__(stdout, step->level);
+      printf("%s[ OK    ]%s", config->use_color ? __BDD_COLOR_GREEN__ : "",
              config->use_color ? __BDD_COLOR_RESET__ : "");
+      if (step->execution_time_ms > 0.0) {
+        printf(" (%.2fms)", step->execution_time_ms);
+      }
+      printf("\n");
     }
   }
 }
@@ -965,8 +971,13 @@ static void __bdd_report_unexpected_pass__(__bdd_config_type__ *config, __bdd_te
                step->name);
       }
     } else {
-      printf("%s(UNEXPECTED PASS)%s\n", config->use_color ? __BDD_COLOR_YELLOW__ : "",
+      __bdd_indent__(stdout, step->level);
+      printf("%s[ UPASS ]%s", config->use_color ? __BDD_COLOR_YELLOW__ : "",
              config->use_color ? __BDD_COLOR_RESET__ : "");
+      if (step->execution_time_ms > 0.0) {
+        printf(" (%.2fms)", step->execution_time_ms);
+      }
+      printf("\n");
       __bdd_indent__(stdout, step->level + 1);
       printf("This test was expected to fail but passed\n");
     }
@@ -980,8 +991,13 @@ static void __bdd_report_expected_fail__(__bdd_config_type__ *config, __bdd_test
         printf("ok %zu - %s # TODO expected failure\n", config->test_tap_index, step->name);
       }
     } else {
-      printf("%s(OK - expected fail)%s\n", config->use_color ? __BDD_COLOR_GREEN__ : "",
+      __bdd_indent__(stdout, step->level);
+      printf("%s[ XFAIL ]%s", config->use_color ? __BDD_COLOR_GREEN__ : "",
              config->use_color ? __BDD_COLOR_RESET__ : "");
+      if (step->execution_time_ms > 0.0) {
+        printf(" (%.2fms)", step->execution_time_ms);
+      }
+      printf("\n");
     }
   }
 }
@@ -993,8 +1009,13 @@ static void __bdd_report_fail__(__bdd_config_type__ *config, __bdd_test_step__ *
       printf("not ok %zu - %s\n", config->test_tap_index, step->name);
     }
   } else {
-    printf("%s(FAIL)%s\n", config->use_color ? __BDD_COLOR_RED__ : "",
+    __bdd_indent__(stdout, step->level);
+    printf("%s[ FAIL  ]%s", config->use_color ? __BDD_COLOR_RED__ : "",
            config->use_color ? __BDD_COLOR_RESET__ : "");
+    if (step->execution_time_ms > 0.0) {
+      printf(" (%.2fms)", step->execution_time_ms);
+    }
+    printf("\n");
     if (config->info_len > 0) {
       __bdd_indent__(stdout, step->level + 1);
       printf("with info: %s\n", config->info_buffer);
@@ -1034,11 +1055,8 @@ static void __bdd_run__(__bdd_config_type__ *config) {
     if ((!skipped || !config->has_focus_nodes) && config->run == __BDD_TEST_RUN__ &&
         !config->use_tap) {
       __bdd_indent__(stdout, step->level);
-      if (step->flags & __bdd_node_flags_benchmark__) {
-        printf("%s\n", step->name);
-      } else {
-        printf("%s ", step->name);
-      }
+      printf("%s\n", step->name);
+      fflush(stdout);
     }
 
     if (!skipped) {

@@ -325,10 +325,10 @@ int main(void) {
   example_retry_logic();
 
   // Run network examples inside a coroutine
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   turbo_coro_t *co = turbo_coro_create(examples_coro, ctx, NULL);
   turbo_coro_resume(co);
-  turbo_coro_context_run(ctx);
+  turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
   turbo_coro_destroy(co);
   turbo_coro_context_destroy(ctx);
 

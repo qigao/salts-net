@@ -54,7 +54,7 @@ set_target_properties(
              EXPORT_NAME Toon)
 
 # Link dependencies
-target_link_libraries(${TARGET_NAME} PRIVATE TurboNet::Utils)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
 if(UNIX)
   target_link_libraries(${TARGET_NAME} PRIVATE m)
 endif()

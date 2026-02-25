@@ -5,7 +5,9 @@ High-performance networking core library providing essential network protocols a
 ## Features
 
 - **URL-Based API**: Simple, intuitive connection strings (e.g., `tcp://host:port`, `pipe://name`)
-- **Asynchronous I/O**: Built on libuv for cross-platform async operations
+- **Coroutine I/O**: Built on libuv for cross-platform coro operations
+- **Core Design**: Synchronous-style code with coro execution via coroutines
+- **Connection Pool**: Coroutine-aware connection pooling for high-concurrency workloads
 - **Multiple Protocols**: TCP, UDP, KCP, TLS, Named Pipes, WebSocket
 - **Memory Management**: Efficient arena-based memory pooling and zero-copy buffers
 - **Configuration System**: Runtime configuration with hashmap-backed storage
@@ -18,98 +20,96 @@ High-performance networking core library providing essential network protocols a
 ### Synchronous Client
 
 ```c
-#include "turbo_sync_client.h"
+#include "turbo_client.h"
 
 int main(void) {
   // Create client - transport determined automatically from URL
-  sync_client_t *client = sync_client_create();
+  turbo_client_t *client = turbo_client_create();
   
   // Connect using URL - scheme determines transport
-  sync_client_connect(client, "tcp://example.com:8080");
+  turbo_client_connect(client, "tcp://example.com:8080");
   
   // Send and receive
-  sync_client_send(client, "Hello", 5);
+  turbo_client_send(client, "Hello", 5);
   
   char *response;
   size_t len;
-  sync_client_receive(client, &response, &len);
+  turbo_client_receive(client, &response, &len);
   printf("Received: %.*s\n", (int)len, response);
   free(response);
   
-  sync_client_destroy(client);
+  turbo_client_destroy(client);
   return 0;
 }
 ```
 
-### Asynchronous Client
+### Coroutine Client
 
 ```c
-#include "turbo_async_client.h"
+#include "turbo_coro_client.h"
+#include "turbo_coro.h"
 
-void on_event(async_client_t *client, const async_client_event_t *event, void *data) {
-  switch (event->type) {
-    case ASYNC_CLIENT_EVENT_CONNECTED:
-      printf("Connected using %s\n", async_client_get_transport_scheme(client));
-      async_client_send(client, "Hello", 5);
-      break;
-    case ASYNC_CLIENT_EVENT_DATA:
-      printf("Received: %.*s\n", (int)event->length, event->data);
-      async_client_close(client);
-      break;
-    case ASYNC_CLIENT_EVENT_ERROR:
-      fprintf(stderr, "Error: %s\n", event->message);
-      break;
-    case ASYNC_CLIENT_EVENT_CLOSED:
-      // Connection closed
-      break;
+void network_task(turbo_coro_t *co, void *arg) {
+  turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
+  turbo_coro_client_t *client = turbo_coro_client_create(ctx);
+
+  // Connect (suspends coroutine until done)
+  turbo_coro_client_connect(client, "tcp://example.com:8080");
+
+  // Send and receive (each call suspends until complete)
+  turbo_coro_client_send(client, "Hello", 5);
+
+  char *data; size_t len;
+  turbo_coro_client_recv(client, &data, &len);
+  printf("Received: %.*s\n", (int)len, data);
+  free(data);
+
+  turbo_coro_client_destroy(client);
+}
+```
+
+### Coroutine Server
+
+```c
+#include "turbo_coro_server.h"
+
+void on_connection(turbo_coro_client_t *client, void *arg) {
+  char *data; size_t len;
+  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+    if (len == 0) break;
+    turbo_coro_client_send(client, data, len); // echo
+    free(data);
   }
 }
 
 int main(void) {
-  async_client_t *client = async_client_create(on_event, NULL);
-  async_client_connect(client, "tls://secure.example.com:443");
-  
-  // Event loop runs in background thread
-  // ... wait for completion ...
-  
-  async_client_destroy(client);
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+  turbo_coro_server_t *server = turbo_coro_server_create(ctx);
+  turbo_coro_server_listen(server, "tcp://0.0.0.0:8080", on_connection, NULL);
+  turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+  turbo_coro_server_destroy(server);
+  turbo_coro_context_destroy(ctx);
   return 0;
 }
 ```
 
-### Asynchronous Server
+### Connection Pool
 
 ```c
-#include "turbo_async_server.h"
+#include "turbo_coro_pool.h"
 
-void on_server_event(async_server_t *server, const async_server_event_t *event, void *data) {
-  switch (event->type) {
-    case ASYNC_SERVER_EVENT_LISTENING:
-      printf("Server listening\n");
-      break;
-    case ASYNC_SERVER_EVENT_CONNECTION:
-      printf("New connection\n");
-      break;
-    case ASYNC_SERVER_EVENT_DATA:
-      // Echo back
-      async_server_send(server, event->connection, event->data, event->length);
-      break;
-    case ASYNC_SERVER_EVENT_DISCONNECTION:
-      printf("Client disconnected\n");
-      break;
-  }
-}
+void worker(turbo_coro_t *co, void *arg) {
+  turbo_coro_pool_t *pool = (turbo_coro_pool_t *)arg;
+  turbo_coro_client_t *c;
 
-int main(void) {
-  async_server_t *server = async_server_create(on_server_event, NULL);
-  
-  // Listen on all interfaces, port 8080
-  async_server_listen(server, "tcp://:8080", 128);
-  
-  // ... run event loop ...
-  
-  async_server_destroy(server);
-  return 0;
+  if (turbo_coro_pool_borrow(pool, &c) != 0) return;
+
+  turbo_coro_client_send(c, "hello", 5);
+  char *data; size_t len;
+  turbo_coro_client_recv(c, &data, &len);
+  free(data);
+
+  turbo_coro_pool_return(pool, c);
 }
 ```
 
@@ -201,9 +201,9 @@ This provides production-grade performance and reliability for network applicati
 See the `examples/` directory for complete working examples:
 
 - `sync_client.c` - Synchronous blocking client
-- `async_client.c` - Asynchronous event-driven client
-- `tcp_server.c` - TCP echo server
-- `pipe_client.c` - Named pipe IPC example
+- `coro_client_example.c` - Coroutine-based client
+- `coro_server_example.c` - Coroutine-based echo server
+- `coro_pool_example.c` - Connection pool with worker coroutines
 - `ws_client.c` - WebSocket client example
 
 ## Documentation
@@ -217,17 +217,17 @@ If you're using the old transport-enum-based API, migration is simple:
 **Before:**
 
 ```c
-sync_client_t *client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TCP);
+turbo_client_t *client = turbo_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TCP);
 char url[256];
 snprintf(url, sizeof(url), "tcp://%s:%d", host, port);
-sync_client_connect(client, url);
+turbo_client_connect(client, url);
 ```
 
 **After:**
 
 ```c
-sync_client_t *client = sync_client_create();
-sync_client_connect(client, "tcp://example.com:8080");
+turbo_client_t *client = turbo_client_create();
+turbo_client_connect(client, "tcp://example.com:8080");
 ```
 
 The transport type is automatically determined from the URL scheme!

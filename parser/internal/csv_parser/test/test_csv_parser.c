@@ -8,6 +8,7 @@
 #include <stb_sprintf.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 
 typedef struct {
@@ -448,6 +449,92 @@ spec("csv_parser") {
       check_null(csv_parse(NULL, 0));
       check_null(csv_parse("", 0));
       check_null(csv_get(NULL, 0, 0));
+    }
+  }
+
+  describe("csv_to_string serialization") {
+    it("should roundtrip simple CSV") {
+      const char *csv = "a,b,c\n1,2,3\n4,5,6\n";
+      csv_options_t opts = {true, ',', '"', true};
+      csv_doc_t *doc = csv_parse_opts(csv, strlen(csv), &opts);
+      check_not_null(doc);
+
+      char *out = csv_to_string(doc);
+      check_not_null(out);
+
+      csv_doc_t *doc2 = csv_parse_opts(out, strlen(out), &opts);
+      check_not_null(doc2);
+      check_int_eq(csv_row_count(doc2), 2);
+      check_str_eq(csv_header_get(doc2, 0), "a");
+      check_str_eq(csv_get(doc2, 0, 0), "1");
+      check_str_eq(csv_get(doc2, 1, 2), "6");
+
+      csv_free(doc2);
+      free(out);
+      csv_free(doc);
+    }
+
+    it("should escape fields with commas and quotes") {
+      const char *csv = "name,value\n\"hello, world\",42\n\"say \"\"hi\"\"\",99\n";
+      csv_options_t opts = {true, ',', '"', true};
+      csv_doc_t *doc = csv_parse_opts(csv, strlen(csv), &opts);
+      check_not_null(doc);
+
+      char *out = csv_to_string(doc);
+      check_not_null(out);
+
+      csv_doc_t *doc2 = csv_parse_opts(out, strlen(out), &opts);
+      check_not_null(doc2);
+      check_str_eq(csv_get(doc2, 0, 0), "hello, world");
+      check_str_eq(csv_get(doc2, 1, 0), "say \"hi\"");
+
+      csv_free(doc2);
+      free(out);
+      csv_free(doc);
+    }
+
+    it("should escape fields with newlines") {
+      const char *csv = "a,b\n\"line1\nline2\",ok\n";
+      csv_options_t opts = {true, ',', '"', true};
+      csv_doc_t *doc = csv_parse_opts(csv, strlen(csv), &opts);
+      check_not_null(doc);
+
+      char *out = csv_to_string(doc);
+      check_not_null(out);
+
+      csv_doc_t *doc2 = csv_parse_opts(out, strlen(out), &opts);
+      check_not_null(doc2);
+      check_str_eq(csv_get(doc2, 0, 0), "line1\nline2");
+      check_str_eq(csv_get(doc2, 0, 1), "ok");
+
+      csv_free(doc2);
+      free(out);
+      csv_free(doc);
+    }
+
+    it("should return NULL for NULL doc") {
+      check_null(csv_to_string(NULL));
+    }
+
+    it("should preserve header in roundtrip") {
+      const char *csv = "x,y,z\n10,20,30\n";
+      csv_options_t opts = {true, ',', '"', true};
+      csv_doc_t *doc = csv_parse_opts(csv, strlen(csv), &opts);
+      check_not_null(doc);
+
+      char *out = csv_to_string(doc);
+      check_not_null(out);
+
+      csv_doc_t *doc2 = csv_parse_opts(out, strlen(out), &opts);
+      check_not_null(doc2);
+      check_int_eq(csv_has_header(doc2), 1);
+      check_str_eq(csv_header_get(doc2, 0), "x");
+      check_str_eq(csv_header_get(doc2, 1), "y");
+      check_str_eq(csv_header_get(doc2, 2), "z");
+
+      csv_free(doc2);
+      free(out);
+      csv_free(doc);
     }
   }
 }

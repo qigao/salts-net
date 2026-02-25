@@ -14,7 +14,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -41,7 +41,7 @@ static int is_network_error(http_coro_response_t *r) {
 
 /* ── Coro test function ───────────────────────────────────────────── */
 
-static http_async_cookie_jar_t *g_jar = NULL;
+static http_cookie_jar_t *g_jar = NULL;
 
 static void test_auto_cookies(turbo_coro_context_t *ctx) {
   memset(&g_result, 0, sizeof(g_result));
@@ -50,7 +50,7 @@ static void test_auto_cookies(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 10000);
 
-  g_jar = http_async_cookie_jar_create();
+  g_jar = http_cookie_jar_create();
   http_coro_client_set_cookie_jar(client, g_jar);
 
   http_coro_client_follow_redirects(client, 0);
@@ -63,9 +63,9 @@ static void test_auto_cookies(turbo_coro_context_t *ctx) {
   }
 
   g_result.status_code = response->status_code;
-  g_result.cookie_count = http_async_cookie_jar_count(g_jar);
+  g_result.cookie_count = http_cookie_jar_count(g_jar);
 
-  const char *session = http_async_cookie_jar_get(g_jar, "session");
+  const char *session = http_cookie_jar_get(g_jar, "session");
   g_result.has_session = (session != NULL && strcmp(session, "abc123") == 0);
 
   http_coro_response_free(response);
@@ -85,7 +85,7 @@ spec("Cookie Management Test") {
 
   after() {
     if (g_jar) {
-      http_async_cookie_jar_destroy(g_jar);
+      http_cookie_jar_destroy(g_jar);
       g_jar = NULL;
     }
   }
@@ -102,20 +102,20 @@ spec("Cookie Management Test") {
   }
 
   it("should successfully perform manual cookie operations") {
-    http_async_cookie_jar_t *jar = http_async_cookie_jar_create();
+    http_cookie_jar_t *jar = http_cookie_jar_create();
 
-    http_async_cookie_jar_set(jar, "user_id", "12345");
-    http_async_cookie_jar_set(jar, "preferences", "dark_mode");
-    check(http_async_cookie_jar_count(jar) >= 2);
-    check(strcmp(http_async_cookie_jar_get(jar, "user_id"), "12345") == 0);
-    check(strcmp(http_async_cookie_jar_get(jar, "preferences"), "dark_mode") == 0);
+    http_cookie_jar_set(jar, "user_id", "12345");
+    http_cookie_jar_set(jar, "preferences", "dark_mode");
+    check(http_cookie_jar_count(jar) >= 2);
+    check(strcmp(http_cookie_jar_get(jar, "user_id"), "12345") == 0);
+    check(strcmp(http_cookie_jar_get(jar, "preferences"), "dark_mode") == 0);
 
-    http_async_cookie_jar_remove(jar, "user_id");
-    check(http_async_cookie_jar_get(jar, "user_id") == NULL);
+    http_cookie_jar_remove(jar, "user_id");
+    check(http_cookie_jar_get(jar, "user_id") == NULL);
 
-    http_async_cookie_jar_clear(jar);
-    check(http_async_cookie_jar_count(jar) == 0);
+    http_cookie_jar_clear(jar);
+    check(http_cookie_jar_count(jar) == 0);
 
-    http_async_cookie_jar_destroy(jar);
+    http_cookie_jar_destroy(jar);
   }
 }

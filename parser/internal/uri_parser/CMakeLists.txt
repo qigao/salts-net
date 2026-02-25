@@ -28,8 +28,6 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
-target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
-
 set_target_properties(
   ${TARGET_NAME}
   PROPERTIES FOLDER turbo_parser/parser/${TARGET_NAME}

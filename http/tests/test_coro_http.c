@@ -25,7 +25,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -87,13 +87,13 @@ static int is_network_error(http_coro_response_t *r) {
 static int s_req_interceptor_called = 0;
 static int s_resp_interceptor_called = 0;
 
-static int test_req_interceptor(http_async_request_context_t *ctx) {
+static int test_req_interceptor(http_request_context_t *ctx) {
   UNUSED(ctx);
   s_req_interceptor_called++;
   return 0;
 }
 
-static void test_resp_interceptor(http_async_response_context_t *ctx) {
+static void test_resp_interceptor(http_response_context_t *ctx) {
   UNUSED(ctx);
   s_resp_interceptor_called++;
 }
@@ -188,7 +188,7 @@ static void test_redirect_fn(turbo_coro_context_t *ctx) {
 
   g_result.status_code = r->status_code;
 
-  http_async_client_stats_t stats;
+  http_client_stats_t stats;
   http_coro_client_get_stats(c, &stats);
   g_result.redirects = stats.redirects_followed;
 
@@ -240,7 +240,7 @@ static void test_stats_fn(turbo_coro_context_t *ctx) {
   }
   http_coro_response_free(r);
 
-  http_async_client_stats_t stats;
+  http_client_stats_t stats;
   http_coro_client_get_stats(c, &stats);
   g_result.total_requests = stats.total_requests;
   g_result.successful_requests = stats.successful_requests;
@@ -368,7 +368,7 @@ spec("coro http client") {
   describe("lifecycle") {
 
     it("should create and destroy client") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
       check_not_null(c);
       http_coro_client_destroy(c);
@@ -393,7 +393,7 @@ spec("coro http client") {
     static http_coro_client_t *client;
 
     before_each() {
-      ctx = turbo_coro_context_create();
+      ctx = turbo_coro_context_create(NULL);
       client = http_coro_client_create(ctx);
     }
     after_each() {
@@ -449,7 +449,7 @@ spec("coro http client") {
     static http_coro_client_t *client;
 
     before_each() {
-      ctx = turbo_coro_context_create();
+      ctx = turbo_coro_context_create(NULL);
       client = http_coro_client_create(ctx);
     }
     after_each() {
@@ -486,7 +486,7 @@ spec("coro http client") {
     static http_coro_client_t *client;
 
     before_each() {
-      ctx = turbo_coro_context_create();
+      ctx = turbo_coro_context_create(NULL);
       client = http_coro_client_create(ctx);
     }
     after_each() {
@@ -525,19 +525,19 @@ spec("coro http client") {
 
   describe("cookie jar") {
     it("should set and get cookie jar") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
 
       check_null(http_coro_client_get_cookie_jar(c));
 
-      http_async_cookie_jar_t *jar = http_async_cookie_jar_create();
+      http_cookie_jar_t *jar = http_cookie_jar_create();
       http_coro_client_set_cookie_jar(c, jar);
       check_ptr_eq(http_coro_client_get_cookie_jar(c), jar);
 
       http_coro_client_set_cookie_jar(c, NULL);
       check_null(http_coro_client_get_cookie_jar(c));
 
-      http_async_cookie_jar_destroy(jar);
+      http_cookie_jar_destroy(jar);
       http_coro_client_destroy(c);
       turbo_coro_context_destroy(ctx);
     }
@@ -552,7 +552,7 @@ spec("coro http client") {
     }
 
     it("should add and clear interceptors") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
       http_coro_client_add_request_interceptor(c, test_req_interceptor, NULL);
       http_coro_client_add_response_interceptor(c, test_resp_interceptor, NULL);
@@ -574,10 +574,10 @@ spec("coro http client") {
 
   describe("retry policy") {
     it("should set get and clear") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
 
-      http_async_retry_policy_t policy = {0};
+      http_retry_policy_t policy = {0};
       policy.max_retries = 3;
       policy.initial_delay_ms = 100;
       policy.max_delay_ms = 5000;
@@ -586,7 +586,7 @@ spec("coro http client") {
       policy.jitter_factor = 0.1;
       http_coro_client_set_retry_policy(c, &policy);
 
-      http_async_retry_policy_t out = {0};
+      http_retry_policy_t out = {0};
       http_coro_client_get_retry_policy(c, &out);
       check_int_eq(out.max_retries, 3);
       check_int_eq(out.initial_delay_ms, 100);
@@ -605,9 +605,9 @@ spec("coro http client") {
 
   describe("rate limiting") {
     it("should set and clear") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
-      http_async_rate_limit_t limit = {.requests_per_second = 10, .burst_size = 20};
+      http_rate_limit_t limit = {.requests_per_second = 10, .burst_size = 20};
       http_coro_client_set_rate_limit(c, &limit);
       http_coro_client_clear_rate_limit(c);
       http_coro_client_destroy(c);
@@ -620,9 +620,9 @@ spec("coro http client") {
 
   describe("statistics") {
     it("should get and reset") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
-      http_async_client_stats_t stats = {0};
+      http_client_stats_t stats = {0};
       http_coro_client_get_stats(c, &stats);
       check_int_eq((int)stats.total_requests, 0);
       http_coro_client_reset_stats(c);
@@ -862,7 +862,7 @@ spec("coro http client") {
 
   describe("compression config") {
     it("should enable and query compression") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
       check_int_eq(http_coro_client_is_compression_enabled(c), 0);
       http_coro_client_enable_compression(c, 1);
@@ -883,7 +883,7 @@ spec("coro http client") {
 
   describe("progress config") {
     it("should set progress callback") {
-      turbo_coro_context_t *ctx = turbo_coro_context_create();
+      turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
       http_coro_client_t *c = http_coro_client_create(ctx);
       http_coro_client_set_progress_callback(c, test_progress_cb, NULL);
       http_coro_client_set_progress_callback(c, NULL, NULL);

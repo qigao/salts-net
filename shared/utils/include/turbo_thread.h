@@ -154,6 +154,19 @@ CXX_C_API void turbo_sleep_ms(uint32_t ms);
 CXX_C_API void turbo_thread_yield(void);
 
 // =============================================================================
+// Global Synchronization Policy
+// =============================================================================
+
+/** 
+ * @brief Enable/disable global locking for all shared resources.
+ * @param enabled 0 to disable all internal mutexes (optimizes for single-loop processes).
+ */
+CXX_C_API void turbo_sync_set_single_threaded(int enabled);
+
+/** @brief Check if we are running in single-threaded mode. */
+CXX_C_API int turbo_sync_is_single_threaded(void);
+
+// =============================================================================
 // Thread Pool
 // =============================================================================
 

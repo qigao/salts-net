@@ -15,7 +15,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -47,11 +47,11 @@ static void test_multipart_memory(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 10000);
 
-  http_async_multipart_form_t *form = http_async_multipart_form_create();
-  http_async_multipart_form_add_field(form, "title", "My Document");
+  http_multipart_form_t *form = http_multipart_form_create();
+  http_multipart_form_add_field(form, "title", "My Document");
 
   const char *file_content = "Hello, World!\nThis is a test file.";
-  http_async_multipart_form_add_file(form, "file", "test.txt", "text/plain",
+  http_multipart_form_add_file(form, "file", "test.txt", "text/plain",
                                      file_content, strlen(file_content));
 
   http_coro_response_t *response = http_coro_post_multipart(client,
@@ -59,7 +59,7 @@ static void test_multipart_memory(turbo_coro_context_t *ctx) {
   if (is_network_error(response)) {
     g_result.skipped = 1;
     http_coro_response_free(response);
-    http_async_multipart_form_destroy(form);
+    http_multipart_form_destroy(form);
     http_coro_client_destroy(client);
     return;
   }
@@ -69,7 +69,7 @@ static void test_multipart_memory(turbo_coro_context_t *ctx) {
   g_result.body_has_filename = (response->body && strstr(response->body, "test.txt") != NULL);
 
   http_coro_response_free(response);
-  http_async_multipart_form_destroy(form);
+  http_multipart_form_destroy(form);
   http_coro_client_destroy(client);
 }
 
@@ -85,16 +85,16 @@ static void test_multipart_file(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 10000);
 
-  http_async_multipart_form_t *form = http_async_multipart_form_create();
-  http_async_multipart_form_add_field(form, "disk_file_desc", "File from disk");
-  http_async_multipart_form_add_file_path(form, "file", "test_upload.txt", "text/plain");
+  http_multipart_form_t *form = http_multipart_form_create();
+  http_multipart_form_add_field(form, "disk_file_desc", "File from disk");
+  http_multipart_form_add_file_path(form, "file", "test_upload.txt", "text/plain");
 
   http_coro_response_t *response = http_coro_post_multipart(client,
       "https://httpbin.org/post", form);
   if (is_network_error(response)) {
     g_result.skipped = 1;
     http_coro_response_free(response);
-    http_async_multipart_form_destroy(form);
+    http_multipart_form_destroy(form);
     http_coro_client_destroy(client);
     remove("test_upload.txt");
     return;
@@ -104,7 +104,7 @@ static void test_multipart_file(turbo_coro_context_t *ctx) {
   g_result.body_has_filename = (response->body && strstr(response->body, "test_upload.txt") != NULL);
 
   http_coro_response_free(response);
-  http_async_multipart_form_destroy(form);
+  http_multipart_form_destroy(form);
   http_coro_client_destroy(client);
   remove("test_upload.txt");
 }

@@ -1,7 +1,7 @@
 // clang-format off
 // Include order is CRITICAL - do not reorder!
-// turbo_sync_client.h MUST be first to define sync_client_t
-#include "turbo_sync_client.h"
+// turbo_client.h MUST be first to define turbo_client_t
+#include "turbo_client.h"
 #include <llhttp.h>
 #include "http_client.h"
 #include "memory_pool.h"
@@ -52,7 +52,7 @@ typedef struct header_entry_s {
 } header_entry_t;
 
 struct http_client_s {
-  sync_client_t *client;
+  turbo_client_t *client;
   int timeout_ms;         // General timeout (backward compat)
   int connect_timeout_ms; // Connection timeout
   int read_timeout_ms;    // Read timeout
@@ -344,7 +344,7 @@ http_client_t *http_client_create(void) {
   if (!client)
     return NULL;
 
-  client->client = sync_client_create();
+  client->client = turbo_client_create();
   if (!client->client) {
     free(client);
     return NULL;
@@ -383,7 +383,7 @@ void http_client_destroy(http_client_t *client) {
   if (!client)
     return;
   if (client->client)
-    sync_client_destroy(client->client);
+    turbo_client_destroy(client->client);
   tstr_free(client->user_agent);
   free(client->current_host);
   tstr_free(client->auth_header);
@@ -621,7 +621,7 @@ static int establish_connection(http_client_t *client, const char *host, int por
 
   /* Create new client if needed - transport will be determined from URL */
   if (!client->client) {
-    client->client = sync_client_create();
+    client->client = turbo_client_create();
     if (!client->client) {
       return -1;
     }
@@ -632,11 +632,11 @@ static int establish_connection(http_client_t *client, const char *host, int por
   tstr_t connect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d", scheme, host, port);
 
   /* Connect with timeout */
-  sync_client_status_t status;
+  turbo_client_status_t status;
   if (client->connect_timeout_ms > 0) {
-    status = sync_client_connect_timeout(client->client, connect_url, client->connect_timeout_ms);
+    status = turbo_client_connect_timeout(client->client, connect_url, client->connect_timeout_ms);
   } else {
-    status = sync_client_connect(client->client, connect_url);
+    status = turbo_client_connect(client->client, connect_url);
   }
 
   tstr_free(connect_url);
@@ -860,7 +860,7 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   const char *connection_header =
       client->connection_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n";
 
-  sync_client_iovec_t parts[64];
+  turbo_client_iovec_t parts[64];
   int part_count = 0;
 
   parts[part_count].data = request_line;
@@ -966,18 +966,18 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     part_count++;
   }
 
-  sync_client_status_t send_status = sync_client_sendv(client->client, parts, part_count);
+  turbo_client_status_t send_status = turbo_client_sendv(client->client, parts, part_count);
   if (send_status != SYNC_CLIENT_STATUS_OK) {
     /* Connection might have been closed, try reconnecting once */
     client->connection_alive = 0;
     if (establish_connection(client, uri_host, uri_port, is_tls) == 0) {
-      send_status = sync_client_sendv(client->client, parts, part_count);
+      send_status = turbo_client_sendv(client->client, parts, part_count);
     }
 
     if (send_status != SYNC_CLIENT_STATUS_OK) {
       http_response_t *response = calloc(1, sizeof(http_response_t));
       response->pool = pool;
-      const char *err_msg = sync_client_last_message(client->client);
+      const char *err_msg = turbo_client_last_message(client->client);
       tstr_t err_str =
           tstr_cat_fmt(tstr_new(), "Send failed: %s", err_msg ? err_msg : "unknown error");
       response->error = pool_strdup(pool, err_str);
@@ -1037,7 +1037,8 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
   /* Use configured read timeout for first receive, proportional for subsequent */
   int first_chunk_timeout = client->read_timeout_ms > 0 ? client->read_timeout_ms : 5000;
   int subsequent_timeout = first_chunk_timeout / 5;
-  if (subsequent_timeout < 2000) subsequent_timeout = 2000;
+  if (subsequent_timeout < 2000)
+    subsequent_timeout = 2000;
   int is_first_chunk = 1;
 
   /* Keep receiving until we get all data or timeout */
@@ -1046,8 +1047,8 @@ static http_response_t *http_request_internal(http_client_t *client, http_method
     size_t chunk_size = 0;
 
     int timeout = is_first_chunk ? first_chunk_timeout : subsequent_timeout;
-    sync_client_status_t status =
-        sync_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
+    turbo_client_status_t status =
+        turbo_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
 
     if (status != SYNC_CLIENT_STATUS_OK || !chunk || chunk_size == 0) {
       /* No more data or error */
@@ -1489,8 +1490,8 @@ void http_client_get_stats(http_client_t *client, http_client_stats_t *stats) {
 
   /* Also get underlying transport stats if available */
   if (client->client) {
-    sync_client_stats_t transport_stats;
-    sync_client_get_stats(client->client, &transport_stats);
+    turbo_client_stats_t transport_stats;
+    turbo_client_get_stats(client->client, &transport_stats);
 
     /* Merge transport stats */
     stats->bytes_sent = transport_stats.bytes_sent;
@@ -1505,7 +1506,7 @@ void http_client_reset_stats(http_client_t *client) {
   memset(&client->stats, 0, sizeof(http_client_stats_t));
 
   if (client->client) {
-    sync_client_reset_stats(client->client);
+    turbo_client_reset_stats(client->client);
   }
 }
 
@@ -1991,7 +1992,7 @@ int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *f
 
 /* Helper to send data as HTTP chunk: <hex-size>\r\n<data>\r\n
  * Splits large data into smaller chunks to avoid buffer overflow */
-static void send_sync_http_chunk(sync_client_t *client, const char *data, size_t len) {
+static void send_sync_http_chunk(turbo_client_t *client, const char *data, size_t len) {
   if (len == 0)
     return;
 
@@ -2006,21 +2007,21 @@ static void send_sync_http_chunk(sync_client_t *client, const char *data, size_t
     int header_len = fmt(chunk_header, sizeof(chunk_header), "{:x}\r\n", chunk_size);
 
     /* Send chunk size */
-    sync_client_send(client, chunk_header, header_len);
+    turbo_client_send(client, chunk_header, header_len);
 
     /* Send chunk data */
-    sync_client_send(client, data + offset, chunk_size);
+    turbo_client_send(client, data + offset, chunk_size);
 
     /* Send chunk trailer */
-    sync_client_send(client, "\r\n", 2);
+    turbo_client_send(client, "\r\n", 2);
 
     offset += chunk_size;
   }
 }
 
 /* Send final chunk: 0\r\n\r\n */
-static void send_sync_http_chunk_end(sync_client_t *client) {
-  sync_client_send(client, "0\r\n\r\n", 5);
+static void send_sync_http_chunk_end(turbo_client_t *client) {
+  turbo_client_send(client, "0\r\n\r\n", 5);
 }
 
 /* Build multipart form body */
@@ -2235,18 +2236,18 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   char conn_hdr[] = "Connection: keep-alive\r\n\r\n";
 
   /* Send Headers */
-  sync_client_send(client->client, request_line, strlen(request_line));
-  sync_client_send(client->client, host_hdr, strlen(host_hdr));
-  sync_client_send(client->client, ua_hdr, strlen(ua_hdr));
-  sync_client_send(client->client, ct_hdr, strlen(ct_hdr));
-  sync_client_send(client->client, te_hdr, strlen(te_hdr));
+  turbo_client_send(client->client, request_line, strlen(request_line));
+  turbo_client_send(client->client, host_hdr, strlen(host_hdr));
+  turbo_client_send(client->client, ua_hdr, strlen(ua_hdr));
+  turbo_client_send(client->client, ct_hdr, strlen(ct_hdr));
+  turbo_client_send(client->client, te_hdr, strlen(te_hdr));
 
   if (client->auth_header) {
-    sync_client_send(client->client, client->auth_header, strlen(client->auth_header));
-    sync_client_send(client->client, "\r\n", 2);
+    turbo_client_send(client->client, client->auth_header, strlen(client->auth_header));
+    turbo_client_send(client->client, "\r\n", 2);
   }
 
-  sync_client_send(client->client, conn_hdr, strlen(conn_hdr));
+  turbo_client_send(client->client, conn_hdr, strlen(conn_hdr));
 
   /* Send Body in Chunks */
   http_multipart_part_t *part = form->parts;
@@ -2310,8 +2311,8 @@ http_response_t *http_post_multipart_chunked(http_client_t *client, const char *
   while (1) {
     char *chunk = NULL;
     size_t chunk_size = 0;
-    sync_client_status_t status =
-        sync_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
+    turbo_client_status_t status =
+        turbo_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
     if (status != SYNC_CLIENT_STATUS_OK || !chunk || chunk_size == 0) {
       free(chunk);
       break;

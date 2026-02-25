@@ -150,8 +150,19 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
 
   memset(arena, 0, sizeof(*arena));
   
-  /* Initialize mutex */
-  turbo_mutex_init(&arena->lock);
+  /* Coroutine optimization: default to no-locking if global single-threaded mode is enabled */
+  if (turbo_sync_is_single_threaded()) {
+    arena->flags &= ~TURBO_ARENA_FLAG_THREAD_SAFE;
+  } else {
+    arena->flags |= TURBO_ARENA_FLAG_THREAD_SAFE;
+  }
+
+  /* Initialize mutex only if thread-safe flag is set */
+  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+    turbo_mutex_init(&arena->lock);
+  } else {
+    arena->lock = NULL;
+  }
 
   if (initial_size == 0) {
     initial_size = TURBO_ARENA_DEFAULT_REGION_SIZE;
@@ -159,7 +170,7 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
 
   arena->head = create_region(initial_size);
   if (!arena->head) {
-    turbo_mutex_destroy(&arena->lock);
+    if (arena->lock) turbo_mutex_destroy(&arena->lock);
     return -1;
   }
 
@@ -167,7 +178,7 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
   arena->region_count = 1;
   arena->total_allocated = arena->head->size;
   arena->total_used = 0;
-  arena->flags = TURBO_ARENA_FLAG_AUTO_GROW;
+  arena->flags |= TURBO_ARENA_FLAG_AUTO_GROW;
   arena->recycle_head = NULL;
   arena->recycle_count = 0;
   arena->recycle_limit = TURBO_ARENA_RECYCLE_LIMIT;
@@ -235,9 +246,15 @@ static void *turbo_arena_alloc_nolock(turbo_arena_t *arena, size_t size) {
 void *turbo_arena_alloc(turbo_arena_t *arena, size_t size) {
   if (!arena) return NULL;
   
-  turbo_mutex_lock(&arena->lock);
+  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+    turbo_mutex_lock(&arena->lock);
+  }
+  
   void *ptr = turbo_arena_alloc_nolock(arena, size);
-  turbo_mutex_unlock(&arena->lock);
+  
+  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+    turbo_mutex_unlock(&arena->lock);
+  }
   
   return ptr;
 }
@@ -323,9 +340,15 @@ static turbo_arena_buffer_t *turbo_arena_get_buffer_nolock(turbo_arena_t *arena,
 turbo_arena_buffer_t *turbo_arena_get_buffer(turbo_arena_t *arena, size_t min_size) {
   if (!arena) return NULL;
 
-  turbo_mutex_lock(&arena->lock);
+  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+    turbo_mutex_lock(&arena->lock);
+  }
+  
   turbo_arena_buffer_t *buffer = turbo_arena_get_buffer_nolock(arena, min_size);
-  turbo_mutex_unlock(&arena->lock);
+  
+  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+    turbo_mutex_unlock(&arena->lock);
+  }
 
   return buffer;
 }
@@ -353,25 +376,23 @@ void turbo_arena_buffer_unref(turbo_arena_buffer_t *buffer) {
       free(buffer);
     } else {
       /* Normal arena buffer - return to pool */
-      /* Safety check: arena may have been freed already (e.g., during pipe close).
-       * If arena is NULL or its lock is invalid, we cannot return to pool - just leak gracefully. */
       turbo_arena_t *arena = buffer->arena;
-      if (!arena || arena->lock == NULL || arena->lock == (turbo_mutex_t)(uintptr_t)-1) {
-        /* Arena already destroyed - cannot recycle buffer.
-         * The buffer's memory was part of the arena region, so it's already freed.
-         * Nothing more we can do here safely. */
-        return;
-      }
+      if (!arena) return;
+
+      int thread_safe = (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE);
       
-      /* Must lock arena to modify region ref count and push to list */
-      turbo_mutex_lock(&arena->lock);
+      if (thread_safe) {
+        turbo_mutex_lock(&arena->lock);
+      }
       
       if (buffer->region && buffer->region->ref_count > 0) {
         buffer->region->ref_count--;
       }
       arena_push_recycled_buffer_nolock(arena, buffer);
       
-      turbo_mutex_unlock(&arena->lock);
+      if (thread_safe) {
+        turbo_mutex_unlock(&arena->lock);
+      }
     }
   }
 }
@@ -601,17 +622,24 @@ turbo_arena_buffer_t *turbo_arena_get_pooled_buffer(turbo_arena_t *arena,
   if (!arena)
     return NULL;
   
-  turbo_mutex_lock(&arena->lock);
+  int thread_safe = (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE);
+  if (thread_safe) {
+    turbo_mutex_lock(&arena->lock);
+  }
+  
   turbo_arena_buffer_t *buffer = arena_pop_recycled_buffer_nolock(arena, min_size);
   
   if (buffer) {
-     turbo_mutex_unlock(&arena->lock);
+     if (thread_safe) turbo_mutex_unlock(&arena->lock);
      return buffer;
   }
   
   // No pooled buffer, allocate new one (using internal nolock alloc)
   buffer = turbo_arena_get_buffer_nolock(arena, min_size);
-  turbo_mutex_unlock(&arena->lock);
+  
+  if (thread_safe) {
+    turbo_mutex_unlock(&arena->lock);
+  }
   
   return buffer;
 }

@@ -113,7 +113,7 @@ struct turbo_tcp_server_s {
  * @param port The port number to bind to.
  * @return 0 on success, libuv error code on failure.
  */
-CXX_C_API int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
+  int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
                             const char* host, unsigned short port);
 
 /**
@@ -128,7 +128,7 @@ CXX_C_API int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
  * @param on_close Callback invoked when a connection is closed.
  * @return 0 on success, libuv error code on failure.
  */
-CXX_C_API int turbo_tcp_server_start(turbo_tcp_server_t* server,
+  int turbo_tcp_server_start(turbo_tcp_server_t* server,
                              turbo_recv_cb on_recv,
                              turbo_connect_cb on_connect,
                              turbo_close_cb on_close);
@@ -140,7 +140,7 @@ CXX_C_API int turbo_tcp_server_start(turbo_tcp_server_t* server,
  *
  * @param server The TCP server to stop.
  */
-CXX_C_API void turbo_tcp_server_stop(turbo_tcp_server_t* server);
+  void turbo_tcp_server_stop(turbo_tcp_server_t* server);
 
 /**
  * @brief Create a new TCP client.
@@ -150,7 +150,7 @@ CXX_C_API void turbo_tcp_server_stop(turbo_tcp_server_t* server);
  * @param loop The libuv event loop to use.
  * @return Pointer to the new client, or NULL on failure.
  */
-CXX_C_API turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop);
+  turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop);
 
 /**
  * @brief Connect a TCP client to a remote server.
@@ -165,7 +165,7 @@ CXX_C_API turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop);
  * @param on_close Callback invoked when connection is closed.
  * @return 0 on success, libuv error code on failure.
  */
-CXX_C_API int turbo_tcp_client_connect(turbo_tcp_client_t* client,
+  int turbo_tcp_client_connect(turbo_tcp_client_t* client,
                              const char* host, unsigned short port,
                              turbo_recv_cb on_recv,
                              turbo_connect_cb on_connect,
@@ -178,7 +178,7 @@ CXX_C_API int turbo_tcp_client_connect(turbo_tcp_client_t* client,
  *
  * @param client The TCP client to close.
  */
-CXX_C_API void turbo_tcp_client_close(turbo_tcp_client_t* client);
+  void turbo_tcp_client_close(turbo_tcp_client_t* client);
 
 /**
  * @brief Get a zero-copy send buffer.
@@ -190,7 +190,7 @@ CXX_C_API void turbo_tcp_client_close(turbo_tcp_client_t* client);
  * @param min_size The minimum size required for the buffer.
  * @return Pointer to the buffer, or NULL on failure.
  */
-CXX_C_API turbo_arena_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* client, size_t min_size);
+  turbo_arena_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* client, size_t min_size);
 
 /**
  * @brief Send data using a zero-copy buffer.
@@ -203,7 +203,7 @@ CXX_C_API turbo_arena_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* cl
  * @param length The number of bytes to send from the buffer.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length);
+  int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length);
 
 /**
  * @brief Discard a send buffer without sending.
@@ -214,7 +214,7 @@ CXX_C_API int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_arena_buff
  * @param client The TCP client.
  * @param buffer The buffer to discard.
  */
-CXX_C_API void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer);
+  void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer);
 
 /**
  * @brief Send data with copying (fallback method).
@@ -227,7 +227,7 @@ CXX_C_API void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_arena_
  * @param length The length of data to send.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_tcp_send(turbo_tcp_client_t* client, const char* data, size_t length);
+  int turbo_tcp_send(turbo_tcp_client_t* client, const char* data, size_t length);
 
 /**
  * @brief Send data from a string view.
@@ -243,6 +243,24 @@ static inline int turbo_tcp_send_v(turbo_tcp_client_t* client, tstr_v data) {
 }
 
 /**
+ * @brief Start reading data on a TCP client.
+ *
+ * Re-arms the internal alloc + read callbacks on the underlying stream.
+ * Used by the coroutine layer after stopping reads between recv calls.
+ *
+ * @param client The TCP client.
+ * @return 0 on success, libuv error code on failure.
+ */
+  int turbo_tcp_read_start(turbo_tcp_client_t* client);
+
+/**
+ * @brief Stop reading data on a TCP client.
+ *
+ * @param client The TCP client.
+ */
+  void turbo_tcp_read_stop(turbo_tcp_client_t* client);
+
+/**
  * @brief Flush pending writes.
  *
  * This function forces immediate sending of any queued data.
@@ -250,7 +268,7 @@ static inline int turbo_tcp_send_v(turbo_tcp_client_t* client, tstr_v data) {
  * @param client The TCP client.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_tcp_flush(turbo_tcp_client_t* client);
+  int turbo_tcp_flush(turbo_tcp_client_t* client);
 
 /**
  * @brief Queue a buffer for sending without auto-flush.
@@ -264,7 +282,7 @@ CXX_C_API int turbo_tcp_flush(turbo_tcp_client_t* client);
  * @param length The number of bytes to send from the buffer.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length);
+  int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length);
 
 /**
  * @brief IO vector structure for scatter-gather operations.
@@ -298,7 +316,7 @@ typedef struct {
  * iov[1].len = payload_len;
  * turbo_tcp_sendv(client, iov, 2);
  */
-CXX_C_API int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_t* iov, size_t iovcnt);
+  int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_t* iov, size_t iovcnt);
 
 /**
  * @brief Get TCP server statistics.
@@ -308,7 +326,7 @@ CXX_C_API int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_
  * @param server The TCP server.
  * @param stats Pointer to a stats structure to fill.
  */
-CXX_C_API void turbo_tcp_get_stats(const turbo_tcp_server_t* server, turbo_tcp_stats_t* stats);
+  void turbo_tcp_get_stats(const turbo_tcp_server_t* server, turbo_tcp_stats_t* stats);
 
 /**
  * @brief Reset TCP server statistics.
@@ -317,7 +335,7 @@ CXX_C_API void turbo_tcp_get_stats(const turbo_tcp_server_t* server, turbo_tcp_s
  *
  * @param server The TCP server.
  */
-CXX_C_API void turbo_tcp_reset_stats(turbo_tcp_server_t* server);
+  void turbo_tcp_reset_stats(turbo_tcp_server_t* server);
 
 /**
  * @brief Trim memory usage.
@@ -326,7 +344,7 @@ CXX_C_API void turbo_tcp_reset_stats(turbo_tcp_server_t* server);
  *
  * @param server The TCP server.
  */
-CXX_C_API void turbo_tcp_trim_memory(turbo_tcp_server_t* server);
+  void turbo_tcp_trim_memory(turbo_tcp_server_t* server);
 
 /**
  * @brief Get current memory usage.
@@ -336,7 +354,7 @@ CXX_C_API void turbo_tcp_trim_memory(turbo_tcp_server_t* server);
  * @param server The TCP server.
  * @return The memory usage in bytes.
  */
-CXX_C_API size_t turbo_tcp_get_memory_usage(const turbo_tcp_server_t* server);
+  size_t turbo_tcp_get_memory_usage(const turbo_tcp_server_t* server);
 
 /**
  * @brief Zero-copy convenience macros.

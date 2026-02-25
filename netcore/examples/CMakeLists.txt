@@ -6,9 +6,6 @@ foreach(test_source ${EXTRA_SOURCES})
     if(test_name STREQUAL "sync_client")
         add_executable(sync_client
             ${CMAKE_CURRENT_SOURCE_DIR}/sync_client.c  )
-    elseif(test_name STREQUAL "async_client")
-        add_executable(async_client
-            ${CMAKE_CURRENT_SOURCE_DIR}/async_client.c )
     else()
         add_executable(${test_name} ${test_source})
     endif()

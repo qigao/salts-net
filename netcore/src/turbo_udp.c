@@ -11,9 +11,9 @@
 #include "tlog.h"
  
 
-/* Forward declarations for pool synchronization */
-extern void turbo_udp_pool_lock(void);
-extern void turbo_udp_pool_unlock(void);
+/* Forward declarations for global synchronization */
+extern void turbo_udp_sync_lock(void);
+extern void turbo_udp_sync_unlock(void);
 
 /* Send operation for zero-copy */
 typedef struct turbo_udp_send_op_s {
@@ -52,13 +52,13 @@ static void init_udp_stats(void) {
 static turbo_udp_send_op_t *get_send_op(turbo_udp_server_t *server) {
   turbo_udp_send_op_t *op = NULL;
 
-  turbo_udp_pool_lock();
+  turbo_udp_sync_lock();
   if (g_send_op_pool && g_send_op_pool_size > 0) {
     op = g_send_op_pool;
     g_send_op_pool = op->next;
     g_send_op_pool_size--;
   }
-  turbo_udp_pool_unlock();
+  turbo_udp_sync_unlock();
 
   if (!op) {
     op = (turbo_udp_send_op_t *)malloc(sizeof(turbo_udp_send_op_t));
@@ -82,15 +82,14 @@ static void return_send_op(turbo_udp_send_op_t *op) {
   /* Release the slice */
   turbo_arena_slice_release(&op->slice);
 
-  turbo_udp_pool_lock();
+  turbo_udp_sync_lock();
   if (g_send_op_pool_size < MAX_SEND_OP_POOL_SIZE) {
     op->next = g_send_op_pool;
     g_send_op_pool = op;
     g_send_op_pool_size++;
-    turbo_udp_pool_unlock();
-    turbo_udp_pool_unlock();
+    turbo_udp_sync_unlock();
   } else {
-    turbo_udp_pool_unlock();
+    turbo_udp_sync_unlock();
     free(op);
   }
 }

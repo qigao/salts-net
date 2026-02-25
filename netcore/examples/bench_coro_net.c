@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
 
     if (mode == 0) {
         printf("Mode: COROUTINES (Single Thread)\n");
-        turbo_coro_context_t* ctx = turbo_coro_context_create();
+        turbo_coro_context_t* ctx = turbo_coro_context_create(NULL);
         bench_ctx_t bctx = { .ctx = ctx, .completed = 0 };
 
         // Create 1000 coroutines
@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
 
         // Run loop until all complete
         while (bctx.completed < NUM_CLIENTS) {
-            turbo_coro_context_run(ctx);
+            turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
         }
 
         turbo_coro_context_destroy(ctx);

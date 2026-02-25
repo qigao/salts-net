@@ -14,7 +14,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -43,7 +43,7 @@ spec("http client basic") {
     describe("client lifecycle") {
 
         it("should create and destroy") {
-            turbo_coro_context_t *ctx = turbo_coro_context_create();
+            turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
             http_coro_client_t *client = http_coro_client_create(ctx);
             check_not_null(client);
             http_coro_client_destroy(client);
@@ -61,7 +61,7 @@ spec("http client basic") {
         static http_coro_client_t *client;
 
         before_each() {
-            ctx = turbo_coro_context_create();
+            ctx = turbo_coro_context_create(NULL);
             client = http_coro_client_create(ctx);
         }
         after_each() {
@@ -107,7 +107,7 @@ spec("http client basic") {
         }
 
         it("should return error for NULL url") {
-            turbo_coro_context_t *ctx = turbo_coro_context_create();
+            turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
             http_coro_client_t *client = http_coro_client_create(ctx);
             check_not_null(client);
             http_coro_client_destroy(client);

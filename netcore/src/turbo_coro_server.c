@@ -23,6 +23,7 @@ struct turbo_coro_server_s {
 
     union {
         uv_tcp_t tcp;
+        uv_pipe_t pipe;
         turbo_kcp_server_t kcp;
         turbo_udp_t udp;
     } handle;
@@ -31,9 +32,6 @@ struct turbo_coro_server_s {
 
     turbo_coro_handler_fn handler;
     void* handler_arg;
-
-    turbo_coro_dgram_handler_fn dgram_handler;
-    void* dgram_handler_arg;
 };
 
 /* ── Coro bridge for connection-oriented handlers ─────────── */
@@ -77,12 +75,46 @@ static void on_tcp_connection(uv_stream_t* server_handle, int status) {
     if (!client) return;
 
     /* Set up as TCP client */
-    uv_tcp_init(server->loop, &client->handle.tcp);
-    client->handle.tcp.data = client;
+    client->handle.tcp = turbo_tcp_client_create(server->loop);
+    if (!client->handle.tcp) {
+        turbo_coro_client_destroy(client);
+        return;
+    }
+    client->handle.tcp->user_data = client;
+    client->handle.tcp->on_recv = on_transport_recv;
+    client->handle.tcp->on_close = on_transport_close;
     client->transport = TURBO_TCP;
     client->ops = transport_ops_table[TURBO_TCP];
 
-    if (uv_accept(server_handle, (uv_stream_t*)&client->handle.tcp) == 0) {
+    if (uv_accept(server_handle, (uv_stream_t*)&client->handle.tcp->handle) == 0) {
+        client->connected = 1;
+        spawn_client_coro(client, server->handler, server->handler_arg);
+    } else {
+        turbo_coro_client_destroy(client);
+    }
+}
+
+/* ── Pipe accept ──────────────────────────────────────────── */
+
+static void on_pipe_connection(uv_stream_t* server_handle, int status) {
+    if (status < 0) return;
+
+    turbo_coro_server_t* server = (turbo_coro_server_t*)server_handle->data;
+    turbo_coro_client_t* client = turbo_coro_client_create(server->ctx);
+    if (!client) return;
+
+    client->handle.pipe = turbo_pipe_client_create(server->loop);
+    if (!client->handle.pipe) {
+        turbo_coro_client_destroy(client);
+        return;
+    }
+    client->handle.pipe->user_data = client;
+    client->handle.pipe->on_recv = on_pipe_coro_recv;
+    client->handle.pipe->on_close = on_pipe_coro_close;
+    client->transport = TURBO_PIPE;
+    client->ops = transport_ops_table[TURBO_PIPE];
+
+    if (uv_accept(server_handle, (uv_stream_t*)&client->handle.pipe->handle) == 0) {
         client->connected = 1;
         spawn_client_coro(client, server->handler, server->handler_arg);
     } else {
@@ -121,33 +153,15 @@ static void on_kcp_accept(void* server_handle, void* client_handle, void* peer) 
 
 static int on_kcp_server_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
     /* peer = turbo_kcp_client_t* — forward to the coro client's recv handler */
+    UNUSED(handle);
     turbo_kcp_client_t* kcp_client = (turbo_kcp_client_t*)peer;
     if (!kcp_client || !kcp_client->user_data) return 0;
 
     turbo_coro_client_t* client = (turbo_coro_client_t*)kcp_client->user_data;
     if (!client->co_wait) return 0;
 
-    /* Reuse the client-side on_kcp_recv logic via the same callback path */
-    if (slice && slice->length > 0) {
-        client->recv_data = malloc(slice->length);
-        if (client->recv_data) {
-            memcpy(client->recv_data, slice->data, slice->length);
-            client->recv_len = slice->length;
-            client->status = 0;
-        } else {
-            client->status = UV_ENOMEM;
-        }
-    } else {
-        client->status = UV_EOF;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
-
-    if (client->co_wait) {
-        turbo_coro_t* co = client->co_wait;
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
-    }
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
     return 0;
 }
 
@@ -180,26 +194,8 @@ static int on_ws_server_recv(void* handle, const turbo_arena_slice_t* slice, voi
     turbo_coro_client_t* client = (turbo_coro_client_t*)conn->user_data;
     if (!client->co_wait) return 0;
 
-    if (slice && slice->length > 0) {
-        client->recv_data = malloc(slice->length);
-        if (client->recv_data) {
-            memcpy(client->recv_data, slice->data, slice->length);
-            client->recv_len = slice->length;
-            client->status = 0;
-        } else {
-            client->status = UV_ENOMEM;
-        }
-    } else {
-        client->status = UV_EOF;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
-
-    if (client->co_wait) {
-        turbo_coro_t* co = client->co_wait;
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
-    }
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
     return 0;
 }
 
@@ -210,60 +206,42 @@ static void on_ws_server_close(void* handle) {
 
 /* ── UDP datagram handler ─────────────────────────────────── */
 
-typedef struct {
-    turbo_coro_server_t* server;
-    char* data;
-    size_t len;
-    struct sockaddr_storage addr;
-    turbo_coro_dgram_handler_fn handler;
-    void* arg;
-} dgram_task_arg_t;
-
-static void dgram_coro_bridge(turbo_coro_t* co, void* arg) {
-    UNUSED(co);
-    dgram_task_arg_t* task = (dgram_task_arg_t*)arg;
-    task->handler(task->server, task->data, task->len,
-                  (const struct sockaddr*)&task->addr, task->arg);
-    free(task->data);
-    free(task);
-}
-
 static int on_udp_server_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
     turbo_udp_t* udp = (turbo_udp_t*)handle;
     turbo_coro_server_t* server = (turbo_coro_server_t*)
         ((char*)udp - offsetof(turbo_coro_server_t, handle.udp));
 
-    if (!server->dgram_handler) return 0;
+    if (!server->handler) return 0;
     if (!slice || slice->length == 0) return 0;
 
-    dgram_task_arg_t* task = malloc(sizeof(dgram_task_arg_t));
-    if (!task) return 0;
+    turbo_coro_client_t* client = turbo_coro_client_create(server->ctx);
+    if (!client) return 0;
 
-    task->data = malloc(slice->length);
-    if (!task->data) {
-        free(task);
-        return 0;
-    }
-
-    memcpy(task->data, slice->data, slice->length);
-    task->len = slice->length;
-    task->server = server;
-    task->handler = server->dgram_handler;
-    task->arg = server->dgram_handler_arg;
+    client->transport = TURBO_UDP;
+    client->ops = &udp_server_ops;
+    client->user_data = server;
+    client->connected = 1;
 
     if (peer) {
         const struct sockaddr* sa = (const struct sockaddr*)peer;
         size_t sa_len = (sa->sa_family == AF_INET6)
             ? sizeof(struct sockaddr_in6)
             : sizeof(struct sockaddr_in);
-        memset(&task->addr, 0, sizeof(task->addr));
-        memcpy(&task->addr, peer, sa_len);
-    } else {
-        memset(&task->addr, 0, sizeof(struct sockaddr_storage));
+        memset(&client->peer_addr, 0, sizeof(client->peer_addr));
+        memcpy(&client->peer_addr, peer, sa_len);
     }
 
-    turbo_coro_t* co = turbo_coro_create(dgram_coro_bridge, task, NULL);
-    turbo_coro_resume(co);
+    client->recv_data = malloc(slice->length);
+    if (!client->recv_data) {
+        turbo_coro_client_destroy(client);
+        return 0;
+    }
+
+    memcpy(client->recv_data, slice->data, slice->length);
+    client->recv_len = slice->length;
+    client->status = 0;
+
+    spawn_client_coro(client, server->handler, server->handler_arg);
     return 0;
 }
 
@@ -274,13 +252,13 @@ static int on_udp_server_recv(void* handle, const turbo_arena_slice_t* slice, vo
 turbo_coro_server_t* turbo_coro_server_create(turbo_coro_context_t* ctx) {
     turbo_coro_server_t* server = calloc(1, sizeof(turbo_coro_server_t));
     if (!server) return NULL;
-    server->loop = turbo_coro_context_loop(ctx);
+    server->loop = ctx ? ctx->loop : NULL;
     server->ctx = ctx;
     return server;
 }
 
 int turbo_coro_server_listen(turbo_coro_server_t* server, const char* url,
-                              turbo_coro_handler_fn handler, void* arg) {
+                               turbo_coro_handler_fn handler, void* arg) {
     turbo_address_t addr;
     int r = parse_transport_url(url, &addr);
     if (r != 0) return r;
@@ -297,7 +275,8 @@ int turbo_coro_server_listen(turbo_coro_server_t* server, const char* url,
         r = uv_ip4_addr(addr.host, addr.port, (struct sockaddr_in*)&saddr);
     }
 
-    if (addr.transport == TURBO_TCP) {
+    switch (addr.transport) {
+    case TURBO_TCP:
         uv_tcp_init(server->loop, &server->handle.tcp);
         server->handle.tcp.data = server;
 
@@ -306,17 +285,31 @@ int turbo_coro_server_listen(turbo_coro_server_t* server, const char* url,
         if (r != 0) return r;
 
         return uv_listen((uv_stream_t*)&server->handle.tcp, 128, on_tcp_connection);
-    }
 
-    if (addr.transport == TURBO_KCP) {
+    case TURBO_PIPE:
+        uv_pipe_init(server->loop, &server->handle.pipe, 0);
+        server->handle.pipe.data = server;
+
+        r = uv_pipe_bind(&server->handle.pipe, addr.path);
+        if (r != 0) return r;
+
+        return uv_listen((uv_stream_t*)&server->handle.pipe, 128, on_pipe_connection);
+
+    case TURBO_KCP:
         r = turbo_kcp_server_init(&server->handle.kcp, server->loop,
                                   addr.host, (unsigned short)addr.port);
         if (r != 0) return r;
 
         return turbo_kcp_server_start(&server->handle.kcp, on_kcp_accept, on_kcp_server_recv);
-    }
 
-    if (addr.transport == TURBO_WEBSOCKET) {
+    case TURBO_UDP:
+        r = turbo_udp_server_init(&server->handle.udp, server->loop,
+                                  addr.host, (unsigned short)addr.port);
+        if (r != 0) return r;
+
+        return turbo_udp_server_start(&server->handle.udp, on_udp_server_recv);
+
+    case TURBO_WEBSOCKET: {
         int is_tls = (strncmp(url, "wss://", 6) == 0);
         turbo_websocket_server_config_t ws_config = {0};
 
@@ -331,26 +324,9 @@ int turbo_coro_server_listen(turbo_coro_server_t* server, const char* url,
             addr.host, addr.port, 128);
     }
 
-    return UV_EPROTONOSUPPORT;
-}
-
-int turbo_coro_server_listen_udp(turbo_coro_server_t* server, const char* url,
-                                  turbo_coro_dgram_handler_fn handler, void* arg) {
-    turbo_address_t addr;
-    int r = parse_transport_url(url, &addr);
-    if (r != 0) return r;
-    if (!addr.valid) return UV_EINVAL;
-    if (addr.transport != TURBO_UDP) return UV_EPROTONOSUPPORT;
-
-    server->transport = TURBO_UDP;
-    server->dgram_handler = handler;
-    server->dgram_handler_arg = arg;
-
-    r = turbo_udp_server_init(&server->handle.udp, server->loop,
-                              addr.host, (unsigned short)addr.port);
-    if (r != 0) return r;
-
-    return turbo_udp_server_start(&server->handle.udp, on_udp_server_recv);
+    default:
+        return UV_EPROTONOSUPPORT;
+    }
 }
 
 int turbo_coro_server_sendto(turbo_coro_server_t* server,
@@ -368,21 +344,33 @@ static void on_server_handle_close(uv_handle_t* handle) {
 void turbo_coro_server_destroy(turbo_coro_server_t* server) {
     if (!server) return;
 
-    if (server->transport == TURBO_TCP) {
+    switch (server->transport) {
+    case TURBO_TCP:
         uv_close((uv_handle_t*)&server->handle.tcp, on_server_handle_close);
-    } else if (server->transport == TURBO_KCP) {
+        return; /* free in callback */
+
+    case TURBO_PIPE:
+        uv_close((uv_handle_t*)&server->handle.pipe, on_server_handle_close);
+        return; /* free in callback */
+
+    case TURBO_KCP:
         turbo_kcp_server_stop(&server->handle.kcp);
-        free(server);
-    } else if (server->transport == TURBO_UDP) {
+        break;
+
+    case TURBO_UDP:
         turbo_udp_server_stop(&server->handle.udp);
-        free(server);
-    } else if (server->transport == TURBO_WEBSOCKET) {
+        break;
+
+    case TURBO_WEBSOCKET:
         if (server->ws_server) {
             turbo_websocket_server_destroy(server->ws_server);
             server->ws_server = NULL;
         }
-        free(server);
-    } else {
-        free(server);
+        break;
+
+    default:
+        break;
     }
+
+    free(server);
 }

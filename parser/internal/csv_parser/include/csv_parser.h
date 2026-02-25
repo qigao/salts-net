@@ -66,6 +66,13 @@ tstr_v      csv_get_by_name_v(const csv_doc_t *doc, size_t row, tstr_v col_name)
 
 const char *csv_get_error(void);
 
+/** Serialize a parsed document back to CSV string (RFC 4180).
+ *  @return malloc'd string, caller must free(). NULL on error. */
+char       *csv_to_string(const csv_doc_t *doc);
+
+/** Serialize and write to file. @return 0 on success, -1 on error. */
+int         csv_write_file(const csv_doc_t *doc, const char *filename);
+
 /* ============================================================================
  * Streaming/SAX API - O(1) memory, callback-based parsing
  * ============================================================================ */

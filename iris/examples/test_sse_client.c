@@ -8,17 +8,14 @@
 #include <string.h>
 #include <platform.h>
 #include <turbo_thread.h>
-#include <http_client_async.h>
+#include <turbo_coro.h>
+#include <http_coro_client.h>
 #include <rpc_client.h>
 
-/* --- 1. Standard SSE Client (using http_client_async) --- */
+/* --- 1. SSE Client (using http_coro_client) --- */
 
-static void on_http_data(http_async_request_t *request, const char *data, size_t len, void *user_data) {
-    (void)request;
+static void on_sse_data(const char *data, size_t len, void *user_data) {
     (void)user_data;
-    
-    /* In SSE, data comes in line by line or in blocks */
-    /* For this test, we just print whatever we get */
     char *buf = malloc(len + 1);
     if (buf) {
         memcpy(buf, data, len);
@@ -28,27 +25,34 @@ static void on_http_data(http_async_request_t *request, const char *data, size_t
     }
 }
 
-static void on_http_complete(http_async_request_t *request, http_async_response_t *response, void *user_data) {
-    (void)request;
-    int *done = (int *)user_data;
-    printf("\n[HTTP SSE] Stream closed. Status: %d\n", response->status_code);
-    *done = 1;
+static void sse_coro_entry(turbo_coro_t *co, void *arg) {
+    (void)co;
+    turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
+
+    http_coro_client_t *client = http_coro_client_create(ctx);
+    http_coro_client_set_timeout(client, 30000);
+
+    printf("\n=== HTTP SSE GET Test ===\n");
+    printf("Connecting to http://localhost:8080/stream...\n");
+
+    http_coro_response_t *r = http_coro_sse_get(
+        client, "http://localhost:8080/stream", on_sse_data, NULL);
+
+    if (r) {
+        printf("\n[HTTP SSE] Stream closed. Status: %d\n", r->status_code);
+        http_coro_response_free(r);
+    }
+
+    http_coro_client_destroy(client);
 }
 
 void run_http_sse_test() {
-    http_async_client_t *client = http_async_client_create();
-    int done = 0;
-    
-    printf("\n=== HTTP SSE GET Test ===\n");
-    printf("Connecting to http://localhost:8080/stream...\n");
-    
-    http_async_sse_get(client, "http://localhost:8080/stream", on_http_data, on_http_complete, &done);
-    
-    while (!done) {
-        turbo_sleep_ms(100);
-    }
-    
-    http_async_client_destroy(client);
+    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
+    turbo_coro_spawn(sched, sse_coro_entry, ctx);
+    turbo_coro_scheduler_run(sched);
+    turbo_coro_scheduler_destroy(sched);
+    turbo_coro_context_destroy(ctx);
 }
 
 /* --- 2. RPC SSE Client (using rpc_client) --- */
@@ -72,37 +76,37 @@ void run_rpc_sse_test() {
     rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("http://localhost:8080/rpc");
     rpc_client_t *client = rpc_client_create(&config);
     int done = 0;
-    
+
     printf("\n=== RPC SSE POST Test ===\n");
     printf("Calling math.count(n=5) on http://localhost:8080/rpc...\n");
-    
+
     rpc_client_call_stream(client, "math.count", "{\"n\":5}", on_rpc_result, on_rpc_complete, &done);
-    
+
     while (!done) {
         turbo_sleep_ms(100);
     }
-    
+
     rpc_client_destroy(client);
 }
 
 int main(int argc, char *argv[]) {
     int mode = 0; // 0=both, 1=http, 2=rpc
-    
+
     if (argc > 1) {
         if (strcmp(argv[1], "http") == 0) mode = 1;
         else if (strcmp(argv[1], "rpc") == 0) mode = 2;
     }
-    
+
     printf("TurboNet SSE C Client\n");
     printf("=====================\n");
-    
+
     if (mode == 0 || mode == 1) {
         run_http_sse_test();
     }
-    
+
     if (mode == 0 || mode == 2) {
         run_rpc_sse_test();
     }
-    
+
     return 0;
 }

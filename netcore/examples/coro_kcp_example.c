@@ -108,12 +108,14 @@ static void launcher_task(turbo_coro_t* co, void* arg) {
 
 int main(void) {
     printf("=== KCP Coroutine Echo Example ===\n");
-    turbo_coro_context_t* ctx = turbo_coro_context_create();
+    printf("[Main] Initializing context\n");
+    turbo_coro_context_t* ctx = turbo_coro_context_create(NULL);
 
     turbo_coro_t* co = turbo_coro_create(launcher_task, ctx, NULL);
     turbo_coro_resume(co);
 
-    turbo_coro_context_run(ctx);
+    printf("[Main] Starting event loop...\n");
+    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     turbo_coro_destroy(co);
     turbo_coro_context_destroy(ctx);

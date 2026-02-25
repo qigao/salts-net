@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "turbo_sync_client.h"
+#include "turbo_client.h"
 
 int main(void) {
   /* Get connection URL from environment or use default */
@@ -30,7 +30,7 @@ int main(void) {
   printf("Connecting to: %s\\n", url);
 
   /* Create client - transport is determined automatically from URL */
-  sync_client_t *client = sync_client_create();
+  turbo_client_t *client = turbo_client_create();
   if (!client) {
     fprintf(stderr, "Failed to create client\\n");
     return 1;
@@ -39,25 +39,25 @@ int main(void) {
   int exit_code = 0;
 
   /* Connect using URL - scheme determines transport automatically */
-  sync_client_status_t status = sync_client_connect(client, url);
+  turbo_client_status_t status = turbo_client_connect(client, url);
   if (status != SYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, "Connect failed (%s): %s\\n", 
-            sync_client_status_to_string(status),
-            sync_client_last_message(client));
+            turbo_client_status_to_string(status),
+            turbo_client_last_message(client));
     exit_code = 1;
     goto done;
   }
   
   printf("Connected successfully using %s transport\\n", 
-         sync_client_get_transport_scheme(client));
+         turbo_client_get_transport_scheme(client));
 
   /* Send message */
   const char *msg = "Hello, server!";
-  status = sync_client_send(client, msg, strlen(msg));
+  status = turbo_client_send(client, msg, strlen(msg));
   if (status != SYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, "Send failed (%s): %s\\n", 
-            sync_client_status_to_string(status),
-            sync_client_last_message(client));
+            turbo_client_status_to_string(status),
+            turbo_client_last_message(client));
     exit_code = 1;
     goto done;
   }
@@ -66,11 +66,11 @@ int main(void) {
   /* Receive response */
   char *response = NULL;
   size_t len = 0;
-  status = sync_client_receive(client, &response, &len);
+  status = turbo_client_receive(client, &response, &len);
   if (status != SYNC_CLIENT_STATUS_OK) {
     fprintf(stderr, "Receive failed (%s): %s\\n", 
-            sync_client_status_to_string(status),
-            sync_client_last_message(client));
+            turbo_client_status_to_string(status),
+            turbo_client_last_message(client));
     exit_code = 1;
     goto done;
   }
@@ -78,6 +78,6 @@ int main(void) {
   free(response);
 
 done:
-  sync_client_destroy(client);
+  turbo_client_destroy(client);
   return exit_code;
 }

@@ -21,7 +21,9 @@ set(HTTP_EXAMPLES
     login_request
     asan_verify
     jwt_auth_example
-    coro_http_example)
+    coro_http_example
+    http_client_multithread
+    )
 
 # Build each example
 foreach(example_name ${HTTP_EXAMPLES})

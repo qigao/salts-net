@@ -14,7 +14,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -51,7 +51,7 @@ static void test_retry_on_5xx(turbo_coro_context_t *ctx) {
   http_coro_client_t *c = http_coro_client_create(ctx);
   http_coro_client_set_timeout(c, 10000);
 
-  http_async_retry_policy_t policy = {
+  http_retry_policy_t policy = {
       .max_retries = 2,
       .initial_delay_ms = 100,
       .max_delay_ms = 1000,
@@ -81,7 +81,7 @@ static void test_no_retry_on_success(turbo_coro_context_t *ctx) {
   http_coro_client_t *c = http_coro_client_create(ctx);
   http_coro_client_set_timeout(c, 10000);
 
-  http_async_retry_policy_t policy = http_async_retry_policy_default();
+  http_retry_policy_t policy = http_retry_policy_default();
   http_coro_client_set_retry_policy(c, &policy);
 
   http_coro_response_t *r = http_coro_get(c, "https://httpbin.org/get");
@@ -104,7 +104,7 @@ static void test_retry_conn_error(turbo_coro_context_t *ctx) {
   http_coro_client_t *c = http_coro_client_create(ctx);
   http_coro_client_set_timeout(c, 3000);
 
-  http_async_retry_policy_t policy = {
+  http_retry_policy_t policy = {
       .max_retries = 1,
       .initial_delay_ms = 50,
       .max_delay_ms = 100,
@@ -128,7 +128,7 @@ static void test_no_retry_on_4xx(turbo_coro_context_t *ctx) {
   http_coro_client_t *c = http_coro_client_create(ctx);
   http_coro_client_set_timeout(c, 10000);
 
-  http_async_retry_policy_t policy = http_async_retry_policy_default();
+  http_retry_policy_t policy = http_retry_policy_default();
   http_coro_client_set_retry_policy(c, &policy);
 
   http_coro_response_t *r = http_coro_get(c, "https://httpbin.org/status/404");
@@ -149,7 +149,7 @@ spec("http retry policy") {
     describe("defaults") {
 
         it("should have sane defaults") {
-            http_async_retry_policy_t policy = http_async_retry_policy_default();
+            http_retry_policy_t policy = http_retry_policy_default();
             check_int_eq(policy.max_retries, 3);
             check_int_eq(policy.initial_delay_ms, 1000);
             check_int_eq(policy.exponential_backoff, 1);
@@ -162,9 +162,9 @@ spec("http retry policy") {
     describe("set and get") {
 
         it("should store policy") {
-            turbo_coro_context_t *ctx = turbo_coro_context_create();
+            turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
             http_coro_client_t *client = http_coro_client_create(ctx);
-            http_async_retry_policy_t policy = {
+            http_retry_policy_t policy = {
                 .max_retries = 5,
                 .initial_delay_ms = 500,
                 .max_delay_ms = 10000,
@@ -176,7 +176,7 @@ spec("http retry policy") {
             };
             http_coro_client_set_retry_policy(client, &policy);
 
-            http_async_retry_policy_t retrieved;
+            http_retry_policy_t retrieved;
             http_coro_client_get_retry_policy(client, &retrieved);
             check_int_eq(retrieved.max_retries, 5);
             check_int_eq(retrieved.initial_delay_ms, 500);
@@ -187,13 +187,13 @@ spec("http retry policy") {
         }
 
         it("should clear policy") {
-            turbo_coro_context_t *ctx = turbo_coro_context_create();
+            turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
             http_coro_client_t *client = http_coro_client_create(ctx);
-            http_async_retry_policy_t policy = http_async_retry_policy_default();
+            http_retry_policy_t policy = http_retry_policy_default();
             http_coro_client_set_retry_policy(client, &policy);
             http_coro_client_clear_retry_policy(client);
 
-            http_async_retry_policy_t retrieved;
+            http_retry_policy_t retrieved;
             http_coro_client_get_retry_policy(client, &retrieved);
             check_int_eq(retrieved.max_retries, 0);
 

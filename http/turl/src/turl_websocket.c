@@ -5,7 +5,7 @@
 
 #include "turl_websocket.h"
 #include "turl_common.h"
-#include <turbo_sync_client.h>
+#include <turbo_client.h>
 #include <tlog.h>
 #include <stdio.h>
 #include <string.h>
@@ -51,21 +51,21 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
     TLOG_INFO("WebSocket: Connecting to {}:{}{}  ({})", host, port, path, use_tls ? "TLS" : "Plain");
   }
 
-  sync_client_t *client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_WEBSOCKET);
+  turbo_client_t *client = turbo_client_create_with_transport(SYNC_CLIENT_TRANSPORT_WEBSOCKET);
   if (!client)
     return -1;
 
-  sync_client_ws_config_t ws_config = {0};
+  turbo_client_ws_config_t ws_config = {0};
   ws_config.path = path;
   ws_config.use_tls = use_tls;
-  sync_client_set_ws_config(client, &ws_config);
+  turbo_client_set_ws_config(client, &ws_config);
 
   char connect_url[512];
   snprintf(connect_url, sizeof(connect_url), "%s://%s:%d", use_tls ? "wss" : "ws", host, port);
 
-  if (sync_client_connect(client, connect_url) != SYNC_CLIENT_STATUS_OK) {
-    TLOG_ERROR("WebSocket connection failed: {}", sync_client_last_message(client));
-    sync_client_destroy(client);
+  if (turbo_client_connect(client, connect_url) != SYNC_CLIENT_STATUS_OK) {
+    TLOG_ERROR("WebSocket connection failed: {}", turbo_client_last_message(client));
+    turbo_client_destroy(client);
     return 1;
   }
 
@@ -75,7 +75,7 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
   if (body && body_len > 0) {
     if (verbose)
       TLOG_INFO("> Sending {} bytes...", body_len);
-    sync_client_send(client, body, body_len);
+    turbo_client_send(client, body, body_len);
   }
 
   if (send_ping) {
@@ -88,7 +88,7 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
   // Receive loop (simple version for CLI)
   char *response = NULL;
   size_t len = 0;
-  while (sync_client_receive_timeout(client, &response, &len, 5000) == SYNC_CLIENT_STATUS_OK) {
+  while (turbo_client_receive_timeout(client, &response, &len, 5000) == SYNC_CLIENT_STATUS_OK) {
     if (verbose)
       TLOG_INFO("< Received {} bytes:", len);
     turl_print_body(response, len, "application/json"); // Try pretty print if it's JSON
@@ -102,6 +102,6 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
 
   if (verbose)
     TLOG_INFO("WebSocket connection closed.");
-  sync_client_destroy(client);
+  turbo_client_destroy(client);
   return 0;
 }

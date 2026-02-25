@@ -1,7 +1,6 @@
 #ifndef TURBO_URI_PARSER_H
 #define TURBO_URI_PARSER_H
 
-#include "platform.h"
 #include <stdint.h>
 
 // Host types
@@ -33,7 +32,7 @@ typedef struct uri_s {
  * @param result     Pointer to uri_t structure to fill
  * @return 1 on success, 0 on failure
  */
-CXX_C_API int uri_parse(const char *url_string, uri_t *result);
+int uri_parse(const char *url_string, uri_t *result);
 
 /**
  * Helper function for copying substrings safely.
@@ -44,6 +43,6 @@ CXX_C_API int uri_parse(const char *url_string, uri_t *result);
  * @param dest      Destination buffer
  * @param dest_size Size of destination buffer
  */
-CXX_C_API void uri_copy_substring(const char *src, int start, int len, char *dest, int dest_size);
+void uri_copy_substring(const char *src, int start, int len, char *dest, int dest_size);
 
 #endif // TURBO_URI_PARSER_H

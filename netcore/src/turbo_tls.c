@@ -33,8 +33,8 @@
 #endif
 
 /* Forward declarations for pool synchronization */
-extern void turbo_tls_pool_lock(void);
-extern void turbo_tls_pool_unlock(void);
+extern void turbo_tls_sync_lock(void);
+extern void turbo_tls_sync_unlock(void);
 
 static void turbo_tls_debug_ssl_errors(const char *context) {
   unsigned long code;
@@ -334,14 +334,14 @@ static void turbo_tls_arena_pool_commit(turbo_tls_arena_pool_t *pool, turbo_tls_
 static turbo_tls_send_op_t *get_tls_send_op(turbo_tls_client_t *client) {
   turbo_tls_send_op_t *op = NULL;
 
-  turbo_tls_pool_lock();
+  turbo_tls_sync_lock();
   if (g_tls_send_op_pool && g_tls_send_op_pool_size > 0) {
     op = g_tls_send_op_pool;
     g_tls_send_op_pool = op->next;
     g_tls_send_op_pool_size--;
     TURBO_STATS_INC("tls.send_ops_reused");
   }
-  turbo_tls_pool_unlock();
+  turbo_tls_sync_unlock();
 
   if (!op) {
     op = (turbo_tls_send_op_t *)malloc(sizeof(turbo_tls_send_op_t));
@@ -372,15 +372,15 @@ static void return_tls_send_op(turbo_tls_send_op_t *op) {
     op->slices = NULL;
   }
 
-  turbo_tls_pool_lock();
+  turbo_tls_sync_lock();
   if (g_tls_send_op_pool_size < MAX_TLS_SEND_OP_POOL_SIZE) {
     op->next = g_tls_send_op_pool;
     g_tls_send_op_pool = op;
     g_tls_send_op_pool_size++;
-    turbo_tls_pool_unlock();
+    turbo_tls_sync_unlock();
     TURBO_STATS_INC("tls.send_ops_pooled");
   } else {
-    turbo_tls_pool_unlock();
+    turbo_tls_sync_unlock();
     free(op);
     TURBO_STATS_INC("tls.send_ops_freed");
   }

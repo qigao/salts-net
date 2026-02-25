@@ -3,7 +3,7 @@
 
 /**
  * @file http_coro_client.h
- * @brief Coroutine-based HTTP client — same surface as http_client_async,
+ * @brief Coroutine-based HTTP client — sequential code instead of callbacks.
  *        but sequential code instead of callbacks.
  *
  * Every request function MUST be called from inside a coroutine.
@@ -32,6 +32,10 @@ typedef http_response_t http_coro_response_t;
 
 /* ── Streaming callback ───────────────────────────────────────────── */
 
+/**
+ * @brief Streaming data callback.
+ * Called whenever a chunk of the response body is received.
+ */
 typedef void (*http_coro_data_cb)(const char *data, size_t len, void *user_data);
 
 /* ── Progress callback ────────────────────────────────────────────── */
@@ -57,6 +61,8 @@ CXX_C_API void http_coro_client_set_max_redirects(http_coro_client_t *client, in
 CXX_C_API void http_coro_client_set_default_header(http_coro_client_t *client,
                                                     const char *name, const char *value);
 CXX_C_API void http_coro_client_clear_default_headers(http_coro_client_t *client);
+CXX_C_API void http_coro_client_remove_default_header(http_coro_client_t *client,
+                                                       const char *name);
 
 /* ── Authentication ───────────────────────────────────────────────── */
 
@@ -69,6 +75,10 @@ CXX_C_API void http_coro_client_clear_auth(http_coro_client_t *client);
 
 /* ── Core requests (must be called inside a coroutine) ────────────── */
 
+/**
+ * @param headers Array of header strings (e.g., "Accept: application/json").
+ * @param header_count Number of strings in the `headers` array.
+ */
 CXX_C_API http_coro_response_t *http_coro_request(http_coro_client_t *client,
                                                    http_method_t method, const char *url,
                                                    const char **headers, int header_count,
@@ -127,6 +137,10 @@ CXX_C_API http_coro_response_t *http_coro_download_file(http_coro_client_t *clie
 
 CXX_C_API void http_coro_client_set_cookie_jar(http_coro_client_t *client,
                                                 http_cookie_jar_t *jar);
+
+/**
+ * @return Pointer to the cookie jar associated with the client. The client retains ownership.
+ */
 CXX_C_API http_cookie_jar_t *http_coro_client_get_cookie_jar(http_coro_client_t *client);
 
 /* ── Interceptors ─────────────────────────────────────────────────── */
@@ -162,13 +176,28 @@ CXX_C_API void http_coro_client_reset_stats(http_coro_client_t *client);
 /* ── Response helpers ─────────────────────────────────────────────── */
 
 CXX_C_API void  http_coro_response_free(http_coro_response_t *response);
+
+/**
+ * @brief Get a header value from the response.
+ * @return A newly allocated string containing the header value. The caller is responsible for freeing it. NULL if not found.
+ */
 CXX_C_API char *http_coro_response_get_header(http_coro_response_t *response, const char *name);
+
 CXX_C_API int   http_coro_response_has_header(http_coro_response_t *response, const char *name);
 CXX_C_API int   http_coro_response_is_json(http_coro_response_t *response);
+
+/**
+ * @brief Parses the JSON response body.
+ * @return A newly allocated JSON value tree. The caller must free it using `json_free()`.
+ */
 CXX_C_API json_value_t *http_coro_response_parse_json(http_coro_response_t *response);
 
 /* ── Content helpers ──────────────────────────────────────────────── */
 
+/**
+ * @brief Gets the content type of the response.
+ * @return A newly allocated string containing the content type. The caller must free it. NULL if not found.
+ */
 CXX_C_API char  *http_coro_response_content_type(http_coro_response_t *response);
 CXX_C_API size_t http_coro_response_content_length(http_coro_response_t *response);
 CXX_C_API int    http_coro_response_is_html(http_coro_response_t *response);
@@ -210,3 +239,4 @@ CXX_C_API void http_coro_jwt_destroy(void *jwt);
 #endif
 
 #endif /* HTTP_CORO_CLIENT_H */
+

@@ -6,9 +6,10 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "turbo_callbacks.h"
 #include "arena_buffer.h"
+#include "turbo_callbacks.h"
 #include "websocket_message.h"
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,10 +48,10 @@ typedef struct {
  * @brief WebSocket connection state.
  */
 typedef enum {
-  TURBO_WS_CONN_HANDSHAKING,     /**< HTTP upgrade in progress */
-  TURBO_WS_CONN_OPEN,            /**< WebSocket connection established */
-  TURBO_WS_CONN_CLOSING,         /**< Close frame sent/received */
-  TURBO_WS_CONN_CLOSED           /**< Connection closed */
+  TURBO_WS_CONN_HANDSHAKING, /**< HTTP upgrade in progress */
+  TURBO_WS_CONN_OPEN,        /**< WebSocket connection established */
+  TURBO_WS_CONN_CLOSING,     /**< Close frame sent/received */
+  TURBO_WS_CONN_CLOSED       /**< Connection closed */
 } turbo_websocket_connection_state_t;
 
 /**
@@ -61,37 +62,37 @@ struct turbo_websocket_connection_s {
   turbo_websocket_server_t *server; /**< Parent server */
 
   /* Underlying transport client */
-  void *transport_client;            /**< turbo_tcp_client_t* or turbo_tls_client_t* */
+  void *transport_client; /**< turbo_tcp_client_t* or turbo_tls_client_t* */
 
   /* Connection state */
   turbo_websocket_connection_state_t state; /**< Current state */
-  uint64_t id;                       /**< Unique connection ID */
+  uint64_t id;                              /**< Unique connection ID */
 
   /* Handshake data */
-  char *request_path;                /**< Requested path */
-  char *origin;                      /**< Origin header */
-  char *selected_subprotocol;        /**< Selected subprotocol */
+  char *request_path;         /**< Requested path */
+  char *origin;               /**< Origin header */
+  char *selected_subprotocol; /**< Selected subprotocol */
 
   /* Handshake buffer */
   turbo_arena_buffer_t *handshake_recv_buffer; /**< Buffer for handshake request */
-  size_t handshake_recv_used;        /**< Bytes received */
+  size_t handshake_recv_used;                  /**< Bytes received */
 
   /* Frame processing */
-  turbo_arena_buffer_t *frame_recv_buffer;     /**< Buffer for incoming frames */
-  size_t frame_recv_used;            /**< Bytes received */
+  turbo_arena_buffer_t *frame_recv_buffer; /**< Buffer for incoming frames */
+  size_t frame_recv_used;                  /**< Bytes received */
 
   /* Message fragmentation */
-  turbo_arena_buffer_t *fragment_buffer;       /**< Buffer for fragmented messages */
-  size_t fragment_buffer_used;       /**< Bytes used */
-  websocket_opcode_t fragment_opcode;          /**< Opcode of first fragment */
-  int expecting_continuation;        /**< 1 if expecting continuation */
+  turbo_arena_buffer_t *fragment_buffer; /**< Buffer for fragmented messages */
+  size_t fragment_buffer_used;           /**< Bytes used */
+  websocket_opcode_t fragment_opcode;    /**< Opcode of first fragment */
+  int expecting_continuation;            /**< 1 if expecting continuation */
 
   /* Control frame state */
-  int close_sent;                    /**< 1 if close frame sent */
-  int close_received;                /**< 1 if close frame received */
+  int close_sent;     /**< 1 if close frame sent */
+  int close_received; /**< 1 if close frame received */
 
   /* Arena for connection lifetime allocations */
-  turbo_arena_t *conn_arena;         /**< Arena for this connection */
+  turbo_arena_t *conn_arena; /**< Arena for this connection */
 
   /* Statistics */
   uint64_t bytes_received;
@@ -100,7 +101,7 @@ struct turbo_websocket_connection_s {
   uint64_t messages_sent;
 
   /* User data */
-  void *user_data;                   /**< User-defined data */
+  void *user_data; /**< User-defined data */
 
   /* Linked list for connection management */
   turbo_websocket_connection_t *next;
@@ -112,38 +113,38 @@ struct turbo_websocket_connection_s {
  */
 struct turbo_websocket_server_s {
   /* Underlying transport server (TCP or TLS) */
-  void *transport_server;            /**< turbo_tcp_server_t* or turbo_tls_server_t* */
-  int is_tls;                        /**< 1 if using TLS, 0 for TCP */
+  void *transport_server; /**< turbo_tcp_server_t* or turbo_tls_server_t* */
+  int is_tls;             /**< 1 if using TLS, 0 for TCP */
 
   /* Event loop */
-  uv_loop_t *loop;                   /**< libuv event loop */
+  uv_loop_t *loop; /**< libuv event loop */
 
   /* Configuration */
   turbo_websocket_server_config_t config; /**< Server configuration */
 
   /* TLS context (only for TLS servers) */
-  turbo_tls_context_t *tls_context;  /**< TLS context for secure connections */
+  turbo_tls_context_t *tls_context; /**< TLS context for secure connections */
 
   /* Connection management */
   turbo_websocket_connection_t *connections_head; /**< Head of connection list */
   turbo_websocket_connection_t *connections_tail; /**< Tail of connection list */
-  int connection_count;              /**< Active connection count */
-  uint64_t next_connection_id;       /**< Next connection ID */
+  int connection_count;                           /**< Active connection count */
+  uint64_t next_connection_id;                    /**< Next connection ID */
 
   /* Buffer pool for zero-copy */
-  turbo_arena_t *buffer_pool;        /**< Shared buffer pool */
+  turbo_arena_t *buffer_pool; /**< Shared buffer pool */
 
   /* Callbacks */
-  turbo_connect_cb on_connection;    /**< New WebSocket connection callback */
-  turbo_recv_cb on_recv;             /**< Data received callback */
-  turbo_close_cb on_close;           /**< Connection closed callback */
+  turbo_connect_cb on_connection; /**< New WebSocket connection callback */
+  turbo_recv_cb on_recv;          /**< Data received callback */
+  turbo_close_cb on_close;        /**< Connection closed callback */
 
   /* User data */
-  void *user_data;                   /**< User-defined data */
+  void *user_data; /**< User-defined data */
 
   /* State */
-  int listening;                     /**< 1 if server is listening */
-  int closing;                       /**< 1 if server is shutting down */
+  int listening; /**< 1 if server is listening */
+  int closing;   /**< 1 if server is shutting down */
 };
 
 /**
@@ -154,10 +155,9 @@ struct turbo_websocket_server_s {
  * @param config Server configuration
  * @return Pointer to turbo_websocket_server_t or NULL on failure
  */
-CXX_C_API turbo_websocket_server_t *turbo_websocket_server_create(
-    uv_loop_t *loop,
-    int use_tls,
-    const turbo_websocket_server_config_t *config);
+  turbo_websocket_server_t *
+turbo_websocket_server_create(uv_loop_t *loop, int use_tls,
+                              const turbo_websocket_server_config_t *config);
 
 /**
  * @brief Starts listening for WebSocket connections.
@@ -168,11 +168,8 @@ CXX_C_API turbo_websocket_server_t *turbo_websocket_server_create(
  * @param backlog Connection backlog
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_listen(
-    turbo_websocket_server_t *server,
-    const char *host,
-    int port,
-    int backlog);
+  int turbo_websocket_server_listen(turbo_websocket_server_t *server, const char *host,
+                                            int port, int backlog);
 
 /**
  * @brief Sends data to a specific WebSocket connection.
@@ -184,10 +181,8 @@ CXX_C_API int turbo_websocket_server_listen(
  * @param len Data length
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_send(
-    turbo_websocket_connection_t *conn,
-    const char *data,
-    size_t len);
+  int turbo_websocket_server_send(turbo_websocket_connection_t *conn, const char *data,
+                                          size_t len);
 
 /**
  * @brief Sends binary data to a WebSocket connection.
@@ -197,10 +192,8 @@ CXX_C_API int turbo_websocket_server_send(
  * @param len Data length
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_send_binary(
-    turbo_websocket_connection_t *conn,
-    const void *data,
-    size_t len);
+  int turbo_websocket_server_send_binary(turbo_websocket_connection_t *conn,
+                                                 const void *data, size_t len);
 
 /**
  * @brief Sends data using scatter-gather I/O.
@@ -210,10 +203,8 @@ CXX_C_API int turbo_websocket_server_send_binary(
  * @param iovcnt Number of iovec entries
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_sendv(
-    turbo_websocket_connection_t *conn,
-    const void *iov,
-    int iovcnt);
+  int turbo_websocket_server_sendv(turbo_websocket_connection_t *conn, const void *iov,
+                                           int iovcnt);
 
 /**
  * @brief Sends a PING control frame to a connection.
@@ -223,10 +214,8 @@ CXX_C_API int turbo_websocket_server_sendv(
  * @param len Payload length
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_send_ping(
-    turbo_websocket_connection_t *conn,
-    const uint8_t *payload,
-    size_t len);
+  int turbo_websocket_server_send_ping(turbo_websocket_connection_t *conn,
+                                               const uint8_t *payload, size_t len);
 
 /**
  * @brief Closes a WebSocket connection.
@@ -238,10 +227,8 @@ CXX_C_API int turbo_websocket_server_send_ping(
  * @param reason Close reason string (optional)
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_close_connection(
-    turbo_websocket_connection_t *conn,
-    uint16_t code,
-    const char *reason);
+  int turbo_websocket_server_close_connection(turbo_websocket_connection_t *conn,
+                                                      uint16_t code, const char *reason);
 
 /**
  * @brief Stops accepting new connections.
@@ -250,7 +237,7 @@ CXX_C_API int turbo_websocket_server_close_connection(
  *
  * @param server WebSocket server
  */
-CXX_C_API void turbo_websocket_server_stop(turbo_websocket_server_t *server);
+  void turbo_websocket_server_stop(turbo_websocket_server_t *server);
 
 /**
  * @brief Gracefully shuts down server and closes all connections.
@@ -259,9 +246,7 @@ CXX_C_API void turbo_websocket_server_stop(turbo_websocket_server_t *server);
  * @param timeout_ms Timeout in milliseconds (0 = immediate)
  * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_websocket_server_shutdown(
-    turbo_websocket_server_t *server,
-    int timeout_ms);
+  int turbo_websocket_server_shutdown(turbo_websocket_server_t *server, int timeout_ms);
 
 /**
  * @brief Destroys WebSocket server and frees resources.
@@ -270,7 +255,7 @@ CXX_C_API int turbo_websocket_server_shutdown(
  *
  * @param server WebSocket server
  */
-CXX_C_API void turbo_websocket_server_destroy(turbo_websocket_server_t *server);
+  void turbo_websocket_server_destroy(turbo_websocket_server_t *server);
 
 /**
  * @brief Sets callbacks for WebSocket server events.
@@ -280,11 +265,9 @@ CXX_C_API void turbo_websocket_server_destroy(turbo_websocket_server_t *server);
  * @param on_recv Callback for received data (per connection)
  * @param on_close Callback for connection close
  */
-CXX_C_API void turbo_websocket_server_set_callbacks(
-    turbo_websocket_server_t *server,
-    turbo_connect_cb on_connection,
-    turbo_recv_cb on_recv,
-    turbo_close_cb on_close);
+  void turbo_websocket_server_set_callbacks(turbo_websocket_server_t *server,
+                                                    turbo_connect_cb on_connection,
+                                                    turbo_recv_cb on_recv, turbo_close_cb on_close);
 
 /**
  * @brief Gets number of active connections.
@@ -292,8 +275,7 @@ CXX_C_API void turbo_websocket_server_set_callbacks(
  * @param server WebSocket server
  * @return Connection count
  */
-CXX_C_API int turbo_websocket_server_get_connection_count(
-    turbo_websocket_server_t *server);
+  int turbo_websocket_server_get_connection_count(turbo_websocket_server_t *server);
 
 /**
  * @brief Gets the selected subprotocol for a connection.
@@ -301,8 +283,8 @@ CXX_C_API int turbo_websocket_server_get_connection_count(
  * @param conn WebSocket connection
  * @return Subprotocol string or NULL
  */
-CXX_C_API const char *turbo_websocket_connection_get_subprotocol(
-    turbo_websocket_connection_t *conn);
+  const char *
+turbo_websocket_connection_get_subprotocol(turbo_websocket_connection_t *conn);
 
 /**
  * @brief Gets the request path for a connection.
@@ -310,8 +292,7 @@ CXX_C_API const char *turbo_websocket_connection_get_subprotocol(
  * @param conn WebSocket connection
  * @return Request path string
  */
-CXX_C_API const char *turbo_websocket_connection_get_path(
-    turbo_websocket_connection_t *conn);
+  const char *turbo_websocket_connection_get_path(turbo_websocket_connection_t *conn);
 
 /**
  * @brief Sets TLS configuration for a WebSocket server (must be TLS server).
@@ -322,9 +303,8 @@ CXX_C_API const char *turbo_websocket_connection_get_path(
  * @param context A pointer to an initialized turbo_tls_context_t.
  * @return 0 on success, -1 on error.
  */
-CXX_C_API int turbo_websocket_server_set_tls_context(
-    turbo_websocket_server_t *server,
-    turbo_tls_context_t *context);
+  int turbo_websocket_server_set_tls_context(turbo_websocket_server_t *server,
+                                                     turbo_tls_context_t *context);
 
 #ifdef __cplusplus
 }

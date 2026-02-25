@@ -20,9 +20,9 @@
 
 /* Enhanced TCP with True Zero-Copy Implementation */
 
-/* Forward declarations for pool synchronization */
-extern void turbo_tcp_pool_lock(void);
-extern void turbo_tcp_pool_unlock(void);
+/* Forward declarations for global synchronization */
+extern void turbo_tcp_sync_lock(void);
+extern void turbo_tcp_sync_unlock(void);
 
 /* Send operation for zero-copy */
 typedef struct turbo_tcp_send_op_s {
@@ -66,13 +66,13 @@ static void init_tcp_stats(void) {
 static turbo_tcp_send_op_t* get_tcp_send_op(turbo_tcp_client_t* client) {
     turbo_tcp_send_op_t* op = NULL;
     
-    turbo_tcp_pool_lock();
+    turbo_tcp_sync_lock();
     if (g_tcp_send_op_pool && g_tcp_send_op_pool_size > 0) {
         op = g_tcp_send_op_pool;
         g_tcp_send_op_pool = op->next;
         g_tcp_send_op_pool_size--;
     }
-    turbo_tcp_pool_unlock();
+    turbo_tcp_sync_unlock();
     
     if (!op) {
         op = (turbo_tcp_send_op_t*)malloc(sizeof(turbo_tcp_send_op_t));
@@ -99,14 +99,14 @@ static void return_tcp_send_op(turbo_tcp_send_op_t* op) {
         op->slices = NULL;
     }
     
-    turbo_tcp_pool_lock();
+    turbo_tcp_sync_lock();
     if (g_tcp_send_op_pool_size < MAX_TCP_SEND_OP_POOL_SIZE) {
         op->next = g_tcp_send_op_pool;
         g_tcp_send_op_pool = op;
         g_tcp_send_op_pool_size++;
-        turbo_tcp_pool_unlock();
+        turbo_tcp_sync_unlock();
     } else {
-        turbo_tcp_pool_unlock();
+        turbo_tcp_sync_unlock();
         free(op);
     }
 }
@@ -167,7 +167,7 @@ static void alloc_tcp_recv_buffer(uv_handle_t* handle, size_t suggested_size, uv
 static void on_tcp_recv(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     turbo_tcp_client_t* client = (turbo_tcp_client_t*)stream->data;
     if (!client || client->closing) return;
-    
+
     if (nread < 0) {
         /* EOF or error */
         turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
@@ -404,20 +404,24 @@ int turbo_tcp_server_start(turbo_tcp_server_t* server,
     return rc;
 }
 
+/* Close callback for server handle */
+static void on_tcp_server_close(uv_handle_t* handle) {
+    free(handle);
+}
+
 /* Stop server */
 void turbo_tcp_server_stop(turbo_tcp_server_t* server) {
     if (!server) return;
-    
+
     if (server->handle) {
         if (!uv_is_closing((uv_handle_t*)server->handle)) {
-            uv_close((uv_handle_t*)server->handle, NULL);
+            uv_close((uv_handle_t*)server->handle, on_tcp_server_close);
         }
-        free(server->handle);
         server->handle = NULL;
     }
-    
+
     turbo_arena_free(&server->arena);
-    
+
 
 }
 
@@ -481,13 +485,8 @@ static void on_connect_dns_resolved(const char* hostname, const char* ip, int st
     
     /* Guard against duplicate callbacks or invalid state */
     if (client->conn_state != 1) {
-        /* If we are not in 'Resolving' state, ignore this callback.
-           If we are already Connecting (2) or Connected (3), this is a duplicate or late callback.
-           Do NOT free ctx here if we suspect multiple callbacks share it, 
-           BUT usually we own ctx. If this is a race, leaking ctx is better than double-free. 
-           However, let's assume valid flow is one callback. */
         TLOG_DEBUG("on_connect_dns_resolved: ignoring callback in state {:d}", client->conn_state);
-        // free(ctx); // Dangerous if multiple calls share ctx
+        free(ctx);
         return;
     }
 
@@ -549,10 +548,12 @@ static void on_tcp_client_connected(uv_connect_t* req, int status) {
         client->conn_state = 3; /* Connected */
         /* Enable TCP_NODELAY */
         uv_tcp_nodelay(&client->handle, 1);
-        
-        /* Start reading */
+
+        /* Start reading — needed by upper layers (WS/TLS handshake).
+           Coro transport callbacks handle the case where data arrives
+           before a coroutine is waiting. */
         uv_read_start((uv_stream_t*)&client->handle, alloc_tcp_recv_buffer, on_tcp_recv);
-        
+
         TLOG_DEBUG("TCP client connected successfully");
         if (client->on_connect) {
             client->on_connect(client, 0, NULL);
@@ -629,6 +630,18 @@ int turbo_tcp_client_connect(turbo_tcp_client_t* client,
     }
     
     return 0;
+}
+
+/* Start reading on client (re-arms alloc + read callbacks) */
+int turbo_tcp_read_start(turbo_tcp_client_t* client) {
+    if (!client || client->closing) return UV_EINVAL;
+    return uv_read_start((uv_stream_t*)&client->handle, alloc_tcp_recv_buffer, on_tcp_recv);
+}
+
+/* Stop reading on client */
+void turbo_tcp_read_stop(turbo_tcp_client_t* client) {
+    if (!client) return;
+    uv_read_stop((uv_stream_t*)&client->handle);
 }
 
 /* Close client */
@@ -753,7 +766,7 @@ int turbo_tcp_flush(turbo_tcp_client_t* client) {
 /* Fallback copy-based send */
 int turbo_tcp_send(turbo_tcp_client_t* client, const char* data, size_t length) {
     if (!client || !data || length == 0) return UV_EINVAL;
-    
+
     turbo_arena_buffer_t* buffer = turbo_tcp_get_send_buffer(client, length);
     if (!buffer) return UV_ENOMEM;
     
@@ -762,11 +775,7 @@ int turbo_tcp_send(turbo_tcp_client_t* client, const char* data, size_t length) 
     
     int rc = turbo_tcp_send_buffer(client, buffer, length);
     turbo_arena_buffer_unref(buffer);
-    
-    if (rc == 0) {
 
-    }
-    
     return rc;
 }
 

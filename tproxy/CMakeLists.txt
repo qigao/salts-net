@@ -22,12 +22,13 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../netcore/include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../common/include>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../vendor/memory/include>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../lb/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/clib/src)
 
 # Link libraries
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboNet::Core
+  PUBLIC TurboNet::Core TurboNet::Parser TurboNet::LB
      OpenSSL::SSL OpenSSL::Crypto)
 
  

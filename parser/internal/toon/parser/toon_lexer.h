@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <arena_buffer.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,7 +53,6 @@ typedef struct {
     char error[256];
 } toon_lexer_t;
 
-#include <arena_buffer.h>
 
 typedef struct {
     struct toonObject *root;

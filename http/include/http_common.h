@@ -32,6 +32,42 @@ typedef int http_method_t;
 #define HTTP_TRACE   7
 #define HTTP_PATCH   28
 
+// Common HTTP methods (values match llhttp's enum)
+#define HTTP_DELETE  0
+// #define HTTP_GET     1
+// #define HTTP_HEAD    2
+// #define HTTP_POST    3
+// #define HTTP_PUT     4
+// #define HTTP_CONNECT 5
+// #define HTTP_OPTIONS 6
+// #define HTTP_TRACE   7
+// #define HTTP_COPY    8
+// #define HTTP_LOCK    9
+// #define HTTP_MKCOL   10
+// #define HTTP_MOVE    11
+// #define HTTP_PROPFIND 12
+// #define HTTP_PROPPATCH 13
+// #define HTTP_SEARCH  14
+// #define HTTP_UNLOCK  15
+// #define HTTP_BIND    16
+// #define HTTP_REBIND  17
+// #define HTTP_UNBIND  18
+// #define HTTP_ACL     19
+// #define HTTP_REPORT  20
+// #define HTTP_MKACTIVITY 21
+// #define HTTP_CHECKOUT 22
+// #define HTTP_MERGE   23
+// #define HTTP_MSEARCH 24
+// #define HTTP_NOTIFY  25
+// #define HTTP_SUBSCRIBE 26
+// #define HTTP_UNSUBSCRIBE 27
+// #define HTTP_PATCH   28
+// #define HTTP_PURGE   29
+// #define HTTP_MKCALENDAR 30
+// #define HTTP_LINK    31
+// #define HTTP_UNLINK  32
+// #define HTTP_SOURCE  33
+
 /* ── Error codes ─────────────────────────────────────────────────── */
 
 typedef enum {
@@ -154,54 +190,9 @@ CXX_C_API void http_multipart_form_add_file(http_multipart_form_t *form, const c
 CXX_C_API int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *field_name,
                                                   const char *file_path, const char *content_type);
 
-/* ── Backward-compat aliases (async prefix) ──────────────────────── */
+/* ── Retry policy default ────────────────────────────────────────── */
 
-typedef http_error_code_t http_async_error_code_t;
-typedef http_response_t http_async_response_t;
-typedef http_client_stats_t http_async_client_stats_t;
-typedef http_retry_policy_t http_async_retry_policy_t;
-typedef http_rate_limit_t http_async_rate_limit_t;
-typedef http_request_context_t http_async_request_context_t;
-typedef http_response_context_t http_async_response_context_t;
-typedef http_request_interceptor_t http_async_request_interceptor_t;
-typedef http_response_interceptor_t http_async_response_interceptor_t;
-typedef http_params_t http_async_params_t;
-typedef http_cookie_jar_t http_async_cookie_jar_t;
-typedef http_multipart_form_t http_async_multipart_form_t;
-
-/* Backward-compat error code aliases */
-#define HTTP_ASYNC_ERROR_NONE               HTTP_ERROR_NONE
-#define HTTP_ASYNC_ERROR_INVALID_URL        HTTP_ERROR_INVALID_URL
-#define HTTP_ASYNC_ERROR_INVALID_PARAMS     HTTP_ERROR_INVALID_PARAMS
-#define HTTP_ASYNC_ERROR_DNS_FAILED         HTTP_ERROR_DNS_FAILED
-#define HTTP_ASYNC_ERROR_CONNECTION_FAILED  HTTP_ERROR_CONNECTION_FAILED
-#define HTTP_ASYNC_ERROR_TIMEOUT            HTTP_ERROR_TIMEOUT
-#define HTTP_ASYNC_ERROR_TLS_HANDSHAKE_FAILED HTTP_ERROR_TLS_HANDSHAKE_FAILED
-#define HTTP_ASYNC_ERROR_SEND_FAILED        HTTP_ERROR_SEND_FAILED
-#define HTTP_ASYNC_ERROR_RECEIVE_FAILED     HTTP_ERROR_RECEIVE_FAILED
-#define HTTP_ASYNC_ERROR_PARSE_FAILED       HTTP_ERROR_PARSE_FAILED
-#define HTTP_ASYNC_ERROR_TOO_MANY_REDIRECTS HTTP_ERROR_TOO_MANY_REDIRECTS
-#define HTTP_ASYNC_ERROR_MEMORY_ALLOCATION  HTTP_ERROR_MEMORY_ALLOCATION
-#define HTTP_ASYNC_ERROR_CANCELLED          HTTP_ERROR_CANCELLED
-
-/* Backward-compat function aliases */
-#define http_async_params_create       http_params_create
-#define http_async_params_add          http_params_add
-#define http_async_params_encode       http_params_encode
-#define http_async_params_free         http_params_free
-#define http_async_build_url           http_build_url
-#define http_async_cookie_jar_create   http_cookie_jar_create
-#define http_async_cookie_jar_destroy  http_cookie_jar_destroy
-#define http_async_cookie_jar_set      http_cookie_jar_set
-#define http_async_cookie_jar_get      http_cookie_jar_get
-#define http_async_cookie_jar_remove   http_cookie_jar_remove
-#define http_async_cookie_jar_clear    http_cookie_jar_clear
-#define http_async_cookie_jar_count    http_cookie_jar_count
-#define http_async_multipart_form_create         http_multipart_form_create
-#define http_async_multipart_form_destroy        http_multipart_form_destroy
-#define http_async_multipart_form_add_field      http_multipart_form_add_field
-#define http_async_multipart_form_add_file       http_multipart_form_add_file
-#define http_async_multipart_form_add_file_path  http_multipart_form_add_file_path
+CXX_C_API http_retry_policy_t http_retry_policy_default(void);
 
 #ifdef __cplusplus
 }

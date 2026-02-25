@@ -77,38 +77,6 @@ set_target_properties(
              EXPORT_NAME HTTP)
 
 # =============================================================================
-# Create HTTP Async Library
-# =============================================================================
-
-set(HTTP_ASYNC_SOURCES src/http_client_async.c src/http_common.c src/stb_sprintf.c)
-set(HTTP_ASYNC_HEADERS include/http_client_async.h include/http_common.h)
-
-add_library(http_client_async SHARED ${HTTP_ASYNC_SOURCES}
-                                     ${HTTP_ASYNC_HEADERS})
-add_library(TurboNet::HttpAsyncClient ALIAS http_client_async)
-target_compile_definitions(http_client_async PRIVATE SHARED_CXX HTTP_NO_DEPRECATION_WARNING)
-
-target_include_directories(
-  http_client_async
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/http>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
-          ${Stb_INCLUDE_DIR})
-
-target_link_libraries(
-  http_client_async
-  PUBLIC TurboNet::Utils TurboNet::Core  $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
-  PRIVATE llhttp::llhttp_static  cjwt sds)
-
-set_target_properties(
-  http_client_async
-  PROPERTIES FOLDER http/http_client
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME HTTPAsync)
-
-# =============================================================================
 # Create HTTP Coro Library
 # =============================================================================
 
@@ -146,11 +114,11 @@ add_subdirectory(tests)
 
 # Installation
 install(
-  TARGETS http_client http_client_async http_coro_client
+  TARGETS http_client http_coro_client
   EXPORT TurboNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
 
-install(FILES ${HTTP_HEADERS} ${HTTP_ASYNC_HEADERS} ${HTTP_CORO_HEADERS}
+install(FILES ${HTTP_HEADERS} ${HTTP_CORO_HEADERS}
         DESTINATION include/http)

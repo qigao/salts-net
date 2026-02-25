@@ -18,7 +18,7 @@ set(HTTP_TESTS
 
 foreach(test_name ${HTTP_TESTS})
   add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpCoroClient TurboNet::HttpAsyncClient TurboNet::TinyTest TurboNet::JsonParser)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpCoroClient TurboNet::TinyTest TurboNet::JsonParser)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
 
   if(WIN32)

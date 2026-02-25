@@ -26,8 +26,11 @@ static const turbo_coro_transport_ops_t tls_ops;
 static const turbo_coro_transport_ops_t kcp_ops;
 static const turbo_coro_transport_ops_t udp_ops;
 static const turbo_coro_transport_ops_t ws_ops;
+static const turbo_coro_transport_ops_t pipe_ops;
 
 /* ── Ref counting ─────────────────────────────────────────── */
+
+#include "netcore/turbo_coro_server.h"
 
 static void retain_client(turbo_coro_client_t* client) {
     if (client) client->ref_count++;
@@ -137,129 +140,184 @@ static void on_handle_close(uv_handle_t* handle) {
     release_client(client);
 }
 
+/* ── Transport Bridge Callbacks ──────────────────────────── */
+
+/*
+ * TCP and PIPE pass their own struct pointer as 'handle' to callbacks.
+ * We extract the coro_client via user_data set during connect.
+ */
+
+int on_transport_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+    UNUSED(peer);
+    turbo_tcp_client_t* tcp = (turbo_tcp_client_t*)handle;
+    turbo_coro_client_t* client = (turbo_coro_client_t*)tcp->user_data;
+
+    if (!client->co_wait || client->timed_out) {
+        /* No coroutine waiting — buffer the data and stop reading.
+           The next coro_recv will find recv_data already set and
+           return immediately without yielding. */
+        if (client->transport == TURBO_TCP && client->handle.tcp) {
+            turbo_tcp_read_stop(client->handle.tcp);
+        }
+        coro_deliver_recv(client, slice);
+        return 0;
+    }
+
+    stop_timeout_timer(client);
+
+    /* Stop reading after one chunk to match the coro_recv pattern.
+       The next coro_recv will call recv_start again. */
+    if (client->transport == TURBO_TCP && client->handle.tcp) {
+        turbo_tcp_read_stop(client->handle.tcp);
+    } else if (client->transport == TURBO_PIPE && client->handle.pipe) {
+        turbo_pipe_read_stop(client->handle.pipe);
+    }
+
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
+    release_client(client);
+    return 0;
+}
+
+void on_transport_connect(void* handle, int status, void* extra) {
+    UNUSED(extra);
+    turbo_tcp_client_t* tcp = (turbo_tcp_client_t*)handle;
+    turbo_coro_client_t* client = (turbo_coro_client_t*)tcp->user_data;
+
+    if (client->timed_out) return;
+
+    client->connected = (status == 0);
+    resume_coro_with_status(client, status);
+}
+
+void on_transport_close(void* handle) {
+    turbo_tcp_client_t* tcp = (turbo_tcp_client_t*)handle;
+    turbo_coro_client_t* client = (turbo_coro_client_t*)tcp->user_data;
+    client->handle.tcp = NULL;
+    client->connected = 0;
+
+    /* If a coroutine is waiting for data (e.g. recv yielded), wake it
+       with EOF so it doesn't hang forever. */
+    if (client->co_wait) {
+        stop_timeout_timer(client);
+        client->status = UV_EOF;
+        client->recv_data = NULL;
+        client->recv_len = 0;
+        /* Resuming may synchronously trigger turbo_coro_client_destroy
+           (e.g. server echo handler exits → coro_entry_bridge → destroy).
+           That destroy does its own release_client, which could free the
+           object before we reach our release below.  Guard with a retain. */
+        retain_client(client);
+        coro_resume_waiter(client);
+        release_client(client);
+    }
+
+    release_client(client);
+}
+
+/* Pipe-specific bridge callbacks (same logic, different handle type) */
+
+int on_pipe_coro_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+    UNUSED(peer);
+    turbo_pipe_client_t* pipe = (turbo_pipe_client_t*)handle;
+    turbo_coro_client_t* client = (turbo_coro_client_t*)pipe->user_data;
+
+    if (!client->co_wait || client->timed_out) {
+        /* No coroutine waiting — buffer the data and stop reading.
+           The next coro_recv will find recv_data already set and
+           return immediately without yielding. */
+        if (client->handle.pipe) {
+            turbo_pipe_read_stop(client->handle.pipe);
+        }
+        coro_deliver_recv(client, slice);
+        return 0;
+    }
+
+    stop_timeout_timer(client);
+    if (client->handle.pipe) {
+        turbo_pipe_read_stop(client->handle.pipe);
+    }
+
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
+    release_client(client);
+    return 0;
+}
+
+void on_pipe_coro_connect(void* handle, int status, void* extra) {
+    UNUSED(extra);
+    turbo_pipe_client_t* pipe = (turbo_pipe_client_t*)handle;
+    turbo_coro_client_t* client = (turbo_coro_client_t*)pipe->user_data;
+
+    if (client->timed_out) return;
+
+    client->connected = (status == 0);
+    resume_coro_with_status(client, status);
+}
+
+void on_pipe_coro_close(void* handle) {
+    turbo_pipe_client_t* pipe = (turbo_pipe_client_t*)handle;
+    turbo_coro_client_t* client = (turbo_coro_client_t*)pipe->user_data;
+    client->handle.pipe = NULL;
+    client->connected = 0;
+
+    if (client->co_wait) {
+        stop_timeout_timer(client);
+        client->status = UV_EOF;
+        client->recv_data = NULL;
+        client->recv_len = 0;
+        retain_client(client);
+        coro_resume_waiter(client);
+        release_client(client);
+    }
+
+    release_client(client);
+}
+
 /* ═══════════════════════════════════════════════════════════
  *  TCP transport ops
  * ═══════════════════════════════════════════════════════════ */
 
-static void on_tcp_connect(uv_connect_t* req, int status) {
-    turbo_coro_client_t* client = (turbo_coro_client_t*)req->handle->data;
-    free(req);
-
-    if (client->timed_out) {
-        release_client(client);
-        return;
-    }
-
-    client->connected = (status == 0);
-    resume_coro_with_status(client, status);
-    release_client(client);
-}
-
 static int tcp_connect(turbo_coro_client_t* c, const char* host, int port) {
     UNUSED(host);
-    struct sockaddr_storage addr;
-    int r = turbo_dns_parse_address(c->resolved_ip, port, &addr);
-    if (r != 0) return r;
-
-    uv_connect_t* req = malloc(sizeof(uv_connect_t));
-    if (!req) return UV_ENOMEM;
-
+    
     retain_client(c);
-    r = uv_tcp_connect(req, &c->handle.tcp, (const struct sockaddr*)&addr, on_tcp_connect);
+    int r = turbo_tcp_client_connect(c->handle.tcp, c->resolved_ip, (unsigned short)port,
+                                    on_transport_recv, on_transport_connect, on_transport_close);
     if (r != 0) {
-        free(req);
         release_client(c);
         return r;
     }
 
     coro_wait(c);
     return c->status;
-}
-
-static void on_tcp_write(uv_write_t* req, int status) {
-    turbo_coro_client_t* client = (turbo_coro_client_t*)req->handle->data;
-    free(req);
-    resume_coro_with_status(client, status);
-    release_client(client);
 }
 
 static int tcp_send(turbo_coro_client_t* c, const char* data, size_t len) {
-    uv_buf_t buf = uv_buf_init((char*)data, (unsigned int)len);
-    uv_write_t* req = malloc(sizeof(uv_write_t));
-    if (!req) return UV_ENOMEM;
-
-    retain_client(c);
-    int r = uv_write(req, (uv_stream_t*)&c->handle.tcp, &buf, 1, on_tcp_write);
-    if (r != 0) {
-        free(req);
-        release_client(c);
-        return r;
-    }
-
-    coro_wait(c);
-    return c->status;
-}
-
-static void on_tcp_alloc(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
-    UNUSED(handle);
-    buf->base = malloc(suggested_size);
-    buf->len = (unsigned long)suggested_size;
-}
-
-static void on_tcp_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
-    turbo_coro_client_t* client = (turbo_coro_client_t*)stream->data;
-
-    if (client->timed_out) {
-        if (buf->base) free(buf->base);
-        return;
-    }
-
-    if (nread == 0) {
-        if (buf->base) free(buf->base);
-        return;
-    }
-
-    stop_timeout_timer(client);
-    uv_read_stop(stream);
-
-    if (nread > 0) {
-        client->recv_data = buf->base;
-        client->recv_len = nread;
-        client->status = 0;
-    } else {
-        if (buf->base) free(buf->base);
-        client->status = (int)nread;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
-
-    if (client->co_wait) {
-        turbo_coro_t* co = client->co_wait;
-        /* If callback fires synchronously (on same stack), don't resume self */
-        if (co != turbo_coro_running()) {
-            client->co_wait = NULL;
-            turbo_coro_resume(co);
-        } else {
-            /* Synchronous completion, just clear the wait handle so caller knows not to yield */
-            client->co_wait = NULL;
-        }
-    }
-    release_client(client);
+    /* turbo_tcp_send uses the internal op pool and handles fragmentation */
+    return turbo_tcp_send(c->handle.tcp, data, len);
 }
 
 static int tcp_recv_start(turbo_coro_client_t* c) {
-    return uv_read_start((uv_stream_t*)&c->handle.tcp, on_tcp_alloc, on_tcp_read);
+    int r = turbo_tcp_read_start(c->handle.tcp);
+    if (r == UV_EALREADY) return 0;  /* already reading — callback will fire */
+    return r;
 }
 
 static void tcp_recv_stop(turbo_coro_client_t* c) {
-    uv_read_stop((uv_stream_t*)&c->handle.tcp);
+    turbo_tcp_read_stop(c->handle.tcp);
 }
 
 static void tcp_close(turbo_coro_client_t* c) {
-    if (!uv_is_closing((uv_handle_t*)&c->handle.tcp)) {
-        retain_client(c);
-        uv_close((uv_handle_t*)&c->handle.tcp, on_handle_close);
+    if (c->handle.tcp) {
+        turbo_tcp_client_close(c->handle.tcp);
     }
+}
+
+static int tcp_get_local_addr(turbo_coro_client_t* c, struct sockaddr_storage* addr) {
+    if (!c->handle.tcp) return UV_EINVAL;
+    int len = sizeof(struct sockaddr_storage);
+    return uv_tcp_getsockname(&c->handle.tcp->handle, (struct sockaddr*)addr, &len);
 }
 
 static const turbo_coro_transport_ops_t tcp_ops = {
@@ -267,7 +325,68 @@ static const turbo_coro_transport_ops_t tcp_ops = {
     .send       = tcp_send,
     .recv_start = tcp_recv_start,
     .recv_stop  = tcp_recv_stop,
+    .get_local_addr = tcp_get_local_addr,
     .close      = tcp_close,
+};
+
+/* ═══════════════════════════════════════════════════════════
+ *  Pipe transport ops
+ *  Pipe is a uv_stream_t — reuses TCP alloc/read callbacks.
+ * ═══════════════════════════════════════════════════════════ */
+
+static int pipe_connect(turbo_coro_client_t* c, const char* host, int port) {
+    UNUSED(port);
+
+    retain_client(c);
+    int r = turbo_pipe_client_connect(c->handle.pipe, host,
+                                     on_pipe_coro_recv, on_pipe_coro_connect, on_pipe_coro_close);
+    if (r != 0) {
+        release_client(c);
+        return r;
+    }
+
+    coro_wait(c);
+    return c->status;
+}
+
+static int pipe_send(turbo_coro_client_t* c, const char* data, size_t len) {
+    return turbo_pipe_send(c->handle.pipe, data, len);
+}
+
+static int pipe_recv_start(turbo_coro_client_t* c) {
+    int r = turbo_pipe_read_start(c->handle.pipe);
+    if (r == UV_EALREADY) return 0;  /* already reading — callback will fire */
+    return r;
+}
+
+static void pipe_recv_stop(turbo_coro_client_t* c) {
+    turbo_pipe_read_stop(c->handle.pipe);
+}
+
+static void pipe_close(turbo_coro_client_t* c) {
+    if (c->handle.pipe) {
+        turbo_pipe_client_close(c->handle.pipe);
+    }
+}
+
+static int pipe_get_local_addr(turbo_coro_client_t* c, struct sockaddr_storage* addr) {
+    if (!c->handle.pipe) return UV_EINVAL;
+    size_t len = sizeof(struct sockaddr_storage);
+    /* uv_pipe_getsockname uses a buffer for the path. For ICE/sockaddr we'll return ENOSYS
+       as Pipes don't have socket addresses in the IP sense. */
+    char buf[1024];
+    int r = uv_pipe_getsockname(&c->handle.pipe->handle, buf, &len);
+    if (r == 0) return UV_ENOSYS; 
+    return r;
+}
+
+static const turbo_coro_transport_ops_t pipe_ops = {
+    .connect    = pipe_connect,
+    .send       = pipe_send,
+    .recv_start = pipe_recv_start,
+    .recv_stop  = pipe_recv_stop,
+    .get_local_addr = pipe_get_local_addr,
+    .close      = pipe_close,
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -301,6 +420,19 @@ static void on_tls_error(turbo_tls_client_t* tls, int status) {
 static void on_tls_close(void* handle) {
     turbo_tls_client_t* tls = (turbo_tls_client_t*)handle;
     turbo_coro_client_t* client = (turbo_coro_client_t*)tls->user_data;
+    client->tls = NULL;
+    client->connected = 0;
+
+    if (client->co_wait) {
+        stop_timeout_timer(client);
+        client->status = UV_EOF;
+        client->recv_data = NULL;
+        client->recv_len = 0;
+        retain_client(client);
+        coro_resume_waiter(client);
+        release_client(client);
+    }
+
     release_client(client);
 }
 
@@ -317,30 +449,8 @@ static int on_tls_recv(void* handle, const turbo_arena_slice_t* slice, void* pee
     stop_timeout_timer(client);
     turbo_tls_read_stop(client->tls);
 
-    if (slice && slice->length > 0) {
-        client->recv_data = malloc(slice->length);
-        if (client->recv_data) {
-            memcpy(client->recv_data, slice->data, slice->length);
-            client->recv_len = slice->length;
-            client->status = 0;
-        } else {
-            client->status = UV_ENOMEM;
-        }
-    } else {
-        client->status = UV_EOF;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
-
-    turbo_coro_t* co = client->co_wait;
-    /* If callback fires synchronously (on same stack), don't resume self */
-    if (co != turbo_coro_running()) {
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
-    } else {
-        /* Synchronous completion, just clear the wait handle so caller knows not to yield */
-        client->co_wait = NULL;
-    }
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
     release_client(client);
     return 0;
 }
@@ -391,7 +501,14 @@ static void tls_close(turbo_coro_client_t* c) {
         turbo_tls_read_stop(c->tls);
         retain_client(c);
         turbo_tls_client_close(c->tls);
+        /* Don't null c->tls here — on_tls_close callback will do it */
     }
+}
+
+static int tls_get_local_addr(turbo_coro_client_t* c, struct sockaddr_storage* addr) {
+    if (!c->tls) return UV_EINVAL;
+    int len = sizeof(struct sockaddr_storage);
+    return uv_tcp_getsockname(&c->tls->handle, (struct sockaddr*)addr, &len);
 }
 
 static const turbo_coro_transport_ops_t tls_ops = {
@@ -399,6 +516,7 @@ static const turbo_coro_transport_ops_t tls_ops = {
     .send       = tls_send,
     .recv_start = tls_recv_start,
     .recv_stop  = tls_recv_stop,
+    .get_local_addr = tls_get_local_addr,
     .close      = tls_close,
 };
 
@@ -432,31 +550,8 @@ static int on_kcp_recv(void* handle, const turbo_arena_slice_t* slice, void* pee
     if (client->timed_out) return 0;
 
     stop_timeout_timer(client);
-
-    if (slice && slice->length > 0) {
-        client->recv_data = malloc(slice->length);
-        if (client->recv_data) {
-            memcpy(client->recv_data, slice->data, slice->length);
-            client->recv_len = slice->length;
-            client->status = 0;
-        } else {
-            client->status = UV_ENOMEM;
-        }
-    } else {
-        client->status = UV_EOF;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
-
-    turbo_coro_t* co = client->co_wait;
-    /* If callback fires synchronously (on same stack), don't resume self */
-    if (co != turbo_coro_running()) {
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
-    } else {
-        /* Synchronous completion, just clear the wait handle so caller knows not to yield */
-        client->co_wait = NULL;
-    }
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
     release_client(client);
     return 0;
 }
@@ -495,7 +590,23 @@ static void kcp_recv_stop(turbo_coro_client_t* c) {
 }
 
 static void kcp_close(turbo_coro_client_t* c) {
+    c->connected = 0;
+
+    if (c->co_wait) {
+        stop_timeout_timer(c);
+        c->status = UV_EOF;
+        c->recv_data = NULL;
+        c->recv_len = 0;
+        coro_resume_waiter(c);
+    }
+
     turbo_kcp_client_close(&c->handle.kcp);
+}
+
+static int kcp_get_local_addr(turbo_coro_client_t* c, struct sockaddr_storage* addr) {
+    if (!c->handle.kcp.server || !c->handle.kcp.server->handle) return UV_EINVAL;
+    int len = sizeof(struct sockaddr_storage);
+    return uv_udp_getsockname(c->handle.kcp.server->handle, (struct sockaddr*)addr, &len);
 }
 
 static const turbo_coro_transport_ops_t kcp_ops = {
@@ -503,6 +614,7 @@ static const turbo_coro_transport_ops_t kcp_ops = {
     .send       = kcp_send,
     .recv_start = kcp_recv_start,
     .recv_stop  = kcp_recv_stop,
+    .get_local_addr = kcp_get_local_addr,
     .close      = kcp_close,
 };
 
@@ -520,7 +632,7 @@ static int on_udp_recv(void* handle, const turbo_arena_slice_t* slice, void* pee
 
     stop_timeout_timer(client);
 
-    /* Copy data BEFORE stopping — stop may invalidate arena buffers */
+    /* Copy peer address BEFORE stopping — stop may invalidate arena buffers */
     if (peer) {
         const struct sockaddr* sa = (const struct sockaddr*)peer;
         size_t sa_len = (sa->sa_family == AF_INET6)
@@ -530,20 +642,7 @@ static int on_udp_recv(void* handle, const turbo_arena_slice_t* slice, void* pee
         memcpy(&client->peer_addr, peer, sa_len);
     }
 
-    if (slice && slice->length > 0) {
-        client->recv_data = malloc(slice->length);
-        if (client->recv_data) {
-            memcpy(client->recv_data, slice->data, slice->length);
-            client->recv_len = slice->length;
-            client->status = 0;
-        } else {
-            client->status = UV_ENOMEM;
-        }
-    } else {
-        client->status = UV_EOF;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
+    coro_deliver_recv(client, slice);
 
     /* Only stop receiving — do NOT call turbo_udp_server_stop here.
        The caller (turbo_udp.c on_udp_recv) still needs to release the
@@ -552,15 +651,8 @@ static int on_udp_recv(void* handle, const turbo_arena_slice_t* slice, void* pee
         uv_udp_recv_stop(client->udp.handle);
     }
 
-    turbo_coro_t* co = client->co_wait;
-    /* If callback fires synchronously (on same stack), don't resume self */
-    if (co != turbo_coro_running()) {
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
-    } else {
-        /* Synchronous completion, just clear the wait handle so caller knows not to yield */
-        client->co_wait = NULL;
-    }
+    coro_resume_waiter(client);
+    release_client(client);
     return 0;
 }
 
@@ -594,7 +686,23 @@ static void udp_recv_stop(turbo_coro_client_t* c) {
 }
 
 static void udp_close(turbo_coro_client_t* c) {
+    c->connected = 0;
+
+    if (c->co_wait) {
+        stop_timeout_timer(c);
+        c->status = UV_EOF;
+        c->recv_data = NULL;
+        c->recv_len = 0;
+        coro_resume_waiter(c);
+    }
+
     turbo_udp_server_stop(&c->udp);
+}
+
+static int udp_get_local_addr(turbo_coro_client_t* c, struct sockaddr_storage* addr) {
+    if (!c->udp.handle) return UV_EINVAL;
+    int len = sizeof(struct sockaddr_storage);
+    return uv_udp_getsockname(c->udp.handle, (struct sockaddr*)addr, &len);
 }
 
 static const turbo_coro_transport_ops_t udp_ops = {
@@ -602,6 +710,7 @@ static const turbo_coro_transport_ops_t udp_ops = {
     .send       = udp_send,
     .recv_start = udp_recv_start,
     .recv_stop  = udp_recv_stop,
+    .get_local_addr = udp_get_local_addr,
     .close      = udp_close,
 };
 
@@ -632,36 +741,12 @@ static int on_ws_recv(void* handle, const turbo_arena_slice_t* slice, void* peer
     UNUSED(peer);
 
     if (!client) return 0;
-
     if (!client->co_wait) return 0;
     if (client->timed_out) return 0;
 
     stop_timeout_timer(client);
-
-    if (slice && slice->length > 0) {
-        client->recv_data = malloc(slice->length);
-        if (client->recv_data) {
-            memcpy(client->recv_data, slice->data, slice->length);
-            client->recv_len = slice->length;
-            client->status = 0;
-        } else {
-            client->status = UV_ENOMEM;
-        }
-    } else {
-        client->status = UV_EOF;
-        client->recv_data = NULL;
-        client->recv_len = 0;
-    }
-
-    turbo_coro_t* co = client->co_wait;
-    /* If callback fires synchronously (on same stack), don't resume self */
-    if (co != turbo_coro_running()) {
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
-    } else {
-        /* Synchronous completion, just clear the wait handle so caller knows not to yield */
-        client->co_wait = NULL;
-    }
+    coro_deliver_recv(client, slice);
+    coro_resume_waiter(client);
     release_client(client);
     return 0;
 }
@@ -672,13 +757,19 @@ static void on_ws_close(void* handle) {
 
     if (!client) return;
 
+    client->ws = NULL;
+    client->connected = 0;
+
     if (client->co_wait) {
+        stop_timeout_timer(client);
         client->status = UV_EOF;
-        client->connected = 0;
-        turbo_coro_t* co = client->co_wait;
-        client->co_wait = NULL;
-        turbo_coro_resume(co);
+        client->recv_data = NULL;
+        client->recv_len = 0;
+        retain_client(client);
+        coro_resume_waiter(client);
+        release_client(client);
     }
+
     release_client(client);
 }
 
@@ -733,11 +824,18 @@ static void ws_close(turbo_coro_client_t* c) {
     }
 }
 
+static int ws_get_local_addr(turbo_coro_client_t* c, struct sockaddr_storage* addr) {
+    if (!c->ws) return UV_EINVAL;
+    /* WS client doesn't expose the handle easily, but we can try to get it if we had access to the underlying transport */
+    return UV_ENOSYS;
+}
+
 static const turbo_coro_transport_ops_t ws_ops = {
     .connect    = ws_connect,
     .send       = ws_send,
     .recv_start = ws_recv_start,
     .recv_stop  = ws_recv_stop,
+    .get_local_addr = ws_get_local_addr,
     .close      = ws_close,
 };
 
@@ -775,6 +873,48 @@ const turbo_coro_transport_ops_t ws_server_ops = {
 };
 
 /* ═══════════════════════════════════════════════════════════
+ *  UDP server-side transport ops
+ *  (for coro clients created by UDP server datagram receive)
+ * ═══════════════════════════════════════════════════════════ */
+
+static int udp_server_send(turbo_coro_client_t* c, const char* data, size_t len) {
+    turbo_coro_server_t* server = (turbo_coro_server_t*)c->user_data;
+    if (!server) return UV_EINVAL;
+    /* Uses the server's UDP handle to send to the datagram sender */
+    return turbo_coro_server_sendto(server, data, len, (const struct sockaddr*)&c->peer_addr);
+}
+
+static int udp_server_recv_start(turbo_coro_client_t* c) {
+    c->co_wait = NULL; /* Synchronously resolved; caller won't yield */
+    if (!c->dgram_consumed) {
+        c->dgram_consumed = 1;
+    } else {
+        /* Second read returns EOF for this connectionless datagram */
+        c->status = UV_EOF;
+        c->recv_data = NULL;
+        c->recv_len = 0;
+    }
+    return 0;
+}
+
+static void udp_server_recv_stop(turbo_coro_client_t* c) {
+    UNUSED(c);
+}
+
+static void udp_server_close(turbo_coro_client_t* c) {
+    UNUSED(c);
+    /* Server owns the UDP handle, nothing to close here. */
+}
+
+const turbo_coro_transport_ops_t udp_server_ops = {
+    .connect    = NULL,
+    .send       = udp_server_send,
+    .recv_start = udp_server_recv_start,
+    .recv_stop  = udp_server_recv_stop,
+    .close      = udp_server_close,
+};
+
+/* ═══════════════════════════════════════════════════════════
  *  Transport selection table — indexed by turbo_transport_t
  * ═══════════════════════════════════════════════════════════ */
 
@@ -783,6 +923,7 @@ const turbo_coro_transport_ops_t* transport_ops_table[] = {
     [TURBO_TLS] = &tls_ops,
     [TURBO_KCP] = &kcp_ops,
     [TURBO_UDP] = &udp_ops,
+    [TURBO_PIPE] = &pipe_ops,
     [TURBO_WEBSOCKET] = &ws_ops,
 };
 
@@ -791,7 +932,7 @@ const turbo_coro_transport_ops_t* transport_ops_table[] = {
  * ═══════════════════════════════════════════════════════════ */
 
 turbo_coro_client_t* turbo_coro_client_create(turbo_coro_context_t* ctx) {
-    uv_loop_t* loop = turbo_coro_context_loop(ctx);
+    uv_loop_t* loop = ctx ? ctx->loop : NULL;
     turbo_coro_client_t* client = calloc(1, sizeof(turbo_coro_client_t));
     if (!client) return NULL;
 
@@ -838,8 +979,21 @@ int turbo_coro_client_connect(turbo_coro_client_t* client, const char* url) {
 
     /* Init transport-specific handle */
     if (addr.transport == TURBO_TCP || addr.transport == TURBO_TLS) {
-        uv_tcp_init(client->loop, &client->handle.tcp);
-        client->handle.tcp.data = client;
+        client->handle.tcp = turbo_tcp_client_create(client->loop);
+        if (!client->handle.tcp) return UV_ENOMEM;
+        client->handle.tcp->user_data = client;
+    }
+
+    /* Pipe: init handle, stash platform path, skip DNS */
+    if (addr.transport == TURBO_PIPE) {
+        client->handle.pipe = turbo_pipe_client_create(client->loop);
+        if (!client->handle.pipe) return UV_ENOMEM;
+        client->handle.pipe->user_data = client;
+
+        /* Stash pipe path in ws_path (1024 bytes, unused for pipe) */
+        strncpy(client->ws_path, addr.path, sizeof(client->ws_path) - 1);
+        client->ws_path[sizeof(client->ws_path) - 1] = '\0';
+        return client->ops->connect(client, addr.path, 0);
     }
 
     /* WebSocket handles its own TCP/TLS + DNS internally — skip DNS resolution,
@@ -885,12 +1039,26 @@ int turbo_coro_client_connect(turbo_coro_client_t* client, const char* url) {
 }
 
 int turbo_coro_client_send(turbo_coro_client_t* client, const char* data, size_t len) {
+    if (!client->ops) return UV_ENOTCONN;
     return client->ops->send(client, data, len);
 }
 
 int turbo_coro_client_recv(turbo_coro_client_t* client, char** data, size_t* len) {
+    if (!client->ops) { *data = NULL; *len = 0; return UV_ENOTCONN; }
+
+    /* Data already buffered from a callback that fired before we were waiting
+       (e.g. uv_read_start delivered data between connect and recv). */
+    if (client->recv_data) {
+        *data = client->recv_data;
+        *len = client->recv_len;
+        int st = client->status;
+        client->recv_data = NULL;
+        client->recv_len = 0;
+        return st;
+    }
+
     retain_client(client);
-    
+
     /* Set wait handle BEFORE starting read to catch synchronous callbacks from buffered transports (e.g. TLS) */
     client->co_wait = turbo_coro_running();
 
@@ -906,10 +1074,18 @@ int turbo_coro_client_recv(turbo_coro_client_t* client, char** data, size_t* len
         start_timeout_timer(client);
         turbo_coro_yield();
     }
-    /* Else: callback fired synchronously, co_wait is NULL. Resume failed (expected), but data/status is set. */
+    /* Else: callback fired synchronously, co_wait is NULL. data/status is set. */
+
+    /* If timed out, the callback's early-return skipped its release_client,
+       so we must release here to balance the retain above. */
+    if (client->timed_out) {
+        release_client(client);
+    }
 
     *data = client->recv_data;
     *len = client->recv_len;
+    client->recv_data = NULL;
+    client->recv_len = 0;
 
     return client->status;
 }
@@ -945,8 +1121,16 @@ int turbo_coro_client_recvfrom(turbo_coro_client_t* client,
         turbo_coro_yield();
     }
 
+    /* If timed out, the callback's early-return skipped its release_client,
+       so we must release here to balance the retain above. */
+    if (client->timed_out) {
+        release_client(client);
+    }
+
     *data = client->recv_data;
     *len = client->recv_len;
+    client->recv_data = NULL;
+    client->recv_len = 0;
     if (addr) {
         memcpy(addr, &client->peer_addr, sizeof(struct sockaddr_storage));
     }
@@ -973,7 +1157,7 @@ static void on_sleep_fired(uv_timer_t* handle) {
 }
 
 int turbo_coro_sleep(turbo_coro_context_t* ctx, uint64_t msec) {
-    uv_loop_t* loop = turbo_coro_context_loop(ctx);
+    uv_loop_t* loop = ctx ? ctx->loop : NULL;
     sleep_ctx_t* sctx = malloc(sizeof(sleep_ctx_t));
     if (!sctx) return UV_ENOMEM;
 
@@ -986,8 +1170,9 @@ int turbo_coro_sleep(turbo_coro_context_t* ctx, uint64_t msec) {
 
     turbo_coro_yield();
 
+    int status = sctx->status;
     uv_close((uv_handle_t*)&sctx->timer, on_sleep_close);
-    return sctx->status;
+    return status;
 }
 
 /* ── Destroy ──────────────────────────────────────────────── */
@@ -1015,6 +1200,11 @@ void turbo_coro_client_destroy(turbo_coro_client_t* client) {
     }
 
     release_client(client);
+}
+
+int turbo_coro_client_get_local_address(turbo_coro_client_t* client, struct sockaddr_storage* addr) {
+    if (!client || !client->ops || !client->ops->get_local_addr || !addr) return UV_EINVAL;
+    return client->ops->get_local_addr(client, addr);
 }
 
 void turbo_coro_client_set_user_data(turbo_coro_client_t* client, void* data) {

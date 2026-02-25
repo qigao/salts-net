@@ -10,9 +10,9 @@
 
 /* Enhanced Pipe with True Zero-Copy Implementation */
 
-/* Forward declarations for pool synchronization */
-extern void turbo_pipe_pool_lock(void);
-extern void turbo_pipe_pool_unlock(void);
+/* Forward declarations for global synchronization */
+extern void turbo_pipe_sync_lock(void);
+extern void turbo_pipe_sync_unlock(void);
 
 /* Send operation for zero-copy */
 typedef struct turbo_pipe_send_op_s {
@@ -56,13 +56,13 @@ static void init_pipe_stats(void) {
 static turbo_pipe_send_op_t* get_pipe_send_op(turbo_pipe_client_t* client) {
     turbo_pipe_send_op_t* op = NULL;
     
-    turbo_pipe_pool_lock();
+    turbo_pipe_sync_lock();
     if (g_pipe_send_op_pool && g_pipe_send_op_pool_size > 0) {
         op = g_pipe_send_op_pool;
         g_pipe_send_op_pool = op->next;
         g_pipe_send_op_pool_size--;
     }
-    turbo_pipe_pool_unlock();
+    turbo_pipe_sync_unlock();
     
     if (!op) {
         op = (turbo_pipe_send_op_t*)malloc(sizeof(turbo_pipe_send_op_t));
@@ -91,14 +91,14 @@ static void return_pipe_send_op(turbo_pipe_send_op_t* op) {
         op->slices = NULL;
     }
     
-    turbo_pipe_pool_lock();
+    turbo_pipe_sync_lock();
     if (g_pipe_send_op_pool_size < MAX_PIPE_SEND_OP_POOL_SIZE) {
         op->next = g_pipe_send_op_pool;
         g_pipe_send_op_pool = op;
         g_pipe_send_op_pool_size++;
-        turbo_pipe_pool_unlock();
+        turbo_pipe_sync_unlock();
     } else {
-        turbo_pipe_pool_unlock();
+        turbo_pipe_sync_unlock();
         free(op);
     }
 }
@@ -447,7 +447,7 @@ static void on_pipe_client_connected(uv_connect_t* req, int status) {
     if (status == 0) {
         /* Start reading */
         uv_read_start((uv_stream_t*)&client->handle, alloc_pipe_recv_buffer, on_pipe_recv);
-        
+
         if (client->on_connect) {
             client->on_connect(client, 0, NULL);
         }
@@ -488,6 +488,18 @@ int turbo_pipe_client_connect(turbo_pipe_client_t* client,
     
     uv_pipe_connect(connect_req, &client->handle, name, on_pipe_client_connected);
     return 0;
+}
+
+/* Start reading on client (re-arms alloc + read callbacks) */
+int turbo_pipe_read_start(turbo_pipe_client_t* client) {
+    if (!client || client->closing) return UV_EINVAL;
+    return uv_read_start((uv_stream_t*)&client->handle, alloc_pipe_recv_buffer, on_pipe_recv);
+}
+
+/* Stop reading on client */
+void turbo_pipe_read_stop(turbo_pipe_client_t* client) {
+    if (!client) return;
+    uv_read_stop((uv_stream_t*)&client->handle);
 }
 
 /* Close client */
@@ -605,11 +617,7 @@ int turbo_pipe_send(turbo_pipe_client_t* client, const char* data, size_t length
     
     int rc = turbo_pipe_send_buffer(client, buffer, length);
     turbo_arena_buffer_unref(buffer);
-    
-    if (rc == 0) {
-        
-    }
-    
+
     return rc;
 }
 
@@ -649,11 +657,7 @@ int turbo_pipe_sendv(turbo_pipe_client_t* client, const turbo_pipe_iovec_t* iov,
     if (rc == 0) {
         rc = turbo_pipe_flush(client);
     }
-    
-    if (rc == 0) {
-        
-    }
-    
+
     return rc;
 }
 

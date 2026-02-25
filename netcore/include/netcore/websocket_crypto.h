@@ -16,15 +16,15 @@ typedef struct {
   uint8_t buffer[64];
 } sha1_context_t;
 
-CXX_C_API void sha1_init(sha1_context_t *ctx);
-CXX_C_API void sha1_update(sha1_context_t *ctx, const uint8_t *data, size_t len);
-CXX_C_API void sha1_final(sha1_context_t *ctx, uint8_t digest[20]);
+ void sha1_init(sha1_context_t *ctx);
+ void sha1_update(sha1_context_t *ctx, const uint8_t *data, size_t len);
+ void sha1_final(sha1_context_t *ctx, uint8_t digest[20]);
 
 /* Cryptographically Secure Random */
-CXX_C_API int secure_random(uint8_t *buffer, size_t length);
+ int secure_random(uint8_t *buffer, size_t length);
 
 /* UTF-8 Validation */
-CXX_C_API int validate_utf8(const uint8_t *data, size_t len);
+ int validate_utf8(const uint8_t *data, size_t len);
 
 #ifdef __cplusplus
 }

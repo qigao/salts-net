@@ -78,7 +78,7 @@ struct turbo_kcp_client_s {
  * @param port The port number to listen on.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_server_init(turbo_kcp_server_t* server, uv_loop_t* loop,
+  int turbo_kcp_server_init(turbo_kcp_server_t* server, uv_loop_t* loop,
                                  const char* host, unsigned short port);
 /**
  * @brief Starts the KCP server, making it ready to accept connections and receive data.
@@ -88,7 +88,7 @@ CXX_C_API int turbo_kcp_server_init(turbo_kcp_server_t* server, uv_loop_t* loop,
  * @param recv_cb The callback function to be invoked when data is received from a client.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_server_start(turbo_kcp_server_t* server, 
+  int turbo_kcp_server_start(turbo_kcp_server_t* server, 
                                   turbo_accept_cb accept_cb,
                                   turbo_recv_cb recv_cb);
 /**
@@ -96,7 +96,7 @@ CXX_C_API int turbo_kcp_server_start(turbo_kcp_server_t* server,
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance to stop.
  */
-CXX_C_API void turbo_kcp_server_stop(turbo_kcp_server_t* server);
+  void turbo_kcp_server_stop(turbo_kcp_server_t* server);
 
 /* KCP configuration */
 /**
@@ -109,7 +109,7 @@ CXX_C_API void turbo_kcp_server_stop(turbo_kcp_server_t* server);
  * @param nc 0: normal, 1: disable congestion control.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_server_set_nodelay(turbo_kcp_server_t* server,
+  int turbo_kcp_server_set_nodelay(turbo_kcp_server_t* server,
                                         int nodelay, int interval, int resend, int nc);
 /**
  * @brief Sets the KCP send and receive window sizes for all clients connected to the server.
@@ -119,7 +119,7 @@ CXX_C_API int turbo_kcp_server_set_nodelay(turbo_kcp_server_t* server,
  * @param rcvwnd Receive window size.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_server_set_wndsize(turbo_kcp_server_t* server,
+  int turbo_kcp_server_set_wndsize(turbo_kcp_server_t* server,
                                         int sndwnd, int rcvwnd);
 /**
  * @brief Sets the KCP Maximum Transmission Unit (MTU) for all clients connected to the server.
@@ -128,7 +128,7 @@ CXX_C_API int turbo_kcp_server_set_wndsize(turbo_kcp_server_t* server,
  * @param mtu The MTU value in bytes.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_server_set_mtu(turbo_kcp_server_t* server, int mtu);
+  int turbo_kcp_server_set_mtu(turbo_kcp_server_t* server, int mtu);
 
 /* Client lifecycle */
 /**
@@ -138,7 +138,7 @@ CXX_C_API int turbo_kcp_server_set_mtu(turbo_kcp_server_t* server, int mtu);
  * @param loop The libuv event loop to associate with the client.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_client_init(turbo_kcp_client_t* client, uv_loop_t* loop);
+  int turbo_kcp_client_init(turbo_kcp_client_t* client, uv_loop_t* loop);
 /**
  * @brief Connects the KCP client to a specified remote host and port.
  *
@@ -149,7 +149,7 @@ CXX_C_API int turbo_kcp_client_init(turbo_kcp_client_t* client, uv_loop_t* loop)
  * @param recv_cb The callback function to be invoked when data is received from the server.
  * @return 0 on success (connection initiated), or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_client_connect(turbo_kcp_client_t* client,
+  int turbo_kcp_client_connect(turbo_kcp_client_t* client,
                                    const char* host, unsigned short port,
                                    turbo_connect_cb connect_cb,
                                    turbo_recv_cb recv_cb);
@@ -158,7 +158,7 @@ CXX_C_API int turbo_kcp_client_connect(turbo_kcp_client_t* client,
  *
  * @param client A pointer to the `turbo_kcp_client_t` instance to close.
  */
-CXX_C_API void turbo_kcp_client_close(turbo_kcp_client_t* client);
+  void turbo_kcp_client_close(turbo_kcp_client_t* client);
 
 /* Zero-copy send operations */
 /**
@@ -168,7 +168,7 @@ CXX_C_API void turbo_kcp_client_close(turbo_kcp_client_t* client);
  * @param min_size The minimum required size for the buffer.
  * @return A pointer to an `turbo_arena_buffer_t` suitable for sending, or NULL on failure.
  */
-CXX_C_API turbo_arena_buffer_t* turbo_kcp_get_send_buffer(turbo_kcp_server_t* server, size_t min_size);
+  turbo_arena_buffer_t* turbo_kcp_get_send_buffer(turbo_kcp_server_t* server, size_t min_size);
 /**
  * @brief Sends data from a zero-copy arena buffer to a KCP client.
  *
@@ -177,7 +177,7 @@ CXX_C_API turbo_arena_buffer_t* turbo_kcp_get_send_buffer(turbo_kcp_server_t* se
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_send_buffer(turbo_kcp_client_t* client,
+  int turbo_kcp_send_buffer(turbo_kcp_client_t* client,
                                  turbo_arena_buffer_t* buffer, size_t length);
 
 /* Fallback copy-based send operations */
@@ -189,7 +189,7 @@ CXX_C_API int turbo_kcp_send_buffer(turbo_kcp_client_t* client,
  * @param length The length of the data to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_send(turbo_kcp_client_t* client, const char* data, size_t length);
+  int turbo_kcp_send(turbo_kcp_client_t* client, const char* data, size_t length);
 
 /* Client send operations */
 /**
@@ -200,7 +200,7 @@ CXX_C_API int turbo_kcp_send(turbo_kcp_client_t* client, const char* data, size_
  * @param length The length of the data to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_client_send(turbo_kcp_client_t* client, const char* data, size_t length);
+  int turbo_kcp_client_send(turbo_kcp_client_t* client, const char* data, size_t length);
 /**
  * @brief Sends data from a zero-copy arena buffer to a KCP client.
  *
@@ -209,7 +209,7 @@ CXX_C_API int turbo_kcp_client_send(turbo_kcp_client_t* client, const char* data
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_kcp_client_send_buffer(turbo_kcp_client_t* client,
+  int turbo_kcp_client_send_buffer(turbo_kcp_client_t* client,
                                         turbo_arena_buffer_t* buffer, size_t length);
 
 /* Statistics and monitoring */
@@ -219,20 +219,20 @@ CXX_C_API int turbo_kcp_client_send_buffer(turbo_kcp_client_t* client,
  * @param server A pointer to the `turbo_kcp_server_t` instance.
  * @param stats A pointer to a `turbo_kcp_stats_t` structure to fill with statistics.
  */
-CXX_C_API void turbo_kcp_get_stats(const turbo_kcp_server_t* server, turbo_kcp_stats_t* stats);
+  void turbo_kcp_get_stats(const turbo_kcp_server_t* server, turbo_kcp_stats_t* stats);
 /**
  * @brief Retrieves statistics for a specific KCP client.
  *
  * @param client A pointer to the `turbo_kcp_client_t` instance.
  * @param stats A pointer to a `turbo_kcp_stats_t` structure to fill with statistics.
  */
-CXX_C_API void turbo_kcp_client_get_stats(const turbo_kcp_client_t* client, turbo_kcp_stats_t* stats);
+  void turbo_kcp_client_get_stats(const turbo_kcp_client_t* client, turbo_kcp_stats_t* stats);
 /**
  * @brief Resets all KCP statistics for the given server.
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance.
  */
-CXX_C_API void turbo_kcp_reset_stats(turbo_kcp_server_t* server);
+  void turbo_kcp_reset_stats(turbo_kcp_server_t* server);
 
 /* Memory management */
 /**
@@ -240,21 +240,21 @@ CXX_C_API void turbo_kcp_reset_stats(turbo_kcp_server_t* server);
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance.
  */
-CXX_C_API void turbo_kcp_trim_memory(turbo_kcp_server_t* server);
+  void turbo_kcp_trim_memory(turbo_kcp_server_t* server);
 /**
  * @brief Gets the current memory usage of the KCP server's internal memory pools.
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance.
  * @return The total memory usage in bytes.
  */
-CXX_C_API size_t turbo_kcp_get_memory_usage(const turbo_kcp_server_t* server);
+  size_t turbo_kcp_get_memory_usage(const turbo_kcp_server_t* server);
 
 /* Global cleanup */
 /**
  * @brief Cleans up global KCP memory pools.
  *        This should be called once when the application is shutting down.
  */
-CXX_C_API void turbo_kcp_cleanup_pools(void);
+  void turbo_kcp_cleanup_pools(void);
 
 /* Convenience macros for zero-copy workflow */
 
@@ -274,7 +274,7 @@ typedef struct {
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_kcp_client_sendv(turbo_kcp_client_t* client, const turbo_kcp_iovec_t* iov, size_t iovcnt);
+  int turbo_kcp_client_sendv(turbo_kcp_client_t* client, const turbo_kcp_iovec_t* iov, size_t iovcnt);
 
 /* Get buffer, write data, send buffer */
 #define turbo_KCP_ZERO_COPY_SEND(client, data_size, write_code) do { \

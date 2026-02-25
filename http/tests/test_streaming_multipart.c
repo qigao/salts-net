@@ -36,7 +36,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -68,14 +68,14 @@ static void test_multipart_upload(turbo_coro_context_t *ctx) {
   http_coro_client_t *c = http_coro_client_create(ctx);
   http_coro_client_set_timeout(c, 15000);
 
-  http_async_multipart_form_t *form = http_async_multipart_form_create();
-  http_async_multipart_form_add_file_path(form, "file", TEST_FILE, "application/octet-stream");
+  http_multipart_form_t *form = http_multipart_form_create();
+  http_multipart_form_add_file_path(form, "file", TEST_FILE, "application/octet-stream");
 
   http_coro_response_t *r = http_coro_post_multipart(c, "https://httpbin.org/post", form);
   if (is_network_error(r)) {
     g_result.skipped = 1;
     http_coro_response_free(r);
-    http_async_multipart_form_destroy(form);
+    http_multipart_form_destroy(form);
     http_coro_client_destroy(c);
     return;
   }
@@ -84,7 +84,7 @@ static void test_multipart_upload(turbo_coro_context_t *ctx) {
   g_result.has_body = (r->body != NULL);
 
   http_coro_response_free(r);
-  http_async_multipart_form_destroy(form);
+  http_multipart_form_destroy(form);
   http_coro_client_destroy(c);
 }
 

@@ -50,6 +50,9 @@ typedef struct turbo_pipe_client_s {
   /* State flags */
   int closing;
   int is_client_mode;
+
+  /* User data */
+  void *user_data;                         /**< User-defined data */
 } turbo_pipe_client_t;
 
 /* Pipe server structure */
@@ -77,7 +80,7 @@ typedef struct turbo_pipe_server_s {
  * "\\.\pipe\my_pipe" on Windows).
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_pipe_server_init(turbo_pipe_server_t *server, uv_loop_t *loop,
+  int turbo_pipe_server_init(turbo_pipe_server_t *server, uv_loop_t *loop,
                            const char *name);
 /**
  * @brief Starts the Pipe server, making it ready to accept client connections.
@@ -91,15 +94,15 @@ CXX_C_API int turbo_pipe_server_init(turbo_pipe_server_t *server, uv_loop_t *loo
  * is closed.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_pipe_server_start(turbo_pipe_server_t *server, turbo_recv_cb on_recv,
-                            turbo_connect_cb on_connect,
-                            turbo_close_cb on_close);
+  int turbo_pipe_server_start(turbo_pipe_server_t *server, turbo_recv_cb on_recv,
+                             turbo_connect_cb on_connect,
+                             turbo_close_cb on_close);
 /**
  * @brief Stops the Pipe server and closes all active client connections.
  *
  * @param server A pointer to the `turbo_pipe_server_t` instance to stop.
  */
-CXX_C_API void turbo_pipe_server_stop(turbo_pipe_server_t *server);
+  void turbo_pipe_server_stop(turbo_pipe_server_t *server);
 
 /* Client functions */
 /**
@@ -109,7 +112,7 @@ CXX_C_API void turbo_pipe_server_stop(turbo_pipe_server_t *server);
  * @return A pointer to the newly created `turbo_pipe_client_t` instance, or
  * NULL on failure.
  */
-CXX_C_API turbo_pipe_client_t *turbo_pipe_client_create(uv_loop_t *loop);
+  turbo_pipe_client_t *turbo_pipe_client_create(uv_loop_t *loop);
 /**
  * @brief Connects the Pipe client to a specified Pipe server.
  *
@@ -124,7 +127,7 @@ CXX_C_API turbo_pipe_client_t *turbo_pipe_client_create(uv_loop_t *loop);
  * @return 0 on success (connection initiated), or a non-zero error code on
  * failure.
  */
-CXX_C_API int turbo_pipe_client_connect(turbo_pipe_client_t *client, const char *name,
+  int turbo_pipe_client_connect(turbo_pipe_client_t *client, const char *name,
                               turbo_recv_cb on_recv,
                               turbo_connect_cb on_connect,
                               turbo_close_cb on_close);
@@ -133,7 +136,7 @@ CXX_C_API int turbo_pipe_client_connect(turbo_pipe_client_t *client, const char 
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance to close.
  */
-CXX_C_API void turbo_pipe_client_close(turbo_pipe_client_t *client);
+  void turbo_pipe_client_close(turbo_pipe_client_t *client);
 
 /* Zero-copy send functions */
 /**
@@ -145,7 +148,7 @@ CXX_C_API void turbo_pipe_client_close(turbo_pipe_client_t *client);
  * @return A pointer to an `turbo_arena_buffer_t` suitable for sending, or NULL
  * on failure.
  */
-CXX_C_API turbo_arena_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *client,
+  turbo_arena_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *client,
                                                  size_t min_size);
 /**
  * @brief Sends data from a zero-copy arena buffer through the Pipe client.
@@ -156,15 +159,33 @@ CXX_C_API turbo_arena_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_pipe_send_buffer(turbo_pipe_client_t *client,
+  int turbo_pipe_send_buffer(turbo_pipe_client_t *client,
                            turbo_arena_buffer_t *buffer, size_t length);
+/**
+ * @brief Starts reading data on a Pipe client.
+ *
+ * Re-arms the internal alloc + read callbacks on the underlying stream.
+ * Used by the coroutine layer after stopping reads between recv calls.
+ *
+ * @param client A pointer to the `turbo_pipe_client_t` instance.
+ * @return 0 on success, or a non-zero error code on failure.
+ */
+  int turbo_pipe_read_start(turbo_pipe_client_t *client);
+
+/**
+ * @brief Stops reading data on a Pipe client.
+ *
+ * @param client A pointer to the `turbo_pipe_client_t` instance.
+ */
+  void turbo_pipe_read_stop(turbo_pipe_client_t *client);
+
 /**
  * @brief Flushes any pending send data in the Pipe client's queue.
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_pipe_flush(turbo_pipe_client_t *client);
+  int turbo_pipe_flush(turbo_pipe_client_t *client);
 
 /**
  * @brief IO vector structure for scatter-gather operations.
@@ -182,7 +203,7 @@ typedef struct {
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_pipe_sendv(turbo_pipe_client_t *client, const turbo_pipe_iovec_t *iov, size_t iovcnt);
+  int turbo_pipe_sendv(turbo_pipe_client_t *client, const turbo_pipe_iovec_t *iov, size_t iovcnt);
 
 /* Fallback copy-based send */
 /**
@@ -193,7 +214,7 @@ CXX_C_API int turbo_pipe_sendv(turbo_pipe_client_t *client, const turbo_pipe_iov
  * @param length The length of the data to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-CXX_C_API int turbo_pipe_send(turbo_pipe_client_t *client, const char *data,
+  int turbo_pipe_send(turbo_pipe_client_t *client, const char *data,
                     size_t length);
 
 /* Buffer management */
@@ -203,7 +224,7 @@ CXX_C_API int turbo_pipe_send(turbo_pipe_client_t *client, const char *data,
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  * @param buffer A pointer to the `turbo_arena_buffer_t` to discard.
  */
-CXX_C_API void turbo_pipe_discard_buffer(turbo_pipe_client_t *client,
+  void turbo_pipe_discard_buffer(turbo_pipe_client_t *client,
                                turbo_arena_buffer_t *buffer);
 
 /* Statistics and monitoring */
@@ -214,14 +235,14 @@ CXX_C_API void turbo_pipe_discard_buffer(turbo_pipe_client_t *client,
  * @param stats A pointer to a `turbo_pipe_stats_t` structure to fill with
  * statistics.
  */
-CXX_C_API void turbo_pipe_get_stats(const turbo_pipe_server_t *server,
+  void turbo_pipe_get_stats(const turbo_pipe_server_t *server,
                           turbo_pipe_stats_t *stats);
 /**
  * @brief Resets all Pipe statistics for the given server.
  *
  * @param server A pointer to the `turbo_pipe_server_t` instance.
  */
-CXX_C_API void turbo_pipe_reset_stats(turbo_pipe_server_t *server);
+  void turbo_pipe_reset_stats(turbo_pipe_server_t *server);
 
 /* Memory management */
 /**
@@ -229,7 +250,7 @@ CXX_C_API void turbo_pipe_reset_stats(turbo_pipe_server_t *server);
  *
  * @param server A pointer to the `turbo_pipe_server_t` instance.
  */
-CXX_C_API void turbo_pipe_trim_memory(turbo_pipe_server_t *server);
+  void turbo_pipe_trim_memory(turbo_pipe_server_t *server);
 /**
  * @brief Gets the current memory usage of the Pipe server's internal memory
  * pools.
@@ -237,14 +258,14 @@ CXX_C_API void turbo_pipe_trim_memory(turbo_pipe_server_t *server);
  * @param server A pointer to the `turbo_pipe_server_t` instance.
  * @return The total memory usage in bytes.
  */
-CXX_C_API size_t turbo_pipe_get_memory_usage(const turbo_pipe_server_t *server);
+  size_t turbo_pipe_get_memory_usage(const turbo_pipe_server_t *server);
 
 /* Global cleanup */
 /**
  * @brief Cleans up global Pipe memory pools.
  *        This should be called once when the application is shutting down.
  */
-CXX_C_API void turbo_pipe_cleanup_pools(void);
+  void turbo_pipe_cleanup_pools(void);
 
 #ifdef __cplusplus
 }

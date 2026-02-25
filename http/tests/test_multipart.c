@@ -15,7 +15,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -47,17 +47,17 @@ static void test_upload_multipart(turbo_coro_context_t *ctx) {
   http_coro_client_t *c = http_coro_client_create(ctx);
   http_coro_client_set_timeout(c, 10000);
 
-  http_async_multipart_form_t *form = http_async_multipart_form_create();
-  http_async_multipart_form_add_field(form, "name", "Test User");
+  http_multipart_form_t *form = http_multipart_form_create();
+  http_multipart_form_add_field(form, "name", "Test User");
   const char *content = "Hello from multipart test!";
-  http_async_multipart_form_add_file(form, "file", "test.txt", "text/plain",
+  http_multipart_form_add_file(form, "file", "test.txt", "text/plain",
                                      content, strlen(content));
 
   http_coro_response_t *r = http_coro_post_multipart(c, "https://httpbin.org/post", form);
   if (is_network_error(r)) {
     g_result.skipped = 1;
     http_coro_response_free(r);
-    http_async_multipart_form_destroy(form);
+    http_multipart_form_destroy(form);
     http_coro_client_destroy(c);
     return;
   }
@@ -67,7 +67,7 @@ static void test_upload_multipart(turbo_coro_context_t *ctx) {
   g_result.body_has_multipart = (r->body && strstr(r->body, "multipart/form-data") != NULL);
 
   http_coro_response_free(r);
-  http_async_multipart_form_destroy(form);
+  http_multipart_form_destroy(form);
   http_coro_client_destroy(c);
 }
 
@@ -76,47 +76,47 @@ spec("http multipart") {
     describe("form creation") {
 
         it("should create and destroy") {
-            http_async_multipart_form_t *form = http_async_multipart_form_create();
+            http_multipart_form_t *form = http_multipart_form_create();
             check_not_null(form);
-            http_async_multipart_form_destroy(form);
+            http_multipart_form_destroy(form);
         }
 
         it("should add text fields") {
-            http_async_multipart_form_t *form = http_async_multipart_form_create();
-            http_async_multipart_form_add_field(form, "name", "John Doe");
-            http_async_multipart_form_add_field(form, "email", "john@example.com");
+            http_multipart_form_t *form = http_multipart_form_create();
+            http_multipart_form_add_field(form, "name", "John Doe");
+            http_multipart_form_add_field(form, "email", "john@example.com");
             check_not_null(form);
-            http_async_multipart_form_destroy(form);
+            http_multipart_form_destroy(form);
         }
 
         it("should add file data") {
-            http_async_multipart_form_t *form = http_async_multipart_form_create();
+            http_multipart_form_t *form = http_multipart_form_create();
             const char *data = "This is test file content";
-            http_async_multipart_form_add_file(form, "upload", "test.txt", "text/plain",
+            http_multipart_form_add_file(form, "upload", "test.txt", "text/plain",
                                                data, strlen(data));
             check_not_null(form);
-            http_async_multipart_form_destroy(form);
+            http_multipart_form_destroy(form);
         }
 
         it("should add mixed content") {
-            http_async_multipart_form_t *form = http_async_multipart_form_create();
-            http_async_multipart_form_add_field(form, "title", "My Upload");
+            http_multipart_form_t *form = http_multipart_form_create();
+            http_multipart_form_add_field(form, "title", "My Upload");
             const char *data = "File content here";
-            http_async_multipart_form_add_file(form, "file", "doc.txt", "text/plain",
+            http_multipart_form_add_file(form, "file", "doc.txt", "text/plain",
                                                data, strlen(data));
             check_not_null(form);
-            http_async_multipart_form_destroy(form);
+            http_multipart_form_destroy(form);
         }
 
         it("should handle binary data") {
-            http_async_multipart_form_t *form = http_async_multipart_form_create();
+            http_multipart_form_t *form = http_multipart_form_create();
             unsigned char binary[256];
             for (int i = 0; i < 256; i++) binary[i] = (unsigned char)i;
-            http_async_multipart_form_add_file(form, "binary", "data.bin",
+            http_multipart_form_add_file(form, "binary", "data.bin",
                                                "application/octet-stream",
                                                binary, sizeof(binary));
             check_not_null(form);
-            http_async_multipart_form_destroy(form);
+            http_multipart_form_destroy(form);
         }
     }
 
@@ -138,12 +138,12 @@ spec("http multipart") {
             fprintf(fp, "Test file content for multipart upload\n");
             fclose(fp);
 
-            http_async_multipart_form_t *form = http_async_multipart_form_create();
-            int result = http_async_multipart_form_add_file_path(form, "file",
+            http_multipart_form_t *form = http_multipart_form_create();
+            int result = http_multipart_form_add_file_path(form, "file",
                 "test_multipart.txt", "text/plain");
             check_int_eq(result, 0);
 
-            http_async_multipart_form_destroy(form);
+            http_multipart_form_destroy(form);
             remove("test_multipart.txt");
         }
     }

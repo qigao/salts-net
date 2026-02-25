@@ -1,11 +1,11 @@
 #ifndef TURBO_PARSER_H
 #define TURBO_PARSER_H
 
-#include "platform.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <time.h>
+#include <platform.h>
+ 
 
 #ifdef __cplusplus
 extern "C" {
@@ -691,7 +691,8 @@ CXX_C_API void turbo_ltv_stream_destroy(turbo_ltv_stream_t *stream);
  * @param data New data to process.
  * @param len Length of new data.
  * @param out Pointer to store a pointer to the reassembled message when complete.
- * @return 0 if a message was completed and stored in 'out', negative for error, positive if more data is needed.
+ * @return 0 if a message was completed and stored in 'out', negative for error, positive if more
+ * data is needed.
  */
 CXX_C_API int turbo_ltv_stream_feed(turbo_ltv_stream_t *stream, const uint8_t *data, size_t len,
                                     void **out);

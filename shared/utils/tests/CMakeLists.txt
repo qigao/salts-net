@@ -24,11 +24,12 @@ set(TEST_FILES
     test_threadpool.c
     test_coro.c
     bench_tlog.c
-    test_mmap_group.c)
+    test_mmap_group.c
+    test_url.c
+    test_url_helpers.c)
 
 # C++ test files
-set(CXX_TEST_FILES
-    test_tlog_cpp.cpp)
+set(CXX_TEST_FILES test_tlog_cpp.cpp)
 
 # Create executables and link libraries for each test
 foreach(TEST_FILE ${TEST_FILES})
@@ -40,7 +41,7 @@ foreach(TEST_FILE ${TEST_FILES})
 
   # Link common libraries
   target_link_libraries(${TEST_NAME} PRIVATE TurboNet::Utils TurboNet::TinyTest
-                                             PkgConfig::STC)
+                                             uri_parser PkgConfig::STC)
 
   # Add Windows system libraries for tests
   if(WIN32)
@@ -49,7 +50,10 @@ foreach(TEST_FILE ${TEST_FILES})
 
   # Add specific libraries based on test type
   if(TEST_NAME MATCHES "dns")
-    target_link_libraries(${TEST_NAME} PRIVATE $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv> c-ares::cares)
+    target_link_libraries(
+      ${TEST_NAME}
+      PRIVATE $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
+              c-ares::cares)
   endif()
 
   if(TEST_NAME MATCHES "fmt_re2c|fmt")

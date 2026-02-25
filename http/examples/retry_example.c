@@ -14,7 +14,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -69,7 +69,7 @@ static void test_retry_on_500(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 10000);
 
-  http_async_retry_policy_t policy = http_async_retry_policy_default();
+  http_retry_policy_t policy = {0};
   policy.max_retries = 2;
   policy.initial_delay_ms = 100;
   policy.retry_on_5xx = 1;
@@ -100,7 +100,7 @@ static void test_retry_conn_error(turbo_coro_context_t *ctx) {
   http_coro_client_t *client = http_coro_client_create(ctx);
   http_coro_client_set_timeout(client, 5000);
 
-  http_async_retry_policy_t policy = http_async_retry_policy_default();
+  http_retry_policy_t policy = {0};
   policy.retry_on_connection_error = 1;
   policy.max_retries = 1;
   policy.initial_delay_ms = 100;

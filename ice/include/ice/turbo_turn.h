@@ -5,10 +5,6 @@
  * - Relay address allocation on TURN server
  * - Data relay when direct connectivity fails
  * - Works through symmetric NATs
- *
- * Public TURN servers (require credentials):
- * - turn:openrelay.metered.ca:80 (free tier available)
- * - turn:relay.metered.ca:80
  */
 
 #ifndef TURBO_TURN_H
@@ -17,7 +13,7 @@
 #include "turbo_stun.h"
 #include "netcore.h"
 #include "platform.h"
-#include "turbo_thread.h"
+#include "turbo_coro_client.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,20 +82,6 @@ typedef struct turbo_turn_client_s turbo_turn_client_t;
 typedef struct turn_channel_s turn_channel_t;
 
 /**
- * TURN client state
- */
-typedef enum {
-    TURN_STATE_IDLE = 0,
-    TURN_STATE_RESOLVING,
-    TURN_STATE_ALLOCATING,
-    TURN_STATE_AUTHENTICATING,
-    TURN_STATE_ALLOCATED,
-    TURN_STATE_REFRESHING,
-    TURN_STATE_ERROR,
-    TURN_STATE_CLOSED
-} turn_state_t;
-
-/**
  * TURN allocation result
  */
 typedef struct {
@@ -117,22 +99,11 @@ struct turn_channel_s {
     uint16_t channel_number;    /* 0x4000-0x7FFF */
     char peer_ip[64];
     uint16_t peer_port;
-    uint64_t expiry_time;       /* When binding expires */
     int active;
 };
 
 /**
- * TURN allocation callback
- */
-typedef void (*turn_allocate_cb)(
-    turbo_turn_client_t *client,
-    int status,                         /* 0 = success */
-    const turn_allocation_t *allocation,
-    void *user_data
-);
-
-/**
- * TURN data received callback
+ * TURN data received callback (for async data indication delivery)
  */
 typedef void (*turn_data_cb)(
     turbo_turn_client_t *client,
@@ -148,7 +119,6 @@ typedef void (*turn_data_cb)(
  */
 typedef struct {
     const char *server_host;
-
     uint16_t server_port;           /* Default 3478 */
     const char *username;           /* Long-term credentials */
     const char *password;
@@ -157,15 +127,13 @@ typedef struct {
 } turn_client_config_t;
 
 /**
- * TURN client structure
+ * TURN client structure (coroutine-based)
  */
 struct turbo_turn_client_s {
-    async_client_t *async_client;
-    turbo_timer_t *refresh_timer;
-    turbo_timer_t *timeout_timer;
+    turbo_coro_client_t *client;
+    turbo_coro_context_t *ctx;
 
     /* Server */
-    struct sockaddr_storage server_addr;
     char server_host[256];
     uint16_t server_port;
 
@@ -175,9 +143,7 @@ struct turbo_turn_client_s {
     char realm[256];
     char nonce[256];
 
-    /* State */
-    turn_state_t state;
-    stun_transaction_id_t current_txn_id;
+    /* Configuration */
     int timeout_ms;
     int requested_lifetime;
 
@@ -190,231 +156,127 @@ struct turbo_turn_client_s {
     int channel_count;
     uint16_t next_channel;
 
-    /* Callbacks */
-    turn_allocate_cb on_allocate;
+    /* Data callback */
     turn_data_cb on_data;
     void *user_data;
-
-    /* Synchronization */
-    turbo_mutex_t lock;
-
-    /* Internal */
-    int pending_closes;
-    int destroying;       /* Set to 1 when destroy is called */
-    int dns_pending;      /* Set to 1 when DNS query is in progress */
 };
-
-
 
 /* ============================================================================
  * TURN Client API
  * ============================================================================ */
 
 /**
- * Create TURN client
+ * Create TURN client (coroutine-based).
  */
-turbo_turn_client_t *turn_client_create(const turn_client_config_t *config);
+turbo_turn_client_t *turn_client_create(turbo_coro_context_t *ctx,
+                                        const turn_client_config_t *config);
 
 /**
- * Destroy TURN client
+ * Destroy TURN client.
  */
 void turn_client_destroy(turbo_turn_client_t *client);
 
-
 /**
- * Allocate relay address
+ * Allocate relay address.
  *
- * Sends Allocate request to TURN server. On success, callback receives
- * the relay address that can be used as a relay candidate.
+ * Sends Allocate request, handles 401 auth challenge automatically,
+ * and returns the allocation result. Runs inside a coroutine.
+ *
+ * @return 0 on success, negative on error
  */
-int turn_client_allocate(
-    turbo_turn_client_t *client,
-    turn_allocate_cb callback,
-    void *user_data
-);
+int turn_client_allocate(turbo_turn_client_t *client, turn_allocation_t *allocation_out);
 
 /**
- * Refresh allocation (extend lifetime)
+ * Refresh allocation (extend lifetime).
  */
 int turn_client_refresh(turbo_turn_client_t *client);
 
 /**
- * Create permission for peer
+ * Create permission for peer.
+ */
+int turn_client_create_permission(turbo_turn_client_t *client,
+                                  const char *peer_ip, uint16_t peer_port);
+
+/**
+ * Bind channel for efficient relay.
+ */
+int turn_client_channel_bind(turbo_turn_client_t *client,
+                             const char *peer_ip, uint16_t peer_port,
+                             uint16_t *channel_out);
+
+/**
+ * Send data through TURN relay.
+ */
+int turn_client_send(turbo_turn_client_t *client,
+                     const char *peer_ip, uint16_t peer_port,
+                     const void *data, size_t len);
+
+/**
+ * Receive data from TURN relay.
  *
- * Must be called before receiving data from a peer.
- */
-int turn_client_create_permission(
-    turbo_turn_client_t *client,
-    const char *peer_ip,
-    uint16_t peer_port
-);
-
-/**
- * Bind channel for efficient relay
+ * Suspends until a Data Indication or ChannelData arrives.
+ * On success, fills peer address and payload.
  *
- * After binding, data to/from peer uses 4-byte ChannelData header
- * instead of full STUN messages.
+ * @return 0 on success, negative on error
  */
-int turn_client_channel_bind(
-    turbo_turn_client_t *client,
-    const char *peer_ip,
-    uint16_t peer_port,
-    uint16_t *channel_out
-);
+int turn_client_recv(turbo_turn_client_t *client,
+                     char *peer_ip_out, uint16_t *peer_port_out,
+                     void **buffer_out,
+                     const uint8_t **payload_out, size_t *payload_len_out);
 
 /**
- * Send data through TURN relay
- *
- * Uses ChannelData if channel is bound, otherwise Send Indication.
+ * Set data callback (optional, for event-style data delivery).
  */
-int turn_client_send(
-    turbo_turn_client_t *client,
-    const char *peer_ip,
-    uint16_t peer_port,
-    const void *data,
-    size_t len
-);
+void turn_client_set_data_callback(turbo_turn_client_t *client,
+                                   turn_data_cb callback, void *user_data);
 
 /**
- * Set data callback
+ * Get allocation info.
  */
-void turn_client_set_data_callback(
-    turbo_turn_client_t *client,
-    turn_data_cb callback,
-    void *user_data
-);
-
-/**
- * Get allocation info
- */
-int turn_client_get_allocation(
-    turbo_turn_client_t *client,
-    turn_allocation_t *allocation_out
-);
-
-/**
- * Get client state
- */
-turn_state_t turn_client_get_state(turbo_turn_client_t *client);
+int turn_client_get_allocation(turbo_turn_client_t *client,
+                               turn_allocation_t *allocation_out);
 
 /* ============================================================================
  * TURN Message Building (Low-level)
  * ============================================================================ */
 
-/**
- * Build Allocate request
- */
-int turn_build_allocate_request(
-    uint8_t *buffer,
-    const stun_transaction_id_t *txn_id,
-    const char *username,
-    const char *realm,
-    const char *nonce,
-    const char *password,
-    int transport              /* TURN_TRANSPORT_UDP or TCP */
-);
+int turn_build_allocate_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
+                                const char *username, const char *realm,
+                                const char *nonce, const char *password, int transport);
 
-/**
- * Build Refresh request
- */
-int turn_build_refresh_request(
-    uint8_t *buffer,
-    const stun_transaction_id_t *txn_id,
-    const char *username,
-    const char *realm,
-    const char *nonce,
-    const char *password,
-    uint32_t lifetime
-);
+int turn_build_refresh_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
+                               const char *username, const char *realm,
+                               const char *nonce, const char *password, uint32_t lifetime);
 
-/**
- * Build CreatePermission request
- */
-int turn_build_create_permission_request(
-    uint8_t *buffer,
-    const stun_transaction_id_t *txn_id,
-    const char *username,
-    const char *realm,
-    const char *nonce,
-    const char *password,
-    const char *peer_ip,
-    uint16_t peer_port
-);
+int turn_build_create_permission_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
+                                         const char *username, const char *realm,
+                                         const char *nonce, const char *password,
+                                         const char *peer_ip, uint16_t peer_port);
 
-/**
- * Build ChannelBind request
- */
-int turn_build_channel_bind_request(
-    uint8_t *buffer,
-    const stun_transaction_id_t *txn_id,
-    const char *username,
-    const char *realm,
-    const char *nonce,
-    const char *password,
-    uint16_t channel_number,
-    const char *peer_ip,
-    uint16_t peer_port
-);
+int turn_build_channel_bind_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
+                                    const char *username, const char *realm,
+                                    const char *nonce, const char *password,
+                                    uint16_t channel_number,
+                                    const char *peer_ip, uint16_t peer_port);
 
-/**
- * Build Send Indication
- */
-int turn_build_send_indication(
-    uint8_t *buffer,
-    const char *peer_ip,
-    uint16_t peer_port,
-    const void *data,
-    size_t data_len
-);
+int turn_build_send_indication(uint8_t *buffer, const char *peer_ip, uint16_t peer_port,
+                               const void *data, size_t data_len);
 
-/**
- * Build ChannelData message
- */
-int turn_build_channel_data(
-    uint8_t *buffer,
-    uint16_t channel_number,
-    const void *data,
-    size_t data_len
-);
+int turn_build_channel_data(uint8_t *buffer, uint16_t channel_number,
+                            const void *data, size_t data_len);
 
-/**
- * Parse Allocate response
- */
-int turn_parse_allocate_response(
-    const uint8_t *data,
-    size_t len,
-    turn_allocation_t *allocation_out,
-    char *realm_out,
-    char *nonce_out
-);
+int turn_parse_allocate_response(const uint8_t *data, size_t len,
+                                 turn_allocation_t *allocation_out,
+                                 char *realm_out, char *nonce_out);
 
-/**
- * Check if data is ChannelData (not STUN)
- */
 int turn_is_channel_data(const uint8_t *data, size_t len);
 
-/**
- * Parse ChannelData header
- */
-int turn_parse_channel_data(
-    const uint8_t *data,
-    size_t len,
-    uint16_t *channel_out,
-    const uint8_t **payload_out,
-    size_t *payload_len_out
-);
+int turn_parse_channel_data(const uint8_t *data, size_t len, uint16_t *channel_out,
+                            const uint8_t **payload_out, size_t *payload_len_out);
 
-/**
- * Parse Data Indication
- */
-int turn_parse_data_indication(
-    const uint8_t *data,
-    size_t len,
-    char *peer_ip_out,
-    uint16_t *peer_port_out,
-    const uint8_t **payload_out,
-    size_t *payload_len_out
-);
+int turn_parse_data_indication(const uint8_t *data, size_t len,
+                               char *peer_ip_out, uint16_t *peer_port_out,
+                               const uint8_t **payload_out, size_t *payload_len_out);
 
 #ifdef __cplusplus
 }

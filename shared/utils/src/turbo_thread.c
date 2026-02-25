@@ -532,3 +532,17 @@ int turbo_threadpool_pending(turbo_threadpool_t *pool) {
 int turbo_threadpool_size(turbo_threadpool_t *pool) {
     return pool ? pool->num_threads : 0;
 }
+
+// =============================================================================
+// Global Synchronization Policy
+// =============================================================================
+
+static int g_single_threaded = 0;
+
+void turbo_sync_set_single_threaded(int enabled) {
+    g_single_threaded = enabled;
+}
+
+int turbo_sync_is_single_threaded(void) {
+    return g_single_threaded;
+}

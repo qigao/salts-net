@@ -8,7 +8,7 @@
 #include <string.h>
 #include <uv.h>
 
-#include "turbo_sync_client.h"
+#include "turbo_client.h"
 #include "turbo_dns.h"
 
 typedef struct {
@@ -68,20 +68,20 @@ int main(void) {
   /* Now connect via TLS */
   printf("  Connecting via TLS to %s...\n", dns_result.resolved_ip);
 
-  sync_client_t *client = sync_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TLS);
+  turbo_client_t *client = turbo_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TLS);
   if (!client) {
     printf("   Failed to create TLS client\n");
     return 1;
   }
 
-  sync_client_status_t status = sync_client_connect_timeout(client, "tls://httpbin.org:443", 5000);
+  turbo_client_status_t status = turbo_client_connect_timeout(client, "tls://httpbin.org:443", 5000);
   if (status == SYNC_CLIENT_STATUS_OK) {
     printf("   Connected successfully\n");
 
     /* Try sending a simple HTTP request */
     const char *request = "GET / HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n";
     printf("  Sending HTTP request...\n");
-    status = sync_client_send(client, request, strlen(request));
+    status = turbo_client_send(client, request, strlen(request));
     if (status == SYNC_CLIENT_STATUS_OK) {
       printf("   Send successful\n");
 
@@ -93,7 +93,7 @@ int main(void) {
       while (receive_count < 10) { /* Max 10 chunks */
         char *response_data = NULL;
         size_t response_len = 0;
-        status = sync_client_receive_timeout(client, &response_data, &response_len, 2000);
+        status = turbo_client_receive_timeout(client, &response_data, &response_len, 2000);
 
         if (status != SYNC_CLIENT_STATUS_OK || !response_data || response_len == 0) {
           free(response_data);
@@ -114,13 +114,13 @@ int main(void) {
 
       printf("   Total received: %zu bytes in %d chunks\n", total_received, receive_count);
     } else {
-      printf("   Send failed: %s\n", sync_client_last_message(client));
+      printf("   Send failed: %s\n", turbo_client_last_message(client));
     }
   } else {
-    printf("   Connection failed: %s\n", sync_client_last_message(client));
+    printf("   Connection failed: %s\n", turbo_client_last_message(client));
   }
 
-  sync_client_destroy(client);
+  turbo_client_destroy(client);
   printf("\n");
 
   printf("TLS tests completed\n");

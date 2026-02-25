@@ -60,8 +60,9 @@ static void ws_task(turbo_coro_t* co, void* arg) {
 }
 
 int main(void) {
+    printf("Mode: COROUTINES (Single Thread)\n");
     printf("[Main] Initializing context\n");
-    turbo_coro_context_t* ctx = turbo_coro_context_create();
+    turbo_coro_context_t* ctx = turbo_coro_context_create(NULL);
 
     printf("[Main] Creating coroutine\n");
     turbo_coro_t* co = turbo_coro_create(ws_task, ctx, NULL);
@@ -69,8 +70,8 @@ int main(void) {
     printf("[Main] Starting coroutine...\n");
     turbo_coro_resume(co);
 
-    printf("[Main] Running loop...\n");
-    turbo_coro_context_run(ctx);
+    printf("[Main] Starting loop...\n");
+    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     turbo_coro_destroy(co);
     turbo_coro_context_destroy(ctx);

@@ -40,43 +40,43 @@ struct turbo_udp_s {
 
 
 /* Server lifecycle */
-CXX_C_API int turbo_udp_server_init(turbo_udp_server_t* server, uv_loop_t* loop,
+  int turbo_udp_server_init(turbo_udp_server_t* server, uv_loop_t* loop,
                                  const char* host, unsigned short port);
-CXX_C_API int turbo_udp_server_start(turbo_udp_server_t* server, turbo_recv_cb cb);
-CXX_C_API void turbo_udp_server_stop(turbo_udp_server_t* server);
+  int turbo_udp_server_start(turbo_udp_server_t* server, turbo_recv_cb cb);
+  void turbo_udp_server_stop(turbo_udp_server_t* server);
 
 /* Zero-copy send operations */
-CXX_C_API turbo_arena_buffer_t* turbo_udp_get_send_buffer(turbo_udp_server_t* server, size_t min_size);
-CXX_C_API int turbo_udp_send_buffer(turbo_udp_server_t* server, const struct sockaddr* dest,
+  turbo_arena_buffer_t* turbo_udp_get_send_buffer(turbo_udp_server_t* server, size_t min_size);
+  int turbo_udp_send_buffer(turbo_udp_server_t* server, const struct sockaddr* dest,
                                  turbo_arena_buffer_t* buffer, size_t length);
 
 /* Fallback copy-based send operations */
-CXX_C_API int turbo_udp_send(turbo_udp_server_t* server, const struct sockaddr* dest,
+  int turbo_udp_send(turbo_udp_server_t* server, const struct sockaddr* dest,
                           const char* data, size_t length);
 
 /* Client-style operations */
-CXX_C_API int turbo_udp_connect(turbo_udp_client_t* client, const char* host, unsigned short port);
-CXX_C_API int turbo_udp_send_connected(turbo_udp_client_t* client, const char* data, size_t length);
-CXX_C_API int turbo_udp_send_buffer_connected(turbo_udp_client_t* client,
+  int turbo_udp_connect(turbo_udp_client_t* client, const char* host, unsigned short port);
+  int turbo_udp_send_connected(turbo_udp_client_t* client, const char* data, size_t length);
+  int turbo_udp_send_buffer_connected(turbo_udp_client_t* client,
                                            turbo_arena_buffer_t* buffer, size_t length);
 
 /* Multicast operations */
-CXX_C_API int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr, const char* interface_addr);
-CXX_C_API int turbo_udp_leave_multicast_group(turbo_udp_t* udp, const char* multicast_addr, const char* interface_addr);
-CXX_C_API int turbo_udp_set_multicast_loop(turbo_udp_t* udp, int on);
-CXX_C_API int turbo_udp_set_multicast_ttl(turbo_udp_t* udp, int ttl);
-CXX_C_API int turbo_udp_set_broadcast(turbo_udp_t* udp, int on);
+  int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr, const char* interface_addr);
+  int turbo_udp_leave_multicast_group(turbo_udp_t* udp, const char* multicast_addr, const char* interface_addr);
+  int turbo_udp_set_multicast_loop(turbo_udp_t* udp, int on);
+  int turbo_udp_set_multicast_ttl(turbo_udp_t* udp, int ttl);
+  int turbo_udp_set_broadcast(turbo_udp_t* udp, int on);
 
 /* Statistics and monitoring */
-CXX_C_API void turbo_udp_get_stats(const turbo_udp_server_t* server, turbo_udp_stats_t* stats);
-CXX_C_API void turbo_udp_reset_stats(turbo_udp_server_t* server);
+  void turbo_udp_get_stats(const turbo_udp_server_t* server, turbo_udp_stats_t* stats);
+  void turbo_udp_reset_stats(turbo_udp_server_t* server);
 
 /* Memory management */
-CXX_C_API void turbo_udp_trim_memory(turbo_udp_server_t* server);
-CXX_C_API size_t turbo_udp_get_memory_usage(const turbo_udp_server_t* server);
+  void turbo_udp_trim_memory(turbo_udp_server_t* server);
+  size_t turbo_udp_get_memory_usage(const turbo_udp_server_t* server);
 
 /* Global cleanup */
-CXX_C_API void turbo_udp_cleanup_pools(void);
+  void turbo_udp_cleanup_pools(void);
 
 /* Convenience macros for zero-copy workflow */
 
@@ -96,7 +96,7 @@ typedef struct {
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_udp_sendv_connected(turbo_udp_client_t* client, const turbo_udp_iovec_t* iov, size_t iovcnt);
+  int turbo_udp_sendv_connected(turbo_udp_client_t* client, const turbo_udp_iovec_t* iov, size_t iovcnt);
 
 /* Get buffer, write data, send buffer */
 #define TURBO_UDP_ZERO_COPY_SEND(server, dest, data_size, write_code) do { \

@@ -50,8 +50,30 @@ extern "C" {
  * - Use one libuv loop per thread
  * - Create separate client/server instances per thread
  * - Don't share arena buffers across threads
- * - Use async_client_t for multi-threaded scenarios (has internal thread)
+ * - Use turbo_coro_client_t with turbo_coro_context_t for coroutine-based I/O
  */
+
+/* ============================================================================
+ * Global Synchronization
+ * ============================================================================ */
+
+/** @brief Initialize global library resources (thread-safe). */
+void turbo_sync_init(void);
+
+/** @brief Cleanup global library resources. */
+void turbo_sync_cleanup(void);
+
+/* Protocol-specific resource locks (Internal use) */
+void turbo_tcp_sync_lock(void);
+void turbo_tcp_sync_unlock(void);
+void turbo_udp_sync_lock(void);
+void turbo_udp_sync_unlock(void);
+void turbo_kcp_sync_lock(void);
+void turbo_kcp_sync_unlock(void);
+void turbo_tls_sync_lock(void);
+void turbo_tls_sync_unlock(void);
+void turbo_pipe_sync_lock(void);
+void turbo_pipe_sync_unlock(void);
 
 /* ============================================================================
  * Error Codes

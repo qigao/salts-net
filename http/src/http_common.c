@@ -223,6 +223,20 @@ void http_cookie_jar_clear(http_cookie_jar_t *jar) {
 
 int http_cookie_jar_count(http_cookie_jar_t *jar) { return jar ? jar->count : 0; }
 
+/* ── Retry policy default ────────────────────────────────────────── */
+
+http_retry_policy_t http_retry_policy_default(void) {
+  http_retry_policy_t policy = {.max_retries = 3,
+                                .initial_delay_ms = 1000,
+                                .max_delay_ms = 30000,
+                                .exponential_backoff = 1,
+                                .retry_on_timeout = 0,
+                                .retry_on_connection_error = 1,
+                                .retry_on_5xx = 1,
+                                .jitter_factor = 0.1};
+  return policy;
+}
+
 /* ── Multipart form data ─────────────────────────────────────────── */
 
 static void generate_boundary(char *boundary, size_t len) {

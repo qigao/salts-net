@@ -78,41 +78,6 @@ typedef struct {
 // requiring users to include llhttp.h
 typedef int http_method_t;
 
-// Common HTTP methods (values match llhttp's enum)
-#define HTTP_DELETE  0
-#define HTTP_GET     1
-#define HTTP_HEAD    2
-#define HTTP_POST    3
-#define HTTP_PUT     4
-#define HTTP_CONNECT 5
-#define HTTP_OPTIONS 6
-#define HTTP_TRACE   7
-#define HTTP_COPY    8
-#define HTTP_LOCK    9
-#define HTTP_MKCOL   10
-#define HTTP_MOVE    11
-#define HTTP_PROPFIND 12
-#define HTTP_PROPPATCH 13
-#define HTTP_SEARCH  14
-#define HTTP_UNLOCK  15
-#define HTTP_BIND    16
-#define HTTP_REBIND  17
-#define HTTP_UNBIND  18
-#define HTTP_ACL     19
-#define HTTP_REPORT  20
-#define HTTP_MKACTIVITY 21
-#define HTTP_CHECKOUT 22
-#define HTTP_MERGE   23
-#define HTTP_MSEARCH 24
-#define HTTP_NOTIFY  25
-#define HTTP_SUBSCRIBE 26
-#define HTTP_UNSUBSCRIBE 27
-#define HTTP_PATCH   28
-#define HTTP_PURGE   29
-#define HTTP_MKCALENDAR 30
-#define HTTP_LINK    31
-#define HTTP_UNLINK  32
-#define HTTP_SOURCE  33
 
 // Create/destroy client
 CXX_C_API http_client_t* http_client_create(void);

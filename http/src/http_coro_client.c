@@ -195,6 +195,23 @@ void http_coro_client_clear_default_headers(http_coro_client_t *c) {
   c->default_header_count = 0;
 }
 
+void http_coro_client_remove_default_header(http_coro_client_t *c, const char *name) {
+  if (!c || !name) return;
+  default_header_t **p = &c->default_headers;
+  while (*p) {
+    if (tstr_casecmp((*p)->name, name) == 0) {
+      default_header_t *n = (*p)->next;
+      free((*p)->name);
+      free((*p)->value);
+      free(*p);
+      *p = n;
+      c->default_header_count--;
+      return;
+    }
+    p = &(*p)->next;
+  }
+}
+
 /* ── Authentication ───────────────────────────────────────────────── */
 
 void http_coro_client_set_basic_auth(http_coro_client_t *c, const char *user,
@@ -360,6 +377,13 @@ static int on_coro_headers_complete(llhttp_t *p) {
     if (ctx->response)
       ctx->response->status_code = (int)llhttp_get_status_code(p);
     ctx->content_length = (size_t)p->content_length;
+    /* Responses to HEAD requests, and responses with status 204 or 304,
+     * must not have a body. Returning 1 tells llhttp to skip the body. */
+    if (p->method == HTTP_HEAD || 
+        (ctx->response && (ctx->response->status_code == 204 || 
+                           ctx->response->status_code == 304))) {
+      return 1;
+    }
   }
   return 0;
 }
@@ -557,6 +581,7 @@ static tstr_t build_http_request_str(http_coro_client_t *c, http_method_t method
 
 static void recv_http_response(turbo_coro_client_t *transport,
                                http_coro_response_t *response,
+                               http_method_t method,
                                http_coro_data_cb data_cb, void *data_cb_ud,
                                http_coro_progress_cb progress_cb, void *progress_ud) {
   llhttp_t parser;
@@ -576,6 +601,7 @@ static void recv_http_response(turbo_coro_client_t *transport,
   settings.on_message_complete = on_coro_message_complete;
 
   llhttp_init(&parser, HTTP_RESPONSE, &settings);
+  parser.method = (uint8_t)method;
   parser.data = &ctx;
 
   tstr_t raw_hdrs = tstr_new();
@@ -585,7 +611,12 @@ static void recv_http_response(turbo_coro_client_t *transport,
     size_t chunk_len = 0;
     int r = turbo_coro_client_recv(transport, &chunk, &chunk_len);
 
-    if (r == TURBO_EOF) break;
+    if (r == TURBO_EOF) {
+      if (!ctx.message_complete) { 
+        set_error(response, HTTP_ERROR_RECEIVE_FAILED, "connection closed before full response");
+      }
+      break;
+    }
     if (r != 0) {
       http_error_code_t ec = (r == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT
                                                     : HTTP_ERROR_RECEIVE_FAILED;
@@ -810,7 +841,7 @@ static http_coro_response_t *do_request(http_coro_client_t *c, http_method_t met
         goto done;
       }
 
-      recv_http_response(transport, resp, data_cb, data_cb_ud,
+      recv_http_response(transport, resp, current_method, data_cb, data_cb_ud,
                          c->progress_callback, c->progress_user_data);
       c->stats.bytes_received += resp->body_len + resp->headers_len;
 

@@ -25,7 +25,7 @@ target_link_libraries(turbo_ice PUBLIC TurboNet::Core OpenSSL::SSL
                                        OpenSSL::Crypto TurboNet::Utils)
 
 if(WIN32)
-  target_link_libraries(turbo_ice PUBLIC ws2_32 iphlpapi)
+  target_link_libraries(turbo_ice PUBLIC ws2_32 iphlpapi psapi)
 endif()
 
 set_target_properties(

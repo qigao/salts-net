@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     const char* url = (argc > 1) ? argv[1] : "tcp://0.0.0.0:8080";
 
     printf("[Main] Initializing context\n");
-    turbo_coro_context_t* ctx = turbo_coro_context_create();
+    turbo_coro_context_t* ctx = turbo_coro_context_create(NULL);
 
     printf("[Main] Creating Coro Server\n");
     turbo_coro_server_t* server = turbo_coro_server_create(ctx);
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
     printf("[Main] Server listening. Connect using 'nc 127.0.0.1 8080'\n");
     printf("[Main] Press Ctrl+C to stop.\n");
 
-    turbo_coro_context_run(ctx);
+    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     printf("[Main] Stopping server...\n");
     turbo_coro_server_destroy(server);

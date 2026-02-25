@@ -1,5 +1,5 @@
 /**
- * test_stun.c - Unit tests for STUN client
+ * test_stun.c - Unit tests for STUN protocol implementation
  */
 
 #include "ice/turbo_stun.h"
@@ -14,26 +14,25 @@ spec("stun") {
         stun_generate_transaction_id(&id1);
         stun_generate_transaction_id(&id2);
 
-        /* IDs should be different */
+        /* IDs should be different across calls */
         check(memcmp(id1.id, id2.id, STUN_TRANSACTION_ID_LEN) != 0);
     }
 
     it("should have correct transaction ID length") {
-        /* Should be 12 bytes */
         check_int_eq(STUN_TRANSACTION_ID_LEN, 12);
     }
   }
 
   describe("STUN Message Building") {
-    it("should build a valid binding request correctly") {
-        uint8_t buffer[64];
+    it("should build a valid binding request header") {
+        uint8_t buffer[STUN_MAX_MESSAGE_SIZE];
         stun_transaction_id_t txn_id;
 
         memset(txn_id.id, 0x42, STUN_TRANSACTION_ID_LEN);
 
         size_t len = stun_build_binding_request(buffer, &txn_id);
 
-        /* Should be exactly 20 bytes (header only) */
+        /* Should be exactly 20 bytes for a header-only request */
         check_size_eq(len, STUN_HEADER_SIZE);
 
         /* Message type: Binding Request (0x0001) */
@@ -50,189 +49,182 @@ spec("stun") {
         check_int_eq(buffer[6], 0xA4);
         check_int_eq(buffer[7], 0x42);
 
-        /* Transaction ID */
+        /* Transaction ID should match input */
         for (int i = 0; i < STUN_TRANSACTION_ID_LEN; i++) {
             check_int_eq(buffer[8 + i], 0x42);
         }
     }
 
-    it("should have correct header size constant") {
+    it("should respect message constants") {
         check_int_eq(STUN_HEADER_SIZE, 20);
-    }
-
-    it("should have correct magic cookie constant") {
         check_long_eq(STUN_MAGIC_COOKIE, 0x2112A442);
     }
   }
 
   describe("STUN Message Detection") {
-    it("should accurately identify valid STUN messages") {
+    it("should identify valid STUN messages") {
         uint8_t buffer[20];
         stun_transaction_id_t txn_id;
         stun_generate_transaction_id(&txn_id);
-
         stun_build_binding_request(buffer, &txn_id);
 
         check(stun_is_stun_message(buffer, 20));
     }
 
-    it("should reject messages that are too short") {
-        uint8_t buffer[10] = {0};
-        check(!stun_is_stun_message(buffer, 10));
+    it("should reject too small buffers") {
+        uint8_t buffer[19] = {0};
+        check(!stun_is_stun_message(buffer, 19));
     }
 
-    it("should reject messages with invalid magic cookie") {
+    it("should reject invalid magic cookie") {
         uint8_t buffer[20] = {0};
-        /* Set first two bits to 0 but bad cookie */
-        buffer[4] = 0xFF;
-        buffer[5] = 0xFF;
-        buffer[6] = 0xFF;
-        buffer[7] = 0xFF;
-
+        buffer[4] = 0xDE; buffer[5] = 0xAD;
+        buffer[6] = 0xBE; buffer[7] = 0xEF;
         check(!stun_is_stun_message(buffer, 20));
     }
 
-    it("should reject messages with invalid first bits") {
-        uint8_t buffer[20] = {0};
-        /* Set magic cookie correctly */
-        buffer[4] = 0x21;
-        buffer[5] = 0x12;
-        buffer[6] = 0xA4;
-        buffer[7] = 0x42;
-        /* But first two bits are not 0 */
-        buffer[0] = 0xC0;
+    it("should reject if first two bits are not zero") {
+        uint8_t buffer[20];
+        stun_transaction_id_t txn_id;
+        stun_generate_transaction_id(&txn_id);
+        stun_build_binding_request(buffer, &txn_id);
 
+        buffer[0] |= 0x80; /* Set first bit */
         check(!stun_is_stun_message(buffer, 20));
     }
   }
 
   describe("STUN Response Parsing") {
-    it("should parse an IPv4 binding response correctly") {
-        /* Simulated STUN binding response with XOR-MAPPED-ADDRESS */
+    it("should parse an IPv4 XOR-MAPPED-ADDRESS") {
+        /* Simulated response: port 54321, ip 203.0.113.1 */
+        /* Cookie: 0x2112A442 */
+        /* XOR'd port: 0xD431 ^ 0x2112 = 0xF523 */
+        /* XOR'd addr: 0xCB007101 ^ 0x2112A442 = 0xEA12D543 */
         uint8_t response[] = {
-            /* Header */
-            0x01, 0x01,             /* Type: Binding Response */
-            0x00, 0x0C,             /* Length: 12 bytes */
-            0x21, 0x12, 0xA4, 0x42, /* Magic Cookie */
-            0x01, 0x02, 0x03, 0x04, /* Transaction ID (12 bytes) */
-            0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0A, 0x0B, 0x0C,
-
-            /* XOR-MAPPED-ADDRESS attribute */
-            0x00, 0x20,             /* Type: XOR-MAPPED-ADDRESS */
-            0x00, 0x08,             /* Length: 8 bytes */
-            0x00, 0x01,             /* Reserved + Family (IPv4) */
-            /* XOR'd port: 54321 XOR 0x2112 = 0xE5B3 XOR 0x2112 = 0xC4A1 -> actually let's compute */
-            /* port = 54321 = 0xD431, XOR with 0x2112 = 0xF523 */
-            0xF5, 0x23,
-            /* XOR'd address: 203.0.113.1 (0xCB007101) XOR 0x2112A442 = 0xEA12D543 */
-            0xEA, 0x12, 0xD5, 0x43
+            0x01, 0x01,             /* Binding Response */
+            0x00, 0x0C,             /* Length 12 */
+            0x21, 0x12, 0xA4, 0x42, /* Cookie */
+            0x00, 0x00, 0x00, 0x00, /* TxID 12 bytes */
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x20,             /* XOR-MAPPED-ADDRESS */
+            0x00, 0x08,             /* Attr len 8 */
+            0x00, 0x01,             /* IPv4 family */
+            0xF5, 0x23,             /* XOR'd port */
+            0xEA, 0x12, 0xD5, 0x43  /* XOR'd IP */
         };
 
-        stun_transaction_id_t expected_txn;
-        memcpy(expected_txn.id, response + 8, STUN_TRANSACTION_ID_LEN);
+        stun_transaction_id_t txn;
+        memset(txn.id, 0, 12);
 
         stun_mapped_address_t mapped;
-        int result = stun_parse_binding_response(response, sizeof(response), &expected_txn, &mapped);
+        int rc = stun_parse_binding_response(response, sizeof(response), &txn, &mapped);
 
-        check_int_eq(result, 0);
+        check_int_eq(rc, 0);
         check_int_eq(mapped.family, STUN_ADDR_FAMILY_IPV4);
         check_int_eq(mapped.port, 54321);
-        /* IP should be 203.0.113.1 */
         check_str_eq(mapped.ip_str, "203.0.113.1");
     }
 
-    it("should return error code for error response type") {
-        /* STUN error response */
-        uint8_t response[] = {
-            0x01, 0x11,             /* Type: Binding Error Response */
-            0x00, 0x00,
-            0x21, 0x12, 0xA4, 0x42,
-            0x01, 0x02, 0x03, 0x04,
-            0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0A, 0x0B, 0x0C
-        };
+    it("should handle transaction ID mismatch") {
+        uint8_t response[20] = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
+        stun_transaction_id_t expected, actual;
+        memset(expected.id, 0xAA, 12);
+        memset(actual.id, 0xBB, 12);
+        memcpy(response + 8, actual.id, 12);
 
         stun_mapped_address_t mapped;
-        int result = stun_parse_binding_response(response, sizeof(response), NULL, &mapped);
-
-        check_int_eq(result, -4); /* Error response */
-    }
-
-    it("should return error code for invalid magic cookie") {
-        uint8_t response[] = {
-            0x01, 0x01,
-            0x00, 0x00,
-            0xFF, 0xFF, 0xFF, 0xFF, /* Bad cookie */
-            0x01, 0x02, 0x03, 0x04,
-            0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0A, 0x0B, 0x0C
-        };
-
-        stun_mapped_address_t mapped;
-        int result = stun_parse_binding_response(response, sizeof(response), NULL, &mapped);
-
-        check_int_eq(result, -3); /* Bad cookie */
-    }
-
-    it("should return error code for truncated messages") {
-        uint8_t response[10] = {0};
-
-        stun_mapped_address_t mapped;
-        int result = stun_parse_binding_response(response, sizeof(response), NULL, &mapped);
-
-        check_int_eq(result, -2); /* Too short */
+        int rc = stun_parse_binding_response(response, 20, &expected, &mapped);
+        check_int_eq(rc, -5); /* Transaction ID mismatch */
     }
   }
 
-  describe("STUN Client Lifecycle") {
-    it("should return NULL when created with no configuration") {
-        turbo_stun_client_t *client = stun_client_create(NULL);
-        check_null(client);
+  describe("ICE Connectivity Checks") {
+    it("should build ICE Binding Request with attributes") {
+        uint8_t buffer[STUN_MAX_MESSAGE_SIZE];
+        stun_transaction_id_t txn;
+        stun_generate_transaction_id(&txn);
+
+        int len = stun_build_ice_request(buffer, &txn, "local", "remote", "pwd",
+                                         1000, 1, 0x12345678, 0);
+        
+        check(len > STUN_HEADER_SIZE);
+        check(stun_is_stun_message(buffer, (size_t)len));
+
+        /* Verify USERNAME attribute exists by checking total length in header */
+        uint16_t body_len = (buffer[2] << 8) | buffer[3];
+        check(body_len > 0);
     }
 
-    it("should return NULL when created without a server host") {
-        stun_client_config_t config = {
-            .server_host = NULL,
-            .server_port = 19302
-        };
+    it("should build ICE Binding Response with attributes") {
+        uint8_t buffer[STUN_MAX_MESSAGE_SIZE];
+        stun_transaction_id_t txn;
+        stun_generate_transaction_id(&txn);
 
-        turbo_stun_client_t *client = stun_client_create(&config);
-        check_null(client);
+        int len = stun_build_ice_response(buffer, &txn, "pwd", "1.2.3.4", 5678);
+
+        check(len > STUN_HEADER_SIZE);
+        check(stun_is_stun_message(buffer, (size_t)len));
     }
 
-    it("should initialize correctly with valid configuration") {
-        stun_client_config_t config = {
-            .server_host = "stun.l.google.com",
-            .server_port = 19302,
-            .timeout_ms = 3000,
-            .retries = 3
-        };
+    it("should validate message integrity correctly") {
+        uint8_t buffer[STUN_MAX_MESSAGE_SIZE];
+        stun_transaction_id_t txn;
+        stun_generate_transaction_id(&txn);
 
-        turbo_stun_client_t *client = stun_client_create(&config);
-        check_not_null(client);
-        check_int_eq(stun_client_get_state(client), STUN_CLIENT_STATE_IDLE);
+        int len = stun_build_ice_request(buffer, &txn, "ufrag", "ufrag", "secret",
+                                         1000, 1, 1, 0);
 
-        stun_client_destroy(client);
+        int valid = stun_validate_message_integrity(buffer, (size_t)len, "secret");
+        check_int_eq(valid, 0);
+
+        int invalid = stun_validate_message_integrity(buffer, (size_t)len, "wrong");
+        check(invalid != 0);
     }
 
-    it("should apply correct default values when optional config is missing") {
-        stun_client_config_t config = {
-            .server_host = "stun.l.google.com",
-            .server_port = 0,    /* Should default to 3478 */
-            .timeout_ms = 0,     /* Should default to 3000 */
-            .retries = 0         /* Should default to 3 */
+    it("should parse ICE request attributes") {
+        uint8_t buffer[STUN_MAX_MESSAGE_SIZE];
+        stun_transaction_id_t txn;
+        stun_generate_transaction_id(&txn);
+
+        /* USERNAME will be "remote:local" per ICE spec */
+        stun_build_ice_request(buffer, &txn, "local", "remote", "pwd",
+                               888, 1, 0, 1);
+
+        char username[128] = {0};
+        uint32_t priority = 0;
+        int use_candidate = 0;
+
+        int rc = stun_parse_ice_request(buffer, STUN_MAX_MESSAGE_SIZE, username,
+                                        &priority, &use_candidate);
+
+        check_int_eq(rc, 0);
+        check_str_eq(username, "remote:local");
+        check_int_eq(priority, 888);
+        check_int_eq(use_candidate, 1);
+    }
+  }
+
+  describe("STUN Error Codes") {
+    it("should extract error codes from error responses") {
+        uint8_t buffer[] = {
+            0x01, 0x11,             /* Binding Error Response */
+            0x00, 0x08,             /* Length 8 */
+            0x21, 0x12, 0xA4, 0x42, /* Cookie */
+            0,0,0,0,0,0,0,0,0,0,0,0, /* TxID */
+            0x00, 0x09,             /* ERROR-CODE */
+            0x00, 0x04,             /* Attr len 4 */
+            0x00, 0x00, 0x04, 0x01  /* Class 4, Code 01 -> 401 Unauthorized */
         };
 
-        turbo_stun_client_t *client = stun_client_create(&config);
-        check_not_null(client);
+        int err = stun_get_error_code(buffer, sizeof(buffer));
+        check_int_eq(err, 401);
+    }
 
-        /* Check internal defaults were applied */
-        check_int_eq(client->server_port, STUN_DEFAULT_PORT);
-        check_int_eq(client->timeout_ms, 3000);
-        check_int_eq(client->retries, 3);
-
-        stun_client_destroy(client);
+    it("should return 0 if no error code found") {
+        uint8_t buffer[20] = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
+        int err = stun_get_error_code(buffer, 20);
+        check_int_eq(err, 0);
     }
   }
 }

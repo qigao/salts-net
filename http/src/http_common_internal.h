@@ -72,10 +72,4 @@ struct http_multipart_form_s {
   int part_count;
 };
 
-/* ── Backward-compat aliases for internal types ──────────────────── */
-
-typedef http_cookie_t http_async_cookie_t;
-typedef http_multipart_file_stream_t http_async_multipart_file_stream_t;
-typedef http_multipart_part_t http_async_multipart_part_t;
-
 #endif /* HTTP_COMMON_INTERNAL_H */

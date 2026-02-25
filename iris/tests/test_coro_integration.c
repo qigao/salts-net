@@ -134,7 +134,7 @@ spec("coro_integration") {
     }
 
     it("should handle full request response cycle") {
-        g_ctx = turbo_coro_context_create();
+        g_ctx = turbo_coro_context_create(NULL);
         unsigned short port = 9876;
 
         // Setup Iris app
@@ -158,7 +158,7 @@ spec("coro_integration") {
         turbo_coro_resume(co);
 
         // Run loop
-        turbo_coro_context_run(g_ctx);
+        turbo_coro_context_run(g_ctx, TURBO_RUN_DEFAULT);
 
         // Cleanup context
         turbo_coro_context_destroy(g_ctx);

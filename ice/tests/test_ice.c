@@ -24,13 +24,13 @@ spec("ice") {
 
   describe("ICE Agent Creation") {
     it("should return NULL when created with no configuration") {
-        turbo_ice_agent_t *agent = ice_agent_create(NULL);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, NULL);
         check_null(agent);
     }
 
     it("should create a valid agent with default configuration") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
         check_int_eq(ice_agent_get_state(agent), ICE_STATE_NEW);
         check_int_eq(ice_agent_get_gathering_state(agent), ICE_GATHERING_NEW);
@@ -39,7 +39,7 @@ spec("ice") {
 
     it("should initialize with zero candidates") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
         check_int_eq(ice_agent_get_local_candidate_count(agent), 0);
         ice_agent_destroy(agent);
@@ -49,7 +49,7 @@ spec("ice") {
   describe("ICE Credentials") {
     it("should generate non-empty local credentials") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
 
         char ufrag[32], pwd[64];
@@ -63,7 +63,7 @@ spec("ice") {
 
     it("should successfully set remote credentials") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
 
         int result = ice_agent_set_remote_credentials(agent, "testufrag", "testpassword123456789012");
@@ -74,7 +74,7 @@ spec("ice") {
 
     it("should return error for invalid credentials parameters") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
 
         check_int_eq(ice_agent_set_remote_credentials(NULL, "ufrag", "pwd"), -1);
         check_int_eq(ice_agent_set_remote_credentials(agent, NULL, "pwd"), -1);
@@ -228,7 +228,7 @@ spec("ice") {
   describe("Remote Candidates") {
     it("should successfully add a valid remote candidate") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
 
         const char *sdp = "candidate:1 1 UDP 2130706431 192.168.1.1 12345 typ host";
@@ -240,7 +240,7 @@ spec("ice") {
 
     it("should return error when adding candidates with NULL parameters") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
 
         check_int_eq(ice_agent_add_remote_candidate(NULL, "candidate:..."), -1);
         check_int_eq(ice_agent_add_remote_candidate(agent, NULL), -1);
@@ -260,7 +260,7 @@ spec("ice") {
 
     it("should return error when queried for selected pair before selection") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         ice_candidate_t local, remote;
 
         int result = ice_agent_get_selected_pair(agent, &local, &remote);
@@ -277,7 +277,7 @@ spec("ice") {
 
     it("should return error for invalid local candidate indices") {
         ice_config_t config = ice_default_config();
-        turbo_ice_agent_t *agent = ice_agent_create(&config);
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         ice_candidate_t out;
 
         check_int_eq(ice_agent_get_local_candidate(agent, -1, &out), -2);

@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
     const char* url = (argc > 1) ? argv[1] : "tcp://127.0.0.1:8080";
 
     printf("[Main] Initializing context\n");
-    turbo_coro_context_t* ctx = turbo_coro_context_create();
+    turbo_coro_context_t* ctx = turbo_coro_context_create(NULL);
 
     context_t app = { .ctx = ctx, .url = url };
 
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     turbo_coro_resume(co);
 
     printf("[Main] Coroutine yielded, starting event loop\n");
-    turbo_coro_context_run(ctx);
+    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     printf("[Main] Loop exited, destroying coroutine\n");
     turbo_coro_destroy(co);

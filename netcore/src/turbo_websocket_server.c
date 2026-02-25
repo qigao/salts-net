@@ -369,7 +369,7 @@ static int ws_server_on_recv(void *handle, const turbo_arena_slice_t *data, void
 
     // Invoke user on_connection callback
     if (server->on_connection) {
-      server->on_connection(handle, 0, conn);
+      server->on_connection(server, 0, conn);
     }
   } else if (conn->state == TURBO_WS_CONN_OPEN || conn->state == TURBO_WS_CONN_CLOSING) {
     // Process WebSocket frames

@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <platform.h>
+#include <netcore/turbo_coro_context.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -142,7 +143,8 @@ struct ice_candidate_s {
     uint32_t priority;
 
     /* Internal */
-    void *socket;                   /* UDP socket for this candidate */
+    void *socket;                   /* UDP socket for this candidate (turbo_coro_client_t) */
+    void *turn_client;              /* TURN client if relay (turbo_turn_client_t) */
     int is_local;                   /* 1 = local, 0 = remote */
     char id[ICE_CANDIDATE_ID_LEN + 1];
 };
@@ -253,8 +255,11 @@ typedef struct {
 
 /**
  * Create ICE agent
+ *
+ * @param ctx    Coroutine context (must outlive the agent)
+ * @param config Agent configuration
  */
-CXX_C_API turbo_ice_agent_t *ice_agent_create(const ice_config_t *config);
+CXX_C_API turbo_ice_agent_t *ice_agent_create(turbo_coro_context_t *ctx, const ice_config_t *config);
 
 /**
  * Destroy ICE agent
@@ -329,6 +334,11 @@ CXX_C_API int ice_agent_send(
  * Get current state
  */
 CXX_C_API ice_state_t ice_agent_get_state(turbo_ice_agent_t *agent);
+
+/**
+ * Get internal context
+ */
+CXX_C_API turbo_coro_context_t *ice_agent_get_context(turbo_ice_agent_t *agent);
 
 
 /**

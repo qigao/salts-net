@@ -14,7 +14,7 @@ static void coro_test_entry(turbo_coro_t *co, void *arg) {
 }
 
 static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create();
+  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
   coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
   turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
   turbo_coro_spawn(sched, coro_test_entry, &tctx);
@@ -29,28 +29,28 @@ static int request_called = 0;
 static int response_called = 0;
 static int user_data_value = 0;
 
-static int test_request_interceptor(http_async_request_context_t *ctx) {
+static int test_request_interceptor(http_request_context_t *ctx) {
   (void)ctx;
   request_called++;
   return 0;
 }
 
-static void test_response_interceptor(http_async_response_context_t *ctx) {
+static void test_response_interceptor(http_response_context_t *ctx) {
   (void)ctx;
   response_called++;
 }
 
-static int abort_interceptor(http_async_request_context_t *ctx) {
+static int abort_interceptor(http_request_context_t *ctx) {
   (void)ctx;
   return 1;
 }
 
-static int check_user_data_request(http_async_request_context_t *ctx) {
+static int check_user_data_request(http_request_context_t *ctx) {
   user_data_value = *(int *)ctx->user_data;
   return 0;
 }
 
-static void check_user_data_response(http_async_response_context_t *ctx) {
+static void check_user_data_response(http_response_context_t *ctx) {
   user_data_value = *(int *)ctx->user_data;
 }
 

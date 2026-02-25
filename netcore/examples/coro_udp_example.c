@@ -16,12 +16,15 @@
 
 /* ── Server: echo datagrams back to sender ────────────────── */
 
-static void udp_echo_handler(turbo_coro_server_t* server,
-                              const char* data, size_t len,
-                              const struct sockaddr* addr, void* arg) {
+static void udp_echo_handler(turbo_coro_client_t* client, void* arg) {
     (void)arg;
-    printf("[Server] Received %zu bytes, echoing back\n", len);
-    turbo_coro_server_sendto(server, data, len, addr);
+    char* data = NULL;
+    size_t len = 0;
+    int r = turbo_coro_client_recv(client, &data, &len);
+    if (r == 0 && data) {
+        printf("[Server] Received %zu bytes, echoing back\n", len);
+        turbo_coro_client_send(client, data, len);
+    }
 }
 
 /* ── Client coroutine: sendto + recvfrom ──────────────────── */
@@ -76,7 +79,7 @@ static void launcher_task(turbo_coro_t* co, void* arg) {
 
     /* Start UDP echo server */
     turbo_coro_server_t* server = turbo_coro_server_create(ctx);
-    int r = turbo_coro_server_listen_udp(server, UDP_SERVER_URL, udp_echo_handler, NULL);
+    int r = turbo_coro_server_listen(server, UDP_SERVER_URL, udp_echo_handler, NULL);
     if (r != 0) {
         printf("[Launcher] Server listen failed: %d\n", r);
         turbo_coro_server_destroy(server);
@@ -100,12 +103,13 @@ static void launcher_task(turbo_coro_t* co, void* arg) {
 
 int main(void) {
     printf("=== UDP Coroutine Echo Example ===\n");
-    turbo_coro_context_t* ctx = turbo_coro_context_create();
+    printf("[Main] Initializing context\n");
+    turbo_coro_context_t* ctx = turbo_coro_context_create(NULL);
 
     turbo_coro_t* co = turbo_coro_create(launcher_task, ctx, NULL);
     turbo_coro_resume(co);
 
-    turbo_coro_context_run(ctx);
+    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     turbo_coro_destroy(co);
     turbo_coro_context_destroy(ctx);

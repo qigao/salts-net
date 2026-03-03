@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "platform.h"
-#include "exprtk_types.h"
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,7 +14,7 @@ extern "C" {
 typedef struct turbo_script_ctx_s turbo_script_ctx_t;
 typedef struct turbo_script_compiled_s turbo_script_compiled_t;
 typedef struct turbo_coro_context_s turbo_coro_context_t;
-
+typedef struct exprtk_value_s exprtk_value_t;
 /**
  * @brief Initialize a new Turbo Script context.
  */
@@ -116,36 +116,35 @@ CXX_C_API void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script
 
 /**
  * @brief Initialize a bare context with only core engine + import.
- * Use turbo_script_load_* to add modules on demand.
+ * Use import("name") to load plugin modules on demand.
  */
 CXX_C_API turbo_script_ctx_t *turbo_script_init_bare(void);
 
-/** @brief Load all fin modules (ta + finance + timeseries) into the context. Equivalent to import("fin"). */
-CXX_C_API void turbo_script_load_fin(turbo_script_ctx_t *ctx);
+/**
+ * @brief Load a plugin by name from C code.
+ * Equivalent to import("name") in script.
+ * @return 0 on success, -1 on failure.
+ */
+CXX_C_API int turbo_script_load_plugin(turbo_script_ctx_t *ctx, const char *name);
 
-/** @brief Load the datetime module (datetime.parse, datetime.now). */
-CXX_C_API void turbo_script_load_datetime(turbo_script_ctx_t *ctx);
+/**
+ * @brief Compile a TurboScript into a MIR module for JIT execution.
+ * @return 0 on success, <0 on error.
+ */
+CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script);
 
-/** @brief Load the JSON module (json.query, json.to_vec). */
-CXX_C_API void turbo_script_load_json(turbo_script_ctx_t *ctx);
+/**
+ * @brief Run a TurboScript using the MIR JIT engine.
+ * @return 0 on success, <0 on error.
+ */
+CXX_C_API int turbo_script_run_jit(turbo_script_ctx_t *ctx, const char *script);
 
-/** @brief Load the string module (str.token, str.count, str.to_num, str.to_str, str.split). */
-CXX_C_API void turbo_script_load_string(turbo_script_ctx_t *ctx);
+/**
+ * @brief Execute the last compiled MIR module (no recompilation).
+ * @return 0 on success, <0 on error.
+ */
+CXX_C_API int turbo_script_exec_jit(turbo_script_ctx_t *ctx);
 
-/** @brief Load the vector module (vec.avg, vec.len, vec.sum, vec.min, vec.max, vec.sort, vec.sort_desc, vec.unique, vec.reverse, vec.concat, vec.range, vec.cumsum, vec.diff, vec.find). */
-CXX_C_API void turbo_script_load_vector(turbo_script_ctx_t *ctx);
-
-/** @brief Load the filesystem module (fs.read, fs.write, fs.exists, fs.remove). */
-CXX_C_API void turbo_script_load_fs(turbo_script_ctx_t *ctx);
-
-/** @brief Load the HTTP module (http.get, http.post). */
-CXX_C_API void turbo_script_load_http(turbo_script_ctx_t *ctx);
-
-/** @brief Load the CSV module.
- *  Legacy (string-based, re-parse each call): csv.rows, csv.cols, csv.get, csv.get_num, csv.col, csv.filter, csv.filter_count, csv.write.
- *  Handle-based (parse once): csv.open, csv.close — csv.rows/csv.cols/csv.col accept handle or string.
- *  Streaming: csv.stream_file, csv.stream_http — return handle, process data as it arrives. */
-CXX_C_API void turbo_script_load_csv(turbo_script_ctx_t *ctx);
 
 #ifdef __cplusplus
 }

@@ -1,15 +1,16 @@
 #include "rpc_client.h"
-#include "tlog.h"
 #include "rpc_error.h"
+#include "tlog.h"
+#include <http_client.h>
 #include <json_parser.h>
-#include <http_coro_client.h>
-#include <turbo_coro.h>
 #include <platform.h>
+#include <stb_sprintf.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stb_sprintf.h>
+#include <turbo_coro.h>
+
 
 #define RPC_CLIENT_VERSION "1.0.0"
 #define MAX_REQUEST_SIZE 65536
@@ -18,7 +19,7 @@
 struct rpc_client_s {
   rpc_client_config_t config;
   rpc_client_state_t state;
-  http_coro_client_t *http_client;
+  http_client_t *http_client;
   int request_id_counter;
 };
 
@@ -27,9 +28,7 @@ struct rpc_client_s {
  * ============================================================================ */
 
 /* Build full URL from config */
-static const char *build_url(rpc_client_t *client) {
-  return client->config.url;
-}
+static const char *build_url(rpc_client_t *client) { return client->config.url; }
 
 /* Build JSON-RPC request using json_parser */
 static char *build_jsonrpc_request(const char *method, const char *params, const char *id,
@@ -219,7 +218,7 @@ static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
 }
 
 /* Process a coro response into an rpc_call_result_t */
-static void process_coro_response(http_coro_response_t *resp, rpc_call_result_t *result) {
+static void process_coro_response(http_response_t *resp, rpc_call_result_t *result) {
   memset(result, 0, sizeof(rpc_call_result_t));
   result->http_status = resp->status_code;
 
@@ -244,7 +243,7 @@ static void process_coro_response(http_coro_response_t *resp, rpc_call_result_t 
  * ============================================================================ */
 
 rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
-  if (!config || !config->url)
+  if (!config || !config->url || !config->http_client)
     return NULL;
 
   rpc_client_t *client = (rpc_client_t *)calloc(1, sizeof(rpc_client_t));
@@ -255,28 +254,10 @@ rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
   client->state = RPC_STATE_DISCONNECTED;
   client->request_id_counter = 1;
 
-  /* Create HTTP client */
-  client->http_client = http_coro_client_create(config->coro_ctx);
-  if (!client->http_client) {
-    free(client);
-    return NULL;
-  }
-
-  /* Configure HTTP client */
-  if (config->timeout_ms > 0) {
-    http_coro_client_set_timeout(client->http_client, config->timeout_ms);
-  }
-
-  if (config->user_agent) {
-    http_coro_client_set_user_agent(client->http_client, config->user_agent);
-  }
+  client->http_client = config->http_client;
 
   /* Set default headers */
-  http_coro_client_set_default_header(client->http_client, "Content-Type", "application/json");
-
-  if (config->keep_alive) {
-    http_coro_client_set_default_header(client->http_client, "Connection", "keep-alive");
-  }
+  http_client_set_default_header(client->http_client, "Content-Type", "application/json");
 
   return client;
 }
@@ -284,10 +265,6 @@ rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
 void rpc_client_destroy(rpc_client_t *client) {
   if (!client)
     return;
-
-  if (client->http_client) {
-    http_coro_client_destroy(client->http_client);
-  }
 
   free(client);
 }
@@ -333,16 +310,16 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
   /* Build URL */
   const char *url = build_url(client);
 
-  /* Direct coroutine call — blocks this coroutine, not the thread */
-  http_coro_response_t *resp = http_coro_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, jsonrpc_body, jsonrpc_len);
+  /* Direct coroutine call �?blocks this coroutine, not the thread */
+  http_response_t *resp =
+      http_request(client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
   json_serialize_free(jsonrpc_body);
 
   if (!resp)
     return -1;
 
   process_coro_response(resp, result);
-  http_coro_response_free(resp);
+  http_response_free(resp);
 
   return 0;
 }
@@ -360,13 +337,13 @@ int rpc_client_notify(rpc_client_t *client, const char *method, const char *para
   /* Build URL */
   const char *url = build_url(client);
 
-  /* Fire and forget — send request, ignore response */
-  http_coro_response_t *resp = http_coro_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, jsonrpc_body, jsonrpc_len);
+  /* Fire and forget �?send request, ignore response */
+  http_response_t *resp =
+      http_request(client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
   json_serialize_free(jsonrpc_body);
 
   if (resp)
-    http_coro_response_free(resp);
+    http_response_free(resp);
 
   return 0;
 }
@@ -442,7 +419,7 @@ int rpc_result_get_double(const rpc_call_result_t *result, const char *key, doub
   return json_extract_double(result->result, key, value);
 }
 
-/* Async call — spawn a coroutine that does the request and calls the user callback */
+/* Async call �?spawn a coroutine that does the request and calls the user callback */
 typedef struct {
   rpc_client_t *client;
   char *method;
@@ -460,14 +437,14 @@ static void async_call_coro(turbo_coro_t *co, void *arg) {
 
   if (jsonrpc_body) {
     const char *url = build_url(a->client);
-    http_coro_response_t *resp = http_coro_request(a->client->http_client, HTTP_POST, url,
-                                                    NULL, 0, jsonrpc_body, jsonrpc_len);
+    http_response_t *resp =
+        http_request(a->client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
     json_serialize_free(jsonrpc_body);
 
     if (resp) {
       rpc_call_result_t result;
       process_coro_response(resp, &result);
-      http_coro_response_free(resp);
+      http_response_free(resp);
 
       if (a->user_callback) {
         a->user_callback(&result, a->user_data);
@@ -570,8 +547,8 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   const char *url = build_url(client);
 
   /* Direct coroutine call */
-  http_coro_response_t *resp = http_coro_request(client->http_client, HTTP_POST, url,
-                                                  NULL, 0, batch_json, pos);
+  http_response_t *resp =
+      http_request(client->http_client, HTTP_POST, url, NULL, 0, batch_json, pos);
   free(batch_json);
 
   if (!resp)
@@ -598,7 +575,7 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
     }
   }
 
-  http_coro_response_free(resp);
+  http_response_free(resp);
   return 0;
 }
 
@@ -667,7 +644,8 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
 
     /* Allocate message buffer - at most as large as the event itself */
     char *msg_buf = (char *)malloc(strlen(event_ptr) + 1);
-    if (!msg_buf) break;
+    if (!msg_buf)
+      break;
     size_t msg_pos = 0;
 
     char *line = event_ptr;
@@ -680,7 +658,7 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
         size_t line_len = next_line - (line + prefix_len);
         /* Strip trailing \r if present */
         if (line_len > 0 && line[prefix_len + line_len - 1] == '\r') {
-            line_len--;
+          line_len--;
         }
         memcpy(msg_buf + msg_pos, line + prefix_len, line_len);
         msg_pos += line_len;
@@ -727,13 +705,12 @@ static void stream_call_coro(turbo_coro_t *co, void *arg) {
   const char *url = build_url(a->client);
   const char *headers[] = {"Accept: text/event-stream", "Cache-Control: no-cache"};
 
-  http_coro_response_t *resp = http_coro_stream_post(
-      a->client->http_client, url, a->jsonrpc_body, a->jsonrpc_len,
-      rpc_stream_data_callback, ctx);
+  http_response_t *resp = http_receive_stream_post(a->client->http_client, url, a->jsonrpc_body,
+                                                   a->jsonrpc_len, rpc_stream_data_callback, ctx);
 
   json_serialize_free(a->jsonrpc_body);
 
-  /* Stream finished — call complete callback */
+  /* Stream finished call complete callback */
   if (ctx->complete_cb) {
     rpc_call_result_t result;
     memset(&result, 0, sizeof(result));
@@ -760,7 +737,7 @@ static void stream_call_coro(turbo_coro_t *co, void *arg) {
   }
 
   if (resp)
-    http_coro_response_free(resp);
+    http_response_free(resp);
   free(ctx->buffer);
   free(ctx);
   free(a);

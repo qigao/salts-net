@@ -13,44 +13,49 @@ set(sources
     "m3_function.c"
     "m3_info.c"
     "m3_module.c"
-    "m3_parse.c"
-)
-
+    "m3_parse.c")
+file(GLOB EXECUTOR_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.c
+     ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 add_library(m3 STATIC ${sources})
-target_include_directories(m3 PUBLIC .)
+target_include_directories(
+  m3 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 target_link_libraries(m3 PUBLIC turbo_utils)
 set_target_properties(m3 PROPERTIES FOLDER "vendor/wasm3")
 
 target_compile_features(m3 PRIVATE c_std_99)
 
-if (CMAKE_C_COMPILER_ID MATCHES "MSVC")
-    # add MSVC specific flags here
+if(CMAKE_C_COMPILER_ID MATCHES "MSVC")
+  # add MSVC specific flags here
 else()
-    # Flags common for GCC and Clang
+  # Flags common for GCC and Clang
 
+  # FIXME: comparison of integers of different signs: 'u32' and 'i32'
+  set_source_files_properties(m3_env.c PROPERTIES COMPILE_FLAGS
+                                                  -Wno-sign-compare)
 
-    # FIXME: comparison of integers of different signs: 'u32' and 'i32'
-    set_source_files_properties(m3_env.c PROPERTIES COMPILE_FLAGS -Wno-sign-compare)
+  if(WASIENV)
+    # FIXME: declaration of 'struct sigaction' will not be visible outside of
+    # this function
+    target_compile_options(m3 PUBLIC -Wno-visibility)
+    # FIXME incompatible pointer types passing 'u32 *' to parameter of type
+    # 'char **'
+    set_source_files_properties(
+      m3_api_meta_wasi.c PROPERTIES COMPILE_FLAGS
+                                    -Wno-incompatible-pointer-types)
+  endif()
 
-    if (WASIENV)
-        # FIXME: declaration of 'struct sigaction' will not be visible outside of this function
-        target_compile_options(m3 PUBLIC -Wno-visibility)
-        # FIXME incompatible pointer types passing 'u32 *' to parameter of type 'char **'
-        set_source_files_properties(m3_api_meta_wasi.c PROPERTIES COMPILE_FLAGS -Wno-incompatible-pointer-types)
-    endif()
-
-    if (CMAKE_C_COMPILER_ID MATCHES "Clang")
-        # Clang specific flags here
-    else()
-        # GCC specific flags here
-    endif()
+  if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    # Clang specific flags here
+  else()
+    # GCC specific flags here
+  endif()
 endif()
 
 if(BUILD_WASI MATCHES "simple")
-    target_compile_definitions(m3 PUBLIC d_m3HasWASI)
+  target_compile_definitions(m3 PUBLIC d_m3HasWASI)
 elseif(BUILD_WASI MATCHES "metawasi")
-    target_compile_definitions(m3 PUBLIC d_m3HasMetaWASI)
+  target_compile_definitions(m3 PUBLIC d_m3HasMetaWASI)
 elseif(BUILD_WASI MATCHES "uvwasi")
-    target_compile_definitions(m3 PUBLIC d_m3HasUVWASI)
-    target_link_libraries(m3 PRIVATE uvwasi_a)
+  target_compile_definitions(m3 PUBLIC d_m3HasUVWASI)
+  target_link_libraries(m3 PRIVATE uvwasi_a)
 endif()

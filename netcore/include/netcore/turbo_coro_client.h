@@ -66,7 +66,8 @@ CXX_C_API int turbo_coro_client_send(turbo_coro_client_t *client, const char *da
  * @brief Receive data from the connection.
  *
  * Suspends until data arrives, the peer closes, or a timeout fires.
- * On success, *data is heap-allocated — caller must free() it.
+ * On success, *data is heap-allocated — caller must free it with
+ * turbo_coro_client_free_recv() (or free() if statically linked).
  *
  * @param client  Client handle
  * @param[out] data  Pointer to received buffer (caller frees)
@@ -74,6 +75,17 @@ CXX_C_API int turbo_coro_client_send(turbo_coro_client_t *client, const char *da
  * @return 0 on success, TURBO_EOF on peer close, negative on error
  */
 CXX_C_API int turbo_coro_client_recv(turbo_coro_client_t *client, char **data, size_t *len);
+
+/**
+ * @brief Free a buffer returned by turbo_coro_client_recv / recvfrom.
+ *
+ * On Windows with shared libraries (DLLs), each DLL may have its own CRT heap.
+ * This function ensures the free() happens in the same module that malloc'd
+ * the buffer, avoiding cross-DLL heap corruption.
+ *
+ * @param data  Buffer pointer returned by recv/recvfrom (NULL-safe)
+ */
+CXX_C_API void turbo_coro_client_free_recv(void *data);
 
 /**
  * @brief Send a datagram to an arbitrary address (UDP only).
@@ -91,7 +103,8 @@ CXX_C_API int turbo_coro_client_sendto(turbo_coro_client_t *client, const char *
  * @brief Receive a datagram with sender address (UDP only).
  *
  * Suspends until a datagram arrives or a timeout fires.
- * On success, *data is heap-allocated — caller must free() it.
+ * On success, *data is heap-allocated — caller must free it with
+ * turbo_coro_client_free_recv() (or free() if statically linked).
  *
  * @param client   Client handle (must be UDP transport)
  * @param[out] data  Pointer to received buffer (caller frees)

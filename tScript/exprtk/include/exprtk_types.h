@@ -20,6 +20,7 @@ typedef enum {
     exprtk_NODE_IF,
     exprtk_NODE_WHILE,
     exprtk_NODE_FOR,
+    exprtk_NODE_SPREAD,
     exprtk_NODE_BLOCK,
     exprtk_NODE_FLOW,
     exprtk_NODE_STRING,
@@ -30,7 +31,18 @@ typedef enum {
     exprtk_NODE_MEMBER_CALL,
     exprtk_NODE_CONSTANT_DECL,
     exprtk_NODE_SWITCH,
-    exprtk_NODE_DO_WHILE
+    exprtk_NODE_DO_WHILE,
+    exprtk_NODE_MAP_LITERAL,
+    exprtk_NODE_MEMBER_ACCESS,
+    exprtk_NODE_MEMBER_SET,
+    exprtk_NODE_FOR_IN,
+    exprtk_NODE_NULL,
+    exprtk_NODE_TEMPLATE_STRING,
+    exprtk_NODE_DESTRUCTURING_ASSIGNMENT,
+    exprtk_NODE_REST_PARAMETER,
+    exprtk_NODE_TRY_CATCH,
+    exprtk_NODE_THROW,
+    exprtk_NODE_FUNCTION_EXPRESSION
 } exprtk_node_type_t;
 
 typedef struct exprtk_node_s exprtk_node_t;
@@ -38,6 +50,9 @@ typedef struct exprtk_node_s exprtk_node_t;
 struct exprtk_node_s {
     exprtk_node_type_t type;
     turbo_arena_t *arena;
+    int line;
+    int column;
+    int inferred_type;  // Type inference result: exprtk_VAL_* or -1 if unknown
     union {
         double number;
         struct {
@@ -98,7 +113,7 @@ struct exprtk_node_s {
         } slice;
         struct {
             char *name;
-            char **arg_names;
+            exprtk_node_t **arg_params;
             size_t arg_count;
             exprtk_node_t *body;
         } func_def;
@@ -118,6 +133,45 @@ struct exprtk_node_s {
             exprtk_node_t *body;
             exprtk_node_t *condition;
         } do_while;
+        struct {
+            char **keys;
+            exprtk_node_t **values;
+            size_t count;
+        } map_literal;
+        struct {
+            exprtk_node_t *object;
+            char *member;
+        } member_access;
+        struct {
+            exprtk_node_t *object;
+            char *member;
+            exprtk_node_t *value;
+        } member_set;
+        struct {
+            char *var_name;
+            exprtk_node_t *collection;
+            exprtk_node_t *body;
+        } for_in;
+        struct {
+            char *template_str;
+            size_t len;
+        } template_string;
+        struct {
+            exprtk_node_t *child;
+        } spread;
+        struct {
+            exprtk_node_t *targets; // exprtk_NODE_VECTOR or exprtk_NODE_MAP_LITERAL
+            exprtk_node_t *value;
+            int is_constant;
+        } destructuring;
+        struct {
+            exprtk_node_t *try_body;
+            char *catch_var;          // variable name for the caught error
+            exprtk_node_t *catch_body;
+        } try_catch;
+        struct {
+            exprtk_node_t *value;     // expression to throw
+        } throw_stmt;
     } data;
 };
 
@@ -126,23 +180,39 @@ typedef struct {
     size_t size;
 } exprtk_vector_t;
 
+// Forward declaration for map
+struct exprtk_map_entry_s;
+struct exprtk_map_s;
+
 // Evaluation result type
-typedef struct {
-    enum { exprtk_VAL_NUMBER, exprtk_VAL_STRING, exprtk_VAL_VECTOR } type;
+typedef struct exprtk_value_s {
+    enum { exprtk_VAL_NUMBER, exprtk_VAL_STRING, exprtk_VAL_VECTOR, exprtk_VAL_MAP, exprtk_VAL_NULL, exprtk_VAL_LIST, exprtk_VAL_FUNCTION } type;
     union {
         double number;
         tstr_v string;
         exprtk_vector_t vector;
+        struct {
+            void *htab;          // HTAB(exprtk_map_kv_t)* — O(1) lookup
+        } map;
+        struct {
+            struct exprtk_value_s *items;
+            size_t count;
+            size_t capacity;
+        } list;
+        struct {
+            exprtk_node_t **arg_params;      // parameter nodes
+            size_t arg_count;
+            exprtk_node_t *body;
+            struct exprtk_env_s *closure_env; // captured scope
+        } function;
     } data;
 } exprtk_value_t;
 
-// Symbol Table / Environment
-typedef struct exprtk_var_s {
-    char *name;
+// Map entry (key-value pair) — defined after exprtk_value_t
+typedef struct exprtk_map_entry_s {
+    char *key;
     exprtk_value_t value;
-    int is_constant; // 1 if read-only
-    struct exprtk_var_s *next;
-} exprtk_var_t;
+} exprtk_map_entry_t;
 
 typedef exprtk_value_t (*exprtk_native_fn)(size_t arg_count, exprtk_value_t *args, void *user_data);
 
@@ -155,7 +225,7 @@ typedef struct exprtk_func_s {
             void *user_data;
         } native;
         struct {
-            char **arg_names;
+            exprtk_node_t **arg_params;
             size_t arg_count;
             exprtk_node_t *body;
         } script;
@@ -167,13 +237,14 @@ typedef enum {
     exprtk_FLOW_NORMAL,
     exprtk_FLOW_BREAK,
     exprtk_FLOW_CONTINUE,
-    exprtk_FLOW_RETURN
+    exprtk_FLOW_RETURN,
+    exprtk_FLOW_THROW
 } exprtk_flow_t;
 
 typedef struct exprtk_module_s exprtk_module_t;
 
 typedef struct exprtk_env_s {
-    exprtk_var_t *head;
+    void *vars;                      // Hash table for variables (opaque pointer to HTAB(exprtk_var_entry_t)*)
     exprtk_func_t *funcs;
     exprtk_flow_t flow;
     exprtk_value_t return_value;
@@ -183,6 +254,10 @@ typedef struct exprtk_env_s {
     const exprtk_module_t **modules;
     size_t module_count;
 
+    // Sorted cache of all module entries (built on first call, O(log n) lookup)
+    void  *mod_cache;           // exprtk_func_entry_t* sorted array (opaque)
+    size_t mod_cache_count;
+
     // Safety Limits
     uint32_t max_recursion;
     uint32_t curr_recursion;
@@ -191,7 +266,16 @@ typedef struct exprtk_env_s {
     uint32_t max_nodes;      // Max nodes to evaluate per expression
     uint32_t curr_nodes;
     int aborted;             // Set to 1 if any safety limit is exceeded
+    int last_line;           // Line of last evaluated node
+    int last_column;         // Column of last evaluated node
     turbo_arena_t arena;     // For persistent data like script function bodies
+    exprtk_value_t error_value; // Value thrown by throw statement
+    struct exprtk_env_s *next_closure; // linked list of closure scopes to free
+
+    // Error reporting (Phase 2)
+    char error_msg[256];     // Last error message
+    int error_line;          // Line where error occurred
+    int error_column;        // Column where error occurred
 } exprtk_env_t;
 
 // Simple context for parser
@@ -202,13 +286,12 @@ typedef struct {
     turbo_arena_t *arena;
 } exprtk_parse_ctx_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Helper to free nodes
 void exprtk_free_node(exprtk_node_t *node);
-void exprtk_env_init(exprtk_env_t *env);
-void exprtk_env_free(exprtk_env_t *env);
-exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name);
-void exprtk_env_set(exprtk_env_t *env, const char *name, exprtk_value_t value);
-void exprtk_env_add_module(exprtk_env_t *env, const exprtk_module_t *mod);
 
 // Token structure passed from Lexer to Parser
 typedef struct {
@@ -219,6 +302,10 @@ typedef struct {
     int line;
     int column;
 } exprtk_token_t;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // exprtk_TYPES_H
 

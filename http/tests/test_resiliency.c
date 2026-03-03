@@ -1,5 +1,5 @@
 #include "tinytest.h"
-#include "http_coro_client.h"
+#include "http_client.h"
 #include <turbo_coro.h>
 #include <netcore/turbo_coro_context.h>
 #include <netcore/turbo_coro_server.h>
@@ -50,20 +50,19 @@ static void client_task_coro(turbo_coro_t* co, void* arg) {
     (void)co;
     test_args_t* a = (test_args_t*)arg;
     
-    http_coro_client_t* c = http_coro_client_create(a->ctx);
-    
+    http_client_t* c = http_client_create();    
     // Set retry policy
     http_retry_policy_t policy = {0};
     policy.max_retries = 3;
     policy.initial_delay_ms = 10; // Fast retry
     policy.retry_on_connection_error = 1;
     policy.retry_on_timeout = 1;
-    http_coro_client_set_retry_policy(c, &policy);
+    http_client_set_retry_policy(c, &policy);
     
     char url[64];
     snprintf(url, sizeof(url), "http://127.0.0.1:%d", a->port);
     
-    http_coro_response_t* r = http_coro_get(c, url);
+    http_response_t* r = http_get(c, url);
     
     if (r && r->status_code == 200 && r->body_len > 10) {
         if (strstr(r->body, "World")) {
@@ -71,8 +70,8 @@ static void client_task_coro(turbo_coro_t* co, void* arg) {
         }
     }
     
-    if (r) http_coro_response_free(r);
-    http_coro_client_destroy(c);
+    if (r) http_response_free(r);
+    http_client_destroy(c);
 
     // Tear down the mock server and stop the loop so context_run() returns
     turbo_coro_server_destroy(a->server);

@@ -676,6 +676,10 @@ static int udp_send(turbo_coro_client_t* c, const char* data, size_t len) {
 }
 
 static int udp_recv_start(turbo_coro_client_t* c) {
+    /* Stop any existing recv first (timeout path doesn't call recv_stop) */
+    if (c->udp.handle) {
+        uv_udp_recv_stop(c->udp.handle);
+    }
     return turbo_udp_server_start(&c->udp, on_udp_recv);
 }
 
@@ -1217,4 +1221,8 @@ void* turbo_coro_client_get_user_data(turbo_coro_client_t* client) {
 
 turbo_coro_context_t* turbo_coro_client_get_context(turbo_coro_client_t* client) {
     return client ? client->ctx : NULL;
+}
+
+void turbo_coro_client_free_recv(void* data) {
+    free(data);
 }

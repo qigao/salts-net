@@ -27,15 +27,12 @@ int exprtk_lexer_next(exprtk_lexer_t *lexer, exprtk_token_t *token) {
     const char *YYLIMIT = lexer->limit;
     const char *token_start;
 
-    token->start = NULL;
-    token->length = 0;
-    token->num_value = 0.0;
     token->type = 0;
-    token->line = lexer->line;
-    token->column = lexer->column;
 
     #define RET(t) do { \
         token->type = t; \
+        token->start = token_start; \
+        token->length = (size_t)(YYCURSOR - token_start); \
         lexer->cursor = YYCURSOR; \
         lexer->column += (int)(YYCURSOR - token_start); \
         return t; \
@@ -43,6 +40,8 @@ int exprtk_lexer_next(exprtk_lexer_t *lexer, exprtk_token_t *token) {
 
 lex_start:
     token_start = YYCURSOR;
+    token->line = lexer->line;
+    token->column = lexer->column;
 
     /*!re2c
         re2c:define:YYCTYPE = "unsigned char";
@@ -73,11 +72,15 @@ lex_start:
         "/" { RET(exprtk_TOKEN_DIVIDE); }
         "%" { RET(exprtk_TOKEN_MOD); }
         "^" { RET(exprtk_TOKEN_POWER); }
+        "..." { RET(exprtk_TOKEN_SPREAD); }
         ".." { RET(exprtk_TOKEN_DOTDOT); }
         "."  { RET(exprtk_TOKEN_DOT); }
+        "?." { RET(exprtk_TOKEN_QUESTION_DOT); }
+        "?"  { RET(exprtk_TOKEN_QUESTION); }
 
         // Comparison
         "==" { RET(exprtk_TOKEN_EQ); }
+        "=>" { RET(exprtk_TOKEN_ARROW); }
         "="  { RET(exprtk_TOKEN_EQUAL); }
         "!=" { RET(exprtk_TOKEN_NE); }
         "<>" { RET(exprtk_TOKEN_NE); }
@@ -97,6 +100,7 @@ lex_start:
         "and" { RET(exprtk_TOKEN_AND); }
         "or"  { RET(exprtk_TOKEN_OR); }
         "not" { RET(exprtk_TOKEN_NOT); }
+        "|>"  { RET(exprtk_TOKEN_PIPE); }
         "&&"  { RET(exprtk_TOKEN_AND); }
         "||"  { RET(exprtk_TOKEN_OR); }
         "!"   { RET(exprtk_TOKEN_NOT); }
@@ -114,16 +118,26 @@ lex_start:
         "var"      { RET(exprtk_TOKEN_VAR); }
         "let"      { RET(exprtk_TOKEN_VAR); }
         "const"    { RET(exprtk_TOKEN_CONST); }
+        "function" { RET(exprtk_TOKEN_FUNC); }
         "func"     { RET(exprtk_TOKEN_FUNC); }
+        "map"      { RET(exprtk_TOKEN_MAP); }
+        "struct"   { RET(exprtk_TOKEN_MAP); }
+        "in"       { RET(exprtk_TOKEN_IN); }
+        "null"     { RET(exprtk_TOKEN_NULL); }
+        "nil"      { RET(exprtk_TOKEN_NULL); }
         "switch"   { RET(exprtk_TOKEN_SWITCH); }
         "case"     { RET(exprtk_TOKEN_CASE); }
         "default"  { RET(exprtk_TOKEN_DEFAULT); }
+        "try"      { RET(exprtk_TOKEN_TRY); }
+        "catch"    { RET(exprtk_TOKEN_CATCH); }
+        "throw"    { RET(exprtk_TOKEN_THROW); }
 
         // Structure
         "{" { RET(exprtk_TOKEN_LBRACE); }
         "}" { RET(exprtk_TOKEN_RBRACE); }
         ";" { RET(exprtk_TOKEN_SEMICOLON); }
         ":" { RET(exprtk_TOKEN_COLON); }
+        "..." { RET(exprtk_TOKEN_SPREAD); }
 
         // Punctuation
         "(" { RET(exprtk_TOKEN_LPAREN); }
@@ -136,6 +150,12 @@ lex_start:
             token->start = token_start;
             token->length = (size_t)(YYCURSOR - token_start);
             RET(exprtk_TOKEN_STRING);
+        }
+
+        "`" ([^`\\] | "\\" .)* "`" {
+            token->start = token_start;
+            token->length = (size_t)(YYCURSOR - token_start);
+            RET(exprtk_TOKEN_TEMPLATE);
         }
 
         "//" [^\n]* {

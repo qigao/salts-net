@@ -5,7 +5,7 @@
  * Based on B-Category research in QuantsPlaybook.
  */
 
-import("fin");
+import("finance");
 
 function run_logic() {
     // 1. Refined Momentum: 20-day return standardized by volatility

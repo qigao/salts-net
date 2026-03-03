@@ -150,20 +150,11 @@ CXX_C_API char *turbo_arena_sprintf(turbo_arena_t *arena, const char *fmt, ...);
  */
 CXX_C_API turbo_arena_buffer_t *turbo_arena_get_buffer(turbo_arena_t *arena, size_t min_size);
 /**
- * @brief Gets a buffer from the arena's recycle pool, or allocates a new one if none are suitable.
- *
- * @param arena A pointer to the `turbo_arena_t` structure.
- * @param min_size The minimum capacity required for the buffer.
- * @return A pointer to an `turbo_arena_buffer_t` instance, or NULL on failure.
- */
-CXX_C_API turbo_arena_buffer_t *turbo_arena_get_pooled_buffer(turbo_arena_t *arena,
-                                                              size_t min_size);
-/**
  * @brief Returns a buffer to the arena's recycle pool.
  *
  * @param buffer A pointer to the `turbo_arena_buffer_t` instance to return.
  */
-CXX_C_API void turbo_arena_return_buffer(turbo_arena_buffer_t *buffer);
+CXX_C_API void turbo_arena_buffer_release(turbo_arena_buffer_t *buffer);
 
 /* Reference counting */
 /**

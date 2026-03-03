@@ -9,7 +9,8 @@
  * decreasing rate (non-linear/parabolic), it indicates "Herding" (Sheep effect).
  */
 
-import("fin");
+import("finance");
+import("ta");
 
 function run_herding_test(return_matrix, na, np) {
     // 1. Calculate Cross-Sectional Absolute Deviation (CSAD) for each period

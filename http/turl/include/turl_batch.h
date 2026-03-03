@@ -7,7 +7,6 @@
 #define TURL_BATCH_H
 
 #include <json_parser.h>
-#include <netcore/turbo_coro_context.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -31,8 +30,7 @@ int turl_batch_download(const char *input_file, int64_t concurrency,
                         char **headers, uint32_t header_count,
                         json_value_t *mustache_context,
                         const char *output_directory,
-                        int follow_redirects, int verbose,
-                        turbo_coro_context_t *coro_ctx);
+                        int follow_redirects, int verbose);
 
 #ifdef __cplusplus
 }

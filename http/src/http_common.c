@@ -145,11 +145,7 @@ void http_cookie_jar_destroy(http_cookie_jar_t *jar) {
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     http_cookie_t *next = cookie->next;
-    tstr_free(cookie->name);
-    tstr_free(cookie->value);
-    tstr_free(cookie->domain);
-    tstr_free(cookie->path);
-    free(cookie);
+    http_cookie_free(cookie);
     cookie = next;
   }
   free(jar);
@@ -160,16 +156,16 @@ void http_cookie_jar_set(http_cookie_jar_t *jar, const char *name, const char *v
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     if (strcmp(cookie->name, name) == 0) {
-      tstr_free(cookie->value);
-      cookie->value = tstr_dup(value);
+      free(cookie->value);
+      cookie->value = strdup(value);
       return;
     }
     cookie = cookie->next;
   }
   cookie = (http_cookie_t *)calloc(1, sizeof(http_cookie_t));
   if (!cookie) return;
-  cookie->name = tstr_dup(name);
-  cookie->value = tstr_dup(value);
+  cookie->name = strdup(name);
+  cookie->value = strdup(value);
   cookie->next = jar->cookies;
   jar->cookies = cookie;
   jar->count++;
@@ -192,11 +188,8 @@ void http_cookie_jar_remove(http_cookie_jar_t *jar, const char *name) {
   while (cookie) {
     if (strcmp(cookie->name, name) == 0) {
       *prev = cookie->next;
-      tstr_free(cookie->name);
-      tstr_free(cookie->value);
-      tstr_free(cookie->domain);
-      tstr_free(cookie->path);
-      free(cookie);
+      cookie->next = NULL; /* detach before freeing */
+      http_cookie_free(cookie);
       jar->count--;
       return;
     }
@@ -210,11 +203,8 @@ void http_cookie_jar_clear(http_cookie_jar_t *jar) {
   http_cookie_t *cookie = jar->cookies;
   while (cookie) {
     http_cookie_t *next = cookie->next;
-    tstr_free(cookie->name);
-    tstr_free(cookie->value);
-    tstr_free(cookie->domain);
-    tstr_free(cookie->path);
-    free(cookie);
+    cookie->next = NULL;
+    http_cookie_free(cookie);
     cookie = next;
   }
   jar->cookies = NULL;
@@ -222,6 +212,7 @@ void http_cookie_jar_clear(http_cookie_jar_t *jar) {
 }
 
 int http_cookie_jar_count(http_cookie_jar_t *jar) { return jar ? jar->count : 0; }
+
 
 /* ── Retry policy default ────────────────────────────────────────── */
 

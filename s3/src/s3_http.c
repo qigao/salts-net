@@ -47,12 +47,11 @@ s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t*
     s3_http_response_t res = {0};
     res.headers = S3Headers_init();
 
-    http_coro_client_t *client = http_coro_client_create(ctx);
-    if (!client) {
+    http_client_t *client = http_client_create();    if (!client) {
         res.error = s3_error_make(-1, "Failed to create HTTP coro client");
         return res;
     }
-    http_coro_client_follow_redirects(client, 0);
+    http_client_follow_redirects(client, 0);
 
     http_retry_policy_t policy = {0};
     policy.max_retries = 3;
@@ -63,14 +62,14 @@ s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t*
     policy.retry_on_connection_error = 1;
     policy.retry_on_5xx = 1;
     policy.jitter_factor = 0.1;
-    http_coro_client_set_retry_policy(client, &policy);
+    http_client_set_retry_policy(client, &policy);
 
     // Base 30s + 30s per MB of body to accommodate large uploads on slow networks
     int timeout_ms = 30000;
     if (req->body_len > 0) {
         timeout_ms += (int)((req->body_len / (1024 * 1024)) + 1) * 30000;
     }
-    http_coro_client_set_timeout(client, timeout_ms);
+    http_client_set_timeout(client, timeout_ms);
 
     int hdr_count = 0;
     const char** hdrs = s3_headers_to_http_array(&req->headers, &hdr_count);
@@ -82,7 +81,7 @@ s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t*
     else if (strcmp(req->method, "DELETE") == 0) method = HTTP_DELETE;
     else if (strcmp(req->method, "HEAD") == 0) method = HTTP_HEAD;
 
-    http_coro_response_t *hresp = http_coro_request(client, method, req->url,
+    http_response_t *hresp = http_request(client, method, req->url,
                                                      hdrs, hdr_count,
                                                      req->body, req->body_len);
 
@@ -100,7 +99,7 @@ s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t*
         } else {
             res.error = S3_OK;
         }
-        http_coro_response_free(hresp);
+        http_response_free(hresp);
     } else {
         res.error = s3_error_make(-1, "HTTP request failed (no response)");
     }
@@ -111,7 +110,7 @@ s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t*
         free(hdrs);
     }
 
-    http_coro_client_destroy(client);
+    http_client_destroy(client);
     return res;
 }
 

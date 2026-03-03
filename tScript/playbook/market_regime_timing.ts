@@ -5,7 +5,7 @@
  * Uses RSRS (Relative Strength) + Alligator (Trend) + Efficiency (Noise).
  */
 
-import("fin");
+import("finance");
 
 function update() {
     // 1. Core Trend: Alligator Balance Lines

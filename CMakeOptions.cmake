@@ -37,14 +37,9 @@ message(STATUS "SSL backend used: ${SSL_BACKEND_USED}")
 #     add_compile_options(/bigobj)
 # endif()
 
-# zlib support
-option(ENABLE_ZLIB "Use zlib" ON)
-
-option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(BUILD_EXAMPLES "Build example programs" ON)
 option(BUILD_TESTS "Build test suite" ON)
 
-  
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 find_package(Threads REQUIRED)

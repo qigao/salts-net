@@ -312,6 +312,18 @@ CXX_C_API const char *turbo_xml_node_name(const turbo_xml_node_t *node);
 
 /* CSV */
 typedef struct csv_doc_s turbo_csv_doc_t;
+typedef struct dsv_filter_s turbo_dsv_filter_t;
+typedef struct csv_stream_processor_s turbo_csv_stream_processor_t;
+
+typedef struct turbo_csv_options_s {
+  bool has_header;
+  char delimiter;
+  char quote;
+  bool skip_empty_rows;
+} turbo_csv_options_t;
+
+typedef void (*turbo_dsv_row_callback_t)(void *user_data, size_t row_index,
+                                         const char *rendered_row);
 
 /**
  * @brief Parse CSV data.
@@ -321,6 +333,17 @@ typedef struct csv_doc_s turbo_csv_doc_t;
  * @return 0 on success, error code otherwise.
  */
 CXX_C_API int turbo_parse_csv(const uint8_t *data, size_t len, void *out);
+
+/**
+ * @brief Parse CSV data with options.
+ * @param data Input buffer.
+ * @param len Buffer length.
+ * @param opts CSV options.
+ * @param out Address of a pointer (turbo_csv_doc_t **) to store the result.
+ * @return 0 on success, error code otherwise.
+ */
+CXX_C_API int turbo_parse_csv_opts(const uint8_t *data, size_t len, const turbo_csv_options_t *opts,
+                                   void *out);
 
 /**
  * @brief Free CSV data and set pointer to NULL.
@@ -381,6 +404,188 @@ CXX_C_API double turbo_csv_get_double(const turbo_csv_doc_t *doc, size_t row, si
  * @return cell boolean value.
  */
 CXX_C_API bool turbo_csv_get_bool(const turbo_csv_doc_t *doc, size_t row, size_t col, bool def);
+
+/**
+ * @brief Find column index by header name.
+ * @param doc Pointer to CSV document.
+ * @param header_name Header name.
+ * @return Column index, or (size_t)-1 if not found.
+ */
+CXX_C_API size_t turbo_csv_find_column(const turbo_csv_doc_t *doc, const char *header_name);
+
+/**
+ * @brief Write CSV document to file.
+ * @param doc Pointer to CSV document.
+ * @param filename Target filename.
+ * @return 0 on success, non-zero on failure.
+ */
+CXX_C_API int turbo_csv_write_file(const turbo_csv_doc_t *doc, const char *filename);
+
+/**
+ * @brief Create a DSV filter bound to a parsed CSV document.
+ * @param doc Parsed CSV document.
+ * @param header_row_index Header row index (0-based).
+ * @return DSV filter handle, or NULL on failure.
+ */
+CXX_C_API turbo_dsv_filter_t *turbo_dsv_filter_create(const turbo_csv_doc_t *doc,
+                                                      size_t header_row_index);
+
+/**
+ * @brief Destroy a DSV filter.
+ * @param filter DSV filter handle.
+ */
+CXX_C_API void turbo_dsv_filter_destroy(turbo_dsv_filter_t *filter);
+
+/**
+ * @brief Get last DSV filter error message.
+ * @param filter DSV filter handle.
+ * @return Error string, or empty/null when no error.
+ */
+CXX_C_API const char *turbo_dsv_filter_error(turbo_dsv_filter_t *filter);
+
+/**
+ * @brief Compile DSV filter expression.
+ * @details Supports:
+ *          - logical join: and/or
+ *          - comparison: == != > >= < <=
+ *          - numeric lhs arithmetic: + - * /, unary +/- and parentheses
+ *          - string literal rhs: "..."
+ *          See tScript/docs/csv_filter_expression.md for full syntax and
+ *          error semantics.
+ * @param filter DSV filter handle.
+ * @param expression Expression string.
+ * @return true on success, false on failure.
+ */
+CXX_C_API bool turbo_dsv_filter_compile(turbo_dsv_filter_t *filter, const char *expression);
+
+/**
+ * @brief Set output delimiter for rendered rows.
+ * @param filter DSV filter handle.
+ * @param delimiter Delimiter character.
+ */
+CXX_C_API void turbo_dsv_filter_set_output_delimiter(turbo_dsv_filter_t *filter, char delimiter);
+
+/**
+ * @brief Evaluate filter on one row.
+ * @param filter DSV filter handle.
+ * @param row_index Row index.
+ * @return 1 match, 0 mismatch, -1 error.
+ */
+CXX_C_API int turbo_dsv_filter_check_row(turbo_dsv_filter_t *filter, size_t row_index);
+
+/**
+ * @brief Run filter across rows and emit matched rendered rows.
+ * @param filter DSV filter handle.
+ * @param callback Callback for each matched row.
+ * @param user_data User context passed to callback.
+ */
+CXX_C_API void turbo_dsv_filter_run(turbo_dsv_filter_t *filter,
+                                    turbo_dsv_row_callback_t callback, void *user_data);
+
+/**
+ * @brief Create CSV stream processor.
+ * @param opts Optional CSV options. NULL uses defaults.
+ * @return Processor handle, or NULL on failure.
+ */
+CXX_C_API turbo_csv_stream_processor_t *
+turbo_csv_stream_processor_create(const turbo_csv_options_t *opts);
+
+/**
+ * @brief Destroy CSV stream processor.
+ * @param p Processor handle.
+ */
+CXX_C_API void turbo_csv_stream_processor_destroy(turbo_csv_stream_processor_t *p);
+
+/**
+ * @brief Set filter expression before feeding rows.
+ * @param p Processor handle.
+ * @param expr Filter expression.
+ * @return true on success.
+ */
+CXX_C_API bool turbo_csv_stream_processor_set_filter(turbo_csv_stream_processor_t *p,
+                                                     const char *expr);
+
+/**
+ * @brief Select columns to accumulate.
+ * @param p Processor handle.
+ * @param names Comma-separated column names.
+ */
+CXX_C_API void turbo_csv_stream_processor_set_columns(turbo_csv_stream_processor_t *p,
+                                                      const char *names);
+
+/**
+ * @brief Feed raw CSV bytes to processor.
+ * @param data Data chunk.
+ * @param len Data length.
+ * @param user_data Processor handle.
+ */
+CXX_C_API void turbo_csv_stream_processor_feed(const char *data, size_t len, void *user_data);
+
+/**
+ * @brief Finish streaming and flush remaining buffered row.
+ * @param p Processor handle.
+ */
+CXX_C_API void turbo_csv_stream_processor_finish(turbo_csv_stream_processor_t *p);
+
+/**
+ * @brief Get matched row count.
+ * @param p Processor handle.
+ * @return Number of matched rows.
+ */
+CXX_C_API size_t turbo_csv_stream_processor_row_count(const turbo_csv_stream_processor_t *p);
+
+/**
+ * @brief Get detected column count.
+ * @param p Processor handle.
+ * @return Number of columns.
+ */
+CXX_C_API size_t turbo_csv_stream_processor_col_count(const turbo_csv_stream_processor_t *p);
+
+/**
+ * @brief Get raw column name by index.
+ * @param p Processor handle.
+ * @param idx Column index.
+ * @return Column name or NULL.
+ */
+CXX_C_API const char *turbo_csv_stream_processor_col_name(const turbo_csv_stream_processor_t *p,
+                                                          size_t idx);
+
+/**
+ * @brief Resolve column index by name.
+ * @param p Processor handle.
+ * @param name Column name.
+ * @return Column index or (size_t)-1.
+ */
+CXX_C_API size_t turbo_csv_stream_processor_col_index(const turbo_csv_stream_processor_t *p,
+                                                      const char *name);
+
+/**
+ * @brief Get numeric column data.
+ * @param p Processor handle.
+ * @param col Column index.
+ * @param out_len Receives length.
+ * @return Pointer to internal double array or NULL.
+ */
+CXX_C_API const double *
+turbo_csv_stream_processor_col_data(const turbo_csv_stream_processor_t *p, size_t col,
+                                    size_t *out_len);
+
+/**
+ * @brief Get string value from matched row/column.
+ * @param p Processor handle.
+ * @param row Row index in matched set.
+ * @param col Column index.
+ * @return String pointer or NULL.
+ */
+CXX_C_API const char *turbo_csv_stream_processor_get_str(const turbo_csv_stream_processor_t *p,
+                                                         size_t row, size_t col);
+
+/**
+ * @brief Get processor error text.
+ * @param p Processor handle.
+ * @return Error string.
+ */
+CXX_C_API const char *turbo_csv_stream_processor_error(const turbo_csv_stream_processor_t *p);
 
 /* INI */
 typedef struct ini_s turbo_ini_t;

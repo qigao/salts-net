@@ -32,7 +32,7 @@ static void buffer_churn_thread(void *arg) {
 
   for (int i = 0; i < ITERATIONS; i++) {
     // Allocate a buffer (triggering pop from recycle list if available)
-    turbo_arena_buffer_t *buf = turbo_arena_get_pooled_buffer(&arena, 256);
+    turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
 
     // If the list is corrupted, we might get NULL or invalid pointer causing
     // crash later
@@ -46,7 +46,7 @@ static void buffer_churn_thread(void *arg) {
       turbo_sleep_ms(0);
 
       // Return it (push to recycle list)
-      turbo_arena_return_buffer(buf);
+      turbo_arena_buffer_release(buf);
     }
 
     if (stop_threads)
@@ -68,7 +68,7 @@ spec("Arena Multithread Tests") {
     // pop
     for (int i = 0; i < 50; i++) {
       turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-      turbo_arena_return_buffer(buf);
+      turbo_arena_buffer_release(buf);
     }
 
     // Start threads

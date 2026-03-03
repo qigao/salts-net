@@ -9,10 +9,10 @@
 #include <platform.h>
 #include <turbo_thread.h>
 #include <turbo_coro.h>
-#include <http_coro_client.h>
+#include <http_client.h>
 #include <rpc_client.h>
 
-/* --- 1. SSE Client (using http_coro_client) --- */
+/* --- 1. SSE Client (using http_client) --- */
 
 static void on_sse_data(const char *data, size_t len, void *user_data) {
     (void)user_data;
@@ -29,21 +29,20 @@ static void sse_coro_entry(turbo_coro_t *co, void *arg) {
     (void)co;
     turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
 
-    http_coro_client_t *client = http_coro_client_create(ctx);
-    http_coro_client_set_timeout(client, 30000);
+    http_client_t *client = http_client_create();    http_client_set_timeout(client, 30000);
 
     printf("\n=== HTTP SSE GET Test ===\n");
     printf("Connecting to http://localhost:8080/stream...\n");
 
-    http_coro_response_t *r = http_coro_sse_get(
+    http_response_t *r = http_sse_get(
         client, "http://localhost:8080/stream", on_sse_data, NULL);
 
     if (r) {
         printf("\n[HTTP SSE] Stream closed. Status: %d\n", r->status_code);
-        http_coro_response_free(r);
+        http_response_free(r);
     }
 
-    http_coro_client_destroy(client);
+    http_client_destroy(client);
 }
 
 void run_http_sse_test() {

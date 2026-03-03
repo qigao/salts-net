@@ -14,13 +14,14 @@
 #include "websocket_handshake_parser.h"
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #endif
+
+static const char WS_GUID[48] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 
 // ============================================================================
@@ -43,6 +44,9 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
                                    size_t len);
 static int send_websocket_frame(turbo_websocket_client_t *client, websocket_opcode_t opcode,
                                 const uint8_t *payload, size_t len, int fin);
+static int ws_compute_accept_key(const char *client_key, char *accept_key, size_t accept_key_size);
+static int ws_extract_header_value(const char *headers, const char *header_name, char *out,
+                                   size_t out_size);
 
 // ============================================================================
 // Client lifecycle
@@ -104,7 +108,7 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
   }
 
   // Allocate handshake buffer
-  client->handshake_recv_buffer = turbo_arena_get_pooled_buffer(client->conn_arena, 4096);
+  client->handshake_recv_buffer = turbo_arena_get_buffer(client->conn_arena, 4096);
   if (!client->handshake_recv_buffer) {
     turbo_arena_free(client->conn_arena);
     free(client->conn_arena);
@@ -114,8 +118,11 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
 
   // Generate Sec-WebSocket-Key (16 random bytes, base64 encoded)
   uint8_t key_bytes[16];
-  for (int i = 0; i < 16; i++) {
-    key_bytes[i] = (uint8_t)(rand() % 256);
+  if (secure_random(key_bytes, sizeof(key_bytes)) != 0) {
+    turbo_arena_free(client->conn_arena);
+    free(client->conn_arena);
+    free(client);
+    return NULL;
   }
 
   char *key_b64 = NULL;
@@ -566,6 +573,69 @@ static const char *strcasestr_local(const char *haystack, const char *needle) {
   return NULL;
 }
 
+static int ws_compute_accept_key(const char *client_key, char *accept_key, size_t accept_key_size) {
+  if (!client_key || !accept_key || accept_key_size == 0) {
+    return -1;
+  }
+
+  char combined[256];
+  static const char FMT_COMBINED[32] = "%s%s";
+  int written = stbsp_snprintf(combined, (int)sizeof(combined), FMT_COMBINED, client_key, WS_GUID);
+  if (written <= 0 || written >= (int)sizeof(combined)) {
+    return -1;
+  }
+
+  sha1_context_t sha1;
+  uint8_t digest[20];
+  sha1_init(&sha1);
+  sha1_update(&sha1, (const uint8_t *)combined, (size_t)written);
+  sha1_final(&sha1, digest);
+
+  char *b64 = NULL;
+  if (tn_base64_encode(digest, sizeof(digest), &b64) != 0 || !b64) {
+    return -1;
+  }
+
+  size_t b64_len = strlen(b64);
+  if (b64_len + 1 > accept_key_size) {
+    free(b64);
+    return -1;
+  }
+  memcpy(accept_key, b64, b64_len + 1);
+  free(b64);
+  return 0;
+}
+
+static int ws_extract_header_value(const char *headers, const char *header_name, char *out,
+                                   size_t out_size) {
+  if (!headers || !header_name || !out || out_size == 0) {
+    return -1;
+  }
+
+  const char *line = strcasestr_local(headers, header_name);
+  if (!line) {
+    return -1;
+  }
+  line += strlen(header_name);
+
+  while (*line == ' ' || *line == '\t') {
+    line++;
+  }
+
+  const char *end = strstr(line, "\r\n");
+  if (!end || end <= line) {
+    return -1;
+  }
+
+  size_t len = (size_t)(end - line);
+  if (len + 1 > out_size) {
+    return -1;
+  }
+  memcpy(out, line, len);
+  out[len] = '\0';
+  return 0;
+}
+
 static int process_handshake_response(turbo_websocket_client_t *client, const char *data,
                                       size_t len) {
   TLOG_DEBUG("process_handshake_response: len={} client={}", len, (void*)client);
@@ -586,10 +656,24 @@ static int process_handshake_response(turbo_websocket_client_t *client, const ch
     return 0; // Need more data
   }
 
-  // Validate handshake response (case-insensitive for headers)
-  // Check for 101 Switching Protocols (allow HTTP/1.0 or HTTP/1.1)
-  if (strstr(client->handshake_recv_buffer->data, " 101 ") &&
-      strcasestr_local(client->handshake_recv_buffer->data, "upgrade: websocket")) {
+  // Validate handshake response
+  char accept_value[96];
+  char expected_accept[96];
+  int status_101 = strstr(client->handshake_recv_buffer->data, " 101 ") != NULL;
+  int has_upgrade =
+      strcasestr_local(client->handshake_recv_buffer->data, "upgrade: websocket") != NULL;
+  int has_connection =
+      strcasestr_local(client->handshake_recv_buffer->data, "connection: upgrade") != NULL;
+  int has_accept = ws_extract_header_value(client->handshake_recv_buffer->data,
+                                           "sec-websocket-accept:",
+                                           accept_value, sizeof(accept_value)) == 0;
+  const char *request_key =
+      client->sec_websocket_key ? client->sec_websocket_key : "dGhlIHNhbXBsZSBub25jZQ==";
+  int expected_ok = has_accept &&
+                    ws_compute_accept_key(request_key, expected_accept, sizeof(expected_accept)) == 0;
+
+  if (status_101 && has_upgrade && has_connection && expected_ok &&
+      strcmp(accept_value, expected_accept) == 0) {
 
     // Handshake successful
     client->state = TURBO_WS_STATE_OPEN;
@@ -770,8 +854,10 @@ static int send_websocket_frame(turbo_websocket_client_t *client, websocket_opco
 
   // Masking key (4 random bytes)
   uint8_t masking_key[4];
+  if (secure_random(masking_key, sizeof(masking_key)) != 0) {
+    return -1;
+  }
   for (int i = 0; i < 4; i++) {
-    masking_key[i] = rand() % 256;
     header[header_len++] = masking_key[i];
   }
 
@@ -864,8 +950,10 @@ int turbo_websocket_client_sendv(turbo_websocket_client_t *client, const void *i
 
   // Generate masking key
   uint8_t masking_key[4];
+  if (secure_random(masking_key, sizeof(masking_key)) != 0) {
+    return -1;
+  }
   for (int i = 0; i < 4; i++) {
-    masking_key[i] = rand() % 256;
     header[header_len++] = masking_key[i];
   }
 

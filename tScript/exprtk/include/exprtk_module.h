@@ -54,6 +54,83 @@ static inline exprtk_value_t exprtk_val_vec(double *data, size_t size) {
     return val;
 }
 
+static inline exprtk_value_t exprtk_val_str(tstr_v v) {
+    exprtk_value_t val;
+    val.type = exprtk_VAL_STRING;
+    val.data.string = v;
+    return val;
+}
+
+/* =========================================================================
+ * Map helpers — O(1) hash table backed map
+ *
+ * Implementation lives in exprtk_map.c (needs MIR HTAB internals).
+ * ========================================================================= */
+
+exprtk_value_t  exprtk_val_map(void);
+exprtk_value_t  exprtk_map_get(const exprtk_value_t *map, const char *key);
+void            exprtk_map_set(exprtk_value_t *map, const char *key, exprtk_value_t value);
+int             exprtk_map_has(const exprtk_value_t *map, const char *key);
+int             exprtk_map_delete(exprtk_value_t *map, const char *key);
+size_t          exprtk_map_count(const exprtk_value_t *map);
+void            exprtk_map_free(exprtk_value_t *map);
+
+/* Returns a pointer to the value inside the hash table (for JIT direct memory access).
+ * The pointer is stable as long as no insertions/deletions occur. */
+exprtk_value_t *exprtk_map_get_ptr(const exprtk_value_t *map, const char *key);
+
+/* Iteration: call exprtk_map_iter_begin, then loop while _next returns 1 */
+typedef struct {
+    void *htab;
+    size_t pos;
+    size_t bound;
+} exprtk_map_iter_t;
+
+exprtk_map_iter_t exprtk_map_iter_begin(const exprtk_value_t *map);
+int               exprtk_map_iter_next(exprtk_map_iter_t *it, const char **key, exprtk_value_t *value);
+
+/* =========================================================================
+ * List helpers — heterogeneous array of exprtk_value_t
+ * ========================================================================= */
+
+static inline exprtk_value_t exprtk_val_list_empty(void) {
+    exprtk_value_t val;
+    memset(&val, 0, sizeof(val));
+    val.type = exprtk_VAL_LIST;
+    val.data.list.items = NULL;
+    val.data.list.count = 0;
+    val.data.list.capacity = 0;
+    return val;
+}
+
+static inline exprtk_value_t exprtk_val_list(exprtk_value_t *items, size_t n) {
+    exprtk_value_t val;
+    val.type = exprtk_VAL_LIST;
+    val.data.list.items = items;
+    val.data.list.count = n;
+    val.data.list.capacity = n;
+    return val;
+}
+
+static inline void exprtk_list_push(exprtk_value_t *list, exprtk_value_t item) {
+    if (list->type != exprtk_VAL_LIST) return;
+    if (list->data.list.count >= list->data.list.capacity) {
+        size_t new_cap = list->data.list.capacity ? list->data.list.capacity * 2 : 4;
+        exprtk_value_t *new_items = (exprtk_value_t*)realloc(
+            list->data.list.items, new_cap * sizeof(exprtk_value_t));
+        if (!new_items) return;
+        list->data.list.items = new_items;
+        list->data.list.capacity = new_cap;
+    }
+    list->data.list.items[list->data.list.count++] = item;
+}
+
+static inline exprtk_value_t exprtk_list_get(const exprtk_value_t *list, size_t idx) {
+    if (list->type != exprtk_VAL_LIST || idx >= list->data.list.count)
+        return exprtk_val_num(0);
+    return list->data.list.items[idx];
+}
+
 /* =========================================================================
  * Arena allocation helpers
  * ========================================================================= */

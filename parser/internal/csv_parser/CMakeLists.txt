@@ -14,6 +14,9 @@ add_custom_command(
   COMMENT "Generating CSV lexer with re2c"
   VERBATIM)
 
+set(DSV_EXPR_LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/dsv_filter_expr_lexer.re)
+set(DSV_EXPR_LEXER_GEN ${CMAKE_CURRENT_BINARY_DIR}/dsv_filter_expr_lexer_gen.c)
+
 # =============================================================================
 # Lemon Generated Files
 # =============================================================================
@@ -32,6 +35,27 @@ add_custom_command(
   COMMENT "Generating CSV parser with lemon"
   VERBATIM)
 
+set(DSV_EXPR_GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/dsv_filter_expr_grammar.y)
+set(DSV_EXPR_GRAMMAR_GEN ${CMAKE_CURRENT_BINARY_DIR}/dsv_filter_expr_grammar_gen.c)
+set(DSV_EXPR_GRAMMAR_H ${CMAKE_CURRENT_BINARY_DIR}/dsv_filter_expr_grammar_gen.h)
+
+add_custom_command(
+  OUTPUT ${DSV_EXPR_GRAMMAR_GEN} ${DSV_EXPR_GRAMMAR_H}
+  COMMAND ${CMAKE_COMMAND} -E copy ${DSV_EXPR_GRAMMAR_Y}
+          ${CMAKE_CURRENT_BINARY_DIR}/dsv_filter_expr_grammar_gen.y
+  COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR}
+          ${CMAKE_CURRENT_BINARY_DIR}/dsv_filter_expr_grammar_gen.y
+  DEPENDS ${DSV_EXPR_GRAMMAR_Y} ${LEMON_DEPENDS}
+  COMMENT "Generating DSV expression parser with lemon"
+  VERBATIM)
+
+add_custom_command(
+  OUTPUT ${DSV_EXPR_LEXER_GEN}
+  COMMAND ${RE2C_EXECUTABLE} -o ${DSV_EXPR_LEXER_GEN} ${DSV_EXPR_LEXER_RE}
+  DEPENDS ${DSV_EXPR_LEXER_RE} ${DSV_EXPR_GRAMMAR_H}
+  COMMENT "Generating DSV expression lexer with re2c"
+  VERBATIM)
+
 # =============================================================================
 # Library (respects BUILD_SHARED_LIBS)
 # =============================================================================
@@ -39,7 +63,9 @@ add_custom_command(
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${CSV_LEXER_GEN}
-                                  ${CSV_GRAMMAR_GEN})
+                                  ${CSV_GRAMMAR_GEN}
+                                  ${DSV_EXPR_LEXER_GEN}
+                                  ${DSV_EXPR_GRAMMAR_GEN})
 add_library(TurboNet::CsvParser ALIAS ${TARGET_NAME})
 
 target_include_directories(

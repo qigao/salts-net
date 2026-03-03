@@ -2,14 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-#include "config.h"
 #include "arena_buffer.h"
-#include "stats.h"
-#include "turbo_udp.h"
+#include "config.h"
 #include "internal.h"
+#include "stats.h"
 #include "tlog.h"
- 
+#include "turbo_udp.h"
 
 /* Forward declarations for global synchronization */
 extern void turbo_udp_sync_lock(void);
@@ -30,22 +28,23 @@ static const size_t MAX_SEND_OP_POOL_SIZE = 512;
 
 /* UDP Statistics IDs */
 static struct {
-    turbo_stat_id_t bytes_sent;
-    turbo_stat_id_t bytes_received;
-    turbo_stat_id_t send_errors;
-    turbo_stat_id_t recv_errors;
-    int initialized;
+  turbo_stat_id_t bytes_sent;
+  turbo_stat_id_t bytes_received;
+  turbo_stat_id_t send_errors;
+  turbo_stat_id_t recv_errors;
+  int initialized;
 } s_udp_stats = {0};
 
 static void init_udp_stats(void) {
-    if (s_udp_stats.initialized) return;
-    
-    s_udp_stats.bytes_sent = turbo_stats_register("udp.bytes_sent", TURBO_STAT_COUNTER);
-    s_udp_stats.bytes_received = turbo_stats_register("udp.bytes_received", TURBO_STAT_COUNTER);
-    s_udp_stats.send_errors = turbo_stats_register("udp.send_errors", TURBO_STAT_COUNTER);
-    s_udp_stats.recv_errors = turbo_stats_register("udp.recv_errors", TURBO_STAT_COUNTER);
-    
-    s_udp_stats.initialized = 1;
+  if (s_udp_stats.initialized)
+    return;
+
+  s_udp_stats.bytes_sent = turbo_stats_register("udp.bytes_sent", TURBO_STAT_COUNTER);
+  s_udp_stats.bytes_received = turbo_stats_register("udp.bytes_received", TURBO_STAT_COUNTER);
+  s_udp_stats.send_errors = turbo_stats_register("udp.send_errors", TURBO_STAT_COUNTER);
+  s_udp_stats.recv_errors = turbo_stats_register("udp.recv_errors", TURBO_STAT_COUNTER);
+
+  s_udp_stats.initialized = 1;
 }
 
 /* Get send operation from pool (thread-safe) */
@@ -109,8 +108,7 @@ static void on_send_complete(uv_udp_send_t *req, int status) {
 }
 
 /* Receive buffer allocation */
-static void alloc_recv_buffer(uv_handle_t *handle, size_t suggested_size,
-                              uv_buf_t *buf) {
+static void alloc_recv_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   (void)suggested_size;
 
   turbo_udp_server_t *server = (turbo_udp_server_t *)handle->data;
@@ -167,8 +165,7 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     turbo_arena_buffer_set_used(used_buffer, (size_t)nread);
 
     /* Create zero-copy slice for the received data */
-    turbo_arena_slice_t slice =
-        turbo_arena_buffer_slice(used_buffer, 0, (size_t)nread);
+    turbo_arena_slice_t slice = turbo_arena_buffer_slice(used_buffer, 0, (size_t)nread);
 
     /* Call user callback with zero-copy slice */
     server->on_recv(server, &slice, (void *)addr);
@@ -187,14 +184,14 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 static void on_handle_closed(uv_handle_t *handle) { free(handle); }
 
 /* Initialize enhanced UDP server */
-int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop,
-                         const char *host, unsigned short port) {
+int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop, const char *host,
+                          unsigned short port) {
   if (!server || !loop)
     return UV_EINVAL;
 
   memset(server, 0, sizeof(*server));
   server->loop = loop;
-  
+
   init_udp_stats();
 
   /* Initialize arena */
@@ -248,19 +245,16 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop,
     return rc;
   }
 
-
   return 0;
-} /* S
- tart enhanced UDP server */
+}
+/* Start enhanced UDP server */
 int turbo_udp_server_start(turbo_udp_server_t *server, turbo_recv_cb cb) {
   if (!server || !server->handle)
     return UV_EINVAL;
 
   server->on_recv = cb;
   int rc = uv_udp_recv_start(server->handle, alloc_recv_buffer, on_udp_recv);
-  if (rc == 0) {
-    TLOG_INFO("UDP server listening");
-  } else {
+  if (rc != 0) {
     TLOG_ERROR("UDP server start failed: {:s}", uv_strerror(rc));
   }
   return rc;
@@ -291,22 +285,19 @@ void turbo_udp_server_stop(turbo_udp_server_t *server) {
   }
 
   turbo_arena_free(&server->arena);
-
-
 }
 
 /* Get zero-copy send buffer */
-turbo_arena_buffer_t *turbo_udp_get_send_buffer(turbo_udp_server_t *server,
-                                              size_t min_size) {
+turbo_arena_buffer_t *turbo_udp_get_send_buffer(turbo_udp_server_t *server, size_t min_size) {
   if (!server)
     return NULL;
 
-  return turbo_arena_get_pooled_buffer(&server->arena, min_size);
+  return turbo_arena_get_buffer(&server->arena, min_size);
 }
 
 /* Send with zero-copy buffer */
 int turbo_udp_send_buffer(turbo_udp_server_t *server, const struct sockaddr *dest,
-                         turbo_arena_buffer_t *buffer, size_t length) {
+                          turbo_arena_buffer_t *buffer, size_t length) {
   if (!server || !server->handle || !dest || !buffer)
     return UV_EINVAL;
 
@@ -328,20 +319,18 @@ int turbo_udp_send_buffer(turbo_udp_server_t *server, const struct sockaddr *des
   uv_buf_t uv_buf = uv_buf_init(op->slice.data, (unsigned int)op->slice.length);
 
   /* Send the data */
-  int rc =
-      uv_udp_send(&op->req, server->handle, &uv_buf, 1, dest, on_send_complete);
+  int rc = uv_udp_send(&op->req, server->handle, &uv_buf, 1, dest, on_send_complete);
   if (rc != 0) {
     return_send_op(op);
     return rc;
   }
 
-
   return 0;
 }
 
 /* Send with automatic buffer allocation and copy (fallback) */
-int turbo_udp_send(turbo_udp_server_t *server, const struct sockaddr *dest,
-                  const char *data, size_t length) {
+int turbo_udp_send(turbo_udp_server_t *server, const struct sockaddr *dest, const char *data,
+                   size_t length) {
   if (!server || !dest || !data || length == 0)
     return UV_EINVAL;
 
@@ -361,15 +350,13 @@ int turbo_udp_send(turbo_udp_server_t *server, const struct sockaddr *dest,
   turbo_arena_buffer_unref(buffer);
 
   if (rc == 0) {
-    
   }
 
   return rc;
 }
 
 /* Connect for client-style usage */
-int turbo_udp_connect(turbo_udp_client_t *client, const char *host,
-                     unsigned short port) {
+int turbo_udp_connect(turbo_udp_client_t *client, const char *host, unsigned short port) {
   if (!client || !client->handle)
     return UV_EINVAL;
 
@@ -382,19 +369,18 @@ int turbo_udp_connect(turbo_udp_client_t *client, const char *host,
 }
 
 /* Send to connected peer */
-int turbo_udp_send_connected(turbo_udp_client_t *client, const char *data,
-                            size_t length) {
+int turbo_udp_send_connected(turbo_udp_client_t *client, const char *data, size_t length) {
   return turbo_udp_send((turbo_udp_server_t *)client, NULL, data, length);
 }
 
 /* Send buffer to connected peer */
-int turbo_udp_send_buffer_connected(turbo_udp_client_t *client,
-                                   turbo_arena_buffer_t *buffer, size_t length) {
-  return turbo_udp_send_buffer((turbo_udp_server_t *)client, NULL, buffer,
-                              length);
+int turbo_udp_send_buffer_connected(turbo_udp_client_t *client, turbo_arena_buffer_t *buffer,
+                                    size_t length) {
+  return turbo_udp_send_buffer((turbo_udp_server_t *)client, NULL, buffer, length);
 }
 
-int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_t *iov, size_t iovcnt) {
+int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_t *iov,
+                              size_t iovcnt) {
   if (!client || !iov || iovcnt == 0)
     return UV_EINVAL;
 
@@ -405,11 +391,8 @@ int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_
     if (iov[i].len > 0 && iov[i].data) {
       /* Wrap user buffer - ZERO COPY! */
       turbo_arena_buffer_t *buffer = turbo_arena_wrap_external(
-          (void*)iov[i].data,
-          iov[i].len,
-          NULL,  /* No free callback - user manages memory */
-          NULL
-      );
+          (void *)iov[i].data, iov[i].len, NULL, /* No free callback - user manages memory */
+          NULL);
       if (!buffer) {
         rc = UV_ENOMEM;
         break;
@@ -421,15 +404,13 @@ int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_
   }
 
   if (rc == 0) {
-    
   }
 
   return rc;
 }
 
 /* Get server statistics */
-void turbo_udp_get_stats(const turbo_udp_server_t *server,
-                        turbo_udp_stats_t *stats) {
+void turbo_udp_get_stats(const turbo_udp_server_t *server, turbo_udp_stats_t *stats) {
   if (!server || !stats)
     return;
 
@@ -528,20 +509,20 @@ void turbo_udp_cleanup_pools(void) {
  * @param interface_addr Interface address (NULL for default)
  * @return 0 on success, negative error code on failure
  */
-int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr, 
-                                   const char* interface_addr) {
-    if (!udp || !udp->handle || !multicast_addr)
-        return UV_EINVAL;
-    
-    int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_JOIN_GROUP);
-    if (rc == 0) {
-        TLOG_INFO("Joined multicast group: {:s}", multicast_addr);
-    } else {
-        turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
-        TLOG_DEBUG("Failed to join multicast group {:s}: {:s}", multicast_addr, uv_strerror(rc));
-    }
-    
-    return rc;
+int turbo_udp_join_multicast_group(turbo_udp_t *udp, const char *multicast_addr,
+                                   const char *interface_addr) {
+  if (!udp || !udp->handle || !multicast_addr)
+    return UV_EINVAL;
+
+  int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_JOIN_GROUP);
+  if (rc == 0) {
+    TLOG_INFO("Joined multicast group: {:s}", multicast_addr);
+  } else {
+    turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
+    TLOG_DEBUG("Failed to join multicast group {:s}: {:s}", multicast_addr, uv_strerror(rc));
+  }
+
+  return rc;
 }
 
 /**
@@ -551,19 +532,19 @@ int turbo_udp_join_multicast_group(turbo_udp_t* udp, const char* multicast_addr,
  * @param interface_addr Interface address (NULL for default)
  * @return 0 on success, negative error code on failure
  */
-int turbo_udp_leave_multicast_group(turbo_udp_t* udp, const char* multicast_addr,
-                                    const char* interface_addr) {
-    if (!udp || !udp->handle || !multicast_addr)
-        return UV_EINVAL;
-    
-    int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_LEAVE_GROUP);
-    if (rc == 0) {
-        
-    } else {
-        turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
-    }
-    
-    return rc;
+int turbo_udp_leave_multicast_group(turbo_udp_t *udp, const char *multicast_addr,
+                                    const char *interface_addr) {
+  if (!udp || !udp->handle || !multicast_addr)
+    return UV_EINVAL;
+
+  int rc = uv_udp_set_membership(udp->handle, multicast_addr, interface_addr, UV_LEAVE_GROUP);
+  if (rc == 0) {
+
+  } else {
+    turbo_stats_counter_inc_fast(s_udp_stats.recv_errors);
+  }
+
+  return rc;
 }
 
 /**
@@ -572,11 +553,11 @@ int turbo_udp_leave_multicast_group(turbo_udp_t* udp, const char* multicast_addr
  * @param on 1 to enable, 0 to disable
  * @return 0 on success, negative error code on failure
  */
-int turbo_udp_set_multicast_loop(turbo_udp_t* udp, int on) {
-    if (!udp || !udp->handle)
-        return UV_EINVAL;
-    
-    return uv_udp_set_multicast_loop(udp->handle, on);
+int turbo_udp_set_multicast_loop(turbo_udp_t *udp, int on) {
+  if (!udp || !udp->handle)
+    return UV_EINVAL;
+
+  return uv_udp_set_multicast_loop(udp->handle, on);
 }
 
 /**
@@ -585,14 +566,14 @@ int turbo_udp_set_multicast_loop(turbo_udp_t* udp, int on) {
  * @param ttl TTL value (1-255)
  * @return 0 on success, negative error code on failure
  */
-int turbo_udp_set_multicast_ttl(turbo_udp_t* udp, int ttl) {
-    if (!udp || !udp->handle)
-        return UV_EINVAL;
-    
-    if (ttl < 1 || ttl > 255)
-        return UV_EINVAL;
-    
-    return uv_udp_set_multicast_ttl(udp->handle, ttl);
+int turbo_udp_set_multicast_ttl(turbo_udp_t *udp, int ttl) {
+  if (!udp || !udp->handle)
+    return UV_EINVAL;
+
+  if (ttl < 1 || ttl > 255)
+    return UV_EINVAL;
+
+  return uv_udp_set_multicast_ttl(udp->handle, ttl);
 }
 
 /**
@@ -601,9 +582,9 @@ int turbo_udp_set_multicast_ttl(turbo_udp_t* udp, int ttl) {
  * @param on 1 to enable, 0 to disable
  * @return 0 on success, negative error code on failure
  */
-int turbo_udp_set_broadcast(turbo_udp_t* udp, int on) {
-    if (!udp || !udp->handle)
-        return UV_EINVAL;
-    
-    return uv_udp_set_broadcast(udp->handle, on);
+int turbo_udp_set_broadcast(turbo_udp_t *udp, int on) {
+  if (!udp || !udp->handle)
+    return UV_EINVAL;
+
+  return uv_udp_set_broadcast(udp->handle, on);
 }

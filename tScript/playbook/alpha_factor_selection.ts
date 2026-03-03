@@ -8,7 +8,7 @@
  * - SMART Money Index
  */
 
-import("fin");
+import("finance");
 
 function run() {
     // 1. Behavioral Bias: Salience STR

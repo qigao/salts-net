@@ -1,0 +1,33 @@
+add_executable(test_turbo_script test_turbo_script.c)
+target_link_libraries(test_turbo_script PRIVATE turbo_script TurboNet::TinyTest
+                                                exprtk ta )
+
+add_dependencies(test_turbo_script
+  vec_plugin
+  ta_plugin
+  ts_plugin)
+
+add_custom_command(
+  TARGET test_turbo_script POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:vec_plugin>  $<TARGET_FILE_DIR:test_turbo_script>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:ta_plugin>   $<TARGET_FILE_DIR:test_turbo_script>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:ts_plugin>   $<TARGET_FILE_DIR:test_turbo_script>
+)
+
+add_test(NAME test_turbo_script COMMAND test_turbo_script)
+
+add_executable(bench_turbo_script bench_turbo_script.c)
+target_link_libraries(bench_turbo_script PRIVATE turbo_script_lib ts_loader
+                                                 TurboNet::TinyTest exprtk mir_static)
+target_include_directories(bench_turbo_script PRIVATE 
+  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir)                                                 
+add_test(NAME bench_turbo_script COMMAND bench_turbo_script)
+set_target_properties(bench_turbo_script PROPERTIES FOLDER turbo_script)
+
+add_executable(test_turbo_script_mir test_turbo_script_mir.c)
+target_link_libraries(test_turbo_script_mir PRIVATE turbo_script
+                                                    TurboNet::TinyTest exprtk)
+add_test(NAME test_turbo_script_mir COMMAND test_turbo_script_mir)
+set_target_properties(test_turbo_script_mir PROPERTIES FOLDER turbo_script)
+
+set_target_properties(test_turbo_script PROPERTIES FOLDER turbo_script)

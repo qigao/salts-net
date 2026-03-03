@@ -518,7 +518,7 @@ void turbo_pipe_client_close(turbo_pipe_client_t* client) {
 turbo_arena_buffer_t* turbo_pipe_get_send_buffer(turbo_pipe_client_t* client, size_t min_size) {
     if (!client) return NULL;
     
-    return turbo_arena_get_pooled_buffer(&client->arena, min_size);
+    return turbo_arena_get_buffer(&client->arena, min_size);
 }
 
 /* Send buffer with zero-copy */

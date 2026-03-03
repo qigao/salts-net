@@ -17,9 +17,9 @@ target_link_libraries(
          TurboNet::JsonParser
          TurboNet::CmdParser
          TurboNet::Utils
-         http_coro_client
+         http_client
   PRIVATE 
-         cjwt qjs
+         cjwt 
          )  
 
 target_include_directories(

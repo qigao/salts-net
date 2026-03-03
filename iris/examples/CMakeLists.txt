@@ -17,7 +17,7 @@ set_target_properties(jwt_example PROPERTIES FOLDER ${TARGET_NAME}/examples)
 
 # SSE Client Example
 add_executable(test_sse_client test_sse_client.c)
-target_link_libraries(test_sse_client PRIVATE rpc_client TurboNet::HttpCoroClient TurboNet::Core)
+target_link_libraries(test_sse_client PRIVATE rpc_client TurboNet::HttpClient TurboNet::Core)
 set_target_properties(test_sse_client PROPERTIES FOLDER ${TARGET_NAME}/examples)
 
 # Unified SSE/RPC Server

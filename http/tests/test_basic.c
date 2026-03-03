@@ -1,125 +1,163 @@
+#include <platform.h>
 #include "tinytest.h"
-#include "http_coro_client.h"
-#include <turbo_coro.h>
+#include "http_client.h"
 #include <string.h>
-
-/* ── Coro test harness ────────────────────────────────────────────── */
-
-typedef struct { turbo_coro_context_t *ctx; void (*test_fn)(turbo_coro_context_t *ctx); } coro_test_ctx_t;
-
-static void coro_test_entry(turbo_coro_t *co, void *arg) {
-  UNUSED(co);
-  coro_test_ctx_t *tctx = (coro_test_ctx_t *)arg;
-  tctx->test_fn(tctx->ctx);
-}
-
-static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-  coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
-  turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
-  turbo_coro_spawn(sched, coro_test_entry, &tctx);
-  turbo_coro_scheduler_run(sched);
-  turbo_coro_scheduler_destroy(sched);
-  turbo_coro_context_destroy(ctx);
-}
-
-/* ── Coro test for malformed URL ──────────────────────────────────── */
-
-static int g_malformed_ran = 0;
-
-static int g_malformed_result = 0;
-
-static void test_malformed_url(turbo_coro_context_t *ctx) {
-  g_malformed_ran = 1;
-  http_coro_client_t *c = http_coro_client_create(ctx);
-  http_coro_response_t *r = http_coro_get(c, "not-a-url");
-  g_malformed_result = (r != NULL);
-  if (r) http_coro_response_free(r);
-  http_coro_client_destroy(c);
-}
+#include <stdlib.h>
 
 spec("http client basic") {
 
     describe("client lifecycle") {
 
         it("should create and destroy") {
-            turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-            http_coro_client_t *client = http_coro_client_create(ctx);
+            http_client_t *client = http_client_create();
             check_not_null(client);
-            http_coro_client_destroy(client);
-            turbo_coro_context_destroy(ctx);
+            http_client_destroy(client);
         }
 
         it("should handle destroy NULL") {
-            http_coro_client_destroy(NULL);
+            http_client_destroy(NULL);
             check(1);
         }
     }
 
     describe("client configuration") {
-        static turbo_coro_context_t *ctx;
-        static http_coro_client_t *client;
+        static http_client_t *client;
 
         before_each() {
-            ctx = turbo_coro_context_create(NULL);
-            client = http_coro_client_create(ctx);
+            client = http_client_create();
         }
         after_each() {
-            http_coro_client_destroy(client);
-            turbo_coro_context_destroy(ctx);
+            http_client_destroy(client);
         }
 
         it("should set timeout") {
-            check_not_null(client);
-            http_coro_client_set_timeout(client, 5000);
-            http_coro_client_set_timeout(client, 0);
-            http_coro_client_set_timeout(client, -1);
+            http_client_set_timeout(client, 5000);
+            http_client_set_connect_timeout(client, 3000);
+            http_client_set_read_timeout(client, 4000);
             check(1);
         }
 
         it("should set user agent") {
-            http_coro_client_set_user_agent(client, "TestAgent/1.0");
-            http_coro_client_set_user_agent(client, "");
-            http_coro_client_set_user_agent(client, NULL);
+            http_client_set_user_agent(client, "TestAgent/1.0");
+            http_client_set_user_agent(client, NULL);
             check(1);
         }
 
+        it("should set base url") {
+            http_client_set_base_url(client, "http://api.example.com");
+            check_str_eq(http_client_get_base_url(client), "http://api.example.com");
+            http_client_clear_base_url(client);
+            check(http_client_get_base_url(client) == NULL);
+        }
+
         it("should set follow redirects") {
-            http_coro_client_follow_redirects(client, 1);
-            http_coro_client_follow_redirects(client, 0);
+            http_client_follow_redirects(client, 1);
+            http_client_follow_redirects(client, 0);
             check(1);
         }
 
         it("should set max redirects") {
-            http_coro_client_set_max_redirects(client, 5);
-            http_coro_client_set_max_redirects(client, 0);
-            http_coro_client_set_max_redirects(client, 100);
-            http_coro_client_set_max_redirects(client, -1);
+            http_client_set_max_redirects(client, 5);
+            http_client_set_max_redirects(client, 0);
             check(1);
+        }
+    }
+
+    describe("headers & auth") {
+        static http_client_t *client;
+
+        before_each() {
+            client = http_client_create();
+        }
+        after_each() {
+            http_client_destroy(client);
+        }
+
+        it("should manage default headers") {
+            http_client_set_default_header(client, "X-Test", "Value");
+            check(http_client_has_default_header(client, "X-Test"));
+            http_client_remove_default_header(client, "X-Test");
+            check(!http_client_has_default_header(client, "X-Test"));
+
+            http_client_set_default_header(client, "X-Multiple", "1");
+            http_client_set_default_header(client, "X-Multiple", "2");
+            http_client_clear_default_headers(client);
+            check(!http_client_has_default_header(client, "X-Multiple"));
+        }
+
+        it("should set auth") {
+            http_client_set_basic_auth(client, "user", "pass");
+            http_client_set_bearer_token(client, "token123");
+            http_client_set_jwt_auth(client, "secret", "{\"sub\":\"123\"}");
+            http_client_clear_auth(client);
+            check(1);
+        }
+
+        it("should set cookie jar") {
+            http_client_set_cookie_jar(client, NULL);
+            check(http_client_get_cookie_jar(client) == NULL);
+        }
+    }
+
+    describe("advanced configuration") {
+        static http_client_t *client;
+
+        before_each() {
+            client = http_client_create();
+        }
+        after_each() {
+            http_client_destroy(client);
+        }
+
+        it("should set retry policy") {
+            http_retry_policy_t policy = { .max_retries = 3 };
+            http_client_set_retry_policy(client, &policy);
+            http_retry_policy_t check_policy;
+            http_client_get_retry_policy(client, &check_policy);
+            check_int_eq(check_policy.max_retries, 3);
+            http_client_clear_retry_policy(client);
+        }
+
+        it("should set rate limit") {
+            http_rate_limit_t limit = { .requests_per_second = 10, .burst_size = 5 };
+            http_client_set_rate_limit(client, &limit);
+            check(http_client_has_rate_limit(client));
+            http_client_clear_rate_limit(client);
+            check(!http_client_has_rate_limit(client));
+        }
+
+        it("should reset stats") {
+            http_client_reset_stats(client);
+            http_client_stats_t stats;
+            http_client_get_stats(client, &stats);
+            check_int_eq((int)stats.total_requests, 0);
         }
     }
 
     describe("error handling") {
 
         it("should handle response free NULL") {
-            http_coro_response_free(NULL);
+            http_response_free(NULL);
             check(1);
         }
 
         it("should return error for NULL url") {
-            turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-            http_coro_client_t *client = http_coro_client_create(ctx);
-            check_not_null(client);
-            http_coro_client_destroy(client);
-            turbo_coro_context_destroy(ctx);
+            http_client_t *client = http_client_create();
+            http_response_t *resp = http_get(client, NULL);
+            check_not_null(resp);
+            if (resp) {
+                check_int_eq(resp->error_code, HTTP_ERROR_INVALID_URL);
+                http_response_free(resp);
+            }
+            http_client_destroy(client);
         }
 
         it("should handle malformed url") {
-            g_malformed_ran = 0;
-            g_malformed_result = 0;
-            run_in_coro(test_malformed_url);
-            check_int_eq(g_malformed_ran, 1);
-            check_int_eq(g_malformed_result, 1);
+            http_client_t *c = http_client_create();
+            http_response_t *r = http_get(c, "not-a-url");
+            check_not_null(r);
+            http_response_free(r);
+            http_client_destroy(c);
         }
     }
 }

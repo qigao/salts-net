@@ -5,7 +5,7 @@
  * Demonstrates dynamic allocation using Risk Parity and Min-Variance.
  */
 
-import("fin");
+import("finance");
 
 // Define assets involved in the rotation (e.g., 5 Top Sectors)
 var num_assets = 5;

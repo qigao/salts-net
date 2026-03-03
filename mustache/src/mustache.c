@@ -1446,13 +1446,13 @@ static int arena_out_verbatim(const char *output, size_t size, void *renderer_da
 
   if (buf->used + size > buf->capacity) {
     size_t min_size = buf->used + size;
-    turbo_arena_buffer_t *new_buf = turbo_arena_get_pooled_buffer(buf->arena, min_size);
+    turbo_arena_buffer_t *new_buf = turbo_arena_get_buffer(buf->arena, min_size);
     if (!new_buf) {
       return -1;
     }
     memcpy(new_buf->data, buf->data, buf->used);
     new_buf->used = buf->used;
-    turbo_arena_return_buffer(buf);
+    turbo_arena_buffer_release(buf);
     renderer->buffer = new_buf;
     buf = new_buf;
   }
@@ -1493,13 +1493,13 @@ static int arena_out_escaped(const char *output, size_t size, void *renderer_dat
 
   if (buf->used + needed > buf->capacity) {
     size_t min_size = buf->used + needed;
-    turbo_arena_buffer_t *new_buf = turbo_arena_get_pooled_buffer(buf->arena, min_size);
+    turbo_arena_buffer_t *new_buf = turbo_arena_get_buffer(buf->arena, min_size);
     if (!new_buf) {
       return -1;
     }
     memcpy(new_buf->data, buf->data, buf->used);
     new_buf->used = buf->used;
-    turbo_arena_return_buffer(buf);
+    turbo_arena_buffer_release(buf);
     renderer->buffer = new_buf;
     buf = new_buf;
   }
@@ -1574,7 +1574,7 @@ int mustache_string_renderer_init_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer
   }
   renderer->base.out_verbatim = arena_out_verbatim;
   renderer->base.out_escaped = arena_out_escaped;
-  renderer->buffer = turbo_arena_get_pooled_buffer(arena, min_capacity ? min_capacity : 1024);
+  renderer->buffer = turbo_arena_get_buffer(arena, min_capacity ? min_capacity : 1024);
   if (!renderer->buffer) {
     return -1;
   }
@@ -1595,7 +1595,7 @@ char *mustache_string_renderer_get_arena(MUSTACHE_STRING_RENDERER_ARENA *rendere
 
 void mustache_string_renderer_free_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer) {
   if (renderer && renderer->buffer) {
-    turbo_arena_return_buffer(renderer->buffer);
+    turbo_arena_buffer_release(renderer->buffer);
     renderer->buffer = NULL;
   }
 }

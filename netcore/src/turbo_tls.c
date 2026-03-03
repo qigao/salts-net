@@ -996,9 +996,6 @@ static void on_tls_handle_closed(uv_handle_t *handle) {
   /* Cleanup TLS session */
   if (client->impl) {
     turbo_tls_session_t *session = (turbo_tls_session_t *)client->impl;
-#if (OPENSSL_VERSION_NUMBER >= 0x10100000L || LIBRESSL_VERSION_NUMBER >= 0x20302000L)
-    SSL_CTX_free(SSL_get_SSL_CTX(session->ssl));
-#endif
     SSL_free(session->ssl);
     free(session);
   }
@@ -1219,8 +1216,16 @@ int turbo_tls_context_set_cert(turbo_tls_context_t *context, const char *cert, s
     return TURBO_TLS_EINVAL;
   }
 
-  SSL_CTX_use_certificate((SSL_CTX *)context->impl, x509);
+  if (SSL_CTX_use_certificate((SSL_CTX *)context->impl, x509) != 1) {
+    X509_free(x509);
+    return TURBO_TLS_EINVAL;
+  }
   X509_free(x509);
+
+  /* If a key is already set, verify cert/key pair now. */
+  if (SSL_CTX_check_private_key((SSL_CTX *)context->impl) != 1) {
+    return TURBO_TLS_EINVAL;
+  }
   return 0;
 }
 
@@ -1234,8 +1239,15 @@ int turbo_tls_context_set_private_key(turbo_tls_context_t *context, const char *
     return TURBO_TLS_EINVAL;
   }
 
-  SSL_CTX_use_PrivateKey((SSL_CTX *)context->impl, pkey);
+  if (SSL_CTX_use_PrivateKey((SSL_CTX *)context->impl, pkey) != 1) {
+    EVP_PKEY_free(pkey);
+    return TURBO_TLS_EINVAL;
+  }
   EVP_PKEY_free(pkey);
+
+  if (SSL_CTX_check_private_key((SSL_CTX *)context->impl) != 1) {
+    return TURBO_TLS_EINVAL;
+  }
   return 0;
 }
 
@@ -1453,7 +1465,7 @@ void turbo_tls_client_close(turbo_tls_client_t *client) {
 turbo_arena_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client, size_t min_size) {
   if (!client)
     return NULL;
-  return turbo_arena_get_pooled_buffer(&client->arena, min_size);
+  return turbo_arena_get_buffer(&client->arena, min_size);
 }
 
 int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buffer, size_t length) {

@@ -1,1457 +1,339 @@
 // clang-format off
-// Include order is CRITICAL - do not reorder!
-// turbo_client.h MUST be first to define turbo_client_t
-#include "turbo_client.h"
+#include "turbo_coro_client.h"
 #include <llhttp.h>
 #include "http_client.h"
-#include "memory_pool.h"
+#include "http_common_internal.h"
+#include <json_parser.h>
 #include "turbo_parser.h"
 // clang-format on
 #include "base64_utils.h"
-#include "cookie_jar.h"
-#include "cookie_parser.h"
-#include "fmt.h"
-#include "tlog.h"
 #include "turbo_str.h"
+#include "turbo_url.h"
 #include <cjwt/cjwt.h>
-#include <json_parser.h>
+#include <fcntl.h>
+#include <netcore/turbo_coro_context.h>
 #include <stb_sprintf.h>
-#include <turbo_fs.h>
-#include <turbo_thread.h>
-
-#define HTTP_REQUEST_POOL_SIZE (1024 * 1024) // 1MB pool for request lifecycle
-
-/*
- * STB_SPRINTF SAFETY NOTE:
- * All string formatting goes through fmt() which handles padding internally.
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <turbo_coro.h>
+#include <turbo_fs.h>
+#include <zlib-ng.h>
 
-/* Helper for pool-based string duplication */
-#define pool_strdup(pool, str) turbo_pool_strdup((void *)(pool), (str))
+/* ── Send helpers ─────────────────────────────────────────────────── */
 
-/* Interceptor list node */
-typedef struct http_interceptor_node_s {
+static inline void send_ok(int *sr, turbo_coro_client_t *t, const void *data, size_t len) {
+  if (*sr == 0)
+    *sr = turbo_coro_client_send(t, data, len);
+}
+
+static inline void send_chunk(int *sr, turbo_coro_client_t *t, const void *data, size_t len) {
+  char hdr[64];
+  stbsp_snprintf(hdr, sizeof(hdr), "%x\r\n", (unsigned)len);
+  send_ok(sr, t, hdr, strlen(hdr));
+  send_ok(sr, t, data, len);
+  send_ok(sr, t, "\r\n", 2);
+}
+
+/* ── Internal types ───────────────────────────────────────────────── */
+
+typedef struct default_header_s {
+  char *name;
+  char *value;
+  struct default_header_s *next;
+} default_header_t;
+
+typedef struct interceptor_node_s {
   union {
     http_request_interceptor_t request;
     http_response_interceptor_t response;
-  } callback;
+  } cb;
   void *user_data;
-  struct http_interceptor_node_s *next;
-} http_interceptor_node_t;
-
-/* Default/request header entry */
-typedef struct header_entry_s {
-  char *name;
-  char *value;
-  struct header_entry_s *next;
-} header_entry_t;
+  struct interceptor_node_s *next;
+} interceptor_node_t;
 
 struct http_client_s {
-  turbo_client_t *client;
-  int timeout_ms;         // General timeout (backward compat)
-  int connect_timeout_ms; // Connection timeout
-  int read_timeout_ms;    // Read timeout
+  turbo_coro_context_t *coro_ctx;
+  int owns_coro_ctx;
+  int timeout_ms;
+  int connect_timeout_ms;
   char *user_agent;
+  char *base_url;
   int follow_redirects;
   int max_redirects;
-  char *base_url; // Base URL for relative requests
+  char *auth_header;
 
-  /* Default headers */
-  header_entry_t *default_headers;
+  default_header_t *default_headers;
   int default_header_count;
 
-  /* Authentication */
-  char *auth_header; // Pre-formatted Authorization header
-
-  /* Connection pooling */
-  char *current_host;
-  int current_port;
-  int current_is_tls;
-  int connection_alive;
-
-  /* Statistics */
-  http_client_stats_t stats;
-
-  /* Cookie jar */
   http_cookie_jar_t *cookie_jar;
 
-  /* Interceptors */
-  http_interceptor_node_t *request_interceptors;
-  http_interceptor_node_t *response_interceptors;
+  interceptor_node_t *request_interceptors;
+  interceptor_node_t *response_interceptors;
 
-  /* Retry policy */
   http_retry_policy_t retry_policy;
   int has_retry_policy;
 
-  /* Progress callback */
-  http_progress_callback_t progress_callback;
-  void *progress_user_data;
-
-  /* Compression */
-  int compression_enabled;
-
-  /* Rate limiting */
   http_rate_limit_t rate_limit;
   int has_rate_limit;
   double last_request_time;
-  int tokens; // Token bucket for rate limiting
+  int tokens;
+
+  http_client_stats_t stats;
+
+  int compression_enabled;
+  http_progress_cb progress_callback;
+  void *progress_user_data;
 };
 
-/* URL parameters structure */
-struct http_params_s {
-  struct param_entry {
-    char *key;
-    char *value;
-    struct param_entry *next;
-  } *head;
-  int count;
-};
-
-/* Enhanced cookie structure - now using the new parser structures */
-typedef http_cookie_t http_cookie_enhanced_t;
-
-/* Stream state for file uploads */
-typedef struct {
-  char *file_path;
-  turbo_file_t fd; /* turbo_fs file descriptor */
-  int64_t file_size;
-  int64_t offset;
-  char *chunk_buf;
-  size_t chunk_size;
-} http_multipart_file_stream_t;
-
-/* Multipart form part */
-typedef struct http_multipart_part_s {
-  char *name;
-  char *filename;
-  char *content_type;
-  char *value; /* For text fields */
-  void *data;  /* For file data */
-  size_t data_len;
-  int is_file;
-  int is_stream;
-  http_multipart_file_stream_t *stream_ctx;
-  struct http_multipart_part_s *next;
-} http_multipart_part_t;
-
-/* Multipart form structure */
-struct http_multipart_form_s {
-  http_multipart_part_t *parts;
-  char boundary[48];
-  int part_count;
-};
-
-/* Request builder structure */
-struct http_request_builder_s {
-  http_client_t *client;
-  char *url;
-  http_method_t method;
-  header_entry_t *headers;
-  int header_count;
-  char *body;
-  size_t body_len;
-};
-
-// Parser context
 typedef struct {
   http_response_t *response;
   int headers_complete;
-  tstr_t current_header_field;
-  tstr_t current_header_value;
-  tstr_t headers_accum;
-  http_header_entry_t *headers_head;
-  http_header_entry_t *headers_tail;
-  int headers_oom;
-} parser_context_t;
+  int message_complete;
+  http_data_cb data_cb;
+  void *data_cb_user_data;
+  http_progress_cb progress_cb;
+  void *progress_cb_user_data;
+  size_t content_length;
+} coro_parser_ctx_t;
 
-// llhttp callbacks
-static int append_current_header(parser_context_t *ctx) {
-  if (!ctx->current_header_field)
-    return 0;
+/* ── Small helpers ────────────────────────────────────────────────── */
 
-  if (!ctx->current_header_value) {
-    ctx->current_header_value = tstr_dup_len("", 0);
-    if (!ctx->current_header_value)
-      ctx->headers_oom = 1;
+static char *coro_strdup(const char *s) {
+  if (!s)
+    return NULL;
+  size_t len = strlen(s);
+  char *d = (char *)malloc(len + 1);
+  if (d) {
+    memcpy(d, s, len);
+    d[len] = '\0';
   }
-
-  if (!ctx->headers_accum) {
-    ctx->headers_accum = tstr_dup_len("", 0);
-    if (!ctx->headers_accum)
-      ctx->headers_oom = 1;
-  }
-
-  if (!ctx->headers_oom && ctx->headers_accum) {
-    ctx->headers_accum = tstr_cat_len(ctx->headers_accum, ctx->current_header_field,
-                                      tstr_len(ctx->current_header_field));
-    if (!ctx->headers_accum) {
-      ctx->headers_oom = 1;
-    } else {
-      ctx->headers_accum = tstr_cat_len(ctx->headers_accum, ": ", 2);
-      if (!ctx->headers_accum) {
-        ctx->headers_oom = 1;
-      } else {
-        ctx->headers_accum = tstr_cat_len(ctx->headers_accum, ctx->current_header_value,
-                                          tstr_len(ctx->current_header_value));
-        if (!ctx->headers_accum) {
-          ctx->headers_oom = 1;
-        } else {
-          ctx->headers_accum = tstr_cat_len(ctx->headers_accum, "\r\n", 2);
-          if (!ctx->headers_accum)
-            ctx->headers_oom = 1;
-        }
-      }
-    }
-  }
-
-  if (!ctx->headers_oom) {
-    MemoryPool *pool = (MemoryPool *)ctx->response->pool;
-    http_header_entry_t *entry = pool ? pool_alloc(pool, sizeof(*entry)) : NULL;
-    if (!entry) {
-      ctx->headers_oom = 1;
-    } else {
-      entry->name = tstr_dup(ctx->current_header_field);
-      entry->value = tstr_dup(ctx->current_header_value);
-      if (!entry->name || !entry->value) {
-        if (entry->name)
-          tstr_free(entry->name);
-        if (entry->value)
-          tstr_free(entry->value);
-        ctx->headers_oom = 1;
-      } else {
-        entry->next = NULL;
-        if (ctx->headers_tail) {
-          ctx->headers_tail->next = entry;
-        } else {
-          ctx->headers_head = entry;
-        }
-        ctx->headers_tail = entry;
-      }
-    }
-  }
-
-  tstr_free(ctx->current_header_field);
-  tstr_free(ctx->current_header_value);
-  ctx->current_header_field = NULL;
-  ctx->current_header_value = NULL;
-
-  return ctx->headers_oom ? -1 : 0;
+  return d;
 }
 
-static int on_status(llhttp_t *parser, const char *at, size_t length) {
-  parser_context_t *ctx = (parser_context_t *)parser->data;
-  ctx->response->status_code = parser->status_code;
-  return 0;
+static double coro_time_sec(void) { return (double)turbo_monotonic_ms() / 1000.0; }
+
+static http_response_t *alloc_response(void) {
+  return (http_response_t *)calloc(1, sizeof(http_response_t));
 }
 
-static int on_header_field(llhttp_t *parser, const char *at, size_t length) {
-  parser_context_t *ctx = (parser_context_t *)parser->data;
-  if (ctx->current_header_value) {
-    if (append_current_header(ctx) != 0)
-      return -1;
-  }
-
-  if (!ctx->current_header_field)
-    ctx->current_header_field = tstr_dup_len(at, length);
-  else
-    ctx->current_header_field = tstr_cat_len(ctx->current_header_field, at, length);
-  if (!ctx->current_header_field) {
-    ctx->headers_oom = 1;
-    return -1;
-  }
-  return 0;
+static void set_error(http_response_t *r, http_error_code_t code, const char *msg) {
+  r->error_code = code;
+  if (!r->error)
+    r->error = coro_strdup(msg);
 }
-
-static int on_header_value(llhttp_t *parser, const char *at, size_t length) {
-  parser_context_t *ctx = (parser_context_t *)parser->data;
-  if (!ctx->current_header_value)
-    ctx->current_header_value = tstr_dup_len(at, length);
-  else
-    ctx->current_header_value = tstr_cat_len(ctx->current_header_value, at, length);
-  if (!ctx->current_header_value) {
-    ctx->headers_oom = 1;
-    return -1;
-  }
-  return 0;
-}
-
-static int on_headers_complete(llhttp_t *parser) {
-  parser_context_t *ctx = (parser_context_t *)parser->data;
-  if (ctx->current_header_field) {
-    if (append_current_header(ctx) != 0)
-      return -1;
-  }
-
-  if (ctx->headers_accum && ctx->response && !ctx->response->headers) {
-    MemoryPool *pool = (MemoryPool *)ctx->response->pool;
-    size_t headers_len = tstr_len(ctx->headers_accum);
-    ctx->response->headers = pool_alloc(pool, headers_len + 1);
-    if (ctx->response->headers) {
-      memcpy(ctx->response->headers, ctx->headers_accum, headers_len);
-      ctx->response->headers[headers_len] = '\0';
-      ctx->response->headers_len = headers_len;
-    }
-  }
-  tstr_free(ctx->headers_accum);
-  ctx->headers_accum = NULL;
-  ctx->response->headers_list = ctx->headers_head;
-  ctx->headers_complete = 1;
-  return 0;
-}
-
-static int on_body(llhttp_t *parser, const char *at, size_t length) {
-  parser_context_t *ctx = (parser_context_t *)parser->data;
-  MemoryPool *pool = (MemoryPool *)ctx->response->pool;
-
-  if (!ctx->response->body) {
-    ctx->response->body = pool_alloc(pool, length + 1);
-    if (ctx->response->body) {
-      memcpy(ctx->response->body, at, length);
-      ctx->response->body[length] = '\0';
-      ctx->response->body_len = length;
-    }
-  } else {
-    size_t new_len = ctx->response->body_len + length;
-    char *new_body = pool_alloc(pool, new_len + 1);
-    if (new_body) {
-      memcpy(new_body, ctx->response->body, ctx->response->body_len);
-      memcpy(new_body + ctx->response->body_len, at, length);
-      new_body[new_len] = '\0';
-      ctx->response->body = new_body;
-      ctx->response->body_len = new_len;
-    }
-  }
-  return 0;
-}
-
-// Note: Request builder and other internal structures now use uri_parser.h
-// which provides uri_t with fixed-size buffers (stack-allocated).
+/* ── Lifecycle ────────────────────────────────────────────────────── */
 
 http_client_t *http_client_create(void) {
-  /* Initialize random seed once for unpredictable multipart boundaries */
-  static int rand_initialized = 0;
-  if (!rand_initialized) {
-    srand((unsigned int)time(NULL) ^ (unsigned int)clock());
-    rand_initialized = 1;
-  }
-
-  http_client_t *client = calloc(1, sizeof(http_client_t));
-  if (!client)
+  http_client_t *c = (http_client_t *)calloc(1, sizeof(*c));
+  if (!c)
     return NULL;
 
-  client->client = turbo_client_create();
-  if (!client->client) {
-    free(client);
-    return NULL;
-  }
-
-  client->timeout_ms = 5000;         // 5 seconds default (reasonable for most cases)
-  client->connect_timeout_ms = 5000; // 5 seconds for connection
-  client->read_timeout_ms = 5000;    // 5 seconds for reading
-  client->user_agent = tstr_dup("TurboHTTP/1.0");
-  client->follow_redirects = 1;
-  client->max_redirects = 10;
-  client->base_url = NULL;
-  client->default_headers = NULL;
-  client->default_header_count = 0;
-  client->connection_alive = 0;
-  client->current_host = NULL;
-  client->current_port = 0;
-  client->current_is_tls = 0;
-  client->auth_header = NULL;
-  client->cookie_jar = NULL;
-  client->request_interceptors = NULL;
-  client->response_interceptors = NULL;
-  client->has_retry_policy = 0;
-  memset(&client->retry_policy, 0, sizeof(http_retry_policy_t));
-  client->progress_callback = NULL;
-  client->progress_user_data = NULL;
-  client->compression_enabled = 0; // Disabled by default
-  client->has_rate_limit = 0;
-  client->last_request_time = 0.0;
-  client->tokens = 0;
-
-  return client;
+  c->coro_ctx = turbo_coro_context_create(NULL);
+  c->owns_coro_ctx = 1;
+  c->timeout_ms = 10000;
+  c->connect_timeout_ms = 10000;
+  c->user_agent = coro_strdup("TurboHTTP/1.0");
+  c->follow_redirects = 1;
+  c->max_redirects = 10;
+  return c;
 }
 
-void http_client_destroy(http_client_t *client) {
-  if (!client)
+void http_client_destroy(http_client_t *c) {
+  if (!c)
     return;
-  if (client->client)
-    turbo_client_destroy(client->client);
-  tstr_free(client->user_agent);
-  free(client->current_host);
-  tstr_free(client->auth_header);
-  tstr_free(client->base_url);
-  /* Note: cookie_jar is not freed here - user must manage it separately */
+  free(c->user_agent);
+  free(c->base_url);
+  free(c->auth_header);
 
-  /* Free default headers */
-  header_entry_t *header = client->default_headers;
-  while (header) {
-    header_entry_t *next = header->next;
-    tstr_free(header->name);
-    tstr_free(header->value);
-    free(header);
-    header = next;
+  default_header_t *h = c->default_headers;
+  while (h) {
+    default_header_t *n = h->next;
+    free(h->name);
+    free(h->value);
+    free(h);
+    h = n;
   }
 
-  /* Free interceptors */
-  http_interceptor_node_t *node = client->request_interceptors;
+  interceptor_node_t *node = c->request_interceptors;
   while (node) {
-    http_interceptor_node_t *next = node->next;
+    interceptor_node_t *n = node->next;
     free(node);
-    node = next;
+    node = n;
   }
-
-  node = client->response_interceptors;
+  node = c->response_interceptors;
   while (node) {
-    http_interceptor_node_t *next = node->next;
+    interceptor_node_t *n = node->next;
     free(node);
-    node = next;
+    node = n;
   }
 
-  free(client);
+  if (c->owns_coro_ctx && c->coro_ctx)
+    turbo_coro_context_destroy(c->coro_ctx);
+
+  free(c);
 }
 
-void http_client_set_timeout(http_client_t *client, int timeout_ms) {
-  if (client) {
-    client->timeout_ms = timeout_ms;
-    client->connect_timeout_ms = timeout_ms;
-    client->read_timeout_ms = timeout_ms;
-  }
+/* ── Configuration ────────────────────────────────────────────────── */
+
+void http_client_set_timeout(http_client_t *c, int ms) {
+  if (c)
+    c->timeout_ms = ms;
 }
 
-void http_client_set_connect_timeout(http_client_t *client, int timeout_ms) {
-  if (client)
-    client->connect_timeout_ms = timeout_ms;
+void http_client_set_connect_timeout(http_client_t *c, int ms) {
+  if (c)
+    c->connect_timeout_ms = ms;
 }
 
-void http_client_set_read_timeout(http_client_t *client, int timeout_ms) {
-  if (client)
-    client->read_timeout_ms = timeout_ms;
+void http_client_set_read_timeout(http_client_t *c, int ms) {
+  /* For the coro client, read timeout is the general timeout */
+  if (c)
+    c->timeout_ms = ms;
 }
 
-void http_client_set_user_agent(http_client_t *client, const char *user_agent) {
-  if (!client)
+void http_client_set_user_agent(http_client_t *c, const char *ua) {
+  if (!c)
     return;
-  tstr_free(client->user_agent);
-  client->user_agent = tstr_dup(user_agent);
+  free(c->user_agent);
+  c->user_agent = coro_strdup(ua);
 }
 
-void http_client_follow_redirects(http_client_t *client, int follow) {
-  if (client)
-    client->follow_redirects = follow;
-}
-
-void http_client_set_max_redirects(http_client_t *client, int max_redirects) {
-  if (client && max_redirects >= 0)
-    client->max_redirects = max_redirects;
-}
-
-void http_client_set_base_url(http_client_t *client, const char *base_url) {
-  if (!client)
+void http_client_set_base_url(http_client_t *c, const char *url) {
+  if (!c)
     return;
-
-  tstr_free(client->base_url);
-  client->base_url = base_url ? tstr_dup(base_url) : NULL;
-
-  /* Remove trailing slash if present */
-  if (client->base_url) {
-    size_t len = strlen(client->base_url);
-    if (len > 0 && client->base_url[len - 1] == '/') {
-      client->base_url[len - 1] = '\0';
-    }
-  }
+  free(c->base_url);
+  c->base_url = url ? coro_strdup(url) : NULL;
 }
 
-const char *http_client_get_base_url(http_client_t *client) {
-  return client ? client->base_url : NULL;
-}
+const char *http_client_get_base_url(http_client_t *c) { return c ? c->base_url : NULL; }
 
-void http_client_clear_base_url(http_client_t *client) {
-  if (client) {
-    tstr_free(client->base_url);
-    client->base_url = NULL;
-  }
-}
-
-/* Build full URL from base URL and path */
-static char *build_full_url(MemoryPool *pool, http_client_t *client, const char *url) {
-  /* If no base URL or URL is already absolute, return as-is */
-  tstr_v url_v = tstr_v_from_cstr(url);
-  if (!client->base_url || tstr_v_starts_with(url_v, tstr_v_from_cstr("http://")) ||
-      tstr_v_starts_with(url_v, tstr_v_from_cstr("https://"))) {
-    return pool_strdup(pool, url);
-  }
-
-  /* Build full URL: base_url + url */
-  tstr_t tmp = tstr_new();
-  if (url[0] == '/')
-    tmp = tstr_cat_fmt(tmp, "%s%s", client->base_url, url);
-  else
-    tmp = tstr_cat_fmt(tmp, "%s/%s", client->base_url, url);
-
-  char *result = pool_strdup(pool, tmp);
-  tstr_free(tmp);
-  return result ? result : pool_strdup(pool, url);
-}
-
-/* ============================================================================
- * Default Headers
- * ========================================================================= */
-
-void http_client_set_default_header(http_client_t *client, const char *name, const char *value) {
-  if (!client || !name || !value)
+void http_client_clear_base_url(http_client_t *c) {
+  if (!c)
     return;
+  free(c->base_url);
+  c->base_url = NULL;
+}
 
-  /* Check if header already exists and update it */
-  header_entry_t *entry = client->default_headers;
-  while (entry) {
-    if (tstr_casecmp(entry->name, name) == 0) {
-      tstr_free(entry->value);
-      entry->value = tstr_dup(value);
+void http_client_follow_redirects(http_client_t *c, int follow) {
+  if (c)
+    c->follow_redirects = follow;
+}
+
+void http_client_set_max_redirects(http_client_t *c, int max) {
+  if (c && max >= 0)
+    c->max_redirects = max;
+}
+
+/* ── Default headers ──────────────────────────────────────────────── */
+
+void http_client_set_default_header(http_client_t *c, const char *name, const char *value) {
+  if (!c || !name || !value)
+    return;
+  default_header_t *h = c->default_headers;
+  while (h) {
+    if (tstr_casecmp(h->name, name) == 0) {
+      free(h->value);
+      h->value = coro_strdup(value);
       return;
     }
-    entry = entry->next;
+    h = h->next;
   }
-
-  /* Add new header */
-  entry = malloc(sizeof(header_entry_t));
-  if (!entry)
+  h = (default_header_t *)calloc(1, sizeof(*h));
+  if (!h)
     return;
-
-  entry->name = tstr_dup(name);
-  entry->value = tstr_dup(value);
-  entry->next = client->default_headers;
-  client->default_headers = entry;
-  client->default_header_count++;
+  h->name = coro_strdup(name);
+  h->value = coro_strdup(value);
+  h->next = c->default_headers;
+  c->default_headers = h;
+  c->default_header_count++;
 }
 
-void http_client_remove_default_header(http_client_t *client, const char *name) {
-  if (!client || !name)
+void http_client_clear_default_headers(http_client_t *c) {
+  if (!c)
     return;
+  default_header_t *h = c->default_headers;
+  while (h) {
+    default_header_t *n = h->next;
+    free(h->name);
+    free(h->value);
+    free(h);
+    h = n;
+  }
+  c->default_headers = NULL;
+  c->default_header_count = 0;
+}
 
-  header_entry_t **prev = &client->default_headers;
-  header_entry_t *entry = client->default_headers;
-
-  while (entry) {
-    if (tstr_casecmp(entry->name, name) == 0) {
-      *prev = entry->next;
-      tstr_free(entry->name);
-      tstr_free(entry->value);
-      free(entry);
-      client->default_header_count--;
+void http_client_remove_default_header(http_client_t *c, const char *name) {
+  if (!c || !name)
+    return;
+  default_header_t **p = &c->default_headers;
+  while (*p) {
+    if (tstr_casecmp((*p)->name, name) == 0) {
+      default_header_t *n = (*p)->next;
+      free((*p)->name);
+      free((*p)->value);
+      free(*p);
+      *p = n;
+      c->default_header_count--;
       return;
     }
-    prev = &entry->next;
-    entry = entry->next;
+    p = &(*p)->next;
   }
 }
 
-void http_client_clear_default_headers(http_client_t *client) {
-  if (!client)
-    return;
-
-  header_entry_t *entry = client->default_headers;
-  while (entry) {
-    header_entry_t *next = entry->next;
-    tstr_free(entry->name);
-    tstr_free(entry->value);
-    free(entry);
-    entry = next;
-  }
-
-  client->default_headers = NULL;
-  client->default_header_count = 0;
-}
-
-int http_client_has_default_header(http_client_t *client, const char *name) {
-  if (!client || !name)
+int http_client_has_default_header(http_client_t *c, const char *name) {
+  if (!c || !name)
     return 0;
-
-  header_entry_t *entry = client->default_headers;
-  while (entry) {
-    if (tstr_casecmp(entry->name, name) == 0) {
+  default_header_t *h = c->default_headers;
+  while (h) {
+    if (tstr_casecmp(h->name, name) == 0)
       return 1;
-    }
-    entry = entry->next;
+    h = h->next;
   }
-
   return 0;
 }
 
-static const char *method_to_string(http_method_t method) {
-  return llhttp_method_name((enum llhttp_method)method);
-}
+/* ── Authentication ───────────────────────────────────────────────── */
 
-/* Helper to check if we can reuse the connection */
-static int can_reuse_connection(http_client_t *client, const char *host, int port, int is_tls) {
-  if (!client->connection_alive)
-    return 0;
-  if (!client->current_host)
-    return 0;
-  if (strcmp(client->current_host, host) != 0)
-    return 0;
-  if (client->current_port != port)
-    return 0;
-  if (client->current_is_tls != is_tls)
-    return 0;
-  return 1;
-}
-
-/* Helper to establish connection (with TLS support) */
-static int establish_connection(http_client_t *client, const char *host, int port, int is_tls) {
-  /* Check if we can reuse existing connection */
-  if (can_reuse_connection(client, host, port, is_tls)) {
-    return 0; /* Connection already established */
-  }
-
-  /* Close existing connection if any */
-  if (client->connection_alive && client->client) {
-    /* Don't destroy the client, just mark connection as closed */
-    client->connection_alive = 0;
-    free(client->current_host);
-    client->current_host = NULL;
-  }
-
-  /* Create new client if needed - transport will be determined from URL */
-  if (!client->client) {
-    client->client = turbo_client_create();
-    if (!client->client) {
-      return -1;
-    }
-  }
-
-  /* Build connection URL - scheme determines transport automatically */
-  const char *scheme = is_tls ? "tls" : "tcp";
-  tstr_t connect_url = tstr_cat_fmt(tstr_new(), "%s://%s:%d", scheme, host, port);
-
-  /* Connect with timeout */
-  turbo_client_status_t status;
-  if (client->connect_timeout_ms > 0) {
-    status = turbo_client_connect_timeout(client->client, connect_url, client->connect_timeout_ms);
-  } else {
-    status = turbo_client_connect(client->client, connect_url);
-  }
-
-  tstr_free(connect_url);
-
-  if (status != SYNC_CLIENT_STATUS_OK) {
-    TLOG_DEBUG("HTTP connection failed to {:s}:{:d} (TLS: {:d})", host, port, is_tls);
-    return -1;
-  }
-
-  TLOG_DEBUG("HTTP connected to {:s}:{:d}", host, port);
-
-  /* Save connection info */
-  free(client->current_host);
-  client->current_host = strdup(host);
-  client->current_port = port;
-  client->current_is_tls = is_tls;
-  client->connection_alive = 1;
-
-  return 0;
-}
-
-/* Forward declarations for enhanced cookie functions */
-static void parse_set_cookie_enhanced(http_cookie_jar_t *jar, const char *set_cookie_value);
-static char *build_cookie_header_enhanced(http_cookie_jar_t *jar, const char *url);
-
-/* Forward declarations for retry functions */
-static void sleep_ms(int milliseconds);
-static int should_retry_response(http_client_t *client, http_response_t *response);
-static int calculate_retry_delay(http_retry_policy_t *policy, int attempt);
-static double get_time_seconds(void);
-
-/* Forward declaration for rate limiting */
-static void apply_rate_limit(http_client_t *client);
-
-/* Helper to extract header value from parsed headers list (zero-copy view) */
-static tstr_v get_header_value_v(const http_header_entry_t *headers, const char *header_name) {
-  if (!headers || !header_name)
-    return tstr_v_from_buf(NULL, 0);
-
-  for (const http_header_entry_t *p = headers; p; p = p->next) {
-    if (tstr_casecmp(p->name, header_name) == 0) {
-      return tstr_to_v(p->value);
-    }
-  }
-
-  return tstr_v_from_buf(NULL, 0);
-}
-
-/* Helper to extract header value from parsed headers list (allocates copy) */
-static char *get_header_value(const http_header_entry_t *headers, const char *header_name) {
-  tstr_v v = get_header_value_v(headers, header_name);
-  if (!v.data)
-    return NULL;
-  return tstr_v_to_cstr(v);
-}
-
-static int header_value_has_token_v(tstr_v value, const char *token) {
-  if (!value.data || value.len == 0)
-    return 0;
-
-  tstr_v token_v = tstr_v_from_cstr(token);
-  const char *p = value.data;
-  const char *end_ptr = value.data + value.len;
-
-  while (p < end_ptr) {
-    while (p < end_ptr && (*p == ' ' || *p == '\t' || *p == ','))
-      p++;
-    if (p >= end_ptr)
-      break;
-
-    const char *start = p;
-    while (p < end_ptr && *p != ',')
-      p++;
-    const char *end = p;
-
-    while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
-      end--;
-
-    tstr_v part = tstr_v_from_buf(start, (size_t)(end - start));
-    if (tstr_v_ieq(part, token_v))
-      return 1;
-
-    if (p < end_ptr && *p == ',')
-      p++;
-  }
-
-  return 0;
-}
-
-/* Phase 7c: Helper function to extract and parse cookies from response headers */
-static void extract_response_cookies(http_client_t *client, http_response_t *response) {
-  if (!client->cookie_jar || !response->headers_list) {
+void http_client_set_basic_auth(http_client_t *c, const char *user, const char *pass) {
+  if (!c || !user || !pass)
     return;
-  }
+  size_t cred_len = strlen(user) + strlen(pass) + 2;
+  char *cred = (char *)malloc(cred_len);
+  stbsp_snprintf(cred, (int)cred_len, "%s:%s", user, pass);
 
-  for (http_header_entry_t *p = response->headers_list; p; p = p->next) {
-    if (tstr_casecmp(p->name, "Set-Cookie") == 0) {
-      parse_set_cookie_enhanced(client->cookie_jar, p->value);
-      TLOG_DEBUG("Extracted cookie from response: {:s}", p->value);
-    }
-  }
-}
-
-/* Forward declaration for redirect handling */
-static http_response_t *http_request_internal(http_client_t *client, http_method_t method,
-                                              const char *url, const char **headers,
-                                              int header_count, const char *body, size_t body_len,
-                                              int redirect_count);
-
-static http_response_t *http_request_internal(http_client_t *client, http_method_t method,
-                                              const char *url, const char **headers,
-                                              int header_count, const char *body, size_t body_len,
-                                              int redirect_count) {
-  /* Create memory pool for this request */
-  MemoryPool *pool = pool_create(HTTP_REQUEST_POOL_SIZE);
-  if (!pool) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    return response;
-  }
-
-  /* Track request statistics */
-  client->stats.total_requests++;
-
-  /* Build full URL if base URL is set */
-  char *full_url = build_full_url(pool, client, url);
-  TLOG_INFO("HTTP Request: {:s} {:s}", method_to_string(method), full_url ? full_url : url);
-  if (!full_url) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Failed to build URL");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    client->stats.failed_requests++;
-    return response;
-  }
-
-  /* Apply rate limiting */
-  apply_rate_limit(client);
-
-  /* Call request interceptors */
-  if (client->request_interceptors) {
-    http_request_context_t ctx = {.method = method,
-                                  .url = full_url,
-                                  .headers = headers,
-                                  .header_count = header_count,
-                                  .body = body,
-                                  .body_len = body_len,
-                                  .user_data = NULL};
-
-    http_interceptor_node_t *node = client->request_interceptors;
-    while (node) {
-      ctx.user_data = node->user_data;
-      int result = node->callback.request(&ctx);
-      if (result != 0) {
-        /* Interceptor aborted request */
-        http_response_t *response = calloc(1, sizeof(http_response_t));
-        response->pool = pool;
-        response->error = pool_strdup(pool, "Request aborted by interceptor");
-        response->error_code = HTTP_ERROR_INVALID_PARAMS;
-        client->stats.failed_requests++;
-        return response;
-      }
-      node = node->next;
-    }
-  }
-
-  uri_t *p_uri = NULL;
-  if (turbo_parse_uri((const uint8_t *)full_url, strlen(full_url), &p_uri) != 0) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Failed to parse URL");
-    response->error_code = HTTP_ERROR_INVALID_URL;
-    return response;
-  }
-
-  const char *uri_scheme = turbo_uri_scheme(p_uri);
-  const char *uri_host = turbo_uri_host(p_uri);
-  const char *uri_path = turbo_uri_path(p_uri);
-  const char *uri_query = turbo_uri_query(p_uri);
-  int uri_port = turbo_uri_port(p_uri);
-
-  /* Determine if TLS is needed */
-  int is_tls = (tstr_casecmp(uri_scheme, "https") == 0);
-
-  /* Set default port if not specified */
-  if (uri_port == 0) {
-    uri_port = is_tls ? 443 : 80;
-  }
-
-  /* Establish connection (reuses if possible) */
-  int was_connected = client->connection_alive;
-  if (establish_connection(client, uri_host, uri_port, is_tls) != 0) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Connection failed");
-    response->error_code = HTTP_ERROR_CONNECTION_FAILED;
-    turbo_free_uri(&p_uri);
-    client->stats.failed_requests++;
-    return response;
-  }
-
-  /* Track connection stats */
-  if (!was_connected && client->connection_alive) {
-    client->stats.connections_created++;
-  } else if (was_connected) {
-    client->stats.connections_reused++;
-  }
-
-  /* Build request line and headers using tstr_t */
-  const char *path = uri_path[0] ? uri_path : "/";
-  tstr_t request_line = tstr_cat_fmt(tstr_new(), "%s %s%s%s HTTP/1.1\r\n", method_to_string(method),
-                                     path, uri_query[0] ? "?" : "", uri_query);
-  tstr_t host_hdr = tstr_cat_fmt(tstr_new(), "Host: %s\r\n", uri_host);
-  tstr_t ua_hdr = tstr_cat_fmt(tstr_new(), "User-Agent: %s\r\n", client->user_agent);
-  tstr_t cl_hdr = NULL;
-  if (body && body_len > 0)
-    cl_hdr = tstr_cat_fmt(tstr_new(), "Content-Length: %zu\r\n", body_len);
-
-  /* Use keep-alive if connection is already established, otherwise close */
-  const char *connection_header =
-      client->connection_alive ? "Connection: keep-alive\r\n" : "Connection: close\r\n";
-
-  turbo_client_iovec_t parts[64];
-  int part_count = 0;
-
-  parts[part_count].data = request_line;
-  parts[part_count].len = tstr_len(request_line);
-  part_count++;
-
-  parts[part_count].data = host_hdr;
-  parts[part_count].len = tstr_len(host_hdr);
-  part_count++;
-
-  parts[part_count].data = ua_hdr;
-  parts[part_count].len = tstr_len(ua_hdr);
-  part_count++;
-
-  parts[part_count].data = (char *)connection_header;
-  parts[part_count].len = strlen(connection_header);
-  part_count++;
-
-  if (cl_hdr) {
-    parts[part_count].data = cl_hdr;
-    parts[part_count].len = tstr_len(cl_hdr);
-    part_count++;
-  }
-
-  // Add authentication header if set
-  if (client->auth_header) {
-    parts[part_count].data = (char *)client->auth_header;
-    parts[part_count].len = strlen(client->auth_header);
-    part_count++;
-
-    parts[part_count].data = (char *)"\r\n";
-    parts[part_count].len = 2;
-    part_count++;
-  }
-
-  // Add cookies if jar is set
-  char *cookie_header = NULL;
-  if (client->cookie_jar) {
-    cookie_header = build_cookie_header_enhanced(client->cookie_jar, full_url);
-    if (cookie_header) {
-      /* Copy to pool for automatic cleanup */
-      char *pool_cookie = pool_strdup(pool, cookie_header);
-      free(cookie_header);
-      cookie_header = pool_cookie;
-
-      if (cookie_header) {
-        parts[part_count].data = cookie_header;
-        parts[part_count].len = strlen(cookie_header);
-        part_count++;
-
-        parts[part_count].data = "\r\n";
-        parts[part_count].len = 2;
-        part_count++;
-      }
-    }
-  }
-
-  // Add Accept-Encoding if compression is enabled
-  char accept_encoding[] = "Accept-Encoding: gzip, deflate\r\n";
-  if (client->compression_enabled) {
-    parts[part_count].data = accept_encoding;
-    parts[part_count].len = strlen(accept_encoding);
-    part_count++;
-  }
-
-  // Add default headers
-  tstr_t *default_header_strings = NULL;
-  int default_headers_added = 0;
-  if (client->default_headers) {
-    default_header_strings = malloc(sizeof(tstr_t) * client->default_header_count);
-    if (default_header_strings) {
-      header_entry_t *entry = client->default_headers;
-      while (entry && part_count < 58) {
-        tstr_t header_str = tstr_cat_fmt(tstr_new(), "%s: %s\r\n", entry->name, entry->value);
-        default_header_strings[default_headers_added] = header_str;
-
-        parts[part_count].data = header_str;
-        parts[part_count].len = tstr_len(header_str);
-        part_count++;
-        default_headers_added++;
-        entry = entry->next;
-      }
-    }
-  }
-
-  for (int i = 0; i < header_count && part_count < 60; i++) {
-    parts[part_count].data = (char *)headers[i];
-    parts[part_count].len = strlen(headers[i]);
-    part_count++;
-
-    parts[part_count].data = (char *)"\r\n";
-    parts[part_count].len = 2;
-    part_count++;
-  }
-
-  parts[part_count].data = (char *)"\r\n";
-  parts[part_count].len = 2;
-  part_count++;
-
-  if (body && body_len > 0) {
-    parts[part_count].data = (char *)body;
-    parts[part_count].len = body_len;
-    part_count++;
-  }
-
-  turbo_client_status_t send_status = turbo_client_sendv(client->client, parts, part_count);
-  if (send_status != SYNC_CLIENT_STATUS_OK) {
-    /* Connection might have been closed, try reconnecting once */
-    client->connection_alive = 0;
-    if (establish_connection(client, uri_host, uri_port, is_tls) == 0) {
-      send_status = turbo_client_sendv(client->client, parts, part_count);
-    }
-
-    if (send_status != SYNC_CLIENT_STATUS_OK) {
-      http_response_t *response = calloc(1, sizeof(http_response_t));
-      response->pool = pool;
-      const char *err_msg = turbo_client_last_message(client->client);
-      tstr_t err_str =
-          tstr_cat_fmt(tstr_new(), "Send failed: %s", err_msg ? err_msg : "unknown error");
-      response->error = pool_strdup(pool, err_str);
-      tstr_free(err_str);
-      response->error_code = HTTP_ERROR_SEND_FAILED;
-      /* cookie_header is now pool-allocated, no need to free */
-      /* Free default header strings before cleanup */
-      if (default_header_strings) {
-        for (int i = 0; i < default_headers_added; i++) {
-          tstr_free(default_header_strings[i]);
-        }
-        free(default_header_strings);
-      }
-      tstr_free(request_line);
-      tstr_free(host_hdr);
-      tstr_free(ua_hdr);
-      tstr_free(cl_hdr);
-      client->stats.failed_requests++;
-      turbo_free_uri(&p_uri);
-      return response;
-    }
-  }
-
-  /* cookie_header is now pool-allocated, no need to free */
-
-  /* Free default header strings */
-  if (default_header_strings) {
-    for (int i = 0; i < default_headers_added; i++) {
-      tstr_free(default_header_strings[i]);
-    }
-    free(default_header_strings);
-    default_header_strings = NULL; /* Prevent double-free */
-  }
-
-  /* Free tstr_t header strings after sendv */
-  tstr_free(request_line);
-  tstr_free(host_hdr);
-  tstr_free(ua_hdr);
-  tstr_free(cl_hdr);
-
-  /* Receive response - may need multiple receives for large responses */
-  char *full_buffer = NULL;
-  size_t total_received = 0;
-  size_t buffer_capacity = 65536;
-
-  full_buffer = malloc(buffer_capacity);
-  if (!full_buffer) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    client->stats.failed_requests++;
-    turbo_free_uri(&p_uri);
-    return response;
-  }
-
-  /* Use configured read timeout for first receive, proportional for subsequent */
-  int first_chunk_timeout = client->read_timeout_ms > 0 ? client->read_timeout_ms : 5000;
-  int subsequent_timeout = first_chunk_timeout / 5;
-  if (subsequent_timeout < 2000)
-    subsequent_timeout = 2000;
-  int is_first_chunk = 1;
-
-  /* Keep receiving until we get all data or timeout */
-  while (1) {
-    char *chunk = NULL;
-    size_t chunk_size = 0;
-
-    int timeout = is_first_chunk ? first_chunk_timeout : subsequent_timeout;
-    turbo_client_status_t status =
-        turbo_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
-
-    if (status != SYNC_CLIENT_STATUS_OK || !chunk || chunk_size == 0) {
-      /* No more data or error */
-      free(chunk);
-      break;
-    }
-
-    is_first_chunk = 0; // Subsequent chunks should arrive quickly
-
-    /* Expand buffer if needed */
-    if (total_received + chunk_size > buffer_capacity) {
-      buffer_capacity = (total_received + chunk_size) * 2;
-      char *new_buffer = realloc(full_buffer, buffer_capacity);
-      if (!new_buffer) {
-        free(chunk);
-        free(full_buffer);
-        http_response_t *response = calloc(1, sizeof(http_response_t));
-        response->pool = pool;
-        response->error = pool_strdup(pool, "Memory allocation failed");
-        response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-        client->stats.failed_requests++;
-        turbo_free_uri(&p_uri);
-        return response;
-      }
-      full_buffer = new_buffer;
-    }
-
-    /* Append chunk to buffer */
-    memcpy(full_buffer + total_received, chunk, chunk_size);
-    total_received += chunk_size;
-    free(chunk);
-  }
-
-  if (total_received == 0) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "No data received");
-    response->error_code = HTTP_ERROR_RECEIVE_FAILED;
-    free(full_buffer);
-    client->stats.failed_requests++;
-    turbo_free_uri(&p_uri);
-    return response;
-  }
-
-  http_response_t *response = calloc(1, sizeof(http_response_t));
-  response->pool = pool; // Critical: lifecycle managed by pool
-  parser_context_t ctx = {0};
-  ctx.response = response;
-
-  llhttp_t parser;
-  llhttp_settings_t settings;
-
-  llhttp_settings_init(&settings);
-  settings.on_status = on_status;
-  settings.on_header_field = on_header_field;
-  settings.on_header_value = on_header_value;
-  settings.on_headers_complete = on_headers_complete;
-  settings.on_body = on_body;
-
-  llhttp_init(&parser, HTTP_RESPONSE, &settings);
-  parser.data = &ctx;
-
-  enum llhttp_errno err = llhttp_execute(&parser, full_buffer, total_received);
-
-  // Only report parse errors that aren't related to EOF
-  if (ctx.headers_oom) {
-    response->error = pool_strdup(pool, "Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-  } else if (err != HPE_OK && err != HPE_PAUSED_UPGRADE && err != HPE_PAUSED) {
-    tstr_t err_str = tstr_cat_fmt(tstr_new(), "Parse error: %s", llhttp_errno_name(err));
-    response->error = pool_strdup(pool, err_str);
-    tstr_free(err_str);
-    response->error_code = HTTP_ERROR_PARSE_FAILED;
-  }
-
-  if (ctx.headers_complete && !response->headers) {
-    /* Culprit Fix: Search safely within the received bytes instead of trusting null termination */
-    const char *headers_end = NULL;
-    for (size_t i = 0; i + 3 < total_received; i++) {
-      if (full_buffer[i] == '\r' && full_buffer[i + 1] == '\n' && full_buffer[i + 2] == '\r' &&
-          full_buffer[i + 3] == '\n') {
-        headers_end = full_buffer + i;
-        break;
-      }
-    }
-
-    if (headers_end) {
-      size_t headers_len = headers_end - full_buffer;
-      response->headers = pool_alloc(pool, headers_len + 1);
-      if (response->headers) {
-        memcpy(response->headers, full_buffer, headers_len);
-        response->headers[headers_len] = '\0';
-        response->headers_len = headers_len;
-      }
-    }
-  }
-
-  free(full_buffer);
-
-  /* Check for redirect */
-  if (client->follow_redirects && redirect_count < client->max_redirects &&
-      (response->status_code == 301 || response->status_code == 302 ||
-       response->status_code == 303 || response->status_code == 307 ||
-       response->status_code == 308)) {
-
-    char *location = get_header_value(response->headers_list, "Location");
-    if (location) {
-      /* Handle relative URLs */
-      tstr_t redirect_url;
-
-      if (location[0] == '/') {
-        redirect_url =
-            tstr_cat_fmt(tstr_new(), "%s://%s:%d%s", uri_scheme, uri_host, uri_port, location);
-      } else if (strncmp(location, "http://", 7) != 0 && strncmp(location, "https://", 8) != 0) {
-        redirect_url =
-            tstr_cat_fmt(tstr_new(), "%s://%s:%d/%s", uri_scheme, uri_host, uri_port, location);
-      } else {
-        redirect_url = tstr_dup(location);
-      }
-
-      free(location);
-
-      /* For 303, always use GET - save status BEFORE freeing response */
-      int saved_status_code = response->status_code;
-      http_response_free(response);
-
-      http_method_t redirect_method = (saved_status_code == 303) ? HTTP_GET : method;
-
-      /* Track redirect */
-      client->stats.redirects_followed++;
-
-      /* Clean up URI before recursive call */
-      turbo_free_uri(&p_uri);
-
-      /* Follow redirect */
-      response = http_request_internal(client, redirect_method, redirect_url, headers, header_count,
-                                       NULL, 0, redirect_count + 1);
-      tstr_free(redirect_url);
-      /* Response from recursive call has its own pool, just return it */
-      return response;
-    }
-  }
-
-  /* Phase 7c: Extract and parse cookies from response headers */
-  extract_response_cookies(client, response);
-
-  /* Check Connection header to determine if we should keep connection alive */
-  tstr_v connection = get_header_value_v(response->headers_list, "Connection");
-  if (connection.data) {
-    if (header_value_has_token_v(connection, "close")) {
-      client->connection_alive = 0;
-    }
-  } else {
-    /* HTTP/1.1 defaults to keep-alive, HTTP/1.0 defaults to close */
-    /* For simplicity, we'll close if not explicitly keep-alive */
-    client->connection_alive = 0;
-  }
-
-  /* Track success */
-  if (!response->error) {
-    client->stats.successful_requests++;
-  } else {
-    client->stats.failed_requests++;
-  }
-
-  /* Call response interceptors */
-  if (client->response_interceptors) {
-    http_response_context_t interceptor_ctx = {
-        .response = response, .url = full_url, .user_data = NULL};
-
-    http_interceptor_node_t *node = client->response_interceptors;
-    while (node) {
-      interceptor_ctx.user_data = node->user_data;
-      node->callback.response(&interceptor_ctx);
-      node = node->next;
-    }
-  }
-
-  turbo_free_uri(&p_uri);
-  return response;
-}
-
-http_response_t *http_request(http_client_t *client, http_method_t method, const char *url,
-                              const char **headers, int header_count, const char *body,
-                              size_t body_len) {
-  http_response_t *response = NULL;
-  int retry_attempt = 0;
-
-  /* Calculate total timeout to prevent retry loop from exceeding user expectations */
-  int request_timeout = (client->read_timeout_ms > 0 ? client->read_timeout_ms : 5000) +
-                        (client->connect_timeout_ms > 0 ? client->connect_timeout_ms : 5000);
-
-  /* Total timeout = single request timeout * (1 + max_retries) */
-  double total_timeout_sec =
-      client->has_retry_policy
-          ? (double)request_timeout * (client->retry_policy.max_retries + 1) / 1000.0
-          : (double)request_timeout / 1000.0;
-
-  double start_time = get_time_seconds();
-
-  /* Try request with retries if policy is set */
-  while (1) {
-    /* Check total timeout before attempting request */
-    double elapsed = get_time_seconds() - start_time;
-    if (elapsed >= total_timeout_sec) {
-      /* Total timeout exceeded */
-      response = calloc(1, sizeof(http_response_t));
-      if (response) {
-        response->error = strdup("Total request timeout exceeded");
-        response->error_code = HTTP_ERROR_TIMEOUT;
-      }
-      client->stats.failed_requests++;
-      return response;
-    }
-
-    response = http_request_internal(client, method, url, headers, header_count, body, body_len, 0);
-
-    /* Check if we should retry */
-    if (!client->has_retry_policy || retry_attempt >= client->retry_policy.max_retries ||
-        !should_retry_response(client, response)) {
-      break;
-    }
-
-    /* Calculate delay and sleep */
-    int delay = calculate_retry_delay(&client->retry_policy, retry_attempt);
-
-    /* Free failed response */
-    http_response_free(response);
-
-    /* Check if we have time for retry delay */
-    elapsed = get_time_seconds() - start_time;
-    if (elapsed + (double)delay / 1000.0 >= total_timeout_sec) {
-      /* Not enough time for retry */
-      response = calloc(1, sizeof(http_response_t));
-      if (response) {
-        response->error = strdup("Total request timeout exceeded");
-        response->error_code = HTTP_ERROR_TIMEOUT;
-      }
-      client->stats.failed_requests++;
-      return response;
-    }
-
-    /* Sleep before retry */
-    sleep_ms(delay);
-
-    retry_attempt++;
-  }
-
-  return response;
-}
-
-http_response_t *http_get(http_client_t *client, const char *url) {
-  return http_request(client, HTTP_GET, url, NULL, 0, NULL, 0);
-}
-
-http_response_t *http_post(http_client_t *client, const char *url, const char *body,
-                           size_t body_len) {
-  return http_request(client, HTTP_POST, url, NULL, 0, body, body_len);
-}
-
-http_response_t *http_put(http_client_t *client, const char *url, const char *body,
-                          size_t body_len) {
-  return http_request(client, HTTP_PUT, url, NULL, 0, body, body_len);
-}
-
-http_response_t *http_del(http_client_t *client, const char *url) {
-  return http_request(client, HTTP_DELETE, url, NULL, 0, NULL, 0);
-}
-
-http_response_t *http_head_request(http_client_t *client, const char *url) {
-  return http_request(client, HTTP_HEAD, url, NULL, 0, NULL, 0);
-}
-
-http_response_t *http_patch(http_client_t *client, const char *url, const char *body,
-                            size_t body_len) {
-  return http_request(client, HTTP_PATCH, url, NULL, 0, body, body_len);
-}
-
-void http_response_free(http_response_t *response) {
-  if (!response)
-    return;
-
-  /* One-shot destruction: frees headers, error, body, and internal strings via the pool */
-  if (response->headers_list) {
-    for (http_header_entry_t *p = response->headers_list; p; p = p->next) {
-      tstr_free(p->name);
-      tstr_free(p->value);
-    }
-  }
-  if (response->pool)
-    pool_destroy((MemoryPool *)response->pool);
-  free(response);
-}
-
-/* ============================================================================
- * Response Header Helpers
- * ========================================================================= */
-
-char *http_response_get_header(http_response_t *response, const char *name) {
-  if (!response || !name || !response->headers_list)
-    return NULL;
-
-  // Use the existing get_header_value helper (returns allocated string)
-  return get_header_value(response->headers_list, name);
-}
-
-int http_response_has_header(http_response_t *response, const char *name) {
-  char *value = http_response_get_header(response, name);
-  int has = (value != NULL);
-  free(value);
-  return has;
-}
-
-char *http_response_content_type(http_response_t *response) {
-  return http_response_get_header(response, "Content-Type");
-}
-
-size_t http_response_content_length(http_response_t *response) {
-  char *value = http_response_get_header(response, "Content-Length");
-  if (!value)
-    return 0;
-
-  size_t length = (size_t)atoll(value);
-  free(value);
-  return length;
-}
-
-int http_response_is_json(http_response_t *response) {
-  char *content_type = http_response_content_type(response);
-  if (!content_type)
-    return 0;
-
-  int is_json = (strstr(content_type, "application/json") != NULL ||
-                 strstr(content_type, "application/javascript") != NULL ||
-                 strstr(content_type, "text/json") != NULL);
-  free(content_type);
-  return is_json;
-}
-
-int http_response_is_html(http_response_t *response) {
-  char *content_type = http_response_content_type(response);
-  if (!content_type)
-    return 0;
-
-  int is_html = (strstr(content_type, "text/html") != NULL);
-  free(content_type);
-  return is_html;
-}
-
-int http_response_is_text(http_response_t *response) {
-  char *content_type = http_response_content_type(response);
-  if (!content_type)
-    return 0;
-
-  int is_text = (strstr(content_type, "text/") != NULL);
-  free(content_type);
-  return is_text;
-}
-
-/* ============================================================================
- * Authentication
- * ========================================================================= */
-
-void http_client_set_basic_auth(http_client_t *client, const char *username, const char *password) {
-  if (!client || !username || !password)
-    return;
-
-  tstr_t creds = tstr_cat_fmt(tstr_new(), "%s:%s", username, password);
-
-  // Base64 encode
   char *encoded = NULL;
-  if (tn_base64_encode((const uint8_t *)creds, tstr_len(creds), &encoded) != 0) {
-    tstr_free(creds);
+  if (tn_base64_encode((const uint8_t *)cred, strlen(cred), &encoded) != 0) {
+    free(cred);
     return;
   }
-  tstr_free(creds);
+  free(cred);
 
-  tstr_t header = tstr_cat_fmt(tstr_new(), "Authorization: Basic %s", encoded);
+  size_t hdr_len = strlen("Authorization: Basic ") + strlen(encoded) + 1;
+  free(c->auth_header);
+  c->auth_header = (char *)malloc(hdr_len);
+  stbsp_snprintf(c->auth_header, (int)hdr_len, "Authorization: Basic %s", encoded);
   free(encoded);
-
-  tstr_free(client->auth_header);
-  client->auth_header = header;
 }
 
-void http_client_set_bearer_token(http_client_t *client, const char *token) {
-  if (!client || !token)
+void http_client_set_bearer_token(http_client_t *c, const char *token) {
+  if (!c || !token)
     return;
-
-  tstr_t header = tstr_cat_fmt(tstr_new(), "Authorization: Bearer %s", token);
-
-  tstr_free(client->auth_header);
-  client->auth_header = header;
+  size_t len = strlen("Authorization: Bearer ") + strlen(token) + 1;
+  free(c->auth_header);
+  c->auth_header = (char *)malloc(len);
+  stbsp_snprintf(c->auth_header, (int)len, "Authorization: Bearer %s", token);
 }
 
-void http_client_set_jwt_auth(http_client_t *client, const char *secret, const char *claims_json) {
-  if (!client || !secret || !claims_json)
+void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *claims_json) {
+  if (!c || !secret || !claims_json)
     return;
 
   json_value_t *private_claims = json_parse(claims_json, strlen(claims_json));
-  if (!private_claims) {
-    TLOG_ERROR("Failed to parse JWT claims JSON");
+  if (!private_claims)
     return;
-  }
 
   cjwt_t jwt = {0};
   jwt.header.alg = alg_hs256;
@@ -1461,1510 +343,1277 @@ void http_client_set_jwt_auth(http_client_t *client, const char *secret, const c
   cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
   json_free(private_claims);
 
-  if (rv != CJWTE_OK) {
-    TLOG_ERROR("Failed to encode JWT: {}", ENUM_NAME(rv));
+  if (rv != CJWTE_OK || !token)
     return;
-  }
 
-  http_client_set_bearer_token(client, token);
+  http_client_set_bearer_token(c, token);
   free(token);
 }
 
-void http_client_clear_auth(http_client_t *client) {
-  if (!client)
+void http_client_clear_auth(http_client_t *c) {
+  if (!c)
     return;
-
-  tstr_free(client->auth_header);
-  client->auth_header = NULL;
+  free(c->auth_header);
+  c->auth_header = NULL;
 }
 
-/* ============================================================================
- * Statistics
- * ========================================================================= */
+/* ── Cookie jar ───────────────────────────────────────────────────── */
 
-void http_client_get_stats(http_client_t *client, http_client_stats_t *stats) {
-  if (!client || !stats)
+void http_client_set_cookie_jar(http_client_t *c, http_cookie_jar_t *jar) {
+  if (c)
+    c->cookie_jar = jar;
+}
+
+http_cookie_jar_t *http_client_get_cookie_jar(http_client_t *c) { return c ? c->cookie_jar : NULL; }
+
+/* ── Interceptors ─────────────────────────────────────────────────── */
+
+void http_client_add_request_interceptor(http_client_t *c, http_request_interceptor_t fn,
+                                         void *ud) {
+  if (!c || !fn)
     return;
+  interceptor_node_t *n = (interceptor_node_t *)calloc(1, sizeof(*n));
+  if (!n)
+    return;
+  n->cb.request = fn;
+  n->user_data = ud;
+  n->next = c->request_interceptors;
+  c->request_interceptors = n;
+}
 
-  *stats = client->stats;
+void http_client_add_response_interceptor(http_client_t *c, http_response_interceptor_t fn,
+                                          void *ud) {
+  if (!c || !fn)
+    return;
+  interceptor_node_t *n = (interceptor_node_t *)calloc(1, sizeof(*n));
+  if (!n)
+    return;
+  n->cb.response = fn;
+  n->user_data = ud;
+  n->next = c->response_interceptors;
+  c->response_interceptors = n;
+}
 
-  /* Also get underlying transport stats if available */
-  if (client->client) {
-    turbo_client_stats_t transport_stats;
-    turbo_client_get_stats(client->client, &transport_stats);
-
-    /* Merge transport stats */
-    stats->bytes_sent = transport_stats.bytes_sent;
-    stats->bytes_received = transport_stats.bytes_received;
+void http_client_clear_interceptors(http_client_t *c) {
+  if (!c)
+    return;
+  interceptor_node_t *node = c->request_interceptors;
+  while (node) {
+    interceptor_node_t *n = node->next;
+    free(node);
+    node = n;
   }
-}
-
-void http_client_reset_stats(http_client_t *client) {
-  if (!client)
-    return;
-
-  memset(&client->stats, 0, sizeof(http_client_stats_t));
-
-  if (client->client) {
-    turbo_client_reset_stats(client->client);
+  c->request_interceptors = NULL;
+  node = c->response_interceptors;
+  while (node) {
+    interceptor_node_t *n = node->next;
+    free(node);
+    node = n;
   }
+  c->response_interceptors = NULL;
 }
 
-/* ============================================================================
- * URL Parameters / Form Data
- * ========================================================================= */
+/* ── Retry / Rate limit / Stats ───────────────────────────────────── */
 
-http_params_t *http_params_create(void) {
-  http_params_t *params = calloc(1, sizeof(http_params_t));
-  return params;
-}
-
-void http_params_add(http_params_t *params, const char *key, const char *value) {
-  if (!params || !key || !value)
+void http_client_set_retry_policy(http_client_t *c, const http_retry_policy_t *p) {
+  if (!c || !p)
     return;
-
-  struct param_entry *entry = malloc(sizeof(struct param_entry));
-  if (!entry)
-    return;
-
-  entry->key = strdup(key);
-  entry->value = strdup(value);
-  entry->next = params->head;
-  params->head = entry;
-  params->count++;
+  c->retry_policy = *p;
+  c->has_retry_policy = 1;
 }
 
-char *http_params_encode(http_params_t *params) {
-  if (!params || !params->head)
-    return strdup("");
+void http_client_get_retry_policy(http_client_t *c, http_retry_policy_t *p) {
+  if (!c || !p)
+    return;
+  *p = c->retry_policy;
+}
 
-  tstr_t result = tstr_new();
-  struct param_entry *entry = params->head;
-  int first = 1;
+void http_client_clear_retry_policy(http_client_t *c) {
+  if (!c)
+    return;
+  memset(&c->retry_policy, 0, sizeof(c->retry_policy));
+  c->has_retry_policy = 0;
+}
 
-  while (entry) {
-    char *key_enc = turbo_url_encode(entry->key);
-    char *val_enc = turbo_url_encode(entry->value);
+void http_client_set_rate_limit(http_client_t *c, const http_rate_limit_t *lim) {
+  if (!c || !lim)
+    return;
+  c->rate_limit = *lim;
+  c->has_rate_limit = 1;
+  c->tokens = lim->burst_size;
+  c->last_request_time = coro_time_sec();
+}
 
-    if (key_enc && val_enc) {
-      if (!first)
-        result = tstr_cat(result, "&");
-      result = tstr_cat(result, key_enc);
-      result = tstr_cat(result, "=");
-      result = tstr_cat(result, val_enc);
-      first = 0;
+void http_client_clear_rate_limit(http_client_t *c) {
+  if (!c)
+    return;
+  memset(&c->rate_limit, 0, sizeof(c->rate_limit));
+  c->has_rate_limit = 0;
+}
+
+int http_client_has_rate_limit(http_client_t *c) { return c ? c->has_rate_limit : 0; }
+
+void http_client_get_stats(http_client_t *c, http_client_stats_t *s) {
+  if (!c || !s)
+    return;
+  *s = c->stats;
+}
+
+void http_client_reset_stats(http_client_t *c) {
+  if (c)
+    memset(&c->stats, 0, sizeof(c->stats));
+}
+/* ── llhttp callbacks ─────────────────────────────────────────────── */
+
+static int on_coro_status(llhttp_t *p, const char *at, size_t len) {
+  (void)at;
+  (void)len;
+  coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
+  if (ctx && ctx->response)
+    ctx->response->status_code = (int)llhttp_get_status_code(p);
+  return 0;
+}
+
+static int on_coro_headers_complete(llhttp_t *p) {
+  coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
+  if (ctx) {
+    ctx->headers_complete = 1;
+    if (ctx->response)
+      ctx->response->status_code = (int)llhttp_get_status_code(p);
+    ctx->content_length = (size_t)p->content_length;
+    /* Responses to HEAD requests, and responses with status 204 or 304,
+     * must not have a body. Returning 1 tells llhttp to skip the body. */
+    if (p->method == HTTP_HEAD || (ctx->response && (ctx->response->status_code == 204 ||
+                                                     ctx->response->status_code == 304))) {
+      return 1;
     }
-
-    free(key_enc);
-    free(val_enc);
-    entry = entry->next;
   }
-
-  return result; /* tstr_t IS char*, caller frees */
+  return 0;
 }
 
-void http_params_free(http_params_t *params) {
-  if (!params)
-    return;
+static int on_coro_body(llhttp_t *p, const char *at, size_t len) {
+  coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
+  if (!ctx || !ctx->response)
+    return 0;
 
-  struct param_entry *entry = params->head;
-  while (entry) {
-    struct param_entry *next = entry->next;
-    free(entry->key);
-    free(entry->value);
-    free(entry);
-    entry = next;
+  if (ctx->data_cb) {
+    ctx->data_cb(at, len, ctx->data_cb_user_data);
+    return 0;
   }
 
-  free(params);
-}
-
-char *http_build_url(const char *base_url, http_params_t *query_params) {
-  if (!base_url)
-    return NULL;
-
-  if (!query_params || !query_params->head)
-    return tstr_dup(base_url);
-
-  char *query_string = http_params_encode(query_params);
-  if (!query_string)
-    return tstr_dup(base_url);
-
-  /* Check if base_url already has query params */
-  const char *has_query = strchr(base_url, '?');
-  char separator = has_query ? '&' : '?';
-
-  tstr_t result = tstr_dup(base_url);
-  result = tstr_cat_fmt(result, "%c%s", separator, query_string);
-  free(query_string);
-
-  return result;
-}
-
-http_response_t *http_post_form(http_client_t *client, const char *url, http_params_t *params) {
-  if (!client || !url || !params)
-    return NULL;
-
-  char *form_data = http_params_encode(params);
-  if (!form_data)
-    return NULL;
-
-  const char *headers[] = {"Content-Type: application/x-www-form-urlencoded"};
-
-  http_response_t *response =
-      http_request(client, HTTP_POST, url, headers, 1, form_data, strlen(form_data));
-
-  free(form_data);
-  return response;
-}
-
-/* ============================================================================
- * Cookie Management
- * ========================================================================= */
-
-http_cookie_jar_t *http_cookie_jar_create(void) {
-  http_cookie_jar_t *jar = calloc(1, sizeof(http_cookie_jar_t));
-  if (jar) {
-    jar->last_cleanup = time(NULL);
+  http_response_t *r = ctx->response;
+  char *nb = (char *)realloc(r->body, r->body_len + len + 1);
+  if (!nb) {
+    set_error(r, HTTP_ERROR_MEMORY_ALLOCATION, "body realloc failed");
+    return 0;
   }
-  return jar;
-}
+  memcpy(nb + r->body_len, at, len);
+  r->body_len += len;
+  nb[r->body_len] = '\0';
+  r->body = nb;
 
-void http_cookie_jar_destroy(http_cookie_jar_t *jar) {
-  if (!jar)
-    return;
-
-  http_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    http_cookie_t *next = cookie->next;
-    http_cookie_free(cookie); // Use the enhanced free function
-    cookie = next;
-  }
-
-  free(jar);
-}
-
-void http_cookie_jar_set(http_cookie_jar_t *jar, const char *name, const char *value) {
-  if (!jar || !name || !value)
-    return;
-
-  /* Check if cookie already exists and update it */
-  http_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    if (strcmp(cookie->name, name) == 0) {
-      /* Update existing cookie */
-      free(cookie->value);
-      cookie->value = strdup(value);
-      return;
-    }
-    cookie = cookie->next;
-  }
-
-  /* Add new cookie using enhanced creation */
-  cookie = http_cookie_create_normalized(name, value, NULL, NULL);
-  if (!cookie)
-    return;
-
-  cookie->next = jar->cookies;
-  jar->cookies = cookie;
-  jar->count++;
-}
-
-const char *http_cookie_jar_get(http_cookie_jar_t *jar, const char *name) {
-  if (!jar || !name)
-    return NULL;
-
-  http_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    if (strcmp(cookie->name, name) == 0) {
-      return cookie->value;
-    }
-    cookie = cookie->next;
-  }
-
-  return NULL;
-}
-
-void http_cookie_jar_remove(http_cookie_jar_t *jar, const char *name) {
-  if (!jar || !name)
-    return;
-
-  http_cookie_t **prev = &jar->cookies;
-  http_cookie_t *cookie = jar->cookies;
-
-  while (cookie) {
-    if (strcmp(cookie->name, name) == 0) {
-      *prev = cookie->next;
-      http_cookie_free(cookie); // Use enhanced free function
-      jar->count--;
-      return;
-    }
-    prev = &cookie->next;
-    cookie = cookie->next;
-  }
-}
-
-void http_cookie_jar_clear(http_cookie_jar_t *jar) {
-  if (!jar)
-    return;
-
-  http_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    http_cookie_t *next = cookie->next;
-    http_cookie_free(cookie); // Use enhanced free function
-    cookie = next;
-  }
-
-  jar->cookies = NULL;
-  jar->count = 0;
-}
-
-int http_cookie_jar_count(http_cookie_jar_t *jar) { return jar ? jar->count : 0; }
-
-void http_client_set_cookie_jar(http_client_t *client, http_cookie_jar_t *jar) {
-  if (client) {
-    client->cookie_jar = jar;
-  }
-}
-
-http_cookie_jar_t *http_client_get_cookie_jar(http_client_t *client) {
-  return client ? client->cookie_jar : NULL;
-}
-
-/* Enhanced Set-Cookie parsing using re2c+lemon parser */
-static void parse_set_cookie_enhanced(http_cookie_jar_t *jar, const char *set_cookie_value) {
-  if (!jar || !set_cookie_value)
-    return;
-
-  /* Use the RFC-compliant parser */
-  http_cookie_t *cookie = parse_set_cookie_rfc(set_cookie_value);
-  if (!cookie)
-    return;
-
-  /* Check if cookie already exists and replace it */
-  http_cookie_t **prev = &jar->cookies;
-  http_cookie_t *existing = jar->cookies;
-
-  while (existing) {
-    if (strcmp(existing->name, cookie->name) == 0) {
-      /* Check domain and path matching for replacement */
-      int domain_match =
-          (!existing->domain && !cookie->domain) ||
-          (existing->domain && cookie->domain && strcmp(existing->domain, cookie->domain) == 0);
-      int path_match =
-          (!existing->path && !cookie->path) ||
-          (existing->path && cookie->path && strcmp(existing->path, cookie->path) == 0);
-
-      if (domain_match && path_match) {
-        /* Replace existing cookie */
-        *prev = existing->next;
-        http_cookie_free(existing);
-        jar->count--;
-        break;
-      }
-    }
-    prev = &existing->next;
-    existing = existing->next;
-  }
-
-  /* Add new cookie to jar */
-  cookie->next = jar->cookies;
-  jar->cookies = cookie;
-  jar->count++;
-
-  /* Periodic cleanup of expired cookies */
-  time_t now = time(NULL);
-  if (now - jar->last_cleanup > 3600) { // Cleanup every hour
-    http_cookie_jar_cleanup_expired(jar);
-    jar->last_cleanup = now;
-  }
-}
-
-/* Enhanced Cookie header building with URL-based filtering */
-static char *build_cookie_header_enhanced(http_cookie_jar_t *jar, const char *url) {
-  if (!jar || !jar->cookies || !url)
-    return NULL;
-
-  /* Calculate total size for matching cookies */
-  size_t total_size = 0;
-  int matching_count = 0;
-
-  http_cookie_t *cookie = jar->cookies;
-  while (cookie) {
-    if (cookie_matches_request(cookie, url)) {
-      total_size += strlen(cookie->name) + strlen(cookie->value) + 3; /* name=value; */
-      matching_count++;
-    }
-    cookie = cookie->next;
-  }
-
-  if (matching_count == 0)
-    return NULL;
-
-  /* Build header */
-  char *header = malloc(total_size + 10); /* "Cookie: " + size */
-  if (!header)
-    return NULL;
-
-  strcpy(header, "Cookie: ");
-  char *p = header + 8;
-
-  cookie = jar->cookies;
-  int first = 1;
-  while (cookie) {
-    if (cookie_matches_request(cookie, url)) {
-      if (!first) {
-        *p++ = ';';
-        *p++ = ' ';
-      }
-      strcpy(p, cookie->name);
-      p += strlen(cookie->name);
-      *p++ = '=';
-      strcpy(p, cookie->value);
-      p += strlen(cookie->value);
-      first = 0;
-    }
-    cookie = cookie->next;
-  }
-  *p = '\0';
-
-  return header;
-}
-
-/* ============================================================================
- * Multipart Form Data
- * ========================================================================= */
-
-/* Generate random boundary string */
-static void generate_boundary(char *boundary, size_t len) {
-  const char *chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  size_t chars_len = strlen(chars);
-
-  strcpy(boundary, "----WebKitFormBoundary");
-  size_t prefix_len = strlen(boundary);
-
-  for (size_t i = prefix_len; i < len - 1; i++) {
-    boundary[i] = chars[rand() % chars_len];
-  }
-  boundary[len - 1] = '\0';
-}
-
-http_multipart_form_t *http_multipart_form_create(void) {
-  http_multipart_form_t *form = calloc(1, sizeof(http_multipart_form_t));
-  if (!form)
-    return NULL;
-
-  /* Generate unique boundary */
-  generate_boundary(form->boundary, sizeof(form->boundary));
-
-  return form;
-}
-
-void http_multipart_form_destroy(http_multipart_form_t *form) {
-  if (!form)
-    return;
-
-  http_multipart_part_t *part = form->parts;
-  while (part) {
-    http_multipart_part_t *next = part->next;
-    free(part->name);
-    free(part->filename);
-    free(part->content_type);
-    free(part->value);
-    free(part->data);
-
-    /* Clean up streaming context if present */
-    if (part->stream_ctx) {
-      if (part->stream_ctx->fd != TURBO_INVALID_FILE) {
-        turbo_fs_close(part->stream_ctx->fd);
-      }
-      free(part->stream_ctx->file_path);
-      free(part->stream_ctx->chunk_buf);
-      free(part->stream_ctx);
-    }
-
-    free(part);
-    part = next;
-  }
-
-  free(form);
-}
-
-void http_multipart_form_add_field(http_multipart_form_t *form, const char *name,
-                                   const char *value) {
-  if (!form || !name || !value)
-    return;
-
-  http_multipart_part_t *part = calloc(1, sizeof(http_multipart_part_t));
-  if (!part)
-    return;
-
-  part->name = strdup(name);
-  part->value = strdup(value);
-  part->is_file = 0;
-  part->next = form->parts;
-  form->parts = part;
-  form->part_count++;
-}
-
-void http_multipart_form_add_file(http_multipart_form_t *form, const char *field_name,
-                                  const char *filename, const char *content_type, const void *data,
-                                  size_t data_len) {
-  if (!form || !field_name || !filename || !data)
-    return;
-
-  http_multipart_part_t *part = calloc(1, sizeof(http_multipart_part_t));
-  if (!part)
-    return;
-
-  part->name = strdup(field_name);
-  part->filename = strdup(filename);
-  part->content_type = content_type ? strdup(content_type) : strdup("application/octet-stream");
-  part->data = malloc(data_len);
-  if (part->data) {
-    memcpy(part->data, data, data_len);
-    part->data_len = data_len;
-  }
-  part->is_file = 1;
-  part->next = form->parts;
-  form->parts = part;
-  form->part_count++;
-}
-
-int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *field_name,
-                                      const char *file_path, const char *content_type) {
-  if (!form || !field_name || !file_path)
-    return -1;
-
-  /* Use turbo_fs to stat the file */
-  turbo_fs_stat_t st;
-  if (turbo_fs_stat(file_path, &st) != 0) {
-    return -1;
-  }
-
-  if (st.is_directory) {
-    return -1;
-  }
-
-  http_multipart_part_t *part = calloc(1, sizeof(http_multipart_part_t));
-  if (!part)
-    return -1;
-
-  part->name = strdup(field_name);
-
-  /* Extract filename from path using turbo_fs helper */
-  char basename[256];
-  if (turbo_fs_path_basename(file_path, basename, sizeof(basename)) == 0) {
-    part->filename = strdup(basename);
-  } else {
-    /* Fallback to manual extraction */
-    const char *p = strrchr(file_path, '/');
-    if (!p)
-      p = strrchr(file_path, '\\');
-    part->filename = strdup(p ? p + 1 : file_path);
-  }
-
-  part->content_type = content_type ? strdup(content_type) : strdup("application/octet-stream");
-  part->is_file = 1;
-  part->is_stream = 1;
-
-  /* Initialize stream context */
-  part->stream_ctx = calloc(1, sizeof(http_multipart_file_stream_t));
-  if (!part->stream_ctx) {
-    free(part->name);
-    free(part->filename);
-    free(part->content_type);
-    free(part);
-    return -1;
-  }
-
-  part->stream_ctx->file_path = strdup(file_path);
-  part->stream_ctx->file_size = st.size;
-  part->stream_ctx->offset = 0;
-  part->stream_ctx->fd = TURBO_INVALID_FILE;
-
-  part->next = form->parts;
-  form->parts = part;
-  form->part_count++;
+  if (ctx->progress_cb)
+    ctx->progress_cb(r->body_len, ctx->content_length, ctx->progress_cb_user_data);
 
   return 0;
 }
 
-/* Helper to send data as HTTP chunk: <hex-size>\r\n<data>\r\n
- * Splits large data into smaller chunks to avoid buffer overflow */
-static void send_sync_http_chunk(turbo_client_t *client, const char *data, size_t len) {
-  if (len == 0)
-    return;
-
-  /* Split into 16KB chunks max to avoid overwhelming buffers */
-  const size_t MAX_CHUNK_SIZE = 16384;
-  size_t offset = 0;
-
-  while (offset < len) {
-    size_t chunk_size = (len - offset > MAX_CHUNK_SIZE) ? MAX_CHUNK_SIZE : (len - offset);
-
-    char chunk_header[32];
-    int header_len = fmt(chunk_header, sizeof(chunk_header), "{:x}\r\n", chunk_size);
-
-    /* Send chunk size */
-    turbo_client_send(client, chunk_header, header_len);
-
-    /* Send chunk data */
-    turbo_client_send(client, data + offset, chunk_size);
-
-    /* Send chunk trailer */
-    turbo_client_send(client, "\r\n", 2);
-
-    offset += chunk_size;
-  }
-}
-
-/* Send final chunk: 0\r\n\r\n */
-static void send_sync_http_chunk_end(turbo_client_t *client) {
-  turbo_client_send(client, "0\r\n\r\n", 5);
-}
-
-/* Build multipart form body */
-static char *build_multipart_body(http_multipart_form_t *form, size_t *body_len) {
-  if (!form || !body_len)
-    return NULL;
-
-  /* Calculate total size */
-  size_t total_size = 0;
-  http_multipart_part_t *part = form->parts;
-
-  while (part) {
-    /* Boundary line */
-    total_size += strlen(form->boundary) + 4; /* --boundary\r\n */
-
-    /* Content-Disposition header */
-    total_size += 100 + strlen(part->name);
-    if (part->filename) {
-      total_size += strlen(part->filename) + 20;
-    }
-
-    /* Content-Type header for files */
-    if (part->is_file && part->content_type) {
-      total_size += strlen(part->content_type) + 20;
-    }
-
-    /* Empty line + data */
-    total_size += 2; /* \r\n */
-    if (part->is_stream && part->stream_ctx) {
-      total_size += (size_t)part->stream_ctx->file_size;
-    } else if (part->is_file) {
-      total_size += part->data_len;
-    } else {
-      total_size += strlen(part->value);
-    }
-    total_size += 2; /* \r\n */
-
-    part = part->next;
-  }
-
-  /* Final boundary */
-  total_size += strlen(form->boundary) + 6; /* --boundary--\r\n */
-
-  /* Allocate buffer */
-  char *body = malloc(total_size + 1);
-  if (!body)
-    return NULL;
-
-  /* Build body */
-  char *p = body;
-  part = form->parts;
-
-  while (part) {
-    /* Boundary */
-    p += sprintf(p, "--%s\r\n", form->boundary);
-
-    /* Content-Disposition */
-    if (part->is_file) {
-      p += sprintf(p, "Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n",
-                   part->name, part->filename);
-      p += sprintf(p, "Content-Type: %s\r\n", part->content_type);
-    } else {
-      p += sprintf(p, "Content-Disposition: form-data; name=\"%s\"\r\n", part->name);
-    }
-
-    /* Empty line */
-    p += sprintf(p, "\r\n");
-
-    /* Data */
-    if (part->is_stream && part->stream_ctx) {
-      turbo_file_t fd = turbo_fs_open(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
-      if (fd != TURBO_INVALID_FILE) {
-        size_t total_read = 0;
-        while (total_read < (size_t)part->stream_ctx->file_size) {
-          int nread =
-              turbo_fs_read(fd, p + total_read, (size_t)part->stream_ctx->file_size - total_read);
-          if (nread <= 0)
-            break;
-          total_read += nread;
-        }
-        p += total_read;
-        turbo_fs_close(fd);
-      }
-    } else if (part->is_file) {
-      memcpy(p, part->data, part->data_len);
-      p += part->data_len;
-    } else {
-      strcpy(p, part->value);
-      p += strlen(part->value);
-    }
-
-    /* Line ending */
-    p += sprintf(p, "\r\n");
-
-    part = part->next;
-  }
-
-  /* Final boundary */
-  p += sprintf(p, "--%s--\r\n", form->boundary);
-
-  *body_len = p - body;
-  return body;
-}
-
-http_response_t *http_post_multipart(http_client_t *client, const char *url,
-                                     http_multipart_form_t *form) {
-  if (!client || !url || !form)
-    return NULL;
-
-  /* Check if form contains streaming parts - if so, must use chunked */
-  http_multipart_part_t *part = form->parts;
-  while (part) {
-    if (part->is_stream) {
-      /* Has streaming file, use chunked transfer to avoid loading into memory */
-      return http_post_multipart_chunked(client, url, form);
-    }
-    part = part->next;
-  }
-
-  /* No streaming parts - safe to build body in memory (small files only) */
-  size_t body_len;
-  char *body = build_multipart_body(form, &body_len);
-  if (!body)
-    return NULL;
-
-  /* Build Content-Type header */
-  char content_type[256];
-  fmt(content_type, sizeof(content_type), "Content-Type: multipart/form-data; boundary={}",
-      form->boundary);
-
-  const char *headers[] = {content_type};
-
-  /* Send request */
-  http_response_t *response = http_request(client, HTTP_POST, url, headers, 1, body, body_len);
-
-  free(body);
-  return response;
-}
-
-http_response_t *http_post_multipart_chunked(http_client_t *client, const char *url,
-                                             http_multipart_form_t *form) {
-  if (!client || !url || !form)
-    return NULL;
-
-  /* Create memory pool for this request */
-  MemoryPool *pool = pool_create(HTTP_REQUEST_POOL_SIZE);
-  if (!pool) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    return response;
-  }
-
-  /* Track request statistics */
-  client->stats.total_requests++;
-
-  /* Build full URL if base URL is set */
-  char *full_url = build_full_url(pool, client, url);
-  if (!full_url) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Failed to build URL");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    client->stats.failed_requests++;
-    return response;
-  }
-
-  uri_t *p_uri = NULL;
-  if (turbo_parse_uri((const uint8_t *)full_url, strlen(full_url), &p_uri) != 0) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Failed to parse URL");
-    response->error_code = HTTP_ERROR_INVALID_URL;
-    return response;
-  }
-
-  const char *uri_host = turbo_uri_host(p_uri);
-  const char *uri_path = turbo_uri_path(p_uri);
-  const char *uri_query = turbo_uri_query(p_uri);
-  int uri_port = turbo_uri_port(p_uri);
-  const char *uri_scheme = turbo_uri_scheme(p_uri);
-  int is_tls = (tstr_casecmp(uri_scheme, "https") == 0);
-  if (uri_port == 0)
-    uri_port = is_tls ? 443 : 80;
-
-  /* Establish connection */
-  if (establish_connection(client, uri_host, uri_port, is_tls) != 0) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->pool = pool;
-    response->error = pool_strdup(pool, "Connection failed");
-    response->error_code = HTTP_ERROR_CONNECTION_FAILED;
-    turbo_free_uri(&p_uri);
-    client->stats.failed_requests++;
-    return response;
-  }
-
-  /* Build Request Line and Headers */
-  char request_line[1024];
-  fmt(request_line, sizeof(request_line), "POST {}{}{} HTTP/1.1\r\n", uri_path[0] ? uri_path : "/",
-      uri_query[0] ? "?" : "", uri_query);
-
-  char host_hdr[512];
-  fmt(host_hdr, sizeof(host_hdr), "Host: {}\r\n", uri_host);
-
-  char ua_hdr[256];
-  fmt(ua_hdr, sizeof(ua_hdr), "User-Agent: {}\r\n", client->user_agent);
-
-  char ct_hdr[256];
-  fmt(ct_hdr, sizeof(ct_hdr), "Content-Type: multipart/form-data; boundary={}\r\n", form->boundary);
-
-  char te_hdr[] = "Transfer-Encoding: chunked\r\n";
-  char conn_hdr[] = "Connection: keep-alive\r\n\r\n";
-
-  /* Send Headers */
-  turbo_client_send(client->client, request_line, strlen(request_line));
-  turbo_client_send(client->client, host_hdr, strlen(host_hdr));
-  turbo_client_send(client->client, ua_hdr, strlen(ua_hdr));
-  turbo_client_send(client->client, ct_hdr, strlen(ct_hdr));
-  turbo_client_send(client->client, te_hdr, strlen(te_hdr));
-
-  if (client->auth_header) {
-    turbo_client_send(client->client, client->auth_header, strlen(client->auth_header));
-    turbo_client_send(client->client, "\r\n", 2);
-  }
-
-  turbo_client_send(client->client, conn_hdr, strlen(conn_hdr));
-
-  /* Send Body in Chunks */
-  http_multipart_part_t *part = form->parts;
-  while (part) {
-    char part_header[512];
-    const char *name = part->name ? part->name : "";
-    if (part->is_file) {
-      const char *filename = part->filename ? part->filename : "";
-      const char *type = part->content_type ? part->content_type : "";
-      fmt(part_header, sizeof(part_header),
-          "--{}\r\nContent-Disposition: form-data; name=\"{}\"; "
-          "filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
-          form->boundary, name, filename, type);
-    } else {
-      fmt(part_header, sizeof(part_header),
-          "--{}\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n", form->boundary, name);
-    }
-
-    send_sync_http_chunk(client->client, part_header, strlen(part_header));
-
-    if (part->is_stream && part->stream_ctx) {
-      turbo_file_t fd = turbo_fs_open(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
-      if (fd != TURBO_INVALID_FILE) {
-        char buf[8192];
-        int nread;
-        while ((nread = turbo_fs_read(fd, buf, sizeof(buf))) > 0) {
-          send_sync_http_chunk(client->client, buf, (size_t)nread);
-        }
-        turbo_fs_close(fd);
-      }
-    } else if (part->data && part->data_len > 0) {
-      send_sync_http_chunk(client->client, part->data, part->data_len);
-    } else if (part->value) {
-      send_sync_http_chunk(client->client, part->value, strlen(part->value));
-    }
-
-    send_sync_http_chunk(client->client, "\r\n", 2);
-    part = part->next;
-  }
-
-  char final_boundary[128];
-  fmt(final_boundary, sizeof(final_boundary), "--{}--\r\n", form->boundary);
-  send_sync_http_chunk(client->client, final_boundary, strlen(final_boundary));
-  send_sync_http_chunk_end(client->client);
-
-  /* Receive Response (simplified) */
-  /* Reuse logic from http_request_internal is hard, so this is a simplified receive */
-  /* In a real implementation we should call http_request_internal with a flag or refactor it */
-
-  /* For now, just reuse http_request_internal's receive part by refactoring is better.
-     But since I want to just implement it, I'll provide a basic receive loop or better,
-     I'll refactor http_request_internal to support "already sent headers/body".
-     Actually, let's keep it simple for now and use a generic receive. */
-
-  char *full_buffer = NULL;
-  size_t total_received = 0;
-  size_t buffer_capacity = 65536;
-  full_buffer = malloc(buffer_capacity);
-
-  int timeout = client->read_timeout_ms > 0 ? client->read_timeout_ms : 5000;
-  while (1) {
-    char *chunk = NULL;
-    size_t chunk_size = 0;
-    turbo_client_status_t status =
-        turbo_client_receive_timeout(client->client, &chunk, &chunk_size, timeout);
-    if (status != SYNC_CLIENT_STATUS_OK || !chunk || chunk_size == 0) {
-      free(chunk);
-      break;
-    }
-    if (total_received + chunk_size > buffer_capacity) {
-      buffer_capacity = (total_received + chunk_size) * 2;
-      full_buffer = realloc(full_buffer, buffer_capacity);
-    }
-    memcpy(full_buffer + total_received, chunk, chunk_size);
-    total_received += chunk_size;
-    free(chunk);
-    timeout = 2000; // shorter for subsequent
-  }
-
-  http_response_t *response = calloc(1, sizeof(http_response_t));
-  response->pool = pool;
-  parser_context_t ctx = {0};
-  ctx.response = response;
-  llhttp_t parser;
-  llhttp_settings_t settings;
-  llhttp_settings_init(&settings);
-  settings.on_status = on_status;
-  settings.on_header_field = on_header_field;
-  settings.on_header_value = on_header_value;
-  settings.on_headers_complete = on_headers_complete;
-  settings.on_body = on_body;
-  llhttp_init(&parser, HTTP_RESPONSE, &settings);
-  parser.data = &ctx;
-  llhttp_execute(&parser, full_buffer, total_received);
-  free(full_buffer);
-
-  turbo_free_uri(&p_uri);
-  return response;
-}
-
-/* ============================================================================
- * Request/Response Interceptors
- * ========================================================================= */
-
-void http_client_add_request_interceptor(http_client_t *client,
-                                         http_request_interceptor_t interceptor, void *user_data) {
-  if (!client || !interceptor)
-    return;
-
-  http_interceptor_node_t *node = malloc(sizeof(http_interceptor_node_t));
-  if (!node)
-    return;
-
-  node->callback.request = interceptor;
-  node->user_data = user_data;
-  node->next = client->request_interceptors;
-  client->request_interceptors = node;
-}
-
-void http_client_add_response_interceptor(http_client_t *client,
-                                          http_response_interceptor_t interceptor,
-                                          void *user_data) {
-  if (!client || !interceptor)
-    return;
-
-  http_interceptor_node_t *node = malloc(sizeof(http_interceptor_node_t));
-  if (!node)
-    return;
-
-  node->callback.response = interceptor;
-  node->user_data = user_data;
-  node->next = client->response_interceptors;
-  client->response_interceptors = node;
-}
-
-void http_client_clear_interceptors(http_client_t *client) {
-  if (!client)
-    return;
-
-  /* Clear request interceptors */
-  http_interceptor_node_t *node = client->request_interceptors;
-  while (node) {
-    http_interceptor_node_t *next = node->next;
-    free(node);
-    node = next;
-  }
-  client->request_interceptors = NULL;
-
-  /* Clear response interceptors */
-  node = client->response_interceptors;
-  while (node) {
-    http_interceptor_node_t *next = node->next;
-    free(node);
-    node = next;
-  }
-  client->response_interceptors = NULL;
-}
-
-/* ============================================================================
- * Retry Policy
- * ========================================================================= */
-
-http_retry_policy_t http_retry_policy_default(void) {
-  http_retry_policy_t policy = {.max_retries = 3,
-                                .initial_delay_ms = 1000,
-                                .max_delay_ms = 30000,
-                                .exponential_backoff = 1,
-                                .retry_on_timeout =
-                                    0, // Don't retry timeouts - timeout is user's intent
-                                .retry_on_connection_error = 1, // Do retry connection errors
-                                .retry_on_5xx = 1,              // Do retry server errors
-                                .jitter_factor = 0.1};
-  return policy;
-}
-
-void http_client_set_retry_policy(http_client_t *client, const http_retry_policy_t *policy) {
-  if (!client || !policy)
-    return;
-
-  client->retry_policy = *policy;
-  client->has_retry_policy = 1;
-}
-
-void http_client_get_retry_policy(http_client_t *client, http_retry_policy_t *policy) {
-  if (!client || !policy)
-    return;
-
-  if (client->has_retry_policy) {
-    *policy = client->retry_policy;
-  } else {
-    memset(policy, 0, sizeof(http_retry_policy_t));
-  }
-}
-
-void http_client_clear_retry_policy(http_client_t *client) {
-  if (!client)
-    return;
-
-  client->has_retry_policy = 0;
-  memset(&client->retry_policy, 0, sizeof(http_retry_policy_t));
-}
-
-/* Check if response should be retried */
-static int should_retry_response(http_client_t *client, http_response_t *response) {
-  if (!client->has_retry_policy)
-    return 0;
-
-  http_retry_policy_t *policy = &client->retry_policy;
-
-  /* Check error conditions */
-  if (response->error) {
-    if (policy->retry_on_timeout && response->error_code == HTTP_ERROR_TIMEOUT) {
-      return 1;
-    }
-    if (policy->retry_on_connection_error &&
-        (response->error_code == HTTP_ERROR_CONNECTION_FAILED ||
-         response->error_code == HTTP_ERROR_DNS_FAILED ||
-         response->error_code == HTTP_ERROR_SEND_FAILED ||
-         response->error_code == HTTP_ERROR_RECEIVE_FAILED)) {
-      return 1;
-    }
-    return 0;
-  }
-
-  /* Check 5xx errors */
-  if (policy->retry_on_5xx && response->status_code >= 500 && response->status_code < 600) {
-    return 1;
-  }
-
+static int on_coro_message_complete(llhttp_t *p) {
+  coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
+  if (ctx)
+    ctx->message_complete = 1;
   return 0;
 }
 
-/* Calculate retry delay with exponential backoff and jitter */
-static int calculate_retry_delay(http_retry_policy_t *policy, int attempt) {
-  int delay;
+/* ── Rate limiter (token bucket) ──────────────────────────────────── */
 
-  if (policy->exponential_backoff) {
-    /* Exponential backoff: delay = initial * (2 ^ attempt) */
-    delay = policy->initial_delay_ms * (1 << attempt);
-  } else {
-    /* Linear backoff */
-    delay = policy->initial_delay_ms * (attempt + 1);
+static void rate_limit_acquire(http_client_t *c) {
+  if (!c->has_rate_limit)
+    return;
+
+  turbo_coro_context_t *ctx = turbo_coro_context_current();
+  if (!ctx)
+    ctx = c->coro_ctx;
+  double now = coro_time_sec();
+  double elapsed = now - c->last_request_time;
+  int refill = (int)(elapsed * c->rate_limit.requests_per_second);
+  if (refill > 0) {
+    c->tokens += refill;
+    if (c->tokens > c->rate_limit.burst_size)
+      c->tokens = c->rate_limit.burst_size;
+    c->last_request_time = now;
   }
 
-  /* Cap at max delay */
-  if (delay > policy->max_delay_ms) {
-    delay = policy->max_delay_ms;
+  while (c->tokens < 1) {
+    int wait_ms = 1000 / c->rate_limit.requests_per_second;
+    if (wait_ms < 10)
+      wait_ms = 10;
+    turbo_coro_sleep(ctx, (uint64_t)wait_ms);
+    now = coro_time_sec();
+    elapsed = now - c->last_request_time;
+    refill = (int)(elapsed * c->rate_limit.requests_per_second);
+    if (refill > 0) {
+      c->tokens += refill;
+      if (c->tokens > c->rate_limit.burst_size)
+        c->tokens = c->rate_limit.burst_size;
+      c->last_request_time = now;
+    }
   }
+  c->tokens--;
+}
 
-  /* Add jitter to prevent thundering herd */
-  if (policy->jitter_factor > 0.0) {
-    int jitter_range = (int)(delay * policy->jitter_factor);
-    int jitter = rand() % (jitter_range * 2 + 1) - jitter_range;
-    delay += jitter;
-    if (delay < 0)
-      delay = 0;
+/* ── Retry helpers ────────────────────────────────────────────────── */
+
+static int calculate_backoff_ms(int attempt, const http_retry_policy_t *p) {
+  int delay = p->initial_delay_ms;
+  if (p->exponential_backoff) {
+    for (int i = 0; i < attempt; i++)
+      delay *= 2;
   }
-
+  if (delay > p->max_delay_ms)
+    delay = p->max_delay_ms;
+  if (p->jitter_factor > 0.0) {
+    double jitter = ((double)(rand() % 1000) / 1000.0) * p->jitter_factor * delay;
+    delay += (int)jitter;
+  }
   return delay;
 }
 
-/* Sleep for specified milliseconds - uses platform abstraction */
-static void sleep_ms(int milliseconds) { turbo_sleep_ms((uint32_t)milliseconds); }
-
-/* ============================================================================
- * Streaming API
- * ========================================================================= */
-
-void http_client_set_progress_callback(http_client_t *client, http_progress_callback_t callback,
-                                       void *user_data) {
-  if (!client)
-    return;
-
-  client->progress_callback = callback;
-  client->progress_user_data = user_data;
+static int should_retry(http_response_t *r, const http_retry_policy_t *p, int attempt) {
+  if (attempt >= p->max_retries)
+    return 0;
+  if (p->retry_on_timeout && r->error_code == HTTP_ERROR_TIMEOUT)
+    return 1;
+  if (p->retry_on_connection_error &&
+      (r->error_code == HTTP_ERROR_CONNECTION_FAILED ||
+       r->error_code == HTTP_ERROR_RECEIVE_FAILED || r->error_code == HTTP_ERROR_SEND_FAILED))
+    return 1;
+  if (p->retry_on_5xx && r->status_code >= 500 && r->status_code < 600)
+    return 1;
+  return 0;
 }
 
-http_response_t *http_get_stream(http_client_t *client, const char *url,
-                                 http_write_callback_t write_callback, void *user_data) {
-  if (!client || !url || !write_callback) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Invalid parameters");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
-  }
+/* ── URL helpers ──────────────────────────────────────────────────── */
 
-  // For streaming, we need to implement a custom receive loop
-  // This is a simplified version - full implementation would modify http_request_internal
+static char *build_coro_full_url(http_client_t *c, const char *url) {
+  if (!url)
+    return NULL;
+  tstr_v url_v = tstr_v_from_cstr(url);
+  if (!c->base_url || tstr_v_starts_with(url_v, tstr_v_from_cstr("http://")) ||
+      tstr_v_starts_with(url_v, tstr_v_from_cstr("https://")))
+    return NULL;
 
-  http_response_t *response = calloc(1, sizeof(http_response_t));
-  response->error = strdup("Streaming not yet fully implemented - use http_download_file");
-  response->error_code = HTTP_ERROR_INVALID_PARAMS;
-  return response;
+  size_t base_len = strlen(c->base_url);
+  size_t full_len = base_len + url_v.len + 2;
+  char *full = (char *)malloc(full_len);
+  if (!full)
+    return NULL;
+  if (url[0] == '/')
+    stbsp_snprintf(full, (int)full_len, "%s%s", c->base_url, url);
+  else
+    stbsp_snprintf(full, (int)full_len, "%s/%s", c->base_url, url);
+  return full;
 }
 
-http_response_t *http_download_file(http_client_t *client, const char *url,
-                                    const char *output_path) {
-  if (!client || !url || !output_path) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Invalid parameters");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
-  }
+static int build_transport_url(const char *http_url, char *buf, size_t buf_size, uri_t **out_uri) {
+  if (turbo_parse_uri((const uint8_t *)http_url, strlen(http_url), out_uri) != 0)
+    return -1;
 
-  /* Open output file first */
-  turbo_file_t fd =
-      turbo_fs_open(output_path, TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
-  if (fd == TURBO_INVALID_FILE) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Failed to open output file");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
-  }
+  const char *scheme = turbo_uri_scheme(*out_uri);
+  const char *host = turbo_uri_host(*out_uri);
+  int port = turbo_uri_port(*out_uri);
 
-  /* Make request - body will be in memory temporarily */
-  http_response_t *response = http_get(client, url);
+  int is_tls = (tstr_casecmp(scheme, "https") == 0);
+  if (port == 0)
+    port = is_tls ? 443 : 80;
 
-  if (response->error || !response->body) {
-    turbo_fs_close(fd);
-    return response;
-  }
-
-  /* Write body to file */
-  int written = turbo_fs_write(fd, response->body, response->body_len);
-  turbo_fs_close(fd);
-
-  if (written < 0 || (size_t)written != response->body_len) {
-    response->error = pool_strdup((MemoryPool *)response->pool, "Failed to write file");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-  }
-
-  return response;
+  turbo_url_build(is_tls ? "tls" : "tcp", host, port, NULL, buf, buf_size);
+  return 0;
 }
 
-http_response_t *http_post_stream(http_client_t *client, const char *url,
-                                  http_read_callback_t read_callback, size_t content_length,
-                                  void *user_data) {
-  if (!client || !url || !read_callback) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Invalid parameters");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
+/* ── Build HTTP request bytes ─────────────────────────────────────── */
+
+static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri_t *uri,
+                                     const char **headers, int header_count, const char *body,
+                                     size_t body_len, http_multipart_form_t *form) {
+  const char *path = turbo_uri_path(uri);
+  const char *query = turbo_uri_query(uri);
+  const char *host = turbo_uri_host(uri);
+  int port = turbo_uri_port(uri);
+  const char *method_name = llhttp_method_name((llhttp_method_t)method);
+
+  tstr_t req = tstr_new();
+
+  req = tstr_cat_fmt(req, "%s %s%s%s HTTP/1.1\r\n", method_name, (path && path[0]) ? path : "/",
+                     (query && query[0]) ? "?" : "", (query && query[0]) ? query : "");
+
+  const char *scheme = turbo_uri_scheme(uri);
+  int is_tls = (tstr_casecmp(scheme, "https") == 0);
+  int default_port = is_tls ? 443 : 80;
+  if (port != 0 && port != default_port) {
+    char host_buf[300];
+    stbsp_snprintf(host_buf, sizeof(host_buf), "Host: %s:%d\r\n", host, port);
+    req = tstr_cat(req, host_buf);
+  } else {
+    req = tstr_cat_fmt(req, "Host: %s\r\n", host);
   }
 
-  // Read all data from callback into buffer
-  char *buffer = malloc(content_length);
-  if (!buffer) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Memory allocation failed");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    return response;
+  req = tstr_cat_fmt(req, "User-Agent: %s\r\n", c->user_agent);
+
+  if (c->compression_enabled)
+    req = tstr_cat(req, "Accept-Encoding: gzip, deflate\r\n");
+
+  if (form) {
+    req = tstr_cat_fmt(req, "Content-Type: multipart/form-data; boundary=%s\r\n", form->boundary);
+    req = tstr_cat(req, "Transfer-Encoding: chunked\r\n");
+  } else if (body && body_len > 0) {
+    char cl[64];
+    stbsp_snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", body_len);
+    req = tstr_cat(req, cl);
   }
 
-  size_t total_read = 0;
-  while (total_read < content_length) {
-    size_t to_read = content_length - total_read;
-    if (to_read > 65536)
-      to_read = 65536; // Read in 64KB chunks
+  if (c->auth_header) {
+    req = tstr_cat(req, c->auth_header);
+    req = tstr_cat(req, "\r\n");
+  }
 
-    size_t bytes_read = read_callback(buffer + total_read, to_read, user_data);
-    if (bytes_read == 0 || bytes_read == (size_t)-1) {
+  default_header_t *dh = c->default_headers;
+  while (dh) {
+    req = tstr_cat_fmt(req, "%s: %s\r\n", dh->name, dh->value);
+    dh = dh->next;
+  }
+
+  for (int i = 0; i < header_count; i++) {
+    req = tstr_cat(req, headers[i]);
+    req = tstr_cat(req, "\r\n");
+  }
+
+  req = tstr_cat(req, "Connection: close\r\n");
+  req = tstr_cat(req, "\r\n");
+
+  /* Body is sent separately in do_request to avoid TLS arena overflow */
+  return req;
+}
+
+/* ── Recv loop ────────────────────────────────────────────────────── */
+
+static void recv_http_response(turbo_coro_client_t *transport, http_response_t *response,
+                               http_method_t method, http_data_cb data_cb, void *data_cb_ud,
+                               http_progress_cb progress_cb, void *progress_ud) {
+  llhttp_t parser;
+  llhttp_settings_t settings;
+  coro_parser_ctx_t ctx = {0};
+
+  ctx.response = response;
+  ctx.data_cb = data_cb;
+  ctx.data_cb_user_data = data_cb_ud;
+  ctx.progress_cb = progress_cb;
+  ctx.progress_cb_user_data = progress_ud;
+
+  llhttp_settings_init(&settings);
+  settings.on_status = on_coro_status;
+  settings.on_headers_complete = on_coro_headers_complete;
+  settings.on_body = on_coro_body;
+  settings.on_message_complete = on_coro_message_complete;
+
+  llhttp_init(&parser, HTTP_RESPONSE, &settings);
+  parser.method = (uint8_t)method;
+  parser.data = &ctx;
+
+  tstr_t raw_hdrs = tstr_new();
+
+  while (!ctx.message_complete) {
+    char *chunk = NULL;
+    size_t chunk_len = 0;
+    int r = turbo_coro_client_recv(transport, &chunk, &chunk_len);
+
+    if (r == TURBO_EOF) {
+      if (!ctx.message_complete) {
+        set_error(response, HTTP_ERROR_RECEIVE_FAILED, "connection closed before full response");
+      }
       break;
     }
-    total_read += bytes_read;
+    if (r != 0) {
+      http_error_code_t ec =
+          (r == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT : HTTP_ERROR_RECEIVE_FAILED;
+      set_error(response, ec, "recv failed");
+      free(chunk);
+      break;
+    }
+
+    if (!ctx.headers_complete)
+      raw_hdrs = tstr_cat_len(raw_hdrs, chunk, chunk_len);
+
+    enum llhttp_errno err = llhttp_execute(&parser, chunk, chunk_len);
+    free(chunk);
+
+    if (err != HPE_OK && err != HPE_PAUSED) {
+      set_error(response, HTTP_ERROR_PARSE_FAILED, llhttp_errno_name(err));
+      break;
+    }
+
+    if (ctx.headers_complete && raw_hdrs && tstr_len(raw_hdrs) > 0 && !response->headers) {
+      const char *delim = strstr(raw_hdrs, "\r\n\r\n");
+      if (delim) {
+        size_t hdr_len = (size_t)(delim - raw_hdrs) + 4;
+        response->headers = coro_strdup(raw_hdrs);
+        response->headers_len = hdr_len;
+      }
+    }
   }
 
-  // POST the data
-  http_response_t *response = http_post(client, url, buffer, total_read);
-  free(buffer);
-
-  return response;
+  tstr_free(raw_hdrs);
 }
 
-http_response_t *http_upload_file(http_client_t *client, const char *url, const char *file_path) {
-  if (!client || !url || !file_path) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Invalid parameters");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
+/* ── Interceptor runners ──────────────────────────────────────────── */
+
+static int run_request_interceptors(http_client_t *c, http_method_t method, const char *url,
+                                    const char **headers, int hdr_count, const char *body,
+                                    size_t body_len) {
+  interceptor_node_t *n = c->request_interceptors;
+  while (n) {
+    http_request_context_t ctx = {0};
+    ctx.method = method;
+    ctx.url = url;
+    ctx.headers = headers;
+    ctx.header_count = hdr_count;
+    ctx.body = body;
+    ctx.body_len = body_len;
+    ctx.user_data = n->user_data;
+    if (n->cb.request(&ctx) != 0)
+      return -1;
+    n = n->next;
+  }
+  return 0;
+}
+
+static void run_response_interceptors(http_client_t *c, http_response_t *resp, const char *url) {
+  interceptor_node_t *n = c->response_interceptors;
+  while (n) {
+    http_response_context_t ctx = {0};
+    ctx.response = resp;
+    ctx.url = url;
+    ctx.user_data = n->user_data;
+    n->cb.response(&ctx);
+    n = n->next;
+  }
+}
+
+/* ── Gzip/deflate decompression ───────────────────────────────────── */
+
+static int decompress_body(http_response_t *resp, const char *encoding) {
+  zng_stream strm = {0};
+  int wbits = (strstr(encoding, "gzip") != NULL) ? (15 + 16) : 15;
+  if (zng_inflateInit2(&strm, wbits) != Z_OK)
+    return -1;
+
+  size_t out_cap = resp->body_len * 4;
+  if (out_cap < 256)
+    out_cap = 256;
+  char *out = (char *)malloc(out_cap);
+  if (!out) {
+    zng_inflateEnd(&strm);
+    return -1;
+  }
+
+  strm.next_in = (uint8_t *)resp->body;
+  strm.avail_in = (uint32_t)resp->body_len;
+
+  size_t total = 0;
+  int32_t ret;
+  do {
+    if (total + 16384 > out_cap) {
+      out_cap *= 2;
+      char *tmp = (char *)realloc(out, out_cap);
+      if (!tmp) {
+        free(out);
+        zng_inflateEnd(&strm);
+        return -1;
+      }
+      out = tmp;
+    }
+    strm.next_out = (uint8_t *)(out + total);
+    strm.avail_out = (uint32_t)(out_cap - total);
+    ret = zng_inflate(&strm, Z_NO_FLUSH);
+    total = out_cap - strm.avail_out;
+  } while (ret == Z_OK);
+
+  zng_inflateEnd(&strm);
+  if (ret != Z_STREAM_END) {
+    free(out);
+    return -1;
+  }
+
+  free(resp->body);
+  resp->body = out;
+  resp->body_len = total;
+  resp->body[total] = '\0';
+  return 0;
+}
+/* ── Core request ─────────────────────────────────────────────────── */
+
+static http_response_t *do_request_impl(http_client_t *c, http_method_t method, const char *url,
+                                        const char **headers, int header_count, const char *body,
+                                        size_t body_len, http_data_cb data_cb, void *data_cb_ud,
+                                        http_multipart_form_t *form, http_data_read_cb read_cb,
+                                        void *read_cb_ud) {
+  http_response_t *resp = alloc_response();
+  if (!resp)
+    return NULL;
+  if (!c) {
+    set_error(resp, HTTP_ERROR_INVALID_PARAMS, "client cannot be NULL");
+    return resp;
+  }
+
+  turbo_coro_context_t *ctx = turbo_coro_context_current();
+  if (!ctx)
+    ctx = c->coro_ctx;
+
+  if (!url) {
+    set_error(resp, HTTP_ERROR_INVALID_URL, "URL cannot be NULL");
+    return resp;
+  }
+
+  char *full_url = build_coro_full_url(c, url);
+  const char *effective_url = full_url ? full_url : url;
+
+  rate_limit_acquire(c);
+
+  if (c->request_interceptors) {
+    if (run_request_interceptors(c, method, effective_url, headers, header_count, body, body_len) !=
+        0) {
+      set_error(resp, HTTP_ERROR_CANCELLED, "request interceptor aborted");
+      free(full_url);
+      c->stats.total_requests++;
+      c->stats.failed_requests++;
+      return resp;
+    }
+  }
+
+  int max_retries = c->has_retry_policy ? c->retry_policy.max_retries : 0;
+  int redirect_count = 0;
+  char *current_url = coro_strdup(effective_url);
+  http_method_t current_method = method;
+  free(full_url);
+
+  for (;;) {
+    for (int attempt = 0; attempt <= max_retries; attempt++) {
+      if (attempt > 0) {
+        free(resp->headers);
+        resp->headers = NULL;
+        resp->headers_len = 0;
+        free(resp->body);
+        resp->body = NULL;
+        resp->body_len = 0;
+        free(resp->error);
+        resp->error = NULL;
+        resp->error_code = HTTP_ERROR_NONE;
+        resp->status_code = 0;
+      }
+
+      uri_t *uri = NULL;
+      char transport_url[512];
+      if (build_transport_url(current_url, transport_url, sizeof(transport_url), &uri) != 0) {
+        set_error(resp, HTTP_ERROR_INVALID_URL, "failed to parse URL");
+        turbo_free_uri(&uri);
+        goto done;
+      }
+
+      turbo_coro_client_t *transport = turbo_coro_client_create(ctx);
+      if (!transport) {
+        set_error(resp, HTTP_ERROR_MEMORY_ALLOCATION, "transport create failed");
+        turbo_free_uri(&uri);
+        goto done;
+      }
+
+      turbo_coro_client_set_timeout(transport, (uint64_t)c->connect_timeout_ms);
+
+      int cr = turbo_coro_client_connect(transport, transport_url);
+      if (cr != 0) {
+        http_error_code_t ec =
+            (cr == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT : HTTP_ERROR_CONNECTION_FAILED;
+        set_error(resp, ec, "connect failed");
+        turbo_coro_client_destroy(transport);
+        turbo_free_uri(&uri);
+        if (c->has_retry_policy && should_retry(resp, &c->retry_policy, attempt)) {
+          turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+          continue;
+        }
+        goto done;
+      }
+
+      turbo_coro_client_set_timeout(transport, (uint64_t)c->timeout_ms);
+
+      tstr_t req_str = build_http_request_str(c, current_method, uri, headers, header_count, body,
+                                              body_len, form);
+      size_t req_len = tstr_len(req_str);
+      int sr = turbo_coro_client_send(transport, req_str, req_len);
+      c->stats.bytes_sent += req_len;
+      tstr_free(req_str);
+
+      /* Send body in chunks to avoid TLS arena overflow on large payloads */
+      if (sr == 0 && form) {
+        http_multipart_part_t *part = form->parts;
+        while (part && sr == 0) {
+          char part_header[512];
+          const char *name = part->name ? part->name : "";
+          if (part->is_file) {
+            const char *filename = part->filename ? part->filename : "";
+            const char *type = part->content_type ? part->content_type : "";
+            stbsp_snprintf(part_header, sizeof(part_header),
+                           "--%s\r\nContent-Disposition: form-data; name=\"%s\"; "
+                           "filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
+                           form->boundary, name, filename, type);
+          } else {
+            stbsp_snprintf(part_header, sizeof(part_header),
+                           "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n",
+                           form->boundary, name);
+          }
+
+          send_chunk(&sr, transport, part_header, strlen(part_header));
+
+          if (part->is_stream && part->stream_ctx) {
+            turbo_file_t fd = turbo_fs_open(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
+            if (fd != TURBO_INVALID_FILE) {
+              char buf[8192];
+              int nread;
+              while (sr == 0 && (nread = turbo_fs_read(fd, buf, sizeof(buf))) > 0)
+                send_chunk(&sr, transport, buf, (size_t)nread);
+              turbo_fs_close(fd);
+            }
+          } else if (part->data && part->data_len > 0) {
+            send_chunk(&sr, transport, part->data, part->data_len);
+          } else if (part->value) {
+            send_chunk(&sr, transport, part->value, strlen(part->value));
+          }
+
+          send_chunk(&sr, transport, "\r\n", 2);
+          part = part->next;
+        }
+
+        if (sr == 0) {
+          char final_boundary[128];
+          stbsp_snprintf(final_boundary, sizeof(final_boundary), "--%s--\r\n", form->boundary);
+          send_chunk(&sr, transport, final_boundary, strlen(final_boundary));
+          send_ok(&sr, transport, "0\r\n\r\n", 5);
+        }
+      } else if (sr == 0 && read_cb) {
+        char read_buf[16384];
+        size_t bytes_read;
+        while (sr == 0 && (bytes_read = read_cb(read_buf, sizeof(read_buf), read_cb_ud)) > 0) {
+          if (bytes_read == (size_t)-1)
+            break;
+          send_chunk(&sr, transport, read_buf, bytes_read);
+          c->stats.bytes_sent += bytes_read;
+        }
+        send_ok(&sr, transport, "0\r\n\r\n", 5);
+      } else if (sr == 0 && body && body_len > 0) {
+        const size_t chunk_size = 256 * 1024; /* 256KB per chunk */
+        size_t offset = 0;
+        while (sr == 0 && offset < body_len) {
+          size_t n = body_len - offset;
+          if (n > chunk_size)
+            n = chunk_size;
+          sr = turbo_coro_client_send(transport, body + offset, n);
+          c->stats.bytes_sent += n;
+          offset += n;
+        }
+      }
+
+      if (sr != 0) {
+        set_error(resp, HTTP_ERROR_SEND_FAILED, "send failed");
+        turbo_coro_client_destroy(transport);
+        turbo_free_uri(&uri);
+        if (c->has_retry_policy && should_retry(resp, &c->retry_policy, attempt)) {
+          turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+          continue;
+        }
+        goto done;
+      }
+
+      recv_http_response(transport, resp, current_method, data_cb, data_cb_ud, c->progress_callback,
+                         c->progress_user_data);
+      c->stats.bytes_received += resp->body_len + resp->headers_len;
+
+      if (!data_cb && c->compression_enabled && resp->body && resp->body_len > 0) {
+        char *ce = http_response_get_header(resp, "Content-Encoding");
+        if (ce) {
+          decompress_body(resp, ce);
+          free(ce);
+        }
+      }
+
+      turbo_coro_client_destroy(transport);
+      turbo_free_uri(&uri);
+
+      if (c->has_retry_policy && resp->error_code != HTTP_ERROR_NONE &&
+          should_retry(resp, &c->retry_policy, attempt)) {
+        turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+        continue;
+      }
+      if (c->has_retry_policy && resp->status_code >= 500 &&
+          should_retry(resp, &c->retry_policy, attempt)) {
+        turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+        continue;
+      }
+      break;
+    }
+
+    /* Redirects */
+    if (!c->follow_redirects)
+      break;
+    if (resp->status_code < 300 || resp->status_code >= 400)
+      break;
+    if (redirect_count >= c->max_redirects) {
+      set_error(resp, HTTP_ERROR_TOO_MANY_REDIRECTS, "too many redirects");
+      break;
+    }
+
+    char *location = http_response_get_header(resp, "Location");
+    if (!location)
+      break;
+
+    redirect_count++;
+    c->stats.redirects_followed++;
+
+    char *new_url = NULL;
+    tstr_v loc_v = tstr_v_from_cstr(location);
+    if (tstr_v_starts_with(loc_v, tstr_v_from_cstr("http://")) ||
+        tstr_v_starts_with(loc_v, tstr_v_from_cstr("https://"))) {
+      new_url = coro_strdup(location);
+    } else {
+      uri_t *cur_uri = NULL;
+      if (turbo_parse_uri((const uint8_t *)current_url, strlen(current_url), &cur_uri) == 0) {
+        const char *s = turbo_uri_scheme(cur_uri);
+        const char *h = turbo_uri_host(cur_uri);
+        int p = turbo_uri_port(cur_uri);
+        char buf[1024];
+        if (p != 0 && p != (tstr_casecmp(s, "https") == 0 ? 443 : 80))
+          stbsp_snprintf(buf, sizeof(buf), "%s://%s:%d%s%s", s, h, p, location[0] == '/' ? "" : "/",
+                         location);
+        else
+          stbsp_snprintf(buf, sizeof(buf), "%s://%s%s%s", s, h, location[0] == '/' ? "" : "/",
+                         location);
+        new_url = coro_strdup(buf);
+        turbo_free_uri(&cur_uri);
+      }
+    }
+    free(location);
+    if (!new_url)
+      break;
+
+    free(current_url);
+    current_url = new_url;
+
+    if (resp->status_code == 303) {
+      current_method = HTTP_GET;
+      body = NULL;
+      body_len = 0;
+    }
+
+    free(resp->headers);
+    resp->headers = NULL;
+    resp->headers_len = 0;
+    free(resp->body);
+    resp->body = NULL;
+    resp->body_len = 0;
+    free(resp->error);
+    resp->error = NULL;
+    resp->error_code = HTTP_ERROR_NONE;
+    resp->status_code = 0;
+  }
+
+done:
+  if (c->response_interceptors)
+    run_response_interceptors(c, resp, current_url);
+
+  c->stats.total_requests++;
+  if (resp->error_code == HTTP_ERROR_NONE && resp->status_code > 0 && resp->status_code < 400)
+    c->stats.successful_requests++;
+  else
+    c->stats.failed_requests++;
+
+  free(current_url);
+  return resp;
+}
+
+/* ── Sync wrapper ────────────────────────────────────────────────── */
+
+typedef struct {
+  http_client_t *client;
+  http_method_t method;
+  const char *url;
+  const char **headers;
+  int header_count;
+  const char *body;
+  size_t body_len;
+  http_data_cb data_cb;
+  void *data_cb_ud;
+  http_multipart_form_t *form;
+  http_data_read_cb read_cb;
+  void *read_cb_ud;
+  http_response_t *result;
+} sync_request_task_t;
+
+static void sync_request_coro(turbo_coro_t *co, void *arg) {
+  UNUSED(co);
+  sync_request_task_t *t = (sync_request_task_t *)arg;
+  t->result =
+      do_request_impl(t->client, t->method, t->url, t->headers, t->header_count, t->body,
+                      t->body_len, t->data_cb, t->data_cb_ud, t->form, t->read_cb, t->read_cb_ud);
+}
+
+static http_response_t *do_request_full(http_client_t *c, http_method_t method, const char *url,
+                                        const char **headers, int header_count, const char *body,
+                                        size_t body_len, http_data_cb data_cb, void *data_cb_ud,
+                                        http_multipart_form_t *form, http_data_read_cb read_cb,
+                                        void *read_cb_ud) {
+  if (!c) {
+    http_response_t *resp = alloc_response();
+    if (!resp)
+      return NULL;
+    set_error(resp, HTTP_ERROR_INVALID_PARAMS, "client cannot be NULL");
+    return resp;
+  }
+  if (turbo_coro_running()) {
+    return do_request_impl(c, method, url, headers, header_count, body, body_len, data_cb,
+                           data_cb_ud, form, read_cb, read_cb_ud);
+  }
+
+  sync_request_task_t task = {.client = c,
+                              .method = method,
+                              .url = url,
+                              .headers = headers,
+                              .header_count = header_count,
+                              .body = body,
+                              .body_len = body_len,
+                              .data_cb = data_cb,
+                              .data_cb_ud = data_cb_ud,
+                              .form = form,
+                              .read_cb = read_cb,
+                              .read_cb_ud = read_cb_ud,
+                              .result = NULL};
+  turbo_coro_t *co = turbo_coro_create(sync_request_coro, &task, NULL);
+  turbo_coro_resume(co);
+  turbo_coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+  turbo_coro_destroy(co);
+  return task.result;
+}
+
+static http_response_t *do_request(http_client_t *c, http_method_t method, const char *url,
+                                   const char **headers, int header_count, const char *body,
+                                   size_t body_len, http_data_cb data_cb, void *data_cb_ud) {
+  return do_request_full(c, method, url, headers, header_count, body, body_len, data_cb, data_cb_ud,
+                         NULL, NULL, NULL);
+}
+
+/* ── Public request API ───────────────────────────────────────────── */
+
+http_response_t *http_request(http_client_t *c, http_method_t method, const char *url,
+                              const char **headers, int header_count, const char *body,
+                              size_t body_len) {
+  return do_request(c, method, url, headers, header_count, body, body_len, NULL, NULL);
+}
+
+http_response_t *http_get(http_client_t *c, const char *url) {
+  return do_request(c, HTTP_GET, url, NULL, 0, NULL, 0, NULL, NULL);
+}
+
+http_response_t *http_post(http_client_t *c, const char *url, const char *body, size_t body_len) {
+  return do_request(c, HTTP_POST, url, NULL, 0, body, body_len, NULL, NULL);
+}
+
+http_response_t *http_put(http_client_t *c, const char *url, const char *body, size_t body_len) {
+  return do_request(c, HTTP_PUT, url, NULL, 0, body, body_len, NULL, NULL);
+}
+
+http_response_t *http_del(http_client_t *c, const char *url) {
+  return do_request(c, HTTP_DELETE, url, NULL, 0, NULL, 0, NULL, NULL);
+}
+
+http_response_t *http_head(http_client_t *c, const char *url) {
+  return do_request(c, HTTP_HEAD, url, NULL, 0, NULL, 0, NULL, NULL);
+}
+
+http_response_t *http_patch(http_client_t *c, const char *url, const char *body, size_t body_len) {
+  return do_request(c, HTTP_PATCH, url, NULL, 0, body, body_len, NULL, NULL);
+}
+
+http_response_t *http_post_json(http_client_t *c, const char *url, const char *json_string) {
+  const char *hdrs[] = {"Content-Type: application/json"};
+  return do_request(c, HTTP_POST, url, hdrs, 1, json_string, json_string ? strlen(json_string) : 0,
+                    NULL, NULL);
+}
+
+http_response_t *http_post_json_object(http_client_t *c, const char *url, json_value_t *json_obj) {
+  if (!json_obj)
+    return http_post_json(c, url, "{}");
+  size_t len = 0;
+  char *str = turbo_json_serialize_pretty(json_obj, &len);
+  if (!str)
+    return http_post_json(c, url, "{}");
+  http_response_t *r = http_post_json(c, url, str);
+  turbo_json_serialize_free(str);
+  return r;
+}
+
+http_response_t *http_post_form(http_client_t *c, const char *url, http_params_t *params) {
+  char *encoded = http_params_encode(params);
+  const char *hdrs[] = {"Content-Type: application/x-www-form-urlencoded"};
+  http_response_t *r =
+      do_request(c, HTTP_POST, url, hdrs, 1, encoded, encoded ? strlen(encoded) : 0, NULL, NULL);
+  free(encoded);
+  return r;
+}
+
+http_response_t *http_post_multipart(http_client_t *c, const char *url,
+                                     http_multipart_form_t *form) {
+  if (!c || !url || !form) {
+    http_response_t *r = alloc_response();
+    set_error(r, HTTP_ERROR_INVALID_PARAMS, "invalid params");
+    return r;
+  }
+  return do_request_full(c, HTTP_POST, url, NULL, 0, NULL, 0, NULL, NULL, form, NULL, NULL);
+}
+
+/* ── Streaming ────────────────────────────────────────────────────── */
+
+http_response_t *http_receive_stream_get(http_client_t *c, const char *url, http_data_cb data_cb,
+                                         void *ud) {
+  return do_request(c, HTTP_GET, url, NULL, 0, NULL, 0, data_cb, ud);
+}
+
+http_response_t *http_receive_stream_post(http_client_t *c, const char *url, const char *body,
+                                          size_t body_len, http_data_cb data_cb, void *ud) {
+  return do_request(c, HTTP_POST, url, NULL, 0, body, body_len, data_cb, ud);
+}
+
+http_response_t *http_post_stream(http_client_t *c, const char *url, http_data_read_cb read_cb,
+                                  size_t content_length, void *ud) {
+  char cl[64];
+  stbsp_snprintf(cl, sizeof(cl), "Content-Length: %zu", content_length);
+  const char *hdrs[] = {"Transfer-Encoding: chunked"};
+  /* If content length is known, we could send it. But chunked is safer for streams. */
+  return do_request_full(c, HTTP_POST, url, hdrs, 1, NULL, 0, NULL, NULL, NULL, read_cb, ud);
+}
+
+http_response_t *http_sse_get(http_client_t *c, const char *url, http_data_cb data_cb, void *ud) {
+  const char *hdrs[] = {"Accept: text/event-stream"};
+  return do_request(c, HTTP_GET, url, hdrs, 1, NULL, 0, data_cb, ud);
+}
+
+/* ── File transfer ────────────────────────────────────────────────── */
+
+http_response_t *http_upload_file(http_client_t *c, const char *url, const char *file_path) {
+  if (!c || !url || !file_path) {
+    http_response_t *r = alloc_response();
+    set_error(r, HTTP_ERROR_INVALID_PARAMS, "invalid params");
+    return r;
   }
 
   http_multipart_form_t *form = http_multipart_form_create();
   if (!form) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Failed to create form");
-    response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-    return response;
+    http_response_t *r = alloc_response();
+    set_error(r, HTTP_ERROR_MEMORY_ALLOCATION, "form alloc failed");
+    return r;
   }
 
   if (http_multipart_form_add_file_path(form, "file", file_path, NULL) != 0) {
     http_multipart_form_destroy(form);
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Failed to add file");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
+    http_response_t *r = alloc_response();
+    set_error(r, HTTP_ERROR_INVALID_PARAMS, "failed to read file");
+    return r;
   }
 
-  /* Always use chunked streaming - no file size limit, constant memory */
-  http_response_t *response = http_post_multipart_chunked(client, url, form);
+  http_response_t *r =
+      do_request_full(c, HTTP_POST, url, NULL, 0, NULL, 0, NULL, NULL, form, NULL, NULL);
   http_multipart_form_destroy(form);
-  return response;
+  return r;
 }
 
-/* ============================================================================
- * Compression Support
- * ========================================================================= */
+typedef struct {
+  turbo_file_t fd;
+  int error;
+} download_ctx_t;
 
-void http_client_enable_compression(http_client_t *client, int enable) {
-  if (client) {
-    client->compression_enabled = enable;
-  }
+static void download_data_cb(const char *data, size_t len, void *user_data) {
+  download_ctx_t *ctx = (download_ctx_t *)user_data;
+  if (ctx->error)
+    return;
+  int64_t written = turbo_fs_write(ctx->fd, data, len);
+  if (written < 0)
+    ctx->error = 1;
 }
 
-int http_client_is_compression_enabled(http_client_t *client) {
-  return client ? client->compression_enabled : 0;
-}
-
-/* ============================================================================
- * Range Requests
- * ========================================================================= */
-
-http_response_t *http_get_range(http_client_t *client, const char *url, size_t start, size_t end) {
-  if (!client || !url) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    response->error = strdup("Invalid parameters");
-    response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    return response;
+http_response_t *http_download_file(http_client_t *c, const char *url, const char *output_path) {
+  turbo_file_t fd = turbo_fs_open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    http_response_t *r = alloc_response();
+    set_error(r, HTTP_ERROR_INVALID_PARAMS, "failed to open output file");
+    return r;
   }
 
-  // Build Range header
-  char range_header[128];
-  if (end > 0) {
-    fmt(range_header, sizeof(range_header), "Range: bytes={}-{}", start, end);
-  } else {
-    fmt(range_header, sizeof(range_header), "Range: bytes={}-", start);
-  }
+  download_ctx_t ctx = {.fd = fd, .error = 0};
+  http_response_t *r = http_receive_stream_get(c, url, download_data_cb, &ctx);
+  turbo_fs_close(fd);
 
-  const char *headers[] = {range_header};
+  if (ctx.error && r->error_code == HTTP_ERROR_NONE)
+    set_error(r, HTTP_ERROR_SEND_FAILED, "failed to write to file");
 
-  return http_request(client, HTTP_GET, url, headers, 1, NULL, 0);
+  return r;
 }
 
-/* ============================================================================
- * JSON Helpers
- * ========================================================================= */
+/* ── Response helpers ─────────────────────────────────────────────── */
 
-json_value_t *http_response_parse_json(http_response_t *response) {
-  if (!response || !response->body || response->body_len == 0)
+void http_response_free(http_response_t *r) {
+  if (!r)
+    return;
+  free(r->headers);
+  free(r->body);
+  free(r->error);
+  free(r);
+}
+
+char *http_response_get_header(http_response_t *r, const char *name) {
+  if (!r || !r->headers || !name)
     return NULL;
-
-  json_value_t *val = NULL;
-  if (turbo_parse_json((const uint8_t *)response->body, response->body_len, &val) == 0) {
-    return val;
+  size_t name_len = strlen(name);
+  const char *p = r->headers;
+  while (*p) {
+    const char *eol = strstr(p, "\r\n");
+    if (!eol)
+      break;
+    const char *colon = (const char *)memchr(p, ':', (size_t)(eol - p));
+    if (colon && (size_t)(colon - p) == name_len) {
+      int match = 1;
+      for (size_t i = 0; i < name_len; i++) {
+        char a = p[i], b = name[i];
+        if (a >= 'A' && a <= 'Z')
+          a += 32;
+        if (b >= 'A' && b <= 'Z')
+          b += 32;
+        if (a != b) {
+          match = 0;
+          break;
+        }
+      }
+      if (match) {
+        const char *val = colon + 1;
+        while (val < eol && *val == ' ')
+          val++;
+        size_t vlen = (size_t)(eol - val);
+        char *result = (char *)malloc(vlen + 1);
+        if (result) {
+          memcpy(result, val, vlen);
+          result[vlen] = '\0';
+        }
+        return result;
+      }
+    }
+    p = eol + 2;
   }
   return NULL;
 }
 
-http_response_t *http_post_json(http_client_t *client, const char *url, const char *json_string) {
-  if (!client || !url || !json_string)
-    return NULL;
-
-  const char *headers[] = {"Content-Type: application/json"};
-
-  return http_request(client, HTTP_POST, url, headers, 1, json_string, strlen(json_string));
+int http_response_has_header(http_response_t *r, const char *name) {
+  char *val = http_response_get_header(r, name);
+  if (val) {
+    free(val);
+    return 1;
+  }
+  return 0;
 }
 
-http_response_t *http_post_json_object(http_client_t *client, const char *url,
-                                       json_value_t *json_obj) {
-  if (!client || !url || !json_obj)
-    return NULL;
-
-  char *json_string = turbo_json_serialize(json_obj, NULL);
-  if (!json_string)
-    return NULL;
-
-  http_response_t *response = http_post_json(client, url, json_string);
-  turbo_json_serialize_free(json_string);
-
-  return response;
+int http_response_is_json(http_response_t *r) {
+  char *ct = http_response_get_header(r, "Content-Type");
+  if (!ct)
+    return 0;
+  int result = (strstr(ct, "application/json") != NULL);
+  free(ct);
+  return result;
 }
 
-/* ============================================================================
- * Rate Limiting
- * ========================================================================= */
+json_value_t *http_response_parse_json(http_response_t *r) {
+  if (!r || !r->body || r->body_len == 0)
+    return NULL;
+  return json_parse(r->body, r->body_len);
+}
 
-/* Get current time in seconds - uses platform abstraction */
-static double get_time_seconds(void) { return (double)turbo_monotonic_ms() / 1000.0; }
+/* ── Content helpers ──────────────────────────────────────────────── */
 
-void http_client_set_rate_limit(http_client_t *client, const http_rate_limit_t *limit) {
-  if (!client || !limit)
+char *http_response_content_type(http_response_t *r) {
+  return http_response_get_header(r, "Content-Type");
+}
+
+size_t http_response_content_length(http_response_t *r) {
+  char *v = http_response_get_header(r, "Content-Length");
+  if (!v)
+    return 0;
+  size_t len = (size_t)atoll(v);
+  free(v);
+  return len;
+}
+
+int http_response_is_html(http_response_t *r) {
+  char *ct = http_response_content_type(r);
+  if (!ct)
+    return 0;
+  int result = (strstr(ct, "text/html") != NULL);
+  free(ct);
+  return result;
+}
+
+int http_response_is_text(http_response_t *r) {
+  char *ct = http_response_content_type(r);
+  if (!ct)
+    return 0;
+  int result = (strstr(ct, "text/") != NULL);
+  free(ct);
+  return result;
+}
+
+int http_response_is_sse(http_response_t *r) {
+  char *ct = http_response_content_type(r);
+  if (!ct)
+    return 0;
+  int result = (strstr(ct, "text/event-stream") != NULL);
+  free(ct);
+  return result;
+}
+
+/* ── Compression ──────────────────────────────────────────────────── */
+
+void http_client_enable_compression(http_client_t *c, int enable) {
+  if (c)
+    c->compression_enabled = enable;
+}
+
+int http_client_is_compression_enabled(http_client_t *c) { return c ? c->compression_enabled : 0; }
+
+/* ── Progress callback ────────────────────────────────────────────── */
+
+void http_client_set_progress_callback(http_client_t *c, http_progress_cb callback,
+                                       void *user_data) {
+  if (!c)
     return;
+  c->progress_callback = callback;
+  c->progress_user_data = user_data;
+}
 
-  client->rate_limit = *limit;
-  if (client->rate_limit.burst_size == 0) {
-    client->rate_limit.burst_size = client->rate_limit.requests_per_second;
+/* ── Range requests ───────────────────────────────────────────────── */
+
+http_response_t *http_get_range(http_client_t *c, const char *url, size_t start, size_t end) {
+  char range_header[128];
+  if (end > 0)
+    stbsp_snprintf(range_header, sizeof(range_header), "Range: bytes=%zu-%zu", start, end);
+  else
+    stbsp_snprintf(range_header, sizeof(range_header), "Range: bytes=%zu-", start);
+  const char *headers[] = {range_header};
+  return http_request(c, HTTP_GET, url, headers, 1, NULL, 0);
+}
+
+/* ── Batch execution ─────────────────────────────────────────────── */
+
+typedef struct {
+  http_client_t *client;
+  const http_batch_request_t *requests;
+  http_batch_result_t *results;
+  int count;
+  int next_index;
+  int worker_count;
+} http_batch_ctx_t;
+
+static void batch_worker_coro(turbo_coro_t *co, void *arg) {
+  UNUSED(co);
+  http_batch_ctx_t *ctx = (http_batch_ctx_t *)arg;
+  while (ctx->next_index < ctx->count) {
+    int idx = ctx->next_index++;
+    const http_batch_request_t *req = &ctx->requests[idx];
+    ctx->results[idx].response =
+        http_request(ctx->client, req->method, req->url, NULL, 0, req->body, req->body_len);
   }
-  client->has_rate_limit = 1;
-  client->tokens = client->rate_limit.burst_size;
-  client->last_request_time = get_time_seconds();
 }
 
-void http_client_clear_rate_limit(http_client_t *client) {
-  if (!client)
-    return;
-
-  client->has_rate_limit = 0;
-}
-
-int http_client_has_rate_limit(http_client_t *client) {
-  return client ? client->has_rate_limit : 0;
-}
-
-/* Apply rate limiting before request */
-static void apply_rate_limit(http_client_t *client) {
-  if (!client->has_rate_limit)
-    return;
-
-  double now = get_time_seconds();
-  double elapsed = now - client->last_request_time;
-
-  /* Refill tokens based on elapsed time */
-  double tokens_to_add = elapsed * client->rate_limit.requests_per_second;
-  client->tokens += (int)tokens_to_add;
-
-  /* Cap at burst size */
-  if (client->tokens > client->rate_limit.burst_size) {
-    client->tokens = client->rate_limit.burst_size;
-  }
-
-  /* Wait if no tokens available */
-  if (client->tokens < 1) {
-    double wait_time = (1.0 - client->tokens) / client->rate_limit.requests_per_second;
-    int wait_ms = (int)(wait_time * 1000.0);
-    if (wait_ms > 0) {
-      sleep_ms(wait_ms);
-      client->tokens = 1;
-    }
+static void batch_spawn_and_join(http_batch_ctx_t *ctx) {
+  turbo_coro_t **workers = calloc(ctx->worker_count, sizeof(turbo_coro_t *));
+  for (int i = 0; i < ctx->worker_count; i++) {
+    workers[i] = turbo_coro_create(batch_worker_coro, ctx, NULL);
+    turbo_coro_resume(workers[i]);
   }
 
-  /* Consume a token */
-  client->tokens--;
-  client->last_request_time = get_time_seconds();
-}
-
-/* ============================================================================
- * Request Builder
- * ========================================================================= */
-
-http_request_builder_t *http_request_builder_create(http_client_t *client) {
-  if (!client)
-    return NULL;
-
-  http_request_builder_t *builder = calloc(1, sizeof(http_request_builder_t));
-  if (!builder)
-    return NULL;
-
-  builder->client = client;
-  builder->method = HTTP_GET; // Default method
-
-  return builder;
-}
-
-void http_request_builder_destroy(http_request_builder_t *builder) {
-  if (!builder)
-    return;
-
-  tstr_free(builder->url);
-  free(builder->body);
-
-  header_entry_t *header = builder->headers;
-  while (header) {
-    header_entry_t *next = header->next;
-    tstr_free(header->name);
-    tstr_free(header->value);
-    free(header);
-    header = next;
-  }
-
-  free(builder);
-}
-
-http_request_builder_t *http_request_builder_url(http_request_builder_t *builder, const char *url) {
-  if (!builder || !url)
-    return builder;
-
-  tstr_free(builder->url);
-  builder->url = tstr_dup(url);
-  return builder;
-}
-
-http_request_builder_t *http_request_builder_method(http_request_builder_t *builder,
-                                                    http_method_t method) {
-  if (!builder)
-    return builder;
-
-  builder->method = method;
-  return builder;
-}
-
-http_request_builder_t *http_request_builder_header(http_request_builder_t *builder,
-                                                    const char *name, const char *value) {
-  if (!builder || !name || !value)
-    return builder;
-
-  header_entry_t *entry = malloc(sizeof(header_entry_t));
-  if (!entry)
-    return builder;
-
-  /* Use tstr_dup for header storage */
-  entry->name = tstr_dup(name);
-  entry->value = tstr_dup(value);
-  entry->next = builder->headers;
-  builder->headers = entry;
-  builder->header_count++;
-
-  return builder;
-}
-
-http_request_builder_t *http_request_builder_body(http_request_builder_t *builder, const char *body,
-                                                  size_t body_len) {
-  if (!builder || !body)
-    return builder;
-
-  free(builder->body);
-  builder->body = malloc(body_len);
-  if (!builder->body) {
-    builder->body_len = 0;
-    return builder;
-  }
-  memcpy(builder->body, body, body_len);
-  builder->body_len = body_len;
-
-  return builder;
-}
-
-http_request_builder_t *http_request_builder_json(http_request_builder_t *builder,
-                                                  const char *json_string) {
-  if (!builder || !json_string)
-    return builder;
-
-  http_request_builder_header(builder, "Content-Type", "application/json");
-  return http_request_builder_body(builder, json_string, strlen(json_string));
-}
-
-http_response_t *http_request_builder_execute(http_request_builder_t *builder) {
-  if (!builder || !builder->client || !builder->url) {
-    http_response_t *response = calloc(1, sizeof(http_response_t));
-    if (response) {
-      response->error = strdup("Invalid builder state");
-      response->error_code = HTTP_ERROR_INVALID_PARAMS;
-    }
-    return response;
-  }
-
-  /* Build headers array */
-  const char **headers = NULL;
-  int headers_built = 0;
-  if (builder->header_count > 0) {
-    headers = malloc(sizeof(char *) * builder->header_count);
-    if (!headers) {
-      http_response_t *response = calloc(1, sizeof(http_response_t));
-      if (response) {
-        response->error = strdup("Memory allocation failed");
-        response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
+  int alive = 1;
+  while (alive) {
+    alive = 0;
+    for (int i = 0; i < ctx->worker_count; i++) {
+      if (turbo_coro_alive(workers[i])) {
+        turbo_coro_resume(workers[i]);
+        alive = 1;
       }
-      return response;
     }
-    header_entry_t *entry = builder->headers;
-    while (entry) {
-      size_t len = strlen(entry->name) + strlen(entry->value) + 5; /* "name: value\0" */
-      char *header = malloc(len);
-      if (!header) {
-        /* Clean up already allocated headers */
-        for (int i = 0; i < headers_built; i++) {
-          free((void *)headers[i]);
-        }
-        free(headers);
-        http_response_t *response = calloc(1, sizeof(http_response_t));
-        if (response) {
-          response->error = strdup("Memory allocation failed");
-          response->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-        }
-        return response;
-      }
-      fmt(header, (int)len, "{}: {}", entry->name, entry->value);
-      headers[headers_built++] = header;
-      entry = entry->next;
-    }
+    if (alive)
+      turbo_coro_yield();
   }
 
-  /* Execute request */
-  http_response_t *response = http_request(builder->client, builder->method, builder->url, headers,
-                                           headers_built, builder->body, builder->body_len);
-
-  /* Free headers */
-  if (headers) {
-    for (int i = 0; i < headers_built; i++) {
-      free((void *)headers[i]);
-    }
-    free(headers);
-  }
-
-  return response;
+  for (int i = 0; i < ctx->worker_count; i++)
+    turbo_coro_destroy(workers[i]);
+  free(workers);
 }
 
-int http_response_decode_jwt(http_response_t *response, const uint8_t *key, size_t key_len,
+http_batch_result_t *http_client_batch(http_client_t *c, const http_batch_request_t *requests,
+                                       int count, int concurrency) {
+  if (!c || !requests || count <= 0)
+    return NULL;
+  if (concurrency <= 0)
+    concurrency = 1;
+  int worker_count = concurrency < count ? concurrency : count;
+
+  http_batch_result_t *results = calloc(count, sizeof(*results));
+  if (!results)
+    return NULL;
+
+  http_batch_ctx_t ctx = {.client = c,
+                          .requests = requests,
+                          .results = results,
+                          .count = count,
+                          .next_index = 0,
+                          .worker_count = worker_count};
+
+  if (turbo_coro_running()) {
+    batch_spawn_and_join(&ctx);
+  } else {
+    turbo_coro_t **workers = calloc(worker_count, sizeof(turbo_coro_t *));
+    for (int i = 0; i < worker_count; i++) {
+      workers[i] = turbo_coro_create(batch_worker_coro, &ctx, NULL);
+      turbo_coro_resume(workers[i]);
+    }
+    turbo_coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+    for (int i = 0; i < worker_count; i++)
+      turbo_coro_destroy(workers[i]);
+    free(workers);
+  }
+
+  return results;
+}
+
+void http_batch_result_free(http_batch_result_t *results, int count) {
+  if (!results)
+    return;
+  for (int i = 0; i < count; i++)
+    http_response_free(results[i].response);
+  free(results);
+}
+
+/* ── JWT decode ───────────────────────────────────────────────────── */
+
+int http_response_decode_jwt(http_response_t *r, const uint8_t *key, size_t key_len,
                              uint32_t options, void **jwt) {
-  if (!response || !response->body || !jwt)
+  if (!r || !r->body || !jwt)
     return CJWTE_INVALID_PARAMETERS;
-
-  int64_t current_time = (int64_t)time(NULL);
-  return (int)cjwt_decode(response->body, response->body_len, options, key, key_len, current_time,
-                          0, (cjwt_t **)jwt);
+  int64_t now = (int64_t)time(NULL);
+  return (int)cjwt_decode(r->body, r->body_len, options, key, key_len, now, 0, (cjwt_t **)jwt);
 }
 
 void http_jwt_destroy(void *jwt) {
-  if (jwt) {
+  if (jwt)
     cjwt_destroy((cjwt_t *)jwt);
-  }
 }

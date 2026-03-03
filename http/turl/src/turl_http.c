@@ -5,7 +5,7 @@
 
 #include "turl_http.h"
 #include "turl_common.h"
-#include <http_coro_client.h>
+#include <http_client.h>
 #include <platform.h>
 #include <tlog.h>
 #include <stdio.h>
@@ -24,8 +24,8 @@ int turl_execute_http_request(const turl_http_config_t *config) {
     char *rendered_body = NULL;
     size_t body_len = 0;
     char **rendered_headers = NULL;
-    http_coro_client_t *client = NULL;
-    http_coro_response_t *resp = NULL;
+    http_client_t *client = NULL;
+    http_response_t *resp = NULL;
     int ret = 0;
 
     if (config->body) {
@@ -55,7 +55,7 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         }
     }
 
-    client = http_coro_client_create(config->coro_ctx);
+    client = http_client_create();
     if (!client) {
         TLOG_ERROR("Failed to create HTTP client");
         ret = 1;
@@ -69,11 +69,11 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         policy.retry_on_timeout = 1;
         policy.retry_on_connection_error = 1;
         policy.retry_on_5xx = 1;
-        http_coro_client_set_retry_policy(client, &policy);
+        http_client_set_retry_policy(client, &policy);
     }
 
     if (config->follow_redirects) {
-        http_coro_client_follow_redirects(client, 1);
+        http_client_follow_redirects(client, 1);
     }
 
     if (config->user_pass) {
@@ -84,14 +84,14 @@ int turl_execute_http_request(const turl_http_config_t *config) {
             if (user) {
                 memcpy(user, config->user_pass, user_len);
                 user[user_len] = '\0';
-                http_coro_client_set_basic_auth(client, user, colon + 1);
+                http_client_set_basic_auth(client, user, colon + 1);
                 free(user);
             }
         }
     }
 
     if (config->bearer_token) {
-        http_coro_client_set_bearer_token(client, config->bearer_token);
+        http_client_set_bearer_token(client, config->bearer_token);
     } else if (config->jwt_secret && config->jwt_claims) {
         // Generate JWT from secret and claims
         char *rendered_claims = turl_render_template(config->jwt_claims, config->mustache_context);
@@ -134,7 +134,7 @@ int turl_execute_http_request(const turl_http_config_t *config) {
 
             char *token = NULL;
             if (cjwt_encode(&jwt, (const uint8_t *)config->jwt_secret, strlen(config->jwt_secret), &token) == CJWTE_OK) {
-                http_coro_client_set_bearer_token(client, token);
+                http_client_set_bearer_token(client, token);
                 if (config->verbose) {
                     TLOG_INFO("Generated JWT Bearer token: {}...", token);
                 }
@@ -204,10 +204,10 @@ int turl_execute_http_request(const turl_http_config_t *config) {
             }
             free(rendered_form);
         }
-        resp = http_coro_post_multipart(client, rendered_url, form);
+        resp = http_post_multipart(client, rendered_url, form);
         http_multipart_form_destroy(form);
     } else {
-        resp = http_coro_request(client, method, rendered_url,
+        resp = http_request(client, method, rendered_url,
                                  config->header_count > 0 ? (const char **)rendered_headers : NULL,
                                  config->header_count, rendered_body, body_len);
     }
@@ -275,7 +275,7 @@ int turl_execute_http_request(const turl_http_config_t *config) {
 
     if (config->show_stats || config->verbose) {
         http_client_stats_t stats;
-        http_coro_client_get_stats(client, &stats);
+        http_client_get_stats(client, &stats);
 
         TLOG_INFO("------------------ Performance Stats ------------------");
         TLOG_INFO("  Total Time:   {:.2f} ms", total_ms);
@@ -285,8 +285,8 @@ int turl_execute_http_request(const turl_http_config_t *config) {
     }
 
 cleanup:
-    if (resp) http_coro_response_free(resp);
-    if (client) http_coro_client_destroy(client);
+    if (resp) http_response_free(resp);
+    if (client) http_client_destroy(client);
     free(rendered_url);
     if (rendered_body) free(rendered_body);
     if (rendered_headers) {

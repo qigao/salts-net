@@ -36,24 +36,64 @@ add_custom_command(
 # Library (respects BUILD_SHARED_LIBS)
 # =============================================================================
 
-file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
+set(SOURCE_FILES
+    src/exprtk_eval.c
+    src/exprtk_map.c
+    src/exprtk_registry.c
+    src/grammar/exprtk_parser.c
+    src/mod_core.c
+    src/mod_io.c
+    src/mod_math.c
+    src/mod_stats.c
+    src/mod_string.c
+    src/exprtk_validate.c
+    src/simd_helpers.c
+)
 
-add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${exprtk_LEXER_GEN}
-                                  ${exprtk_GRAMMAR_GEN})
+add_library(${TARGET_NAME} STATIC 
+    ${SOURCE_FILES} 
+    ${exprtk_LEXER_GEN}
+    ${exprtk_GRAMMAR_GEN}
+)
 add_library(TurboNet::exprtkParser ALIAS ${TARGET_NAME})
 
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/parser>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
-          ${CMAKE_CURRENT_SOURCE_DIR}/src)
+          ${CMAKE_CURRENT_SOURCE_DIR}/src
+          ${CMAKE_SOURCE_DIR}/vendor/mir)
+
+# Define BUILDING_EXPRTK so exprtk_grammar.h includes the generated file
+target_compile_definitions(${TARGET_NAME} PRIVATE BUILDING_EXPRTK)
+
+
+# Find simde include directory
+find_path(SIMDE_INCLUDE_DIRS "simde/simde-common.h")
+if(SIMDE_INCLUDE_DIRS)
+  message(STATUS "Found SIMDe: ${SIMDE_INCLUDE_DIRS}")
+else()
+  message(FATAL_ERROR "SIMDe not found. Please install it (e.g., via vcpkg).")
+endif()
+
+target_include_directories(${TARGET_NAME} PRIVATE ${SIMDE_INCLUDE_DIRS})
 
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils
 PRIVATE
   TurboNet::CsvParser
   TurboNet::DateTimeParser
+  mir_static
  )
+
+# Enable AVX/AVX2 for SIMD optimizations
+if(MSVC)
+  target_compile_options(${TARGET_NAME} PRIVATE /arch:AVX2)
+else()
+  target_compile_options(${TARGET_NAME} PRIVATE -mavx2 -mfma)
+endif()
 
 target_include_directories(${TARGET_NAME} PRIVATE)
 

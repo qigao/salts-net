@@ -21,6 +21,9 @@ extern "C" {
 /** Opaque event-loop context (wraps libuv loop + thread-safe post queue) */
 typedef struct turbo_coro_context_s turbo_coro_context_t;
 
+/** Shorter alias for turbo_coro_context_t */
+typedef struct turbo_coro_context_s coro_context;
+
 /**
  * @brief Create an event-loop context.
  *
@@ -130,6 +133,17 @@ CXX_C_API int turbo_coro_post(turbo_coro_context_t *ctx, turbo_coro_post_fn fn, 
  * @return Static string describing the error
  */
 CXX_C_API const char *turbo_strerror(int err);
+
+/**
+ * @brief Get the current thread's event-loop context.
+ *
+ * This allows components to implicitly find the event loop they are running on,
+ * avoiding the need to pass the context explicitly everywhere.
+ *
+ * @return Current context or NULL if no context is active on this thread.
+ */
+CXX_C_API turbo_coro_context_t *turbo_coro_context_current(void);
+
 
 /* ── Error codes ──────────────────────────────────────────────
  * Values match libuv on the target platform so internal code can

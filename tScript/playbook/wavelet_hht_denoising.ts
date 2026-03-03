@@ -5,7 +5,7 @@
  * Based on Category C research from QuantsPlaybook.
  */
 
-import("fin");
+import("timeseries");
 
 function update() {
     // 1. Wavelet Denoising (Haar Transform)

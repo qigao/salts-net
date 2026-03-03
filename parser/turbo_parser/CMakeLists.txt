@@ -5,22 +5,13 @@ target_include_directories(
   turbo_parser
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
           $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../internal/csv_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/ini_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/ltv_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/soa_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/cmd_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/dotenv_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/datetime_parser/include
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toon
-          ${CMAKE_CURRENT_SOURCE_DIR}/../internal/toml/include
-          ${CMAKE_SOURCE_DIR}/vendor/cxml/include
-          ${CMAKE_SOURCE_DIR}/common/include # for platform.h used by uri_parser
-)
+ 
+  )
 
  
 target_link_libraries(
   turbo_parser
+  PUBLIC TurboNet::Utils
    PRIVATE csv_parser
           ini_parser
           json_parser

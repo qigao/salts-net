@@ -1,7 +1,7 @@
 #include "s3/s3_client.h"
 #include "s3/s3_response.h"
 #include "tinytest.h"
-#include <http_coro_client.h>
+#include <http_client.h>
 #include <netcore/turbo_coro_context.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,9 +46,8 @@ static void test_real_list_buckets(void *arg) {
   turbo_coro_context_t *ctx = ((turbo_coro_context_t **)arg)[1];
 
   // Step 1: Raw HTTP GET to fetch and dump the XML body
-  http_coro_client_t *hc = http_coro_client_create(ctx);
-  http_coro_client_set_timeout(hc, 30000);
-  http_coro_response_t *raw = http_coro_get(hc, "https://play.min.io/");
+  http_client_t *hc = http_client_create();  http_client_set_timeout(hc, 30000);
+  http_response_t *raw = http_get(hc, "https://play.min.io/");
   if (raw && raw->status_code == 200 && raw->body && raw->body_len > 0) {
     printf("  Raw response: status=%d body_len=%zu\n", raw->status_code, raw->body_len);
     dump_to_file("s3_list_buckets_raw.xml", raw->body, raw->body_len);
@@ -80,8 +79,8 @@ static void test_real_list_buckets(void *arg) {
            (raw && raw->error) ? raw->error : "(null)");
   }
   if (raw)
-    http_coro_response_free(raw);
-  http_coro_client_destroy(hc);
+    http_response_free(raw);
+  http_client_destroy(hc);
 
   // Step 2: Also test via the public S3 API
   s3_base_url_t url = {0};

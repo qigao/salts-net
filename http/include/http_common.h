@@ -3,11 +3,10 @@
 
 /**
  * @file http_common.h
- * @brief Shared HTTP types for sync, async, and coroutine clients.
+ * @brief Shared HTTP types and utilities.
  *
  * Method values match llhttp so we can pass them directly.
- * Data-only types (params, cookies, retry, etc.) live here so that
- * every HTTP client variant can use them without cross-including.
+ * Data-only types (params, cookies, response, retry, etc.) live here.
  */
 
 #include <platform.h>
@@ -32,42 +31,6 @@ typedef int http_method_t;
 #define HTTP_TRACE   7
 #define HTTP_PATCH   28
 
-// Common HTTP methods (values match llhttp's enum)
-#define HTTP_DELETE  0
-// #define HTTP_GET     1
-// #define HTTP_HEAD    2
-// #define HTTP_POST    3
-// #define HTTP_PUT     4
-// #define HTTP_CONNECT 5
-// #define HTTP_OPTIONS 6
-// #define HTTP_TRACE   7
-// #define HTTP_COPY    8
-// #define HTTP_LOCK    9
-// #define HTTP_MKCOL   10
-// #define HTTP_MOVE    11
-// #define HTTP_PROPFIND 12
-// #define HTTP_PROPPATCH 13
-// #define HTTP_SEARCH  14
-// #define HTTP_UNLOCK  15
-// #define HTTP_BIND    16
-// #define HTTP_REBIND  17
-// #define HTTP_UNBIND  18
-// #define HTTP_ACL     19
-// #define HTTP_REPORT  20
-// #define HTTP_MKACTIVITY 21
-// #define HTTP_CHECKOUT 22
-// #define HTTP_MERGE   23
-// #define HTTP_MSEARCH 24
-// #define HTTP_NOTIFY  25
-// #define HTTP_SUBSCRIBE 26
-// #define HTTP_UNSUBSCRIBE 27
-// #define HTTP_PATCH   28
-// #define HTTP_PURGE   29
-// #define HTTP_MKCALENDAR 30
-// #define HTTP_LINK    31
-// #define HTTP_UNLINK  32
-// #define HTTP_SOURCE  33
-
 /* ── Error codes ─────────────────────────────────────────────────── */
 
 typedef enum {
@@ -86,7 +49,7 @@ typedef enum {
   HTTP_ERROR_CANCELLED
 } http_error_code_t;
 
-/* ── Response (shared layout) ────────────────────────────────────── */
+/* ── Response ────────────────────────────────────────────────────── */
 
 typedef struct {
   int status_code;
@@ -94,9 +57,11 @@ typedef struct {
   size_t headers_len;
   char *body;
   size_t body_len;
-  http_error_code_t error_code;
   char *error;
+  http_error_code_t error_code;
 } http_response_t;
+
+CXX_C_API void http_response_free(http_response_t *response);
 
 /* ── Statistics ──────────────────────────────────────────────────── */
 
@@ -108,6 +73,8 @@ typedef struct {
   uint64_t redirects_followed;
   uint64_t bytes_sent;
   uint64_t bytes_received;
+  uint64_t connections_created;
+  uint64_t connections_reused;
 } http_client_stats_t;
 
 /* ── Retry policy ────────────────────────────────────────────────── */
@@ -193,6 +160,15 @@ CXX_C_API int http_multipart_form_add_file_path(http_multipart_form_t *form, con
 /* ── Retry policy default ────────────────────────────────────────── */
 
 CXX_C_API http_retry_policy_t http_retry_policy_default(void);
+
+/* ── Response helpers (common) ───────────────────────────────────── */
+
+/**
+ * @brief Get a specific header value from raw response headers.
+ * @return Newly allocated string, caller must free(). NULL if not found.
+ */
+CXX_C_API char *http_response_get_header(http_response_t *response, const char *name);
+CXX_C_API int   http_response_has_header(http_response_t *response, const char *name);
 
 #ifdef __cplusplus
 }

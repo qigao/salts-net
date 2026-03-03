@@ -740,7 +740,7 @@ int turbo_kcp_server_set_mtu(turbo_kcp_server_t *server, int mtu) {
 /* Get zero-copy send buffer */
 turbo_arena_buffer_t *turbo_kcp_get_send_buffer(turbo_kcp_server_t *server, size_t min_size) {
   if (!server) return NULL;
-  return turbo_arena_get_pooled_buffer(&server->arena, min_size);
+  return turbo_arena_get_buffer(&server->arena, min_size);
 }
 
 /* Send with zero-copy buffer */

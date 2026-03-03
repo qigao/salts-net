@@ -19,7 +19,6 @@
 #include <tlog.h>
 
 typedef struct {
-  turbo_coro_context_t *coro_ctx;
   int verbose;
   int follow_redirects;
   int show_stats;
@@ -56,7 +55,7 @@ static void turl_main_coro(turbo_coro_t *co, void *arg) {
     a->ret = turl_batch_download(a->input_file, a->concurrency, a->raw_headers,
                                   a->header_count, a->mustache_context,
                                   a->output_path, a->follow_redirects,
-                                  a->verbose, a->coro_ctx);
+                                  a->verbose);
     return;
   }
 
@@ -74,8 +73,7 @@ static void turl_main_coro(turbo_coro_t *co, void *arg) {
                                       .show_stats = a->show_stats,
                                       .verbose = a->verbose,
                                       .mustache_context = a->mustache_context,
-                                      .follow_redirects = a->follow_redirects,
-                                      .coro_ctx = a->coro_ctx};
+                                      .follow_redirects = a->follow_redirects};
     a->ret = turl_run_collection(a->collection_path, &global_cfg);
     return;
   }
@@ -126,7 +124,7 @@ static void turl_main_coro(turbo_coro_t *co, void *arg) {
                                      .follow_redirects = a->follow_redirects,
                                      .verbose = a->verbose,
                                      .mustache_context = a->mustache_context,
-                                     .coro_ctx = a->coro_ctx};
+                                     .follow_redirects = a->follow_redirects};
 
   a->ret = turl_execute_http_request(&http_config);
 
@@ -331,7 +329,6 @@ int main(int argc, char *argv[]) {
   turbo_coro_context_t *coro_ctx = turbo_coro_context_create(NULL);
 
   turl_coro_args_t coro_args = {
-      .coro_ctx = coro_ctx,
       .verbose = verbose,
       .follow_redirects = follow_redirects,
       .show_stats = show_stats,

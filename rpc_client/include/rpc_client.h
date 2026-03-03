@@ -2,9 +2,11 @@
 #define RPC_CLIENT_H
 
 #include "rpc_error.h"
-#include <netcore/turbo_coro_context.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/* Forward declare http_client_t */
+typedef struct http_client_s http_client_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,10 +29,7 @@ typedef struct rpc_client_s rpc_client_t;
  */
 typedef struct {
   const char *url;               /**< Full URL (e.g., "http://127.0.0.1:8080/rpc") */
-  int timeout_ms;                /**< Request timeout in milliseconds */
-  int keep_alive;                /**< Keep connection alive */
-  const char *user_agent;        /**< User-Agent header */
-  turbo_coro_context_t *coro_ctx; /**< Coroutine context for HTTP I/O */
+  http_client_t *http_client;    /**< HTTP client instance (caller retains ownership) */
 } rpc_client_config_t;
 
 /**
@@ -290,9 +289,6 @@ int rpc_result_get_double(const rpc_call_result_t *result, const char *key, doub
 #define RPC_CLIENT_DEFAULT_CONFIG(url) \
   { \
     (const char *)(url), \
-    5000, \
-    1, \
-    "rpc_client/1.0", \
     NULL \
   }
 

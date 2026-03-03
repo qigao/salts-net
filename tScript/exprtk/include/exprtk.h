@@ -7,6 +7,7 @@
 #define exprtk_H
 
 #include "exprtk_types.h"
+#include "exprtk_module.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +20,9 @@ exprtk_node_t *exprtk_parse(const char *input, size_t length);
 exprtk_node_t *exprtk_parse_ext(const char *input, size_t length,
                                  turbo_arena_t *arena, int *error,
                                  char *error_msg, size_t error_msg_len);
+
+// Validate AST (undefined variables, duplicate params, simple type checks)
+int exprtk_validate(exprtk_node_t *root, exprtk_env_t *env, char *error_msg, size_t msg_len);
 
 // Clean up (frees the arena)
 void exprtk_free(exprtk_node_t *node);
@@ -37,10 +41,18 @@ exprtk_node_t *exprtk_node_create(turbo_arena_t *arena, exprtk_node_type_t type)
 void exprtk_env_init(exprtk_env_t *env);
 void exprtk_env_free(exprtk_env_t *env);
 void exprtk_env_set(exprtk_env_t *env, const char *name, exprtk_value_t value);
+void exprtk_env_set_local(exprtk_env_t *env, const char *name, exprtk_value_t value);
 exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name);
 void exprtk_env_register_func(exprtk_env_t *env, const char *name, exprtk_native_fn fn, void *user_data);
 void exprtk_env_set_constant(exprtk_env_t *env, const char *name, exprtk_value_t value);
 void exprtk_env_add_module(exprtk_env_t *env, const exprtk_module_t *mod);
+int exprtk_env_last_line(const exprtk_env_t *env);
+int exprtk_env_last_column(const exprtk_env_t *env);
+
+// Global Registry
+void exprtk_registry_init(void);
+void exprtk_registry_add_module(const exprtk_module_t *mod);
+exprtk_builtin_fn exprtk_registry_find(const char *name);
 
 // Math Functions
 double exprtk_median(const double *data, size_t n, turbo_arena_t *arena);

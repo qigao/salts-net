@@ -123,57 +123,56 @@ struct turbo_tls_server_s {
 
 
 /* TLS context management */
-  int turbo_tls_context_init(turbo_tls_context_t *context, int flags);
-  void turbo_tls_context_destroy(turbo_tls_context_t *context);
-  void turbo_tls_context_set_verify_flags(turbo_tls_context_t *context,
-                                       int verify_flags);
-  int turbo_tls_context_add_trusted_certs(turbo_tls_context_t *context,
-                                       const char *cert, size_t length);
-  int turbo_tls_context_set_cert(turbo_tls_context_t *context, const char *cert,
-                              size_t length);
-  int turbo_tls_context_set_private_key(turbo_tls_context_t *context,
-                                     const char *key, size_t length);
+CXX_C_API int turbo_tls_context_init(turbo_tls_context_t *context, int flags);
+CXX_C_API void turbo_tls_context_destroy(turbo_tls_context_t *context);
+CXX_C_API void turbo_tls_context_set_verify_flags(turbo_tls_context_t *context,
+                                                  int verify_flags);
+CXX_C_API int turbo_tls_context_add_trusted_certs(turbo_tls_context_t *context,
+                                                  const char *cert, size_t length);
+CXX_C_API int turbo_tls_context_set_cert(turbo_tls_context_t *context, const char *cert,
+                                         size_t length);
+CXX_C_API int turbo_tls_context_set_private_key(turbo_tls_context_t *context,
+                                                const char *key, size_t length);
 
 /* Server lifecycle */
-  int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop,
-                         turbo_tls_context_t *context, const char *host,
-                         unsigned short port);
-  int turbo_tls_server_start(turbo_tls_server_t *server, turbo_recv_cb on_recv,
-                          turbo_connect_cb on_connect,
-                          turbo_close_cb on_close);
-  void turbo_tls_server_stop(turbo_tls_server_t *server);
+CXX_C_API int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop,
+                                    turbo_tls_context_t *context, const char *host,
+                                    unsigned short port);
+CXX_C_API int turbo_tls_server_start(turbo_tls_server_t *server, turbo_recv_cb on_recv,
+                                     turbo_connect_cb on_connect,
+                                     turbo_close_cb on_close);
+CXX_C_API void turbo_tls_server_stop(turbo_tls_server_t *server);
 
 /* Client lifecycle */
-  turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop,
-                                          turbo_tls_context_t *context);
-  int turbo_tls_client_set_hostname(turbo_tls_client_t *client,
-                                 const char *hostname, size_t length);
-  int turbo_tls_client_connect(turbo_tls_client_t *client, const char *host,
-                            unsigned short port, turbo_recv_cb on_recv,
-                            turbo_connect_cb on_connect,
-                            turbo_close_cb on_close);
-  void turbo_tls_client_close(turbo_tls_client_t *client);
+CXX_C_API turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop,
+                                                      turbo_tls_context_t *context);
+CXX_C_API int turbo_tls_client_set_hostname(turbo_tls_client_t *client,
+                                            const char *hostname, size_t length);
+CXX_C_API int turbo_tls_client_connect(turbo_tls_client_t *client, const char *host,
+                                       unsigned short port, turbo_recv_cb on_recv,
+                                       turbo_connect_cb on_connect,
+                                       turbo_close_cb on_close);
+CXX_C_API void turbo_tls_client_close(turbo_tls_client_t *client);
 
 /* Zero-copy send operations */
-  turbo_arena_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client,
-                                              size_t min_size);
-  int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buffer,
-                         size_t length);
-  void turbo_tls_discard_buffer(turbo_tls_client_t *client,
-                             turbo_arena_buffer_t *buffer);
+CXX_C_API turbo_arena_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client,
+                                                          size_t min_size);
+CXX_C_API int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buffer,
+                                    size_t length);
+CXX_C_API void turbo_tls_discard_buffer(turbo_tls_client_t *client,
+                                        turbo_arena_buffer_t *buffer);
 
 /* Fallback copy-based send */
-  int turbo_tls_send(turbo_tls_client_t *client, const char *data, size_t length);
+CXX_C_API int turbo_tls_send(turbo_tls_client_t *client, const char *data, size_t length);
 
 /* Read operations */
-  int turbo_tls_read_start(turbo_tls_client_t *client,
-                        void (*alloc_cb)(turbo_tls_client_t *, size_t,
-                                         uv_buf_t *),
-                        turbo_recv_cb read_cb);
-  int turbo_tls_read_stop(turbo_tls_client_t *client);
+CXX_C_API int turbo_tls_read_start(turbo_tls_client_t *client,
+                                   void (*alloc_cb)(turbo_tls_client_t *, size_t, uv_buf_t *),
+                                   turbo_recv_cb read_cb);
+CXX_C_API int turbo_tls_read_stop(turbo_tls_client_t *client);
 
 /* Flush pending writes */
-  int turbo_tls_flush(turbo_tls_client_t *client);
+CXX_C_API int turbo_tls_flush(turbo_tls_client_t *client);
 
 /**
  * @brief IO vector structure for scatter-gather operations.
@@ -194,16 +193,17 @@ typedef struct {
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-  int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_tls_iovec_t *iov, size_t iovcnt);
+CXX_C_API int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_tls_iovec_t *iov,
+                              size_t iovcnt);
 
 /* Statistics and monitoring */
-  void turbo_tls_get_stats(const turbo_tls_server_t *server,
-                        turbo_tls_stats_t *stats);
-  void turbo_tls_reset_stats(turbo_tls_server_t *server);
+CXX_C_API void turbo_tls_get_stats(const turbo_tls_server_t *server,
+                                   turbo_tls_stats_t *stats);
+CXX_C_API void turbo_tls_reset_stats(turbo_tls_server_t *server);
 
 /* Memory management */
-  void turbo_tls_trim_memory(turbo_tls_server_t *server);
-  size_t turbo_tls_get_memory_usage(const turbo_tls_server_t *server);
+CXX_C_API void turbo_tls_trim_memory(turbo_tls_server_t *server);
+CXX_C_API size_t turbo_tls_get_memory_usage(const turbo_tls_server_t *server);
 
 /**
  * @brief Get the peer certificate in PEM format.
@@ -212,7 +212,8 @@ typedef struct {
  * @param length Pointer to buffer length. Updated with actual bytes copied or required.
  * @return 0 on success, error code on failure.
  */
-  int turbo_tls_client_get_peer_cert_pem(turbo_tls_client_t *client, char *buffer, size_t *length);
+CXX_C_API int turbo_tls_client_get_peer_cert_pem(turbo_tls_client_t *client, char *buffer,
+                                                  size_t *length);
 
 /* Zero-copy convenience macros */
 

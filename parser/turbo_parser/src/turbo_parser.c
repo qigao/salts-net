@@ -4,7 +4,9 @@
 
 // Parsers headers
 #include "csv_parser.h"
+#include "csv_stream_processor.h"
 #include "datetime_parser.h"
+#include "dsv_filter.h"
 #include "frame_parser.h" // for TLV
 #include "ini_parser.h"
 #include "json_parser.h"
@@ -183,6 +185,30 @@ int turbo_parse_csv(const uint8_t *data, size_t len, void *out) {
   return 0;
 }
 
+int turbo_parse_csv_opts(const uint8_t *data, size_t len, const turbo_csv_options_t *opts,
+                         void *out) {
+  if (!data || !out)
+    return -1;
+
+  if (!opts) {
+    return turbo_parse_csv(data, len, out);
+  }
+
+  csv_options_t native_opts = {
+      .has_header = opts->has_header,
+      .delimiter = opts->delimiter,
+      .quote = opts->quote,
+      .skip_empty_rows = opts->skip_empty_rows,
+  };
+
+  csv_doc_t *doc = csv_parse_opts((const char *)data, len, &native_opts);
+  if (!doc)
+    return -1;
+
+  *(csv_doc_t **)out = doc;
+  return 0;
+}
+
 void turbo_free_csv(void *out) {
   if (!out)
     return;
@@ -214,6 +240,112 @@ double turbo_csv_get_double(const turbo_csv_doc_t *doc, size_t row, size_t col, 
 
 bool turbo_csv_get_bool(const turbo_csv_doc_t *doc, size_t row, size_t col, bool def) {
   return csv_get_bool((const csv_doc_t *)doc, row, col, def);
+}
+
+size_t turbo_csv_find_column(const turbo_csv_doc_t *doc, const char *header_name) {
+  return csv_find_column((const csv_doc_t *)doc, header_name);
+}
+
+int turbo_csv_write_file(const turbo_csv_doc_t *doc, const char *filename) {
+  return csv_write_file((const csv_doc_t *)doc, filename);
+}
+
+turbo_dsv_filter_t *turbo_dsv_filter_create(const turbo_csv_doc_t *doc,
+                                            size_t header_row_index) {
+  return (turbo_dsv_filter_t *)dsv_filter_create((const csv_doc_t *)doc, header_row_index);
+}
+
+void turbo_dsv_filter_destroy(turbo_dsv_filter_t *filter) {
+  dsv_filter_destroy((dsv_filter_t *)filter);
+}
+
+const char *turbo_dsv_filter_error(turbo_dsv_filter_t *filter) {
+  return dsv_filter_error((dsv_filter_t *)filter);
+}
+
+bool turbo_dsv_filter_compile(turbo_dsv_filter_t *filter, const char *expression) {
+  return dsv_filter_compile((dsv_filter_t *)filter, expression);
+}
+
+void turbo_dsv_filter_set_output_delimiter(turbo_dsv_filter_t *filter, char delimiter) {
+  dsv_filter_set_output_delimiter((dsv_filter_t *)filter, delimiter);
+}
+
+int turbo_dsv_filter_check_row(turbo_dsv_filter_t *filter, size_t row_index) {
+  return dsv_filter_check_row((dsv_filter_t *)filter, row_index);
+}
+
+void turbo_dsv_filter_run(turbo_dsv_filter_t *filter, turbo_dsv_row_callback_t callback,
+                          void *user_data) {
+  dsv_filter_run((dsv_filter_t *)filter, (dsv_row_callback_t)callback, user_data);
+}
+
+turbo_csv_stream_processor_t *
+turbo_csv_stream_processor_create(const turbo_csv_options_t *opts) {
+  if (!opts) {
+    return (turbo_csv_stream_processor_t *)csv_stream_processor_create(NULL);
+  }
+
+  csv_options_t native_opts = {
+      .has_header = opts->has_header,
+      .delimiter = opts->delimiter,
+      .quote = opts->quote,
+      .skip_empty_rows = opts->skip_empty_rows,
+  };
+  return (turbo_csv_stream_processor_t *)csv_stream_processor_create(&native_opts);
+}
+
+void turbo_csv_stream_processor_destroy(turbo_csv_stream_processor_t *p) {
+  csv_stream_processor_destroy((csv_stream_processor_t *)p);
+}
+
+bool turbo_csv_stream_processor_set_filter(turbo_csv_stream_processor_t *p,
+                                           const char *expr) {
+  return csv_stream_processor_set_filter((csv_stream_processor_t *)p, expr);
+}
+
+void turbo_csv_stream_processor_set_columns(turbo_csv_stream_processor_t *p, const char *names) {
+  csv_stream_processor_set_columns((csv_stream_processor_t *)p, names);
+}
+
+void turbo_csv_stream_processor_feed(const char *data, size_t len, void *user_data) {
+  csv_stream_processor_feed(data, len, user_data);
+}
+
+void turbo_csv_stream_processor_finish(turbo_csv_stream_processor_t *p) {
+  csv_stream_processor_finish((csv_stream_processor_t *)p);
+}
+
+size_t turbo_csv_stream_processor_row_count(const turbo_csv_stream_processor_t *p) {
+  return csv_stream_processor_row_count((const csv_stream_processor_t *)p);
+}
+
+size_t turbo_csv_stream_processor_col_count(const turbo_csv_stream_processor_t *p) {
+  return csv_stream_processor_col_count((const csv_stream_processor_t *)p);
+}
+
+const char *turbo_csv_stream_processor_col_name(const turbo_csv_stream_processor_t *p,
+                                                size_t idx) {
+  return csv_stream_processor_col_name((const csv_stream_processor_t *)p, idx);
+}
+
+size_t turbo_csv_stream_processor_col_index(const turbo_csv_stream_processor_t *p,
+                                            const char *name) {
+  return csv_stream_processor_col_index((const csv_stream_processor_t *)p, name);
+}
+
+const double *turbo_csv_stream_processor_col_data(const turbo_csv_stream_processor_t *p,
+                                                  size_t col, size_t *out_len) {
+  return csv_stream_processor_col_data((const csv_stream_processor_t *)p, col, out_len);
+}
+
+const char *turbo_csv_stream_processor_get_str(const turbo_csv_stream_processor_t *p,
+                                               size_t row, size_t col) {
+  return csv_stream_processor_get_str((const csv_stream_processor_t *)p, row, col);
+}
+
+const char *turbo_csv_stream_processor_error(const turbo_csv_stream_processor_t *p) {
+  return csv_stream_processor_error((const csv_stream_processor_t *)p);
 }
 
 /* INI */

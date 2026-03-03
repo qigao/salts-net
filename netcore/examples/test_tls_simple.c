@@ -43,12 +43,23 @@ int main(void) {
   dns_result_t dns_result = {0};
 
   uv_loop_t loop;
-  uv_loop_init(&loop);
+  if (uv_loop_init(&loop) != 0) {
+    printf("   Failed to init uv loop\n");
+    return 1;
+  }
+
+  int rc = turbo_dns_init();
+  if (rc != 0) {
+    printf("   Failed to init turbo_dns: %d (%s)\n", rc, uv_strerror(rc));
+    uv_loop_close(&loop);
+    return 1;
+  }
 
   /* Use turbo_dns with system default DNS (no custom servers configured) */
-  int rc = turbo_dns_resolve_async(&loop, "httpbin.org", TURBO_DNS_ANY, dns_callback, &dns_result);
+  rc = turbo_dns_resolve_async(&loop, "httpbin.org", TURBO_DNS_ANY, dns_callback, &dns_result);
   if (rc != 0) {
-    printf("   Failed to start DNS resolution: %d\n", rc);
+    printf("   Failed to start DNS resolution: %d (%s)\n", rc, uv_strerror(rc));
+    turbo_dns_cleanup();
     uv_loop_close(&loop);
     return 1;
   }
@@ -58,6 +69,8 @@ int main(void) {
     uv_run(&loop, UV_RUN_ONCE);
   }
 
+  turbo_dns_cleanup();
+  uv_run(&loop, UV_RUN_NOWAIT);
   uv_loop_close(&loop);
 
   if (dns_result.status != 0) {

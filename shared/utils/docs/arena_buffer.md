@@ -54,7 +54,7 @@ turbo_arena_buffer_ref(buf);     // +1
 turbo_arena_buffer_unref(buf);   // -1，归零时回收
 
 // 用完归还
-turbo_arena_return_buffer(buf);
+turbo_arena_buffer_release(buf);
 ```
 
 ## Buffer 切片

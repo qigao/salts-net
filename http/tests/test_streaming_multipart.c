@@ -1,6 +1,5 @@
 #include "tinytest.h"
-#include "http_coro_client.h"
-#include <turbo_coro.h>
+#include "http_client.h"
 #include <platform.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,67 +24,13 @@ static void remove_test_file(void) {
     remove(TEST_FILE);
 }
 
-/* ── Coro test harness ────────────────────────────────────────────── */
+/* ── Network error check ─────────────────────────────────────────── */
 
-typedef struct { turbo_coro_context_t *ctx; void (*test_fn)(turbo_coro_context_t *ctx); } coro_test_ctx_t;
-
-static void coro_test_entry(turbo_coro_t *co, void *arg) {
-  UNUSED(co);
-  coro_test_ctx_t *tctx = (coro_test_ctx_t *)arg;
-  tctx->test_fn(tctx->ctx);
-}
-
-static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-  coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
-  turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
-  turbo_coro_spawn(sched, coro_test_entry, &tctx);
-  turbo_coro_scheduler_run(sched);
-  turbo_coro_scheduler_destroy(sched);
-  turbo_coro_context_destroy(ctx);
-}
-
-/* ── Result struct ────────────────────────────────────────────────── */
-
-static struct {
-  int ran, skipped, status_code;
-  int has_body;
-} g_result;
-
-static int is_network_error(http_coro_response_t *r) {
+static int is_network_error(http_response_t *r) {
   if (!r) return 1;
   return (r->error_code == HTTP_ERROR_CONNECTION_FAILED ||
           r->error_code == HTTP_ERROR_TIMEOUT ||
           r->error_code == HTTP_ERROR_DNS_FAILED);
-}
-
-/* ── Coro test functions ──────────────────────────────────────────── */
-
-static void test_multipart_upload(turbo_coro_context_t *ctx) {
-  memset(&g_result, 0, sizeof(g_result));
-  g_result.ran = 1;
-
-  http_coro_client_t *c = http_coro_client_create(ctx);
-  http_coro_client_set_timeout(c, 15000);
-
-  http_multipart_form_t *form = http_multipart_form_create();
-  http_multipart_form_add_file_path(form, "file", TEST_FILE, "application/octet-stream");
-
-  http_coro_response_t *r = http_coro_post_multipart(c, "https://httpbin.org/post", form);
-  if (is_network_error(r)) {
-    g_result.skipped = 1;
-    http_coro_response_free(r);
-    http_multipart_form_destroy(form);
-    http_coro_client_destroy(c);
-    return;
-  }
-
-  g_result.status_code = r->status_code;
-  g_result.has_body = (r->body != NULL);
-
-  http_coro_response_free(r);
-  http_multipart_form_destroy(form);
-  http_coro_client_destroy(c);
 }
 
 spec("http streaming multipart") {
@@ -96,12 +41,18 @@ spec("http streaming multipart") {
     describe("coro upload") {
 
         it("should upload multipart form with file") {
-            run_in_coro(test_multipart_upload);
-            check_int_eq(g_result.ran, 1);
-            if (!g_result.skipped) {
-                check_int_eq(g_result.status_code, 200);
-                check_int_eq(g_result.has_body, 1);
+            http_client_t *c = http_client_create();
+            http_client_set_timeout(c, 15000);
+            http_multipart_form_t *form = http_multipart_form_create();
+            http_multipart_form_add_file_path(form, "file", TEST_FILE, "application/octet-stream");
+            http_response_t *r = http_post_multipart(c, "https://httpbin.org/post", form);
+            if (!is_network_error(r)) {
+                check_int_eq(r->status_code, 200);
+                check_not_null(r->body);
             }
+            http_response_free(r);
+            http_multipart_form_destroy(form);
+            http_client_destroy(c);
         }
     }
 }

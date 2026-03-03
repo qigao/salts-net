@@ -260,15 +260,15 @@ spec("Arena Buffer Tests") {
 
   describe("Buffer Recycling") {
     it("should recycle buffers correctly") {
-      turbo_arena_buffer_t *buf = turbo_arena_get_pooled_buffer(&arena, 128);
+      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 128);
       check_not_null(buf);
       check_int_eq(arena.recycle_count, 0); // Should be empty initially
 
-      turbo_arena_return_buffer(buf);
+      turbo_arena_buffer_release(buf);
       check_int_eq(arena.recycle_count, 1);
       check_ptr_eq(arena.recycle_head, buf);
 
-      turbo_arena_buffer_t *buf2 = turbo_arena_get_pooled_buffer(&arena, 128);
+      turbo_arena_buffer_t *buf2 = turbo_arena_get_buffer(&arena, 128);
       check_ptr_eq(buf2, buf); // Should get the same buffer back
       check_int_eq(arena.recycle_count, 0);
 

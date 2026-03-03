@@ -25,6 +25,17 @@ _Static_assert(TURBO_ECONNREFUSED == UV_ECONNREFUSED, "TURBO_ECONNREFUSED mismat
 _Static_assert(TURBO_EPROTONOSUPPORT == UV_EPROTONOSUPPORT, "TURBO_EPROTONOSUPPORT mismatch");
 _Static_assert(TURBO_EALREADY == UV_EALREADY, "TURBO_EALREADY mismatch");
 
+#ifdef _WIN32
+static __declspec(thread) turbo_coro_context_t *tls_current_context = NULL;
+#else
+static __thread turbo_coro_context_t *tls_current_context = NULL;
+#endif
+
+turbo_coro_context_t *turbo_coro_context_current(void) {
+  return tls_current_context;
+}
+
+
 
 
 turbo_coro_context_t *turbo_coro_context_create(void *loop) {
@@ -55,7 +66,12 @@ turbo_coro_context_t *turbo_coro_context_create(void *loop) {
 int turbo_coro_context_run(turbo_coro_context_t *ctx, turbo_run_mode_t mode) {
   if (!ctx || !ctx->loop)
     return 0;
-  return uv_run(ctx->loop, (uv_run_mode)mode);
+  
+  turbo_coro_context_t *prev = tls_current_context;
+  tls_current_context = ctx;
+  int r = uv_run(ctx->loop, (uv_run_mode)mode);
+  tls_current_context = prev;
+  return r;
 }
 
 void turbo_coro_context_stop(turbo_coro_context_t* ctx) {

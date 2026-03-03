@@ -4,7 +4,7 @@
 #include "s3/s3_multimap.h"
 #include "s3/s3_error.h"
 #include "s3/s3_client.h"
-#include <http_coro_client.h>
+#include <http_client.h>
 
 typedef struct {
     const char* method;

@@ -27,21 +27,9 @@ struct http_params_s {
 };
 
 /* ── Cookie internals ────────────────────────────────────────────── */
+/* Uses the full cookie parser types with domain matching, expiry, etc. */
 
-typedef struct http_cookie_s {
-  tstr_t name;
-  tstr_t value;
-  tstr_t domain;
-  tstr_t path;
-  int secure;
-  int http_only;
-  struct http_cookie_s *next;
-} http_cookie_t;
-
-struct http_cookie_jar_s {
-  http_cookie_t *cookies;
-  int count;
-};
+#include "cookie_jar.h"
 
 /* ── Multipart internals ─────────────────────────────────────────── */
 

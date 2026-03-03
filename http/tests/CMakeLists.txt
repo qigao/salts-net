@@ -14,11 +14,12 @@ set(HTTP_TESTS
     test_streaming_multipart
     test_retry
     test_resiliency
-    test_coro_http)
+    test_coro_http
+    test_batch)
 
 foreach(test_name ${HTTP_TESTS})
   add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpCoroClient TurboNet::TinyTest TurboNet::JsonParser)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::TinyTest TurboNet::JsonParser)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
 
   if(WIN32)

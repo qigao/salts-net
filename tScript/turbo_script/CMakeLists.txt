@@ -1,76 +1,60 @@
-cmake_minimum_required(VERSION 3.10)
+project(turbo_script)
 
-project(turbo_script) 
+set(TARGET_NAME turbo_script)
+set(TARGET_NAME_LIB ${TARGET_NAME}_lib)
 
-include_directories(
-    include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../fin/include    # fin.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/../exprtk/include # exprtk_types.h etc.
-    ${CMAKE_SOURCE_DIR}/http/include
-    ${CMAKE_SOURCE_DIR}/shared/utils/include
- )
+file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
+     ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
 
-set(SOURCES
-    src/turbo_script.c
-    src/dsv_filter.c
-    src/csv_stream_processor.c
-)
+# ── STATIC lib for testing ────────────────────────────────────────
+add_library(${TARGET_NAME_LIB} STATIC ${SOURCE_FILES})
 
-add_library(turbo_script SHARED ${SOURCES})
-add_library(TurboNet::TurboScript ALIAS turbo_script)
+target_include_directories(
+  ${TARGET_NAME_LIB}
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir
+          ${CMAKE_CURRENT_SOURCE_DIR}/../exprtk/include)
 
-target_compile_definitions(turbo_script PRIVATE SHARED_CXX)
+target_compile_definitions(${TARGET_NAME_LIB} PRIVATE SHARED_CXX)
 
-target_link_libraries(turbo_script PRIVATE
-    exprtk
-    fin
-    datetime_parser
-    json_parser
-    csv_parser
-    http_coro_client
-    PUBLIC TurboNet::Utils TurboNet::Core
-)
+target_link_libraries(
+  ${TARGET_NAME_LIB}
+  PRIVATE exprtk datetime_parser mir_static ts_loader
+  PUBLIC TurboNet::Utils)
 
-add_executable(test_turbo_script test/test_turbo_script.c)
-target_link_libraries(test_turbo_script PRIVATE
-    turbo_script
-    TurboNet::TinyTest
-)
+set_target_properties(
+  ${TARGET_NAME_LIB}
+  PROPERTIES FOLDER turbo_script
+             VERSION ${PROJECT_VERSION}
+             SOVERSION ${PROJECT_VERSION_MAJOR})
 
-add_test(NAME test_turbo_script COMMAND test_turbo_script)
+# ── SHARED library ────────────────────────────────────────────────
+add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
+add_library(TurboNet::TurboScript ALIAS ${TARGET_NAME})
 
-add_executable(test_csv_stream_processor test/test_csv_stream_processor.c)
-target_link_libraries(test_csv_stream_processor PRIVATE
-    turbo_script csv_parser
-    TurboNet::TinyTest
-)
+# PUBLIC: consumers get turbo_script.h; stubs forward ts_plugin*.h to ts_loader
+target_include_directories(
+  ${TARGET_NAME}
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
+  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir
+          ${CMAKE_CURRENT_SOURCE_DIR}/../exprtk/include)
 
-add_test(NAME test_csv_stream_processor COMMAND test_csv_stream_processor)
+target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 
-set_target_properties(turbo_script PROPERTIES
-    FOLDER turbo_script
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-    EXPORT_NAME TurboScript
-)
-set_target_properties(test_turbo_script PROPERTIES
-    FOLDER turbo_script
-)
-set_target_properties(test_csv_stream_processor PROPERTIES
-    FOLDER turbo_script
-)
+target_link_libraries(
+  ${TARGET_NAME}
+  PRIVATE exprtk datetime_parser mir_static ts_loader
+  PUBLIC TurboNet::Utils)
 
-# Install library
-install(
-  TARGETS turbo_script
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
+set_target_properties(
+  ${TARGET_NAME}
+  PROPERTIES FOLDER turbo_script
+             VERSION ${PROJECT_VERSION}
+             SOVERSION ${PROJECT_VERSION_MAJOR}
+             EXPORT_NAME TurboScript)
 
-# Install headers
-install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.h")
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_script.h DESTINATION include)
+
+add_subdirectory(test)

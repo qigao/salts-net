@@ -6,7 +6,7 @@
 #ifndef TURL_HTTP_H
 #define TURL_HTTP_H
 
-#include <http_coro_client.h>
+#include <http_client.h>
 #include <json_parser.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -42,7 +42,6 @@ typedef struct {
     void *js_ctx;
     uint64_t global_obj;
     const char *test_path;
-    turbo_coro_context_t *coro_ctx;
 } turl_http_config_t;
 
 /**

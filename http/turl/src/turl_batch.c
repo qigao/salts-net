@@ -5,7 +5,7 @@
 
 #include "turl_batch.h"
 #include "turl_common.h"
-#include <http_coro_client.h>
+#include <http_client.h>
 #include <turbo_coro.h>
 #include <platform.h>
 #include <tlog.h>
@@ -27,18 +27,16 @@ typedef struct {
   uint32_t header_count;
   json_value_t *context;
   char *output_directory;
-  turbo_coro_context_t *coro_ctx;
 } batch_download_ctx_t;
 
 static void batch_worker(turbo_coro_t *co, void *arg) {
   batch_download_ctx_t *ctx = (batch_download_ctx_t *)arg;
 
-  http_coro_client_t *client = http_coro_client_create(ctx->coro_ctx);
-  if (!client) {
+  http_client_t *client = http_client_create();  if (!client) {
     TLOG_ERROR("Failed to create HTTP client for batch worker");
     return;
   }
-  http_coro_client_follow_redirects(client, ctx->follow_redirects);
+  http_client_follow_redirects(client, ctx->follow_redirects);
 
   while (ctx->current_index < ctx->url_count) {
     int idx = ctx->current_index++;
@@ -50,7 +48,7 @@ static void batch_worker(turbo_coro_t *co, void *arg) {
 
     char *rendered_url = turl_render_template(raw_url, ctx->context);
 
-    http_coro_response_t *resp = http_coro_request(
+    http_response_t *resp = http_request(
         client, HTTP_GET, rendered_url, ctx->headers, ctx->header_count, NULL, 0);
 
     if (resp->error) {
@@ -98,21 +96,20 @@ static void batch_worker(turbo_coro_t *co, void *arg) {
       }
     }
 
-    http_coro_response_free(resp);
+    http_response_free(resp);
     free(rendered_url);
 
     ctx->completed++;
   }
 
-  http_coro_client_destroy(client);
+  http_client_destroy(client);
 }
 
 int turl_batch_download(const char *input_file, int64_t concurrency,
                         char **headers, uint32_t header_count,
                         json_value_t *mustache_context,
                         const char *output_directory,
-                        int follow_redirects, int verbose,
-                        turbo_coro_context_t *coro_ctx) {
+                        int follow_redirects, int verbose) {
     FILE *f = fopen(input_file, "r");
     if (!f) {
       TLOG_ERROR("Failed to open input file: {}", input_file);
@@ -157,7 +154,6 @@ int turl_batch_download(const char *input_file, int64_t concurrency,
         .header_count = header_count,
         .context = mustache_context,
         .output_directory = (char *)output_directory,
-        .coro_ctx = coro_ctx,
     };
 
     // Spawn worker coroutines

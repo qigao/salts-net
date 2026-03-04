@@ -14,10 +14,10 @@ typedef struct {
 
 static exprtk_value_t test_triple_fn(size_t argc, exprtk_value_t *args, void *user_data) {
   (void)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_NUMBER) {
-    return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = 0.0};
+  if (argc != 1 || args[0].type != EXPRTK_VAL_NUMBER) {
+    return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0};
   }
-  return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = args[0].data.number * 3.0};
+  return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = args[0].data.number * 3.0};
 }
 
 spec("turbo_script") {
@@ -1987,4 +1987,3 @@ spec("turbo_script") {
     }
   }
 }
-

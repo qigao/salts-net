@@ -19,6 +19,7 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include "simd_helpers.h"
 
 /* =========================================================================
  * Internal helpers
@@ -71,8 +72,8 @@ static size_t adj_lower_bound(const universe_adj_t *adj, size_t n,
  * Lifecycle
  * ========================================================================= */
 
-universe_t *universe_create(turbo_arena_t *arena) {
-    universe_t *u = (universe_t *)turbo_arena_alloc(arena, sizeof(universe_t));
+universe_t *universe_create(turbo_pool_t *arena) {
+    universe_t *u = (universe_t *)turbo_pool_alloc(arena, sizeof(universe_t));
     if (!u) return NULL;
     memset(u, 0, sizeof(*u));
     u->arena = arena;
@@ -176,14 +177,12 @@ void universe_finalize(universe_t *u) {
     size_t n = u->num_assets;
     if (n == 0) return;
 
-    u->active_mask    = (uint8_t *)turbo_arena_alloc(u->arena, n * sizeof(uint8_t));
-    u->cum_adj_cache  = (double  *)turbo_arena_alloc(u->arena, n * sizeof(double));
-    u->delisted_today = (uint32_t *)turbo_arena_alloc(u->arena, n * sizeof(uint32_t));
+    u->active_mask    = (uint8_t *)turbo_pool_alloc(u->arena, n * sizeof(uint8_t));
+    u->cum_adj_cache  = (double  *)turbo_pool_alloc(u->arena, n * sizeof(double));
+    u->delisted_today = (uint32_t *)turbo_pool_alloc(u->arena, n * sizeof(uint32_t));
 
     if (u->active_mask)   memset(u->active_mask,   0, n * sizeof(uint8_t));
-    if (u->cum_adj_cache) {
-        for (size_t i = 0; i < n; i++) u->cum_adj_cache[i] = 1.0;
-    }
+    if (u->cum_adj_cache)  simd_fill(u->cum_adj_cache, 1.0, n);
 
     u->current_date = 0.0;
 }
@@ -270,6 +269,12 @@ double universe_adjust_price(const universe_t *u, uint32_t asset_id, double raw_
     return raw_price * universe_adj_factor(u, asset_id);
 }
 
+void universe_adjust_prices(const universe_t *u, const double *raw, double *adjusted, size_t n) {
+    if (!u || !raw || !adjusted || !u->cum_adj_cache || n == 0) return;
+    size_t na = u->num_assets < n ? u->num_assets : n;
+    simd_mul(raw, u->cum_adj_cache, adjusted, na);
+}
+
 size_t universe_delisted_today(const universe_t *u, uint32_t *out, size_t max) {
     if (!u || !u->delisted_today || !out) return 0;
     size_t n = u->num_delisted_today < max ? u->num_delisted_today : max;
@@ -293,29 +298,34 @@ void universe_rank(const universe_t *u, const double *values, size_t n, double *
     if (!u || !values || !out || n == 0) return;
     size_t na = u->num_assets < n ? u->num_assets : n;
 
-    /* Zero out inactive */
-    for (size_t i = 0; i < na; i++)
-        out[i] = (!u->active_mask || u->active_mask[i]) ? values[i] : 0.0;
+    /* Zero the entire output with SIMD */
+    simd_fill(out, 0.0, na);
 
-    /* For each active asset, compute its rank among active assets */
-    size_t active_count = count_active(u);
-    if (active_count == 0) return;
+    rank_item_t *items = (rank_item_t *)turbo_pool_alloc(u->arena, na * sizeof(rank_item_t));
+    size_t active_count = 0;
 
     for (size_t i = 0; i < na; i++) {
-        if (!u->active_mask[i]) { out[i] = 0.0; continue; }
-        size_t rank = 0;
-        for (size_t j = 0; j < na; j++) {
-            if (u->active_mask[j] && values[j] < values[i]) rank++;
+        if (u->active_mask && u->active_mask[i]) {
+            items[active_count].idx = i;
+            items[active_count].val = values[i];
+            active_count++;
         }
-        out[i] = (double)rank / (double)(active_count - 1 > 0 ? active_count - 1 : 1);
+    }
+
+    if (active_count == 0) return;
+
+    qsort(items, active_count, sizeof(rank_item_t), compare_rank_items);
+
+    double denom = (double)(active_count - 1 > 0 ? active_count - 1 : 1);
+    for (size_t i = 0; i < active_count; i++) {
+        out[items[i].idx] = (double)i / denom;
     }
 }
 
-/* Pair for sorting in top_n */
-typedef struct { size_t idx; double val; } rank_pair_t;
+/* Pair comparing function for top_n descending order */
 static int rp_cmp_desc(const void *a, const void *b) {
-    double va = ((const rank_pair_t *)a)->val;
-    double vb = ((const rank_pair_t *)b)->val;
+    double va = ((const rank_item_t *)a)->val;
+    double vb = ((const rank_item_t *)b)->val;
     return (va > vb) ? -1 : (va < vb) ? 1 : 0;
 }
 
@@ -325,21 +335,23 @@ size_t universe_top_n(const universe_t *u, const double *values, size_t n,
     size_t na = u->num_assets < n ? u->num_assets : n;
 
     /* Collect active (index, value) pairs */
-    rank_pair_t *tmp = (rank_pair_t *)malloc(na * sizeof(rank_pair_t));
+    rank_item_t *tmp = (rank_item_t *)turbo_pool_alloc(u->arena, na * sizeof(rank_item_t));
     if (!tmp) return 0;
     size_t cnt = 0;
     for (size_t i = 0; i < na; i++) {
-        if (u->active_mask && u->active_mask[i])
-            tmp[cnt++] = (rank_pair_t){ i, values[i] };
+        if (u->active_mask && u->active_mask[i]) {
+            tmp[cnt].idx = i;
+            tmp[cnt].val = values[i];
+            cnt++;
+        }
     }
 
-    qsort(tmp, cnt, sizeof(rank_pair_t), rp_cmp_desc);
+    qsort(tmp, cnt, sizeof(rank_item_t), rp_cmp_desc);
 
     size_t written = cnt < k ? cnt : k;
     for (size_t i = 0; i < written; i++)
         out_ids[i] = u->assets[tmp[i].idx].id;
 
-    free(tmp);
     return written;
 }
 
@@ -353,6 +365,100 @@ size_t universe_filter_gt(const universe_t *u, const double *values, size_t n,
         if (mask[i]) count++;
     }
     return count;
+}
+
+/* =========================================================================
+ * Vectorized Cross-Sectional Helpers (SIMD-accelerated)
+ * ========================================================================= */
+
+void universe_zscore(const universe_t *u, const double *values, size_t n, double *out) {
+    if (!u || !values || !out || n == 0) return;
+    size_t na = u->num_assets < n ? u->num_assets : n;
+
+    /* Gather active values into a contiguous scratch buffer */
+    double *active_vals = (double *)turbo_pool_alloc(u->arena, na * sizeof(double));
+    size_t *active_idx  = (size_t *)turbo_pool_alloc(u->arena, na * sizeof(size_t));
+    size_t ac = 0;
+
+    for (size_t i = 0; i < na; i++) {
+        if (u->active_mask && u->active_mask[i]) {
+            active_vals[ac] = values[i];
+            active_idx[ac]  = i;
+            ac++;
+        }
+    }
+
+    simd_fill(out, 0.0, na);
+    if (ac < 2) return;
+
+    /* Compute mean + variance in a single SIMD pass */
+    double mean, variance;
+    simd_mean_variance(active_vals, ac, &mean, &variance);
+    double sd = sqrt(variance);
+    if (sd < 1e-15) return;
+
+    /* Z-score normalize the active values using SIMD */
+    double *z = (double *)turbo_pool_alloc(u->arena, ac * sizeof(double));
+    simd_zscore(active_vals, z, ac, mean, sd);
+
+    /* Scatter back to output */
+    for (size_t i = 0; i < ac; i++) {
+        out[active_idx[i]] = z[i];
+    }
+}
+
+void universe_clip(const universe_t *u, const double *values, size_t n,
+                   double lo, double hi, double *out) {
+    if (!u || !values || !out || n == 0) return;
+    size_t na = u->num_assets < n ? u->num_assets : n;
+    /* Clamp: first raise all values to at least `lo`, then cap at `hi` */
+    simd_element_max_scalar(values, lo, out, na);
+    simd_element_min_scalar(out, hi, out, na);
+}
+
+double universe_cross_sum(const universe_t *u, const double *values, size_t n) {
+    if (!u || !values || n == 0 || !u->active_mask) return 0.0;
+    size_t na = u->num_assets < n ? u->num_assets : n;
+
+    double *active_vals = (double *)turbo_pool_alloc(u->arena, na * sizeof(double));
+    size_t ac = 0;
+    for (size_t i = 0; i < na; i++) {
+        if (u->active_mask[i])
+            active_vals[ac++] = values[i];
+    }
+    return ac > 0 ? simd_sum(active_vals, ac) : 0.0;
+}
+
+void universe_demean(const universe_t *u, const double *values, size_t n, double *out) {
+    if (!u || !values || !out || n == 0) return;
+    size_t na = u->num_assets < n ? u->num_assets : n;
+
+    double *active_vals = (double *)turbo_pool_alloc(u->arena, na * sizeof(double));
+    size_t *active_idx  = (size_t *)turbo_pool_alloc(u->arena, na * sizeof(size_t));
+    size_t ac = 0;
+
+    for (size_t i = 0; i < na; i++) {
+        if (u->active_mask && u->active_mask[i]) {
+            active_vals[ac] = values[i];
+            active_idx[ac]  = i;
+            ac++;
+        }
+    }
+
+    simd_fill(out, 0.0, na);
+    if (ac == 0) return;
+
+    double mean = simd_sum(active_vals, ac) / (double)ac;
+
+    /* Subtract mean using SIMD: out_active = vals - mean (via scale + add) */
+    double *demeaned = (double *)turbo_pool_alloc(u->arena, ac * sizeof(double));
+    double *mean_vec = (double *)turbo_pool_alloc(u->arena, ac * sizeof(double));
+    simd_fill(mean_vec, mean, ac);
+    simd_sub(active_vals, mean_vec, demeaned, ac);
+
+    for (size_t i = 0; i < ac; i++) {
+        out[active_idx[i]] = demeaned[i];
+    }
 }
 
 /* =========================================================================

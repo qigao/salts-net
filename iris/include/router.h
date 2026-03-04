@@ -6,7 +6,7 @@
 #include <string.h>
 
 /* Phase IRIS-1: Use turbo_arena instead of vendor arena for consistency with MQTT/HTTP */
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "request.h"
 #include "platform.h"
 #include "netcore/turbo_coro_client.h"
@@ -96,12 +96,12 @@ typedef struct {
   void *data;
   size_t size;
   void (*cleanup)(void *data);
-  turbo_arena_t *arena; /* Phase IRIS-1: Changed from Arena* */
+  turbo_pool_t *arena; /* Phase IRIS-1: Changed from Arena* */
 } req_context_t;
 
 // Arena-aware Request structure
 typedef struct Req {
-  turbo_arena_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
+  turbo_pool_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
   turbo_coro_client_t *client; /* Coroutine client connection */
   char *method;
   char *path;
@@ -125,7 +125,7 @@ typedef struct {
 
 // Arena-aware Response structure
 typedef struct Res {
-  turbo_arena_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
+  turbo_pool_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
   turbo_coro_client_t *client; /* Coroutine client connection */
   int status;
   char *content_type; // Arena allocated string
@@ -157,8 +157,8 @@ CXX_C_API void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *midd
 
 // Function declarations
 CXX_C_API int router(turbo_coro_client_t *client, const char *request_data, size_t request_len);
-CXX_C_API Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
-CXX_C_API Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
+CXX_C_API Req *arena_copy_req(turbo_pool_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
+CXX_C_API Res *arena_copy_res(turbo_pool_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Req *copy_req(const Req *original);
 CXX_C_API Res *copy_res(const Res *original);
 CXX_C_API void destroy_req(Req *req);

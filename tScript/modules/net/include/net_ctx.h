@@ -6,7 +6,7 @@
 #define NET_CTX_H
 
 #include "exprtk.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "http_client.h"
 #include "turbo_client.h"
 
@@ -22,10 +22,10 @@ typedef struct net_ctx_s {
 typedef struct {
     net_ctx_t     *ctx;
     exprtk_env_t  *env;
-    turbo_arena_t *scratch;
+    turbo_pool_t *scratch;
 } http_ud_t;
 
-#define NET_ZERO ((exprtk_value_t){exprtk_VAL_NUMBER, .data.number = 0.0})
+#define NET_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
 
 static inline http_client_t *net_ctx_ensure_client(net_ctx_t *ctx) {
     if (!ctx) return NULL;
@@ -33,8 +33,8 @@ static inline http_client_t *net_ctx_ensure_client(net_ctx_t *ctx) {
     return ctx->client;
 }
 
-static inline char *net_arena_cstr(turbo_arena_t *a, tstr_v sv) {
-    char *buf = turbo_arena_alloc(a, sv.len + 1);
+static inline char *net_arena_cstr(turbo_pool_t *a, tstr_v sv) {
+    char *buf = turbo_pool_alloc(a, sv.len + 1);
     if (buf) { memcpy(buf, sv.data, sv.len); buf[sv.len] = '\0'; }
     return buf;
 }

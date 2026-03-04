@@ -9,7 +9,7 @@
 
 typedef struct
 {
-    turbo_arena_t *pool;
+    turbo_pool_t *pool;
     Res *res;
     char *header;
     char *content;
@@ -67,7 +67,7 @@ void create_post(Req *req, Res *res)
     int reading_time = compute_reading_time(content);
 
     // Create separate arena for async operation
-    turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
+    turbo_pool_t *async_pool = malloc(sizeof(turbo_pool_t)); if (!async_pool || turbo_pool_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         free(slug);
         json_free(json);
@@ -76,7 +76,7 @@ void create_post(Req *req, Res *res)
     }
 
     // Allocate async context in the async arena
-    ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
+    ctx_t *ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         free(slug);
         json_free(json);
@@ -97,11 +97,11 @@ void create_post(Req *req, Res *res)
         return;
     }
 
-    ctx->header = turbo_arena_strdup(async_pool, header);
-    ctx->content = turbo_arena_strdup(async_pool, content);
-    ctx->slug = turbo_arena_strdup(async_pool, slug);
+    ctx->header = turbo_pool_strdup(async_pool, header);
+    ctx->content = turbo_pool_strdup(async_pool, content);
+    ctx->slug = turbo_pool_strdup(async_pool, slug);
     ctx->reading_time = reading_time;
-    ctx->author_id = turbo_arena_strdup(async_pool, author_id);
+    ctx->author_id = turbo_pool_strdup(async_pool, author_id);
     ctx->created_at = (int)time(NULL);
     ctx->updated_at = ctx->created_at;
     ctx->is_hidden = is_hidden;

@@ -6,10 +6,7 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
 
 # Static lib for tests
 add_library(${TARGET_NAME_LIB} STATIC ${SOURCE_FILES})
-target_link_libraries(
-  ${TARGET_NAME_LIB}
-  PRIVATE exprtk ts_loader
-  PUBLIC http_client)
+target_link_libraries(${TARGET_NAME_LIB} PUBLIC exprtk http_client)
 set_target_properties(${TARGET_NAME_LIB} PROPERTIES FOLDER
                                                     turbo_script/modules/net)
 target_include_directories(
@@ -17,10 +14,7 @@ target_include_directories(
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 # Shared plugin DLL
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-target_link_libraries(
-  ${TARGET_NAME}
-  PRIVATE ts_loader exprtk
-  PUBLIC http_client)
+target_link_libraries(${TARGET_NAME} PUBLIC exprtk http_client)
 target_include_directories(${TARGET_NAME} PRIVATE ${net_INCLUDES})
 set_target_properties(
   ${TARGET_NAME}

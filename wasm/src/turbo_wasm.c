@@ -1,6 +1,6 @@
 #include "turbo_wasm.h"
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "m3_api_libc.h"
 #include "m3_core.h"
 #include "turbo_str_view.h"
@@ -12,7 +12,7 @@
 
 typedef struct turbo_wasm_vm_s {
   turbo_wasm_config_t cfg;
-  turbo_arena_t owned_arena;
+  turbo_pool_t owned_arena;
   IM3Environment env;
   IM3Runtime runtime;
   uint8_t *wasm_bytes;
@@ -52,7 +52,7 @@ static int wasm_set_bytes_copy(turbo_wasm_vm_t *vm, const uint8_t *bytes, size_t
   if (!vm || !bytes || len == 0)
     return -1;
 
-  dst = (uint8_t *)turbo_arena_alloc(&vm->owned_arena, len);
+  dst = (uint8_t *)turbo_pool_alloc(&vm->owned_arena, len);
   if (!dst) {
     wasm_set_err(vm, "out of memory");
     return -1;
@@ -150,7 +150,7 @@ turbo_wasm_vm_t *turbo_wasm_vm_create(const turbo_wasm_config_t *cfg) {
     return NULL;
 
   vm->cfg = cfg ? *cfg : turbo_wasm_config_default();
-  if (turbo_arena_init(&vm->owned_arena, 1U << 20) != 0) {
+  if (turbo_pool_init(&vm->owned_arena, 1U << 20) != 0) {
     wasm_set_err(vm, "failed to initialize owned arena");
     free(vm);
     return NULL;
@@ -193,7 +193,7 @@ void turbo_wasm_vm_destroy(turbo_wasm_vm_t *vm) {
   }
 
   wasm_release_bytes(vm);
-  turbo_arena_free(&vm->owned_arena);
+  turbo_pool_free(&vm->owned_arena);
   free(vm);
 }
 
@@ -267,7 +267,7 @@ int turbo_wasm_vm_load_file(turbo_wasm_vm_t *vm, const char *path) {
     return -1;
   }
 
-  buf = (uint8_t *)turbo_arena_alloc(&vm->owned_arena, (size_t)file_size);
+  buf = (uint8_t *)turbo_pool_alloc(&vm->owned_arena, (size_t)file_size);
   if (!buf) {
     fclose(fp);
     wasm_set_err(vm, "out of memory");

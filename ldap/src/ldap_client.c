@@ -7,7 +7,7 @@
 #include "ldap_builder.h"
 #include "ldap_parser.h"
 #include "turbo_tcp.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
@@ -101,7 +101,7 @@ static int parse_url(const char *url, char **host, uint16_t *port, int *use_tls)
 }
 
 /* TCP receive callback */
-static int on_tcp_recv(void *handle, const turbo_arena_slice_t *slice, void *peer) {
+static int on_tcp_recv(void *handle, const turbo_pool_slice_t *slice, void *peer) {
     (void)peer;
     turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
     ldap_client_t *client = (ldap_client_t *)tcp->user_data;

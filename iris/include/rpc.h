@@ -10,7 +10,7 @@ typedef struct Res Res;
 
 #include "router.h"
 /* Phase IRIS-1: Use turbo_arena instead of vendor arena */
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "platform.h"
 
 #ifdef __cplusplus
@@ -45,7 +45,7 @@ typedef enum {
  * @brief RPC Request structure
  */
 typedef struct {
-  turbo_arena_t *arena;    /**< Arena for memory allocation */
+  turbo_pool_t *arena;    /**< Arena for memory allocation */
   char *jsonrpc;           /**< Protocol version (e.g., "2.0") */
   char *method;            /**< Method name */
   char *params;            /**< Parameters (JSON string) */
@@ -59,7 +59,7 @@ typedef struct {
  * @brief RPC Response structure
  */
 typedef struct {
-  turbo_arena_t *arena;    /**< Arena for memory allocation */
+  turbo_pool_t *arena;    /**< Arena for memory allocation */
   char *jsonrpc;           /**< Protocol version */
   char *result;            /**< Result (JSON string) */
   char *error_message;     /**< Error message */
@@ -111,7 +111,7 @@ typedef struct rpc_context_s {
   rpc_method_t *methods;
   size_t method_count;
   size_t method_capacity;
-  turbo_arena_t *arena;
+  turbo_pool_t *arena;
 } rpc_context_t;
 
 /**

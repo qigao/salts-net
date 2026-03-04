@@ -105,3 +105,55 @@ if (!is_flat) {
     }
 }
 ```
+
+---
+
+## 资产域管理 (Universe)
+
+`universe.*` 提供回测中资产生命周期管理、除权除息、活跃资产过滤等功能 (SIMD 加速)。
+
+### 生命周期
+
+| 函数 | 说明 |
+|---|---|
+| `universe_create(arena)` | 创建空域 |
+| `universe_add_asset(u, asset)` | 注册可交易资产 |
+| `universe_add_adjustment(u, adj)` | 添加拆股/分红事件 |
+| `universe_finalize(u)` | 排序调整因子、分配运行时数组 |
+| `universe_advance(u, date)` | 推进时钟到新交易日 (更新 active_mask) |
+| `universe_free(u)` | 释放 |
+
+### 查询
+
+| 函数 | 说明 |
+|---|---|
+| `universe_is_active(u, id)` | 资产当日是否可交易 |
+| `universe_active_count(u)` | 当前活跃资产数量 |
+| `universe_active_ids(u, out, max)` | 填充活跃 ID 列表 |
+| `universe_adj_factor(u, id)` | 获取累积复权因子 |
+| `universe_adjust_price(u, id, px)` | 对单条价格复权 |
+| `universe_delisted_today(u, out, max)` | 当日退市的资产 ID |
+
+### 横截面运算 (SIMD 加速)
+
+| 函数 | 说明 | SIMD 原语 |
+|---|---|---|
+| `universe_rank(u, vals, n, out)` | 活跃资产百分位排名 [0,1] | `simd_fill` + `compare_rank_items` |
+| `universe_top_n(u, vals, n, k, ids)` | Top-k 资产 ID (降序) | `rank_item_t` |
+| `universe_filter_gt(u, vals, n, thr, mask)` | 布尔掩码: 活跃 & 值>阈值 | — |
+| `universe_adjust_prices(u, raw, adj, n)` | 批量复权 | `simd_mul` |
+| `universe_zscore(u, vals, n, out)` | Z-Score 标准化 | `simd_mean_variance` + `simd_zscore` |
+| `universe_demean(u, vals, n, out)` | 减去截面均值 | `simd_sum` + `simd_sub` |
+| `universe_clip(u, vals, n, lo, hi, out)` | 截断到 [lo, hi] | `simd_element_max/min_scalar` |
+| `universe_cross_sum(u, vals, n)` | 活跃资产求和 | `simd_sum` |
+
+---
+
+## 图算法 (Graph)
+
+| 函数 | 说明 |
+|---|---|
+| `graph.bellman_ford(edges, nv, ne, src, dist, prev)` | Bellman-Ford 最短路 |
+| `graph.has_negative_cycle(edges, nv, ne)` | 检测负环 |
+| `graph.extract_path(prev, src, tgt, path)` | 从前驱数组提取路径 |
+| `graph.detect_arbitrage(rates, n)` | 汇率三角套利检测 (`-log` 转换) |

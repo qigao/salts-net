@@ -3,30 +3,19 @@
  * @brief Technical Analysis internal math and calculation helpers.
  */
 
+#include "simd_helpers.h"
 #include "ta.h"
-#include <arena_buffer.h>
-#include <math.h>
-#include <simde/x86/avx2.h>
+#include <math.h> 
 #include <stdlib.h>
 #include <string.h>
+#include <turbo_buffer.h>
 
 void ta_sma_calc(const double *src, size_t len, size_t period, double *dst) {
   if (period == 0 || period > len)
     return;
-  double sum = 0;
-  size_t i = 0;
-  for (; i + 4 <= period; i += 4) {
-    simde__m256d v = simde_mm256_loadu_pd(&src[i]);
-    /* Horizontal add, then store to scalar buffer (don't alias vector register memory). */
-    v = simde_mm256_hadd_pd(v, v);
-    double tmp[4];
-    simde_mm256_storeu_pd(tmp, v);
-    sum += tmp[0] + tmp[2];
-  }
-  for (; i < period; ++i)
-    sum += src[i];
+  double sum = simd_sum(src, period);
   dst[period - 1] = sum / (double)period;
-  for (i = period; i < len; ++i) {
+  for (size_t i = period; i < len; ++i) {
     sum += src[i] - src[i - period];
     dst[i] = sum / (double)period;
   }
@@ -86,47 +75,16 @@ void ta_smma(const double *in, size_t n, size_t period, double *out) {
 double ta_highest(const double *src, size_t idx, size_t period) {
   if (period == 0)
     return 0;
-  const double *start = &src[idx - period + 1];
-  double h = start[0];
-  size_t i = 0;
-  if (period >= 4) {
-    simde__m256d v_max = simde_mm256_loadu_pd(&start[0]);
-    for (i = 4; i + 4 <= period; i += 4) {
-      v_max = simde_mm256_max_pd(v_max, simde_mm256_loadu_pd(&start[i]));
-    }
-    // Horizontal max reduction
-    double tmp[4];
-    simde_mm256_storeu_pd(tmp, v_max);
-    h = fmax(fmax(tmp[0], tmp[1]), fmax(tmp[2], tmp[3]));
-  }
-  for (; i < period; ++i)
-    if (start[i] > h)
-      h = start[i];
-  return h;
+  return simd_max(&src[idx - period + 1], period);
 }
 
 double ta_lowest(const double *src, size_t idx, size_t period) {
   if (period == 0)
     return 0;
-  const double *start = &src[idx - period + 1];
-  double l = start[0];
-  size_t i = 0;
-  if (period >= 4) {
-    simde__m256d v_min = simde_mm256_loadu_pd(&start[0]);
-    for (i = 4; i + 4 <= period; i += 4) {
-      v_min = simde_mm256_min_pd(v_min, simde_mm256_loadu_pd(&start[i]));
-    }
-    double tmp[4];
-    simde_mm256_storeu_pd(tmp, v_min);
-    l = fmin(fmin(tmp[0], tmp[1]), fmin(tmp[2], tmp[3]));
-  }
-  for (; i < period; ++i)
-    if (start[i] < l)
-      l = start[i];
-  return l;
+  return simd_min(&src[idx - period + 1], period);
 }
 
-void ta_highest_arr(const double *src, size_t n, size_t period, double *dst, turbo_arena_t *arena) {
+void ta_highest_arr(const double *src, size_t n, size_t period, double *dst, turbo_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -145,7 +103,7 @@ void ta_highest_arr(const double *src, size_t n, size_t period, double *dst, tur
   TEMP_FREE(arena, deque);
 }
 
-void ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, turbo_arena_t *arena) {
+void ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, turbo_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -165,7 +123,7 @@ void ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, turb
 }
 
 void ta_highest_idx_arr(const double *src, size_t n, size_t period, size_t *dst,
-                        turbo_arena_t *arena) {
+                        turbo_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -185,7 +143,7 @@ void ta_highest_idx_arr(const double *src, size_t n, size_t period, size_t *dst,
 }
 
 void ta_lowest_idx_arr(const double *src, size_t n, size_t period, size_t *dst,
-                       turbo_arena_t *arena) {
+                       turbo_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -232,22 +190,12 @@ void ta_true_range_arr(const double *high, const double *low, const double *clos
   if (len == 0)
     return;
   dst[0] = high[0] - low[0];
-  size_t i = 1;
-  simde__m256d v_sign_mask = simde_mm256_set1_pd(-0.0); // Mask for clearing sign bit (abs)
-  for (; i + 4 <= len; i += 4) {
-    simde__m256d v_hi = simde_mm256_loadu_pd(&high[i]);
-    simde__m256d v_lo = simde_mm256_loadu_pd(&low[i]);
-    simde__m256d v_cp = simde_mm256_loadu_pd(&close[i - 1]);
-
-    simde__m256d v_hl = simde_mm256_sub_pd(v_hi, v_lo);
-    simde__m256d v_hc = simde_mm256_andnot_pd(v_sign_mask, simde_mm256_sub_pd(v_hi, v_cp));
-    simde__m256d v_lc = simde_mm256_andnot_pd(v_sign_mask, simde_mm256_sub_pd(v_lo, v_cp));
-
-    simde__m256d v_tr = simde_mm256_max_pd(v_hl, simde_mm256_max_pd(v_hc, v_lc));
-    simde_mm256_storeu_pd(&dst[i], v_tr);
+  for (size_t i = 1; i < len; ++i) {
+    double hl = high[i] - low[i];
+    double hc = fabs(high[i] - close[i - 1]);
+    double lc = fabs(low[i] - close[i - 1]);
+    dst[i] = fmax(hl, fmax(hc, lc));
   }
-  for (; i < len; ++i)
-    dst[i] = ta_true_range(high[i], low[i], close[i - 1]);
 }
 
 void ta_linreg(const double *src, size_t end_idx, size_t period, double *slope, double *intercept) {

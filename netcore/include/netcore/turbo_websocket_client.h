@@ -6,7 +6,7 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "turbo_callbacks.h"
 #include "websocket_message.h"
 
@@ -78,15 +78,15 @@ struct turbo_websocket_client_s {
   char *negotiated_extensions;     /**< Server-negotiated extensions */
 
   /* Handshake buffer */
-  turbo_arena_buffer_t *handshake_recv_buffer; /**< Buffer for handshake response */
+  turbo_pool_buffer_t *handshake_recv_buffer; /**< Buffer for handshake response */
   size_t handshake_recv_used;                  /**< Bytes received in handshake buffer */
 
   /* Frame processing */
-  turbo_arena_buffer_t *frame_recv_buffer; /**< Buffer for incoming frames */
+  turbo_pool_buffer_t *frame_recv_buffer; /**< Buffer for incoming frames */
   size_t frame_recv_used;                  /**< Bytes received in frame buffer */
 
   /* Message fragmentation */
-  turbo_arena_buffer_t *fragment_buffer; /**< Buffer for fragmented messages */
+  turbo_pool_buffer_t *fragment_buffer; /**< Buffer for fragmented messages */
   size_t fragment_buffer_used;           /**< Bytes used in fragment buffer */
   websocket_opcode_t fragment_opcode;    /**< Opcode of first fragment */
   int expecting_continuation;            /**< 1 if expecting continuation frame */
@@ -99,7 +99,7 @@ struct turbo_websocket_client_s {
   int in_close_callback; /**< 1 if currently executing on_close callback */
 
   /* Arena for connection lifetime allocations */
-  turbo_arena_t *conn_arena; /**< Arena for config, buffers, etc. */
+  turbo_pool_t *conn_arena; /**< Arena for config, buffers, etc. */
 
   /* Connection parameters (stored for handshake) */
   char *connect_host; /**< Host for WebSocket handshake */

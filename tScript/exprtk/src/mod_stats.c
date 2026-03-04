@@ -5,56 +5,56 @@
  *        cumprod/rank/histogram
  */
 #include "exprtk_module.h"
-#include "exprtk_internal.h"
+#include "exprtk.h"
 #include "simd_helpers.h"
 
-#define ALLOC_DBL(arena, n) TURBO_ARENA_ALLOC_ARRAY(arena, double, n)
 
-static exprtk_value_t fn_median(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+
+static exprtk_value_t fn_median(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
         return exprtk_val_num(exprtk_median(args[0].data.vector.data, args[0].data.vector.size, arena));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_percentile(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_percentile(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_NUMBER)
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER)
         return exprtk_val_num(exprtk_percentile(args[0].data.vector.data, args[0].data.vector.size, args[1].data.number, arena));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_skewness(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_skewness(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
         return exprtk_val_num(exprtk_skewness(args[0].data.vector.data, args[0].data.vector.size));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_kurtosis(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_kurtosis(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
         return exprtk_val_num(exprtk_kurtosis(args[0].data.vector.data, args[0].data.vector.size));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_geometric_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_geometric_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
         return exprtk_val_num(exprtk_geometric_mean(args[0].data.vector.data, args[0].data.vector.size));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_harmonic_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_harmonic_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
         return exprtk_val_num(exprtk_harmonic_mean(args[0].data.vector.data, args[0].data.vector.size));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_zscore(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_zscore(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n >= 2) {
             // Use SIMD-optimized mean and variance calculation
@@ -75,9 +75,9 @@ static exprtk_value_t fn_zscore(size_t argc, exprtk_value_t *args, exprtk_env_t 
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_wmean(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_wmean(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n > 0 && args[1].data.vector.size >= n) {
             // Use SIMD-optimized operations
@@ -89,9 +89,9 @@ static exprtk_value_t fn_wmean(size_t argc, exprtk_value_t *args, exprtk_env_t *
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_wvar(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_wvar(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n >= 2 && args[1].data.vector.size >= n) {
             double sw = 0, swx = 0;
@@ -106,9 +106,9 @@ static exprtk_value_t fn_wvar(size_t argc, exprtk_value_t *args, exprtk_env_t *e
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ewma(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_ewma(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_NUMBER) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
         size_t n = args[0].data.vector.size;
         double alpha = args[1].data.number;
         if (alpha > 1.0) alpha = 2.0 / (alpha + 1.0);
@@ -125,9 +125,9 @@ static exprtk_value_t fn_ewma(size_t argc, exprtk_value_t *args, exprtk_env_t *e
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ewmvar(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_ewmvar(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_NUMBER) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
         size_t n = args[0].data.vector.size;
         double alpha = args[1].data.number;
         if (alpha > 1.0) alpha = 2.0 / (alpha + 1.0);
@@ -148,9 +148,9 @@ static exprtk_value_t fn_ewmvar(size_t argc, exprtk_value_t *args, exprtk_env_t 
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_covariance(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_covariance(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n >= 2 && args[1].data.vector.size >= n) {
             // Use SIMD-optimized sum
@@ -170,9 +170,9 @@ static exprtk_value_t fn_covariance(size_t argc, exprtk_value_t *args, exprtk_en
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_cumsum(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_cumsum(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n > 0) {
             double *res = ALLOC_DBL(arena, n);
@@ -186,9 +186,9 @@ static exprtk_value_t fn_cumsum(size_t argc, exprtk_value_t *args, exprtk_env_t 
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_cumprod(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_cumprod(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n > 0) {
             double *res = ALLOC_DBL(arena, n);
@@ -202,9 +202,9 @@ static exprtk_value_t fn_cumprod(size_t argc, exprtk_value_t *args, exprtk_env_t
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_VECTOR) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
         size_t n = args[0].data.vector.size;
         if (n > 0) {
             double *res = ALLOC_DBL(arena, n);
@@ -229,9 +229,9 @@ static exprtk_value_t fn_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *e
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_histogram(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_histogram(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_NUMBER) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
         size_t n = args[0].data.vector.size;
         size_t nbins = (size_t)args[1].data.number;
         if (n > 0 && nbins > 0) {

@@ -255,7 +255,7 @@ CXX_C_API void turbo_rwlock_wrunlock(turbo_rwlock_t *lock);
  * @return Duplicated string, or NULL on failure
  * @note Memory is managed by the pool, do not free() directly
  */
-CXX_C_API char *turbo_pool_strdup(void *pool, const char *str);
+CXX_C_API char *turbo_memory_pool_strdup(void *pool, const char *str);
 
 /**
  * @brief URL-encode a string per RFC 3986.

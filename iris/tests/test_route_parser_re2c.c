@@ -5,19 +5,19 @@
 
 #include "tinytest.h"
 #include "route_trie.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include <string.h>
 
-static turbo_arena_t test_arena;
+static turbo_pool_t test_arena;
 
 spec("route_parser_re2c") {
     before_each() {
-        int ret = turbo_arena_init(&test_arena, 4096);
+        int ret = turbo_pool_init(&test_arena, 4096);
         check_int_eq(ret, 0);
     }
 
     after_each() {
-        turbo_arena_free(&test_arena);
+        turbo_pool_free(&test_arena);
     }
 
     /* HTTP Method Parsing Tests */

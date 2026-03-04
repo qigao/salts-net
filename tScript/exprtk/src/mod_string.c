@@ -83,24 +83,24 @@ static bool mod_to_bool(const char *s, bool *out) {
 }
 
 /* Allocate a null-terminated C string in arena from a tstr_v */
-static inline char *mod_arena_cstr(turbo_arena_t *a, tstr_v sv) {
-    char *buf = turbo_arena_alloc(a, sv.len + 1);
+static inline char *mod_arena_cstr(turbo_pool_t *a, tstr_v sv) {
+    char *buf = turbo_pool_alloc(a, sv.len + 1);
     if (buf) { memcpy(buf, sv.data, sv.len); buf[sv.len] = '\0'; }
     return buf;
 }
 
-static exprtk_value_t fn_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING)
         return exprtk_val_num((double)args[0].data.string.len);
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_lower(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_lower(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
         tstr_v s = args[0].data.string;
-        char *buf = turbo_arena_alloc(arena, s.len);
+        char *buf = turbo_pool_alloc(arena, s.len);
         if (buf) {
             for (size_t i = 0; i < s.len; ++i) buf[i] = (char)tolower((unsigned char)s.data[i]);
             return exprtk_val_str(tstr_v_from_buf(buf, s.len));
@@ -109,11 +109,11 @@ static exprtk_value_t fn_lower(size_t argc, exprtk_value_t *args, exprtk_env_t *
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_upper(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_upper(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
         tstr_v s = args[0].data.string;
-        char *buf = turbo_arena_alloc(arena, s.len);
+        char *buf = turbo_pool_alloc(arena, s.len);
         if (buf) {
             for (size_t i = 0; i < s.len; ++i) buf[i] = (char)toupper((unsigned char)s.data[i]);
             return exprtk_val_str(tstr_v_from_buf(buf, s.len));
@@ -122,60 +122,60 @@ static exprtk_value_t fn_upper(size_t argc, exprtk_value_t *args, exprtk_env_t *
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_trim(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_trim(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING)
         return exprtk_val_str(tstr_v_trim(args[0].data.string, " \t\r\n"));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ltrim(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_ltrim(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING)
         return exprtk_val_str(tstr_v_trim_left(args[0].data.string, " \t\r\n"));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_rtrim(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_rtrim(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING)
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING)
         return exprtk_val_str(tstr_v_trim_right(args[0].data.string, " \t\r\n"));
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_contains(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_contains(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_STRING && args[1].type == exprtk_VAL_STRING)
+    if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING)
         return exprtk_val_num(tstr_v_contains(args[0].data.string, args[1].data.string) ? 1.0 : 0.0);
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_starts_with(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_starts_with(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_STRING && args[1].type == exprtk_VAL_STRING)
+    if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING)
         return exprtk_val_num(tstr_v_starts_with(args[0].data.string, args[1].data.string) ? 1.0 : 0.0);
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ends_with(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_ends_with(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_STRING && args[1].type == exprtk_VAL_STRING)
+    if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING)
         return exprtk_val_num(tstr_v_ends_with(args[0].data.string, args[1].data.string) ? 1.0 : 0.0);
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_index_of(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_index_of(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if (argc == 2 && args[0].type == exprtk_VAL_STRING && args[1].type == exprtk_VAL_STRING) {
+    if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING) {
         size_t pos = tstr_v_find(args[0].data.string, args[1].data.string);
         return exprtk_val_num(pos == TSTR_V_NPOS ? -1.0 : (double)pos);
     }
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_substr(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_substr(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env; (void)arena;
-    if ((argc == 2 || argc == 3) && args[0].type == exprtk_VAL_STRING) {
+    if ((argc == 2 || argc == 3) && args[0].type == EXPRTK_VAL_STRING) {
         size_t start = (size_t)args[1].data.number;
         size_t len = (argc == 3) ? (size_t)args[2].data.number : TSTR_V_NPOS;
         return exprtk_val_str(tstr_v_sub(args[0].data.string, start, len));
@@ -183,9 +183,9 @@ static exprtk_value_t fn_substr(size_t argc, exprtk_value_t *args, exprtk_env_t 
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_replace(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_replace(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 3 && args[0].type == exprtk_VAL_STRING && args[1].type == exprtk_VAL_STRING && args[2].type == exprtk_VAL_STRING) {
+    if (argc == 3 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING && args[2].type == EXPRTK_VAL_STRING) {
         tstr_v s = args[0].data.string;
         tstr_v old_v = args[1].data.string;
         tstr_v new_v = args[2].data.string;
@@ -200,7 +200,7 @@ static exprtk_value_t fn_replace(size_t argc, exprtk_value_t *args, exprtk_env_t
         }
         if (count == 0) return args[0];
         size_t new_len = s.len + count * (new_v.len - old_v.len);
-        char *buf = turbo_arena_alloc(arena, new_len);
+        char *buf = turbo_pool_alloc(arena, new_len);
         if (buf) {
             char *dest = buf;
             size_t last_src = 0;
@@ -220,11 +220,11 @@ static exprtk_value_t fn_replace(size_t argc, exprtk_value_t *args, exprtk_env_t
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_reverse(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_reverse(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc == 1 && args[0].type == exprtk_VAL_STRING) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
         tstr_v s = args[0].data.string;
-        char *buf = turbo_arena_alloc(arena, s.len);
+        char *buf = turbo_pool_alloc(arena, s.len);
         if (buf) {
             for (size_t i = 0; i < s.len; ++i) buf[i] = s.data[s.len - 1 - i];
             return exprtk_val_str(tstr_v_from_buf(buf, s.len));
@@ -233,14 +233,14 @@ static exprtk_value_t fn_reverse(size_t argc, exprtk_value_t *args, exprtk_env_t
     return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_assert(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_assert(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)arena;
     if (argc == 1 || argc == 2) {
-        double cond = (args[0].type == exprtk_VAL_NUMBER) ? args[0].data.number : (args[0].data.string.len > 0);
+        double cond = (args[0].type == EXPRTK_VAL_NUMBER) ? args[0].data.number : (args[0].data.string.len > 0);
         if (fabs(cond) <= 1e-9) {
             if (env) {
                 env->aborted = 1;
-                if (argc == 2 && args[1].type == exprtk_VAL_STRING)
+                if (argc == 2 && args[1].type == EXPRTK_VAL_STRING)
                     printf("Assertion failed: %.*s\n", (int)args[1].data.string.len, args[1].data.string.data);
                 else
                     printf("Assertion failed\n");
@@ -256,11 +256,11 @@ static exprtk_value_t fn_assert(size_t argc, exprtk_value_t *args, exprtk_env_t 
 /* ========================================================================= */
 
 /* tokenize(str, delim, index) → string: extract token at index */
-static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 3 || args[0].type != exprtk_VAL_STRING
-                   || args[1].type != exprtk_VAL_STRING
-                   || args[2].type != exprtk_VAL_NUMBER)
+    if (argc != 3 || args[0].type != EXPRTK_VAL_STRING
+                   || args[1].type != EXPRTK_VAL_STRING
+                   || args[2].type != EXPRTK_VAL_NUMBER)
         return exprtk_val_num(0);
 
     char *input = mod_arena_cstr(arena, args[0].data.string);
@@ -273,7 +273,7 @@ static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_
     exprtk_value_t ret = exprtk_val_num(0);
     if (tokens && index < count) {
         size_t len = strlen(tokens[index]);
-        char *buf = turbo_arena_alloc(arena, len + 1);
+        char *buf = turbo_pool_alloc(arena, len + 1);
         if (buf) {
             memcpy(buf, tokens[index], len);
             buf[len] = '\0';
@@ -285,10 +285,10 @@ static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 /* split(str, delim) → vector: split string into numeric vector */
-static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 2 || args[0].type != exprtk_VAL_STRING
-                   || args[1].type != exprtk_VAL_STRING)
+    if (argc != 2 || args[0].type != EXPRTK_VAL_STRING
+                   || args[1].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
 
     char *input = mod_arena_cstr(arena, args[0].data.string);
@@ -299,7 +299,7 @@ static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *
 
     exprtk_value_t ret = exprtk_val_num(0);
     if (tokens && count > 0) {
-        double *vec = (double *)turbo_arena_alloc(arena, count * sizeof(double));
+        double *vec = (double *)turbo_pool_alloc(arena, count * sizeof(double));
         if (vec) {
             for (size_t i = 0; i < count; ++i)
                 mod_to_double(tokens[i], &vec[i]);
@@ -311,10 +311,10 @@ static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 /* token_count(str, delim) → number: count tokens */
-static exprtk_value_t fn_token_count(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_token_count(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 2 || args[0].type != exprtk_VAL_STRING
-                   || args[1].type != exprtk_VAL_STRING)
+    if (argc != 2 || args[0].type != EXPRTK_VAL_STRING
+                   || args[1].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
 
     char *input = mod_arena_cstr(arena, args[0].data.string);
@@ -327,9 +327,9 @@ static exprtk_value_t fn_token_count(size_t argc, exprtk_value_t *args, exprtk_e
 }
 
 /* to_num(str) → number: parse string as double */
-static exprtk_value_t fn_to_num(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_to_num(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 1 || args[0].type != exprtk_VAL_STRING)
+    if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
     char *s = mod_arena_cstr(arena, args[0].data.string);
     double val = 0.0;
@@ -338,13 +338,13 @@ static exprtk_value_t fn_to_num(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 /* to_str(num) → string: format number as string */
-static exprtk_value_t fn_to_str(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_to_str(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 1 || args[0].type != exprtk_VAL_NUMBER)
+    if (argc != 1 || args[0].type != EXPRTK_VAL_NUMBER)
         return exprtk_val_num(0);
     char tmp[64];
     int len = snprintf(tmp, sizeof(tmp), "%g", args[0].data.number);
-    char *buf = turbo_arena_alloc(arena, len + 1);
+    char *buf = turbo_pool_alloc(arena, len + 1);
     if (buf) {
         memcpy(buf, tmp, len);
         buf[len] = '\0';
@@ -354,9 +354,9 @@ static exprtk_value_t fn_to_str(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 /* to_int(str) → number: parse string as integer */
-static exprtk_value_t fn_to_int(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_to_int(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 1 || args[0].type != exprtk_VAL_STRING)
+    if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
     char *s = mod_arena_cstr(arena, args[0].data.string);
     long long val = 0;
@@ -365,14 +365,14 @@ static exprtk_value_t fn_to_int(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 /* to_double(str) → number: alias for to_num */
-static exprtk_value_t fn_to_double(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_to_double(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     return fn_to_num(argc, args, env, arena);
 }
 
 /* to_bool(str) → number: parse "true"/"false"/"yes"/"no"/"1"/"0" */
-static exprtk_value_t fn_to_bool(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_to_bool(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 1 || args[0].type != exprtk_VAL_STRING)
+    if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
     char *s = mod_arena_cstr(arena, args[0].data.string);
     bool val = false;
@@ -381,16 +381,16 @@ static exprtk_value_t fn_to_bool(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 /* format(fmt, ...) → string: sprintf-style formatting (%d %f %g %s %%) */
-static exprtk_value_t fn_format(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_format(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc < 1 || args[0].type != exprtk_VAL_STRING)
+    if (argc < 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
     tstr_v fmt = args[0].data.string;
     size_t cap = fmt.len + argc * 32;
     for (size_t i = 1; i < argc; ++i) {
-        if (args[i].type == exprtk_VAL_STRING) cap += args[i].data.string.len;
+        if (args[i].type == EXPRTK_VAL_STRING) cap += args[i].data.string.len;
     }
-    char *buf = turbo_arena_alloc(arena, cap + 1);
+    char *buf = turbo_pool_alloc(arena, cap + 1);
     if (!buf) return exprtk_val_num(0);
     size_t pos = 0, arg_idx = 1;
     for (size_t i = 0; i < fmt.len; ++i) {
@@ -414,7 +414,7 @@ static exprtk_value_t fn_format(size_t argc, exprtk_value_t *args, exprtk_env_t 
                         written = snprintf(buf + pos, cap - pos, "%g", args[arg_idx].data.number);
                         break;
                     case 's':
-                        if (args[arg_idx].type == exprtk_VAL_STRING) {
+                        if (args[arg_idx].type == EXPRTK_VAL_STRING) {
                             tstr_v s = args[arg_idx].data.string;
                             written = snprintf(buf + pos, cap - pos, "%.*s", (int)s.len, s.data);
                         }
@@ -438,15 +438,15 @@ static exprtk_value_t fn_format(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 /* join(vec, delim) → string: join numeric vector into delimited string */
-static exprtk_value_t fn_join(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) {
+static exprtk_value_t fn_join(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) {
     (void)env;
-    if (argc != 2 || args[0].type != exprtk_VAL_VECTOR || args[1].type != exprtk_VAL_STRING)
+    if (argc != 2 || args[0].type != EXPRTK_VAL_VECTOR || args[1].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
     size_t n = args[0].data.vector.size;
     if (n == 0) return exprtk_val_str(tstr_v_from_buf("", 0));
     tstr_v delim = args[1].data.string;
     size_t cap = n * 24 + (n > 0 ? (n - 1) * delim.len : 0) + 1;
-    char *buf = turbo_arena_alloc(arena, cap);
+    char *buf = turbo_pool_alloc(arena, cap);
     if (!buf) return exprtk_val_num(0);
     size_t pos = 0;
     for (size_t i = 0; i < n; ++i) {

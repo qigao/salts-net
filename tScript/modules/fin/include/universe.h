@@ -15,7 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "exprtk_types.h"   /* turbo_arena_t (via exprtk_types -> arena_buffer) */
+#include "exprtk_types.h"   /* turbo_pool_t (via exprtk_types -> turbo_buff) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,7 +105,7 @@ typedef struct {
     uint32_t         *delisted_today;
     size_t            num_delisted_today;
 
-    turbo_arena_t    *arena;
+    turbo_pool_t    *arena;
 } universe_t;
 
 /* =========================================================================
@@ -117,7 +117,7 @@ typedef struct {
  * @param arena  Lifetime arena; all universe memory is allocated here.
  * @return Pointer to universe, or NULL on OOM.
  */
-universe_t *universe_create(turbo_arena_t *arena);
+universe_t *universe_create(turbo_pool_t *arena);
 
 /**
  * @brief Free a universe (releases heap-allocated arrays, not the arena).
@@ -224,6 +224,39 @@ size_t universe_top_n(const universe_t *u, const double *values, size_t n,
  */
 size_t universe_filter_gt(const universe_t *u, const double *values, size_t n,
                           double threshold, uint8_t *mask);
+
+/* =========================================================================
+ * Vectorized / SIMD-accelerated Cross-Sectional Helpers
+ * ========================================================================= */
+
+/**
+ * @brief Bulk-adjust an array of raw prices using SIMD element-wise multiply.
+ *        adjusted[i] = raw[i] * cum_adj_cache[i]
+ */
+void universe_adjust_prices(const universe_t *u, const double *raw, double *adjusted, size_t n);
+
+/**
+ * @brief Cross-sectional z-score normalization of active assets using SIMD.
+ *        Inactive slots are set to 0.
+ */
+void universe_zscore(const universe_t *u, const double *values, size_t n, double *out);
+
+/**
+ * @brief Clamp all values to [lo, hi] using SIMD element-wise clip.
+ */
+void universe_clip(const universe_t *u, const double *values, size_t n,
+                   double lo, double hi, double *out);
+
+/**
+ * @brief Sum values of active assets using SIMD reduction.
+ */
+double universe_cross_sum(const universe_t *u, const double *values, size_t n);
+
+/**
+ * @brief De-mean active asset values (subtract cross-sectional mean) using SIMD.
+ *        Inactive slots are set to 0.
+ */
+void universe_demean(const universe_t *u, const double *values, size_t n, double *out);
 
 /**
  * @brief Find the internal array index for a given asset ID.

@@ -27,7 +27,7 @@ int is_auth(Req *req, Res *res, Chain *chain)
     // Get the user session
     Session *session = get_session(req);
 
-    auth_context_t *ctx = turbo_arena_alloc(req->arena, sizeof(auth_context_t));
+    auth_context_t *ctx = turbo_pool_alloc(req->arena, sizeof(auth_context_t));
     if (!ctx)
     {
         send_text(res, 500, "Internal Server Error");
@@ -55,9 +55,9 @@ int is_auth(Req *req, Res *res, Chain *chain)
         }
 
         // Copy strings into arena
-        ctx->id = turbo_arena_strdup(req->arena, id);
-        ctx->name = turbo_arena_strdup(req->arena, name);
-        ctx->username = turbo_arena_strdup(req->arena, username);
+        ctx->id = turbo_pool_strdup(req->arena, id);
+        ctx->name = turbo_pool_strdup(req->arena, name);
+        ctx->username = turbo_pool_strdup(req->arena, username);
         ctx->is_admin = string_to_bool(is_admin_str);
 
         free(id);
@@ -71,7 +71,7 @@ int is_auth(Req *req, Res *res, Chain *chain)
             return 0;
         }
 
-        ctx->user_slug = turbo_arena_strdup(req->arena, username);
+        ctx->user_slug = turbo_pool_strdup(req->arena, username);
         if (!ctx->user_slug) {
             send_text(res, 500, "Memory allocation failed");
             return 0;

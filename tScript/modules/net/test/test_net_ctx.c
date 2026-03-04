@@ -5,7 +5,7 @@
 #include "net_ctx.h"
 #include "tinytest.h"
 #include <string.h>
-#include <arena_buffer.h>
+#include <turbo_buffer.h>
 spec("net_ctx") {
 
     describe("Lifecycle") {
@@ -49,8 +49,8 @@ spec("net_ctx") {
     describe("net_arena_cstr") {
 
         it("should copy string view to arena as null-terminated C string") {
-            turbo_arena_t arena = {0};
-            turbo_arena_init(&arena, 256);
+            turbo_pool_t arena = {0};
+            turbo_pool_init(&arena, 256);
 
             tstr_v sv = tstr_v_from_buf("hello", 5);
             char *cstr = net_arena_cstr(&arena, sv);
@@ -59,12 +59,12 @@ spec("net_ctx") {
             check_str_eq(cstr, "hello");
             check_int_eq(strlen(cstr), 5);
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
 
         it("should handle empty string view") {
-            turbo_arena_t arena = {0};
-            turbo_arena_init(&arena, 256);
+            turbo_pool_t arena = {0};
+            turbo_pool_init(&arena, 256);
 
             tstr_v sv = tstr_v_from_buf("", 0);
             char *cstr = net_arena_cstr(&arena, sv);
@@ -72,7 +72,7 @@ spec("net_ctx") {
             check_not_null(cstr);
             check_str_eq(cstr, "");
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
     }
 }

@@ -9,7 +9,7 @@
 #include "stats.h"
 #include "turbo_callbacks.h"
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,7 +52,7 @@ struct turbo_tls_context_s {
 /* TLS client with zero-copy capabilities */
 struct turbo_tls_client_s {
   uv_tcp_t handle;
-  turbo_arena_t arena;
+  turbo_pool_t arena;
   turbo_tls_context_t *context;
 
   /* TLS implementation */
@@ -60,13 +60,13 @@ struct turbo_tls_client_s {
   char hostname[256];
 
   /* Zero-copy receive buffers (ping-pong) */
-  turbo_arena_buffer_t *recv_buffer1;
-  turbo_arena_buffer_t *recv_buffer2;
+  turbo_pool_buffer_t *recv_buffer1;
+  turbo_pool_buffer_t *recv_buffer2;
   int recv_toggle;
 
   /* Zero-copy send queue */
-  turbo_arena_buffer_t *send_queue_head;
-  turbo_arena_buffer_t *send_queue_tail;
+  turbo_pool_buffer_t *send_queue_head;
+  turbo_pool_buffer_t *send_queue_tail;
   size_t send_queue_bytes;
 
   /* Write state */
@@ -105,7 +105,7 @@ struct turbo_tls_client_s {
 struct turbo_tls_server_s {
   uv_tcp_t *handle;
   uv_loop_t *loop;
-  turbo_arena_t arena;
+  turbo_pool_t arena;
   turbo_tls_context_t *context;
 
   /* Callbacks */
@@ -155,12 +155,12 @@ CXX_C_API int turbo_tls_client_connect(turbo_tls_client_t *client, const char *h
 CXX_C_API void turbo_tls_client_close(turbo_tls_client_t *client);
 
 /* Zero-copy send operations */
-CXX_C_API turbo_arena_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client,
+CXX_C_API turbo_pool_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client,
                                                           size_t min_size);
-CXX_C_API int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buffer,
+CXX_C_API int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_pool_buffer_t *buffer,
                                     size_t length);
 CXX_C_API void turbo_tls_discard_buffer(turbo_tls_client_t *client,
-                                        turbo_arena_buffer_t *buffer);
+                                        turbo_pool_buffer_t *buffer);
 
 /* Fallback copy-based send */
 CXX_C_API int turbo_tls_send(turbo_tls_client_t *client, const char *data, size_t length);
@@ -220,13 +220,13 @@ CXX_C_API int turbo_tls_client_get_peer_cert_pem(turbo_tls_client_t *client, cha
 /* Get buffer, write data, send buffer */
 #define TURBO_TLS_ZERO_COPY_SEND(client, data_size, write_code)                 \
   do {                                                                         \
-    turbo_arena_buffer_t *_buf = turbo_tls_get_send_buffer(client, data_size);   \
+    turbo_pool_buffer_t *_buf = turbo_tls_get_send_buffer(client, data_size);   \
     if (_buf) {                                                                \
       char *_ptr = _buf->data;                                                 \
       write_code;                                                              \
-      turbo_arena_buffer_set_used(_buf, data_size);                             \
+      turbo_pool_set_used(_buf, data_size);                             \
       turbo_tls_send_buffer(client, _buf, data_size);                           \
-      turbo_arena_buffer_unref(_buf);                                           \
+      turbo_pool_unref(_buf);                                           \
     }                                                                          \
   } while (0)
 

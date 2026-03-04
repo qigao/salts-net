@@ -365,7 +365,7 @@ size_t exprtk_ta_bsm_iv_put(const double *price, const double *S, const double *
 }
 
 size_t exprtk_ta_opt_binomial(double S, double K, double T, double r, double sigma, size_t steps,
-                              int is_call, double *out, turbo_arena_t *arena) {
+                              int is_call, double *out, turbo_pool_t *arena) {
   if (steps == 0 || T <= 0 || sigma <= 0) {
     *out = is_call ? fmax(0, S - K) : fmax(0, K - S);
     return 1;

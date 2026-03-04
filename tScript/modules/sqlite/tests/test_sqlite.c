@@ -26,13 +26,13 @@
 typedef struct {
   ts_plugin_handle_t *sqlite_plugin;
   exprtk_env_t env;
-  turbo_arena_t scratch;
+  turbo_pool_t scratch;
 } test_env_t;
 
 static void test_env_init(test_env_t *t) {
   memset(t, 0, sizeof(*t));
   exprtk_env_init(&t->env);
-  turbo_arena_init(&t->scratch, 4096);
+  turbo_pool_init(&t->scratch, 4096);
   t->sqlite_plugin = ts_plugin_load(SQLITE_PLUGIN_DLL);
   if (t->sqlite_plugin)
     ts_plugin_init(t->sqlite_plugin, &t->env, &t->scratch);
@@ -41,7 +41,7 @@ static void test_env_init(test_env_t *t) {
 static void test_env_free(test_env_t *t) {
   ts_plugin_unload(t->sqlite_plugin);
   exprtk_env_free(&t->env);
-  turbo_arena_free(&t->scratch);
+  turbo_pool_free(&t->scratch);
 }
 
 /* Helper: call a registered function by name */
@@ -53,19 +53,19 @@ static exprtk_value_t call_fn(test_env_t *t, const char *name, size_t argc, expr
     }
     fn = fn->next;
   }
-  return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = -999.0};
+  return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = -999.0};
 }
 
 /* Helper: make a string value in env arena */
 static exprtk_value_t make_str(test_env_t *t, const char *s) {
   size_t len = strlen(s);
-  char *buf = turbo_arena_alloc(&t->env.arena, len + 1);
+  char *buf = turbo_pool_alloc(&t->env.arena, len + 1);
   memcpy(buf, s, len + 1);
-  return (exprtk_value_t){exprtk_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
+  return (exprtk_value_t){EXPRTK_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
 }
 
 static exprtk_value_t make_num(double v) {
-  return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = v};
+  return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = v};
 }
 
 spec("sqlite_module") {
@@ -81,14 +81,14 @@ spec("sqlite_module") {
       check_str_eq(h->plugin->name, "sqlite");
 
       exprtk_env_t env;
-      turbo_arena_t scratch;
+      turbo_pool_t scratch;
       exprtk_env_init(&env);
-      turbo_arena_init(&scratch, 4096);
+      turbo_pool_init(&scratch, 4096);
       check_int_eq(ts_plugin_init(h, &env, &scratch), 0);
 
       ts_plugin_unload(h);
       exprtk_env_free(&env);
-      turbo_arena_free(&scratch);
+      turbo_pool_free(&scratch);
     }
   }
 
@@ -103,7 +103,7 @@ spec("sqlite_module") {
 
       exprtk_value_t args[1] = {make_str(&t, ":memory:")};
       exprtk_value_t handle = call_fn(&t, "sqlite.open", 1, args);
-      check_int_eq(handle.type, exprtk_VAL_NUMBER);
+      check_int_eq(handle.type, EXPRTK_VAL_NUMBER);
       check(handle.data.number >= 0.0);
 
       exprtk_value_t close_args[1] = {handle};
@@ -127,7 +127,7 @@ spec("sqlite_module") {
       exprtk_value_t exec_args[2] = {db,
                                      make_str(&t, "CREATE TABLE test (id INTEGER, value REAL)")};
       exprtk_value_t res = call_fn(&t, "sqlite.exec", 2, exec_args);
-      check_int_eq(res.type, exprtk_VAL_NUMBER);
+      check_int_eq(res.type, EXPRTK_VAL_NUMBER);
 
       exec_args[1] = make_str(&t, "INSERT INTO test VALUES (1, 3.14)");
       res = call_fn(&t, "sqlite.exec", 2, exec_args);
@@ -163,7 +163,7 @@ spec("sqlite_module") {
 
       exprtk_value_t query_args[2] = {db, make_str(&t, "SELECT value FROM test WHERE id=1")};
       exprtk_value_t res = call_fn(&t, "sqlite.query_scalar", 2, query_args);
-      check_int_eq(res.type, exprtk_VAL_NUMBER);
+      check_int_eq(res.type, EXPRTK_VAL_NUMBER);
       check_float_eq(res.data.number, 3.14, 0.01);
 
       exprtk_value_t close_args[1] = {db};
@@ -225,7 +225,7 @@ spec("sqlite_module") {
       exprtk_value_t query_args[3] = {db, make_str(&t, "SELECT value FROM test ORDER BY id"),
                                       make_num(0)};
       exprtk_value_t res = call_fn(&t, "sqlite.query_col", 3, query_args);
-      check_int_eq(res.type, exprtk_VAL_VECTOR);
+      check_int_eq(res.type, EXPRTK_VAL_VECTOR);
       check_int_eq(res.data.vector.size, 3);
       check_float_eq(res.data.vector.data[0], 10.0, 0.01);
       check_float_eq(res.data.vector.data[1], 20.0, 0.01);

@@ -94,19 +94,19 @@ static void send_error(turbo_coro_client_t *client, int error_code) {
 
 // Separates URL into path and query string components
 // Example: /users/123?active=true -> path="/users/123", query="active=true"
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-static int extract_path_and_query(turbo_arena_t *arena, char *url_buf, char **path, char **query) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+static int extract_path_and_query(turbo_pool_t *arena, char *url_buf, char **path, char **query) {
   if (!arena || !url_buf || !path || !query)
     return -1;
 
   char *qmark = strchr(url_buf, '?');
   if (qmark) {
     *qmark = '\0';
-    *path = turbo_arena_strdup(arena, url_buf);
-    *query = turbo_arena_strdup(arena, qmark + 1);
+    *path = turbo_pool_strdup(arena, url_buf);
+    *query = turbo_pool_strdup(arena, qmark + 1);
   } else {
-    *path = turbo_arena_strdup(arena, url_buf);
-    *query = turbo_arena_strdup(arena, "");
+    *path = turbo_pool_strdup(arena, url_buf);
+    *query = turbo_pool_strdup(arena, "");
   }
 
   if (!*path || !*query)
@@ -114,7 +114,7 @@ static int extract_path_and_query(turbo_arena_t *arena, char *url_buf, char **pa
 
   // If path is empty, treat it as root
   if ((*path)[0] == '\0') {
-    *path = turbo_arena_strdup(arena, "/");
+    *path = turbo_pool_strdup(arena, "/");
     if (!*path)
       return -1;
   }
@@ -123,15 +123,15 @@ static int extract_path_and_query(turbo_arena_t *arena, char *url_buf, char **pa
 
 // Extracts URL parameters from a previously matched route
 // Example: From route /users/:id matched with /users/123, extracts parameter id=123
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-static int extract_url_params(turbo_arena_t *arena, const route_match_t *match,
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+static int extract_url_params(turbo_pool_t *arena, const route_match_t *match,
                               request_t *url_params) {
   if (!arena || !match || !url_params)
     return -1;
 
   if (url_params->capacity == 0) {
     url_params->capacity = match->param_count > 0 ? match->param_count : 1;
-    url_params->items = turbo_arena_alloc(arena, sizeof(request_item_t) * url_params->capacity);
+    url_params->items = turbo_pool_alloc(arena, sizeof(request_item_t) * url_params->capacity);
     if (!url_params->items) {
       url_params->capacity = 0;
       return -1;
@@ -144,8 +144,8 @@ static int extract_url_params(turbo_arena_t *arena, const route_match_t *match,
   }
 
   for (int i = 0; i < match->param_count && url_params->count < url_params->capacity; i++) {
-    char *key = turbo_arena_alloc(arena, match->params[i].key.len + 1);
-    char *value = turbo_arena_alloc(arena, match->params[i].value.len + 1);
+    char *key = turbo_pool_alloc(arena, match->params[i].key.len + 1);
+    char *value = turbo_pool_alloc(arena, match->params[i].value.len + 1);
 
     if (!key || !value) {
       return -1;
@@ -260,13 +260,13 @@ void *get_connection_context(turbo_coro_client_t *client) {
 }
 
 // Create and initialize Req
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-static Req *create_req(turbo_arena_t *arena, turbo_coro_client_t *client) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+static Req *create_req(turbo_pool_t *arena, turbo_coro_client_t *client) {
   if (!arena)
     return NULL;
 
   /* Phase IRIS-1: Allocate Req from arena */
-  Req *req = turbo_arena_alloc(arena, sizeof(Req));
+  Req *req = turbo_pool_alloc(arena, sizeof(Req));
   if (!req)
     return NULL;
 
@@ -290,7 +290,7 @@ static Req *create_req(turbo_arena_t *arena, turbo_coro_client_t *client) {
   req->context.arena = arena;
 
   // Initialize security context
-  req->security = turbo_arena_alloc(arena, sizeof(iris_security_context_t));
+  req->security = turbo_pool_alloc(arena, sizeof(iris_security_context_t));
   if (!req->security) {
     return NULL;
   }
@@ -301,13 +301,13 @@ static Req *create_req(turbo_arena_t *arena, turbo_coro_client_t *client) {
 }
 
 // Create and initialize Res
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-static Res *create_res(turbo_arena_t *arena, turbo_coro_client_t *client) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+static Res *create_res(turbo_pool_t *arena, turbo_coro_client_t *client) {
   if (!arena)
     return NULL;
 
   /* Phase IRIS-1: Allocate Res from arena */
-  Res *res = turbo_arena_alloc(arena, sizeof(Res));
+  Res *res = turbo_pool_alloc(arena, sizeof(Res));
   if (!res)
     return NULL;
 
@@ -315,7 +315,7 @@ static Res *create_res(turbo_arena_t *arena, turbo_coro_client_t *client) {
   res->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
   res->client = client;         /* NetCore migration: use client */
   res->status = 200;
-  res->content_type = turbo_arena_strdup(arena, "text/plain"); /* Phase IRIS-1: Updated */
+  res->content_type = turbo_pool_strdup(arena, "text/plain"); /* Phase IRIS-1: Updated */
   res->body = NULL;
   res->body_len = 0;
   res->keep_alive = 1;
@@ -327,13 +327,13 @@ static Res *create_res(turbo_arena_t *arena, turbo_coro_client_t *client) {
 }
 
 // Create and initialize http_context_t
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-static http_context_t *create_http_context(turbo_arena_t *arena) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+static http_context_t *create_http_context(turbo_pool_t *arena) {
   if (!arena)
     return NULL;
 
   http_context_t *context =
-      turbo_arena_alloc(arena, sizeof(http_context_t)); /* Phase IRIS-1: Updated */
+      turbo_pool_alloc(arena, sizeof(http_context_t)); /* Phase IRIS-1: Updated */
   if (!context)
     return NULL;
 
@@ -357,8 +357,8 @@ static void cleanup_request_t(request_t *req_data) {
   req_data->capacity = 0;
 }
 
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-request_t copy_request_t(turbo_arena_t *arena, const request_t *original) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+request_t copy_request_t(turbo_pool_t *arena, const request_t *original) {
   request_t copy;
   memset(&copy, 0, sizeof(request_t));
 
@@ -369,7 +369,7 @@ request_t copy_request_t(turbo_arena_t *arena, const request_t *original) {
     // Allocate items array in arena
     copy.capacity = original->capacity;
     copy.count = original->count;
-    copy.items = turbo_arena_alloc(arena, copy.capacity * sizeof(request_item_t));
+    copy.items = turbo_pool_alloc(arena, copy.capacity * sizeof(request_item_t));
 
     if (!copy.items) {
       copy.capacity = 0;
@@ -380,7 +380,7 @@ request_t copy_request_t(turbo_arena_t *arena, const request_t *original) {
     // Copy each item using arena
     for (int i = 0; i < original->count; i++) {
       if (original->items[i].key) {
-        copy.items[i].key = turbo_arena_strdup(arena, original->items[i].key);
+        copy.items[i].key = turbo_pool_strdup(arena, original->items[i].key);
         if (!copy.items[i].key) {
           // Arena allocation failed - clear and return
           memset(&copy, 0, sizeof(request_t));
@@ -391,7 +391,7 @@ request_t copy_request_t(turbo_arena_t *arena, const request_t *original) {
       }
 
       if (original->items[i].value) {
-        copy.items[i].value = turbo_arena_strdup(arena, original->items[i].value);
+        copy.items[i].value = turbo_pool_strdup(arena, original->items[i].value);
         if (!copy.items[i].value) {
           // Arena allocation failed - clear and return
           memset(&copy, 0, sizeof(request_t));
@@ -519,25 +519,25 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
   if (!req || !req->arena || !context)
     return -1;
 
-  turbo_arena_t *arena = req->arena;
+  turbo_pool_t *arena = req->arena;
 
   // Copy method
   if (context->method) {
-    req->method = turbo_arena_strdup(arena, context->method);
+    req->method = turbo_pool_strdup(arena, context->method);
     if (!req->method)
       return -1;
   }
 
   // Copy path
   if (path) {
-    req->path = turbo_arena_strdup(arena, path);
+    req->path = turbo_pool_strdup(arena, path);
     if (!req->path)
       return -1;
   }
 
   // Copy body
   if (context->body && context->body_length > 0) {
-    req->body = turbo_arena_alloc(arena, context->body_length + 1);
+    req->body = turbo_pool_alloc(arena, context->body_length + 1);
     if (!req->body)
       return -1;
     memcpy(req->body, context->body, context->body_length);
@@ -1133,8 +1133,8 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
   }
 
   // Phase IRIS-1: Create request arena (8KB initial - enough for typical HTTP request)
-  turbo_arena_t arena;
-  if (turbo_arena_init(&arena, 8192) != 0) {
+  turbo_pool_t arena;
+  if (turbo_pool_init(&arena, 8192) != 0) {
     send_error(client, 500);
     return 1; // Close connection on arena init failure
   }
@@ -1303,7 +1303,7 @@ cleanup:
   }
 
   // Phase IRIS-1: Free the entire arena (handles all request/response memory)
-  turbo_arena_free(&arena);
+  turbo_pool_free(&arena);
 
   return should_close;
 }
@@ -1322,7 +1322,7 @@ void set_header(Res *res, const char *name, const char *value) {
     if (res->arena) {
       // Arena-based allocation
       /* Phase IRIS-1: turbo_arena doesn't have realloc, so alloc + memcpy */
-      tmp = turbo_arena_alloc(res->arena, new_cap * sizeof(http_header_t));
+      tmp = turbo_pool_alloc(res->arena, new_cap * sizeof(http_header_t));
       if (tmp && res->headers && res->header_capacity > 0) {
         memcpy(tmp, res->headers, res->header_capacity * sizeof(http_header_t));
       }
@@ -1342,8 +1342,8 @@ void set_header(Res *res, const char *name, const char *value) {
 
   if (res->arena) {
     // Arena-based string allocation
-    res->headers[res->header_count].name = turbo_arena_strdup(res->arena, name);
-    res->headers[res->header_count].value = turbo_arena_strdup(res->arena, value);
+    res->headers[res->header_count].name = turbo_pool_strdup(res->arena, name);
+    res->headers[res->header_count].value = turbo_pool_strdup(res->arena, value);
   } else {
     // Malloc-based string allocation
     res->headers[res->header_count].name = strdup(name);
@@ -1505,13 +1505,13 @@ Req *copy_req(const Req *original) {
   return copy;
 }
 
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+Req *arena_copy_req(turbo_pool_t *target_arena, const Req *original) {
   if (!original || !target_arena)
     return NULL;
 
   // Allocate on target arena
-  Req *copy = turbo_arena_alloc(target_arena, sizeof(Req));
+  Req *copy = turbo_pool_alloc(target_arena, sizeof(Req));
   if (!copy)
     return NULL;
 
@@ -1522,13 +1522,13 @@ Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original) {
 
   // Deep copy strings using target arena
   if (original->method)
-    copy->method = turbo_arena_strdup(target_arena, original->method);
+    copy->method = turbo_pool_strdup(target_arena, original->method);
 
   if (original->path)
-    copy->path = turbo_arena_strdup(target_arena, original->path);
+    copy->path = turbo_pool_strdup(target_arena, original->path);
 
   if (original->body && original->body_len > 0) {
-    copy->body = turbo_arena_alloc(target_arena, original->body_len + 1);
+    copy->body = turbo_pool_alloc(target_arena, original->body_len + 1);
     memcpy(copy->body, original->body, original->body_len);
     copy->body[original->body_len] = '\0';
   }
@@ -1543,7 +1543,7 @@ Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original) {
   copy->context.arena = target_arena;
 
   // Copy security context using target arena
-  copy->security = turbo_arena_alloc(target_arena, sizeof(iris_security_context_t));
+  copy->security = turbo_pool_alloc(target_arena, sizeof(iris_security_context_t));
   if (!copy->security) {
     return NULL;
   }
@@ -1557,13 +1557,13 @@ Req *arena_copy_req(turbo_arena_t *target_arena, const Req *original) {
   return copy;
 }
 
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original) {
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+Res *arena_copy_res(turbo_pool_t *target_arena, const Res *original) {
   if (!original || !target_arena)
     return NULL;
 
   // Allocate on target arena
-  Res *copy = turbo_arena_alloc(target_arena, sizeof(Res));
+  Res *copy = turbo_pool_alloc(target_arena, sizeof(Res));
   if (!copy)
     return NULL;
 
@@ -1573,18 +1573,18 @@ Res *arena_copy_res(turbo_arena_t *target_arena, const Res *original) {
   copy->client = original->client;
 
   if (original->content_type)
-    copy->content_type = turbo_arena_strdup(target_arena, original->content_type);
+    copy->content_type = turbo_pool_strdup(target_arena, original->content_type);
 
   // Copy headers array in target arena
   if (original->header_capacity > 0) {
     copy->headers =
-        turbo_arena_alloc(target_arena, original->header_capacity * sizeof(http_header_t));
+        turbo_pool_alloc(target_arena, original->header_capacity * sizeof(http_header_t));
 
     for (int i = 0; i < original->header_count; ++i) {
       if (original->headers[i].name)
-        copy->headers[i].name = turbo_arena_strdup(target_arena, original->headers[i].name);
+        copy->headers[i].name = turbo_pool_strdup(target_arena, original->headers[i].name);
       if (original->headers[i].value)
-        copy->headers[i].value = turbo_arena_strdup(target_arena, original->headers[i].value);
+        copy->headers[i].value = turbo_pool_strdup(target_arena, original->headers[i].value);
     }
   }
 

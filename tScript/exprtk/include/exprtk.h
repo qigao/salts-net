@@ -6,79 +6,77 @@
 #ifndef exprtk_H
 #define exprtk_H
 
-#include "exprtk_types.h"
+#include "platform.h"
 #include "exprtk_module.h"
+#include "exprtk_types.h"
+#include "turbo_buffer.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#define ALLOC_DBL(arena, n) TURBO_POOL_ALLOC_ARRAY(arena, double, n)
+#define ALLOC_FLT(arena, n) TURBO_POOL_ALLOC_ARRAY(arena, float, n)
+
 // Parse the input string into an AST (simplified API, creates internal arena if needed)
-exprtk_node_t *exprtk_parse(const char *input, size_t length);
+CXX_C_API exprtk_node_t *exprtk_parse(const char *input, size_t length);
 
 // Extended parse API allowing custom arena and error reporting
-exprtk_node_t *exprtk_parse_ext(const char *input, size_t length,
-                                 turbo_arena_t *arena, int *error,
-                                 char *error_msg, size_t error_msg_len);
+CXX_C_API exprtk_node_t *exprtk_parse_ext(const char *input, size_t length, turbo_pool_t *arena, int *error,
+                                          char *error_msg, size_t error_msg_len);
 
 // Validate AST (undefined variables, duplicate params, simple type checks)
-int exprtk_validate(exprtk_node_t *root, exprtk_env_t *env, char *error_msg, size_t msg_len);
+CXX_C_API int exprtk_validate(exprtk_node_t *root, exprtk_env_t *env, char *error_msg, size_t msg_len);
 
 // Clean up (frees the arena)
-void exprtk_free(exprtk_node_t *node);
+CXX_C_API void exprtk_free(exprtk_node_t *node);
 
 // Evaluate AST
-exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env);
+CXX_C_API exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env);
 
 // Complexity checks
-size_t exprtk_node_count(const exprtk_node_t *node);
-size_t exprtk_node_depth(const exprtk_node_t *node);
+CXX_C_API size_t exprtk_node_count(const exprtk_node_t *node);
+CXX_C_API size_t exprtk_node_depth(const exprtk_node_t *node);
 
 // Node allocation (internal/parser use)
-exprtk_node_t *exprtk_node_create(turbo_arena_t *arena, exprtk_node_type_t type);
+CXX_C_API exprtk_node_t *exprtk_node_create(turbo_pool_t *arena, exprtk_node_type_t type);
 
 // Environment management
-void exprtk_env_init(exprtk_env_t *env);
-void exprtk_env_free(exprtk_env_t *env);
-void exprtk_env_set(exprtk_env_t *env, const char *name, exprtk_value_t value);
-void exprtk_env_set_local(exprtk_env_t *env, const char *name, exprtk_value_t value);
-exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name);
-void exprtk_env_register_func(exprtk_env_t *env, const char *name, exprtk_native_fn fn, void *user_data);
-void exprtk_env_set_constant(exprtk_env_t *env, const char *name, exprtk_value_t value);
-void exprtk_env_add_module(exprtk_env_t *env, const exprtk_module_t *mod);
-int exprtk_env_last_line(const exprtk_env_t *env);
-int exprtk_env_last_column(const exprtk_env_t *env);
+CXX_C_API void exprtk_env_init(exprtk_env_t *env);
+CXX_C_API void exprtk_env_free(exprtk_env_t *env);
+CXX_C_API void exprtk_env_set(exprtk_env_t *env, const char *name, exprtk_value_t value);
+CXX_C_API void exprtk_env_set_local(exprtk_env_t *env, const char *name, exprtk_value_t value);
+CXX_C_API exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name);
+CXX_C_API int exprtk_env_has(exprtk_env_t *env, const char *name);
+CXX_C_API void exprtk_env_register_func(exprtk_env_t *env, const char *name, exprtk_native_fn fn,
+                                        void *user_data);
+CXX_C_API void exprtk_env_set_constant(exprtk_env_t *env, const char *name, exprtk_value_t value);
+CXX_C_API void exprtk_env_add_module(exprtk_env_t *env, const exprtk_module_t *mod);
+CXX_C_API int exprtk_env_last_line(const exprtk_env_t *env);
+CXX_C_API int exprtk_env_last_column(const exprtk_env_t *env);
 
 // Global Registry
-void exprtk_registry_init(void);
-void exprtk_registry_add_module(const exprtk_module_t *mod);
-exprtk_builtin_fn exprtk_registry_find(const char *name);
+CXX_C_API void exprtk_registry_init(void);
+CXX_C_API void exprtk_registry_add_module(const exprtk_module_t *mod);
+CXX_C_API exprtk_builtin_fn exprtk_registry_find(const char *name);
 
-// Math Functions
-double exprtk_median(const double *data, size_t n, turbo_arena_t *arena);
-double exprtk_percentile(const double *data, size_t n, double p, turbo_arena_t *arena);
-double exprtk_geometric_mean(const double *data, size_t n);
-double exprtk_harmonic_mean(const double *data, size_t n);
-double exprtk_skewness(const double *data, size_t n);
-double exprtk_kurtosis(const double *data, size_t n);
+/**
+ * @brief Full internal call dispatch (user functions + module registry).
+ * Called by the evaluator for NODE_FUNCTION_CALL.
+ */
+CXX_C_API exprtk_value_t exprtk_call_internal(const char *name, size_t argc, exprtk_value_t *args,
+                                              exprtk_env_t *env, turbo_pool_t *arena);
 
-double exprtk_fibonacci(int n);
-long long exprtk_gcd(long long u, long long v);
-double exprtk_normal_rand(double mu, double sigma);
+CXX_C_API exprtk_builtin_fn exprtk_find_builtin(const char *name, exprtk_env_t *env);
 
-double exprtk_det2(const double *A);
-double exprtk_det3(const double *A);
-int    exprtk_inv2(const double *A, double *out);
-int    exprtk_inv3(const double *A, double *out);
-void   exprtk_matmul(const double *A, const double *B, size_t m, size_t k, size_t n, double *out);
-void   exprtk_transpose(const double *A, size_t rows, size_t cols, double *out);
-int    exprtk_eig2(const double *A, double *ev);
-int    exprtk_eig3(const double *A, double *ev);
-double exprtk_trace2(const double *A);
+CXX_C_API exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_arena);
+CXX_C_API exprtk_node_t *exprtk_node_create(turbo_pool_t *arena, exprtk_node_type_t type);
+CXX_C_API void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *env,
+                                int is_constant);
+CXX_C_API void exprtk_env_init_local(exprtk_env_t *env);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif // exprtk_H
-

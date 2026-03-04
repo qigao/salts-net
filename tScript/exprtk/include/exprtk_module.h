@@ -10,7 +10,7 @@
 #define EXPRTK_MODULE_H
 
 #include "exprtk_types.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +22,7 @@
 
 typedef exprtk_value_t (*exprtk_builtin_fn)(
     size_t argc, exprtk_value_t *args,
-    exprtk_env_t *env, turbo_arena_t *arena);
+    exprtk_env_t *env, turbo_pool_t *arena);
 
 typedef struct {
     const char *name;
@@ -41,14 +41,14 @@ struct exprtk_module_s {
 
 static inline exprtk_value_t exprtk_val_num(double v) {
     exprtk_value_t val;
-    val.type = exprtk_VAL_NUMBER;
+    val.type = EXPRTK_VAL_NUMBER;
     val.data.number = v;
     return val;
 }
 
 static inline exprtk_value_t exprtk_val_vec(double *data, size_t size) {
     exprtk_value_t val;
-    val.type = exprtk_VAL_VECTOR;
+    val.type = EXPRTK_VAL_VECTOR;
     val.data.vector.data = data;
     val.data.vector.size = size;
     return val;
@@ -56,7 +56,7 @@ static inline exprtk_value_t exprtk_val_vec(double *data, size_t size) {
 
 static inline exprtk_value_t exprtk_val_str(tstr_v v) {
     exprtk_value_t val;
-    val.type = exprtk_VAL_STRING;
+    val.type = EXPRTK_VAL_STRING;
     val.data.string = v;
     return val;
 }
@@ -96,7 +96,7 @@ int               exprtk_map_iter_next(exprtk_map_iter_t *it, const char **key, 
 static inline exprtk_value_t exprtk_val_list_empty(void) {
     exprtk_value_t val;
     memset(&val, 0, sizeof(val));
-    val.type = exprtk_VAL_LIST;
+    val.type = EXPRTK_VAL_LIST;
     val.data.list.items = NULL;
     val.data.list.count = 0;
     val.data.list.capacity = 0;
@@ -105,7 +105,7 @@ static inline exprtk_value_t exprtk_val_list_empty(void) {
 
 static inline exprtk_value_t exprtk_val_list(exprtk_value_t *items, size_t n) {
     exprtk_value_t val;
-    val.type = exprtk_VAL_LIST;
+    val.type = EXPRTK_VAL_LIST;
     val.data.list.items = items;
     val.data.list.count = n;
     val.data.list.capacity = n;
@@ -113,7 +113,7 @@ static inline exprtk_value_t exprtk_val_list(exprtk_value_t *items, size_t n) {
 }
 
 static inline void exprtk_list_push(exprtk_value_t *list, exprtk_value_t item) {
-    if (list->type != exprtk_VAL_LIST) return;
+    if (list->type != EXPRTK_VAL_LIST) return;
     if (list->data.list.count >= list->data.list.capacity) {
         size_t new_cap = list->data.list.capacity ? list->data.list.capacity * 2 : 4;
         exprtk_value_t *new_items = (exprtk_value_t*)realloc(
@@ -126,7 +126,7 @@ static inline void exprtk_list_push(exprtk_value_t *list, exprtk_value_t item) {
 }
 
 static inline exprtk_value_t exprtk_list_get(const exprtk_value_t *list, size_t idx) {
-    if (list->type != exprtk_VAL_LIST || idx >= list->data.list.count)
+    if (list->type != EXPRTK_VAL_LIST || idx >= list->data.list.count)
         return exprtk_val_num(0);
     return list->data.list.items[idx];
 }
@@ -135,13 +135,13 @@ static inline exprtk_value_t exprtk_list_get(const exprtk_value_t *list, size_t 
  * Arena allocation helpers
  * ========================================================================= */
 
-#ifndef TURBO_ARENA_ALLOC_ARRAY
-#define TURBO_ARENA_ALLOC_ARRAY(arena, type, n) \
-    ((type*)turbo_arena_alloc((arena), (n) * sizeof(type)))
+#ifndef TURBO_POOL_ALLOC_ARRAY
+#define TURBO_POOL_ALLOC_ARRAY(arena, type, n) \
+    ((type*)turbo_pool_alloc((arena), (n) * sizeof(type)))
 #endif
 
 #define TEMP_ALLOC(arena, type, n) \
-    ((arena) ? (type*)turbo_arena_alloc((arena), (n) * sizeof(type)) \
+    ((arena) ? (type*)turbo_pool_alloc((arena), (n) * sizeof(type)) \
              : (type*)calloc((n), sizeof(type)))
 
 #define TEMP_FREE(arena, ptr) \

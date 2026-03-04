@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "config.h"
 #include "internal.h"
 #include "stats.h"
@@ -16,7 +16,7 @@ extern void turbo_udp_sync_unlock(void);
 /* Send operation for zero-copy */
 typedef struct turbo_udp_send_op_s {
   uv_udp_send_t req;
-  turbo_arena_slice_t slice;
+  turbo_pool_slice_t slice;
   turbo_udp_server_t *server;
   struct turbo_udp_send_op_s *next;
 } turbo_udp_send_op_t;
@@ -79,7 +79,7 @@ static void return_send_op(turbo_udp_send_op_t *op) {
     return;
 
   /* Release the slice */
-  turbo_arena_slice_release(&op->slice);
+  turbo_pool_slice_release(&op->slice);
 
   turbo_udp_sync_lock();
   if (g_send_op_pool_size < MAX_SEND_OP_POOL_SIZE) {
@@ -153,7 +153,7 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
   turbo_stats_counter_add_fast(s_udp_stats.bytes_received, (size_t)nread);
 
   /* Determine which buffer was used */
-  turbo_arena_buffer_t *used_buffer = NULL;
+  turbo_pool_buffer_t *used_buffer = NULL;
   if (server->recv_buffer1 && buf->base == server->recv_buffer1->data) {
     used_buffer = server->recv_buffer1;
   } else if (server->recv_buffer2 && buf->base == server->recv_buffer2->data) {
@@ -162,10 +162,10 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 
   if (used_buffer && server->on_recv) {
     /* Set the used size in the buffer */
-    turbo_arena_buffer_set_used(used_buffer, (size_t)nread);
+    turbo_pool_set_used(used_buffer, (size_t)nread);
 
     /* Create zero-copy slice for the received data */
-    turbo_arena_slice_t slice = turbo_arena_buffer_slice(used_buffer, 0, (size_t)nread);
+    turbo_pool_slice_t slice = turbo_pool_slice(used_buffer, 0, (size_t)nread);
 
     /* Call user callback with zero-copy slice */
     server->on_recv(server, &slice, (void *)addr);
@@ -176,7 +176,7 @@ static void on_udp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     }
 
     /* Release the slice (user should have ref'd it if needed) */
-    turbo_arena_slice_release(&slice);
+    turbo_pool_slice_release(&slice);
   }
 }
 
@@ -195,21 +195,21 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop, const cha
   init_udp_stats();
 
   /* Initialize arena */
-  if (turbo_arena_init(&server->arena, 0) != 0) {
+  if (turbo_pool_init(&server->arena, 0) != 0) {
     return UV_ENOMEM;
   }
 
   /* Create UDP handle */
   server->handle = (uv_udp_t *)malloc(sizeof(uv_udp_t));
   if (!server->handle) {
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return UV_ENOMEM;
   }
 
   int rc = uv_udp_init(loop, server->handle);
   if (rc != 0) {
     free(server->handle);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
@@ -217,12 +217,12 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop, const cha
 
   /* Allocate receive buffers from arena */
   size_t recv_buf_size = turbo_udp_config_get_recv_buf_size();
-  server->recv_buffer1 = turbo_arena_get_buffer(&server->arena, recv_buf_size);
-  server->recv_buffer2 = turbo_arena_get_buffer(&server->arena, recv_buf_size);
+  server->recv_buffer1 = turbo_pool_get_buffer(&server->arena, recv_buf_size);
+  server->recv_buffer2 = turbo_pool_get_buffer(&server->arena, recv_buf_size);
 
   if (!server->recv_buffer1) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return UV_ENOMEM;
   }
 
@@ -234,14 +234,14 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop, const cha
   rc = uv_ip4_addr(bind_host, (int)port, &addr4);
   if (rc != 0) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
   rc = uv_udp_bind(server->handle, (const struct sockaddr *)&addr4, 0);
   if (rc != 0) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
@@ -276,28 +276,28 @@ void turbo_udp_server_stop(turbo_udp_server_t *server) {
 
   /* Release receive buffers */
   if (server->recv_buffer1) {
-    turbo_arena_buffer_unref(server->recv_buffer1);
+    turbo_pool_unref(server->recv_buffer1);
     server->recv_buffer1 = NULL;
   }
   if (server->recv_buffer2) {
-    turbo_arena_buffer_unref(server->recv_buffer2);
+    turbo_pool_unref(server->recv_buffer2);
     server->recv_buffer2 = NULL;
   }
 
-  turbo_arena_free(&server->arena);
+  turbo_pool_free(&server->arena);
 }
 
 /* Get zero-copy send buffer */
-turbo_arena_buffer_t *turbo_udp_get_send_buffer(turbo_udp_server_t *server, size_t min_size) {
+turbo_pool_buffer_t *turbo_udp_get_send_buffer(turbo_udp_server_t *server, size_t min_size) {
   if (!server)
     return NULL;
 
-  return turbo_arena_get_buffer(&server->arena, min_size);
+  return turbo_pool_get_buffer(&server->arena, min_size);
 }
 
 /* Send with zero-copy buffer */
 int turbo_udp_send_buffer(turbo_udp_server_t *server, const struct sockaddr *dest,
-                          turbo_arena_buffer_t *buffer, size_t length) {
+                          turbo_pool_buffer_t *buffer, size_t length) {
   if (!server || !server->handle || !dest || !buffer)
     return UV_EINVAL;
 
@@ -309,7 +309,7 @@ int turbo_udp_send_buffer(turbo_udp_server_t *server, const struct sockaddr *des
     return UV_ENOMEM;
 
   /* Create slice from buffer */
-  op->slice = turbo_arena_buffer_slice(buffer, 0, length);
+  op->slice = turbo_pool_slice(buffer, 0, length);
   if (!op->slice.data) {
     return_send_op(op);
     return UV_ENOMEM;
@@ -335,19 +335,19 @@ int turbo_udp_send(turbo_udp_server_t *server, const struct sockaddr *dest, cons
     return UV_EINVAL;
 
   /* Get buffer from arena */
-  turbo_arena_buffer_t *buffer = turbo_udp_get_send_buffer(server, length);
+  turbo_pool_buffer_t *buffer = turbo_udp_get_send_buffer(server, length);
   if (!buffer)
     return UV_ENOMEM;
 
   /* Copy data to buffer */
   memcpy(buffer->data, data, length);
-  turbo_arena_buffer_set_used(buffer, length);
+  turbo_pool_set_used(buffer, length);
 
   /* Send the buffer */
   int rc = turbo_udp_send_buffer(server, dest, buffer, length);
 
   /* Release our reference to the buffer */
-  turbo_arena_buffer_unref(buffer);
+  turbo_pool_unref(buffer);
 
   if (rc == 0) {
   }
@@ -374,7 +374,7 @@ int turbo_udp_send_connected(turbo_udp_client_t *client, const char *data, size_
 }
 
 /* Send buffer to connected peer */
-int turbo_udp_send_buffer_connected(turbo_udp_client_t *client, turbo_arena_buffer_t *buffer,
+int turbo_udp_send_buffer_connected(turbo_udp_client_t *client, turbo_pool_buffer_t *buffer,
                                     size_t length) {
   return turbo_udp_send_buffer((turbo_udp_server_t *)client, NULL, buffer, length);
 }
@@ -390,7 +390,7 @@ int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_
   for (size_t i = 0; i < iovcnt && rc == 0; i++) {
     if (iov[i].len > 0 && iov[i].data) {
       /* Wrap user buffer - ZERO COPY! */
-      turbo_arena_buffer_t *buffer = turbo_arena_wrap_external(
+      turbo_pool_buffer_t *buffer = turbo_pool_wrap_external(
           (void *)iov[i].data, iov[i].len, NULL, /* No free callback - user manages memory */
           NULL);
       if (!buffer) {
@@ -399,7 +399,7 @@ int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_udp_iovec_
       }
 
       rc = turbo_udp_send_buffer_connected(client, buffer, iov[i].len);
-      turbo_arena_buffer_unref(buffer);
+      turbo_pool_unref(buffer);
     }
   }
 
@@ -417,7 +417,7 @@ void turbo_udp_get_stats(const turbo_udp_server_t *server, turbo_udp_stats_t *st
   memset(stats, 0, sizeof(*stats));
 
   /* Get arena statistics */
-  turbo_arena_get_stats(&server->arena, &stats->arena_stats);
+  turbo_pool_get_stats(&server->arena, &stats->arena_stats);
 
   /* Get global UDP statistics from stats system */
   turbo_stat_entry_t *entry;
@@ -472,7 +472,7 @@ void turbo_udp_trim_memory(turbo_udp_server_t *server) {
   if (!server)
     return;
 
-  turbo_arena_trim(&server->arena);
+  turbo_pool_trim(&server->arena);
 }
 
 /* Get memory usage */
@@ -480,8 +480,8 @@ size_t turbo_udp_get_memory_usage(const turbo_udp_server_t *server) {
   if (!server)
     return 0;
 
-  turbo_arena_stats_t stats;
-  turbo_arena_get_stats(&server->arena, &stats);
+  turbo_pool_stats_t stats;
+  turbo_pool_get_stats(&server->arena, &stats);
   return stats.total_allocated;
 }
 

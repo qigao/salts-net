@@ -29,11 +29,11 @@ static const char WS_GUID[48] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 #include "tlog.h"
 
 // ============================================================================
-static int on_tcp_recv_internal(void *handle, const turbo_arena_slice_t *data, void *peer);
+static int on_tcp_recv_internal(void *handle, const turbo_pool_slice_t *data, void *peer);
 static void on_tcp_connect_internal(void *handle, int status, void *peer);
 static void on_tcp_close_internal(void *handle);
 
-static int on_tls_recv_internal(void *handle, const turbo_arena_slice_t *data, void *peer);
+static int on_tls_recv_internal(void *handle, const turbo_pool_slice_t *data, void *peer);
 static void on_tls_connect_internal(void *handle, int status, void *peer);
 static void on_tls_close_internal(void *handle);
 
@@ -67,13 +67,13 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
   client->state = TURBO_WS_STATE_CONNECTING;
 
   // Allocate connection arena (8KB initial)
-  client->conn_arena = calloc(1, sizeof(turbo_arena_t));
+  client->conn_arena = calloc(1, sizeof(turbo_pool_t));
   if (!client->conn_arena) {
     free(client);
     return NULL;
   }
 
-  if (turbo_arena_init(client->conn_arena, 8192) != 0) {
+  if (turbo_pool_init(client->conn_arena, 8192) != 0) {
     free(client->conn_arena);
     free(client);
     return NULL;
@@ -81,36 +81,36 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
 
   // Copy config (allocate from arena)
   if (config->path) {
-    client->config.path = turbo_arena_strdup(client->conn_arena, config->path);
+    client->config.path = turbo_pool_strdup(client->conn_arena, config->path);
   } else {
-    client->config.path = turbo_arena_strdup(client->conn_arena, "/");
+    client->config.path = turbo_pool_strdup(client->conn_arena, "/");
   }
 
   if (config->origin) {
-    client->config.origin = turbo_arena_strdup(client->conn_arena, config->origin);
+    client->config.origin = turbo_pool_strdup(client->conn_arena, config->origin);
   }
 
   if (config->host) {
-    client->config.host = turbo_arena_strdup(client->conn_arena, config->host);
+    client->config.host = turbo_pool_strdup(client->conn_arena, config->host);
   }
 
   // Copy subprotocols
   if (config->subprotocols && config->subprotocol_count > 0) {
     client->config.subprotocol_count = config->subprotocol_count;
-    client->config.subprotocols = turbo_arena_alloc(client->conn_arena,
+    client->config.subprotocols = turbo_pool_alloc(client->conn_arena,
         sizeof(char *) * config->subprotocol_count);
     if (client->config.subprotocols) {
       for (int i = 0; i < config->subprotocol_count; i++) {
         ((char **)client->config.subprotocols)[i] =
-            turbo_arena_strdup(client->conn_arena, config->subprotocols[i]);
+            turbo_pool_strdup(client->conn_arena, config->subprotocols[i]);
       }
     }
   }
 
   // Allocate handshake buffer
-  client->handshake_recv_buffer = turbo_arena_get_buffer(client->conn_arena, 4096);
+  client->handshake_recv_buffer = turbo_pool_get_buffer(client->conn_arena, 4096);
   if (!client->handshake_recv_buffer) {
-    turbo_arena_free(client->conn_arena);
+    turbo_pool_free(client->conn_arena);
     free(client->conn_arena);
     free(client);
     return NULL;
@@ -119,7 +119,7 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
   // Generate Sec-WebSocket-Key (16 random bytes, base64 encoded)
   uint8_t key_bytes[16];
   if (secure_random(key_bytes, sizeof(key_bytes)) != 0) {
-    turbo_arena_free(client->conn_arena);
+    turbo_pool_free(client->conn_arena);
     free(client->conn_arena);
     free(client);
     return NULL;
@@ -127,7 +127,7 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
 
   char *key_b64 = NULL;
   if (tn_base64_encode(key_bytes, 16, &key_b64) == 0) {
-    client->sec_websocket_key = turbo_arena_strdup(client->conn_arena, key_b64);
+    client->sec_websocket_key = turbo_pool_strdup(client->conn_arena, key_b64);
     free(key_b64);
   }
 
@@ -141,7 +141,7 @@ int turbo_websocket_client_connect(turbo_websocket_client_t *client, const char 
     return -1;
 
   // Store host and port for handshake
-  client->connect_host = turbo_arena_strdup(client->conn_arena, host);
+  client->connect_host = turbo_pool_strdup(client->conn_arena, host);
   client->connect_port = port;
   TLOG_DEBUG("turbo_websocket_client_connect: is_tls={}", client->is_tls);
 
@@ -297,7 +297,7 @@ static void websocket_client_free(turbo_websocket_client_t *client) {
 
   // Free arena
   if (client->conn_arena) {
-    turbo_arena_free(client->conn_arena);
+    turbo_pool_free(client->conn_arena);
     free(client->conn_arena);
   }
 
@@ -376,7 +376,7 @@ static void on_tcp_connect_internal(void *handle, int status, void *peer) {
   send_websocket_handshake(client, client->connect_host, client->connect_port);
 }
 
-static int on_tcp_recv_internal(void *handle, const turbo_arena_slice_t *data, void *peer) {
+static int on_tcp_recv_internal(void *handle, const turbo_pool_slice_t *data, void *peer) {
   (void)peer;
   TLOG_DEBUG("on_tcp_recv_internal: handle={} data={}", handle, (void*)data);
   if (!handle) return 0;
@@ -455,7 +455,7 @@ static void on_tls_connect_internal(void *handle, int status, void *peer) {
   send_websocket_handshake(client, client->connect_host, client->connect_port);
 }
 
-static int on_tls_recv_internal(void *handle, const turbo_arena_slice_t *data, void *peer) {
+static int on_tls_recv_internal(void *handle, const turbo_pool_slice_t *data, void *peer) {
   (void)peer;
   if (!handle) return 0;
 
@@ -705,7 +705,7 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
   if (result == WS_PARSE_NEED_MORE) {
     // Buffer incomplete frame data for later
     if (!client->frame_recv_buffer) {
-      client->frame_recv_buffer = turbo_arena_get_buffer(client->conn_arena, 65536);
+      client->frame_recv_buffer = turbo_pool_get_buffer(client->conn_arena, 65536);
       if (!client->frame_recv_buffer)
         return -1;
     }
@@ -778,7 +778,7 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
       client->expecting_continuation = 0;
 
       if (client->on_recv && client->fragment_buffer) {
-        turbo_arena_slice_t slice = {.data = client->fragment_buffer->data,
+        turbo_pool_slice_t slice = {.data = client->fragment_buffer->data,
                                      .length = client->fragment_buffer_used,
                                      .buffer = NULL};
         client->on_recv(client, &slice, NULL);
@@ -792,7 +792,7 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
       TLOG_DEBUG("process_websocket_frame: complete message opcode={} payload_len={} on_recv={}",
               (int)opcode, (unsigned long long)payload_len, (void*)client->on_recv);
       if (client->on_recv) {
-        turbo_arena_slice_t slice = {
+        turbo_pool_slice_t slice = {
             .data = (char *)payload, .length = payload_len, .buffer = NULL};
         TLOG_DEBUG("process_websocket_frame: calling on_recv");
         client->on_recv(client, &slice, NULL);
@@ -805,7 +805,7 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
 
       // Allocate fragment buffer if needed (1MB default)
       if (!client->fragment_buffer) {
-        client->fragment_buffer = turbo_arena_get_buffer(client->conn_arena, 1024 * 1024);
+        client->fragment_buffer = turbo_pool_get_buffer(client->conn_arena, 1024 * 1024);
         if (!client->fragment_buffer)
           return -1;
       }

@@ -33,9 +33,9 @@ spec("net_plugin") {
       check_str_eq(h->plugin->name, "net");
 
       exprtk_env_t env;
-      turbo_arena_t scratch;
+      turbo_pool_t scratch;
       exprtk_env_init(&env);
-      turbo_arena_init(&scratch, 4096);
+      turbo_pool_init(&scratch, 4096);
 
       check_int_eq(ts_plugin_init(h, &env, &scratch), 0);
       check_not_null(h->instance);
@@ -48,7 +48,7 @@ spec("net_plugin") {
 
       ts_plugin_unload(h);
       exprtk_env_free(&env);
-      turbo_arena_free(&scratch);
+      turbo_pool_free(&scratch);
     }
   }
 }

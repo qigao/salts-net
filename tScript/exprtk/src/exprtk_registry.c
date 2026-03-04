@@ -5,14 +5,15 @@
 
 #include "exprtk_module.h"
 #include "exprtk.h"
-#include "exprtk_internal.h"
+
 #include <string.h>
 #include <stdlib.h>
 
-#define REGISTRY_MAX 256
+#define REGISTRY_INITIAL_CAP 256
 
-static exprtk_func_entry_t g_registry[REGISTRY_MAX];
+static exprtk_func_entry_t *g_registry = NULL;
 static size_t g_registry_count = 0;
+static size_t g_registry_cap = 0;
 static int g_registry_ready = 0;
 
 static int entry_cmp(const void *a, const void *b) {
@@ -69,7 +70,14 @@ static exprtk_builtin_fn mod_cache_find(exprtk_env_t *env, const char *name) {
 
 void exprtk_registry_add_module(const exprtk_module_t *mod) {
     if (!mod) return;
-    for (size_t i = 0; i < mod->count && g_registry_count < REGISTRY_MAX; ++i) {
+    for (size_t i = 0; i < mod->count; ++i) {
+        if (g_registry_count >= g_registry_cap) {
+            size_t new_cap = g_registry_cap == 0 ? REGISTRY_INITIAL_CAP : g_registry_cap * 2;
+            exprtk_func_entry_t *grown = (exprtk_func_entry_t *)realloc(g_registry, new_cap * sizeof(exprtk_func_entry_t));
+            if (!grown) return;
+            g_registry = grown;
+            g_registry_cap = new_cap;
+        }
         g_registry[g_registry_count++] = mod->entries[i];
     }
     g_registry_ready = 0; // Need re-sort
@@ -77,6 +85,11 @@ void exprtk_registry_add_module(const exprtk_module_t *mod) {
 
 void exprtk_registry_init(void) {
     if (g_registry_ready) return;
+
+    /* Register core module by default */
+    extern const exprtk_module_t *exprtk_module_core(void);
+    exprtk_registry_add_module(exprtk_module_core());
+
     qsort(g_registry, g_registry_count, sizeof(exprtk_func_entry_t), entry_cmp);
     g_registry_ready = 1;
 }
@@ -122,7 +135,7 @@ static exprtk_value_t call_script_func(
     exprtk_node_t *body, exprtk_env_t *parent_env,
     exprtk_env_t *caller_env, size_t argc, exprtk_value_t *args)
 {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
 
     caller_env->curr_recursion++;
     if (caller_env->curr_recursion > caller_env->max_recursion) {
@@ -143,7 +156,7 @@ static exprtk_value_t call_script_func(
 
     /* Check for variadic (last param is spread) */
     int is_variadic = 0;
-    if (param_count > 0 && params[param_count - 1]->type == exprtk_NODE_SPREAD)
+    if (param_count > 0 && params[param_count - 1]->type == EXPRTK_NODE_SPREAD)
         is_variadic = 1;
 
     size_t std_args = is_variadic ? (param_count - 1) : param_count;
@@ -152,12 +165,12 @@ static exprtk_value_t call_script_func(
         exprtk_value_t val;
         if (i < argc) {
             val = args[i];
-        } else if (param->type == exprtk_NODE_ASSIGNMENT && param->data.assignment.value) {
+        } else if (param->type == EXPRTK_NODE_ASSIGNMENT && param->data.assignment.value) {
             val = exprtk_eval(param->data.assignment.value, caller_env);
         } else {
             val = zero;
         }
-        if (param->type == exprtk_NODE_ASSIGNMENT) {
+        if (param->type == EXPRTK_NODE_ASSIGNMENT) {
             exprtk_env_set(&local_env, param->data.assignment.name, val);
         } else {
             eval_destructure(param, val, &local_env, 0);
@@ -166,10 +179,10 @@ static exprtk_value_t call_script_func(
 
     if (is_variadic) {
         size_t rest_sz = (argc > std_args) ? (argc - std_args) : 0;
-        double *rest_data = (double*)turbo_arena_alloc(&local_env.arena, rest_sz * sizeof(double));
+        double *rest_data = (double*)turbo_pool_alloc(&local_env.arena, rest_sz * sizeof(double));
         for (size_t i = 0; i < rest_sz; ++i) {
             exprtk_value_t v = args[std_args + i];
-            rest_data[i] = (v.type == exprtk_VAL_NUMBER) ? v.data.number : 0;
+            rest_data[i] = (v.type == EXPRTK_VAL_NUMBER) ? v.data.number : 0;
         }
         exprtk_value_t rest_val = exprtk_val_vec(rest_data, rest_sz);
         eval_destructure(params[param_count - 1], rest_val, &local_env, 0);
@@ -196,8 +209,8 @@ static exprtk_value_t call_script_func(
 
 exprtk_value_t exprtk_call_internal(const char *name, size_t argc,
                                     exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_arena_t *arena) {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+                                    turbo_pool_t *arena) {
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     exprtk_value_t result = zero;
 
     /* 1. Check native/script functions in environment */
@@ -224,7 +237,7 @@ exprtk_value_t exprtk_call_internal(const char *name, size_t argc,
     /* 1.25 Check if name is a variable holding a function value */
     if (env) {
         exprtk_value_t callee = exprtk_env_get(env, name);
-        if (callee.type == exprtk_VAL_FUNCTION && callee.data.function.body) {
+        if (callee.type == EXPRTK_VAL_FUNCTION && callee.data.function.body) {
             return call_script_func(
                 callee.data.function.arg_params, callee.data.function.arg_count,
                 callee.data.function.body, callee.data.function.closure_env,

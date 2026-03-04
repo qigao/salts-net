@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 typedef struct json_value_s json_value_t;
-typedef struct turbo_arena_s turbo_arena_t;
+typedef struct turbo_pool_s turbo_pool_t;
 /**
  * JSON-based data provider for mustache templates
  */
@@ -23,7 +23,7 @@ typedef struct MUSTACHE_JSON_PROVIDER {
   json_value_t *root_data;
   MUSTACHE_TEMPLATE *(*template_loader)(const char *name, size_t size, void *user_data);
   void *user_data;
-  turbo_arena_t *arena;
+  turbo_pool_t *arena;
 } MUSTACHE_JSON_PROVIDER;
 
 /**
@@ -43,7 +43,7 @@ CXX_C_API int mustache_json_provider_init_arena(MUSTACHE_JSON_PROVIDER *provider
                                                 MUSTACHE_TEMPLATE *(*template_loader)(const char *,
                                                                                       size_t,
                                                                                       void *),
-                                                void *user_data, turbo_arena_t *arena);
+                                                void *user_data, turbo_pool_t *arena);
 
 /**
  * Render a mustache template with JSON data

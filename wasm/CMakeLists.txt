@@ -19,14 +19,13 @@ add_library(${TARGET_WASM3} STATIC ${WASM3_CORE_SOURCES})
 set_target_properties(${TARGET_WASM3} PROPERTIES FOLDER "wasm/vendor")
 target_include_directories(
   ${TARGET_WASM3}
-  PUBLIC  
-   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/vendor/wasm3/source>
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/vendor/wasm3/source>
   PRIVATE ${CMAKE_SOURCE_DIR}/shared/utils/include)
 target_link_libraries(${TARGET_WASM3} PRIVATE TurboNet::Utils)
 
-add_library(${TARGET_NAME} SHARED
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_wasm.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_wasm.c)
+add_library(
+  ${TARGET_NAME} SHARED ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_wasm.h
+                        ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_wasm.c)
 add_library(TurboNet::Wasm ALIAS ${TARGET_NAME})
 
 set_target_properties(
@@ -42,8 +41,7 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/shared/utils/include>
          $<INSTALL_INTERFACE:include>
          $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/vendor/wasm3/source>
-  PRIVATE   
-          ${CMAKE_SOURCE_DIR}/shared/utils/include)
+  PRIVATE ${CMAKE_SOURCE_DIR}/shared/utils/include)
 
 target_link_libraries(${TARGET_NAME} PRIVATE ${TARGET_WASM3} TurboNet::Utils)
 target_compile_definitions(${TARGET_NAME} PRIVATE TURBO_WASM_BUILD_SHARED)

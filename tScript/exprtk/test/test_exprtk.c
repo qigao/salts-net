@@ -6,15 +6,15 @@
 
 #include "exprtk.h"
 #include "exprtk_module.h"
-#include "exprtk_internal.h"
 #include "tinytest.h"
 #include <string.h>
+
 #include <math.h>
 
 /* Helper for native function testing */
 static exprtk_value_t native_double(size_t argc, exprtk_value_t *args, void *ud) {
     (void)ud;
-    if (argc == 1 && args[0].type == exprtk_VAL_NUMBER) {
+    if (argc == 1 && args[0].type == EXPRTK_VAL_NUMBER) {
         return exprtk_val_num(args[0].data.number * 2.0);
     }
     return exprtk_val_num(0.0);
@@ -24,7 +24,7 @@ static exprtk_value_t sum_func(size_t argc, exprtk_value_t *args, void *ud) {
     (void)ud;
     double s = 0;
     for (size_t i = 0; i < argc; ++i) {
-        if (args[i].type == exprtk_VAL_NUMBER) s += args[i].data.number;
+        if (args[i].type == EXPRTK_VAL_NUMBER) s += args[i].data.number;
     }
     return exprtk_val_num(s);
 }
@@ -214,7 +214,7 @@ suite("exprtk_grammar") {
             const char *input = "\"Hello\" + \" \" + \"World\"";
             exprtk_node_t *root = exprtk_parse(input, 0);
             exprtk_value_t res = exprtk_eval(root, NULL);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(res.data.string.len, 11);
             check_int_eq(strncmp(res.data.string.data, "Hello World", 11), 0);
             exprtk_free(root);
@@ -317,7 +317,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse("null", 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, NULL);
-            check_int_eq(res.type, exprtk_VAL_NULL);
+            check_int_eq(res.type, EXPRTK_VAL_NULL);
             exprtk_free(root);
         }
 
@@ -396,7 +396,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "HELLO", 5), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -409,7 +409,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "World", 5), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -503,7 +503,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "Hello World!", 12), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -516,7 +516,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "Result: 15", 10), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -529,7 +529,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             /* Root is a block, first statement should be folded */
-            check_int_eq(root->data.block.statements[0]->type, exprtk_NODE_NUMBER);
+            check_int_eq(root->data.block.statements[0]->type, EXPRTK_NODE_NUMBER);
             check_float_eq(root->data.block.statements[0]->data.number, 7.0, 0.0001);
             exprtk_free(root);
         }
@@ -538,7 +538,7 @@ suite("exprtk_grammar") {
             const char *input = "if (1) { x = 10; } else { x = 20; }";
             exprtk_node_t *root = exprtk_parse(input, 0);
             /* The 'if' node should be replaced by its true branch (the assignment block) */
-            check_int_eq(root->data.block.statements[0]->type, exprtk_NODE_BLOCK);
+            check_int_eq(root->data.block.statements[0]->type, EXPRTK_NODE_BLOCK);
             exprtk_free(root);
         }
 
@@ -595,7 +595,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_node_t *n = root->data.block.statements[0];
-            check_int_eq(n->type, exprtk_NODE_ASSIGNMENT);
+            check_int_eq(n->type, EXPRTK_NODE_ASSIGNMENT);
             check_int_eq(n->line, 1);
             check_int_eq(n->column, 3); /* "=" is at col 3 in "x = 42" */
             exprtk_free(root);
@@ -625,7 +625,7 @@ suite("exprtk_grammar") {
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
             
-            check_int_eq(res.type, exprtk_VAL_VECTOR);
+            check_int_eq(res.type, EXPRTK_VAL_VECTOR);
             check_int_eq(res.data.vector.size, 5);
             check_float_eq(res.data.vector.data[0], 1.0, 0.001);
             check_float_eq(res.data.vector.data[1], 2.0, 0.001);
@@ -698,7 +698,7 @@ suite("exprtk_grammar") {
             check_float_eq(exprtk_env_get(&env, "x").data.number, 10.0, 0.001);
             
             exprtk_value_t r = exprtk_env_get(&env, "r");
-            check_int_eq(r.type, exprtk_VAL_VECTOR);
+            check_int_eq(r.type, EXPRTK_VAL_VECTOR);
             check_int_eq(r.data.vector.size, 2);
             check_float_eq(r.data.vector.data[0], 30.0, 0.001);
             check_float_eq(r.data.vector.data[1], 40.0, 0.001);
@@ -899,7 +899,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(res.data.string.len, 2);
             check_int_eq(res.data.string.data[0], 'H');
             check_int_eq(res.data.string.data[1], 'I');
@@ -912,13 +912,12 @@ suite("exprtk_grammar") {
         it("should return 'number' for numeric values") {
             exprtk_env_t env;
             exprtk_env_init(&env);
-            exprtk_registry_add_module(exprtk_module_core());
             exprtk_registry_init();
             const char *input = "typeof(42)";
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "number", 6), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -931,7 +930,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "string", 6), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -944,7 +943,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "vector", 6), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -957,7 +956,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "map", 3), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -970,7 +969,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "null", 4), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -1073,7 +1072,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "list", 4), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -1093,7 +1092,7 @@ suite("exprtk_grammar") {
             root = exprtk_parse("l = list(10, \"hello\", 30); typeof(l[1])", 0);
             check_not_null(root);
             res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "string", 6), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -1208,8 +1207,8 @@ suite("exprtk_grammar") {
 
     group("Error Reporting") {
         it("should report line and column for syntax errors") {
-            turbo_arena_t arena;
-            turbo_arena_init(&arena, 1024);
+            turbo_pool_t arena;
+            turbo_pool_init(&arena, 1024);
             int err = 0;
             char err_msg[256] = {0};
             
@@ -1225,12 +1224,12 @@ suite("exprtk_grammar") {
             }
             check_int_eq(strncmp(err_msg, "Syntax error at line 1, col 6 near '*'", 38), 0);
             
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
 
         it("should report line and column for multiline syntax errors") {
-            turbo_arena_t arena;
-            turbo_arena_init(&arena, 1024);
+            turbo_pool_t arena;
+            turbo_pool_init(&arena, 1024);
             int err = 0;
             char err_msg[256] = {0};
             
@@ -1248,7 +1247,7 @@ suite("exprtk_grammar") {
             }
             check_int_eq(strncmp(err_msg, "Syntax error at line 3, col 7 near 'b'", 38), 0);
             
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
     }
 
@@ -1307,7 +1306,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "string", 6), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -1368,7 +1367,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_NULL);
+            check_int_eq(res.type, EXPRTK_VAL_NULL);
             exprtk_free(root);
             exprtk_env_free(&env);
         }
@@ -1389,7 +1388,6 @@ suite("exprtk_grammar") {
         it("should pipe value as first argument to function") {
             exprtk_env_t env;
             exprtk_env_init(&env);
-            exprtk_registry_add_module(exprtk_module_core());
             /* abs is a standard math function; 
                define a simple function for testing */
             const char *input = 
@@ -1428,7 +1426,7 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             exprtk_value_t res = exprtk_eval(root, &env);
-            check_int_eq(res.type, exprtk_VAL_STRING);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
             check_int_eq(strncmp(res.data.string.data, "world", 5), 0);
             exprtk_free(root);
             exprtk_env_free(&env);
@@ -1495,7 +1493,6 @@ suite("exprtk_grammar") {
         it("should identify as function type") {
             exprtk_env_t env;
             exprtk_env_init(&env);
-            exprtk_registry_add_module(exprtk_module_core());
             const char *input =
                 "f = func() {};"
                 "is_function(f)";

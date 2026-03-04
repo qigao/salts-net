@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
 /* ── Fast double parser for financial CSV data ────────────────────── */
 /* No scientific notation, no locale, no inf/nan — just [-]digits[.digits].
@@ -85,34 +85,34 @@ typedef struct str_entry_s {
 } str_entry_t;
 
 typedef struct {
-    turbo_arena_buffer_t *rows_buf;   /* rows[row_idx] → linked list of col entries */
+    turbo_pool_buffer_t *rows_buf;   /* rows[row_idx] → linked list of col entries */
     size_t        row_count;
     size_t        col_count;
 } str_store_t;
 
-static void str_store_init(str_store_t *s, size_t col_count, turbo_arena_t *arena) {
+static void str_store_init(str_store_t *s, size_t col_count, turbo_pool_t *arena) {
     s->col_count = col_count;
     s->row_count = 0;
-    s->rows_buf = turbo_arena_get_buffer(arena, 256 * sizeof(str_entry_t *));
-    if (s->rows_buf) turbo_arena_buffer_set_used(s->rows_buf, 0);
+    s->rows_buf = turbo_pool_get_buffer(arena, 256 * sizeof(str_entry_t *));
+    if (s->rows_buf) turbo_pool_set_used(s->rows_buf, 0);
 }
 
 static void str_store_push_row(str_store_t *s, const char **fields, const size_t *field_lens,
                                 size_t field_count, bool *col_selected, sp_col_t *cols_meta,
-                                turbo_arena_t *arena) {
+                                turbo_pool_t *arena) {
     if (!s->rows_buf) return;
     if (s->rows_buf->used + sizeof(str_entry_t *) > s->rows_buf->capacity) {
         size_t new_cap = s->rows_buf->capacity * 2;
-        turbo_arena_buffer_t *nb = turbo_arena_get_buffer(arena, new_cap);
+        turbo_pool_buffer_t *nb = turbo_pool_get_buffer(arena, new_cap);
         if (!nb) return;
         memcpy(nb->data, s->rows_buf->data, s->rows_buf->used);
-        turbo_arena_buffer_set_used(nb, s->rows_buf->used);
-        turbo_arena_buffer_release(s->rows_buf);
+        turbo_pool_set_used(nb, s->rows_buf->used);
+        turbo_pool_unref(s->rows_buf);
         s->rows_buf = nb;
     }
 
     size_t cols = field_count < s->col_count ? field_count : s->col_count;
-    str_entry_t *entries = TURBO_ARENA_ALLOC_ARRAY(arena, str_entry_t, cols);
+    str_entry_t *entries = TURBO_POOL_ALLOC_ARRAY(arena, str_entry_t, cols);
     if (!entries) return;
 
     for (size_t i = 0; i < cols; i++) {
@@ -121,7 +121,7 @@ static void str_store_push_row(str_store_t *s, const char **fields, const size_t
             entries[i].next = NULL;
             continue;
         }
-        char *str_ptr = TURBO_ARENA_ALLOC_ARRAY(arena, char, field_lens[i] + 1);
+        char *str_ptr = TURBO_POOL_ALLOC_ARRAY(arena, char, field_lens[i] + 1);
         if (str_ptr) {
             memcpy(str_ptr, fields[i], field_lens[i]);
             str_ptr[field_lens[i]] = '\0';
@@ -132,12 +132,12 @@ static void str_store_push_row(str_store_t *s, const char **fields, const size_t
 
     str_entry_t **row_ptr = (str_entry_t **)(s->rows_buf->data + s->rows_buf->used);
     *row_ptr = entries;
-    turbo_arena_buffer_set_used(s->rows_buf, s->rows_buf->used + sizeof(str_entry_t *));
+    turbo_pool_set_used(s->rows_buf, s->rows_buf->used + sizeof(str_entry_t *));
     s->row_count++;
 }
 
 static void str_store_free(str_store_t *s) {
-    if (s->rows_buf) turbo_arena_buffer_release(s->rows_buf);
+    if (s->rows_buf) turbo_pool_unref(s->rows_buf);
 }
 
 /* ── Growing double vector ────────────────────────────────────────── */
@@ -148,10 +148,10 @@ typedef struct {
     size_t  cap;
 } dvec_t;
 
-static void dvec_push(dvec_t *v, double val, turbo_arena_t *arena) {
+static void dvec_push(dvec_t *v, double val, turbo_pool_t *arena) {
     if (v->len >= v->cap) {
         size_t new_cap = v->cap ? v->cap + v->cap / 2 : 4096; /* 1.5x growth */
-        double *nd = TURBO_ARENA_ALLOC_ARRAY(arena, double, new_cap);
+        double *nd = TURBO_POOL_ALLOC_ARRAY(arena, double, new_cap);
         if (!nd) return;
         if (v->data) memcpy(nd, v->data, v->len * sizeof(double));
         /* Old memory will be collected when arena is freed */
@@ -164,7 +164,7 @@ static void dvec_push(dvec_t *v, double val, turbo_arena_t *arena) {
 /* ── Processor internals ──────────────────────────────────────────── */
 
 struct csv_stream_processor_s {
-    turbo_arena_t arena;
+    turbo_pool_t arena;
 
     /* Line buffer */
     char  *line_buf;
@@ -647,8 +647,8 @@ static void parse_header(csv_stream_processor_t *p, const char *line, size_t len
     size_t n = split_csv_line(line, len, p->opts.delimiter, spans, 256);
 
     p->col_count = n;
-    p->cols = TURBO_ARENA_ALLOC_ARRAY(&p->arena, sp_col_t, n);
-    p->num_vecs = TURBO_ARENA_ALLOC_ARRAY(&p->arena, dvec_t, n);
+    p->cols = TURBO_POOL_ALLOC_ARRAY(&p->arena, sp_col_t, n);
+    p->num_vecs = TURBO_POOL_ALLOC_ARRAY(&p->arena, dvec_t, n);
     if (!p->cols || !p->num_vecs) { set_error(p, "OOM in parse_header"); return; }
 
     /* Note: dvec_t starts zero-initialized due to arena/calloc nature, or we memset */
@@ -824,7 +824,7 @@ csv_stream_processor_t *csv_stream_processor_create(const csv_options_t *opts) {
     csv_stream_processor_t *p = (csv_stream_processor_t *)calloc(1, sizeof(*p));
     if (!p) return NULL;
 
-    turbo_arena_init(&p->arena, 65536);
+    turbo_pool_init(&p->arena, 65536);
 
     if (opts) {
         p->opts = *opts;
@@ -834,7 +834,7 @@ csv_stream_processor_t *csv_stream_processor_create(const csv_options_t *opts) {
 
     p->line_cap = 65536;
     p->line_buf = (char *)malloc(p->line_cap); // keep line_buf as simple malloc since we feed chunks dynamically.
-    if (!p->line_buf) { turbo_arena_free(&p->arena); free(p); return NULL; }
+    if (!p->line_buf) { turbo_pool_free(&p->arena); free(p); return NULL; }
     p->line_len = 0;
 
     return p;
@@ -850,7 +850,7 @@ void csv_stream_processor_destroy(csv_stream_processor_t *p) {
     free_filter_plan(p);
 
     str_store_free(&p->str_store);
-    turbo_arena_free(&p->arena);
+    turbo_pool_free(&p->arena);
     free(p);
 }
 

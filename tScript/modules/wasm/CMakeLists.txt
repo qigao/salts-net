@@ -7,10 +7,8 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
 
 # Static lib for tests/integration
 add_library(${TARGET_NAME_LIB} STATIC ${SOURCE_FILES})
-target_link_libraries(
-  ${TARGET_NAME_LIB}
-  PRIVATE exprtk ts_loader TurboNet::Wasm
-  PUBLIC TurboNet::Core)
+target_link_libraries(${TARGET_NAME_LIB} PUBLIC exprtk TurboNet::Wasm
+                                                TurboNet::Core)
 set_target_properties(${TARGET_NAME_LIB} PROPERTIES FOLDER
                                                     turbo_script/modules/wasm)
 target_include_directories(
@@ -19,10 +17,8 @@ target_include_directories(
 
 # Shared plugin DLL
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-target_link_libraries(
-  ${TARGET_NAME}
-  PRIVATE ts_loader exprtk TurboNet::Wasm
-  PUBLIC TurboNet::Core)
+target_link_libraries(${TARGET_NAME} PUBLIC exprtk TurboNet::Wasm
+                                            TurboNet::Core)
 set_target_properties(
   ${TARGET_NAME}
   PROPERTIES FOLDER turbo_script/modules/wasm

@@ -6,7 +6,7 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "stats.h"
 #include "turbo_callbacks.h"
 
@@ -22,7 +22,7 @@ typedef struct turbo_pipe_client_s turbo_pipe_client_t;
 /* Pipe client structure */
 typedef struct turbo_pipe_client_s {
   uv_pipe_t handle;
-  turbo_arena_t arena;
+  turbo_pool_t arena;
 
   /* Server reference (for server-side clients) */
   turbo_pipe_server_t *server;
@@ -33,13 +33,13 @@ typedef struct turbo_pipe_client_s {
   turbo_close_cb on_close;
 
   /* Zero-copy receive buffers (ping-pong) */
-  turbo_arena_buffer_t *recv_buffer1;
-  turbo_arena_buffer_t *recv_buffer2;
+  turbo_pool_buffer_t *recv_buffer1;
+  turbo_pool_buffer_t *recv_buffer2;
   int recv_toggle;
 
   /* Send queue for batching */
-  turbo_arena_buffer_t *send_queue_head;
-  turbo_arena_buffer_t *send_queue_tail;
+  turbo_pool_buffer_t *send_queue_head;
+  turbo_pool_buffer_t *send_queue_tail;
   size_t send_queue_bytes;
 
   /* Write state */
@@ -59,7 +59,7 @@ typedef struct turbo_pipe_client_s {
 typedef struct turbo_pipe_server_s {
   uv_pipe_t *handle;
   uv_loop_t *loop;
-  turbo_arena_t arena;
+  turbo_pool_t arena;
 
   /* Callbacks */
   turbo_recv_cb on_recv;
@@ -145,22 +145,22 @@ typedef struct turbo_pipe_server_s {
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  * @param min_size The minimum required size for the buffer.
- * @return A pointer to an `turbo_arena_buffer_t` suitable for sending, or NULL
+ * @return A pointer to an `turbo_pool_buffer_t` suitable for sending, or NULL
  * on failure.
  */
-  turbo_arena_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *client,
+  turbo_pool_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *client,
                                                  size_t min_size);
 /**
  * @brief Sends data from a zero-copy arena buffer through the Pipe client.
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance.
- * @param buffer A pointer to the `turbo_arena_buffer_t` containing the data to
+ * @param buffer A pointer to the `turbo_pool_buffer_t` containing the data to
  * send.
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
   int turbo_pipe_send_buffer(turbo_pipe_client_t *client,
-                           turbo_arena_buffer_t *buffer, size_t length);
+                           turbo_pool_buffer_t *buffer, size_t length);
 /**
  * @brief Starts reading data on a Pipe client.
  *
@@ -222,10 +222,10 @@ typedef struct {
  * @brief Discards a send buffer from the client's queue without sending it.
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance.
- * @param buffer A pointer to the `turbo_arena_buffer_t` to discard.
+ * @param buffer A pointer to the `turbo_pool_buffer_t` to discard.
  */
   void turbo_pipe_discard_buffer(turbo_pipe_client_t *client,
-                               turbo_arena_buffer_t *buffer);
+                               turbo_pool_buffer_t *buffer);
 
 /* Statistics and monitoring */
 /**

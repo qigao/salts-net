@@ -6,15 +6,15 @@
  * exprtk_env_register_func. The user_data is a mir_instance_t*.
  */
 #include "turbo_script_internal.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "exprtk.h"
 #include "exprtk_module.h"
 #include <mir.h>
 #include <stdlib.h>
 #include <string.h>
 
-static inline char *mir_arena_cstr(turbo_arena_t *a, tstr_v sv) {
-  char *buf = turbo_arena_alloc(a, sv.len + 1);
+static inline char *mir_arena_cstr(turbo_pool_t *a, tstr_v sv) {
+  char *buf = turbo_pool_alloc(a, sv.len + 1);
   if (buf) {
     memcpy(buf, sv.data, sv.len);
     buf[sv.len] = '\0';
@@ -40,7 +40,7 @@ static MIR_item_t mir_get_global_item(MIR_context_t ctx, const char *name) {
 
 static exprtk_value_t ts_mir_load(size_t argc, exprtk_value_t *args, void *user_data) {
   turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_STRING)
+  if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
     return exprtk_val_num(0);
 
   if (!ctx->mir_ctx)
@@ -71,7 +71,7 @@ static exprtk_value_t ts_mir_load(size_t argc, exprtk_value_t *args, void *user_
 
 static exprtk_value_t ts_mir_call(size_t argc, exprtk_value_t *args, void *user_data) {
   turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)user_data;
-  if (argc < 1 || args[0].type != exprtk_VAL_STRING)
+  if (argc < 1 || args[0].type != EXPRTK_VAL_STRING)
     return exprtk_val_num(0);
   if (!ctx->mir_ctx)
     return exprtk_val_num(0);
@@ -98,9 +98,9 @@ static exprtk_value_t ts_mir_call(size_t argc, exprtk_value_t *args, void *user_
   }
 
   for (size_t i = 0; i < mir_argc; i++) {
-    if (args[i + 1].type == exprtk_VAL_NUMBER)
+    if (args[i + 1].type == EXPRTK_VAL_NUMBER)
       mir_args[i].d = args[i + 1].data.number;
-    else if (args[i + 1].type == exprtk_VAL_STRING)
+    else if (args[i + 1].type == EXPRTK_VAL_STRING)
       mir_args[i].a = (void *)args[i + 1].data.string.data;
     else
       mir_args[i].i = 0;

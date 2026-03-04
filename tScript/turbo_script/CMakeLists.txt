@@ -13,8 +13,7 @@ target_include_directories(
   ${TARGET_NAME_LIB}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir
-          ${CMAKE_CURRENT_SOURCE_DIR}/../exprtk/include)
+  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir)
 
 target_compile_definitions(${TARGET_NAME_LIB} PRIVATE SHARED_CXX)
 
@@ -33,20 +32,19 @@ set_target_properties(
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 add_library(TurboNet::TurboScript ALIAS ${TARGET_NAME})
 
-# PUBLIC: consumers get turbo_script.h; stubs forward ts_plugin*.h to ts_loader
+ 
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>
-  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir
-          ${CMAKE_CURRENT_SOURCE_DIR}/../exprtk/include)
+  PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 
 target_link_libraries(
   ${TARGET_NAME}
-  PRIVATE exprtk datetime_parser mir_static ts_loader
-  PUBLIC TurboNet::Utils)
+  PRIVATE  datetime_parser mir_static  
+  PUBLIC TurboNet::Utils exprtk)
 
 set_target_properties(
   ${TARGET_NAME}
@@ -55,6 +53,7 @@ set_target_properties(
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME TurboScript)
 
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_script.h DESTINATION include)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_script.h
+        DESTINATION include)
 
 add_subdirectory(test)

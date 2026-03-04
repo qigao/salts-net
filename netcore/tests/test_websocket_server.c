@@ -16,7 +16,7 @@ static void test_on_connection(void *handle, int status, void *peer) {
   callback_invoked = 1;
 }
 
-static int test_on_recv(void *handle, const turbo_arena_slice_t *data, void *peer) {
+static int test_on_recv(void *handle, const turbo_pool_slice_t *data, void *peer) {
   (void)handle; (void)data; (void)peer;
   callback_invoked = 2;
   return 0;

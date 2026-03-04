@@ -91,13 +91,13 @@ static exprtk_value_t throw_error(exprtk_env_t *env, const exprtk_node_t *node, 
 // Type name helper (Phase 2)
 static const char* type_name(int type) {
     switch (type) {
-        case exprtk_VAL_NUMBER: return "number";
-        case exprtk_VAL_STRING: return "string";
-        case exprtk_VAL_VECTOR: return "vector";
-        case exprtk_VAL_MAP: return "map";
-        case exprtk_VAL_NULL: return "null";
-        case exprtk_VAL_LIST: return "list";
-        case exprtk_VAL_FUNCTION: return "function";
+        case EXPRTK_VAL_NUMBER: return "number";
+        case EXPRTK_VAL_STRING: return "string";
+        case EXPRTK_VAL_VECTOR: return "vector";
+        case EXPRTK_VAL_MAP: return "map";
+        case EXPRTK_VAL_NULL: return "null";
+        case EXPRTK_VAL_LIST: return "list";
+        case EXPRTK_VAL_FUNCTION: return "function";
         default: return "unknown";
     }
 }
@@ -149,19 +149,19 @@ void exprtk_env_set(exprtk_env_t *env, const char *name, exprtk_value_t value) {
 void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *env, int is_constant) {
     if (!target || !env) return;
     
-    if (target->type == exprtk_NODE_VARIABLE) {
+    if (target->type == EXPRTK_NODE_VARIABLE) {
         if (is_constant) exprtk_env_set_constant(env, target->data.variable.name, rhs);
         else exprtk_env_set_local(env, target->data.variable.name, rhs);
-    } else if (target->type == exprtk_NODE_VECTOR) {
-        if (rhs.type != exprtk_VAL_VECTOR) return;
+    } else if (target->type == EXPRTK_NODE_VECTOR) {
+        if (rhs.type != EXPRTK_VAL_VECTOR) return;
         size_t rhs_idx = 0;
         for (size_t i = 0; i < target->data.vector.count; ++i) {
             exprtk_node_t *el = target->data.vector.elements[i];
-            if (el->type == exprtk_NODE_SPREAD) {
+            if (el->type == EXPRTK_NODE_SPREAD) {
                 exprtk_node_t *child = el->data.spread.child;
-                if (child->type == exprtk_NODE_VARIABLE) {
+                if (child->type == EXPRTK_NODE_VARIABLE) {
                     size_t rest_sz = (rhs_idx < rhs.data.vector.size) ? (rhs.data.vector.size - rhs_idx) : 0;
-                    double *rest_data = (double*)turbo_arena_alloc(target->arena, rest_sz * sizeof(double));
+                    double *rest_data = (double*)turbo_pool_alloc(target->arena, rest_sz * sizeof(double));
                     if (rest_sz > 0) {
                         memcpy(rest_data, rhs.data.vector.data + rhs_idx, rest_sz * sizeof(double));
                     }
@@ -170,7 +170,7 @@ void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *e
                     else exprtk_env_set(env, child->data.variable.name, rest_val);
                     rhs_idx = rhs.data.vector.size;
                 }
-            } else if (el->type == exprtk_NODE_NULL) {
+            } else if (el->type == EXPRTK_NODE_NULL) {
                 rhs_idx++;
             } else {
                 exprtk_value_t val = (rhs_idx < rhs.data.vector.size) ? 
@@ -178,8 +178,8 @@ void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *e
                 eval_destructure(el, val, env, is_constant);
             }
         }
-    } else if (target->type == exprtk_NODE_MAP_LITERAL) {
-        if (rhs.type != exprtk_VAL_MAP) return;
+    } else if (target->type == EXPRTK_NODE_MAP_LITERAL) {
+        if (rhs.type != EXPRTK_VAL_MAP) return;
         exprtk_node_t *rest_node = NULL;
         for (size_t i = 0; i < target->data.map_literal.count; ++i) {
             char *key = target->data.map_literal.keys[i];
@@ -209,9 +209,9 @@ void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *e
             }
             eval_destructure(rest_node, rest_map, env, is_constant);
         }
-    } else if (target->type == exprtk_NODE_SPREAD) {
+    } else if (target->type == EXPRTK_NODE_SPREAD) {
         exprtk_node_t *child = target->data.spread.child;
-        if (child->type == exprtk_NODE_VARIABLE) {
+        if (child->type == EXPRTK_NODE_VARIABLE) {
             if (is_constant) exprtk_env_set_constant(env, child->data.variable.name, rhs);
             else exprtk_env_set(env, child->data.variable.name, rhs);
         }
@@ -233,11 +233,11 @@ void exprtk_env_init_local(exprtk_env_t *env) {
         env->modules = NULL;
         env->module_count = 0;
         env->flow = exprtk_FLOW_NORMAL;
-        env->return_value.type = exprtk_VAL_NUMBER;
+        env->return_value.type = EXPRTK_VAL_NUMBER;
         env->return_value.data.number = 0.0;
         env->parent = NULL;
-        turbo_arena_init(&env->arena, 65536); // 64KB initial
-        env->arena.flags |= TURBO_ARENA_FLAG_AUTO_GROW;
+        turbo_pool_init(&env->arena, 65536); // 64KB initial
+        env->arena.flags |= TURBO_POOL_FLAG_AUTO_GROW;
 
         // Safety Limits Defaults
         env->max_recursion = 100;
@@ -329,7 +329,7 @@ static void free_htab_entries(HTAB(exprtk_var_entry_t) *htab) {
         if (els_addr[i].hash != HTAB_DELETED_HASH) {
             exprtk_var_entry_t entry = els_addr[i].el;
             free(entry.name);
-            if (entry.value.type == exprtk_VAL_MAP) {
+            if (entry.value.type == EXPRTK_VAL_MAP) {
                 exprtk_map_free(&entry.value);
             }
         }
@@ -349,7 +349,7 @@ void exprtk_env_free(exprtk_env_t *env) {
         closure = next;
     }
     env->next_closure = NULL;
-    turbo_arena_free(&env->arena);
+    turbo_pool_free(&env->arena);
     if (env->modules) {
         free((void *)env->modules);
         env->modules = NULL;
@@ -385,7 +385,7 @@ void exprtk_env_free(exprtk_env_t *env) {
 }
 
 exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name) {
-    exprtk_value_t val = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t val = { EXPRTK_VAL_NUMBER, {0.0} };
     if (!env || !name) return val;
 
     exprtk_env_t *curr_env = env;
@@ -400,6 +400,22 @@ exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name) {
         curr_env = curr_env->parent;
     }
     return val;
+}
+
+int exprtk_env_has(exprtk_env_t *env, const char *name) {
+    if (!env || !name) return 0;
+    exprtk_env_t *curr_env = env;
+    while (curr_env) {
+        if (curr_env->vars) {
+            HTAB(exprtk_var_entry_t) *htab = (HTAB(exprtk_var_entry_t)*)curr_env->vars;
+            exprtk_var_entry_t key = { .name = (char*)name };
+            exprtk_var_entry_t result;
+            if (HTAB_OP(exprtk_var_entry_t, do)(htab, key, HTAB_FIND, &result))
+                return 1;
+        }
+        curr_env = curr_env->parent;
+    }
+    return 0;
 }
 
  
@@ -451,9 +467,9 @@ static exprtk_value_t* eval_expand_args(exprtk_node_t **nodes, size_t count, exp
     size_t actual = 0;
     
     for (size_t i = 0; i < count; ++i) {
-        if (nodes[i]->type == exprtk_NODE_SPREAD) {
+        if (nodes[i]->type == EXPRTK_NODE_SPREAD) {
             exprtk_value_t el = exprtk_eval(nodes[i]->data.spread.child, env);
-            if (el.type == exprtk_VAL_VECTOR) {
+            if (el.type == EXPRTK_VAL_VECTOR) {
                 if (actual + el.data.vector.size > cap) {
                     cap = actual + el.data.vector.size;
                     exprtk_value_t *new_vals = (exprtk_value_t*)realloc(vals, cap * sizeof(exprtk_value_t));
@@ -510,19 +526,19 @@ typedef struct {
     size_t           argc;
     exprtk_node_t   *obj_node;
     exprtk_env_t    *env;
-    turbo_arena_t   *arena;
+    turbo_pool_t   *arena;
 } mc_ctx_t;
 
 /* Helper: get mutable variable from env when obj_node is a VARIABLE */
 static int mc_get_var(mc_ctx_t *mc, exprtk_value_t *out, const char **name) {
-    if (mc->obj_node->type != exprtk_NODE_VARIABLE) return 0;
+    if (mc->obj_node->type != EXPRTK_NODE_VARIABLE) return 0;
     *name = mc->obj_node->data.variable.name;
     *out = exprtk_env_get(mc->env, *name);
     return 1;
 }
 
 static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
 
     if (strcmp(m, "length") == 0 || strcmp(m, "size") == 0)
@@ -530,7 +546,7 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
 
     if (strcmp(m, "push") == 0 && mc->argc > 0) {
         exprtk_value_t var; const char *vn;
-        if (mc_get_var(mc, &var, &vn) && var.type == exprtk_VAL_LIST) {
+        if (mc_get_var(mc, &var, &vn) && var.type == EXPRTK_VAL_LIST) {
             exprtk_list_push(&var, mc->args[0]);
             exprtk_env_set(mc->env, vn, var);
             return exprtk_val_num((double)var.data.list.count);
@@ -539,7 +555,7 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
 
     if (strcmp(m, "pop") == 0 && mc->obj.data.list.count > 0) {
         exprtk_value_t var; const char *vn;
-        if (mc_get_var(mc, &var, &vn) && var.type == exprtk_VAL_LIST && var.data.list.count > 0) {
+        if (mc_get_var(mc, &var, &vn) && var.type == EXPRTK_VAL_LIST && var.data.list.count > 0) {
             exprtk_value_t popped = var.data.list.items[var.data.list.count - 1];
             var.data.list.count--;
             exprtk_env_set(mc->env, vn, var);
@@ -551,9 +567,9 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
         for (size_t i = 0; i < mc->obj.data.list.count; ++i) {
             exprtk_value_t item = mc->obj.data.list.items[i];
             if (item.type != mc->args[0].type) continue;
-            if (item.type == exprtk_VAL_NUMBER && fabs(item.data.number - mc->args[0].data.number) < 1e-9)
+            if (item.type == EXPRTK_VAL_NUMBER && fabs(item.data.number - mc->args[0].data.number) < 1e-9)
                 return exprtk_val_num((double)i);
-            if (item.type == exprtk_VAL_STRING && tstr_v_eq(item.data.string, mc->args[0].data.string))
+            if (item.type == EXPRTK_VAL_STRING && tstr_v_eq(item.data.string, mc->args[0].data.string))
                 return exprtk_val_num((double)i);
         }
         return exprtk_val_num(-1);
@@ -563,9 +579,9 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
         for (size_t i = 0; i < mc->obj.data.list.count; ++i) {
             exprtk_value_t item = mc->obj.data.list.items[i];
             if (item.type != mc->args[0].type) continue;
-            if (item.type == exprtk_VAL_NUMBER && fabs(item.data.number - mc->args[0].data.number) < 1e-9)
+            if (item.type == EXPRTK_VAL_NUMBER && fabs(item.data.number - mc->args[0].data.number) < 1e-9)
                 return exprtk_val_num(1);
-            if (item.type == exprtk_VAL_STRING && tstr_v_eq(item.data.string, mc->args[0].data.string))
+            if (item.type == EXPRTK_VAL_STRING && tstr_v_eq(item.data.string, mc->args[0].data.string))
                 return exprtk_val_num(1);
         }
         return zero;
@@ -584,7 +600,7 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
 }
 
 static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
 
     if (strcmp(m, "size") == 0 || strcmp(m, "length") == 0)
@@ -616,7 +632,7 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
         }
     }
 
-    if (strcmp(m, "has") == 0 && mc->argc > 0 && mc->args[0].type == exprtk_VAL_STRING) {
+    if (strcmp(m, "has") == 0 && mc->argc > 0 && mc->args[0].type == EXPRTK_VAL_STRING) {
         char key_buf[256];
         size_t klen = mc->args[0].data.string.len < 255 ? mc->args[0].data.string.len : 255;
         memcpy(key_buf, mc->args[0].data.string.data, klen);
@@ -624,9 +640,9 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
         return exprtk_val_num(exprtk_map_has(&mc->obj, key_buf) ? 1.0 : 0.0);
     }
 
-    if (strcmp(m, "delete") == 0 && mc->argc > 0 && mc->args[0].type == exprtk_VAL_STRING) {
+    if (strcmp(m, "delete") == 0 && mc->argc > 0 && mc->args[0].type == EXPRTK_VAL_STRING) {
         exprtk_value_t var; const char *vn;
-        if (mc_get_var(mc, &var, &vn) && var.type == exprtk_VAL_MAP) {
+        if (mc_get_var(mc, &var, &vn) && var.type == EXPRTK_VAL_MAP) {
             char key_buf[256];
             size_t klen = mc->args[0].data.string.len < 255 ? mc->args[0].data.string.len : 255;
             memcpy(key_buf, mc->args[0].data.string.data, klen);
@@ -641,7 +657,7 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
 }
 
 static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
 
     if (strcmp(m, "length") == 0 || strcmp(m, "size") == 0)
@@ -665,7 +681,7 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
         result = fn(call_argc, call_args, mc->env, mc->arena);
     } else {
         /* Inline fallbacks for essential methods when registry is empty */
-        if (strcmp(m, "indexOf") == 0 && mc->argc > 0 && mc->args[0].type == exprtk_VAL_STRING) {
+        if (strcmp(m, "indexOf") == 0 && mc->argc > 0 && mc->args[0].type == EXPRTK_VAL_STRING) {
             result = exprtk_val_num(-1);
             if (mc->args[0].data.string.len <= mc->obj.data.string.len) {
                 for (size_t i = 0; i <= mc->obj.data.string.len - mc->args[0].data.string.len; ++i) {
@@ -681,20 +697,20 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
             if (start >= (int)mc->obj.data.string.len) { start = 0; len = 0; }
             if (start + len > (int)mc->obj.data.string.len) len = (int)mc->obj.data.string.len - start;
             if (len < 0) len = 0;
-            char *buf = (char*)turbo_arena_alloc(mc->arena, len + 1);
+            char *buf = (char*)turbo_pool_alloc(mc->arena, len + 1);
             memcpy(buf, mc->obj.data.string.data + start, len);
             buf[len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = len;
             result = exprtk_val_str(sv);
         } else if (strcmp(m, "toUpper") == 0) {
-            char *buf = (char*)turbo_arena_alloc(mc->arena, mc->obj.data.string.len + 1);
+            char *buf = (char*)turbo_pool_alloc(mc->arena, mc->obj.data.string.len + 1);
             for (size_t i = 0; i < mc->obj.data.string.len; ++i)
                 buf[i] = (char)toupper((unsigned char)mc->obj.data.string.data[i]);
             buf[mc->obj.data.string.len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = mc->obj.data.string.len;
             result = exprtk_val_str(sv);
         } else if (strcmp(m, "toLower") == 0) {
-            char *buf = (char*)turbo_arena_alloc(mc->arena, mc->obj.data.string.len + 1);
+            char *buf = (char*)turbo_pool_alloc(mc->arena, mc->obj.data.string.len + 1);
             for (size_t i = 0; i < mc->obj.data.string.len; ++i)
                 buf[i] = (char)tolower((unsigned char)mc->obj.data.string.data[i]);
             buf[mc->obj.data.string.len] = '\0';
@@ -707,17 +723,17 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
 }
 
 static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
 
     if (strcmp(m, "length") == 0 || strcmp(m, "size") == 0)
         return exprtk_val_num((double)mc->obj.data.vector.size);
 
-    if (strcmp(m, "push") == 0 && mc->argc > 0 && mc->args[0].type == exprtk_VAL_NUMBER) {
+    if (strcmp(m, "push") == 0 && mc->argc > 0 && mc->args[0].type == EXPRTK_VAL_NUMBER) {
         exprtk_value_t var; const char *vn;
-        if (mc_get_var(mc, &var, &vn) && var.type == exprtk_VAL_VECTOR) {
+        if (mc_get_var(mc, &var, &vn) && var.type == EXPRTK_VAL_VECTOR) {
             size_t new_sz = var.data.vector.size + 1;
-            double *new_data = (double*)turbo_arena_alloc(mc->arena, new_sz * sizeof(double));
+            double *new_data = (double*)turbo_pool_alloc(mc->arena, new_sz * sizeof(double));
             if (var.data.vector.data)
                 memcpy(new_data, var.data.vector.data, var.data.vector.size * sizeof(double));
             new_data[new_sz - 1] = mc->args[0].data.number;
@@ -730,7 +746,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
 
     if (strcmp(m, "pop") == 0 && mc->obj.data.vector.size > 0) {
         exprtk_value_t var; const char *vn;
-        if (mc_get_var(mc, &var, &vn) && var.type == exprtk_VAL_VECTOR && var.data.vector.size > 0) {
+        if (mc_get_var(mc, &var, &vn) && var.type == EXPRTK_VAL_VECTOR && var.data.vector.size > 0) {
             exprtk_value_t popped = exprtk_val_num(var.data.vector.data[var.data.vector.size - 1]);
             var.data.vector.size--;
             exprtk_env_set(mc->env, vn, var);
@@ -738,7 +754,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
         }
     }
 
-    if (strcmp(m, "indexOf") == 0 && mc->argc > 0 && mc->args[0].type == exprtk_VAL_NUMBER) {
+    if (strcmp(m, "indexOf") == 0 && mc->argc > 0 && mc->args[0].type == EXPRTK_VAL_NUMBER) {
         for (size_t i = 0; i < mc->obj.data.vector.size; ++i) {
             if (fabs(mc->obj.data.vector.data[i] - mc->args[0].data.number) < 1e-9)
                 return exprtk_val_num((double)i);
@@ -747,7 +763,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
     }
 
     if (strcmp(m, "reverse") == 0) {
-        double *data = (double*)turbo_arena_alloc(mc->arena, mc->obj.data.vector.size * sizeof(double));
+        double *data = (double*)turbo_pool_alloc(mc->arena, mc->obj.data.vector.size * sizeof(double));
         for (size_t i = 0; i < mc->obj.data.vector.size; ++i)
             data[i] = mc->obj.data.vector.data[mc->obj.data.vector.size - 1 - i];
         return exprtk_val_vec(data, mc->obj.data.vector.size);
@@ -803,7 +819,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
 }
 
 exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
-    exprtk_value_t zero = { exprtk_VAL_NUMBER, {0.0} };
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     if (!node || (env && env->aborted)) return zero;
 
     if (env) {
@@ -822,11 +838,11 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
     }
 
     switch (node->type) {
-        case exprtk_NODE_NUMBER:
+        case EXPRTK_NODE_NUMBER:
             return exprtk_val_num(node->data.number);
-        case exprtk_NODE_STRING:
+        case EXPRTK_NODE_STRING:
             return exprtk_val_str(node->data.string.value);
-        case exprtk_NODE_TEMPLATE_STRING: {
+        case EXPRTK_NODE_TEMPLATE_STRING: {
             const char *str = node->data.template_string.template_str;
             size_t len = node->data.template_string.len;
             char *result_buf = NULL;
@@ -837,7 +853,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
     if (result_len + (slen) + 1 > result_cap) { \
         result_cap = (result_cap == 0) ? 64 : result_cap * 2; \
         if (result_cap < result_len + (slen) + 1) result_cap = result_len + (slen) + 1; \
-        char *new_buf = (char*)turbo_arena_alloc(node->arena, result_cap); \
+        char *new_buf = (char*)turbo_pool_alloc(node->arena, result_cap); \
         if (result_buf) memcpy(new_buf, result_buf, result_len); \
         result_buf = new_buf; \
     } \
@@ -869,19 +885,19 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                             exprtk_node_t *expr_node = exprtk_parse(expr_str, expr_len);
                             if (expr_node) {
                                 exprtk_value_t expr_val = exprtk_eval(expr_node, env);
-                                if (expr_val.type == exprtk_VAL_NUMBER) {
+                                if (expr_val.type == EXPRTK_VAL_NUMBER) {
                                     char num_buf[64];
                                     snprintf(num_buf, sizeof(num_buf), "%g", expr_val.data.number);
                                     APPEND_STR(num_buf, strlen(num_buf));
-                                } else if (expr_val.type == exprtk_VAL_STRING) {
+                                } else if (expr_val.type == EXPRTK_VAL_STRING) {
                                     APPEND_STR(expr_val.data.string.data, expr_val.data.string.len);
-                                } else if (expr_val.type == exprtk_VAL_NULL) {
+                                } else if (expr_val.type == EXPRTK_VAL_NULL) {
                                     APPEND_STR("null", 4);
-                                } else if (expr_val.type == exprtk_VAL_VECTOR) {
+                                } else if (expr_val.type == EXPRTK_VAL_VECTOR) {
                                     APPEND_STR("[vector]", 8);
-                                } else if (expr_val.type == exprtk_VAL_MAP) {
+                                } else if (expr_val.type == EXPRTK_VAL_MAP) {
                                     APPEND_STR("[map]", 5);
-                                } else if (expr_val.type == exprtk_VAL_LIST) {
+                                } else if (expr_val.type == EXPRTK_VAL_LIST) {
                                     APPEND_STR("[list]", 6);
                                 }
                                 exprtk_free(expr_node);
@@ -896,7 +912,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 }
             }
             if (!result_buf) {
-                result_buf = (char*)turbo_arena_alloc(node->arena, 1);
+                result_buf = (char*)turbo_pool_alloc(node->arena, 1);
                 result_buf[0] = '\0';
             }
             tstr_v sv;
@@ -905,30 +921,30 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
 #undef APPEND_STR
             return exprtk_val_str(sv);
         }
-        case exprtk_NODE_VARIABLE:
+        case EXPRTK_NODE_VARIABLE:
             return exprtk_env_get(env, node->data.variable.name);
-        case exprtk_NODE_SPREAD:
+        case EXPRTK_NODE_SPREAD:
             return exprtk_eval(node->data.spread.child, env);
-        case exprtk_NODE_DESTRUCTURING_ASSIGNMENT: {
+        case EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT: {
             exprtk_value_t rhs = exprtk_eval(node->data.destructuring.value, env);
             eval_destructure(node->data.destructuring.targets, rhs, env, node->data.destructuring.is_constant);
             return rhs;
         }
-        case exprtk_NODE_ASSIGNMENT: {
+        case EXPRTK_NODE_ASSIGNMENT: {
             exprtk_value_t val = exprtk_eval(node->data.assignment.value, env);
             exprtk_env_set(env, node->data.assignment.name, val);
             return val;
         }
-        case exprtk_NODE_CONSTANT_DECL: {
+        case EXPRTK_NODE_CONSTANT_DECL: {
             exprtk_value_t val = exprtk_eval(node->data.assignment.value, env);
             exprtk_env_set_constant(env, node->data.assignment.name, val);
             return val;
         }
-        case exprtk_NODE_IF: {
+        case EXPRTK_NODE_IF: {
             exprtk_value_t cond_val = exprtk_eval(node->data.if_stmt.condition, env);
             if (env && env->flow != exprtk_FLOW_NORMAL) return zero;
             
-            double cond = (cond_val.type == exprtk_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
+            double cond = (cond_val.type == EXPRTK_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
             
             if (fabs(cond) > 1e-9) {
                 if (node->data.if_stmt.if_branch) return exprtk_eval(node->data.if_stmt.if_branch, env);
@@ -937,7 +953,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return zero;
         }
-        case exprtk_NODE_WHILE: {
+        case EXPRTK_NODE_WHILE: {
             exprtk_value_t last_val = zero;
             while (1) {
                 if (env && env->flow != exprtk_FLOW_NORMAL && env->flow != exprtk_FLOW_CONTINUE) break;
@@ -946,7 +962,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 exprtk_value_t cond_val = exprtk_eval(node->data.while_loop.condition, env);
                 if (env && (env->flow != exprtk_FLOW_NORMAL || env->aborted)) break;
                 
-                double cond = (cond_val.type == exprtk_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
+                double cond = (cond_val.type == EXPRTK_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
                 if (fabs(cond) <= 1e-9) break;
 
                 if (env) {
@@ -966,7 +982,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return last_val;
         }
-        case exprtk_NODE_FOR: {
+        case EXPRTK_NODE_FOR: {
             if (node->data.for_loop.init) exprtk_eval(node->data.for_loop.init, env);
             if (env && (env->flow != exprtk_FLOW_NORMAL || env->aborted)) return zero;
             
@@ -975,7 +991,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 if (node->data.for_loop.condition) {
                     exprtk_value_t cond_val = exprtk_eval(node->data.for_loop.condition, env);
                     if (env && (env->flow != exprtk_FLOW_NORMAL || env->aborted)) break;
-                    double cond = (cond_val.type == exprtk_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
+                    double cond = (cond_val.type == EXPRTK_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
                     if (fabs(cond) <= 1e-9) break;
                 }
 
@@ -1002,7 +1018,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return last_val;
         }
-        case exprtk_NODE_BLOCK: {
+        case EXPRTK_NODE_BLOCK: {
             exprtk_value_t last_val = zero;
             for (size_t i = 0; i < node->data.block.count; ++i) {
                 last_val = exprtk_eval(node->data.block.statements[i], env);
@@ -1011,7 +1027,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return last_val;
         }
-        case exprtk_NODE_FLOW: {
+        case EXPRTK_NODE_FLOW: {
             if (env) {
                 if (node->data.flow.type == exprtk_TOKEN_RETURN) {
                     if (node->data.flow.value) {
@@ -1029,8 +1045,8 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return zero;
         }
-        case exprtk_NODE_BINARY_OP: {
-            exprtk_value_t l_val = {exprtk_VAL_NUMBER, {0.0}};
+        case EXPRTK_NODE_BINARY_OP: {
+            exprtk_value_t l_val = {EXPRTK_VAL_NUMBER, {0.0}};
             if (node->data.binary.left) {
                 l_val = exprtk_eval(node->data.binary.left, env);
                 if (env && env->flow != exprtk_FLOW_NORMAL) return zero;
@@ -1039,7 +1055,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             exprtk_value_t r_val = exprtk_eval(node->data.binary.right, env);
             if (env && env->flow != exprtk_FLOW_NORMAL) return zero;
 
-            if (l_val.type == exprtk_VAL_NUMBER && r_val.type == exprtk_VAL_NUMBER) {
+            if (l_val.type == EXPRTK_VAL_NUMBER && r_val.type == EXPRTK_VAL_NUMBER) {
                 double l = l_val.data.number;
                 double r = r_val.data.number;
                 switch (node->data.binary.op) {
@@ -1067,12 +1083,12 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     case exprtk_TOKEN_OR:       return exprtk_val_num(fabs(l) > 1e-9 || fabs(r) > 1e-9);
                 }
             } else if (node->data.binary.op == exprtk_TOKEN_PLUS && 
-                      (l_val.type == exprtk_VAL_STRING || r_val.type == exprtk_VAL_STRING)) {
+                      (l_val.type == EXPRTK_VAL_STRING || r_val.type == EXPRTK_VAL_STRING)) {
                 // String concat
                 char n_buf[32];
                 const char *l_data, *r_data;
                 size_t l_len, r_len;
-                if (l_val.type == exprtk_VAL_NUMBER) {
+                if (l_val.type == EXPRTK_VAL_NUMBER) {
                     l_len = snprintf(n_buf, sizeof(n_buf), "%g", l_val.data.number);
                     l_data = n_buf;
                 } else {
@@ -1080,7 +1096,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     l_len = l_val.data.string.len;
                 }
                 char r_buf[32];
-                if (r_val.type == exprtk_VAL_NUMBER) {
+                if (r_val.type == EXPRTK_VAL_NUMBER) {
                     r_len = snprintf(r_buf, sizeof(r_buf), "%g", r_val.data.number);
                     r_data = r_buf;
                 } else {
@@ -1088,7 +1104,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     r_len = r_val.data.string.len;
                 }
                 size_t new_len = l_len + r_len;
-                char *new_data = (char*)turbo_arena_alloc(node->arena, new_len + 1);
+                char *new_data = (char*)turbo_pool_alloc(node->arena, new_len + 1);
                 if (new_data) {
                     memcpy(new_data, l_data, l_len);
                     memcpy(new_data + l_len, r_data, r_len);
@@ -1096,17 +1112,17 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     return exprtk_val_str(tstr_v_from_buf(new_data, new_len));
                 }
                 return zero;
-            } else if (l_val.type == exprtk_VAL_STRING && r_val.type == exprtk_VAL_STRING) {
+            } else if (l_val.type == EXPRTK_VAL_STRING && r_val.type == EXPRTK_VAL_STRING) {
                 if (node->data.binary.op == exprtk_TOKEN_EQ) {
                     return exprtk_val_num(tstr_v_eq(l_val.data.string, r_val.data.string) ? 1.0 : 0.0);
                 } else if (node->data.binary.op == exprtk_TOKEN_NE) {
                     return exprtk_val_num(!tstr_v_eq(l_val.data.string, r_val.data.string) ? 1.0 : 0.0);
                 }
             } else if (node->data.binary.op == exprtk_TOKEN_EQ) {
-                if (l_val.type == exprtk_VAL_NULL && r_val.type == exprtk_VAL_NULL) return exprtk_val_num(1.0);
+                if (l_val.type == EXPRTK_VAL_NULL && r_val.type == EXPRTK_VAL_NULL) return exprtk_val_num(1.0);
                 return exprtk_val_num(0.0);
             } else if (node->data.binary.op == exprtk_TOKEN_NE) {
-                if (l_val.type == exprtk_VAL_NULL && r_val.type == exprtk_VAL_NULL) return exprtk_val_num(0.0);
+                if (l_val.type == EXPRTK_VAL_NULL && r_val.type == EXPRTK_VAL_NULL) return exprtk_val_num(0.0);
                 return exprtk_val_num(1.0);
             }
 
@@ -1130,7 +1146,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             return throw_error(env, node, "Type error: cannot apply '%s' to %s and %s",
                              op_name, type_name(l_val.type), type_name(r_val.type));
         }
-        case exprtk_NODE_FUNCTION_CALL: {
+        case EXPRTK_NODE_FUNCTION_CALL: {
             if (!node->data.function.name) return zero;
             size_t actual_count = 0;
             exprtk_value_t *args = eval_expand_args(node->data.function.args, node->data.function.arg_count, env, &actual_count);
@@ -1139,7 +1155,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             free(args);
             return result;
         }
-        case exprtk_NODE_FUNCTION_DEFINITION: {
+        case EXPRTK_NODE_FUNCTION_DEFINITION: {
             const char *name = node->data.func_def.name;
             if (!name) return zero; 
 
@@ -1167,7 +1183,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             curr->data.script.body = exprtk_node_copy(node->data.func_def.body, &env->arena);
             return zero;
         }
-        case exprtk_NODE_MEMBER_CALL: {
+        case EXPRTK_NODE_MEMBER_CALL: {
             size_t mc_argc = 0;
             exprtk_value_t *mc_args = eval_expand_args(
                 node->data.member_call.args, node->data.member_call.arg_count, env, &mc_argc);
@@ -1185,12 +1201,12 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
 
             exprtk_value_t mc_result;
             switch (mc.obj.type) {
-                case exprtk_VAL_LIST:   mc_result = eval_list_method(&mc);   break;
-                case exprtk_VAL_MAP:    mc_result = eval_map_method(&mc);    break;
-                case exprtk_VAL_STRING: mc_result = eval_string_method(&mc); break;
-                case exprtk_VAL_VECTOR: mc_result = eval_vector_method(&mc); break;
+                case EXPRTK_VAL_LIST:   mc_result = eval_list_method(&mc);   break;
+                case EXPRTK_VAL_MAP:    mc_result = eval_map_method(&mc);    break;
+                case EXPRTK_VAL_STRING: mc_result = eval_string_method(&mc); break;
+                case EXPRTK_VAL_VECTOR: mc_result = eval_vector_method(&mc); break;
                 default:
-                    if (mc.obj_node->type == exprtk_NODE_VARIABLE) {
+                    if (mc.obj_node->type == EXPRTK_NODE_VARIABLE) {
                         char full_name[256];
                         snprintf(full_name, sizeof(full_name), "%s.%s",
                                  mc.obj_node->data.variable.name, mc.method);
@@ -1203,7 +1219,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             free(mc_args);
             return mc_result;
         }
-        case exprtk_NODE_DO_WHILE: {
+        case EXPRTK_NODE_DO_WHILE: {
             exprtk_value_t last_val = zero;
             while (1) {
                 last_val = exprtk_eval(node->data.do_while.body, env);
@@ -1219,7 +1235,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 exprtk_value_t cond_val = exprtk_eval(node->data.do_while.condition, env);
                 if (env && (env->flow != exprtk_FLOW_NORMAL || env->aborted)) break;
                 
-                double cond = (cond_val.type == exprtk_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
+                double cond = (cond_val.type == EXPRTK_VAL_NUMBER) ? cond_val.data.number : (double)(cond_val.data.string.len > 0);
                 if (fabs(cond) <= 1e-9) break;
 
                 if (env) {
@@ -1232,24 +1248,24 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return last_val;
         }
-        case exprtk_NODE_VECTOR: {
+        case EXPRTK_NODE_VECTOR: {
             size_t actual_count = 0;
             exprtk_value_t *vals = eval_expand_args(node->data.vector.elements, node->data.vector.count, env, &actual_count);
             if (!vals && actual_count == 0) return zero;
             if (actual_count == 0) { free(vals); return zero; }
             
-            double *data = (double*)turbo_arena_alloc(node->arena, actual_count * sizeof(double));
+            double *data = (double*)turbo_pool_alloc(node->arena, actual_count * sizeof(double));
             for (size_t i = 0; i < actual_count; ++i) {
-                data[i] = (vals[i].type == exprtk_VAL_NUMBER) ? vals[i].data.number : 0;
+                data[i] = (vals[i].type == EXPRTK_VAL_NUMBER) ? vals[i].data.number : 0;
             }
             free(vals);
             return exprtk_val_vec(data, actual_count);
         }
-        case exprtk_NODE_INDEX: {
+        case EXPRTK_NODE_INDEX: {
             exprtk_value_t arr = exprtk_eval(node->data.index_access.array, env);
             exprtk_value_t idx_val = exprtk_eval(node->data.index_access.index, env);
 
-            if (arr.type == exprtk_VAL_VECTOR && idx_val.type == exprtk_VAL_NUMBER) {
+            if (arr.type == EXPRTK_VAL_VECTOR && idx_val.type == EXPRTK_VAL_NUMBER) {
                 int idx = (int)idx_val.data.number;
                 if (idx < 0 || idx >= (int)arr.data.vector.size) {
                     return throw_error(env, node, "Array index %d out of bounds [0, %zu)", idx, arr.data.vector.size);
@@ -1257,7 +1273,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 return exprtk_val_num(arr.data.vector.data[idx]);
             }
             /* List index: l[i] → any value */
-            if (arr.type == exprtk_VAL_LIST && idx_val.type == exprtk_VAL_NUMBER) {
+            if (arr.type == EXPRTK_VAL_LIST && idx_val.type == EXPRTK_VAL_NUMBER) {
                 int idx = (int)idx_val.data.number;
                 if (idx < 0 || idx >= (int)arr.data.list.count) {
                     return throw_error(env, node, "List index %d out of bounds [0, %zu)", idx, arr.data.list.count);
@@ -1265,7 +1281,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 return arr.data.list.items[idx];
             }
             /* Dynamic map index: m["key"] */
-            if (arr.type == exprtk_VAL_MAP && idx_val.type == exprtk_VAL_STRING) {
+            if (arr.type == EXPRTK_VAL_MAP && idx_val.type == EXPRTK_VAL_STRING) {
                 return exprtk_map_get(&arr, idx_val.data.string.data);
             }
 
@@ -1273,31 +1289,31 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             return throw_error(env, node, "Invalid indexing: expected vector[number], list[number], or map[string], got %s[%s]",
                              type_name(arr.type), type_name(idx_val.type));
         }
-        case exprtk_NODE_SLICE: {
+        case EXPRTK_NODE_SLICE: {
             exprtk_value_t arr = exprtk_eval(node->data.slice.array, env);
             exprtk_value_t start_val = exprtk_eval(node->data.slice.start, env);
             exprtk_value_t end_val = exprtk_eval(node->data.slice.end, env);
-            if (arr.type != exprtk_VAL_VECTOR || start_val.type != exprtk_VAL_NUMBER || end_val.type != exprtk_VAL_NUMBER) return zero;
+            if (arr.type != EXPRTK_VAL_VECTOR || start_val.type != EXPRTK_VAL_NUMBER || end_val.type != EXPRTK_VAL_NUMBER) return zero;
             int start = (int)start_val.data.number;
             int end = (int)end_val.data.number;
             if (start < 0) start = 0;
             if (end > (int)arr.data.vector.size) end = (int)arr.data.vector.size;
             if (start > end) return zero;
             size_t count = (size_t)(end - start);
-            double *data = (double*)turbo_arena_alloc(node->arena, count * sizeof(double));
+            double *data = (double*)turbo_pool_alloc(node->arena, count * sizeof(double));
             if (!data) return zero;
             for (size_t i = 0; i < count; ++i) {
                 data[i] = arr.data.vector.data[start + i];
             }
             return exprtk_val_vec(data, count);
         }
-        case exprtk_NODE_MAP_LITERAL: {
+        case EXPRTK_NODE_MAP_LITERAL: {
             exprtk_value_t map = exprtk_val_map();
             for (size_t i = 0; i < node->data.map_literal.count; ++i) {
                 if (node->data.map_literal.keys[i] == NULL) {
                     /* Spread operator */
                     exprtk_value_t other = exprtk_eval(node->data.map_literal.values[i], env);
-                    if (other.type == exprtk_VAL_MAP) {
+                    if (other.type == EXPRTK_VAL_MAP) {
                         exprtk_map_iter_t it = exprtk_map_iter_begin(&other);
                         const char *k;
                         exprtk_value_t v;
@@ -1313,32 +1329,32 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return map;
         }
-        case exprtk_NODE_MEMBER_ACCESS: {
+        case EXPRTK_NODE_MEMBER_ACCESS: {
             exprtk_value_t obj = exprtk_eval(node->data.member_access.object, env);
             const char *member = node->data.member_access.member;
-            if (obj.type == exprtk_VAL_MAP) {
+            if (obj.type == EXPRTK_VAL_MAP) {
                 return exprtk_map_get(&obj, member);
             }
             /* String property access */
-            if (obj.type == exprtk_VAL_STRING) {
+            if (obj.type == EXPRTK_VAL_STRING) {
                 if (strcmp(member, "length") == 0) return exprtk_val_num((double)obj.data.string.len);
             }
             /* Vector property access */
-            if (obj.type == exprtk_VAL_VECTOR) {
+            if (obj.type == EXPRTK_VAL_VECTOR) {
                 if (strcmp(member, "length") == 0) return exprtk_val_num((double)obj.data.vector.size);
             }
             return zero;
         }
-        case exprtk_NODE_MEMBER_SET: {
+        case EXPRTK_NODE_MEMBER_SET: {
             /* Evaluate the new value first */
             exprtk_value_t val = exprtk_eval(node->data.member_set.value, env);
             if (env && env->flow != exprtk_FLOW_NORMAL) return zero;
             /* The object must be a variable so we can mutate the map in-place */
-            if (node->data.member_set.object->type == exprtk_NODE_VARIABLE) {
+            if (node->data.member_set.object->type == EXPRTK_NODE_VARIABLE) {
                 const char *var_name = node->data.member_set.object->data.variable.name;
                 /* Get the variable from hash table */
                 exprtk_value_t var_val = exprtk_env_get(env, var_name);
-                if (var_val.type == exprtk_VAL_MAP) {
+                if (var_val.type == EXPRTK_VAL_MAP) {
                     exprtk_map_set(&var_val, node->data.member_set.member, val);
                     /* Update the variable in hash table */
                     exprtk_env_set(env, var_name, var_val);
@@ -1347,18 +1363,18 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             }
             return zero;
         }
-        case exprtk_NODE_NULL: {
+        case EXPRTK_NODE_NULL: {
             exprtk_value_t null_val;
             memset(&null_val, 0, sizeof(null_val));
-            null_val.type = exprtk_VAL_NULL;
+            null_val.type = EXPRTK_VAL_NULL;
             return null_val;
         }
-        case exprtk_NODE_FOR_IN: {
+        case EXPRTK_NODE_FOR_IN: {
             exprtk_value_t collection = exprtk_eval(node->data.for_in.collection, env);
             if (env && (env->flow != exprtk_FLOW_NORMAL || env->aborted)) return zero;
             exprtk_value_t last_val = zero;
 
-            if (collection.type == exprtk_VAL_VECTOR) {
+            if (collection.type == EXPRTK_VAL_VECTOR) {
                 for (size_t i = 0; i < collection.data.vector.size; ++i) {
                     if (env) {
                         env->curr_loop_iterations++;
@@ -1370,7 +1386,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     if (env && env->flow == exprtk_FLOW_CONTINUE) env->flow = exprtk_FLOW_NORMAL;
                     if (env && env->flow == exprtk_FLOW_RETURN) break;
                 }
-            } else if (collection.type == exprtk_VAL_MAP) {
+            } else if (collection.type == EXPRTK_VAL_MAP) {
                 exprtk_map_iter_t it = exprtk_map_iter_begin(&collection);
                 const char *key;
                 while (exprtk_map_iter_next(&it, &key, NULL)) {
@@ -1387,7 +1403,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     if (env && env->flow == exprtk_FLOW_CONTINUE) env->flow = exprtk_FLOW_NORMAL;
                     if (env && env->flow == exprtk_FLOW_RETURN) break;
                 }
-            } else if (collection.type == exprtk_VAL_LIST) {
+            } else if (collection.type == EXPRTK_VAL_LIST) {
                 for (size_t i = 0; i < collection.data.list.count; ++i) {
                     if (env) {
                         env->curr_loop_iterations++;
@@ -1403,7 +1419,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             return last_val;
         }
 
-        case exprtk_NODE_THROW: {
+        case EXPRTK_NODE_THROW: {
             exprtk_value_t thrown = zero;
             if (node->data.throw_stmt.value) {
                 thrown = exprtk_eval(node->data.throw_stmt.value, env);
@@ -1415,7 +1431,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             return thrown;
         }
 
-        case exprtk_NODE_TRY_CATCH: {
+        case EXPRTK_NODE_TRY_CATCH: {
             /* Evaluate try body */
             exprtk_value_t result = exprtk_eval(node->data.try_catch.try_body, env);
 
@@ -1456,10 +1472,10 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             return result;
         }
 
-        case exprtk_NODE_FUNCTION_EXPRESSION: {
+        case EXPRTK_NODE_FUNCTION_EXPRESSION: {
             /* Create a function value that captures the current environment */
             exprtk_value_t val;
-            val.type = exprtk_VAL_FUNCTION;
+            val.type = EXPRTK_VAL_FUNCTION;
             val.data.function.arg_params = node->data.func_def.arg_params;
             val.data.function.arg_count  = node->data.func_def.arg_count;
             val.data.function.body       = node->data.func_def.body;
@@ -1467,7 +1483,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             return val;
         }
 
-        case exprtk_NODE_SWITCH: {
+        case EXPRTK_NODE_SWITCH: {
             exprtk_value_t switch_val = exprtk_eval(node->data.switch_stmt.value, env);
             if (env && env->flow != exprtk_FLOW_NORMAL) return zero;
 
@@ -1476,9 +1492,9 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 if (env && env->flow != exprtk_FLOW_NORMAL) return zero;
 
                 int match = 0;
-                if (switch_val.type == exprtk_VAL_NUMBER && case_val.type == exprtk_VAL_NUMBER)
+                if (switch_val.type == EXPRTK_VAL_NUMBER && case_val.type == EXPRTK_VAL_NUMBER)
                     match = fabs(switch_val.data.number - case_val.data.number) < 1e-9;
-                else if (switch_val.type == exprtk_VAL_STRING && case_val.type == exprtk_VAL_STRING)
+                else if (switch_val.type == EXPRTK_VAL_STRING && case_val.type == EXPRTK_VAL_STRING)
                     match = tstr_v_eq(switch_val.data.string, case_val.data.string);
 
                 if (match)

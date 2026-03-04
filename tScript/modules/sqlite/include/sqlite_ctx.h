@@ -6,7 +6,7 @@
 #define SQLITE_CTX_H
 
 #include "exprtk.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include <sqlite3.h>
 #include <string.h>
 #include <stdlib.h>
@@ -26,10 +26,10 @@ typedef struct {
 typedef struct {
     sqlite_ctx_t  *ctx;
     exprtk_env_t  *env;
-    turbo_arena_t *scratch;
+    turbo_pool_t *scratch;
 } sqlite_ud_t;
 
-#define SQLITE_ZERO ((exprtk_value_t){exprtk_VAL_NUMBER, .data.number = 0.0})
+#define SQLITE_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
 
 #define SQLITE_CTX_ERROR(ud, msg) do {                                  \
     (ud)->env->aborted = 1;                                             \

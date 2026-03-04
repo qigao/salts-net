@@ -5,7 +5,7 @@
 #include <string.h>
 
 /* Phase IRIS-1: Use turbo_arena instead of vendor arena */
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "request.h"
 #include "security.h"
 #include "turbo_str.h"
@@ -62,8 +62,8 @@ static size_t calculate_next_size(size_t current, size_t needed) {
 }
 
 // Buffer reallocation
-/* Phase IRIS-1: Updated to use turbo_arena_t */
-static int ensure_buffer_capacity(turbo_arena_t *arena, char **buffer, size_t *capacity,
+/* Phase IRIS-1: Updated to use turbo_pool_t */
+static int ensure_buffer_capacity(turbo_pool_t *arena, char **buffer, size_t *capacity,
                                   size_t current_length, size_t additional_needed) {
   if (!arena || !buffer || !capacity)
     return -1;
@@ -83,7 +83,7 @@ static int ensure_buffer_capacity(turbo_arena_t *arena, char **buffer, size_t *c
     return -2;
 
   /* Phase IRIS-1: turbo_arena doesn't have realloc, so alloc + memcpy */
-  char *new_buffer = turbo_arena_alloc(arena, new_capacity);
+  char *new_buffer = turbo_pool_alloc(arena, new_capacity);
   if (!new_buffer) {
     TLOG_ERROR("Arena buffer reallocation failed");
     return -1;
@@ -145,7 +145,7 @@ static int on_header_field_cb(llhttp_t *parser, const char *at, size_t length) {
 
   // Validate header field name using security module
   // Create a null-terminated string for validation
-  char *temp_name = turbo_arena_alloc(context->arena, length + 1);
+  char *temp_name = turbo_pool_alloc(context->arena, length + 1);
   if (!temp_name) {
     return 1;
   }
@@ -177,7 +177,7 @@ static int on_header_field_cb(llhttp_t *parser, const char *at, size_t length) {
 }
 
 // Array growth
-static int ensure_array_capacity(turbo_arena_t *arena, request_t *array) {
+static int ensure_array_capacity(turbo_pool_t *arena, request_t *array) {
   if (!arena || !array)
     return -1;
 
@@ -191,7 +191,7 @@ static int ensure_array_capacity(turbo_arena_t *arena, request_t *array) {
   int new_capacity = array->capacity == 0 ? 16 : array->capacity * 2;
 
   /* Phase IRIS-1: turbo_arena doesn't have realloc, so alloc + memcpy */
-  request_item_t *new_items = turbo_arena_alloc(arena, new_capacity * sizeof(request_item_t));
+  request_item_t *new_items = turbo_pool_alloc(arena, new_capacity * sizeof(request_item_t));
   if (!new_items) {
     TLOG_ERROR("Arena array reallocation failed");
     return -1;
@@ -232,7 +232,7 @@ static int on_header_value_cb(llhttp_t *parser, const char *at, size_t length) {
 
   // Validate header value using security module
   // Create a null-terminated string for validation
-  char *temp_value = turbo_arena_alloc(context->arena, length + 1);
+  char *temp_value = turbo_pool_alloc(context->arena, length + 1);
   if (!temp_value) {
     return 1;
   }
@@ -252,11 +252,11 @@ static int on_header_value_cb(llhttp_t *parser, const char *at, size_t length) {
     return 1;
 
   context->headers.items[context->headers.count].key =
-      turbo_arena_strdup(context->arena, context->current_header_field);
+      turbo_pool_strdup(context->arena, context->current_header_field);
   if (!context->headers.items[context->headers.count].key)
     return 1;
 
-  char *value = turbo_arena_alloc(context->arena, length + 1);
+  char *value = turbo_pool_alloc(context->arena, length + 1);
   if (!value) {
     return 1;
   }
@@ -356,7 +356,7 @@ static int on_version_cb(llhttp_t *parser) {
 }
 
 // Initialize HTTP context
-void http_context_init(http_context_t *context, turbo_arena_t *arena) {
+void http_context_init(http_context_t *context, turbo_pool_t *arena) {
   if (!context || !arena)
     return;
 
@@ -364,7 +364,7 @@ void http_context_init(http_context_t *context, turbo_arena_t *arena) {
   context->arena = arena;
 
   // Allocate parser implementation from arena
-  context->parser_impl = turbo_arena_alloc(arena, sizeof(http_parser_impl_t));
+  context->parser_impl = turbo_pool_alloc(arena, sizeof(http_parser_impl_t));
   if (!context->parser_impl)
     return;
 
@@ -393,7 +393,7 @@ void http_context_init(http_context_t *context, turbo_arena_t *arena) {
   context->body_capacity = 512;
   size_t total_buf = context->url_capacity + context->method_capacity +
                      context->header_field_capacity + context->body_capacity;
-  char *buf = turbo_arena_alloc(arena, total_buf);
+  char *buf = turbo_pool_alloc(arena, total_buf);
   if (!buf)
     return;
   memset(buf, 0, total_buf);
@@ -412,7 +412,7 @@ void http_context_init(http_context_t *context, turbo_arena_t *arena) {
   context->headers.count = 0;
   context->headers.capacity = 16;
   context->headers.items =
-      turbo_arena_alloc(arena, context->headers.capacity * sizeof(request_item_t));
+      turbo_pool_alloc(arena, context->headers.capacity * sizeof(request_item_t));
   if (context->headers.items) {
     memset(context->headers.items, 0, context->headers.capacity * sizeof(request_item_t));
   }
@@ -454,7 +454,7 @@ void http_context_free(http_context_t *context) {
 }
 
 // Query parsing
-void parse_query(turbo_arena_t *arena, const char *query_string, request_t *query) {
+void parse_query(turbo_pool_t *arena, const char *query_string, request_t *query) {
   if (!arena || !query)
     return;
 
@@ -483,7 +483,7 @@ void parse_query(turbo_arena_t *arena, const char *query_string, request_t *quer
   }
 
   query->capacity = param_count;
-  query->items = turbo_arena_alloc(arena, query->capacity * sizeof(request_item_t));
+  query->items = turbo_pool_alloc(arena, query->capacity * sizeof(request_item_t));
   if (!query->items) {
     query->capacity = 0;
     return;
@@ -495,7 +495,7 @@ void parse_query(turbo_arena_t *arena, const char *query_string, request_t *quer
     query->items[i].value = NULL;
   }
 
-  char *buffer = turbo_arena_alloc(arena, query_len + 1);
+  char *buffer = turbo_pool_alloc(arena, query_len + 1);
   if (!buffer) {
     query->items = NULL;
     query->capacity = 0;
@@ -524,8 +524,8 @@ void parse_query(turbo_arena_t *arena, const char *query_string, request_t *quer
       continue;
 
     *eq = '\0';
-    query->items[query->count].key = turbo_arena_strdup(arena, pair);
-    query->items[query->count].value = turbo_arena_strdup(arena, eq + 1);
+    query->items[query->count].key = turbo_pool_strdup(arena, pair);
+    query->items[query->count].value = turbo_pool_strdup(arena, eq + 1);
 
     if (query->items[query->count].key && query->items[query->count].value) {
       query->count++;

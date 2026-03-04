@@ -116,21 +116,21 @@ static uvwasi_errno_t uvwasi__get_filestat_set_times(
   return UVWASI_ESUCCESS;
 }
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
 #ifdef _MSC_VER
-static __declspec(thread) turbo_arena_t* g_uvwasi_arena = NULL;
+static __declspec(thread) turbo_pool_t* g_uvwasi_arena = NULL;
 #else
-static __thread turbo_arena_t* g_uvwasi_arena = NULL;
+static __thread turbo_pool_t* g_uvwasi_arena = NULL;
 #endif
 
-void uvwasi_SetThreadArena(turbo_arena_t* arena) {
+void uvwasi_SetThreadArena(turbo_pool_t* arena) {
   g_uvwasi_arena = arena;
 }
 
 static void* default_malloc(size_t size, void* mem_user_data) {
   if (g_uvwasi_arena) {
-    size_t* p = (size_t*)turbo_arena_alloc(g_uvwasi_arena, size + sizeof(size_t));
+    size_t* p = (size_t*)turbo_pool_alloc(g_uvwasi_arena, size + sizeof(size_t));
     if (!p) return NULL;
     *p = size;
     void* ptr = p + 1;
@@ -148,7 +148,7 @@ static void default_free(void* ptr, void* mem_user_data) {
 static void* default_calloc(size_t nmemb, size_t size, void* mem_user_data) {
   size_t total = nmemb * size;
   if (g_uvwasi_arena) {
-    size_t* p = (size_t*)turbo_arena_alloc(g_uvwasi_arena, total + sizeof(size_t));
+    size_t* p = (size_t*)turbo_pool_alloc(g_uvwasi_arena, total + sizeof(size_t));
     if (!p) return NULL;
     *p = total;
     void* ptr = p + 1;

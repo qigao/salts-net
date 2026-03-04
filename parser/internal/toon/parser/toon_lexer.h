@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <arena_buffer.h>
+#include <turbo_buffer.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,7 +58,7 @@ typedef struct {
     struct toonObject *root;
     struct toonObject *last_node; // Tail of the root children list
     struct toonObject *columns;
-    turbo_arena_t *arena;
+    turbo_pool_t *arena;
     int error;
     int line;
     char error_msg[256];

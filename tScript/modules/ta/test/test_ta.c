@@ -4,7 +4,7 @@
  */
 #include "ta.h"
 #include "tinytest.h"
-#include <arena_buffer.h>
+#include <turbo_buffer.h>
 #include <math.h>
 #include <string.h>
 
@@ -62,8 +62,8 @@ spec("ta_indicators") {
     describe("RSI - Relative Strength Index") {
 
         it("should calculate RSI for trending data") {
-            turbo_arena_t arena = {0};
-            turbo_arena_init(&arena, 4096);
+            turbo_pool_t arena = {0};
+            turbo_pool_init(&arena, 4096);
 
             double in[] = {44, 44.34, 44.09, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
                           45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64};
@@ -79,15 +79,15 @@ spec("ta_indicators") {
                 check(out[i] >= 0.0 && out[i] <= 100.0);
             }
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
     }
 
     describe("MACD - Moving Average Convergence Divergence") {
 
         it("should calculate MACD line, signal, and histogram") {
-            turbo_arena_t arena = {0};
-            turbo_arena_init(&arena, 4096);
+            turbo_pool_t arena = {0};
+            turbo_pool_init(&arena, 4096);
 
             // Need enough data for MACD (slow period is 26)
             double in[50];
@@ -111,15 +111,15 @@ spec("ta_indicators") {
                 }
             }
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
     }
 
     describe("ATR - Average True Range") {
 
         it("should calculate ATR from high/low/close") {
-            turbo_arena_t arena = {0};
-            turbo_arena_init(&arena, 4096);
+            turbo_pool_t arena = {0};
+            turbo_pool_init(&arena, 4096);
 
             double hi[] = {48, 49, 50, 51, 52};
             double lo[] = {46, 47, 48, 49, 50};
@@ -136,7 +136,7 @@ spec("ta_indicators") {
                 check(out[i] > 0.0);
             }
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
     }
 

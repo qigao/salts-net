@@ -4,7 +4,7 @@
  */
 
 #include "bar_window.h"
-#include "exprtk_types.h"   /* turbo_arena_alloc */
+#include "exprtk_types.h"   /* turbo_pool_alloc */
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -13,10 +13,10 @@
  * Lifecycle
  * ========================================================================= */
 
-bar_window_t *bar_window_create(size_t capacity, turbo_arena_t *arena) {
+bar_window_t *bar_window_create(size_t capacity, turbo_pool_t *arena) {
     if (capacity == 0) return NULL;
 
-    bar_window_t *w = (bar_window_t *)turbo_arena_alloc(arena, sizeof(bar_window_t));
+    bar_window_t *w = (bar_window_t *)turbo_pool_alloc(arena, sizeof(bar_window_t));
     if (!w) return NULL;
     memset(w, 0, sizeof(*w));
 
@@ -24,7 +24,7 @@ bar_window_t *bar_window_create(size_t capacity, turbo_arena_t *arena) {
 
     /* Ring storage — 6 arrays × capacity */
 #define ALLOC_RING(field) \
-    w->field = (double *)turbo_arena_alloc(arena, capacity * sizeof(double)); \
+    w->field = (double *)turbo_pool_alloc(arena, capacity * sizeof(double)); \
     if (!w->field) return NULL; \
     memset(w->field, 0, capacity * sizeof(double))
 
@@ -37,7 +37,7 @@ bar_window_t *bar_window_create(size_t capacity, turbo_arena_t *arena) {
 
     /* Linearized view — same size, allocated separately */
 #define ALLOC_LIN(field, ring_field) \
-    w->field = (double *)turbo_arena_alloc(arena, capacity * sizeof(double)); \
+    w->field = (double *)turbo_pool_alloc(arena, capacity * sizeof(double)); \
     if (!w->field) return NULL; \
     memset(w->field, 0, capacity * sizeof(double))
 

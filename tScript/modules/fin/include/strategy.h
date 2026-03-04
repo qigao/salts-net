@@ -32,7 +32,7 @@
 #include "provider.h"
 #include "bar_window.h"
 #include "order_manager.h"
-#include "exprtk_types.h"   /* turbo_arena_t, exprtk_env_t */
+#include "exprtk_types.h"   /* turbo_pool_t, exprtk_env_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,7 +104,7 @@ typedef struct {
     double               current_date;
 
     strategy_config_t    config;
-    turbo_arena_t       *arena;
+    turbo_pool_t       *arena;
 } strategy_ctx_t;
 
 /* =========================================================================
@@ -123,7 +123,7 @@ typedef struct {
 strategy_ctx_t *strategy_create(universe_t *universe,
                                   provider_t *provider,
                                   const strategy_config_t *cfg,
-                                  turbo_arena_t *arena);
+                                  turbo_pool_t *arena);
 
 /**
  * @brief Free a strategy context (releases internally owned heap memory).

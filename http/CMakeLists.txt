@@ -75,7 +75,7 @@ set_target_properties(
   PROPERTIES FOLDER http/http_client
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME HTTP)
+             EXPORT_NAME HttpClient)
 
 # Tests & Examples
 add_subdirectory(examples)

@@ -142,11 +142,11 @@ spec("kcp") {
       turbo_kcp_trim_memory(&server);
 
       /* Get send buffer */
-      turbo_arena_buffer_t *buffer = turbo_kcp_get_send_buffer(&server, 1024);
+      turbo_pool_buffer_t *buffer = turbo_kcp_get_send_buffer(&server, 1024);
       check_not_null(buffer);
       check(buffer->capacity >= 1024);
 
-      turbo_arena_buffer_unref(buffer);
+      turbo_pool_unref(buffer);
 
       turbo_kcp_server_stop(&server);
       uv_run(g_loop, UV_RUN_NOWAIT);

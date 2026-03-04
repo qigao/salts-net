@@ -5,7 +5,7 @@
 #ifndef WASM_CTX_H
 #define WASM_CTX_H
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "exprtk.h"
 #include "turbo_wasm.h"
 
@@ -28,24 +28,24 @@ typedef struct {
 typedef struct {
   wasm_ctx_t *ctx;
   exprtk_env_t *env;
-  turbo_arena_t *scratch;
+  turbo_pool_t *scratch;
 } wasm_ud_t;
 
-#define WASM_ZERO ((exprtk_value_t){exprtk_VAL_NUMBER, .data.number = 0.0})
+#define WASM_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
 
 #define WASM_CTX_ABORT(ud)                                                                          \
   do {                                                                                              \
     (ud)->env->aborted = 1;                                                                         \
   } while (0)
 
-static inline turbo_arena_t *wasm_tmp_arena(wasm_ud_t *ud) {
+static inline turbo_pool_t *wasm_tmp_arena(wasm_ud_t *ud) {
   if (ud->scratch)
     return ud->scratch;
   return &ud->env->arena;
 }
 
-static inline char *wasm_arena_cstr(turbo_arena_t *a, tstr_v sv) {
-  char *buf = (char *)turbo_arena_alloc(a, sv.len + 1);
+static inline char *wasm_arena_cstr(turbo_pool_t *a, tstr_v sv) {
+  char *buf = (char *)turbo_pool_alloc(a, sv.len + 1);
   if (!buf)
     return NULL;
   memcpy(buf, sv.data, sv.len);

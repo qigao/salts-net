@@ -94,7 +94,7 @@ void tfree(void *ptr) {
  * -------------------------------------------------------------------------- */
 
 toonObject *TOONc_newObjectArena(void *arena, int kvtype) {
-    toonObject *o = arena ? turbo_arena_alloc((turbo_arena_t *)arena, sizeof(toonObject)) : tmalloc(sizeof(toonObject));
+    toonObject *o = arena ? turbo_pool_alloc((turbo_pool_t *)arena, sizeof(toonObject)) : tmalloc(sizeof(toonObject));
     o->kvtype = kvtype;
     o->indent = 0;
     o->key = NULL;
@@ -109,7 +109,7 @@ toonObject *TOONc_newObjectArena(void *arena, int kvtype) {
 
 toonObject *TOONc_newStringObjArena(void *arena, char *s, size_t len) {
     toonObject *o = TOONc_newObjectArena(arena, KV_STRING);
-    o->str.ptr = arena ? turbo_arena_alloc((turbo_arena_t *)arena, len + 1) : tmalloc(len + 1);
+    o->str.ptr = arena ? turbo_pool_alloc((turbo_pool_t *)arena, len + 1) : tmalloc(len + 1);
     o->str.len = len;
     memcpy(o->str.ptr, s, len);
     o->str.ptr[len] = '\0';
@@ -160,7 +160,7 @@ void TOONc_listReserveArena(void *arena, toonObject *list, size_t capacity) {
     if (capacity <= list->array.capacity) return;
     
     if (arena) {
-        toonObject **new_items = turbo_arena_alloc((turbo_arena_t *)arena, sizeof(toonObject *) * capacity);
+        toonObject **new_items = turbo_pool_alloc((turbo_pool_t *)arena, sizeof(toonObject *) * capacity);
         if (list->array.items) {
             memcpy(new_items, list->array.items, sizeof(toonObject *) * list->array.len);
         }
@@ -186,8 +186,8 @@ void TOONc_free(toonObject *obj) {
     
     // If this is a root object with an arena, free the whole arena
     if (obj->arena != NULL && obj->arena != ARENA_MANAGED_SENTINEL) {
-        turbo_arena_t *arena = (turbo_arena_t *)obj->arena;
-        turbo_arena_free(arena);
+        turbo_pool_t *arena = (turbo_pool_t *)obj->arena;
+        turbo_pool_free(arena);
         tfree(arena);
         return;
     }
@@ -221,9 +221,9 @@ static toonObject *parse(const char *source, size_t length) {
     toon_lexer_init(&lexer, source, length);
     
     toon_parse_ctx_t ctx;
-    ctx.arena = tmalloc(sizeof(turbo_arena_t));
-    turbo_arena_init(ctx.arena, 32768); // Increased to 32KB
-    ctx.arena->flags |= TURBO_ARENA_FLAG_AUTO_GROW;
+    ctx.arena = tmalloc(sizeof(turbo_pool_t));
+    turbo_pool_init(ctx.arena, 32768); // Increased to 32KB
+    ctx.arena->flags |= TURBO_POOL_FLAG_AUTO_GROW;
 
     ctx.root = TOONc_newObjectArena(ctx.arena, KV_OBJ);
     ctx.root->arena = ctx.arena; // The root owns the arena
@@ -569,7 +569,7 @@ static char *j_str(j_ctx *c, size_t *len) {
         c->p++;
     }
     *len = c->p - start;
-    char *res = turbo_arena_alloc(c->arena, *len + 1);
+    char *res = turbo_pool_alloc(c->arena, *len + 1);
     memcpy(res, start, *len);
     res[*len] = '\0';
     if (c->p < c->end) c->p++; // skip close quote
@@ -631,8 +631,8 @@ static toonObject *j_val(j_ctx *c) {
 
 toonObject *TOONc_fromJSONString(const char *json, size_t len) {
     if (!json) return NULL;
-    void *arena = tmalloc(sizeof(turbo_arena_t));
-    turbo_arena_init(arena, 32768);
+    void *arena = tmalloc(sizeof(turbo_pool_t));
+    turbo_pool_init(arena, 32768);
     j_ctx c = {json, json + len, arena};
     toonObject *root = j_val(&c);
     if (root) root->arena = arena;

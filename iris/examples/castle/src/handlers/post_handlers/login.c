@@ -4,7 +4,7 @@
 
 typedef struct
 {
-    turbo_arena_t *pool;
+    turbo_pool_t *pool;
     Res *res;
     char *username;
     char *password;
@@ -45,7 +45,7 @@ void login(Req *req, Res *res)
     }
 
     // Create separate arena for async operation
-    turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
+    turbo_pool_t *async_pool = malloc(sizeof(turbo_pool_t)); if (!async_pool || turbo_pool_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         json_free(json);
         send_text(res, 500, "Arena allocation failed");
@@ -53,7 +53,7 @@ void login(Req *req, Res *res)
     }
 
     // Allocate login context
-    ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
+    ctx_t *ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         json_free(json);
         send_text(res, 500, "Context allocation failed");
@@ -72,8 +72,8 @@ void login(Req *req, Res *res)
         return;
     }
 
-    ctx->username = turbo_arena_strdup(async_pool, json_string(juser));
-    ctx->password = turbo_arena_strdup(async_pool, json_string(jpass));
+    ctx->username = turbo_pool_strdup(async_pool, json_string(juser));
+    ctx->password = turbo_pool_strdup(async_pool, json_string(jpass));
     json_free(json);
 
     // Create PostgreSQL async context

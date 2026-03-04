@@ -5,7 +5,7 @@
 // Structure to hold request context for async operations
 typedef struct
 {
-    turbo_arena_t *pool;
+    turbo_pool_t *pool;
     Res *res;
     char *name;
     char *username;
@@ -51,7 +51,7 @@ void add_user(Req *req, Res *res)
     const char *about = json_type(j_about) == JSON_STRING ? json_string(j_about) : "";
 
     // Create separate arena for async operation
-    turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
+    turbo_pool_t *async_pool = malloc(sizeof(turbo_pool_t)); if (!async_pool || turbo_pool_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         json_free(json);
         send_text(res, 500, "Arena allocation failed");
@@ -59,7 +59,7 @@ void add_user(Req *req, Res *res)
     }
 
     // Create context to hold all the data for async operation
-    ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
+    ctx_t *ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         json_free(json);
         send_text(res, 500, "Context allocation failed");
@@ -79,11 +79,11 @@ void add_user(Req *req, Res *res)
     }
 
     // Copy all strings to context (they need to persist after this function returns)
-    ctx->name = turbo_arena_strdup(async_pool, name);
-    ctx->username = turbo_arena_strdup(async_pool, username);
-    ctx->password = turbo_arena_strdup(async_pool, password);
-    ctx->email = turbo_arena_strdup(async_pool, email);
-    ctx->about = turbo_arena_strdup(async_pool, about);
+    ctx->name = turbo_pool_strdup(async_pool, name);
+    ctx->username = turbo_pool_strdup(async_pool, username);
+    ctx->password = turbo_pool_strdup(async_pool, password);
+    ctx->email = turbo_pool_strdup(async_pool, email);
+    ctx->about = turbo_pool_strdup(async_pool, about);
 
     if (!ctx->name || !ctx->username || !ctx->password || !ctx->email || !ctx->about)
     {

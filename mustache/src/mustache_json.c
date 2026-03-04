@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "turbo_str.h"
 
 
@@ -64,7 +64,7 @@ int mustache_json_provider_init(MUSTACHE_JSON_PROVIDER *provider, json_value_t *
 int mustache_json_provider_init_arena(MUSTACHE_JSON_PROVIDER *provider, json_value_t *json_data,
                                       MUSTACHE_TEMPLATE *(*template_loader)(const char *, size_t,
                                                                             void *),
-                                      void *user_data, turbo_arena_t *arena) {
+                                      void *user_data, turbo_pool_t *arena) {
   if (mustache_json_provider_init(provider, json_data, template_loader, user_data) != 0) {
     return -1;
   }
@@ -139,7 +139,7 @@ static void *json_get_child_by_name(void *node, const char *name, size_t size,
 
   /* Create null-terminated key string */
   if (provider && provider->arena) {
-    key_buffer = turbo_arena_alloc(provider->arena, size + 1);
+    key_buffer = turbo_pool_alloc(provider->arena, size + 1);
   } else {
     key_buffer = tstr_dup_len(name, size);
   }

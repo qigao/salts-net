@@ -147,7 +147,7 @@ static void on_handle_close(uv_handle_t* handle) {
  * We extract the coro_client via user_data set during connect.
  */
 
-int on_transport_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+int on_transport_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     UNUSED(peer);
     turbo_tcp_client_t* tcp = (turbo_tcp_client_t*)handle;
     turbo_coro_client_t* client = (turbo_coro_client_t*)tcp->user_data;
@@ -217,7 +217,7 @@ void on_transport_close(void* handle) {
 
 /* Pipe-specific bridge callbacks (same logic, different handle type) */
 
-int on_pipe_coro_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+int on_pipe_coro_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     UNUSED(peer);
     turbo_pipe_client_t* pipe = (turbo_pipe_client_t*)handle;
     turbo_coro_client_t* client = (turbo_coro_client_t*)pipe->user_data;
@@ -436,7 +436,7 @@ static void on_tls_close(void* handle) {
     release_client(client);
 }
 
-static int on_tls_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_tls_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     turbo_tls_client_t* tls = (turbo_tls_client_t*)handle;
     turbo_coro_client_t* client = (turbo_coro_client_t*)tls->user_data;
     UNUSED(peer);
@@ -539,7 +539,7 @@ static void on_kcp_connect(void* handle, int status, void* peer) {
     release_client(client);
 }
 
-static int on_kcp_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_kcp_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     /* KCP delivers: handle = turbo_kcp_server_t*, peer = turbo_kcp_client_t* */
     UNUSED(handle);
     turbo_kcp_client_t* kcp = (turbo_kcp_client_t*)peer;
@@ -622,7 +622,7 @@ static const turbo_coro_transport_ops_t kcp_ops = {
  *  UDP transport ops
  * ═══════════════════════════════════════════════════════════ */
 
-static int on_udp_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_udp_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     turbo_udp_t* udp = (turbo_udp_t*)handle;
     turbo_coro_client_t* client = (turbo_coro_client_t*)
         ((char*)udp - offsetof(turbo_coro_client_t, udp));
@@ -739,7 +739,7 @@ static void on_ws_connect(void* handle, int status, void* peer) {
     release_client(client);
 }
 
-static int on_ws_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_ws_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     turbo_websocket_client_t* ws = (turbo_websocket_client_t*)handle;
     turbo_coro_client_t* client = (turbo_coro_client_t*)ws->user_data;
     UNUSED(peer);

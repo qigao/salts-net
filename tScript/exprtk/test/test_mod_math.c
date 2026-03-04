@@ -4,9 +4,9 @@
  */
 
 #include "tinytest.h"
-#include "exprtk_module.h"
-#include "exprtk_internal.h"
-#include "arena_buffer.h"
+#include "exprtk_module.h" 
+#include "simd_helpers.h"
+#include "turbo_buffer.h"
 #include <stdlib.h>
 #include <math.h>
 
@@ -17,14 +17,7 @@
 #define TEST_TOLERANCE 1e-10
 
 // Forward declarations
-extern ols_result_t ols_fit(const double *y, const double *x, size_t n);
-extern double exprtk_skewness(const double *data, size_t n);
-extern double exprtk_kurtosis(const double *data, size_t n);
-extern double exprtk_geometric_mean(const double *data, size_t n);
-extern double exprtk_harmonic_mean(const double *data, size_t n);
-extern void exprtk_matmul(const double *A, const double *B, size_t m, size_t k, size_t n, double *out);
-extern void exprtk_transpose(const double *A, size_t rows, size_t cols, double *out);
-extern int gauss_jordan_invert(double *mat, size_t n, turbo_arena_t *arena);
+
 
 // Helper function
 static void fill_random(double *arr, size_t n, double min, double max) {
@@ -246,8 +239,8 @@ spec("SIMD Math Module") {
 
     describe("Gauss-Jordan Inversion") {
         it("should invert identity matrix") {
-            turbo_arena_t arena;
-            turbo_arena_init(&arena, 4096);
+            turbo_pool_t arena;
+            turbo_pool_init(&arena, 4096);
 
             double I[] = {1, 0, 0, 1};  // 2x2 identity
             double result[4];
@@ -260,12 +253,12 @@ spec("SIMD Math Module") {
                 check_double_eq(result[i], I[i], TEST_TOLERANCE);
             }
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
 
         it("should invert 2x2 matrix") {
-            turbo_arena_t arena;
-            turbo_arena_init(&arena, 4096);
+            turbo_pool_t arena;
+            turbo_pool_init(&arena, 4096);
 
             // [4 7]  inverse is [0.6 -0.7]
             // [2 6]             [-0.2 0.4]
@@ -279,7 +272,7 @@ spec("SIMD Math Module") {
                 check_double_eq(A[i], expected[i], 1e-9);
             }
 
-            turbo_arena_free(&arena);
+            turbo_pool_free(&arena);
         }
     }
 

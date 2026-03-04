@@ -35,27 +35,12 @@ add_custom_command(
 # =============================================================================
 # Library (respects BUILD_SHARED_LIBS)
 # =============================================================================
+file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
+     ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
 
-set(SOURCE_FILES
-    src/exprtk_eval.c
-    src/exprtk_map.c
-    src/exprtk_registry.c
-    src/grammar/exprtk_parser.c
-    src/mod_core.c
-    src/mod_io.c
-    src/mod_math.c
-    src/mod_stats.c
-    src/mod_string.c
-    src/exprtk_validate.c
-    src/simd_helpers.c
-)
-
-add_library(${TARGET_NAME} STATIC 
-    ${SOURCE_FILES} 
-    ${exprtk_LEXER_GEN}
-    ${exprtk_GRAMMAR_GEN}
-)
-add_library(TurboNet::exprtkParser ALIAS ${TARGET_NAME})
+add_library(${TARGET_NAME} SHARED ${SOURCE_FILES} ${exprtk_LEXER_GEN}
+                                  ${exprtk_GRAMMAR_GEN})
+add_library(TurboNet::ExprTk ALIAS ${TARGET_NAME})
 
 target_include_directories(
   ${TARGET_NAME}
@@ -64,12 +49,10 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/parser>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
-          ${CMAKE_CURRENT_SOURCE_DIR}/src
-          ${CMAKE_SOURCE_DIR}/vendor/mir)
+          ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/vendor/mir)
 
 # Define BUILDING_EXPRTK so exprtk_grammar.h includes the generated file
-target_compile_definitions(${TARGET_NAME} PRIVATE BUILDING_EXPRTK)
-
+target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 
 # Find simde include directory
 find_path(SIMDE_INCLUDE_DIRS "simde/simde-common.h")
@@ -81,12 +64,10 @@ endif()
 
 target_include_directories(${TARGET_NAME} PRIVATE ${SIMDE_INCLUDE_DIRS})
 
-target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils
-PRIVATE
-  TurboNet::CsvParser
-  TurboNet::DateTimeParser
-  mir_static
- )
+target_link_libraries(
+  ${TARGET_NAME}
+  PUBLIC TurboNet::Utils
+  PRIVATE TurboNet::DateTimeParser mir_static)
 
 # Enable AVX/AVX2 for SIMD optimizations
 if(MSVC)
@@ -102,7 +83,9 @@ set_target_properties(
   PROPERTIES FOLDER turbo_script/${TARGET_NAME}
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME exprtkParser)
+             EXPORT_NAME ExprTk
+             WINDOWS_EXPORT_ALL_SYMBOLS ON
+             CXX_VISIBILITY_PRESET default
+             VISIBILITY_INLINES_HIDDEN OFF)
 
 add_subdirectory(test)
-

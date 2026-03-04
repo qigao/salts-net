@@ -10,7 +10,7 @@
 #include "turbo_callbacks.h"
 #include "turbo_str_view.h"
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,16 +36,16 @@ typedef struct turbo_tcp_client_s turbo_tcp_client_t;
  */
 struct turbo_tcp_client_s {
     uv_tcp_t handle;                         /**< libuv TCP handle */
-    turbo_arena_t arena;                      /**< Memory arena for zero-copy operations */
+    turbo_pool_t arena;                      /**< Memory arena for zero-copy operations */
 
     /* Zero-copy receive buffers (ping-pong) */
-    turbo_arena_buffer_t* recv_buffer1;       /**< First receive buffer */
-    turbo_arena_buffer_t* recv_buffer2;       /**< Second receive buffer for ping-pong */
+    turbo_pool_buffer_t* recv_buffer1;       /**< First receive buffer */
+    turbo_pool_buffer_t* recv_buffer2;       /**< Second receive buffer for ping-pong */
     int recv_toggle;                         /**< Toggle between buffers */
 
     /* Zero-copy send queue */
-    turbo_arena_buffer_t* send_queue_head;    /**< Head of send buffer queue */
-    turbo_arena_buffer_t* send_queue_tail;    /**< Tail of send buffer queue */
+    turbo_pool_buffer_t* send_queue_head;    /**< Head of send buffer queue */
+    turbo_pool_buffer_t* send_queue_tail;    /**< Tail of send buffer queue */
     size_t send_queue_bytes;                 /**< Total bytes queued for sending */
 
     /* Write state */
@@ -55,7 +55,7 @@ struct turbo_tcp_client_s {
     int write_in_progress;                   /**< Flag indicating if write is in progress */
 
     /* Outstanding zero-copy write buffer */
-    turbo_arena_buffer_t* pending_write_buffer; /**< Buffer being written */
+    turbo_pool_buffer_t* pending_write_buffer; /**< Buffer being written */
 
     /* Callbacks */
     turbo_recv_cb on_recv;                   /**< Receive data callback */
@@ -82,7 +82,7 @@ struct turbo_tcp_client_s {
 struct turbo_tcp_server_s {
     uv_tcp_t* handle;                        /**< libuv TCP server handle */
     uv_loop_t* loop;                         /**< libuv event loop */
-    turbo_arena_t arena;                      /**< Memory arena for server operations */
+    turbo_pool_t arena;                      /**< Memory arena for server operations */
 
     /* Callbacks */
     turbo_recv_cb on_recv;                   /**< Receive data callback (per client) */
@@ -93,7 +93,7 @@ struct turbo_tcp_server_s {
     int active_connections;                  /**< Number of active connections */
 
     /* Arena pool for client arenas */
-    turbo_arena_t* arena_pool;                /**< Pool of arenas for clients */
+    turbo_pool_t* arena_pool;                /**< Pool of arenas for clients */
     size_t arena_pool_size;                  /**< Size of arena pool */
 
     /* User data for higher-level protocols (WebSocket, etc.) */
@@ -190,7 +190,7 @@ struct turbo_tcp_server_s {
  * @param min_size The minimum size required for the buffer.
  * @return Pointer to the buffer, or NULL on failure.
  */
-  CXX_C_API turbo_arena_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* client, size_t min_size);
+  CXX_C_API turbo_pool_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* client, size_t min_size);
 
 /**
  * @brief Send data using a zero-copy buffer.
@@ -203,7 +203,7 @@ struct turbo_tcp_server_s {
  * @param length The number of bytes to send from the buffer.
  * @return 0 on success, error code on failure.
  */
-  CXX_C_API int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length);
+  CXX_C_API int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_pool_buffer_t* buffer, size_t length);
 
 /**
  * @brief Discard a send buffer without sending.
@@ -214,7 +214,7 @@ struct turbo_tcp_server_s {
  * @param client The TCP client.
  * @param buffer The buffer to discard.
  */
-  CXX_C_API void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer);
+  CXX_C_API void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_pool_buffer_t* buffer);
 
 /**
  * @brief Send data with copying (fallback method).
@@ -282,7 +282,7 @@ static inline int turbo_tcp_send_v(turbo_tcp_client_t* client, tstr_v data) {
  * @param length The number of bytes to send from the buffer.
  * @return 0 on success, error code on failure.
  */
-  CXX_C_API int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length);
+  CXX_C_API int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_pool_buffer_t* buffer, size_t length);
 
 /**
  * @brief IO vector structure for scatter-gather operations.
@@ -371,13 +371,13 @@ typedef struct {
  * @param write_code Code block that writes data to _ptr.
  */
 #define TURBO_TCP_ZERO_COPY_SEND(client, data_size, write_code) do { \
-    turbo_arena_buffer_t* _buf = turbo_tcp_get_send_buffer(client, data_size); \
+    turbo_pool_buffer_t* _buf = turbo_tcp_get_send_buffer(client, data_size); \
     if (_buf) { \
         char* _ptr = _buf->data; \
         write_code; \
-        turbo_arena_buffer_set_used(_buf, data_size); \
+        turbo_pool_set_used(_buf, data_size); \
         turbo_tcp_send_buffer(client, _buf, data_size); \
-        turbo_arena_buffer_unref(_buf); \
+        turbo_pool_unref(_buf); \
     } \
 } while(0)
 

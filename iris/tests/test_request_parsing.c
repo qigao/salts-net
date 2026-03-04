@@ -9,9 +9,9 @@
 #include <stdio.h>
 #include "tinytest.h"
 #include <llhttp.h>
-#include <arena_buffer.h>
+#include <turbo_buffer.h>
 #include "iris.h"
-static turbo_arena_t arena;
+static turbo_pool_t arena;
 static http_context_t ctx;
 
 /* Internal definition from request.c to allow white-box testing */
@@ -23,13 +23,13 @@ struct http_parser_impl
 
 spec("request_parsing") {
     before_each() {
-        turbo_arena_init(&arena, 8192);
+        turbo_pool_init(&arena, 8192);
         http_context_init(&ctx, &arena);
     }
 
     after_each() {
         http_context_free(&ctx);
-        turbo_arena_free(&arena);
+        turbo_pool_free(&arena);
     }
 
     /* ============================================================================
@@ -207,8 +207,8 @@ spec("request_parsing") {
 
     it("should parse http1.0 keep alive") {
         /* Reset context */
-        turbo_arena_free(&arena);
-        turbo_arena_init(&arena, 8192);
+        turbo_pool_free(&arena);
+        turbo_pool_init(&arena, 8192);
         http_context_init(&ctx, &arena);
 
         const char *request = "GET /test HTTP/1.0\r\n"
@@ -226,8 +226,8 @@ spec("request_parsing") {
 
         for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
             /* Reset context for each test */
-            turbo_arena_free(&arena);
-            turbo_arena_init(&arena, 8192);
+            turbo_pool_free(&arena);
+            turbo_pool_init(&arena, 8192);
             http_context_init(&ctx, &arena);
 
             char request[256];

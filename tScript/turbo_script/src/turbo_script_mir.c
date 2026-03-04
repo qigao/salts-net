@@ -1,7 +1,8 @@
 #include "turbo_script.h"
 #include "turbo_script_internal.h"
 #include "exprtk.h"
-#include "exprtk_internal.h"
+#include "exprtk_module.h"
+
 #include <mir.h>
 #include <mir-gen.h>
 #include "exprtk_grammar.h"
@@ -357,7 +358,7 @@ static void ts_emit_interpreter_call(ts_mir_compiler_t *c, const char *name, siz
 /* --- Access helpers: member/index fast path + bridge fallback --- */
 static MIR_reg_t ts_emit_member_access(ts_mir_compiler_t *c, const char *obj_name, const char *member) {
     exprtk_value_t obj = exprtk_env_get(&c->ts_ctx->env, obj_name);
-    if (obj.type == exprtk_VAL_MAP && exprtk_map_has(&obj, member)) {
+    if (obj.type == EXPRTK_VAL_MAP && exprtk_map_has(&obj, member)) {
         MIR_reg_t ptr_reg = 0;
         for (int i = 0; i < c->map_ptr_count; i++) {
             if (c->map_ptrs[i].obj_name == obj_name &&
@@ -459,7 +460,7 @@ static MIR_reg_t ts_emit_index_access(ts_mir_compiler_t *c, const char *name, ex
 
     /* Native fast path for vectors pre-bound in env at compile time. */
     exprtk_value_t existing = exprtk_env_get(&c->ts_ctx->env, name);
-    int is_prebound = (existing.type == exprtk_VAL_VECTOR && existing.data.vector.data != NULL);
+    int is_prebound = (existing.type == EXPRTK_VAL_VECTOR && existing.data.vector.data != NULL);
     if (is_prebound) {
         MIR_reg_t ptr_reg = 0;
         for (int i = 0; i < c->vec_ptr_count; i++) {
@@ -505,11 +506,11 @@ static MIR_reg_t ts_emit_index_access(ts_mir_compiler_t *c, const char *name, ex
 /* --- Assignment/fallback helpers: env sync + interpreter eval --- */
 static int ts_is_non_numeric_node(exprtk_node_t *node) {
     if (!node) return 0;
-    return node->type == exprtk_NODE_VECTOR ||
-           node->type == exprtk_NODE_MAP_LITERAL ||
-           node->type == exprtk_NODE_STRING ||
-           node->type == exprtk_NODE_TEMPLATE_STRING ||
-           node->type == exprtk_NODE_SLICE;
+    return node->type == EXPRTK_NODE_VECTOR ||
+           node->type == EXPRTK_NODE_MAP_LITERAL ||
+           node->type == EXPRTK_NODE_STRING ||
+           node->type == EXPRTK_NODE_TEMPLATE_STRING ||
+           node->type == EXPRTK_NODE_SLICE;
 }
 
 static MIR_reg_t ts_emit_assignment(ts_mir_compiler_t *c, exprtk_node_t *node) {
@@ -531,11 +532,11 @@ static int ts_compile_data_access_and_assignment(ts_mir_compiler_t *c, exprtk_no
     if (!node || !out) return 0;
 
     switch (node->type) {
-        case exprtk_NODE_ASSIGNMENT:
+        case EXPRTK_NODE_ASSIGNMENT:
             *out = ts_emit_assignment(c, node);
             return 1;
 
-        case exprtk_NODE_CONSTANT_DECL: {
+        case EXPRTK_NODE_CONSTANT_DECL: {
             MIR_reg_t val = ts_compile_expr(c, node->data.assignment.value);
             MIR_reg_t target = get_or_create_reg(c, node->data.assignment.name);
             MIR_append_insn(c->ctx, c->func, MIR_new_insn(c->ctx, MIR_DMOV,
@@ -545,7 +546,7 @@ static int ts_compile_data_access_and_assignment(ts_mir_compiler_t *c, exprtk_no
             return 1;
         }
 
-        case exprtk_NODE_NULL: {
+        case EXPRTK_NODE_NULL: {
             MIR_reg_t r = new_temp_reg(c);
             MIR_append_insn(c->ctx, c->func, MIR_new_insn(c->ctx, MIR_DMOV,
                 MIR_new_reg_op(c->ctx, r), MIR_new_double_op(c->ctx, 0.0)));
@@ -553,9 +554,9 @@ static int ts_compile_data_access_and_assignment(ts_mir_compiler_t *c, exprtk_no
             return 1;
         }
 
-        case exprtk_NODE_INDEX:
+        case EXPRTK_NODE_INDEX:
             if (node->data.index_access.array &&
-                node->data.index_access.array->type == exprtk_NODE_VARIABLE &&
+                node->data.index_access.array->type == EXPRTK_NODE_VARIABLE &&
                 c->ctx_reg) {
                 const char *name = node->data.index_access.array->data.variable.name;
                 *out = ts_emit_index_access(c, name, node->data.index_access.index);
@@ -564,9 +565,9 @@ static int ts_compile_data_access_and_assignment(ts_mir_compiler_t *c, exprtk_no
             }
             return 1;
 
-        case exprtk_NODE_MEMBER_ACCESS:
+        case EXPRTK_NODE_MEMBER_ACCESS:
             if (node->data.member_access.object &&
-                node->data.member_access.object->type == exprtk_NODE_VARIABLE &&
+                node->data.member_access.object->type == EXPRTK_NODE_VARIABLE &&
                 node->data.member_access.member) {
                 const char *obj_name = node->data.member_access.object->data.variable.name;
                 const char *member = node->data.member_access.member;
@@ -690,12 +691,12 @@ static void ts_compile_script_func(ts_mir_compiler_t *c,
 static void ts_prescan_functions(ts_mir_compiler_t *c, exprtk_node_t *node) {
     if (!node) return;
 
-    if (node->type == exprtk_NODE_FUNCTION_DEFINITION) {
+    if (node->type == EXPRTK_NODE_FUNCTION_DEFINITION) {
         if (node->data.func_def.name && node->data.func_def.body &&
             node->data.func_def.arg_count <= 16) {
             int all_vars = 1;
             for (size_t i = 0; i < node->data.func_def.arg_count; i++) {
-                if (node->data.func_def.arg_params[i]->type != exprtk_NODE_VARIABLE) {
+                if (node->data.func_def.arg_params[i]->type != EXPRTK_NODE_VARIABLE) {
                     all_vars = 0;
                     break;
                 }
@@ -711,7 +712,7 @@ static void ts_prescan_functions(ts_mir_compiler_t *c, exprtk_node_t *node) {
     }
 
     /* Recurse into blocks to find nested function definitions */
-    if (node->type == exprtk_NODE_BLOCK) {
+    if (node->type == EXPRTK_NODE_BLOCK) {
         for (size_t i = 0; i < node->data.block.count; i++) {
             ts_prescan_functions(c, node->data.block.statements[i]);
         }
@@ -725,13 +726,13 @@ static void ts_prescan_functions(ts_mir_compiler_t *c, exprtk_node_t *node) {
 double ts_mir_load_var(void *ctx_ptr, const char *name) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t val = exprtk_env_get(&ctx->env, name);
-    return (val.type == exprtk_VAL_NUMBER) ? val.data.number : 0.0;
+    return (val.type == EXPRTK_VAL_NUMBER) ? val.data.number : 0.0;
 }
 
 void ts_mir_store_var(void *ctx_ptr, const char *name, double value) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t val;
-    val.type = exprtk_VAL_NUMBER;
+    val.type = EXPRTK_VAL_NUMBER;
     val.data.number = value;
     exprtk_env_set(&ctx->env, name, val);
 }
@@ -745,7 +746,7 @@ static exprtk_value_t ts_mir_call_bridge(void *ctx_ptr, const char *name, size_t
     exprtk_value_t args[16];
     if (argc > 16) argc = 16;
     for (size_t i = 0; i < argc; i++) {
-        args[i].type = exprtk_VAL_NUMBER;
+        args[i].type = EXPRTK_VAL_NUMBER;
         args[i].data.number = argv[i];
     }
     return exprtk_call_internal(name, argc, args, &ctx->env, &ctx->env.arena);
@@ -753,30 +754,30 @@ static exprtk_value_t ts_mir_call_bridge(void *ctx_ptr, const char *name, size_t
 
 double ts_mir_call0(void *ctx_ptr, const char *name) {
     exprtk_value_t r = ts_mir_call_bridge(ctx_ptr, name, 0, NULL);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 double ts_mir_call1(void *ctx_ptr, const char *name, double a0) {
     double argv[1] = {a0};
     exprtk_value_t r = ts_mir_call_bridge(ctx_ptr, name, 1, argv);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 double ts_mir_call2(void *ctx_ptr, const char *name, double a0, double a1) {
     double argv[2] = {a0, a1};
     exprtk_value_t r = ts_mir_call_bridge(ctx_ptr, name, 2, argv);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 double ts_mir_call3(void *ctx_ptr, const char *name, double a0, double a1, double a2) {
     double argv[3] = {a0, a1, a2};
     exprtk_value_t r = ts_mir_call_bridge(ctx_ptr, name, 3, argv);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 double ts_mir_calln(void *ctx_ptr, const char *name, int64_t argc, double *argv) {
     exprtk_value_t r = ts_mir_call_bridge(ctx_ptr, name, (size_t)argc, argv);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 /* =========================================================================
@@ -791,11 +792,11 @@ double ts_mir_call_native(void *ctx_ptr, void *fn_ptr, void *user_data,
     exprtk_value_t args[16];
     if (argc > 16) argc = 16;
     for (int64_t i = 0; i < argc; i++) {
-        args[i].type = exprtk_VAL_NUMBER;
+        args[i].type = EXPRTK_VAL_NUMBER;
         args[i].data.number = argv[i];
     }
     exprtk_value_t r = fn((size_t)argc, args, user_data);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 /* Direct call to exprtk_builtin_fn — module/registry functions */
@@ -806,11 +807,11 @@ double ts_mir_call_builtin(void *ctx_ptr, void *fn_ptr,
     exprtk_value_t args[16];
     if (argc > 16) argc = 16;
     for (int64_t i = 0; i < argc; i++) {
-        args[i].type = exprtk_VAL_NUMBER;
+        args[i].type = EXPRTK_VAL_NUMBER;
         args[i].data.number = argv[i];
     }
     exprtk_value_t r = fn((size_t)argc, args, &ctx->env, &ctx->env.arena);
-    return (r.type == exprtk_VAL_NUMBER) ? r.data.number : 0.0;
+    return (r.type == EXPRTK_VAL_NUMBER) ? r.data.number : 0.0;
 }
 
 /* =========================================================================
@@ -821,7 +822,7 @@ double ts_mir_eval_node(void *ctx_ptr, void *node_ptr) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_node_t *node = (exprtk_node_t *)node_ptr;
     exprtk_value_t result = exprtk_eval(node, &ctx->env);
-    return (result.type == exprtk_VAL_NUMBER) ? result.data.number : 0.0;
+    return (result.type == EXPRTK_VAL_NUMBER) ? result.data.number : 0.0;
 }
 
 /* =========================================================================
@@ -831,7 +832,7 @@ double ts_mir_eval_node(void *ctx_ptr, void *node_ptr) {
 double ts_mir_vec_get(void *ctx_ptr, const char *name, double index) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t val = exprtk_env_get(&ctx->env, name);
-    if (val.type == exprtk_VAL_VECTOR) {
+    if (val.type == EXPRTK_VAL_VECTOR) {
         int idx = (int)index;
         if (idx >= 0 && idx < (int)val.data.vector.size)
             return val.data.vector.data[idx];
@@ -857,13 +858,13 @@ void ts_mir_define_func(void *ctx_ptr, void *node_ptr) {
 double ts_mir_member_get(void *ctx_ptr, const char *obj_name, const char *member) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t obj = exprtk_env_get(&ctx->env, obj_name);
-    if (obj.type == exprtk_VAL_VECTOR) {
+    if (obj.type == EXPRTK_VAL_VECTOR) {
         if (strcmp(member, "length") == 0) return (double)obj.data.vector.size;
-    } else if (obj.type == exprtk_VAL_STRING) {
+    } else if (obj.type == EXPRTK_VAL_STRING) {
         if (strcmp(member, "length") == 0) return (double)obj.data.string.len;
-    } else if (obj.type == exprtk_VAL_MAP) {
+    } else if (obj.type == EXPRTK_VAL_MAP) {
         exprtk_value_t val = exprtk_map_get(&obj, member);
-        if (val.type == exprtk_VAL_NUMBER) return val.data.number;
+        if (val.type == EXPRTK_VAL_NUMBER) return val.data.number;
     }
     return 0.0;
 }
@@ -875,7 +876,7 @@ double ts_mir_member_get(void *ctx_ptr, const char *obj_name, const char *member
 void *ts_mir_vec_data(void *ctx_ptr, const char *name) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t val = exprtk_env_get(&ctx->env, name);
-    if (val.type == exprtk_VAL_VECTOR && val.data.vector.data)
+    if (val.type == EXPRTK_VAL_VECTOR && val.data.vector.data)
         return (void *)val.data.vector.data;
     return NULL;
 }
@@ -887,9 +888,9 @@ void *ts_mir_vec_data(void *ctx_ptr, const char *name) {
 double ts_mir_map_get_key(void *ctx_ptr, const char *obj_name, const char *key) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t obj = exprtk_env_get(&ctx->env, obj_name);
-    if (obj.type == exprtk_VAL_MAP) {
+    if (obj.type == EXPRTK_VAL_MAP) {
         exprtk_value_t val = exprtk_map_get(&obj, key);
-        if (val.type == exprtk_VAL_NUMBER) return val.data.number;
+        if (val.type == EXPRTK_VAL_NUMBER) return val.data.number;
     }
     return 0.0;
 }
@@ -899,11 +900,11 @@ double ts_mir_map_get_key(void *ctx_ptr, const char *obj_name, const char *key) 
 void *ts_mir_map_num_ptr(void *ctx_ptr, const char *obj_name, const char *key) {
     turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)ctx_ptr;
     exprtk_value_t obj = exprtk_env_get(&ctx->env, obj_name);
-    if (obj.type == exprtk_VAL_MAP) {
+    if (obj.type == EXPRTK_VAL_MAP) {
         /* We need a stable pointer into the HTAB entry.
          * Use exprtk_map_get_ptr which returns a pointer to the value inside the htab. */
         exprtk_value_t *vp = exprtk_map_get_ptr(&obj, key);
-        if (vp && vp->type == exprtk_VAL_NUMBER)
+        if (vp && vp->type == EXPRTK_VAL_NUMBER)
             return (void *)&vp->data.number;
     }
     return NULL;
@@ -917,17 +918,17 @@ void *ts_mir_map_num_ptr(void *ctx_ptr, const char *obj_name, const char *key) {
 static int ts_try_fold_constant(exprtk_node_t *node, double *out) {
     if (!node) return 0;
 
-    if (node->type == exprtk_NODE_NUMBER) {
+    if (node->type == EXPRTK_NODE_NUMBER) {
         *out = node->data.number;
         return 1;
     }
 
-    if (node->type == exprtk_NODE_NULL) {
+    if (node->type == EXPRTK_NODE_NULL) {
         *out = 0.0;
         return 1;
     }
 
-    if (node->type == exprtk_NODE_BINARY_OP) {
+    if (node->type == EXPRTK_NODE_BINARY_OP) {
         /* Unary operators */
         if (node->data.binary.left == NULL) {
             double r;
@@ -992,17 +993,17 @@ static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
     }
 
     switch (node->type) {
-        case exprtk_NODE_NUMBER: {
+        case EXPRTK_NODE_NUMBER: {
             MIR_reg_t r = new_temp_reg(c);
             MIR_append_insn(c->ctx, c->func, MIR_new_insn(c->ctx, MIR_DMOV,
                 MIR_new_reg_op(c->ctx, r), MIR_new_double_op(c->ctx, node->data.number)));
             return r;
         }
 
-        case exprtk_NODE_VARIABLE:
+        case EXPRTK_NODE_VARIABLE:
             return get_or_create_reg(c, node->data.variable.name);
 
-        case exprtk_NODE_BINARY_OP: {
+        case EXPRTK_NODE_BINARY_OP: {
             /* Phase 1: Unary operators (left == NULL) */
             if (node->data.binary.left == NULL) {
                 MIR_reg_t operand = ts_compile_expr(c, node->data.binary.right);
@@ -1137,7 +1138,7 @@ static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
                 case exprtk_TOKEN_ASSIGN_SUB:
                 case exprtk_TOKEN_ASSIGN_MUL:
                 case exprtk_TOKEN_ASSIGN_DIV: {
-                    if (node->data.binary.left->type != exprtk_NODE_VARIABLE) return 0;
+                    if (node->data.binary.left->type != EXPRTK_NODE_VARIABLE) return 0;
                     MIR_reg_t target = get_or_create_reg(c, node->data.binary.left->data.variable.name);
                     MIR_reg_t rhs = ts_compile_expr(c, node->data.binary.right);
                     MIR_insn_code_t op;
@@ -1192,7 +1193,7 @@ static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 4+9: Function call compilation */
-        case exprtk_NODE_FUNCTION_CALL: {
+        case EXPRTK_NODE_FUNCTION_CALL: {
             size_t argc = node->data.function.arg_count;
             const char *name = node->data.function.name;
             if (!name) return 0;
@@ -1230,10 +1231,10 @@ static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 4: Member call compilation (module.method) */
-        case exprtk_NODE_MEMBER_CALL: {
+        case EXPRTK_NODE_MEMBER_CALL: {
             if (!node->data.member_call.object || !node->data.member_call.method) break;
             const char *obj_name = NULL;
-            if (node->data.member_call.object->type == exprtk_NODE_VARIABLE)
+            if (node->data.member_call.object->type == EXPRTK_NODE_VARIABLE)
                 obj_name = node->data.member_call.object->data.variable.name;
             if (!obj_name) break;
 
@@ -1254,18 +1255,18 @@ static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 8: String/Vector/Slice — no-sync fallback (read-only, don't modify JIT vars) */
-        case exprtk_NODE_STRING:
-        case exprtk_NODE_VECTOR:
-        case exprtk_NODE_SLICE:
-        case exprtk_NODE_TEMPLATE_STRING:
-        case exprtk_NODE_MAP_LITERAL:
+        case EXPRTK_NODE_STRING:
+        case EXPRTK_NODE_VECTOR:
+        case EXPRTK_NODE_SLICE:
+        case EXPRTK_NODE_TEMPLATE_STRING:
+        case EXPRTK_NODE_MAP_LITERAL:
             return ts_emit_eval_node(c, node, 0);
 
         /* Phase 8: full-sync fallback nodes (mutate env or complex control) */
-        case exprtk_NODE_MEMBER_SET:
-        case exprtk_NODE_DESTRUCTURING_ASSIGNMENT:
-        case exprtk_NODE_SPREAD:
-        case exprtk_NODE_REST_PARAMETER:
+        case EXPRTK_NODE_MEMBER_SET:
+        case EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT:
+        case EXPRTK_NODE_SPREAD:
+        case EXPRTK_NODE_REST_PARAMETER:
             return ts_emit_eval_node(c, node, 1);
 
         default: {
@@ -1288,7 +1289,7 @@ static void ts_compile_branch_false(ts_mir_compiler_t *c, exprtk_node_t *node,
     if (!node) return;
 
     /* Binary comparison → single DBXX branch instruction */
-    if (node->type == exprtk_NODE_BINARY_OP) {
+    if (node->type == EXPRTK_NODE_BINARY_OP) {
         /* NOT: unary, left is NULL — branch false when operand is true (non-zero) */
         if (node->data.binary.op == exprtk_TOKEN_NOT && node->data.binary.left == NULL) {
             MIR_reg_t val = ts_compile_expr(c, node->data.binary.right);
@@ -1360,7 +1361,7 @@ static void ts_compile_branch_true(ts_mir_compiler_t *c, exprtk_node_t *node,
                                    MIR_label_t true_label) {
     if (!node) return;
 
-    if (node->type == exprtk_NODE_BINARY_OP && node->data.binary.left != NULL) {
+    if (node->type == EXPRTK_NODE_BINARY_OP && node->data.binary.left != NULL) {
         MIR_insn_code_t bop = 0;
         /* Direct branch when condition IS true */
         switch (node->data.binary.op) {
@@ -1399,13 +1400,13 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
     if (!node) return;
 
     switch (node->type) {
-        case exprtk_NODE_BLOCK:
+        case EXPRTK_NODE_BLOCK:
             for (size_t i = 0; i < node->data.block.count; i++) {
                 ts_compile_stmt(c, node->data.block.statements[i]);
             }
             break;
 
-        case exprtk_NODE_IF: {
+        case EXPRTK_NODE_IF: {
             MIR_label_t else_label = node->data.if_stmt.else_branch ? MIR_new_label(c->ctx) : NULL;
             MIR_label_t end_label = MIR_new_label(c->ctx);
 
@@ -1426,7 +1427,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
             break;
         }
 
-        case exprtk_NODE_WHILE: {
+        case EXPRTK_NODE_WHILE: {
             MIR_label_t loop_label = MIR_new_label(c->ctx);
             MIR_label_t end_label = MIR_new_label(c->ctx);
 
@@ -1452,7 +1453,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
             break;
         }
 
-        case exprtk_NODE_FOR: {
+        case EXPRTK_NODE_FOR: {
             if (node->data.for_loop.init) ts_compile_stmt(c, node->data.for_loop.init);
 
             MIR_label_t loop_label = MIR_new_label(c->ctx);
@@ -1487,7 +1488,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 1: do-while loop */
-        case exprtk_NODE_DO_WHILE: {
+        case EXPRTK_NODE_DO_WHILE: {
             MIR_label_t loop_label = MIR_new_label(c->ctx);
             MIR_label_t end_label = MIR_new_label(c->ctx);
 
@@ -1511,7 +1512,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 1: break/continue/return */
-        case exprtk_NODE_FLOW: {
+        case EXPRTK_NODE_FLOW: {
             if (node->data.flow.type == exprtk_TOKEN_BREAK && c->loop_depth > 0) {
                 MIR_append_insn(c->ctx, c->func, MIR_new_insn(c->ctx, MIR_JMP,
                     MIR_new_label_op(c->ctx, c->loop_stack[c->loop_depth - 1].break_label)));
@@ -1547,7 +1548,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 6+9: Function definition — already compiled in pre-scan, just register in env */
-        case exprtk_NODE_FUNCTION_DEFINITION: {
+        case EXPRTK_NODE_FUNCTION_DEFINITION: {
             /* The MIR function was already compiled during ts_prescan_functions.
              * Just register in env via bridge for interpreter fallback compatibility. */
             MIR_append_insn(c->ctx, c->func,
@@ -1561,18 +1562,18 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
 
         /* Phase 14: For-in — native compilation for pre-bound vectors,
          * interpreter fallback for everything else. */
-        case exprtk_NODE_FOR_IN: {
+        case EXPRTK_NODE_FOR_IN: {
             const char *iter_name = node->data.for_in.var_name;
             exprtk_node_t *collection = node->data.for_in.collection;
             const char *vec_name = NULL;
             int native = 0;
 
-            if (collection && collection->type == exprtk_NODE_VARIABLE)
+            if (collection && collection->type == EXPRTK_NODE_VARIABLE)
                 vec_name = collection->data.variable.name;
 
             if (vec_name && c->ctx_reg) {
                 exprtk_value_t existing = exprtk_env_get(&c->ts_ctx->env, vec_name);
-                if (existing.type == exprtk_VAL_VECTOR && existing.data.vector.data) {
+                if (existing.type == EXPRTK_VAL_VECTOR && existing.data.vector.data) {
                     native = 1;
                     int64_t len = (int64_t)existing.data.vector.size;
 
@@ -1678,7 +1679,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
         }
 
         /* Phase 8: Switch statement — native MIR (chain of compare-and-branch) */
-        case exprtk_NODE_SWITCH: {
+        case EXPRTK_NODE_SWITCH: {
             MIR_reg_t val = ts_compile_expr(c, node->data.switch_stmt.value);
             MIR_label_t end_label = MIR_new_label(c->ctx);
 
@@ -2096,7 +2097,7 @@ int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script) {
         if (f->is_script && f->data.script.body && f->data.script.arg_count <= 16) {
             int all_vars = 1;
             for (size_t i = 0; i < f->data.script.arg_count; i++) {
-                if (f->data.script.arg_params[i]->type != exprtk_NODE_VARIABLE) {
+                if (f->data.script.arg_params[i]->type != EXPRTK_NODE_VARIABLE) {
                     all_vars = 0;
                     break;
                 }

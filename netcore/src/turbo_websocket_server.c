@@ -27,7 +27,7 @@ static const char WS_GUID[48] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 // Transport callbacks
 static void ws_server_on_connection(void *handle, int status, void *peer);
-static int ws_server_on_recv(void *handle, const turbo_arena_slice_t *data, void *peer);
+static int ws_server_on_recv(void *handle, const turbo_pool_slice_t *data, void *peer);
 static void ws_server_on_close(void *handle);
 
 // Connection management
@@ -48,7 +48,7 @@ static void ws_compute_accept_key(const char *client_key, char *accept_key);
 
 // Frame processing
 static void ws_server_handle_frame(turbo_websocket_connection_t *conn,
-                                   const turbo_arena_slice_t *data);
+                                   const turbo_pool_slice_t *data);
 static int ws_send_frame(turbo_websocket_connection_t *conn, websocket_opcode_t opcode,
                          const uint8_t *payload, size_t payload_len, int fin, int mask);
 static void ws_handle_control_frame(turbo_websocket_connection_t *conn, websocket_opcode_t opcode,
@@ -75,13 +75,13 @@ turbo_websocket_server_create(uv_loop_t *loop, int use_tls,
   server->next_connection_id = 1;
 
   // Allocate buffer pool for zero-copy
-  server->buffer_pool = calloc(1, sizeof(turbo_arena_t));
+  server->buffer_pool = calloc(1, sizeof(turbo_pool_t));
   if (!server->buffer_pool) {
     free(server);
     return NULL;
   }
 
-  if (turbo_arena_init(server->buffer_pool, 1024 * 1024) != 0) { // 1MB pool
+  if (turbo_pool_init(server->buffer_pool, 1024 * 1024) != 0) { // 1MB pool
     free(server->buffer_pool);
     free(server);
     return NULL;
@@ -185,7 +185,7 @@ void turbo_websocket_server_destroy(turbo_websocket_server_t *server) {
     return;
 
   if (server->buffer_pool) {
-    turbo_arena_free(server->buffer_pool);
+    turbo_pool_free(server->buffer_pool);
     free(server->buffer_pool);
   }
 
@@ -292,22 +292,22 @@ static void ws_server_on_connection(void *handle, int status, void *peer) {
   conn->transport_client = handle;
 
   // Allocate connection arena
-  conn->conn_arena = calloc(1, sizeof(turbo_arena_t));
+  conn->conn_arena = calloc(1, sizeof(turbo_pool_t));
   if (!conn->conn_arena) {
     free(conn);
     return;
   }
 
-  if (turbo_arena_init(conn->conn_arena, 16384) != 0) { // 16KB
+  if (turbo_pool_init(conn->conn_arena, 16384) != 0) { // 16KB
     free(conn->conn_arena);
     free(conn);
     return;
   }
 
   // Allocate handshake buffer
-  conn->handshake_recv_buffer = turbo_arena_get_buffer(conn->conn_arena, 4096);
+  conn->handshake_recv_buffer = turbo_pool_get_buffer(conn->conn_arena, 4096);
   if (!conn->handshake_recv_buffer) {
-    turbo_arena_free(conn->conn_arena);
+    turbo_pool_free(conn->conn_arena);
     free(conn->conn_arena);
     free(conn);
     return;
@@ -326,7 +326,7 @@ static void ws_server_on_connection(void *handle, int status, void *peer) {
   }
 }
 
-static int ws_server_on_recv(void *handle, const turbo_arena_slice_t *data, void *peer) {
+static int ws_server_on_recv(void *handle, const turbo_pool_slice_t *data, void *peer) {
   // For recv callback: handle = TCP/TLS client, peer = NULL
   // Get WebSocket connection from client's user_data
   turbo_tcp_client_t *tcp_client = (turbo_tcp_client_t *)handle;
@@ -400,7 +400,7 @@ static void ws_server_on_close(void *handle) {
 
   // Free resources
   if (conn->conn_arena) {
-    turbo_arena_free(conn->conn_arena);
+    turbo_pool_free(conn->conn_arena);
     free(conn->conn_arena);
   }
 
@@ -455,7 +455,7 @@ static int ws_server_parse_handshake(turbo_websocket_connection_t *conn, const c
     if (path_end) {
       size_t path_len = path_end - path_start;
       if (path_len > 0) {
-        char *path_copy = (char *)turbo_arena_alloc(conn->conn_arena, path_len + 1);
+        char *path_copy = (char *)turbo_pool_alloc(conn->conn_arena, path_len + 1);
         if (path_copy) {
           memcpy(path_copy, path_start, path_len);
           path_copy[path_len] = '\0';
@@ -720,7 +720,7 @@ int turbo_websocket_server_sendv(turbo_websocket_connection_t *conn, const void 
 // ============================================================================
 
 static void ws_server_handle_frame(turbo_websocket_connection_t *conn,
-                                   const turbo_arena_slice_t *data) {
+                                   const turbo_pool_slice_t *data) {
   // Parse WebSocket frame
   ws_frame_t frame;
   ws_parse_result_t result = ws_frame_parse((const uint8_t *)data->data, data->length, &frame);
@@ -728,7 +728,7 @@ static void ws_server_handle_frame(turbo_websocket_connection_t *conn,
   if (result == WS_PARSE_NEED_MORE) {
     // Buffer incomplete frame data for later
     if (!conn->frame_recv_buffer) {
-      conn->frame_recv_buffer = turbo_arena_get_buffer(conn->conn_arena, 65536);
+      conn->frame_recv_buffer = turbo_pool_get_buffer(conn->conn_arena, 65536);
       if (!conn->frame_recv_buffer)
         return;
     }
@@ -805,7 +805,7 @@ static void ws_server_handle_frame(turbo_websocket_connection_t *conn,
       conn->expecting_continuation = 0;
 
       if (conn->server->on_recv && conn->fragment_buffer) {
-        turbo_arena_slice_t slice = {.data = conn->fragment_buffer->data,
+        turbo_pool_slice_t slice = {.data = conn->fragment_buffer->data,
                                      .length = conn->fragment_buffer_used,
                                      .buffer = NULL};
         conn->server->on_recv(conn->transport_client, &slice, conn);
@@ -819,7 +819,7 @@ static void ws_server_handle_frame(turbo_websocket_connection_t *conn,
     if (fin) {
       // Complete unfragmented message
       if (conn->server->on_recv) {
-        turbo_arena_slice_t slice = {
+        turbo_pool_slice_t slice = {
             .data = (char *)payload, .length = payload_len, .buffer = NULL};
         conn->server->on_recv(conn->transport_client, &slice, conn);
       }
@@ -836,7 +836,7 @@ static void ws_server_handle_frame(turbo_websocket_connection_t *conn,
         size_t buf_size = conn->server->config.max_message_size;
         if (buf_size == 0)
           buf_size = 1024 * 1024; // 1MB default
-        conn->fragment_buffer = turbo_arena_get_buffer(conn->conn_arena, buf_size);
+        conn->fragment_buffer = turbo_pool_get_buffer(conn->conn_arena, buf_size);
         if (!conn->fragment_buffer) {
           if (decoded_payload)
             free(decoded_payload);

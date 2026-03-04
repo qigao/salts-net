@@ -9,7 +9,7 @@
 #include "stats.h"
 #include "turbo_callbacks.h"
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
 #define TURBO_KCP_DEFAULT_RECV_BUFFER_SIZE 65536
 
@@ -31,11 +31,11 @@ typedef struct turbo_kcp_context_s turbo_kcp_context_t;
 struct turbo_kcp_server_s {
     uv_loop_t* loop;                        /* Event loop */
     uv_udp_t* handle;                       /* UDP handle */
-    turbo_arena_t arena;            /* Memory arena */
+    turbo_pool_t arena;            /* Memory arena */
 
     /* Receive buffers (ping-pong for zero-copy) */
-    turbo_arena_buffer_t* recv_buffer1;      /* Primary receive buffer */
-    turbo_arena_buffer_t* recv_buffer2;      /* Secondary receive buffer */
+    turbo_pool_buffer_t* recv_buffer1;      /* Primary receive buffer */
+    turbo_pool_buffer_t* recv_buffer2;      /* Secondary receive buffer */
     int recv_toggle;                        /* Buffer toggle state */
 
     /* Callbacks */
@@ -166,19 +166,19 @@ struct turbo_kcp_client_s {
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance.
  * @param min_size The minimum required size for the buffer.
- * @return A pointer to an `turbo_arena_buffer_t` suitable for sending, or NULL on failure.
+ * @return A pointer to an `turbo_pool_buffer_t` suitable for sending, or NULL on failure.
  */
-  turbo_arena_buffer_t* turbo_kcp_get_send_buffer(turbo_kcp_server_t* server, size_t min_size);
+  turbo_pool_buffer_t* turbo_kcp_get_send_buffer(turbo_kcp_server_t* server, size_t min_size);
 /**
  * @brief Sends data from a zero-copy arena buffer to a KCP client.
  *
  * @param client A pointer to the `turbo_kcp_client_t` instance.
- * @param buffer A pointer to the `turbo_arena_buffer_t` containing the data to send.
+ * @param buffer A pointer to the `turbo_pool_buffer_t` containing the data to send.
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
   int turbo_kcp_send_buffer(turbo_kcp_client_t* client,
-                                 turbo_arena_buffer_t* buffer, size_t length);
+                                 turbo_pool_buffer_t* buffer, size_t length);
 
 /* Fallback copy-based send operations */
 /**
@@ -205,12 +205,12 @@ struct turbo_kcp_client_s {
  * @brief Sends data from a zero-copy arena buffer to a KCP client.
  *
  * @param client A pointer to the `turbo_kcp_client_t` instance.
- * @param buffer A pointer to the `turbo_arena_buffer_t` containing the data to send.
+ * @param buffer A pointer to the `turbo_pool_buffer_t` containing the data to send.
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
   int turbo_kcp_client_send_buffer(turbo_kcp_client_t* client,
-                                        turbo_arena_buffer_t* buffer, size_t length);
+                                        turbo_pool_buffer_t* buffer, size_t length);
 
 /* Statistics and monitoring */
 /**
@@ -278,13 +278,13 @@ typedef struct {
 
 /* Get buffer, write data, send buffer */
 #define turbo_KCP_ZERO_COPY_SEND(client, data_size, write_code) do { \
-    turbo_arena_buffer_t* _buf = turbo_kcp_get_send_buffer((client)->server, data_size); \
+    turbo_pool_buffer_t* _buf = turbo_kcp_get_send_buffer((client)->server, data_size); \
     if (_buf) { \
         char* _ptr = _buf->data; \
         write_code; \
-        turbo_arena_buffer_set_used(_buf, data_size); \
+        turbo_pool_set_used(_buf, data_size); \
         turbo_kcp_send_buffer(client, _buf, data_size); \
-        turbo_arena_buffer_unref(_buf); \
+        turbo_pool_unref(_buf); \
     } \
 } while(0)
 

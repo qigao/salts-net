@@ -58,7 +58,7 @@ static void param_grid_get(const double *ranges, size_t num_params,
 static void inject_params(exprtk_env_t *env, const char **names,
                           const double *values, size_t n) {
     for (size_t i = 0; i < n; i++) {
-        exprtk_value_t v = { .type = exprtk_VAL_NUMBER, .data = { .number = values[i] } };
+        exprtk_value_t v = { .type = EXPRTK_VAL_NUMBER, .data = { .number = values[i] } };
         exprtk_env_set(env, names[i], v);
     }
 }
@@ -128,7 +128,7 @@ int strategy_walk_forward(strategy_ctx_t *ctx,
                           double start_date, double end_date,
                           const wfo_config_t *cfg,
                           wfo_result_t *result,
-                          turbo_arena_t *arena) {
+                          turbo_pool_t *arena) {
     if (!ctx || !code || !cfg || !result || !arena) return -1;
     if (cfg->num_params == 0 || !cfg->param_names || !cfg->ranges) return -1;
     if (cfg->in_sample_bars == 0 || cfg->out_sample_bars == 0) return -1;
@@ -149,13 +149,13 @@ int strategy_walk_forward(strategy_ctx_t *ctx,
     if (max_windows == 0) return -1;
 
     /* Allocate result arrays */
-    result->best_params = TURBO_ARENA_ALLOC_ARRAY(arena, double, max_windows * cfg->num_params);
-    result->is_scores   = TURBO_ARENA_ALLOC_ARRAY(arena, double, max_windows);
-    result->oos_scores  = TURBO_ARENA_ALLOC_ARRAY(arena, double, max_windows);
+    result->best_params = TURBO_POOL_ALLOC_ARRAY(arena, double, max_windows * cfg->num_params);
+    result->is_scores   = TURBO_POOL_ALLOC_ARRAY(arena, double, max_windows);
+    result->oos_scores  = TURBO_POOL_ALLOC_ARRAY(arena, double, max_windows);
     if (!result->best_params || !result->is_scores || !result->oos_scores) return -1;
 
     /* Temp buffer for current parameter combination */
-    double *cur_params = TURBO_ARENA_ALLOC_ARRAY(arena, double, cfg->num_params);
+    double *cur_params = TURBO_POOL_ALLOC_ARRAY(arena, double, cfg->num_params);
     if (!cur_params) return -1;
 
     size_t win_idx = 0;

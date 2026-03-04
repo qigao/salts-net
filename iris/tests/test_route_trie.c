@@ -9,10 +9,10 @@
 #include <stdbool.h>
 #include "tinytest.h"
 #include "route_trie.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
 static route_trie_t *trie;
-static turbo_arena_t arena;
+static turbo_pool_t arena;
 
 /* Dummy handler for testing */
 static void dummy_handler(Req *req, Res *res) {
@@ -33,7 +33,7 @@ static void handler_b(Req *req, Res *res) {
 spec("route_trie") {
     before_each() {
         trie = route_trie_create();
-        turbo_arena_init(&arena, 4096);
+        turbo_pool_init(&arena, 4096);
     }
 
     after_each() {
@@ -41,7 +41,7 @@ spec("route_trie") {
             route_trie_free(trie);
             trie = NULL;
         }
-        turbo_arena_free(&arena);
+        turbo_pool_free(&arena);
     }
 
     /* ============================================================================

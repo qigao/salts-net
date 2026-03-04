@@ -17,7 +17,7 @@
 
 /** Bind a named scalar variable into the TurboScript environment. */
 static void bind_num(exprtk_env_t *env, const char *name, double val) {
-    exprtk_value_t v = { .type = exprtk_VAL_NUMBER, .data = { .number = val } };
+    exprtk_value_t v = { .type = EXPRTK_VAL_NUMBER, .data = { .number = val } };
     exprtk_env_set(env, name, v);
 }
 
@@ -25,7 +25,7 @@ static void bind_num(exprtk_env_t *env, const char *name, double val) {
 static void bind_vec(exprtk_env_t *env, const char *name,
                      const double *data, size_t len) {
     exprtk_value_t v;
-    v.type = exprtk_VAL_VECTOR;
+    v.type = EXPRTK_VAL_VECTOR;
     v.data.vector.data = (double *)data;   /* cast away const — env doesn't own it */
     v.data.vector.size = len;
     exprtk_env_set(env, name, v);
@@ -34,7 +34,7 @@ static void bind_vec(exprtk_env_t *env, const char *name,
 /** Read a scalar output variable written by the strategy script. */
 static double read_num(exprtk_env_t *env, const char *name, double def) {
     exprtk_value_t v = exprtk_env_get(env, name);
-    if (v.type == exprtk_VAL_NUMBER) return v.data.number;
+    if (v.type == EXPRTK_VAL_NUMBER) return v.data.number;
     return def;
 }
 
@@ -45,8 +45,8 @@ static double read_num(exprtk_env_t *env, const char *name, double def) {
 strategy_ctx_t *strategy_create(universe_t *universe,
                                   provider_t *provider,
                                   const strategy_config_t *cfg,
-                                  turbo_arena_t *arena) {
-    strategy_ctx_t *ctx = (strategy_ctx_t *)turbo_arena_alloc(arena, sizeof(strategy_ctx_t));
+                                  turbo_pool_t *arena) {
+    strategy_ctx_t *ctx = (strategy_ctx_t *)turbo_pool_alloc(arena, sizeof(strategy_ctx_t));
     if (!ctx) return NULL;
     memset(ctx, 0, sizeof(*ctx));
 
@@ -59,7 +59,7 @@ strategy_ctx_t *strategy_create(universe_t *universe,
 
     /* Allocate per-asset bar windows */
     if (ctx->num_assets > 0) {
-        ctx->windows = (bar_window_t **)turbo_arena_alloc(
+        ctx->windows = (bar_window_t **)turbo_pool_alloc(
             arena, ctx->num_assets * sizeof(bar_window_t *));
         if (!ctx->windows) return NULL;
         for (size_t i = 0; i < ctx->num_assets; i++) {
@@ -80,7 +80,7 @@ strategy_ctx_t *strategy_create(universe_t *universe,
     ctx->order_mgr->spread       = ctx->config.spread;
 
     /* Create TurboScript environment */
-    ctx->env = (exprtk_env_t *)turbo_arena_alloc(arena, sizeof(exprtk_env_t));
+    ctx->env = (exprtk_env_t *)turbo_pool_alloc(arena, sizeof(exprtk_env_t));
     if (!ctx->env) return NULL;
     exprtk_env_init(ctx->env);
 
@@ -201,13 +201,13 @@ void strategy_reset(strategy_ctx_t *ctx) {
 int strategy_compile(strategy_ctx_t *ctx, const char *code) {
     if (!ctx || !ctx->env || !code) return -1;
     exprtk_parse_ctx_t parse = {0};
-    turbo_arena_t scratch;
-    turbo_arena_init(&scratch, 1024 * 256);
+    turbo_pool_t scratch;
+    turbo_pool_init(&scratch, 1024 * 256);
     parse.arena = &scratch;
 
-    ctx->parsed = (struct exprtk_parse_ctx_s *)turbo_arena_alloc(
+    ctx->parsed = (struct exprtk_parse_ctx_s *)turbo_pool_alloc(
         ctx->arena, sizeof(exprtk_parse_ctx_t));
-    if (!ctx->parsed) { turbo_arena_free(&scratch); return -1; }
+    if (!ctx->parsed) { turbo_pool_free(&scratch); return -1; }
 
     /* Parse the script */
     exprtk_parse_ctx_t *pc = (exprtk_parse_ctx_t *)ctx->parsed;
@@ -227,13 +227,124 @@ int strategy_compile(strategy_ctx_t *ctx, const char *code) {
     /* Detect on_init/on_bar/on_fill/on_stop hooks */
     if (!err) strategy_init_hooks(ctx);
 
-    turbo_arena_free(&scratch);
+    turbo_pool_free(&scratch);
     return err ? -1 : 0;
 }
 
 /* =========================================================================
  * Per-Bar Execution
  * ========================================================================= */
+
+/** Bind bar data and context variables to script environment. */
+static void bind_bar_context(strategy_ctx_t *ctx, bar_window_t *w,
+                               uint32_t asset_id, double prev_close) {
+    bind_vec(ctx->env, "O", w->open,   w->count);
+    bind_vec(ctx->env, "H", w->high,   w->count);
+    bind_vec(ctx->env, "L", w->low,    w->count);
+    bind_vec(ctx->env, "C", w->close,  w->count);
+    bind_vec(ctx->env, "V", w->volume, w->count);
+    bind_num(ctx->env, "n",          (double)w->count);
+    bind_num(ctx->env, "asset_id",   (double)asset_id);
+    bind_num(ctx->env, "bar_index",  (double)ctx->total_bars);
+    bind_num(ctx->env, "position",   order_manager_position(ctx->order_mgr, asset_id));
+    bind_num(ctx->env, "entry_price",order_manager_entry_price(ctx->order_mgr, asset_id));
+    bind_num(ctx->env, "cash",       ctx->order_mgr->cash);
+    bind_num(ctx->env, "equity",     ctx->order_mgr->equity);
+    bind_num(ctx->env, "prev_close", prev_close);
+}
+
+/** Update trade statistics in script environment. */
+static void bind_trade_stats(strategy_ctx_t *ctx) {
+    size_t nt = ctx->order_mgr->num_trades;
+    double nw = 0.0, cpnl = 0.0;
+    for (size_t ti = 0; ti < nt; ti++) {
+        cpnl += ctx->order_mgr->trades[ti].pnl;
+        if (ctx->order_mgr->trades[ti].pnl > 0.0) nw += 1.0;
+    }
+    bind_num(ctx->env, "num_trades", (double)nt);
+    bind_num(ctx->env, "num_wins",   nw);
+    bind_num(ctx->env, "cum_pnl",    cpnl);
+}
+
+/** Reset output variables before strategy execution. */
+static void reset_output_vars(strategy_ctx_t *ctx) {
+    bind_num(ctx->env, "signal",      0.0);
+    bind_num(ctx->env, "size",        0.1);
+    bind_num(ctx->env, "signal_type", 0.0); /* 0: MKT, 1: LIMIT, 2: STOP */
+    bind_num(ctx->env, "signal_price",0.0);
+    bind_num(ctx->env, "bars_valid",  1.0); /* 1: DAY, -1: GTC */
+    bind_num(ctx->env, "stop_loss",   0.0);
+    bind_num(ctx->env, "take_profit", 0.0);
+    bind_num(ctx->env, "trailing_dist", 0.0);
+    bind_num(ctx->env, "trailing_pct",  0.0);
+}
+
+/** Execute the compiled strategy script. */
+static void execute_strategy_script(strategy_ctx_t *ctx) {
+    exprtk_parse_ctx_t *pc = (exprtk_parse_ctx_t *)ctx->parsed;
+    if (ctx->has_hooks && ctx->hook_on_bar) {
+        call_hook(ctx, ctx->hook_on_bar);
+    } else if (pc->root) {
+        exprtk_eval(pc->root, ctx->env);
+    }
+}
+
+/** Process strategy signals and generate orders. */
+static void process_strategy_signals(strategy_ctx_t *ctx, uint32_t asset_id,
+                                       double open_price, double prev_close) {
+    double sig  = read_num(ctx->env, "signal",      0.0);
+    double sz   = read_num(ctx->env, "size",        0.1);
+    double type = read_num(ctx->env, "signal_type", 0.0);
+    double prc  = read_num(ctx->env, "signal_price",0.0);
+    int valid   = (int)read_num(ctx->env, "bars_valid",  1.0);
+    double sl   = read_num(ctx->env, "stop_loss",   0.0);
+    double tp   = read_num(ctx->env, "take_profit", 0.0);
+    double tdst = read_num(ctx->env, "trailing_dist", 0.0);
+    double tpct = read_num(ctx->env, "trailing_pct",  0.0);
+
+    double pos = order_manager_position(ctx->order_mgr, asset_id);
+
+    /* Set trailing stop if requested */
+    if (tdst > 0.0 && pos != 0.0) {
+        order_manager_set_trailing_stop(ctx->order_mgr, asset_id, tdst, tpct > 0.0);
+    }
+
+    /* Buy signal */
+    if (sig > 0.5 && pos <= 0.0) {
+        if (pos < 0.0)
+            order_manager_close(ctx->order_mgr, asset_id, open_price, ctx->current_date);
+
+        if (type == 1.0) {
+            order_manager_limit(ctx->order_mgr, asset_id, +1, sz, prc, sl, tp, valid, NULL);
+        } else if (type == 2.0) {
+            order_manager_stop(ctx->order_mgr, asset_id, +1, sz, prc, sl, tp, valid, NULL);
+        } else {
+            order_manager_market(ctx->order_mgr, asset_id, +1, sz,
+                                  open_price, prev_close, sl, tp);
+        }
+    }
+    /* Sell/short signal */
+    else if (sig < -0.5 && pos >= 0.0) {
+        if (pos > 0.0)
+            order_manager_close(ctx->order_mgr, asset_id, open_price, ctx->current_date);
+
+        if (ctx->order_mgr->rules && ctx->order_mgr->rules->short_allowed) {
+            if (type == 1.0) {
+                order_manager_limit(ctx->order_mgr, asset_id, -1, sz, prc, sl, tp, valid, NULL);
+            } else if (type == 2.0) {
+                order_manager_stop(ctx->order_mgr, asset_id, -1, sz, prc, sl, tp, valid, NULL);
+            } else {
+                order_manager_market(ctx->order_mgr, asset_id, -1, sz,
+                                      open_price, prev_close, sl, tp);
+            }
+        }
+    }
+    /* Flat signal */
+    else if (fabs(sig) < 0.01 && pos != 0.0) {
+        order_manager_cancel_pending(ctx->order_mgr, asset_id);
+        order_manager_close(ctx->order_mgr, asset_id, open_price, ctx->current_date);
+    }
+}
 
 void strategy_on_bar(strategy_ctx_t *ctx,
                       uint32_t asset_id,
@@ -265,104 +376,12 @@ void strategy_on_bar(strategy_ctx_t *ctx,
 
     if (!ctx->parsed || !ctx->env) return;
 
-    /* 4. Bind read-only state */
-    bind_vec(ctx->env, "O", w->open,   w->count);
-    bind_vec(ctx->env, "H", w->high,   w->count);
-    bind_vec(ctx->env, "L", w->low,    w->count);
-    bind_vec(ctx->env, "C", w->close,  w->count);
-    bind_vec(ctx->env, "V", w->volume, w->count);
-    bind_num(ctx->env, "n",          (double)w->count);
-    bind_num(ctx->env, "asset_id",   (double)asset_id);
-    bind_num(ctx->env, "bar_index",  (double)ctx->total_bars);
-    bind_num(ctx->env, "position",   order_manager_position(ctx->order_mgr, asset_id));
-    bind_num(ctx->env, "entry_price",order_manager_entry_price(ctx->order_mgr, asset_id));
-    bind_num(ctx->env, "cash",       ctx->order_mgr->cash);
-    bind_num(ctx->env, "equity",     ctx->order_mgr->equity);
-    bind_num(ctx->env, "prev_close", prev_close);
-
-    /* Update trade-log state for adaptive logic */
-    {
-        size_t nt = ctx->order_mgr->num_trades;
-        double nw = 0.0, cpnl = 0.0;
-        for (size_t ti = 0; ti < nt; ti++) {
-            cpnl += ctx->order_mgr->trades[ti].pnl;
-            if (ctx->order_mgr->trades[ti].pnl > 0.0) nw += 1.0;
-        }
-        bind_num(ctx->env, "num_trades", (double)nt);
-        bind_num(ctx->env, "num_wins",   nw);
-        bind_num(ctx->env, "cum_pnl",    cpnl);
-    }
-
-    /* 5. Reset output variables */
-    bind_num(ctx->env, "signal",      0.0);
-    bind_num(ctx->env, "size",        0.1);
-    bind_num(ctx->env, "signal_type", 0.0); /* 0: MKT, 1: LIMIT, 2: STOP */
-    bind_num(ctx->env, "signal_price",0.0);
-    bind_num(ctx->env, "bars_valid",  1.0); /* 1: DAY, -1: GTC */
-    bind_num(ctx->env, "stop_loss",   0.0);
-    bind_num(ctx->env, "take_profit", 0.0);
-    bind_num(ctx->env, "trailing_dist", 0.0);
-    bind_num(ctx->env, "trailing_pct",  0.0);
-
-    /* 6. Execute the compiled strategy */
-    exprtk_parse_ctx_t *pc = (exprtk_parse_ctx_t *)ctx->parsed;
-    if (ctx->has_hooks && ctx->hook_on_bar) {
-        call_hook(ctx, ctx->hook_on_bar);
-    } else if (pc->root) {
-        exprtk_eval(pc->root, ctx->env);
-    }
-
-    /* 7. Read strategy decisions */
-    double sig  = read_num(ctx->env, "signal",      0.0);
-    double sz   = read_num(ctx->env, "size",        0.1);
-    double type = read_num(ctx->env, "signal_type", 0.0);
-    double prc  = read_num(ctx->env, "signal_price",0.0);
-    int valid   = (int)read_num(ctx->env, "bars_valid",  1.0);
-    double sl   = read_num(ctx->env, "stop_loss",   0.0);
-    double tp   = read_num(ctx->env, "take_profit", 0.0);
-    double tdst = read_num(ctx->env, "trailing_dist", 0.0);
-    double tpct = read_num(ctx->env, "trailing_pct",  0.0);
-
-    /* 8. Translate signal to order */
-    double pos = order_manager_position(ctx->order_mgr, asset_id);
-    
-    if (tdst > 0.0 && pos != 0.0) {
-        order_manager_set_trailing_stop(ctx->order_mgr, asset_id, tdst, tpct > 0.0);
-    }
-
-    if (sig > 0.5 && pos <= 0.0) {
-        /* Buy signal — not already long */
-        if (pos < 0.0)
-            order_manager_close(ctx->order_mgr, asset_id, bar->open, bar->date);
-            
-        if (type == 1.0) {
-            order_manager_limit(ctx->order_mgr, asset_id, +1, sz, prc, sl, tp, valid, NULL);
-        } else if (type == 2.0) {
-            order_manager_stop(ctx->order_mgr, asset_id, +1, sz, prc, sl, tp, valid, NULL);
-        } else {
-            order_manager_market(ctx->order_mgr, asset_id, +1, sz,
-                                  bar->open, prev_close, sl, tp);
-        }
-    } else if (sig < -0.5 && pos >= 0.0) {
-        /* Sell/short signal */
-        if (pos > 0.0)
-            order_manager_close(ctx->order_mgr, asset_id, bar->open, bar->date);
-        
-        if (ctx->order_mgr->rules && ctx->order_mgr->rules->short_allowed) {
-            if (type == 1.0) {
-                order_manager_limit(ctx->order_mgr, asset_id, -1, sz, prc, sl, tp, valid, NULL);
-            } else if (type == 2.0) {
-                order_manager_stop(ctx->order_mgr, asset_id, -1, sz, prc, sl, tp, valid, NULL);
-            } else {
-                order_manager_market(ctx->order_mgr, asset_id, -1, sz,
-                                      bar->open, prev_close, sl, tp);
-            }
-        }
-    } else if (fabs(sig) < 0.01 && pos != 0.0) {
-        /* Flat signal — close existing position */
-        order_manager_cancel_pending(ctx->order_mgr, asset_id);
-        order_manager_close(ctx->order_mgr, asset_id, bar->open, bar->date);
-    }
+    /* Bind context and execute strategy */
+    bind_bar_context(ctx, w, asset_id, prev_close);
+    bind_trade_stats(ctx);
+    reset_output_vars(ctx);
+    execute_strategy_script(ctx);
+    process_strategy_signals(ctx, asset_id, bar->open, prev_close);
 }
 
 /* =========================================================================
@@ -386,17 +405,7 @@ int strategy_run_single(strategy_ctx_t *ctx,
     if (end_date   <= 0.0) end_date   = (a->end_date > 0.0) ? a->end_date : 1e12;
 
     /* Open bar stream */
-    void *stream;
-    if (a->ticker[0]) {
-        /* Use ticker-based CSV open if available */
-        typedef void *(*open_by_ticker_fn)(provider_t *, const char *,
-                                           uint32_t, double, double, turbo_arena_t *);
-        /* We call the internal helper by function pointer convention;
-         * for now fall back to generic open_stream. */
-        stream = p->open_stream(p, asset_id, start_date, end_date, ctx->arena);
-    } else {
-        stream = p->open_stream(p, asset_id, start_date, end_date, ctx->arena);
-    }
+    void *stream = p->open_stream(p, asset_id, start_date, end_date, ctx->arena);
     if (!stream) return -1;
 
     provider_bar_t bar;

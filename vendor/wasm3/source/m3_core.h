@@ -223,8 +223,8 @@ void        m3_Free_Impl            (void * i_ptr);
 void *      m3_CopyMem              (const void * i_from, size_t i_size);
 
 #if d_m3UseArena
-struct turbo_arena_s;
-void        m3_SetThreadArena       (struct turbo_arena_s * i_arena);
+struct turbo_pool_s;
+void        m3_SetThreadArena       (struct turbo_pool_s * i_arena);
 #endif
 
 #if d_m3LogHeapOps

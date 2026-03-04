@@ -82,22 +82,22 @@ expr(A) ::= expr(L) PLUS(OP) expr(R). {
 **Core Data Structure**:
 ```c
 typedef enum {
-    exprtk_NODE_NUMBER,          // Literal number
-    exprtk_NODE_VARIABLE,        // Variable reference
-    exprtk_NODE_BINARY_OP,       // Binary operation
-    exprtk_NODE_FUNCTION_CALL,   // Function call
-    exprtk_NODE_IF,              // if statement
-    exprtk_NODE_WHILE,           // while loop
-    exprtk_NODE_FOR,             // for loop
-    exprtk_NODE_BLOCK,           // Statement block
-    exprtk_NODE_VECTOR,          // Array literal
-    exprtk_NODE_MAP_LITERAL,     // Object literal
+    EXPRTK_NODE_NUMBER,          // Literal number
+    EXPRTK_NODE_VARIABLE,        // Variable reference
+    EXPRTK_NODE_BINARY_OP,       // Binary operation
+    EXPRTK_NODE_FUNCTION_CALL,   // Function call
+    EXPRTK_NODE_IF,              // if statement
+    EXPRTK_NODE_WHILE,           // while loop
+    EXPRTK_NODE_FOR,             // for loop
+    EXPRTK_NODE_BLOCK,           // Statement block
+    EXPRTK_NODE_VECTOR,          // Array literal
+    EXPRTK_NODE_MAP_LITERAL,     // Object literal
     // ... 25 node types total
 } exprtk_node_type_t;
 
 struct exprtk_node_s {
     exprtk_node_type_t type;
-    turbo_arena_t *arena;
+    turbo_pool_t *arena;
     int line, column;
     union {
         double number;
@@ -184,13 +184,13 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env)
 ```c
 typedef struct {
     enum {
-        exprtk_VAL_NUMBER,   // Number
-        exprtk_VAL_STRING,   // String
-        exprtk_VAL_VECTOR,   // Array
-        exprtk_VAL_MAP,      // Object/Dictionary
-        exprtk_VAL_NULL,     // null
-        exprtk_VAL_LIST,     // List
-        exprtk_VAL_FUNCTION  // Function (closure)
+        EXPRTK_VAL_NUMBER,   // Number
+        EXPRTK_VAL_STRING,   // String
+        EXPRTK_VAL_VECTOR,   // Array
+        EXPRTK_VAL_MAP,      // Object/Dictionary
+        EXPRTK_VAL_NULL,     // null
+        EXPRTK_VAL_LIST,     // List
+        EXPRTK_VAL_FUNCTION  // Function (closure)
     } type;
     union { ... } data;
 } exprtk_value_t;
@@ -218,7 +218,7 @@ typedef struct exprtk_env_s {
     uint32_t curr_nodes;
     int aborted;                     // Set if any limit exceeded
 
-    turbo_arena_t arena;             // Memory allocator
+    turbo_pool_t arena;             // Memory allocator
     exprtk_value_t error_value;      // Value thrown by throw statement
     char error_msg[256];             // Last error message
     int error_line;                  // Line where error occurred
@@ -242,13 +242,13 @@ The evaluator core is a **25-case switch statement**, one case per node type.
 #### Type 1: Literals (Direct Return)
 
 ```c
-case exprtk_NODE_NUMBER:
+case EXPRTK_NODE_NUMBER:
     return exprtk_val_num(node->data.number);
 
-case exprtk_NODE_STRING:
+case EXPRTK_NODE_STRING:
     return exprtk_val_str(node->data.string.value);
 
-case exprtk_NODE_NULL:
+case EXPRTK_NODE_NULL:
     return exprtk_val_null();
 ```
 
@@ -259,7 +259,7 @@ case exprtk_NODE_NULL:
 #### Type 2: Variables (Symbol Table Lookup)
 
 ```c
-case exprtk_NODE_VARIABLE:
+case EXPRTK_NODE_VARIABLE:
     return exprtk_env_get(env, node->data.variable.name);
 ```
 
@@ -297,7 +297,7 @@ exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name) {
 #### Type 3: Binary Operations (Recursive Eval + Compute)
 
 ```c
-case exprtk_NODE_BINARY_OP: {
+case EXPRTK_NODE_BINARY_OP: {
     // 1. Recursively evaluate left and right subtrees
     exprtk_value_t l_val = exprtk_eval(node->data.binary.left, env);
     exprtk_value_t r_val = exprtk_eval(node->data.binary.right, env);
@@ -331,7 +331,7 @@ case exprtk_NODE_BINARY_OP: {
 
 **IF Statement**:
 ```c
-case exprtk_NODE_IF: {
+case EXPRTK_NODE_IF: {
     // 1. Evaluate condition
     exprtk_value_t cond_val = exprtk_eval(node->data.if_stmt.condition, env);
 
@@ -358,7 +358,7 @@ case exprtk_NODE_IF: {
 
 **WHILE Loop**:
 ```c
-case exprtk_NODE_WHILE: {
+case EXPRTK_NODE_WHILE: {
     exprtk_value_t last_val = zero;
     while (1) {
         // 1. Check control flow (break/continue/return)
@@ -402,7 +402,7 @@ case exprtk_NODE_WHILE: {
 #### Type 5: Function Calls (Dynamic Dispatch)
 
 ```c
-case exprtk_NODE_FUNCTION_CALL: {
+case EXPRTK_NODE_FUNCTION_CALL: {
     // 1. Expand arguments (handle spread operator)
     size_t actual_count = 0;
     exprtk_value_t *args = eval_expand_args(
@@ -457,7 +457,7 @@ static exprtk_value_t* eval_expand_args(...) {
 
 **Array Literal**:
 ```c
-case exprtk_NODE_VECTOR: {
+case EXPRTK_NODE_VECTOR: {
     // 1. Expand elements (supports spread)
     size_t actual_count = 0;
     exprtk_value_t *vals = eval_expand_args(
@@ -468,7 +468,7 @@ case exprtk_NODE_VECTOR: {
     );
 
     // 2. Convert to double array
-    double *data = (double*)turbo_arena_alloc(node->arena, actual_count * sizeof(double));
+    double *data = (double*)turbo_pool_alloc(node->arena, actual_count * sizeof(double));
     for (size_t i = 0; i < actual_count; ++i) {
         data[i] = (vals[i].type == NUMBER) ? vals[i].data.number : 0.0;
     }
@@ -480,7 +480,7 @@ case exprtk_NODE_VECTOR: {
 
 **Array Indexing**:
 ```c
-case exprtk_NODE_INDEX: {
+case EXPRTK_NODE_INDEX: {
     exprtk_value_t arr = exprtk_eval(node->data.index_access.array, env);
     exprtk_value_t idx_val = exprtk_eval(node->data.index_access.index, env);
 
@@ -503,7 +503,7 @@ case exprtk_NODE_INDEX: {
 #### Type 7: Destructuring Assignment (Recursive Pattern Matching)
 
 ```c
-case exprtk_NODE_DESTRUCTURING_ASSIGNMENT: {
+case EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT: {
     exprtk_value_t rhs = exprtk_eval(node->data.destructuring.value, env);
     eval_destructure(node->data.destructuring.targets, rhs, env, is_constant);
     return rhs;
@@ -577,7 +577,7 @@ typedef enum {
 
 **Example**:
 ```c
-case exprtk_NODE_BLOCK: {
+case EXPRTK_NODE_BLOCK: {
     for (size_t i = 0; i < node->data.block.count; ++i) {
         last_val = exprtk_eval(node->data.block.statements[i], env);
         if (env->flow != FLOW_NORMAL) break;  // Stop on control flow

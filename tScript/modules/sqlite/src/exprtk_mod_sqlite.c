@@ -57,12 +57,12 @@ static sqlite_handle_t *sqlite_handle_get(sqlite_ctx_t *ctx, int handle) {
 
 static exprtk_value_t fn_sqlite_open(size_t argc, exprtk_value_t *args, void *user_data) {
   sqlite_ud_t *ud = (sqlite_ud_t *)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_STRING) {
+  if (argc != 1 || args[0].type != EXPRTK_VAL_STRING) {
     SQLITE_CTX_ERROR(ud, "sqlite.open: expected string path");
     return SQLITE_ZERO;
   }
 
-  char *path = turbo_arena_alloc(ud->scratch, args[0].data.string.len + 1);
+  char *path = turbo_pool_alloc(ud->scratch, args[0].data.string.len + 1);
   if (!path) {
     SQLITE_CTX_ERROR(ud, "sqlite.open: OOM");
     return SQLITE_ZERO;
@@ -85,12 +85,12 @@ static exprtk_value_t fn_sqlite_open(size_t argc, exprtk_value_t *args, void *us
     return SQLITE_ZERO;
   }
 
-  return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = (double)handle};
+  return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = (double)handle};
 }
 
 static exprtk_value_t fn_sqlite_close(size_t argc, exprtk_value_t *args, void *user_data) {
   sqlite_ud_t *ud = (sqlite_ud_t *)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_NUMBER) {
+  if (argc != 1 || args[0].type != EXPRTK_VAL_NUMBER) {
     SQLITE_CTX_ERROR(ud, "sqlite.close: expected number handle");
     return SQLITE_ZERO;
   }
@@ -100,7 +100,7 @@ static exprtk_value_t fn_sqlite_close(size_t argc, exprtk_value_t *args, void *u
 
 static exprtk_value_t fn_sqlite_exec(size_t argc, exprtk_value_t *args, void *user_data) {
   sqlite_ud_t *ud = (sqlite_ud_t *)user_data;
-  if (argc != 2 || args[0].type != exprtk_VAL_NUMBER || args[1].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_NUMBER || args[1].type != EXPRTK_VAL_STRING) {
     SQLITE_CTX_ERROR(ud, "sqlite.exec: expected (number, string)");
     return SQLITE_ZERO;
   }
@@ -111,7 +111,7 @@ static exprtk_value_t fn_sqlite_exec(size_t argc, exprtk_value_t *args, void *us
     return SQLITE_ZERO;
   }
 
-  char *sql = turbo_arena_alloc(ud->scratch, args[1].data.string.len + 1);
+  char *sql = turbo_pool_alloc(ud->scratch, args[1].data.string.len + 1);
   if (!sql) {
     SQLITE_CTX_ERROR(ud, "sqlite.exec: OOM");
     return SQLITE_ZERO;
@@ -131,12 +131,12 @@ static exprtk_value_t fn_sqlite_exec(size_t argc, exprtk_value_t *args, void *us
     return SQLITE_ZERO;
   }
 
-  return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = (double)sqlite3_changes(h->db)};
+  return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = (double)sqlite3_changes(h->db)};
 }
 
 static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, void *user_data) {
   sqlite_ud_t *ud = (sqlite_ud_t *)user_data;
-  if (argc < 2 || args[0].type != exprtk_VAL_NUMBER || args[1].type != exprtk_VAL_STRING) {
+  if (argc < 2 || args[0].type != EXPRTK_VAL_NUMBER || args[1].type != EXPRTK_VAL_STRING) {
     SQLITE_CTX_ERROR(ud, "sqlite.query_col: expected (number, string [, number])");
     return SQLITE_ZERO;
   }
@@ -148,10 +148,10 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
   }
 
   int col_idx = 0;
-  if (argc >= 3 && args[2].type == exprtk_VAL_NUMBER)
+  if (argc >= 3 && args[2].type == EXPRTK_VAL_NUMBER)
     col_idx = (int)args[2].data.number;
 
-  char *sql = turbo_arena_alloc(ud->scratch, args[1].data.string.len + 1);
+  char *sql = turbo_pool_alloc(ud->scratch, args[1].data.string.len + 1);
   if (!sql) {
     SQLITE_CTX_ERROR(ud, "sqlite.query_col: OOM");
     return SQLITE_ZERO;
@@ -170,7 +170,7 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
 
   size_t cap = 64;
   size_t len = 0;
-  double *data = turbo_arena_alloc(&ud->env->arena, cap * sizeof(double));
+  double *data = turbo_pool_alloc(&ud->env->arena, cap * sizeof(double));
   if (!data) {
     sqlite3_finalize(stmt);
     SQLITE_CTX_ERROR(ud, "sqlite.query_col: OOM");
@@ -180,7 +180,7 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     if (len >= cap) {
       cap *= 2;
-      double *new_data = turbo_arena_alloc(&ud->env->arena, cap * sizeof(double));
+      double *new_data = turbo_pool_alloc(&ud->env->arena, cap * sizeof(double));
       if (!new_data) {
         sqlite3_finalize(stmt);
         SQLITE_CTX_ERROR(ud, "sqlite.query_col: OOM");
@@ -201,12 +201,12 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
     return SQLITE_ZERO;
   }
 
-  return (exprtk_value_t){exprtk_VAL_VECTOR, .data.vector = {.data = data, .size = len}};
+  return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {.data = data, .size = len}};
 }
 
 static exprtk_value_t fn_sqlite_query_scalar(size_t argc, exprtk_value_t *args, void *user_data) {
   sqlite_ud_t *ud = (sqlite_ud_t *)user_data;
-  if (argc != 2 || args[0].type != exprtk_VAL_NUMBER || args[1].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_NUMBER || args[1].type != EXPRTK_VAL_STRING) {
     SQLITE_CTX_ERROR(ud, "sqlite.query_scalar: expected (number, string)");
     return SQLITE_ZERO;
   }
@@ -217,7 +217,7 @@ static exprtk_value_t fn_sqlite_query_scalar(size_t argc, exprtk_value_t *args, 
     return SQLITE_ZERO;
   }
 
-  char *sql = turbo_arena_alloc(ud->scratch, args[1].data.string.len + 1);
+  char *sql = turbo_pool_alloc(ud->scratch, args[1].data.string.len + 1);
   if (!sql) {
     SQLITE_CTX_ERROR(ud, "sqlite.query_scalar: OOM");
     return SQLITE_ZERO;
@@ -239,12 +239,12 @@ static exprtk_value_t fn_sqlite_query_scalar(size_t argc, exprtk_value_t *args, 
     result = sqlite3_column_double(stmt, 0);
 
   sqlite3_finalize(stmt);
-  return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = result};
+  return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = result};
 }
 
 static exprtk_value_t fn_sqlite_error(size_t argc, exprtk_value_t *args, void *user_data) {
   sqlite_ud_t *ud = (sqlite_ud_t *)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_NUMBER) {
+  if (argc != 1 || args[0].type != EXPRTK_VAL_NUMBER) {
     SQLITE_CTX_ERROR(ud, "sqlite.error: expected number handle");
     return SQLITE_ZERO;
   }
@@ -259,12 +259,12 @@ static exprtk_value_t fn_sqlite_error(size_t argc, exprtk_value_t *args, void *u
   if (len == 0)
     return SQLITE_ZERO;
 
-  char *buf = turbo_arena_alloc(&ud->env->arena, len + 1);
+  char *buf = turbo_pool_alloc(&ud->env->arena, len + 1);
   if (!buf) return SQLITE_ZERO;
   memcpy(buf, h->error_msg, len);
   buf[len] = '\0';
 
-  return (exprtk_value_t){exprtk_VAL_STRING, .data.string = {buf, len}};
+  return (exprtk_value_t){EXPRTK_VAL_STRING, .data.string = {buf, len}};
 }
 
 /* == Loader =============================================================== */
@@ -272,10 +272,10 @@ static exprtk_value_t fn_sqlite_error(size_t argc, exprtk_value_t *args, void *u
 void sqlite_load(void *p, void *e, void *s) {
   sqlite_ctx_t *ctx = (sqlite_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_arena_t *scratch = (turbo_arena_t *)s;
+  turbo_pool_t *scratch = (turbo_pool_t *)s;
   if (!ctx || !env) return;
 
-  sqlite_ud_t *ud = turbo_arena_alloc(&env->arena, sizeof(*ud));
+  sqlite_ud_t *ud = turbo_pool_alloc(&env->arena, sizeof(*ud));
   if (!ud) return;
   ud->ctx = ctx;
   ud->env = env;

@@ -76,7 +76,7 @@ static turbo_csv_doc_t *csv_parse_with_header(feeds_ud_t *ud, size_t argc, exprt
   turbo_csv_options_t opts = {true, ',', '"', true};
   int rc;
 
-  if (argc < 1 || args[0].type != exprtk_VAL_STRING) {
+  if (argc < 1 || args[0].type != EXPRTK_VAL_STRING) {
     char msg[96];
     snprintf(msg, sizeof(msg), "%s: expected string arg", fn_name);
     FEEDS_ERROR(ud, msg);
@@ -101,7 +101,7 @@ static turbo_csv_doc_t *csv_parse_raw(feeds_ud_t *ud, size_t argc, exprtk_value_
   turbo_csv_options_t opts = {false, ',', '"', true};
   int rc;
 
-  if (argc < 1 || args[0].type != exprtk_VAL_STRING) {
+  if (argc < 1 || args[0].type != EXPRTK_VAL_STRING) {
     char msg[96];
     snprintf(msg, sizeof(msg), "%s: expected string arg", fn_name);
     FEEDS_ERROR(ud, msg);
@@ -130,7 +130,7 @@ static exprtk_value_t fn_csv_rows(size_t argc, exprtk_value_t *args, void *user_
   if (!doc)
     return FEEDS_ZERO;
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = (double)turbo_csv_row_count(doc);
   turbo_free_csv(&ptr);
   return ret;
@@ -144,7 +144,7 @@ static exprtk_value_t fn_csv_cols(size_t argc, exprtk_value_t *args, void *user_
   if (!doc)
     return FEEDS_ZERO;
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = (double)turbo_csv_column_count(doc);
   turbo_free_csv(&ptr);
   return ret;
@@ -158,8 +158,8 @@ static exprtk_value_t fn_csv_get(size_t argc, exprtk_value_t *args, void *user_d
   exprtk_value_t ret = FEEDS_ZERO;
   void *ptr;
 
-  if (argc != 3 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_NUMBER ||
-      args[2].type != exprtk_VAL_NUMBER) {
+  if (argc != 3 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_NUMBER ||
+      args[2].type != EXPRTK_VAL_NUMBER) {
     FEEDS_ERROR(ud, "csv.get: expected (string, number, number)");
     return FEEDS_ZERO;
   }
@@ -174,10 +174,10 @@ static exprtk_value_t fn_csv_get(size_t argc, exprtk_value_t *args, void *user_d
   if (val) {
     char *buf;
     len = strlen(val);
-    buf = (char *)turbo_arena_alloc(&ud->env->arena, len + 1);
+    buf = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
     if (buf) {
       memcpy(buf, val, len + 1);
-      ret.type = exprtk_VAL_STRING;
+      ret.type = EXPRTK_VAL_STRING;
       ret.data.string = tstr_v_from_buf(buf, len);
     }
   }
@@ -194,8 +194,8 @@ static exprtk_value_t fn_csv_get_num(size_t argc, exprtk_value_t *args, void *us
   exprtk_value_t ret;
   void *ptr;
 
-  if (argc != 3 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_NUMBER ||
-      args[2].type != exprtk_VAL_NUMBER) {
+  if (argc != 3 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_NUMBER ||
+      args[2].type != EXPRTK_VAL_NUMBER) {
     FEEDS_ERROR(ud, "csv.get_num: expected (string, number, number)");
     return FEEDS_ZERO;
   }
@@ -207,7 +207,7 @@ static exprtk_value_t fn_csv_get_num(size_t argc, exprtk_value_t *args, void *us
   row = (size_t)args[1].data.number;
   col = (size_t)args[2].data.number;
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = turbo_csv_get_double(doc, row, col, 0.0);
 
   ptr = doc;
@@ -223,7 +223,7 @@ static exprtk_value_t fn_csv_col(size_t argc, exprtk_value_t *args, void *user_d
   exprtk_value_t ret;
   void *ptr;
 
-  if (argc != 2 || args[0].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "csv.col: expected (string, number|string)");
     return FEEDS_ZERO;
   }
@@ -232,9 +232,9 @@ static exprtk_value_t fn_csv_col(size_t argc, exprtk_value_t *args, void *user_d
   if (!doc)
     return FEEDS_ZERO;
 
-  if (args[1].type == exprtk_VAL_NUMBER) {
+  if (args[1].type == EXPRTK_VAL_NUMBER) {
     col_idx = (size_t)args[1].data.number;
-  } else if (args[1].type == exprtk_VAL_STRING) {
+  } else if (args[1].type == EXPRTK_VAL_STRING) {
     char *name = feeds_arena_cstr(ud->scratch, args[1].data.string);
     col_idx = turbo_csv_find_column(doc, name);
     if (col_idx == (size_t)-1) {
@@ -254,10 +254,10 @@ static exprtk_value_t fn_csv_col(size_t argc, exprtk_value_t *args, void *user_d
   if (row_count == 0) {
     ptr = doc;
     turbo_free_csv(&ptr);
-    return (exprtk_value_t){exprtk_VAL_VECTOR, .data.vector = {NULL, 0}};
+    return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {NULL, 0}};
   }
 
-  data = (double *)turbo_arena_alloc(&ud->env->arena, row_count * sizeof(double));
+  data = (double *)turbo_pool_alloc(&ud->env->arena, row_count * sizeof(double));
   if (!data) {
     ptr = doc;
     turbo_free_csv(&ptr);
@@ -272,7 +272,7 @@ static exprtk_value_t fn_csv_col(size_t argc, exprtk_value_t *args, void *user_d
   ptr = doc;
   turbo_free_csv(&ptr);
 
-  ret.type = exprtk_VAL_VECTOR;
+  ret.type = EXPRTK_VAL_VECTOR;
   ret.data.vector.data = data;
   ret.data.vector.size = row_count;
   return ret;
@@ -285,23 +285,23 @@ static exprtk_value_t fn_csv_write(size_t argc, exprtk_value_t *args, void *user
   exprtk_value_t ret;
   void *ptr;
 
-  if (argc != 2 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "csv.write: expected (filename, csv_content)");
-    return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = -1.0};
+    return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = -1.0};
   }
 
   path = feeds_arena_cstr(ud->scratch, args[0].data.string);
   if (!path) {
     FEEDS_ERROR(ud, "csv.write: OOM");
-    return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = -1.0};
+    return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = -1.0};
   }
 
   doc = csv_parse_with_header(ud, 1, &args[1], "csv.write");
   if (!doc) {
-    return (exprtk_value_t){exprtk_VAL_NUMBER, .data.number = -1.0};
+    return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = -1.0};
   }
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = (double)turbo_csv_write_file(doc, path);
 
   ptr = doc;
@@ -312,7 +312,7 @@ static exprtk_value_t fn_csv_write(size_t argc, exprtk_value_t *args, void *user
 /* == CSV filter =========================================================== */
 
 typedef struct {
-  turbo_arena_t *arena;
+  turbo_pool_t *arena;
   char *buf;
   size_t len;
   size_t cap;
@@ -328,7 +328,7 @@ static int feeds_buf_ensure(feeds_buf_t *fb, size_t need_more) {
   }
 
   {
-    char *nb = (char *)turbo_arena_alloc(fb->arena, fb->cap);
+    char *nb = (char *)turbo_pool_alloc(fb->arena, fb->cap);
     if (!nb)
       return 0;
     if (fb->buf && fb->len > 0) {
@@ -376,7 +376,7 @@ static exprtk_value_t fn_csv_filter_count(size_t argc, exprtk_value_t *args, voi
   exprtk_value_t ret;
   void *ptr;
 
-  if (argc != 2 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "csv.filter_count: expected (string, string)");
     return FEEDS_ZERO;
   }
@@ -388,7 +388,7 @@ static exprtk_value_t fn_csv_filter_count(size_t argc, exprtk_value_t *args, voi
   expr_cstr = feeds_arena_cstr(ud->scratch, args[1].data.string);
   filter = turbo_dsv_filter_create(doc, 0);
   if (!filter || !turbo_dsv_filter_compile(filter, expr_cstr)) {
-    exprtk_value_t zero = {exprtk_VAL_NUMBER, .data.number = 0.0};
+    exprtk_value_t zero = {EXPRTK_VAL_NUMBER, .data.number = 0.0};
     if (filter) {
       turbo_dsv_filter_destroy(filter);
     }
@@ -408,7 +408,7 @@ static exprtk_value_t fn_csv_filter_count(size_t argc, exprtk_value_t *args, voi
   ptr = doc;
   turbo_free_csv(&ptr);
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = count;
   return ret;
 }
@@ -423,7 +423,7 @@ static exprtk_value_t fn_csv_filter(size_t argc, exprtk_value_t *args, void *use
   exprtk_value_t ret = FEEDS_ZERO;
   void *ptr;
 
-  if (argc != 2 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "csv.filter: expected (string, string)");
     return FEEDS_ZERO;
   }
@@ -445,7 +445,7 @@ static exprtk_value_t fn_csv_filter(size_t argc, exprtk_value_t *args, void *use
 
   fb.arena = &ud->env->arena;
   fb.cap = 1024;
-  fb.buf = (char *)turbo_arena_alloc(fb.arena, fb.cap);
+  fb.buf = (char *)turbo_pool_alloc(fb.arena, fb.cap);
   if (!fb.buf) {
     turbo_dsv_filter_destroy(filter);
     ptr = doc;
@@ -475,7 +475,7 @@ static exprtk_value_t fn_csv_filter(size_t argc, exprtk_value_t *args, void *use
   turbo_free_csv(&ptr);
 
   if (fb.len > 0) {
-    ret.type = exprtk_VAL_STRING;
+    ret.type = EXPRTK_VAL_STRING;
     ret.data.string = tstr_v_from_buf(fb.buf, fb.len);
   }
   return ret;
@@ -489,7 +489,7 @@ static exprtk_value_t fn_csv_open(size_t argc, exprtk_value_t *args, void *user_
   int handle;
   exprtk_value_t ret;
 
-  if (argc != 1 || args[0].type != exprtk_VAL_STRING) {
+  if (argc != 1 || args[0].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "csv.open: expected 1 string arg");
     return FEEDS_ZERO;
   }
@@ -506,14 +506,14 @@ static exprtk_value_t fn_csv_open(size_t argc, exprtk_value_t *args, void *user_
     return FEEDS_ZERO;
   }
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = (double)handle;
   return ret;
 }
 
 static exprtk_value_t fn_csv_close(size_t argc, exprtk_value_t *args, void *user_data) {
   feeds_ud_t *ud = (feeds_ud_t *)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_NUMBER) {
+  if (argc != 1 || args[0].type != EXPRTK_VAL_NUMBER) {
     FEEDS_ERROR(ud, "csv.close: expected 1 number arg");
     return FEEDS_ZERO;
   }
@@ -532,7 +532,7 @@ static exprtk_value_t fn_csv_stream_file(size_t argc, exprtk_value_t *args, void
   size_t n;
   const char *err;
 
-  if (argc < 1 || args[0].type != exprtk_VAL_STRING) {
+  if (argc < 1 || args[0].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "csv.stream_file: expected (string [, string [, string]])");
     return FEEDS_ZERO;
   }
@@ -544,11 +544,11 @@ static exprtk_value_t fn_csv_stream_file(size_t argc, exprtk_value_t *args, void
     return FEEDS_ZERO;
   }
 
-  if (argc >= 2 && args[1].type == exprtk_VAL_STRING) {
+  if (argc >= 2 && args[1].type == EXPRTK_VAL_STRING) {
     char *expr = feeds_arena_cstr(ud->scratch, args[1].data.string);
     turbo_csv_stream_processor_set_filter(proc, expr);
   }
-  if (argc >= 3 && args[2].type == exprtk_VAL_STRING) {
+  if (argc >= 3 && args[2].type == EXPRTK_VAL_STRING) {
     char *cols = feeds_arena_cstr(ud->scratch, args[2].data.string);
     turbo_csv_stream_processor_set_columns(proc, cols);
   }
@@ -580,7 +580,7 @@ static exprtk_value_t fn_csv_stream_file(size_t argc, exprtk_value_t *args, void
     return FEEDS_ZERO;
   }
 
-  ret.type = exprtk_VAL_NUMBER;
+  ret.type = EXPRTK_VAL_NUMBER;
   ret.data.number = (double)handle;
   return ret;
 }
@@ -604,16 +604,16 @@ static exprtk_value_t fn_csv_rows_v2(size_t argc, exprtk_value_t *args, void *us
     return FEEDS_ZERO;
   }
 
-  if (args[0].type == exprtk_VAL_NUMBER) {
+  if (args[0].type == EXPRTK_VAL_NUMBER) {
     int h = (int)args[0].data.number;
     if (h >= 0 && h < FEEDS_MAX_HANDLES) {
       if (ud->ctx->csv_stream_handles[h]) {
-        ret.type = exprtk_VAL_NUMBER;
+        ret.type = EXPRTK_VAL_NUMBER;
         ret.data.number = (double)turbo_csv_stream_processor_row_count(ud->ctx->csv_stream_handles[h]);
         return ret;
       }
       if (ud->ctx->csv_doc_handles[h]) {
-        ret.type = exprtk_VAL_NUMBER;
+        ret.type = EXPRTK_VAL_NUMBER;
         ret.data.number = (double)turbo_csv_row_count(ud->ctx->csv_doc_handles[h]);
         return ret;
       }
@@ -634,16 +634,16 @@ static exprtk_value_t fn_csv_cols_v2(size_t argc, exprtk_value_t *args, void *us
     return FEEDS_ZERO;
   }
 
-  if (args[0].type == exprtk_VAL_NUMBER) {
+  if (args[0].type == EXPRTK_VAL_NUMBER) {
     int h = (int)args[0].data.number;
     if (h >= 0 && h < FEEDS_MAX_HANDLES) {
       if (ud->ctx->csv_stream_handles[h]) {
-        ret.type = exprtk_VAL_NUMBER;
+        ret.type = EXPRTK_VAL_NUMBER;
         ret.data.number = (double)turbo_csv_stream_processor_col_count(ud->ctx->csv_stream_handles[h]);
         return ret;
       }
       if (ud->ctx->csv_doc_handles[h]) {
-        ret.type = exprtk_VAL_NUMBER;
+        ret.type = EXPRTK_VAL_NUMBER;
         ret.data.number = (double)turbo_csv_column_count(ud->ctx->csv_doc_handles[h]);
         return ret;
       }
@@ -667,7 +667,7 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
     return FEEDS_ZERO;
   }
 
-  if (args[0].type != exprtk_VAL_NUMBER) {
+  if (args[0].type != EXPRTK_VAL_NUMBER) {
     return fn_csv_col(argc, args, user_data);
   }
 
@@ -683,10 +683,10 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
     size_t len = 0;
     double *data;
 
-    if (args[1].type == exprtk_VAL_STRING) {
+    if (args[1].type == EXPRTK_VAL_STRING) {
       char *name = feeds_arena_cstr(ud->scratch, args[1].data.string);
       col_idx = turbo_csv_stream_processor_col_index(proc, name);
-    } else if (args[1].type == exprtk_VAL_NUMBER) {
+    } else if (args[1].type == EXPRTK_VAL_NUMBER) {
       col_idx = (size_t)args[1].data.number;
     } else {
       FEEDS_ERROR(ud, "csv.col: col must be number or string");
@@ -695,17 +695,17 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
 
     src = turbo_csv_stream_processor_col_data(proc, col_idx, &len);
     if (!src || len == 0) {
-      return (exprtk_value_t){exprtk_VAL_VECTOR, .data.vector = {NULL, 0}};
+      return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {NULL, 0}};
     }
 
-    data = (double *)turbo_arena_alloc(&ud->env->arena, len * sizeof(double));
+    data = (double *)turbo_pool_alloc(&ud->env->arena, len * sizeof(double));
     if (!data) {
       FEEDS_ERROR(ud, "csv.col: OOM");
       return FEEDS_ZERO;
     }
     memcpy(data, src, len * sizeof(double));
 
-    ret.type = exprtk_VAL_VECTOR;
+    ret.type = EXPRTK_VAL_VECTOR;
     ret.data.vector.data = data;
     ret.data.vector.size = len;
     return ret;
@@ -716,9 +716,9 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
     size_t row_count = turbo_csv_row_count(doc);
     double *data;
 
-    if (args[1].type == exprtk_VAL_NUMBER) {
+    if (args[1].type == EXPRTK_VAL_NUMBER) {
       col_idx = (size_t)args[1].data.number;
-    } else if (args[1].type == exprtk_VAL_STRING) {
+    } else if (args[1].type == EXPRTK_VAL_STRING) {
       char *name = feeds_arena_cstr(ud->scratch, args[1].data.string);
       col_idx = turbo_csv_find_column(doc, name);
       if (col_idx == (size_t)-1) {
@@ -731,10 +731,10 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
     }
 
     if (row_count == 0) {
-      return (exprtk_value_t){exprtk_VAL_VECTOR, .data.vector = {NULL, 0}};
+      return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {NULL, 0}};
     }
 
-    data = (double *)turbo_arena_alloc(&ud->env->arena, row_count * sizeof(double));
+    data = (double *)turbo_pool_alloc(&ud->env->arena, row_count * sizeof(double));
     if (!data) {
       FEEDS_ERROR(ud, "csv.col: OOM");
       return FEEDS_ZERO;
@@ -744,7 +744,7 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
       data[i] = turbo_csv_get_double(doc, i, col_idx, 0.0);
     }
 
-    ret.type = exprtk_VAL_VECTOR;
+    ret.type = EXPRTK_VAL_VECTOR;
     ret.data.vector.data = data;
     ret.data.vector.size = row_count;
     return ret;
@@ -763,7 +763,7 @@ static exprtk_value_t fn_json_query(size_t argc, exprtk_value_t *args, void *use
   char *key_cstr;
   exprtk_value_t ret = FEEDS_ZERO;
 
-  if (argc != 2 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_STRING) {
+  if (argc != 2 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "json.query: expected 2 string args");
     return FEEDS_ZERO;
   }
@@ -785,22 +785,22 @@ static exprtk_value_t fn_json_query(size_t argc, exprtk_value_t *args, void *use
   if (val) {
     switch (turbo_json_type(val)) {
       case TURBO_JSON_NUMBER:
-        ret.type = exprtk_VAL_NUMBER;
+        ret.type = EXPRTK_VAL_NUMBER;
         ret.data.number = turbo_json_number(val);
         break;
       case TURBO_JSON_STRING: {
         const char *s = turbo_json_string(val);
         size_t len = s ? strlen(s) : 0;
-        char *buf = (char *)turbo_arena_alloc(&ud->env->arena, len + 1);
+        char *buf = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
         if (buf && s) {
           memcpy(buf, s, len + 1);
-          ret.type = exprtk_VAL_STRING;
+          ret.type = EXPRTK_VAL_STRING;
           ret.data.string = tstr_v_from_buf(buf, len);
         }
         break;
       }
       case TURBO_JSON_BOOL:
-        ret.type = exprtk_VAL_NUMBER;
+        ret.type = EXPRTK_VAL_NUMBER;
         ret.data.number = turbo_json_bool(val) ? 1.0 : 0.0;
         break;
       default:
@@ -823,7 +823,7 @@ static exprtk_value_t fn_json_to_vec(size_t argc, exprtk_value_t *args, void *us
   double *data;
   exprtk_value_t ret;
 
-  if (argc < 1 || argc > 2 || args[0].type != exprtk_VAL_STRING) {
+  if (argc < 1 || argc > 2 || args[0].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "json.to_vec: expected 1-2 string args");
     return FEEDS_ZERO;
   }
@@ -839,12 +839,12 @@ static exprtk_value_t fn_json_to_vec(size_t argc, exprtk_value_t *args, void *us
     return FEEDS_ZERO;
   }
 
-  if (argc == 2 && args[1].type == exprtk_VAL_STRING) {
+  if (argc == 2 && args[1].type == EXPRTK_VAL_STRING) {
     key_cstr = feeds_arena_cstr(ud->scratch, args[1].data.string);
   }
 
   size = turbo_json_array_size(root);
-  data = (double *)turbo_arena_alloc(&ud->env->arena, size * sizeof(double));
+  data = (double *)turbo_pool_alloc(&ud->env->arena, size * sizeof(double));
   if (!data) {
     void *ptr = root;
     turbo_free_json(&ptr);
@@ -865,7 +865,7 @@ static exprtk_value_t fn_json_to_vec(size_t argc, exprtk_value_t *args, void *us
     turbo_free_json(&ptr);
   }
 
-  ret.type = exprtk_VAL_VECTOR;
+  ret.type = EXPRTK_VAL_VECTOR;
   ret.data.vector.data = data;
   ret.data.vector.size = size;
   return ret;
@@ -880,7 +880,7 @@ static exprtk_value_t fn_xml_root_name(size_t argc, exprtk_value_t *args, void *
   const char *name;
   exprtk_value_t ret = FEEDS_ZERO;
 
-  if (argc != 1 || args[0].type != exprtk_VAL_STRING) {
+  if (argc != 1 || args[0].type != EXPRTK_VAL_STRING) {
     FEEDS_ERROR(ud, "xml.root_name: expected 1 string arg");
     return FEEDS_ZERO;
   }
@@ -894,10 +894,10 @@ static exprtk_value_t fn_xml_root_name(size_t argc, exprtk_value_t *args, void *
   name = root ? turbo_xml_node_name(root) : NULL;
   if (name) {
     size_t len = strlen(name);
-    char *buf = (char *)turbo_arena_alloc(&ud->env->arena, len + 1);
+    char *buf = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
     if (buf) {
       memcpy(buf, name, len + 1);
-      ret.type = exprtk_VAL_STRING;
+      ret.type = EXPRTK_VAL_STRING;
       ret.data.string = tstr_v_from_buf(buf, len);
     }
   }
@@ -914,13 +914,13 @@ static exprtk_value_t fn_xml_root_name(size_t argc, exprtk_value_t *args, void *
 void feeds_load(void *p, void *e, void *s) {
   feeds_ctx_t *ctx = (feeds_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_arena_t *scratch = (turbo_arena_t *)s;
+  turbo_pool_t *scratch = (turbo_pool_t *)s;
   feeds_ud_t *ud;
 
   if (!ctx || !env)
     return;
 
-  ud = (feeds_ud_t *)turbo_arena_alloc(&env->arena, sizeof(*ud));
+  ud = (feeds_ud_t *)turbo_pool_alloc(&env->arena, sizeof(*ud));
   if (!ud)
     return;
 

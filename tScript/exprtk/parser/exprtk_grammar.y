@@ -1,7 +1,6 @@
 /**
  * @file exprtk_grammar.y
  * @brief exprtk-like Expression Parser Grammar (Lemon)
- * // Forced Rebuild 3
  */
 
 %name exprtkParse
@@ -41,7 +40,7 @@ static void exprtk_node_copy_pos(exprtk_node_t *dst, const exprtk_node_t *src) {
 }
 
 static char *exprtk_strdup(exprtk_parse_ctx_t *ctx, const char *s, size_t n) {
-    char *d = (char*)turbo_arena_alloc(ctx->arena, n + 1);
+    char *d = (char*)turbo_pool_alloc(ctx->arena, n + 1);
     if (d) {
         memcpy(d, s, n);
         d[n] = '\0';
@@ -50,7 +49,7 @@ static char *exprtk_strdup(exprtk_parse_ctx_t *ctx, const char *s, size_t n) {
 }
 
 static tstr_v exprtk_unescape_to_arena(exprtk_parse_ctx_t *ctx, const char *s, size_t n) {
-    char *d = (char*)turbo_arena_alloc(ctx->arena, n + 1);
+    char *d = (char*)turbo_pool_alloc(ctx->arena, n + 1);
     size_t len = 0;
     if (!d) return tstr_v_from_buf(NULL, 0);
     for (size_t i = 0; i < n; ++i) {
@@ -111,7 +110,7 @@ start ::= block_content(E). {
 
 // Block Content (Handles optional trailing semicolon and empty blocks)
 block_content(A) ::= . {
-    A = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
     A->data.block.count = 0;
     A->data.block.statements = NULL;
 }
@@ -125,7 +124,7 @@ stmt(A) ::= expr(E) SEMICOLON. { A = E; }
 stmt(A) ::= expr(E). [LOWER_THAN_ELSE] { A = E; }
 stmt(A) ::= SEMICOLON(OP). {
     // Empty statement - return a NOP or empty block
-    A = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
     if (A) {
         A->data.block.count = 0;
         A->data.block.statements = NULL;
@@ -133,7 +132,7 @@ stmt(A) ::= SEMICOLON(OP). {
     }
 }
 stmt(A) ::= error SEMICOLON(OP). {
-    A = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
     if (A) {
         A->data.block.count = 0;
         A->data.block.statements = NULL;
@@ -142,14 +141,14 @@ stmt(A) ::= error SEMICOLON(OP). {
 }
 
 stmts(A) ::= stmt(S). {
-    A = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
     if (A) {
-        if (S->type == exprtk_NODE_BLOCK && S->data.block.count == 0) {
+        if (S->type == EXPRTK_NODE_BLOCK && S->data.block.count == 0) {
             A->data.block.count = 0;
             A->data.block.statements = NULL;
         } else {
             A->data.block.count = 1;
-            A->data.block.statements = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.block.statements[0] = S;
         }
         exprtk_node_copy_pos(A, S);
@@ -158,11 +157,11 @@ stmts(A) ::= stmt(S). {
 
 stmts(A) ::= stmts(L) stmt(R). {
     A = L;
-    if (R->type == exprtk_NODE_BLOCK && R->data.block.count == 0) {
+    if (R->type == EXPRTK_NODE_BLOCK && R->data.block.count == 0) {
         // Skip empty statement
     } else {
         A->data.block.count++;
-        exprtk_node_t **new_stmts = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.block.count * sizeof(exprtk_node_t*));
+        exprtk_node_t **new_stmts = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.block.count * sizeof(exprtk_node_t*));
         memcpy(new_stmts, L->data.block.statements, (A->data.block.count-1) * sizeof(exprtk_node_t*));
         new_stmts[A->data.block.count-1] = R;
         A->data.block.statements = new_stmts;
@@ -209,7 +208,7 @@ expr(A) ::= expr(C) QUESTION(OP) expr(T) COLON expr(E). [QUESTION] {
 }
 
 expr(A) ::= WHILE(OP) LPAREN expr(C) RPAREN expr(B). {
-    A = exprtk_node_new(ctx, exprtk_NODE_WHILE);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_WHILE);
     if (A) {
         A->data.while_loop.condition = C;
         A->data.while_loop.body = B;
@@ -218,7 +217,7 @@ expr(A) ::= WHILE(OP) LPAREN expr(C) RPAREN expr(B). {
 }
 
 expr(A) ::= FOR(OP) LPAREN expr(I) SEMICOLON expr(C) SEMICOLON expr(P) RPAREN expr(B). {
-    A = exprtk_node_new(ctx, exprtk_NODE_FOR);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FOR);
     if (A) {
         A->data.for_loop.init = I;
         A->data.for_loop.condition = C;
@@ -230,7 +229,7 @@ expr(A) ::= FOR(OP) LPAREN expr(I) SEMICOLON expr(C) SEMICOLON expr(P) RPAREN ex
 
 // For-in loop: for (x in collection) { ... }
 expr(A) ::= FOR(OP) LPAREN VARIABLE(V) IN expr(C) RPAREN expr(B). {
-    A = exprtk_node_new(ctx, exprtk_NODE_FOR_IN);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FOR_IN);
     if (A) {
         A->data.for_in.var_name = exprtk_strdup(ctx, V.start, V.length);
         A->data.for_in.collection = C;
@@ -240,7 +239,7 @@ expr(A) ::= FOR(OP) LPAREN VARIABLE(V) IN expr(C) RPAREN expr(B). {
 }
 
 expr(A) ::= DO(OP) expr(B) WHILE LPAREN expr(C) RPAREN. {
-    A = exprtk_node_new(ctx, exprtk_NODE_DO_WHILE);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_DO_WHILE);
     if (A) {
         A->data.do_while.body = B;
         A->data.do_while.condition = C;
@@ -249,7 +248,7 @@ expr(A) ::= DO(OP) expr(B) WHILE LPAREN expr(C) RPAREN. {
 }
 
 expr(A) ::= SWITCH(OP) LPAREN expr(V) RPAREN LBRACE switch_cases(C) RBRACE. {
-    A = exprtk_node_new(ctx, exprtk_NODE_SWITCH);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_SWITCH);
     if (A) {
         A->data.switch_stmt.value = V;
         A->data.switch_stmt.cases = C->data.switch_stmt.cases;
@@ -260,7 +259,7 @@ expr(A) ::= SWITCH(OP) LPAREN expr(V) RPAREN LBRACE switch_cases(C) RBRACE. {
 }
 
 switch_cases(A) ::= . {
-    A = exprtk_node_new(ctx, exprtk_NODE_SWITCH);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_SWITCH);
     A->data.switch_stmt.cases = NULL;
     A->data.switch_stmt.case_count = 0;
     A->data.switch_stmt.default_case = NULL;
@@ -269,7 +268,7 @@ switch_cases(A) ::= . {
 switch_cases(A) ::= switch_cases(L) CASE expr(V) COLON block_content(B). {
     A = L;
     A->data.switch_stmt.case_count++;
-    exprtk_node_t **new_cases = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.switch_stmt.case_count * 2 * sizeof(exprtk_node_t*));
+    exprtk_node_t **new_cases = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.switch_stmt.case_count * 2 * sizeof(exprtk_node_t*));
     if (A->data.switch_stmt.case_count > 1) {
         memcpy(new_cases, A->data.switch_stmt.cases, (A->data.switch_stmt.case_count - 1) * 2 * sizeof(exprtk_node_t*));
     }
@@ -284,7 +283,7 @@ switch_cases(A) ::= switch_cases(L) DEFAULT COLON block_content(B). {
 }
 
 expr(A) ::= BREAK(OP). {
-    A = exprtk_node_new(ctx, exprtk_NODE_FLOW);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
     if (A) {
         A->data.flow.type = exprtk_TOKEN_BREAK;
         exprtk_node_set_pos(A, &OP);
@@ -292,7 +291,7 @@ expr(A) ::= BREAK(OP). {
 }
 
 expr(A) ::= CONTINUE(OP). {
-    A = exprtk_node_new(ctx, exprtk_NODE_FLOW);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
     if (A) {
         A->data.flow.type = exprtk_TOKEN_CONTINUE;
         exprtk_node_set_pos(A, &OP);
@@ -300,7 +299,7 @@ expr(A) ::= CONTINUE(OP). {
 }
 
 expr(A) ::= RETURN(OP) expr(V). {
-    A = exprtk_node_new(ctx, exprtk_NODE_FLOW);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
     if (A) {
         A->data.flow.type = exprtk_TOKEN_RETURN;
         A->data.flow.value = V;
@@ -310,7 +309,7 @@ expr(A) ::= RETURN(OP) expr(V). {
 
 // throw expression
 expr(A) ::= THROW(OP) expr(V). {
-    A = exprtk_node_new(ctx, exprtk_NODE_THROW);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_THROW);
     if (A) {
         A->data.throw_stmt.value = V;
         exprtk_node_set_pos(A, &OP);
@@ -319,7 +318,7 @@ expr(A) ::= THROW(OP) expr(V). {
 
 // try { ... } catch (e) { ... }
 expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LPAREN VARIABLE(V) RPAREN LBRACE block_content(C) RBRACE. {
-    A = exprtk_node_new(ctx, exprtk_NODE_TRY_CATCH);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_TRY_CATCH);
     if (A) {
         A->data.try_catch.try_body = T;
         A->data.try_catch.catch_var = exprtk_strdup(ctx, V.start, V.length);
@@ -330,7 +329,7 @@ expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LPAREN VARIABLE(V) RPAR
 
 // try { ... } catch { ... } (no variable binding)
 expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LBRACE block_content(C) RBRACE. {
-    A = exprtk_node_new(ctx, exprtk_NODE_TRY_CATCH);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_TRY_CATCH);
     if (A) {
         A->data.try_catch.try_body = T;
         A->data.try_catch.catch_var = NULL;
@@ -341,16 +340,16 @@ expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LBRACE block_content(C)
 
 // Function Definition (Go-like)
 func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr(Arg) RPAREN LBRACE block_content(Body) RBRACE. {
-    if (Arg->type != exprtk_NODE_VARIABLE && Arg->type != exprtk_NODE_VECTOR && Arg->type != exprtk_NODE_MAP_LITERAL && Arg->type != exprtk_NODE_SPREAD && Arg->type != exprtk_NODE_ASSIGNMENT) {
+    if (Arg->type != EXPRTK_NODE_VARIABLE && Arg->type != EXPRTK_NODE_VECTOR && Arg->type != EXPRTK_NODE_MAP_LITERAL && Arg->type != EXPRTK_NODE_SPREAD && Arg->type != EXPRTK_NODE_ASSIGNMENT) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
         if (A) {
             A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
             A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.func_def.arg_params[0] = Arg;
             A->data.func_def.body = Body;
             exprtk_node_set_pos(A, &OP);
@@ -362,10 +361,10 @@ func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr_list_2plus(Args) RPAREN LBRA
     int valid = 1;
     for (size_t i = 0; i < Args->data.function.arg_count; ++i) {
         exprtk_node_t *arg = Args->data.function.args[i];
-        if (arg->type != exprtk_NODE_VARIABLE && arg->type != exprtk_NODE_VECTOR && arg->type != exprtk_NODE_MAP_LITERAL && arg->type != exprtk_NODE_SPREAD && arg->type != exprtk_NODE_ASSIGNMENT) {
+        if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL && arg->type != EXPRTK_NODE_SPREAD && arg->type != EXPRTK_NODE_ASSIGNMENT) {
             valid = 0; break;
         }
-        if (arg->type == exprtk_NODE_SPREAD && i != Args->data.function.arg_count - 1) {
+        if (arg->type == EXPRTK_NODE_SPREAD && i != Args->data.function.arg_count - 1) {
             valid = 0; break;
         }
     }
@@ -374,11 +373,11 @@ func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr_list_2plus(Args) RPAREN LBRA
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
         if (A) {
             A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
             A->data.func_def.arg_count = Args->data.function.arg_count;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
             for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                 A->data.func_def.arg_params[i] = Args->data.function.args[i];
             }
@@ -389,7 +388,7 @@ func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr_list_2plus(Args) RPAREN LBRA
 }
 
 func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN RPAREN LBRACE block_content(Body) RBRACE. {
-    A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
     if (A) {
         A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
         A->data.func_def.arg_count = 0;
@@ -401,7 +400,7 @@ func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN RPAREN LBRACE block_content(Body)
 
 // Anonymous function expressions: func(params) { body }  (no name → first-class value)
 expr(A) ::= FUNC(OP) LPAREN RPAREN LBRACE block_content(Body) RBRACE. {
-    A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_EXPRESSION);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION);
     if (A) {
         A->data.func_def.name = NULL;
         A->data.func_def.arg_count = 0;
@@ -412,16 +411,16 @@ expr(A) ::= FUNC(OP) LPAREN RPAREN LBRACE block_content(Body) RBRACE. {
 }
 
 expr(A) ::= FUNC(OP) LPAREN expr(Arg) RPAREN LBRACE block_content(Body) RBRACE. {
-    if (Arg->type != exprtk_NODE_VARIABLE && Arg->type != exprtk_NODE_VECTOR && Arg->type != exprtk_NODE_MAP_LITERAL && Arg->type != exprtk_NODE_SPREAD && Arg->type != exprtk_NODE_ASSIGNMENT) {
+    if (Arg->type != EXPRTK_NODE_VARIABLE && Arg->type != EXPRTK_NODE_VECTOR && Arg->type != EXPRTK_NODE_MAP_LITERAL && Arg->type != EXPRTK_NODE_SPREAD && Arg->type != EXPRTK_NODE_ASSIGNMENT) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_EXPRESSION);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION);
         if (A) {
             A->data.func_def.name = NULL;
             A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.func_def.arg_params[0] = Arg;
             A->data.func_def.body = Body;
             exprtk_node_set_pos(A, &OP);
@@ -433,7 +432,7 @@ expr(A) ::= FUNC(OP) LPAREN expr_list_2plus(Args) RPAREN LBRACE block_content(Bo
     int valid = 1;
     for (size_t i = 0; i < Args->data.function.arg_count; ++i) {
         exprtk_node_t *arg = Args->data.function.args[i];
-        if (arg->type != exprtk_NODE_VARIABLE && arg->type != exprtk_NODE_VECTOR && arg->type != exprtk_NODE_MAP_LITERAL && arg->type != exprtk_NODE_SPREAD && arg->type != exprtk_NODE_ASSIGNMENT) {
+        if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL && arg->type != EXPRTK_NODE_SPREAD && arg->type != EXPRTK_NODE_ASSIGNMENT) {
             valid = 0; break;
         }
     }
@@ -442,11 +441,11 @@ expr(A) ::= FUNC(OP) LPAREN expr_list_2plus(Args) RPAREN LBRACE block_content(Bo
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_EXPRESSION);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION);
         if (A) {
             A->data.func_def.name = NULL;
             A->data.func_def.arg_count = Args->data.function.arg_count;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
             for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                 A->data.func_def.arg_params[i] = Args->data.function.args[i];
             }
@@ -458,26 +457,26 @@ expr(A) ::= FUNC(OP) LPAREN expr_list_2plus(Args) RPAREN LBRACE block_content(Bo
 
 // Arrow functions
 expr(A) ::= expr(E) ARROW(OP) expr(B). {
-    if (!E || !B || (E->type != exprtk_NODE_VARIABLE && E->type != exprtk_NODE_VECTOR && E->type != exprtk_NODE_MAP_LITERAL && E->type != exprtk_NODE_SPREAD && E->type != exprtk_NODE_ASSIGNMENT)) {
+    if (!E || !B || (E->type != EXPRTK_NODE_VARIABLE && E->type != EXPRTK_NODE_VECTOR && E->type != EXPRTK_NODE_MAP_LITERAL && E->type != EXPRTK_NODE_SPREAD && E->type != EXPRTK_NODE_ASSIGNMENT)) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid arrow function parameter pattern");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
         if (A) {
             A->data.func_def.name = NULL;
             A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.func_def.arg_params[0] = E;
             
             exprtk_node_t *body = B;
-            if (B->type != exprtk_NODE_BLOCK) {
-                exprtk_node_t *ret = exprtk_node_new(ctx, exprtk_NODE_FLOW);
+            if (B->type != EXPRTK_NODE_BLOCK) {
+                exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
                 ret->data.flow.type = exprtk_TOKEN_RETURN;
                 ret->data.flow.value = B;
-                exprtk_node_t *blk = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+                exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
                 blk->data.block.count = 1;
-                blk->data.block.statements = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+                blk->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
                 blk->data.block.statements[0] = ret;
                 body = blk;
             }
@@ -494,10 +493,10 @@ expr(A) ::= LPAREN expr_list_2plus(Args) RPAREN ARROW(OP) expr(B). [ARROW] {
         int valid = 1;
         for (size_t i = 0; i < Args->data.function.arg_count; ++i) {
             exprtk_node_t *arg = Args->data.function.args[i];
-            if (arg->type != exprtk_NODE_VARIABLE && arg->type != exprtk_NODE_VECTOR && arg->type != exprtk_NODE_MAP_LITERAL && arg->type != exprtk_NODE_SPREAD && arg->type != exprtk_NODE_ASSIGNMENT) {
+            if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL && arg->type != EXPRTK_NODE_SPREAD && arg->type != EXPRTK_NODE_ASSIGNMENT) {
                 valid = 0; break;
             }
-            if (arg->type == exprtk_NODE_SPREAD && i != Args->data.function.arg_count - 1) {
+            if (arg->type == EXPRTK_NODE_SPREAD && i != Args->data.function.arg_count - 1) {
                 valid = 0; break;
             }
         }
@@ -506,23 +505,23 @@ expr(A) ::= LPAREN expr_list_2plus(Args) RPAREN ARROW(OP) expr(B). [ARROW] {
             snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid arrow function parameter pattern");
             A = NULL;
         } else {
-            A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+            A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
             if (A) {
                 A->data.func_def.name = NULL;
                 A->data.func_def.arg_count = Args->data.function.arg_count;
-                A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+                A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                     A->data.func_def.arg_params[i] = Args->data.function.args[i];
                 }
                 
                 exprtk_node_t *body = B;
-                if (B->type != exprtk_NODE_BLOCK) {
-                    exprtk_node_t *ret = exprtk_node_new(ctx, exprtk_NODE_FLOW);
+                if (B->type != EXPRTK_NODE_BLOCK) {
+                    exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
                     ret->data.flow.type = exprtk_TOKEN_RETURN;
                     ret->data.flow.value = B;
-                    exprtk_node_t *blk = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+                    exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
                     blk->data.block.count = 1;
-                    blk->data.block.statements = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+                    blk->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
                     blk->data.block.statements[0] = ret;
                     body = blk;
                 }
@@ -537,18 +536,18 @@ expr(A) ::= LPAREN RPAREN ARROW expr(B). {
     if (!B) {
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
         A->data.func_def.name = NULL;
         A->data.func_def.arg_count = 0;
         A->data.func_def.arg_params = NULL;
         exprtk_node_t *body = B;
-        if (B->type != exprtk_NODE_BLOCK) {
-            exprtk_node_t *ret = exprtk_node_new(ctx, exprtk_NODE_FLOW);
+        if (B->type != EXPRTK_NODE_BLOCK) {
+            exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
             ret->data.flow.type = exprtk_TOKEN_RETURN;
             ret->data.flow.value = B;
-            exprtk_node_t *blk = exprtk_node_new(ctx, exprtk_NODE_BLOCK);
+            exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
             blk->data.block.count = 1;
-            blk->data.block.statements = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            blk->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
             blk->data.block.statements[0] = ret;
             body = blk;
         }
@@ -562,44 +561,44 @@ expr(A) ::= func_def(F). { A = F; }
 
 // Support JS-style assignment: x = 10 or f(x) = ...
 expr(A) ::= expr(B) EQUAL(OP) expr(C). {
-    if (B->type == exprtk_NODE_VARIABLE) {
-        if (C && C->type == exprtk_NODE_FUNCTION_DEFINITION && C->data.func_def.name == NULL) {
+    if (B->type == EXPRTK_NODE_VARIABLE) {
+        if (C && C->type == EXPRTK_NODE_FUNCTION_DEFINITION && C->data.func_def.name == NULL) {
             // Assigning anonymous function to a variable natively names the function
             C->data.func_def.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
             A = C; // Just emit it directly as a named function definition!
             exprtk_node_set_pos(A, &OP);
         } else {
-            A = exprtk_node_new(ctx, exprtk_NODE_ASSIGNMENT);
+            A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
             if (A) {
                 A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
                 A->data.assignment.value = C;
                 exprtk_node_set_pos(A, &OP);
             }
         }
-    } else if (B->type == exprtk_NODE_MEMBER_ACCESS) {
+    } else if (B->type == EXPRTK_NODE_MEMBER_ACCESS) {
         // Member assignment: obj.key = val
-        A = exprtk_node_new(ctx, exprtk_NODE_MEMBER_SET);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_MEMBER_SET);
         if (A) {
             A->data.member_set.object = B->data.member_access.object;
             A->data.member_set.member = exprtk_strdup(ctx, B->data.member_access.member, strlen(B->data.member_access.member));
             A->data.member_set.value = C;
             exprtk_node_set_pos(A, &OP);
         }
-    } else if (B->type == exprtk_NODE_VECTOR || B->type == exprtk_NODE_MAP_LITERAL) {
+    } else if (B->type == EXPRTK_NODE_VECTOR || B->type == EXPRTK_NODE_MAP_LITERAL) {
         // Destructuring assignment: [a, b] = [1, 2] or map{a, b} = m
-        A = exprtk_node_new(ctx, exprtk_NODE_DESTRUCTURING_ASSIGNMENT);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT);
         if (A) {
             A->data.destructuring.targets = B;
             A->data.destructuring.value = C;
             A->data.destructuring.is_constant = 0;
             exprtk_node_set_pos(A, &OP);
         }
-    } else if (B->type == exprtk_NODE_FUNCTION_CALL) {
+    } else if (B->type == EXPRTK_NODE_FUNCTION_CALL) {
         // Function Definition: f(x, y) = ...
         int valid = 1;
         for (size_t i = 0; i < B->data.function.arg_count; ++i) {
             exprtk_node_t *arg = B->data.function.args[i];
-            if (arg->type != exprtk_NODE_VARIABLE && arg->type != exprtk_NODE_VECTOR && arg->type != exprtk_NODE_MAP_LITERAL) {
+            if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL) {
                 valid = 0;
                 break;
             }
@@ -609,11 +608,11 @@ expr(A) ::= expr(B) EQUAL(OP) expr(C). {
             snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
             A = NULL;
         } else {
-            A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_DEFINITION);
+            A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
             if (A) {
                 A->data.func_def.name = exprtk_strdup(ctx, B->data.function.name, strlen(B->data.function.name));
                 A->data.func_def.arg_count = B->data.function.arg_count;
-                A->data.func_def.arg_params = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+                A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                     A->data.func_def.arg_params[i] = B->data.function.args[i];
                 }
@@ -629,12 +628,12 @@ expr(A) ::= expr(B) EQUAL(OP) expr(C). {
 }
 
 expr(A) ::= VAR(OP) VARIABLE(V) EQUAL expr(C). {
-    if (C && C->type == exprtk_NODE_FUNCTION_DEFINITION && C->data.func_def.name == NULL) {
+    if (C && C->type == EXPRTK_NODE_FUNCTION_DEFINITION && C->data.func_def.name == NULL) {
         C->data.func_def.name = exprtk_strdup(ctx, V.start, V.length);
         A = C;
         exprtk_node_set_pos(A, &OP);
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_ASSIGNMENT);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
         if (A) {
             A->data.assignment.name = exprtk_strdup(ctx, V.start, V.length);
             A->data.assignment.value = C;
@@ -644,11 +643,11 @@ expr(A) ::= VAR(OP) VARIABLE(V) EQUAL expr(C). {
 }
 
 expr(A) ::= VAR(OP) LBRACKET vector_elements(V) RBRACKET EQUAL expr(C). {
-    exprtk_node_t *lhs = exprtk_node_new(ctx, exprtk_NODE_VECTOR);
+    exprtk_node_t *lhs = exprtk_node_new(ctx, EXPRTK_NODE_VECTOR);
     lhs->data.vector.elements = V->data.vector.elements;
     lhs->data.vector.count = V->data.vector.count;
     
-    A = exprtk_node_new(ctx, exprtk_NODE_DESTRUCTURING_ASSIGNMENT);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT);
     A->data.destructuring.targets = lhs;
     A->data.destructuring.value = C;
     A->data.destructuring.is_constant = 0;
@@ -656,7 +655,7 @@ expr(A) ::= VAR(OP) LBRACKET vector_elements(V) RBRACKET EQUAL expr(C). {
 }
 
 expr(A) ::= VAR(OP) MAP LBRACE map_entries(E) RBRACE EQUAL expr(C). {
-    A = exprtk_node_new(ctx, exprtk_NODE_DESTRUCTURING_ASSIGNMENT);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT);
     A->data.destructuring.targets = E;
     A->data.destructuring.value = C;
     A->data.destructuring.is_constant = 0;
@@ -664,14 +663,14 @@ expr(A) ::= VAR(OP) MAP LBRACE map_entries(E) RBRACE EQUAL expr(C). {
 }
 
 expr(A) ::= CONST(OP) VARIABLE(V) EQUAL expr(C). {
-    if (C && C->type == exprtk_NODE_FUNCTION_DEFINITION && C->data.func_def.name == NULL) {
+    if (C && C->type == EXPRTK_NODE_FUNCTION_DEFINITION && C->data.func_def.name == NULL) {
         C->data.func_def.name = exprtk_strdup(ctx, V.start, V.length);
         // We can't easily mark function definitions as "constant" in the same way as variables
         // but since we don't have function re-assignment checks yet, this is fine.
         A = C;
         exprtk_node_set_pos(A, &OP);
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_CONSTANT_DECL);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_CONSTANT_DECL);
         if (A) {
             A->data.assignment.name = exprtk_strdup(ctx, V.start, V.length);
             A->data.assignment.value = C;
@@ -681,11 +680,11 @@ expr(A) ::= CONST(OP) VARIABLE(V) EQUAL expr(C). {
 }
 
 expr(A) ::= CONST(OP) LBRACKET vector_elements(V) RBRACKET EQUAL expr(C). {
-    exprtk_node_t *lhs = exprtk_node_new(ctx, exprtk_NODE_VECTOR);
+    exprtk_node_t *lhs = exprtk_node_new(ctx, EXPRTK_NODE_VECTOR);
     lhs->data.vector.elements = V->data.vector.elements;
     lhs->data.vector.count = V->data.vector.count;
     
-    A = exprtk_node_new(ctx, exprtk_NODE_DESTRUCTURING_ASSIGNMENT);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT);
     A->data.destructuring.targets = lhs;
     A->data.destructuring.value = C;
     A->data.destructuring.is_constant = 1;
@@ -693,7 +692,7 @@ expr(A) ::= CONST(OP) LBRACKET vector_elements(V) RBRACKET EQUAL expr(C). {
 }
 
 expr(A) ::= CONST(OP) MAP LBRACE map_entries(E) RBRACE EQUAL expr(C). {
-    A = exprtk_node_new(ctx, exprtk_NODE_DESTRUCTURING_ASSIGNMENT);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_DESTRUCTURING_ASSIGNMENT);
     A->data.destructuring.targets = E;
     A->data.destructuring.value = C;
     A->data.destructuring.is_constant = 1;
@@ -708,19 +707,19 @@ expr(A) ::= CONST(OP) MAP LBRACE map_entries(E) RBRACE EQUAL expr(C). {
 // Or we can add specific AST node types for compound assignment.
 // For Phase 1, let's just implement basic ASSIGN := and map += to it if possible or just parse them and error/ignore for now to fix build?
 // User asked for +=.
-// Let's create `exprtk_NODE_ASSIGNMENT` with an extra field `op`?
-// Or just handle in evaluator. Evaluator currently has `exprtk_NODE_ASSIGNMENT` with `value`.
+// Let's create `EXPRTK_NODE_ASSIGNMENT` with an extra field `op`?
+// Or just handle in evaluator. Evaluator currently has `EXPRTK_NODE_ASSIGNMENT` with `value`.
 // If I change evaluator I need to update struct.
 // Let's just implement `ASSIGN` first to fix conflicts/warnings, and add `ASSIGN_ADD` etc later or now.
 // I will implement `ASSIGN_ADD` by constructing `x = x + c` semantic tree.
 expr(A) ::= expr(B) ASSIGN_ADD(OP) expr(C). {
-     if (B->type != exprtk_NODE_VARIABLE) {
+     if (B->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1; A = NULL;
     } else {
-        exprtk_node_t *add = exprtk_node_new(ctx, exprtk_NODE_BINARY_OP);
+        exprtk_node_t *add = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
         if (add) {
             add->data.binary.op = exprtk_TOKEN_PLUS;
-            add->data.binary.left = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+            add->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
             if (add->data.binary.left) {
                 add->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
                 exprtk_node_copy_pos(add->data.binary.left, B);
@@ -729,7 +728,7 @@ expr(A) ::= expr(B) ASSIGN_ADD(OP) expr(C). {
             exprtk_node_set_pos(add, &OP);
         }
         
-        A = exprtk_node_new(ctx, exprtk_NODE_ASSIGNMENT);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
         if (A) {
             A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
             A->data.assignment.value = add;
@@ -743,13 +742,13 @@ expr(A) ::= expr(B) ASSIGN_ADD(OP) expr(C). {
 // But I defined precedence for them, so I should use them.
 // I'll just do ASSIGN_SUB for completeness.
 expr(A) ::= expr(B) ASSIGN_SUB(OP) expr(C). {
-     if (B->type != exprtk_NODE_VARIABLE) {
+     if (B->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1; A = NULL;
     } else {
-        exprtk_node_t *op = exprtk_node_new(ctx, exprtk_NODE_BINARY_OP);
+        exprtk_node_t *op = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
         if (op) {
             op->data.binary.op = exprtk_TOKEN_MINUS;
-            op->data.binary.left = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+            op->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
             if (op->data.binary.left) {
                 op->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
                 exprtk_node_copy_pos(op->data.binary.left, B);
@@ -758,7 +757,7 @@ expr(A) ::= expr(B) ASSIGN_SUB(OP) expr(C). {
             exprtk_node_set_pos(op, &OP);
         }
         
-        A = exprtk_node_new(ctx, exprtk_NODE_ASSIGNMENT);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
         if (A) {
             A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
             A->data.assignment.value = op;
@@ -768,13 +767,13 @@ expr(A) ::= expr(B) ASSIGN_SUB(OP) expr(C). {
 }
 
 expr(A) ::= expr(B) ASSIGN_MUL(OP) expr(C). {
-     if (B->type != exprtk_NODE_VARIABLE) {
+     if (B->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1; A = NULL;
     } else {
-        exprtk_node_t *op = exprtk_node_new(ctx, exprtk_NODE_BINARY_OP);
+        exprtk_node_t *op = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
         if (op) {
             op->data.binary.op = exprtk_TOKEN_MULTIPLY;
-            op->data.binary.left = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+            op->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
             if (op->data.binary.left) {
                 op->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
                 exprtk_node_copy_pos(op->data.binary.left, B);
@@ -783,7 +782,7 @@ expr(A) ::= expr(B) ASSIGN_MUL(OP) expr(C). {
             exprtk_node_set_pos(op, &OP);
         }
         
-        A = exprtk_node_new(ctx, exprtk_NODE_ASSIGNMENT);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
         if (A) {
             A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
             A->data.assignment.value = op;
@@ -793,13 +792,13 @@ expr(A) ::= expr(B) ASSIGN_MUL(OP) expr(C). {
 }
 
 expr(A) ::= expr(B) ASSIGN_DIV(OP) expr(C). {
-     if (B->type != exprtk_NODE_VARIABLE) {
+     if (B->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1; A = NULL;
     } else {
-        exprtk_node_t *op = exprtk_node_new(ctx, exprtk_NODE_BINARY_OP);
+        exprtk_node_t *op = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
         if (op) {
             op->data.binary.op = exprtk_TOKEN_DIVIDE;
-            op->data.binary.left = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+            op->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
             if (op->data.binary.left) {
                 op->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
                 exprtk_node_copy_pos(op->data.binary.left, B);
@@ -808,7 +807,7 @@ expr(A) ::= expr(B) ASSIGN_DIV(OP) expr(C). {
             exprtk_node_set_pos(op, &OP);
         }
         
-        A = exprtk_node_new(ctx, exprtk_NODE_ASSIGNMENT);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
         if (A) {
             A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
             A->data.assignment.value = op;
@@ -855,7 +854,7 @@ expr(A) ::= NOT(OP) expr(B). {
 }
 
 expr(A) ::= SPREAD(OP) expr(B). [NOT] {
-    A = exprtk_node_new(ctx, exprtk_NODE_SPREAD);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_SPREAD);
     if (A) {
         A->data.spread.child = B;
         exprtk_node_set_pos(A, &OP);
@@ -867,13 +866,13 @@ expr(A) ::= LPAREN expr(B) RPAREN. {
 }
 
 expr(A) ::= NUMBER(N). {
-    A = exprtk_node_new(ctx, exprtk_NODE_NUMBER);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_NUMBER);
     A->data.number = N.num_value;
     exprtk_node_set_pos(A, &N);
 }
 
 expr(A) ::= STRING(S). {
-    A = exprtk_node_new(ctx, exprtk_NODE_STRING);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_STRING);
     if (A) {
         A->data.string.value = exprtk_unescape_to_arena(ctx, S.start + 1, S.length - 2);
         exprtk_node_set_pos(A, &S);
@@ -881,7 +880,7 @@ expr(A) ::= STRING(S). {
 }
 
 expr(A) ::= TEMPLATE(S). {
-    A = exprtk_node_new(ctx, exprtk_NODE_TEMPLATE_STRING);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_TEMPLATE_STRING);
     if (A) {
         A->data.template_string.template_str = exprtk_strdup(ctx, S.start + 1, S.length - 2);
         A->data.template_string.len = S.length - 2;
@@ -890,12 +889,12 @@ expr(A) ::= TEMPLATE(S). {
 }
 
 expr(A) ::= NULL(N). {
-    A = exprtk_node_new(ctx, exprtk_NODE_NULL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_NULL);
     exprtk_node_set_pos(A, &N);
 }
 
 expr(A) ::= VARIABLE(V). {
-    A = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
     if (A) {
         A->data.variable.name = exprtk_strdup(ctx, V.start, V.length);
         exprtk_node_set_pos(A, &V);
@@ -903,16 +902,16 @@ expr(A) ::= VARIABLE(V). {
 }
 
 expr(A) ::= expr(F) LPAREN expr(E) RPAREN. {
-    if (F->type != exprtk_NODE_VARIABLE) {
+    if (F->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function call");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_CALL);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
         if (A) {
             A->data.function.name = exprtk_strdup(ctx, F->data.variable.name, strlen(F->data.variable.name));
             A->data.function.arg_count = 1;
-            A->data.function.args = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.function.args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.function.args[0] = E;
             exprtk_node_copy_pos(A, F);
         }
@@ -920,12 +919,12 @@ expr(A) ::= expr(F) LPAREN expr(E) RPAREN. {
 }
 
 expr(A) ::= expr(F) LPAREN expr_list_2plus(L) RPAREN. {
-    if (F->type != exprtk_NODE_VARIABLE) {
+    if (F->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function call");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_CALL);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
         if (A) {
             A->data.function.name = exprtk_strdup(ctx, F->data.variable.name, strlen(F->data.variable.name));
             A->data.function.args = L->data.function.args;
@@ -936,12 +935,12 @@ expr(A) ::= expr(F) LPAREN expr_list_2plus(L) RPAREN. {
 }
 
 expr(A) ::= expr(F) LPAREN RPAREN. {
-    if (F->type != exprtk_NODE_VARIABLE) {
+    if (F->type != EXPRTK_NODE_VARIABLE) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function call");
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_CALL);
+        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
         if (A) {
             A->data.function.name = exprtk_strdup(ctx, F->data.variable.name, strlen(F->data.variable.name));
             A->data.function.args = NULL;
@@ -953,19 +952,19 @@ expr(A) ::= expr(F) LPAREN RPAREN. {
 
 // Member call: obj.method(args) and obj.method()
 expr(A) ::= expr(B) DOT(OP) VARIABLE(V) LPAREN expr(E) RPAREN. {
-    A = exprtk_node_new(ctx, exprtk_NODE_MEMBER_CALL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MEMBER_CALL);
     if (A) {
         A->data.member_call.object = B;
         A->data.member_call.method = exprtk_strdup(ctx, V.start, V.length);
         A->data.member_call.arg_count = 1;
-        A->data.member_call.args = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.member_call.args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.member_call.args[0] = E;
         exprtk_node_set_pos(A, &OP);
     }
 }
 
 expr(A) ::= expr(B) DOT(OP) VARIABLE(V) LPAREN expr_list_2plus(L) RPAREN. {
-    A = exprtk_node_new(ctx, exprtk_NODE_MEMBER_CALL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MEMBER_CALL);
     if (A) {
         A->data.member_call.object = B;
         A->data.member_call.method = exprtk_strdup(ctx, V.start, V.length);
@@ -976,7 +975,7 @@ expr(A) ::= expr(B) DOT(OP) VARIABLE(V) LPAREN expr_list_2plus(L) RPAREN. {
 }
 
 expr(A) ::= expr(B) DOT(OP) VARIABLE(V) LPAREN RPAREN. {
-    A = exprtk_node_new(ctx, exprtk_NODE_MEMBER_CALL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MEMBER_CALL);
     if (A) {
         A->data.member_call.object = B;
         A->data.member_call.method = exprtk_strdup(ctx, V.start, V.length);
@@ -988,7 +987,7 @@ expr(A) ::= expr(B) DOT(OP) VARIABLE(V) LPAREN RPAREN. {
 
 // Member access: obj.key (property read). Uses MEMBER_PREC so LPAREN can shift for member calls.
 expr(A) ::= expr(B) DOT(OP) VARIABLE(V). [MEMBER_PREC] {
-    A = exprtk_node_new(ctx, exprtk_NODE_MEMBER_ACCESS);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MEMBER_ACCESS);
     if (A) {
         A->data.member_access.object = B;
         A->data.member_access.member = exprtk_strdup(ctx, V.start, V.length);
@@ -1002,27 +1001,27 @@ expr(A) ::= expr(B) QUESTION_DOT(OP) VARIABLE(V). [MEMBER_PREC] {
     // Build: if (B == null) { null } else { B.member }
     // Note: B is evaluated twice in this desugaring, but for typical use (variable access)
     // this is acceptable.
-    exprtk_node_t *null_node = exprtk_node_new(ctx, exprtk_NODE_NULL);
+    exprtk_node_t *null_node = exprtk_node_new(ctx, EXPRTK_NODE_NULL);
     exprtk_node_set_pos(null_node, &OP);
 
     // condition: B == null
-    exprtk_node_t *cond = exprtk_node_new(ctx, exprtk_NODE_BINARY_OP);
+    exprtk_node_t *cond = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
     cond->data.binary.op = exprtk_TOKEN_EQ;
     cond->data.binary.left = B;
-    cond->data.binary.right = exprtk_node_new(ctx, exprtk_NODE_NULL);
+    cond->data.binary.right = exprtk_node_new(ctx, EXPRTK_NODE_NULL);
     exprtk_node_set_pos(cond, &OP);
 
     // else branch: B.member (we reuse B, which is fine for simple expressions)
-    exprtk_node_t *access = exprtk_node_new(ctx, exprtk_NODE_MEMBER_ACCESS);
+    exprtk_node_t *access = exprtk_node_new(ctx, EXPRTK_NODE_MEMBER_ACCESS);
     access->data.member_access.object = B;
     access->data.member_access.member = exprtk_strdup(ctx, V.start, V.length);
     exprtk_node_set_pos(access, &OP);
 
     // null result for if-true
-    exprtk_node_t *null_result = exprtk_node_new(ctx, exprtk_NODE_NULL);
+    exprtk_node_t *null_result = exprtk_node_new(ctx, EXPRTK_NODE_NULL);
     exprtk_node_set_pos(null_result, &OP);
 
-    A = exprtk_node_new(ctx, exprtk_NODE_IF);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_IF);
     A->data.if_stmt.condition = cond;
     A->data.if_stmt.if_branch = null_result;
     A->data.if_stmt.else_branch = access;
@@ -1032,14 +1031,14 @@ expr(A) ::= expr(B) QUESTION_DOT(OP) VARIABLE(V). [MEMBER_PREC] {
 // Pipe operator: expr |> f(args) → f(expr, args)
 // This rewrites the RHS function call to prepend the LHS as the first argument.
 expr(A) ::= expr(B) PIPE(OP) expr(C). {
-    if (!C || C->type != exprtk_NODE_FUNCTION_CALL) {
+    if (!C || C->type != EXPRTK_NODE_FUNCTION_CALL) {
         ctx->error = 1;
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Pipe operator requires a function call on the right side");
         A = NULL;
     } else {
         // Prepend B as first argument to C's function call
         size_t new_count = C->data.function.arg_count + 1;
-        exprtk_node_t **new_args = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, new_count * sizeof(exprtk_node_t*));
+        exprtk_node_t **new_args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, new_count * sizeof(exprtk_node_t*));
         new_args[0] = B;
         for (size_t i = 0; i < C->data.function.arg_count; ++i) {
             new_args[i + 1] = C->data.function.args[i];
@@ -1057,7 +1056,7 @@ expr(A) ::= MAP LBRACE map_entries(E) RBRACE. {
 }
 
 expr(A) ::= MAP(OP) LBRACE RBRACE. {
-    A = exprtk_node_new(ctx, exprtk_NODE_MAP_LITERAL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.keys = NULL;
         A->data.map_literal.values = NULL;
@@ -1067,14 +1066,14 @@ expr(A) ::= MAP(OP) LBRACE RBRACE. {
 }
 
 map_entries(A) ::= VARIABLE(K). {
-    A = exprtk_node_new(ctx, exprtk_NODE_MAP_LITERAL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.count = 1;
-        A->data.map_literal.keys = (char**)turbo_arena_alloc(ctx->arena, sizeof(char*));
+        A->data.map_literal.keys = (char**)turbo_pool_alloc(ctx->arena, sizeof(char*));
         A->data.map_literal.keys[0] = exprtk_strdup(ctx, K.start, K.length);
-        A->data.map_literal.values = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
         
-        exprtk_node_t *v = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+        exprtk_node_t *v = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
         v->data.variable.name = exprtk_strdup(ctx, K.start, K.length);
         A->data.map_literal.values[0] = v;
         
@@ -1083,24 +1082,24 @@ map_entries(A) ::= VARIABLE(K). {
 }
 
 map_entries(A) ::= VARIABLE(K) COLON expr(V). {
-    A = exprtk_node_new(ctx, exprtk_NODE_MAP_LITERAL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.count = 1;
-        A->data.map_literal.keys = (char**)turbo_arena_alloc(ctx->arena, sizeof(char*));
+        A->data.map_literal.keys = (char**)turbo_pool_alloc(ctx->arena, sizeof(char*));
         A->data.map_literal.keys[0] = exprtk_strdup(ctx, K.start, K.length);
-        A->data.map_literal.values = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.map_literal.values[0] = V;
         exprtk_node_set_pos(A, &K);
     }
 }
 
 map_entries(A) ::= SPREAD(OP) expr(E). {
-    A = exprtk_node_new(ctx, exprtk_NODE_MAP_LITERAL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.count = 1;
-        A->data.map_literal.keys = (char**)turbo_arena_alloc(ctx->arena, sizeof(char*));
+        A->data.map_literal.keys = (char**)turbo_pool_alloc(ctx->arena, sizeof(char*));
         A->data.map_literal.keys[0] = NULL; // Spread marker
-        A->data.map_literal.values = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.map_literal.values[0] = E;
         exprtk_node_set_pos(A, &OP);
     }
@@ -1110,13 +1109,13 @@ map_entries(A) ::= map_entries(L) COMMA VARIABLE(K). {
     A = L;
     A->data.map_literal.count++;
     size_t c = A->data.map_literal.count;
-    char **new_keys = (char**)turbo_arena_alloc(ctx->arena, c * sizeof(char*));
-    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
+    char **new_keys = (char**)turbo_pool_alloc(ctx->arena, c * sizeof(char*));
+    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
     if (L->data.map_literal.keys) memcpy(new_keys, L->data.map_literal.keys, (c-1) * sizeof(char*));
     if (L->data.map_literal.values) memcpy(new_vals, L->data.map_literal.values, (c-1) * sizeof(exprtk_node_t*));
     
     new_keys[c-1] = exprtk_strdup(ctx, K.start, K.length);
-    exprtk_node_t *v = exprtk_node_new(ctx, exprtk_NODE_VARIABLE);
+    exprtk_node_t *v = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
     v->data.variable.name = exprtk_strdup(ctx, K.start, K.length);
     new_vals[c-1] = v;
     
@@ -1128,8 +1127,8 @@ map_entries(A) ::= map_entries(L) COMMA VARIABLE(K) COLON expr(V). {
     A = L;
     A->data.map_literal.count++;
     size_t c = A->data.map_literal.count;
-    char **new_keys = (char**)turbo_arena_alloc(ctx->arena, c * sizeof(char*));
-    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
+    char **new_keys = (char**)turbo_pool_alloc(ctx->arena, c * sizeof(char*));
+    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
     if (L->data.map_literal.keys) memcpy(new_keys, L->data.map_literal.keys, (c-1) * sizeof(char*));
     if (L->data.map_literal.values) memcpy(new_vals, L->data.map_literal.values, (c-1) * sizeof(exprtk_node_t*));
     new_keys[c-1] = exprtk_strdup(ctx, K.start, K.length);
@@ -1142,8 +1141,8 @@ map_entries(A) ::= map_entries(L) COMMA SPREAD(OP) expr(E). {
     A = L;
     A->data.map_literal.count++;
     size_t c = A->data.map_literal.count;
-    char **new_keys = (char**)turbo_arena_alloc(ctx->arena, c * sizeof(char*));
-    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
+    char **new_keys = (char**)turbo_pool_alloc(ctx->arena, c * sizeof(char*));
+    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
     if (L->data.map_literal.keys) memcpy(new_keys, L->data.map_literal.keys, (c-1) * sizeof(char*));
     if (L->data.map_literal.values) memcpy(new_vals, L->data.map_literal.values, (c-1) * sizeof(exprtk_node_t*));
     new_keys[c-1] = NULL; // Spread marker
@@ -1154,10 +1153,10 @@ map_entries(A) ::= map_entries(L) COMMA SPREAD(OP) expr(E). {
 }
 
 expr_list_2plus(A) ::= expr(E1) COMMA(OP) expr(E2). {
-    A = exprtk_node_new(ctx, exprtk_NODE_FUNCTION_CALL);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
     if (A) {
         A->data.function.arg_count = 2;
-        A->data.function.args = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, 2 * sizeof(exprtk_node_t*));
+        A->data.function.args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, 2 * sizeof(exprtk_node_t*));
         A->data.function.args[0] = E1;
         A->data.function.args[1] = E2;
         exprtk_node_set_pos(A, &OP);
@@ -1168,7 +1167,7 @@ expr_list_2plus(A) ::= expr_list_2plus(L) COMMA expr(E). {
     A = L;
     if (A) {
         A->data.function.arg_count++;
-        exprtk_node_t **new_args = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.function.arg_count * sizeof(exprtk_node_t*));
+        exprtk_node_t **new_args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.function.arg_count * sizeof(exprtk_node_t*));
         if (new_args && A->data.function.args) {
             memcpy(new_args, A->data.function.args, (A->data.function.arg_count-1) * sizeof(exprtk_node_t*));
             new_args[A->data.function.arg_count-1] = E;
@@ -1184,7 +1183,7 @@ expr(A) ::= LBRACKET vector_content(B) RBRACKET. {
 }
 
 expr(A) ::= expr(B) LBRACKET(OP) expr(C) RBRACKET. {
-    A = exprtk_node_new(ctx, exprtk_NODE_INDEX);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_INDEX);
     if (A) {
         A->data.index_access.array = B;
         A->data.index_access.index = C;
@@ -1193,7 +1192,7 @@ expr(A) ::= expr(B) LBRACKET(OP) expr(C) RBRACKET. {
 }
 
 expr(A) ::= expr(B) LBRACKET(OP) expr(S) DOTDOT expr(E) RBRACKET. {
-    A = exprtk_node_new(ctx, exprtk_NODE_SLICE);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_SLICE);
     if (A) {
         A->data.slice.array = B;
         A->data.slice.start = S;
@@ -1203,7 +1202,7 @@ expr(A) ::= expr(B) LBRACKET(OP) expr(S) DOTDOT expr(E) RBRACKET. {
 }
 
 vector_content(A) ::= . {
-    A = exprtk_node_new(ctx, exprtk_NODE_VECTOR);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_VECTOR);
     if (A) {
         A->data.vector.count = 0;
         A->data.vector.elements = NULL;
@@ -1215,10 +1214,10 @@ vector_content(A) ::= vector_elements(E). {
 }
 
 vector_elements(A) ::= expr(E). {
-    A = exprtk_node_new(ctx, exprtk_NODE_VECTOR);
+    A = exprtk_node_new(ctx, EXPRTK_NODE_VECTOR);
     if (A) {
         A->data.vector.count = 1;
-        A->data.vector.elements = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.vector.elements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.vector.elements[0] = E;
         exprtk_node_copy_pos(A, E);
     }
@@ -1227,7 +1226,7 @@ vector_elements(A) ::= expr(E). {
 vector_elements(A) ::= vector_elements(L) COMMA expr(R). {
     A = L;
     A->data.vector.count++;
-    exprtk_node_t **new_elements = (exprtk_node_t**)turbo_arena_alloc(ctx->arena, A->data.vector.count * sizeof(exprtk_node_t*));
+    exprtk_node_t **new_elements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.vector.count * sizeof(exprtk_node_t*));
     memcpy(new_elements, A->data.vector.elements, (A->data.vector.count - 1) * sizeof(exprtk_node_t*));
     new_elements[A->data.vector.count - 1] = R;
     A->data.vector.elements = new_elements;

@@ -21,7 +21,7 @@ static void signal_handler(int signum) {
     stop_flag = 1;
 }
 
-static int on_recv(void *conn, const turbo_arena_slice_t *slice, void *user_data) {
+static int on_recv(void *conn, const turbo_pool_slice_t *slice, void *user_data) {
     (void)user_data;
 
     printf("[Server] on_recv called: conn=%p, slice=%p\n", conn, (void*)slice);

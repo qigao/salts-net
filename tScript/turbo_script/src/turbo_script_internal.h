@@ -7,7 +7,7 @@
 #define TURBO_SCRIPT_INTERNAL_H
 
 #include "exprtk_module.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include <mir.h>
 #include "ts_plugin_loader.h"
 #include "turbo_script.h"
@@ -24,7 +24,7 @@ struct turbo_script_ctx_s {
     exprtk_env_t env;
     exprtk_node_t *expr;
     imported_module_t *imports;
-     turbo_arena_t scratch_arena;
+     turbo_pool_t scratch_arena;
     char error_msg[256];
 
     /* Plugin handles */

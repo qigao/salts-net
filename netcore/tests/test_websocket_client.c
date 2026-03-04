@@ -11,7 +11,7 @@
 
 static int callback_invoked = 0;
 
-static void test_recv_callback(void *handle, const turbo_arena_slice_t *data, void *peer) {
+static void test_recv_callback(void *handle, const turbo_pool_slice_t *data, void *peer) {
   (void)handle; (void)data; (void)peer;
   callback_invoked = 1;
 }

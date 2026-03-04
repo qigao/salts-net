@@ -78,17 +78,17 @@ Wasm3 in this repository has been enhanced with **Arena Memory Management** supp
 
 **Key Benefits:**
 - **Zero Fragmentation**: Solves the heap fragmentation issues common in long-running Wasm sessions.
-- **Instant Cleanup**: Reclaim 100% of the memory used by a Wasm session in a single `turbo_arena_free` call, including any internal "leaked" structures.
+- **Instant Cleanup**: Reclaim 100% of the memory used by a Wasm session in a single `turbo_pool_free` call, including any internal "leaked" structures.
 - **Improved Performance**: Arena allocations are significantly faster than standard `malloc`/`free`.
 
 **Usage:**
 ```c
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "wasm3.h"
 
 // 1. Initialize an arena
-turbo_arena_t arena;
-turbo_arena_init(&arena, 1024 * 1024);
+turbo_pool_t arena;
+turbo_pool_init(&arena, 1024 * 1024);
 
 // 2. Bind it to the current thread
 m3_SetThreadArena(&arena);
@@ -99,7 +99,7 @@ IM3Runtime runtime = m3_NewRuntime(env, 64 * 1024, NULL);
 // ...
 
 // 4. Cleanup everything at once
-turbo_arena_free(&arena); // Safe to call even if Wasm3 handles are still "active"
+turbo_pool_free(&arena); // Safe to call even if Wasm3 handles are still "active"
 m3_SetThreadArena(NULL);
 ```
 

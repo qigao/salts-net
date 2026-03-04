@@ -5,7 +5,7 @@
 
 #include "snmp_client.h"
 #include "turbo_client.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "memory_pool.h"
 #include <stdlib.h>
 #include <string.h>

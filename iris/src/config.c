@@ -8,7 +8,7 @@
  */
 
 #include "config.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "tlog.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"

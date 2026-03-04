@@ -3,7 +3,7 @@
 
 typedef struct
 {
-    turbo_arena_t *pool;
+    turbo_pool_t *pool;
     Res *res;
     bool is_author;
 } ctx_t;
@@ -22,13 +22,13 @@ void get_posts_by_cat(Req *req, Res *res)
 
     auth_context_t *auth_ctx = (auth_context_t *)get_context(req);
 
-    turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
+    turbo_pool_t *async_pool = malloc(sizeof(turbo_pool_t)); if (!async_pool || turbo_pool_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         send_text(res, 500, "Arena allocation failed");
         return;
     }
 
-    ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
+    ctx_t *ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         send_text(res, 500, "Context allocation failed");
         return;

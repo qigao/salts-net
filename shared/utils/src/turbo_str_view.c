@@ -168,7 +168,7 @@ char *tstr_v_to_pool(tstr_v v, MemoryPool *pool) {
   TSTR_V_COPY_TO(v, pool_alloc(pool, v.len + 1));
 }
 
-char *tstr_v_to_arena(tstr_v v, turbo_arena_t *arena) {
+char *tstr_v_to_arena(tstr_v v, turbo_pool_t *arena) {
   if (!arena) return NULL;
-  TSTR_V_COPY_TO(v, turbo_arena_alloc(arena, v.len + 1));
+  TSTR_V_COPY_TO(v, turbo_pool_alloc(arena, v.len + 1));
 }

@@ -18,10 +18,7 @@ add_library(${TARGET_NAME} STATIC ${SOURCE_FILES})
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 
-target_link_libraries(
-  ${TARGET_NAME}
-  PUBLIC exprtk TurboNet::Utils  
-  PRIVATE ts_loader)
+target_link_libraries(${TARGET_NAME} PUBLIC exprtk TurboNet::Utils)
 
 set_target_properties(
   ${TARGET_NAME}
@@ -33,7 +30,7 @@ set_target_properties(
 # ── SHARED plugin DLL (loaded at runtime via ts_plugin_load) ─────
 add_library(${TARGET_NAME_PLUGIN} SHARED ${SOURCE_FILES})
 
-target_link_libraries(${TARGET_NAME_PLUGIN} PRIVATE ${TARGET_NAME} ts_loader)
+target_link_libraries(${TARGET_NAME_PLUGIN} PRIVATE ${TARGET_NAME})
 
 target_include_directories(${TARGET_NAME_PLUGIN}
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

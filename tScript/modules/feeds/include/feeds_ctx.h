@@ -5,7 +5,7 @@
 #ifndef FEEDS_CTX_H
 #define FEEDS_CTX_H
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "exprtk.h"
 #include "turbo_parser.h"
 
@@ -24,10 +24,10 @@ typedef struct feeds_ctx_s {
 typedef struct {
   feeds_ctx_t *ctx;
   exprtk_env_t *env;
-  turbo_arena_t *scratch;
+  turbo_pool_t *scratch;
 } feeds_ud_t;
 
-#define FEEDS_ZERO ((exprtk_value_t){exprtk_VAL_NUMBER, .data.number = 0.0})
+#define FEEDS_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
 
 #define FEEDS_ERROR(ud, msg)                                                                    \
   do {                                                                                          \
@@ -40,8 +40,8 @@ typedef struct {
     }                                                                                           \
   } while (0)
 
-static inline char *feeds_arena_cstr(turbo_arena_t *a, tstr_v sv) {
-  char *buf = (char *)turbo_arena_alloc(a, sv.len + 1);
+static inline char *feeds_arena_cstr(turbo_pool_t *a, tstr_v sv) {
+  char *buf = (char *)turbo_pool_alloc(a, sv.len + 1);
   if (buf) {
     memcpy(buf, sv.data, sv.len);
     buf[sv.len] = '\0';

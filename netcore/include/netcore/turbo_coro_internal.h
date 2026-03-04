@@ -27,7 +27,7 @@
 // Transport Dependencies
 // =============================================================================
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "turbo_dns.h"
 #include "turbo_tcp.h"
 #include "turbo_kcp.h"
@@ -45,7 +45,7 @@ extern "C" {
 /* ── Generic Transport Bridge Callbacks (Internal) ────────── */
 
 /** @brief Global bridge for receive callbacks (shared between client/server). */
-int on_transport_recv(void *handle, const turbo_arena_slice_t *slice, void *peer);
+int on_transport_recv(void *handle, const turbo_pool_slice_t *slice, void *peer);
 
 /** @brief Global bridge for connect callbacks. */
 void on_transport_connect(void *handle, int status, void *extra);
@@ -54,7 +54,7 @@ void on_transport_connect(void *handle, int status, void *extra);
 void on_transport_close(void *handle);
 
 /** @brief Pipe-specific bridge for receive callbacks. */
-int on_pipe_coro_recv(void *handle, const turbo_arena_slice_t *slice, void *peer);
+int on_pipe_coro_recv(void *handle, const turbo_pool_slice_t *slice, void *peer);
 
 /** @brief Pipe-specific bridge for connect callbacks. */
 void on_pipe_coro_connect(void *handle, int status, void *extra);
@@ -158,7 +158,7 @@ struct turbo_coro_client_s {
  * Every recv callback does exactly this.
  */
 static inline void coro_deliver_recv(turbo_coro_client_t *client,
-                                     const turbo_arena_slice_t *slice) {
+                                     const turbo_pool_slice_t *slice) {
   if (slice && slice->length > 0) {
     client->recv_data = malloc(slice->length);
     if (client->recv_data) {

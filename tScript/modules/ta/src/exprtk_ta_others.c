@@ -3,14 +3,16 @@
  * @brief Technical Analysis Other indicators and complex ones.
  */
 
+#include "simd_helpers.h"
 #include "ta.h"
-#include <arena_buffer.h>
 #include <math.h>
 #include <simde/x86/avx2.h>
 #include <stdlib.h>
 #include <string.h>
+#include <turbo_buffer.h>
 
-size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_arena_t *arena) {
+
+size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_pool_t *arena) {
   if (n < 24)
     return 0;
   double *ma3 = TEMP_ALLOC(arena, double, n);
@@ -28,17 +30,12 @@ size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_arena_t *are
   ta_sma_calc(in, n, 6, ma6);
   ta_sma_calc(in, n, 12, ma12);
   ta_sma_calc(in, n, 24, ma24);
-  size_t i = 23;
-  simde__m256d v_025 = simde_mm256_set1_pd(0.25);
-  for (; i + 4 <= n; i += 4) {
-    simde__m256d v = simde_mm256_add_pd(
-        simde_mm256_add_pd(simde_mm256_loadu_pd(&ma3[i]), simde_mm256_loadu_pd(&ma6[i])),
-        simde_mm256_add_pd(simde_mm256_loadu_pd(&ma12[i]), simde_mm256_loadu_pd(&ma24[i])));
-    simde_mm256_storeu_pd(&out[i], simde_mm256_mul_pd(v, v_025));
-  }
-  for (; i < n; ++i) {
-    out[i] = (ma3[i] + ma6[i] + ma12[i] + ma24[i]) * 0.25;
-  }
+
+  // out = (ma3 + ma6 + ma12 + ma24) * 0.25
+  simd_add(ma3, ma6, out, n);
+  simd_add(out, ma12, out, n);
+  simd_add(out, ma24, out, n);
+  simd_scale(out, out, 0.25, n);
   TEMP_FREE(arena, ma3);
   TEMP_FREE(arena, ma6);
   TEMP_FREE(arena, ma12);
@@ -46,7 +43,7 @@ size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_arena_t *are
   return n;
 }
 
-size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, turbo_arena_t *arena) {
+size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena) {
   if (period < 2 || period > n)
     return 0;
   double *wma_half = TEMP_ALLOC(arena, double, n);
@@ -62,15 +59,9 @@ size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, tur
   ta_wma_calc(in, n, period / 2, wma_half);
   ta_wma_calc(in, n, period, wma_full);
 
-  size_t i = 0;
-  simde__m256d v_two = simde_mm256_set1_pd(2.0);
-  for (; i + 4 <= n; i += 4) {
-    simde__m256d v_h = simde_mm256_loadu_pd(&wma_half[i]);
-    simde__m256d v_f = simde_mm256_loadu_pd(&wma_full[i]);
-    simde_mm256_storeu_pd(&diff[i], simde_mm256_sub_pd(simde_mm256_mul_pd(v_two, v_h), v_f));
-  }
-  for (; i < n; ++i)
-    diff[i] = 2.0 * wma_half[i] - wma_full[i];
+  // diff = 2.0 * wma_half - wma_full
+  simd_scale(wma_half, diff, 2.0, n);
+  simd_sub(diff, wma_full, diff, n);
 
   size_t sqrt_period = (size_t)sqrt((double)period);
   ta_wma_calc(diff, n, sqrt_period, out);
@@ -114,7 +105,7 @@ size_t exprtk_ta_vwap(const double *hi, const double *lo, const double *cl, cons
 }
 
 size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t period,
-                          double *upper, double *lower, double *middle, turbo_arena_t *arena) {
+                          double *upper, double *lower, double *middle, turbo_pool_t *arena) {
   if (n < period)
     return 0;
   double *hh = TEMP_ALLOC(arena, double, n);
@@ -127,6 +118,14 @@ size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t p
   ta_highest_arr(hi, n, period, hh, arena);
   ta_lowest_arr(lo, n, period, ll, arena);
 
+  if (upper)
+    memcpy(upper, hh, n * sizeof(double));
+  if (lower)
+    memcpy(lower, ll, n * sizeof(double));
+  if (middle) {
+    simd_add(hh, ll, middle, n);
+    simd_scale(middle, middle, 0.5, n);
+  }
   for (size_t i = 0; i < period - 1; ++i) {
     if (upper)
       upper[i] = 0;
@@ -135,26 +134,6 @@ size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t p
     if (middle)
       middle[i] = 0;
   }
-  size_t i = period - 1;
-  simde__m256d v_05 = simde_mm256_set1_pd(0.5);
-  for (; i + 4 <= n; i += 4) {
-    simde__m256d v_hh = simde_mm256_loadu_pd(&hh[i]);
-    simde__m256d v_ll = simde_mm256_loadu_pd(&ll[i]);
-    if (upper)
-      simde_mm256_storeu_pd(&upper[i], v_hh);
-    if (lower)
-      simde_mm256_storeu_pd(&lower[i], v_ll);
-    if (middle)
-      simde_mm256_storeu_pd(&middle[i], simde_mm256_mul_pd(simde_mm256_add_pd(v_hh, v_ll), v_05));
-  }
-  for (; i < n; ++i) {
-    if (upper)
-      upper[i] = hh[i];
-    if (lower)
-      lower[i] = ll[i];
-    if (middle)
-      middle[i] = (hh[i] + ll[i]) / 2.0;
-  }
   TEMP_FREE(arena, hh);
   TEMP_FREE(arena, ll);
   return n;
@@ -162,7 +141,7 @@ size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t p
 
 size_t exprtk_ta_keltner(const double *hi, const double *lo, const double *cl, size_t n,
                          size_t ema_p, size_t atr_p, double mult, double *upper, double *middle,
-                         double *lower, turbo_arena_t *arena) {
+                         double *lower, turbo_pool_t *arena) {
   if (ema_p == 0 || atr_p == 0 || n < ema_p || n < atr_p)
     return 0;
 
@@ -197,7 +176,7 @@ size_t exprtk_ta_keltner(const double *hi, const double *lo, const double *cl, s
 size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, size_t n,
                           size_t tenkan_p, size_t kijun_p, size_t senkou_p, double *tenkan,
                           double *kijun, double *senkou_a, double *senkou_b, double *chikou,
-                          turbo_arena_t *arena) {
+                          turbo_pool_t *arena) {
   if (n < tenkan_p || n < kijun_p || n < senkou_p)
     return 0;
   double *hh_tenkan = TEMP_ALLOC(arena, double, n);
@@ -228,49 +207,14 @@ size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, 
      design, matching TradingView behavior where Senkou Span is undefined
      before enough bars have been processed. */
   size_t i = 0;
-  simde__m256d v_05 = simde_mm256_set1_pd(0.5);
-  for (; i + 4 <= n; i += 4) {
-    simde__m256d v_ht = simde_mm256_loadu_pd(&hh_tenkan[i]);
-    simde__m256d v_lt = simde_mm256_loadu_pd(&ll_tenkan[i]);
-    simde__m256d v_tenkan = simde_mm256_mul_pd(simde_mm256_add_pd(v_ht, v_lt), v_05);
-    simde_mm256_storeu_pd(&tenkan[i], v_tenkan);
+  // Compute Tenkan and Kijun
+  simd_add(hh_tenkan, ll_tenkan, tenkan, n);
+  simd_scale(tenkan, tenkan, 0.5, n);
+  simd_add(hh_kijun, ll_kijun, kijun, n);
+  simd_scale(kijun, kijun, 0.5, n);
 
-    simde__m256d v_hk = simde_mm256_loadu_pd(&hh_kijun[i]);
-    simde__m256d v_lk = simde_mm256_loadu_pd(&ll_kijun[i]);
-    simde__m256d v_kijun = simde_mm256_mul_pd(simde_mm256_add_pd(v_hk, v_lk), v_05);
-    simde_mm256_storeu_pd(&kijun[i], v_kijun);
-
-    if (i >= kijun_p) {
-      simde__m256d v_tp = simde_mm256_loadu_pd(&tenkan[i - kijun_p]);
-      simde__m256d v_kp = simde_mm256_loadu_pd(&kijun[i - kijun_p]);
-      simde_mm256_storeu_pd(&senkou_a[i], simde_mm256_mul_pd(simde_mm256_add_pd(v_tp, v_kp), v_05));
-
-      simde__m256d v_hsp = simde_mm256_loadu_pd(&hh_senkou[i - kijun_p]);
-      simde__m256d v_lsp = simde_mm256_loadu_pd(&ll_senkou[i - kijun_p]);
-      simde_mm256_storeu_pd(&senkou_b[i],
-                            simde_mm256_mul_pd(simde_mm256_add_pd(v_hsp, v_lsp), v_05));
-    } else {
-      for (size_t j = 0; j < 4; ++j) {
-        if (i + j >= kijun_p) {
-          senkou_a[i + j] = (tenkan[i + j - kijun_p] + kijun[i + j - kijun_p]) * 0.5;
-          senkou_b[i + j] = (hh_senkou[i + j - kijun_p] + ll_senkou[i + j - kijun_p]) * 0.5;
-        } else {
-          senkou_a[i + j] = 0;
-          senkou_b[i + j] = 0;
-        }
-      }
-    }
-
-    if (i + kijun_p + 4 <= n) {
-      simde_mm256_storeu_pd(&chikou[i], simde_mm256_loadu_pd(&cl[i + kijun_p]));
-    } else {
-      for (size_t j = 0; j < 4; ++j)
-        chikou[i + j] = (i + j + kijun_p < n) ? cl[i + j + kijun_p] : 0;
-    }
-  }
-  for (; i < n; i++) {
-    tenkan[i] = (hh_tenkan[i] + ll_tenkan[i]) / 2.0;
-    kijun[i] = (hh_kijun[i] + ll_kijun[i]) / 2.0;
+  // Compute Senkou A and B (with lag)
+  for (i = 0; i < n; i++) {
     if (i >= kijun_p) {
       senkou_a[i] = (tenkan[i - kijun_p] + kijun[i - kijun_p]) / 2.0;
       senkou_b[i] = (hh_senkou[i - kijun_p] + ll_senkou[i - kijun_p]) / 2.0;
@@ -294,7 +238,7 @@ size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, 
 
 size_t exprtk_ta_supertrend(const double *hi, const double *lo, const double *cl, size_t n,
                             size_t period, double mult, double *trend, double *upper, double *lower,
-                            turbo_arena_t *arena) {
+                            turbo_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *atr = TEMP_ALLOC(arena, double, n);
@@ -360,7 +304,7 @@ size_t exprtk_ta_rma(const double *in, size_t n, size_t period, double *out) {
 }
 
 size_t exprtk_ta_zlema(const double *in, size_t n, size_t period, double *out,
-                       turbo_arena_t *arena) {
+                       turbo_pool_t *arena) {
   if (period < 2 || n < period)
     return 0;
   size_t lag = (period - 1) / 2;
@@ -379,7 +323,7 @@ size_t exprtk_ta_zlema(const double *in, size_t n, size_t period, double *out,
 }
 
 size_t exprtk_ta_alma(const double *in, size_t n, size_t period, double offset, double sigma,
-                      double *out, turbo_arena_t *arena) {
+                      double *out, turbo_pool_t *arena) {
   if (period < 2 || n < period)
     return 0;
   double *w = TEMP_ALLOC(arena, double, period);
@@ -425,7 +369,7 @@ size_t exprtk_ta_alma(const double *in, size_t n, size_t period, double offset, 
 }
 
 size_t exprtk_ta_vidya(const double *in, size_t n, size_t cmo_p, size_t ema_p, double *out,
-                       turbo_arena_t *arena) {
+                       turbo_pool_t *arena) {
   if (n < cmo_p || n < ema_p)
     return 0;
   double *cmo = TEMP_ALLOC(arena, double, n);
@@ -448,7 +392,7 @@ size_t exprtk_ta_vidya(const double *in, size_t n, size_t cmo_p, size_t ema_p, d
 }
 
 size_t exprtk_ta_rvi(const double *in, size_t n, size_t std_p, size_t ema_p, double *out,
-                     turbo_arena_t *arena) {
+                     turbo_pool_t *arena) {
   if (n < std_p + ema_p)
     return 0;
   double *std = TEMP_ALLOC(arena, double, n);
@@ -460,7 +404,7 @@ size_t exprtk_ta_rvi(const double *in, size_t n, size_t std_p, size_t ema_p, dou
   return res;
 }
 
-size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, turbo_arena_t *arena) {
+size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena) {
   if (n < period)
     return 0;
   double *hh = TEMP_ALLOC(arena, double, n);
@@ -492,39 +436,19 @@ size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, tur
 }
 
 size_t exprtk_ta_volatility_ratio(const double *hi, const double *lo, const double *cl, size_t n,
-                                  size_t period, double *out, turbo_arena_t *arena) {
+                                  size_t period, double *out, turbo_pool_t *arena) {
   if (n < period)
     return 0;
   double *atr = TEMP_ALLOC(arena, double, n);
   if (!atr)
     return 0;
   exprtk_ta_atr(hi, lo, cl, n, period, atr, arena);
-  size_t i = 0;
-  out[0] = 0;
-  simde__m256d v_zero = simde_mm256_setzero_pd();
-  for (i = 1; i + 4 <= n; i += 4) {
-    simde__m256d v_hi = simde_mm256_loadu_pd(&hi[i]);
-    simde__m256d v_lo = simde_mm256_loadu_pd(&lo[i]);
-    simde__m256d v_cl_prev = simde_mm256_loadu_pd(&cl[i - 1]);
-    simde__m256d v_atr = simde_mm256_loadu_pd(&atr[i]);
-
-    simde__m256d v_tr1 = simde_mm256_sub_pd(v_hi, v_lo);
-    simde__m256d v_tr2 =
-        simde_mm256_andnot_pd(simde_mm256_set1_pd(-0.0), simde_mm256_sub_pd(v_hi, v_cl_prev));
-    simde__m256d v_tr3 =
-        simde_mm256_andnot_pd(simde_mm256_set1_pd(-0.0), simde_mm256_sub_pd(v_lo, v_cl_prev));
-    simde__m256d v_tr = simde_mm256_max_pd(v_tr1, simde_mm256_max_pd(v_tr2, v_tr3));
-
-    simde__m256d v_mask = simde_mm256_cmp_pd(v_atr, v_zero, SIMDE_CMP_GT_OQ);
-    simde__m256d v_res = simde_mm256_div_pd(v_tr, v_atr);
-    simde_mm256_storeu_pd(&out[i], simde_mm256_and_pd(v_res, v_mask));
-  }
+  size_t i = 1;
   for (; i < n; ++i) {
-    if (i < 1) {
-      out[i] = 0;
-      continue;
-    }
-    double tr = fmax(hi[i] - lo[i], fmax(fabs(hi[i] - cl[i - 1]), fabs(lo[i] - cl[i - 1])));
+    double tr1 = hi[i] - lo[i];
+    double tr2 = fabs(hi[i] - cl[i - 1]);
+    double tr3 = fabs(lo[i] - cl[i - 1]);
+    double tr = fmax(tr1, fmax(tr2, tr3));
     out[i] = (atr[i] > 1e-15) ? tr / atr[i] : 0;
   }
   TEMP_FREE(arena, atr);
@@ -573,7 +497,7 @@ size_t exprtk_ta_arbr(const double *hi, const double *lo, const double *op, cons
 }
 
 size_t exprtk_ta_rsrs(const double *hi, const double *lo, size_t n, size_t n_reg, size_t m_z,
-                      double *slope, double *zscore, turbo_arena_t *arena) {
+                      double *slope, double *zscore, turbo_pool_t *arena) {
   if (n < n_reg)
     return 0;
   double *slopes = ALLOC_DBL(arena, n);
@@ -612,7 +536,7 @@ size_t exprtk_ta_rsrs(const double *hi, const double *lo, size_t n, size_t n_reg
 }
 
 size_t exprtk_ta_smart_money(const double *p, const double *v, size_t n, size_t period, double *out,
-                             turbo_arena_t *arena) {
+                             turbo_pool_t *arena) {
   if (n < period)
     return 0;
   for (size_t i = period - 1; i < n; i++) {
@@ -636,7 +560,7 @@ size_t exprtk_ta_smart_money(const double *p, const double *v, size_t n, size_t 
 }
 
 size_t exprtk_ta_vmacd_mtm(const double *v, size_t n, size_t period, double *out,
-                           turbo_arena_t *arena) {
+                           turbo_pool_t *arena) {
   if (n < 60)
     return 0;
   double *macd = ALLOC_DBL(arena, n);
@@ -675,7 +599,7 @@ size_t exprtk_ta_vmacd_mtm(const double *v, size_t n, size_t period, double *out
 }
 
 size_t exprtk_ta_noise_area(const double *op, const double *cl, size_t n, size_t period,
-                            double *upper, double *lower, turbo_arena_t *arena) {
+                            double *upper, double *lower, turbo_pool_t *arena) {
   if (n < period)
     return 0;
   double *dist = ALLOC_DBL(arena, n);
@@ -700,9 +624,9 @@ size_t exprtk_ta_noise_area(const double *op, const double *cl, size_t n, size_t
 }
 
 #ifdef _MSC_VER
-#define WF_THREAD_LOCAL __declspec(thread)
+  #define WF_THREAD_LOCAL __declspec(thread)
 #else
-#define WF_THREAD_LOCAL __thread
+  #define WF_THREAD_LOCAL __thread
 #endif
 
 static WF_THREAD_LOCAL const double *s_w_factor_avg_size;
@@ -715,7 +639,7 @@ static int w_factor_cmp(const void *a, const void *b) {
 }
 
 size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cnt, size_t n,
-                          size_t period, double *out, turbo_arena_t *arena) {
+                          size_t period, double *out, turbo_pool_t *arena) {
   if (n < period)
     return 0;
   double *avg_size = ALLOC_DBL(arena, n);
@@ -723,7 +647,7 @@ size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cn
     return 0;
   for (size_t i = 0; i < n; i++)
     avg_size[i] = (cnt[i] > 1e-15) ? amt[i] / cnt[i] : 0;
-  size_t *indices = TURBO_ARENA_ALLOC_ARRAY(arena, size_t, period);
+  size_t *indices = TURBO_POOL_ALLOC_ARRAY(arena, size_t, period);
   if (!indices)
     return 0;
   for (size_t i = period - 1; i < n; i++) {
@@ -743,7 +667,7 @@ size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cn
 }
 
 size_t exprtk_ta_cpv(const double *ret, const double *vol, size_t n, size_t period, double *out,
-                     turbo_arena_t *arena) {
+                     turbo_pool_t *arena) {
   if (n < period * 2)
     return 0;
   double *corrs = ALLOC_DBL(arena, n);
@@ -775,7 +699,7 @@ size_t exprtk_ta_cpv(const double *ret, const double *vol, size_t n, size_t peri
 }
 
 size_t exprtk_vec_quantile(const double *in, size_t n, size_t period, double *out,
-                           turbo_arena_t *arena) {
+                           turbo_pool_t *arena) {
   (void)arena;
   if (n < period)
     return 0;
@@ -792,13 +716,13 @@ size_t exprtk_vec_quantile(const double *in, size_t n, size_t period, double *ou
 }
 
 size_t exprtk_ta_qrs(const double *slope, size_t n, size_t period, double *out,
-                     turbo_arena_t *arena) {
+                     turbo_pool_t *arena) {
   (void)arena;
   return exprtk_vec_quantile(slope, n, period, out, arena);
 }
 
 size_t exprtk_ta_alligator(const double *in, size_t n, double *jaw, double *teeth, double *lips,
-                           turbo_arena_t *arena) {
+                           turbo_pool_t *arena) {
   if (n < 21)
     return 0;
   double *tmp_j = ALLOC_DBL(arena, n);
@@ -822,7 +746,7 @@ size_t exprtk_ta_alligator(const double *in, size_t n, double *jaw, double *teet
 }
 
 size_t exprtk_ta_shadow(const double *op, const double *hi, const double *lo, const double *cl,
-                        size_t n, double *upper, double *lower, turbo_arena_t *arena) {
+                        size_t n, double *upper, double *lower, turbo_pool_t *arena) {
   (void)arena;
   for (size_t i = 0; i < n; i++) {
     double real_top = fmax(op[i], cl[i]);

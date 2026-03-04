@@ -6,7 +6,7 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "turbo_callbacks.h"
 #include "websocket_message.h"
 
@@ -74,15 +74,15 @@ struct turbo_websocket_connection_s {
   char *selected_subprotocol; /**< Selected subprotocol */
 
   /* Handshake buffer */
-  turbo_arena_buffer_t *handshake_recv_buffer; /**< Buffer for handshake request */
+  turbo_pool_buffer_t *handshake_recv_buffer; /**< Buffer for handshake request */
   size_t handshake_recv_used;                  /**< Bytes received */
 
   /* Frame processing */
-  turbo_arena_buffer_t *frame_recv_buffer; /**< Buffer for incoming frames */
+  turbo_pool_buffer_t *frame_recv_buffer; /**< Buffer for incoming frames */
   size_t frame_recv_used;                  /**< Bytes received */
 
   /* Message fragmentation */
-  turbo_arena_buffer_t *fragment_buffer; /**< Buffer for fragmented messages */
+  turbo_pool_buffer_t *fragment_buffer; /**< Buffer for fragmented messages */
   size_t fragment_buffer_used;           /**< Bytes used */
   websocket_opcode_t fragment_opcode;    /**< Opcode of first fragment */
   int expecting_continuation;            /**< 1 if expecting continuation */
@@ -92,7 +92,7 @@ struct turbo_websocket_connection_s {
   int close_received; /**< 1 if close frame received */
 
   /* Arena for connection lifetime allocations */
-  turbo_arena_t *conn_arena; /**< Arena for this connection */
+  turbo_pool_t *conn_arena; /**< Arena for this connection */
 
   /* Statistics */
   uint64_t bytes_received;
@@ -132,7 +132,7 @@ struct turbo_websocket_server_s {
   uint64_t next_connection_id;                    /**< Next connection ID */
 
   /* Buffer pool for zero-copy */
-  turbo_arena_t *buffer_pool; /**< Shared buffer pool */
+  turbo_pool_t *buffer_pool; /**< Shared buffer pool */
 
   /* Callbacks */
   turbo_connect_cb on_connection; /**< New WebSocket connection callback */

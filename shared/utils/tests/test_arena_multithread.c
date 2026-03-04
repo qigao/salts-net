@@ -1,6 +1,6 @@
 #include "platform.h"
 #include "turbo_thread.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "stats.h"
 #include "tinytest.h"
 #include "turbo_atomic.h"
@@ -10,7 +10,7 @@
 
 /*
  * This test reproduces race conditions in the arena buffer recycling mechanism.
- * Since turbo_arena_t is NOT thread-safe by default, this test is expected to
+ * Since turbo_pool_t is NOT thread-safe by default, this test is expected to
  * fail or crash if run without external synchronization or internal locks.
  *
  * It is designed to stress test the pop/push operations of the recycled buffer
@@ -22,7 +22,7 @@
 // Number of iterations per thread
 #define ITERATIONS 10000
 
-static turbo_arena_t arena;
+static turbo_pool_t arena;
 static volatile int stop_threads = 0;
 
 // Thread function that repeatedly gets and returns buffers
@@ -32,7 +32,7 @@ static void buffer_churn_thread(void *arg) {
 
   for (int i = 0; i < ITERATIONS; i++) {
     // Allocate a buffer (triggering pop from recycle list if available)
-    turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
+    turbo_pool_buffer_t *buf = turbo_pool_get_buffer(&arena, 256);
 
     // If the list is corrupted, we might get NULL or invalid pointer causing
     // crash later
@@ -46,7 +46,7 @@ static void buffer_churn_thread(void *arg) {
       turbo_sleep_ms(0);
 
       // Return it (push to recycle list)
-      turbo_arena_buffer_release(buf);
+      turbo_pool_unref(buf);
     }
 
     if (stop_threads)
@@ -67,8 +67,8 @@ spec("Arena Multithread Tests") {
     // Pre-fill the pool with some buffers to encourage immediate contention on
     // pop
     for (int i = 0; i < 50; i++) {
-      turbo_arena_buffer_t *buf = turbo_arena_get_buffer(&arena, 256);
-      turbo_arena_buffer_release(buf);
+      turbo_pool_buffer_t *buf = turbo_pool_get_buffer(&arena, 256);
+      turbo_pool_unref(buf);
     }
 
     // Start threads
@@ -84,8 +84,8 @@ spec("Arena Multithread Tests") {
     }
 
     // Verify arena integrity (basic check)
-    turbo_arena_stats_t stats;
-    turbo_arena_get_stats(&arena, &stats);
+    turbo_pool_stats_t stats;
+    turbo_pool_get_stats(&arena, &stats);
     printf("Test complete. Total allocated: %zu, Regions: %zu\n", stats.total_allocated,
            stats.region_count);
   }

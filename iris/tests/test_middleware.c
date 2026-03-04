@@ -11,9 +11,9 @@
 #include "router.h"
 #include "iris.h"
 #include "iris_app.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 
-static turbo_arena_t arena;
+static turbo_pool_t arena;
 
 /* Test tracking variables */
 static int middleware_call_order[10];
@@ -75,7 +75,7 @@ static void test_handler(Req *req, Res *res) {
 
 spec("middleware") {
     before_each() {
-        turbo_arena_init(&arena, 4096);
+        turbo_pool_init(&arena, 4096);
         reset_tracking();
         /* Reset both legacy middleware and default app */
         iris_app_reset_default();
@@ -83,7 +83,7 @@ spec("middleware") {
     }
 
     after_each() {
-        turbo_arena_free(&arena);
+        turbo_pool_free(&arena);
         iris_app_reset_default();
         reset_middleware();
     }

@@ -1,7 +1,7 @@
 #ifndef TURBO_CALLBACKS_H
 #define TURBO_CALLBACKS_H
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include <uv.h>
 
 #ifdef __cplusplus
@@ -25,7 +25,7 @@ extern "C" {
  * @param peer Additional peer context.
  * @return For connection-oriented protocols, non-zero to close the connection.
  */
-typedef int (*turbo_recv_cb)(void* handle, const turbo_arena_slice_t* data, void* peer);
+typedef int (*turbo_recv_cb)(void* handle, const turbo_pool_slice_t* data, void* peer);
 
 /**
  * @brief Generic connection status callback.

@@ -8,7 +8,7 @@
 
 typedef struct
 {
-    turbo_arena_t *pool;
+    turbo_pool_t *pool;
     Res *res;
     char *category;
     char *original_slug;
@@ -66,7 +66,7 @@ void edit_category(Req *req, Res *res)
     }
 
     // Create separate arena for async operation
-    turbo_arena_t *async_pool = malloc(sizeof(turbo_arena_t)); if (!async_pool || turbo_arena_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
+    turbo_pool_t *async_pool = malloc(sizeof(turbo_pool_t)); if (!async_pool || turbo_pool_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         json_free(json);
         free(new_slug);
@@ -75,7 +75,7 @@ void edit_category(Req *req, Res *res)
     }
 
     // Create context to hold all the data for async operation
-    ctx_t *ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
+    ctx_t *ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         json_free(json);
         free(new_slug);
@@ -96,10 +96,10 @@ void edit_category(Req *req, Res *res)
         return;
     }
 
-    ctx->category = turbo_arena_strdup(async_pool, category);
-    ctx->original_slug = turbo_arena_strdup(async_pool, slug);
-    ctx->new_slug = turbo_arena_strdup(async_pool, new_slug);
-    ctx->author_id = turbo_arena_strdup(async_pool, author_id);
+    ctx->category = turbo_pool_strdup(async_pool, category);
+    ctx->original_slug = turbo_pool_strdup(async_pool, slug);
+    ctx->new_slug = turbo_pool_strdup(async_pool, new_slug);
+    ctx->author_id = turbo_pool_strdup(async_pool, author_id);
 
     free(new_slug);
 

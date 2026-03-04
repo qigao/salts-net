@@ -8,44 +8,55 @@
 
 #include "exprtk_module.h"
 #include "mir-htab.h"
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
+
 
 /* =========================================================================
  * HTAB type for map key-value pairs
  * ========================================================================= */
 
 typedef struct {
-    char *key;
-    exprtk_value_t value;
+  char *key;
+  exprtk_value_t value;
 } exprtk_map_kv_t;
 
 DEF_HTAB(exprtk_map_kv_t)
 
 /* MIR allocator wrapper (standard malloc/free) */
-static void* map_malloc(size_t size, void *ud) { (void)ud; return malloc(size); }
-static void* map_calloc(size_t n, size_t sz, void *ud) { (void)ud; return calloc(n, sz); }
-static void* map_realloc(void *p, size_t old_sz, size_t new_sz, void *ud) {
-    (void)ud; (void)old_sz; return realloc(p, new_sz);
+static void *map_malloc(size_t size, void *ud) {
+  (void)ud;
+  return malloc(size);
 }
-static void map_free(void *p, void *ud) { (void)ud; free(p); }
+static void *map_calloc(size_t n, size_t sz, void *ud) {
+  (void)ud;
+  return calloc(n, sz);
+}
+static void *map_realloc(void *p, size_t old_sz, size_t new_sz, void *ud) {
+  (void)ud;
+  (void)old_sz;
+  return realloc(p, new_sz);
+}
+static void map_free(void *p, void *ud) {
+  (void)ud;
+  free(p);
+}
 
-static struct MIR_alloc map_alloc_struct = {
-    map_malloc, map_calloc, map_realloc, map_free, NULL
-};
+static struct MIR_alloc map_alloc_struct = {map_malloc, map_calloc, map_realloc, map_free, NULL};
 static MIR_alloc_t map_alloc = &map_alloc_struct;
 
 static htab_hash_t kv_hash(exprtk_map_kv_t e, void *arg) {
-    (void)arg;
-    const char *s = e.key;
-    htab_hash_t h = 0;
-    while (*s) h = h * 31 + (unsigned char)*s++;
-    return h;
+  (void)arg;
+  const char *s = e.key;
+  htab_hash_t h = 0;
+  while (*s)
+    h = h * 31 + (unsigned char)*s++;
+  return h;
 }
 
 static int kv_eq(exprtk_map_kv_t a, exprtk_map_kv_t b, void *arg) {
-    (void)arg;
-    return strcmp(a.key, b.key) == 0;
+  (void)arg;
+  return strcmp(a.key, b.key) == 0;
 }
 
 /* =========================================================================
@@ -53,123 +64,127 @@ static int kv_eq(exprtk_map_kv_t a, exprtk_map_kv_t b, void *arg) {
  * ========================================================================= */
 
 exprtk_value_t exprtk_val_map(void) {
-    exprtk_value_t val;
-    memset(&val, 0, sizeof(val));
-    val.type = exprtk_VAL_MAP;
+  exprtk_value_t val;
+  memset(&val, 0, sizeof(val));
+  val.type = EXPRTK_VAL_MAP;
 
-    HTAB(exprtk_map_kv_t) *htab = NULL;
-    HTAB_OP(exprtk_map_kv_t, create)(&htab, map_alloc, 8, kv_hash, kv_eq, NULL, NULL);
-    val.data.map.htab = htab;
-    return val;
+  HTAB(exprtk_map_kv_t) *htab = NULL;
+  HTAB_OP(exprtk_map_kv_t, create)(&htab, map_alloc, 8, kv_hash, kv_eq, NULL, NULL);
+  val.data.map.htab = htab;
+  return val;
 }
 
 exprtk_value_t exprtk_map_get(const exprtk_value_t *map, const char *key) {
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab)
-        return exprtk_val_num(0);
-
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    exprtk_map_kv_t probe = { .key = (char*)key };
-    exprtk_map_kv_t result;
-
-    if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result))
-        return result.value;
-
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
     return exprtk_val_num(0);
+
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  exprtk_map_kv_t probe = {.key = (char *)key};
+  exprtk_map_kv_t result;
+
+  if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result))
+    return result.value;
+
+  return exprtk_val_num(0);
 }
 
 void exprtk_map_set(exprtk_value_t *map, const char *key, exprtk_value_t value) {
-    if (!map || map->type != exprtk_VAL_MAP) return;
+  if (!map || map->type != EXPRTK_VAL_MAP)
+    return;
 
-    /* Lazy init: if htab is NULL (e.g. from memset-zero'd value), create it */
-    if (!map->data.map.htab) {
-        HTAB(exprtk_map_kv_t) *htab = NULL;
-        HTAB_OP(exprtk_map_kv_t, create)(&htab, map_alloc, 8, kv_hash, kv_eq, NULL, NULL);
-        map->data.map.htab = htab;
-    }
+  /* Lazy init: if htab is NULL (e.g. from memset-zero'd value), create it */
+  if (!map->data.map.htab) {
+    HTAB(exprtk_map_kv_t) *htab = NULL;
+    HTAB_OP(exprtk_map_kv_t, create)(&htab, map_alloc, 8, kv_hash, kv_eq, NULL, NULL);
+    map->data.map.htab = htab;
+  }
 
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    exprtk_map_kv_t probe = { .key = (char*)key };
-    exprtk_map_kv_t result;
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  exprtk_map_kv_t probe = {.key = (char *)key};
+  exprtk_map_kv_t result;
 
-    if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result)) {
-        /* Update existing */
-        result.value = value;
-        HTAB_OP(exprtk_map_kv_t, do)(htab, result, HTAB_REPLACE, &result);
-    } else {
-        /* Insert new */
-        exprtk_map_kv_t entry = { .key = strdup(key), .value = value };
-        HTAB_OP(exprtk_map_kv_t, do)(htab, entry, HTAB_INSERT, &result);
-    }
+  if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result)) {
+    /* Update existing */
+    result.value = value;
+    HTAB_OP(exprtk_map_kv_t, do)(htab, result, HTAB_REPLACE, &result);
+  } else {
+    /* Insert new */
+    exprtk_map_kv_t entry = {.key = strdup(key), .value = value};
+    HTAB_OP(exprtk_map_kv_t, do)(htab, entry, HTAB_INSERT, &result);
+  }
 }
 
 int exprtk_map_has(const exprtk_value_t *map, const char *key) {
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab) return 0;
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
+    return 0;
 
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    exprtk_map_kv_t probe = { .key = (char*)key };
-    exprtk_map_kv_t result;
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  exprtk_map_kv_t probe = {.key = (char *)key};
+  exprtk_map_kv_t result;
 
-    return HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result) ? 1 : 0;
+  return HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result) ? 1 : 0;
 }
 
 int exprtk_map_delete(exprtk_value_t *map, const char *key) {
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab) return 0;
-
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    exprtk_map_kv_t probe = { .key = (char*)key };
-    exprtk_map_kv_t result;
-
-    if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result)) {
-        free(result.key);
-        HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_DELETE, &result);
-        return 1;
-    }
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
     return 0;
+
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  exprtk_map_kv_t probe = {.key = (char *)key};
+  exprtk_map_kv_t result;
+
+  if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result)) {
+    free(result.key);
+    HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_DELETE, &result);
+    return 1;
+  }
+  return 0;
 }
 
 size_t exprtk_map_count(const exprtk_value_t *map) {
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab) return 0;
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
+    return 0;
 
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    return htab->els_num;
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  return htab->els_num;
 }
 
 exprtk_value_t *exprtk_map_get_ptr(const exprtk_value_t *map, const char *key) {
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab)
-        return NULL;
-
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    HTAB_EL(exprtk_map_kv_t) *els = VARR_ADDR(HTAB_EL(exprtk_map_kv_t), htab->els);
-    htab_size_t bound = htab->els_bound;
-
-    /* Hash the key and find the entry directly in the backing array */
-    exprtk_map_kv_t probe = { .key = (char*)key };
-    htab_hash_t h = kv_hash(probe, NULL);
-
-    for (htab_size_t i = 0; i < bound; i++) {
-        if (els[i].hash != HTAB_DELETED_HASH &&
-            els[i].hash == h &&
-            strcmp(els[i].el.key, key) == 0) {
-            return &els[i].el.value;
-        }
-    }
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
     return NULL;
+
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  exprtk_map_kv_t probe = {.key = (char *)key};
+  exprtk_map_kv_t found;
+
+  if (!HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &found))
+    return NULL;
+
+  /* Walk the backing array to find the live entry matching this key */
+  HTAB_EL(exprtk_map_kv_t) *els = VARR_ADDR(HTAB_EL(exprtk_map_kv_t), htab->els);
+  htab_size_t bound = htab->els_bound;
+  for (htab_size_t i = 0; i < bound; i++) {
+    if (els[i].hash != HTAB_DELETED_HASH && strcmp(els[i].el.key, key) == 0)
+      return &els[i].el.value;
+  }
+  return NULL;
 }
 
 void exprtk_map_free(exprtk_value_t *map) {
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab) return;
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
+    return;
 
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    HTAB_EL(exprtk_map_kv_t) *els = VARR_ADDR(HTAB_EL(exprtk_map_kv_t), htab->els);
-    htab_size_t bound = htab->els_bound;
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  HTAB_EL(exprtk_map_kv_t) *els = VARR_ADDR(HTAB_EL(exprtk_map_kv_t), htab->els);
+  htab_size_t bound = htab->els_bound;
 
-    for (htab_size_t i = 0; i < bound; i++) {
-        if (els[i].hash != HTAB_DELETED_HASH)
-            free(els[i].el.key);
-    }
+  for (htab_size_t i = 0; i < bound; i++) {
+    if (els[i].hash != HTAB_DELETED_HASH)
+      free(els[i].el.key);
+  }
 
-    HTAB_OP(exprtk_map_kv_t, destroy)(&htab);
-    map->data.map.htab = NULL;
+  HTAB_OP(exprtk_map_kv_t, destroy)(&htab);
+  map->data.map.htab = NULL;
 }
 
 /* =========================================================================
@@ -177,29 +192,33 @@ void exprtk_map_free(exprtk_value_t *map) {
  * ========================================================================= */
 
 exprtk_map_iter_t exprtk_map_iter_begin(const exprtk_value_t *map) {
-    exprtk_map_iter_t it = { NULL, 0, 0 };
-    if (!map || map->type != exprtk_VAL_MAP || !map->data.map.htab) return it;
-
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)map->data.map.htab;
-    it.htab = htab;
-    it.pos = 0;
-    it.bound = htab->els_bound;
+  exprtk_map_iter_t it = {NULL, 0, 0};
+  if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab)
     return it;
+
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
+  it.htab = htab;
+  it.pos = 0;
+  it.bound = htab->els_bound;
+  return it;
 }
 
 int exprtk_map_iter_next(exprtk_map_iter_t *it, const char **key, exprtk_value_t *value) {
-    if (!it || !it->htab) return 0;
-
-    HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t)*)it->htab;
-    HTAB_EL(exprtk_map_kv_t) *els = VARR_ADDR(HTAB_EL(exprtk_map_kv_t), htab->els);
-
-    while (it->pos < it->bound) {
-        size_t i = it->pos++;
-        if (els[i].hash != HTAB_DELETED_HASH) {
-            if (key) *key = els[i].el.key;
-            if (value) *value = els[i].el.value;
-            return 1;
-        }
-    }
+  if (!it || !it->htab)
     return 0;
+
+  HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)it->htab;
+  HTAB_EL(exprtk_map_kv_t) *els = VARR_ADDR(HTAB_EL(exprtk_map_kv_t), htab->els);
+
+  while (it->pos < it->bound) {
+    size_t i = it->pos++;
+    if (els[i].hash != HTAB_DELETED_HASH) {
+      if (key)
+        *key = els[i].el.key;
+      if (value)
+        *value = els[i].el.value;
+      return 1;
+    }
+  }
+  return 0;
 }

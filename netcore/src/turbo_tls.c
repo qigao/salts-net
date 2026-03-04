@@ -112,14 +112,14 @@ static void turbo_tls_debug_uv_error(const char *context, int err) {
 
 /* Arena-based memory pool for TLS */
 typedef struct turbo_tls_arena_pool_s {
-  turbo_arena_t arena;
-  turbo_arena_buffer_t *current_buffer;
+  turbo_pool_t arena;
+  turbo_pool_buffer_t *current_buffer;
   size_t buffer_size;
   int ret;
 } turbo_tls_arena_pool_t;
 
 typedef struct turbo_tls_arena_pos_s {
-  turbo_arena_buffer_t *buffer;
+  turbo_pool_buffer_t *buffer;
   size_t offset;
 } turbo_tls_arena_pos_t;
 
@@ -133,7 +133,7 @@ typedef struct turbo_tls_session_s {
 /* Send operation for zero-copy */
 typedef struct turbo_tls_send_op_s {
   uv_write_t req;
-  turbo_arena_slice_t *slices;
+  turbo_pool_slice_t *slices;
   size_t slice_count;
   turbo_tls_client_t *client;
   struct turbo_tls_send_op_s *next;
@@ -176,16 +176,16 @@ static int turbo_tls_arena_pool_init(turbo_tls_arena_pool_t *pool) {
   pool->ret = -1;
   pool->current_buffer = NULL;
 
-  return turbo_arena_init(&pool->arena, pool->buffer_size);
+  return turbo_pool_init(&pool->arena, pool->buffer_size);
 }
 
 static void turbo_tls_arena_pool_destroy(turbo_tls_arena_pool_t *pool) {
   if (pool) {
     if (pool->current_buffer) {
-      turbo_arena_buffer_unref(pool->current_buffer);
+      turbo_pool_unref(pool->current_buffer);
       pool->current_buffer = NULL;
     }
-    turbo_arena_free(&pool->arena);
+    turbo_pool_free(&pool->arena);
   }
 }
 
@@ -227,7 +227,7 @@ static void turbo_tls_arena_pool_write(turbo_tls_arena_pool_t *pool, const char 
     return;
 
   if (pool->current_buffer && pool->current_buffer->used > pool->current_buffer->capacity) {
-    turbo_arena_buffer_unref(pool->current_buffer);
+    turbo_pool_unref(pool->current_buffer);
     pool->current_buffer = NULL;
   }
 
@@ -236,19 +236,19 @@ static void turbo_tls_arena_pool_write(turbo_tls_arena_pool_t *pool, const char 
     if (pool->current_buffer->used <= pool->current_buffer->capacity) {
       existing_used = pool->current_buffer->used;
     } else {
-      turbo_arena_buffer_unref(pool->current_buffer);
+      turbo_pool_unref(pool->current_buffer);
       pool->current_buffer = NULL;
     }
   }
 
   /* Ensure we have a current buffer with enough space */
-  if (!pool->current_buffer || turbo_arena_buffer_remaining(pool->current_buffer) < (size_t)len) {
+  if (!pool->current_buffer || turbo_pool_remaining(pool->current_buffer) < (size_t)len) {
 
     /* Get a new buffer */
     size_t needed_size = existing_used + (size_t)len;
     if (needed_size < pool->buffer_size)
       needed_size = pool->buffer_size;
-    turbo_arena_buffer_t *new_buffer = turbo_arena_get_buffer(&pool->arena, needed_size);
+    turbo_pool_buffer_t *new_buffer = turbo_pool_get_buffer(&pool->arena, needed_size);
 
     if (!new_buffer) {
       return; /* Out of memory */
@@ -265,14 +265,14 @@ static void turbo_tls_arena_pool_write(turbo_tls_arena_pool_t *pool, const char 
 
     /* Release old buffer and use new one */
     if (pool->current_buffer) {
-      turbo_arena_buffer_unref(pool->current_buffer);
+      turbo_pool_unref(pool->current_buffer);
     }
     pool->current_buffer = new_buffer;
     pool->ret = -1;
   }
 
   /* Append new data */
-  char *write_ptr = turbo_arena_buffer_write_ptr(pool->current_buffer);
+  char *write_ptr = turbo_pool_write_ptr(pool->current_buffer);
   memcpy(write_ptr, data, (size_t)len);
   pool->current_buffer->used += (size_t)len;
   pool->ret = -1;
@@ -366,7 +366,7 @@ static void return_tls_send_op(turbo_tls_send_op_t *op) {
   /* Release all slices */
   if (op->slices) {
     for (size_t i = 0; i < op->slice_count; i++) {
-      turbo_arena_slice_release(&op->slices[i]);
+      turbo_pool_slice_release(&op->slices[i]);
     }
     free(op->slices);
     op->slices = NULL;
@@ -813,7 +813,7 @@ static void do_tls_read(turbo_tls_client_t *client) {
     int nread;
 
     /* Always use ping-pong receive buffers for consistency */
-    turbo_arena_buffer_t *recv_buffer =
+    turbo_pool_buffer_t *recv_buffer =
         (client->recv_toggle == 1) ? client->recv_buffer2 : client->recv_buffer1;
     if (!recv_buffer) {
       TLOG_DEBUG("no receive buffer available for client={}", (void *)client);
@@ -836,7 +836,7 @@ static void do_tls_read(turbo_tls_client_t *client) {
         /* Create error slice */
         TLOG_DEBUG("SSL_read error for client={} err={:d}", (void *)client, error);
         turbo_tls_debug_ssl_errors("SSL_read error detail");
-        turbo_arena_slice_t error_slice = {NULL, 0, NULL};
+        turbo_pool_slice_t error_slice = {NULL, 0, NULL};
         client->on_recv(client, &error_slice, NULL);
         return;
       }
@@ -850,11 +850,11 @@ static void do_tls_read(turbo_tls_client_t *client) {
 
     /* Create slice for received data - buffer should always match now */
     TLOG_DEBUG("calling on_recv with {} bytes for client={}", nread, (void *)client);
-    turbo_arena_buffer_set_used(recv_buffer, (size_t)nread);
-    turbo_arena_slice_t slice = turbo_arena_buffer_slice(recv_buffer, 0, (size_t)nread);
+    turbo_pool_set_used(recv_buffer, (size_t)nread);
+    turbo_pool_slice_t slice = turbo_pool_slice(recv_buffer, 0, (size_t)nread);
 
     int should_close = client->on_recv(client, &slice, NULL);
-    turbo_arena_slice_release(&slice);
+    turbo_pool_slice_release(&slice);
 
     if (should_close) {
       turbo_tls_client_close(client);
@@ -960,7 +960,7 @@ static void on_tls_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
     turbo_tls_debug_uv_error("uv_read error detail", (int)nread);
     TURBO_STATS_INC("tls.recv_errors");
     if (client->on_recv) {
-      turbo_arena_slice_t error_slice = {NULL, 0, NULL};
+      turbo_pool_slice_t error_slice = {NULL, 0, NULL};
       client->on_recv(client, &error_slice, NULL);
     }
     return;
@@ -1015,24 +1015,24 @@ static void on_tls_handle_closed(uv_handle_t *handle) {
 
   /* Cleanup client resources */
   if (client->recv_buffer1) {
-    turbo_arena_buffer_unref(client->recv_buffer1);
+    turbo_pool_unref(client->recv_buffer1);
   }
   if (client->recv_buffer2) {
-    turbo_arena_buffer_unref(client->recv_buffer2);
+    turbo_pool_unref(client->recv_buffer2);
   }
   if (client->write_iov) {
     free(client->write_iov);
   }
 
   /* Free send queue */
-  turbo_arena_buffer_t *current = client->send_queue_head;
+  turbo_pool_buffer_t *current = client->send_queue_head;
   while (current) {
-    turbo_arena_buffer_t *next = current->next;
-    turbo_arena_buffer_unref(current);
+    turbo_pool_buffer_t *next = current->next;
+    turbo_pool_unref(current);
     current = next;
   }
 
-  turbo_arena_free(&client->arena);
+  turbo_pool_free(&client->arena);
   free(client);
 }
 
@@ -1062,14 +1062,14 @@ static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
   client->on_close = server->on_close;
 
   /* Initialize client arena */
-  if (turbo_arena_init(&client->arena, 0) != 0) {
+  if (turbo_pool_init(&client->arena, 0) != 0) {
     free(client);
     return;
   }
 
   /* Initialize TCP handle */
   if (uv_tcp_init(server->loop, &client->handle) != 0) {
-    turbo_arena_free(&client->arena);
+    turbo_pool_free(&client->arena);
     free(client);
     return;
   }
@@ -1107,8 +1107,8 @@ static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
 
   /* Setup receive buffers */
   size_t recv_buf_size = 16384; /* Default read buffer size */
-  client->recv_buffer1 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
-  client->recv_buffer2 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
+  client->recv_buffer1 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
+  client->recv_buffer2 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
 
   if (!client->recv_buffer1) {
     uv_close((uv_handle_t *)&client->handle, on_tls_handle_closed);
@@ -1276,7 +1276,7 @@ void turbo_tls_server_stop(turbo_tls_server_t *server) {
     server->handle = NULL;
   }
 
-  turbo_arena_free(&server->arena);
+  turbo_pool_free(&server->arena);
   TURBO_STATS_INC("tls.servers_stopped");
 }
 
@@ -1293,14 +1293,14 @@ turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop, turbo_tls_context_t
   client->context = context;
 
   /* Initialize client arena */
-  if (turbo_arena_init(&client->arena, 0) != 0) {
+  if (turbo_pool_init(&client->arena, 0) != 0) {
     free(client);
     return NULL;
   }
 
   /* Initialize TCP handle */
   if (uv_tcp_init(loop, &client->handle) != 0) {
-    turbo_arena_free(&client->arena);
+    turbo_pool_free(&client->arena);
     free(client);
     return NULL;
   }
@@ -1309,14 +1309,14 @@ turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop, turbo_tls_context_t
 
   /* Setup receive buffers */
   size_t recv_buf_size = 16384;
-  client->recv_buffer1 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
-  client->recv_buffer2 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
+  client->recv_buffer1 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
+  client->recv_buffer2 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
 
   /* Setup write IOV array */
   client->write_iov_capacity = 16;
   client->write_iov = (uv_buf_t *)malloc(client->write_iov_capacity * sizeof(uv_buf_t));
   if (!client->write_iov) {
-    turbo_arena_free(&client->arena);
+    turbo_pool_free(&client->arena);
     free(client);
     return NULL;
   }
@@ -1462,13 +1462,13 @@ void turbo_tls_client_close(turbo_tls_client_t *client) {
 }
 
 /* Zero-copy send operations */
-turbo_arena_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client, size_t min_size) {
+turbo_pool_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client, size_t min_size) {
   if (!client)
     return NULL;
-  return turbo_arena_get_buffer(&client->arena, min_size);
+  return turbo_pool_get_buffer(&client->arena, min_size);
 }
 
-int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buffer, size_t length) {
+int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_pool_buffer_t *buffer, size_t length) {
   if (!client || !buffer || client->closing)
     return UV_EINVAL;
   if (length > buffer->used)
@@ -1485,7 +1485,7 @@ int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buff
   client->send_queue_bytes += length;
 
   /* Reference the buffer */
-  turbo_arena_buffer_ref(buffer);
+  turbo_pool_ref(buffer);
 
   /* Flush if not already writing */
   if (!client->write_in_progress) {
@@ -1495,25 +1495,25 @@ int turbo_tls_send_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buff
   return 0;
 }
 
-void turbo_tls_discard_buffer(turbo_tls_client_t *client, turbo_arena_buffer_t *buffer) {
+void turbo_tls_discard_buffer(turbo_tls_client_t *client, turbo_pool_buffer_t *buffer) {
   if (!client || !buffer)
     return;
-  turbo_arena_buffer_unref(buffer);
+  turbo_pool_unref(buffer);
 }
 
 int turbo_tls_send(turbo_tls_client_t *client, const char *data, size_t length) {
   if (!client || !data || length == 0)
     return UV_EINVAL;
 
-  turbo_arena_buffer_t *buffer = turbo_tls_get_send_buffer(client, length);
+  turbo_pool_buffer_t *buffer = turbo_tls_get_send_buffer(client, length);
   if (!buffer)
     return UV_ENOMEM;
 
   memcpy(buffer->data, data, length);
-  turbo_arena_buffer_set_used(buffer, length);
+  turbo_pool_set_used(buffer, length);
 
   int rc = turbo_tls_send_buffer(client, buffer, length);
-  turbo_arena_buffer_unref(buffer);
+  turbo_pool_unref(buffer);
 
   if (rc == 0) {
     TURBO_STATS_INC("tls.copy_sends");
@@ -1532,7 +1532,7 @@ int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_tls_iovec_t *iov, si
   for (size_t i = 0; i < iovcnt && rc == 0; i++) {
     if (iov[i].len > 0 && iov[i].data) {
       /* Wrap user buffer - ZERO COPY! */
-      turbo_arena_buffer_t *buffer = turbo_arena_wrap_external(
+      turbo_pool_buffer_t *buffer = turbo_pool_wrap_external(
           (void *)iov[i].data, iov[i].len, NULL, /* No free callback - user manages memory */
           NULL);
       if (!buffer) {
@@ -1541,7 +1541,7 @@ int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_tls_iovec_t *iov, si
       }
 
       rc = turbo_tls_send_buffer(client, buffer, iov[i].len);
-      turbo_arena_buffer_unref(buffer);
+      turbo_pool_unref(buffer);
     }
   }
 
@@ -1600,7 +1600,7 @@ int turbo_tls_flush(turbo_tls_client_t *client) {
 
   /* Encrypt only the first queued entry to avoid arena overflow on large payloads.
      on_tls_write_complete will call flush again for remaining entries. */
-  turbo_arena_buffer_t *current = client->send_queue_head;
+  turbo_pool_buffer_t *current = client->send_queue_head;
   TLOG_DEBUG("SSL_write encrypting %zu bytes for client={}", current->used, (void *)client);
   int ssl_written = SSL_write(session->ssl, current->data, (int)current->used);
   if (ssl_written <= 0) {
@@ -1616,7 +1616,7 @@ int turbo_tls_flush(turbo_tls_client_t *client) {
   if (!client->send_queue_head)
     client->send_queue_tail = NULL;
   client->send_queue_bytes -= current->used;
-  turbo_arena_buffer_unref(current);
+  turbo_pool_unref(current);
 
   TLOG_DEBUG("encrypted %zu plaintext bytes for client={}", plaintext_bytes, (void *)client);
 
@@ -1663,7 +1663,7 @@ void turbo_tls_get_stats(const turbo_tls_server_t *server, turbo_tls_stats_t *st
   memset(stats, 0, sizeof(*stats));
 
   /* Get arena statistics */
-  turbo_arena_get_stats(&server->arena, &stats->arena_stats);
+  turbo_pool_get_stats(&server->arena, &stats->arena_stats);
 
   /* Basic stats - would need proper implementation */
   stats->bytes_sent = 0;
@@ -1682,15 +1682,15 @@ void turbo_tls_reset_stats(turbo_tls_server_t *server) {
 void turbo_tls_trim_memory(turbo_tls_server_t *server) {
   if (!server)
     return;
-  turbo_arena_trim(&server->arena);
+  turbo_pool_trim(&server->arena);
 }
 
 size_t turbo_tls_get_memory_usage(const turbo_tls_server_t *server) {
   if (!server)
     return 0;
 
-  turbo_arena_stats_t stats;
-  turbo_arena_get_stats(&server->arena, &stats);
+  turbo_pool_stats_t stats;
+  turbo_pool_get_stats(&server->arena, &stats);
   return stats.total_allocated;
 }
 
@@ -1719,21 +1719,21 @@ int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop, turbo_tls
   server->active_connections = 0;
 
   /* Initialize arena */
-  int rc = turbo_arena_init(&server->arena, 0);
+  int rc = turbo_pool_init(&server->arena, 0);
   if (rc != 0)
     return rc;
 
   /* Initialize TCP handle */
   server->handle = (uv_tcp_t *)malloc(sizeof(uv_tcp_t));
   if (!server->handle) {
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return UV_ENOMEM;
   }
 
   rc = uv_tcp_init(loop, server->handle);
   if (rc != 0) {
     free(server->handle);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
@@ -1744,14 +1744,14 @@ int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop, turbo_tls
   rc = uv_ip4_addr(host, port, &addr);
   if (rc != 0) {
     free(server->handle);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
   rc = uv_tcp_bind(server->handle, (const struct sockaddr *)&addr, 0);
   if (rc != 0) {
     free(server->handle);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 

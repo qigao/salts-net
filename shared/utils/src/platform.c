@@ -412,7 +412,7 @@ void turbo_rwlock_wrunlock(turbo_rwlock_t *lock) {
 // String utilities - safe string duplication
 // =============================================================================
 
-char *turbo_pool_strdup(void *pool, const char *str) {
+char *turbo_memory_pool_strdup(void *pool, const char *str) {
   if (!pool || !str)
     return NULL;
   size_t len = strlen(str);

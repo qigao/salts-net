@@ -151,7 +151,7 @@ static void on_kcp_accept(void* server_handle, void* client_handle, void* peer) 
     spawn_client_coro(client, server->handler, server->handler_arg);
 }
 
-static int on_kcp_server_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_kcp_server_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     /* peer = turbo_kcp_client_t* — forward to the coro client's recv handler */
     UNUSED(handle);
     turbo_kcp_client_t* kcp_client = (turbo_kcp_client_t*)peer;
@@ -186,7 +186,7 @@ static void on_ws_server_connection(void* handle, int status, void* peer) {
     spawn_client_coro(client, server->handler, server->handler_arg);
 }
 
-static int on_ws_server_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_ws_server_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     UNUSED(handle);
     turbo_websocket_connection_t* conn = (turbo_websocket_connection_t*)peer;
     if (!conn || !conn->user_data) return 0;
@@ -206,7 +206,7 @@ static void on_ws_server_close(void* handle) {
 
 /* ── UDP datagram handler ─────────────────────────────────── */
 
-static int on_udp_server_recv(void* handle, const turbo_arena_slice_t* slice, void* peer) {
+static int on_udp_server_recv(void* handle, const turbo_pool_slice_t* slice, void* peer) {
     turbo_udp_t* udp = (turbo_udp_t*)handle;
     turbo_coro_server_t* server = (turbo_coro_server_t*)
         ((char*)udp - offsetof(turbo_coro_server_t, handle.udp));

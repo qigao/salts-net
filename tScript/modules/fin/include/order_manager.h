@@ -18,7 +18,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "market_rules.h"   /* universe_market_rules_t, order_error_t */
-#include "exprtk_types.h"   /* turbo_arena_t */
+#include "exprtk_types.h"   /* turbo_pool_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -137,7 +137,7 @@ typedef struct {
     double      current_date;
 
     order_executor_t *executor;  /**< Optional live executor */
-    turbo_arena_t *arena;
+    turbo_pool_t *arena;
 } order_manager_t;
 
 /* =========================================================================
@@ -204,7 +204,7 @@ void order_manager_report_fill(order_manager_t *mgr,
 order_manager_t *order_manager_create(const universe_market_rules_t *rules,
                                        double cash0,
                                        size_t asset_cap,
-                                       turbo_arena_t *arena);
+                                       turbo_pool_t *arena);
 
 /** Free dynamic allocations (positions, pending, trades). Arena is untouched. */
 void order_manager_free(order_manager_t *mgr);

@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 
-#define NET_ONE ((exprtk_value_t){exprtk_VAL_NUMBER, .data.number = 1.0})
+#define NET_ONE ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 1.0})
 
 /* == Lifecycle ============================================================ */
 
@@ -26,11 +26,11 @@ void net_ctx_destroy(void *p) {
 
 static exprtk_value_t copy_response_body(http_response_t *resp, exprtk_env_t *env) {
   if (resp && resp->status_code >= 200 && resp->status_code < 300 && resp->body) {
-    char *buf = turbo_arena_alloc(&env->arena, resp->body_len + 1);
+    char *buf = turbo_pool_alloc(&env->arena, resp->body_len + 1);
     if (buf) {
       memcpy(buf, resp->body, resp->body_len);
       buf[resp->body_len] = '\0';
-      return (exprtk_value_t){exprtk_VAL_STRING,
+      return (exprtk_value_t){EXPRTK_VAL_STRING,
                               .data.string = tstr_v_from_buf(buf, resp->body_len)};
     }
   }
@@ -56,7 +56,7 @@ static turbo_client_t *net_ctx_recreate_ws_client(net_ctx_t *ctx) {
 
 static exprtk_value_t fn_http_get(size_t argc, exprtk_value_t *args, void *user_data) {
   http_ud_t *ud = (http_ud_t *)user_data;
-  if (argc != 1 || args[0].type != exprtk_VAL_STRING)
+  if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
     return NET_ZERO;
 
   http_client_t *c = net_ctx_ensure_client(ud->ctx);
@@ -71,7 +71,7 @@ static exprtk_value_t fn_http_get(size_t argc, exprtk_value_t *args, void *user_
 
 static exprtk_value_t fn_http_post(size_t argc, exprtk_value_t *args, void *user_data) {
   http_ud_t *ud = (http_ud_t *)user_data;
-  if (argc != 2 || args[0].type != exprtk_VAL_STRING || args[1].type != exprtk_VAL_STRING)
+  if (argc != 2 || args[0].type != EXPRTK_VAL_STRING || args[1].type != EXPRTK_VAL_STRING)
     return NET_ZERO;
 
   http_client_t *c = net_ctx_ensure_client(ud->ctx);
@@ -89,9 +89,9 @@ static exprtk_value_t fn_http_post(size_t argc, exprtk_value_t *args, void *user
 
 static exprtk_value_t fn_ws_connect(size_t argc, exprtk_value_t *args, void *user_data) {
   http_ud_t *ud = (http_ud_t *)user_data;
-  if (!ud || !ud->ctx || argc < 1 || argc > 2 || args[0].type != exprtk_VAL_STRING)
+  if (!ud || !ud->ctx || argc < 1 || argc > 2 || args[0].type != EXPRTK_VAL_STRING)
     return NET_ZERO;
-  if (argc == 2 && args[1].type != exprtk_VAL_STRING)
+  if (argc == 2 && args[1].type != EXPRTK_VAL_STRING)
     return NET_ZERO;
 
   turbo_client_t *client = net_ctx_recreate_ws_client(ud->ctx);
@@ -135,7 +135,7 @@ static exprtk_value_t fn_ws_connect(size_t argc, exprtk_value_t *args, void *use
 
 static exprtk_value_t fn_ws_send(size_t argc, exprtk_value_t *args, void *user_data) {
   http_ud_t *ud = (http_ud_t *)user_data;
-  if (!ud || !ud->ctx || argc != 1 || args[0].type != exprtk_VAL_STRING)
+  if (!ud || !ud->ctx || argc != 1 || args[0].type != EXPRTK_VAL_STRING)
     return NET_ZERO;
   if (!ud->ctx->ws_client) {
     net_set_error(ud->ctx, "ws client not connected");
@@ -155,7 +155,7 @@ static exprtk_value_t fn_ws_recv(size_t argc, exprtk_value_t *args, void *user_d
   http_ud_t *ud = (http_ud_t *)user_data;
   if (!ud || !ud->ctx || argc > 1)
     return NET_ZERO;
-  if (argc == 1 && args[0].type != exprtk_VAL_NUMBER)
+  if (argc == 1 && args[0].type != EXPRTK_VAL_NUMBER)
     return NET_ZERO;
   if (!ud->ctx->ws_client) {
     net_set_error(ud->ctx, "ws client not connected");
@@ -176,7 +176,7 @@ static exprtk_value_t fn_ws_recv(size_t argc, exprtk_value_t *args, void *user_d
     return NET_ZERO;
   }
 
-  char *buf = turbo_arena_alloc(&ud->env->arena, len + 1);
+  char *buf = turbo_pool_alloc(&ud->env->arena, len + 1);
   if (!buf) {
     free(resp);
     net_set_error(ud->ctx, "response alloc failed");
@@ -186,7 +186,7 @@ static exprtk_value_t fn_ws_recv(size_t argc, exprtk_value_t *args, void *user_d
   buf[len] = '\0';
   free(resp);
   net_set_error(ud->ctx, "");
-  return (exprtk_value_t){exprtk_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
+  return (exprtk_value_t){EXPRTK_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
 }
 
 static exprtk_value_t fn_ws_close(size_t argc, exprtk_value_t *args, void *user_data) {
@@ -207,9 +207,9 @@ static exprtk_value_t fn_ws_close(size_t argc, exprtk_value_t *args, void *user_
 void net_load(void *p, void *e, void *s) {
   net_ctx_t *ctx = (net_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_arena_t *scratch = (turbo_arena_t *)s;
+  turbo_pool_t *scratch = (turbo_pool_t *)s;
   if (!ctx || !env) return;
-  http_ud_t *ud = turbo_arena_alloc(&env->arena, sizeof(*ud));
+  http_ud_t *ud = turbo_pool_alloc(&env->arena, sizeof(*ud));
   if (!ud) return;
   ud->ctx = ctx;
   ud->env = env;

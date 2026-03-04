@@ -7,43 +7,16 @@
 #include <simde/x86/avx2.h>
 #include <simde/x86/fma.h>
 
-#define SIMD_THRESHOLD 8
-
-static inline double simd_sum(const double *arr, size_t n) {
-    if (n < SIMD_THRESHOLD) {
-        double s = 0;
-        for (size_t i = 0; i < n; i++) s += arr[i];
-        return s;
-    }
-    simde__m256d acc = simde_mm256_setzero_pd();
-    size_t i = 0;
-    for (; i + 4 <= n; i += 4)
-        acc = simde_mm256_add_pd(acc, simde_mm256_loadu_pd(&arr[i]));
-    double tmp[4];
-    simde_mm256_storeu_pd(tmp, acc);
-    double s = tmp[0] + tmp[1] + tmp[2] + tmp[3];
-    for (; i < n; i++) s += arr[i];
-    return s;
-}
+#include "simd_helpers.h"
+#include <math.h>
+#include <stdlib.h>
 
 /* Sharpe = (mean(r) - rf) / std(r) * sqrt(annual_factor) */
 double exprtk_sharpe(const double *returns, size_t n, double rf, double annual_factor) {
     if (n < 2) return 0.0;
-    double mean = simd_sum(returns, n) / (double)n;
-
-    simde__m256d v_mean = simde_mm256_set1_pd(mean);
-    simde__m256d acc = simde_mm256_setzero_pd();
-    size_t i = 0;
-    for (; i + 4 <= n; i += 4) {
-        simde__m256d d = simde_mm256_sub_pd(simde_mm256_loadu_pd(&returns[i]), v_mean);
-        acc = simde_mm256_fmadd_pd(d, d, acc);
-    }
-    double tmp[4];
-    simde_mm256_storeu_pd(tmp, acc);
-    double var = tmp[0] + tmp[1] + tmp[2] + tmp[3];
-    for (; i < n; i++) { double d = returns[i] - mean; var += d * d; }
-
-    double std = sqrt(var / (double)(n - 1));
+    double mean, variance;
+    simd_mean_variance(returns, n, &mean, &variance);
+    double std = sqrt(variance);
     if (std < 1e-15) return 0.0;
     return (mean - rf) / std * sqrt(annual_factor);
 }
@@ -57,7 +30,10 @@ double exprtk_sortino(const double *returns, size_t n, double rf, double annual_
     size_t down_count = 0;
     for (size_t i = 0; i < n; i++) {
         double d = returns[i] - rf;
-        if (d < 0) { down_sum += d * d; down_count++; }
+        if (d < 0) {
+            down_sum += d * d;
+            down_count++;
+        }
     }
     if (down_count == 0) return 0.0;
     double down_std = sqrt(down_sum / (double)down_count);
@@ -153,15 +129,13 @@ double exprtk_ulcer_index(const double *equity, size_t n) {
 /* information_ratio = mean(excess) / std(excess) */
 double exprtk_information_ratio(const double *ret, const double *bench, size_t n) {
     if (n < 2) return 0.0;
-    double sum = 0, sum2 = 0;
-    for (size_t i = 0; i < n; i++) {
-        double e = ret[i] - bench[i];
-        sum += e;
-        sum2 += e * e;
-    }
-    double mean = sum / (double)n;
-    double var = sum2 / (double)(n - 1) - (sum * sum) / ((double)n * (double)(n - 1));
-    double te = sqrt(fabs(var));
+    double *excess = malloc(n * sizeof(double));
+    if (!excess) return 0.0;
+    simd_sub(ret, bench, excess, n);
+    double mean, variance;
+    simd_mean_variance(excess, n, &mean, &variance);
+    free(excess);
+    double te = sqrt(variance);
     if (te < 1e-15) return 0.0;
     return mean / te;
 }

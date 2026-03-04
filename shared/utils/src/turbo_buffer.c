@@ -6,25 +6,25 @@
 #include <sys/mman.h>
 #endif
 
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "stats.h"
 #include "turbo_atomic.h"
 
 /* Default configuration */
-#ifndef TURBO_ARENA_DEFAULT_REGION_SIZE
-  #define TURBO_ARENA_DEFAULT_REGION_SIZE (2 * 1024 * 1024) /* 2MB regions */
+#ifndef TURBO_POOL_DEFAULT_REGION_SIZE
+  #define TURBO_POOL_DEFAULT_REGION_SIZE (2 * 1024 * 1024) /* 2MB regions */
 #endif
 
-#ifndef TURBO_ARENA_MAX_REGIONS
-  #define TURBO_ARENA_MAX_REGIONS 64 /* Max regions per arena */
+#ifndef TURBO_POOL_MAX_REGIONS
+  #define TURBO_POOL_MAX_REGIONS 64 /* Max regions per arena */
 #endif
 
-#ifndef TURBO_ARENA_ALIGNMENT
-  #define TURBO_ARENA_ALIGNMENT 16 /* 16-byte alignment for SIMD */
+#ifndef TURBO_POOL_ALIGNMENT
+  #define TURBO_POOL_ALIGNMENT 16 /* 16-byte alignment for SIMD */
 #endif
 
-#ifndef TURBO_ARENA_RECYCLE_LIMIT
-  #define TURBO_ARENA_RECYCLE_LIMIT 1024 /* Max recycled buffers per arena */
+#ifndef TURBO_POOL_RECYCLE_LIMIT
+  #define TURBO_POOL_RECYCLE_LIMIT 1024 /* Max recycled buffers per arena */
 #endif
 
 /* Align size to boundary */
@@ -52,10 +52,10 @@ static void free_region_memory(void *ptr, size_t size) {
 }
 
 /* Create new enhanced region */
-static turbo_arena_region_t *create_region(size_t min_size) {
-  size_t region_size = TURBO_ARENA_DEFAULT_REGION_SIZE;
+static turbo_pool_region_t *create_region(size_t min_size) {
+  size_t region_size = TURBO_POOL_DEFAULT_REGION_SIZE;
   if (min_size > region_size) {
-    region_size = align_size(min_size + sizeof(turbo_arena_region_t), 4096);
+    region_size = align_size(min_size + sizeof(turbo_pool_region_t), 4096);
   }
 
   void *memory = alloc_region_memory(region_size);
@@ -63,9 +63,9 @@ static turbo_arena_region_t *create_region(size_t min_size) {
     return NULL;
   }
 
-  turbo_arena_region_t *region = (turbo_arena_region_t *)memory;
-  region->memory = (char *)memory + sizeof(turbo_arena_region_t);
-  region->size = region_size - sizeof(turbo_arena_region_t);
+  turbo_pool_region_t *region = (turbo_pool_region_t *)memory;
+  region->memory = (char *)memory + sizeof(turbo_pool_region_t);
+  region->size = region_size - sizeof(turbo_pool_region_t);
   region->used = 0;
   region->next = NULL;
   region->ref_count = 0;
@@ -74,11 +74,11 @@ static turbo_arena_region_t *create_region(size_t min_size) {
 }
 
 /* Free region */
-static void free_region(turbo_arena_region_t *region) {
+static void free_region(turbo_pool_region_t *region) {
   if (!region)
     return;
 
-  size_t total_size = region->size + sizeof(turbo_arena_region_t);
+  size_t total_size = region->size + sizeof(turbo_pool_region_t);
   free_region_memory(region, total_size);
 }
 
@@ -86,9 +86,9 @@ static void free_region(turbo_arena_region_t *region) {
  * Internal: Push buffer to recycle list. 
  * Assumes arena lock is held by caller.
  */
-static void arena_push_recycled_buffer_nolock(turbo_arena_t *arena,
-                                        turbo_arena_buffer_t *buffer) {
-  if (!arena || !buffer || buffer == (turbo_arena_buffer_t*)(uintptr_t)-1)
+static void arena_push_recycled_buffer_nolock(turbo_pool_t *arena,
+                                        turbo_pool_buffer_t *buffer) {
+  if (!arena || !buffer || buffer == (turbo_pool_buffer_t*)(uintptr_t)-1)
     return;
 
   if (arena->recycle_limit == 0)
@@ -109,17 +109,17 @@ static void arena_push_recycled_buffer_nolock(turbo_arena_t *arena,
  * Internal: Pop buffer from recycle list. 
  * Assumes arena lock is held by caller.
  */
-static turbo_arena_buffer_t *arena_pop_recycled_buffer_nolock(turbo_arena_t *arena,
+static turbo_pool_buffer_t *arena_pop_recycled_buffer_nolock(turbo_pool_t *arena,
                                                       size_t min_size) {
   if (!arena)
     return NULL;
 
-  turbo_arena_buffer_t **prev = &arena->recycle_head;
-  turbo_arena_buffer_t *buffer = arena->recycle_head;
+  turbo_pool_buffer_t **prev = &arena->recycle_head;
+  turbo_pool_buffer_t *buffer = arena->recycle_head;
 
   while (buffer) {
     /* Safety check for invalid pointer (0xFFFFFFFFFFFFFFFF) */
-    if (buffer == (turbo_arena_buffer_t*)(uintptr_t)-1) {
+    if (buffer == (turbo_pool_buffer_t*)(uintptr_t)-1) {
       *prev = NULL; /* Unlink corrupted node */
       break;
     }
@@ -144,7 +144,7 @@ static turbo_arena_buffer_t *arena_pop_recycled_buffer_nolock(turbo_arena_t *are
 }
 
 /* Initialize enhanced arena */
-int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
+int turbo_pool_init(turbo_pool_t *arena, size_t initial_size) {
   if (!arena)
     return -1;
 
@@ -152,20 +152,20 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
   
   /* Coroutine optimization: default to no-locking if global single-threaded mode is enabled */
   if (turbo_sync_is_single_threaded()) {
-    arena->flags &= ~TURBO_ARENA_FLAG_THREAD_SAFE;
+    arena->flags &= ~TURBO_POOL_FLAG_THREAD_SAFE;
   } else {
-    arena->flags |= TURBO_ARENA_FLAG_THREAD_SAFE;
+    arena->flags |= TURBO_POOL_FLAG_THREAD_SAFE;
   }
 
   /* Initialize mutex only if thread-safe flag is set */
-  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+  if (arena->flags & TURBO_POOL_FLAG_THREAD_SAFE) {
     turbo_mutex_init(&arena->lock);
   } else {
     arena->lock = NULL;
   }
 
   if (initial_size == 0) {
-    initial_size = TURBO_ARENA_DEFAULT_REGION_SIZE;
+    initial_size = TURBO_POOL_DEFAULT_REGION_SIZE;
   }
 
   arena->head = create_region(initial_size);
@@ -178,23 +178,23 @@ int turbo_arena_init(turbo_arena_t *arena, size_t initial_size) {
   arena->region_count = 1;
   arena->total_allocated = arena->head->size;
   arena->total_used = 0;
-  arena->flags |= TURBO_ARENA_FLAG_AUTO_GROW;
+  arena->flags |= TURBO_POOL_FLAG_AUTO_GROW;
   arena->recycle_head = NULL;
   arena->recycle_count = 0;
-  arena->recycle_limit = TURBO_ARENA_RECYCLE_LIMIT;
+  arena->recycle_limit = TURBO_POOL_RECYCLE_LIMIT;
 
   return 0;
 }
 
 /* Internal: Allocate from arena. Assumes lock held. */
-static void *turbo_arena_alloc_nolock(turbo_arena_t *arena, size_t size) {
+static void *turbo_pool_alloc_nolock(turbo_pool_t *arena, size_t size) {
   if (!arena || size == 0)
     return NULL;
 
-  size = align_size(size, TURBO_ARENA_ALIGNMENT);
+  size = align_size(size, TURBO_POOL_ALIGNMENT);
 
   /* Try current region first */
-  turbo_arena_region_t *region = arena->current;
+  turbo_pool_region_t *region = arena->current;
   if (region && (region->used + size <= region->size)) {
     void *ptr = region->memory + region->used;
     region->used += size;
@@ -214,15 +214,15 @@ static void *turbo_arena_alloc_nolock(turbo_arena_t *arena, size_t size) {
   }
 
   /* Need new region */
-  if (!(arena->flags & TURBO_ARENA_FLAG_AUTO_GROW)) {
+  if (!(arena->flags & TURBO_POOL_FLAG_AUTO_GROW)) {
     return NULL;
   }
 
-  if (arena->region_count >= TURBO_ARENA_MAX_REGIONS) {
+  if (arena->region_count >= TURBO_POOL_MAX_REGIONS) {
     return NULL;
   }
 
-  turbo_arena_region_t *new_region = create_region(size);
+  turbo_pool_region_t *new_region = create_region(size);
   if (!new_region) {
     return NULL;
   }
@@ -243,16 +243,16 @@ static void *turbo_arena_alloc_nolock(turbo_arena_t *arena, size_t size) {
 }
 
 /* Allocate from enhanced arena */
-void *turbo_arena_alloc(turbo_arena_t *arena, size_t size) {
+void *turbo_pool_alloc(turbo_pool_t *arena, size_t size) {
   if (!arena) return NULL;
   
-  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+  if (arena->flags & TURBO_POOL_FLAG_THREAD_SAFE) {
     turbo_mutex_lock(&arena->lock);
   }
   
-  void *ptr = turbo_arena_alloc_nolock(arena, size);
+  void *ptr = turbo_pool_alloc_nolock(arena, size);
   
-  if (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE) {
+  if (arena->flags & TURBO_POOL_FLAG_THREAD_SAFE) {
     turbo_mutex_unlock(&arena->lock);
   }
   
@@ -260,12 +260,12 @@ void *turbo_arena_alloc(turbo_arena_t *arena, size_t size) {
 }
 
 /* String duplication using arena allocation */
-char *turbo_arena_strdup(turbo_arena_t *arena, const char *str) {
+char *turbo_pool_strdup(turbo_pool_t *arena, const char *str) {
   if (!arena || !str)
     return NULL;
 
   size_t len = strlen(str) + 1;  /* Include null terminator */
-  char *copy = (char *)turbo_arena_alloc(arena, len);
+  char *copy = (char *)turbo_pool_alloc(arena, len);
   if (!copy)
     return NULL;
 
@@ -277,7 +277,7 @@ char *turbo_arena_strdup(turbo_arena_t *arena, const char *str) {
 #include <stdarg.h>
 #include <stdio.h>
 
-char *turbo_arena_sprintf(turbo_arena_t *arena, const char *fmt, ...) {
+char *turbo_pool_sprintf(turbo_pool_t *arena, const char *fmt, ...) {
   if (!arena || !fmt)
     return NULL;
 
@@ -292,7 +292,7 @@ char *turbo_arena_sprintf(turbo_arena_t *arena, const char *fmt, ...) {
     return NULL;
 
   /* Allocate buffer */
-  char *buf = (char *)turbo_arena_alloc(arena, (size_t)len + 1);
+  char *buf = (char *)turbo_pool_alloc(arena, (size_t)len + 1);
   if (!buf)
     return NULL;
 
@@ -305,21 +305,21 @@ char *turbo_arena_sprintf(turbo_arena_t *arena, const char *fmt, ...) {
 }
 
 /* Internal: Zero-copy buffer allocation. Assumes lock held. */
-static turbo_arena_buffer_t *turbo_arena_get_buffer_nolock(turbo_arena_t *arena,
+static turbo_pool_buffer_t *turbo_pool_get_buffer_nolock(turbo_pool_t *arena,
                                            size_t min_size) {
   if (!arena || min_size == 0)
     return NULL;
 
-  size_t aligned_size = align_size(min_size, TURBO_ARENA_ALIGNMENT);
-  size_t total_size = sizeof(turbo_arena_buffer_t) + aligned_size;
+  size_t aligned_size = align_size(min_size, TURBO_POOL_ALIGNMENT);
+  size_t total_size = sizeof(turbo_pool_buffer_t) + aligned_size;
 
   /* Allocate buffer header + data in one block */
-  turbo_arena_buffer_t *buffer =
-      (turbo_arena_buffer_t *)turbo_arena_alloc_nolock(arena, total_size);
+  turbo_pool_buffer_t *buffer =
+      (turbo_pool_buffer_t *)turbo_pool_alloc_nolock(arena, total_size);
   if (!buffer)
     return NULL;
 
-  buffer->data = (char *)buffer + sizeof(turbo_arena_buffer_t);
+  buffer->data = (char *)buffer + sizeof(turbo_pool_buffer_t);
   buffer->capacity = aligned_size;
   buffer->used = 0;
   buffer->ref_count = 1;
@@ -337,17 +337,17 @@ static turbo_arena_buffer_t *turbo_arena_get_buffer_nolock(turbo_arena_t *arena,
 }
 
 /* Zero-copy buffer allocation (recycle first, then allocate) */
-turbo_arena_buffer_t *turbo_arena_get_buffer(turbo_arena_t *arena, size_t min_size) {
+turbo_pool_buffer_t *turbo_pool_get_buffer(turbo_pool_t *arena, size_t min_size) {
   if (!arena) return NULL;
 
-  int thread_safe = (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE);
+  int thread_safe = (arena->flags & TURBO_POOL_FLAG_THREAD_SAFE);
   if (thread_safe) {
     turbo_mutex_lock(&arena->lock);
   }
   
-  turbo_arena_buffer_t *buffer = arena_pop_recycled_buffer_nolock(arena, min_size);
+  turbo_pool_buffer_t *buffer = arena_pop_recycled_buffer_nolock(arena, min_size);
   if (!buffer) {
-    buffer = turbo_arena_get_buffer_nolock(arena, min_size);
+    buffer = turbo_pool_get_buffer_nolock(arena, min_size);
   }
   
   if (thread_safe) {
@@ -358,14 +358,14 @@ turbo_arena_buffer_t *turbo_arena_get_buffer(turbo_arena_t *arena, size_t min_si
 }
 
 /* Reference counting for zero-copy */
-void turbo_arena_buffer_ref(turbo_arena_buffer_t *buffer) {
+void turbo_pool_ref(turbo_pool_buffer_t *buffer) {
   if (!buffer)
     return;
   /* Atomic increment */
   turbo_atomic_inc((turbo_atomic_int_t *)&buffer->ref_count);
 }
 
-void turbo_arena_buffer_unref(turbo_arena_buffer_t *buffer) {
+void turbo_pool_unref(turbo_pool_buffer_t *buffer) {
   if (!buffer) 
       return;
 
@@ -380,10 +380,10 @@ void turbo_arena_buffer_unref(turbo_arena_buffer_t *buffer) {
       free(buffer);
     } else {
       /* Normal arena buffer - return to pool */
-      turbo_arena_t *arena = buffer->arena;
+      turbo_pool_t *arena = buffer->arena;
       if (!arena) return;
 
-      int thread_safe = (arena->flags & TURBO_ARENA_FLAG_THREAD_SAFE);
+      int thread_safe = (arena->flags & TURBO_POOL_FLAG_THREAD_SAFE);
       
       if (thread_safe) {
         turbo_mutex_lock(&arena->lock);
@@ -402,9 +402,9 @@ void turbo_arena_buffer_unref(turbo_arena_buffer_t *buffer) {
 }
 
 /* Get buffer slice for zero-copy operations */
-turbo_arena_slice_t turbo_arena_buffer_slice(turbo_arena_buffer_t *buffer,
+turbo_pool_slice_t turbo_pool_slice(turbo_pool_buffer_t *buffer,
                                            size_t offset, size_t length) {
-  turbo_arena_slice_t slice = {0};
+  turbo_pool_slice_t slice = {0};
 
   if (!buffer || offset >= buffer->used) {
     return slice;
@@ -419,22 +419,22 @@ turbo_arena_slice_t turbo_arena_buffer_slice(turbo_arena_buffer_t *buffer,
   slice.buffer = buffer;
 
   /* Reference the buffer */
-  turbo_arena_buffer_ref(buffer);
+  turbo_pool_ref(buffer);
 
   return slice;
 }
 
 /* Release slice */
-void turbo_arena_slice_release(turbo_arena_slice_t *slice) {
+void turbo_pool_slice_release(turbo_pool_slice_t *slice) {
   if (!slice || !slice->buffer)
     return;
 
-  turbo_arena_buffer_unref(slice->buffer);
+  turbo_pool_unref(slice->buffer);
   memset(slice, 0, sizeof(*slice));
 }
 
 /* Zero-copy external buffer wrapping */
-turbo_arena_buffer_t* turbo_arena_wrap_external(
+turbo_pool_buffer_t* turbo_pool_wrap_external(
     void *data,
     size_t size,
     void (*free_cb)(void *data, void *user_data),
@@ -444,8 +444,8 @@ turbo_arena_buffer_t* turbo_arena_wrap_external(
     return NULL;
   
   /* Allocate buffer structure only (not data!) */
-  turbo_arena_buffer_t *buffer = 
-      (turbo_arena_buffer_t*)calloc(1, sizeof(turbo_arena_buffer_t));
+  turbo_pool_buffer_t *buffer = 
+      (turbo_pool_buffer_t*)calloc(1, sizeof(turbo_pool_buffer_t));
   if (!buffer)
     return NULL;
   
@@ -466,12 +466,12 @@ turbo_arena_buffer_t* turbo_arena_wrap_external(
   return buffer;
 }
 
-int turbo_arena_buffer_is_external(const turbo_arena_buffer_t *buffer) {
+int turbo_pool_is_external(const turbo_pool_buffer_t *buffer) {
   return buffer ? buffer->is_external : 0;
 }
 
 /* Reset arena (keep regions, reset usage) */
-void turbo_arena_reset(turbo_arena_t *arena) {
+void turbo_pool_reset(turbo_pool_t *arena) {
   if (!arena)
     return;
 
@@ -479,7 +479,7 @@ void turbo_arena_reset(turbo_arena_t *arena) {
 
   size_t regions_with_refs = 0;
 
-  for (turbo_arena_region_t *region = arena->head; region;
+  for (turbo_pool_region_t *region = arena->head; region;
        region = region->next) {
     if (region->ref_count == 0) {
       region->used = 0;
@@ -492,7 +492,7 @@ void turbo_arena_reset(turbo_arena_t *arena) {
   arena->total_used = 0;
 
   /* Recalculate used memory for regions with references */
-  for (turbo_arena_region_t *region = arena->head; region;
+  for (turbo_pool_region_t *region = arena->head; region;
        region = region->next) {
     arena->total_used += region->used;
   }
@@ -501,17 +501,17 @@ void turbo_arena_reset(turbo_arena_t *arena) {
 }
 
 /* Trim unused regions (only if no references) */
-void turbo_arena_trim(turbo_arena_t *arena) {
+void turbo_pool_trim(turbo_pool_t *arena) {
   if (!arena)
     return;
 
   turbo_mutex_lock(&arena->lock);
 
-  turbo_arena_region_t *prev = NULL;
-  turbo_arena_region_t *current = arena->head;
+  turbo_pool_region_t *prev = NULL;
+  turbo_pool_region_t *current = arena->head;
 
   while (current) {
-    turbo_arena_region_t *next = current->next;
+    turbo_pool_region_t *next = current->next;
 
     /* Can only free regions with no references and no usage */
     if (current->ref_count == 0 && current->used == 0 &&
@@ -539,18 +539,18 @@ void turbo_arena_trim(turbo_arena_t *arena) {
 }
 
 /* Free entire arena */
-void turbo_arena_free(turbo_arena_t *arena) {
+void turbo_pool_free(turbo_pool_t *arena) {
   if (!arena)
     return;
   
   /* First, invalidate the arena state to prevent other threads from using it.
    * Save the lock pointer, clear arena fields, then destroy the lock.
-   * This ensures that any concurrent turbo_arena_buffer_unref() will see
+   * This ensures that any concurrent turbo_pool_unref() will see
    * the NULL arena state and bail out safely. */
   turbo_mutex_t lock_to_destroy = arena->lock;
   
   /* Capture region list before clearing */
-  turbo_arena_region_t *current = arena->head;
+  turbo_pool_region_t *current = arena->head;
   
   /* Clear arena fields FIRST - this marks the arena as invalid.
    * Any concurrent access will see NULL lock and bail out. */
@@ -562,7 +562,7 @@ void turbo_arena_free(turbo_arena_t *arena) {
   
   /* Now free all regions */
   while (current) {
-    turbo_arena_region_t *next = current->next;
+    turbo_pool_region_t *next = current->next;
     free_region(current);
     current = next;
   }
@@ -579,15 +579,15 @@ void turbo_arena_free(turbo_arena_t *arena) {
 }
 
 /* Get arena statistics */
-void turbo_arena_get_stats(const turbo_arena_t *arena,
-                          turbo_arena_stats_t *stats) {
+void turbo_pool_get_stats(const turbo_pool_t *arena,
+                          turbo_pool_stats_t *stats) {
   if (!arena || !stats)
     return;
 
   // We can't lock const arena in strict C if mutex is mixed in? 
   // turbo_mutex_lock takes pointer. `arena->lock` is mutable data even in const struct if it's a pointer.
   // Cast away const to lock.
-  turbo_arena_t *mut_arena = (turbo_arena_t*)arena;
+  turbo_pool_t *mut_arena = (turbo_pool_t*)arena;
   turbo_mutex_lock(&mut_arena->lock);
 
   memset(stats, 0, sizeof(*stats));
@@ -602,7 +602,7 @@ void turbo_arena_get_stats(const turbo_arena_t *arena,
           : 0.0;
 
   /* Count regions with references */
-  for (turbo_arena_region_t *region = arena->head; region;
+  for (turbo_pool_region_t *region = arena->head; region;
        region = region->next) {
     if (region->ref_count > 0) {
       stats->regions_with_refs++;
@@ -620,10 +620,10 @@ void turbo_arena_get_stats(const turbo_arena_t *arena,
 }
 
 /* Return buffer to pool */
-void turbo_arena_buffer_release(turbo_arena_buffer_t *buffer) {
+void turbo_pool_release(turbo_pool_buffer_t *buffer) {
   if (!buffer)
     return;
   
   // Just Unref. If refcount hits 0, unref will recycle it.
-  turbo_arena_buffer_unref(buffer);
+  turbo_pool_unref(buffer);
 }

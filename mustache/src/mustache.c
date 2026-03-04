@@ -1,6 +1,6 @@
 #include "mustache.h"
 #include <errno.h>
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "turbo_str.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -1439,20 +1439,20 @@ static int string_out_escaped(const char *output, size_t size, void *renderer_da
 
 static int arena_out_verbatim(const char *output, size_t size, void *renderer_data) {
   MUSTACHE_STRING_RENDERER_ARENA *renderer = (MUSTACHE_STRING_RENDERER_ARENA *)renderer_data;
-  turbo_arena_buffer_t *buf = renderer->buffer;
+  turbo_pool_buffer_t *buf = renderer->buffer;
   if (!buf) {
     return -1;
   }
 
   if (buf->used + size > buf->capacity) {
     size_t min_size = buf->used + size;
-    turbo_arena_buffer_t *new_buf = turbo_arena_get_buffer(buf->arena, min_size);
+    turbo_pool_buffer_t *new_buf = turbo_pool_get_buffer(buf->arena, min_size);
     if (!new_buf) {
       return -1;
     }
     memcpy(new_buf->data, buf->data, buf->used);
     new_buf->used = buf->used;
-    turbo_arena_buffer_release(buf);
+    turbo_pool_unref(buf);
     renderer->buffer = new_buf;
     buf = new_buf;
   }
@@ -1486,20 +1486,20 @@ static int arena_out_escaped(const char *output, size_t size, void *renderer_dat
   }
 
   MUSTACHE_STRING_RENDERER_ARENA *renderer = (MUSTACHE_STRING_RENDERER_ARENA *)renderer_data;
-  turbo_arena_buffer_t *buf = renderer->buffer;
+  turbo_pool_buffer_t *buf = renderer->buffer;
   if (!buf) {
     return -1;
   }
 
   if (buf->used + needed > buf->capacity) {
     size_t min_size = buf->used + needed;
-    turbo_arena_buffer_t *new_buf = turbo_arena_get_buffer(buf->arena, min_size);
+    turbo_pool_buffer_t *new_buf = turbo_pool_get_buffer(buf->arena, min_size);
     if (!new_buf) {
       return -1;
     }
     memcpy(new_buf->data, buf->data, buf->used);
     new_buf->used = buf->used;
-    turbo_arena_buffer_release(buf);
+    turbo_pool_unref(buf);
     renderer->buffer = new_buf;
     buf = new_buf;
   }
@@ -1568,13 +1568,13 @@ void mustache_string_renderer_free(MUSTACHE_STRING_RENDERER *renderer) {
 }
 
 int mustache_string_renderer_init_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer,
-                                        turbo_arena_t *arena, size_t min_capacity) {
+                                        turbo_pool_t *arena, size_t min_capacity) {
   if (!renderer || !arena) {
     return -1;
   }
   renderer->base.out_verbatim = arena_out_verbatim;
   renderer->base.out_escaped = arena_out_escaped;
-  renderer->buffer = turbo_arena_get_buffer(arena, min_capacity ? min_capacity : 1024);
+  renderer->buffer = turbo_pool_get_buffer(arena, min_capacity ? min_capacity : 1024);
   if (!renderer->buffer) {
     return -1;
   }
@@ -1595,7 +1595,7 @@ char *mustache_string_renderer_get_arena(MUSTACHE_STRING_RENDERER_ARENA *rendere
 
 void mustache_string_renderer_free_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer) {
   if (renderer && renderer->buffer) {
-    turbo_arena_buffer_release(renderer->buffer);
+    turbo_pool_unref(renderer->buffer);
     renderer->buffer = NULL;
   }
 }

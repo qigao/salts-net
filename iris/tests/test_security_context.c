@@ -5,7 +5,7 @@
 #include <time.h>
 #include "tinytest.h"
 #include "router.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "netcore/turbo_coro_client.h"
 #include "security.h"
 
@@ -20,11 +20,11 @@ spec("security_context") {
 
     it("should initialize security context") {
         // Create arena
-        turbo_arena_t arena;
-        check_int_eq(turbo_arena_init(&arena, 4096), 0);
+        turbo_pool_t arena;
+        check_int_eq(turbo_pool_init(&arena, 4096), 0);
         
         // Create request using arena allocation (simulating create_req)
-        Req *req = turbo_arena_alloc(&arena, sizeof(Req));
+        Req *req = turbo_pool_alloc(&arena, sizeof(Req));
         check_not_null(req);
         
         // Initialize request structure (simulating create_req logic)
@@ -33,7 +33,7 @@ spec("security_context") {
         req->client = NULL; // Mock client
         
         // Initialize security context
-        req->security = turbo_arena_alloc(&arena, sizeof(iris_security_context_t));
+        req->security = turbo_pool_alloc(&arena, sizeof(iris_security_context_t));
         check_not_null(req->security);
         check_int_eq(iris_security_context_init(req->security), IRIS_SECURITY_OK);
         req->request_start_time = time(NULL);
@@ -69,7 +69,7 @@ spec("security_context") {
         check_int_eq(req->security->threat_level, 5);
         
         // Cleanup
-        turbo_arena_free(&arena);
+        turbo_pool_free(&arena);
     }
 
     it("should have reasonable structure size") {

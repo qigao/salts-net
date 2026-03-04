@@ -4,6 +4,7 @@
  */
 #include "ts.h"
 #include "ts_internal.h"
+#include "simd_helpers.h"
 #include <math.h>
 #include <string.h>
 
@@ -45,17 +46,8 @@ size_t exprtk_ts_rolling_skew(const double *in, size_t n, size_t period, double 
     if (period < 3 || n < period) return 0;
     for (size_t i = 0; i < period - 1; i++) out[i] = 0;
     for (size_t i = period - 1; i < n; i++) {
-        double sum = 0, sum2 = 0, sum3 = 0;
-        for (size_t j = 0; j < period; j++) {
-            double v = in[i - period + 1 + j];
-            sum += v; sum2 += v * v; sum3 += v * v * v;
-        }
-        double mean = sum / (double)period;
-        double var = sum2 / (double)period - mean * mean;
-        double std = sqrt(fabs(var));
-        if (std < 1e-15) { out[i] = 0; continue; }
-        double m3 = sum3 / (double)period - 3.0 * mean * sum2 / (double)period + 2.0 * mean * mean * mean;
-        out[i] = m3 / (std * std * std) * (double)period * (double)period / ((double)(period - 1) * (double)(period - 2));
+        const double *sub = &in[i - period + 1];
+        out[i] = exprtk_skewness(sub, period);
     }
     return n;
 }
@@ -64,24 +56,8 @@ size_t exprtk_ts_rolling_kurt(const double *in, size_t n, size_t period, double 
     if (period < 4 || n < period) return 0;
     for (size_t i = 0; i < period - 1; i++) out[i] = 0;
     for (size_t i = period - 1; i < n; i++) {
-        double sum = 0, sum2 = 0, sum4 = 0;
-        for (size_t j = 0; j < period; j++) {
-            double v = in[i - period + 1 + j];
-            double v2 = v * v;
-            sum += v; sum2 += v2; sum4 += v2 * v2;
-        }
-        double mean = sum / (double)period;
-        double var = sum2 / (double)period - mean * mean;
-        if (fabs(var) < 1e-15) { out[i] = 0; continue; }
-        /* Compute centered 4th moment */
-        double m4 = 0;
-        for (size_t j = 0; j < period; j++) {
-            double d = in[i - period + 1 + j] - mean;
-            double d2 = d * d;
-            m4 += d2 * d2;
-        }
-        m4 /= (double)period;
-        out[i] = m4 / (var * var) - 3.0;
+        const double *sub = &in[i - period + 1];
+        out[i] = exprtk_kurtosis(sub, period);
     }
     return n;
 }
@@ -90,16 +66,25 @@ size_t exprtk_ts_rolling_corr(const double *a, const double *b, size_t n, size_t
     if (period < 2 || n < period) return 0;
     for (size_t i = 0; i < period - 1; i++) out[i] = 0;
     for (size_t i = period - 1; i < n; i++) {
-        double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
-        for (size_t j = 0; j < period; j++) {
-            size_t k = i - period + 1 + j;
-            sa += a[k]; sb += b[k];
-            saa += a[k] * a[k]; sbb += b[k] * b[k];
-            sab += a[k] * b[k];
+        size_t offset = i - period + 1;
+        const double *sub_a = &a[offset];
+        const double *sub_b = &b[offset];
+        
+        double ma, mb, va, vb;
+        simd_mean_variance(sub_a, period, &ma, &va);
+        simd_mean_variance(sub_b, period, &mb, &vb);
+        
+        if (va < 1e-15 || vb < 1e-15) {
+            out[i] = 0;
+            continue;
         }
-        double p = (double)period;
-        double denom = sqrt((p * saa - sa * sa) * (p * sbb - sb * sb));
-        out[i] = (fabs(denom) > 1e-15) ? (p * sab - sa * sb) / denom : 0;
+        
+        double covariance = 0;
+        for (size_t j = 0; j < period; j++) {
+            covariance += (sub_a[j] - ma) * (sub_b[j] - mb);
+        }
+        covariance /= (double)(period - 1);
+        out[i] = covariance / sqrt(va * vb);
     }
     return n;
 }
@@ -108,15 +93,9 @@ size_t exprtk_ts_rolling_beta(const double *y, const double *x, size_t n, size_t
     if (period < 2 || n < period) return 0;
     for (size_t i = 0; i < period - 1; i++) out[i] = 0;
     for (size_t i = period - 1; i < n; i++) {
-        double sx = 0, sy = 0, sxx = 0, sxy = 0;
-        for (size_t j = 0; j < period; j++) {
-            size_t k = i - period + 1 + j;
-            sx += x[k]; sy += y[k];
-            sxx += x[k] * x[k]; sxy += x[k] * y[k];
-        }
-        double p = (double)period;
-        double denom = p * sxx - sx * sx;
-        out[i] = (fabs(denom) > 1e-15) ? (p * sxy - sx * sy) / denom : 0;
+        size_t offset = i - period + 1;
+        ols_result_t res = ols_fit(&y[offset], &x[offset], period);
+        out[i] = res.slope;
     }
     return n;
 }

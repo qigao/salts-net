@@ -13,7 +13,7 @@
 #include "turbo_callbacks.h"
 #include <asn1/x509_generate.h>
 
-static int on_recv(void *conn, const turbo_arena_slice_t *slice, void *user_data) {
+static int on_recv(void *conn, const turbo_pool_slice_t *slice, void *user_data) {
     (void)user_data;
 
     if (!slice || !slice->data) {

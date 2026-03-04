@@ -10,7 +10,7 @@
 
 #include "config.h"
 #include "internal.h"
-#include "arena_buffer.h"
+#include "turbo_buffer.h"
 #include "stats.h"
 #include "turbo_kcp.h"
 #include "ikcp.h"
@@ -53,7 +53,7 @@ struct turbo_kcp_context_s {
 /* Send operation for zero-copy */
 typedef struct turbo_kcp_send_op_s {
   uv_udp_send_t req;
-  turbo_arena_slice_t slice;
+  turbo_pool_slice_t slice;
   turbo_kcp_server_t *server;
   struct turbo_kcp_send_op_s *next;
 } turbo_kcp_send_op_t;
@@ -198,7 +198,7 @@ static turbo_kcp_send_op_t *get_send_op(turbo_kcp_server_t *server) {
 static void return_send_op(turbo_kcp_send_op_t *op) {
   if (!op) return;
 
-  turbo_arena_slice_release(&op->slice);
+  turbo_pool_slice_release(&op->slice);
 
     turbo_kcp_sync_lock();
     if (g_send_op_pool_size < MAX_SEND_OP_POOL_SIZE) {
@@ -241,18 +241,18 @@ static int ikcp_output_callback(const char *buf, int len, ikcpcb *kcp, void *use
   turbo_kcp_send_op_t *op = get_send_op(client->server);
   if (!op) return -1;
 
-  turbo_arena_buffer_t *buffer = turbo_arena_get_buffer(&client->server->arena, len);
+  turbo_pool_buffer_t *buffer = turbo_pool_get_buffer(&client->server->arena, len);
   if (!buffer) {
     return_send_op(op);
     return -1;
   }
 
   memcpy(buffer->data, buf, len);
-  turbo_arena_buffer_set_used(buffer, len);
+  turbo_pool_set_used(buffer, len);
 
-  op->slice = turbo_arena_buffer_slice(buffer, 0, len);
+  op->slice = turbo_pool_slice(buffer, 0, len);
   if (!op->slice.data) {
-    turbo_arena_buffer_unref(buffer);
+    turbo_pool_unref(buffer);
     return_send_op(op);
     return -1;
   }
@@ -264,7 +264,7 @@ static int ikcp_output_callback(const char *buf, int len, ikcpcb *kcp, void *use
   int rc = uv_udp_send(&op->req, client->server->handle, &uv_buf, 1,
                        (const struct sockaddr *)&client->peer_addr, on_send_complete);
 
-  turbo_arena_buffer_unref(buffer);
+  turbo_pool_unref(buffer);
 
   if (rc != 0) {
     printf("DEBUG: uv_udp_send failed: %d\n", rc);
@@ -365,21 +365,21 @@ static void alloc_recv_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf
 /* Send raw UDP packet (for handshake) */
 static int send_raw_packet(turbo_kcp_server_t *server, const struct sockaddr *addr,
                            const char *data, size_t len) {
-  turbo_arena_buffer_t *buffer = turbo_arena_get_buffer(&server->arena, len);
+  turbo_pool_buffer_t *buffer = turbo_pool_get_buffer(&server->arena, len);
   if (!buffer) return -1;
 
   memcpy(buffer->data, data, len);
-  turbo_arena_buffer_set_used(buffer, len);
+  turbo_pool_set_used(buffer, len);
 
   turbo_kcp_send_op_t *op = get_send_op(server);
   if (!op) {
-    turbo_arena_buffer_unref(buffer);
+    turbo_pool_unref(buffer);
     return -1;
   }
 
-  op->slice = turbo_arena_buffer_slice(buffer, 0, len);
+  op->slice = turbo_pool_slice(buffer, 0, len);
   if (!op->slice.data) {
-    turbo_arena_buffer_unref(buffer);
+    turbo_pool_unref(buffer);
     return_send_op(op);
     return -1;
   }
@@ -387,7 +387,7 @@ static int send_raw_packet(turbo_kcp_server_t *server, const struct sockaddr *ad
   uv_buf_t uv_buf = uv_buf_init(op->slice.data, (unsigned int)op->slice.length);
   int rc = uv_udp_send(&op->req, server->handle, &uv_buf, 1, addr, on_send_complete);
 
-  turbo_arena_buffer_unref(buffer);
+  turbo_pool_unref(buffer);
 
   if (rc != 0) {
     return_send_op(op);
@@ -406,7 +406,7 @@ static void handle_connection_request(turbo_kcp_server_t *server, const struct s
   if (strncmp(msg, KCP_CONN_SYN, strlen(KCP_CONN_SYN)) != 0) return;
 
   /* Create new client */
-  turbo_kcp_client_t *client = turbo_arena_alloc(&server->arena, sizeof(turbo_kcp_client_t));
+  turbo_kcp_client_t *client = turbo_pool_alloc(&server->arena, sizeof(turbo_kcp_client_t));
   if (!client) return;
 
   memset(client, 0, sizeof(*client));
@@ -499,21 +499,21 @@ static void process_kcp_recv(turbo_kcp_server_t *server, turbo_kcp_client_t *cli
 
   int peeksize;
   while ((peeksize = ikcp_peeksize(client->kcp_ctx->kcp)) > 0) {
-    turbo_arena_buffer_t *buffer = turbo_arena_get_buffer(&server->arena, peeksize);
+    turbo_pool_buffer_t *buffer = turbo_pool_get_buffer(&server->arena, peeksize);
     if (!buffer) break;
 
     int recv_len = ikcp_recv(client->kcp_ctx->kcp, buffer->data, peeksize);
     if (recv_len > 0) {
-      turbo_arena_buffer_set_used(buffer, recv_len);
+      turbo_pool_set_used(buffer, recv_len);
 
       if (server->on_recv) {
-        turbo_arena_slice_t slice = turbo_arena_buffer_slice(buffer, 0, recv_len);
+        turbo_pool_slice_t slice = turbo_pool_slice(buffer, 0, recv_len);
         server->on_recv(server, &slice, client);
-        turbo_arena_slice_release(&slice);
+        turbo_pool_slice_release(&slice);
       }
     }
 
-    turbo_arena_buffer_unref(buffer);
+    turbo_pool_unref(buffer);
 
     /* Check if client was closed in the callback */
     if (!client->kcp_ctx) {
@@ -595,20 +595,20 @@ int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const cha
 
   init_kcp_stats();
 
-  if (turbo_arena_init(&server->arena, 0) != 0) {
+  if (turbo_pool_init(&server->arena, 0) != 0) {
     return UV_ENOMEM;
   }
 
   server->handle = (uv_udp_t *)malloc(sizeof(uv_udp_t));
   if (!server->handle) {
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return UV_ENOMEM;
   }
 
   int rc = uv_udp_init(loop, server->handle);
   if (rc != 0) {
     free(server->handle);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
@@ -616,12 +616,12 @@ int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const cha
 
   /* Allocate receive buffers */
   size_t recv_buf_size = TURBO_KCP_DEFAULT_RECV_BUFFER_SIZE;
-  server->recv_buffer1 = turbo_arena_get_buffer(&server->arena, recv_buf_size);
-  server->recv_buffer2 = turbo_arena_get_buffer(&server->arena, recv_buf_size);
+  server->recv_buffer1 = turbo_pool_get_buffer(&server->arena, recv_buf_size);
+  server->recv_buffer2 = turbo_pool_get_buffer(&server->arena, recv_buf_size);
 
   if (!server->recv_buffer1) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return UV_ENOMEM;
   }
 
@@ -633,14 +633,14 @@ int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const cha
   rc = uv_ip4_addr(bind_host, (int)port, &addr4);
   if (rc != 0) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
   rc = uv_udp_bind(server->handle, (const struct sockaddr *)&addr4, 0);
   if (rc != 0) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
     return rc;
   }
 
@@ -694,15 +694,15 @@ void turbo_kcp_server_stop(turbo_kcp_server_t *server) {
   }
 
   if (server->recv_buffer1) {
-    turbo_arena_buffer_unref(server->recv_buffer1);
+    turbo_pool_unref(server->recv_buffer1);
     server->recv_buffer1 = NULL;
   }
   if (server->recv_buffer2) {
-    turbo_arena_buffer_unref(server->recv_buffer2);
+    turbo_pool_unref(server->recv_buffer2);
     server->recv_buffer2 = NULL;
   }
 
-  turbo_arena_free(&server->arena);
+  turbo_pool_free(&server->arena);
 }
 
 /* Set KCP nodelay configuration */
@@ -738,13 +738,13 @@ int turbo_kcp_server_set_mtu(turbo_kcp_server_t *server, int mtu) {
 }
 
 /* Get zero-copy send buffer */
-turbo_arena_buffer_t *turbo_kcp_get_send_buffer(turbo_kcp_server_t *server, size_t min_size) {
+turbo_pool_buffer_t *turbo_kcp_get_send_buffer(turbo_kcp_server_t *server, size_t min_size) {
   if (!server) return NULL;
-  return turbo_arena_get_buffer(&server->arena, min_size);
+  return turbo_pool_get_buffer(&server->arena, min_size);
 }
 
 /* Send with zero-copy buffer */
-int turbo_kcp_send_buffer(turbo_kcp_client_t *client, turbo_arena_buffer_t *buffer,
+int turbo_kcp_send_buffer(turbo_kcp_client_t *client, turbo_pool_buffer_t *buffer,
                           size_t length) {
   if (!client || !client->kcp_ctx || !client->kcp_ctx->kcp || !buffer) return UV_EINVAL;
   if (length > buffer->used) return UV_EINVAL;
@@ -791,14 +791,14 @@ int turbo_kcp_client_init(turbo_kcp_client_t *client, uv_loop_t *loop) {
   memset(client->server, 0, sizeof(*client->server));
   client->server->loop = loop;
 
-  if (turbo_arena_init(&client->server->arena, 0) != 0) {
+  if (turbo_pool_init(&client->server->arena, 0) != 0) {
     free(client->server);
     return UV_ENOMEM;
   }
 
   client->server->handle = (uv_udp_t *)malloc(sizeof(uv_udp_t));
   if (!client->server->handle) {
-    turbo_arena_free(&client->server->arena);
+    turbo_pool_free(&client->server->arena);
     free(client->server);
     return UV_ENOMEM;
   }
@@ -806,7 +806,7 @@ int turbo_kcp_client_init(turbo_kcp_client_t *client, uv_loop_t *loop) {
   int rc = uv_udp_init(loop, client->server->handle);
   if (rc != 0) {
     free(client->server->handle);
-    turbo_arena_free(&client->server->arena);
+    turbo_pool_free(&client->server->arena);
     free(client->server);
     return rc;
   }
@@ -839,7 +839,7 @@ int turbo_kcp_client_connect(turbo_kcp_client_t *client, const char *host, unsig
 
   /* Allocate receive buffer */
   size_t recv_buf_size = TURBO_KCP_DEFAULT_RECV_BUFFER_SIZE;
-  client->server->recv_buffer1 = turbo_arena_get_buffer(&client->server->arena, recv_buf_size);
+  client->server->recv_buffer1 = turbo_pool_get_buffer(&client->server->arena, recv_buf_size);
   if (!client->server->recv_buffer1) {
     return UV_ENOMEM;
   }
@@ -916,7 +916,7 @@ void turbo_kcp_client_close(turbo_kcp_client_t *client) {
           uv_close((uv_handle_t *)client->server->handle, on_handle_closed);
         }
       }
-      turbo_arena_free(&client->server->arena);
+      turbo_pool_free(&client->server->arena);
       free(client->server);
     }
     client->server = NULL;
@@ -930,7 +930,7 @@ int turbo_kcp_client_send(turbo_kcp_client_t *client, const char *data, size_t l
   return turbo_kcp_send(client, data, length);
 }
 
-int turbo_kcp_client_send_buffer(turbo_kcp_client_t *client, turbo_arena_buffer_t *buffer,
+int turbo_kcp_client_send_buffer(turbo_kcp_client_t *client, turbo_pool_buffer_t *buffer,
                                  size_t length) {
   return turbo_kcp_send_buffer(client, buffer, length);
 }
@@ -958,7 +958,7 @@ void turbo_kcp_get_stats(const turbo_kcp_server_t *server, turbo_kcp_stats_t *st
   if (!server || !stats) return;
 
   memset(stats, 0, sizeof(*stats));
-  turbo_arena_get_stats(&server->arena, &stats->arena_stats);
+  turbo_pool_get_stats(&server->arena, &stats->arena_stats);
 
   turbo_stat_entry_t *entry;
 
@@ -1046,7 +1046,7 @@ void turbo_kcp_client_get_stats(const turbo_kcp_client_t *client, turbo_kcp_stat
   stats->clients_active = client->connected ? 1 : 0;
 
   if (client->server) {
-    turbo_arena_get_stats(&client->server->arena, &stats->arena_stats);
+    turbo_pool_get_stats(&client->server->arena, &stats->arena_stats);
   }
 }
 
@@ -1079,15 +1079,15 @@ void turbo_kcp_reset_stats(turbo_kcp_server_t *server) {
 /* Trim arena memory */
 void turbo_kcp_trim_memory(turbo_kcp_server_t *server) {
   if (!server) return;
-  turbo_arena_trim(&server->arena);
+  turbo_pool_trim(&server->arena);
 }
 
 /* Get memory usage */
 size_t turbo_kcp_get_memory_usage(const turbo_kcp_server_t *server) {
   if (!server) return 0;
 
-  turbo_arena_stats_t stats;
-  turbo_arena_get_stats(&server->arena, &stats);
+  turbo_pool_stats_t stats;
+  turbo_pool_get_stats(&server->arena, &stats);
   return stats.total_allocated;
 }
 

@@ -6,12 +6,12 @@
 #include "ts_internal.h"
 #include "ts.h"
 
-#define ALLOC_DBL(arena, n) TURBO_ARENA_ALLOC_ARRAY(arena, double, n)
+#define ALLOC_DBL(arena, n) TURBO_POOL_ALLOC_ARRAY(arena, double, n)
 
 static exprtk_value_t fn_ts_diff(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_arena_t *arena) {
+                                 turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -23,9 +23,9 @@ static exprtk_value_t fn_ts_diff(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_ts_autocorr(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_arena_t *arena) {
+                                     turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t ml = (size_t)args[1].data.number;
     double *out = ALLOC_DBL(arena, ml + 1);
     if (out) {
@@ -37,9 +37,9 @@ static exprtk_value_t fn_ts_autocorr(size_t argc, exprtk_value_t *args, exprtk_e
 }
 
 static exprtk_value_t fn_ts_pacf(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_arena_t *arena) {
+                                 turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t ml = (size_t)args[1].data.number;
     double *out = ALLOC_DBL(arena, ml + 1);
     if (out) {
@@ -51,9 +51,9 @@ static exprtk_value_t fn_ts_pacf(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_ts_adf(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_arena_t *arena) {
+                                turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     double *out = ALLOC_DBL(arena, 2);
     if (out) {
       exprtk_ts_adf(args[0].data.vector.data, args[0].data.vector.size, (size_t)args[1].data.number,
@@ -65,9 +65,9 @@ static exprtk_value_t fn_ts_adf(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ts_garch(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_arena_t *arena) {
+                                  turbo_pool_t *arena) {
   (void)env;
-  if (argc == 3 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc == 3 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -79,18 +79,18 @@ static exprtk_value_t fn_ts_garch(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_ts_hurst(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_arena_t *arena) {
+                                  turbo_pool_t *arena) {
   (void)env;
-  if (argc == 1 && args[0].type == exprtk_VAL_VECTOR)
+  if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
     return exprtk_val_num(
         exprtk_ts_hurst(args[0].data.vector.data, args[0].data.vector.size, NULL, arena));
   return exprtk_val_num(0);
 }
 
 static exprtk_value_t fn_ts_match(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_arena_t *arena) {
+                                  turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -102,10 +102,10 @@ static exprtk_value_t fn_ts_match(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_ts_match_cosine(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                         turbo_arena_t *arena) {
+                                         turbo_pool_t *arena) {
   (void)env;
   (void)arena;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -117,9 +117,9 @@ static exprtk_value_t fn_ts_match_cosine(size_t argc, exprtk_value_t *args, expr
 }
 
 static exprtk_value_t fn_ts_match_normalized(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                             turbo_arena_t *arena) {
+                                             turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -132,12 +132,12 @@ static exprtk_value_t fn_ts_match_normalized(size_t argc, exprtk_value_t *args, 
 }
 
 static exprtk_value_t fn_ts_match_candle(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                         turbo_arena_t *arena) {
+                                         turbo_pool_t *arena) {
   (void)env;
-  if (argc == 8 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR &&
-      args[2].type == exprtk_VAL_VECTOR && args[3].type == exprtk_VAL_VECTOR &&
-      args[4].type == exprtk_VAL_VECTOR && args[5].type == exprtk_VAL_VECTOR &&
-      args[6].type == exprtk_VAL_VECTOR && args[7].type == exprtk_VAL_VECTOR) {
+  if (argc == 8 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR &&
+      args[2].type == EXPRTK_VAL_VECTOR && args[3].type == EXPRTK_VAL_VECTOR &&
+      args[4].type == EXPRTK_VAL_VECTOR && args[5].type == EXPRTK_VAL_VECTOR &&
+      args[6].type == EXPRTK_VAL_VECTOR && args[7].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[4].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -152,9 +152,9 @@ static exprtk_value_t fn_ts_match_candle(size_t argc, exprtk_value_t *args, expr
 }
 
 static exprtk_value_t fn_ts_match_dtw(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_arena_t *arena) {
+                                      turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -166,9 +166,9 @@ static exprtk_value_t fn_ts_match_dtw(size_t argc, exprtk_value_t *args, exprtk_
 }
 
 static exprtk_value_t fn_ts_match_correl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                         turbo_arena_t *arena) {
+                                         turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -180,9 +180,9 @@ static exprtk_value_t fn_ts_match_correl(size_t argc, exprtk_value_t *args, expr
 }
 
 static exprtk_value_t fn_ts_match_returns(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                          turbo_arena_t *arena) {
+                                          turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size, m = args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
     if (out) {
@@ -194,9 +194,9 @@ static exprtk_value_t fn_ts_match_returns(size_t argc, exprtk_value_t *args, exp
 }
 
 static exprtk_value_t fn_ts_dwt(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_arena_t *arena) {
+                                 turbo_pool_t *arena) {
   (void)env;
-  if (argc >= 2 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     size_t levels = (size_t)args[1].data.number;
     double *approx = ALLOC_DBL(arena, n);
@@ -210,9 +210,9 @@ static exprtk_value_t fn_ts_dwt(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ts_emd(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_arena_t *arena) {
+                                 turbo_pool_t *arena) {
   (void)env;
-  if (argc >= 2 && args[0].type == exprtk_VAL_VECTOR) {
+  if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     size_t max_imfs = (size_t)args[1].data.number;
     double *imfs = ALLOC_DBL(arena, n * max_imfs);
@@ -225,9 +225,9 @@ static exprtk_value_t fn_ts_emd(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ts_coint(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_arena_t *arena) {
+                                   turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     double *out = ALLOC_DBL(arena, 3);
     if (out) {
       size_t n = args[0].data.vector.size < args[1].data.vector.size
@@ -240,9 +240,9 @@ static exprtk_value_t fn_ts_coint(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_ts_spread(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_arena_t *arena) {
+                                    turbo_pool_t *arena) {
   (void)env;
-  if (argc == 2 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) {
+  if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size < args[1].data.vector.size
                    ? args[0].data.vector.size : args[1].data.vector.size;
     double *out = ALLOC_DBL(arena, n);
@@ -259,9 +259,9 @@ static exprtk_value_t fn_ts_spread(size_t argc, exprtk_value_t *args, exprtk_env
  * ========================================================================= */
 
 #define ROLL_1V1P(name, func) \
-static exprtk_value_t name(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) { \
+static exprtk_value_t name(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) { \
   (void)env; \
-  if (argc >= 2 && args[0].type == exprtk_VAL_VECTOR) { \
+  if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR) { \
     size_t n = args[0].data.vector.size, p = (size_t)args[1].data.number; \
     double *out = ALLOC_DBL(arena, n); \
     if (out && func(args[0].data.vector.data, n, p, out)) \
@@ -279,9 +279,9 @@ ROLL_1V1P(fn_ts_ewm_mean,     exprtk_ts_ewm_mean)
 ROLL_1V1P(fn_ts_ewm_std,      exprtk_ts_ewm_std)
 
 #define ROLL_2V1P(name, func) \
-static exprtk_value_t name(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) { \
+static exprtk_value_t name(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) { \
   (void)env; \
-  if (argc >= 3 && args[0].type == exprtk_VAL_VECTOR && args[1].type == exprtk_VAL_VECTOR) { \
+  if (argc >= 3 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) { \
     size_t n = args[0].data.vector.size < args[1].data.vector.size \
                    ? args[0].data.vector.size : args[1].data.vector.size; \
     size_t p = (size_t)args[2].data.number; \
@@ -296,9 +296,9 @@ ROLL_2V1P(fn_ts_rolling_corr, exprtk_ts_rolling_corr)
 ROLL_2V1P(fn_ts_rolling_beta, exprtk_ts_rolling_beta)
 
 #define EXPAND_1V(name, func) \
-static exprtk_value_t name(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_arena_t *arena) { \
+static exprtk_value_t name(size_t argc, exprtk_value_t *args, exprtk_env_t *env, turbo_pool_t *arena) { \
   (void)env; \
-  if (argc >= 1 && args[0].type == exprtk_VAL_VECTOR) { \
+  if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) { \
     size_t n = args[0].data.vector.size; \
     double *out = ALLOC_DBL(arena, n); \
     if (out && func(args[0].data.vector.data, n, out)) \

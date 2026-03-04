@@ -12,7 +12,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 add_library(${TARGET_NAME_LIB} STATIC ${SOURCE_FILES})
 target_link_libraries(
   ${TARGET_NAME_LIB}
-  PRIVATE exprtk ts_loader unofficial::sqlite3::sqlite3
+  PRIVATE exprtk   unofficial::sqlite3::sqlite3
   PUBLIC TurboNet::Core)
 set_target_properties(${TARGET_NAME_LIB} PROPERTIES FOLDER
                                                     turbo_script/modules/sqlite)
@@ -24,7 +24,7 @@ target_include_directories(
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 target_link_libraries(
   ${TARGET_NAME}
-  PRIVATE ts_loader exprtk unofficial::sqlite3::sqlite3
+  PRIVATE   exprtk unofficial::sqlite3::sqlite3
   PUBLIC TurboNet::Core)
 set_target_properties(
   ${TARGET_NAME}

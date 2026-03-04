@@ -81,9 +81,9 @@ UVWASI_EXPORT
 uvwasi_errno_t uvwasi_init(uvwasi_t* uvwasi, const uvwasi_options_t* options);
 UVWASI_EXPORT
 void uvwasi_destroy(uvwasi_t* uvwasi);
-struct turbo_arena_s;
+struct turbo_pool_s;
 UVWASI_EXPORT
-void uvwasi_SetThreadArena(struct turbo_arena_s* arena);
+void uvwasi_SetThreadArena(struct turbo_pool_s* arena);
 UVWASI_EXPORT
 void uvwasi_options_init(uvwasi_options_t* options);
 /* Use int instead of uv_file to avoid needing uv.h */

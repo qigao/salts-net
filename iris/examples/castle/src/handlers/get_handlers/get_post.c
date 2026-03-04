@@ -3,7 +3,7 @@
 
 typedef struct
 {
-  turbo_arena_t* pool;
+  turbo_pool_t* pool;
   Res* res;
   char* username;
   char* post_slug;
@@ -34,14 +34,14 @@ void get_post(Req* req, Res* res)
   const char* user_slug = auth_ctx->user_slug;
   bool is_author = auth_ctx->is_author;
 
-  turbo_arena_t* async_pool = calloc(1, sizeof(turbo_arena_t));
+  turbo_pool_t* async_pool = calloc(1, sizeof(turbo_pool_t));
   if (!async_pool) {
     send_text(res, 500, "Arena allocation failed");
     return;
   }
-  turbo_arena_init(async_pool, 4096);
+  turbo_pool_init(async_pool, 4096);
 
-  ctx_t* ctx = turbo_arena_alloc(async_pool, sizeof(ctx_t));
+  ctx_t* ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
   if (!ctx) {
     send_text(res, 500, "Context allocation failed");
     return;
@@ -57,8 +57,8 @@ void get_post(Req* req, Res* res)
     return;
   }
 
-  ctx->username = turbo_arena_strdup(async_pool, user_slug);
-  ctx->post_slug = turbo_arena_strdup(async_pool, post_slug);
+  ctx->username = turbo_pool_strdup(async_pool, user_slug);
+  ctx->post_slug = turbo_pool_strdup(async_pool, post_slug);
 
   pg_async_t* pg = pquv_create(db, ctx);
   if (!pg) {

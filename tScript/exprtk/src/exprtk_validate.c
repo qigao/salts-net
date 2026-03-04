@@ -1,8 +1,9 @@
-#include "exprtk_internal.h"
+#include <exprtk.h>
 #include "exprtk_grammar_gen.h"
 #include <stdbool.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef struct validate_ctx_s {
     exprtk_parse_ctx_t *p_ctx;
@@ -69,16 +70,9 @@ static bool scope_has(validate_ctx_t *ctx, const char *name) {
     }
     // 2. Check environment (pre-defined global vars via hash table)
     if (ctx->env) {
-        // exprtk_env_get returns {NUMBER, 0.0} for both "not found" and "found=0".
-        // We walk the scope chain manually to do an existence check.
         exprtk_env_t *e = ctx->env;
         while (e) {
-            if (e->vars) {
-                // Direct hash table existence check
-                exprtk_value_t v = exprtk_env_get(e, name);
-                // If it's anything other than the default {NUMBER, 0.0}, it's defined
-                if (v.type != exprtk_VAL_NUMBER || v.data.number != 0.0) return true;
-            }
+            if (exprtk_env_has(e, name)) return true;
             // Also check functions
             exprtk_func_t *f = e->funcs;
             while (f) {
@@ -132,20 +126,20 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
     if (!node || ctx->p_ctx->error) return;
 
     switch (node->type) {
-        case exprtk_NODE_VARIABLE:
+        case EXPRTK_NODE_VARIABLE:
             if (!scope_has(ctx, node->data.variable.name)) {
                 // report_error(ctx, node, "Undefined variable '%s'", node->data.variable.name);
                 // We'll skip for now to avoid false positives on dynamic registrations or external bindings
             }
             break;
 
-        case exprtk_NODE_ASSIGNMENT:
-        case exprtk_NODE_CONSTANT_DECL:
+        case EXPRTK_NODE_ASSIGNMENT:
+        case EXPRTK_NODE_CONSTANT_DECL:
             validate_node(ctx, node->data.assignment.value);
             scope_add(ctx, node->data.assignment.name);
             break;
 
-        case exprtk_NODE_BINARY_OP:
+        case EXPRTK_NODE_BINARY_OP:
             validate_node(ctx, node->data.binary.left);
             validate_node(ctx, node->data.binary.right);
             // Simple Type Checking
@@ -154,19 +148,19 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
                 node->data.binary.op == exprtk_TOKEN_MULTIPLY ||
                 node->data.binary.op == exprtk_TOKEN_DIVIDE) {
                 // We don't have full type inference yet, but we can catch obvious literals
-                if ((node->data.binary.left && node->data.binary.left->type == exprtk_NODE_MAP_LITERAL) ||
-                    (node->data.binary.right && node->data.binary.right->type == exprtk_NODE_MAP_LITERAL)) {
+                if ((node->data.binary.left && node->data.binary.left->type == EXPRTK_NODE_MAP_LITERAL) ||
+                    (node->data.binary.right && node->data.binary.right->type == EXPRTK_NODE_MAP_LITERAL)) {
                     report_error(ctx, node, "Invalid operation on Map type");
                 }
             }
             break;
 
-        case exprtk_NODE_FUNCTION_EXPRESSION:
-        case exprtk_NODE_FUNCTION_DEFINITION: {
+        case EXPRTK_NODE_FUNCTION_EXPRESSION:
+        case EXPRTK_NODE_FUNCTION_DEFINITION: {
             scope_push(ctx);
             for (size_t i = 0; i < node->data.func_def.arg_count; ++i) {
                 exprtk_node_t *arg = node->data.func_def.arg_params[i];
-                if (arg->type == exprtk_NODE_VARIABLE) {
+                if (arg->type == EXPRTK_NODE_VARIABLE) {
                     const char *arg_name = arg->data.variable.name;
                     // Check for duplicate parameters
                     struct scope_s *s = ctx->scope;
@@ -186,25 +180,25 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
             break;
         }
 
-        case exprtk_NODE_BLOCK:
+        case EXPRTK_NODE_BLOCK:
             for (size_t i = 0; i < node->data.block.count; ++i) {
                 validate_node(ctx, node->data.block.statements[i]);
             }
             break;
 
-        case exprtk_NODE_IF:
+        case EXPRTK_NODE_IF:
             validate_node(ctx, node->data.if_stmt.condition);
             validate_node(ctx, node->data.if_stmt.if_branch);
             validate_node(ctx, node->data.if_stmt.else_branch);
             break;
 
-        case exprtk_NODE_WHILE:
-        case exprtk_NODE_DO_WHILE:
+        case EXPRTK_NODE_WHILE:
+        case EXPRTK_NODE_DO_WHILE:
             validate_node(ctx, node->data.while_loop.condition);
             validate_node(ctx, node->data.while_loop.body);
             break;
 
-        case exprtk_NODE_FOR:
+        case EXPRTK_NODE_FOR:
             scope_push(ctx);
             validate_node(ctx, node->data.for_loop.init);
             validate_node(ctx, node->data.for_loop.condition);
@@ -213,7 +207,7 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
             scope_pop(ctx);
             break;
 
-        case exprtk_NODE_FOR_IN:
+        case EXPRTK_NODE_FOR_IN:
             scope_push(ctx);
             validate_node(ctx, node->data.for_in.collection);
             scope_add(ctx, node->data.for_in.var_name);
@@ -221,7 +215,7 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
             scope_pop(ctx);
             break;
 
-        case exprtk_NODE_FUNCTION_CALL:
+        case EXPRTK_NODE_FUNCTION_CALL:
             for (size_t i = 0; i < node->data.function.arg_count; ++i) {
                 validate_node(ctx, node->data.function.args[i]);
             }
@@ -229,7 +223,7 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
             // Handle import calls: add the module name to scope
             if (node->data.function.name && strcmp(node->data.function.name, "import") == 0 && node->data.function.arg_count == 1) {
                 exprtk_node_t *arg = node->data.function.args[0];
-                if (arg->type == exprtk_NODE_STRING) {
+                if (arg->type == EXPRTK_NODE_STRING) {
                     // Add the import name itself as a scope variable
                     char mod_name[64];
                     size_t mod_len = arg->data.string.value.len < 63 ? arg->data.string.value.len : 63;
@@ -277,9 +271,9 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
             }
             break;
 
-        case exprtk_NODE_MEMBER_CALL:
+        case EXPRTK_NODE_MEMBER_CALL:
             // Skip variable check if the object is a known module prefix
-            if (node->data.member_call.object && node->data.member_call.object->type == exprtk_NODE_VARIABLE) {
+            if (node->data.member_call.object && node->data.member_call.object->type == EXPRTK_NODE_VARIABLE) {
                 const char *obj_name = node->data.member_call.object->data.variable.name;
                 if (!is_module_prefix(ctx, obj_name)) {
                     validate_node(ctx, node->data.member_call.object);
@@ -292,13 +286,13 @@ static void validate_node(validate_ctx_t *ctx, exprtk_node_t *node) {
             }
             break;
 
-        case exprtk_NODE_VECTOR:
+        case EXPRTK_NODE_VECTOR:
             for (size_t i = 0; i < node->data.vector.count; ++i) {
                 validate_node(ctx, node->data.vector.elements[i]);
             }
             break;
 
-        case exprtk_NODE_MAP_LITERAL:
+        case EXPRTK_NODE_MAP_LITERAL:
             for (size_t i = 0; i < node->data.map_literal.count; ++i) {
                 validate_node(ctx, node->data.map_literal.values[i]);
             }

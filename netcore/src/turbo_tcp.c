@@ -27,7 +27,7 @@ extern void turbo_tcp_sync_unlock(void);
 /* Send operation for zero-copy */
 typedef struct turbo_tcp_send_op_s {
     uv_write_t req;
-    turbo_arena_slice_t* slices;
+    turbo_pool_slice_t* slices;
     size_t slice_count;
     turbo_tcp_client_t* client;
     struct turbo_tcp_send_op_s* next;
@@ -93,7 +93,7 @@ static void return_tcp_send_op(turbo_tcp_send_op_t* op) {
     /* Release all slices */
     if (op->slices) {
         for (size_t i = 0; i < op->slice_count; i++) {
-            turbo_arena_slice_release(&op->slices[i]);
+            turbo_pool_slice_release(&op->slices[i]);
         }
         free(op->slices);
         op->slices = NULL;
@@ -180,7 +180,7 @@ static void on_tcp_recv(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
     turbo_stats_counter_add_fast(s_tcp_stats.bytes_received, (size_t)nread);
     
     /* Determine which buffer was used */
-    turbo_arena_buffer_t* used_buffer = NULL;
+    turbo_pool_buffer_t* used_buffer = NULL;
     if (client->recv_buffer1 && buf->base == client->recv_buffer1->data) {
         used_buffer = client->recv_buffer1;
     } else if (client->recv_buffer2 && buf->base == client->recv_buffer2->data) {
@@ -189,16 +189,16 @@ static void on_tcp_recv(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
     
     if (used_buffer && client->on_recv) {
         /* Set the used size in the buffer */
-        turbo_arena_buffer_set_used(used_buffer, (size_t)nread);
+        turbo_pool_set_used(used_buffer, (size_t)nread);
         
         /* Create zero-copy slice for the received data */
-        turbo_arena_slice_t slice = turbo_arena_buffer_slice(used_buffer, 0, (size_t)nread);
+        turbo_pool_slice_t slice = turbo_pool_slice(used_buffer, 0, (size_t)nread);
         
         /* Call user callback with zero-copy slice */
         int should_close = client->on_recv(client, &slice, NULL);
         
         /* Release the slice (user should have ref'd it if needed) */
-        turbo_arena_slice_release(&slice);
+        turbo_pool_slice_release(&slice);
         
         if (should_close) {
             turbo_tcp_client_close(client);
@@ -229,24 +229,24 @@ static void on_tcp_handle_closed(uv_handle_t* handle) {
     
     /* Cleanup client resources */
     if (client->recv_buffer1) {
-        turbo_arena_buffer_unref(client->recv_buffer1);
+        turbo_pool_unref(client->recv_buffer1);
     }
     if (client->recv_buffer2) {
-        turbo_arena_buffer_unref(client->recv_buffer2);
+        turbo_pool_unref(client->recv_buffer2);
     }
     if (client->write_iov) {
         free(client->write_iov);
     }
     
     /* Free send queue */
-    turbo_arena_buffer_t* current = client->send_queue_head;
+    turbo_pool_buffer_t* current = client->send_queue_head;
     while (current) {
-        turbo_arena_buffer_t* next = current->next;
-        turbo_arena_buffer_unref(current);
+        turbo_pool_buffer_t* next = current->next;
+        turbo_pool_unref(current);
         current = next;
     }
     
-    turbo_arena_free(&client->arena);
+    turbo_pool_free(&client->arena);
     
     if (client->dns_initialized) {
         turbo_dns_cleanup();
@@ -276,14 +276,14 @@ static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
     client->on_close = server->on_close;
     
     /* Initialize client arena */
-    if (turbo_arena_init(&client->arena, 0) != 0) {
+    if (turbo_pool_init(&client->arena, 0) != 0) {
         free(client);
         return;
     }
     
     /* Initialize TCP handle */
     if (uv_tcp_init(server->loop, &client->handle) != 0) {
-        turbo_arena_free(&client->arena);
+        turbo_pool_free(&client->arena);
         free(client);
         return;
     }
@@ -298,8 +298,8 @@ static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
     
     /* Setup receive buffers */
     size_t recv_buf_size = turbo_tcp_config_get_read_buf_size();
-    client->recv_buffer1 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
-    client->recv_buffer2 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
+    client->recv_buffer1 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
+    client->recv_buffer2 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
     
     if (!client->recv_buffer1) {
         uv_close((uv_handle_t*)&client->handle, on_tcp_handle_closed);
@@ -342,21 +342,21 @@ int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
     init_tcp_stats();
     
     /* Initialize server arena */
-    if (turbo_arena_init(&server->arena, 0) != 0) {
+    if (turbo_pool_init(&server->arena, 0) != 0) {
         return UV_ENOMEM;
     }
     
     /* Create TCP handle */
     server->handle = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
     if (!server->handle) {
-        turbo_arena_free(&server->arena);
+        turbo_pool_free(&server->arena);
         return UV_ENOMEM;
     }
     
     int rc = uv_tcp_init(loop, server->handle);
     if (rc != 0) {
         free(server->handle);
-        turbo_arena_free(&server->arena);
+        turbo_pool_free(&server->arena);
         return rc;
     }
     
@@ -368,14 +368,14 @@ int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
     rc = uv_ip4_addr(bind_host, (int)port, &addr);
     if (rc != 0) {
         uv_close((uv_handle_t*)server->handle, NULL);
-        turbo_arena_free(&server->arena);
+        turbo_pool_free(&server->arena);
         return rc;
     }
     
     rc = uv_tcp_bind(server->handle, (const struct sockaddr*)&addr, 0);
     if (rc != 0) {
         uv_close((uv_handle_t*)server->handle, NULL);
-        turbo_arena_free(&server->arena);
+        turbo_pool_free(&server->arena);
         return rc;
     }
     
@@ -420,7 +420,7 @@ void turbo_tcp_server_stop(turbo_tcp_server_t* server) {
         server->handle = NULL;
     }
 
-    turbo_arena_free(&server->arena);
+    turbo_pool_free(&server->arena);
 
 
 }
@@ -437,14 +437,14 @@ turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop) {
     client->is_client_mode = 1;
     
     /* Initialize client arena */
-    if (turbo_arena_init(&client->arena, 0) != 0) {
+    if (turbo_pool_init(&client->arena, 0) != 0) {
         free(client);
         return NULL;
     }
     
     /* Initialize TCP handle */
     if (uv_tcp_init(loop, &client->handle) != 0) {
-        turbo_arena_free(&client->arena);
+        turbo_pool_free(&client->arena);
         free(client);
         return NULL;
     }
@@ -453,14 +453,14 @@ turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop) {
     
     /* Setup receive buffers */
     size_t recv_buf_size = turbo_tcp_config_get_read_buf_size();
-    client->recv_buffer1 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
-    client->recv_buffer2 = turbo_arena_get_buffer(&client->arena, recv_buf_size);
+    client->recv_buffer1 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
+    client->recv_buffer2 = turbo_pool_get_buffer(&client->arena, recv_buf_size);
     
     /* Setup write IOV array */
     client->write_iov_capacity = turbo_tcp_config_get_max_write_iov();
     client->write_iov = (uv_buf_t*)malloc(client->write_iov_capacity * sizeof(uv_buf_t));
     if (!client->write_iov) {
-        turbo_arena_free(&client->arena);
+        turbo_pool_free(&client->arena);
         free(client);
         return NULL;
     }
@@ -661,14 +661,14 @@ void turbo_tcp_client_close(turbo_tcp_client_t* client) {
 }
 
 /* Get zero-copy send buffer */
-turbo_arena_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* client, size_t min_size) {
+turbo_pool_buffer_t* turbo_tcp_get_send_buffer(turbo_tcp_client_t* client, size_t min_size) {
     if (!client) return NULL;
     
-    return turbo_arena_get_buffer(&client->arena, min_size);
+    return turbo_pool_get_buffer(&client->arena, min_size);
 }
 
 /* Queue buffer without auto-flush (for scatter-gather) */
-int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length) {
+int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_pool_buffer_t* buffer, size_t length) {
     if (!client || !buffer || client->closing) return UV_EINVAL;
     
     if (length > buffer->used) return UV_EINVAL;
@@ -684,13 +684,13 @@ int turbo_tcp_queue_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buf
     client->send_queue_bytes += length;
     
     /* Reference the buffer */
-    turbo_arena_buffer_ref(buffer);
+    turbo_pool_ref(buffer);
     
     return 0;
 }
 
 /* Send buffer with zero-copy (auto-flush) */
-int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer, size_t length) {
+int turbo_tcp_send_buffer(turbo_tcp_client_t* client, turbo_pool_buffer_t* buffer, size_t length) {
     if (!client || !buffer || client->closing) return UV_EINVAL;
     
     if (length > buffer->used) return UV_EINVAL;
@@ -717,14 +717,14 @@ int turbo_tcp_flush(turbo_tcp_client_t* client) {
     
     /* Count buffers in queue */
     size_t buffer_count = 0;
-    turbo_arena_buffer_t* current = client->send_queue_head;
+    turbo_pool_buffer_t* current = client->send_queue_head;
     while (current && buffer_count < client->write_iov_capacity) {
         buffer_count++;
         current = current->next;
     }
     
     /* Create slices and IOV array */
-    op->slices = (turbo_arena_slice_t*)malloc(buffer_count * sizeof(turbo_arena_slice_t));
+    op->slices = (turbo_pool_slice_t*)malloc(buffer_count * sizeof(turbo_pool_slice_t));
     if (!op->slices) {
         return_tcp_send_op(op);
         return UV_ENOMEM;
@@ -734,11 +734,11 @@ int turbo_tcp_flush(turbo_tcp_client_t* client) {
     current = client->send_queue_head;
     
     for (size_t i = 0; i < buffer_count; i++) {
-        op->slices[i] = turbo_arena_buffer_slice(current, 0, current->used);
+        op->slices[i] = turbo_pool_slice(current, 0, current->used);
         client->write_iov[i] = uv_buf_init(op->slices[i].data, (unsigned int)op->slices[i].length);
         
-        turbo_arena_buffer_t* next = current->next;
-        turbo_arena_buffer_unref(current);
+        turbo_pool_buffer_t* next = current->next;
+        turbo_pool_unref(current);
         current = next;
     }
     
@@ -767,22 +767,22 @@ int turbo_tcp_flush(turbo_tcp_client_t* client) {
 int turbo_tcp_send(turbo_tcp_client_t* client, const char* data, size_t length) {
     if (!client || !data || length == 0) return UV_EINVAL;
 
-    turbo_arena_buffer_t* buffer = turbo_tcp_get_send_buffer(client, length);
+    turbo_pool_buffer_t* buffer = turbo_tcp_get_send_buffer(client, length);
     if (!buffer) return UV_ENOMEM;
     
     memcpy(buffer->data, data, length);
-    turbo_arena_buffer_set_used(buffer, length);
+    turbo_pool_set_used(buffer, length);
     
     int rc = turbo_tcp_send_buffer(client, buffer, length);
-    turbo_arena_buffer_unref(buffer);
+    turbo_pool_unref(buffer);
 
     return rc;
 }
 
 /* Discard buffer */
-void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_arena_buffer_t* buffer) {
+void turbo_tcp_discard_buffer(turbo_tcp_client_t* client, turbo_pool_buffer_t* buffer) {
     if (!client || !buffer) return;
-    turbo_arena_buffer_unref(buffer);
+    turbo_pool_unref(buffer);
 }
 
 /* Scatter-gather send (ZERO-COPY with external buffer wrapping) */
@@ -795,7 +795,7 @@ int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_t* iov, si
     for (size_t i = 0; i < iovcnt && rc == 0; i++) {
         if (iov[i].len > 0 && iov[i].data) {
             /* Wrap user buffer - ZERO COPY! */
-            turbo_arena_buffer_t* buffer = turbo_arena_wrap_external(
+            turbo_pool_buffer_t* buffer = turbo_pool_wrap_external(
                 (void*)iov[i].data,
                 iov[i].len,
                 NULL,  /* No free callback - user manages memory */
@@ -807,7 +807,7 @@ int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_t* iov, si
             }
             
             rc = turbo_tcp_queue_buffer(client, buffer, iov[i].len);
-            turbo_arena_buffer_unref(buffer);
+            turbo_pool_unref(buffer);
         }
     }
     
@@ -826,7 +826,7 @@ void turbo_tcp_get_stats(const turbo_tcp_server_t* server, turbo_tcp_stats_t* st
     memset(stats, 0, sizeof(*stats));
     
     /* Get arena statistics */
-    turbo_arena_get_stats(&server->arena, &stats->arena_stats);
+    turbo_pool_get_stats(&server->arena, &stats->arena_stats);
     
     /* Get global TCP statistics from stats system */
     turbo_stat_entry_t* entry;
@@ -892,15 +892,15 @@ void turbo_tcp_reset_stats(turbo_tcp_server_t* server) {
 /* Trim memory */
 void turbo_tcp_trim_memory(turbo_tcp_server_t* server) {
     if (!server) return;
-    turbo_arena_trim(&server->arena);
+    turbo_pool_trim(&server->arena);
 }
 
 /* Get memory usage */
 size_t turbo_tcp_get_memory_usage(const turbo_tcp_server_t* server) {
     if (!server) return 0;
     
-    turbo_arena_stats_t stats;
-    turbo_arena_get_stats(&server->arena, &stats);
+    turbo_pool_stats_t stats;
+    turbo_pool_get_stats(&server->arena, &stats);
     return stats.total_allocated;
 }
 

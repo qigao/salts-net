@@ -38,7 +38,7 @@ extern "C" {
  *
  * Arena Allocators:
  *   - NOT thread-safe by default
- *   - Can be made thread-safe with TURBO_ARENA_FLAG_THREAD_SAFE (future)
+ *   - Can be made thread-safe with TURBO_POOL_FLAG_THREAD_SAFE (future)
  *   - Each client/server has its own arena (no sharing)
  *
  * Global Pools:

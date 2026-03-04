@@ -10,8 +10,8 @@ extern "C" {
 #endif
 
 typedef struct MUSTACHE_TEMPLATE MUSTACHE_TEMPLATE;
-typedef struct turbo_arena_s turbo_arena_t;
-typedef struct turbo_arena_buffer_s turbo_arena_buffer_t;
+typedef struct turbo_pool_s turbo_pool_t;
+typedef struct turbo_pool_buffer_s turbo_pool_buffer_t;
 
 #define MUSTACHE_ERR_SUCCESS (0)
 #define MUSTACHE_ERR_DANGLINGTAGOPENER (1)
@@ -228,7 +228,7 @@ CXX_C_API void mustache_string_renderer_free(MUSTACHE_STRING_RENDERER *renderer)
  */
 typedef struct MUSTACHE_STRING_RENDERER_ARENA {
   MUSTACHE_RENDERER base;
-  turbo_arena_buffer_t *buffer;
+  turbo_pool_buffer_t *buffer;
 } MUSTACHE_STRING_RENDERER_ARENA;
 
 /**
@@ -239,7 +239,7 @@ typedef struct MUSTACHE_STRING_RENDERER_ARENA {
  * @return 0 on success, -1 on error
  */
 CXX_C_API int mustache_string_renderer_init_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer,
-                                                  turbo_arena_t *arena,
+                                                  turbo_pool_t *arena,
                                                   size_t min_capacity);
 
 /**

@@ -21,7 +21,7 @@ typedef struct {
     s3_error_t error;
 } s3_http_response_t;
 
-s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t* req);
+s3_http_response_t s3_http_execute(coro_context_t *ctx, s3_http_request_t* req);
 void s3_http_response_free(s3_http_response_t* resp);
 
 // Build full URL from base_url + path (handles port, scheme)

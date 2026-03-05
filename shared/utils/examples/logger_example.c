@@ -53,7 +53,6 @@ static void example_multi_sink(void) {
   // Create logger
   tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_DEBUG,
-    .async_mode = 0,
     .buffer_size = 0,
     .pool_size = 0
   };
@@ -272,7 +271,6 @@ static void example_async_logging(void) {
   // Create async logger - logs are queued and processed by background thread
   tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_DEBUG,
-    .async_mode = 1,  // Enable async mode
     .pool_size = 32 * 1024  // 32KB memory pool for formatting
   };
   tlog_t *logger = tlog_create(&config);
@@ -334,7 +332,6 @@ static void example_async_throughput(void) {
 
   tlog_config_t config = {
     .min_level = TURBO_LOG_LEVEL_INFO,
-    .async_mode = 1,
     .pool_size = 64 * 1024
   };
   tlog_t *logger = tlog_create(&config);

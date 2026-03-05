@@ -62,24 +62,24 @@ int main(int argc, char **argv) {
         backend = bbuf;
     }
 
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) { fprintf(stderr, "context create failed\n"); return 1; }
 
-    turbo_coro_lb_config_t config = {
+    coro_lb_config_t config = {
         .balance = TURBO_LB_ROUND_ROBIN,
         .mode = TURBO_LB_MODE_REQUEST,
         .frame_cb = tlv_frame_cb,
         .filter_cb = tlv_filter,
     };
 
-    turbo_coro_lb_t *lb = turbo_coro_lb_create(ctx, &config);
+    coro_lb_t *lb = coro_lb_create(ctx, &config);
     if (!lb) { fprintf(stderr, "lb create failed\n"); return 1; }
 
-    if (turbo_coro_lb_listen(lb, frontend) != 0) {
+    if (coro_lb_listen(lb, frontend) != 0) {
         fprintf(stderr, "listen failed: %s\n", frontend);
         return 1;
     }
-    if (turbo_coro_lb_accept_workers(lb, backend) != 0) {
+    if (coro_lb_accept_workers(lb, backend) != 0) {
         fprintf(stderr, "accept_workers failed: %s\n", backend);
         return 1;
     }
@@ -89,9 +89,9 @@ int main(int argc, char **argv) {
     printf("  backend:  %s\n", backend);
     printf("  filter:   0xFF=reject, 0xFE=drop, else=accept\n");
 
-    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-    turbo_coro_lb_destroy(lb);
-    turbo_coro_context_destroy(ctx);
+    coro_lb_destroy(lb);
+    coro_context_destroy(ctx);
     return 0;
 }

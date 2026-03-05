@@ -960,6 +960,13 @@ static exprtk_value_t fn_vec_range(size_t argc, exprtk_value_t *args, exprtk_env
   (void)env;
   if (argc < 1 || argc > 2)
     return exprtk_val_num(0);
+
+  // Check argument types
+  if (args[0].type != EXPRTK_VAL_NUMBER)
+    return exprtk_val_num(0);
+  if (argc == 2 && args[1].type != EXPRTK_VAL_NUMBER)
+    return exprtk_val_num(0);
+
   double start_d = 0, end_d;
   if (argc == 1) {
     end_d = args[0].data.number;

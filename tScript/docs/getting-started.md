@@ -290,7 +290,7 @@ Chain operations elegantly:
 
 ```javascript
 var result = data
-    |> filter(x > 0)
+    |> filter(x => x > 0)
     |> map(x => x * 2)
     |> sum();
 ```

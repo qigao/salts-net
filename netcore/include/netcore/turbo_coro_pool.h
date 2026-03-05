@@ -1,14 +1,14 @@
 /**
- * @file turbo_coro_pool.h
+ * @file coro_pool.h
  * @brief Coroutine-aware connection pool for TurboNet.
  *
- * Manages a pool of turbo_coro_client_t connections to a single endpoint.
+ * Manages a pool of coro_client_t connections to a single endpoint.
  * Single-threaded cooperative model — no locks needed.
  * Protocol auto-detected from URL scheme (tcp://, tls://, ws://, etc.).
  */
 
-#ifndef TURBO_CORO_POOL_H
-#define TURBO_CORO_POOL_H
+#ifndef coro_POOL_H
+#define coro_POOL_H
 
 #include "platform.h"
 #include "turbo_coro_client.h"
@@ -21,19 +21,19 @@ extern "C" {
 #endif
 
 /** Opaque connection pool handle */
-typedef struct turbo_coro_pool_s turbo_coro_pool_t;
+typedef struct coro_pool_s coro_pool_t;
 
 /** Pool configuration */
-typedef struct turbo_coro_pool_config_s {
+typedef struct coro_pool_config_s {
   size_t   min_size;           /**< Connections to pre-create on open (default 1) */
   size_t   max_size;           /**< Maximum connections (default 8) */
   uint64_t connect_timeout_ms; /**< Per-connection timeout, 0=infinite (default 5000) */
   uint64_t borrow_timeout_ms;  /**< Wait timeout when pool full, 0=infinite (default 0) */
   uint64_t idle_timeout_ms;    /**< Idle connection reap interval, 0=never (default 60000) */
-} turbo_coro_pool_config_t;
+} coro_pool_config_t;
 
 /** Sensible defaults */
-#define TURBO_CORO_POOL_CONFIG_DEFAULT { 1, 8, 5000, 0, 60000 }
+#define coro_POOL_CONFIG_DEFAULT { 1, 8, 5000, 0, 60000 }
 
 /* ── Lifecycle ─────────────────────────────────────────────── */
 
@@ -43,8 +43,8 @@ typedef struct turbo_coro_pool_config_s {
  * @param config  Configuration (NULL for defaults)
  * @return Pool handle or NULL on failure
  */
-CXX_C_API turbo_coro_pool_t *turbo_coro_pool_create(turbo_coro_context_t *ctx,
-                                                      const turbo_coro_pool_config_t *config);
+CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
+                                                      const coro_pool_config_t *config);
 
 /**
  * @brief Open the pool and pre-connect min_size connections.
@@ -55,7 +55,7 @@ CXX_C_API turbo_coro_pool_t *turbo_coro_pool_create(turbo_coro_context_t *ctx,
  * @param url   Endpoint URL (e.g. "tcp://host:port", "tls://host:port")
  * @return 0 on success, negative TURBO_* error code on failure
  */
-CXX_C_API int turbo_coro_pool_open(turbo_coro_pool_t *pool, const char *url);
+CXX_C_API int coro_pool_open(coro_pool_t *pool, const char *url);
 
 /**
  * @brief Close all connections and reject future borrows.
@@ -64,13 +64,13 @@ CXX_C_API int turbo_coro_pool_open(turbo_coro_pool_t *pool, const char *url);
  *
  * @param pool  Pool handle
  */
-CXX_C_API void turbo_coro_pool_close(turbo_coro_pool_t *pool);
+CXX_C_API void coro_pool_close(coro_pool_t *pool);
 
 /**
  * @brief Destroy the pool and free all resources.
  * @param pool  Pool handle (NULL-safe)
  */
-CXX_C_API void turbo_coro_pool_destroy(turbo_coro_pool_t *pool);
+CXX_C_API void coro_pool_destroy(coro_pool_t *pool);
 
 /* ── Borrow / Return ──────────────────────────────────────── */
 
@@ -87,7 +87,7 @@ CXX_C_API void turbo_coro_pool_destroy(turbo_coro_pool_t *pool);
  * @param[out] out  Receives the borrowed client pointer
  * @return 0 on success, TURBO_ETIMEDOUT on timeout, negative on error
  */
-CXX_C_API int turbo_coro_pool_borrow(turbo_coro_pool_t *pool, turbo_coro_client_t **out);
+CXX_C_API int coro_pool_borrow(coro_pool_t *pool, coro_client_t **out);
 
 /**
  * @brief Return a connection to the pool.
@@ -99,21 +99,21 @@ CXX_C_API int turbo_coro_pool_borrow(turbo_coro_pool_t *pool, turbo_coro_client_
  * @param pool    Pool handle
  * @param client  Client to return (must have been borrowed from this pool)
  */
-CXX_C_API void turbo_coro_pool_return(turbo_coro_pool_t *pool, turbo_coro_client_t *client);
+CXX_C_API void coro_pool_return(coro_pool_t *pool, coro_client_t *client);
 
 /* ── Query ────────────────────────────────────────────────── */
 
 /** Number of idle (available) connections */
-CXX_C_API size_t turbo_coro_pool_idle_count(const turbo_coro_pool_t *pool);
+CXX_C_API size_t coro_pool_idle_count(const coro_pool_t *pool);
 
 /** Number of currently borrowed connections */
-CXX_C_API size_t turbo_coro_pool_borrowed_count(const turbo_coro_pool_t *pool);
+CXX_C_API size_t coro_pool_borrowed_count(const coro_pool_t *pool);
 
 /** Total alive connections (idle + borrowed) */
-CXX_C_API size_t turbo_coro_pool_size(const turbo_coro_pool_t *pool);
+CXX_C_API size_t coro_pool_size(const coro_pool_t *pool);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* TURBO_CORO_POOL_H */
+#endif /* coro_POOL_H */

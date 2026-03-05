@@ -124,7 +124,6 @@ TurboScript 提供了丰富的可选模块：
 ```
 tScript/
 ├── exprtk/          # 核心解释器
-├── ts_loader/       # 插件加载器
 ├── modules/         # 内置和插件模块
 ├── docs/            # 文档（你在这里）
 └── tests/           # 测试套件

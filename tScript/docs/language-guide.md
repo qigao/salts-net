@@ -855,12 +855,12 @@ var average = avg(prices);
 ```javascript
 // Good
 var result = data
-    |> filter(x > 0)
+    |> filter(x => x > 0)
     |> map(x => x * 2)
     |> sum();
 
 // Harder to read
-var result = sum(map(filter(data, x > 0), x => x * 2));
+var result = sum(map(filter(data, x => x > 0), x => x * 2));
 ```
 
 ### 4. Handle Errors Explicitly

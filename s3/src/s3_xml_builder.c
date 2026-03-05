@@ -14,14 +14,20 @@ s3_xml_builder_t* s3_xml_new(void) {
     return b;
 }
 
-static void xml_escape_append(tstr_t* buf, const char* text) {
+static void xml_escape_append(tstr_t* buf, const char* text, int escape_quotes) {
     for (const char* p = text; *p; p++) {
         switch (*p) {
             case '&':  *buf = tstr_cat(*buf, "&amp;");  break;
             case '<':  *buf = tstr_cat(*buf, "&lt;");   break;
             case '>':  *buf = tstr_cat(*buf, "&gt;");   break;
-            case '"':  *buf = tstr_cat(*buf, "&quot;");  break;
-            case '\'': *buf = tstr_cat(*buf, "&apos;");  break;
+            case '"':  
+                if (escape_quotes) *buf = tstr_cat(*buf, "&quot;");
+                else { char c[2] = {*p, 0}; *buf = tstr_cat(*buf, c); }
+                break;
+            case '\'': 
+                if (escape_quotes) *buf = tstr_cat(*buf, "&apos;");
+                else { char c[2] = {*p, 0}; *buf = tstr_cat(*buf, c); }
+                break;
             default: {
                 char c[2] = {*p, 0};
                 *buf = tstr_cat(*buf, c);
@@ -49,14 +55,14 @@ void s3_xml_attr(s3_xml_builder_t* b, const char* name, const char* value) {
         b->buf[len - 1] = '\0'; // remove '>'
         // tstr_len is now stale, but tstr_cat will handle it
         b->buf = tstr_cat_fmt(b->buf, " %s=\"", name);
-        xml_escape_append(&b->buf, value);
+        xml_escape_append(&b->buf, value, 1);
         b->buf = tstr_cat(b->buf, "\">");
     }
 }
 
 void s3_xml_text(s3_xml_builder_t* b, const char* text) {
     if (!b || !text) return;
-    xml_escape_append(&b->buf, text);
+    xml_escape_append(&b->buf, text, 0);
 }
 
 void s3_xml_close(s3_xml_builder_t* b, const char* tag) {
@@ -71,7 +77,7 @@ void s3_xml_elem(s3_xml_builder_t* b, const char* tag, const char* text) {
         return;
     }
     b->buf = tstr_cat_fmt(b->buf, "<%s>", tag);
-    xml_escape_append(&b->buf, text);
+    xml_escape_append(&b->buf, text, 0);
     b->buf = tstr_cat_fmt(b->buf, "</%s>", tag);
 }
 

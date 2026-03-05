@@ -1,21 +1,22 @@
 /**
  * @file turbo_client.c
- * @brief Synchronous (blocking) network client — thin wrapper over turbo_coro_client.
+ * @brief Coroutine-based network client — thin wrapper over coro_client.
  *
- * Architecture:
- *   - One background thread runs a turbo_coro_context (libuv loop).
- *   - Each public API call posts a coroutine to that loop via turbo_coro_post(),
- *     then blocks the caller on uv_cond_wait until the coro signals completion.
- *   - All protocol logic lives in turbo_coro_client — zero duplication here.
+ * Architecture (like http_client):
+ *   - Creates its own coro_context (caller can run the loop or we auto-run)
+ *   - Fast path: if already in coro, call coro_client directly
+ *   - Sync path: spawn temporary coro, run loop until completion
+ *   - All protocol logic lives in coro_client — zero duplication here
  */
 
 #include "turbo_client.h"
+#include "config.h"
+#include "tlog.h"
 #include "turbo_coro.h"
 #include "turbo_coro_client.h"
 #include "turbo_coro_context.h"
+#include "turbo_coro_internal.h"
 #include "turbo_url.h"
-#include "config.h"
-#include "tlog.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -26,57 +27,54 @@
 /* ── Internal struct ──────────────────────────────────────── */
 
 struct turbo_client_s {
-  /* Thread + loop */
-  uv_thread_t            thread;
-  turbo_coro_context_t  *ctx;
-  int                    loop_ready;
-  int                    loop_running;
+  /* Coro context (owned by this client) */
+  coro_context_t *coro_ctx;
+  int owns_coro_ctx;
 
-  /* Synchronisation (caller ↔ loop thread) */
-  uv_mutex_t             mutex;
-  uv_cond_t              cond;
-  int                    done;
+  /* Coro client (created on first connect) */
+  coro_client_t *coro;
 
-  /* Coro client (lives on loop thread) */
-  turbo_coro_client_t   *coro;
+  /* Sync operation completion */
+  volatile int operation_done;
 
   /* Last-operation result */
-  turbo_client_status_t   result_code;
-  int                    uv_status;
-  char                   error_message[SYNC_ERROR_MSG_MAX];
-
-  /* Receive buffer (caller frees) */
-  char                  *response;
-  size_t                 response_len;
+  turbo_client_status_t result_code;
+  int uv_status;
+  char error_message[SYNC_ERROR_MSG_MAX];
 
   /* Transport (set on connect) */
   turbo_client_transport_t transport;
-  turbo_client_state_t    state;
+  turbo_client_state_t state;
 
   /* Timeouts */
-  int                    connect_timeout_ms;
-  int                    operation_timeout_ms;
+  int connect_timeout_ms;
+  int operation_timeout_ms;
 
   /* Stats */
-  turbo_client_stats_t    stats;
+  turbo_client_stats_t stats;
 
   /* TLS config (stored until connect) */
   turbo_client_tls_config_t tls_config;
-  int                    has_tls_config;
+  int has_tls_config;
 
   /* WS config (stored until connect, owned copies) */
   turbo_client_ws_config_t ws_config;
-  int                    has_ws_config;
-  char                  *ws_path_owned;
-  char                  *ws_origin_owned;
-  char                 **ws_subprotocols_owned;
-  int                    ws_subprotocols_count;
+  int has_ws_config;
+  char *ws_path_owned;
+  char *ws_origin_owned;
+  char **ws_subprotocols_owned;
+  int ws_subprotocols_count;
 
   /* URL for connect (owned copy) */
-  char                  *connect_url;
+  char *connect_url;
 };
 
 /* ── Helpers ──────────────────────────────────────────────── */
+
+static void signal_operation_done(turbo_client_t *c) {
+  c->operation_done = 1;
+  coro_context_stop(c->coro_ctx);  /* Stop the loop so TURBO_RUN_DEFAULT returns */
+}
 
 static void result_reset(turbo_client_t *c) {
   c->result_code = SYNC_CLIENT_STATUS_OK;
@@ -97,111 +95,66 @@ static void result_set_uv_error(turbo_client_t *c, int uv_err) {
   c->result_code = SYNC_CLIENT_STATUS_IO_ERROR;
   c->uv_status = uv_err;
   const char *msg = uv_strerror(uv_err);
-  if (msg)
-    snprintf(c->error_message, SYNC_ERROR_MSG_MAX, "network error: %s (%d)", msg, uv_err);
-  else
-    snprintf(c->error_message, SYNC_ERROR_MSG_MAX, "network error (code %d)", uv_err);
-}
-
-static void signal_done(turbo_client_t *c) {
-  uv_mutex_lock(&c->mutex);
-  c->done = 1;
-  uv_cond_signal(&c->cond);
-  uv_mutex_unlock(&c->mutex);
-}
-
-static void wait_done(turbo_client_t *c) {
-  uv_mutex_lock(&c->mutex);
-  while (!c->done)
-    uv_cond_wait(&c->cond, &c->mutex);
-  uv_mutex_unlock(&c->mutex);
-}
-
-static turbo_client_status_t wait_done_timed(turbo_client_t *c, int timeout_ms) {
-  if (timeout_ms <= 0) {
-    wait_done(c);
-    return c->result_code;
-  }
-
-  uv_mutex_lock(&c->mutex);
-  uint64_t deadline = uv_hrtime() + ((uint64_t)timeout_ms * 1000000ULL);
-  while (!c->done) {
-    uint64_t now = uv_hrtime();
-    if (now >= deadline) {
-      result_set_error(c, SYNC_CLIENT_STATUS_IO_ERROR, "operation timeout");
-      c->done = 1;
-      break;
-    }
-    uint64_t remaining_ms = (deadline - now) / 1000000ULL;
-    if (remaining_ms == 0) remaining_ms = 1;
-    uv_cond_timedwait(&c->cond, &c->mutex, remaining_ms);
-  }
-  turbo_client_status_t result = c->result_code;
-  uv_mutex_unlock(&c->mutex);
-  return result;
+  if (msg) snprintf(c->error_message, SYNC_ERROR_MSG_MAX, "network error: %s (%d)", msg, uv_err);
+  else snprintf(c->error_message, SYNC_ERROR_MSG_MAX, "network error (code %d)", uv_err);
 }
 
 /* ── Coroutine task contexts ─────────────────────────────── */
 
 typedef struct {
   turbo_client_t *client;
-  const char    *url;
+  const char *url;
+  turbo_client_status_t result;
 } connect_task_t;
 
 typedef struct {
   turbo_client_t *client;
-  const char    *data;
-  size_t         len;
+  const char *data;
+  size_t len;
+  turbo_client_status_t result;
 } send_task_t;
 
 typedef struct {
-  turbo_client_t          *client;
+  turbo_client_t *client;
   const turbo_client_iovec_t *iov;
-  size_t                  iovcnt;
+  size_t iovcnt;
+  turbo_client_status_t result;
 } sendv_task_t;
 
 typedef struct {
   turbo_client_t *client;
+  char **response;
+  size_t *len;
+  turbo_client_status_t result;
 } recv_task_t;
 
-/* ── Coroutine self-cleanup ───────────────────────────────── */
+/* ── Coroutine entry points ─────────────────────────────── */
 
-static void post_destroy_coro(void *arg) {
-  turbo_coro_t *co = (turbo_coro_t *)arg;
-  turbo_coro_destroy(co);
-}
-
-static void schedule_coro_cleanup(turbo_client_t *c, turbo_coro_t *co) {
-  turbo_coro_post(c->ctx, post_destroy_coro, co);
-}
-
-/* ── Coroutine entry points (run on loop thread) ─────────── */
-
-static void connect_coro(turbo_coro_t *co, void *arg) {
+static void connect_coro(coro_t *co, void *arg) {
+  (void)co;
   connect_task_t *task = (connect_task_t *)arg;
   turbo_client_t *c = task->client;
 
   if (!c->coro) {
-    c->coro = turbo_coro_client_create(c->ctx);
+    c->coro = coro_client_create(c->coro_ctx);
     if (!c->coro) {
       result_set_error(c, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create coro client");
-      signal_done(c);
-      schedule_coro_cleanup(c, co);
+      task->result = c->result_code;
+      signal_operation_done(c);
       return;
     }
   }
 
   /* Apply timeout */
-  if (c->connect_timeout_ms > 0)
-    turbo_coro_client_set_timeout(c->coro, (uint64_t)c->connect_timeout_ms);
+  if (c->connect_timeout_ms > 0) coro_client_set_timeout(c->coro, (uint64_t)c->connect_timeout_ms);
 
   c->state = SYNC_CLIENT_STATE_CONNECTING;
   c->stats.connection_attempts++;
 
-  int rc = turbo_coro_client_connect(c->coro, task->url);
+  int rc = coro_client_connect(c->coro, task->url);
 
   /* Reset timeout after connect */
-  turbo_coro_client_set_timeout(c->coro, 0);
+  coro_client_set_timeout(c->coro, 0);
 
   if (rc == 0) {
     c->state = SYNC_CLIENT_STATE_CONNECTED;
@@ -212,17 +165,17 @@ static void connect_coro(turbo_coro_t *co, void *arg) {
     result_set_uv_error(c, rc);
   }
 
-  signal_done(c);
-  schedule_coro_cleanup(c, co);
+  task->result = c->result_code;
+  signal_operation_done(c);
 }
 
-static void send_coro(turbo_coro_t *co, void *arg) {
+static void send_coro(coro_t *co, void *arg) {
+  (void)co;
   send_task_t *task = (send_task_t *)arg;
   turbo_client_t *c = task->client;
 
-  int rc = turbo_coro_client_send(c->coro, task->data, task->len);
+  int rc = coro_client_send(c->coro, task->data, task->len);
 
-  uv_mutex_lock(&c->mutex);
   if (rc == 0) {
     c->stats.bytes_sent += task->len;
     c->stats.messages_sent++;
@@ -231,13 +184,13 @@ static void send_coro(turbo_coro_t *co, void *arg) {
     c->stats.send_errors++;
     result_set_uv_error(c, rc);
   }
-  uv_mutex_unlock(&c->mutex);
 
-  signal_done(c);
-  schedule_coro_cleanup(c, co);
+  task->result = c->result_code;
+  signal_operation_done(c);
 }
 
-static void sendv_coro(turbo_coro_t *co, void *arg) {
+static void sendv_coro(coro_t *co, void *arg) {
+  (void)co;
   sendv_task_t *task = (sendv_task_t *)arg;
   turbo_client_t *c = task->client;
 
@@ -247,13 +200,11 @@ static void sendv_coro(turbo_coro_t *co, void *arg) {
   /* Send each buffer individually through coro_client */
   for (size_t i = 0; i < task->iovcnt && rc == 0; i++) {
     if (task->iov[i].data && task->iov[i].len > 0) {
-      rc = turbo_coro_client_send(c->coro, task->iov[i].data, task->iov[i].len);
-      if (rc == 0)
-        total_bytes += task->iov[i].len;
+      rc = coro_client_send(c->coro, task->iov[i].data, task->iov[i].len);
+      if (rc == 0) total_bytes += task->iov[i].len;
     }
   }
 
-  uv_mutex_lock(&c->mutex);
   if (rc == 0) {
     c->stats.bytes_sent += total_bytes;
     c->stats.messages_sent++;
@@ -264,13 +215,13 @@ static void sendv_coro(turbo_coro_t *co, void *arg) {
     c->stats.send_errors++;
     result_set_uv_error(c, rc);
   }
-  uv_mutex_unlock(&c->mutex);
 
-  signal_done(c);
-  schedule_coro_cleanup(c, co);
+  task->result = c->result_code;
+  signal_operation_done(c);
 }
 
-static void recv_coro(turbo_coro_t *co, void *arg) {
+static void recv_coro(coro_t *co, void *arg) {
+  (void)co;
   recv_task_t *task = (recv_task_t *)arg;
   turbo_client_t *c = task->client;
 
@@ -279,125 +230,28 @@ static void recv_coro(turbo_coro_t *co, void *arg) {
 
   /* Apply timeout */
   if (c->operation_timeout_ms > 0)
-    turbo_coro_client_set_timeout(c->coro, (uint64_t)c->operation_timeout_ms);
+    coro_client_set_timeout(c->coro, (uint64_t)c->operation_timeout_ms);
 
-  int rc = turbo_coro_client_recv(c->coro, &data, &len);
+  int rc = coro_client_recv(c->coro, &data, &len);
 
   /* Reset timeout */
-  turbo_coro_client_set_timeout(c->coro, 0);
+  coro_client_set_timeout(c->coro, 0);
 
-  uv_mutex_lock(&c->mutex);
   if (rc == 0 && data) {
-    c->response = data;
-    c->response_len = len;
+    *task->response = data;
+    *task->len = len;
     c->stats.bytes_received += len;
     c->stats.messages_received++;
     result_reset(c);
   } else {
-    c->response = NULL;
-    c->response_len = 0;
-    if (rc != 0)
-      result_set_uv_error(c, rc);
-    else
-      result_set_error(c, SYNC_CLIENT_STATUS_IO_ERROR, "empty receive");
-  }
-  uv_mutex_unlock(&c->mutex);
-
-  signal_done(c);
-  schedule_coro_cleanup(c, co);
-}
-
-/* ── Post helpers (post callback → spawn coro) ───────────── */
-
-static void post_connect(void *arg) {
-  connect_task_t *task = (connect_task_t *)arg;
-  turbo_coro_t *co = turbo_coro_create(connect_coro, task, NULL);
-  if (co) {
-    turbo_coro_resume(co);
-  } else {
-    result_set_error(task->client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create coroutine");
-    signal_done(task->client);
-  }
-}
-
-static void post_send(void *arg) {
-  send_task_t *task = (send_task_t *)arg;
-  turbo_coro_t *co = turbo_coro_create(send_coro, task, NULL);
-  if (co) {
-    turbo_coro_resume(co);
-  } else {
-    result_set_error(task->client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create coroutine");
-    signal_done(task->client);
-  }
-}
-
-static void post_sendv(void *arg) {
-  sendv_task_t *task = (sendv_task_t *)arg;
-  turbo_coro_t *co = turbo_coro_create(sendv_coro, task, NULL);
-  if (co) {
-    turbo_coro_resume(co);
-  } else {
-    result_set_error(task->client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create coroutine");
-    signal_done(task->client);
-  }
-}
-
-static void post_recv(void *arg) {
-  recv_task_t *task = (recv_task_t *)arg;
-  turbo_coro_t *co = turbo_coro_create(recv_coro, task, NULL);
-  if (co) {
-    turbo_coro_resume(co);
-  } else {
-    result_set_error(task->client, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create coroutine");
-    signal_done(task->client);
-  }
-}
-
-/* ── Loop thread ─────────────────────────────────────────── */
-
-static void keepalive_post(void *arg) {
-  /* No-op: the sole purpose is to force turbo_coro_post's lazy
-     uv_async_t initialization, which keeps the loop alive. */
-  (void)arg;
-}
-
-static void loop_thread_main(void *arg) {
-  turbo_client_t *c = (turbo_client_t *)arg;
-
-  c->ctx = turbo_coro_context_create(NULL);
-  if (!c->ctx) {
-    uv_mutex_lock(&c->mutex);
-    c->loop_ready = -1;
-    uv_cond_signal(&c->cond);
-    uv_mutex_unlock(&c->mutex);
-    return;
+    *task->response = NULL;
+    *task->len = 0;
+    if (rc != 0) result_set_uv_error(c, rc);
+    else result_set_error(c, SYNC_CLIENT_STATUS_IO_ERROR, "empty receive");
   }
 
-  /* Force the post queue's uv_async_t to be created so the loop
-     stays alive waiting for posted work. */
-  turbo_coro_post(c->ctx, keepalive_post, NULL);
-
-  /* Signal ready */
-  uv_mutex_lock(&c->mutex);
-  c->loop_ready = 1;
-  c->loop_running = 1;
-  uv_cond_signal(&c->cond);
-  uv_mutex_unlock(&c->mutex);
-
-  /* Run until stopped */
-  turbo_coro_context_run(c->ctx, TURBO_RUN_DEFAULT);
-
-  c->loop_running = 0;
-}
-
-static void post_stop(void *arg) {
-  turbo_client_t *c = (turbo_client_t *)arg;
-  if (c->coro) {
-    turbo_coro_client_destroy(c->coro);
-    c->coro = NULL;
-  }
-
-  turbo_coro_context_stop(c->ctx);
+  task->result = c->result_code;
+  signal_operation_done(c);
 }
 
 /* ── Public API: lifecycle ───────────────────────────────── */
@@ -408,33 +262,13 @@ turbo_client_t *turbo_client_create(void) {
   turbo_client_t *c = (turbo_client_t *)calloc(1, sizeof(turbo_client_t));
   if (!c) return NULL;
 
-  if (uv_mutex_init(&c->mutex) != 0) { free(c); return NULL; }
-  if (uv_cond_init(&c->cond) != 0) { uv_mutex_destroy(&c->mutex); free(c); return NULL; }
-
+  c->coro_ctx = coro_context_create(NULL);
+  if (!c->coro_ctx) {
+    free(c);
+    return NULL;
+  }
+  c->owns_coro_ctx = 1;
   c->state = SYNC_CLIENT_STATE_DISCONNECTED;
-
-  /* Start loop thread */
-  if (uv_thread_create(&c->thread, loop_thread_main, c) != 0) {
-    uv_cond_destroy(&c->cond);
-    uv_mutex_destroy(&c->mutex);
-    free(c);
-    return NULL;
-  }
-
-  /* Wait for loop to be ready */
-  uv_mutex_lock(&c->mutex);
-  while (c->loop_ready == 0)
-    uv_cond_wait(&c->cond, &c->mutex);
-  int ready = c->loop_ready;
-  uv_mutex_unlock(&c->mutex);
-
-  if (ready < 0) {
-    uv_thread_join(&c->thread);
-    uv_cond_destroy(&c->cond);
-    uv_mutex_destroy(&c->mutex);
-    free(c);
-    return NULL;
-  }
 
   return c;
 }
@@ -445,20 +279,23 @@ turbo_client_t *turbo_client_create_with_transport(turbo_client_transport_t tran
   return c;
 }
 
+static void on_async_close(uv_handle_t *handle) {
+  (void)handle;
+}
+
 void turbo_client_destroy(turbo_client_t *c) {
   if (!c) return;
 
-  if (c->loop_running && c->ctx) {
-    turbo_coro_post(c->ctx, post_stop, c);
-    uv_thread_join(&c->thread);
+  if (c->coro) {
+    coro_client_destroy(c->coro);
+    c->coro = NULL;
   }
 
-  if (c->ctx) {
-    turbo_coro_context_destroy(c->ctx);
-    c->ctx = NULL;
+  if (c->coro_ctx && c->owns_coro_ctx) {
+    coro_context_destroy(c->coro_ctx);
+    c->coro_ctx = NULL;
   }
 
-  free(c->response);
   free(c->connect_url);
   free(c->ws_path_owned);
   free(c->ws_origin_owned);
@@ -468,31 +305,44 @@ void turbo_client_destroy(turbo_client_t *c) {
     free(c->ws_subprotocols_owned);
   }
 
-  uv_cond_destroy(&c->cond);
-  uv_mutex_destroy(&c->mutex);
   free(c);
+}
+
+coro_context_t *turbo_client_get_context(turbo_client_t *c) {
+  return c ? c->coro_ctx : NULL;
 }
 
 /* ── Public API: connect ─────────────────────────────────── */
 
 turbo_client_status_t turbo_client_connect(turbo_client_t *c, const char *url) {
   if (!c || !url) return SYNC_CLIENT_STATUS_INVALID_PARAM;
-  if (!c->loop_running) return SYNC_CLIENT_STATUS_NOT_READY;
 
   /* Parse URL to determine transport */
   turbo_address_t addr;
   int parse_rc = parse_transport_url(url, &addr);
-  if (parse_rc != 0 || !addr.valid)
-    return SYNC_CLIENT_STATUS_INVALID_PARAM;
+  if (parse_rc != 0 || !addr.valid) return SYNC_CLIENT_STATUS_INVALID_PARAM;
 
   switch (addr.transport) {
-  case TURBO_TCP:       c->transport = SYNC_CLIENT_TRANSPORT_TCP; break;
-  case TURBO_UDP:       c->transport = SYNC_CLIENT_TRANSPORT_UDP; break;
-  case TURBO_KCP:       c->transport = SYNC_CLIENT_TRANSPORT_KCP; break;
-  case TURBO_TLS:       c->transport = SYNC_CLIENT_TRANSPORT_TLS; break;
-  case TURBO_PIPE:      c->transport = SYNC_CLIENT_TRANSPORT_PIPE; break;
-  case TURBO_WEBSOCKET: c->transport = SYNC_CLIENT_TRANSPORT_WEBSOCKET; break;
-  default: return SYNC_CLIENT_STATUS_TRANSPORT_ERROR;
+  case TURBO_TCP:
+    c->transport = SYNC_CLIENT_TRANSPORT_TCP;
+    break;
+  case TURBO_UDP:
+    c->transport = SYNC_CLIENT_TRANSPORT_UDP;
+    break;
+  case TURBO_KCP:
+    c->transport = SYNC_CLIENT_TRANSPORT_KCP;
+    break;
+  case TURBO_TLS:
+    c->transport = SYNC_CLIENT_TRANSPORT_TLS;
+    break;
+  case TURBO_PIPE:
+    c->transport = SYNC_CLIENT_TRANSPORT_PIPE;
+    break;
+  case TURBO_WEBSOCKET:
+    c->transport = SYNC_CLIENT_TRANSPORT_WEBSOCKET;
+    break;
+  default:
+    return SYNC_CLIENT_STATUS_TRANSPORT_ERROR;
   }
 
   /* Store URL copy */
@@ -501,15 +351,52 @@ turbo_client_status_t turbo_client_connect(turbo_client_t *c, const char *url) {
   if (!c->connect_url) return SYNC_CLIENT_STATUS_ALLOC_FAILED;
 
   result_reset(c);
-  c->done = 0;
 
-  connect_task_t task = { .client = c, .url = c->connect_url };
-  turbo_coro_post(c->ctx, post_connect, &task);
+  /* Fast path: already inside a coroutine — call directly */
+  if (coro_running()) {
+    if (!c->coro) {
+      c->coro = coro_client_create(c->coro_ctx);
+      if (!c->coro) {
+        result_set_error(c, SYNC_CLIENT_STATUS_ALLOC_FAILED, "failed to create coro client");
+        return c->result_code;
+      }
+    }
 
-  return wait_done_timed(c, c->connect_timeout_ms);
+    if (c->connect_timeout_ms > 0)
+      coro_client_set_timeout(c->coro, (uint64_t)c->connect_timeout_ms);
+
+    c->state = SYNC_CLIENT_STATE_CONNECTING;
+    c->stats.connection_attempts++;
+
+    int rc = coro_client_connect(c->coro, c->connect_url);
+
+    coro_client_set_timeout(c->coro, 0);
+
+    if (rc == 0) {
+      c->state = SYNC_CLIENT_STATE_CONNECTED;
+      result_reset(c);
+    } else {
+      c->state = SYNC_CLIENT_STATE_ERROR;
+      c->stats.connection_failures++;
+      result_set_uv_error(c, rc);
+    }
+
+    return c->result_code;
+  }
+
+  /* Sync path: spawn a managed coroutine and drive the context loop */
+  c->operation_done = 0;
+  connect_task_t task = {.client = c, .url = c->connect_url, .result = SYNC_CLIENT_STATUS_OK};
+  coro_context_spawn(c->coro_ctx, connect_coro, &task);
+
+  /* Run loop until operation is done (coro will call coro_context_stop) */
+  coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+
+  return task.result;
 }
 
-turbo_client_status_t turbo_client_connect_timeout(turbo_client_t *c, const char *url, int timeout_ms) {
+turbo_client_status_t turbo_client_connect_timeout(turbo_client_t *c, const char *url,
+                                                   int timeout_ms) {
   if (!c) return SYNC_CLIENT_STATUS_INVALID_PARAM;
   c->connect_timeout_ms = timeout_ms;
   return turbo_client_connect(c, url);
@@ -522,27 +409,71 @@ turbo_client_status_t turbo_client_send(turbo_client_t *c, const char *data, siz
   if (c->state != SYNC_CLIENT_STATE_CONNECTED) return SYNC_CLIENT_STATUS_NOT_READY;
 
   result_reset(c);
-  c->done = 0;
 
-  send_task_t task = { .client = c, .data = data, .len = len };
-  turbo_coro_post(c->ctx, post_send, &task);
+  /* Fast path: already inside a coroutine */
+  if (coro_running()) {
+    int rc = coro_client_send(c->coro, data, len);
+    if (rc == 0) {
+      c->stats.bytes_sent += len;
+      c->stats.messages_sent++;
+      result_reset(c);
+    } else {
+      c->stats.send_errors++;
+      result_set_uv_error(c, rc);
+    }
+    return c->result_code;
+  }
 
-  wait_done(c);
-  return c->result_code;
+  /* Sync path */
+  c->operation_done = 0;
+  send_task_t task = {.client = c, .data = data, .len = len, .result = SYNC_CLIENT_STATUS_OK};
+  coro_context_spawn(c->coro_ctx, send_coro, &task);
+
+  coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+
+  return task.result;
 }
 
-turbo_client_status_t turbo_client_sendv(turbo_client_t *c, const turbo_client_iovec_t *iov, size_t iovcnt) {
+turbo_client_status_t turbo_client_sendv(turbo_client_t *c, const turbo_client_iovec_t *iov,
+                                         size_t iovcnt) {
   if (!c || !iov || iovcnt == 0) return SYNC_CLIENT_STATUS_INVALID_PARAM;
   if (c->state != SYNC_CLIENT_STATE_CONNECTED) return SYNC_CLIENT_STATUS_NOT_READY;
 
   result_reset(c);
-  c->done = 0;
 
-  sendv_task_t task = { .client = c, .iov = iov, .iovcnt = iovcnt };
-  turbo_coro_post(c->ctx, post_sendv, &task);
+  /* Fast path: already inside a coroutine */
+  if (coro_running()) {
+    size_t total_bytes = 0;
+    int rc = 0;
 
-  wait_done(c);
-  return c->result_code;
+    for (size_t i = 0; i < iovcnt && rc == 0; i++) {
+      if (iov[i].data && iov[i].len > 0) {
+        rc = coro_client_send(c->coro, iov[i].data, iov[i].len);
+        if (rc == 0) total_bytes += iov[i].len;
+      }
+    }
+
+    if (rc == 0) {
+      c->stats.bytes_sent += total_bytes;
+      c->stats.messages_sent++;
+      c->stats.scatter_gather_sends++;
+      c->stats.total_iov_buffers_sent += iovcnt;
+      result_reset(c);
+    } else {
+      c->stats.send_errors++;
+      result_set_uv_error(c, rc);
+    }
+    return c->result_code;
+  }
+
+  /* Sync path */
+  c->operation_done = 0;
+  sendv_task_t task = {.client = c, .iov = iov, .iovcnt = iovcnt, .result = SYNC_CLIENT_STATUS_OK};
+  coro_context_spawn(c->coro_ctx, sendv_coro, &task);
+
+  coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+
+  return task.result;
 }
 
 /* ── Public API: receive ─────────────────────────────────── */
@@ -555,37 +486,51 @@ turbo_client_status_t turbo_client_receive(turbo_client_t *c, char **response, s
   *len = 0;
 
   result_reset(c);
-  c->done = 0;
-  free(c->response);
-  c->response = NULL;
-  c->response_len = 0;
 
-  recv_task_t task = { .client = c };
-  turbo_coro_post(c->ctx, post_recv, &task);
+  /* Fast path: already inside a coroutine */
+  if (coro_running()) {
+    char *data = NULL;
+    size_t data_len = 0;
 
-  turbo_client_status_t result = wait_done_timed(c, c->operation_timeout_ms);
+    if (c->operation_timeout_ms > 0)
+      coro_client_set_timeout(c->coro, (uint64_t)c->operation_timeout_ms);
 
-  if (result == SYNC_CLIENT_STATUS_OK) {
-    uv_mutex_lock(&c->mutex);
-    *response = c->response;
-    *len = c->response_len;
-    c->response = NULL;
-    c->response_len = 0;
-    uv_mutex_unlock(&c->mutex);
+    int rc = coro_client_recv(c->coro, &data, &data_len);
+
+    coro_client_set_timeout(c->coro, 0);
+
+    if (rc == 0 && data) {
+      *response = data;
+      *len = data_len;
+      c->stats.bytes_received += data_len;
+      c->stats.messages_received++;
+      result_reset(c);
+    } else {
+      if (rc != 0) result_set_uv_error(c, rc);
+      else result_set_error(c, SYNC_CLIENT_STATUS_IO_ERROR, "empty receive");
+    }
+    return c->result_code;
   }
 
-  return result;
+  /* Sync path */
+  c->operation_done = 0;
+  recv_task_t task = {.client = c, .response = response, .len = len, .result = SYNC_CLIENT_STATUS_OK};
+  coro_context_spawn(c->coro_ctx, recv_coro, &task);
+
+  coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+
+  return task.result;
 }
 
-turbo_client_status_t turbo_client_receive_timeout(turbo_client_t *c, char **response,
-                                                  size_t *len, int timeout_ms) {
+turbo_client_status_t turbo_client_receive_timeout(turbo_client_t *c, char **response, size_t *len,
+                                                   int timeout_ms) {
   if (!c || !response || !len) return SYNC_CLIENT_STATUS_INVALID_PARAM;
   c->operation_timeout_ms = timeout_ms;
   return turbo_client_receive(c, response, len);
 }
 
 turbo_client_status_t turbo_client_recvv(turbo_client_t *c, turbo_client_iovec_t *iov,
-                                        size_t iovcnt, size_t *bytes_read) {
+                                         size_t iovcnt, size_t *bytes_read) {
   if (!c || !iov || iovcnt == 0 || !bytes_read) return SYNC_CLIENT_STATUS_INVALID_PARAM;
   *bytes_read = 0;
 
@@ -600,8 +545,7 @@ turbo_client_status_t turbo_client_recvv(turbo_client_t *c, turbo_client_iovec_t
   size_t offset = 0;
   for (size_t i = 0; i < iovcnt && offset < response_len; i++) {
     size_t to_copy = iov[i].len;
-    if (offset + to_copy > response_len)
-      to_copy = response_len - offset;
+    if (offset + to_copy > response_len) to_copy = response_len - offset;
     if (to_copy > 0 && iov[i].data) {
       memcpy(iov[i].data, response + offset, to_copy);
       offset += to_copy;
@@ -611,9 +555,7 @@ turbo_client_status_t turbo_client_recvv(turbo_client_t *c, turbo_client_iovec_t
 
   free(response);
 
-  uv_mutex_lock(&c->mutex);
   c->stats.scatter_gather_receives++;
-  uv_mutex_unlock(&c->mutex);
 
   return SYNC_CLIENT_STATUS_OK;
 }
@@ -639,25 +581,19 @@ int turbo_client_is_connected(const turbo_client_t *c) {
 
 void turbo_client_get_stats(const turbo_client_t *c, turbo_client_stats_t *stats) {
   if (!c || !stats) return;
-  uv_mutex_lock((uv_mutex_t *)&c->mutex);
   memcpy(stats, &c->stats, sizeof(turbo_client_stats_t));
-  uv_mutex_unlock((uv_mutex_t *)&c->mutex);
 }
 
 void turbo_client_reset_stats(turbo_client_t *c) {
   if (!c) return;
-  uv_mutex_lock(&c->mutex);
   memset(&c->stats, 0, sizeof(c->stats));
-  uv_mutex_unlock(&c->mutex);
 }
 
 turbo_client_status_t turbo_client_last_status(turbo_client_t *c) {
   return c ? c->result_code : SYNC_CLIENT_STATUS_INVALID_PARAM;
 }
 
-int turbo_client_last_uv_error(turbo_client_t *c) {
-  return c ? c->uv_status : 0;
-}
+int turbo_client_last_uv_error(turbo_client_t *c) { return c ? c->uv_status : 0; }
 
 const char *turbo_client_last_message(turbo_client_t *c) {
   if (!c) return "client not available";
@@ -669,34 +605,50 @@ const char *turbo_client_last_message(turbo_client_t *c) {
 
 const char *turbo_client_status_to_string(turbo_client_status_t status) {
   switch (status) {
-  case SYNC_CLIENT_STATUS_OK:              return "ok";
-  case SYNC_CLIENT_STATUS_INVALID_PARAM:   return "invalid parameter";
-  case SYNC_CLIENT_STATUS_ALLOC_FAILED:    return "allocation failure";
-  case SYNC_CLIENT_STATUS_NOT_READY:       return "client not ready";
-  case SYNC_CLIENT_STATUS_SHUTTING_DOWN:   return "client shutting down";
-  case SYNC_CLIENT_STATUS_IO_ERROR:        return "I/O error";
-  case SYNC_CLIENT_STATUS_TRANSPORT_ERROR: return "transport error";
-  case SYNC_CLIENT_STATUS_INTERNAL_ERROR:  return "internal error";
-  default:                                 return "unknown error";
+  case SYNC_CLIENT_STATUS_OK:
+    return "ok";
+  case SYNC_CLIENT_STATUS_INVALID_PARAM:
+    return "invalid parameter";
+  case SYNC_CLIENT_STATUS_ALLOC_FAILED:
+    return "allocation failure";
+  case SYNC_CLIENT_STATUS_NOT_READY:
+    return "client not ready";
+  case SYNC_CLIENT_STATUS_SHUTTING_DOWN:
+    return "client shutting down";
+  case SYNC_CLIENT_STATUS_IO_ERROR:
+    return "I/O error";
+  case SYNC_CLIENT_STATUS_TRANSPORT_ERROR:
+    return "transport error";
+  case SYNC_CLIENT_STATUS_INTERNAL_ERROR:
+    return "internal error";
+  default:
+    return "unknown error";
   }
 }
 
 const char *turbo_client_transport_to_string(turbo_client_transport_t transport) {
   switch (transport) {
-  case SYNC_CLIENT_TRANSPORT_TCP:       return "tcp";
-  case SYNC_CLIENT_TRANSPORT_UDP:       return "udp";
-  case SYNC_CLIENT_TRANSPORT_KCP:       return "kcp";
-  case SYNC_CLIENT_TRANSPORT_TLS:       return "tls";
-  case SYNC_CLIENT_TRANSPORT_PIPE:      return "pipe";
-  case SYNC_CLIENT_TRANSPORT_WEBSOCKET: return "websocket";
-  default:                              return "unknown";
+  case SYNC_CLIENT_TRANSPORT_TCP:
+    return "tcp";
+  case SYNC_CLIENT_TRANSPORT_UDP:
+    return "udp";
+  case SYNC_CLIENT_TRANSPORT_KCP:
+    return "kcp";
+  case SYNC_CLIENT_TRANSPORT_TLS:
+    return "tls";
+  case SYNC_CLIENT_TRANSPORT_PIPE:
+    return "pipe";
+  case SYNC_CLIENT_TRANSPORT_WEBSOCKET:
+    return "websocket";
+  default:
+    return "unknown";
   }
 }
 
 /* ── Public API: TLS config ──────────────────────────────── */
 
 turbo_client_status_t turbo_client_set_tls_config(turbo_client_t *c,
-                                                 const turbo_client_tls_config_t *config) {
+                                                  const turbo_client_tls_config_t *config) {
   if (!c || !config) return SYNC_CLIENT_STATUS_INVALID_PARAM;
   c->tls_config = *config;
   c->has_tls_config = 1;
@@ -706,7 +658,7 @@ turbo_client_status_t turbo_client_set_tls_config(turbo_client_t *c,
 /* ── Public API: WebSocket config ────────────────────────── */
 
 turbo_client_status_t turbo_client_set_ws_config(turbo_client_t *c,
-                                                const turbo_client_ws_config_t *config) {
+                                                 const turbo_client_ws_config_t *config) {
   if (!c || !config) return SYNC_CLIENT_STATUS_INVALID_PARAM;
 
   /* Free previous owned copies */
@@ -733,7 +685,8 @@ turbo_client_status_t turbo_client_set_ws_config(turbo_client_t *c,
     c->ws_subprotocols_owned = (char **)calloc((size_t)config->subprotocol_count, sizeof(char *));
     if (c->ws_subprotocols_owned) {
       for (int i = 0; i < config->subprotocol_count; i++)
-        c->ws_subprotocols_owned[i] = config->subprotocols[i] ? strdup(config->subprotocols[i]) : NULL;
+        c->ws_subprotocols_owned[i] =
+            config->subprotocols[i] ? strdup(config->subprotocols[i]) : NULL;
       c->ws_subprotocols_count = config->subprotocol_count;
       c->ws_config.subprotocols = (const char **)c->ws_subprotocols_owned;
     }

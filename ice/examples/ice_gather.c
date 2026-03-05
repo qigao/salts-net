@@ -8,10 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void gathering_coro(turbo_coro_t *co, void *arg) {
+static void gathering_coro(coro_t *co, void *arg) {
     (void)co;
     turbo_ice_agent_t *agent = (turbo_ice_agent_t *)arg;
-    turbo_coro_context_t *ctx = ice_agent_get_context(agent);
+    coro_context_t *ctx = ice_agent_get_context(agent);
 
     printf("Starting candidate gathering...\n");
     printf("======================================================\n");
@@ -38,12 +38,12 @@ static void gathering_coro(turbo_coro_t *co, void *arg) {
         printf("\nGathering failed with code %d\n", result);
     }
 
-    turbo_coro_context_stop(ctx);
+    coro_context_stop(ctx);
 }
 
 int main(void) {
     /* Create coro context */
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) return 1;
 
     /* Configure ICE agent */
@@ -55,7 +55,7 @@ int main(void) {
     /* Create agent */
     turbo_ice_agent_t *agent = ice_agent_create(ctx, &config);
     if (!agent) {
-        turbo_coro_context_destroy(ctx);
+        coro_context_destroy(ctx);
         return 1;
     }
 
@@ -65,18 +65,18 @@ int main(void) {
     printf("Local Credentials:\n  ufrag: %s\n  pwd:   %s\n\n", ufrag, pwd);
 
     /* Start gathering in a coroutine */
-    turbo_coro_t *co = turbo_coro_create(gathering_coro, agent, NULL);
+    coro_t *co = coro_create(gathering_coro, agent, NULL);
     if (co) {
-        turbo_coro_resume(co);
+        coro_resume(co);
     }
 
     /* Run loop */
-    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     /* Cleanup */
-    if (co) turbo_coro_destroy(co);
+    if (co) coro_destroy(co);
     ice_agent_destroy(agent);
-    turbo_coro_context_destroy(ctx);
+    coro_context_destroy(ctx);
 
     return 0;
 }

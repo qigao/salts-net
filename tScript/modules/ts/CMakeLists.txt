@@ -28,9 +28,8 @@ set_target_properties(
              EXPORT_NAME Ts)
 
 # ── SHARED plugin DLL (loaded at runtime via ts_plugin_load) ─────
-add_library(${TARGET_NAME_PLUGIN} SHARED ${SOURCE_FILES})
-
-target_link_libraries(${TARGET_NAME_PLUGIN} PRIVATE ${TARGET_NAME})
+add_library(${TARGET_NAME_PLUGIN} SHARED ${SOURCE_FILES}) 
+target_link_libraries(${TARGET_NAME_PLUGIN} PUBLIC ${TARGET_NAME})
 
 target_include_directories(${TARGET_NAME_PLUGIN}
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

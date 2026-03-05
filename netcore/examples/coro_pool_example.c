@@ -6,9 +6,7 @@
  * send a request, receive a response, and return the connection.
  */
 
-#include "turbo_coro_pool.h"
-#include "turbo_coro_server.h"
-#include "turbo_coro.h"
+#include "netcore.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,13 +16,13 @@
 
 /* ── Echo server handler ──────────────────────────────────── */
 
-static void echo_handler(turbo_coro_client_t *client, void *arg) {
+static void echo_handler(coro_client_t *client, void *arg) {
   (void)arg;
   char *data = NULL;
   size_t len = 0;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
-    turbo_coro_client_send(client, data, len);
+    coro_client_send(client, data, len);
     free(data);
     data = NULL;
   }
@@ -33,86 +31,84 @@ static void echo_handler(turbo_coro_client_t *client, void *arg) {
 /* ── Worker coroutine ─────────────────────────────────────── */
 
 typedef struct {
-  turbo_coro_pool_t *pool;
+  coro_pool_t *pool;
   int                id;
   int               *remaining;
-  turbo_coro_context_t *ctx;
+  coro_context_t *ctx;
 } worker_arg_t;
 
-static void worker(turbo_coro_t *co, void *arg) {
+static void worker(coro_t *co, void *arg) {
   (void)co;
   worker_arg_t *w = (worker_arg_t *)arg;
 
-  turbo_coro_client_t *c = NULL;
-  int rc = turbo_coro_pool_borrow(w->pool, &c);
+  coro_client_t *c = NULL;
+  int rc = coro_pool_borrow(w->pool, &c);
   if (rc != 0) {
     printf("[Worker %d] borrow failed: %s\n", w->id, turbo_strerror(rc));
     goto done;
   }
 
   printf("[Worker %d] borrowed connection (pool size=%zu, borrowed=%zu)\n",
-         w->id, turbo_coro_pool_size(w->pool), turbo_coro_pool_borrowed_count(w->pool));
+         w->id, coro_pool_size(w->pool), coro_pool_borrowed_count(w->pool));
 
   /* Send */
   char msg[64];
   int len = snprintf(msg, sizeof(msg), "hello from worker %d", w->id);
-  turbo_coro_client_send(c, msg, (size_t)len);
+  coro_client_send(c, msg, (size_t)len);
 
   /* Receive echo */
   char *data = NULL;
   size_t dlen = 0;
-  rc = turbo_coro_client_recv(c, &data, &dlen);
+  rc = coro_client_recv(c, &data, &dlen);
   if (rc == 0) {
     printf("[Worker %d] received: %.*s\n", w->id, (int)dlen, data);
     free(data);
   }
 
-  turbo_coro_pool_return(w->pool, c);
+  coro_pool_return(w->pool, c);
   printf("[Worker %d] returned connection\n", w->id);
 
 done:
   (*w->remaining)--;
   if (*w->remaining == 0)
-    turbo_coro_context_stop(w->ctx);
+    coro_context_stop(w->ctx);
 }
 
 /* ── Main coroutine ───────────────────────────────────────── */
 
 typedef struct {
-  turbo_coro_context_t *ctx;
-  turbo_coro_server_t  *server;
+  coro_context_t *ctx;
+  coro_server_t  *server;
 } main_arg_t;
 
-static void main_coro(turbo_coro_t *co, void *arg) {
+static void main_coro(coro_t *co, void *arg) {
   (void)co;
   main_arg_t *m = (main_arg_t *)arg;
 
   /* Create and open pool */
-  turbo_coro_pool_config_t cfg = TURBO_CORO_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
   cfg.min_size = 2;
   cfg.max_size = 4;
 
-  turbo_coro_pool_t *pool = turbo_coro_pool_create(m->ctx, &cfg);
-  int rc = turbo_coro_pool_open(pool, POOL_URL);
+  coro_pool_t *pool = coro_pool_create(m->ctx, &cfg);
+  int rc = coro_pool_open(pool, POOL_URL);
   if (rc != 0) {
     printf("[Main] pool open failed: %s\n", turbo_strerror(rc));
-    turbo_coro_pool_destroy(pool);
-    turbo_coro_context_stop(m->ctx);
+    coro_pool_destroy(pool);
+    coro_context_stop(m->ctx);
     return;
   }
 
   printf("[Main] pool opened: size=%zu, idle=%zu\n",
-         turbo_coro_pool_size(pool), turbo_coro_pool_idle_count(pool));
+         coro_pool_size(pool), coro_pool_idle_count(pool));
 
   /* Spawn workers */
   int remaining = NUM_WORKERS;
   worker_arg_t args[NUM_WORKERS];
-  turbo_coro_t *workers[NUM_WORKERS];
 
   for (int i = 0; i < NUM_WORKERS; i++) {
     args[i] = (worker_arg_t){ .pool = pool, .id = i, .remaining = &remaining, .ctx = m->ctx };
-    workers[i] = turbo_coro_create(worker, &args[i], NULL);
-    turbo_coro_resume(workers[i]);
+    coro_context_spawn(m->ctx, worker, &args[i]);
   }
 
   /* Workers run via the event loop — we just return here.
@@ -122,26 +118,24 @@ static void main_coro(turbo_coro_t *co, void *arg) {
 int main(void) {
   printf("[Main] Starting coro pool example\n");
 
-  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-  turbo_coro_server_t *server = turbo_coro_server_create(ctx);
+  coro_context_t *ctx = coro_context_create(NULL);
+  coro_server_t *server = coro_server_create(ctx);
 
-  int rc = turbo_coro_server_listen(server, POOL_URL, echo_handler, NULL);
+  int rc = coro_server_listen(server, POOL_URL, echo_handler, NULL);
   if (rc != 0) {
     printf("[Main] server listen failed: %s\n", turbo_strerror(rc));
-    turbo_coro_server_destroy(server);
-    turbo_coro_context_destroy(ctx);
+    coro_server_destroy(server);
+    coro_context_destroy(ctx);
     return 1;
   }
 
   main_arg_t marg = { .ctx = ctx, .server = server };
-  turbo_coro_t *co = turbo_coro_create(main_coro, &marg, NULL);
-  turbo_coro_resume(co);
+  coro_context_spawn(ctx, main_coro, &marg);
 
-  turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+  coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-  turbo_coro_destroy(co);
-  turbo_coro_server_destroy(server);
-  turbo_coro_context_destroy(ctx);
+  coro_server_destroy(server);
+  coro_context_destroy(ctx);
 
   printf("[Main] Done.\n");
   return 0;

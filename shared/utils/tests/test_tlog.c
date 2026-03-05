@@ -191,6 +191,7 @@ spec("TLog Tests") {
     TURBO_LOG_WARN(logger, "test", "Second callback message");
     TURBO_LOG_ERROR(logger, "test", "Third callback message");
 
+    tlog_flush(logger); // Wait for async queue to drain before checking count
     check_int_eq(callback_count, 3);
 
     tlog_destroy(logger);

@@ -22,22 +22,22 @@
 
 /* ── Coro echo server ─────────────────────────────────────── */
 
-static void echo_handler(turbo_coro_client_t *client, void *arg) {
+static void echo_handler(coro_client_t *client, void *arg) {
   (void)arg;
   char *data = NULL;
   size_t len = 0;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
     /* Send back the fixed response */
-    turbo_coro_client_send(client, SYNC_TEST_RESPONSE, strlen(SYNC_TEST_RESPONSE));
+    coro_client_send(client, SYNC_TEST_RESPONSE, strlen(SYNC_TEST_RESPONSE));
     free(data);
     data = NULL;
   }
 }
 
 typedef struct {
-  turbo_coro_context_t *ctx;
-  turbo_coro_server_t  *server;
+  coro_context_t *ctx;
+  coro_server_t  *server;
   uv_thread_t           thread;
 } server_ctx_t;
 
@@ -45,27 +45,27 @@ static server_ctx_t srv_ctx;
 
 static void server_thread_fn(void *arg) {
   server_ctx_t *s = (server_ctx_t *)arg;
-  turbo_coro_context_run(s->ctx, TURBO_RUN_DEFAULT);
+  coro_context_run(s->ctx, TURBO_RUN_DEFAULT);
 }
 
 static void start_server(void) {
-  srv_ctx.ctx = turbo_coro_context_create(NULL);
-  srv_ctx.server = turbo_coro_server_create(srv_ctx.ctx);
-  turbo_coro_server_listen(srv_ctx.server, SYNC_TEST_URL, echo_handler, NULL);
+  srv_ctx.ctx = coro_context_create(NULL);
+  srv_ctx.server = coro_server_create(srv_ctx.ctx);
+  coro_server_listen(srv_ctx.server, SYNC_TEST_URL, echo_handler, NULL);
   uv_thread_create(&srv_ctx.thread, server_thread_fn, &srv_ctx);
   uv_sleep(100); /* Let server start */
 }
 
 static void post_server_stop(void *arg) {
-  turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
-  turbo_coro_context_stop(ctx);
+  coro_context_t *ctx = (coro_context_t *)arg;
+  coro_context_stop(ctx);
 }
 
 static void stop_server(void) {
-  turbo_coro_post(srv_ctx.ctx, post_server_stop, srv_ctx.ctx);
+  coro_post(srv_ctx.ctx, post_server_stop, srv_ctx.ctx);
   uv_thread_join(&srv_ctx.thread);
-  turbo_coro_server_destroy(srv_ctx.server);
-  turbo_coro_context_destroy(srv_ctx.ctx);
+  coro_server_destroy(srv_ctx.server);
+  coro_context_destroy(srv_ctx.ctx);
   srv_ctx.server = NULL;
   srv_ctx.ctx = NULL;
 }

@@ -15,11 +15,9 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_SOURCE_DIR}/vendor/mir)
 
-target_compile_definitions(${TARGET_NAME_LIB} PRIVATE SHARED_CXX)
-
 target_link_libraries(
   ${TARGET_NAME_LIB}
-  PRIVATE exprtk datetime_parser mir_static ts_loader
+  PRIVATE exprtk datetime_parser mir_static  
   PUBLIC TurboNet::Utils)
 
 set_target_properties(
@@ -57,3 +55,4 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_script.h
         DESTINATION include)
 
 add_subdirectory(test)
+add_subdirectory(app)

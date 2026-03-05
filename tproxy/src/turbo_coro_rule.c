@@ -40,7 +40,7 @@ typedef struct turbo_dns_mapping_s {
     struct turbo_dns_mapping_s *next;
 } turbo_dns_mapping_t;
 
-struct turbo_coro_rule_engine_s {
+struct coro_rule_engine_s {
     turbo_rule_entry_t *head;
     turbo_rule_entry_t *tail;
     
@@ -55,12 +55,12 @@ struct turbo_coro_rule_engine_s {
     void *health_user_data;
 };
 
-turbo_coro_rule_engine_t* turbo_coro_rule_engine_create(void) {
-    turbo_coro_rule_engine_t *engine = (turbo_coro_rule_engine_t*)calloc(1, sizeof(turbo_coro_rule_engine_t));
+coro_rule_engine_t* coro_rule_engine_create(void) {
+    coro_rule_engine_t *engine = (coro_rule_engine_t*)calloc(1, sizeof(coro_rule_engine_t));
     return engine;
 }
 
-void turbo_coro_rule_engine_destroy(turbo_coro_rule_engine_t *engine) {
+void coro_rule_engine_destroy(coro_rule_engine_t *engine) {
     if (!engine) return;
     
     // Cleanup rules
@@ -103,7 +103,7 @@ void turbo_coro_rule_engine_destroy(turbo_coro_rule_engine_t *engine) {
     free(engine);
 }
 
-int turbo_coro_rule_add(turbo_coro_rule_engine_t *engine, 
+int coro_rule_add(coro_rule_engine_t *engine, 
                                  turbo_rule_type_t type, 
                                  const char *payload, 
                                  turbo_rule_action_type_t action, 
@@ -181,7 +181,7 @@ static bool match_cidr(const char *ip_str, const char *cidr) {
     return (a & mask) == (n & mask);
 }
 
-static const char* match_geoip(turbo_coro_rule_engine_t *engine, const char *ip_str) {
+static const char* match_geoip(coro_rule_engine_t *engine, const char *ip_str) {
     if (!engine || !engine->geoip_db || !ip_str) return NULL;
     
     struct in_addr addr4;
@@ -226,7 +226,7 @@ static const char* match_geoip(turbo_coro_rule_engine_t *engine, const char *ip_
     return NULL;
 }
 
-static const char* lookup_dns(turbo_coro_rule_engine_t *engine, const char *ip) {
+static const char* lookup_dns(coro_rule_engine_t *engine, const char *ip) {
     turbo_dns_mapping_t *m = engine->dns_cache;
     while (m) {
         if (strcmp(m->ip, ip) == 0) return m->domain;
@@ -235,7 +235,7 @@ static const char* lookup_dns(turbo_coro_rule_engine_t *engine, const char *ip) 
     return NULL;
 }
 
-static const char* resolve_group(turbo_coro_rule_engine_t *engine, const char *target, int depth) {
+static const char* resolve_group(coro_rule_engine_t *engine, const char *target, int depth) {
     if (depth > 10) return NULL; // Prevent infinite loops
     
     turbo_group_t *g = engine->groups;
@@ -290,7 +290,7 @@ static const char* resolve_group(turbo_coro_rule_engine_t *engine, const char *t
     return NULL;
 }
 
-turbo_rule_action_type_t turbo_coro_rule_evaluate(turbo_coro_rule_engine_t *engine, 
+turbo_rule_action_type_t coro_rule_evaluate(coro_rule_engine_t *engine, 
                                                            const char *host, 
                                                            int port, 
                                                            const char **out_proxy_url) {
@@ -339,7 +339,7 @@ turbo_rule_action_type_t turbo_coro_rule_evaluate(turbo_coro_rule_engine_t *engi
     return TURBO_RULE_ACTION_DIRECT;
 }
 
-int turbo_coro_rule_parse_and_add(turbo_coro_rule_engine_t *engine, const char *line) {
+int coro_rule_parse_and_add(coro_rule_engine_t *engine, const char *line) {
     if (!engine || !line) return -1;
     
     // Simple split-by-comma parser
@@ -396,13 +396,13 @@ int turbo_coro_rule_parse_and_add(turbo_coro_rule_engine_t *engine, const char *
         if (!proxy_url) proxy_url = action_str; 
     }
     
-    turbo_coro_rule_add(engine, type, payload, action, proxy_url);
+    coro_rule_add(engine, type, payload, action, proxy_url);
     
     free(copy);
     return 0;
 }
 
-int turbo_coro_rule_group_add(turbo_coro_rule_engine_t *engine, 
+int coro_rule_group_add(coro_rule_engine_t *engine, 
                                        const char *name, 
                                        turbo_group_type_t type) {
     if (!engine || !name) return -1;
@@ -415,7 +415,7 @@ int turbo_coro_rule_group_add(turbo_coro_rule_engine_t *engine,
     return 0;
 }
 
-int turbo_coro_rule_group_add_member(turbo_coro_rule_engine_t *engine, 
+int coro_rule_group_add_member(coro_rule_engine_t *engine, 
                                               const char *group_name, 
                                               const char *member) {
     if (!engine || !group_name || !member) return -1;
@@ -442,7 +442,7 @@ int turbo_coro_rule_group_add_member(turbo_coro_rule_engine_t *engine,
     return -2;
 }
 
-int turbo_coro_rule_group_select(turbo_coro_rule_engine_t *engine, 
+int coro_rule_group_select(coro_rule_engine_t *engine, 
                                           const char *group_name, 
                                           const char *member) {
     if (!engine || !group_name || !member) return -1;
@@ -458,7 +458,7 @@ int turbo_coro_rule_group_select(turbo_coro_rule_engine_t *engine,
     return -2;
 }
 
-int turbo_coro_rule_group_update_member(turbo_coro_rule_engine_t *engine,
+int coro_rule_group_update_member(coro_rule_engine_t *engine,
                                                 const char *group_name,
                                                 const char *member,
                                                 bool alive,
@@ -483,7 +483,7 @@ int turbo_coro_rule_group_update_member(turbo_coro_rule_engine_t *engine,
     return -2; // Group not found
 }
 
-void turbo_coro_rule_update_health(turbo_coro_rule_engine_t *engine,
+void coro_rule_update_health(coro_rule_engine_t *engine,
                                             const char *url_or_name,
                                             bool alive,
                                             uint64_t latency_ms) {
@@ -502,7 +502,7 @@ void turbo_coro_rule_update_health(turbo_coro_rule_engine_t *engine,
     }
 }
 
-void turbo_coro_rule_engine_set_health_cb(turbo_coro_rule_engine_t *engine,
+void coro_rule_engine_set_health_cb(coro_rule_engine_t *engine,
                                                   turbo_group_health_cb cb,
                                                   void *user_data) {
     if (!engine) return;
@@ -510,7 +510,7 @@ void turbo_coro_rule_engine_set_health_cb(turbo_coro_rule_engine_t *engine,
     engine->health_user_data = user_data;
 }
 
-void turbo_coro_rule_engine_trigger_health_checks(turbo_coro_rule_engine_t *engine) {
+void coro_rule_engine_trigger_health_checks(coro_rule_engine_t *engine) {
     if (!engine || !engine->health_cb) return;
     turbo_group_t *g = engine->groups;
     while (g) {
@@ -534,7 +534,7 @@ void turbo_coro_rule_engine_trigger_health_checks(turbo_coro_rule_engine_t *engi
     }
 }
 
-void turbo_coro_rule_dns_record(turbo_coro_rule_engine_t *engine, 
+void coro_rule_dns_record(coro_rule_engine_t *engine, 
                                          const char *ip, 
                                          const char *domain) {
     if (!engine || !ip || !domain) return;
@@ -563,7 +563,7 @@ static int compare_geoip(const void *a, const void *b) {
     return memcmp(g1->start, g2->start, g1->is_ipv6 ? 16 : 4);
 }
 
-int turbo_coro_rule_geoip_load(turbo_coro_rule_engine_t *engine, const char *path) {
+int coro_rule_geoip_load(coro_rule_engine_t *engine, const char *path) {
     if (!engine || !path) return -1;
     
     FILE *f = fopen(path, "r");

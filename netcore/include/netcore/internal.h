@@ -50,7 +50,7 @@ extern "C" {
  * - Use one libuv loop per thread
  * - Create separate client/server instances per thread
  * - Don't share arena buffers across threads
- * - Use turbo_coro_client_t with turbo_coro_context_t for coroutine-based I/O
+ * - Use coro_client_t with coro_context_t for coroutine-based I/O
  */
 
 /* ============================================================================

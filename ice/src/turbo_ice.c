@@ -14,7 +14,7 @@
 #include "ice/turbo_stun.h"
 #include "ice/turbo_turn.h"
 #include <platform.h>
-#include <turbo_coro_client.h>
+#include <netcore/turbo_coro_client.h>
 
 #include "turbo_dns.h"
 #include "turbo_str.h"
@@ -114,7 +114,7 @@ struct turbo_ice_agent_s {
   ice_config_t config;
 
   /* Coroutine context */
-  turbo_coro_context_t *ctx;
+  coro_context_t *ctx;
 
   /* State */
   ice_state_t state;
@@ -260,15 +260,15 @@ static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, co
  * ============================================================================ */
 
 static int create_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *candidate) {
-  turbo_coro_client_t *client = turbo_coro_client_create(agent->ctx);
+  coro_client_t *client = coro_client_create(agent->ctx);
   if (!client) return -1;
 
   char url[512];
   stbsp_snprintf(url, sizeof(url), "udp://%s:0", candidate->ip);
 
-  int rc = turbo_coro_client_connect(client, url);
+  int rc = coro_client_connect(client, url);
   if (rc != 0) {
-      turbo_coro_client_destroy(client);
+      coro_client_destroy(client);
       return -1;
   }
 
@@ -276,7 +276,7 @@ static int create_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *ca
   
   struct sockaddr_storage addr;
   memset(&addr, 0, sizeof(addr));
-  if (turbo_coro_client_get_local_address(client, &addr) == 0) {
+  if (coro_client_get_local_address(client, &addr) == 0) {
       if (addr.ss_family == AF_INET) {
           struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr;
           candidate->port = ntohs(addr4->sin_port);
@@ -613,7 +613,7 @@ ice_config_t ice_default_config(void) {
 }
 
 
-turbo_ice_agent_t *ice_agent_create(turbo_coro_context_t *ctx, const ice_config_t *config) {
+turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *config) {
   if (!config)
     return NULL;
   ensure_random_seeded();
@@ -660,7 +660,7 @@ void ice_agent_destroy(turbo_ice_agent_t *agent) {
   for (int i = 0; i < agent->local_candidate_count; i++) {
     ice_candidate_t *cand = &agent->local_candidates[i];
     if (cand->socket) {
-      turbo_coro_client_destroy((turbo_coro_client_t *)cand->socket);
+      coro_client_destroy((coro_client_t *)cand->socket);
       cand->socket = NULL;
     }
   }
@@ -816,12 +816,12 @@ static void send_connectivity_check(turbo_ice_agent_t *agent, ice_candidate_pair
       rc = turn_client_send((turbo_turn_client_t *)pair->local->turn_client, pair->remote->ip, pair->remote->port, stun_buf, len);
     }
   } else if (pair->local->socket) {
-    turbo_coro_client_t *client = (turbo_coro_client_t *)pair->local->socket;
+    coro_client_t *client = (coro_client_t *)pair->local->socket;
     char url[512];
     stbsp_snprintf(url, sizeof(url), "udp://%s:%u", pair->remote->ip, pair->remote->port);
 
-    turbo_coro_client_connect(client, url);
-    rc = turbo_coro_client_send(client, (const char *)stun_buf, len);
+    coro_client_connect(client, url);
+    rc = coro_client_send(client, (const char *)stun_buf, len);
   }
 
   if (rc == 0) {
@@ -890,11 +890,11 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
     if (local_cand->type == ICE_CANDIDATE_TYPE_RELAY && local_cand->turn_client) {
       turn_client_send((turbo_turn_client_t *)local_cand->turn_client, remote_ip, remote_port, resp_buf, resp_len);
     } else if (local_cand->socket) {
-      turbo_coro_client_t *client = (turbo_coro_client_t *)local_cand->socket;
+      coro_client_t *client = (coro_client_t *)local_cand->socket;
       char url[512];
       stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote_ip, remote_port);
-      turbo_coro_client_connect(client, url);
-      turbo_coro_client_send(client, (const char *)resp_buf, resp_len);
+      coro_client_connect(client, url);
+      coro_client_send(client, (const char *)resp_buf, resp_len);
     }
   } else {
     TLOG_DEBUG("Failed to build STUN response");
@@ -1116,11 +1116,11 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
             if (buf) free(buf);
           }
         } else if (pair->local->socket) {
-          turbo_coro_client_t *client = (turbo_coro_client_t *)pair->local->socket;
-          turbo_coro_client_set_timeout(client, 500);
+          coro_client_t *client = (coro_client_t *)pair->local->socket;
+          coro_client_set_timeout(client, 500);
           char *data = NULL;
           size_t data_len = 0;
-          int rc = turbo_coro_client_recv(client, &data, &data_len);
+          int rc = coro_client_recv(client, &data, &data_len);
           if (rc == 0 && data && data_len > 0) {
             if (stun_is_stun_message((const uint8_t *)data, data_len)) {
               uint16_t msg_type = read_u16_be((const uint8_t *)data);
@@ -1146,7 +1146,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
           }
         }
       }
-      turbo_coro_sleep(agent->ctx, ICE_DEFAULT_TA_INTERVAL);
+      coro_sleep(agent->ctx, ICE_DEFAULT_TA_INTERVAL);
       continue;
     }
 
@@ -1204,7 +1204,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
       }
     }
 
-    turbo_coro_sleep(agent->ctx, ICE_DEFAULT_TA_INTERVAL);
+    coro_sleep(agent->ctx, ICE_DEFAULT_TA_INTERVAL);
   }
 }
 
@@ -1273,11 +1273,11 @@ int ice_agent_send(turbo_ice_agent_t *agent, const void *data, size_t len) {
     return -4;
 
   if (local->type == ICE_CANDIDATE_TYPE_HOST || local->type == ICE_CANDIDATE_TYPE_SRFLX) {
-    turbo_coro_client_t *client = (turbo_coro_client_t *)local->socket;
+    coro_client_t *client = (coro_client_t *)local->socket;
     char url[512];
     stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote->ip, remote->port);
-    turbo_coro_client_connect(client, url);
-    int rc = turbo_coro_client_send(client, (const char *)data, len);
+    coro_client_connect(client, url);
+    int rc = coro_client_send(client, (const char *)data, len);
     return rc;
   } else if (local->type == ICE_CANDIDATE_TYPE_RELAY) {
     if (!local->turn_client) return -5;
@@ -1293,7 +1293,7 @@ ice_state_t ice_agent_get_state(turbo_ice_agent_t *agent) {
   return agent->state;
 }
 
-turbo_coro_context_t *ice_agent_get_context(turbo_ice_agent_t *agent) {
+coro_context_t *ice_agent_get_context(turbo_ice_agent_t *agent) {
   if (!agent) return NULL;
   return agent->ctx;
 }

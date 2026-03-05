@@ -130,8 +130,8 @@ typedef struct {
  * TURN client structure (coroutine-based)
  */
 struct turbo_turn_client_s {
-    turbo_coro_client_t *client;
-    turbo_coro_context_t *ctx;
+    coro_client_t *client;
+    coro_context_t *ctx;
 
     /* Server */
     char server_host[256];
@@ -168,7 +168,7 @@ struct turbo_turn_client_s {
 /**
  * Create TURN client (coroutine-based).
  */
-turbo_turn_client_t *turn_client_create(turbo_coro_context_t *ctx,
+turbo_turn_client_t *turn_client_create(coro_context_t *ctx,
                                         const turn_client_config_t *config);
 
 /**

@@ -346,7 +346,7 @@ void simd_reverse(const double *src, double *dst, size_t n) {
         // AVX doesn't have a direct "reverse 4 doubles" but we can permute.
         // Permute indices 3, 2, 1, 0
         v = _mm256_permute4x64_pd(v, _MM_SHUFFLE(0, 1, 2, 3));
-        _mm256_storeu_pd(&dst[n - 4 - i], v);
+        _mm256_storeu_pd(&dst[n - i - 4], v);
     }
     for (; i < n; i++) dst[n - 1 - i] = src[i];
 }

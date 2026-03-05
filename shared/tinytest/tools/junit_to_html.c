@@ -1,27 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <platform.h>
+#include <string.h>
 
+#include "turbo_str.h"
+#include "turbo_fs.h"
 #include "cmd_arger.h"
 #include "mustache_xml.h"
 #include "xml/cxparser.h"
 #include "core/cxdefs.h"
 
-static char *read_file_to_string(const char *filename, size_t *out_size) {
-    FILE *f = fopen(filename, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = (char *)malloc(size + 1);
-    if (buf) {
-        size_t read = fread(buf, 1, size, f);
-        buf[read] = '\0';
-        if (out_size) *out_size = read;
-    }
-    fclose(f);
-    return buf;
-}
+
 
 static const char* get_attr(cxml_elem_node *elem, const char *name) {
     if (!elem->attributes) return "";
@@ -96,7 +85,7 @@ int main(int argc, char **argv) {
 
     if (root_elem) {
         const char* root_name = cxml_string_as_raw(&root_elem->name.qname);
-        if (strcasecmp(root_name, "testsuite") == 0) {
+        if (tstr_casecmp(root_name, "testsuite") == 0) {
             suite = root_elem;
         } else {
             /* Look for testsuite children */
@@ -139,7 +128,7 @@ int main(int argc, char **argv) {
         if (_cxml_get_node_type(node) != CXML_ELEM_NODE) continue;
         cxml_elem_node *testcase = (cxml_elem_node *)node;
         const char* tc_name = cxml_string_as_raw(&testcase->name.qname);
-        if (strcasecmp(tc_name, "testcase") != 0) continue;
+        if (tstr_casecmp(tc_name, "testcase") != 0) continue;
 
         case_count++;
         if (find_child(testcase, "failure")) {
@@ -153,18 +142,17 @@ int main(int argc, char **argv) {
     printf("Processing %d test cases...\n", case_count);
 
     /* Load template */
-    size_t template_size = 0;
-    char *template_str = read_file_to_string(template_path, &template_size);
-    if (!template_str) {
+    turbo_fs_buf_t template_buf;
+    if (turbo_fs_read_file(template_path, &template_buf) != 0) {
         fprintf(stderr, "Warning: Could not open template file at: %s. Trying relative to executable...\n", template_path);
-        template_str = read_file_to_string("dashboard.html", &template_size);
+        if (turbo_fs_read_file("dashboard.html", &template_buf) != 0) {
+            fprintf(stderr, "Error: Could not find template file.\n");
+            cxml_root_node_free(root_node);
+            return 1;
+        }
     }
-
-    if (!template_str) {
-        fprintf(stderr, "Error: Could not find template file.\n");
-        cxml_root_node_free(root_node);
-        return 1;
-    }
+    char *template_str = template_buf.base;
+    size_t template_size = template_buf.len;
 
     /* Compile template */
     MUSTACHE_TEMPLATE *mustache_templ = mustache_compile(template_str, template_size, NULL, NULL, 0);

@@ -1,5 +1,4 @@
 add_subdirectory(exprtk) 
-add_subdirectory(executor)
 add_subdirectory(turbo_script)
 add_subdirectory(examples)
 add_subdirectory(modules)

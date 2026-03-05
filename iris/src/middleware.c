@@ -113,7 +113,16 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
     return;
   }
 
-  int total_middleware_count = global_middleware_count + middleware_info->middleware_count;
+  /* Support multi-instance apps: get global middleware from the specific app */
+  MiddlewareHandler *app_global_mw = global_middleware;
+  int app_global_mw_count = global_middleware_count;
+
+  if (req->app) {
+    app_global_mw = req->app->global_middleware;
+    app_global_mw_count = req->app->global_middleware_count;
+  }
+
+  int total_middleware_count = app_global_mw_count + middleware_info->middleware_count;
 
   // If there is no middleware, call the handler directly
   if (total_middleware_count == 0) {
@@ -135,12 +144,13 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
   }
 
   // Copy global middleware handlers first
-  memcpy(
-      combined_handlers, global_middleware, sizeof(MiddlewareHandler) * global_middleware_count);
+  if (app_global_mw_count > 0 && app_global_mw) {
+    memcpy(combined_handlers, app_global_mw, sizeof(MiddlewareHandler) * app_global_mw_count);
+  }
 
   // Copy route-specific middleware handlers
   if (middleware_info->middleware_count > 0 && middleware_info->middleware) {
-    memcpy(combined_handlers + global_middleware_count,
+    memcpy(combined_handlers + app_global_mw_count,
            middleware_info->middleware,
            sizeof(MiddlewareHandler) * middleware_info->middleware_count);
   }

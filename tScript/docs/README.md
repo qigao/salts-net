@@ -124,7 +124,6 @@ TurboScript comes with a rich set of optional modules:
 ```
 tScript/
 ├── exprtk/          # Core interpreter
-├── ts_loader/       # Plugin loader
 ├── modules/         # Built-in and plugin modules
 ├── docs/            # Documentation (you are here)
 └── tests/           # Test suite

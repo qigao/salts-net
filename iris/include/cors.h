@@ -22,8 +22,8 @@ typedef struct
 
 CXX_C_API void cors_register(cors_t *opts);
 CXX_C_API void reset_cors(void);
-CXX_C_API bool cors_handle_preflight(const http_context_t *ctx, Res *res);
-CXX_C_API void cors_add_headers(const http_context_t *ctx, Res *res);
+CXX_C_API bool cors_handle_preflight(cors_t *opts, const http_context_t *ctx, Res *res);
+CXX_C_API void cors_add_headers(cors_t *opts, const http_context_t *ctx, Res *res);
 CXX_C_API void init_cors(cors_t *opts);
 
 #ifdef __cplusplus

@@ -43,7 +43,7 @@ static void dump_to_file(const char *filename, const char *data, size_t len) {
 // Test that fetches real XML from play.min.io and parses it
 static void test_real_list_buckets(void *arg) {
   __bdd_config_type__ *__bdd_config__ = ((__bdd_config_type__ **)arg)[0];
-  turbo_coro_context_t *ctx = ((turbo_coro_context_t **)arg)[1];
+  coro_context_t *ctx = ((coro_context_t **)arg)[1];
 
   // Step 1: Raw HTTP GET to fetch and dump the XML body
   http_client_t *hc = http_client_create();  http_client_set_timeout(hc, 30000);
@@ -111,20 +111,20 @@ typedef void (*test_fn_t2)(void *arg);
 typedef struct {
   test_fn_t2 fn;
   void *arg;
-  turbo_coro_context_t *ctx;
+  coro_context_t *ctx;
 } coro_wrap2_t;
-static void coro_entry2(turbo_coro_t *co, void *a) {
+static void coro_entry2(coro_t *co, void *a) {
   (void)co;
   coro_wrap2_t *w = (coro_wrap2_t *)a;
   w->fn(w->arg);
-  turbo_coro_context_stop(w->ctx);
+  coro_context_stop(w->ctx);
 }
-static void run_in_coro2(turbo_coro_context_t *ctx, test_fn_t2 fn, void *arg) {
+static void run_in_coro2(coro_context_t *ctx, test_fn_t2 fn, void *arg) {
   coro_wrap2_t w = {.fn = fn, .arg = arg, .ctx = ctx};
-  turbo_coro_t *co = turbo_coro_create(coro_entry2, &w, NULL);
-  turbo_coro_resume(co);
-  turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_destroy(co);
+  coro_t *co = coro_create(coro_entry2, &w, NULL);
+  coro_resume(co);
+  coro_context_run(ctx, TURBO_RUN_DEFAULT);
+  coro_destroy(co);
 }
 
 spec("cxml S3 XML Parser Tests") {
@@ -237,9 +237,9 @@ spec("cxml S3 XML Parser Tests") {
   }
 
   it("should parse real play.min.io ListBuckets response") {
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    coro_context_t *ctx = coro_context_create(NULL);
     void *args[2] = {__bdd_config__, ctx};
     run_in_coro2(ctx, test_real_list_buckets, args);
-    turbo_coro_context_destroy(ctx);
+    coro_context_destroy(ctx);
   }
 }

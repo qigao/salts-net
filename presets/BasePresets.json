@@ -16,7 +16,7 @@
                 "Msvc",
                 "flags-msvc"
             ],
-            "binaryDir": "${sourceDir}/build/Ninja/Msvc"
+            "binaryDir": "${sourceDir}/build/Msvc"
         },
         {
             "name": "base-developer-windows-asan",
@@ -27,7 +27,7 @@
                 "Msvc",
                 "flags-msvc"
             ],
-            "binaryDir": "${sourceDir}/build/Ninja/Msvc-ASan"
+            "binaryDir": "${sourceDir}/build/Msvc-ASan"
         },
         {
             "name": "base-release-windows",
@@ -38,7 +38,7 @@
                 "Msvc",
                 "flags-msvc"
             ],
-            "binaryDir": "${sourceDir}/build/windows-msvc-release"
+            "binaryDir": "${sourceDir}/build/Msvc-Release"
         },
         {
             "name": "base-release-linux",

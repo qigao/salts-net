@@ -137,7 +137,7 @@ typedef struct {
  * @param mapped  Output mapped address
  * @return 0 on success, negative on error
  */
-int stun_binding_request(turbo_coro_context_t *ctx,
+int stun_binding_request(coro_context_t *ctx,
                          const stun_client_config_t *config,
                          stun_mapped_address_t *mapped);
 

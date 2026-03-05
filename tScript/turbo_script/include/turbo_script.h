@@ -13,7 +13,7 @@ extern "C" {
 
 typedef struct turbo_script_ctx_s turbo_script_ctx_t;
 typedef struct turbo_script_compiled_s turbo_script_compiled_t;
-typedef struct turbo_coro_context_s turbo_coro_context_t;
+typedef struct coro_context_s coro_context_t;
 typedef struct exprtk_value_s exprtk_value_t;
 /**
  * @brief Initialize a new Turbo Script context.
@@ -23,7 +23,7 @@ CXX_C_API turbo_script_ctx_t *turbo_script_init();
 /**
  * @brief Set the coroutine context for networking/async operations.
  */
-CXX_C_API void turbo_script_set_coro_context(turbo_script_ctx_t *ctx, turbo_coro_context_t *coro_ctx);
+CXX_C_API void turbo_script_set_coro_context(turbo_script_ctx_t *ctx, coro_context_t *coro_ctx);
 
 /**
  * @brief Free a Turbo Script context.
@@ -38,6 +38,17 @@ CXX_C_API void turbo_script_free(turbo_script_ctx_t *ctx);
  * @return 0 on success, <0 on failure.
  */
 CXX_C_API int turbo_script_run(turbo_script_ctx_t *ctx, const char *script);
+
+/**
+ * @brief Run a script from a string and print the evaluated result to stdout.
+ * Intended for REPL use.
+ *
+ * @param ctx Context.
+ * @param script Script content.
+ * @return 0 on success, <0 on failure.
+ */
+CXX_C_API int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script);
+
 
 /**
  * @brief Run a script from a file.

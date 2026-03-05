@@ -8,7 +8,7 @@
 
 #include <string.h>
 #include <stdlib.h>
-
+#include <stdio.h>
 #define REGISTRY_INITIAL_CAP 256
 
 static exprtk_func_entry_t *g_registry = NULL;
@@ -105,7 +105,7 @@ exprtk_builtin_fn exprtk_registry_find(const char *name) {
     if (hit) return hit->fn;
 
     /* 2. If name doesn't have a dot, it might be registered with a prefix we don't know here.
-     * But our current registry flattens everything. 
+     * But our current registry flattens everything.
      * If a module "math" has "sum", it's currently registered as "sum".
      * If we want to support "math.sum", we need to register it as both or handle dots.
      */
@@ -260,16 +260,17 @@ exprtk_value_t exprtk_call_internal(const char *name, size_t argc,
     }
 
     /* 2. Module registry — O(log n) sorted-array lookup */
+    /* Try full name first (e.g., "vec.reverse") */
+    exprtk_builtin_fn mod_fn = exprtk_registry_find(name);
+    if (mod_fn) return mod_fn(argc, args, env, arena);
+
     /* Check for namespaced call in global registry too */
     const char *final_dot = strchr(name, '.');
     if (final_dot) {
         /* If it's something like "math.sin", just look for "sin" in registry as fallback */
-        exprtk_builtin_fn mod_fn = exprtk_registry_find(final_dot + 1);
+        mod_fn = exprtk_registry_find(final_dot + 1);
         if (mod_fn) return mod_fn(argc, args, env, arena);
     }
-
-    exprtk_builtin_fn fallback_fn = exprtk_registry_find(name);
-    if (fallback_fn) return fallback_fn(argc, args, env, arena);
 
     return result;
 }

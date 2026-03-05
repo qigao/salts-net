@@ -168,7 +168,6 @@ typedef struct tlog_s tlog_t;
  */
 typedef struct {
   turbo_log_level_t min_level; // Global minimum level
-  int async_mode;              // 0 = sync, 1 = async with ring buffer
   size_t buffer_size;          // Ring buffer size for async (default: 64KB)
   size_t pool_size;            // Memory pool size (default: 32KB)
 } tlog_config_t;

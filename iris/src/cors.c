@@ -33,17 +33,17 @@ void reset_cors(void)
     }
 }
 
-static bool is_origin_allowed(const char *origin)
+static bool is_origin_allowed(cors_t *opts, const char *origin)
 {
-    if (!g_cors_opts || !origin)
+    if (!opts || !origin)
         return false;
 
     // Allow all the origins
-    if (g_cors_opts->allow_all_origins)
+    if (opts->allow_all_origins)
         return true;
 
     // Allow specific origins
-    if (g_cors_opts->origin && strcmp(origin, g_cors_opts->origin) == 0)
+    if (opts->origin && strcmp(origin, opts->origin) == 0)
     {
         return true;
     }
@@ -51,9 +51,9 @@ static bool is_origin_allowed(const char *origin)
     return false;
 }
 
-bool cors_handle_preflight(const http_context_t *ctx, Res *res)
+bool cors_handle_preflight(cors_t *opts, const http_context_t *ctx, Res *res)
 {
-    if (!g_cors_opts || !g_cors_opts->enabled)
+    if (!opts || !opts->enabled)
         return false;
     if (strcmp(ctx->method, "OPTIONS") != 0)
         return false;
@@ -61,7 +61,7 @@ bool cors_handle_preflight(const http_context_t *ctx, Res *res)
     // Check origin
     const char *origin = get_req(&ctx->headers, "Origin");
 
-    if (origin && !is_origin_allowed(origin))
+    if (origin && !is_origin_allowed(opts, origin))
     {
         res->status = 403;
         return true;
@@ -74,30 +74,30 @@ bool cors_handle_preflight(const http_context_t *ctx, Res *res)
     res->content_type = "";
 
     // Add CORS headers
-    if (g_cors_opts->allow_all_origins)
+    if (opts->allow_all_origins)
     {
         set_header(res, "Access-Control-Allow-Origin", "*");
     }
-    else if (origin && is_origin_allowed(origin))
+    else if (origin && is_origin_allowed(opts, origin))
     {
         set_header(res, "Access-Control-Allow-Origin", origin);
     }
 
-    if (g_cors_opts->methods)
-        set_header(res, "Access-Control-Allow-Methods", g_cors_opts->methods);
-    if (g_cors_opts->headers)
-        set_header(res, "Access-Control-Allow-Headers", g_cors_opts->headers);
-    if (g_cors_opts->credentials)
-        set_header(res, "Access-Control-Allow-Credentials", g_cors_opts->credentials);
-    if (g_cors_opts->max_age)
-        set_header(res, "Access-Control-Max-Age", g_cors_opts->max_age);
+    if (opts->methods)
+        set_header(res, "Access-Control-Allow-Methods", opts->methods);
+    if (opts->headers)
+        set_header(res, "Access-Control-Allow-Headers", opts->headers);
+    if (opts->credentials)
+        set_header(res, "Access-Control-Allow-Credentials", opts->credentials);
+    if (opts->max_age)
+        set_header(res, "Access-Control-Max-Age", opts->max_age);
 
     return true;
 }
 
-void cors_add_headers(const http_context_t *ctx, Res *res)
+void cors_add_headers(cors_t *opts, const http_context_t *ctx, Res *res)
 {
-    if (!g_cors_opts || !g_cors_opts->enabled)
+    if (!opts || !opts->enabled)
         return;
 
     const char *origin = get_req(&ctx->headers, "Origin");
@@ -105,12 +105,12 @@ void cors_add_headers(const http_context_t *ctx, Res *res)
     bool should_add_cors = false;
 
     // Check origin and add headers
-    if (g_cors_opts->allow_all_origins)
+    if (opts->allow_all_origins)
     {
         set_header(res, "Access-Control-Allow-Origin", "*");
         should_add_cors = true;
     }
-    else if (origin && is_origin_allowed(origin))
+    else if (origin && is_origin_allowed(opts, origin))
     {
         set_header(res, "Access-Control-Allow-Origin", origin);
         should_add_cors = true;
@@ -119,12 +119,12 @@ void cors_add_headers(const http_context_t *ctx, Res *res)
     // Add other headers for allowed origins only
     if (should_add_cors)
     {
-        if (g_cors_opts->methods)
-            set_header(res, "Access-Control-Allow-Methods", g_cors_opts->methods);
-        if (g_cors_opts->headers)
-            set_header(res, "Access-Control-Allow-Headers", g_cors_opts->headers);
-        if (g_cors_opts->credentials)
-            set_header(res, "Access-Control-Allow-Credentials", g_cors_opts->credentials);
+        if (opts->methods)
+            set_header(res, "Access-Control-Allow-Methods", opts->methods);
+        if (opts->headers)
+            set_header(res, "Access-Control-Allow-Headers", opts->headers);
+        if (opts->credentials)
+            set_header(res, "Access-Control-Allow-Credentials", opts->credentials);
     }
 }
 

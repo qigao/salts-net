@@ -1,10 +1,10 @@
 /**
- * @file turbo_coro_rule.h
+ * @file coro_rule.h
  * @brief Rule-based routing engine for TProxy (inspired by V2Ray/Clash).
  */
 
-#ifndef TURBO_CORO_RULE_H
-#define TURBO_CORO_RULE_H
+#ifndef coro_RULE_H
+#define coro_RULE_H
 
 #include "platform.h"
 #include <stdint.h>
@@ -43,17 +43,17 @@ typedef struct {
     char *proxy_url;            /**< Optional: Backend URL if action is TURBO_RULE_ACTION_PROXY */
 } turbo_rule_t;
 
-typedef struct turbo_coro_rule_engine_s turbo_coro_rule_engine_t;
+typedef struct coro_rule_engine_s coro_rule_engine_t;
 
 /**
  * @brief Create a new rule engine.
  */
-CXX_C_API turbo_coro_rule_engine_t* turbo_coro_rule_engine_create(void);
+CXX_C_API coro_rule_engine_t* coro_rule_engine_create(void);
 
 /**
  * @brief Destroy a rule engine and all its rules.
  */
-CXX_C_API void turbo_coro_rule_engine_destroy(turbo_coro_rule_engine_t *engine);
+CXX_C_API void coro_rule_engine_destroy(coro_rule_engine_t *engine);
 
 /**
  * @brief Add a rule to the engine (FIFO priority).
@@ -63,7 +63,7 @@ CXX_C_API void turbo_coro_rule_engine_destroy(turbo_coro_rule_engine_t *engine);
  * @param proxy_url URL to use if action is Proxy
  * @return 0 on success
  */
-CXX_C_API int turbo_coro_rule_add(turbo_coro_rule_engine_t *engine, 
+CXX_C_API int coro_rule_add(coro_rule_engine_t *engine, 
                                  turbo_rule_type_t type, 
                                  const char *payload, 
                                  turbo_rule_action_type_t action, 
@@ -77,7 +77,7 @@ CXX_C_API int turbo_coro_rule_add(turbo_coro_rule_engine_t *engine,
  * @param[out] out_proxy_url Pointer to a string that will receive the proxy URL if matched.
  * @return The action to take.
  */
-CXX_C_API turbo_rule_action_type_t turbo_coro_rule_evaluate(turbo_coro_rule_engine_t *engine, 
+CXX_C_API turbo_rule_action_type_t coro_rule_evaluate(coro_rule_engine_t *engine, 
                                                            const char *host, 
                                                            int port, 
                                                            const char **out_proxy_url);
@@ -87,7 +87,7 @@ CXX_C_API turbo_rule_action_type_t turbo_coro_rule_evaluate(turbo_coro_rule_engi
  * Format: "TYPE,PAYLOAD,ACTION[,PROXY_URL]"
  * Example: "DOMAIN-SUFFIX,google.com,Proxy,wss://remote:443"
  */
-CXX_C_API int turbo_coro_rule_parse_and_add(turbo_coro_rule_engine_t *engine, const char *line);
+CXX_C_API int coro_rule_parse_and_add(coro_rule_engine_t *engine, const char *line);
 
 /* ============================================================================ 
  * Proxy Groups
@@ -99,28 +99,28 @@ CXX_C_API int turbo_coro_rule_parse_and_add(turbo_coro_rule_engine_t *engine, co
  * @param type Group type (Select, Latency, etc.).
  * @return 0 on success.
  */
-CXX_C_API int turbo_coro_rule_group_add(turbo_coro_rule_engine_t *engine, 
+CXX_C_API int coro_rule_group_add(coro_rule_engine_t *engine, 
                                        const char *name, 
                                        turbo_group_type_t type);
 
 /**
  * @brief Add a member (proxy URL or another group name) to a group.
  */
-CXX_C_API int turbo_coro_rule_group_add_member(turbo_coro_rule_engine_t *engine, 
+CXX_C_API int coro_rule_group_add_member(coro_rule_engine_t *engine, 
                                               const char *group_name, 
                                               const char *member);
 
 /**
  * @brief Manually set the selected member for a SELECT group.
  */
-CXX_C_API int turbo_coro_rule_group_select(turbo_coro_rule_engine_t *engine, 
+CXX_C_API int coro_rule_group_select(coro_rule_engine_t *engine, 
                                           const char *group_name, 
                                           const char *member);
 
 /**
  * @brief Update a member's health/latency.
  */
-CXX_C_API int turbo_coro_rule_group_update_member(turbo_coro_rule_engine_t *engine,
+CXX_C_API int coro_rule_group_update_member(coro_rule_engine_t *engine,
                                                 const char *group_name,
                                                 const char *member,
                                                 bool alive,
@@ -134,19 +134,19 @@ typedef void (*turbo_group_health_cb)(const char *url, void *user_data);
 /**
  * @brief Set callback for periodic health checks.
  */
-CXX_C_API void turbo_coro_rule_engine_set_health_cb(turbo_coro_rule_engine_t *engine,
+CXX_C_API void coro_rule_engine_set_health_cb(coro_rule_engine_t *engine,
                                                   turbo_group_health_cb cb,
                                                   void *user_data);
 
 /**
  * @brief Manually trigger health checks for all members in all groups.
  */
-CXX_C_API void turbo_coro_rule_engine_trigger_health_checks(turbo_coro_rule_engine_t *engine);
+CXX_C_API void coro_rule_engine_trigger_health_checks(coro_rule_engine_t *engine);
 
 /**
  * @brief Update health/latency for any member matching the given URL across all groups.
  */
-CXX_C_API void turbo_coro_rule_update_health(turbo_coro_rule_engine_t *engine,
+CXX_C_API void coro_rule_update_health(coro_rule_engine_t *engine,
                                             const char *url_or_name,
                                             bool alive,
                                             uint64_t latency_ms);
@@ -158,12 +158,12 @@ CXX_C_API void turbo_coro_rule_update_health(turbo_coro_rule_engine_t *engine,
 /**
  * @brief Load a GeoIP database (CSV or simplified binary format).
  */
-CXX_C_API int turbo_coro_rule_geoip_load(turbo_coro_rule_engine_t *engine, const char *path);
+CXX_C_API int coro_rule_geoip_load(coro_rule_engine_t *engine, const char *path);
 
 /**
  * @brief Records a DNS mapping for sniffing (e.g., from intercepted DNS traffic).
  */
-CXX_C_API void turbo_coro_rule_dns_record(turbo_coro_rule_engine_t *engine, 
+CXX_C_API void coro_rule_dns_record(coro_rule_engine_t *engine, 
                                          const char *ip, 
                                          const char *domain);
 
@@ -171,4 +171,4 @@ CXX_C_API void turbo_coro_rule_dns_record(turbo_coro_rule_engine_t *engine,
 }
 #endif
 
-#endif // TURBO_CORO_RULE_H
+#endif // coro_RULE_H

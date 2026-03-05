@@ -1151,7 +1151,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             size_t actual_count = 0;
             exprtk_value_t *args = eval_expand_args(node->data.function.args, node->data.function.arg_count, env, &actual_count);
             if (!args && actual_count == 0) return zero;
-            exprtk_value_t result = exprtk_call_internal(node->data.function.name, actual_count, args, env, node->arena);
+            exprtk_value_t result = exprtk_call_internal(node->data.function.name, actual_count, args, env, &env->arena);
             free(args);
             return result;
         }
@@ -1210,7 +1210,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                         char full_name[256];
                         snprintf(full_name, sizeof(full_name), "%s.%s",
                                  mc.obj_node->data.variable.name, mc.method);
-                        mc_result = exprtk_call_internal(full_name, mc_argc, mc_args, env, node->arena);
+                        mc_result = exprtk_call_internal(full_name, mc_argc, mc_args, env, &env->arena);
                     } else {
                         mc_result = zero;
                     }
@@ -1253,8 +1253,8 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             exprtk_value_t *vals = eval_expand_args(node->data.vector.elements, node->data.vector.count, env, &actual_count);
             if (!vals && actual_count == 0) return zero;
             if (actual_count == 0) { free(vals); return zero; }
-            
-            double *data = (double*)turbo_pool_alloc(node->arena, actual_count * sizeof(double));
+
+            double *data = (double*)turbo_pool_alloc(&env->arena, actual_count * sizeof(double));
             for (size_t i = 0; i < actual_count; ++i) {
                 data[i] = (vals[i].type == EXPRTK_VAL_NUMBER) ? vals[i].data.number : 0;
             }

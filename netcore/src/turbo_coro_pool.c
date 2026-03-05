@@ -1,9 +1,14 @@
 /**
- * @file turbo_coro_pool.c
+ * @file coro_pool.c
  * @brief Coroutine-aware connection pool implementation.
  *
  * Single-threaded cooperative model: no locks, no atomics.
  * One pool = one URL endpoint. Slot array sized to max_size.
+ *
+ * Waiter list: coroutines blocked in pool_borrow() are tracked in a
+ * singly-linked list embedded in the pool. When pool_close() fires or
+ * a connection is returned, all waiters are woken atomically so none
+ * are left suspended forever.
  */
 
 #include "turbo_coro_pool.h"
@@ -16,72 +21,63 @@
 
 /* ── Slot states ──────────────────────────────────────────── */
 
-typedef enum {
-  POOL_SLOT_EMPTY,
-  POOL_SLOT_IDLE,
-  POOL_SLOT_BORROWED
-} pool_slot_state_t;
+typedef enum { POOL_SLOT_EMPTY, POOL_SLOT_IDLE, POOL_SLOT_BORROWED } pool_slot_state_t;
 
 typedef struct {
-  turbo_coro_client_t *client;
-  pool_slot_state_t    state;
-  uint64_t             idle_since;
+  coro_client_t *client;
+  pool_slot_state_t state;
+  uint64_t idle_since;
 } pool_slot_t;
 
-/* ── Waiter queue (FIFO, stack-allocated nodes) ───────────── */
+/* ── Waiter list node ─────────────────────────────────────── */
+
+typedef enum { POOL_WAKE_RETRY = 0, POOL_WAKE_CLOSED } pool_wake_reason_t;
 
 typedef struct pool_waiter_s {
-  turbo_coro_t         *co;
-  int                   timed_out;
+  coro_t *co;                     /**< Suspended coroutine */
+  int is_scheduled;               /**< 1 = scheduler-managed */
+  pool_wake_reason_t wake_reason; /**< Wake reason set by pool */
   struct pool_waiter_s *next;
 } pool_waiter_t;
 
-/* ── Borrow timeout context ───────────────────────────────── */
-
-typedef struct {
-  pool_waiter_t       *waiter;
-  turbo_coro_pool_t   *pool;
-} borrow_timeout_ctx_t;
-
 /* ── Pool structure ───────────────────────────────────────── */
 
-struct turbo_coro_pool_s {
-  turbo_coro_context_t    *ctx;
-  uv_loop_t               *loop;
-  char                     url[1280];
-  turbo_coro_pool_config_t config;
-  pool_slot_t             *slots;
-  size_t                   alive_count;
-  pool_waiter_t           *wait_head;
-  pool_waiter_t           *wait_tail;
-  uv_timer_t               idle_timer;
-  int                      idle_timer_active;
-  int                      closed;
+struct coro_pool_s {
+  coro_context_t *ctx;
+  uv_loop_t *loop;
+  char url[1280];
+  coro_pool_config_t config;
+  pool_slot_t *slots;
+  size_t alive_count;
+  uv_timer_t idle_timer;
+  int idle_timer_active;
+  int closed;
+
+  /* Waiter list — coroutines blocked waiting for a free slot */
+  pool_waiter_t *waiter_head;
+  pool_waiter_t *waiter_tail;
 };
 
 /* ── Forward declarations ─────────────────────────────────── */
 
-static int  connect_slot(turbo_coro_pool_t *pool, size_t idx);
-static void destroy_slot(turbo_coro_pool_t *pool, size_t idx);
-static void waiter_enqueue(turbo_coro_pool_t *pool, pool_waiter_t *w);
-static pool_waiter_t *waiter_dequeue(turbo_coro_pool_t *pool);
+static int connect_slot(coro_pool_t *pool, size_t idx);
+static void destroy_slot(coro_pool_t *pool, size_t idx);
 static void idle_timer_cb(uv_timer_t *handle);
-static void idle_timer_start(turbo_coro_pool_t *pool);
-static void idle_timer_stop(turbo_coro_pool_t *pool);
-static void borrow_timeout_cb(uv_timer_t *handle);
-static void on_borrow_timer_close(uv_handle_t *handle);
+static void idle_timer_start(coro_pool_t *pool);
+static void idle_timer_stop(coro_pool_t *pool);
+static void wake_all_waiters(coro_pool_t *pool);
+static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason);
 
 /* ── Lifecycle ────────────────────────────────────────────── */
 
-turbo_coro_pool_t *turbo_coro_pool_create(turbo_coro_context_t *ctx,
-                                           const turbo_coro_pool_config_t *config) {
+coro_pool_t *coro_pool_create(coro_context_t *ctx, const coro_pool_config_t *config) {
   if (!ctx) return NULL;
 
-  turbo_coro_pool_config_t defaults = TURBO_CORO_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t defaults = coro_POOL_CONFIG_DEFAULT;
   if (!config) config = &defaults;
   if (config->max_size == 0) return NULL;
 
-  turbo_coro_pool_t *pool = (turbo_coro_pool_t *)calloc(1, sizeof(*pool));
+  coro_pool_t *pool = (coro_pool_t *)calloc(1, sizeof(*pool));
   if (!pool) return NULL;
 
   pool->slots = (pool_slot_t *)calloc(config->max_size, sizeof(pool_slot_t));
@@ -90,19 +86,21 @@ turbo_coro_pool_t *turbo_coro_pool_create(turbo_coro_context_t *ctx,
     return NULL;
   }
 
-  pool->ctx    = ctx;
-  pool->loop   = ctx->loop;
+  pool->ctx = ctx;
+  pool->loop = ctx->loop;
   pool->config = *config;
 
-  if (pool->config.min_size > pool->config.max_size)
-    pool->config.min_size = pool->config.max_size;
+  if (pool->config.min_size > pool->config.max_size) pool->config.min_size = pool->config.max_size;
 
   return pool;
 }
 
-int turbo_coro_pool_open(turbo_coro_pool_t *pool, const char *url) {
+int coro_pool_open(coro_pool_t *pool, const char *url) {
+  /* Must be called from a coroutine — connect suspends */
+  ASSERT_IN_CORO();
+
   if (!pool || !url) return TURBO_EINVAL;
-  if (pool->closed)  return TURBO_EOF;
+  if (pool->closed) return TURBO_EOF;
 
   size_t len = strlen(url);
   if (len >= sizeof(pool->url)) return TURBO_EINVAL;
@@ -115,13 +113,12 @@ int turbo_coro_pool_open(turbo_coro_pool_t *pool, const char *url) {
   }
 
   /* Start idle reaper if configured */
-  if (pool->config.idle_timeout_ms > 0)
-    idle_timer_start(pool);
+  if (pool->config.idle_timeout_ms > 0) idle_timer_start(pool);
 
   return 0;
 }
 
-void turbo_coro_pool_close(turbo_coro_pool_t *pool) {
+void coro_pool_close(coro_pool_t *pool) {
   if (!pool || pool->closed) return;
   pool->closed = 1;
 
@@ -129,33 +126,48 @@ void turbo_coro_pool_close(turbo_coro_pool_t *pool) {
 
   /* Destroy all slots */
   for (size_t i = 0; i < pool->config.max_size; i++) {
-    if (pool->slots[i].state != POOL_SLOT_EMPTY)
-      destroy_slot(pool, i);
+    if (pool->slots[i].state != POOL_SLOT_EMPTY) destroy_slot(pool, i);
   }
 
-  /* Wake all waiters with EOF */
-  pool_waiter_t *w;
-  while ((w = waiter_dequeue(pool)) != NULL) {
-    w->timed_out = 0; /* not timeout, just closed */
-    turbo_coro_resume(w->co);
-  }
+  /* Wake ALL blocked borrowers with TURBO_EOF so none hang forever */
+  wake_all_waiters(pool);
 }
 
-void turbo_coro_pool_destroy(turbo_coro_pool_t *pool) {
+void coro_pool_destroy(coro_pool_t *pool) {
   if (!pool) return;
-  turbo_coro_pool_close(pool);
+  coro_pool_close(pool);
+
+  /* When called from a scheduler-managed coroutine, yield once so waiters
+     woken by pool_close() can run and observe closed state before memory
+     is reclaimed. */
+  coro_t *running = coro_running();
+  if (running && coro_is_scheduled(running)) {
+    coro_yield();
+  }
+
   free(pool->slots);
   free(pool);
 }
 
 /* ── Borrow ───────────────────────────────────────────────── */
 
-int turbo_coro_pool_borrow(turbo_coro_pool_t *pool, turbo_coro_client_t **out) {
+int coro_pool_borrow(coro_pool_t *pool, coro_client_t **out) {
+  /* Must be called from a coroutine */
+  ASSERT_IN_CORO();
+
   if (!pool || !out) return TURBO_EINVAL;
   *out = NULL;
   if (pool->closed) return TURBO_EOF;
 
+  /* Optional borrow timeout — note start time once */
+  uint64_t start_time = 0;
+  if (pool->config.borrow_timeout_ms > 0) {
+    start_time = uv_now(pool->loop);
+  }
+
 retry:
+  if (pool->closed) return TURBO_EOF;
+
   /* 1. Find an IDLE slot with a live connection */
   for (size_t i = 0; i < pool->config.max_size; i++) {
     if (pool->slots[i].state == POOL_SLOT_IDLE) {
@@ -164,7 +176,7 @@ retry:
         *out = pool->slots[i].client;
         return 0;
       }
-      /* Stale connection — destroy and try to reconnect in its place */
+      /* Stale idle connection — destroy it and try next */
       destroy_slot(pool, i);
     }
   }
@@ -182,59 +194,60 @@ retry:
     }
   }
 
-  /* 3. Pool full — wait for a return */
-  pool_waiter_t waiter = {0};
-  waiter.co = turbo_coro_running();
-  waiter_enqueue(pool, &waiter);
-
-  /* Optional borrow timeout */
-  uv_timer_t borrow_timer;
-  borrow_timeout_ctx_t timer_ctx;
-  int has_timer = 0;
-
+  /* 3. Pool full — check timeout */
   if (pool->config.borrow_timeout_ms > 0) {
-    uv_timer_init(pool->loop, &borrow_timer);
-    timer_ctx.waiter = &waiter;
-    timer_ctx.pool   = pool;
-    borrow_timer.data = &timer_ctx;
-    uv_timer_start(&borrow_timer, borrow_timeout_cb, pool->config.borrow_timeout_ms, 0);
-    has_timer = 1;
+    uint64_t elapsed = uv_now(pool->loop) - start_time;
+    if (elapsed >= pool->config.borrow_timeout_ms) {
+      return TURBO_ETIMEDOUT;
+    }
   }
 
-  turbo_coro_yield();
+  /* 4. Enqueue ourselves as a waiter, then yield */
+  pool_waiter_t waiter;
+  waiter.co = coro_running();
+  waiter.is_scheduled = coro_is_scheduled(waiter.co);
+  waiter.wake_reason = POOL_WAKE_RETRY;
+  waiter.next = NULL;
 
-  /* Stop timer if it was running */
-  if (has_timer) {
-    uv_timer_stop(&borrow_timer);
-    uv_close((uv_handle_t *)&borrow_timer, on_borrow_timer_close);
-    /* Yield once to let uv_close complete */
-    turbo_coro_yield();
+  if (pool->waiter_tail) {
+    pool->waiter_tail->next = &waiter;
+  } else {
+    pool->waiter_head = &waiter;
+  }
+  pool->waiter_tail = &waiter;
+
+  /* Mark as waiting-for-I/O so scheduler skips us */
+  if (waiter.is_scheduled) {
+    coro_set_waiting_for_io(waiter.co, 1);
   }
 
-  if (pool->closed) return TURBO_EOF;
-  if (waiter.timed_out) return TURBO_ETIMEDOUT;
+  coro_yield();
 
+  /* pool_close/pool_destroy wake path: return immediately without touching
+     the pool again (pool memory may be reclaimed right after wake). */
+  if (waiter.wake_reason == POOL_WAKE_CLOSED) {
+    return TURBO_EOF;
+  }
+
+  /* Normal wake: retry the borrow */
   goto retry;
 }
 
 /* ── Return ───────────────────────────────────────────────── */
 
-void turbo_coro_pool_return(turbo_coro_pool_t *pool, turbo_coro_client_t *client) {
+void coro_pool_return(coro_pool_t *pool, coro_client_t *client) {
   if (!pool || !client) return;
 
-  /* Find the slot */
   for (size_t i = 0; i < pool->config.max_size; i++) {
     if (pool->slots[i].client == client && pool->slots[i].state == POOL_SLOT_BORROWED) {
       if (client->connected && !pool->closed) {
         pool->slots[i].state = POOL_SLOT_IDLE;
         pool->slots[i].idle_since = uv_now(pool->loop);
+        /* Wake one waiting borrower so it can claim this slot */
+        wake_one_waiter(pool, POOL_WAKE_RETRY);
       } else {
         destroy_slot(pool, i);
       }
-
-      /* Wake first waiter */
-      pool_waiter_t *w = waiter_dequeue(pool);
-      if (w) turbo_coro_resume(w->co);
       return;
     }
   }
@@ -242,7 +255,7 @@ void turbo_coro_pool_return(turbo_coro_pool_t *pool, turbo_coro_client_t *client
 
 /* ── Query ────────────────────────────────────────────────── */
 
-size_t turbo_coro_pool_idle_count(const turbo_coro_pool_t *pool) {
+size_t coro_pool_idle_count(const coro_pool_t *pool) {
   if (!pool) return 0;
   size_t n = 0;
   for (size_t i = 0; i < pool->config.max_size; i++)
@@ -250,7 +263,7 @@ size_t turbo_coro_pool_idle_count(const turbo_coro_pool_t *pool) {
   return n;
 }
 
-size_t turbo_coro_pool_borrowed_count(const turbo_coro_pool_t *pool) {
+size_t coro_pool_borrowed_count(const coro_pool_t *pool) {
   if (!pool) return 0;
   size_t n = 0;
   for (size_t i = 0; i < pool->config.max_size; i++)
@@ -258,98 +271,84 @@ size_t turbo_coro_pool_borrowed_count(const turbo_coro_pool_t *pool) {
   return n;
 }
 
-size_t turbo_coro_pool_size(const turbo_coro_pool_t *pool) {
-  return pool ? pool->alive_count : 0;
+size_t coro_pool_size(const coro_pool_t *pool) { return pool ? pool->alive_count : 0; }
+
+/* ── Internal: waiter management ─────────────────────────── */
+
+/**
+ * @brief Resume a single waiting borrower.
+ *
+ * Pops the head of the waiter list and clears its waiting_for_io flag
+ * (scheduler-managed) or resumes it directly (manually-managed).
+ * The coroutine will retry the borrow on its next tick.
+ */
+static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason) {
+  if (!pool->waiter_head) return;
+
+  pool_waiter_t *w = pool->waiter_head;
+  pool->waiter_head = w->next;
+  if (!pool->waiter_head) pool->waiter_tail = NULL;
+  w->wake_reason = reason;
+
+  if (w->is_scheduled) {
+    coro_set_waiting_for_io(w->co, 0);
+  } else {
+    if (w->co && w->co != coro_running()) {
+      coro_resume(w->co);
+    }
+  }
+}
+
+/**
+ * @brief Wake ALL waiting borrowers (used on pool_close).
+ *
+ * Each waiter will re-enter pool_borrow(), see pool->closed == 1,
+ * and return TURBO_EOF immediately.
+ */
+static void wake_all_waiters(coro_pool_t *pool) {
+  while (pool->waiter_head) {
+    wake_one_waiter(pool, POOL_WAKE_CLOSED);
+  }
 }
 
 /* ── Internal: slot management ────────────────────────────── */
 
-static int connect_slot(turbo_coro_pool_t *pool, size_t idx) {
-  turbo_coro_client_t *c = turbo_coro_client_create(pool->ctx);
+static int connect_slot(coro_pool_t *pool, size_t idx) {
+  coro_client_t *c = coro_client_create(pool->ctx);
   if (!c) return TURBO_ENOMEM;
 
   if (pool->config.connect_timeout_ms > 0)
-    turbo_coro_client_set_timeout(c, pool->config.connect_timeout_ms);
+    coro_client_set_timeout(c, pool->config.connect_timeout_ms);
 
-  int rc = turbo_coro_client_connect(c, pool->url);
+  int rc = coro_client_connect(c, pool->url);
   if (rc != 0) {
-    turbo_coro_client_destroy(c);
+    coro_client_destroy(c);
     return rc;
   }
 
-  /* Reset timeout after connect */
-  turbo_coro_client_set_timeout(c, 0);
+  /* Reset timeout after connect so subsequent ops use their own timeouts */
+  coro_client_set_timeout(c, 0);
 
-  pool->slots[idx].client     = c;
-  pool->slots[idx].state      = POOL_SLOT_IDLE;
+  pool->slots[idx].client = c;
+  pool->slots[idx].state = POOL_SLOT_IDLE;
   pool->slots[idx].idle_since = uv_now(pool->loop);
   pool->alive_count++;
   return 0;
 }
 
-static void destroy_slot(turbo_coro_pool_t *pool, size_t idx) {
+static void destroy_slot(coro_pool_t *pool, size_t idx) {
   if (pool->slots[idx].client) {
-    turbo_coro_client_destroy(pool->slots[idx].client);
+    coro_client_destroy(pool->slots[idx].client);
     pool->slots[idx].client = NULL;
   }
   pool->slots[idx].state = POOL_SLOT_EMPTY;
   if (pool->alive_count > 0) pool->alive_count--;
 }
 
-/* ── Internal: waiter queue ───────────────────────────────── */
-
-static void waiter_enqueue(turbo_coro_pool_t *pool, pool_waiter_t *w) {
-  w->next = NULL;
-  if (pool->wait_tail)
-    pool->wait_tail->next = w;
-  else
-    pool->wait_head = w;
-  pool->wait_tail = w;
-}
-
-static pool_waiter_t *waiter_dequeue(turbo_coro_pool_t *pool) {
-  pool_waiter_t *w = pool->wait_head;
-  if (!w) return NULL;
-  pool->wait_head = w->next;
-  if (!pool->wait_head) pool->wait_tail = NULL;
-  w->next = NULL;
-  return w;
-}
-
-/* ── Internal: borrow timeout ─────────────────────────────── */
-
-static void borrow_timeout_cb(uv_timer_t *handle) {
-  borrow_timeout_ctx_t *ctx = (borrow_timeout_ctx_t *)handle->data;
-  ctx->waiter->timed_out = 1;
-
-  /* Remove waiter from queue */
-  turbo_coro_pool_t *pool = ctx->pool;
-  pool_waiter_t **pp = &pool->wait_head;
-  while (*pp) {
-    if (*pp == ctx->waiter) {
-      *pp = ctx->waiter->next;
-      if (pool->wait_tail == ctx->waiter)
-        pool->wait_tail = NULL;
-      break;
-    }
-    pp = &(*pp)->next;
-  }
-
-  turbo_coro_resume(ctx->waiter->co);
-}
-
-static void on_borrow_timer_close(uv_handle_t *handle) {
-  /* Timer is stack-allocated in the coroutine frame.
-   * The coroutine yielded waiting for this close callback.
-   * Resume it so it can proceed. */
-  borrow_timeout_ctx_t *ctx = (borrow_timeout_ctx_t *)handle->data;
-  turbo_coro_resume(ctx->waiter->co);
-}
-
 /* ── Internal: idle reaper ────────────────────────────────── */
 
 static void idle_timer_cb(uv_timer_t *handle) {
-  turbo_coro_pool_t *pool = (turbo_coro_pool_t *)handle->data;
+  coro_pool_t *pool = (coro_pool_t *)handle->data;
   if (pool->closed) return;
 
   uint64_t now = uv_now(pool->loop);
@@ -371,7 +370,7 @@ static void idle_timer_cb(uv_timer_t *handle) {
   }
 }
 
-static void idle_timer_start(turbo_coro_pool_t *pool) {
+static void idle_timer_start(coro_pool_t *pool) {
   if (pool->idle_timer_active) return;
 
   uv_timer_init(pool->loop, &pool->idle_timer);
@@ -385,11 +384,9 @@ static void idle_timer_start(turbo_coro_pool_t *pool) {
   pool->idle_timer_active = 1;
 }
 
-static void on_idle_timer_close(uv_handle_t *handle) {
-  (void)handle;
-}
+static void on_idle_timer_close(uv_handle_t *handle) { (void)handle; }
 
-static void idle_timer_stop(turbo_coro_pool_t *pool) {
+static void idle_timer_stop(coro_pool_t *pool) {
   if (!pool->idle_timer_active) return;
   uv_timer_stop(&pool->idle_timer);
   uv_close((uv_handle_t *)&pool->idle_timer, on_idle_timer_close);

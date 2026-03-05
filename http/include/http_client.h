@@ -51,6 +51,11 @@ typedef size_t (*http_data_read_cb)(char *buffer, size_t size, void *user_data);
 CXX_C_API http_client_t *http_client_create(void);
 CXX_C_API void http_client_destroy(http_client_t *client);
 
+/**
+ * @brief Get the coroutine context associated with the client.
+ */
+CXX_C_API struct coro_context_s *http_client_get_context(http_client_t *client);
+
 /* ── Configuration ────────────────────────────────────────────────── */
 
 CXX_C_API void http_client_set_timeout(http_client_t *client, int timeout_ms);

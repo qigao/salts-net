@@ -99,17 +99,31 @@ void exprtk_map_set(exprtk_value_t *map, const char *key, exprtk_value_t value) 
     map->data.map.htab = htab;
   }
 
+  /* Deep copy string values to avoid dangling pointers when arena is reset */
+  exprtk_value_t value_copy = value;
+  if (value.type == EXPRTK_VAL_STRING && value.data.string.data) {
+    char *str_copy = (char *)malloc(value.data.string.len + 1);
+    if (str_copy) {
+      memcpy(str_copy, value.data.string.data, value.data.string.len);
+      str_copy[value.data.string.len] = '\0';
+      value_copy.data.string.data = str_copy;
+    }
+  }
+
   HTAB(exprtk_map_kv_t) *htab = (HTAB(exprtk_map_kv_t) *)map->data.map.htab;
   exprtk_map_kv_t probe = {.key = (char *)key};
   exprtk_map_kv_t result;
 
   if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result)) {
-    /* Update existing */
-    result.value = value;
+    /* Update existing - free old string if it was a string */
+    if (result.value.type == EXPRTK_VAL_STRING && result.value.data.string.data) {
+      free((void *)result.value.data.string.data);
+    }
+    result.value = value_copy;
     HTAB_OP(exprtk_map_kv_t, do)(htab, result, HTAB_REPLACE, &result);
   } else {
     /* Insert new */
-    exprtk_map_kv_t entry = {.key = strdup(key), .value = value};
+    exprtk_map_kv_t entry = {.key = strdup(key), .value = value_copy};
     HTAB_OP(exprtk_map_kv_t, do)(htab, entry, HTAB_INSERT, &result);
   }
 }
@@ -135,6 +149,10 @@ int exprtk_map_delete(exprtk_value_t *map, const char *key) {
 
   if (HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_FIND, &result)) {
     free(result.key);
+    /* Free string value if it was deep-copied */
+    if (result.value.type == EXPRTK_VAL_STRING && result.value.data.string.data) {
+      free((void *)result.value.data.string.data);
+    }
     HTAB_OP(exprtk_map_kv_t, do)(htab, probe, HTAB_DELETE, &result);
     return 1;
   }
@@ -179,8 +197,13 @@ void exprtk_map_free(exprtk_value_t *map) {
   htab_size_t bound = htab->els_bound;
 
   for (htab_size_t i = 0; i < bound; i++) {
-    if (els[i].hash != HTAB_DELETED_HASH)
+    if (els[i].hash != HTAB_DELETED_HASH) {
       free(els[i].el.key);
+      /* Free string values that were deep-copied */
+      if (els[i].el.value.type == EXPRTK_VAL_STRING && els[i].el.value.data.string.data) {
+        free((void *)els[i].el.value.data.string.data);
+      }
+    }
   }
 
   HTAB_OP(exprtk_map_kv_t, destroy)(&htab);

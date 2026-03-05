@@ -6,7 +6,7 @@
 #include "tinytest.h"
 #include "router.h"
 #include "turbo_buffer.h"
-#include "netcore/turbo_coro_client.h"
+#include "netcore.h"
 #include "security.h"
 
 spec("security_context") {

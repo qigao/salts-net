@@ -4,19 +4,20 @@
 #include <string.h>
 
 #include "server.h"
+#include "iris_app.h"
 #include "async.h"
 #include "error_recovery.h"
 #include "router.h"
 #include "tlog.h"
-#include "netcore/turbo_coro_server.h" /* Use coroutine server */
-#include "netcore/turbo_coro_client.h"
+#include "netcore.h" /* Use coroutine server */
 #include "turbo_thread.h"
 
 #define READ_BUF_SIZE 8192
 
 /* Connection context structure - matching definition in router.c */
 typedef struct {
-  turbo_coro_client_t *client;
+  iris_app_t *app;
+  coro_client_t *client;
   char buffer[READ_BUF_SIZE];
   size_t buffer_used;
   int keep_alive;
@@ -27,8 +28,8 @@ typedef struct {
 } iris_connection_ctx_t;
 
 /* Global server state */
-static turbo_coro_server_t *g_server = NULL;
-static turbo_coro_context_t *g_coro_ctx = NULL;
+static coro_server_t *g_server = NULL;
+static coro_context_t *g_coro_ctx = NULL;
 static int g_shutdown_requested = 0;
 static void (*g_app_shutdown_hook)(void) = NULL;
 
@@ -54,7 +55,7 @@ static void signal_handler(int signum) {
 
   /* Stop the loop */
   if (g_coro_ctx) {
-    turbo_coro_context_stop(g_coro_ctx);
+    coro_context_stop(g_coro_ctx);
   }
 }
 
@@ -83,8 +84,8 @@ static void cleanup_connection_context(iris_connection_ctx_t *ctx) {
 }
 
 /* Coroutine Handler for each connection */
-static void server_handler(turbo_coro_client_t *client, void *arg) {
-  (void)arg;
+static void server_handler(coro_client_t *client, void *arg) {
+  iris_app_t *app = (iris_app_t *)arg;
 
   /* Initialize connection context */
   iris_connection_ctx_t *ctx = (iris_connection_ctx_t *)calloc(1, sizeof(iris_connection_ctx_t));
@@ -93,13 +94,14 @@ static void server_handler(turbo_coro_client_t *client, void *arg) {
     return;
   }
 
+  ctx->app = app;
   ctx->client = client;
   ctx->keep_alive = 1;
   ctx->created_time = time(NULL);
   ctx->request_count = 0;
   
   /* Attach context to client used_data */
-  turbo_coro_client_set_user_data(client, ctx);
+  coro_client_set_user_data(client, ctx);
 
   char *data = NULL;
   size_t len = 0;
@@ -108,7 +110,7 @@ static void server_handler(turbo_coro_client_t *client, void *arg) {
   /* Read loop */
   while (1) {
     /* Receive data (yields until data available) */
-    r = turbo_coro_client_recv(client, &data, &len);
+    r = coro_client_recv(client, &data, &len);
     
     if (r != 0) {
       if (r != TURBO_EOF) {
@@ -120,9 +122,9 @@ static void server_handler(turbo_coro_client_t *client, void *arg) {
     if (data && len > 0) {
       ctx->request_count++;
       
-      /* Process request via router */
-      /* Router returns 1 to close, 0 to keep alive */
-      int should_close = router(client, data, len);
+      /* Process request via app-aware router */
+      /* iris_app_execute returns 1 to close, 0 to keep alive */
+      int should_close = iris_app_execute(app, client, data, len);
       
       free(data);
       data = NULL;
@@ -138,17 +140,16 @@ static void server_handler(turbo_coro_client_t *client, void *arg) {
 
   /* Cleanup */
   cleanup_connection_context(ctx);
-  turbo_coro_client_set_user_data(client, NULL);
+  coro_client_set_user_data(client, NULL);
 }
 
-/* Server startup function */
 /* Server startup function - decoupled for testing */
-turbo_coro_server_t* iris_server_start(turbo_coro_context_t *ctx, unsigned short port) {
+coro_server_t* iris_server_start(iris_app_t *app, coro_context_t *ctx, unsigned short port) {
   if (!ctx) return NULL;
 
   g_coro_ctx = ctx;
 
-  turbo_coro_server_t *server = turbo_coro_server_create(ctx);
+  coro_server_t *server = coro_server_create(ctx);
   if (!server) {
     TLOG_ERROR("Failed to create server");
     g_coro_ctx = NULL;
@@ -158,10 +159,10 @@ turbo_coro_server_t* iris_server_start(turbo_coro_context_t *ctx, unsigned short
   char listen_url[64];
   snprintf(listen_url, sizeof(listen_url), "tcp://0.0.0.0:%d", port);
 
-  int r = turbo_coro_server_listen(server, listen_url, server_handler, NULL);
+  int r = coro_server_listen(server, listen_url, server_handler, app);
   if (r != 0) {
     TLOG_ERROR("Failed to start listening: {}", r);
-    turbo_coro_server_destroy(server);
+    coro_server_destroy(server);
     g_coro_ctx = NULL;
     return NULL;
   }
@@ -169,14 +170,16 @@ turbo_coro_server_t* iris_server_start(turbo_coro_context_t *ctx, unsigned short
   return server;
 }
 
-int iris_server_run(unsigned short PORT) {
+int iris_app_run(iris_app_t *app, unsigned short port) {
+  if (!app) return -1;
+
   /* Initialize error recovery system */
   if (iris_error_recovery_init() != 0) {
     TLOG_ERROR("Failed to initialize error recovery system");
     return -1;
   }
 
-  g_coro_ctx = turbo_coro_context_create(NULL);
+  g_coro_ctx = coro_context_create(NULL);
   if (!g_coro_ctx) {
     TLOG_ERROR("Failed to create coro context");
     iris_error_recovery_cleanup();
@@ -194,10 +197,10 @@ int iris_server_run(unsigned short PORT) {
   signal(SIGTERM, signal_handler);
 #endif
 
-  /* Start server */
-  g_server = iris_server_start(g_coro_ctx, PORT);
+  /* Start server with app context */
+  g_server = iris_server_start(app, g_coro_ctx, port);
   if (!g_server) {
-    turbo_coro_context_destroy(g_coro_ctx);
+    coro_context_destroy(g_coro_ctx);
     g_coro_ctx = NULL;
     iris_error_recovery_cleanup();
     return -1;
@@ -206,10 +209,10 @@ int iris_server_run(unsigned short PORT) {
   /* Initialize thread pool for iris_await() */
   iris_async_init(0);
 
-  TLOG_INFO("Server is running on http://localhost:{}", PORT);
+  TLOG_INFO("Server is running on http://localhost:{}", port);
 
   /* Run the loop */
-  turbo_coro_context_run(g_coro_ctx, TURBO_RUN_DEFAULT);
+  coro_context_run(g_coro_ctx, TURBO_RUN_DEFAULT);
 
   /* Cleanup */
   TLOG_INFO("Shutting down server...");
@@ -217,12 +220,12 @@ int iris_server_run(unsigned short PORT) {
   iris_async_shutdown();
 
   if (g_server) {
-    turbo_coro_server_destroy(g_server);
+    coro_server_destroy(g_server);
     g_server = NULL;
   }
 
   if (g_coro_ctx) {
-    turbo_coro_context_destroy(g_coro_ctx);
+    coro_context_destroy(g_coro_ctx);
     g_coro_ctx = NULL;
   }
 
@@ -232,4 +235,8 @@ int iris_server_run(unsigned short PORT) {
   iris_error_recovery_cleanup();
 
   return 0;
+}
+
+int iris_server_run(unsigned short PORT) {
+  return iris_app_run(iris_app_default(), PORT);
 }

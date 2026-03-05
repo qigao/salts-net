@@ -9,13 +9,35 @@
 // Parse raw "Name: Value\r\n" header string into S3Headers
 static void parse_raw_headers_into_s3headers(const char* raw, size_t raw_len, S3Headers* out) {
     if (!raw || raw_len == 0) return;
-    const char* p = raw;
     const char* end = raw + raw_len;
+
+    // Some servers may emit interim responses (e.g. 100 Continue) before
+    // the final 2xx response. We want headers from the last HTTP block.
+    const char* block_start = raw;
+    const char* scan = raw;
+    while (scan < end) {
+        const char* http = strstr(scan, "HTTP/");
+        if (!http || http >= end) break;
+        if (http == raw || *(http - 1) == '\n') {
+            block_start = http;
+        }
+        scan = http + 5;
+    }
+
+    const char* block_end = strstr(block_start, "\r\n\r\n");
+    if (!block_end || block_end > end) block_end = end;
+
+    const char* p = block_start;
+    // Skip status line
+    while (p < block_end && *p != '\r' && *p != '\n') p++;
+    while (p < block_end && (*p == '\r' || *p == '\n')) p++;
+
     while (p < end) {
+        if (p >= block_end) break;
         const char* line_end = p;
-        while (line_end < end && *line_end != '\r' && *line_end != '\n') line_end++;
+        while (line_end < block_end && *line_end != '\r' && *line_end != '\n') line_end++;
         if (line_end == p) { // empty line
-            while (line_end < end && (*line_end == '\r' || *line_end == '\n')) line_end++;
+            while (line_end < block_end && (*line_end == '\r' || *line_end == '\n')) line_end++;
             p = line_end;
             continue;
         }
@@ -39,11 +61,11 @@ static void parse_raw_headers_into_s3headers(const char* raw, size_t raw_len, S3
         }
         // Advance past \r\n
         p = line_end;
-        while (p < end && (*p == '\r' || *p == '\n')) p++;
+        while (p < block_end && (*p == '\r' || *p == '\n')) p++;
     }
 }
 
-s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t* req) {
+s3_http_response_t s3_http_execute(coro_context_t *ctx, s3_http_request_t* req) {
     s3_http_response_t res = {0};
     res.headers = S3Headers_init();
 
@@ -90,8 +112,8 @@ s3_http_response_t s3_http_execute(turbo_coro_context_t *ctx, s3_http_request_t*
         res.body = hresp->body ? tstr_dup(hresp->body) : tstr_new();
 
         // Parse raw headers string into S3Headers
-        if (hresp->headers && hresp->headers_len > 0) {
-            parse_raw_headers_into_s3headers(hresp->headers, hresp->headers_len, &res.headers);
+        if (hresp->headers) {
+            parse_raw_headers_into_s3headers(hresp->headers, strlen(hresp->headers), &res.headers);
         }
 
         if (hresp->error) {
@@ -158,14 +180,14 @@ s3_http_response_t s3_execute_signed(s3_client_t* client,
     // Build URL
     tstr_t url_s = s3_build_url(&client->base_url, uri_path);
 
-    // Append query params to URL if any
+    // Append query params (URL-encoded) if any
     if (query_params && S3Headers_size(query_params) > 0) {
-        const char* sep = "?";
-        c_foreach(i, S3Headers, *query_params) {
-            url_s = tstr_cat_fmt(url_s, "%s%s=%s", sep,
-                                  cstr_str(&i.ref->first), cstr_str(&i.ref->second));
-            sep = "&";
+        tstr_t qs = s3_headers_to_query_string(query_params);
+        if (qs && tstr_len(qs) > 0) {
+            url_s = tstr_cat(url_s, "?");
+            url_s = tstr_cat(url_s, qs);
         }
+        tstr_free(qs);
     }
 
     // Build request

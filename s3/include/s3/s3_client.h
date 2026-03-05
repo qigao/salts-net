@@ -27,7 +27,7 @@ typedef struct {
 CXX_C_API void s3_base_url_free(s3_base_url_t* url);
 
 // Client lifecycle
-CXX_C_API s3_client_t* s3_client_create(turbo_coro_context_t *ctx,
+CXX_C_API s3_client_t* s3_client_create(coro_context_t *ctx,
                                    const s3_base_url_t* base_url,
                                    s3_credential_provider_t* provider);
 CXX_C_API void            s3_client_destroy(s3_client_t* client);

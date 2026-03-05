@@ -3,9 +3,8 @@
  * @brief Integration tests for coroutine-based server and client
  */
 
-#include "tinytest.h"
-#include "netcore/turbo_coro_server.h"
-#include "netcore/turbo_coro_client.h"
+#include "tinytest.h" 
+#include "netcore.h"
 #include "iris_app.h"
 #include "server.h"
 #include "router.h"
@@ -16,8 +15,8 @@
 
 /* Global state */
 static int g_handler_called = 0;
-static turbo_coro_server_t* g_server = NULL;
-static turbo_coro_context_t* g_ctx = NULL;
+static coro_server_t* g_server = NULL;
+static coro_context_t* g_ctx = NULL;
 static int g_client_connected = 0;
 static int g_response_received = 0;
 
@@ -30,29 +29,29 @@ static void test_handler(Req *req, Res *res) {
 
 /* Coroutine bridge for client task */
 typedef struct {
-    turbo_coro_client_t* client;
+    coro_client_t* client;
     unsigned short port;
 } client_task_arg_t;
 
 /* Client logic runs inside a coroutine */
-static void client_logic(turbo_coro_client_t* client, unsigned short port) {
+static void client_logic(coro_client_t* client, unsigned short port) {
     char url[64];
     snprintf(url, sizeof(url), "tcp://127.0.0.1:%d", port);
     
     // Connect
-    if (turbo_coro_client_connect(client, url) == 0) {
+    if (coro_client_connect(client, url) == 0) {
         g_client_connected = 1;
         
         // Send request
         const char* req = "GET /test HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        turbo_coro_client_send(client, req, strlen(req));
+        coro_client_send(client, req, strlen(req));
         
         // Receive response
         char* resp_data = NULL;
         size_t resp_len = 0;
         
         // Simple read (might get incomplete response in real world, but for "Hello World" usually one packet)
-        int r = turbo_coro_client_recv(client, &resp_data, &resp_len);
+        int r = coro_client_recv(client, &resp_data, &resp_len);
         
         if (r == 0 && resp_data) {
             if (strstr(resp_data, "Hello World")) {
@@ -69,15 +68,15 @@ static void client_logic(turbo_coro_client_t* client, unsigned short port) {
     }
     
     // Cleanup client
-    turbo_coro_client_destroy(client);
+    coro_client_destroy(client);
     
     // Stop server and loop to finish test
     if (g_server) {
-        turbo_coro_server_destroy(g_server);
+        coro_server_destroy(g_server);
         g_server = NULL;
     }
     
-    turbo_coro_context_stop(g_ctx);
+    coro_context_stop(g_ctx);
 }
 
 /* Bridge to run client logic in coroutine */
@@ -89,9 +88,9 @@ static void client_task_entry(void* arg) {
 
 /* Helper to spawn client task */
 /* We need to use internal spawn_client_coro logic logic kind of, or just use turbo_coro directly? 
-   But turbo_coro_client doesn't expose a "run this in coro" function.
+   But coro_client doesn't expose a "run this in coro" function.
    
-   Wait, turbo_coro_client_create creates a client.
+   Wait, coro_client_create creates a client.
    Operations on it MUST be done from a coroutine.
    So I DO need to spawn a coroutine.
 */
@@ -102,7 +101,7 @@ static void client_task_entry(void* arg) {
 */
 #include "turbo_coro.h"
 
-static void coro_entry_wrapper(turbo_coro_t* co, void* arg) {
+static void coro_entry_wrapper(coro_t* co, void* arg) {
     (void)co;
     client_task_entry(arg);
 }
@@ -124,7 +123,7 @@ spec("coro_integration") {
     
     after_each() {
         if (g_server) {
-            turbo_coro_server_destroy(g_server);
+            coro_server_destroy(g_server);
             g_server = NULL;
         }
         
@@ -134,7 +133,7 @@ spec("coro_integration") {
     }
 
     it("should handle full request response cycle") {
-        g_ctx = turbo_coro_context_create(NULL);
+        g_ctx = coro_context_create(NULL);
         unsigned short port = 9876;
 
         // Setup Iris app
@@ -144,24 +143,24 @@ spec("coro_integration") {
         // Initialize global router (links app->route_trie to global_route_trie)
         init_router();
 
-        // Start server
-        g_server = iris_server_start(g_ctx, port);
+        // Start server with app context
+        g_server = iris_server_start(app, g_ctx, port);
         check_not_null(g_server);
 
         // Spawn client task
-        turbo_coro_client_t* client = turbo_coro_client_create(g_ctx);
+        coro_client_t* client = coro_client_create(g_ctx);
         client_task_arg_t* arg = malloc(sizeof(client_task_arg_t));
         arg->client = client;
         arg->port = port;
 
-        turbo_coro_t* co = turbo_coro_create(coro_entry_wrapper, arg, NULL);
-        turbo_coro_resume(co);
+        coro_t* co = coro_create(coro_entry_wrapper, arg, NULL);
+        coro_resume(co);
 
         // Run loop
-        turbo_coro_context_run(g_ctx, TURBO_RUN_DEFAULT);
+        coro_context_run(g_ctx, TURBO_RUN_DEFAULT);
 
         // Cleanup context
-        turbo_coro_context_destroy(g_ctx);
+        coro_context_destroy(g_ctx);
         g_ctx = NULL;
 
         // Verify results

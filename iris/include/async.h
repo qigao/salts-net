@@ -3,7 +3,7 @@
 
 #include "platform.h"
 #include "turbo_str.h"
-#include "netcore/turbo_coro_context.h"
+#include "netcore.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -98,12 +98,12 @@ typedef struct {
  * Submits work_fn to the thread pool and yields the current coroutine.
  * The coroutine is resumed on the event loop thread when work completes.
  *
- * @param ctx      Event-loop context (from turbo_coro_client_get_context)
+ * @param ctx      Event-loop context (from coro_client_get_context)
  * @param work_fn  Work function (runs in thread pool)
  * @param context  User context passed to work_fn
  * @return Result with success/error status
  */
-CXX_C_API iris_await_result_t iris_await(turbo_coro_context_t *ctx,
+CXX_C_API iris_await_result_t iris_await(coro_context_t *ctx,
                                           iris_async_work_fn work_fn,
                                           void *context);
 

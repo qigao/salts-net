@@ -37,9 +37,6 @@ enable_testing()
 include(CMakeOptions.cmake)
 include(Sanitizers)
 
-# Find common dependencies used by multiple libraries
-find_package(llhttp CONFIG REQUIRED)
-# Find libuv (managed by vcpkg)
 find_package(libuv CONFIG REQUIRED)
 
 find_package(kcp CONFIG REQUIRED)
@@ -48,7 +45,7 @@ find_package(Threads REQUIRED)
 find_package(c-ares CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED) 
-
+find_package(llhttp CONFIG REQUIRED)
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
 
 # Additional components

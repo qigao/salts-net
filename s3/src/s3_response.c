@@ -175,13 +175,29 @@ tstr_t s3_parse_create_multipart_xml(const char* xml_data, s3_error_t* err) {
 
 tstr_t s3_parse_complete_multipart_etag_xml(const char* xml_data, tstr_t* location, s3_error_t* err) {
     if (!xml_data) { if (err) *err = s3_error_make(-1, "No XML data"); return NULL; }
+    
+    /* S3 can return 200 OK but then an error in the body for CompleteMultipartUpload. */
+    if (strstr(xml_data, "<Error")) {
+        if (err) *err = s3_parse_error_xml(xml_data);
+        return NULL;
+    }
+
     void* doc = cxml_load_string(xml_data);
     if (!doc) { if (err) *err = s3_error_make(-1, "Failed to parse XML"); return NULL; }
     cxml_elem_node* root = cxml_get_root_element(doc);
+    
     tstr_t etag = mxml_child_text_dup(root, "ETag");
     if (location) *location = mxml_child_text_dup(root, "Location");
+    
+    if (tstr_len(etag) == 0) {
+        tstr_free(etag);
+        etag = NULL;
+        if (err) *err = s3_error_make(-1, "ETag not found in CompleteMultipartUpload response");
+    } else {
+        if (err) *err = S3_OK;
+    }
+    
     cxml_delete_document(doc);
-    if (err) *err = S3_OK;
     return etag;
 }
 

@@ -73,6 +73,17 @@ CXX_C_API turbo_client_t *turbo_client_create_with_transport(turbo_client_transp
 CXX_C_API void turbo_client_destroy(turbo_client_t *client);
 
 /**
+ * @brief Gets the coroutine context associated with the client.
+ *
+ * This allows advanced users to manually run the event loop or integrate
+ * with existing coroutine-based code.
+ *
+ * @param client A pointer to the `turbo_client_t` instance.
+ * @return The `coro_context_t` pointer, or NULL if invalid.
+ */
+CXX_C_API struct coro_context_s *turbo_client_get_context(turbo_client_t *client);
+
+/**
  * @brief Gets the transport type used by the synchronous client.
  *
  * @param client A pointer to the `turbo_client_t` instance.

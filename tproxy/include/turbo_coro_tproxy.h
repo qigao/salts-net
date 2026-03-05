@@ -1,81 +1,81 @@
-#ifndef TURBO_CORO_TPROXY_H
-#define TURBO_CORO_TPROXY_H
+#ifndef coro_TPROXY_H
+#define coro_TPROXY_H
 
 #include "platform.h"
-#include <netcore/turbo_coro_context.h>
-#include <netcore/turbo_coro_server.h>
-#include <netcore/turbo_coro_client.h>
-#include <stdint.h>
-#include <stdbool.h>
+#include <netcore.h>
+
 #include "turbo_coro_rule.h"
+#include <stdbool.h>
+#include <stdint.h>
+
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-    
+
 typedef struct {
-    const char *name;
-    const char *type;          /**< "select", "url-test", "fallback", "load-balance" */
-    const char **members;
-    size_t member_count;
-} turbo_coro_group_config_t;
+  const char *name;
+  const char *type; /**< "select", "url-test", "fallback", "load-balance" */
+  const char **members;
+  size_t member_count;
+} coro_group_config_t;
 
-typedef struct turbo_coro_tproxy_config_s {
-    const char *listen_urls;   /**< Comma-separated list of URLs or port ranges, e.g. "tcp://0.0.0.0:1080, tcp://0.0.0.0:8000-9000, udp://0.0.0.0:5000-5500" */
-    const char *backend_url;   /**< Upstream tunnel URL e.g. "wss://my-remote:443", or NULL for direct connection */
-    int enable_socks5;         /**< If 1, proxy parses SOCKS5 handshake (e.g. curl -x socks5h://) */
-    int enable_http;           /**< If 1, proxy parses HTTP CONNECT handshake (e.g. curl -x http://) */
-    
-    // Optional Authentication (if non-NULL, requires authentication for both SOCKS5 and HTTP)
-    const char *auth_user;
-    const char *auth_pass;
+typedef struct coro_tproxy_config_s {
+  const char
+      *listen_urls; /**< Comma-separated list of URLs or port ranges, e.g. "tcp://0.0.0.0:1080,
+                       tcp://0.0.0.0:8000-9000, udp://0.0.0.0:5000-5500" */
+  const char *backend_url; /**< Upstream tunnel URL e.g. "wss://my-remote:443", or NULL for direct
+                              connection */
+  int enable_socks5;       /**< If 1, proxy parses SOCKS5 handshake (e.g. curl -x socks5h://) */
+  int enable_http;         /**< If 1, proxy parses HTTP CONNECT handshake (e.g. curl -x http://) */
 
-    // Optional Access Control (Comma-separated IPs, e.g. "192.168.1.1, 10.0.0.5")
-    const char *whitelist_ips; /**< If set, only these client IPs are allowed. */
-    const char *blacklist_ips; /**< If set, these client IPs are blocked. */
+  // Optional Authentication (if non-NULL, requires authentication for both SOCKS5 and HTTP)
+  const char *auth_user;
+  const char *auth_pass;
 
-    // Optional Dynamic Routing
-    /**
-     * @brief Route evaluation callback. Return a backend URL string or NULL for direct connection.
-     * @param target_host The requested destination host (domain or IP).
-     * @param target_port The requested destination port.
-     * @param user_data Opaque user context.
-     */
-    const char* (*route_cb)(const char *target_host, int target_port, void *user_data);
-    void *route_cb_data;
+  // Optional Access Control (Comma-separated IPs, e.g. "192.168.1.1, 10.0.0.5")
+  const char *whitelist_ips; /**< If set, only these client IPs are allowed. */
+  const char *blacklist_ips; /**< If set, these client IPs are blocked. */
 
-    // Optional Traffic Shaping
-    size_t rate_limit_bps;     /**< Max bytes per second per connection (0 = unlimited). */
+  // Optional Dynamic Routing
+  /**
+   * @brief Route evaluation callback. Return a backend URL string or NULL for direct connection.
+   * @param target_host The requested destination host (domain or IP).
+   * @param target_port The requested destination port.
+   * @param user_data Opaque user context.
+   */
+  const char *(*route_cb)(const char *target_host, int target_port, void *user_data);
+  void *route_cb_data;
 
-    // Optional Rules (Clash-style string array, e.g. ["DOMAIN,google.com,Proxy", "MATCH,Direct"])
-    const char **rules;
-    size_t rule_count;
+  // Optional Traffic Shaping
+  size_t rate_limit_bps; /**< Max bytes per second per connection (0 = unlimited). */
 
-    // Proxy Groups
-    turbo_coro_group_config_t *groups;
-    size_t group_count;
+  // Optional Rules (Clash-style string array, e.g. ["DOMAIN,google.com,Proxy", "MATCH,Direct"])
+  const char **rules;
+  size_t rule_count;
 
-    // GeoIP
-    const char *geoip_file;
+  // Proxy Groups
+  coro_group_config_t *groups;
+  size_t group_count;
 
-    // Transparent Proxy
-    int transparent;           /**< If 1, use IP_TRANSPARENT/TPROXY (Linux only) */
-} turbo_coro_tproxy_config_t;
+  // GeoIP
+  const char *geoip_file;
 
-typedef struct turbo_coro_tproxy_s turbo_coro_tproxy_t;
+  // Transparent Proxy
+  int transparent; /**< If 1, use IP_TRANSPARENT/TPROXY (Linux only) */
+} coro_tproxy_config_t;
+
+typedef struct coro_tproxy_s coro_tproxy_t;
 
 /**
  * @brief Starts a coroutine-based transparent/multiprotocol proxy server.
  */
-CXX_C_API turbo_coro_tproxy_t* turbo_coro_tproxy_start(
-    turbo_coro_context_t *ctx,
-    const turbo_coro_tproxy_config_t *config
-);
+CXX_C_API coro_tproxy_t *coro_tproxy_start(coro_context_t *ctx, const coro_tproxy_config_t *config);
 
 /**
  * @brief Stops and destroys the proxy server.
  */
-CXX_C_API void turbo_coro_tproxy_destroy(turbo_coro_tproxy_t *proxy);
+CXX_C_API void coro_tproxy_destroy(coro_tproxy_t *proxy);
 
 /**
  * @brief Loads proxy configuration from a JSON file.
@@ -83,20 +83,16 @@ CXX_C_API void turbo_coro_tproxy_destroy(turbo_coro_tproxy_t *proxy);
  * @param config Pointer to the config struct to fill.
  * @return 0 on success, negative on error.
  */
-CXX_C_API int turbo_coro_tproxy_config_load(const char *path, turbo_coro_tproxy_config_t *config);
+CXX_C_API int coro_tproxy_config_load(const char *path, coro_tproxy_config_t *config);
 
-CXX_C_API int turbo_coro_rule_group_update_member(turbo_coro_rule_engine_t *engine,
-                                                const char *group_name,
-                                                const char *member,
-                                                bool alive,
-                                                uint64_t latency_ms);
+CXX_C_API int coro_rule_group_update_member(coro_rule_engine_t *engine, const char *group_name,
+                                            const char *member, bool alive, uint64_t latency_ms);
 
-CXX_C_API void turbo_coro_rule_engine_set_health_cb(turbo_coro_rule_engine_t *engine,
-                                                  turbo_group_health_cb cb,
-                                                  void *user_data);
+CXX_C_API void coro_rule_engine_set_health_cb(coro_rule_engine_t *engine, turbo_group_health_cb cb,
+                                              void *user_data);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // TURBO_CORO_TPROXY_H
+#endif // coro_TPROXY_H

@@ -1,5 +1,4 @@
-// clang-format off
-#include "turbo_coro_client.h"
+// clang-format off 
 #include <llhttp.h>
 #include "http_client.h"
 #include "http_common_internal.h"
@@ -12,6 +11,7 @@
 #include <cjwt/cjwt.h>
 #include <fcntl.h>
 #include <netcore/turbo_coro_context.h>
+#include <netcore/turbo_coro_client.h>
 #include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,12 +23,12 @@
 
 /* ── Send helpers ─────────────────────────────────────────────────── */
 
-static inline void send_ok(int *sr, turbo_coro_client_t *t, const void *data, size_t len) {
+static inline void send_ok(int *sr, coro_client_t *t, const void *data, size_t len) {
   if (*sr == 0)
-    *sr = turbo_coro_client_send(t, data, len);
+    *sr = coro_client_send(t, data, len);
 }
 
-static inline void send_chunk(int *sr, turbo_coro_client_t *t, const void *data, size_t len) {
+static inline void send_chunk(int *sr, coro_client_t *t, const void *data, size_t len) {
   char hdr[64];
   stbsp_snprintf(hdr, sizeof(hdr), "%x\r\n", (unsigned)len);
   send_ok(sr, t, hdr, strlen(hdr));
@@ -54,7 +54,7 @@ typedef struct interceptor_node_s {
 } interceptor_node_t;
 
 struct http_client_s {
-  turbo_coro_context_t *coro_ctx;
+  coro_context_t *coro_ctx;
   int owns_coro_ctx;
   int timeout_ms;
   int connect_timeout_ms;
@@ -130,7 +130,7 @@ http_client_t *http_client_create(void) {
   if (!c)
     return NULL;
 
-  c->coro_ctx = turbo_coro_context_create(NULL);
+  c->coro_ctx = coro_context_create(NULL);
   c->owns_coro_ctx = 1;
   c->timeout_ms = 10000;
   c->connect_timeout_ms = 10000;
@@ -139,6 +139,8 @@ http_client_t *http_client_create(void) {
   c->max_redirects = 10;
   return c;
 }
+
+coro_context_t *http_client_get_context(http_client_t *c) { return c ? c->coro_ctx : NULL; }
 
 void http_client_destroy(http_client_t *c) {
   if (!c)
@@ -170,7 +172,7 @@ void http_client_destroy(http_client_t *c) {
   }
 
   if (c->owns_coro_ctx && c->coro_ctx)
-    turbo_coro_context_destroy(c->coro_ctx);
+    coro_context_destroy(c->coro_ctx);
 
   free(c);
 }
@@ -531,7 +533,7 @@ static void rate_limit_acquire(http_client_t *c) {
   if (!c->has_rate_limit)
     return;
 
-  turbo_coro_context_t *ctx = turbo_coro_context_current();
+  coro_context_t *ctx = coro_context_current();
   if (!ctx)
     ctx = c->coro_ctx;
   double now = coro_time_sec();
@@ -548,7 +550,7 @@ static void rate_limit_acquire(http_client_t *c) {
     int wait_ms = 1000 / c->rate_limit.requests_per_second;
     if (wait_ms < 10)
       wait_ms = 10;
-    turbo_coro_sleep(ctx, (uint64_t)wait_ms);
+    coro_sleep(ctx, (uint64_t)wait_ms);
     now = coro_time_sec();
     elapsed = now - c->last_request_time;
     refill = (int)(elapsed * c->rate_limit.requests_per_second);
@@ -697,7 +699,7 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
 
 /* ── Recv loop ────────────────────────────────────────────────────── */
 
-static void recv_http_response(turbo_coro_client_t *transport, http_response_t *response,
+static void recv_http_response(coro_client_t *transport, http_response_t *response,
                                http_method_t method, http_data_cb data_cb, void *data_cb_ud,
                                http_progress_cb progress_cb, void *progress_ud) {
   llhttp_t parser;
@@ -725,7 +727,7 @@ static void recv_http_response(turbo_coro_client_t *transport, http_response_t *
   while (!ctx.message_complete) {
     char *chunk = NULL;
     size_t chunk_len = 0;
-    int r = turbo_coro_client_recv(transport, &chunk, &chunk_len);
+    int r = coro_client_recv(transport, &chunk, &chunk_len);
 
     if (r == TURBO_EOF) {
       if (!ctx.message_complete) {
@@ -865,7 +867,7 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
     return resp;
   }
 
-  turbo_coro_context_t *ctx = turbo_coro_context_current();
+  coro_context_t *ctx = coro_context_current();
   if (!ctx)
     ctx = c->coro_ctx;
 
@@ -919,35 +921,35 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
         goto done;
       }
 
-      turbo_coro_client_t *transport = turbo_coro_client_create(ctx);
+      coro_client_t *transport = coro_client_create(ctx);
       if (!transport) {
         set_error(resp, HTTP_ERROR_MEMORY_ALLOCATION, "transport create failed");
         turbo_free_uri(&uri);
         goto done;
       }
 
-      turbo_coro_client_set_timeout(transport, (uint64_t)c->connect_timeout_ms);
+      coro_client_set_timeout(transport, (uint64_t)c->connect_timeout_ms);
 
-      int cr = turbo_coro_client_connect(transport, transport_url);
+      int cr = coro_client_connect(transport, transport_url);
       if (cr != 0) {
         http_error_code_t ec =
             (cr == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT : HTTP_ERROR_CONNECTION_FAILED;
         set_error(resp, ec, "connect failed");
-        turbo_coro_client_destroy(transport);
+        coro_client_destroy(transport);
         turbo_free_uri(&uri);
         if (c->has_retry_policy && should_retry(resp, &c->retry_policy, attempt)) {
-          turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+          coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
           continue;
         }
         goto done;
       }
 
-      turbo_coro_client_set_timeout(transport, (uint64_t)c->timeout_ms);
+      coro_client_set_timeout(transport, (uint64_t)c->timeout_ms);
 
       tstr_t req_str = build_http_request_str(c, current_method, uri, headers, header_count, body,
                                               body_len, form);
       size_t req_len = tstr_len(req_str);
-      int sr = turbo_coro_client_send(transport, req_str, req_len);
+      int sr = coro_client_send(transport, req_str, req_len);
       c->stats.bytes_sent += req_len;
       tstr_free(req_str);
 
@@ -1014,7 +1016,7 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
           size_t n = body_len - offset;
           if (n > chunk_size)
             n = chunk_size;
-          sr = turbo_coro_client_send(transport, body + offset, n);
+          sr = coro_client_send(transport, body + offset, n);
           c->stats.bytes_sent += n;
           offset += n;
         }
@@ -1022,10 +1024,10 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
 
       if (sr != 0) {
         set_error(resp, HTTP_ERROR_SEND_FAILED, "send failed");
-        turbo_coro_client_destroy(transport);
+        coro_client_destroy(transport);
         turbo_free_uri(&uri);
         if (c->has_retry_policy && should_retry(resp, &c->retry_policy, attempt)) {
-          turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+          coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
           continue;
         }
         goto done;
@@ -1043,17 +1045,17 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
         }
       }
 
-      turbo_coro_client_destroy(transport);
+      coro_client_destroy(transport);
       turbo_free_uri(&uri);
 
       if (c->has_retry_policy && resp->error_code != HTTP_ERROR_NONE &&
           should_retry(resp, &c->retry_policy, attempt)) {
-        turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+        coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
         continue;
       }
       if (c->has_retry_policy && resp->status_code >= 500 &&
           should_retry(resp, &c->retry_policy, attempt)) {
-        turbo_coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
+        coro_sleep(ctx, (uint64_t)calculate_backoff_ms(attempt, &c->retry_policy));
         continue;
       }
       break;
@@ -1155,7 +1157,7 @@ typedef struct {
   http_response_t *result;
 } sync_request_task_t;
 
-static void sync_request_coro(turbo_coro_t *co, void *arg) {
+static void sync_request_coro(coro_t *co, void *arg) {
   UNUSED(co);
   sync_request_task_t *t = (sync_request_task_t *)arg;
   t->result =
@@ -1175,11 +1177,15 @@ static http_response_t *do_request_full(http_client_t *c, http_method_t method, 
     set_error(resp, HTTP_ERROR_INVALID_PARAMS, "client cannot be NULL");
     return resp;
   }
-  if (turbo_coro_running()) {
+  /* Fast path: already inside a coroutine — call directly, I/O will yield. */
+  if (coro_running()) {
     return do_request_impl(c, method, url, headers, header_count, body, body_len, data_cb,
                            data_cb_ud, form, read_cb, read_cb_ud);
   }
 
+  /* Sync path: spawn a managed coroutine and drive the context loop to completion.
+   * task must remain alive until the loop returns — it lives on the stack here,
+   * which is safe because coro_context_run() blocks until the coro finishes. */
   sync_request_task_t task = {.client = c,
                               .method = method,
                               .url = url,
@@ -1193,10 +1199,8 @@ static http_response_t *do_request_full(http_client_t *c, http_method_t method, 
                               .read_cb = read_cb,
                               .read_cb_ud = read_cb_ud,
                               .result = NULL};
-  turbo_coro_t *co = turbo_coro_create(sync_request_coro, &task, NULL);
-  turbo_coro_resume(co);
-  turbo_coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_destroy(co);
+  coro_context_spawn(c->coro_ctx, sync_request_coro, &task);
+  coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
   return task.result;
 }
 
@@ -1523,7 +1527,7 @@ typedef struct {
   int worker_count;
 } http_batch_ctx_t;
 
-static void batch_worker_coro(turbo_coro_t *co, void *arg) {
+static void batch_worker_coro(coro_t *co, void *arg) {
   UNUSED(co);
   http_batch_ctx_t *ctx = (http_batch_ctx_t *)arg;
   while (ctx->next_index < ctx->count) {
@@ -1534,29 +1538,30 @@ static void batch_worker_coro(turbo_coro_t *co, void *arg) {
   }
 }
 
+/* Fan-out `worker_count` lazy tasks and yield until all complete.
+ * Must be called from inside a coroutine (uses coro_when_all). */
 static void batch_spawn_and_join(http_batch_ctx_t *ctx) {
-  turbo_coro_t **workers = calloc(ctx->worker_count, sizeof(turbo_coro_t *));
-  for (int i = 0; i < ctx->worker_count; i++) {
-    workers[i] = turbo_coro_create(batch_worker_coro, ctx, NULL);
-    turbo_coro_resume(workers[i]);
+  coro_context_t *coro_ctx = ctx->client->coro_ctx;
+  int n = ctx->worker_count;
+
+  coro_task_t **tasks = (coro_task_t **)calloc(n, sizeof(coro_task_t *));
+  if (!tasks)
+    return;
+
+  for (int i = 0; i < n; i++) {
+    tasks[i] = coro_task_create(coro_ctx, batch_worker_coro, ctx);
+    if (tasks[i])
+      coro_task_start(tasks[i]);
   }
 
-  int alive = 1;
-  while (alive) {
-    alive = 0;
-    for (int i = 0; i < ctx->worker_count; i++) {
-      if (turbo_coro_alive(workers[i])) {
-        turbo_coro_resume(workers[i]);
-        alive = 1;
-      }
-    }
-    if (alive)
-      turbo_coro_yield();
-  }
+  coro_when_all(coro_ctx, tasks, n);
+  free(tasks);
+}
 
-  for (int i = 0; i < ctx->worker_count; i++)
-    turbo_coro_destroy(workers[i]);
-  free(workers);
+/* Wrapper coro used when batch is called from outside a coroutine. */
+static void batch_outer_coro(coro_t *co, void *arg) {
+  UNUSED(co);
+  batch_spawn_and_join((http_batch_ctx_t *)arg);
 }
 
 http_batch_result_t *http_client_batch(http_client_t *c, const http_batch_request_t *requests,
@@ -1567,7 +1572,7 @@ http_batch_result_t *http_client_batch(http_client_t *c, const http_batch_reques
     concurrency = 1;
   int worker_count = concurrency < count ? concurrency : count;
 
-  http_batch_result_t *results = calloc(count, sizeof(*results));
+  http_batch_result_t *results = (http_batch_result_t *)calloc(count, sizeof(*results));
   if (!results)
     return NULL;
 
@@ -1578,18 +1583,13 @@ http_batch_result_t *http_client_batch(http_client_t *c, const http_batch_reques
                           .next_index = 0,
                           .worker_count = worker_count};
 
-  if (turbo_coro_running()) {
+  if (coro_running()) {
+    /* Already in a coro: fan out directly and yield via when_all. */
     batch_spawn_and_join(&ctx);
   } else {
-    turbo_coro_t **workers = calloc(worker_count, sizeof(turbo_coro_t *));
-    for (int i = 0; i < worker_count; i++) {
-      workers[i] = turbo_coro_create(batch_worker_coro, &ctx, NULL);
-      turbo_coro_resume(workers[i]);
-    }
-    turbo_coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
-    for (int i = 0; i < worker_count; i++)
-      turbo_coro_destroy(workers[i]);
-    free(workers);
+    /* Sync call site: spawn a driver coro and run the loop to completion. */
+    coro_context_spawn(c->coro_ctx, batch_outer_coro, &ctx);
+    coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
   }
 
   return results;

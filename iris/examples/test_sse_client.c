@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <platform.h>
-#include <turbo_thread.h>
+#include "netcore.h"
 #include <turbo_coro.h>
 #include <http_client.h>
 #include <rpc_client.h>
@@ -25,9 +25,9 @@ static void on_sse_data(const char *data, size_t len, void *user_data) {
     }
 }
 
-static void sse_coro_entry(turbo_coro_t *co, void *arg) {
+static void sse_coro_entry(coro_t *co, void *arg) {
     (void)co;
-    turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
+    coro_context_t *ctx = (coro_context_t *)arg;
 
     http_client_t *client = http_client_create();    http_client_set_timeout(client, 30000);
 
@@ -46,12 +46,12 @@ static void sse_coro_entry(turbo_coro_t *co, void *arg) {
 }
 
 void run_http_sse_test() {
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-    turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
-    turbo_coro_spawn(sched, sse_coro_entry, ctx);
-    turbo_coro_scheduler_run(sched);
-    turbo_coro_scheduler_destroy(sched);
-    turbo_coro_context_destroy(ctx);
+    coro_context_t *ctx = coro_context_create(NULL);
+    coro_scheduler_t *sched = coro_scheduler_create();
+    coro_spawn(sched, sse_coro_entry, ctx, NULL);
+    coro_scheduler_run(sched);
+    coro_scheduler_destroy(sched);
+    coro_context_destroy(ctx);
 }
 
 /* --- 2. RPC SSE Client (using rpc_client) --- */

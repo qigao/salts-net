@@ -8,9 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void turn_test_coro(turbo_coro_t *co, void *arg) {
+static void turn_test_coro(coro_t *co, void *arg) {
     (void)co;
-    turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
+    coro_context_t *ctx = (coro_context_t *)arg;
     
     /* Config for TURN server */
     turn_client_config_t config = {
@@ -27,7 +27,7 @@ static void turn_test_coro(turbo_coro_t *co, void *arg) {
     turbo_turn_client_t *client = turn_client_create(ctx, &config);
     if (!client) {
         printf("Failed to create TURN client\n");
-        turbo_coro_context_stop(ctx);
+        coro_context_stop(ctx);
         return;
     }
 
@@ -46,22 +46,22 @@ static void turn_test_coro(turbo_coro_t *co, void *arg) {
     }
 
     turn_client_destroy(client);
-    turbo_coro_context_stop(ctx);
+    coro_context_stop(ctx);
 }
 
 int main(void) {
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) return 1;
 
     printf("Starting TURN Test (coroutine-based)...\n");
-    turbo_coro_t *co = turbo_coro_create(turn_test_coro, ctx, NULL);
+    coro_t *co = coro_create(turn_test_coro, ctx, NULL);
     if (co) {
-        turbo_coro_resume(co);
+        coro_resume(co);
     }
 
-    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-    if (co) turbo_coro_destroy(co);
-    turbo_coro_context_destroy(ctx);
+    if (co) coro_destroy(co);
+    coro_context_destroy(ctx);
     return 0;
 }

@@ -1,4 +1,5 @@
 #include "error_recovery.h"
+#include "iris_app.h"
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -71,11 +72,15 @@ iris_recovery_action_t iris_handle_error(const iris_error_context_t *ctx, iris_r
         return IRIS_RECOVERY_CONTINUE;
     }
 
-    /* Use custom handler if available, otherwise use suggested action */
+    /* Support multi-instance: check default app's error handler first */
+    iris_app_t *app = iris_app_get_default_if_exists();
+    if (app && app->error_handler) {
+        return app->error_handler(ctx);
+    }
+
+    /* Use custom global handler if available */
     if (g_error_handler) {
-        iris_recovery_action_t handler_action = g_error_handler(ctx);
-        /* Handler can override the suggested action */
-        return handler_action;
+        return g_error_handler(ctx);
     }
 
     /* Log the error */

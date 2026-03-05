@@ -375,8 +375,8 @@ spec("turbo_script") {
           "parity = call_price - put_price; "
 
           // Greeks
-          "delta_c = ta.bsm_delta_call([100], [100], [1], [0.05], [0.2]); "
-          "delta_p = ta.bsm_delta_put([100], [100], [1], [0.05], [0.2]); "
+          "delta_c = bsm_delta_call([100], [100], [1], [0.05], [0.2]); "
+          "delta_p = bsm_delta_put([100], [100], [1], [0.05], [0.2]); "
           "dc = delta_c[0]; "
           "dp = delta_p[0]; "
 
@@ -719,10 +719,10 @@ spec("turbo_script") {
           " returns = [-0.02, 0.01, -0.03, "
           "0.02, 0.01, -0.01, 0.03, -0.02, 0.01, -0.04, "
           "            0.02, 0.01, -0.01, 0.03, -0.02, 0.01, -0.03, 0.02, 0.01, -0.01]; "
-          "vh = var_hist(returns, 0.95); "
-          "vp = var_param(returns, 0.95); "
-          "cv = cvar(returns, 0.95); "
-          "k = kelly(0.6, 0.02, 0.015);";
+          "vh = ta.var_hist(returns, 0.95); "
+          "vp = ta.var_param(returns, 0.95); "
+          "cv = ta.cvar(returns, 0.95); "
+          "k = ta.kelly(0.6, 0.02, 0.015);";
       int res = turbo_script_run(ctx, script);
       if (res != 0)
         printf("Risk Metrics Error: %s\n", turbo_script_get_error(ctx));
@@ -750,8 +750,8 @@ spec("turbo_script") {
       turbo_script_load_plugin(ctx, "ta");
       const char *script = "equity = [100, "
                            "105, 103, 108, 106, 110, 107, 112, 115, 113]; "
-                           "dd = drawdown(equity); "
-                           "dd_stats = drawdown_stats(equity);";
+                           "dd = ta.drawdown(equity); "
+                           "dd_stats = ta.drawdown_stats(equity);";
       int res = turbo_script_run(ctx, script);
       if (res != 0)
         printf("Drawdown Error: %s\n", turbo_script_get_error(ctx));
@@ -773,8 +773,8 @@ spec("turbo_script") {
       turbo_script_load_plugin(ctx, "ta");
       const char *script = " fast = [1, 3, 5, 4, 2, 4, 6]; "
                            "slow = [2, 2, 4, 5, 3, 3, 5]; "
-                           "co = crossover(fast, slow); "
-                           "cu = crossunder(fast, slow); "
+                           "co = ta.crossover(fast, slow); "
+                           "cu = ta.crossunder(fast, slow); "
                            "co_len = vec.len(co); "
                            "cu_len = vec.len(cu);";
       int res = turbo_script_run(ctx, script);
@@ -799,8 +799,8 @@ spec("turbo_script") {
           "h = [105, 105, 105, 105, 105]; "
           "l = [ 95,  95,  95,  95,  95]; "
           "c = [100.1, 100.2, 99.9, 100, 100.1]; "
-          "doji = fin.candle_doji(o, h, l, c, 0.1); "
-          "hammer = fin.candle_hammer(o, h, l, c); "
+          "doji = ta.candle_doji(o, h, l, c, 0.1); "
+          "hammer = ta.candle_hammer(o, h, l, c); "
           "doji_len = vec.len(doji); "
           "hammer_len = vec.len(hammer);";
       int res = turbo_script_run(ctx, script);
@@ -1148,7 +1148,6 @@ spec("turbo_script") {
     it("should extract column as numeric vector by index") {
       turbo_script_ctx_t *ctx = turbo_script_init();
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
 
       const char *script =
           "var data = "
@@ -1170,7 +1169,6 @@ spec("turbo_script") {
     it("should extract column as numeric vector by name") {
       turbo_script_ctx_t *ctx = turbo_script_init();
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
 
       const char *script =
           "var data = "
@@ -1229,7 +1227,6 @@ spec("turbo_script") {
     it("should filter rows and return matching content") {
       turbo_script_ctx_t *ctx = turbo_script_init_bare();
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
 
       const char *script = "var data = "
                            "\"name_s,score_n\\nAlice,95\\nBob,60\\nCharlie,85\";"
@@ -1250,7 +1247,6 @@ spec("turbo_script") {
 
       const char *script = ""
                            "import(\"feeds\");"
-                           "import(\"vec\");"
                            "var data = \"x,y\\n1,2\\n3,4\\n5,6\";"
                            "var xs = csv.col(data, \"x\");"
                            "var total = vec.sum(xs);";
@@ -1320,7 +1316,7 @@ spec("turbo_script") {
   describe("Vector Sort") {
     it("should sort ascending") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = "var v = [3, 1, 4, 1, 5, 9, 2, 6];"
                            "var s = vec.sort(v);"
                            "var first = s[0];"
@@ -1333,7 +1329,7 @@ spec("turbo_script") {
 
     it("should sort descending") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = "var v = [3, 1, 4, 1, 5];"
                            "var s = vec.sort_desc(v);"
                            "var first = s[0];"
@@ -1346,7 +1342,6 @@ spec("turbo_script") {
 
     it("should not modify original vector") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
       const char *script = "var v = [3, 1, 2];"
                            "var s = vec.sort(v);"
                            "var orig_first = v[0];";
@@ -1357,7 +1352,6 @@ spec("turbo_script") {
 
     it("should handle single element") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
       const char *script = " var v = [42];"
                            "var s = vec.sort(v);"
                            "var val = s[0];";
@@ -1370,7 +1364,6 @@ spec("turbo_script") {
   describe("Vector Unique") {
     it("should remove duplicates and sort") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
       const char *script = "var v = [3, 1, 2, 1, 3, 2];"
                            "var u = vec.unique(v);"
                            "var n = vec.len(u);"
@@ -1385,7 +1378,6 @@ spec("turbo_script") {
 
     it("should handle all same values") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
       const char *script = "var v = [5, 5, 5, 5];"
                            "var u = vec.unique(v);"
                            "var n = vec.len(u);";
@@ -1444,7 +1436,7 @@ spec("turbo_script") {
   describe("Vector Reverse") {
     it("should reverse a vector") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [1, 2, 3, 4, 5];"
                            "var r = vec.reverse(v);"
                            "var first = r[0];"
@@ -1457,7 +1449,7 @@ spec("turbo_script") {
 
     it("should handle single element") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [42];"
                            "var r = vec.reverse(v);"
                            "var val = r[0];";
@@ -1468,7 +1460,7 @@ spec("turbo_script") {
 
     it("should not modify original vector") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [1, 2, 3];"
                            "var r = vec.reverse(v);"
                            "var orig = v[0];";
@@ -1481,7 +1473,7 @@ spec("turbo_script") {
   describe("Vector Concat") {
     it("should merge two vectors") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var a = [1, 2, 3];"
                            "var b = [4, 5];"
                            "var c = vec.concat(a, b);"
@@ -1495,7 +1487,7 @@ spec("turbo_script") {
 
     it("should handle one empty vector") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       bind_vec(ctx, "a", (const double[]){1.0, 2.0}, 2);
       const char *script = " var b = vec.range(0);"
                            "var c = vec.concat(a, b);"
@@ -1509,7 +1501,7 @@ spec("turbo_script") {
   describe("Vector Range") {
     it("should generate vec.range(5)") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = vec.range(5);"
                            "var n = vec.len(v);"
                            "var first = v[0];"
@@ -1523,7 +1515,7 @@ spec("turbo_script") {
 
     it("should generate vec.range(2, 5)") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = vec.range(2, 5);"
                            "var n = vec.len(v);"
                            "var first = v[0];"
@@ -1537,7 +1529,7 @@ spec("turbo_script") {
 
     it("should return empty for vec.range(0)") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = "var v = vec.range(0);"
                            "var n = vec.len(v);";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1575,7 +1567,7 @@ spec("turbo_script") {
   describe("Vector Diff") {
     it("should compute first-order differences") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [1, 3, 6];"
                            "var d = vec.diff(v);"
                            "var n = vec.len(d);"
@@ -1590,7 +1582,7 @@ spec("turbo_script") {
 
     it("should return empty for single element") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [42];"
                            "var d = vec.diff(v);"
                            "var n = vec.len(d);";
@@ -1603,7 +1595,7 @@ spec("turbo_script") {
   describe("Vector Find") {
     it("should return index when found") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [10, 20, 30, 40];"
                            "var idx = vec.find(v, 30);";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1613,7 +1605,7 @@ spec("turbo_script") {
 
     it("should return -1 when not found") {
       turbo_script_ctx_t *ctx = turbo_script_init();
-      check_int_eq(turbo_script_load_plugin(ctx, "vec"), 0);
+
       const char *script = " var v = [10, 20, 30];"
                            "var idx = vec.find(v, 99);";
       check_int_eq(turbo_script_run(ctx, script), 0);

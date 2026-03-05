@@ -407,25 +407,18 @@ static void on_tcp_close_internal(void *handle) {
 
   turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
   turbo_websocket_client_t *client = (turbo_websocket_client_t *)tcp->user_data;
+  tcp->user_data = NULL;
 
   if (!client) return;
 
+  client->transport = NULL;
   client->state = TURBO_WS_STATE_CLOSED;
   client->in_close_callback = 1;
 
   if (client->on_close) {
     client->on_close(client);
   }
-  
-  // Guard against client being freed in callback
-  // Use a way to detect if client is still valid is impossible if freed.
-  // BUT client->pending_destroy should only be processed if client is still alive.
-  // If destroy was called during pending_destroy, destroy would have freed it if state was closed.
-  // But wait, destroy sets pending_destroy=1 if we are 'in use'.
-  // We need destroy to NOT free if in_close_callback is set. 
-  
-  // So proceed assuming destroy modified to respect in_close_callback.
-  
+
   client->in_close_callback = 0;
 
   /* Deferred cleanup from turbo_websocket_client_destroy */
@@ -480,9 +473,11 @@ static void on_tls_close_internal(void *handle) {
 
   turbo_tls_client_t *tls = (turbo_tls_client_t *)handle;
   turbo_websocket_client_t *client = (turbo_websocket_client_t *)tls->user_data;
+  tls->user_data = NULL;
 
   if (!client) return;
 
+  client->transport = NULL;
   client->state = TURBO_WS_STATE_CLOSED;
   client->in_close_callback = 1;
 
@@ -735,10 +730,8 @@ static int process_websocket_frame(turbo_websocket_client_t *client, const uint8
   // Handle control frames (can appear between fragmented data frames)
   if (opcode == WS_OPCODE_CLOSE) {
     client->close_received = 1;
-    client->state = TURBO_WS_STATE_CLOSED;
-
-    if (client->on_close) {
-      client->on_close(client);
+    if (client->state != TURBO_WS_STATE_CLOSED) {
+      client->state = TURBO_WS_STATE_CLOSING;
     }
     return -1;
   }

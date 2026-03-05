@@ -876,7 +876,7 @@ int turbo_kcp_client_connect(turbo_kcp_client_t *client, const char *host, unsig
 void turbo_kcp_client_close(turbo_kcp_client_t *client) {
   if (!client) return;
 
-  /* Check if we are closing a copy (e.g. from turbo_coro_client).
+  /* Check if we are closing a copy (e.g. from coro_client).
      If so, find the original client and close IT instead. */
   if (client->conv_id != 0) {
     turbo_kcp_client_t *original = find_client_by_conv_id(client->conv_id);

@@ -3,9 +3,9 @@
 
 #include "platform.h"
 #include "turbo_thread.h"
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <assert.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -18,7 +18,7 @@ typedef struct turbo_pool_slice_s turbo_pool_slice_t;
 typedef struct turbo_pool_stats_s turbo_pool_stats_t;
 
 #ifndef TURBO_ASSERT
-#define TURBO_ASSERT(x) assert(x)
+  #define TURBO_ASSERT(x) assert(x)
 #endif
 
 /* Arena flags */
@@ -37,10 +37,10 @@ typedef enum {
 
 /* Memory region with reference counting */
 struct turbo_pool_region_s {
-  char *memory;               /* Region memory */
-  size_t size;                /* Total region size */
-  size_t used;                /* Used bytes in region */
-  uint32_t ref_count;         /* Reference count for zero-copy */
+  char *memory;              /* Region memory */
+  size_t size;               /* Total region size */
+  size_t used;               /* Used bytes in region */
+  uint32_t ref_count;        /* Reference count for zero-copy */
   turbo_pool_region_t *next; /* Next region in chain */
 };
 
@@ -48,25 +48,25 @@ struct turbo_pool_region_s {
 struct turbo_pool_s {
   turbo_pool_region_t *head;         /* First region */
   turbo_pool_region_t *current;      /* Current allocation region */
-  size_t region_count;                /* Number of regions */
-  size_t total_allocated;             /* Total allocated memory */
-  size_t total_used;                  /* Total used memory */
-  uint32_t flags;                     /* Arena flags */
+  size_t region_count;               /* Number of regions */
+  size_t total_allocated;            /* Total allocated memory */
+  size_t total_used;                 /* Total used memory */
+  uint32_t flags;                    /* Arena flags */
   turbo_pool_buffer_t *recycle_head; /* Recycled buffer list head */
-  size_t recycle_count;               /* Number of recycled buffers */
-  size_t recycle_limit;               /* Max recycled buffers */
-  turbo_mutex_t lock;                 /* Mutex for thread safety */
+  size_t recycle_count;              /* Number of recycled buffers */
+  size_t recycle_limit;              /* Max recycled buffers */
+  turbo_mutex_t lock;                /* Mutex for thread safety */
 };
 
 /* Zero-copy buffer */
 struct turbo_pool_buffer_s {
-  char *data;                        /* Buffer data pointer */
-  size_t capacity;                   /* Buffer capacity */
-  size_t used;                       /* Used bytes in buffer */
-  uint32_t ref_count;                /* Reference count */
+  char *data;                       /* Buffer data pointer */
+  size_t capacity;                  /* Buffer capacity */
+  size_t used;                      /* Used bytes in buffer */
+  uint32_t ref_count;               /* Reference count */
   turbo_pool_t *arena;              /* Parent arena (NULL if external) */
   turbo_pool_region_t *region;      /* Source region (NULL if external) */
-  uint32_t flags;                    /* Buffer flags */
+  uint32_t flags;                   /* Buffer flags */
   struct turbo_pool_buffer_s *next; /* Next pointer for queues/pools */
 
   /* External memory support (for zero-copy wrapping) */
@@ -77,8 +77,8 @@ struct turbo_pool_buffer_s {
 
 /* Buffer slice for zero-copy operations */
 struct turbo_pool_slice_s {
-  char *data;                   /* Slice data pointer */
-  size_t length;                /* Slice length */
+  char *data;                  /* Slice data pointer */
+  size_t length;               /* Slice length */
   turbo_pool_buffer_t *buffer; /* Source buffer */
 };
 
@@ -201,7 +201,7 @@ CXX_C_API void turbo_pool_unref(turbo_pool_buffer_t *buffer);
  */
 CXX_C_API turbo_pool_buffer_t *
 turbo_pool_wrap_external(void *data, size_t size, void (*free_cb)(void *data, void *user_data),
-                          void *user_data);
+                         void *user_data);
 
 /**
  * @brief Check if an arena buffer wraps external memory.
@@ -221,7 +221,7 @@ CXX_C_API int turbo_pool_is_external(const turbo_pool_buffer_t *buffer);
  * @return An `turbo_pool_slice_t` structure representing the slice.
  */
 CXX_C_API turbo_pool_slice_t turbo_pool_slice(turbo_pool_buffer_t *buffer, size_t offset,
-                                                       size_t length);
+                                              size_t length);
 /**
  * @brief Releases a zero-copy slice, decrementing the reference count of its underlying buffer.
  *
@@ -241,7 +241,7 @@ CXX_C_API void turbo_pool_get_stats(const turbo_pool_t *arena, turbo_pool_stats_
 /* Convenience macros */
 #define TURBO_POOL_ALLOC(arena, type) ((type *)turbo_pool_alloc(arena, sizeof(type)))
 
-#define TURBO_POOL_ALLOC_ARRAY(arena, type, count)                                                \
+#define TURBO_POOL_ALLOC_ARRAY(arena, type, count)                                                 \
   ((type *)turbo_pool_alloc(arena, sizeof(type) * (count)))
 
 /* Buffer helpers */

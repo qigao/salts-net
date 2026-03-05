@@ -4,7 +4,6 @@
 #include "middleware.h"
 #include "route_trie.h"
 #include "security.h"
-#include "security.h"
 #include "netcore/turbo_coro_client.h"
 #include "turbo_str.h"
 #include "tlog.h"
@@ -23,7 +22,7 @@ struct http_parser_impl {
 
 /* Forward declaration of connection context structure from server_refactored.c */
 typedef struct {
-  turbo_coro_client_t *client;
+  coro_client_t *client;
   char buffer[8192]; /* READ_BUF_SIZE */
   size_t buffer_used;
   int keep_alive;
@@ -36,12 +35,12 @@ typedef struct {
 // Write request structure definition (forward declared in router.h)
 // Write request structure definition (forward declared in router.h)
 struct write_req_s {
-  turbo_coro_client_t *client;
+  coro_client_t *client;
   char *data; // Heap allocated (managed by caller)
 };
 
 // Sends error responses (400, 413, 414, or 500) - uses NetCore send
-static void send_error(turbo_coro_client_t *client, int error_code) {
+static void send_error(coro_client_t *client, int error_code) {
   if (!client)
     return;
 
@@ -86,7 +85,7 @@ static void send_error(turbo_coro_client_t *client, int error_code) {
     return;
 
   size_t len = strlen(err);
-  int status = turbo_coro_client_send(client, err, len);
+  int status = coro_client_send(client, err, len);
   if (status != 0) {
     TLOG_ERROR("Send error: %d", status);
   }
@@ -211,14 +210,14 @@ void *get_context(Req *req) {
  * @param data The data to attach
  * @param cleanup Cleanup function to call when connection is closed
  */
-void set_connection_context(turbo_coro_client_t *client, void *data,
+void set_connection_context(coro_client_t *client, void *data,
                             void (*cleanup)(void *)) {
   if (!client) {
     return;
   }
 
   /* Get the connection context from NetCore */
-  void *ctx_ptr = turbo_coro_client_get_user_data(client);
+  void *ctx_ptr = coro_client_get_user_data(client);
   if (!ctx_ptr) {
     /* No connection context exists - this shouldn't happen in normal operation */
     TLOG_ERROR("Warning: Attempting to set connection context on connection without context");
@@ -243,13 +242,13 @@ void set_connection_context(turbo_coro_client_t *client, void *data,
  * @param client The connection to get data from
  * @return The middleware data, or NULL if none set
  */
-void *get_connection_context(turbo_coro_client_t *client) {
+void *get_connection_context(coro_client_t *client) {
   if (!client) {
     return NULL;
   }
 
   /* Get the connection context from NetCore */
-  void *ctx_ptr = turbo_coro_client_get_user_data(client);
+  void *ctx_ptr = coro_client_get_user_data(client);
   if (!ctx_ptr) {
     return NULL;
   }
@@ -261,7 +260,7 @@ void *get_connection_context(turbo_coro_client_t *client) {
 
 // Create and initialize Req
 /* Phase IRIS-1: Updated to use turbo_pool_t */
-static Req *create_req(turbo_pool_t *arena, turbo_coro_client_t *client) {
+static Req *create_req(turbo_pool_t *arena, struct iris_app *app, coro_client_t *client) {
   if (!arena)
     return NULL;
 
@@ -271,6 +270,7 @@ static Req *create_req(turbo_pool_t *arena, turbo_coro_client_t *client) {
     return NULL;
 
   memset(req, 0, sizeof(Req));
+  req->app = app;               /* Association with application instance */
   req->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
   req->client = client;         /* NetCore migration: use client */
   req->method = NULL;
@@ -302,7 +302,7 @@ static Req *create_req(turbo_pool_t *arena, turbo_coro_client_t *client) {
 
 // Create and initialize Res
 /* Phase IRIS-1: Updated to use turbo_pool_t */
-static Res *create_res(turbo_pool_t *arena, turbo_coro_client_t *client) {
+static Res *create_res(turbo_pool_t *arena, coro_client_t *client) {
   if (!arena)
     return NULL;
 
@@ -732,7 +732,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   }
 
   // Send using NetCore API
-  int result = turbo_coro_client_send(res->client, response, total_len);
+  int result = coro_client_send(res->client, response, total_len);
   if (result != 0) {
     TLOG_ERROR("Send error: %d", result);
   }
@@ -774,7 +774,7 @@ void reply_stream_start(Res *res, int status) {
                          status, date_str);
 
   if (n > 0) {
-    turbo_coro_client_send(res->client, headers, n);
+    coro_client_send(res->client, headers, n);
   }
 }
 
@@ -800,11 +800,11 @@ void reply_stream_chunk(Res *res, const char *data) {
   stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", payload_len);
   
   // Send length
-  turbo_coro_client_send(res->client, hex_len, strlen(hex_len));
+  coro_client_send(res->client, hex_len, strlen(hex_len));
   // Send payload
-  turbo_coro_client_send(res->client, payload, payload_len);
+  coro_client_send(res->client, payload, payload_len);
   // Send trailing CRLF
-  turbo_coro_client_send(res->client, "\r\n", 2);
+  coro_client_send(res->client, "\r\n", 2);
   
   free(payload);
 }
@@ -816,7 +816,7 @@ void reply_stream_end(Res *res) {
   // Send the zero-length chunk to signal end of stream
   // Format: 0\r\n\r\n
   const char *end_chunk = "0\r\n\r\n";
-  turbo_coro_client_send(res->client, end_chunk, strlen(end_chunk));
+  coro_client_send(res->client, end_chunk, strlen(end_chunk));
 }
 
 // =============================================================================
@@ -845,7 +845,7 @@ static void send_headers_only(Res *res, int status, const char *content_type,
                          res->keep_alive ? "keep-alive" : "close");
 
   if (n > 0) {
-    turbo_coro_client_send(res->client, headers, n);
+    coro_client_send(res->client, headers, n);
   }
 }
 
@@ -881,7 +881,7 @@ int reply_file(Res *res, int status, const char *content_type, const char *file_
   }
 
   send_headers_only(res, status, content_type, (size_t)file_size, NULL);
-  turbo_coro_client_send(res->client, data, (size_t)file_size);
+  coro_client_send(res->client, data, (size_t)file_size);
   free(data);
   return 0;
 }
@@ -930,7 +930,7 @@ int reply_download(Res *res, const char *file_path, const char *download_name) {
                  "Content-Disposition: attachment; filename=\"%s\"\r\n", filename);
 
   send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra);
-  turbo_coro_client_send(res->client, data, (size_t)file_size);
+  coro_client_send(res->client, data, (size_t)file_size);
   free(data);
   return 0;
 }
@@ -957,7 +957,7 @@ void reply_chunked_start(Res *res, int status, const char *content_type) {
                          res->keep_alive ? "keep-alive" : "close");
 
   if (n > 0) {
-    turbo_coro_client_send(res->client, headers, n);
+    coro_client_send(res->client, headers, n);
   }
 }
 
@@ -968,9 +968,9 @@ void reply_chunked_write(Res *res, const void *data, size_t len) {
   char hex_len[32];
   int n = stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", len);
   if (n > 0) {
-    turbo_coro_client_send(res->client, hex_len, n);
-    turbo_coro_client_send(res->client, data, len);
-    turbo_coro_client_send(res->client, "\r\n", 2);
+    coro_client_send(res->client, hex_len, n);
+    coro_client_send(res->client, data, len);
+    coro_client_send(res->client, "\r\n", 2);
   }
 }
 
@@ -978,7 +978,7 @@ void reply_chunked_end(Res *res) {
   if (!res || !res->client)
     return;
 
-  turbo_coro_client_send(res->client, "0\r\n\r\n", 5);
+  coro_client_send(res->client, "0\r\n\r\n", 5);
 }
 
 #define DEFAULT_CHUNK_SIZE (64 * 1024)
@@ -1016,7 +1016,7 @@ int reply_file_chunked(Res *res, int status, const char *content_type,
 }
 
 // Validates all cookies in the Cookie header
-static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
+static iris_security_result_t validate_request_cookies(http_context_t *ctx, const iris_security_limits_t *limits) {
   if (!ctx) {
     return IRIS_SECURITY_ERROR_NULL_POINTER;
   }
@@ -1030,12 +1030,10 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
     }
   }
 
-  // If no cookies, that's fine
   if (!cookie_header) {
     return IRIS_SECURITY_OK;
   }
 
-  const iris_security_limits_t *limits = iris_security_get_limits();
   const char *pos = cookie_header;
 
   // Parse and validate each cookie in the header
@@ -1125,8 +1123,9 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx) {
 }
 
 // Main router function
-int router(turbo_coro_client_t *client, const char *request_data, size_t request_len) {
-  if (!client || !request_data || request_len == 0) {
+int iris_app_execute(iris_app_t *app, coro_client_t *client, const char *request_data,
+                     size_t request_len) {
+  if (!app || !client || !request_data || request_len == 0) {
     if (client)
       send_error(client, 400);
     return 1;
@@ -1151,7 +1150,7 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
 
   // Create resources
   ctx = create_http_context(&arena);
-  req = create_req(&arena, client);
+  req = create_req(&arena, app, client);
   res = create_res(&arena, client);
 
   if (!ctx || !req || !res) {
@@ -1189,7 +1188,7 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
   }
 
   // Validate URL path for security
-  const iris_security_limits_t *limits = iris_security_get_limits();
+  const iris_security_limits_t *limits = &app->security_limits;
   iris_security_result_t path_validation = iris_validate_url_path(path, limits->max_url_length);
   if (path_validation != IRIS_SECURITY_OK) {
     if (path_validation == IRIS_SECURITY_ERROR_MALICIOUS_CONTENT) {
@@ -1207,7 +1206,7 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
   req->security->url_validated = true;
 
   // Validate cookies for security
-  iris_security_result_t cookie_validation = validate_request_cookies(ctx);
+  iris_security_result_t cookie_validation = validate_request_cookies(ctx, limits);
   if (cookie_validation != IRIS_SECURITY_OK) {
     if (cookie_validation == IRIS_SECURITY_ERROR_MALICIOUS_CONTENT) {
       // Log potential attack attempt
@@ -1228,17 +1227,17 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
   res->keep_alive = ctx->keep_alive;
 
   // Handle CORS preflight
-  if (cors_handle_preflight(ctx, res)) {
+  if (cors_handle_preflight(app->cors_opts, ctx, res)) {
     reply(res, res->status, res->content_type, res->body, res->body_len);
     should_close = !res->keep_alive;
     goto cleanup;
   }
 
   // Route matching validation
-  if (!global_route_trie || !ctx->method) {
-    TLOG_ERROR("Missing route trie ({}) or method ({})", global_route_trie,
-              ctx->method ? ctx->method : "NULL");
-    cors_add_headers(ctx, res);
+  if (!app->route_trie || !ctx->method) {
+    TLOG_ERROR("Missing route trie ({}) or method ({})", (void *)app->route_trie,
+               ctx->method ? ctx->method : "NULL");
+    cors_add_headers(app->cors_opts, ctx, res);
     send_404_response = true;
     goto cleanup;
   }
@@ -1252,8 +1251,8 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
 
   // Route matching
   route_match_t match;
-  if (!route_trie_match(global_route_trie, ctx->method, &tokenized_path, &match)) {
-    cors_add_headers(ctx, res);
+  if (!route_trie_match(app->route_trie, ctx->method, &tokenized_path, &match)) {
+    cors_add_headers(app->cors_opts, ctx, res);
     send_404_response = true;
     goto cleanup;
   }
@@ -1277,7 +1276,7 @@ int router(turbo_coro_client_t *client, const char *request_data, size_t request
   }
 
   // Success path - call handler
-  cors_add_headers(ctx, res);
+  cors_add_headers(app->cors_opts, ctx, res);
 
   // Calls chain if there is a middleware
   // otherwise, calls the handler directly
@@ -1306,6 +1305,10 @@ cleanup:
   turbo_pool_free(&arena);
 
   return should_close;
+}
+
+int router(coro_client_t *client, const char *request_data, size_t request_len) {
+  return iris_app_execute(iris_app_default(), client, request_data, request_len);
 }
 
 // Adds a header

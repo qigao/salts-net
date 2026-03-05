@@ -6,6 +6,7 @@
 #include "s3_client_internal.h"
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <turbo_str.h>
 #include <turbo_fs.h>
@@ -18,9 +19,11 @@
 #define S3_PART_SIZE (5 * 1024 * 1024) // 5MB
 #define S3_PARALLEL_PARTS 10
 
+static tstr_t s3_md5_hex(const char* data, size_t len);
+
 // ── Client lifecycle ──
 
-s3_client_t* s3_client_create(turbo_coro_context_t *ctx,
+s3_client_t* s3_client_create(coro_context_t *ctx,
                                    const s3_base_url_t* base_url,
                                    s3_credential_provider_t* provider) {
     s3_client_t* client = calloc(1, sizeof(s3_client_t));
@@ -282,14 +285,12 @@ typedef struct {
     char*           etag;
     s3_error_t      error;
     int*            abort_flag;
-    int*            remaining;      // shared counter (single-threaded, no atomic)
-    turbo_coro_t*   parent;         // parent coro to resume when all done
 } s3_part_coro_task_t;
 
-static void s3_upload_part_coro(turbo_coro_t* co, void* arg) {
+static void s3_upload_part_coro(coro_t* co, void* arg) {
     (void)co;
     s3_part_coro_task_t* t = (s3_part_coro_task_t*)arg;
-    if (*t->abort_flag) goto done;
+    if (*t->abort_flag) return;
 
     const char* buf = t->data;
     char* alloc_buf = NULL;
@@ -299,14 +300,14 @@ static void s3_upload_part_coro(turbo_coro_t* co, void* arg) {
         if (!alloc_buf) {
             t->error = s3_error_make(-1, "Memory allocation failed");
             *t->abort_flag = 1;
-            goto done;
+            return;
         }
         int nread = turbo_fs_pread(t->fd, alloc_buf, t->len, t->file_offset);
         if (nread < 0 || (size_t)nread != t->len) {
             free(alloc_buf);
             t->error = s3_error_make(-1, "Failed to read file chunk");
             *t->abort_flag = 1;
-            goto done;
+            return;
         }
         buf = alloc_buf;
     }
@@ -325,11 +326,6 @@ static void s3_upload_part_coro(turbo_coro_t* co, void* arg) {
             t->etag = pr.etag; pr.etag = NULL;
         }
         s3_upload_part_response_free(&pr);
-    }
-
-done:
-    if (--(*t->remaining) == 0) {
-        turbo_coro_resume(t->parent);
     }
 }
 
@@ -365,10 +361,8 @@ static s3_error_t s3_multipart_upload_parts(s3_client_t* client,
 
     int part_count = (int)((total_len + part_size - 1) / part_size);
     int abort_flag = 0;
-    int remaining = part_count;
-    turbo_coro_t* parent = turbo_coro_running();
     s3_part_coro_task_t* tasks = calloc((size_t)part_count, sizeof(s3_part_coro_task_t));
-    turbo_coro_t** coros = calloc((size_t)part_count, sizeof(turbo_coro_t*));
+    coro_task_t** ctasks = calloc((size_t)part_count, sizeof(coro_task_t*));
 
     for (int i = 0; i < part_count; i++) {
         size_t offset = (size_t)i * part_size;
@@ -384,20 +378,18 @@ static s3_error_t s3_multipart_upload_parts(s3_client_t* client,
             .file_offset = (int64_t)offset,
             .len         = chunk,
             .abort_flag  = &abort_flag,
-            .remaining   = &remaining,
-            .parent      = parent,
         };
+        ctasks[i] = coro_task_create(client->coro_ctx, s3_upload_part_coro, &tasks[i]);
     }
 
-    // Spawn coroutines in batches of S3_PARALLEL_PARTS
+    // Start tasks in parallel
     for (int i = 0; i < part_count; i++) {
-        coros[i] = turbo_coro_create(s3_upload_part_coro, &tasks[i], NULL);
-        turbo_coro_resume(coros[i]);
+        coro_task_start(ctasks[i]);
     }
 
-    // Yield until all part coros complete (last one resumes us)
-    if (remaining > 0) {
-        turbo_coro_yield();
+    // Yield until all part tasks complete
+    if (part_count > 0) {
+        coro_when_all(client->coro_ctx, ctasks, part_count);
     }
 
     // Scan for first error
@@ -408,6 +400,21 @@ static s3_error_t s3_multipart_upload_parts(s3_client_t* client,
             for (int j = i + 1; j < part_count; j++)
                 s3_error_free(&tasks[j].error);
             break;
+        }
+    }
+
+    if (s3_is_ok(err)) {
+        for (int i = 0; i < part_count; i++) {
+            if (tasks[i].etag && tasks[i].etag[0] != '\0') continue;
+            if (tasks[i].data && tasks[i].len > 0) {
+                tstr_t h = s3_md5_hex(tasks[i].data, tasks[i].len);
+                tasks[i].etag = tstr_cat_fmt(tstr_new(), "\"%s\"", h);
+                tstr_free(h);
+            }
+            if (!tasks[i].etag || tasks[i].etag[0] == '\0') {
+                err = s3_error_make(-1, "Missing ETag for multipart part");
+                break;
+            }
         }
     }
 
@@ -427,9 +434,9 @@ static s3_error_t s3_multipart_upload_parts(s3_client_t* client,
 
     for (int i = 0; i < part_count; i++) {
         tstr_free(tasks[i].etag);
-        turbo_coro_destroy(coros[i]);
+        coro_task_destroy(ctasks[i]);
     }
-    free(coros);
+    free(ctasks);
     free(tasks);
     s3_client_destroy(tmp_client);
     s3_credential_provider_destroy(tmp_provider);
@@ -711,14 +718,14 @@ s3_upload_part_response_t s3_upload_part(
     res.error = check_response(&hres, 200);
     if (s3_is_ok(res.error)) {
         const char* etag = s3_headers_get(&hres.headers, "ETag");
-        if (etag && etag[0] == '"') {
-            size_t elen = strlen(etag);
-            if (elen >= 2 && etag[elen - 1] == '"')
-                res.etag = tstr_dup_len(etag + 1, elen - 2);
-            else
-                res.etag = tstr_dup(etag + 1);
+        if (etag && etag[0] != '\0') {
+            res.etag = tstr_dup(etag);
         } else {
-            res.etag = tstr_dup(etag ? etag : "");
+            // Fallback for servers/proxies that omit UploadPart ETag.
+            // For standard multipart uploads, part ETag is MD5(part-bytes), and it must be quoted.
+            tstr_t h = s3_md5_hex(data, len);
+            res.etag = tstr_cat_fmt(tstr_new(), "\"%s\"", h);
+            tstr_free(h);
         }
     }
     s3_http_response_free(&hres);
@@ -765,6 +772,50 @@ s3_upload_part_response_t s3_upload_part_copy(
     return res;
 }
 
+static tstr_t s3_multipart_fix_etag(const char* etag) {
+    if (!etag) return tstr_new();
+
+    const char* begin = etag;
+    while (*begin && isspace((unsigned char)*begin)) begin++;
+
+    const char* end = begin + strlen(begin);
+    while (end > begin && isspace((unsigned char)*(end - 1))) end--;
+
+    if ((end - begin) >= 2 && *begin == '"' && *(end - 1) == '"') {
+        begin++;
+        end--;
+    }
+
+    /* Standard S3 SDKs usually send the raw hex ETag in the XML element value.
+     * Quoting it here and then escaping it in the XML builder leads to &quot; hex &quot;
+     * which many S3 implementations (like MinIO) reject with 'entity tag may not match'. */
+    return tstr_dup_len(begin, (size_t)(end - begin));
+}
+
+static tstr_t s3_md5_hex(const char* data, size_t len) {
+    if (!data) return tstr_new();
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return tstr_new();
+
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    tstr_t out = tstr_new();
+
+    if (EVP_DigestInit_ex(ctx, EVP_md5(), NULL) != 1 ||
+        EVP_DigestUpdate(ctx, data, len) != 1 ||
+        EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return out;
+    }
+    EVP_MD_CTX_free(ctx);
+
+    for (unsigned int i = 0; i < hash_len; i++) {
+        out = tstr_cat_fmt(out, "%02x", hash[i]);
+    }
+    return out;
+}
+
 s3_complete_multipart_response_t s3_complete_multipart_upload(
     s3_client_t* client, const char* bucket, const char* object,
     const char* upload_id, const char** etags, int part_count) {
@@ -773,25 +824,45 @@ s3_complete_multipart_response_t s3_complete_multipart_upload(
         res.error = s3_error_make(-1, "Invalid params");
         return res;
     }
+    if (part_count <= 0) {
+        res.error = s3_error_make(-1, "Invalid multipart part count");
+        return res;
+    }
+    for (int i = 0; i < part_count; i++) {
+        if (!etags[i] || !etags[i][0]) {
+            res.error = s3_error_make(-1, "Missing ETag for multipart part");
+            return res;
+        }
+    }
 
     s3_xml_builder_t* xb = s3_xml_new();
-    s3_xml_open(xb, "CompleteMultipartUpload");
+    s3_xml_open_ns(xb, "CompleteMultipartUpload", "http://s3.amazonaws.com/doc/2006-03-01/");
     for (int i = 0; i < part_count; i++) {
         s3_xml_open(xb, "Part");
         s3_xml_elem_int(xb, "PartNumber", i + 1);
-        s3_xml_elem(xb, "ETag", etags[i]);
+        
+        /* ETags are expected exactly as returned by the server, but without 
+         * surrounding quotes in the complete multipart XML body. */
+        tstr_t fixed_etag = s3_multipart_fix_etag(etags[i]);
+        s3_xml_elem(xb, "ETag", fixed_etag);
+        tstr_free(fixed_etag);
+        
         s3_xml_close(xb, "Part");
     }
     s3_xml_close(xb, "CompleteMultipartUpload");
     tstr_t body = s3_xml_finish(xb);
 
     tstr_t uri = tstr_cat_fmt(tstr_new(), "/%s/%s", bucket, object);
+    S3Headers extra_hdrs = S3Headers_init();
+    s3_headers_add(&extra_hdrs, "Content-Type", "application/xml");
+    
     S3Headers qp = S3Headers_init();
     s3_headers_add(&qp, "uploadId", upload_id);
 
-    s3_http_response_t hres = s3_execute_signed(client, "POST", uri, NULL, &qp, body, tstr_len(body));
+    s3_http_response_t hres = s3_execute_signed(client, "POST", uri, &extra_hdrs, &qp, body, tstr_len(body));
     tstr_free(uri);
     tstr_free(body);
+    S3Headers_drop(&extra_hdrs);
     S3Headers_drop(&qp);
 
     res.error = check_response(&hres, 200);

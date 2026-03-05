@@ -26,7 +26,7 @@
 #include "stb_sprintf.h"
 #include "turbo_atomic.h"
 #include "turbo_fs.h"
-#include "turbo_coro.h"
+#include "minicoro.h"
 #include "turbo_mmap.h"
 
 
@@ -745,7 +745,6 @@ struct tlog_s {
   // Read-Only / Rare Access (Cold)
   // ---------------------------------------------------------------------------
   turbo_log_level_t min_level;
-  int async_mode;
   size_t ring_mask;
   turbo_log_sink_t *sinks[MAX_SINKS];
   int sink_count;
@@ -786,7 +785,6 @@ struct tlog_s {
   
   // Data
   async_log_entry_t **ring_buffer;
-  MemoryPool *pool; // Sync mode pool
 };
 
 // Forward declarations
@@ -930,56 +928,42 @@ tlog_t *tlog_create(const tlog_config_t *config) {
     return NULL;
 
   logger->min_level = config ? config->min_level : TURBO_LOG_LEVEL_INFO;
-  logger->async_mode = config ? config->async_mode : 0;
 
   turbo_mutex_init(&logger->sink_mutex);
-
-  size_t pool_size = (config && config->pool_size) ? config->pool_size : DEFAULT_POOL_SIZE;
-  logger->pool = pool_create(pool_size);
-  if (!logger->pool) {
-    turbo_mutex_destroy(&logger->sink_mutex);
-    free(logger);
-    return NULL;
-  }
-
   turbo_mutex_init(&logger->pool_mutex);
 
   turbo_atomic_store64(&logger->logs_written, 0);
   turbo_atomic_store64(&logger->logs_dropped, 0);
   turbo_atomic_store(&logger->active_allocs, 0);
 
-  if (logger->async_mode) {
-    logger->ring_mask = 16384 - 1; // 16K capacity
-    logger->ring_buffer = calloc(16384, sizeof(async_log_entry_t *));
-    turbo_atomic_store(&logger->head, 0);
-    turbo_atomic_store(&logger->tail, 0);
+  logger->ring_mask = 16384 - 1; // 16K capacity
+  logger->ring_buffer = calloc(16384, sizeof(async_log_entry_t *));
+  turbo_atomic_store(&logger->head, 0);
+  turbo_atomic_store(&logger->tail, 0);
 
-    turbo_mutex_init(&logger->queue_mutex);
+  turbo_mutex_init(&logger->queue_mutex);
 
-    size_t async_pool_size =
-        (config && config->buffer_size) ? config->buffer_size : DEFAULT_ASYNC_POOL_SIZE;
-    logger->async_pool = pool_create(async_pool_size);
-    if (!logger->async_pool || !logger->ring_buffer) {
-      if (logger->ring_buffer) free(logger->ring_buffer);
-      if (logger->async_pool) pool_destroy(logger->async_pool);
-      turbo_mutex_destroy(&logger->queue_mutex);
-      turbo_mutex_destroy(&logger->pool_mutex);
-      pool_destroy(logger->pool);
-      turbo_mutex_destroy(&logger->sink_mutex);
-      free(logger);
-      return NULL;
-    }
+  size_t async_pool_size =
+      (config && config->buffer_size) ? config->buffer_size : DEFAULT_ASYNC_POOL_SIZE;
+  logger->async_pool = pool_create(async_pool_size);
+  if (!logger->async_pool || !logger->ring_buffer) {
+    if (logger->ring_buffer) free(logger->ring_buffer);
+    if (logger->async_pool) pool_destroy(logger->async_pool);
+    turbo_mutex_destroy(&logger->queue_mutex);
+    turbo_mutex_destroy(&logger->pool_mutex);
+    turbo_mutex_destroy(&logger->sink_mutex);
+    free(logger);
+    return NULL;
+  }
 
-    if (logger_start_async(logger) != 0) {
-      pool_destroy(logger->async_pool);
-      free(logger->ring_buffer);
-      turbo_mutex_destroy(&logger->queue_mutex);
-      turbo_mutex_destroy(&logger->pool_mutex);
-      pool_destroy(logger->pool);
-      turbo_mutex_destroy(&logger->sink_mutex);
-      free(logger);
-      return NULL;
-    }
+  if (logger_start_async(logger) != 0) {
+    pool_destroy(logger->async_pool);
+    free(logger->ring_buffer);
+    turbo_mutex_destroy(&logger->queue_mutex);
+    turbo_mutex_destroy(&logger->pool_mutex);
+    turbo_mutex_destroy(&logger->sink_mutex);
+    free(logger);
+    return NULL;
   }
 
   return logger;
@@ -989,12 +973,10 @@ void tlog_destroy(tlog_t *logger) {
   if (!logger)
     return;
 
-  if (logger->async_mode) {
-    logger_stop_async(logger);
-    free(logger->ring_buffer);
-    turbo_mutex_destroy(&logger->queue_mutex);
-    pool_destroy(logger->async_pool);
-  }
+  logger_stop_async(logger);
+  free(logger->ring_buffer);
+  turbo_mutex_destroy(&logger->queue_mutex);
+  pool_destroy(logger->async_pool);
 
   // Flush and destroy sinks
   for (int i = 0; i < logger->sink_count; i++) {
@@ -1006,7 +988,6 @@ void tlog_destroy(tlog_t *logger) {
 
   turbo_mutex_destroy(&logger->sink_mutex);
   turbo_mutex_destroy(&logger->pool_mutex);
-  pool_destroy(logger->pool);
   free(logger);
 
   // Clear default if this was it
@@ -1057,19 +1038,17 @@ void tlog_flush(tlog_t *logger) {
     return;
 
   // Wait for async queue to drain
-  if (logger->async_mode) {
-    turbo_mutex_lock(&logger->queue_mutex);
-    uint32_t t = (uint32_t)turbo_atomic_load(&logger->tail);
-    uint32_t h = (uint32_t)turbo_atomic_load(&logger->head);
-    while (t != h && turbo_atomic_load(&logger->running)) {
-      // Signal worker and wait for drain
-      turbo_cond_signal(&logger->queue_cond);
-      turbo_cond_wait(&logger->drain_cond, &logger->queue_mutex);
-      t = (uint32_t)turbo_atomic_load(&logger->tail);
-      h = (uint32_t)turbo_atomic_load(&logger->head);
-    }
-    turbo_mutex_unlock(&logger->queue_mutex);
+  turbo_mutex_lock(&logger->queue_mutex);
+  uint32_t t = (uint32_t)turbo_atomic_load(&logger->tail);
+  uint32_t h = (uint32_t)turbo_atomic_load(&logger->head);
+  while (t != h && turbo_atomic_load(&logger->running)) {
+    // Signal worker and wait for drain
+    turbo_cond_signal(&logger->queue_cond);
+    turbo_cond_wait(&logger->drain_cond, &logger->queue_mutex);
+    t = (uint32_t)turbo_atomic_load(&logger->tail);
+    h = (uint32_t)turbo_atomic_load(&logger->head);
   }
+  turbo_mutex_unlock(&logger->queue_mutex);
 
   // Flush all sinks
   turbo_mutex_lock(&logger->sink_mutex);
@@ -1108,96 +1087,179 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
     return;
   }
 
-  if (logger->async_mode) {
-    // Build message first in thread-local buffer to know exact length
-    int msg_len = fmt_print(tls_msg_buf, MAX_MESSAGE_SIZE, fmt, args, arg_count);
-    if (msg_len < 0) msg_len = 0;
-    if (msg_len >= MAX_MESSAGE_SIZE) msg_len = MAX_MESSAGE_SIZE - 1;
+  // Build message first in thread-local buffer to know exact length
+  int msg_len = fmt_print(tls_msg_buf, MAX_MESSAGE_SIZE, fmt, args, arg_count);
+  if (msg_len < 0) msg_len = 0;
+  if (msg_len >= MAX_MESSAGE_SIZE) msg_len = MAX_MESSAGE_SIZE - 1;
 
-    // Cooperative backpressure if in coroutine
-    while (turbo_atomic_load(&logger->queue_size) >= MAX_QUEUE_SIZE) {
-      if (turbo_coro_running()) {
-        turbo_coro_yield();
-      } else {
-        turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-        return;
-      }
+  // Cooperative backpressure if in coroutine
+  while (turbo_atomic_load(&logger->queue_size) >= MAX_QUEUE_SIZE) {
+    if (mco_running()) {
+      mco_yield(mco_running());
+    } else {
+      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
+      return;
     }
+  }
 
-    size_t comp_len = component ? strlen(component) : 0;
-    size_t file_len = file ? strlen(file) : 0;
-    size_t needed =
-        sizeof(async_log_entry_t) + comp_len + file_len + (size_t)msg_len + STRING_PADDING * 3;
+  size_t comp_len = component ? strlen(component) : 0;
+  size_t file_len = file ? strlen(file) : 0;
+  size_t needed =
+      sizeof(async_log_entry_t) + comp_len + file_len + (size_t)msg_len + STRING_PADDING * 3;
 
-    // Allocate from pool (must be synchronized)
-    turbo_mutex_lock(&logger->pool_mutex);
-    while (pool_get_available(logger->async_pool) < needed) {
-      if (turbo_atomic_load(&logger->queue_size) == 0 && 
-          turbo_atomic_load(&logger->active_allocs) == 0) {
-        pool_reset(logger->async_pool);
-        break;
-      }
-      if (turbo_coro_running()) {
-        turbo_mutex_unlock(&logger->pool_mutex);
-        turbo_coro_yield();
-        turbo_mutex_lock(&logger->pool_mutex);
-      } else {
-        turbo_mutex_unlock(&logger->pool_mutex);
-        turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-        return;
-      }
+  // Allocate from pool (must be synchronized)
+  turbo_mutex_lock(&logger->pool_mutex);
+  while (pool_get_available(logger->async_pool) < needed) {
+    if (turbo_atomic_load(&logger->queue_size) == 0 && 
+        turbo_atomic_load(&logger->active_allocs) == 0) {
+      pool_reset(logger->async_pool);
+      break;
     }
-
-    async_log_entry_t *ae = (async_log_entry_t *)pool_alloc(logger->async_pool, needed);
-    if (!ae) {
+    if (mco_running()) {
+      turbo_mutex_unlock(&logger->pool_mutex);
+      mco_yield(mco_running());
+      turbo_mutex_lock(&logger->pool_mutex);
+    } else {
       turbo_mutex_unlock(&logger->pool_mutex);
       turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
       return;
     }
-    
-    // Mark as active before unlocking
-    turbo_atomic_fetch_add(&logger->active_allocs, 1);
+  }
+
+  async_log_entry_t *ae = (async_log_entry_t *)pool_alloc(logger->async_pool, needed);
+  if (!ae) {
     turbo_mutex_unlock(&logger->pool_mutex);
+    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
+    return;
+  }
+  
+  // Mark as active before unlocking
+  turbo_atomic_fetch_add(&logger->active_allocs, 1);
+  turbo_mutex_unlock(&logger->pool_mutex);
 
-    // Now claim slot in ring buffer - Deadlock free!
-    uint32_t head = (uint32_t)turbo_atomic_fetch_add(&logger->head, 1);
-    uint32_t index = head & (uint32_t)logger->ring_mask;
-    
-    // Wait for slot to be cleared by consumer
-    while (unlikely(logger->ring_buffer[index] != NULL)) {
-        turbo_thread_yield();
-    }
+  // Now claim slot in ring buffer - Deadlock free!
+  uint32_t head = (uint32_t)turbo_atomic_fetch_add(&logger->head, 1);
+  uint32_t index = head & (uint32_t)logger->ring_mask;
+  
+  // Wait for slot to be cleared by consumer
+  while (unlikely(logger->ring_buffer[index] != NULL)) {
+      turbo_thread_yield();
+  }
 
-    ae->level = level;
-    ae->timestamp_ms = turbo_realtime_ms();
-    ae->thread_id = get_cached_tid();
-    ae->line = line;
+  ae->level = level;
+  ae->timestamp_ms = turbo_realtime_ms();
+  ae->thread_id = get_cached_tid();
+  ae->line = line;
 
-    char *ptr = ae->data;
-    if (component) {
-      ae->component = ptr;
-      memcpy(ptr, component, comp_len);
-      memset(ptr + comp_len, 0, STRING_PADDING);
-      ptr += comp_len + STRING_PADDING;
+  char *ptr = ae->data;
+  if (component) {
+    ae->component = ptr;
+    memcpy(ptr, component, comp_len);
+    memset(ptr + comp_len, 0, STRING_PADDING);
+    ptr += comp_len + STRING_PADDING;
+  } else {
+    ae->component = NULL;
+  }
+
+  if (file) {
+    ae->file = ptr;
+    memcpy(ptr, file, file_len);
+    memset(ptr + file_len, 0, STRING_PADDING);
+    ptr += file_len + STRING_PADDING;
+  } else {
+    ae->file = NULL;
+  }
+
+  ae->message = ptr;
+  memcpy(ptr, tls_msg_buf, (size_t)msg_len);
+  memset(ptr + msg_len, 0, STRING_PADDING);
+  ae->message_len = (size_t)msg_len;
+
+  // Memory Barrier
+  #ifdef _WIN32
+    MemoryBarrier();
+  #else
+    __sync_synchronize();
+  #endif
+
+  // Enqueue
+  logger->ring_buffer[index] = ae;
+  int prev_size = turbo_atomic_fetch_add(&logger->queue_size, 1);
+  if (prev_size == 0) {
+    turbo_mutex_lock(&logger->queue_mutex);
+    turbo_cond_signal(&logger->queue_cond);
+    turbo_mutex_unlock(&logger->queue_mutex);
+  }
+}
+
+void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *component, const char *file,
+                   int line, const char *message, size_t message_len) {
+  if (!logger || !message)
+    return;
+  if (level < logger->min_level)
+    return;
+  if (logger->sink_count == 0)
+    return;
+
+  // Cooperative backpressure if in coroutine
+  while (turbo_atomic_load(&logger->queue_size) >= MAX_QUEUE_SIZE) {
+    if (mco_running()) {
+      mco_yield(mco_running());
     } else {
-      ae->component = NULL;
+      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
+      return;
     }
+  }
 
-    if (file) {
-      ae->file = ptr;
-      memcpy(ptr, file, file_len);
-      memset(ptr + file_len, 0, STRING_PADDING);
-      ptr += file_len + STRING_PADDING;
+  // Allocate from pool (must be synchronized)
+  turbo_mutex_lock(&logger->pool_mutex);
+  while (pool_get_available(logger->async_pool) < (message_len + 1024)) {
+    if (turbo_atomic_load(&logger->queue_size) == 0 &&
+        turbo_atomic_load(&logger->active_allocs) == 0) {
+      pool_reset(logger->async_pool);
+      break;
+    }
+    if (mco_running()) {
+      turbo_mutex_unlock(&logger->pool_mutex);
+      mco_yield(mco_running());
+      turbo_mutex_lock(&logger->pool_mutex);
     } else {
-      ae->file = NULL;
+      turbo_mutex_unlock(&logger->pool_mutex);
+      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
+      return;
     }
+  }
 
-    ae->message = ptr;
-    memcpy(ptr, tls_msg_buf, (size_t)msg_len);
-    memset(ptr + msg_len, 0, STRING_PADDING);
-    ae->message_len = (size_t)msg_len;
+  turbo_log_entry_t entry = {.level = level,
+                             .timestamp_ms = turbo_realtime_ms(),
+                             .thread_id = get_cached_tid(),
+                             .component = component,
+                             .file = file,
+                             .line = line,
+                             .message = message,
+                             .message_len = message_len};
 
-    // Memory Barrier
+  async_log_entry_t *ae = async_entry_create(logger->async_pool, &entry);
+  if (!ae) {
+    turbo_mutex_unlock(&logger->pool_mutex);
+    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
+    return;
+  }
+
+  // Mark as active before unlocking
+  turbo_atomic_fetch_add(&logger->active_allocs, 1);
+  turbo_mutex_unlock(&logger->pool_mutex);
+
+  // Now claim slot in ring buffer
+  uint32_t head = (uint32_t)turbo_atomic_fetch_add(&logger->head, 1);
+  uint32_t index = head & (uint32_t)logger->ring_mask;
+  
+  // Wait for slot to be cleared by consumer
+  while (unlikely(logger->ring_buffer[index] != NULL)) {
+      turbo_thread_yield();
+  }
+
+  if (ae) {
     #ifdef _WIN32
       MemoryBarrier();
     #else
@@ -1212,128 +1274,8 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
       turbo_cond_signal(&logger->queue_cond);
       turbo_mutex_unlock(&logger->queue_mutex);
     }
-
   } else {
-    // Sync mode - Use thread-local buffer to avoid pool_mutex
-    char *message = tls_msg_buf;
-    int len = fmt_print(message, MAX_MESSAGE_SIZE, fmt, args, (size_t)arg_count);
-    if (len < 0)
-      len = 0;
-    if (len >= MAX_MESSAGE_SIZE)
-      len = MAX_MESSAGE_SIZE - 1;
-    memset(message + len, 0, STRING_PADDING);
-
-    turbo_log_entry_t entry = {.level = level,
-                               .timestamp_ms = turbo_realtime_ms(),
-                               .thread_id = get_cached_tid(),
-                               .component = component,
-                               .file = file,
-                               .line = line,
-                               .message = message,
-                               .message_len = (size_t)len};
-    logger_write_to_sinks(logger, &entry);
-    turbo_atomic_fetch_add64(&logger->logs_written, 1);
-  }
-}
-
-void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *component, const char *file,
-                   int line, const char *message, size_t message_len) {
-  if (!logger || !message)
-    return;
-  if (level < logger->min_level)
-    return;
-  if (logger->sink_count == 0)
-    return;
-
-  if (logger->async_mode) {
-    // Cooperative backpressure if in coroutine
-    while (turbo_atomic_load(&logger->queue_size) >= MAX_QUEUE_SIZE) {
-      if (turbo_coro_running()) {
-        turbo_coro_yield();
-      } else {
-        turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-        return;
-      }
-    }
-
-    // Allocate from pool (must be synchronized)
-    turbo_mutex_lock(&logger->pool_mutex);
-    while (pool_get_available(logger->async_pool) < (message_len + 1024)) {
-      if (turbo_atomic_load(&logger->queue_size) == 0 &&
-          turbo_atomic_load(&logger->active_allocs) == 0) {
-        pool_reset(logger->async_pool);
-        break;
-      }
-      if (turbo_coro_running()) {
-        turbo_mutex_unlock(&logger->pool_mutex);
-        turbo_coro_yield();
-        turbo_mutex_lock(&logger->pool_mutex);
-      } else {
-        turbo_mutex_unlock(&logger->pool_mutex);
-        turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-        return;
-      }
-    }
-
-    turbo_log_entry_t entry = {.level = level,
-                               .timestamp_ms = turbo_realtime_ms(),
-                               .thread_id = get_cached_tid(),
-                               .component = component,
-                               .file = file,
-                               .line = line,
-                               .message = message,
-                               .message_len = message_len};
-
-    async_log_entry_t *ae = async_entry_create(logger->async_pool, &entry);
-    if (!ae) {
-      turbo_mutex_unlock(&logger->pool_mutex);
-      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-      return;
-    }
-
-    // Mark as active before unlocking
-    turbo_atomic_fetch_add(&logger->active_allocs, 1);
-    turbo_mutex_unlock(&logger->pool_mutex);
-
-    // Now claim slot in ring buffer
-    uint32_t head = (uint32_t)turbo_atomic_fetch_add(&logger->head, 1);
-    uint32_t index = head & (uint32_t)logger->ring_mask;
-    
-    // Wait for slot to be cleared by consumer
-    while (unlikely(logger->ring_buffer[index] != NULL)) {
-        turbo_thread_yield();
-    }
-
-    if (ae) {
-      #ifdef _WIN32
-        MemoryBarrier();
-      #else
-        __sync_synchronize();
-      #endif
-
-      // Enqueue
-      logger->ring_buffer[index] = ae;
-      int prev_size = turbo_atomic_fetch_add(&logger->queue_size, 1);
-      if (prev_size == 0) {
-        turbo_mutex_lock(&logger->queue_mutex);
-        turbo_cond_signal(&logger->queue_cond);
-        turbo_mutex_unlock(&logger->queue_mutex);
-      }
-    } else {
-      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-    }
-
-  } else {
-    turbo_log_entry_t entry = {.level = level,
-                               .timestamp_ms = turbo_realtime_ms(),
-                               .thread_id = get_cached_tid(),
-                               .component = component,
-                               .file = file,
-                               .line = line,
-                               .message = message,
-                               .message_len = message_len};
-    logger_write_to_sinks(logger, &entry);
-    turbo_atomic_fetch_add64(&logger->logs_written, 1);
+    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
   }
 }
 
@@ -1364,7 +1306,7 @@ uint64_t tlog_get_dropped(const tlog_t *logger) {
 }
 
 int tlog_get_queue_size(const tlog_t *logger) {
-  return logger && logger->async_mode ? turbo_atomic_load(&((tlog_t *)logger)->queue_size) : 0;
+  return logger ? turbo_atomic_load(&((tlog_t *)logger)->queue_size) : 0;
 }
 
 // =============================================================================
@@ -1377,7 +1319,6 @@ static void create_default_logger(void) {
     return;
 
   tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_INFO,
-                          .async_mode = 0,
                           .pool_size = DEFAULT_POOL_SIZE,
                           .buffer_size = 0};
 

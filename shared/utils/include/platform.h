@@ -53,8 +53,9 @@
   // uv.h includes windows.h, so we might not need to explicit include it,
   // but keeping it for other utils if needed.
   // Since we hid uv.h, we MUST include windows.h now for LONG, etc.
-  #include <winsock2.h>
   #include <windows.h>
+  #include <winsock2.h>
+
 
   // Windows doesn't have ssize_t, define it if not already defined by uv
   #ifndef _SSIZE_T_DEFINED
@@ -98,16 +99,16 @@ CXX_C_API uint64_t turbo_realtime_ms(void);
  * @brief Cross-platform time structure (Y2038 safe)
  */
 typedef struct {
-    int64_t tv_sec;   /**< Seconds since epoch */
-    int32_t tv_usec;  /**< Microseconds */
+  int64_t tv_sec;  /**< Seconds since epoch */
+  int32_t tv_usec; /**< Microseconds */
 } turbo_timeval_t;
 
 /**
  * @brief Cross-platform timezone structure (usually ignored)
  */
 typedef struct {
-    int tz_minuteswest;
-    int tz_dsttime;
+  int tz_minuteswest;
+  int tz_dsttime;
 } turbo_timezone_t;
 
 /**
@@ -146,7 +147,7 @@ static inline uint64_t turbo_ms_to_ns(uint64_t ms) { return ms * 1000000ULL; }
 
 /**
  * @brief Cross-platform timer using native OS facilities (CreateTimerQueueTimer/timer_create)
- * 
+ *
  * This timer does NOT depend on a libuv loop. Callbacks are executed by the OS
  * thread pool (Windows) or a dedicated thread (POSIX), so they must be thread-safe.
  */
@@ -174,8 +175,8 @@ CXX_C_API void turbo_timer_destroy(turbo_timer_t *timer);
  * @param repeat Repeat interval in milliseconds (0 for one-shot)
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb,
-                                uint64_t timeout, uint64_t repeat);
+CXX_C_API int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout,
+                                uint64_t repeat);
 
 /**
  * @brief Stop a timer
@@ -211,16 +212,16 @@ CXX_C_API uint64_t turbo_timer_get_repeat(turbo_timer_t *timer);
 
 #ifdef _WIN32
 typedef struct turbo_rwlock_s {
-    SRWLOCK lock;
+  SRWLOCK lock;
 } turbo_rwlock_t;
 #else
-#include <pthread.h>
+  #include <pthread.h>
 typedef struct turbo_rwlock_s {
-    pthread_rwlock_t lock;
+  pthread_rwlock_t lock;
 } turbo_rwlock_t;
 #endif
 
-CXX_C_API int  turbo_rwlock_init(turbo_rwlock_t *lock);
+CXX_C_API int turbo_rwlock_init(turbo_rwlock_t *lock);
 CXX_C_API void turbo_rwlock_destroy(turbo_rwlock_t *lock);
 CXX_C_API void turbo_rwlock_rdlock(turbo_rwlock_t *lock);
 CXX_C_API void turbo_rwlock_rdunlock(turbo_rwlock_t *lock);
@@ -231,16 +232,16 @@ CXX_C_API void turbo_rwlock_wrunlock(turbo_rwlock_t *lock);
  * @brief Mark a variable as unused to suppress compiler warnings
  */
 #define UNUSED(x) (void)(x)
- 
+
 // =============================================================================
 // Cache / Branch Prediction Hints
 // =============================================================================
 #if defined(__GNUC__) || defined(__clang__)
-  #define likely(x)       __builtin_expect(!!(x), 1)
-  #define unlikely(x)     __builtin_expect(!!(x), 0)
+  #define likely(x) __builtin_expect(!!(x), 1)
+  #define unlikely(x) __builtin_expect(!!(x), 0)
 #else
-  #define likely(x)       (x)
-  #define unlikely(x)     (x)
+  #define likely(x) (x)
+  #define unlikely(x) (x)
 #endif
 
 // =============================================================================

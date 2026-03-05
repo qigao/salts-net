@@ -16,7 +16,7 @@
 #endif
 
 #include "router.h"
-#include "netcore/turbo_coro_client.h"
+#include "netcore.h"
 #include "error_recovery.h"
 
 /* Test data structure for middleware context */

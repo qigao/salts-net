@@ -24,8 +24,8 @@
 /* ── Test context ─────────────────────────────────────────── */
 
 typedef struct {
-  turbo_coro_context_t *ctx;
-  turbo_coro_server_t  *server;
+  coro_context_t *ctx;
+  coro_server_t  *server;
   int                   test_result;
 } test_ctx_t;
 
@@ -33,13 +33,13 @@ static test_ctx_t ctx;
 
 /* ── Echo handler ─────────────────────────────────────────── */
 
-static void echo_handler(turbo_coro_client_t *client, void *arg) {
+static void echo_handler(coro_client_t *client, void *arg) {
   (void)arg;
   char *data = NULL;
   size_t len = 0;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
-    turbo_coro_client_send(client, data, len);
+    coro_client_send(client, data, len);
     free(data);
     data = NULL;
   }
@@ -47,99 +47,97 @@ static void echo_handler(turbo_coro_client_t *client, void *arg) {
 
 static void setup(void) {
   memset(&ctx, 0, sizeof(ctx));
-  ctx.ctx = turbo_coro_context_create(NULL);
+  ctx.ctx = coro_context_create(NULL);
 }
 
 static void teardown(void) {
-  if (ctx.server) { turbo_coro_server_destroy(ctx.server); ctx.server = NULL; }
-  if (ctx.ctx)    { turbo_coro_context_destroy(ctx.ctx);    ctx.ctx = NULL; }
+  if (ctx.server) { coro_server_destroy(ctx.server); ctx.server = NULL; }
+  if (ctx.ctx)    { coro_context_destroy(ctx.ctx);    ctx.ctx = NULL; }
 }
 
-static void run_coro(turbo_coro_fn fn) {
-  turbo_coro_t *co = turbo_coro_create(fn, &ctx, NULL);
-  turbo_coro_resume(co);
-  turbo_coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_destroy(co);
+static void run_coro(coro_fn fn) {
+  coro_context_spawn(ctx.ctx, fn, &ctx);
+  coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
 }
 
 /* ── Helper: connect, send, recv, verify ──────────────────── */
 
 static int do_echo_test(test_ctx_t *t, const char *url) {
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
+  coro_client_t *client = coro_client_create(t->ctx);
   if (!client) { fprintf(stderr, "[VTABLE] create failed\n"); return 0; }
 
-  turbo_coro_client_set_timeout(client, 5000);
+  coro_client_set_timeout(client, 5000);
 
-  int rc = turbo_coro_client_connect(client, url);
-  if (rc != 0) { fprintf(stderr, "[VTABLE] connect failed: %d\n", rc); turbo_coro_client_destroy(client); return 0; }
+  int rc = coro_client_connect(client, url);
+  if (rc != 0) { fprintf(stderr, "[VTABLE] connect failed: %d\n", rc); coro_client_destroy(client); return 0; }
 
-  rc = turbo_coro_client_send(client, VTABLE_TEST_MESSAGE, strlen(VTABLE_TEST_MESSAGE));
-  if (rc != 0) { fprintf(stderr, "[VTABLE] send failed: %d\n", rc); turbo_coro_client_destroy(client); return 0; }
+  rc = coro_client_send(client, VTABLE_TEST_MESSAGE, strlen(VTABLE_TEST_MESSAGE));
+  if (rc != 0) { fprintf(stderr, "[VTABLE] send failed: %d\n", rc); coro_client_destroy(client); return 0; }
 
   char *data = NULL;
   size_t len = 0;
-  rc = turbo_coro_client_recv(client, &data, &len);
+  rc = coro_client_recv(client, &data, &len);
   int ok = (rc == 0 && len == strlen(VTABLE_TEST_MESSAGE) &&
             memcmp(data, VTABLE_TEST_MESSAGE, len) == 0);
   free(data);
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
   return ok;
 }
 
 /* ── Test coroutines ──────────────────────────────────────── */
 
-static void coro_create_clients(turbo_coro_t *co, void *arg) {
+static void coro_create_clients(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  turbo_coro_client_t *c1 = turbo_coro_client_create(t->ctx);
-  turbo_coro_client_t *c2 = turbo_coro_client_create(t->ctx);
-  turbo_coro_client_t *c3 = turbo_coro_client_create(t->ctx);
+  coro_client_t *c1 = coro_client_create(t->ctx);
+  coro_client_t *c2 = coro_client_create(t->ctx);
+  coro_client_t *c3 = coro_client_create(t->ctx);
 
   t->test_result = (c1 && c2 && c3 && c1 != c2 && c2 != c3) ? 1 : 0;
 
-  turbo_coro_client_destroy(c1);
-  turbo_coro_client_destroy(c2);
-  turbo_coro_client_destroy(c3);
-  turbo_coro_context_stop(t->ctx);
+  coro_client_destroy(c1);
+  coro_client_destroy(c2);
+  coro_client_destroy(c3);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_tcp_transport(turbo_coro_t *co, void *arg) {
+static void coro_tcp_transport(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, "tcp://127.0.0.1:18900", echo_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, "tcp://127.0.0.1:18900", echo_handler, NULL);
   if (rc != 0) { t->test_result = 0; goto done; }
 
   t->test_result = do_echo_test(t, "tcp://127.0.0.1:18900");
 
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_udp_transport(turbo_coro_t *co, void *arg) {
+static void coro_udp_transport(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, "udp://127.0.0.1:18901", echo_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, "udp://127.0.0.1:18901", echo_handler, NULL);
   if (rc != 0) { t->test_result = 0; goto done; }
 
   t->test_result = do_echo_test(t, "udp://127.0.0.1:18901");
 
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_pipe_transport(turbo_coro_t *co, void *arg) {
+static void coro_pipe_transport(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
   tstr_t url = tstr_cat_fmt(tstr_new(), "pipe://vtable_coro_test_%d", (int)uv_os_getpid());
 
-  turbo_coro_server_t *srv = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(srv, url, echo_handler, NULL);
+  coro_server_t *srv = coro_server_create(t->ctx);
+  int rc = coro_server_listen(srv, url, echo_handler, NULL);
   if (rc != 0) {
     /* Pipe not supported in coro layer — expected */
     t->test_result = 0;
@@ -152,21 +150,21 @@ static void coro_pipe_transport(turbo_coro_t *co, void *arg) {
 
 done:
   tstr_free(url);
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_ws_transport(turbo_coro_t *co, void *arg) {
+static void coro_ws_transport(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, "ws://127.0.0.1:18912", echo_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, "ws://127.0.0.1:18912", echo_handler, NULL);
   if (rc != 0) { t->test_result = 0; goto done; }
 
   t->test_result = do_echo_test(t, "ws://127.0.0.1:18912");
 
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
 /* ── Specs ────────────────────────────────────────────────── */

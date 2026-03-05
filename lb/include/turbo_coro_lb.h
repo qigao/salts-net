@@ -1,5 +1,5 @@
 /**
- * @file turbo_coro_lb.h
+ * @file coro_lb.h
  * @brief L4/L7 Load Balancer for TurboNet coroutine networking.
  *
  * Two dispatch modes:
@@ -9,8 +9,8 @@
  * Optional filter callback inspects data before forwarding (both modes).
  */
 
-#ifndef TURBO_CORO_LB_H
-#define TURBO_CORO_LB_H
+#ifndef coro_LB_H
+#define coro_LB_H
 
 #include "platform.h"
 #include <netcore/turbo_coro_context.h>
@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-typedef struct turbo_coro_lb_s turbo_coro_lb_t;
+typedef struct coro_lb_s coro_lb_t;
 
 /* ── Enums ────────────────────────────────────────────────── */
 
@@ -49,7 +49,7 @@ typedef enum {
  * @param arg   User-supplied argument
  * @return Group name, or NULL for default group.
  */
-typedef const char *(*turbo_coro_lb_route_fn)(const char *data, size_t len,
+typedef const char *(*coro_lb_route_fn)(const char *data, size_t len,
                                               void *arg);
 
 /**
@@ -64,7 +64,7 @@ typedef const char *(*turbo_coro_lb_route_fn)(const char *data, size_t len,
  * @param len   Bytes available
  * @param arg   User-supplied argument
  */
-typedef ssize_t (*turbo_coro_lb_frame_fn)(const char *data, size_t len,
+typedef ssize_t (*coro_lb_frame_fn)(const char *data, size_t len,
                                           void *arg);
 
 /** Filter result returned by filter callback. */
@@ -85,7 +85,7 @@ typedef struct {
  * @param arg   User-supplied argument
  * @return Filter result with verdict
  */
-typedef turbo_lb_filter_result_t (*turbo_coro_lb_filter_fn)(
+typedef turbo_lb_filter_result_t (*coro_lb_filter_fn)(
     const char *data, size_t len, void *arg);
 
 /* ── Config ───────────────────────────────────────────────── */
@@ -95,40 +95,40 @@ typedef struct {
     turbo_lb_mode_t mode;
 
     /* L7 routing (both modes) */
-    turbo_coro_lb_route_fn route_cb; /**< NULL = no routing */
+    coro_lb_route_fn route_cb; /**< NULL = no routing */
     void *route_cb_arg;
     size_t peek_bytes; /**< SESSION mode: bytes to peek before routing */
 
     /* REQUEST mode framing */
-    turbo_coro_lb_frame_fn frame_cb; /**< Required for REQUEST mode */
+    coro_lb_frame_fn frame_cb; /**< Required for REQUEST mode */
     void *frame_cb_arg;
 
     /* Filter (both modes) */
-    turbo_coro_lb_filter_fn filter_cb; /**< NULL = accept all */
+    coro_lb_filter_fn filter_cb; /**< NULL = accept all */
     void *filter_cb_arg;
-} turbo_coro_lb_config_t;
+} coro_lb_config_t;
 
-#define TURBO_CORO_LB_CONFIG_DEFAULT \
+#define coro_LB_CONFIG_DEFAULT \
     { TURBO_LB_ROUND_ROBIN, TURBO_LB_MODE_SESSION, \
       NULL, NULL, 0, NULL, NULL, NULL, NULL }
 
 /* ── API ──────────────────────────────────────────────────── */
 
-CXX_C_API turbo_coro_lb_t *
-turbo_coro_lb_create(turbo_coro_context_t *ctx,
-                     const turbo_coro_lb_config_t *config);
+CXX_C_API coro_lb_t *
+coro_lb_create(coro_context_t *ctx,
+                     const coro_lb_config_t *config);
 
-CXX_C_API int turbo_coro_lb_listen(turbo_coro_lb_t *lb, const char *url);
+CXX_C_API int coro_lb_listen(coro_lb_t *lb, const char *url);
 
-CXX_C_API int turbo_coro_lb_accept_workers(turbo_coro_lb_t *lb,
+CXX_C_API int coro_lb_accept_workers(coro_lb_t *lb,
                                             const char *url);
 
-CXX_C_API void turbo_coro_lb_stop(turbo_coro_lb_t *lb);
+CXX_C_API void coro_lb_stop(coro_lb_t *lb);
 
-CXX_C_API void turbo_coro_lb_destroy(turbo_coro_lb_t *lb);
+CXX_C_API void coro_lb_destroy(coro_lb_t *lb);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* TURBO_CORO_LB_H */
+#endif /* coro_LB_H */

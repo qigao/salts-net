@@ -6,7 +6,7 @@ add_test(NAME test_net_ctx COMMAND test_net_ctx)
 set_target_properties(test_net_ctx PROPERTIES FOLDER turbo_script/modules/net)
 
 add_executable(test_net_module test_net_plugin.c)
-target_link_libraries(test_net_module PRIVATE ts_loader exprtk TurboNet::TinyTest)
+target_link_libraries(test_net_module PRIVATE exprtk TurboNet::TinyTest)
 add_test(NAME test_net_module COMMAND test_net_module)
 set_target_properties(test_net_module PROPERTIES FOLDER turbo_script/modules/net)
 

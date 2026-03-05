@@ -22,13 +22,13 @@
 
 /* ── Echo server: sends back TCP_TEST_RESPONSE on any data ── */
 
-static void echo_handler(turbo_coro_client_t *client, void *arg) {
+static void echo_handler(coro_client_t *client, void *arg) {
   (void)arg;
   char *data = NULL;
   size_t len = 0;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
-    turbo_coro_client_send(client, TCP_TEST_RESPONSE, strlen(TCP_TEST_RESPONSE));
+    coro_client_send(client, TCP_TEST_RESPONSE, strlen(TCP_TEST_RESPONSE));
     free(data);
     data = NULL;
   }
@@ -37,8 +37,8 @@ static void echo_handler(turbo_coro_client_t *client, void *arg) {
 /* ── Test context ─────────────────────────────────────────── */
 
 typedef struct {
-  turbo_coro_context_t *ctx;
-  turbo_coro_server_t  *server;
+  coro_context_t *ctx;
+  coro_server_t  *server;
   int                   test_result;
 } test_ctx_t;
 
@@ -46,54 +46,52 @@ static test_ctx_t g;
 
 static void setup(void) {
   memset(&g, 0, sizeof(g));
-  g.ctx = turbo_coro_context_create(NULL);
-  g.server = turbo_coro_server_create(g.ctx);
-  turbo_coro_server_listen(g.server, TCP_TEST_URL, echo_handler, NULL);
+  g.ctx = coro_context_create(NULL);
+  g.server = coro_server_create(g.ctx);
+  coro_server_listen(g.server, TCP_TEST_URL, echo_handler, NULL);
 }
 
 static void teardown(void) {
-  if (g.server) { turbo_coro_server_destroy(g.server); g.server = NULL; }
-  if (g.ctx)    { turbo_coro_context_destroy(g.ctx);    g.ctx = NULL; }
+  if (g.server) { coro_server_destroy(g.server); g.server = NULL; }
+  if (g.ctx)    { coro_context_destroy(g.ctx);    g.ctx = NULL; }
 }
 
-static void run_coro(turbo_coro_fn fn) {
-  turbo_coro_t *co = turbo_coro_create(fn, &g, NULL);
-  turbo_coro_resume(co);
-  turbo_coro_context_run(g.ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_destroy(co);
+static void run_coro(coro_fn fn) {
+  coro_context_spawn(g.ctx, fn, &g);
+  coro_context_run(g.ctx, TURBO_RUN_DEFAULT);
 }
 
 /* ── Test coroutines ──────────────────────────────────────── */
 
-static void coro_create_destroy(turbo_coro_t *co, void *arg) {
+static void coro_create_destroy(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
+  coro_client_t *client = coro_client_create(t->ctx);
   t->test_result = (client != NULL) ? 1 : 0;
-  turbo_coro_client_destroy(client);
-  turbo_coro_context_stop(t->ctx);
+  coro_client_destroy(client);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_full_lifecycle(turbo_coro_t *co, void *arg) {
+static void coro_full_lifecycle(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
   t->test_result = 0;
 
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
+  coro_client_t *client = coro_client_create(t->ctx);
   if (!client) goto done;
 
   /* Connect */
-  int rc = turbo_coro_client_connect(client, TCP_TEST_URL);
+  int rc = coro_client_connect(client, TCP_TEST_URL);
   if (rc != 0) goto cleanup;
 
   /* Send */
-  rc = turbo_coro_client_send(client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
+  rc = coro_client_send(client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
   if (rc != 0) goto cleanup;
 
   /* Receive */
   char *data = NULL;
   size_t len = 0;
-  rc = turbo_coro_client_recv(client, &data, &len);
+  rc = coro_client_recv(client, &data, &len);
   if (rc != 0) goto cleanup;
 
   if (len == strlen(TCP_TEST_RESPONSE) &&
@@ -103,31 +101,31 @@ static void coro_full_lifecycle(turbo_coro_t *co, void *arg) {
   free(data);
 
 cleanup:
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_multiple_sends(turbo_coro_t *co, void *arg) {
+static void coro_multiple_sends(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
   t->test_result = 0;
 
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
+  coro_client_t *client = coro_client_create(t->ctx);
   if (!client) goto done;
 
-  int rc = turbo_coro_client_connect(client, TCP_TEST_URL);
+  int rc = coro_client_connect(client, TCP_TEST_URL);
   if (rc != 0) goto cleanup;
 
   /* Send 3 messages, receive 3 responses */
   int ok = 1;
   for (int i = 0; i < 3; i++) {
-    rc = turbo_coro_client_send(client, "msg", 3);
+    rc = coro_client_send(client, "msg", 3);
     if (rc != 0) { ok = 0; break; }
 
     char *data = NULL;
     size_t len = 0;
-    rc = turbo_coro_client_recv(client, &data, &len);
+    rc = coro_client_recv(client, &data, &len);
     if (rc != 0) { ok = 0; break; }
     free(data);
   }
@@ -135,22 +133,22 @@ static void coro_multiple_sends(turbo_coro_t *co, void *arg) {
   t->test_result = ok;
 
 cleanup:
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_send_before_connect(turbo_coro_t *co, void *arg) {
+static void coro_send_before_connect(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
-  int rc = turbo_coro_client_send(client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
+  coro_client_t *client = coro_client_create(t->ctx);
+  int rc = coro_client_send(client, TCP_TEST_MESSAGE, strlen(TCP_TEST_MESSAGE));
   /* Should fail — not connected */
   t->test_result = (rc != 0) ? 1 : 0;
 
-  turbo_coro_client_destroy(client);
-  turbo_coro_context_stop(t->ctx);
+  coro_client_destroy(client);
+  coro_context_stop(t->ctx);
 }
 
 /* ── Specs ────────────────────────────────────────────────── */

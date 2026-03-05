@@ -2,38 +2,38 @@
 #include "tinytest.h"
 #include "http_client.h"
 #include <turbo_coro.h>
-#include <netcore/turbo_coro_context.h>
+#include <netcore.h>
 #include <string.h>
 #include <stdlib.h>
 
 /* ── Coro test harness ────────────────────────────────────────────── */
 
 typedef struct {
-    turbo_coro_context_t *ctx;
-    void (*test_fn)(turbo_coro_context_t *ctx);
+    coro_context_t *ctx;
+    void (*test_fn)(coro_context_t *ctx);
 } coro_test_ctx_t;
 
-static void coro_test_entry(turbo_coro_t *co, void *arg) {
+static void coro_test_entry(coro_t *co, void *arg) {
     UNUSED(co);
     coro_test_ctx_t *tctx = (coro_test_ctx_t *)arg;
     tctx->test_fn(tctx->ctx);
 }
 
-static void run_in_coro(void (*fn)(turbo_coro_context_t *ctx)) {
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+static void run_in_coro(void (*fn)(coro_context_t *ctx)) {
+    coro_context_t *ctx = coro_context_create(NULL);
     coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
-    turbo_coro_scheduler_t *sched = turbo_coro_scheduler_create();
-    turbo_coro_spawn(sched, coro_test_entry, &tctx);
-    turbo_coro_scheduler_run(sched);
-    turbo_coro_scheduler_destroy(sched);
-    turbo_coro_context_destroy(ctx);
+    coro_scheduler_t *sched = coro_scheduler_create();
+    coro_spawn(sched, coro_test_entry, &tctx, NULL);
+    coro_scheduler_run(sched);
+    coro_scheduler_destroy(sched);
+    coro_context_destroy(ctx);
 }
 
 /* ── Coro batch test ──────────────────────────────────────────────── */
 
 static int g_coro_batch_ok = 0;
 
-static void test_batch_in_coro(turbo_coro_context_t *ctx) {
+static void test_batch_in_coro(coro_context_t *ctx) {
     UNUSED(ctx);
     g_coro_batch_ok = 0;
     http_client_t *c = http_client_create();

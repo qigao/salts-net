@@ -19,8 +19,8 @@
 /* ── Test context ─────────────────────────────────────────── */
 
 typedef struct {
-  turbo_coro_context_t *ctx;
-  turbo_coro_server_t  *server;
+  coro_context_t *ctx;
+  coro_server_t  *server;
   int                   test_result;
   int                   test_counter;
 } test_ctx_t;
@@ -29,25 +29,25 @@ static test_ctx_t g;
 
 /* ── Echo handler ─────────────────────────────────────────── */
 
-static void echo_handler(turbo_coro_client_t *client, void *arg) {
+static void echo_handler(coro_client_t *client, void *arg) {
   (void)arg;
   char *data = NULL;
   size_t len = 0;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
-    turbo_coro_client_send(client, data, len);
+    coro_client_send(client, data, len);
     free(data);
     data = NULL;
   }
 }
 
-static void pong_handler(turbo_coro_client_t *client, void *arg) {
+static void pong_handler(coro_client_t *client, void *arg) {
   (void)arg;
   char *data = NULL;
   size_t len = 0;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
-    turbo_coro_client_send(client, "PONG", 4);
+    coro_client_send(client, "PONG", 4);
     free(data);
     data = NULL;
   }
@@ -61,42 +61,40 @@ static void get_pipe_url(char *buf, size_t size) {
 
 static void setup(void) {
   memset(&g, 0, sizeof(g));
-  g.ctx = turbo_coro_context_create(NULL);
+  g.ctx = coro_context_create(NULL);
 }
 
 static void teardown(void) {
-  if (g.server) { turbo_coro_server_destroy(g.server); g.server = NULL; }
-  if (g.ctx)    { turbo_coro_context_destroy(g.ctx);    g.ctx = NULL; }
+  if (g.server) { coro_server_destroy(g.server); g.server = NULL; }
+  if (g.ctx)    { coro_context_destroy(g.ctx);    g.ctx = NULL; }
 }
 
-static void run_coro(turbo_coro_fn fn) {
-  turbo_coro_t *co = turbo_coro_create(fn, &g, NULL);
-  turbo_coro_resume(co);
-  turbo_coro_context_run(g.ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_destroy(co);
+static void run_coro(coro_fn fn) {
+  coro_context_spawn(g.ctx, fn, &g);
+  coro_context_run(g.ctx, TURBO_RUN_DEFAULT);
 }
 
 /* ── Test coroutines ──────────────────────────────────────── */
 
-static void coro_create_client(turbo_coro_t *co, void *arg) {
+static void coro_create_client(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
+  coro_client_t *client = coro_client_create(t->ctx);
   t->test_result = (client != NULL) ? 1 : 0;
-  turbo_coro_client_destroy(client);
-  turbo_coro_context_stop(t->ctx);
+  coro_client_destroy(client);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_create_server(turbo_coro_t *co, void *arg) {
+static void coro_create_server(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
-  turbo_coro_server_t *srv = turbo_coro_server_create(t->ctx);
+  coro_server_t *srv = coro_server_create(t->ctx);
   t->test_result = (srv != NULL) ? 1 : 0;
   free(srv); /* Never listened — safe to free directly */
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_listen_pipe(turbo_coro_t *co, void *arg) {
+static void coro_listen_pipe(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
@@ -104,14 +102,14 @@ static void coro_listen_pipe(turbo_coro_t *co, void *arg) {
   get_pipe_url(url, sizeof(url));
   printf("  Using pipe: %s\n", url);
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, url, echo_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, url, echo_handler, NULL);
   t->test_result = (rc == 0) ? 1 : 0;
 
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_connect_pipe(turbo_coro_t *co, void *arg) {
+static void coro_connect_pipe(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
   t->test_result = 0;
@@ -120,21 +118,21 @@ static void coro_connect_pipe(turbo_coro_t *co, void *arg) {
   get_pipe_url(url, sizeof(url));
   printf("  Using pipe: %s\n", url);
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, url, echo_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, url, echo_handler, NULL);
   if (rc != 0) goto done;
 
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
-  turbo_coro_client_set_timeout(client, 5000);
-  rc = turbo_coro_client_connect(client, url);
+  coro_client_t *client = coro_client_create(t->ctx);
+  coro_client_set_timeout(client, 5000);
+  rc = coro_client_connect(client, url);
   t->test_result = (rc == 0) ? 1 : 0;
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
 
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_send_recv_pipe(turbo_coro_t *co, void *arg) {
+static void coro_send_recv_pipe(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
   t->test_result = 0;
@@ -143,22 +141,22 @@ static void coro_send_recv_pipe(turbo_coro_t *co, void *arg) {
   get_pipe_url(url, sizeof(url));
   printf("  Using pipe: %s\n", url);
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, url, echo_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, url, echo_handler, NULL);
   if (rc != 0) goto done;
 
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
-  turbo_coro_client_set_timeout(client, 5000);
-  rc = turbo_coro_client_connect(client, url);
-  if (rc != 0) { turbo_coro_client_destroy(client); goto done; }
+  coro_client_t *client = coro_client_create(t->ctx);
+  coro_client_set_timeout(client, 5000);
+  rc = coro_client_connect(client, url);
+  if (rc != 0) { coro_client_destroy(client); goto done; }
 
   printf("  Sending: %s\n", TEST_MESSAGE);
-  rc = turbo_coro_client_send(client, TEST_MESSAGE, strlen(TEST_MESSAGE));
-  if (rc != 0) { turbo_coro_client_destroy(client); goto done; }
+  rc = coro_client_send(client, TEST_MESSAGE, strlen(TEST_MESSAGE));
+  if (rc != 0) { coro_client_destroy(client); goto done; }
 
   char *data = NULL;
   size_t len = 0;
-  rc = turbo_coro_client_recv(client, &data, &len);
+  rc = coro_client_recv(client, &data, &len);
   printf("  Received %zu bytes: %.*s\n", len, (int)len, data ? data : "");
 
   if (rc == 0 && len == strlen(TEST_MESSAGE) &&
@@ -166,13 +164,13 @@ static void coro_send_recv_pipe(turbo_coro_t *co, void *arg) {
     t->test_result = 1;
   }
   free(data);
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
 
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
-static void coro_bidi_pipe(turbo_coro_t *co, void *arg) {
+static void coro_bidi_pipe(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
   t->test_result = 0;
@@ -181,30 +179,30 @@ static void coro_bidi_pipe(turbo_coro_t *co, void *arg) {
   get_pipe_url(url, sizeof(url));
   printf("  Using pipe: %s\n", url);
 
-  t->server = turbo_coro_server_create(t->ctx);
-  int rc = turbo_coro_server_listen(t->server, url, pong_handler, NULL);
+  t->server = coro_server_create(t->ctx);
+  int rc = coro_server_listen(t->server, url, pong_handler, NULL);
   if (rc != 0) goto done;
 
-  turbo_coro_client_t *client = turbo_coro_client_create(t->ctx);
-  turbo_coro_client_set_timeout(client, 5000);
-  rc = turbo_coro_client_connect(client, url);
-  if (rc != 0) { turbo_coro_client_destroy(client); goto done; }
+  coro_client_t *client = coro_client_create(t->ctx);
+  coro_client_set_timeout(client, 5000);
+  rc = coro_client_connect(client, url);
+  if (rc != 0) { coro_client_destroy(client); goto done; }
 
-  rc = turbo_coro_client_send(client, "PING", 4);
-  if (rc != 0) { turbo_coro_client_destroy(client); goto done; }
+  rc = coro_client_send(client, "PING", 4);
+  if (rc != 0) { coro_client_destroy(client); goto done; }
 
   char *data = NULL;
   size_t len = 0;
-  rc = turbo_coro_client_recv(client, &data, &len);
+  rc = coro_client_recv(client, &data, &len);
 
   if (rc == 0 && len == 4 && memcmp(data, "PONG", 4) == 0) {
     t->test_result = 1;
   }
   free(data);
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
 
 done:
-  turbo_coro_context_stop(t->ctx);
+  coro_context_stop(t->ctx);
 }
 
 /* ── Specs ────────────────────────────────────────────────── */

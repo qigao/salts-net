@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <ctype.h>
+#include <platform.h>
 
 #include "session.h"
 #include "request.h"
@@ -36,90 +37,6 @@ static const cookie_options_t COOKIE_DEFAULTS = {
     .secure = true,
 };
 
-static int is_url_safe(char c)
-{
-    return (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~');
-}
-
-static char *url_encode(const char *str)
-{
-    if (!str)
-        return NULL;
-
-    size_t len = strlen(str);
-    size_t encoded_len = len * 3 + 1; // worst case: every char becomes %XX
-    char *encoded = malloc(encoded_len);
-    if (!encoded)
-        return NULL;
-
-    size_t j = 0;
-    for (size_t i = 0; i < len && j < encoded_len - 3; i++)
-    {
-        if (is_url_safe(str[i]))
-        {
-            encoded[j++] = str[i];
-        }
-        else
-        {
-            int written = stbsp_snprintf(encoded + j, encoded_len - j, "%%%02X", (unsigned char)str[i]);
-            if (written < 0 || written >= (int)(encoded_len - j))
-            {
-                free(encoded);
-                return NULL;
-            }
-            j += written;
-        }
-    }
-    encoded[j] = '\0';
-    return encoded;
-}
-
-static int hex_to_int(char c)
-{
-    if (c >= '0' && c <= '9')
-        return c - '0';
-    if (c >= 'A' && c <= 'F')
-        return c - 'A' + 10;
-    if (c >= 'a' && c <= 'f')
-        return c - 'a' + 10;
-    return -1;
-}
-
-static char *url_decode(const char *str)
-{
-    if (!str)
-        return NULL;
-
-    size_t len = strlen(str);
-    char *decoded = malloc(len + 1);
-    if (!decoded)
-        return NULL;
-
-    size_t j = 0;
-    for (size_t i = 0; i < len; i++)
-    {
-        if (str[i] == '%' && i + 2 < len)
-        {
-            int high = hex_to_int(str[i + 1]);
-            int low = hex_to_int(str[i + 2]);
-            if (high >= 0 && low >= 0)
-            {
-                decoded[j++] = (char)(high * 16 + low);
-                i += 2;
-            }
-            else
-            {
-                decoded[j++] = str[i];
-            }
-        }
-        else
-        {
-            decoded[j++] = str[i];
-        }
-    }
-    decoded[j] = '\0';
-    return decoded;
-}
 
 static char *safe_strdup(const char *str)
 {
@@ -385,8 +302,8 @@ void set_session(Session *sess, const char *key, const char *value)
     if (!sess || !key || !value)
         return;
 
-    char *encoded_key = url_encode(key);
-    char *encoded_value = url_encode(value);
+    char *encoded_key = turbo_url_encode(key);
+    char *encoded_value = turbo_url_encode(value);
     if (!encoded_key || !encoded_value)
     {
         free(encoded_key);
@@ -457,7 +374,7 @@ char *get_session_value(Session *sess, const char *key)
     if (!sess || !key || !sess->data || strlen(sess->data) == 0)
         return NULL;
 
-    char *encoded_key = url_encode(key);
+    char *encoded_key = turbo_url_encode(key);
     if (!encoded_key)
         return NULL;
 
@@ -490,7 +407,7 @@ char *get_session_value(Session *sess, const char *key)
                 strncpy(encoded_value, value_start, value_len);
                 encoded_value[value_len] = '\0';
 
-                result = url_decode(encoded_value);
+                result = turbo_url_decode(encoded_value);
                 free(encoded_value);
             }
             break;
@@ -510,7 +427,7 @@ void remove_session_value(Session *sess, const char *key)
     if (!sess || !key || !sess->data)
         return;
 
-    char *encoded_key = url_encode(key);
+    char *encoded_key = turbo_url_encode(key);
     if (!encoded_key)
         return;
 
@@ -580,8 +497,8 @@ void print_sessions(void)
                         *pair_end = '\0';
 
                     // Decode for display
-                    char *decoded_key = url_decode(pair_start);
-                    char *decoded_value = url_decode(value_start);
+                    char *decoded_key = turbo_url_decode(pair_start);
+                    char *decoded_value = turbo_url_decode(value_start);
 
                     printf("      %s = %s\n",
                            decoded_key ? decoded_key : pair_start,

@@ -45,37 +45,37 @@ int main(int argc, char **argv) {
         backend = bbuf;
     }
 
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) {
         fprintf(stderr, "Failed to create context\n");
         return 1;
     }
 
-    turbo_coro_lb_config_t config = {
+    coro_lb_config_t config = {
         .balance = TURBO_LB_ROUND_ROBIN,
         .route_cb = route_by_prefix,
         .route_cb_arg = NULL,
         .peek_bytes = 4096,
     };
 
-    turbo_coro_lb_t *lb = turbo_coro_lb_create(ctx, &config);
+    coro_lb_t *lb = coro_lb_create(ctx, &config);
     if (!lb) {
         fprintf(stderr, "Failed to create LB\n");
-        turbo_coro_context_destroy(ctx);
+        coro_context_destroy(ctx);
         return 1;
     }
 
-    if (turbo_coro_lb_listen(lb, frontend) != 0) {
+    if (coro_lb_listen(lb, frontend) != 0) {
         fprintf(stderr, "Failed to listen on %s\n", frontend);
-        turbo_coro_lb_destroy(lb);
-        turbo_coro_context_destroy(ctx);
+        coro_lb_destroy(lb);
+        coro_context_destroy(ctx);
         return 1;
     }
 
-    if (turbo_coro_lb_accept_workers(lb, backend) != 0) {
+    if (coro_lb_accept_workers(lb, backend) != 0) {
         fprintf(stderr, "Failed to accept workers on %s\n", backend);
-        turbo_coro_lb_destroy(lb);
-        turbo_coro_context_destroy(ctx);
+        coro_lb_destroy(lb);
+        coro_context_destroy(ctx);
         return 1;
     }
 
@@ -84,9 +84,9 @@ int main(int argc, char **argv) {
     printf("  backend:  %s\n", backend);
     printf("  routing:  API:* -> api group, WEB:* -> web group\n");
 
-    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-    turbo_coro_lb_destroy(lb);
-    turbo_coro_context_destroy(ctx);
+    coro_lb_destroy(lb);
+    coro_context_destroy(ctx);
     return 0;
 }

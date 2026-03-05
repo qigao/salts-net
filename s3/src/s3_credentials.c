@@ -321,7 +321,7 @@ s3_credential_provider_t* s3_creds_minio_client_config(const char* filename, con
 // ── STS Assume Role Provider ──
 
 typedef struct {
-    turbo_coro_context_t *coro_ctx;
+    coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t access_key;
     tstr_t secret_key;
@@ -443,7 +443,7 @@ static void assume_role_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_assume_role(turbo_coro_context_t *ctx,
+s3_credential_provider_t* s3_creds_assume_role(coro_context_t *ctx,
                                                       const char* sts_endpoint, const char* access_key,
                                                       const char* secret_key, const char* region,
                                                       const char* role_arn, const char* session_name,
@@ -467,7 +467,7 @@ s3_credential_provider_t* s3_creds_assume_role(turbo_coro_context_t *ctx,
 // ── Web Identity Provider ──
 
 typedef struct {
-    turbo_coro_context_t *coro_ctx;
+    coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t region;
     tstr_t role_arn;
@@ -539,7 +539,7 @@ static void web_identity_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_web_identity(turbo_coro_context_t *ctx,
+s3_credential_provider_t* s3_creds_web_identity(coro_context_t *ctx,
                                                        const char* sts_endpoint, const char* region,
                                                        const char* role_arn,
                                                        tstr_t (*token_fn)(void* ctx), void* token_ctx) {
@@ -560,7 +560,7 @@ s3_credential_provider_t* s3_creds_web_identity(turbo_coro_context_t *ctx,
 // ── IAM AWS Provider (EC2 instance metadata) ──
 
 typedef struct {
-    turbo_coro_context_t *coro_ctx;
+    coro_context_t *coro_ctx;
     tstr_t endpoint;
     s3_credentials_t cached;
     time_t cached_expiry;
@@ -655,7 +655,7 @@ static void iam_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_iam_aws(turbo_coro_context_t *ctx, const char* custom_endpoint) {
+s3_credential_provider_t* s3_creds_iam_aws(coro_context_t *ctx, const char* custom_endpoint) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
     iam_ctx_t* ictx = calloc(1, sizeof(iam_ctx_t));
     ictx->coro_ctx = ctx;
@@ -669,7 +669,7 @@ s3_credential_provider_t* s3_creds_iam_aws(turbo_coro_context_t *ctx, const char
 // ── LDAP Identity Provider ──
 
 typedef struct {
-    turbo_coro_context_t *coro_ctx;
+    coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t ldap_username;
     tstr_t ldap_password;
@@ -735,7 +735,7 @@ static void ldap_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_ldap_identity(turbo_coro_context_t *ctx,
+s3_credential_provider_t* s3_creds_ldap_identity(coro_context_t *ctx,
                                                         const char* sts_endpoint,
                                                         const char* ldap_username, const char* ldap_password) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));
@@ -753,7 +753,7 @@ s3_credential_provider_t* s3_creds_ldap_identity(turbo_coro_context_t *ctx,
 // ── Certificate Identity Provider ──
 
 typedef struct {
-    turbo_coro_context_t *coro_ctx;
+    coro_context_t *coro_ctx;
     tstr_t sts_endpoint;
     tstr_t cert_file;
     tstr_t key_file;
@@ -819,7 +819,7 @@ static void cert_destroy(void* ctx) {
     free(c);
 }
 
-s3_credential_provider_t* s3_creds_cert_identity(turbo_coro_context_t *ctx,
+s3_credential_provider_t* s3_creds_cert_identity(coro_context_t *ctx,
                                                         const char* sts_endpoint,
                                                         const char* cert_file, const char* key_file) {
     s3_credential_provider_t* p = calloc(1, sizeof(s3_credential_provider_t));

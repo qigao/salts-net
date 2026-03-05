@@ -259,11 +259,22 @@ static exprtk_value_t ts_print(size_t argc, exprtk_value_t *args, void *user_dat
       printf("]");
       break;
     }
+    case EXPRTK_VAL_MAP:
+      printf("{map:%zu}", exprtk_map_count(&args[i]));
+      break;
+    case EXPRTK_VAL_LIST:
+      printf("[list:%zu]", args[i].data.list.count);
+      break;
+    case EXPRTK_VAL_NULL:
+      printf("null");
+      break;
     default:
+      printf("[unknown type %d]", args[i].type);
       break;
     }
   }
   printf("\n");
+  fflush(stdout);
   return TS_ZERO;
 }
 
@@ -337,6 +348,81 @@ int turbo_script_run(turbo_script_ctx_t *ctx, const char *script) {
 
   return ctx->env.aborted ? -1 : 0;
 }
+
+static void print_repl_val(exprtk_value_t *val, turbo_script_ctx_t *ctx) {
+  switch (val->type) {
+    case EXPRTK_VAL_NUMBER:
+      printf("%g\n", val->data.number);
+      break;
+    case EXPRTK_VAL_STRING:
+      printf("%.*s\n", (int)val->data.string.len, val->data.string.data);
+      break;
+    case EXPRTK_VAL_VECTOR: {
+      size_t n = val->data.vector.size;
+      printf("[");
+      for (size_t j = 0; j < n; ++j) {
+        if (j > 0) printf(", ");
+        printf("%g", val->data.vector.data[j]);
+      }
+      printf("]\n");
+      break;
+    }
+    case EXPRTK_VAL_MAP:
+      printf("{map}\n");
+      break;
+    case EXPRTK_VAL_LIST:
+      printf("[list]\n");
+      break;
+    case EXPRTK_VAL_NULL:
+      printf("null\n");
+      break;
+    case EXPRTK_VAL_FUNCTION:
+      printf("[function]\n");
+      break;
+    default:
+      printf("[unknown]\n");
+      break;
+  }
+}
+
+int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script) {
+  if (!ctx || !script)
+    return -1;
+
+  /* Reset scratch arena from previous run */
+  turbo_pool_reset(&ctx->scratch_arena);
+  ctx->env.aborted = 0;
+  ctx->env.curr_nodes = 0;
+  ctx->env.curr_loop_iterations = 0;
+  ctx->env.curr_recursion = 0;
+
+  if (ctx->expr) {
+    exprtk_free(ctx->expr);
+    ctx->expr = NULL;
+  }
+
+  ctx->expr = exprtk_parse(script, 0);
+  if (!ctx->expr) {
+    set_error_msg(ctx, "Parse error");
+    return -1;
+  }
+
+  if (exprtk_validate(ctx->expr, &ctx->env, ctx->error_msg, sizeof(ctx->error_msg)) != 0) {
+    return -1;
+  }
+
+  exprtk_value_t res = exprtk_eval(ctx->expr, &ctx->env);
+  if (!ctx->env.aborted && ctx->expr) {
+     int is_block = ctx->expr->type == EXPRTK_NODE_BLOCK;
+     int empty_block = is_block && ctx->expr->data.block.count == 0;
+     if (!empty_block) {
+       print_repl_val(&res, ctx);
+     }
+  }
+
+  return ctx->env.aborted ? -1 : 0;
+}
+
 
 turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx, const char *script) {
   if (!ctx || !script)

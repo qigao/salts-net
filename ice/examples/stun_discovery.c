@@ -8,9 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void discovery_coro(turbo_coro_t *co, void *arg) {
+static void discovery_coro(coro_t *co, void *arg) {
     (void)co;
-    turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
+    coro_context_t *ctx = (coro_context_t *)arg;
     
     /* Config for Google STUN server */
     stun_client_config_t config = {
@@ -34,30 +34,30 @@ static void discovery_coro(turbo_coro_t *co, void *arg) {
         printf("\nFAILED: STUN request failed with code %d\n", rc);
     }
 
-    turbo_coro_context_stop(ctx);
+    coro_context_stop(ctx);
 }
 
 int main(void) {
     /* Initialize coroutine context */
-    turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
+    coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) {
         fprintf(stderr, "Failed to create coroutine context\n");
         return 1;
     }
 
     /* Start the discovery coroutine */
-    turbo_coro_t *co = turbo_coro_create(discovery_coro, ctx, NULL);
+    coro_t *co = coro_create(discovery_coro, ctx, NULL);
     if (co) {
-        turbo_coro_resume(co);
+        coro_resume(co);
     }
 
     /* Run the event loop */
     printf("Starting STUN discovery (coroutine-based)...\n");
-    turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     /* Cleanup */
-    if (co) turbo_coro_destroy(co);
-    turbo_coro_context_destroy(ctx);
+    if (co) coro_destroy(co);
+    coro_context_destroy(ctx);
     
     return 0;
 }

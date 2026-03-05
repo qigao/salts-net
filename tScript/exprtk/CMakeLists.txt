@@ -89,3 +89,7 @@ set_target_properties(
              VISIBILITY_INLINES_HIDDEN OFF)
 
 add_subdirectory(test)
+
+install(DIRECTORY include/
+        DESTINATION include/exprtk
+        FILES_MATCHING PATTERN "*.h")

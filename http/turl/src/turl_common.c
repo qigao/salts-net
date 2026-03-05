@@ -17,7 +17,6 @@ tlog_t *g_turl_logger = NULL;
 
 void turl_setup_logger(int verbose) {
   tlog_config_t config = {.min_level = verbose ? TURBO_LOG_LEVEL_DEBUG : TURBO_LOG_LEVEL_INFO,
-                          .async_mode = 0, // Sync mode for CLI tool
                           .buffer_size = 0,
                           .pool_size = 0};
 

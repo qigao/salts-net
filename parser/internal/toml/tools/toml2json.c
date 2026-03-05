@@ -181,7 +181,7 @@ static void cat(FILE* fp) {
 	toml_free(tbl);
 }
 
-int main(int argc, const char* argv[argc + 1]) {
+int main(int argc, char** argv) {
 	if (argc == 1) {
 		cat(stdin);
 		return 0;

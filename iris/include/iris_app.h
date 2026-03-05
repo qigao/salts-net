@@ -4,7 +4,9 @@
 #include "route_trie.h"
 #include "middleware.h"
 #include "cors.h"
+#include "security.h"
 #include "platform.h"
+#include "error_recovery.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +38,12 @@ typedef struct iris_app {
 
     /* Lifecycle hooks */
     void (*shutdown_hook)(void);
+
+    /* Security limits */
+    iris_security_limits_t security_limits;
+
+    /* Error recovery */
+    iris_error_handler_t error_handler;
 } iris_app_t;
 
 /**
@@ -142,6 +150,16 @@ CXX_C_API void iris_app_cors(iris_app_t *app, cors_t *opts);
  * @brief Set shutdown hook for an app
  */
 CXX_C_API void iris_app_shutdown_hook(iris_app_t *app, void (*hook)(void));
+
+/**
+ * @brief Set custom error handler for an app
+ */
+CXX_C_API void iris_app_set_error_handler(iris_app_t *app, iris_error_handler_t handler);
+
+/**
+ * @brief Set custom security limits for an app
+ */
+CXX_C_API void iris_app_set_security_limits(iris_app_t *app, const iris_security_limits_t *limits);
 
 /**
  * @brief Start the server and listen on specified port

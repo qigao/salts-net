@@ -545,12 +545,12 @@ int turn_parse_data_indication(
 static int turn_send_and_recv(turbo_turn_client_t *tc,
                               const uint8_t *send_buf, int send_len,
                               char **recv_data, size_t *recv_len) {
-    int rc = turbo_coro_client_send(tc->client, (const char *)send_buf, send_len);
+    int rc = coro_client_send(tc->client, (const char *)send_buf, send_len);
     if (rc != 0) return rc;
-    return turbo_coro_client_recv(tc->client, recv_data, recv_len);
+    return coro_client_recv(tc->client, recv_data, recv_len);
 }
 
-turbo_turn_client_t *turn_client_create(turbo_coro_context_t *ctx,
+turbo_turn_client_t *turn_client_create(coro_context_t *ctx,
                                         const turn_client_config_t *config) {
     if (!ctx || !config || !config->server_host) return NULL;
 
@@ -566,19 +566,19 @@ turbo_turn_client_t *turn_client_create(turbo_coro_context_t *ctx,
     tc->requested_lifetime = config->lifetime ? config->lifetime : TURN_DEFAULT_LIFETIME;
     tc->next_channel = TURN_CHANNEL_MIN;
 
-    tc->client = turbo_coro_client_create(ctx);
+    tc->client = coro_client_create(ctx);
     if (!tc->client) {
         free(tc);
         return NULL;
     }
 
-    turbo_coro_client_set_timeout(tc->client, tc->timeout_ms);
+    coro_client_set_timeout(tc->client, tc->timeout_ms);
     return tc;
 }
 
 void turn_client_destroy(turbo_turn_client_t *tc) {
     if (!tc) return;
-    if (tc->client) turbo_coro_client_destroy(tc->client);
+    if (tc->client) coro_client_destroy(tc->client);
     free(tc);
 }
 
@@ -588,7 +588,7 @@ int turn_client_allocate(turbo_turn_client_t *tc, turn_allocation_t *allocation_
     char url[512];
     stbsp_snprintf(url, sizeof(url), "udp://%s:%u", tc->server_host, tc->server_port);
 
-    int rc = turbo_coro_client_connect(tc->client, url);
+    int rc = coro_client_connect(tc->client, url);
     if (rc != 0) return -2;
 
     /* Step 1: unauthenticated allocate */
@@ -676,7 +676,7 @@ int turn_client_create_permission(turbo_turn_client_t *tc,
                                                    peer_ip, peer_port);
     if (len < 0) return -2;
 
-    return turbo_coro_client_send(tc->client, (const char *)buffer, len);
+    return coro_client_send(tc->client, (const char *)buffer, len);
 }
 
 int turn_client_channel_bind(turbo_turn_client_t *tc,
@@ -697,7 +697,7 @@ int turn_client_channel_bind(turbo_turn_client_t *tc,
                                               channel, peer_ip, peer_port);
     if (len < 0) return -3;
 
-    int rc = turbo_coro_client_send(tc->client, (const char *)buffer, len);
+    int rc = coro_client_send(tc->client, (const char *)buffer, len);
     if (rc != 0) return rc;
 
     turn_channel_t *ch = &tc->channels[tc->channel_count++];
@@ -724,13 +724,13 @@ int turn_client_send(turbo_turn_client_t *tc,
             tc->channels[i].active) {
             msg_len = turn_build_channel_data(buffer, tc->channels[i].channel_number, data, len);
             if (msg_len < 0) return -2;
-            return turbo_coro_client_send(tc->client, (const char *)buffer, msg_len);
+            return coro_client_send(tc->client, (const char *)buffer, msg_len);
         }
     }
 
     msg_len = turn_build_send_indication(buffer, peer_ip, peer_port, data, len);
     if (msg_len < 0) return -3;
-    return turbo_coro_client_send(tc->client, (const char *)buffer, msg_len);
+    return coro_client_send(tc->client, (const char *)buffer, msg_len);
 }
 
 int turn_client_recv(turbo_turn_client_t *tc,
@@ -741,7 +741,7 @@ int turn_client_recv(turbo_turn_client_t *tc,
 
     char *data = NULL;
     size_t data_len = 0;
-    int rc = turbo_coro_client_recv(tc->client, &data, &data_len);
+    int rc = coro_client_recv(tc->client, &data, &data_len);
     if (rc != 0) {
         if (data) free(data);
         return rc;

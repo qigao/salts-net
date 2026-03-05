@@ -4,11 +4,15 @@
  */
 
 #include "tinytest.h"
-#include "exprtk_module.h" 
+#include "exprtk_module.h"
 #include "simd_helpers.h"
 #include "turbo_buffer.h"
+#include "exprtk_types.h"
+#include "exprtk.h"
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
+#include <stdio.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -58,6 +62,49 @@ spec("SIMD Math Module") {
 
             free(x);
             free(y);
+        }
+    }
+
+    describe("SIMD Reverse") {
+        it("should reverse a small vector") {
+            double input[] = {1.0, 2.0, 3.0, 4.0, 5.0};
+            double output[5];
+
+            simd_reverse(input, output, 5);
+
+            check_double_eq(output[0], 5.0, TEST_TOLERANCE);
+            check_double_eq(output[1], 4.0, TEST_TOLERANCE);
+            check_double_eq(output[2], 3.0, TEST_TOLERANCE);
+            check_double_eq(output[3], 2.0, TEST_TOLERANCE);
+            check_double_eq(output[4], 1.0, TEST_TOLERANCE);
+        }
+
+        it("should reverse a single element") {
+            double input[] = {42.0};
+            double output[1];
+
+            simd_reverse(input, output, 1);
+
+            check_double_eq(output[0], 42.0, TEST_TOLERANCE);
+        }
+
+        it("should reverse a large vector") {
+            const size_t n = 100;
+            double *input = malloc(n * sizeof(double));
+            double *output = malloc(n * sizeof(double));
+
+            for (size_t i = 0; i < n; i++) {
+                input[i] = (double)i;
+            }
+
+            simd_reverse(input, output, n);
+
+            for (size_t i = 0; i < n; i++) {
+                check_double_eq(output[i], (double)(n - 1 - i), TEST_TOLERANCE);
+            }
+
+            free(input);
+            free(output);
         }
     }
 
@@ -358,6 +405,90 @@ spec("SIMD Math Module") {
             free(A);
             free(B);
             free(C);
+        }
+    }
+
+    describe("Vector Functions via Registry") {
+        it("should reverse a vector via exprtk_call_internal") {
+            // Create environment with arena
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+
+            // Add math module to env
+            extern const exprtk_module_t *exprtk_module_math(void);
+            exprtk_env_add_module(&env, exprtk_module_math());
+
+            double input[] = {1.0, 2.0, 3.0, 4.0, 5.0};
+            exprtk_value_t vec_arg = {
+                .type = EXPRTK_VAL_VECTOR,
+                .data.vector = {.data = input, .size = 5}
+            };
+
+            exprtk_value_t result = exprtk_call_internal("vec.reverse", 1, &vec_arg, &env, &env.arena);
+
+            printf("Result type: %d (expected %d for VECTOR)\n", result.type, EXPRTK_VAL_VECTOR);
+            if (result.type == EXPRTK_VAL_NUMBER) {
+                printf("Got number: %f\n", result.data.number);
+            }
+
+            check_int_eq(result.type, EXPRTK_VAL_VECTOR);
+            if (result.type == EXPRTK_VAL_VECTOR) {
+                check_int_eq(result.data.vector.size, 5);
+                check_not_null(result.data.vector.data);
+
+                if (result.data.vector.data) {
+                    printf("Reversed vector: [%f, %f, %f, %f, %f]\n",
+                           result.data.vector.data[0], result.data.vector.data[1],
+                           result.data.vector.data[2], result.data.vector.data[3],
+                           result.data.vector.data[4]);
+
+                    check_double_eq(result.data.vector.data[0], 5.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[1], 4.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[2], 3.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[3], 2.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[4], 1.0, TEST_TOLERANCE);
+                }
+            }
+
+            exprtk_env_free(&env);
+        }
+
+        it("should generate vec.range via exprtk_call_internal") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+
+            extern const exprtk_module_t *exprtk_module_math(void);
+            exprtk_env_add_module(&env, exprtk_module_math());
+
+            exprtk_value_t arg = {.type = EXPRTK_VAL_NUMBER, .data.number = 5.0};
+
+            exprtk_value_t result = exprtk_call_internal("vec.range", 1, &arg, &env, &env.arena);
+
+            printf("Result type: %d (expected %d for VECTOR)\n", result.type, EXPRTK_VAL_VECTOR);
+            if (result.type == EXPRTK_VAL_NUMBER) {
+                printf("Got number: %f\n", result.data.number);
+            }
+
+            check_int_eq(result.type, EXPRTK_VAL_VECTOR);
+            if (result.type == EXPRTK_VAL_VECTOR) {
+                check_int_eq(result.data.vector.size, 5);
+                check_not_null(result.data.vector.data);
+
+                if (result.data.vector.data) {
+                    printf("Range vector: [%f, %f, %f, %f, %f]\n",
+                           result.data.vector.data[0], result.data.vector.data[1],
+                           result.data.vector.data[2], result.data.vector.data[3],
+                           result.data.vector.data[4]);
+
+                    check_double_eq(result.data.vector.data[0], 0.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[1], 1.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[2], 2.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[3], 3.0, TEST_TOLERANCE);
+                    check_double_eq(result.data.vector.data[4], 4.0, TEST_TOLERANCE);
+                }
+            }
+
+            exprtk_env_free(&env);
         }
     }
 }

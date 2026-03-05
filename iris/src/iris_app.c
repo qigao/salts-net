@@ -43,6 +43,9 @@ iris_app_t *iris_app_create(void) {
     app->rpc_context = NULL;
     app->shutdown_hook = NULL;
 
+    /* Default security limits */
+    app->security_limits = IRIS_DEFAULT_SECURITY_LIMITS;
+
     return app;
 }
 
@@ -257,9 +260,22 @@ void iris_app_shutdown_hook(iris_app_t *app, void (*hook)(void)) {
     }
 }
 
+void iris_app_set_error_handler(iris_app_t *app, iris_error_handler_t handler) {
+    if (app) {
+        app->error_handler = handler;
+    }
+}
+
+void iris_app_set_security_limits(iris_app_t *app, const iris_security_limits_t *limits) {
+    if (app && limits) {
+        app->security_limits = *limits;
+    }
+}
+
 int iris_app_listen(iris_app_t *app, unsigned short port) {
-    if (app && app->shutdown_hook) {
+    if (!app) return -1;
+    if (app->shutdown_hook) {
         shutdown_hook(app->shutdown_hook);
     }
-    return iris_server_run(port);
+    return iris_app_run(app, port);
 }

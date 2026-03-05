@@ -55,13 +55,13 @@ add_executable(junit_to_html ${JUNIT_TO_HTML_SOURCES})
 
 target_include_directories(junit_to_html PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/utils/include
     ${CMAKE_SOURCE_DIR}/mustache/include
     ${CMAKE_SOURCE_DIR}/parser/internal/json_parser/include
     ${CMAKE_SOURCE_DIR}/parser/internal/cmd_parser/include
     ${CMAKE_SOURCE_DIR}/vendor/cxml/include)
 
 target_link_libraries(junit_to_html PRIVATE
+    TurboNet::Utils
     TurboNet::Mustache
     TurboNet::JsonParser
     TurboNet::CmdParser

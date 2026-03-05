@@ -11,7 +11,7 @@
 #include "turl_websocket.h"
 #include <dotenv.h>
 #include <json_parser.h>
-#include <netcore/turbo_coro_context.h>
+#include <netcore.h>
 #include <turbo_coro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,7 +47,7 @@ typedef struct {
   int ret;
 } turl_coro_args_t;
 
-static void turl_main_coro(turbo_coro_t *co, void *arg) {
+static void turl_main_coro(coro_t *co, void *arg) {
   turl_coro_args_t *a = (turl_coro_args_t *)arg;
 
   // Handle batch mode
@@ -326,7 +326,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Create coroutine context and run HTTP/batch/collection inside it
-  turbo_coro_context_t *coro_ctx = turbo_coro_context_create(NULL);
+  coro_context_t *coro_ctx = coro_context_create(NULL);
 
   turl_coro_args_t coro_args = {
       .verbose = verbose,
@@ -357,11 +357,9 @@ int main(int argc, char *argv[]) {
       .ret = 0,
   };
 
-  turbo_coro_t *co = turbo_coro_create(turl_main_coro, &coro_args, NULL);
-  turbo_coro_resume(co);
-  turbo_coro_context_run(coro_ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_destroy(co);
-  turbo_coro_context_destroy(coro_ctx);
+  coro_context_spawn(coro_ctx, turl_main_coro, &coro_args);
+  coro_context_run(coro_ctx, TURBO_RUN_DEFAULT);
+  coro_context_destroy(coro_ctx);
 
   int ret = coro_args.ret;
 

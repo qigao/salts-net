@@ -47,48 +47,65 @@ int main(void) {
 
 ```c
 #include "turbo_coro_client.h"
-#include "turbo_coro.h"
+#include "coro_context.h"
 
-void network_task(turbo_coro_t *co, void *arg) {
-  turbo_coro_context_t *ctx = (turbo_coro_context_t *)arg;
-  turbo_coro_client_t *client = turbo_coro_client_create(ctx);
+void network_task(coro_t *co, void *arg) {
+  coro_context_t *ctx = (coro_context_t *)arg;
+  coro_client_t *client = coro_client_create(ctx);
 
   // Connect (suspends coroutine until done)
-  turbo_coro_client_connect(client, "tcp://example.com:8080");
+  coro_client_connect(client, "tcp://example.com:8080");
 
   // Send and receive (each call suspends until complete)
-  turbo_coro_client_send(client, "Hello", 5);
+  coro_client_send(client, "Hello", 5);
 
   char *data; size_t len;
-  turbo_coro_client_recv(client, &data, &len);
+  coro_client_recv(client, &data, &len);
   printf("Received: %.*s\n", (int)len, data);
   free(data);
 
-  turbo_coro_client_destroy(client);
+  coro_client_destroy(client);
+}
+
+int main(void) {
+  coro_context_t *ctx = coro_context_create(NULL);
+
+  // Spawn coroutine (automatic lifecycle management)
+  coro_context_spawn(ctx, network_task, ctx);
+
+  // Run event loop
+  coro_context_run(ctx, TURBO_RUN_DEFAULT);
+
+  coro_context_destroy(ctx);
+  return 0;
 }
 ```
+
+> **Note:** Use `coro_context_spawn()` for automatic coroutine management.
+> The low-level `coro_create()`/`coro_resume()`/`coro_destroy()` API
+> is available for advanced use cases but requires manual lifecycle management.
 
 ### Coroutine Server
 
 ```c
 #include "turbo_coro_server.h"
 
-void on_connection(turbo_coro_client_t *client, void *arg) {
+void on_connection(coro_client_t *client, void *arg) {
   char *data; size_t len;
-  while (turbo_coro_client_recv(client, &data, &len) == 0) {
+  while (coro_client_recv(client, &data, &len) == 0) {
     if (len == 0) break;
-    turbo_coro_client_send(client, data, len); // echo
+    coro_client_send(client, data, len); // echo
     free(data);
   }
 }
 
 int main(void) {
-  turbo_coro_context_t *ctx = turbo_coro_context_create(NULL);
-  turbo_coro_server_t *server = turbo_coro_server_create(ctx);
-  turbo_coro_server_listen(server, "tcp://0.0.0.0:8080", on_connection, NULL);
-  turbo_coro_context_run(ctx, TURBO_RUN_DEFAULT);
-  turbo_coro_server_destroy(server);
-  turbo_coro_context_destroy(ctx);
+  coro_context_t *ctx = coro_context_create(NULL);
+  coro_server_t *server = coro_server_create(ctx);
+  coro_server_listen(server, "tcp://0.0.0.0:8080", on_connection, NULL);
+  coro_context_run(ctx, TURBO_RUN_DEFAULT);
+  coro_server_destroy(server);
+  coro_context_destroy(ctx);
   return 0;
 }
 ```
@@ -96,20 +113,20 @@ int main(void) {
 ### Connection Pool
 
 ```c
-#include "turbo_coro_pool.h"
+#include "coro_pool.h"
 
-void worker(turbo_coro_t *co, void *arg) {
-  turbo_coro_pool_t *pool = (turbo_coro_pool_t *)arg;
-  turbo_coro_client_t *c;
+void worker(coro_t *co, void *arg) {
+  coro_pool_t *pool = (coro_pool_t *)arg;
+  coro_client_t *c;
 
-  if (turbo_coro_pool_borrow(pool, &c) != 0) return;
+  if (coro_pool_borrow(pool, &c) != 0) return;
 
-  turbo_coro_client_send(c, "hello", 5);
+  coro_client_send(c, "hello", 5);
   char *data; size_t len;
-  turbo_coro_client_recv(c, &data, &len);
+  coro_client_recv(c, &data, &len);
   free(data);
 
-  turbo_coro_pool_return(pool, c);
+  coro_pool_return(pool, c);
 }
 ```
 

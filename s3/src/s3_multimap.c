@@ -1,21 +1,9 @@
 #include "s3/s3_multimap.h"
+#include "s3/s3_url.h"
 #include <stb_sprintf.h>
 #include <stc/cstr.h>
 #include <ctype.h>
 
-static tstr_t url_encode(const char* s) {
-    if (!s) return tstr_new();
-    tstr_t res = tstr_new();
-    for (; *s; s++) {
-        unsigned char c = *s;
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            res = tstr_cat_fmt(res, "%c", c);
-        } else {
-            res = tstr_cat_fmt(res, "%%%02X", c);
-        }
-    }
-    return res;
-}
 
 void s3_headers_add(S3Headers* m, const char* key, const char* value) {
     if (!m || !key || !value) return;
@@ -25,7 +13,15 @@ void s3_headers_add(S3Headers* m, const char* key, const char* value) {
 const char* s3_headers_get(S3Headers* m, const char* key) {
     if (!m || !key) return NULL;
     const S3Headers_value* v = S3Headers_get(m, key);
-    return v ? cstr_str(&v->second) : NULL;
+    if (v) return cstr_str(&v->second);
+
+    // HTTP header field names are case-insensitive.
+    c_foreach (i, S3Headers, *m) {
+        if (tstr_casecmp(cstr_str(&i.ref->first), key) == 0) {
+            return cstr_str(&i.ref->second);
+        }
+    }
+    return NULL;
 }
 
 int s3_headers_contains(S3Headers* m, const char* key) {
@@ -40,8 +36,8 @@ tstr_t s3_headers_to_query_string(S3Headers* m) {
         if (!first) {
             qs = tstr_cat(qs, "&");
         }
-        tstr_t ek = url_encode(cstr_str(&i.ref->first));
-        tstr_t ev = url_encode(cstr_str(&i.ref->second));
+        tstr_t ek = s3_url_encode(cstr_str(&i.ref->first));
+        tstr_t ev = s3_url_encode(cstr_str(&i.ref->second));
         qs = tstr_cat(qs, ek);
         qs = tstr_cat(qs, "=");
         qs = tstr_cat(qs, ev);
@@ -134,8 +130,8 @@ tstr_t s3_headers_get_canonical_query(S3Headers* m) {
             qs = tstr_cat(qs, "&");
         }
         // In S3, keys and values should be URL-encoded
-        tstr_t ek = url_encode(cstr_str(&i.ref->first));
-        tstr_t ev = url_encode(cstr_str(&i.ref->second));
+        tstr_t ek = s3_url_encode(cstr_str(&i.ref->first));
+        tstr_t ev = s3_url_encode(cstr_str(&i.ref->second));
         qs = tstr_cat(qs, ek);
         qs = tstr_cat(qs, "=");
         qs = tstr_cat(qs, ev);

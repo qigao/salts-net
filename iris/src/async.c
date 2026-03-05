@@ -3,7 +3,7 @@
  * @brief Iris async task implementation
  *
  * Thread pool for blocking work. iris_await() bridges thread pool completions
- * back to the event loop via turbo_coro_post(), so it works correctly inside
+ * back to the event loop via coro_post(), so it works correctly inside
  * coro server handlers.
  */
 
@@ -24,8 +24,8 @@ struct iris_async_task_s {
     iris_async_done_fn done_fn;
     int result;
     char *error;
-    turbo_coro_t *awaiting_coro;
-    turbo_coro_context_t *coro_ctx;
+    coro_t *awaiting_coro;
+    coro_context_t *coro_ctx;
 };
 
 // =============================================================================
@@ -48,7 +48,7 @@ static void task_worker(void *arg) {
     }
 
     if (task->awaiting_coro) {
-        turbo_coro_post(task->coro_ctx, (turbo_coro_post_fn)turbo_coro_resume,
+        coro_post(task->coro_ctx, (coro_post_fn)coro_resume,
                         task->awaiting_coro);
     } else if (task->done_fn) {
         task->done_fn(task->context, task->result, task->error);
@@ -153,10 +153,10 @@ void iris_async_then(void *context, int success, const char *error,
 // Coroutine-aware await
 // =============================================================================
 
-iris_await_result_t iris_await(turbo_coro_context_t *ctx,
+iris_await_result_t iris_await(coro_context_t *ctx,
                                iris_async_work_fn work_fn, void *context) {
     iris_await_result_t fail = {0, "not in coroutine"};
-    turbo_coro_t *co = turbo_coro_running();
+    coro_t *co = coro_running();
     if (!co || !work_fn || !ctx) return fail;
 
     ensure_pool();
@@ -178,7 +178,7 @@ iris_await_result_t iris_await(turbo_coro_context_t *ctx,
         return fail;
     }
 
-    turbo_coro_yield();
+    coro_yield();
 
     iris_await_result_t result;
     result.success = task->result;

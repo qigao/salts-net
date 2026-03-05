@@ -28,7 +28,6 @@ spec("TLog Bench") {
         // Setup a default logger with a callback sink for all benchmarks
         tlog_config_t config = {
             .min_level = TURBO_LOG_LEVEL_DEBUG,
-            .async_mode = 0,
             .pool_size = 64 * 1024
         };
         tlog_t *logger = tlog_create(&config);
@@ -59,7 +58,6 @@ spec("TLog Bench") {
             if (!async_logger) {
                 tlog_config_t config = {
                     .min_level = TURBO_LOG_LEVEL_DEBUG,
-                    .async_mode = 1,
                     .buffer_size = 2 * 1024 * 1024,
                     .pool_size = 64 * 1024
                 };
@@ -82,7 +80,7 @@ spec("TLog Bench") {
         benchmark("standard_file_sink", ITERS_HEAVY) {
             static tlog_t *s_logger = NULL;
             if (!s_logger) {
-                tlog_config_t config = {.async_mode = 0};
+                tlog_config_t config = {0};
                 s_logger = tlog_create(&config);
                 turbo_file_sink_opts_t opts = {.path = log_file};
                 tlog_add_sink(s_logger, turbo_sink_file_create(&opts));
@@ -93,7 +91,7 @@ spec("TLog Bench") {
         benchmark("mmap_file_sink", ITERS_HEAVY) {
             static tlog_t *m_logger = NULL;
             if (!m_logger) {
-                tlog_config_t config = {.async_mode = 0};
+                tlog_config_t config = {0};
                 m_logger = tlog_create(&config);
                 turbo_mmap_sink_opts_t opts = {
                     .path = mmap_file,
@@ -112,7 +110,7 @@ spec("TLog Bench") {
     }
 
     bench("Logger Component Overhead") {
-        tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_INFO, .async_mode = 0};
+        tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_INFO};
         tlog_t *logger = tlog_create(&config);
         tlog_add_sink(logger, turbo_sink_callback_create(null_callback, NULL));
         tlog_set_default(logger);

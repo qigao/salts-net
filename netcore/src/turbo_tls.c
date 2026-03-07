@@ -7,7 +7,6 @@
 
 #include "config.h"
 #include "internal.h"
-#include "stats.h"
 #include "turbo_dns.h"
 #include "tlog.h"
 #include "turbo_tls.h"
@@ -81,34 +80,7 @@ static void turbo_tls_debug_uv_error(const char *context, int err) {
   #define UV_EOF (-4095)
 #endif
 
-/* Stats macros - simple stubs if not available */
-#ifndef TURBO_STATS_INC
-  #define TURBO_STATS_INC(name)                                                                    \
-    do {                                                                                           \
-      (void)(name);                                                                                \
-    } while (0)
-#endif
-#ifndef TURBO_STATS_ADD
-  #define TURBO_STATS_ADD(name, value)                                                             \
-    do {                                                                                           \
-      (void)(name);                                                                                \
-      (void)(value);                                                                               \
-    } while (0)
-#endif
-#ifndef TURBO_STATS_SET
-  #define TURBO_STATS_SET(name, value)                                                             \
-    do {                                                                                           \
-      (void)(name);                                                                                \
-      (void)(value);                                                                               \
-    } while (0)
-#endif
-#ifndef TURBO_STATS_RECORD
-  #define TURBO_STATS_RECORD(name, value)                                                          \
-    do {                                                                                           \
-      (void)(name);                                                                                \
-      (void)(value);                                                                               \
-    } while (0)
-#endif
+
 
 /* Arena-based memory pool for TLS */
 typedef struct turbo_tls_arena_pool_s {
@@ -339,14 +311,14 @@ static turbo_tls_send_op_t *get_tls_send_op(turbo_tls_client_t *client) {
     op = g_tls_send_op_pool;
     g_tls_send_op_pool = op->next;
     g_tls_send_op_pool_size--;
-    TURBO_STATS_INC("tls.send_ops_reused");
+
   }
   turbo_tls_sync_unlock();
 
   if (!op) {
     op = (turbo_tls_send_op_t *)malloc(sizeof(turbo_tls_send_op_t));
     if (op) {
-      TURBO_STATS_INC("tls.send_ops_allocated");
+
     } else {
       return NULL; // NULL check
     }
@@ -378,11 +350,11 @@ static void return_tls_send_op(turbo_tls_send_op_t *op) {
     g_tls_send_op_pool = op;
     g_tls_send_op_pool_size++;
     turbo_tls_sync_unlock();
-    TURBO_STATS_INC("tls.send_ops_pooled");
+
   } else {
     turbo_tls_sync_unlock();
     free(op);
-    TURBO_STATS_INC("tls.send_ops_freed");
+
   }
 }
 
@@ -616,12 +588,12 @@ static void on_tls_write_complete(uv_write_t *req, int status) {
       total_bytes += op->slices[i].length;
     }
 
-    TURBO_STATS_ADD("tls.bytes_sent", total_bytes);
-    TURBO_STATS_INC("tls.messages_sent");
-    TURBO_STATS_INC("tls.zero_copy_sends");
-    TURBO_STATS_RECORD("tls.send_size", total_bytes);
+
+
+
+
   } else {
-    TURBO_STATS_INC("tls.send_errors");
+
   }
 
   /* Commit arena pool changes */
@@ -643,7 +615,7 @@ static void on_handshake_write(uv_write_t *req, int status) {
   free(req);
 
   if (status != 0) {
-    TURBO_STATS_INC("tls.handshake_errors");
+
     if (client->handshake_done_cb) {
       client->handshake_done_cb(client, status);
     }
@@ -675,7 +647,7 @@ static int do_handshake(turbo_tls_client_t *client) {
     } else {
       TLOG_DEBUG("handshake error client={} err={:d}", (void *)client, err);
       turbo_tls_debug_ssl_errors("handshake error detail");
-      TURBO_STATS_INC("tls.handshake_errors");
+
       return TURBO_TLS_EHANDSHAKE;
     }
   }
@@ -843,10 +815,10 @@ static void do_tls_read(turbo_tls_client_t *client) {
     }
 
     TLOG_DEBUG("decrypted {} bytes for client={}", nread, (void *)client);
-    TURBO_STATS_ADD("tls.bytes_received", (size_t)nread);
-    TURBO_STATS_INC("tls.messages_received");
-    TURBO_STATS_INC("tls.zero_copy_receives");
-    TURBO_STATS_RECORD("tls.recv_size", (size_t)nread);
+
+
+
+
 
     /* Create slice for received data - buffer should always match now */
     TLOG_DEBUG("calling on_recv with {} bytes for client={}", nread, (void *)client);
@@ -875,7 +847,7 @@ static void on_handshake_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t
     TLOG_DEBUG("handshake read error client={} nread={}", (void *)client, nread);
     turbo_tls_debug_uv_error("handshake read uv error", (int)nread);
     uv_read_stop(stream);
-    TURBO_STATS_INC("tls.handshake_errors");
+
     if (client->handshake_done_cb) {
       client->handshake_done_cb(client, (int)nread);
     }
@@ -901,7 +873,7 @@ static void on_handshake_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t
       client->handshake_complete = 1;
       TLOG_DEBUG("handshake complete for client={} is_server={}", (void *)client,
                  SSL_is_server(session->ssl));
-      TURBO_STATS_INC("tls.handshakes_completed");
+
 
       int verify_result = verify_certificate(client);
       if (verify_result == 0) {
@@ -934,7 +906,7 @@ static void on_handshake_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t
       uv_read_stop(stream);
       client->handshake_complete = 1;
       TLOG_DEBUG("handshake complete (no data) for client={}", (void *)client);
-      TURBO_STATS_INC("tls.handshakes_completed");
+
 
       int verify_result = verify_certificate(client);
       if (verify_result == 0 && client->on_connect) {
@@ -958,7 +930,7 @@ static void on_tls_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf)
   if (nread < 0) {
     TLOG_DEBUG("uv_read error client={} nread=%zd", (void *)client, nread);
     turbo_tls_debug_uv_error("uv_read error detail", (int)nread);
-    TURBO_STATS_INC("tls.recv_errors");
+
     if (client->on_recv) {
       turbo_pool_slice_t error_slice = {NULL, 0, NULL};
       client->on_recv(client, &error_slice, NULL);
@@ -983,8 +955,8 @@ static void on_tls_handle_closed(uv_handle_t *handle) {
     if (client->server->active_connections > 0) {
       client->server->active_connections--;
     }
-    TURBO_STATS_SET("tls.active_connections", client->server->active_connections);
-    TURBO_STATS_INC("tls.connections_closed");
+
+
 
     if (client->server->on_close) {
       client->server->on_close(client);
@@ -1039,7 +1011,7 @@ static void on_tls_handle_closed(uv_handle_t *handle) {
 /* New TLS connection callback */
 static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
   if (status < 0) {
-    TURBO_STATS_INC("tls.accept_errors");
+
     return;
   }
 
@@ -1048,7 +1020,7 @@ static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
   if (!server)
     return;
 
-  TURBO_STATS_INC("tls.connections_accepted");
+
 
   /* Create new client */
   turbo_tls_client_t *client = (turbo_tls_client_t *)calloc(1, sizeof(*client));
@@ -1136,8 +1108,8 @@ static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
   if (uv_read_start((uv_stream_t *)&client->handle, alloc_tls_recv_buffer, on_handshake_read) ==
       0) {
     server->active_connections++;
-    TURBO_STATS_SET("tls.active_connections", server->active_connections);
-    TURBO_STATS_INC("tls.connections_established");
+
+
 
     /* For server mode, trigger initial handshake processing */
     int handshake_rc = do_handshake(client);
@@ -1277,7 +1249,7 @@ void turbo_tls_server_stop(turbo_tls_server_t *server) {
   }
 
   turbo_pool_free(&server->arena);
-  TURBO_STATS_INC("tls.servers_stopped");
+
 }
 
 /* Client lifecycle implementation */
@@ -1345,7 +1317,7 @@ static void on_tls_client_connected(uv_connect_t *req, int status) {
     return;
 
   if (status == 0) {
-    TURBO_STATS_INC("tls.client_connections_established");
+
     TLOG_DEBUG("client TCP connection established client={}", (void *)client);
 
     /* Initialize TLS components */
@@ -1397,7 +1369,7 @@ static void on_tls_client_connected(uv_connect_t *req, int status) {
     }
   } else {
     turbo_tls_debug_uv_error("client TCP connection failed", status);
-    TURBO_STATS_INC("tls.client_connection_errors");
+
     turbo_tls_client_close(client);
   }
 }
@@ -1516,7 +1488,7 @@ int turbo_tls_send(turbo_tls_client_t *client, const char *data, size_t length) 
   turbo_pool_unref(buffer);
 
   if (rc == 0) {
-    TURBO_STATS_INC("tls.copy_sends");
+
   }
 
   return rc;
@@ -1551,8 +1523,8 @@ int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_tls_iovec_t *iov, si
   }
 
   if (rc == 0) {
-    TURBO_STATS_INC("tls.scatter_gather_sends");
-    TURBO_STATS_INC("tls.zero_copy_sendv");
+
+
   }
 
   return rc;
@@ -1652,32 +1624,11 @@ int turbo_tls_flush(turbo_tls_client_t *client) {
     return rc;
   }
 
-  TURBO_STATS_INC("tls.flush_calls");
+
   return 0;
 }
 
-/* Statistics and monitoring - simplified implementations */
-void turbo_tls_get_stats(const turbo_tls_server_t *server, turbo_tls_stats_t *stats) {
-  if (!server || !stats)
-    return;
-  memset(stats, 0, sizeof(*stats));
 
-  /* Get arena statistics */
-  turbo_pool_get_stats(&server->arena, &stats->arena_stats);
-
-  /* Basic stats - would need proper implementation */
-  stats->bytes_sent = 0;
-  stats->bytes_received = 0;
-  stats->active_connections = server->active_connections;
-}
-
-void turbo_tls_reset_stats(turbo_tls_server_t *server) {
-  if (!server)
-    return;
-
-  /* Reset stats - would need proper implementation */
-  (void)server; /* Suppress unused parameter warning */
-}
 
 void turbo_tls_trim_memory(turbo_tls_server_t *server) {
   if (!server)
@@ -1688,10 +1639,7 @@ void turbo_tls_trim_memory(turbo_tls_server_t *server) {
 size_t turbo_tls_get_memory_usage(const turbo_tls_server_t *server) {
   if (!server)
     return 0;
-
-  turbo_pool_stats_t stats;
-  turbo_pool_get_stats(&server->arena, &stats);
-  return stats.total_allocated;
+  return server->arena.total_allocated;
 }
 
 /* Cleanup global pools */
@@ -1703,7 +1651,7 @@ void turbo_tls_cleanup_pools(void) {
   }
   g_tls_send_op_pool_size = 0;
 
-  TURBO_STATS_INC("tls.pools_cleaned");
+
 }
 
 /* Server lifecycle */

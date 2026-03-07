@@ -15,7 +15,6 @@ typedef struct turbo_pool_region_s turbo_pool_region_t;
 typedef struct turbo_pool_s turbo_pool_t;
 typedef struct turbo_pool_buffer_s turbo_pool_buffer_t;
 typedef struct turbo_pool_slice_s turbo_pool_slice_t;
-typedef struct turbo_pool_stats_s turbo_pool_stats_t;
 
 #ifndef TURBO_ASSERT
   #define TURBO_ASSERT(x) assert(x)
@@ -229,14 +228,7 @@ CXX_C_API turbo_pool_slice_t turbo_pool_slice(turbo_pool_buffer_t *buffer, size_
  */
 CXX_C_API void turbo_pool_slice_release(turbo_pool_slice_t *slice);
 
-/* Statistics and monitoring */
-/**
- * @brief Retrieves statistics about the arena's memory usage.
- *
- * @param arena A pointer to the `turbo_pool_t` instance.
- * @param stats A pointer to an `turbo_pool_stats_t` structure to fill with statistics.
- */
-CXX_C_API void turbo_pool_get_stats(const turbo_pool_t *arena, turbo_pool_stats_t *stats);
+
 
 /* Convenience macros */
 #define TURBO_POOL_ALLOC(arena, type) ((type *)turbo_pool_alloc(arena, sizeof(type)))

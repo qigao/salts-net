@@ -10,6 +10,20 @@
 #include <stdio.h>
 
 static int g_counter = 0;
+#include "turbo_coro_internal.h"
+
+static void robust_context_destroy(coro_context_t *ctx) {
+    if (!ctx) return;
+    int max_drain = 500;
+    while (max_drain-- > 0) {
+        int has_handles = coro_context_alive(ctx);
+        int has_coros = ctx->scheduler ? coro_scheduler_count(ctx->scheduler) > 0 : 0;
+        if (!has_handles && !has_coros) break;
+        uv_run(ctx->loop, UV_RUN_NOWAIT);
+        if (ctx->scheduler) coro_scheduler_tick(ctx->scheduler);
+    }
+    coro_context_destroy(ctx);
+}
 
 /* ── Test tasks ───────────────────────────────────────────── */
 
@@ -220,6 +234,6 @@ spec("Task Combinators") {
         /* Note: when_all requires lazy tasks, not eager spawn */
         /* This test verifies the API doesn't crash with mixed usage */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 }

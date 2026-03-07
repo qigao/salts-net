@@ -6,7 +6,6 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "stats.h"
 #include "turbo_callbacks.h"
 
 #include "turbo_buffer.h"
@@ -212,27 +211,7 @@ struct turbo_kcp_client_s {
   int turbo_kcp_client_send_buffer(turbo_kcp_client_t* client,
                                         turbo_pool_buffer_t* buffer, size_t length);
 
-/* Statistics and monitoring */
-/**
- * @brief Retrieves statistics for the KCP server.
- *
- * @param server A pointer to the `turbo_kcp_server_t` instance.
- * @param stats A pointer to a `turbo_kcp_stats_t` structure to fill with statistics.
- */
-  void turbo_kcp_get_stats(const turbo_kcp_server_t* server, turbo_kcp_stats_t* stats);
-/**
- * @brief Retrieves statistics for a specific KCP client.
- *
- * @param client A pointer to the `turbo_kcp_client_t` instance.
- * @param stats A pointer to a `turbo_kcp_stats_t` structure to fill with statistics.
- */
-  void turbo_kcp_client_get_stats(const turbo_kcp_client_t* client, turbo_kcp_stats_t* stats);
-/**
- * @brief Resets all KCP statistics for the given server.
- *
- * @param server A pointer to the `turbo_kcp_server_t` instance.
- */
-  void turbo_kcp_reset_stats(turbo_kcp_server_t* server);
+
 
 /* Memory management */
 /**

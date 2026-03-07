@@ -6,7 +6,6 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "stats.h"
 #include "turbo_callbacks.h"
 #include "turbo_str_view.h"
 
@@ -318,24 +317,7 @@ typedef struct {
  */
   CXX_C_API int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_t* iov, size_t iovcnt);
 
-/**
- * @brief Get TCP server statistics.
- *
- * This function retrieves various statistics about the server's operation.
- *
- * @param server The TCP server.
- * @param stats Pointer to a stats structure to fill.
- */
-  CXX_C_API void turbo_tcp_get_stats(const turbo_tcp_server_t* server, turbo_tcp_stats_t* stats);
 
-/**
- * @brief Reset TCP server statistics.
- *
- * This function resets all statistics counters to zero.
- *
- * @param server The TCP server.
- */
-  CXX_C_API void turbo_tcp_reset_stats(turbo_tcp_server_t* server);
 
 /**
  * @brief Trim memory usage.

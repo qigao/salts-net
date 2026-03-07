@@ -14,6 +14,7 @@
 #include "turbo_coro_client.h"
 #include "turbo_coro_server.h"
 #include "turbo_coro.h"
+#include "turbo_coro_internal.h"
 #include "turbo_str.h"
 #include "tinytest.h"
 
@@ -52,7 +53,24 @@ static void setup(void) {
 
 static void teardown(void) {
   if (ctx.server) { coro_server_destroy(ctx.server); ctx.server = NULL; }
-  if (ctx.ctx)    { coro_context_destroy(ctx.ctx);    ctx.ctx = NULL; }
+
+  /* Drain pending handles and tick scheduler so handler coroutines can exit.
+   * We loop until no handles or coroutines remain, with a safeguard. */
+  if (ctx.ctx) {
+    int max_drain = 500;
+    while (max_drain-- > 0) {
+      int has_handles = coro_context_alive(ctx.ctx);
+      int has_coros = ctx.ctx->scheduler ? coro_scheduler_count(ctx.ctx->scheduler) > 0 : 0;
+      if (!has_handles && !has_coros) break;
+
+      uv_run(ctx.ctx->loop, UV_RUN_NOWAIT);
+      if (ctx.ctx->scheduler) {
+        coro_scheduler_tick(ctx.ctx->scheduler);
+      }
+    }
+    coro_context_destroy(ctx.ctx);
+    ctx.ctx = NULL;
+  }
 }
 
 static void run_coro(coro_fn fn) {
@@ -141,7 +159,7 @@ static void coro_pipe_transport(coro_t *co, void *arg) {
   if (rc != 0) {
     /* Pipe not supported in coro layer — expected */
     t->test_result = 0;
-    free(srv);
+    coro_server_destroy(srv);
     goto done;
   }
 

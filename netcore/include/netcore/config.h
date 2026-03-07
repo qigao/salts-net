@@ -188,9 +188,7 @@ int turbo_config_save_to_file(const char *filename);
 #define TURBO_PIPE_CLIENT_BUFFER_SIZE "pipe.client_buffer_size"
 #define TURBO_PIPE_MAX_WRITE_IOV "pipe.max_write_iov"
 
-/* Statistics Configuration Keys */
-#define TURBO_STATS_UPDATE_POOL_SIZE "stats.update_pool_size"
-#define TURBO_STATS_RATE_INTERVAL_MS "stats.rate_interval_ms"
+
 
 /* TCP Configuration Helpers */
 /**
@@ -785,21 +783,7 @@ static inline size_t turbo_udp_config_get_recv_buf_max(void) {
   return (size_t)turbo_config_get_uint(TURBO_UDP_RECV_BUF_MAX, 2 * 1024 * 1024);
 }
 
-/* Statistics Configuration Getters */
-/**
- * @brief Gets the update pool size for statistics.
- * @return The update pool size.
- */
-static inline size_t turbo_stats_config_get_update_pool_size(void) {
-  return (size_t)turbo_config_get_uint(TURBO_STATS_UPDATE_POOL_SIZE, 1000);
-}
-/**
- * @brief Gets the rate interval in milliseconds for statistics updates.
- * @return The rate interval in milliseconds.
- */
-static inline int turbo_stats_config_get_rate_interval_ms(void) {
-  return (int)turbo_config_get_int(TURBO_STATS_RATE_INTERVAL_MS, 1000);
-}
+
 
 #ifdef __cplusplus
 }

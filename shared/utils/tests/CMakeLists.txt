@@ -26,7 +26,13 @@ set(TEST_FILES
     bench_tlog.c
     test_mmap_group.c
     test_url.c
-    test_url_helpers.c)
+    test_url_helpers.c
+    test_turbo_ring.c
+    test_disruptor.c
+    test_turbo_atomic.c
+    bench_turbo_ring.c
+    bench_ring_comparison.c
+    bench_disruptor.c)
 
 # C++ test files
 set(CXX_TEST_FILES test_tlog_cpp.cpp)

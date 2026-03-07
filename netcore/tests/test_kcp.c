@@ -106,25 +106,7 @@ spec("kcp") {
     }
   }
 
-  describe("Statistics") {
-    it("should get and reset stats") {
-      turbo_kcp_server_t server;
-      memset(&server, 0, sizeof(server));
 
-      int rc = turbo_kcp_server_init(&server, g_loop, TEST_HOST, TEST_PORT + 3);
-      check_int_eq(rc, 0);
-
-      turbo_kcp_stats_t stats;
-      turbo_kcp_get_stats(&server, &stats);
-
-      /* Reset should work without crash */
-      turbo_kcp_reset_stats(&server);
-
-      turbo_kcp_server_stop(&server);
-      uv_run(g_loop, UV_RUN_NOWAIT);
-      uv_run(g_loop, UV_RUN_NOWAIT);
-    }
-  }
 
   describe("Memory management") {
     it("should track memory usage") {
@@ -166,14 +148,8 @@ spec("kcp") {
       turbo_kcp_server_stop(NULL);
       turbo_kcp_client_close(NULL);
       turbo_kcp_trim_memory(NULL);
-      turbo_kcp_reset_stats(NULL);
-
       check_size_eq(turbo_kcp_get_memory_usage(NULL), 0);
       check_null(turbo_kcp_get_send_buffer(NULL, 1024));
-
-      turbo_kcp_stats_t stats;
-      turbo_kcp_get_stats(NULL, &stats);
-      turbo_kcp_client_get_stats(NULL, &stats);
     }
   }
 }

@@ -10,6 +10,20 @@
 
 static int g_coro_executed = 0;
 static int g_coro_count = 0;
+#include "turbo_coro_internal.h"
+
+static void robust_context_destroy(coro_context_t *ctx) {
+    if (!ctx) return;
+    int max_drain = 500;
+    while (max_drain-- > 0) {
+        int has_handles = coro_context_alive(ctx);
+        int has_coros = ctx->scheduler ? coro_scheduler_count(ctx->scheduler) > 0 : 0;
+        if (!has_handles && !has_coros) break;
+        uv_run(ctx->loop, UV_RUN_NOWAIT);
+        if (ctx->scheduler) coro_scheduler_tick(ctx->scheduler);
+    }
+    coro_context_destroy(ctx);
+}
 
 /* ── Test coroutines ──────────────────────────────────────── */
 
@@ -64,6 +78,48 @@ static void echo_handler(coro_client_t *client, void *arg) {
     /* Handler ends, client coroutine should be auto-cleaned */
 }
 
+/* ── Client task for testing ──────────────────────────────── */
+
+static void server_client_task(coro_t *co, void *arg) {
+    (void)co;
+    coro_context_t *ctx = (coro_context_t *)arg;
+
+    /* Create and start server */
+    coro_server_t *server = coro_server_create(ctx);
+    if (!server) return;
+
+    int r = coro_server_listen(server, "tcp://127.0.0.1:19999", echo_handler, NULL);
+    if (r != 0) {
+        coro_server_destroy(server);
+        return;
+    }
+
+    /* Now connect client */
+    coro_client_t *client = coro_client_create(ctx);
+    if (!client) {
+        coro_server_destroy(server);
+        return;
+    }
+
+    coro_client_set_timeout(client, 5000);
+    r = coro_client_connect(client, "tcp://127.0.0.1:19999");
+    if (r == 0) {
+        const char *msg = "hello";
+        coro_client_send(client, msg, 5);
+
+        char *recv_data = NULL;
+        size_t recv_len = 0;
+        coro_client_recv(client, &recv_data, &recv_len);
+
+        if (recv_data) {
+            coro_client_free_recv(recv_data);
+        }
+    }
+
+    coro_client_destroy(client);
+    coro_server_destroy(server);
+}
+
 /* ── Tests ────────────────────────────────────────────────── */
 
 spec("Coroutine Auto-Cleanup") {
@@ -84,7 +140,7 @@ spec("Coroutine Auto-Cleanup") {
         check_int_eq(counter, 1);
         check_int_eq(g_coro_executed, 1);
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should auto-clean multiple coroutines") {
@@ -106,7 +162,7 @@ spec("Coroutine Auto-Cleanup") {
         check_int_eq(c3, 1);
         check_int_eq(g_coro_executed, 3);
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should auto-clean yielding coroutines") {
@@ -129,7 +185,7 @@ spec("Coroutine Auto-Cleanup") {
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
         check_int_eq(counter, 3);  /* Final increment */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should auto-clean coroutines with async I/O") {
@@ -148,7 +204,7 @@ spec("Coroutine Auto-Cleanup") {
 
         check_int_eq(g_coro_count, 6);  /* All completed (3 start + 3 end) */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should auto-clean server connection coroutines") {
@@ -157,41 +213,15 @@ spec("Coroutine Auto-Cleanup") {
 
         g_coro_executed = 0;
 
-        /* Create echo server */
-        coro_server_t *server = coro_server_create(ctx);
-        check(server != NULL);
+        /* Spawn coroutine that creates server and client */
+        coro_context_spawn(ctx, server_client_task, ctx);
 
-        int r = coro_server_listen(server, "tcp://127.0.0.1:0", echo_handler, NULL);
-        check_int_eq(r, 0);
+        /* Run loop to execute everything */
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-        /* Create client and connect */
-        coro_client_t *client = coro_client_create(ctx);
-        check(client != NULL);
-
-        r = coro_client_connect(client, "tcp://127.0.0.1:9999");
-        if (r == 0) {
-            const char *msg = "hello";
-            coro_client_send(client, msg, 5);
-
-            char *recv_data = NULL;
-            size_t recv_len = 0;
-            coro_client_recv(client, &recv_data, &recv_len);
-
-            if (recv_data) {
-                check_int_eq(recv_len, 5);
-                coro_client_free_recv(recv_data);
-            }
-        }
-
-        coro_client_destroy(client);
-        coro_server_destroy(server);
-
-        /* Run loop to process cleanup */
-        coro_context_run(ctx, TURBO_RUN_NOWAIT);
-
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
 
         /* Server handler coroutine should have been auto-cleaned */
-        /* (We can't easily verify the count without exposing internals) */
+        check_int_eq(g_coro_executed, 1);
     }
 }

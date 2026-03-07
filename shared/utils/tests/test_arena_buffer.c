@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "turbo_buffer.h"
-#include "stats.h"
+
 #include "tinytest.h"
 
 static int free_cb_called = 0;
@@ -236,7 +236,7 @@ spec("Arena Buffer Tests") {
     }
   }
 
-  describe("Arena Reset and Stats") {
+  describe("Arena Reset") {
     it("should reset arena correctly") {
       turbo_pool_alloc(&arena, 100);
       turbo_pool_alloc(&arena, 200);
@@ -248,13 +248,11 @@ spec("Arena Buffer Tests") {
       check_size_eq(arena.total_used, 0);
     }
 
-    it("should get arena stats") {
-      turbo_pool_stats_t stats;
+    it("should get arena usage") {
       turbo_pool_alloc(&arena, 512);
 
-      turbo_pool_get_stats(&arena, &stats);
-      check_size_ge(stats.total_allocated, 512);
-      check_int_ge(stats.region_count, 1);
+      check_size_ge(arena.total_allocated, 512);
+      check_int_ge(arena.region_count, 1);
     }
   }
 

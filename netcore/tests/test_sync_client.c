@@ -12,6 +12,7 @@
 #include "turbo_client.h"
 #include "turbo_coro_server.h"
 #include "turbo_coro.h"
+#include "turbo_coro_internal.h"
 #include "tinytest.h"
 
 #define TEST_PORT 18890
@@ -64,10 +65,29 @@ static void post_server_stop(void *arg) {
 static void stop_server(void) {
   coro_post(srv_ctx.ctx, post_server_stop, srv_ctx.ctx);
   uv_thread_join(&srv_ctx.thread);
-  coro_server_destroy(srv_ctx.server);
-  coro_context_destroy(srv_ctx.ctx);
-  srv_ctx.server = NULL;
-  srv_ctx.ctx = NULL;
+  if (srv_ctx.server) {
+    coro_server_destroy(srv_ctx.server);
+    srv_ctx.server = NULL;
+  }
+
+  /* Drain pending handles and tick scheduler so handler coroutines can exit. */
+  if (srv_ctx.ctx) {
+    int max_drain = 500;
+    while (max_drain-- > 0) {
+      int has_handles = coro_context_alive(srv_ctx.ctx);
+      int has_coros = srv_ctx.ctx->scheduler
+                          ? coro_scheduler_count(srv_ctx.ctx->scheduler) > 0
+                          : 0;
+      if (!has_handles && !has_coros) break;
+
+      uv_run(srv_ctx.ctx->loop, UV_RUN_NOWAIT);
+      if (srv_ctx.ctx->scheduler) {
+        coro_scheduler_tick(srv_ctx.ctx->scheduler);
+      }
+    }
+    coro_context_destroy(srv_ctx.ctx);
+    srv_ctx.ctx = NULL;
+  }
 }
 
 spec("sync_client") {

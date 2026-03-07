@@ -7,7 +7,7 @@
 #endif
 
 #include "turbo_buffer.h"
-#include "stats.h"
+
 #include "turbo_atomic.h"
 
 /* Default configuration */
@@ -578,46 +578,7 @@ void turbo_pool_free(turbo_pool_t *arena) {
   memset(arena, 0, sizeof(*arena));
 }
 
-/* Get arena statistics */
-void turbo_pool_get_stats(const turbo_pool_t *arena,
-                          turbo_pool_stats_t *stats) {
-  if (!arena || !stats)
-    return;
 
-  // We can't lock const arena in strict C if mutex is mixed in? 
-  // turbo_mutex_lock takes pointer. `arena->lock` is mutable data even in const struct if it's a pointer.
-  // Cast away const to lock.
-  turbo_pool_t *mut_arena = (turbo_pool_t*)arena;
-  turbo_mutex_lock(&mut_arena->lock);
-
-  memset(stats, 0, sizeof(*stats));
-
-  stats->region_count = arena->region_count;
-  stats->total_allocated = arena->total_allocated;
-  stats->total_used = arena->total_used;
-  stats->fragmentation_ratio =
-      arena->total_allocated > 0
-          ? (double)(arena->total_allocated - arena->total_used) /
-                arena->total_allocated
-          : 0.0;
-
-  /* Count regions with references */
-  for (turbo_pool_region_t *region = arena->head; region;
-       region = region->next) {
-    if (region->ref_count > 0) {
-      stats->regions_with_refs++;
-    }
-    if (region->used == 0) {
-      stats->empty_regions++;
-    }
-  }
-
-  stats->efficiency = arena->total_allocated > 0
-                          ? (double)arena->total_used / arena->total_allocated
-                          : 0.0;
-                          
-  turbo_mutex_unlock(&mut_arena->lock);
-}
 
 /* Return buffer to pool */
 void turbo_pool_release(turbo_pool_buffer_t *buffer) {

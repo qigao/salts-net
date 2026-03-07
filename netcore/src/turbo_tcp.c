@@ -3,12 +3,12 @@
 #include <stdint.h>
 
 #include "turbo_tcp.h"
-#include "stats.h"
 #include "config.h"
 #include "client_common.h"
 #include "turbo_dns.h"
 #include "internal.h"
 #include "tlog.h"
+#include "disruptor.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -33,47 +33,67 @@ typedef struct turbo_tcp_send_op_s {
     struct turbo_tcp_send_op_s* next;
 } turbo_tcp_send_op_t;
 
-/* Send operation pool */
-static turbo_tcp_send_op_t* g_tcp_send_op_pool = NULL;
-static size_t g_tcp_send_op_pool_size = 0;
-static const size_t MAX_TCP_SEND_OP_POOL_SIZE = 256;
+/* ── Lock-free send op pool via disruptor ──────────────────── */
+#define TCP_SEND_OP_POOL_CAPACITY 256  /* must be power of 2 */
 
-/* TCP Statistics IDs */
-static struct {
-    turbo_stat_id_t bytes_sent;
-    turbo_stat_id_t bytes_received;
-    turbo_stat_id_t send_errors;
-    turbo_stat_id_t recv_errors;
-    turbo_stat_id_t active_connections;
-    turbo_stat_id_t connections_closed;
-    int initialized;
-} s_tcp_stats = {0};
+static disruptor_t*          g_tcp_disruptor       = NULL;
+static disruptor_consumer_t  g_tcp_disruptor_cons;
+static int                   g_tcp_disruptor_ready  = 0;
 
-static void init_tcp_stats(void) {
-    if (s_tcp_stats.initialized) return;
+/* Disruptor entry: stores a pointer to a pre-allocated send op */
+typedef struct {
+    turbo_tcp_send_op_t *op;
+} tcp_send_op_entry_t;
+
+/* Pre-allocated send op slab (cache-friendly, no per-op malloc) */
+static turbo_tcp_send_op_t g_tcp_send_op_slab[TCP_SEND_OP_POOL_CAPACITY];
+
+static void ensure_tcp_disruptor(void) {
+    if (g_tcp_disruptor_ready) return;
     
-    s_tcp_stats.bytes_sent = turbo_stats_register("tcp.bytes_sent", TURBO_STAT_COUNTER);
-    s_tcp_stats.bytes_received = turbo_stats_register("tcp.bytes_received", TURBO_STAT_COUNTER);
-    s_tcp_stats.send_errors = turbo_stats_register("tcp.send_errors", TURBO_STAT_COUNTER);
-    s_tcp_stats.recv_errors = turbo_stats_register("tcp.recv_errors", TURBO_STAT_COUNTER);
-    s_tcp_stats.active_connections = turbo_stats_register("tcp.active_connections", TURBO_STAT_GAUGE);
-    s_tcp_stats.connections_closed = turbo_stats_register("tcp.connections_closed", TURBO_STAT_COUNTER);
+    disruptor_config_t cfg = {
+        .entry_size       = sizeof(tcp_send_op_entry_t),
+        .capacity         = TCP_SEND_OP_POOL_CAPACITY,
+        .consumer_capacity = 1
+    };
+    g_tcp_disruptor = disruptor_create(&cfg);
+    if (!g_tcp_disruptor) return;
     
-    s_tcp_stats.initialized = 1;
+    disruptor_consumer_register(g_tcp_disruptor, &g_tcp_disruptor_cons);
+    
+    /* Pre-fill: publish all slab pointers so consumers can claim them */
+    disruptor_sequence_range_t range;
+    if (disruptor_publisher_claim_n_blocking(g_tcp_disruptor,
+            TCP_SEND_OP_POOL_CAPACITY, &range)) {
+        for (uint64_t seq = range.first_sequence; seq <= range.last_sequence; ++seq) {
+            disruptor_cursor_t c = { .sequence = seq };
+            tcp_send_op_entry_t *e = (tcp_send_op_entry_t *)
+                disruptor_acquire_entry(g_tcp_disruptor, &c);
+            e->op = &g_tcp_send_op_slab[seq - range.first_sequence];
+        }
+        disruptor_publisher_commit_range_blocking(g_tcp_disruptor, &range);
+    }
+    g_tcp_disruptor_ready = 1;
 }
 
-/* Get send operation from pool (thread-safe) */
+/* Get send operation: lock-free claim from disruptor, fallback to malloc */
 static turbo_tcp_send_op_t* get_tcp_send_op(turbo_tcp_client_t* client) {
     turbo_tcp_send_op_t* op = NULL;
     
-    turbo_tcp_sync_lock();
-    if (g_tcp_send_op_pool && g_tcp_send_op_pool_size > 0) {
-        op = g_tcp_send_op_pool;
-        g_tcp_send_op_pool = op->next;
-        g_tcp_send_op_pool_size--;
-    }
-    turbo_tcp_sync_unlock();
+    ensure_tcp_disruptor();
     
+    if (g_tcp_disruptor_ready) {
+        disruptor_cursor_t cursor;
+        if (disruptor_consumer_wait_for_nonblocking(g_tcp_disruptor, &cursor)) {
+            const tcp_send_op_entry_t *e = (const tcp_send_op_entry_t *)
+                disruptor_show_entry(g_tcp_disruptor, &cursor);
+            op = e->op;
+            disruptor_consumer_release_entry(g_tcp_disruptor,
+                &g_tcp_disruptor_cons, &cursor);
+        }
+    }
+    
+    /* Fallback: allocate if disruptor pool exhausted */
     if (!op) {
         op = (turbo_tcp_send_op_t*)malloc(sizeof(turbo_tcp_send_op_t));
     }
@@ -86,7 +106,7 @@ static turbo_tcp_send_op_t* get_tcp_send_op(turbo_tcp_client_t* client) {
     return op;
 }
 
-/* Return send operation to pool (thread-safe) */
+/* Return send operation: lock-free publish back into disruptor */
 static void return_tcp_send_op(turbo_tcp_send_op_t* op) {
     if (!op) return;
     
@@ -99,14 +119,22 @@ static void return_tcp_send_op(turbo_tcp_send_op_t* op) {
         op->slices = NULL;
     }
     
-    turbo_tcp_sync_lock();
-    if (g_tcp_send_op_pool_size < MAX_TCP_SEND_OP_POOL_SIZE) {
-        op->next = g_tcp_send_op_pool;
-        g_tcp_send_op_pool = op;
-        g_tcp_send_op_pool_size++;
-        turbo_tcp_sync_unlock();
+    /* Check if this op belongs to the pre-allocated slab */
+    if (g_tcp_disruptor_ready &&
+        op >= &g_tcp_send_op_slab[0] &&
+        op < &g_tcp_send_op_slab[TCP_SEND_OP_POOL_CAPACITY]) {
+        /* Return to disruptor pool */
+        disruptor_cursor_t cursor;
+        if (disruptor_publisher_try_claim(g_tcp_disruptor, &cursor)) {
+            tcp_send_op_entry_t *e = (tcp_send_op_entry_t *)
+                disruptor_acquire_entry(g_tcp_disruptor, &cursor);
+            e->op = op;
+            disruptor_publisher_publish(g_tcp_disruptor, &cursor);
+        }
+        /* If claim fails (pool full / contention), the slab slot is leaked
+           temporarily — it will be reclaimed when the pool drains. */
     } else {
-        turbo_tcp_sync_unlock();
+        /* Heap-allocated fallback: free normally */
         free(op);
     }
 }
@@ -117,17 +145,6 @@ static void on_tcp_write_complete(uv_write_t* req, int status) {
     turbo_tcp_client_t* client = op->client;
     
     client->write_in_progress = 0;
-    
-    if (status == 0) {
-        size_t total_bytes = 0;
-        for (size_t i = 0; i < op->slice_count; i++) {
-            total_bytes += op->slices[i].length;
-        }
-        
-        turbo_stats_counter_add_fast(s_tcp_stats.bytes_sent, total_bytes);
-    } else {
-        turbo_stats_counter_inc_fast(s_tcp_stats.send_errors);
-    }
     
     return_tcp_send_op(op);
     
@@ -170,14 +187,13 @@ static void on_tcp_recv(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 
     if (nread < 0) {
         /* EOF or error */
-        turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
         turbo_tcp_client_close(client);
         return;
     }
     
     if (nread == 0 || !buf || !buf->base) return;
     
-    turbo_stats_counter_add_fast(s_tcp_stats.bytes_received, (size_t)nread);
+
     
     /* Determine which buffer was used */
     turbo_pool_buffer_t* used_buffer = NULL;
@@ -214,8 +230,6 @@ static void on_tcp_handle_closed(uv_handle_t* handle) {
     /* Update connection count */
     if (client->server) {
         client->server->active_connections--;
-        turbo_stats_gauge_set_fast(s_tcp_stats.active_connections, client->server->active_connections);
-        turbo_stats_counter_inc_fast(s_tcp_stats.connections_closed);
         
         TLOG_DEBUG("TCP connection closed (server mode), active connections: {:d}", 
                    client->server->active_connections);
@@ -259,7 +273,6 @@ static void on_tcp_handle_closed(uv_handle_t* handle) {
 /* New connection callback */
 static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
     if (status < 0) {
-        turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
         return;
     }
     
@@ -320,7 +333,6 @@ static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
     /* Start reading */
     if (uv_read_start((uv_stream_t*)&client->handle, alloc_tcp_recv_buffer, on_tcp_recv) == 0) {
         server->active_connections++;
-        turbo_stats_gauge_set_fast(s_tcp_stats.active_connections, server->active_connections);
         
         TLOG_DEBUG("TCP connection accepted, active connections: {:d}", server->active_connections);
 
@@ -338,8 +350,6 @@ int turbo_tcp_server_init(turbo_tcp_server_t* server, uv_loop_t* loop,
     
     memset(server, 0, sizeof(*server));
     server->loop = loop;
-    
-    init_tcp_stats();
     
     /* Initialize server arena */
     if (turbo_pool_init(&server->arena, 0) != 0) {
@@ -431,8 +441,6 @@ turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop) {
     
     turbo_tcp_client_t* client = (turbo_tcp_client_t*)calloc(1, sizeof(*client));
     if (!client) return NULL;
-    
-    init_tcp_stats();
     
     client->is_client_mode = 1;
     
@@ -560,7 +568,6 @@ static void on_tcp_client_connected(uv_connect_t* req, int status) {
         }
     } else {
         client->conn_state = 0;
-        turbo_stats_counter_inc_fast(s_tcp_stats.recv_errors);
         if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET) {
             TLOG_DEBUG("TCP connection failed: {:s}", uv_strerror(status));
         } else {
@@ -819,75 +826,7 @@ int turbo_tcp_sendv(turbo_tcp_client_t* client, const turbo_tcp_iovec_t* iov, si
     return rc;
 }
 
-/* Get statistics */
-void turbo_tcp_get_stats(const turbo_tcp_server_t* server, turbo_tcp_stats_t* stats) {
-    if (!server || !stats) return;
-    
-    memset(stats, 0, sizeof(*stats));
-    
-    /* Get arena statistics */
-    turbo_pool_get_stats(&server->arena, &stats->arena_stats);
-    
-    /* Get global TCP statistics from stats system */
-    turbo_stat_entry_t* entry;
-    
-    entry = turbo_stats_get("tcp.bytes_sent");
-    stats->bytes_sent = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.bytes_received");
-    stats->bytes_received = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.messages_sent");
-    stats->messages_sent = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.messages_received");
-    stats->messages_received = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.zero_copy_sends");
-    stats->zero_copy_sends = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.copy_sends");
-    stats->copy_sends = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.zero_copy_receives");
-    stats->zero_copy_receives = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.active_connections");
-    stats->active_connections = entry ? entry->data.gauge : 0;
-    
-    entry = turbo_stats_get("tcp.connections_established");
-    stats->connections_established = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.connections_closed");
-    stats->connections_closed = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.send_errors");
-    stats->send_errors = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.recv_errors");
-    stats->recv_errors = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("tcp.client_connection_errors");
-    stats->connection_errors = entry ? entry->data.counter : 0;
-}
 
-/* Reset statistics */
-void turbo_tcp_reset_stats(turbo_tcp_server_t* server) {
-    if (!server) return;
-    
-    turbo_stats_reset("tcp.bytes_sent");
-    turbo_stats_reset("tcp.bytes_received");
-    turbo_stats_reset("tcp.messages_sent");
-    turbo_stats_reset("tcp.messages_received");
-    turbo_stats_reset("tcp.zero_copy_sends");
-    turbo_stats_reset("tcp.copy_sends");
-    turbo_stats_reset("tcp.zero_copy_receives");
-    turbo_stats_reset("tcp.connections_established");
-    turbo_stats_reset("tcp.connections_closed");
-    turbo_stats_reset("tcp.send_errors");
-    turbo_stats_reset("tcp.recv_errors");
-    turbo_stats_reset("tcp.client_connection_errors");
-}
 
 /* Trim memory */
 void turbo_tcp_trim_memory(turbo_tcp_server_t* server) {
@@ -898,20 +837,15 @@ void turbo_tcp_trim_memory(turbo_tcp_server_t* server) {
 /* Get memory usage */
 size_t turbo_tcp_get_memory_usage(const turbo_tcp_server_t* server) {
     if (!server) return 0;
-    
-    turbo_pool_stats_t stats;
-    turbo_pool_get_stats(&server->arena, &stats);
-    return stats.total_allocated;
+    return server->arena.total_allocated;
 }
 
 /* Cleanup global pools */
 void turbo_tcp_cleanup_pools(void) {
-    while (g_tcp_send_op_pool) {
-        turbo_tcp_send_op_t* op = g_tcp_send_op_pool;
-        g_tcp_send_op_pool = op->next;
-        free(op);
+    if (g_tcp_disruptor) {
+        disruptor_consumer_unregister(g_tcp_disruptor, &g_tcp_disruptor_cons);
+        disruptor_destroy(g_tcp_disruptor);
+        g_tcp_disruptor = NULL;
+        g_tcp_disruptor_ready = 0;
     }
-    g_tcp_send_op_pool_size = 0;
-    
-    TURBO_STATS_INC("tcp.pools_cleaned");
 }

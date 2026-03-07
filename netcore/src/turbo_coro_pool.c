@@ -51,6 +51,8 @@ struct coro_pool_s {
   size_t alive_count;
   uv_timer_t idle_timer;
   int idle_timer_active;
+  int idle_timer_closing;
+  int destroy_pending;
   int closed;
 
   /* Waiter list — coroutines blocked waiting for a free slot */
@@ -73,7 +75,7 @@ static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason);
 coro_pool_t *coro_pool_create(coro_context_t *ctx, const coro_pool_config_t *config) {
   if (!ctx) return NULL;
 
-  coro_pool_config_t defaults = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t defaults = CORO_POOL_CONFIG_DEFAULT;
   if (!config) config = &defaults;
   if (config->max_size == 0) return NULL;
 
@@ -143,6 +145,13 @@ void coro_pool_destroy(coro_pool_t *pool) {
   coro_t *running = coro_running();
   if (running && coro_is_scheduled(running)) {
     coro_yield();
+  }
+
+  /* If idle_timer close is still pending (uv_close is async), defer the
+     free to the close callback so libuv doesn't process freed memory. */
+  if (pool->idle_timer_closing) {
+    pool->destroy_pending = 1;
+    return;
   }
 
   free(pool->slots);
@@ -384,11 +393,21 @@ static void idle_timer_start(coro_pool_t *pool) {
   pool->idle_timer_active = 1;
 }
 
-static void on_idle_timer_close(uv_handle_t *handle) { (void)handle; }
+static void on_idle_timer_close(uv_handle_t *handle) {
+  coro_pool_t *pool = (coro_pool_t *)handle->data;
+  if (pool) {
+    pool->idle_timer_closing = 0;
+    if (pool->destroy_pending) {
+      free(pool->slots);
+      free(pool);
+    }
+  }
+}
 
 static void idle_timer_stop(coro_pool_t *pool) {
   if (!pool->idle_timer_active) return;
   uv_timer_stop(&pool->idle_timer);
+  pool->idle_timer_closing = 1;
   uv_close((uv_handle_t *)&pool->idle_timer, on_idle_timer_close);
   pool->idle_timer_active = 0;
 }

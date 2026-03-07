@@ -13,6 +13,7 @@
 
 #include "tinytest.h"
 #include "turbo_coro.h"
+#include "turbo_coro_internal.h"
 #include "netcore.h"
 
 
@@ -60,7 +61,21 @@ static void teardown(void) {
     coro_server_destroy(g_ctx.server);
     g_ctx.server = NULL;
   }
+
+  /* Drain pending handles and tick scheduler so handler coroutines can exit */
   if (g_ctx.ctx) {
+    int max_drain = 200;
+    while (max_drain-- > 0) {
+      int has_handles = coro_context_alive(g_ctx.ctx);
+      int has_coros = g_ctx.ctx->scheduler
+                          ? coro_scheduler_count(g_ctx.ctx->scheduler) > 0
+                          : 0;
+      if (!has_handles && !has_coros) break;
+      uv_run(g_ctx.ctx->loop, UV_RUN_NOWAIT);
+      if (g_ctx.ctx->scheduler) {
+        coro_scheduler_tick(g_ctx.ctx->scheduler);
+      }
+    }
     coro_context_destroy(g_ctx.ctx);
     g_ctx.ctx = NULL;
   }
@@ -87,7 +102,7 @@ static void coro_test_create_destroy(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
   coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
   t->test_result = (pool != NULL) ? 1 : 0;
 
@@ -104,7 +119,7 @@ static void coro_test_open_close(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
   cfg.min_size = 2;
   cfg.max_size = 4;
   coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
@@ -126,7 +141,7 @@ static void coro_test_borrow_return(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
   cfg.min_size = 1;
   cfg.max_size = 4;
   coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
@@ -182,7 +197,7 @@ static void coro_test_borrow_grows(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
   cfg.min_size = 1;
   cfg.max_size = 3;
   coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
@@ -215,7 +230,7 @@ static void coro_test_query_counts(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
 
-  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
   cfg.min_size = 2;
   cfg.max_size = 4;
   coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);

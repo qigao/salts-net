@@ -1,7 +1,7 @@
 #include "platform.h"
 #include "turbo_thread.h"
 #include "turbo_buffer.h"
-#include "stats.h"
+
 #include "tinytest.h"
 #include "turbo_atomic.h"
 #include <stdio.h>
@@ -84,9 +84,7 @@ spec("Arena Multithread Tests") {
     }
 
     // Verify arena integrity (basic check)
-    turbo_pool_stats_t stats;
-    turbo_pool_get_stats(&arena, &stats);
-    printf("Test complete. Total allocated: %zu, Regions: %zu\n", stats.total_allocated,
-           stats.region_count);
+    printf("Test complete. Total allocated: %zu, Regions: %zu\n", arena.total_allocated,
+           arena.region_count);
   }
 }

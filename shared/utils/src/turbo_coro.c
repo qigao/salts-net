@@ -83,7 +83,7 @@ int coro_resume(coro_t *co) {
 
 int coro_yield(void) {
   mco_coro *mco = mco_running();
-  if (!mco) return -1; // Not inside a coroutine
+  assert(mco && "coro_yield() must be called from within a coroutine");
   mco_result res = mco_yield(mco);
   return (res == MCO_SUCCESS) ? 0 : -1;
 }

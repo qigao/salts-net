@@ -79,12 +79,7 @@ turbo_pool_buffer_t *buf = turbo_pool_wrap_external(
 // 引用归零时自动调用 my_free
 ```
 
-## 统计
 
-```c
-turbo_pool_stats_t stats;
-turbo_pool_get_stats(&arena, &stats);
-```
 
 ## Flags
 

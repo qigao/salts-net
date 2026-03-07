@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include "turbo_pipe.h"
-#include "stats.h"
 #include "config.h"
 #include "internal.h"
 #include "tlog.h"
@@ -28,29 +27,7 @@ static turbo_pipe_send_op_t* g_pipe_send_op_pool = NULL;
 static size_t g_pipe_send_op_pool_size = 0;
 static const size_t MAX_PIPE_SEND_OP_POOL_SIZE = 256;
 
-/* Pipe Statistics IDs */
-static struct {
-    turbo_stat_id_t bytes_sent;
-    turbo_stat_id_t bytes_received;
-    turbo_stat_id_t send_errors;
-    turbo_stat_id_t recv_errors;
-    turbo_stat_id_t active_connections;
-    turbo_stat_id_t connections_closed;
-    int initialized;
-} s_pipe_stats = {0};
 
-static void init_pipe_stats(void) {
-    if (s_pipe_stats.initialized) return;
-    
-    s_pipe_stats.bytes_sent = turbo_stats_register("pipe.bytes_sent", TURBO_STAT_COUNTER);
-    s_pipe_stats.bytes_received = turbo_stats_register("pipe.bytes_received", TURBO_STAT_COUNTER);
-    s_pipe_stats.send_errors = turbo_stats_register("pipe.send_errors", TURBO_STAT_COUNTER);
-    s_pipe_stats.recv_errors = turbo_stats_register("pipe.recv_errors", TURBO_STAT_COUNTER);
-    s_pipe_stats.active_connections = turbo_stats_register("pipe.active_connections", TURBO_STAT_GAUGE);
-    s_pipe_stats.connections_closed = turbo_stats_register("pipe.connections_closed", TURBO_STAT_COUNTER);
-    
-    s_pipe_stats.initialized = 1;
-}
 
 /* Get send operation from pool (thread-safe) */
 static turbo_pipe_send_op_t* get_pipe_send_op(turbo_pipe_client_t* client) {
@@ -122,9 +99,7 @@ static void on_pipe_write_complete(uv_write_t* req, int status) {
             total_bytes += op->slices[i].length;
         }
         
-        turbo_stats_counter_add_fast(s_pipe_stats.bytes_sent, total_bytes);
     } else {
-        turbo_stats_counter_inc_fast(s_pipe_stats.send_errors);
     }
     
     return_pipe_send_op(op);
@@ -168,14 +143,13 @@ static void on_pipe_recv(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf
     
     if (nread < 0) {
         /* EOF or error */
-        turbo_stats_counter_inc_fast(s_pipe_stats.recv_errors);
         turbo_pipe_client_close(client);
         return;
     }
     
     if (nread == 0 || !buf || !buf->base) return;
     
-    turbo_stats_counter_add_fast(s_pipe_stats.bytes_received, (size_t)nread);
+
     
     /* Determine which buffer was used */
     turbo_pool_buffer_t* used_buffer = NULL;
@@ -212,8 +186,6 @@ static void on_pipe_handle_closed(uv_handle_t* handle) {
     /* Update connection count */
     if (client->server) {
         client->server->active_connections--;
-        turbo_stats_gauge_set_fast(s_pipe_stats.active_connections, client->server->active_connections);
-        turbo_stats_counter_inc_fast(s_pipe_stats.connections_closed);
         
         if (client->server->on_close) {
             client->server->on_close(client);
@@ -248,7 +220,6 @@ static void on_pipe_handle_closed(uv_handle_t* handle) {
 /* New connection callback */
 static void on_pipe_new_connection(uv_stream_t* server_stream, int status) {
     if (status < 0) {
-        turbo_stats_counter_inc_fast(s_pipe_stats.recv_errors);
         return;
     }
     
@@ -306,7 +277,6 @@ static void on_pipe_new_connection(uv_stream_t* server_stream, int status) {
     /* Start reading */
     if (uv_read_start((uv_stream_t*)&client->handle, alloc_pipe_recv_buffer, on_pipe_recv) == 0) {
         server->active_connections++;
-        turbo_stats_gauge_set_fast(s_pipe_stats.active_connections, server->active_connections);
 
         if (client->on_connect) {
             /* turbo_connect_cb signature: (void* handle, int status, void* peer)
@@ -323,8 +293,6 @@ int turbo_pipe_server_init(turbo_pipe_server_t* server, uv_loop_t* loop, const c
     
     memset(server, 0, sizeof(*server));
     server->loop = loop;
-    
-    init_pipe_stats();
     
     /* Initialize server arena */
     if (turbo_pool_init(&server->arena, 0) != 0) {
@@ -402,8 +370,6 @@ turbo_pipe_client_t* turbo_pipe_client_create(uv_loop_t* loop) {
     
     client->is_client_mode = 1;
     
-    init_pipe_stats();
-    
     /* Initialize client arena */
     if (turbo_pool_init(&client->arena, 0) != 0) {
         free(client);
@@ -452,7 +418,6 @@ static void on_pipe_client_connected(uv_connect_t* req, int status) {
             client->on_connect(client, 0, NULL);
         }
     } else {
-        turbo_stats_counter_inc_fast(s_pipe_stats.recv_errors);
         if (status == UV_ETIMEDOUT || status == UV_ECONNREFUSED || status == UV_ECONNRESET || status == UV_ENOENT) {
             TLOG_DEBUG("Pipe connection failed: {:s}", uv_strerror(status));
         } else {
@@ -661,75 +626,7 @@ int turbo_pipe_sendv(turbo_pipe_client_t* client, const turbo_pipe_iovec_t* iov,
     return rc;
 }
 
-/* Get statistics */
-void turbo_pipe_get_stats(const turbo_pipe_server_t* server, turbo_pipe_stats_t* stats) {
-    if (!server || !stats) return;
-    
-    memset(stats, 0, sizeof(*stats));
-    
-    /* Get arena statistics */
-    turbo_pool_get_stats(&server->arena, &stats->arena_stats);
-    
-    /* Get global pipe statistics from stats system */
-    turbo_stat_entry_t* entry;
-    
-    entry = turbo_stats_get("pipe.bytes_sent");
-    stats->bytes_sent = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.bytes_received");
-    stats->bytes_received = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.messages_sent");
-    stats->messages_sent = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.messages_received");
-    stats->messages_received = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.zero_copy_sends");
-    stats->zero_copy_sends = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.copy_sends");
-    stats->copy_sends = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.zero_copy_receives");
-    stats->zero_copy_receives = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.active_connections");
-    stats->active_connections = entry ? entry->data.gauge : 0;
-    
-    entry = turbo_stats_get("pipe.connections_established");
-    stats->connections_established = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.connections_closed");
-    stats->connections_closed = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.send_errors");
-    stats->send_errors = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.recv_errors");
-    stats->recv_errors = entry ? entry->data.counter : 0;
-    
-    entry = turbo_stats_get("pipe.client_connection_errors");
-    stats->connection_errors = entry ? entry->data.counter : 0;
-}
 
-/* Reset statistics */
-void turbo_pipe_reset_stats(turbo_pipe_server_t* server) {
-    if (!server) return;
-    
-    turbo_stats_reset("pipe.bytes_sent");
-    turbo_stats_reset("pipe.bytes_received");
-    turbo_stats_reset("pipe.messages_sent");
-    turbo_stats_reset("pipe.messages_received");
-    turbo_stats_reset("pipe.zero_copy_sends");
-    turbo_stats_reset("pipe.copy_sends");
-    turbo_stats_reset("pipe.zero_copy_receives");
-    turbo_stats_reset("pipe.connections_established");
-    turbo_stats_reset("pipe.connections_closed");
-    turbo_stats_reset("pipe.send_errors");
-    turbo_stats_reset("pipe.recv_errors");
-    turbo_stats_reset("pipe.client_connection_errors");
-}
 
 /* Trim memory */
 void turbo_pipe_trim_memory(turbo_pipe_server_t* server) {
@@ -740,10 +637,7 @@ void turbo_pipe_trim_memory(turbo_pipe_server_t* server) {
 /* Get memory usage */
 size_t turbo_pipe_get_memory_usage(const turbo_pipe_server_t* server) {
     if (!server) return 0;
-    
-    turbo_pool_stats_t stats;
-    turbo_pool_get_stats(&server->arena, &stats);
-    return stats.total_allocated;
+    return server->arena.total_allocated;
 }
 
 /* Cleanup global pools */

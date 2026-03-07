@@ -1,5 +1,5 @@
 #include "turbo_buffer.h"
-#include "stats.h"
+
 #include "tinytest.h"
 #include <stdint.h>
 #include <string.h>
@@ -41,10 +41,8 @@ spec("Simple Arena Tests") {
     }
   }
 
-  it("should get arena statistics") {
-    turbo_pool_stats_t stats;
-    turbo_pool_get_stats(&test_arena, &stats);
-
-    check_int_ge(stats.region_count, 0);
+  it("should check arena usage") {
+    check_int_ge(test_arena.region_count, 1);
+    check_size_ge(test_arena.total_allocated, 2 * 1024 * 1024);
   }
 }

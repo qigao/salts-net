@@ -10,6 +10,20 @@
 
 static int g_executed = 0;
 static int g_counter = 0;
+#include "turbo_coro_internal.h"
+
+static void robust_context_destroy(coro_context_t *ctx) {
+    if (!ctx) return;
+    int max_drain = 500;
+    while (max_drain-- > 0) {
+        int has_handles = coro_context_alive(ctx);
+        int has_coros = ctx->scheduler ? coro_scheduler_count(ctx->scheduler) > 0 : 0;
+        if (!has_handles && !has_coros) break;
+        uv_run(ctx->loop, UV_RUN_NOWAIT);
+        if (ctx->scheduler) coro_scheduler_tick(ctx->scheduler);
+    }
+    coro_context_destroy(ctx);
+}
 
 /* ── Test coroutines ──────────────────────────────────────── */
 
@@ -54,7 +68,7 @@ spec("Lazy Task API") {
         /* Verify task is not done */
         check_int_eq(coro_task_is_done(task), 0);
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should execute task when started") {
@@ -80,7 +94,7 @@ spec("Lazy Task API") {
         /* Task should be done */
         check_int_eq(coro_task_is_done(task), 1);
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should cancel task before start") {
@@ -110,7 +124,7 @@ spec("Lazy Task API") {
         /* Run loop to clean up */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should not allow double start") {
@@ -135,7 +149,7 @@ spec("Lazy Task API") {
 
         check_int_eq(counter, 1);  /* Should execute only once */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should handle conditional execution") {
@@ -165,7 +179,7 @@ spec("Lazy Task API") {
         check_int_eq(c2, 0);  /* Cancelled */
         check_int_eq(c3, 1);  /* Executed */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should handle async tasks") {
@@ -189,7 +203,7 @@ spec("Lazy Task API") {
 
         check_int_eq(g_executed, 2);  /* Started and completed */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should compare eager vs lazy execution") {
@@ -216,7 +230,7 @@ spec("Lazy Task API") {
         check_int_eq(eager_counter, 1);  /* Now executed */
         check_int_eq(lazy_counter, 1);   /* Now executed */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 
     it("should auto-cleanup completed tasks") {
@@ -238,6 +252,6 @@ spec("Lazy Task API") {
 
         /* All tasks should be cleaned up (we can't verify count without exposing internals) */
 
-        coro_context_destroy(ctx);
+        robust_context_destroy(ctx);
     }
 }

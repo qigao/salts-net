@@ -12,6 +12,7 @@
 #include "turbo_coro_server.h"
 #include "turbo_coro_client.h"
 #include "turbo_coro.h"
+#include "turbo_coro_internal.h"
 #include "tinytest.h"
 
 #define TEST_PORT 18889
@@ -54,7 +55,22 @@ static void setup(void) {
 
 static void teardown(void) {
   if (g.server) { coro_server_destroy(g.server); g.server = NULL; }
-  if (g.ctx)    { coro_context_destroy(g.ctx);    g.ctx = NULL; }
+
+  /* Drain pending handles and tick scheduler so handler coroutines can exit */
+  if (g.ctx) {
+    int max_drain = 200;
+    while (max_drain-- > 0) {
+      int has_handles = coro_context_alive(g.ctx);
+      int has_coros = g.ctx->scheduler ? coro_scheduler_count(g.ctx->scheduler) > 0 : 0;
+      if (!has_handles && !has_coros) break;
+      uv_run(g.ctx->loop, UV_RUN_NOWAIT);
+      if (g.ctx->scheduler) {
+        coro_scheduler_tick(g.ctx->scheduler);
+      }
+    }
+    coro_context_destroy(g.ctx);
+    g.ctx = NULL;
+  }
 }
 
 static void run_coro(coro_fn fn) {

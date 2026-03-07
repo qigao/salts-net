@@ -28,6 +28,7 @@
 #include "turbo_fs.h"
 #include "minicoro.h"
 #include "turbo_mmap.h"
+#include "disruptor.h"
 
 
 #ifdef _WIN32
@@ -55,8 +56,6 @@ uint64_t __pthread_threadid_np(void);
 #define MAX_SINKS 8
 #define DEFAULT_POOL_SIZE (32 * 1024)
 #define DEFAULT_ASYNC_POOL_SIZE (1024 * 1024)
-#define MAX_QUEUE_SIZE 10000      // Bounded queue size for backpressure
-#define QUEUE_HIGH_WATERMARK 8000 // Start warning when queue reaches this
 #define STRING_PADDING 8          // Padding for string alignment
 
 // ANSI color codes
@@ -742,39 +741,29 @@ void turbo_sink_destroy(turbo_log_sink_t *sink) {
 
 struct tlog_s {
   // ---------------------------------------------------------------------------
-  // Read-Only / Rare Access (Cold)
+  // Configuration (Read-Only)
   // ---------------------------------------------------------------------------
   turbo_log_level_t min_level;
-  size_t ring_mask;
   turbo_log_sink_t *sinks[MAX_SINKS];
   int sink_count;
   turbo_mutex_t sink_mutex;
-  
+
   // ---------------------------------------------------------------------------
-  // Producer Hot Fields
+  // Disruptor (Replaces custom ring buffer)
   // ---------------------------------------------------------------------------
-  alignas(64) turbo_atomic_int_t head;       // Producer index
-  alignas(64) turbo_atomic_int_t active_allocs; // Threads holding pool memory
-  
+  disruptor_t *disruptor;
+  disruptor_consumer_t consumer;
+
   // ---------------------------------------------------------------------------
-  // Consumer Hot Fields
+  // Memory Pool (Thread-Safe)
   // ---------------------------------------------------------------------------
-  alignas(64) turbo_atomic_int_t tail;       // Consumer index
-  alignas(64) turbo_atomic_int_t running;
-  
-  // ---------------------------------------------------------------------------
-  // Shared Hot Fields (High Contention)
-  // ---------------------------------------------------------------------------
-  alignas(64) turbo_atomic_int_t queue_size; 
-  alignas(64) turbo_mutex_t pool_mutex;
+  turbo_mutex_t pool_mutex;
   MemoryPool *async_pool;
-  
+
   // ---------------------------------------------------------------------------
-  // Synchronization
+  // Background Thread
   // ---------------------------------------------------------------------------
-  alignas(64) turbo_mutex_t queue_mutex;
-  turbo_cond_t queue_cond;
-  turbo_cond_t drain_cond;
+  turbo_atomic_int_t running;
   turbo_thread_t thread;
 
   // ---------------------------------------------------------------------------
@@ -782,123 +771,100 @@ struct tlog_s {
   // ---------------------------------------------------------------------------
   alignas(64) turbo_atomic_int64_t logs_written;
   alignas(64) turbo_atomic_int64_t logs_dropped;
-  
-  // Data
-  async_log_entry_t **ring_buffer;
+  alignas(64) turbo_atomic_int64_t logs_published;  // Total published to disruptor
 };
 
 // Forward declarations
 static void logger_write_to_sinks(tlog_t *logger, const turbo_log_entry_t *entry);
 
 // =============================================================================
-// Async Thread - Fully Async Processing
+// Async Thread - Using Disruptor
 // =============================================================================
-
-static void logger_process_queue_batch(tlog_t *logger) {
-  uint32_t mask = (uint32_t)logger->ring_mask;
-  
-  while (1) {
-    uint32_t t = (uint32_t)turbo_atomic_load(&logger->tail);
-    uint32_t h = (uint32_t)turbo_atomic_load(&logger->head);
-    
-    if (t == h) break;
-
-    uint32_t index = t & mask;
-    async_log_entry_t *ae = logger->ring_buffer[index];
-    
-    // Busy wait briefly if producer claimed slot but hasn't written pointer yet
-    while (unlikely(!ae)) {
-      turbo_thread_yield();
-      ae = logger->ring_buffer[index];
-    }
-
-    // Convert and write to sinks
-    turbo_log_entry_t entry = {.level = ae->level,
-                               .timestamp_ms = ae->timestamp_ms,
-                               .thread_id = ae->thread_id,
-                               .component = ae->component,
-                               .file = ae->file,
-                               .line = ae->line,
-                               .message = ae->message,
-                               .message_len = ae->message_len};
-
-    logger_write_to_sinks(logger, &entry);
-    turbo_atomic_fetch_add64(&logger->logs_written, 1);
-
-    logger->ring_buffer[index] = NULL;
-    turbo_atomic_fetch_add(&logger->tail, 1);
-    turbo_atomic_fetch_sub(&logger->active_allocs, 1);
-    
-    if (turbo_atomic_fetch_sub(&logger->queue_size, 1) == 1) {
-      // Signal drain only if we are truly empty
-      turbo_mutex_lock(&logger->queue_mutex);
-      turbo_cond_broadcast(&logger->drain_cond);
-      turbo_mutex_unlock(&logger->queue_mutex);
-      
-      // Safe to reset pool only if no pending producers and no active allocs
-      if (turbo_atomic_load(&logger->tail) == turbo_atomic_load(&logger->head) &&
-          turbo_atomic_load(&logger->active_allocs) == 0) {
-          turbo_mutex_lock(&logger->pool_mutex);
-          pool_reset(logger->async_pool);
-          turbo_mutex_unlock(&logger->pool_mutex);
-      }
-    }
-  }
-}
 
 static void async_logger_thread(void *arg) {
   tlog_t *logger = (tlog_t *)arg;
 
+  // Try to register consumer
+  uint64_t next_sequence = disruptor_consumer_register(logger->disruptor, &logger->consumer);
+
+  // Consumer loop
   while (turbo_atomic_load(&logger->running)) {
-    uint32_t t = (uint32_t)turbo_atomic_load(&logger->tail);
-    uint32_t h = (uint32_t)turbo_atomic_load(&logger->head);
+    disruptor_cursor_t cursor;
+    cursor.sequence = next_sequence;
 
-    if (t == h) {
-      // Small spin-wait to avoid context switches during high activity bursts
-      for (int i = 0; i < 64; i++) {
-        if (turbo_atomic_load(&logger->head) != (int)t) break;
-        turbo_thread_yield();
-      }
-
-      t = (uint32_t)turbo_atomic_load(&logger->tail);
-      h = (uint32_t)turbo_atomic_load(&logger->head);
-
-      if (t == h) {
-        turbo_mutex_lock(&logger->queue_mutex);
-        if (turbo_atomic_load(&logger->head) == (int)t && turbo_atomic_load(&logger->running)) {
-          turbo_cond_wait(&logger->queue_cond, &logger->queue_mutex);
-        }
-        turbo_mutex_unlock(&logger->queue_mutex);
-      }
+    // Try non-blocking first to avoid infinite spin
+    if (!disruptor_consumer_wait_for_nonblocking(logger->disruptor, &cursor)) {
+      // No data available, sleep briefly
+      turbo_sleep_ms(1);
+      continue;
     }
 
-    if (!turbo_atomic_load(&logger->running) && 
-        turbo_atomic_load(&logger->tail) == turbo_atomic_load(&logger->head)) {
-      break;
+    // Process all available entries in batch
+    for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
+      disruptor_cursor_t read_cursor;
+      read_cursor.sequence = seq;
+
+      // Get entry pointer from disruptor
+      async_log_entry_t **entry_ptr = (async_log_entry_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+      if (!entry_ptr || !*entry_ptr) continue;
+
+      async_log_entry_t *ae = *entry_ptr;
+
+      // Convert and write to sinks
+      turbo_log_entry_t entry = {
+        .level = ae->level,
+        .timestamp_ms = ae->timestamp_ms,
+        .thread_id = ae->thread_id,
+        .component = ae->component,
+        .file = ae->file,
+        .line = ae->line,
+        .message = ae->message,
+        .message_len = ae->message_len
+      };
+
+      logger_write_to_sinks(logger, &entry);
+      turbo_atomic_fetch_add64(&logger->logs_written, 1);
     }
 
-    logger_process_queue_batch(logger);
+    // Release entries back to disruptor
+    disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &cursor);
+    next_sequence = cursor.sequence + 1;
   }
 
   // Final drain on shutdown
-  logger_process_queue_batch(logger);
+  disruptor_cursor_t cursor;
+  cursor.sequence = next_sequence;
+  if (disruptor_consumer_wait_for_nonblocking(logger->disruptor, &cursor)) {
+    for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
+      disruptor_cursor_t read_cursor;
+      read_cursor.sequence = seq;
+      async_log_entry_t **entry_ptr = (async_log_entry_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+      if (entry_ptr && *entry_ptr) {
+        async_log_entry_t *ae = *entry_ptr;
+        turbo_log_entry_t entry = {
+          .level = ae->level,
+          .timestamp_ms = ae->timestamp_ms,
+          .thread_id = ae->thread_id,
+          .component = ae->component,
+          .file = ae->file,
+          .line = ae->line,
+          .message = ae->message,
+          .message_len = ae->message_len
+        };
+        logger_write_to_sinks(logger, &entry);
+        turbo_atomic_fetch_add64(&logger->logs_written, 1);
+      }
+    }
+    disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &cursor);
+  }
 
-  // Final signal that we're done
-  turbo_mutex_lock(&logger->queue_mutex);
-  turbo_cond_broadcast(&logger->drain_cond);
-  turbo_mutex_unlock(&logger->queue_mutex);
+  disruptor_consumer_unregister(logger->disruptor, &logger->consumer);
 }
 
 static int logger_start_async(tlog_t *logger) {
   turbo_atomic_store(&logger->running, 1);
-  turbo_atomic_store(&logger->queue_size, 0);
-
-  turbo_cond_init(&logger->queue_cond);
-  turbo_cond_init(&logger->drain_cond);
 
   if (turbo_thread_create(&logger->thread, async_logger_thread, logger) != 0) {
-    turbo_cond_destroy(&logger->queue_cond);
-    turbo_cond_destroy(&logger->drain_cond);
     return -1;
   }
 
@@ -907,15 +873,7 @@ static int logger_start_async(tlog_t *logger) {
 
 static void logger_stop_async(tlog_t *logger) {
   turbo_atomic_store(&logger->running, 0);
-
-  // Wake thread to exit
-  turbo_mutex_lock(&logger->queue_mutex);
-  turbo_cond_signal(&logger->queue_cond);
-  turbo_mutex_unlock(&logger->queue_mutex);
-
   turbo_thread_join(&logger->thread);
-  turbo_cond_destroy(&logger->queue_cond);
-  turbo_cond_destroy(&logger->drain_cond);
 }
 
 // =============================================================================
@@ -934,22 +892,29 @@ tlog_t *tlog_create(const tlog_config_t *config) {
 
   turbo_atomic_store64(&logger->logs_written, 0);
   turbo_atomic_store64(&logger->logs_dropped, 0);
-  turbo_atomic_store(&logger->active_allocs, 0);
+  turbo_atomic_store64(&logger->logs_published, 0);
 
-  logger->ring_mask = 16384 - 1; // 16K capacity
-  logger->ring_buffer = calloc(16384, sizeof(async_log_entry_t *));
-  turbo_atomic_store(&logger->head, 0);
-  turbo_atomic_store(&logger->tail, 0);
+  // Create disruptor (replaces custom ring buffer)
+  disruptor_config_t disruptor_config = {
+    .capacity = 16384,  // 16K entries (power of 2)
+    .entry_size = sizeof(async_log_entry_t *),  // Store pointers
+    .consumer_capacity = 1  // Single consumer
+  };
 
-  turbo_mutex_init(&logger->queue_mutex);
+  logger->disruptor = disruptor_create(&disruptor_config);
+  if (!logger->disruptor) {
+    turbo_mutex_destroy(&logger->pool_mutex);
+    turbo_mutex_destroy(&logger->sink_mutex);
+    free(logger);
+    return NULL;
+  }
 
+  // Create memory pool for log entries
   size_t async_pool_size =
       (config && config->buffer_size) ? config->buffer_size : DEFAULT_ASYNC_POOL_SIZE;
   logger->async_pool = pool_create(async_pool_size);
-  if (!logger->async_pool || !logger->ring_buffer) {
-    if (logger->ring_buffer) free(logger->ring_buffer);
-    if (logger->async_pool) pool_destroy(logger->async_pool);
-    turbo_mutex_destroy(&logger->queue_mutex);
+  if (!logger->async_pool) {
+    disruptor_destroy(logger->disruptor);
     turbo_mutex_destroy(&logger->pool_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
@@ -958,8 +923,7 @@ tlog_t *tlog_create(const tlog_config_t *config) {
 
   if (logger_start_async(logger) != 0) {
     pool_destroy(logger->async_pool);
-    free(logger->ring_buffer);
-    turbo_mutex_destroy(&logger->queue_mutex);
+    disruptor_destroy(logger->disruptor);
     turbo_mutex_destroy(&logger->pool_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
@@ -974,8 +938,7 @@ void tlog_destroy(tlog_t *logger) {
     return;
 
   logger_stop_async(logger);
-  free(logger->ring_buffer);
-  turbo_mutex_destroy(&logger->queue_mutex);
+  disruptor_destroy(logger->disruptor);
   pool_destroy(logger->async_pool);
 
   // Flush and destroy sinks
@@ -1037,18 +1000,16 @@ void tlog_flush(tlog_t *logger) {
   if (!logger)
     return;
 
-  // Wait for async queue to drain
-  turbo_mutex_lock(&logger->queue_mutex);
-  uint32_t t = (uint32_t)turbo_atomic_load(&logger->tail);
-  uint32_t h = (uint32_t)turbo_atomic_load(&logger->head);
-  while (t != h && turbo_atomic_load(&logger->running)) {
-    // Signal worker and wait for drain
-    turbo_cond_signal(&logger->queue_cond);
-    turbo_cond_wait(&logger->drain_cond, &logger->queue_mutex);
-    t = (uint32_t)turbo_atomic_load(&logger->tail);
-    h = (uint32_t)turbo_atomic_load(&logger->head);
+  // Wait for all published logs to be written
+  int64_t published = turbo_atomic_load64(&logger->logs_published);
+  int64_t written = turbo_atomic_load64(&logger->logs_written);
+
+  int timeout = 0;
+  while (written < published && timeout < 1000) {  // Max 1 second timeout
+    turbo_sleep_ms(1);
+    written = turbo_atomic_load64(&logger->logs_written);
+    timeout++;
   }
-  turbo_mutex_unlock(&logger->queue_mutex);
 
   // Flush all sinks
   turbo_mutex_lock(&logger->sink_mutex);
@@ -1087,20 +1048,10 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
     return;
   }
 
-  // Build message first in thread-local buffer to know exact length
+  // Build message first in thread-local buffer
   int msg_len = fmt_print(tls_msg_buf, MAX_MESSAGE_SIZE, fmt, args, arg_count);
   if (msg_len < 0) msg_len = 0;
   if (msg_len >= MAX_MESSAGE_SIZE) msg_len = MAX_MESSAGE_SIZE - 1;
-
-  // Cooperative backpressure if in coroutine
-  while (turbo_atomic_load(&logger->queue_size) >= MAX_QUEUE_SIZE) {
-    if (mco_running()) {
-      mco_yield(mco_running());
-    } else {
-      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-      return;
-    }
-  }
 
   size_t comp_len = component ? strlen(component) : 0;
   size_t file_len = file ? strlen(file) : 0;
@@ -1110,11 +1061,6 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
   // Allocate from pool (must be synchronized)
   turbo_mutex_lock(&logger->pool_mutex);
   while (pool_get_available(logger->async_pool) < needed) {
-    if (turbo_atomic_load(&logger->queue_size) == 0 && 
-        turbo_atomic_load(&logger->active_allocs) == 0) {
-      pool_reset(logger->async_pool);
-      break;
-    }
     if (mco_running()) {
       turbo_mutex_unlock(&logger->pool_mutex);
       mco_yield(mco_running());
@@ -1132,20 +1078,9 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return;
   }
-  
-  // Mark as active before unlocking
-  turbo_atomic_fetch_add(&logger->active_allocs, 1);
   turbo_mutex_unlock(&logger->pool_mutex);
 
-  // Now claim slot in ring buffer - Deadlock free!
-  uint32_t head = (uint32_t)turbo_atomic_fetch_add(&logger->head, 1);
-  uint32_t index = head & (uint32_t)logger->ring_mask;
-  
-  // Wait for slot to be cleared by consumer
-  while (unlikely(logger->ring_buffer[index] != NULL)) {
-      turbo_thread_yield();
-  }
-
+  // Fill entry
   ae->level = level;
   ae->timestamp_ms = turbo_realtime_ms();
   ae->thread_id = get_cached_tid();
@@ -1175,20 +1110,17 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
   memset(ptr + msg_len, 0, STRING_PADDING);
   ae->message_len = (size_t)msg_len;
 
-  // Memory Barrier
-  #ifdef _WIN32
-    MemoryBarrier();
-  #else
-    __sync_synchronize();
-  #endif
+  // Publish to disruptor
+  disruptor_cursor_t cursor;
+  disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
 
-  // Enqueue
-  logger->ring_buffer[index] = ae;
-  int prev_size = turbo_atomic_fetch_add(&logger->queue_size, 1);
-  if (prev_size == 0) {
-    turbo_mutex_lock(&logger->queue_mutex);
-    turbo_cond_signal(&logger->queue_cond);
-    turbo_mutex_unlock(&logger->queue_mutex);
+  async_log_entry_t **slot = (async_log_entry_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
+  if (slot) {
+    *slot = ae;
+    disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
+    turbo_atomic_fetch_add64(&logger->logs_published, 1);
+  } else {
+    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
   }
 }
 
@@ -1201,24 +1133,9 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
   if (logger->sink_count == 0)
     return;
 
-  // Cooperative backpressure if in coroutine
-  while (turbo_atomic_load(&logger->queue_size) >= MAX_QUEUE_SIZE) {
-    if (mco_running()) {
-      mco_yield(mco_running());
-    } else {
-      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-      return;
-    }
-  }
-
   // Allocate from pool (must be synchronized)
   turbo_mutex_lock(&logger->pool_mutex);
   while (pool_get_available(logger->async_pool) < (message_len + 1024)) {
-    if (turbo_atomic_load(&logger->queue_size) == 0 &&
-        turbo_atomic_load(&logger->active_allocs) == 0) {
-      pool_reset(logger->async_pool);
-      break;
-    }
     if (mco_running()) {
       turbo_mutex_unlock(&logger->pool_mutex);
       mco_yield(mco_running());
@@ -1245,35 +1162,17 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return;
   }
-
-  // Mark as active before unlocking
-  turbo_atomic_fetch_add(&logger->active_allocs, 1);
   turbo_mutex_unlock(&logger->pool_mutex);
 
-  // Now claim slot in ring buffer
-  uint32_t head = (uint32_t)turbo_atomic_fetch_add(&logger->head, 1);
-  uint32_t index = head & (uint32_t)logger->ring_mask;
-  
-  // Wait for slot to be cleared by consumer
-  while (unlikely(logger->ring_buffer[index] != NULL)) {
-      turbo_thread_yield();
-  }
+  // Publish to disruptor
+  disruptor_cursor_t cursor;
+  disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
 
-  if (ae) {
-    #ifdef _WIN32
-      MemoryBarrier();
-    #else
-      __sync_synchronize();
-    #endif
-
-    // Enqueue
-    logger->ring_buffer[index] = ae;
-    int prev_size = turbo_atomic_fetch_add(&logger->queue_size, 1);
-    if (prev_size == 0) {
-      turbo_mutex_lock(&logger->queue_mutex);
-      turbo_cond_signal(&logger->queue_cond);
-      turbo_mutex_unlock(&logger->queue_mutex);
-    }
+  async_log_entry_t **slot = (async_log_entry_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
+  if (slot) {
+    *slot = ae;
+    disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
+    turbo_atomic_fetch_add64(&logger->logs_published, 1);
   } else {
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
   }
@@ -1306,7 +1205,9 @@ uint64_t tlog_get_dropped(const tlog_t *logger) {
 }
 
 int tlog_get_queue_size(const tlog_t *logger) {
-  return logger ? turbo_atomic_load(&((tlog_t *)logger)->queue_size) : 0;
+  // Disruptor doesn't expose queue size directly
+  // Return 0 for now (could be enhanced if needed)
+  return 0;
 }
 
 // =============================================================================

@@ -11,9 +11,10 @@
 #include "config.h"
 #include "internal.h"
 #include "turbo_buffer.h"
-#include "stats.h"
+#include "turbo_buffer.h"
 #include "turbo_kcp.h"
 #include "ikcp.h"
+#include "disruptor.h"
 
 /* Forward declarations for global synchronization */
 extern void turbo_kcp_sync_lock(void);
@@ -69,33 +70,44 @@ typedef struct turbo_kcp_client_mapping_s {
 #define KCP_CLIENT_MAP_SIZE 256
 static turbo_kcp_client_mapping_t *g_client_map[KCP_CLIENT_MAP_SIZE] = {0};
 
-/* Send operation pool */
-static turbo_kcp_send_op_t *g_send_op_pool = NULL;
-static size_t g_send_op_pool_size = 0;
-static const size_t MAX_SEND_OP_POOL_SIZE = 512;
+/* ── Lock-free send op pool via disruptor ──────────────────── */
+#define KCP_SEND_OP_POOL_CAPACITY 512  /* must be power of 2 */
 
-/* KCP Statistics IDs */
-static struct {
-    turbo_stat_id_t bytes_sent;
-    turbo_stat_id_t bytes_received;
-    turbo_stat_id_t send_errors;
-    turbo_stat_id_t recv_errors;
-    turbo_stat_id_t active_connections;
-    turbo_stat_id_t connections_closed;
-    int initialized;
-} s_kcp_stats = {0};
+static disruptor_t*          g_kcp_disruptor       = NULL;
+static disruptor_consumer_t  g_kcp_disruptor_cons;
+static int                   g_kcp_disruptor_ready  = 0;
 
-static void init_kcp_stats(void) {
-    if (s_kcp_stats.initialized) return;
+typedef struct {
+    turbo_kcp_send_op_t *op;
+} kcp_send_op_entry_t;
+
+static turbo_kcp_send_op_t g_kcp_send_op_slab[KCP_SEND_OP_POOL_CAPACITY];
+
+static void ensure_kcp_disruptor(void) {
+    if (g_kcp_disruptor_ready) return;
     
-    s_kcp_stats.bytes_sent = turbo_stats_register("kcp.bytes_sent", TURBO_STAT_COUNTER);
-    s_kcp_stats.bytes_received = turbo_stats_register("kcp.bytes_received", TURBO_STAT_COUNTER);
-    s_kcp_stats.send_errors = turbo_stats_register("kcp.send_errors", TURBO_STAT_COUNTER);
-    s_kcp_stats.recv_errors = turbo_stats_register("kcp.recv_errors", TURBO_STAT_COUNTER);
-    s_kcp_stats.active_connections = turbo_stats_register("kcp.active_connections", TURBO_STAT_GAUGE);
-    s_kcp_stats.connections_closed = turbo_stats_register("kcp.connections_closed", TURBO_STAT_COUNTER);
+    disruptor_config_t cfg = {
+        .entry_size       = sizeof(kcp_send_op_entry_t),
+        .capacity         = KCP_SEND_OP_POOL_CAPACITY,
+        .consumer_capacity = 1
+    };
+    g_kcp_disruptor = disruptor_create(&cfg);
+    if (!g_kcp_disruptor) return;
     
-    s_kcp_stats.initialized = 1;
+    disruptor_consumer_register(g_kcp_disruptor, &g_kcp_disruptor_cons);
+    
+    disruptor_sequence_range_t range;
+    if (disruptor_publisher_claim_n_blocking(g_kcp_disruptor,
+            KCP_SEND_OP_POOL_CAPACITY, &range)) {
+        for (uint64_t seq = range.first_sequence; seq <= range.last_sequence; ++seq) {
+            disruptor_cursor_t c = { .sequence = seq };
+            kcp_send_op_entry_t *e = (kcp_send_op_entry_t *)
+                disruptor_acquire_entry(g_kcp_disruptor, &c);
+            e->op = &g_kcp_send_op_slab[seq - range.first_sequence];
+        }
+        disruptor_publisher_commit_range_blocking(g_kcp_disruptor, &range);
+    }
+    g_kcp_disruptor_ready = 1;
 }
 
 /* Connection handshake */
@@ -149,7 +161,7 @@ static void add_client_mapping(uint32_t conv_id, turbo_kcp_client_t *client) {
   g_client_map[hash] = mapping;
   
   /* Update active connections (simplified for now, ideally track with atomic or context) */
-  /* turbo_stats_gauge_set_fast(s_kcp_stats.active_connections, ...); */
+
 }
 
 /* Remove client mapping */
@@ -162,31 +174,32 @@ static void remove_client_mapping(uint32_t conv_id) {
       turbo_kcp_client_mapping_t *to_remove = *mapping;
       *mapping = (*mapping)->next;
       free(to_remove);
-      turbo_stats_counter_inc_fast(s_kcp_stats.connections_closed);
       return;
     }
     mapping = &(*mapping)->next;
   }
 }
 
-/* Get send operation from pool */
+/* Get send operation: lock-free claim from disruptor, fallback to malloc */
 static turbo_kcp_send_op_t *get_send_op(turbo_kcp_server_t *server) {
   turbo_kcp_send_op_t *op = NULL;
 
-  turbo_kcp_sync_lock();
-  if (g_send_op_pool && g_send_op_pool_size > 0) {
-    op = g_send_op_pool;
-    g_send_op_pool = op->next;
-    g_send_op_pool_size--;
+  ensure_kcp_disruptor();
+  
+  if (g_kcp_disruptor_ready) {
+      disruptor_cursor_t cursor;
+      if (disruptor_consumer_wait_for_nonblocking(g_kcp_disruptor, &cursor)) {
+          const kcp_send_op_entry_t *e = (const kcp_send_op_entry_t *)
+              disruptor_show_entry(g_kcp_disruptor, &cursor);
+          op = e->op;
+          disruptor_consumer_release_entry(g_kcp_disruptor,
+              &g_kcp_disruptor_cons, &cursor);
+      }
   }
-  turbo_kcp_sync_unlock();
 
   if (!op) {
     op = (turbo_kcp_send_op_t *)malloc(sizeof(turbo_kcp_send_op_t));
-    if (op) {
-    } else {
-      return NULL;
-    }
+    if (!op) return NULL;
   }
 
   memset(op, 0, sizeof(*op));
@@ -194,22 +207,25 @@ static turbo_kcp_send_op_t *get_send_op(turbo_kcp_server_t *server) {
   return op;
 }
 
-/* Return send operation to pool */
+/* Return send operation: lock-free publish back into disruptor */
 static void return_send_op(turbo_kcp_send_op_t *op) {
   if (!op) return;
 
   turbo_pool_slice_release(&op->slice);
 
-    turbo_kcp_sync_lock();
-    if (g_send_op_pool_size < MAX_SEND_OP_POOL_SIZE) {
-        op->next = g_send_op_pool;
-        g_send_op_pool = op;
-        g_send_op_pool_size++;
-        turbo_kcp_sync_unlock();
-    } else {
-        turbo_kcp_sync_unlock();
-        free(op);
-    }
+  if (g_kcp_disruptor_ready &&
+      op >= &g_kcp_send_op_slab[0] &&
+      op < &g_kcp_send_op_slab[KCP_SEND_OP_POOL_CAPACITY]) {
+      disruptor_cursor_t cursor;
+      if (disruptor_publisher_try_claim(g_kcp_disruptor, &cursor)) {
+          kcp_send_op_entry_t *e = (kcp_send_op_entry_t *)
+              disruptor_acquire_entry(g_kcp_disruptor, &cursor);
+          e->op = op;
+          disruptor_publisher_publish(g_kcp_disruptor, &cursor);
+      }
+  } else {
+      free(op);
+  }
 }
 
 /* Send completion callback */
@@ -218,9 +234,7 @@ static void on_send_complete(uv_udp_send_t *req, int status) {
       (turbo_kcp_send_op_t *)((char *)req - offsetof(turbo_kcp_send_op_t, req));
 
   if (status == 0) {
-    turbo_stats_counter_add_fast(s_kcp_stats.bytes_sent, op->slice.length);
   } else {
-    turbo_stats_counter_inc_fast(s_kcp_stats.send_errors);
   }
 
   return_send_op(op);
@@ -531,13 +545,12 @@ static void on_kcp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
   if (!server) return;
 
   if (nread < 0) {
-    turbo_stats_counter_inc_fast(s_kcp_stats.recv_errors);
     return;
   }
 
   if (nread == 0 || !buf || !buf->base || !addr) return;
 
-  turbo_stats_counter_add_fast(s_kcp_stats.bytes_received, (size_t)nread);
+
 
   /* Client-mode: check for connection ACK first */
   if (server->connecting_client && handle_connection_ack(server, buf->base, nread)) {
@@ -570,7 +583,6 @@ static void on_kcp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
       /* Feed data to ikcp */
       int rc = ikcp_input(client->kcp_ctx->kcp, buf->base, (long)nread);
       if (rc < 0) {
-        turbo_stats_counter_inc_fast(s_kcp_stats.recv_errors);
         return;
       }
 
@@ -593,7 +605,7 @@ int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const cha
   memset(server, 0, sizeof(*server));
   server->loop = loop;
 
-  init_kcp_stats();
+
 
   if (turbo_pool_init(&server->arena, 0) != 0) {
     return UV_ENOMEM;
@@ -751,7 +763,7 @@ int turbo_kcp_send_buffer(turbo_kcp_client_t *client, turbo_pool_buffer_t *buffe
 
   int rc = ikcp_send(client->kcp_ctx->kcp, buffer->data, (int)length);
   if (rc < 0) {
-    turbo_stats_counter_inc_fast(s_kcp_stats.send_errors);
+
     return UV_EIO;
   }
 
@@ -768,7 +780,7 @@ int turbo_kcp_send(turbo_kcp_client_t *client, const char *data, size_t length) 
 
   int rc = ikcp_send(client->kcp_ctx->kcp, data, (int)length);
   if (rc < 0) {
-    turbo_stats_counter_inc_fast(s_kcp_stats.send_errors);
+
     return UV_EIO;
   }
 
@@ -783,7 +795,6 @@ int turbo_kcp_client_init(turbo_kcp_client_t *client, uv_loop_t *loop) {
   if (!client || !loop) return UV_EINVAL;
 
   memset(client, 0, sizeof(*client));
-  init_kcp_stats();
 
   client->server = malloc(sizeof(turbo_kcp_server_t));
   if (!client->server) return UV_ENOMEM;
@@ -945,136 +956,12 @@ int turbo_kcp_client_sendv(turbo_kcp_client_t *client, const turbo_kcp_iovec_t *
       rc = turbo_kcp_send(client, iov[i].data, iov[i].len);
     }
   }
-
-  if (rc == 0) {
-    TURBO_STATS_INC("kcp.scatter_gather_sends");
-  }
+ 
 
   return rc;
 }
 
-/* Get server statistics */
-void turbo_kcp_get_stats(const turbo_kcp_server_t *server, turbo_kcp_stats_t *stats) {
-  if (!server || !stats) return;
 
-  memset(stats, 0, sizeof(*stats));
-  turbo_pool_get_stats(&server->arena, &stats->arena_stats);
-
-  turbo_stat_entry_t *entry;
-
-  entry = turbo_stats_get("kcp.bytes_sent");
-  stats->bytes_sent = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.bytes_received");
-  stats->bytes_received = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.packets_sent");
-  stats->packets_sent = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.packets_received");
-  stats->packets_received = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.messages_sent");
-  stats->messages_sent = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.messages_received");
-  stats->messages_received = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.zero_copy_sends");
-  stats->zero_copy_sends = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.copy_sends");
-  stats->copy_sends = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.connections_established");
-  stats->connections_established = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.send_errors");
-  stats->send_errors = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.recv_errors");
-  stats->recv_errors = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.updates");
-  stats->kcp_updates = entry ? entry->data.counter : 0;
-}
-
-/* Get client statistics */
-void turbo_kcp_client_get_stats(const turbo_kcp_client_t *client, turbo_kcp_stats_t *stats) {
-  if (!client || !stats) return;
-
-  memset(stats, 0, sizeof(*stats));
-
-  turbo_stat_entry_t *entry;
-
-  entry = turbo_stats_get("kcp.bytes_sent");
-  stats->bytes_sent = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.bytes_received");
-  stats->bytes_received = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.packets_sent");
-  stats->packets_sent = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.packets_received");
-  stats->packets_received = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.messages_sent");
-  stats->messages_sent = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.messages_received");
-  stats->messages_received = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.zero_copy_sends");
-  stats->zero_copy_sends = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.copy_sends");
-  stats->copy_sends = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.connections_established");
-  stats->connections_established = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.send_errors");
-  stats->send_errors = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.recv_errors");
-  stats->recv_errors = entry ? entry->data.counter : 0;
-
-  entry = turbo_stats_get("kcp.updates");
-  stats->kcp_updates = entry ? entry->data.counter : 0;
-
-  stats->clients_active = client->connected ? 1 : 0;
-
-  if (client->server) {
-    turbo_pool_get_stats(&client->server->arena, &stats->arena_stats);
-  }
-}
-
-/* Reset server statistics */
-void turbo_kcp_reset_stats(turbo_kcp_server_t *server) {
-  if (!server) return;
-
-  turbo_stats_reset("kcp.bytes_sent");
-  turbo_stats_reset("kcp.bytes_received");
-  turbo_stats_reset("kcp.packets_sent");
-  turbo_stats_reset("kcp.packets_received");
-  turbo_stats_reset("kcp.messages_sent");
-  turbo_stats_reset("kcp.messages_received");
-  turbo_stats_reset("kcp.zero_copy_sends");
-  turbo_stats_reset("kcp.copy_sends");
-  turbo_stats_reset("kcp.connections_established");
-  turbo_stats_reset("kcp.send_errors");
-  turbo_stats_reset("kcp.recv_errors");
-  turbo_stats_reset("kcp.updates");
-  turbo_stats_reset("kcp.send_ops_allocated");
-  turbo_stats_reset("kcp.send_ops_reused");
-  turbo_stats_reset("kcp.send_ops_pooled");
-  turbo_stats_reset("kcp.send_ops_freed");
-  turbo_stats_reset("kcp.clients_mapped");
-  turbo_stats_reset("kcp.clients_unmapped");
-  turbo_stats_reset("kcp.kcp_outputs");
-  turbo_stats_reset("kcp.input_errors");
-}
 
 /* Trim arena memory */
 void turbo_kcp_trim_memory(turbo_kcp_server_t *server) {
@@ -1085,20 +972,17 @@ void turbo_kcp_trim_memory(turbo_kcp_server_t *server) {
 /* Get memory usage */
 size_t turbo_kcp_get_memory_usage(const turbo_kcp_server_t *server) {
   if (!server) return 0;
-
-  turbo_pool_stats_t stats;
-  turbo_pool_get_stats(&server->arena, &stats);
-  return stats.total_allocated;
+  return server->arena.total_allocated;
 }
 
 /* Cleanup global pools */
 void turbo_kcp_cleanup_pools(void) {
-  while (g_send_op_pool) {
-    turbo_kcp_send_op_t *op = g_send_op_pool;
-    g_send_op_pool = op->next;
-    free(op);
+  if (g_kcp_disruptor) {
+      disruptor_consumer_unregister(g_kcp_disruptor, &g_kcp_disruptor_cons);
+      disruptor_destroy(g_kcp_disruptor);
+      g_kcp_disruptor = NULL;
+      g_kcp_disruptor_ready = 0;
   }
-  g_send_op_pool_size = 0;
 
   for (int i = 0; i < KCP_CLIENT_MAP_SIZE; i++) {
     turbo_kcp_client_mapping_t *mapping = g_client_map[i];
@@ -1110,5 +994,5 @@ void turbo_kcp_cleanup_pools(void) {
     g_client_map[i] = NULL;
   }
 
-  TURBO_STATS_INC("kcp.pools_cleaned");
+
 }

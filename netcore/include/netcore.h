@@ -1,6 +1,9 @@
 #ifndef TURBO_NETCORE_H
 #define TURBO_NETCORE_H
 
+#include <disruptor.h>
+#include <ring_buffer.h>
+
 #include <netcore/config.h>
 #include <netcore/turbo_client.h>
 #include <netcore/turbo_tcp.h>

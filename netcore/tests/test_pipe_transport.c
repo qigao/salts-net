@@ -12,6 +12,7 @@
 #include "turbo_coro_client.h"
 #include "turbo_coro_server.h"
 #include "turbo_coro.h"
+#include "turbo_coro_internal.h"
 #include "tinytest.h"
 
 #define TEST_MESSAGE "pipe_test_message"
@@ -65,8 +66,28 @@ static void setup(void) {
 }
 
 static void teardown(void) {
-  if (g.server) { coro_server_destroy(g.server); g.server = NULL; }
-  if (g.ctx)    { coro_context_destroy(g.ctx);    g.ctx = NULL; }
+  if (g.server) {
+    coro_server_destroy(g.server);
+    g.server = NULL;
+  }
+
+  /* Let async close complete and handler coroutines exit cleanly.
+   * Run until no active handles remain (server close + client connections).
+   * Also tick the scheduler so woken coroutines can complete. */
+  if (g.ctx) {
+    int max_drain = 200;
+    while (max_drain-- > 0) {
+      int has_handles = coro_context_alive(g.ctx);
+      int has_coros = g.ctx->scheduler ? coro_scheduler_count(g.ctx->scheduler) > 0 : 0;
+      if (!has_handles && !has_coros) break;
+      uv_run(g.ctx->loop, UV_RUN_NOWAIT);
+      if (g.ctx->scheduler) {
+        coro_scheduler_tick(g.ctx->scheduler);
+      }
+    }
+    coro_context_destroy(g.ctx);
+    g.ctx = NULL;
+  }
 }
 
 static void run_coro(coro_fn fn) {

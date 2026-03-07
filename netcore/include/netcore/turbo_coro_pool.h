@@ -7,8 +7,8 @@
  * Protocol auto-detected from URL scheme (tcp://, tls://, ws://, etc.).
  */
 
-#ifndef coro_POOL_H
-#define coro_POOL_H
+#ifndef CORO_POOL_H
+#define CORO_POOL_H
 
 #include "platform.h"
 #include "turbo_coro_client.h"
@@ -33,7 +33,7 @@ typedef struct coro_pool_config_s {
 } coro_pool_config_t;
 
 /** Sensible defaults */
-#define coro_POOL_CONFIG_DEFAULT { 1, 8, 5000, 0, 60000 }
+#define CORO_POOL_CONFIG_DEFAULT { 1, 8, 5000, 0, 60000 }
 
 /* ── Lifecycle ─────────────────────────────────────────────── */
 

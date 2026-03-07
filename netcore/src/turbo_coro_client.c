@@ -6,7 +6,8 @@
  * Zero if/else branching in public API — all dispatch through ops.
  */
 
-#include "turbo_coro_client.h"
+#include "netcore/turbo_coro_client.h"
+#include "netcore/turbo_coro_server.h"
 #include "turbo_coro.h"
 #include "turbo_coro_internal.h"
 #include "turbo_dns.h"
@@ -16,13 +17,12 @@
 #include <string.h>
 #include <uv.h>
 
+
 /* ── Forward declarations ─────────────────────────────────── */
 
 static void on_timer_fired(uv_timer_t *handle);
 
 /* ── Ref counting ─────────────────────────────────────────── */
-
-#include "netcore/turbo_coro_server.h"
 
 void retain_client(coro_client_t *client) {
   if (client) client->ref_count++;
@@ -1231,10 +1231,14 @@ void coro_client_destroy(coro_client_t *client) {
     turbo_dns_cleanup();
   }
 
-  if (!uv_is_closing((uv_handle_t *)&client->timer)) {
-    uv_timer_stop(&client->timer);
-    retain_client(client);
-    uv_close((uv_handle_t *)&client->timer, on_handle_close);
+  /* Close timer handle if it's initialized. Check the type field directly
+     to avoid calling uv_is_closing() on an uninitialized handle. */
+  if (client->timer.type == UV_TIMER) {
+    if (!uv_is_closing((uv_handle_t *)&client->timer)) {
+      uv_timer_stop(&client->timer);
+      retain_client(client);
+      uv_close((uv_handle_t *)&client->timer, on_handle_close);
+    }
   }
 
   if (client->ops) {

@@ -5,7 +5,7 @@
 #include <string.h>
 #include <uv.h>
 #ifndef _WIN32
-#include <signal.h>
+  #include <signal.h>
 #endif
 #include "tlog.h"
 
@@ -23,31 +23,26 @@ static uv_mutex_t g_config_lock;
 static uv_once_t g_config_lock_once = UV_ONCE_INIT;
 
 #if defined(_MSC_VER)
-#define TURBO_THREAD_LOCAL __declspec(thread)
+  #define TURBO_THREAD_LOCAL __declspec(thread)
 #else
-#define TURBO_THREAD_LOCAL _Thread_local
+  #define TURBO_THREAD_LOCAL _Thread_local
 #endif
 
 static TURBO_THREAD_LOCAL char g_config_string_buf[256];
 
-static void init_config_lock_once(void) {
-  uv_mutex_init(&g_config_lock);
-}
+static void init_config_lock_once(void) { uv_mutex_init(&g_config_lock); }
 
 static void config_lock(void) {
   uv_once(&g_config_lock_once, init_config_lock_once);
   uv_mutex_lock(&g_config_lock);
 }
 
-static void config_unlock(void) {
-  uv_mutex_unlock(&g_config_lock);
-}
+static void config_unlock(void) { uv_mutex_unlock(&g_config_lock); }
 
 /* Parse size env like 64K/1M/2G or plain integer; returns def on failure */
 static size_t parse_env_size(const char *name, size_t def) {
   const char *s = getenv(name);
-  if (!s || !*s)
-    return def;
+  if (!s || !*s) return def;
 
   size_t n = 0;
   while (*s && isspace((unsigned char)*s))
@@ -61,18 +56,14 @@ static size_t parse_env_size(const char *name, size_t def) {
 
   if (*s) {
     char c = (char)tolower((unsigned char)*s);
-    if (c == 'k')
-      n *= (size_t)1024;
-    else if (c == 'm')
-      n *= (size_t)1024 * 1024;
-    else if (c == 'g')
-      n *= (size_t)1024 * 1024 * 1024;
+    if (c == 'k') n *= (size_t)1024;
+    else if (c == 'm') n *= (size_t)1024 * 1024;
+    else if (c == 'g') n *= (size_t)1024 * 1024 * 1024;
   }
   return n > 0 ? n : def;
 }
 
-static size_t parse_env_size_compat(const char *primary, const char *legacy,
-                                    size_t def) {
+static size_t parse_env_size_compat(const char *primary, const char *legacy, size_t def) {
   const char *value = getenv(primary);
   if (value && *value) {
     return parse_env_size(primary, def);
@@ -128,11 +119,10 @@ void turbo_config_cleanup(void) {
 
 int turbo_config_set_int(const char *key, int64_t value) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return -1;
-    }
+  }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -146,11 +136,10 @@ int turbo_config_set_int(const char *key, int64_t value) {
 
 int turbo_config_set_uint(const char *key, uint64_t value) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return -1;
-    }
+  }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -164,11 +153,10 @@ int turbo_config_set_uint(const char *key, uint64_t value) {
 
 int turbo_config_set_float(const char *key, double value) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return -1;
-    }
+  }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -182,11 +170,10 @@ int turbo_config_set_float(const char *key, double value) {
 
 int turbo_config_set_string(const char *key, const char *value) {
   config_lock();
-  if (!g_config_init || !key || !value)
-    {
+  if (!g_config_init || !key || !value) {
     config_unlock();
     return -1;
-    }
+  }
 
   config_entry_t entry = {0};
   strncpy(entry.key, key, sizeof(entry.key) - 1);
@@ -200,11 +187,10 @@ int turbo_config_set_string(const char *key, const char *value) {
 
 int64_t turbo_config_get_int(const char *key, int64_t default_val) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return default_val;
-    }
+  }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_INT) {
@@ -219,11 +205,10 @@ int64_t turbo_config_get_int(const char *key, int64_t default_val) {
 
 uint64_t turbo_config_get_uint(const char *key, uint64_t default_val) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return default_val;
-    }
+  }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_UINT) {
@@ -238,11 +223,10 @@ uint64_t turbo_config_get_uint(const char *key, uint64_t default_val) {
 
 double turbo_config_get_float(const char *key, double default_val) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return default_val;
-    }
+  }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_FLOAT) {
@@ -257,11 +241,10 @@ double turbo_config_get_float(const char *key, double default_val) {
 
 const char *turbo_config_get_string(const char *key, const char *default_val) {
   config_lock();
-  if (!g_config_init || !key)
-    {
+  if (!g_config_init || !key) {
     config_unlock();
     return default_val;
-    }
+  }
 
   const ConfigMap_value *entry = ConfigMap_get(&g_config_map, key);
   if (!entry || entry->second.type != CONFIG_TYPE_STRING) {
@@ -269,8 +252,7 @@ const char *turbo_config_get_string(const char *key, const char *default_val) {
     return default_val;
   }
 
-  strncpy(g_config_string_buf, entry->second.value.str_val,
-          sizeof(g_config_string_buf) - 1);
+  strncpy(g_config_string_buf, entry->second.value.str_val, sizeof(g_config_string_buf) - 1);
   g_config_string_buf[sizeof(g_config_string_buf) - 1] = '\0';
   config_unlock();
   return g_config_string_buf;
@@ -294,24 +276,21 @@ void turbo_tcp_config_init_defaults(void) {
   turbo_config_set_uint(TURBO_TCP_BACKLOG, 128);
 
   /* Pool and buffer sizes with environment variable support */
-  turbo_config_set_uint(TURBO_TCP_POOL_CHUNK_SIZE,
-                       parse_env_size_compat("TURBO_TCP_POOL_CHUNK",
-                                             "turbo_TCP_POOL_CHUNK",
-                                             64 * 1024));
+  turbo_config_set_uint(
+      TURBO_TCP_POOL_CHUNK_SIZE,
+      parse_env_size_compat("TURBO_TCP_POOL_CHUNK", "turbo_TCP_POOL_CHUNK", 64 * 1024));
 
-  turbo_config_set_uint(TURBO_TCP_READ_BUF_MIN,
-                       parse_env_size_compat("TURBO_TCP_READ_BUF_MIN",
-                                             "turbo_TCP_READ_BUF_MIN",
-                                             16 * 1024));
+  turbo_config_set_uint(
+      TURBO_TCP_READ_BUF_MIN,
+      parse_env_size_compat("TURBO_TCP_READ_BUF_MIN", "turbo_TCP_READ_BUF_MIN", 16 * 1024));
 
   turbo_config_set_uint(
       TURBO_TCP_READ_BUF_MAX,
-      parse_env_size_compat("TURBO_TCP_READ_BUF_MAX", "turbo_TCP_READ_BUF_MAX",
-                            4 * 1024 * 1024));
+      parse_env_size_compat("TURBO_TCP_READ_BUF_MAX", "turbo_TCP_READ_BUF_MAX", 4 * 1024 * 1024));
 
-  turbo_config_set_uint(TURBO_TCP_READ_BUF_SIZE,
-                       parse_env_size_compat("TURBO_TCP_READ_BUF",
-                                             "turbo_TCP_READ_BUF", 64 * 1024));
+  turbo_config_set_uint(
+      TURBO_TCP_READ_BUF_SIZE,
+      parse_env_size_compat("TURBO_TCP_READ_BUF", "turbo_TCP_READ_BUF", 64 * 1024));
 
   /* Client buffer and IOV configuration */
   turbo_config_set_uint(TURBO_TCP_CLIENT_BUFFER_SIZE, 8192);
@@ -347,8 +326,7 @@ void turbo_config_print_all(void) {
     TLOG_ERROR("Configuration system not initialized");
     return;
   }
-
-  TLOG_INFO("=== Iris Configuration ===");
+  TLOG_INFO("==========================");
   TLOG_INFO("TCP Configuration:");
   TLOG_INFO("  recv_buffer_size: {:d}", turbo_tcp_config_get_recv_buffer_size());
   TLOG_INFO("  send_buffer_size: {:d}", turbo_tcp_config_get_send_buffer_size());
@@ -367,19 +345,14 @@ void turbo_config_print_all(void) {
   TLOG_INFO("  recv_buf_min: {}", turbo_udp_config_get_recv_buf_min());
   TLOG_INFO("  recv_buf_max: {}", turbo_udp_config_get_recv_buf_max());
 
-  TLOG_INFO("Statistics Configuration:");
-  TLOG_INFO("  update_pool_size: {}", turbo_stats_config_get_update_pool_size());
-  TLOG_INFO("  rate_interval_ms: {:d}", turbo_stats_config_get_rate_interval_ms());
   TLOG_INFO("==========================");
 }
 
 int turbo_config_load_from_file(const char *filename) {
-  if (!filename)
-    return -1;
+  if (!filename) return -1;
 
   FILE *file = fopen(filename, "r");
-  if (!file)
-    return -1;
+  if (!file) return -1;
 
   char line[512];
   int line_num = 0;
@@ -391,13 +364,11 @@ int turbo_config_load_from_file(const char *filename) {
     char *p = line;
     while (*p && isspace(*p))
       p++;
-    if (*p == '#' || *p == '\0')
-      continue;
+    if (*p == '#' || *p == '\0') continue;
 
     /* Parse key=value */
     char *eq = strchr(p, '=');
-    if (!eq)
-      continue;
+    if (!eq) continue;
 
     *eq = '\0';
     char *key = p;
@@ -432,82 +403,49 @@ int turbo_config_load_from_file(const char *filename) {
 }
 
 int turbo_config_save_to_file(const char *filename) {
-  if (!filename)
-    return -1;
+  if (!filename) return -1;
 
   FILE *file = fopen(filename, "w");
-  if (!file)
-    return -1;
+  if (!file) return -1;
 
   fprintf(file, "# Iris Configuration File\n");
   fprintf(file, "# Generated automatically\n\n");
 
   fprintf(file, "# TCP Configuration\n");
-  fprintf(file, "%s=%d\n", TURBO_TCP_RECV_BUFFER_SIZE,
-          turbo_tcp_config_get_recv_buffer_size());
-  fprintf(file, "%s=%d\n", TURBO_TCP_SEND_BUFFER_SIZE,
-          turbo_tcp_config_get_send_buffer_size());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_BATCH_BYTES,
-          turbo_tcp_config_get_batch_bytes());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_ARENA_FREE_MAX,
-          turbo_tcp_config_get_arena_free_max());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_ARENA_REGION_HINT,
-          turbo_tcp_config_get_arena_region_hint());
+  fprintf(file, "%s=%d\n", TURBO_TCP_RECV_BUFFER_SIZE, turbo_tcp_config_get_recv_buffer_size());
+  fprintf(file, "%s=%d\n", TURBO_TCP_SEND_BUFFER_SIZE, turbo_tcp_config_get_send_buffer_size());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_BATCH_BYTES, turbo_tcp_config_get_batch_bytes());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_ARENA_FREE_MAX, turbo_tcp_config_get_arena_free_max());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_ARENA_REGION_HINT, turbo_tcp_config_get_arena_region_hint());
   fprintf(file, "%s=%u\n", TURBO_TCP_BACKLOG, turbo_tcp_config_get_backlog());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_POOL_CHUNK_SIZE,
-          turbo_tcp_config_get_pool_chunk_size());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_READ_BUF_MIN,
-          turbo_tcp_config_get_read_buf_min());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_READ_BUF_MAX,
-          turbo_tcp_config_get_read_buf_max());
-  fprintf(file, "%s=%zu\n", TURBO_TCP_READ_BUF_SIZE,
-          turbo_tcp_config_get_read_buf_size());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_POOL_CHUNK_SIZE, turbo_tcp_config_get_pool_chunk_size());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_READ_BUF_MIN, turbo_tcp_config_get_read_buf_min());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_READ_BUF_MAX, turbo_tcp_config_get_read_buf_max());
+  fprintf(file, "%s=%zu\n", TURBO_TCP_READ_BUF_SIZE, turbo_tcp_config_get_read_buf_size());
 
   fprintf(file, "\n# UDP Configuration\n");
-  fprintf(file, "%s=%zu\n", TURBO_UDP_POOL_CHUNK_SIZE,
-          turbo_udp_config_get_pool_chunk_size());
-  fprintf(file, "%s=%zu\n", TURBO_UDP_RECV_BUF_SIZE,
-          turbo_udp_config_get_recv_buf_size());
-  fprintf(file, "%s=%zu\n", TURBO_UDP_RECV_BUF_MIN,
-          turbo_udp_config_get_recv_buf_min());
-  fprintf(file, "%s=%zu\n", TURBO_UDP_RECV_BUF_MAX,
-          turbo_udp_config_get_recv_buf_max());
+  fprintf(file, "%s=%zu\n", TURBO_UDP_POOL_CHUNK_SIZE, turbo_udp_config_get_pool_chunk_size());
+  fprintf(file, "%s=%zu\n", TURBO_UDP_RECV_BUF_SIZE, turbo_udp_config_get_recv_buf_size());
+  fprintf(file, "%s=%zu\n", TURBO_UDP_RECV_BUF_MIN, turbo_udp_config_get_recv_buf_min());
+  fprintf(file, "%s=%zu\n", TURBO_UDP_RECV_BUF_MAX, turbo_udp_config_get_recv_buf_max());
 
   fprintf(file, "\n# KCP Configuration\n");
-  fprintf(file, "%s=%u\n", TURBO_KCP_CONV_BASE,
-          turbo_kcp_config_get_conv_base());
-  fprintf(file, "%s=%d\n", TURBO_KCP_NODELAY,
-          turbo_kcp_config_get_nodelay());
-  fprintf(file, "%s=%d\n", TURBO_KCP_INTERVAL,
-          turbo_kcp_config_get_interval());
-  fprintf(file, "%s=%d\n", TURBO_KCP_RESEND,
-          turbo_kcp_config_get_resend());
-  fprintf(file, "%s=%d\n", TURBO_KCP_NC,
-          turbo_kcp_config_get_nc());
-  fprintf(file, "%s=%d\n", TURBO_KCP_MTU,
-          turbo_kcp_config_get_mtu());
-  fprintf(file, "%s=%d\n", TURBO_KCP_MSS,
-          turbo_kcp_config_get_mss());
-  fprintf(file, "%s=%d\n", TURBO_KCP_SND_WND,
-          turbo_kcp_config_get_snd_wnd());
-  fprintf(file, "%s=%d\n", TURBO_KCP_RCV_WND,
-          turbo_kcp_config_get_rcv_wnd());
+  fprintf(file, "%s=%u\n", TURBO_KCP_CONV_BASE, turbo_kcp_config_get_conv_base());
+  fprintf(file, "%s=%d\n", TURBO_KCP_NODELAY, turbo_kcp_config_get_nodelay());
+  fprintf(file, "%s=%d\n", TURBO_KCP_INTERVAL, turbo_kcp_config_get_interval());
+  fprintf(file, "%s=%d\n", TURBO_KCP_RESEND, turbo_kcp_config_get_resend());
+  fprintf(file, "%s=%d\n", TURBO_KCP_NC, turbo_kcp_config_get_nc());
+  fprintf(file, "%s=%d\n", TURBO_KCP_MTU, turbo_kcp_config_get_mtu());
+  fprintf(file, "%s=%d\n", TURBO_KCP_MSS, turbo_kcp_config_get_mss());
+  fprintf(file, "%s=%d\n", TURBO_KCP_SND_WND, turbo_kcp_config_get_snd_wnd());
+  fprintf(file, "%s=%d\n", TURBO_KCP_RCV_WND, turbo_kcp_config_get_rcv_wnd());
 
   fprintf(file, "\n# MTCP Configuration\n");
   fprintf(file, "%s=%s\n", TURBO_MTCP_HOST, turbo_mtcp_config_get_host());
   fprintf(file, "%s=%u\n", TURBO_MTCP_PORT, turbo_mtcp_config_get_port());
-  fprintf(file, "%s=%s\n", TURBO_MTCP_WORKER_PATH,
-          turbo_mtcp_config_get_worker_path());
-  fprintf(file, "%s=%u\n", TURBO_MTCP_WORKER_COUNT,
-          turbo_mtcp_config_get_worker_count());
-  fprintf(file, "%s=%c\n", TURBO_MTCP_HANDSHAKE_TOKEN,
-          turbo_mtcp_config_get_handshake_token());
-
-  fprintf(file, "\n# Statistics Configuration\n");
-  fprintf(file, "%s=%zu\n", TURBO_STATS_UPDATE_POOL_SIZE,
-          turbo_stats_config_get_update_pool_size());
-  fprintf(file, "%s=%d\n", TURBO_STATS_RATE_INTERVAL_MS,
-          turbo_stats_config_get_rate_interval_ms());
+  fprintf(file, "%s=%s\n", TURBO_MTCP_WORKER_PATH, turbo_mtcp_config_get_worker_path());
+  fprintf(file, "%s=%u\n", TURBO_MTCP_WORKER_COUNT, turbo_mtcp_config_get_worker_count());
+  fprintf(file, "%s=%c\n", TURBO_MTCP_HANDSHAKE_TOKEN, turbo_mtcp_config_get_handshake_token());
 
   fclose(file);
   return 0;
@@ -531,22 +469,18 @@ void turbo_pipe_config_init_defaults(void) {
   turbo_config_set_uint(TURBO_PIPE_BACKLOG, 128);
 
   /* Pool and buffer sizes with environment variable support */
-  turbo_config_set_uint(TURBO_PIPE_POOL_CHUNK_SIZE,
-                       parse_env_size_compat("TURBO_PIPE_POOL_CHUNK",
-                                             "turbo_PIPE_POOL_CHUNK",
-                                             64 * 1024));
-
-  turbo_config_set_uint(TURBO_PIPE_READ_BUF_MIN,
-                       parse_env_size_compat("TURBO_PIPE_READ_BUF_MIN",
-                                             "turbo_PIPE_READ_BUF_MIN",
-                                             16 * 1024));
+  turbo_config_set_uint(
+      TURBO_PIPE_POOL_CHUNK_SIZE,
+      parse_env_size_compat("TURBO_PIPE_POOL_CHUNK", "turbo_PIPE_POOL_CHUNK", 64 * 1024));
 
   turbo_config_set_uint(
-      TURBO_PIPE_READ_BUF_MAX,
-      parse_env_size("TURBO_PIPE_READ_BUF_MAX", 4 * 1024 * 1024));
+      TURBO_PIPE_READ_BUF_MIN,
+      parse_env_size_compat("TURBO_PIPE_READ_BUF_MIN", "turbo_PIPE_READ_BUF_MIN", 16 * 1024));
 
-  turbo_config_set_uint(TURBO_PIPE_READ_BUF_SIZE,
-                       parse_env_size("TURBO_PIPE_READ_BUF", 64 * 1024));
+  turbo_config_set_uint(TURBO_PIPE_READ_BUF_MAX,
+                        parse_env_size("TURBO_PIPE_READ_BUF_MAX", 4 * 1024 * 1024));
+
+  turbo_config_set_uint(TURBO_PIPE_READ_BUF_SIZE, parse_env_size("TURBO_PIPE_READ_BUF", 64 * 1024));
 
   /* Client buffer and IOV configuration */
   turbo_config_set_uint(TURBO_PIPE_CLIENT_BUFFER_SIZE, 8192);
@@ -573,24 +507,21 @@ void turbo_udp_config_init_defaults(void) {
   /* Initialize UDP configuration with defaults and environment overrides */
 
   /* Pool configuration */
-  turbo_config_set_uint(TURBO_UDP_POOL_CHUNK_SIZE,
-                       parse_env_size_compat("TURBO_UDP_POOL_CHUNK",
-                                             "turbo_UDP_POOL_CHUNK",
-                                             32 * 1024));
+  turbo_config_set_uint(
+      TURBO_UDP_POOL_CHUNK_SIZE,
+      parse_env_size_compat("TURBO_UDP_POOL_CHUNK", "turbo_UDP_POOL_CHUNK", 32 * 1024));
 
   /* Receive buffer configuration */
-  turbo_config_set_uint(TURBO_UDP_RECV_BUF_SIZE,
-                       parse_env_size_compat("TURBO_UDP_RECV_BUF",
-                                             "turbo_UDP_RECV_BUF", 64 * 1024));
-
-  turbo_config_set_uint(TURBO_UDP_RECV_BUF_MIN,
-                       parse_env_size_compat("TURBO_UDP_RECV_BUF_MIN",
-                                             "turbo_UDP_RECV_BUF_MIN",
-                                             8 * 1024));
+  turbo_config_set_uint(
+      TURBO_UDP_RECV_BUF_SIZE,
+      parse_env_size_compat("TURBO_UDP_RECV_BUF", "turbo_UDP_RECV_BUF", 64 * 1024));
 
   turbo_config_set_uint(
-      TURBO_UDP_RECV_BUF_MAX,
-      parse_env_size("TURBO_UDP_RECV_BUF_MAX", 2 * 1024 * 1024));
+      TURBO_UDP_RECV_BUF_MIN,
+      parse_env_size_compat("TURBO_UDP_RECV_BUF_MIN", "turbo_UDP_RECV_BUF_MIN", 8 * 1024));
+
+  turbo_config_set_uint(TURBO_UDP_RECV_BUF_MAX,
+                        parse_env_size("TURBO_UDP_RECV_BUF_MAX", 2 * 1024 * 1024));
 
   /* Validate and fix buffer limits */
   size_t recv_min = turbo_udp_config_get_recv_buf_min();

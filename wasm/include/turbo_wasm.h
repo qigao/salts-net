@@ -22,6 +22,8 @@ extern "C" {
 
 typedef struct turbo_wasm_vm_s turbo_wasm_vm_t;
 typedef void *turbo_wasm_func_t;
+typedef int (*turbo_wasm_link_cb_ex_t)(turbo_wasm_vm_t *vm, void *m3_module,
+                                        void *userdata);
 
 typedef enum turbo_wasm_value_type_e {
   TURBO_WASM_VAL_NONE = 0,
@@ -45,6 +47,12 @@ TURBO_WASM_API turbo_wasm_config_t turbo_wasm_config_default(void);
 TURBO_WASM_API turbo_wasm_vm_t *
 turbo_wasm_vm_create(const turbo_wasm_config_t *cfg);
 TURBO_WASM_API void turbo_wasm_vm_destroy(turbo_wasm_vm_t *vm);
+TURBO_WASM_API int turbo_wasm_vm_reset(turbo_wasm_vm_t *vm);
+
+TURBO_WASM_API void
+turbo_wasm_vm_set_link_callback_ex(turbo_wasm_vm_t *vm,
+                                   turbo_wasm_link_cb_ex_t cb,
+                                   void *userdata);
 
 TURBO_WASM_API int turbo_wasm_vm_load_bytes(turbo_wasm_vm_t *vm,
                                             const uint8_t *bytes, size_t len);

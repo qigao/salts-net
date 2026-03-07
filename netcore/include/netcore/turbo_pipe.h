@@ -7,7 +7,6 @@
 
 #include "platform.h"
 #include "turbo_buffer.h"
-#include "stats.h"
 #include "turbo_callbacks.h"
 
 
@@ -227,22 +226,7 @@ typedef struct {
   void turbo_pipe_discard_buffer(turbo_pipe_client_t *client,
                                turbo_pool_buffer_t *buffer);
 
-/* Statistics and monitoring */
-/**
- * @brief Retrieves statistics for the Pipe server.
- *
- * @param server A pointer to the `turbo_pipe_server_t` instance.
- * @param stats A pointer to a `turbo_pipe_stats_t` structure to fill with
- * statistics.
- */
-  void turbo_pipe_get_stats(const turbo_pipe_server_t *server,
-                          turbo_pipe_stats_t *stats);
-/**
- * @brief Resets all Pipe statistics for the given server.
- *
- * @param server A pointer to the `turbo_pipe_server_t` instance.
- */
-  void turbo_pipe_reset_stats(turbo_pipe_server_t *server);
+
 
 /* Memory management */
 /**

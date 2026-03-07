@@ -6,7 +6,6 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "stats.h"
 #include "turbo_callbacks.h"
 
 #include "turbo_buffer.h"
@@ -196,10 +195,7 @@ typedef struct {
 CXX_C_API int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_tls_iovec_t *iov,
                               size_t iovcnt);
 
-/* Statistics and monitoring */
-CXX_C_API void turbo_tls_get_stats(const turbo_tls_server_t *server,
-                                   turbo_tls_stats_t *stats);
-CXX_C_API void turbo_tls_reset_stats(turbo_tls_server_t *server);
+
 
 /* Memory management */
 CXX_C_API void turbo_tls_trim_memory(turbo_tls_server_t *server);

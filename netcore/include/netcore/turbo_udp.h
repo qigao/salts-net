@@ -6,7 +6,6 @@
 #include <uv.h>
 
 #include "platform.h"
-#include "stats.h"
 #include "turbo_callbacks.h"
 
 #include "turbo_buffer.h"
@@ -68,9 +67,7 @@ CXX_C_API int turbo_udp_set_multicast_loop(turbo_udp_t *udp, int on);
 CXX_C_API int turbo_udp_set_multicast_ttl(turbo_udp_t *udp, int ttl);
 CXX_C_API int turbo_udp_set_broadcast(turbo_udp_t *udp, int on);
 
-/* Statistics and monitoring */
-CXX_C_API void turbo_udp_get_stats(const turbo_udp_server_t *server, turbo_udp_stats_t *stats);
-CXX_C_API void turbo_udp_reset_stats(turbo_udp_server_t *server);
+
 
 /* Memory management */
 CXX_C_API void turbo_udp_trim_memory(turbo_udp_server_t *server);

@@ -19,7 +19,7 @@
 #include <time.h>
 #include <turbo_coro.h>
 #include <turbo_fs.h>
-#include <zlib-ng.h>
+#include <zstd.h>
 
 /* ── Send helpers ─────────────────────────────────────────────────── */
 
@@ -663,7 +663,7 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
   req = tstr_cat_fmt(req, "User-Agent: %s\r\n", c->user_agent);
 
   if (c->compression_enabled)
-    req = tstr_cat(req, "Accept-Encoding: gzip, deflate\r\n");
+    req = tstr_cat(req, "Accept-Encoding: zstd\r\n");
 
   if (form) {
     req = tstr_cat_fmt(req, "Content-Type: multipart/form-data; boundary=%s\r\n", form->boundary);
@@ -801,50 +801,72 @@ static void run_response_interceptors(http_client_t *c, http_response_t *resp, c
   }
 }
 
-/* ── Gzip/deflate decompression ───────────────────────────────────── */
+/* ── Zstd decompression ─────────────────────────────────────────────── */
 
 static int decompress_body(http_response_t *resp, const char *encoding) {
-  zng_stream strm = {0};
-  int wbits = (strstr(encoding, "gzip") != NULL) ? (15 + 16) : 15;
-  if (zng_inflateInit2(&strm, wbits) != Z_OK)
+  (void)encoding;
+  unsigned long long out_cap = ZSTD_getFrameContentSize(resp->body, resp->body_len);
+  
+  if (out_cap == ZSTD_CONTENTSIZE_ERROR)
     return -1;
 
-  size_t out_cap = resp->body_len * 4;
-  if (out_cap < 256)
-    out_cap = 256;
-  char *out = (char *)malloc(out_cap);
-  if (!out) {
-    zng_inflateEnd(&strm);
-    return -1;
+  if (out_cap != ZSTD_CONTENTSIZE_UNKNOWN) {
+    char *out = (char *)malloc((size_t)out_cap + 1);
+    if (!out) return -1;
+    size_t decompressed_size = ZSTD_decompress(out, (size_t)out_cap, resp->body, resp->body_len);
+    if (ZSTD_isError(decompressed_size)) {
+      free(out);
+      return -1;
+    }
+    free(resp->body);
+    resp->body = out;
+    resp->body_len = decompressed_size;
+    resp->body[decompressed_size] = '\0';
+    return 0;
   }
 
-  strm.next_in = (uint8_t *)resp->body;
-  strm.avail_in = (uint32_t)resp->body_len;
+  out_cap = resp->body_len * 4;
+  if (out_cap < 256) out_cap = 256;
+  char *out = (char *)malloc(out_cap + 1);
+  if (!out) return -1;
 
-  size_t total = 0;
-  int32_t ret;
-  do {
-    if (total + 16384 > out_cap) {
-      out_cap *= 2;
-      char *tmp = (char *)realloc(out, out_cap);
-      if (!tmp) {
-        free(out);
-        zng_inflateEnd(&strm);
-        return -1;
-      }
-      out = tmp;
-    }
-    strm.next_out = (uint8_t *)(out + total);
-    strm.avail_out = (uint32_t)(out_cap - total);
-    ret = zng_inflate(&strm, Z_NO_FLUSH);
-    total = out_cap - strm.avail_out;
-  } while (ret == Z_OK);
-
-  zng_inflateEnd(&strm);
-  if (ret != Z_STREAM_END) {
+  ZSTD_DCtx *dctx = ZSTD_createDCtx();
+  if (!dctx) {
     free(out);
     return -1;
   }
+
+  ZSTD_inBuffer input = {resp->body, resp->body_len, 0};
+  size_t total = 0;
+  size_t ret = 1;
+
+  while (input.pos < input.size || ret != 0) {
+    ZSTD_outBuffer output = {out + total, out_cap - total, 0};
+    ret = ZSTD_decompressStream(dctx, &output, &input);
+    if (ZSTD_isError(ret)) {
+      free(out);
+      ZSTD_freeDCtx(dctx);
+      return -1;
+    }
+    total += output.pos;
+
+    if (ret != 0 && output.pos == output.size) {
+      out_cap *= 2;
+      char *tmp = (char *)realloc(out, out_cap + 1);
+      if (!tmp) {
+        free(out);
+        ZSTD_freeDCtx(dctx);
+        return -1;
+      }
+      out = tmp;
+    } else if (ret != 0 && input.pos == input.size && output.pos < output.size) {
+      free(out);
+      ZSTD_freeDCtx(dctx);
+      return -1;
+    }
+  }
+
+  ZSTD_freeDCtx(dctx);
 
   free(resp->body);
   resp->body = out;

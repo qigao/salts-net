@@ -1,5 +1,5 @@
 find_package(libuv CONFIG REQUIRED)
-find_package(zlib-ng CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 
 # =============================================================================
 # re2c Generated Files
@@ -68,7 +68,7 @@ target_include_directories(
 target_link_libraries(
   http_client
   PUBLIC TurboNet::Utils TurboNet::Core $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
-  PRIVATE llhttp::llhttp_static cjwt sds zlib-ng::zlib)
+  PRIVATE llhttp::llhttp_static cjwt sds zstd::libzstd)
 
 set_target_properties(
   http_client

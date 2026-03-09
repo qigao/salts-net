@@ -11,6 +11,7 @@
 #ifndef TURBO_ATOMIC_H
 #define TURBO_ATOMIC_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Platform detection */
@@ -413,6 +414,204 @@ static inline void turbo_atomic_store_size_relaxed(turbo_atomic_size_t *ptr, siz
   #endif
 #else
   __atomic_store_n(ptr, value, __ATOMIC_RELAXED);
+#endif
+}
+
+/* ============================================================================
+ * Atomic Bool Operations
+ * ============================================================================ */
+
+typedef turbo_atomic_int_t turbo_atomic_bool_t;
+
+/**
+ * @brief Atomically load bool value
+ */
+static inline bool turbo_atomic_load_bool(turbo_atomic_bool_t *ptr) {
+  return turbo_atomic_load(ptr) != 0;
+}
+
+/**
+ * @brief Atomically store bool value
+ */
+static inline void turbo_atomic_store_bool(turbo_atomic_bool_t *ptr, bool value) {
+  turbo_atomic_store(ptr, value ? 1 : 0);
+}
+
+/**
+ * @brief Atomic compare-and-swap for bool
+ * @return 1 if swap succeeded, 0 otherwise
+ */
+static inline int turbo_atomic_cas_bool(turbo_atomic_bool_t *ptr, bool expected, bool desired) {
+  return turbo_atomic_cas(ptr, expected ? 1 : 0, desired ? 1 : 0);
+}
+
+/* ============================================================================
+ * Atomic Uint32 Operations
+ * ============================================================================ */
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  typedef _Atomic uint32_t turbo_atomic_uint32_t;
+#elif defined(_WIN32) || defined(_WIN64)
+  typedef volatile ULONG turbo_atomic_uint32_t;
+#else
+  typedef volatile uint32_t turbo_atomic_uint32_t;
+#endif
+
+/**
+ * @brief Atomically load uint32_t value
+ */
+static inline uint32_t turbo_atomic_load_uint32(turbo_atomic_uint32_t *ptr) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_load(ptr);
+#elif defined(_WIN32) || defined(_WIN64)
+  uint32_t value = *(volatile ULONG *)ptr;
+  _ReadBarrier();
+  return value;
+#else
+  return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+#endif
+}
+
+/**
+ * @brief Atomically store uint32_t value
+ */
+static inline void turbo_atomic_store_uint32(turbo_atomic_uint32_t *ptr, uint32_t value) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  atomic_store(ptr, value);
+#elif defined(_WIN32) || defined(_WIN64)
+  _WriteBarrier();
+  *(volatile ULONG *)ptr = (ULONG)value;
+#else
+  __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and add to uint32_t value, return OLD value
+ */
+static inline uint32_t turbo_atomic_fetch_add_uint32(turbo_atomic_uint32_t *ptr, uint32_t value) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_add(ptr, value);
+#elif defined(_WIN32) || defined(_WIN64)
+  return (uint32_t)InterlockedExchangeAdd((volatile LONG *)ptr, (LONG)value);
+#else
+  return __atomic_fetch_add(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and subtract from uint32_t value, return OLD value
+ */
+static inline uint32_t turbo_atomic_fetch_sub_uint32(turbo_atomic_uint32_t *ptr, uint32_t value) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_sub(ptr, value);
+#elif defined(_WIN32) || defined(_WIN64)
+  return (uint32_t)InterlockedExchangeAdd((volatile LONG *)ptr, -(LONG)value);
+#else
+  return __atomic_fetch_sub(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+/**
+ * @brief Atomic compare-and-swap for uint32_t
+ * @return 1 if swap succeeded, 0 otherwise
+ */
+static inline int turbo_atomic_cas_uint32(turbo_atomic_uint32_t *ptr, uint32_t expected, uint32_t desired) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_compare_exchange_strong(ptr, &expected, desired);
+#elif defined(_WIN32) || defined(_WIN64)
+  return InterlockedCompareExchange((volatile LONG *)ptr, (LONG)desired, (LONG)expected) == (LONG)expected;
+#else
+  return __atomic_compare_exchange_n(ptr, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+#endif
+}
+
+/* ============================================================================
+ * Atomic Uint64 Operations
+ * ============================================================================ */
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  typedef _Atomic uint64_t turbo_atomic_uint64_t;
+#elif defined(_WIN32) || defined(_WIN64)
+  typedef volatile ULONG64 turbo_atomic_uint64_t;
+#else
+  typedef volatile uint64_t turbo_atomic_uint64_t;
+#endif
+
+/**
+ * @brief Atomically load uint64_t value
+ */
+static inline uint64_t turbo_atomic_load_uint64(turbo_atomic_uint64_t *ptr) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_load_explicit(ptr, memory_order_acquire);
+#elif defined(_WIN32) || defined(_WIN64)
+  #ifdef _WIN64
+    uint64_t value = *(volatile ULONG64 *)ptr;
+    _ReadBarrier();
+    return value;
+  #else
+    return (uint64_t)InterlockedCompareExchange64((volatile LONG64 *)ptr, 0, 0);
+  #endif
+#else
+  return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+#endif
+}
+
+/**
+ * @brief Atomically store uint64_t value
+ */
+static inline void turbo_atomic_store_uint64(turbo_atomic_uint64_t *ptr, uint64_t value) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  atomic_store_explicit(ptr, value, memory_order_release);
+#elif defined(_WIN32) || defined(_WIN64)
+  #ifdef _WIN64
+    _WriteBarrier();
+    *(volatile ULONG64 *)ptr = (ULONG64)value;
+  #else
+    InterlockedExchange64((volatile LONG64 *)ptr, (LONG64)value);
+  #endif
+#else
+  __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and add to uint64_t value, return OLD value
+ */
+static inline uint64_t turbo_atomic_fetch_add_uint64(turbo_atomic_uint64_t *ptr, uint64_t value) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_add(ptr, value);
+#elif defined(_WIN32) || defined(_WIN64)
+  return (uint64_t)InterlockedExchangeAdd64((volatile LONG64 *)ptr, (LONG64)value);
+#else
+  return __atomic_fetch_add(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+/**
+ * @brief Atomically fetch and subtract from uint64_t value, return OLD value
+ */
+static inline uint64_t turbo_atomic_fetch_sub_uint64(turbo_atomic_uint64_t *ptr, uint64_t value) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_fetch_sub(ptr, value);
+#elif defined(_WIN32) || defined(_WIN64)
+  return (uint64_t)InterlockedExchangeAdd64((volatile LONG64 *)ptr, -(LONG64)value);
+#else
+  return __atomic_fetch_sub(ptr, value, __ATOMIC_SEQ_CST);
+#endif
+}
+
+/**
+ * @brief Atomic compare-and-swap for uint64_t
+ * @return 1 if swap succeeded, 0 otherwise
+ */
+static inline int turbo_atomic_cas_uint64(turbo_atomic_uint64_t *ptr, uint64_t expected, uint64_t desired) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+  return atomic_compare_exchange_strong(ptr, &expected, desired);
+#elif defined(_WIN32) || defined(_WIN64)
+  return InterlockedCompareExchange64((volatile LONG64 *)ptr, (LONG64)desired, (LONG64)expected) == (LONG64)expected;
+#else
+  return __atomic_compare_exchange_n(ptr, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 #endif
 }
 

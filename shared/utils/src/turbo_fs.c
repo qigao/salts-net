@@ -483,6 +483,19 @@ int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t offset) {
   return err;
 }
 
+int turbo_fs_pwrite(turbo_file_t fd, const char *data, size_t len, int64_t offset) {
+  if (fd == TURBO_INVALID_FILE || !data) {
+    return UV_EINVAL;
+  }
+
+  uv_fs_t req;
+  uv_buf_t buf = uv_buf_init((char *)data, (unsigned int)len);
+  int err = uv_fs_write(NULL, &req, (uv_file)fd, &buf, 1, offset, NULL);
+
+  uv_fs_req_cleanup(&req);
+  return err;
+}
+
 int turbo_fs_write(turbo_file_t fd, const char *data, size_t len) {
   if (fd == TURBO_INVALID_FILE || !data) {
     return UV_EINVAL;

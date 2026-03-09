@@ -2,7 +2,6 @@
 
 # Define list of test files
 set(TEST_FILES
-    test_aio.c
     test_arena_buffer.c
     test_arena.c
     test_dns_pref.c
@@ -23,16 +22,23 @@ set(TEST_FILES
     test_url_codec.c
     test_threadpool.c
     test_coro.c
-    bench_tlog.c
     test_mmap_group.c
     test_url.c
     test_url_helpers.c
     test_turbo_ring.c
+    test_bucket_priority_queue.c
+    test_bucket_priority_queue_spsc.c
+    test_bucket_priority_queue_mpmc.c
     test_disruptor.c
     test_turbo_atomic.c
+    test_object_pool.c
+    bench_tlog.c
+    bench_bucket_priority_queue.c
+    bench_priority_queue_comparison.c
     bench_turbo_ring.c
     bench_ring_comparison.c
-    bench_disruptor.c)
+    bench_disruptor.c
+    )
 
 # C++ test files
 set(CXX_TEST_FILES test_tlog_cpp.cpp)

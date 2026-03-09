@@ -54,7 +54,7 @@ spec("MMAP Tests") {
     check_size_eq(turbo_mmap_size(&mmap), strlen(test_data));
 
     // Verify content
-    check_ptr_eq(memcmp(test_data, turbo_mmap_data(&mmap), strlen(test_data)),
+    check_int_eq(memcmp(test_data, turbo_mmap_data(&mmap), strlen(test_data)),
                  0);
 
     turbo_mmap_close(&mmap);
@@ -91,7 +91,8 @@ spec("MMAP Tests") {
     err = turbo_mmap_open(&mmap, test_file_path, TURBO_MMAP_WRITE);
     check_int_eq(err, TURBO_MMAP_OK);
     ((char *)turbo_mmap_data(&mmap))[0] = original;
-    turbo_mmap_sync(&mmap, false);
+    err = turbo_mmap_sync(&mmap, false);
+    check_int_eq(err, TURBO_MMAP_OK);
     turbo_mmap_close(&mmap);
   }
 
@@ -106,7 +107,7 @@ spec("MMAP Tests") {
     check_size_eq(turbo_mmap_size(&mmap), 15);
 
     // Verify content at offset
-    check_ptr_eq(memcmp("memory-mapped w", turbo_mmap_data(&mmap), 15), 0);
+    check_int_eq(memcmp("memory-mapped w", turbo_mmap_data(&mmap), 15), 0);
 
     turbo_mmap_close(&mmap);
   }

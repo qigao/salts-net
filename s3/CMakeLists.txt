@@ -12,7 +12,7 @@ project(
 
 # Dependencies
 find_package(OpenSSL REQUIRED)
-find_package(zlib-ng CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 
 # S3 C Library Target
@@ -65,7 +65,7 @@ target_include_directories(
 target_link_libraries(
   s3_client
   PUBLIC TurboNet::HttpClient TurboNet::Utils OpenSSL::SSL OpenSSL::Crypto
-  PRIVATE cxml ini_parser turbo_parser uri_parser zlib-ng::zlib PkgConfig::STC)
+  PRIVATE cxml ini_parser turbo_parser uri_parser PkgConfig::STC)
 
 set_target_properties(s3_client PROPERTIES POSITION_INDEPENDENT_CODE ON
                                               FOLDER "s3"

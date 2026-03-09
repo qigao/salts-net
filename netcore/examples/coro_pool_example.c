@@ -86,7 +86,7 @@ static void main_coro(coro_t *co, void *arg) {
   main_arg_t *m = (main_arg_t *)arg;
 
   /* Create and open pool */
-  coro_pool_config_t cfg = coro_POOL_CONFIG_DEFAULT;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
   cfg.min_size = 2;
   cfg.max_size = 4;
 

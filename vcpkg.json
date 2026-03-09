@@ -41,7 +41,7 @@
       "name": "pkgconf"
     },
     {
-      "name": "zlib-ng"
+      "name": "zstd"
     },
     {
       "name": "simde"

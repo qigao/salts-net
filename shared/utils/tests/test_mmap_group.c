@@ -74,8 +74,10 @@ spec("MMAP Group Tests") {
 
     // Verify persistence
     turbo_fs_buf_t b1, b2;
-    turbo_fs_read_file(test_file1, &b1);
-    turbo_fs_read_file(test_file2, &b2);
+    int err1 = turbo_fs_read_file(test_file1, &b1);
+    int err2 = turbo_fs_read_file(test_file2, &b2);
+    check_int_eq(err1, 0);
+    check_int_eq(err2, 0);
     
     check_int_eq(b1.base[0], 'Z');
     check_int_eq(b2.base[0], 'Q');

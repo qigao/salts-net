@@ -9,21 +9,6 @@ add_subdirectory(parser)
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
      ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
 
-# Platform-specific async I/O
-if(WIN32)
-  # Windows: use IOCP for high-performance I/O
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uv\\.c$")
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uring\\.c$")
-elseif(APPLE OR ANDROID)
-  # macOS/iOS/Android: use libuv thread pool
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_iocp\\.c$")
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uring\\.c$")
-else()
-  # Linux: use io_uring for true kernel-level async
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_iocp\\.c$")
-  list(FILTER SOURCE_FILES EXCLUDE REGEX ".*turbo_aio_uv\\.c$")
-endif()
-
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 # Public alias
 add_library(TurboNet::Utils ALIAS ${TARGET_NAME})
@@ -50,16 +35,6 @@ target_link_libraries(
           TurboNet::SDS # Simple Dynamic Strings
           uri_parser ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
 )
-
-# Linux: link liburing for io_uring async I/O
-if(NOT WIN32
-   AND NOT APPLE
-   AND NOT ANDROID)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(URING REQUIRED liburing)
-  target_include_directories(${TARGET_NAME} PRIVATE ${URING_INCLUDE_DIRS})
-  target_link_libraries(${TARGET_NAME} PRIVATE ${URING_LIBRARIES})
-endif()
 
 # Set target properties
 set_target_properties(

@@ -26,6 +26,10 @@ set(CMAKE_C_STANDARD 11) # C17 to ensure C11 atomic support
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(MSVC)
+  add_compile_options(/experimental:c11atomics)
+endif()
 # Enable folder organization in IDEs
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")

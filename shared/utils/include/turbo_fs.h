@@ -241,6 +241,17 @@ CXX_C_API int turbo_fs_read(turbo_file_t fd, char *buf, size_t len);
 CXX_C_API int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t offset);
 
 /**
+ * @brief Write to an open file at a specific offset
+ *
+ * @param fd File handle from turbo_fs_open
+ * @param data Data to write
+ * @param len Number of bytes to write
+ * @param offset Byte offset in the file to write to
+ * @return Number of bytes written, or negative error code
+ */
+CXX_C_API int turbo_fs_pwrite(turbo_file_t fd, const char *data, size_t len, int64_t offset);
+
+/**
  * @brief Write to an open file
  *
  * @param fd File handle from turbo_fs_open

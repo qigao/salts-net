@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5) 
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 # TurboNet Project - Unified High-Performance Networking Library
 project(
@@ -48,7 +48,7 @@ find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(c-ares CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
-find_package(PkgConfig REQUIRED) 
+find_package(PkgConfig REQUIRED)
 find_package(llhttp CONFIG REQUIRED)
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
 
@@ -66,6 +66,7 @@ add_subdirectory(wasm)
 add_subdirectory(iris)
 add_subdirectory(rpc_client)
 add_subdirectory(s3)
+add_subdirectory(tbe)
 
 add_subdirectory(snmp)
 add_subdirectory(ldap)
@@ -92,8 +93,8 @@ write_basic_package_version_file(
 
 # Install the config files
 install(FILES "${CMAKE_BINARY_DIR}/TurboNetConfig.cmake"
-              "${CMAKE_BINARY_DIR}/TurboNetConfigVersion.cmake"
-        DESTINATION "lib/cmake/TurboNet")
+  "${CMAKE_BINARY_DIR}/TurboNetConfigVersion.cmake"
+  DESTINATION "lib/cmake/TurboNet")
 
 # Install the export set
 install(

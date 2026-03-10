@@ -160,8 +160,7 @@ static __bdd_spec_entry__ *__bdd_specs__ = NULL;
 static size_t __bdd_spec_count__ = 0;
 
 static void __bdd_register_spec__(const char *name, __bdd_spec_fn__ fn) {
-  __bdd_spec_entry__ *e =
-      __BDD_CAST(__bdd_spec_entry__ *, malloc(sizeof(__bdd_spec_entry__)));
+  __bdd_spec_entry__ *e = __BDD_CAST(__bdd_spec_entry__ *, malloc(sizeof(__bdd_spec_entry__)));
   if (!e) {
     perror("malloc(spec)");
     abort();
@@ -193,14 +192,14 @@ static void __bdd_cleanup_specs__(void) {
 }
 
 #if defined(__cplusplus)
-  #define __BDD_CONSTRUCTOR__(fn)                                                                 \
-    static void fn(void);                                                                         \
-    namespace {                                                                                   \
-      struct __BDD_CAT2(__bdd_ctor_struct_, fn) {                                                 \
-        __BDD_CAT2(__bdd_ctor_struct_, fn)() { fn(); }                                            \
-      };                                                                                          \
-      static __BDD_CAT2(__bdd_ctor_struct_, fn) __BDD_CAT2(__bdd_ctor_obj_, fn);                  \
-    }                                                                                             \
+  #define __BDD_CONSTRUCTOR__(fn)                                                                  \
+    static void fn(void);                                                                          \
+    namespace {                                                                                    \
+      struct __BDD_CAT2(__bdd_ctor_struct_, fn) {                                                  \
+        __BDD_CAT2(__bdd_ctor_struct_, fn)() { fn(); }                                             \
+      };                                                                                           \
+      static __BDD_CAT2(__bdd_ctor_struct_, fn) __BDD_CAT2(__bdd_ctor_obj_, fn);                   \
+    }                                                                                              \
     static void fn(void)
 #elif defined(_MSC_VER)
   #ifdef read
@@ -213,13 +212,13 @@ static void __bdd_cleanup_specs__(void) {
     #pragma pop_macro("read")
     #undef __BDD_POP_READ__
   #endif
-  typedef void (__cdecl *__bdd_ctor_fn__)(void);
-  #define __BDD_CONSTRUCTOR__(fn)                                                                 \
-    static void __cdecl fn(void);                                                                 \
+typedef void(__cdecl *__bdd_ctor_fn__)(void);
+  #define __BDD_CONSTRUCTOR__(fn)                                                                  \
+    static void __cdecl fn(void);                                                                  \
     __declspec(allocate(".CRT$XCU")) static __bdd_ctor_fn__ __BDD_CAT2(__bdd_ctor_, fn) = fn;      \
     static void __cdecl fn(void)
 #elif defined(__GNUC__) || defined(__clang__)
-  #define __BDD_CONSTRUCTOR__(fn)                                                                 \
+  #define __BDD_CONSTRUCTOR__(fn)                                                                  \
     static void fn(void) __attribute__((constructor));                                             \
     static void fn(void)
 #else
@@ -232,16 +231,16 @@ static inline void __bdd_bench_print_header__(size_t level) {
   __bdd_bench_header_printed__ = 1;
   __bdd_bench_header_level__ = level;
   __bdd_indent__(stdout, level);
-  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n",
-         BDD_BENCH_NAME_WIDTH, "benchmark", "iters", "avg(us)", "min(us)", "max(us)", "ops/s");
+  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "benchmark", "iters",
+         "avg(us)", "min(us)", "max(us)", "ops/s");
   __bdd_indent__(stdout, level);
-  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n",
-         BDD_BENCH_NAME_WIDTH, "---------", "-----", "-------", "-------", "-------", "-----");
+  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "---------", "-----",
+         "-------", "-------", "-------", "-----");
 #endif
 }
 
-static inline void __bdd_bench_print__(const char *name, size_t iters, double sum_ms,
-                                       double min_ms, double max_ms, size_t level, bool use_color) {
+static inline void __bdd_bench_print__(const char *name, size_t iters, double sum_ms, double min_ms,
+                                       double max_ms, size_t level, bool use_color) {
   double avg_us = (sum_ms / (double)iters) * 1000.0;
   double min_us = min_ms * 1000.0;
   double max_us = max_ms * 1000.0;
@@ -253,16 +252,12 @@ static inline void __bdd_bench_print__(const char *name, size_t iters, double su
   __bdd_indent__(stdout, level);
 #if BDD_BENCH_TABLE
   printf("  %s%-*s%s  %8zu  %11.3f  %11.3f  %11.3f  %11.0f\n",
-         use_color ? __BDD_COLOR_MAGENTA__ : "",
-         BDD_BENCH_NAME_WIDTH, name,
-         use_color ? __BDD_COLOR_RESET__ : "",
-         iters, avg_us, min_us, max_us, ops_s);
+         use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
+         use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
 #else
   printf("%s%-*s%s  %8zu iters  avg %9.3f us  min %9.3f us  max %9.3f us  ops/s %9.0f\n",
-         use_color ? __BDD_COLOR_MAGENTA__ : "",
-         BDD_BENCH_NAME_WIDTH, name,
-         use_color ? __BDD_COLOR_RESET__ : "",
-         iters, avg_us, min_us, max_us, ops_s);
+         use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
+         use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
 #endif
 }
 
@@ -278,10 +273,8 @@ static inline char *tt_temp_dir(void) {
   DWORD n = GetTempPathA((DWORD)sizeof(path), path);
   if (n == 0 || n >= sizeof(path)) {
     const char *env = getenv("TEMP");
-    if (!env)
-      env = getenv("TMP");
-    if (!env)
-      env = ".";
+    if (!env) env = getenv("TMP");
+    if (!env) env = ".";
     char *res = __BDD_CAST(char *, malloc(strlen(env) + 1));
     if (res) strcpy(res, env);
     return res;
@@ -304,8 +297,7 @@ static inline char *tt_read_file(const char *path, size_t *out_size) {
   FILE *fp = fopen(path, "rb");
   long size;
   char *buf;
-  if (!fp)
-    return NULL;
+  if (!fp) return NULL;
   if (fseek(fp, 0, SEEK_END) != 0) {
     fclose(fp);
     return NULL;
@@ -331,15 +323,13 @@ static inline char *tt_read_file(const char *path, size_t *out_size) {
   }
   fclose(fp);
   buf[size] = '\0';
-  if (out_size)
-    *out_size = (size_t)size;
+  if (out_size) *out_size = (size_t)size;
   return buf;
 }
 
 static inline int tt_write_file(const char *path, const void *data, size_t size) {
   FILE *fp = fopen(path, "wb");
-  if (!fp)
-    return -1;
+  if (!fp) return -1;
   if (size > 0 && fwrite(data, 1, size, fp) != size) {
     fclose(fp);
     return -1;
@@ -367,13 +357,11 @@ static inline int tt_make_dir(const char *path) {
 static inline int tt_is_dir(const char *path) {
 #ifdef _WIN32
   DWORD attrs = GetFileAttributesA(path);
-  if (attrs == INVALID_FILE_ATTRIBUTES)
-    return 0;
+  if (attrs == INVALID_FILE_ATTRIBUTES) return 0;
   return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
 #else
   struct stat st;
-  if (stat(path, &st) != 0)
-    return 0;
+  if (stat(path, &st) != 0) return 0;
   return S_ISDIR(st.st_mode) ? 1 : 0;
 #endif
 }
@@ -384,10 +372,8 @@ static inline char *tt_make_temp_file(const char *prefix, const char *suffix) {
 #ifdef _WIN32
   char base[MAX_PATH];
   char file[MAX_PATH];
-  if (GetTempPathA((DWORD)sizeof(base), base) == 0)
-    return NULL;
-  if (GetTempFileNameA(base, pre, 0, file) == 0)
-    return NULL;
+  if (GetTempPathA((DWORD)sizeof(base), base) == 0) return NULL;
+  if (GetTempFileNameA(base, pre, 0, file) == 0) return NULL;
   if (suf[0]) {
     char renamed[MAX_PATH];
     snprintf(renamed, sizeof(renamed), "%s%s", file, suf);
@@ -427,13 +413,10 @@ static inline char *tt_make_temp_dir(const char *prefix) {
 #ifdef _WIN32
   char base[MAX_PATH];
   char file[MAX_PATH];
-  if (GetTempPathA((DWORD)sizeof(base), base) == 0)
-    return NULL;
-  if (GetTempFileNameA(base, pre, 0, file) == 0)
-    return NULL;
+  if (GetTempPathA((DWORD)sizeof(base), base) == 0) return NULL;
+  if (GetTempFileNameA(base, pre, 0, file) == 0) return NULL;
   DeleteFileA(file);
-  if (CreateDirectoryA(file, NULL) == 0)
-    return NULL;
+  if (CreateDirectoryA(file, NULL) == 0) return NULL;
   return _strdup(file);
 #else
   char *dir = tt_temp_dir();
@@ -450,10 +433,8 @@ static inline char *tt_make_temp_dir(const char *prefix) {
 }
 
 static inline int tt_remove_tree(const char *path) {
-  if (!path || !path[0])
-    return -1;
-  if (!tt_is_dir(path))
-    return tt_remove_file(path);
+  if (!path || !path[0]) return -1;
+  if (!tt_is_dir(path)) return tt_remove_file(path);
 #ifdef _WIN32
   char pattern[MAX_PATH];
   WIN32_FIND_DATAA fdata;
@@ -463,8 +444,7 @@ static inline int tt_remove_tree(const char *path) {
   if (h != INVALID_HANDLE_VALUE) {
     do {
       const char *name = fdata.cFileName;
-      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
-        continue;
+      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
       char child[MAX_PATH];
       snprintf(child, sizeof(child), "%s\\%s", path, name);
       if (fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -482,8 +462,7 @@ static inline int tt_remove_tree(const char *path) {
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
       const char *name = ent->d_name;
-      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
-        continue;
+      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
       char child[1024];
       snprintf(child, sizeof(child), "%s/%s", path, name);
       if (tt_is_dir(child)) {
@@ -565,9 +544,7 @@ static inline __bdd_array__ *__bdd_array_get_or_create__(__bdd_array__ **arr_ptr
   return *arr_ptr;
 }
 
-static inline size_t __bdd_array_size__(__bdd_array__ *arr) {
-  return arr ? arr->size : 0;
-}
+static inline size_t __bdd_array_size__(__bdd_array__ *arr) { return arr ? arr->size : 0; }
 
 typedef enum __bdd_node_type__ {
   __BDD_NODE_GROUP__ = 1,
@@ -653,8 +630,8 @@ static inline void __bdd_bench_reset__(__bdd_config_type__ *config) {
   __bdd_bench_header_printed__ = 0;
   if (!config->bench_entries) {
     config->bench_cap = BDD_BENCH_MAX;
-    config->bench_entries = __BDD_CAST(__bdd_bench_entry__ *,
-                                       calloc(config->bench_cap, sizeof(__bdd_bench_entry__)));
+    config->bench_entries =
+        __BDD_CAST(__bdd_bench_entry__ *, calloc(config->bench_cap, sizeof(__bdd_bench_entry__)));
   }
 }
 
@@ -665,9 +642,9 @@ static inline void __bdd_bench_add__(__bdd_config_type__ *config, const char *na
   }
   if (config->bench_count >= config->bench_cap) {
     size_t new_cap = config->bench_cap ? config->bench_cap * 2 : BDD_BENCH_MAX;
-    __bdd_bench_entry__ *n = __BDD_CAST(__bdd_bench_entry__ *,
-                                        realloc(config->bench_entries,
-                                                new_cap * sizeof(__bdd_bench_entry__)));
+    __bdd_bench_entry__ *n =
+        __BDD_CAST(__bdd_bench_entry__ *,
+                   realloc(config->bench_entries, new_cap * sizeof(__bdd_bench_entry__)));
     if (!n) return;
     config->bench_entries = n;
     config->bench_cap = new_cap;
@@ -697,12 +674,10 @@ static inline void __bdd_bench_flush__(__bdd_config_type__ *config, size_t level
     __bdd_bench_entry__ *e = &config->bench_entries[i];
     char mark = (i == 0) ? '*' : ' ';
     __bdd_indent__(stdout, level);
-    printf("%c %s%-*s%s  %8zu  %11.3f  %11.3f  %11.3f  %11.0f\n",
-           mark,
-           use_color ? __BDD_COLOR_MAGENTA__ : "",
-           BDD_BENCH_NAME_WIDTH, e->name,
-           use_color ? __BDD_COLOR_RESET__ : "",
-           e->iters, e->avg_us, e->min_us, e->max_us, e->ops_s);
+    printf("%c %s%-*s%s  %8zu  %11.3f  %11.3f  %11.3f  %11.0f\n", mark,
+           use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, e->name,
+           use_color ? __BDD_COLOR_RESET__ : "", e->iters, e->avg_us, e->min_us, e->max_us,
+           e->ops_s);
   }
 }
 
@@ -771,7 +746,8 @@ static void __bdd_node_flatten_internal__(__bdd_config_type__ *config, size_t le
     for (size_t listIndex = 0; listIndex < before_each_lists->size; ++listIndex) {
       __bdd_array__ *list = __BDD_CAST(__bdd_array__ *, before_each_lists->values[listIndex]);
       for (size_t i = 0; i < __bdd_array_size__(list); ++i) {
-        __bdd_array_push__(steps, __bdd_test_step_create__(level, __BDD_CAST(__bdd_node__ *, list->values[i])));
+        __bdd_array_push__(
+            steps, __bdd_test_step_create__(level, __BDD_CAST(__bdd_node__ *, list->values[i])));
       }
     }
 
@@ -781,7 +757,8 @@ static void __bdd_node_flatten_internal__(__bdd_config_type__ *config, size_t le
       size_t reverseListIndex = after_each_lists->size - listIndex - 1;
       __bdd_array__ *list = __BDD_CAST(__bdd_array__ *, after_each_lists->values[reverseListIndex]);
       for (size_t i = 0; i < __bdd_array_size__(list); ++i) {
-        __bdd_array_push__(steps, __bdd_test_step_create__(level, __BDD_CAST(__bdd_node__ *, list->values[i])));
+        __bdd_array_push__(
+            steps, __bdd_test_step_create__(level, __BDD_CAST(__bdd_node__ *, list->values[i])));
       }
     }
     return;
@@ -791,15 +768,17 @@ static void __bdd_node_flatten_internal__(__bdd_config_type__ *config, size_t le
 
   for (size_t i = 0; i < __bdd_array_size__(node->list_before); ++i) {
     __bdd_array_push__(
-        steps, __bdd_test_step_create__(level + 1, __BDD_CAST(__bdd_node__ *, node->list_before->values[i])));
+        steps, __bdd_test_step_create__(level + 1,
+                                        __BDD_CAST(__bdd_node__ *, node->list_before->values[i])));
   }
 
   __bdd_array_push__(before_each_lists, node->list_before_each);
   __bdd_array_push__(after_each_lists, node->list_after_each);
 
   for (size_t i = 0; i < __bdd_array_size__(node->list_children); ++i) {
-    __bdd_node_flatten_internal__(config, level + 1, __BDD_CAST(__bdd_node__ *, node->list_children->values[i]),
-                                  steps, before_each_lists, after_each_lists);
+    __bdd_node_flatten_internal__(config, level + 1,
+                                  __BDD_CAST(__bdd_node__ *, node->list_children->values[i]), steps,
+                                  before_each_lists, after_each_lists);
   }
 
   __bdd_array_pop__(before_each_lists);
@@ -807,7 +786,8 @@ static void __bdd_node_flatten_internal__(__bdd_config_type__ *config, size_t le
 
   for (size_t i = 0; i < __bdd_array_size__(node->list_after); ++i) {
     __bdd_array_push__(
-        steps, __bdd_test_step_create__(level + 1, __BDD_CAST(__bdd_node__ *, node->list_after->values[i])));
+        steps, __bdd_test_step_create__(level + 1,
+                                        __BDD_CAST(__bdd_node__ *, node->list_after->values[i])));
   }
 }
 
@@ -865,8 +845,8 @@ static bool __bdd_enter_node__(__bdd_node_flags__ node_flags, __bdd_config_type_
       fprintf(stderr, "error: node_stack is empty\n");
       abort();
     }
-    __bdd_array__ **list_ptr =
-        __BDD_REINTERPRET_CAST(__bdd_array__ **, __BDD_REINTERPRET_CAST(unsigned char *, top) + list_offset);
+    __bdd_array__ **list_ptr = __BDD_REINTERPRET_CAST(
+        __bdd_array__ **, __BDD_REINTERPRET_CAST(unsigned char *, top) + list_offset);
     __bdd_array__ *list = __bdd_array_get_or_create__(list_ptr);
 
     int id = config->id++;
@@ -1165,8 +1145,7 @@ static bool __bdd_is_supported_term__(void) {
 }
 
 static void __bdd_xml_escape__(FILE *f, const char *str) {
-  if (!str)
-    return;
+  if (!str) return;
   for (const char *p = str; *p; ++p) {
     switch (*p) {
     case '&':
@@ -1355,8 +1334,7 @@ int main(int argc, char **argv) {
 
   for (size_t s = 0; s < __bdd_spec_count__; ++s) {
     __bdd_spec_entry__ *spec = __bdd_get_spec_entry__(s);
-    if (!spec)
-      continue;
+    if (!spec) continue;
 
     config.run = __BDD_INIT_RUN__;
     config.id = 0;
@@ -1396,8 +1374,7 @@ int main(int argc, char **argv) {
       } else if (step->type == __BDD_NODE_TEST__) {
         path_buffer[0] = '\0';
         for (int j = 1; j < stack_depth; ++j) {
-          if (j > 1)
-            strcat(path_buffer, ".");
+          if (j > 1) strcat(path_buffer, ".");
           strcat(path_buffer, group_stack[j]->name);
         }
         if (path_buffer[0] != '\0') {
@@ -1427,12 +1404,9 @@ int main(int argc, char **argv) {
       } else if (step->type == __BDD_NODE_TEST__) {
         __bdd_indent__(stdout, step->level);
         const char *tag = "";
-        if (step->flags & __bdd_node_flags_skip__)
-          tag = " [skip]";
-        else if (step->flags & __bdd_node_flags_focus__)
-          tag = " [focus]";
-        else if (step->flags & __bdd_node_flags_expected_fail__)
-          tag = " [should_fail]";
+        if (step->flags & __bdd_node_flags_skip__) tag = " [skip]";
+        else if (step->flags & __bdd_node_flags_focus__) tag = " [focus]";
+        else if (step->flags & __bdd_node_flags_expected_fail__) tag = " [should_fail]";
         printf("%s%s\n", step->name, tag);
       }
     }
@@ -1493,8 +1467,7 @@ int main(int argc, char **argv) {
   size_t todo_count = 0;
   for (size_t i = 0; i < all_steps->size; ++i) {
     __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, all_steps->values[i]);
-    if (step->type != __BDD_NODE_TEST__)
-      continue;
+    if (step->type != __BDD_NODE_TEST__) continue;
     if (step->flags & __bdd_node_flags_skip__) {
       skipped_count++;
     } else if (step->flags & __bdd_node_flags_expected_fail__) {
@@ -1569,17 +1542,17 @@ int main(int argc, char **argv) {
 #endif /* TINYTEST_NO_MAIN */
 
 #define spec(name)                                                                                 \
-  static void __BDD_CAT2(__bdd_spec_fn_, __LINE__)(__bdd_config_type__ *__bdd_config__);           \
+  static void __BDD_CAT2(__bdd_spec_fn_, __LINE__)(__bdd_config_type__ * __bdd_config__);          \
   __BDD_CONSTRUCTOR__(__BDD_CAT2(__bdd_spec_reg_, __LINE__)) {                                     \
-    __bdd_register_spec__((name), __BDD_CAT2(__bdd_spec_fn_, __LINE__));                            \
+    __bdd_register_spec__((name), __BDD_CAT2(__bdd_spec_fn_, __LINE__));                           \
   }                                                                                                \
-  static void __BDD_CAT2(__bdd_spec_fn_, __LINE__)(__bdd_config_type__ *__bdd_config__)
+  static void __BDD_CAT2(__bdd_spec_fn_, __LINE__)(__bdd_config_type__ * __bdd_config__)
 
 #define __BDD_CAT(a, b) a##b
 #define __BDD_CAT2(a, b) __BDD_CAT(a, b)
 
 #define __BDD_NODE__(flags, node_list, type, ...)                                                  \
-  for (bool __BDD_CAT2(__bdd_has_run_, __LINE__) = 0;                                             \
+  for (bool __BDD_CAT2(__bdd_has_run_, __LINE__) = 0;                                              \
        (!__BDD_CAT2(__bdd_has_run_, __LINE__) &&                                                   \
         __bdd_enter_node__(flags, __bdd_config__, (type),                                          \
                            offsetof(struct __bdd_node__, node_list), __VA_ARGS__));                \
@@ -1590,7 +1563,7 @@ int main(int argc, char **argv) {
 #define group(...) describe(__VA_ARGS__)
 #define suite(...) spec(__VA_ARGS__)
 #define it(...) __BDD_NODE__(__bdd_node_flags_none__, list_children, __BDD_NODE_TEST__, __VA_ARGS__)
-#define bench(...)                                                                                  \
+#define bench(...)                                                                                 \
   __BDD_NODE__(__bdd_node_flags_benchmark__, list_children, __BDD_NODE_TEST__, __VA_ARGS__)
 #define it_only(...)                                                                               \
   __BDD_NODE__(__bdd_node_flags_focus__, list_children, __BDD_NODE_TEST__, __VA_ARGS__)
@@ -1642,7 +1615,7 @@ static inline int __bdd_eval_bool__(int v) { return v; }
     ++__bdd_config__->assertion_failed_count;                                                      \
     char *message = __bdd_format__(__VA_ARGS__);                                                   \
     const char *fmt = __bdd_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__;           \
-    __bdd_config__->location = __BDD_CONST_CAST(char *, "at " __FILE__ ":" __STRING__LINE__);       \
+    __bdd_config__->location = __BDD_CONST_CAST(char *, "at " __FILE__ ":" __STRING__LINE__);      \
     size_t bufflen = strlen(fmt) + strlen(message) + 1;                                            \
     __bdd_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));                     \
     if (__bdd_config__->use_color) {                                                               \
@@ -1710,8 +1683,8 @@ static inline int __bdd_eval_bool__(int v) { return v; }
   __BDD_CHECK__((actual) == (expected), "expected %u but got %u",                                  \
                 __BDD_CAST(unsigned, (expected)), __BDD_CAST(unsigned, (actual)))
 #define check_uint_eq_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) == (expected), "expected %u but got %u",                                   \
-               __BDD_CAST(unsigned, (expected)), __BDD_CAST(unsigned, (actual)))
+  __BDD_WARN__((actual) == (expected), "expected %u but got %u", __BDD_CAST(unsigned, (expected)), \
+               __BDD_CAST(unsigned, (actual)))
 
 #define check_uint_ne(actual, expected)                                                            \
   __BDD_CHECK__((actual) != (expected), "expected != %u but got %u",                               \
@@ -1725,8 +1698,8 @@ static inline int __bdd_eval_bool__(int v) { return v; }
   __BDD_CHECK__((actual) == (expected), "expected %zu but got %zu",                                \
                 __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
 #define check_size_eq_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) == (expected), "expected %zu but got %zu",                                 \
-               __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_WARN__((actual) == (expected), "expected %zu but got %zu", __BDD_CAST(size_t, (expected)), \
+               __BDD_CAST(size_t, (actual)))
 
 #define check_size_ne(actual, expected)                                                            \
   __BDD_CHECK__((actual) != (expected), "expected != %zu but got %zu",                             \
@@ -1771,35 +1744,35 @@ static inline int __bdd_eval_bool__(int v) { return v; }
 /* Float/double comparisons with epsilon */
 #define check_float_eq(actual, expected, epsilon)                                                  \
   __BDD_CHECK__(((actual) - (expected)) <= (epsilon) && ((expected) - (actual)) <= (epsilon),      \
-               "expected %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),                 \
-               __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+                "expected %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),                 \
+                __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
 #define check_float_eq_warn(actual, expected, epsilon)                                             \
   __BDD_WARN__(((actual) - (expected)) <= (epsilon) && ((expected) - (actual)) <= (epsilon),       \
-              "expected %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),                  \
-              __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+               "expected %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),                  \
+               __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
 
 #define check_float_ne(actual, expected, epsilon)                                                  \
   __BDD_CHECK__(((actual) - (expected)) > (epsilon) || ((expected) - (actual)) > (epsilon),        \
-               "expected != %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),              \
-               __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+                "expected != %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),              \
+                __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
 #define check_float_ne_warn(actual, expected, epsilon)                                             \
   __BDD_WARN__(((actual) - (expected)) > (epsilon) || ((expected) - (actual)) > (epsilon),         \
-              "expected != %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),               \
-              __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+               "expected != %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),               \
+               __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
 
 #define check_float_gt(actual, expected)                                                           \
-  __BDD_CHECK__((actual) > (expected), "expected > %f but got %f",                                 \
-                __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_CHECK__((actual) > (expected), "expected > %f but got %f", __BDD_CAST(double, (expected)), \
+                __BDD_CAST(double, (actual)))
 #define check_float_gt_warn(actual, expected)                                                      \
-  __BDD_WARN__((actual) > (expected), "expected > %f but got %f",                                  \
-               __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_WARN__((actual) > (expected), "expected > %f but got %f", __BDD_CAST(double, (expected)),  \
+               __BDD_CAST(double, (actual)))
 
 #define check_float_lt(actual, expected)                                                           \
-  __BDD_CHECK__((actual) < (expected), "expected < %f but got %f",                                 \
-                __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_CHECK__((actual) < (expected), "expected < %f but got %f", __BDD_CAST(double, (expected)), \
+                __BDD_CAST(double, (actual)))
 #define check_float_lt_warn(actual, expected)                                                      \
-  __BDD_WARN__((actual) < (expected), "expected < %f but got %f",                                  \
-               __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_WARN__((actual) < (expected), "expected < %f but got %f", __BDD_CAST(double, (expected)),  \
+               __BDD_CAST(double, (actual)))
 
 #define check_float_ge(actual, expected)                                                           \
   __BDD_CHECK__((actual) >= (expected), "expected >= %f but got %f",                               \
@@ -1817,19 +1790,17 @@ static inline int __bdd_eval_bool__(int v) { return v; }
 
 /* Relative tolerance: |actual - expected| <= rel * |expected| (Catch2 WithinRel equivalent) */
 #define check_float_within_rel(actual, expected, rel)                                              \
-  __BDD_CHECK__(                                                                                   \
-      fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=                      \
-          __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),                        \
-      "expected %f within %f%% of %f, delta was %f", __BDD_CAST(double, (actual)),                 \
-      __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                           \
-      fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
+  __BDD_CHECK__(fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=             \
+                    __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),              \
+                "expected %f within %f%% of %f, delta was %f", __BDD_CAST(double, (actual)),       \
+                __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                 \
+                fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
 #define check_float_within_rel_warn(actual, expected, rel)                                         \
-  __BDD_WARN__(                                                                                    \
-      fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=                      \
-          __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),                        \
-      "expected %f within %f%% of %f, delta was %f", __BDD_CAST(double, (actual)),                 \
-      __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                           \
-      fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
+  __BDD_WARN__(fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=              \
+                   __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),               \
+               "expected %f within %f%% of %f, delta was %f", __BDD_CAST(double, (actual)),        \
+               __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                  \
+               fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
 
 /* Absolute tolerance (Catch2 WithinAbs equivalent) — same as check_float_eq but named for clarity
  */
@@ -1883,61 +1854,50 @@ static inline int __bdd_str_starts_with__(const char *s, const char *prefix) {
 static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
   size_t slen;
   size_t suflen;
-  if (!s || !suffix)
-    return 0;
+  if (!s || !suffix) return 0;
   slen = strlen(s);
   suflen = strlen(suffix);
   return slen >= suflen && strcmp(s + slen - suflen, suffix) == 0;
 }
 
 #define check_str_eq(actual, expected)                                                             \
-  __BDD_CHECK__(__bdd_str_eq__((actual), (expected)),                                               \
-                "expected \"%s\" but got \"%s\"",                                                   \
-                (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
-                (const char*)(actual) ? (const char*)(actual) : "(null)")
+  __BDD_CHECK__(__bdd_str_eq__((actual), (expected)), "expected \"%s\" but got \"%s\"",            \
+                (const char *)(expected) ? (const char *)(expected) : "(null)",                    \
+                (const char *)(actual) ? (const char *)(actual) : "(null)")
 #define check_str_eq_warn(actual, expected)                                                        \
-  __BDD_WARN__(__bdd_str_eq__((actual), (expected)),                                                \
-               "expected \"%s\" but got \"%s\"",                                                   \
-               (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
-               (const char*)(actual) ? (const char*)(actual) : "(null)")
+  __BDD_WARN__(__bdd_str_eq__((actual), (expected)), "expected \"%s\" but got \"%s\"",             \
+               (const char *)(expected) ? (const char *)(expected) : "(null)",                     \
+               (const char *)(actual) ? (const char *)(actual) : "(null)")
 
 #define check_str_ne(actual, expected)                                                             \
-  __BDD_CHECK__(__bdd_str_ne__((actual), (expected)),                                               \
-                "expected != \"%s\" but got \"%s\"",                                                \
-                (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
-                (const char*)(actual) ? (const char*)(actual) : "(null)")
+  __BDD_CHECK__(__bdd_str_ne__((actual), (expected)), "expected != \"%s\" but got \"%s\"",         \
+                (const char *)(expected) ? (const char *)(expected) : "(null)",                    \
+                (const char *)(actual) ? (const char *)(actual) : "(null)")
 #define check_str_ne_warn(actual, expected)                                                        \
-  __BDD_WARN__(__bdd_str_ne__((actual), (expected)),                                                \
-               "expected != \"%s\" but got \"%s\"",                                                \
-               (const char*)(expected) ? (const char*)(expected) : "(null)",                       \
-               (const char*)(actual) ? (const char*)(actual) : "(null)")
+  __BDD_WARN__(__bdd_str_ne__((actual), (expected)), "expected != \"%s\" but got \"%s\"",          \
+               (const char *)(expected) ? (const char *)(expected) : "(null)",                     \
+               (const char *)(actual) ? (const char *)(actual) : "(null)")
 
 #define check_str_contains(haystack, needle)                                                       \
-  __BDD_CHECK__(__bdd_str_contains__((haystack), (needle)),                                         \
-                "expected \"%s\" to contain \"%s\"", (haystack) ? (haystack) : "(null)",           \
-                (needle) ? (needle) : "(null)")
+  __BDD_CHECK__(__bdd_str_contains__((haystack), (needle)), "expected \"%s\" to contain \"%s\"",   \
+                (haystack) ? (haystack) : "(null)", (needle) ? (needle) : "(null)")
 #define check_str_contains_warn(haystack, needle)                                                  \
-  __BDD_WARN__(__bdd_str_contains__((haystack), (needle)),                                          \
-               "expected \"%s\" to contain \"%s\"", (haystack) ? (haystack) : "(null)",            \
-               (needle) ? (needle) : "(null)")
+  __BDD_WARN__(__bdd_str_contains__((haystack), (needle)), "expected \"%s\" to contain \"%s\"",    \
+               (haystack) ? (haystack) : "(null)", (needle) ? (needle) : "(null)")
 
 #define check_str_starts_with(str, prefix)                                                         \
-  __BDD_CHECK__(__bdd_str_starts_with__((str), (prefix)),                                           \
-                "expected \"%s\" to start with \"%s\"", (str) ? (str) : "(null)",                  \
-                (prefix) ? (prefix) : "(null)")
+  __BDD_CHECK__(__bdd_str_starts_with__((str), (prefix)), "expected \"%s\" to start with \"%s\"",  \
+                (str) ? (str) : "(null)", (prefix) ? (prefix) : "(null)")
 #define check_str_starts_with_warn(str, prefix)                                                    \
-  __BDD_WARN__(__bdd_str_starts_with__((str), (prefix)),                                            \
-               "expected \"%s\" to start with \"%s\"", (str) ? (str) : "(null)",                   \
-               (prefix) ? (prefix) : "(null)")
+  __BDD_WARN__(__bdd_str_starts_with__((str), (prefix)), "expected \"%s\" to start with \"%s\"",   \
+               (str) ? (str) : "(null)", (prefix) ? (prefix) : "(null)")
 
 #define check_str_ends_with(str, suffix)                                                           \
-  __BDD_CHECK__(__bdd_str_ends_with__((str), (suffix)),                                             \
-                "expected \"%s\" to end with \"%s\"", (str) ? (str) : "(null)",                    \
-                (suffix) ? (suffix) : "(null)")
+  __BDD_CHECK__(__bdd_str_ends_with__((str), (suffix)), "expected \"%s\" to end with \"%s\"",      \
+                (str) ? (str) : "(null)", (suffix) ? (suffix) : "(null)")
 #define check_str_ends_with_warn(str, suffix)                                                      \
-  __BDD_WARN__(__bdd_str_ends_with__((str), (suffix)),                                              \
-               "expected \"%s\" to end with \"%s\"", (str) ? (str) : "(null)",                     \
-               (suffix) ? (suffix) : "(null)")
+  __BDD_WARN__(__bdd_str_ends_with__((str), (suffix)), "expected \"%s\" to end with \"%s\"",       \
+               (str) ? (str) : "(null)", (suffix) ? (suffix) : "(null)")
 
 /* Memory comparisons */
 #define check_mem_eq(actual, expected, len)                                                        \
@@ -1968,7 +1928,8 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
 
 #define check_hex64_eq(actual, expected)                                                           \
   __BDD_CHECK__((actual) == (expected), "expected 0x%llx but got 0x%llx",                          \
-                __BDD_CAST(unsigned long long, (expected)), __BDD_CAST(unsigned long long, (actual)))
+                __BDD_CAST(unsigned long long, (expected)),                                        \
+                __BDD_CAST(unsigned long long, (actual)))
 
 /* Boolean assertions */
 #define check_true(actual) __BDD_CHECK__((actual), "expected true but got false")
@@ -1988,8 +1949,8 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
 #define check_int_range(actual, lo, hi)                                                            \
   __BDD_CHECK__(__BDD_CAST(int, (actual)) >= __BDD_CAST(int, (lo)) &&                              \
                     __BDD_CAST(int, (actual)) <= __BDD_CAST(int, (hi)),                            \
-                "expected %d in range [%d, %d]", __BDD_CAST(int, (actual)),                        \
-                __BDD_CAST(int, (lo)), __BDD_CAST(int, (hi)))
+                "expected %d in range [%d, %d]", __BDD_CAST(int, (actual)), __BDD_CAST(int, (lo)), \
+                __BDD_CAST(int, (hi)))
 
 /* Float special value assertions */
 #define check_float_nan(actual)                                                                    \
@@ -2014,7 +1975,7 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
 
 /* Bitmask assertion: (val & mask) == mask */
 #define check_bits(actual, mask)                                                                   \
-  __BDD_CHECK__((__BDD_CAST(unsigned, (actual)) & __BDD_CAST(unsigned, (mask))) ==                \
+  __BDD_CHECK__((__BDD_CAST(unsigned, (actual)) & __BDD_CAST(unsigned, (mask))) ==                 \
                     __BDD_CAST(unsigned, (mask)),                                                  \
                 "expected bits 0x%x set in 0x%x, got 0x%x", __BDD_CAST(unsigned, (mask)),          \
                 __BDD_CAST(unsigned, (actual)),                                                    \
@@ -2082,8 +2043,7 @@ static inline bool __bdd_ptr_array_eq__(const void *const *actual, const void *c
 static inline bool __bdd_str_array_eq__(const char *const *actual, const char *const *expected,
                                         size_t n, size_t *fail_idx) {
   for (size_t i = 0; i < n; i++) {
-    if (actual[i] == NULL && expected[i] == NULL)
-      continue;
+    if (actual[i] == NULL && expected[i] == NULL) continue;
     if (actual[i] == NULL || expected[i] == NULL || strcmp(actual[i], expected[i]) != 0) {
       *fail_idx = i;
       return false;
@@ -2160,7 +2120,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                 (epsilon), &__bdd_fi__)) {                                         \
       __BDD_CHECK__(0, "array mismatch at [%zu]: expected %f but got %f (+/- %f)", __bdd_fi__,     \
                     ((const double *)(expected))[__bdd_fi__],                                      \
-                   ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon));         \
+                   ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon));          \
     }                                                                                              \
   } while (0)
 #define check_float_array_eq_warn(actual, expected, n, epsilon)                                    \
@@ -2170,7 +2130,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                 (epsilon), &__bdd_fi__)) {                                         \
       __BDD_WARN__(0, "array mismatch at [%zu]: expected %f but got %f (+/- %f)", __bdd_fi__,      \
                    ((const double *)(expected))[__bdd_fi__],                                       \
-                  ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon));          \
+                  ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon));           \
     }                                                                                              \
   } while (0)
 
@@ -2276,6 +2236,9 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 #define given(...) describe("Given " __VA_ARGS__)
 #define when(...) describe("When " __VA_ARGS__)
 #define then(...) it("Then " __VA_ARGS__)
+#define and_given(...) describe("And given " __VA_ARGS__)
+#define and_when(...) describe("And when " __VA_ARGS__)
+#define and_then(...) it("And then " __VA_ARGS__)
 
 /* --- Section (Catch2 SECTION equivalent) --- */
 #define section(...) describe(__VA_ARGS__)
@@ -2299,9 +2262,9 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 #define GIVEN(...) given(__VA_ARGS__)
 #define WHEN(...) when(__VA_ARGS__)
 #define THEN(...) then(__VA_ARGS__)
-#define AND_GIVEN(...) describe("And given " __VA_ARGS__)
-#define AND_WHEN(...) describe("And when " __VA_ARGS__)
-#define AND_THEN(...) it("And then " __VA_ARGS__)
+#define AND_GIVEN(...) and_given(__VA_ARGS__)
+#define AND_WHEN(...) and_when(__VA_ARGS__)
+#define AND_THEN(...) and_then(__VA_ARGS__)
 
 /* --- Benchmark (Catch2 BENCHMARK equivalent) --- */
 /* Usage: benchmark("name", iterations) { code; }
@@ -2315,11 +2278,10 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
           double __min;                                                                            \
           double __max;                                                                            \
           double __sum;                                                                            \
-        } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0};                            \
-        !__bdd_bm__.__done;                                                                        \
-        __bdd_bm__.__done = 1,                                                                     \
-          __bdd_bench_add__(__bdd_config__, (name), __bdd_bm__.__n, __bdd_bm__.__sum,               \
-                           __bdd_bm__.__min, __bdd_bm__.__max))                                    \
+        } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0};                           \
+        !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                 \
+          __bdd_bench_add__(__bdd_config__, (name), __bdd_bm__.__n, __bdd_bm__.__sum,              \
+                            __bdd_bm__.__min, __bdd_bm__.__max))                                   \
       for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
         for (double __bdd_bm_t0__ = __bdd_get_time_ms__(), __bdd_bm_t1__ = 0; __bdd_bm_t1__ == 0;  \
              __bdd_bm_t1__ = __bdd_get_time_ms__() - __bdd_bm_t0__,                                \
@@ -2337,11 +2299,11 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
           double __min;                                                                            \
           double __max;                                                                            \
           double __sum;                                                                            \
-        } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0};                            \
+        } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0};                           \
         !__bdd_bm__.__done;                                                                        \
         __bdd_bm__.__done = 1,                                                                     \
           __bdd_bench_print__(                                                                     \
-              (name), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min, __bdd_bm__.__max,         \
+              (name), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min, __bdd_bm__.__max,        \
               __bdd_config__->current_test ? __bdd_config__->current_test->level + 1 : 1,          \
               __bdd_config__->use_color))                                                          \
       for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
@@ -2362,29 +2324,27 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
   #include <stdexcept>
 
 namespace __bdd_cpp__ {
-  
-  template <typename T, typename U>
-  inline bool __bdd_equal__(const T &a, const U &b) {
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
-#endif
+
+  template <typename T, typename U> inline bool __bdd_equal__(const T &a, const U &b) {
+  #if defined(__GNUC__) || defined(__clang__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wfloat-equal"
+  #endif
     return a == b;
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+  #if defined(__GNUC__) || defined(__clang__)
+    #pragma GCC diagnostic pop
+  #endif
   }
 
-  template <typename T, typename U>
-  inline bool __bdd_not_equal__(const T &a, const U &b) {
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
-#endif
+  template <typename T, typename U> inline bool __bdd_not_equal__(const T &a, const U &b) {
+  #if defined(__GNUC__) || defined(__clang__)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wfloat-equal"
+  #endif
     return a != b;
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+  #if defined(__GNUC__) || defined(__clang__)
+    #pragma GCC diagnostic pop
+  #endif
   }
 
   template <typename Container>
@@ -2393,12 +2353,10 @@ namespace __bdd_cpp__ {
     os << "[";
     size_t i = 0;
     for (auto it = c.begin(); it != c.end() && i < max_items; ++it, ++i) {
-      if (i > 0)
-        os << ", ";
+      if (i > 0) os << ", ";
       os << *it;
     }
-    if (c.size() > max_items)
-      os << ", ...(" << c.size() << " total)";
+    if (c.size() > max_items) os << ", ...(" << c.size() << " total)";
     os << "]";
     return os.str();
   }
@@ -2407,13 +2365,11 @@ namespace __bdd_cpp__ {
   bool containers_equal(const Container &actual, const Container &expected, size_t &fail_idx,
                         bool &size_mismatch) {
     size_mismatch = (actual.size() != expected.size());
-    if (size_mismatch)
-      return false;
+    if (size_mismatch) return false;
     auto a = actual.begin();
     auto e = expected.begin();
     for (fail_idx = 0; a != actual.end(); ++a, ++e, ++fail_idx) {
-      if (!(*a == *e))
-        return false;
+      if (!(*a == *e)) return false;
     }
     return true;
   }

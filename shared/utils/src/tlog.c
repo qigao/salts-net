@@ -21,12 +21,11 @@
 #include "tlog.h"
 #include "fmt.h"
 #include "log_pattern_lexer.h"
-#include "memory_pool.h"
+#include "turbo_buffer.h"
 #include "sds.h"
 #include "stb_sprintf.h"
 #include "turbo_atomic.h"
 #include "turbo_fs.h"
-#include "minicoro.h"
 #include "turbo_mmap.h"
 #include "disruptor.h"
 
@@ -55,7 +54,7 @@ uint64_t __pthread_threadid_np(void);
 
 #define MAX_SINKS 8
 #define DEFAULT_POOL_SIZE (32 * 1024)
-#define DEFAULT_ASYNC_POOL_SIZE (1024 * 1024)
+#define DEFAULT_ASYNC_BUFFER_SIZE (64 * 1024)
 #define STRING_PADDING 8          // Padding for string alignment
 
 // ANSI color codes
@@ -200,7 +199,30 @@ static void pattern_free(compiled_pattern_t *cp) {
 // Async Entry Management
 // =============================================================================
 
-static async_log_entry_t *async_entry_create(MemoryPool *pool, const turbo_log_entry_t *entry) {
+static uint64_t round_up_pow2_u64(uint64_t value) {
+  if (value <= 1U) {
+    return 1U;
+  }
+  value--;
+  value |= value >> 1U;
+  value |= value >> 2U;
+  value |= value >> 4U;
+  value |= value >> 8U;
+  value |= value >> 16U;
+  value |= value >> 32U;
+  return value + 1U;
+}
+
+static uint64_t logger_disruptor_capacity(size_t buffer_size_bytes) {
+  size_t buffer_bytes = buffer_size_bytes ? buffer_size_bytes : DEFAULT_ASYNC_BUFFER_SIZE;
+  uint64_t entries = (uint64_t)(buffer_bytes / sizeof(turbo_pool_buffer_t *));
+  if (entries < 1024U) {
+    entries = 1024U;
+  }
+  return round_up_pow2_u64(entries);
+}
+
+static turbo_pool_buffer_t *async_entry_create(turbo_pool_t *pool, const turbo_log_entry_t *entry) {
   size_t comp_len = entry->component ? strlen(entry->component) : 0;
   size_t file_len = entry->file ? strlen(entry->file) : 0;
   size_t msg_len = entry->message_len;
@@ -208,9 +230,13 @@ static async_log_entry_t *async_entry_create(MemoryPool *pool, const turbo_log_e
   size_t total_size = sizeof(async_log_entry_t) + comp_len + STRING_PADDING + file_len +
                       STRING_PADDING + msg_len + STRING_PADDING;
 
-  async_log_entry_t *ae = (async_log_entry_t *)pool_alloc(pool, total_size);
-  if (!ae)
+  turbo_pool_buffer_t *buffer = turbo_pool_get_buffer(pool, total_size);
+  if (!buffer) {
     return NULL;
+  }
+  turbo_pool_set_used(buffer, total_size);
+
+  async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
 
   ae->level = entry->level;
   ae->timestamp_ms = entry->timestamp_ms;
@@ -241,7 +267,7 @@ static async_log_entry_t *async_entry_create(MemoryPool *pool, const turbo_log_e
   memcpy(ptr, entry->message, msg_len);
   memset(ptr + msg_len, 0, STRING_PADDING);
 
-  return ae;
+  return buffer;
 }
 
 // =============================================================================
@@ -420,8 +446,6 @@ turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opt
     sink->use_colors = opts->use_colors;
     if (opts->pattern) {
       pattern_compile(opts->pattern, &sink->pattern);
-    } else if (opts->include_file_line) {
-      pattern_compile(TURBO_LOG_FULL_PATTERN, &sink->pattern);
     } else {
       pattern_compile(TURBO_LOG_DEFAULT_PATTERN, &sink->pattern);
     }
@@ -437,39 +461,55 @@ turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opt
 // =============================================================================
 // File Sink (Thread-Safe)
 // =============================================================================
+// File Sink (pwrite-based, lock-free with rotation)
+// =============================================================================
 
 typedef struct {
   turbo_log_sink_t base;
   turbo_file_t fd;
   char *path;
   compiled_pattern_t pattern;
+  turbo_atomic_int64_t offset;
+  turbo_atomic_int64_t bytes_written; // Summary counter for current file size
+  turbo_atomic_int_t rotate_flag;     // 1 => rotate before next write
   size_t max_size;
   int max_files;
-  size_t current_size;
-  turbo_mutex_t write_mutex;
+  turbo_mutex_t rotate_mutex;
 } file_sink_t;
 
-static void file_sink_rotate_unlocked(file_sink_t *fs) {
-  if (fs->max_files <= 0)
-    return;
+static void file_sink_rotate(file_sink_t *fs) {
+  turbo_mutex_lock(&fs->rotate_mutex);
 
-  turbo_fs_close(fs->fd);
-  fs->fd = TURBO_INVALID_FILE;
-
-  char old_path[512], new_path[512];
-  for (int i = fs->max_files - 1; i >= 0; i--) {
-    if (i == 0) {
-      fmt(old_path, sizeof(old_path), "{}", fs->path);
-    } else {
-      fmt(old_path, sizeof(old_path), "{}.{}", fs->path, i);
-    }
-    fmt(new_path, sizeof(new_path), "{}.{}", fs->path, i + 1);
-    turbo_fs_rename(old_path, new_path);
+  // Close current file
+  if (fs->fd != TURBO_INVALID_FILE) {
+    turbo_fs_close(fs->fd);
+    fs->fd = TURBO_INVALID_FILE;
   }
 
+  if (fs->max_files > 0) {
+    // Rotate files: file.log.N -> file.log.N+1
+    char old_path[512], new_path[512];
+    for (int i = fs->max_files - 1; i >= 0; i--) {
+      if (i == 0) {
+        fmt(old_path, sizeof(old_path), "{}", fs->path);
+      } else {
+        fmt(old_path, sizeof(old_path), "{}.{}", fs->path, i);
+      }
+      fmt(new_path, sizeof(new_path), "{}.{}", fs->path, i + 1);
+      turbo_fs_rename(old_path, new_path);
+    }
+  }
+
+  // Open new file (when max_files == 0, just recreate/truncate the current file)
   fs->fd = turbo_fs_open(fs->path, TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC,
                          TURBO_FS_DEFAULT_MODE);
-  fs->current_size = 0;
+  if (fs->fd != TURBO_INVALID_FILE) {
+    turbo_atomic_store64(&fs->offset, 0);
+    turbo_atomic_store64(&fs->bytes_written, 0);
+    turbo_atomic_store(&fs->rotate_flag, 0);
+  }
+
+  turbo_mutex_unlock(&fs->rotate_mutex);
 }
 
 static void file_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
@@ -483,44 +523,45 @@ static void file_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *ent
     return;
   line[len++] = '\n';
 
-  turbo_mutex_lock(&fs->write_mutex);
+  if (fs->max_size > 0 && turbo_atomic_load(&fs->rotate_flag)) {
+    file_sink_rotate(fs);
+  }
   if (fs->fd == TURBO_INVALID_FILE) {
-    turbo_mutex_unlock(&fs->write_mutex);
     return;
   }
 
-  if (fs->max_size > 0 && fs->current_size >= fs->max_size) {
-    file_sink_rotate_unlocked(fs);
-    if (fs->fd == TURBO_INVALID_FILE) {
-      turbo_mutex_unlock(&fs->write_mutex);
-      return;
-    }
+  int64_t write_offset = turbo_atomic_fetch_add64(&fs->offset, len);
+  int written = turbo_fs_pwrite(fs->fd, line, (size_t)len, write_offset);
+  if (written <= 0) {
+    return;
   }
 
-  int written = turbo_fs_write(fs->fd, line, (size_t)len);
-  if (written > 0) {
-    fs->current_size += written;
+  if (fs->max_size > 0) {
+    int64_t total_written = turbo_atomic_fetch_add64(&fs->bytes_written, written) + written;
+    if (total_written >= (int64_t)fs->max_size) {
+      turbo_atomic_store(&fs->rotate_flag, 1);
+      file_sink_rotate(fs);
+    }
   }
-  turbo_mutex_unlock(&fs->write_mutex);
 }
 
 static void file_sink_flush(turbo_log_sink_t *sink) {
   file_sink_t *fs = (file_sink_t *)sink;
-  turbo_mutex_lock(&fs->write_mutex);
+  turbo_mutex_lock(&fs->rotate_mutex);
   if (fs->fd != TURBO_INVALID_FILE) {
     turbo_fs_fsync(fs->fd);
   }
-  turbo_mutex_unlock(&fs->write_mutex);
+  turbo_mutex_unlock(&fs->rotate_mutex);
 }
 
 static void file_sink_destroy(turbo_log_sink_t *sink) {
   file_sink_t *fs = (file_sink_t *)sink;
-  turbo_mutex_lock(&fs->write_mutex);
+  turbo_mutex_lock(&fs->rotate_mutex);
   if (fs->fd != TURBO_INVALID_FILE) {
     turbo_fs_close(fs->fd);
   }
-  turbo_mutex_unlock(&fs->write_mutex);
-  turbo_mutex_destroy(&fs->write_mutex);
+  turbo_mutex_unlock(&fs->rotate_mutex);
+  turbo_mutex_destroy(&fs->rotate_mutex);
   sdsfree(fs->path);
   pattern_free(&fs->pattern);
   free(fs);
@@ -534,7 +575,7 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   if (!sink)
     return NULL;
 
-  turbo_mutex_init(&sink->write_mutex);
+  turbo_mutex_init(&sink->rotate_mutex);
 
   sink->base.write = file_sink_write;
   sink->base.flush = file_sink_flush;
@@ -545,25 +586,30 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   pattern_compile(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN, &sink->pattern);
   sink->max_size = opts->max_size;
   sink->max_files = opts->max_files;
-  sink->fd = TURBO_INVALID_FILE;
+
   int flags = TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT;
   flags |= opts->append ? TURBO_FS_O_APPEND : TURBO_FS_O_TRUNC;
 
   sink->fd = turbo_fs_open(opts->path, flags, TURBO_FS_DEFAULT_MODE);
   if (sink->fd == TURBO_INVALID_FILE) {
-    turbo_mutex_destroy(&sink->write_mutex);
+    turbo_mutex_destroy(&sink->rotate_mutex);
     sdsfree(sink->path);
     pattern_free(&sink->pattern);
     free(sink);
     return NULL;
   }
 
+  // Initialize counters from current file size if appending
   if (opts->append) {
     int64_t pos = turbo_fs_seek(sink->fd, 0, SEEK_END);
-    if (pos > 0) {
-      sink->current_size = (size_t)pos;
-    }
+    int64_t initial = pos > 0 ? pos : 0;
+    turbo_atomic_store64(&sink->offset, initial);
+    turbo_atomic_store64(&sink->bytes_written, initial);
+  } else {
+    turbo_atomic_store64(&sink->offset, 0);
+    turbo_atomic_store64(&sink->bytes_written, 0);
   }
+  turbo_atomic_store(&sink->rotate_flag, 0);
 
   return &sink->base;
 }
@@ -608,121 +654,7 @@ turbo_log_sink_t *turbo_sink_callback_create(turbo_log_callback_fn callback, voi
 }
 
 // =============================================================================
-// Mmap Sink (Ultra High Performance)
-// =============================================================================
-
-typedef struct {
-  turbo_log_sink_t base;
-  char *path;
-  turbo_mmap_t mmap;
-  size_t write_pos;
-  int circular;
-  compiled_pattern_t pattern;
-  turbo_mutex_t write_mutex;
-} mmap_sink_t;
-
-static void mmap_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
-  mmap_sink_t *ms = (mmap_sink_t *)sink;
-  if (entry->level < sink->min_level)
-    return;
-
-  char line[MAX_MESSAGE_SIZE];
-  int len = format_with_pattern(line, sizeof(line) - 1, &ms->pattern, entry);
-  if (len <= 0)
-    return;
-  line[len++] = '\n';
-
-  turbo_mutex_lock(&ms->write_mutex);
-  if (!ms->mmap.is_mapped) {
-    turbo_mutex_unlock(&ms->write_mutex);
-    return;
-  }
-
-  if (ms->write_pos + (size_t)len > ms->mmap.length) {
-    if (ms->circular) {
-      ms->write_pos = 0; // Wrap around
-    } else {
-      // Out of space, skip
-      turbo_mutex_unlock(&ms->write_mutex);
-      return;
-    }
-  }
-
-  char *data = (char *)ms->mmap.data;
-  memcpy(data + ms->write_pos, line, (size_t)len);
-  ms->write_pos += (size_t)len;
-
-  // Potential improvement: call turbo_mmap_sync asynchronously or on flush
-  turbo_mutex_unlock(&ms->write_mutex);
-}
-
-static void mmap_sink_flush(turbo_log_sink_t *sink) {
-  mmap_sink_t *ms = (mmap_sink_t *)sink;
-  turbo_mutex_lock(&ms->write_mutex);
-  if (ms->mmap.is_mapped) {
-    turbo_mmap_sync(&ms->mmap, false);
-  }
-  turbo_mutex_unlock(&ms->write_mutex);
-}
-
-static void mmap_sink_destroy(turbo_log_sink_t *sink) {
-  mmap_sink_t *ms = (mmap_sink_t *)sink;
-  if (ms->mmap.is_mapped) {
-    turbo_mmap_sync(&ms->mmap, false);
-    turbo_mmap_close(&ms->mmap);
-  }
-  turbo_mutex_destroy(&ms->write_mutex);
-  sdsfree(ms->path);
-  pattern_free(&ms->pattern);
-  free(ms);
-}
-
-turbo_log_sink_t *turbo_sink_mmap_create(const turbo_mmap_sink_opts_t *opts) {
-  if (!opts || !opts->path)
-    return NULL;
-
-  size_t file_size = opts->file_size > 0 ? opts->file_size : 10 * 1024 * 1024; // Default 10MB
-
-  // Ensure file exists and has correct size
-  turbo_file_t fd = turbo_fs_open(opts->path, TURBO_FS_O_RDWR | TURBO_FS_O_CREAT, TURBO_FS_DEFAULT_MODE);
-  if (fd == TURBO_INVALID_FILE) return NULL;
-  
-  if (turbo_fs_ftruncate(fd, (int64_t)file_size) != 0) {
-    turbo_fs_close(fd);
-    return NULL;
-  }
-  turbo_fs_close(fd);
-
-  mmap_sink_t *sink = calloc(1, sizeof(mmap_sink_t));
-  if (!sink)
-    return NULL;
-
-  turbo_mutex_init(&sink->write_mutex);
-  turbo_mmap_init(&sink->mmap);
-
-  if (turbo_mmap_open(&sink->mmap, opts->path, TURBO_MMAP_READ | TURBO_MMAP_WRITE) != TURBO_MMAP_OK) {
-    turbo_mutex_destroy(&sink->write_mutex);
-    free(sink);
-    return NULL;
-  }
-
-  sink->base.write = mmap_sink_write;
-  sink->base.flush = mmap_sink_flush;
-  sink->base.destroy = mmap_sink_destroy;
-  sink->base.min_level = TURBO_LOG_LEVEL_DEBUG;
-
-  sink->path = tstr_dup(opts->path);
-  sink->circular = opts->circular;
-  pattern_compile(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN, &sink->pattern);
-
-  // If appending, find the end of data (rough heuristic: find first null or end)
-  // For a clean circular log, we might start at 0.
-  // We'll just start at 0 for now as mmap logs are often treated as fresh bins.
-  sink->write_pos = 0;
-
-  return &sink->base;
-}
-
+// Logger Implementation
 // =============================================================================
 // Statistics
 // =============================================================================
@@ -755,10 +687,9 @@ struct tlog_s {
   disruptor_consumer_t consumer;
 
   // ---------------------------------------------------------------------------
-  // Memory Pool (Thread-Safe)
+  // Async payload pool (thread-safe via turbo_buffer)
   // ---------------------------------------------------------------------------
-  turbo_mutex_t pool_mutex;
-  MemoryPool *async_pool;
+  turbo_pool_t async_pool;
 
   // ---------------------------------------------------------------------------
   // Background Thread
@@ -776,6 +707,7 @@ struct tlog_s {
 
 // Forward declarations
 static void logger_write_to_sinks(tlog_t *logger, const turbo_log_entry_t *entry);
+static int logger_publish_entry(tlog_t *logger, turbo_pool_buffer_t *buffer);
 
 // =============================================================================
 // Async Thread - Using Disruptor
@@ -805,10 +737,12 @@ static void async_logger_thread(void *arg) {
       read_cursor.sequence = seq;
 
       // Get entry pointer from disruptor
-      async_log_entry_t **entry_ptr = (async_log_entry_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+      turbo_pool_buffer_t **entry_ptr =
+          (turbo_pool_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
       if (!entry_ptr || !*entry_ptr) continue;
 
-      async_log_entry_t *ae = *entry_ptr;
+      turbo_pool_buffer_t *buffer = *entry_ptr;
+      async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
 
       // Convert and write to sinks
       turbo_log_entry_t entry = {
@@ -824,6 +758,8 @@ static void async_logger_thread(void *arg) {
 
       logger_write_to_sinks(logger, &entry);
       turbo_atomic_fetch_add64(&logger->logs_written, 1);
+      turbo_pool_release(buffer);
+      *entry_ptr = NULL;
     }
 
     // Release entries back to disruptor
@@ -838,9 +774,11 @@ static void async_logger_thread(void *arg) {
     for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
       disruptor_cursor_t read_cursor;
       read_cursor.sequence = seq;
-      async_log_entry_t **entry_ptr = (async_log_entry_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+      turbo_pool_buffer_t **entry_ptr =
+          (turbo_pool_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
       if (entry_ptr && *entry_ptr) {
-        async_log_entry_t *ae = *entry_ptr;
+        turbo_pool_buffer_t *buffer = *entry_ptr;
+        async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
         turbo_log_entry_t entry = {
           .level = ae->level,
           .timestamp_ms = ae->timestamp_ms,
@@ -853,6 +791,8 @@ static void async_logger_thread(void *arg) {
         };
         logger_write_to_sinks(logger, &entry);
         turbo_atomic_fetch_add64(&logger->logs_written, 1);
+        turbo_pool_release(buffer);
+        *entry_ptr = NULL;
       }
     }
     disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &cursor);
@@ -876,6 +816,24 @@ static void logger_stop_async(tlog_t *logger) {
   turbo_thread_join(&logger->thread);
 }
 
+static int logger_publish_entry(tlog_t *logger, turbo_pool_buffer_t *buffer) {
+  disruptor_cursor_t cursor = {0};
+  disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
+
+  turbo_pool_buffer_t **slot =
+      (turbo_pool_buffer_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
+  if (!slot || cursor.sequence == 0U) {
+    turbo_pool_release(buffer);
+    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
+    return -1;
+  }
+
+  *slot = buffer;
+  disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
+  turbo_atomic_fetch_add64(&logger->logs_published, 1);
+  return 0;
+}
+
 // =============================================================================
 // Logger Lifecycle
 // =============================================================================
@@ -888,43 +846,40 @@ tlog_t *tlog_create(const tlog_config_t *config) {
   logger->min_level = config ? config->min_level : TURBO_LOG_LEVEL_INFO;
 
   turbo_mutex_init(&logger->sink_mutex);
-  turbo_mutex_init(&logger->pool_mutex);
 
   turbo_atomic_store64(&logger->logs_written, 0);
   turbo_atomic_store64(&logger->logs_dropped, 0);
   turbo_atomic_store64(&logger->logs_published, 0);
 
+  uint64_t disruptor_capacity = logger_disruptor_capacity(config ? config->buffer_size : 0);
+
   // Create disruptor (replaces custom ring buffer)
   disruptor_config_t disruptor_config = {
-    .capacity = 16384,  // 16K entries (power of 2)
-    .entry_size = sizeof(async_log_entry_t *),  // Store pointers
+    .capacity = disruptor_capacity,
+    .entry_size = sizeof(turbo_pool_buffer_t *),
     .consumer_capacity = 1  // Single consumer
   };
 
   logger->disruptor = disruptor_create(&disruptor_config);
   if (!logger->disruptor) {
-    turbo_mutex_destroy(&logger->pool_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
     return NULL;
   }
 
-  // Create memory pool for log entries
+  // Create async payload pool for log entries
   size_t async_pool_size =
-      (config && config->buffer_size) ? config->buffer_size : DEFAULT_ASYNC_POOL_SIZE;
-  logger->async_pool = pool_create(async_pool_size);
-  if (!logger->async_pool) {
+      (config && config->pool_size) ? config->pool_size : DEFAULT_POOL_SIZE;
+  if (turbo_pool_init(&logger->async_pool, async_pool_size) != 0) {
     disruptor_destroy(logger->disruptor);
-    turbo_mutex_destroy(&logger->pool_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
     return NULL;
   }
 
   if (logger_start_async(logger) != 0) {
-    pool_destroy(logger->async_pool);
+    turbo_pool_free(&logger->async_pool);
     disruptor_destroy(logger->disruptor);
-    turbo_mutex_destroy(&logger->pool_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
     return NULL;
@@ -939,7 +894,7 @@ void tlog_destroy(tlog_t *logger) {
 
   logger_stop_async(logger);
   disruptor_destroy(logger->disruptor);
-  pool_destroy(logger->async_pool);
+  turbo_pool_free(&logger->async_pool);
 
   // Flush and destroy sinks
   for (int i = 0; i < logger->sink_count; i++) {
@@ -950,7 +905,6 @@ void tlog_destroy(tlog_t *logger) {
   }
 
   turbo_mutex_destroy(&logger->sink_mutex);
-  turbo_mutex_destroy(&logger->pool_mutex);
   free(logger);
 
   // Clear default if this was it
@@ -1000,15 +954,10 @@ void tlog_flush(tlog_t *logger) {
   if (!logger)
     return;
 
-  // Wait for all published logs to be written
+  // Wait for all currently published logs to be written.
   int64_t published = turbo_atomic_load64(&logger->logs_published);
-  int64_t written = turbo_atomic_load64(&logger->logs_written);
-
-  int timeout = 0;
-  while (written < published && timeout < 1000) {  // Max 1 second timeout
+  while (turbo_atomic_load64(&logger->logs_written) < published) {
     turbo_sleep_ms(1);
-    written = turbo_atomic_load64(&logger->logs_written);
-    timeout++;
   }
 
   // Flush all sinks
@@ -1026,11 +975,11 @@ void tlog_flush(tlog_t *logger) {
 // =============================================================================
 
 static void logger_write_to_sinks(tlog_t *logger, const turbo_log_entry_t *entry) {
-  // Note: sink_mutex not needed here as sinks are thread-safe individually
-  // and sink array modification is rare
+  turbo_mutex_lock(&logger->sink_mutex);
   for (int i = 0; i < logger->sink_count; i++) {
     logger->sinks[i]->write(logger->sinks[i], entry);
   }
+  turbo_mutex_unlock(&logger->sink_mutex);
 }
 
 void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *component,
@@ -1039,8 +988,6 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
   if (!logger || !fmt)
     return;
   if (level < logger->min_level)
-    return;
-  if (logger->sink_count == 0)
     return;
 
   if (arg_count == 0) {
@@ -1053,75 +1000,24 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
   if (msg_len < 0) msg_len = 0;
   if (msg_len >= MAX_MESSAGE_SIZE) msg_len = MAX_MESSAGE_SIZE - 1;
 
-  size_t comp_len = component ? strlen(component) : 0;
-  size_t file_len = file ? strlen(file) : 0;
-  size_t needed =
-      sizeof(async_log_entry_t) + comp_len + file_len + (size_t)msg_len + STRING_PADDING * 3;
+  turbo_log_entry_t entry = {
+    .level = level,
+    .timestamp_ms = turbo_realtime_ms(),
+    .thread_id = get_cached_tid(),
+    .component = component,
+    .file = file,
+    .line = line,
+    .message = tls_msg_buf,
+    .message_len = (size_t)msg_len
+  };
 
-  // Allocate from pool (must be synchronized)
-  turbo_mutex_lock(&logger->pool_mutex);
-  while (pool_get_available(logger->async_pool) < needed) {
-    if (mco_running()) {
-      turbo_mutex_unlock(&logger->pool_mutex);
-      mco_yield(mco_running());
-      turbo_mutex_lock(&logger->pool_mutex);
-    } else {
-      turbo_mutex_unlock(&logger->pool_mutex);
-      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-      return;
-    }
-  }
-
-  async_log_entry_t *ae = (async_log_entry_t *)pool_alloc(logger->async_pool, needed);
-  if (!ae) {
-    turbo_mutex_unlock(&logger->pool_mutex);
+  turbo_pool_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
+  if (!buffer) {
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return;
   }
-  turbo_mutex_unlock(&logger->pool_mutex);
 
-  // Fill entry
-  ae->level = level;
-  ae->timestamp_ms = turbo_realtime_ms();
-  ae->thread_id = get_cached_tid();
-  ae->line = line;
-
-  char *ptr = ae->data;
-  if (component) {
-    ae->component = ptr;
-    memcpy(ptr, component, comp_len);
-    memset(ptr + comp_len, 0, STRING_PADDING);
-    ptr += comp_len + STRING_PADDING;
-  } else {
-    ae->component = NULL;
-  }
-
-  if (file) {
-    ae->file = ptr;
-    memcpy(ptr, file, file_len);
-    memset(ptr + file_len, 0, STRING_PADDING);
-    ptr += file_len + STRING_PADDING;
-  } else {
-    ae->file = NULL;
-  }
-
-  ae->message = ptr;
-  memcpy(ptr, tls_msg_buf, (size_t)msg_len);
-  memset(ptr + msg_len, 0, STRING_PADDING);
-  ae->message_len = (size_t)msg_len;
-
-  // Publish to disruptor
-  disruptor_cursor_t cursor;
-  disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
-
-  async_log_entry_t **slot = (async_log_entry_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
-  if (slot) {
-    *slot = ae;
-    disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
-    turbo_atomic_fetch_add64(&logger->logs_published, 1);
-  } else {
-    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-  }
+  (void)logger_publish_entry(logger, buffer);
 }
 
 void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *component, const char *file,
@@ -1130,22 +1026,6 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
     return;
   if (level < logger->min_level)
     return;
-  if (logger->sink_count == 0)
-    return;
-
-  // Allocate from pool (must be synchronized)
-  turbo_mutex_lock(&logger->pool_mutex);
-  while (pool_get_available(logger->async_pool) < (message_len + 1024)) {
-    if (mco_running()) {
-      turbo_mutex_unlock(&logger->pool_mutex);
-      mco_yield(mco_running());
-      turbo_mutex_lock(&logger->pool_mutex);
-    } else {
-      turbo_mutex_unlock(&logger->pool_mutex);
-      turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-      return;
-    }
-  }
 
   turbo_log_entry_t entry = {.level = level,
                              .timestamp_ms = turbo_realtime_ms(),
@@ -1156,26 +1036,13 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
                              .message = message,
                              .message_len = message_len};
 
-  async_log_entry_t *ae = async_entry_create(logger->async_pool, &entry);
-  if (!ae) {
-    turbo_mutex_unlock(&logger->pool_mutex);
+  turbo_pool_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
+  if (!buffer) {
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return;
   }
-  turbo_mutex_unlock(&logger->pool_mutex);
 
-  // Publish to disruptor
-  disruptor_cursor_t cursor;
-  disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
-
-  async_log_entry_t **slot = (async_log_entry_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
-  if (slot) {
-    *slot = ae;
-    disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
-    turbo_atomic_fetch_add64(&logger->logs_published, 1);
-  } else {
-    turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
-  }
+  (void)logger_publish_entry(logger, buffer);
 }
 
 // =============================================================================

@@ -13,6 +13,12 @@ static void test_callback(const turbo_log_entry_t *entry, void *user_data) {
          entry->message);
 }
 
+static void count_only_callback(const turbo_log_entry_t *entry, void *user_data) {
+  (void)entry;
+  (void)user_data;
+  callback_count++;
+}
+
 typedef enum {
   TURBOMQ_ERR_NONE = 0,
   TURBOMQ_ERR_INVALID_ARG = -1,
@@ -56,9 +62,7 @@ spec("TLog Tests") {
 
     turbo_console_sink_opts_t sink_opts = {.output = stdout,
                                            .use_colors = 0,
-                                           .include_timestamp = 1,
-                                           .include_thread_id = 0,
-                                           .include_file_line = 0};
+                                           .pattern = NULL};
     tlog_add_sink(logger, turbo_sink_console_create(&sink_opts));
 
     TURBO_LOG_INFO(logger, "test", "Info message");
@@ -78,9 +82,7 @@ spec("TLog Tests") {
     // Add console sink
     turbo_console_sink_opts_t console_opts = {.output = stdout,
                                               .use_colors = 1,
-                                              .include_timestamp = 1,
-                                              .include_thread_id = 0,
-                                              .include_file_line = 1};
+                                              .pattern = TURBO_LOG_FULL_PATTERN};
     tlog_add_sink(logger, turbo_sink_console_create(&console_opts));
 
     // Add file sink
@@ -160,9 +162,7 @@ spec("TLog Tests") {
     tlog_t *custom_logger = tlog_create(&config);
     turbo_console_sink_opts_t sink_opts = {.output = stdout,
                                            .use_colors = 1,
-                                           .include_timestamp = 0,
-                                           .include_thread_id = 0,
-                                           .include_file_line = 1};
+                                           .pattern = TURBO_LOG_FULL_PATTERN};
     tlog_add_sink(custom_logger, turbo_sink_console_create(&sink_opts));
     tlog_set_default(custom_logger);
 
@@ -193,6 +193,82 @@ spec("TLog Tests") {
 
     tlog_flush(logger); // Wait for async queue to drain before checking count
     check_int_eq(callback_count, 3);
+
+    tlog_destroy(logger);
+  }
+
+  it("should rotate file when written bytes exceed max_size") {
+    char base_path[256];
+    char rotated_path[300];
+    char* sep = "/";
+#ifdef _WIN32
+    sep = "\\";
+#endif
+    turbo_fs_get_tmpdir(base_path, sizeof(base_path) - 48);
+    strcat(base_path, sep);
+    strcat(base_path, "test_tlog_rotate.log");
+    snprintf(rotated_path, sizeof(rotated_path), "%s.1", base_path);
+
+    turbo_fs_unlink(base_path);
+    turbo_fs_unlink(rotated_path);
+
+    tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+    tlog_t *logger = tlog_create(&config);
+    check_not_null(logger);
+
+    turbo_file_sink_opts_t file_opts = {
+        .path = base_path,
+        .max_size = 128,
+        .max_files = 1,
+        .append = 0,
+        .pattern = "{message}"
+    };
+    turbo_log_sink_t *file_sink = turbo_sink_file_create(&file_opts);
+    check_not_null(file_sink);
+    tlog_add_sink(logger, file_sink);
+
+    for (int i = 0; i < 64; i++) {
+      TURBO_LOG_INFO(logger, "rotate", "rotate-msg-{:04d}-abcdefghijklmnopqrstuvwxyz", i);
+    }
+
+    tlog_flush(logger);
+    tlog_destroy(logger);
+
+    turbo_fs_stat_t st_base = {0};
+    turbo_fs_stat_t st_rot = {0};
+    check_int_eq(turbo_fs_stat(base_path, &st_base), 0);
+    check_int_eq(turbo_fs_stat(rotated_path, &st_rot), 0);
+    check(st_base.is_file);
+    check(st_rot.is_file);
+    check_size_gt((size_t)st_rot.size, 0);
+
+    turbo_fs_unlink(base_path);
+    turbo_fs_unlink(rotated_path);
+  }
+
+  it("should sustain high-volume async logging without pool exhaustion") {
+    callback_count = 0;
+
+    tlog_config_t config = {
+        .min_level = TURBO_LOG_LEVEL_DEBUG,
+        .buffer_size = 8 * 1024,
+        .pool_size = 8 * 1024
+    };
+    tlog_t *logger = tlog_create(&config);
+    check_not_null(logger);
+
+    turbo_log_sink_t *cb_sink = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(cb_sink);
+    tlog_add_sink(logger, cb_sink);
+
+    const int total_logs = 5000;
+    for (int i = 0; i < total_logs; i++) {
+      TURBO_LOG_INFO(logger, "stress", "high-volume message {}", i);
+    }
+
+    tlog_flush(logger);
+    check_int_eq(callback_count, total_logs);
+    check_int_eq((int)tlog_get_dropped(logger), 0);
 
     tlog_destroy(logger);
   }
@@ -229,53 +305,4 @@ spec("TLog Tests") {
     }
   }
 
-  it("should handle mmap sink") {
-    char tmp_path[256];
-    char* sep = "/";
-#ifdef _WIN32
-    sep = "\\";
-#endif
-    turbo_fs_get_tmpdir(tmp_path, sizeof(tmp_path) - 32);
-    strcat(tmp_path, sep);
-    strcat(tmp_path, "test_tlog_mmap.log");
-
-    // Remove existing file if any
-    turbo_fs_unlink(tmp_path);
-
-    tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
-    tlog_t *logger = tlog_create(&config);
-    check_not_null(logger);
-
-    turbo_mmap_sink_opts_t opts = {
-        .path = tmp_path,
-        .file_size = 64 * 1024, // 64KB
-        .circular = 0,
-        .pattern = "{message}" // Simplify pattern for easy verification
-    };
-    turbo_log_sink_t *sink = turbo_sink_mmap_create(&opts);
-    check_not_null(sink);
-    tlog_add_sink(logger, sink);
-
-    const char *msg = "This is a memory-mapped log message";
-    TURBO_LOG_INFO(logger, "mmap", msg);
-
-    // Flush to ensure data hits disk/file-system for reading
-    tlog_flush(logger);
-    
-    // Clean up logger to ensure mmap unmap/close happens
-    tlog_destroy(logger);
-
-    // Verify file content
-    turbo_fs_buf_t buf;
-    int err = turbo_fs_read_file(tmp_path, &buf);
-    check_int_eq(err, 0);
-    
-    // Check if message is in the file (plus newline)
-    check_size_gt(buf.len, strlen(msg));
-    buf.base[buf.len] = '\0'; // Ensure null-termination for strstr
-    check_not_null(strstr(buf.base, msg));
-
-    turbo_fs_buf_free(&buf);
-    turbo_fs_unlink(tmp_path);
-  }
-}
+ }

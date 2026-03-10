@@ -24,10 +24,7 @@ void turl_setup_logger(int verbose) {
 
   turbo_console_sink_opts_t sink_opts = {.output = stdout,
                                          .use_colors = 1,
-                                         .pattern = "[{time}] [{level}] {message}",
-                                         .include_timestamp = 1,
-                                         .include_thread_id = 0,
-                                         .include_file_line = 0};
+                                         .pattern = "[{time}] [{level}] {message}"};
 
   turbo_log_sink_t *console_sink = turbo_sink_console_create(&sink_opts);
   tlog_add_sink(g_turl_logger, console_sink);

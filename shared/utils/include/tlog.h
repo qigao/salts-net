@@ -99,10 +99,7 @@ typedef struct {
   FILE *output;        // stdout/stderr (default: stdout)
   int use_colors;      // ANSI colors (default: 1)
   const char *pattern; // Format pattern (default: TURBO_LOG_DEFAULT_PATTERN)
-  // Legacy options (ignored if pattern is set)
-  int include_timestamp; // Show timestamp (default: 1)
-  int include_thread_id; // Show thread ID (default: 0)
-  int include_file_line; // Show file:line (default: 0)
+                       // Use TURBO_LOG_FULL_PATTERN for file:line info
 } turbo_console_sink_opts_t;
 
 /**
@@ -117,16 +114,6 @@ typedef struct {
 } turbo_file_sink_opts_t;
 
 /**
- * @brief Memory-Mapped File Sink options
- */
-typedef struct {
-  const char *path;      // Log file path
-  size_t file_size;      // Total size to map (default: 10MB)
-  int circular;          // If 1, wrap to start on reaching file_size. If 0, stop or rotate.
-  const char *pattern;   // Format pattern
-} turbo_mmap_sink_opts_t;
-
-/**
  * @brief Callback sink - custom log handling
  */
 typedef void (*turbo_log_callback_fn)(const turbo_log_entry_t *entry, void *user_data);
@@ -137,14 +124,15 @@ typedef void (*turbo_log_callback_fn)(const turbo_log_entry_t *entry, void *user
 CXX_C_API turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opts);
 
 /**
- * @brief Create file sink with optional rotation (standard I/O)
+ * @brief Create file sink with optional rotation (lock-free pwrite)
+ *
+ * Uses turbo_fs_pwrite for atomic append operations without mutex locks
+ * on the write path. Rotation is protected by mutex but happens rarely.
+ *
+ * Performance: ~9M ops/s (single-thread), ~9M ops/s (4-thread)
+ * Best for: All file logging scenarios, especially high-concurrency
  */
 CXX_C_API turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts);
-
-/**
- * @brief Create memory-mapped file sink (ultra-high performance)
- */
-CXX_C_API turbo_log_sink_t *turbo_sink_mmap_create(const turbo_mmap_sink_opts_t *opts);
 
 /**
  * @brief Create callback sink for custom handling
@@ -261,6 +249,25 @@ CXX_C_API turbo_log_level_t turbo_log_level_from_name(const char *name);
 
 // =============================================================================
 // Convenience Macros (capture caller's file/line correctly)
+// =============================================================================
+//
+// Three-level macro hierarchy:
+//
+// 1. TURBO_LOG_TYPED - Internal implementation (captures __FILE__/__LINE__)
+//    - Used by all other macros
+//    - Supports typed format arguments via fmt.h
+//    - DO NOT call directly - use TURBO_LOG_* or TLOG_* instead
+//
+// 2. TURBO_LOG_* - Explicit logger + component
+//    - TURBO_LOG_DEBUG(logger, component, fmt, ...)
+//    - TURBO_LOG_INFO(logger, component, fmt, ...)
+//    - Use when you need multiple loggers or per-call component names
+//
+// 3. TLOG_* - Uses default logger (convenient)
+//    - TLOG_DEBUG(fmt, ...)
+//    - TLOG_INFO(fmt, ...)
+//    - Use for simple cases with global logger
+//
 // =============================================================================
 
 #define TURBO_LOG(logger, level, component, ...)                                                   \

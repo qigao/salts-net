@@ -7,3 +7,8 @@ foreach(test_source ${TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_target_properties(${test_name} PROPERTIES FOLDER  ${folder_name})
 endforeach()
+
+# Benchmark (separate from tests)
+add_executable(benchmark_tlv_parser benchmark_tlv_parser.c)
+target_link_libraries(benchmark_tlv_parser PRIVATE TurboNet::TinyTest ${TARGET_NAME})
+set_target_properties(benchmark_tlv_parser PROPERTIES FOLDER ${folder_name})

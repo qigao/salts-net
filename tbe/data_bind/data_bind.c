@@ -20,7 +20,7 @@
 #include <sys/stat.h>
 
 /* Helper functions from tbe_helpers.c (linked statically) */
-extern char* tbe_read_varstring_copy(const uint8_t* buf, size_t offset);
+extern char* tbe_read_varstring(const uint8_t* buf, size_t offset);
 
 
 
@@ -425,7 +425,7 @@ static int compile_and_link(DataBind* codec, const char* c_source) {
     MIR_load_external(codec->ctx, "set_str", codec->api.set_field_string);
     if (codec->api.set_field_bytes)
         MIR_load_external(codec->ctx, "set_bytes", codec->api.set_field_bytes);
-    MIR_load_external(codec->ctx, "read_varstr", tbe_read_varstring_copy);
+    MIR_load_external(codec->ctx, "read_varstr", tbe_read_varstring);
 
     MIR_gen_init(codec->ctx);
     MIR_link(codec->ctx, MIR_set_gen_interface, NULL);

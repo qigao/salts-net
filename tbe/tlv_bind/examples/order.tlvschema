@@ -1,0 +1,30 @@
+# TLV Schema Definition
+# Format: type field_name
+# Field numbers are auto-assigned based on declaration order (starting from 1)
+
+# Simple order message
+message Order {
+    int32   order_id      # 32-bit integer (field 1)
+    string  symbol        # variable-length string (field 2)
+    double  price         # 64-bit float (field 3)
+    int32   quantity      # 32-bit integer (field 4)
+    bytes   metadata      # raw binary data (field 5)
+}
+
+# Nested message example
+message Trade {
+    int32   trade_id      # field 1
+    Order   order         # nested Order message (field 2)
+    int64   timestamp     # 64-bit integer (field 3)
+}
+
+# TLV Encoding Rules:
+# - Tag: varint encoding (field_number << 3 | wire_type)
+# - Length: varint encoding (number of bytes in value)
+# - Value: raw bytes
+#
+# Wire types:
+#   0 = varint (int32, int64)
+#   1 = fixed64 (double)
+#   2 = length-delimited (string, bytes, nested message)
+#   5 = fixed32 (int32 alternative)

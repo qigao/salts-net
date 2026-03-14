@@ -25,8 +25,8 @@ static exprtk_builtin_fn find_function(const exprtk_module_t *mod, const char *n
 suite("Graph Algorithms") {
   group("Bellman-Ford") {
     it("should find shortest paths in simple graph") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // Simple graph: 0 -> 1 (5), 0 -> 2 (3), 1 -> 2 (1), 2 -> 1 (2)
       double edges[] = {
@@ -63,12 +63,12 @@ suite("Graph Algorithms") {
       check_float_eq(dist[1], 5.0, EPSILON);  // 0 -> 2 -> 1 = 3 + 2 = 5
       check_float_eq(dist[2], 3.0, EPSILON);  // 0 -> 2 = 3
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should detect negative cycle") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // Graph with negative cycle: 0 -> 1 (1), 1 -> 2 (2), 2 -> 0 (-5)
       double edges[] = {
@@ -98,12 +98,12 @@ suite("Graph Algorithms") {
       // Should detect negative cycle
       check_float_eq(result.data.number, -1.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle disconnected vertices") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // Graph: 0 -> 1 (5), vertex 2 is disconnected
       double edges[] = {
@@ -133,14 +133,14 @@ suite("Graph Algorithms") {
       check_float_eq(dist[1], 5.0, EPSILON);
       check(dist[2] == DBL_MAX);  // Unreachable
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
   group("Negative Cycle Detection") {
     it("should detect negative cycle") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double edges[] = {
         0, 1, 1,
@@ -159,12 +159,12 @@ suite("Graph Algorithms") {
 
       check_float_eq(result.data.number, 1.0, EPSILON);  // Has cycle
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should return false for positive cycle") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double edges[] = {
         0, 1, 1,
@@ -183,14 +183,14 @@ suite("Graph Algorithms") {
 
       check_float_eq(result.data.number, 0.0, EPSILON);  // No negative cycle
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
   group("Path Extraction") {
     it("should extract path from predecessor array") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // Predecessor array: prev[0] = -1, prev[1] = 0, prev[2] = 1, prev[3] = 2
       // Path from 0 to 3: 0 -> 1 -> 2 -> 3
@@ -216,12 +216,12 @@ suite("Graph Algorithms") {
       check_float_eq(path[2], 2.0, EPSILON);
       check_float_eq(path[3], 3.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should return -1 for unreachable target") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double prev[] = {-1, 0, -1};  // Vertex 2 unreachable
       double path[10];
@@ -238,14 +238,14 @@ suite("Graph Algorithms") {
 
       check_float_eq(result.data.number, -1.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
   group("Currency Arbitrage Detection") {
     it("should detect arbitrage opportunity") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // 3 currencies with arbitrage: USD, EUR, GBP
       // USD -> EUR: 1.2, EUR -> GBP: 0.9, GBP -> USD: 1.0
@@ -266,12 +266,12 @@ suite("Graph Algorithms") {
 
       check_float_eq(result.data.number, 1.0, EPSILON);  // Arbitrage exists
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should return false for fair rates") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // Fair exchange rates (no arbitrage)
       // Use simple integer ratios to avoid floating point errors
@@ -291,7 +291,7 @@ suite("Graph Algorithms") {
 
       check_float_eq(result.data.number, 0.0, EPSILON);  // No arbitrage
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 }

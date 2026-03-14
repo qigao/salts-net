@@ -30,11 +30,11 @@
  * @param arena Memory arena
  */
 void exprtk_pf_cov_matrix(const double *returns, size_t na, size_t np,
-                           double *out, turbo_pool_t *arena) {
+                           double *out, mem_pool_t *arena) {
     if (!returns || !out || na == 0 || np == 0) return;
 
     /* Calculate mean returns for each asset */
-    double *means = TURBO_POOL_ALLOC_ARRAY(arena, double, na);
+    double *means = MEM_ALLOC_ARRAY(arena, double, na);
     if (!means) return;
 
     for (size_t i = 0; i < na; i++) {
@@ -80,13 +80,13 @@ void exprtk_pf_cov_matrix(const double *returns, size_t na, size_t np,
  * @param arena Memory arena
  * @return Portfolio variance
  */
-double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, turbo_pool_t *arena) {
+double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, mem_pool_t *arena) {
     if (!cov || !weights || n == 0) return 0.0;
 
     /* Allocate working memory */
-    double *inv_cov = TURBO_POOL_ALLOC_ARRAY(arena, double, n * n);
-    double *ones = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *temp = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *inv_cov = MEM_ALLOC_ARRAY(arena, double, n * n);
+    double *ones = MEM_ALLOC_ARRAY(arena, double, n);
+    double *temp = MEM_ALLOC_ARRAY(arena, double, n);
     if (!inv_cov || !ones || !temp) return 0.0;
 
     /* Copy covariance matrix for inversion */
@@ -97,7 +97,7 @@ double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, turb
     /* TODO: Replace with proper Cholesky for better numerical stability */
 
     /* Create augmented matrix [Σ | I] */
-    double *aug = TURBO_POOL_ALLOC_ARRAY(arena, double, n * 2 * n);
+    double *aug = MEM_ALLOC_ARRAY(arena, double, n * 2 * n);
     if (!aug) return 0.0;
 
     for (size_t i = 0; i < n; i++) {
@@ -203,13 +203,13 @@ double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, turb
  * @return Sharpe ratio
  */
 double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n,
-                             double rf, double *weights, turbo_pool_t *arena) {
+                             double rf, double *weights, mem_pool_t *arena) {
     if (!mu || !cov || !weights || n == 0) return 0.0;
 
     /* Allocate working memory */
-    double *inv_cov = TURBO_POOL_ALLOC_ARRAY(arena, double, n * n);
-    double *excess = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *temp = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *inv_cov = MEM_ALLOC_ARRAY(arena, double, n * n);
+    double *excess = MEM_ALLOC_ARRAY(arena, double, n);
+    double *temp = MEM_ALLOC_ARRAY(arena, double, n);
     if (!inv_cov || !excess || !temp) return 0.0;
 
     /* Calculate excess returns */
@@ -220,7 +220,7 @@ double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n,
     /* Invert covariance matrix (same as min variance) */
     memcpy(inv_cov, cov, n * n * sizeof(double));
 
-    double *aug = TURBO_POOL_ALLOC_ARRAY(arena, double, n * 2 * n);
+    double *aug = MEM_ALLOC_ARRAY(arena, double, n * 2 * n);
     if (!aug) return 0.0;
 
     for (size_t i = 0; i < n; i++) {
@@ -322,7 +322,7 @@ double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n,
  * @return Portfolio variance
  */
 double exprtk_pf_markowitz(const double *mu, const double *cov, size_t n,
-                            double target, double *weights, turbo_pool_t *arena) {
+                            double target, double *weights, mem_pool_t *arena) {
     if (!mu || !cov || !weights || n == 0) return 0.0;
 
     /* For simplicity, use a grid search approach */

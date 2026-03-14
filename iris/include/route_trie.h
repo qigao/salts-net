@@ -45,7 +45,7 @@ typedef struct
     size_t route_count;
     turbo_rwlock_t lock;
     void *node_pool;
-    turbo_pool_t param_arena;
+    mem_pool_t param_arena;
 } route_trie_t;
 
 typedef struct
@@ -81,12 +81,12 @@ typedef enum
 } http_method_t;
 
 // Path tokenization functions
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-CXX_C_API int tokenize_path(turbo_pool_t *arena, const char *path, tokenized_path_t *result);
+/* Phase IRIS-1: Updated to use mem_pool_t */
+CXX_C_API int tokenize_path(mem_pool_t *arena, const char *path, tokenized_path_t *result);
 
 // re2c-based route parsing functions
 CXX_C_API http_method_t parse_http_method_re2c(const char *method, size_t len);
-CXX_C_API int tokenize_path_re2c(turbo_pool_t *arena, const char *path, tokenized_path_t *result);
+CXX_C_API int tokenize_path_re2c(mem_pool_t *arena, const char *path, tokenized_path_t *result);
 CXX_C_API int count_path_segments_re2c(const char *path, size_t len);
 CXX_C_API bool extract_path_segment_re2c(const char **cursor, const char *limit, path_segment_t *segment);
 CXX_C_API bool is_valid_path_char_re2c(unsigned char c);

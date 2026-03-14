@@ -12,7 +12,7 @@ static int is_network_error(http_response_t *r) {
 spec("Advanced Features Test") {
 
   it("should successfully apply custom timeouts") {
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create("https://httpbin.org");
     http_client_set_connect_timeout(c, 3000);
     http_client_set_timeout(c, 10000);
     http_response_t *r = http_get(c, "https://httpbin.org/delay/1");
@@ -23,7 +23,7 @@ spec("Advanced Features Test") {
   }
 
   it("should successfully handle compressed responses") {
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create("https://httpbin.org");
     http_client_set_timeout(c, 10000);
     http_client_enable_compression(c, 1);
     http_response_t *r = http_get(c, "https://httpbin.org/gzip");
@@ -36,7 +36,7 @@ spec("Advanced Features Test") {
   }
 
   it("should successfully perform range requests") {
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create("https://httpbin.org");
     http_client_set_timeout(c, 10000);
     http_response_t *r = http_get_range(c, "https://httpbin.org/bytes/1000", 0, 99);
     if (!is_network_error(r)) {

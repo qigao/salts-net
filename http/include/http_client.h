@@ -48,13 +48,19 @@ typedef size_t (*http_data_read_cb)(char *buffer, size_t size, void *user_data);
 
 /* ── Lifecycle ────────────────────────────────────────────────────── */
 
-CXX_C_API http_client_t *http_client_create(void);
+/**
+ * @brief Create an HTTP client with a base URL.
+ * @param base_url Base URL for all requests (e.g. "https://api.example.com")
+ * @return Client handle or NULL on failure
+ */
+CXX_C_API http_client_t *http_client_create(const char *base_url);
 CXX_C_API void http_client_destroy(http_client_t *client);
 
 /**
  * @brief Get the coroutine context associated with the client.
  */
 CXX_C_API struct coro_context_s *http_client_get_context(http_client_t *client);
+CXX_C_API void http_client_init_logging(void *tlog_ptr);
 
 /* ── Configuration ────────────────────────────────────────────────── */
 
@@ -63,9 +69,7 @@ CXX_C_API void http_client_set_connect_timeout(http_client_t *client, int timeou
 CXX_C_API void http_client_set_read_timeout(http_client_t *client, int timeout_ms);
 
 CXX_C_API void http_client_set_user_agent(http_client_t *client, const char *user_agent);
-CXX_C_API void http_client_set_base_url(http_client_t *client, const char *base_url);
 CXX_C_API const char *http_client_get_base_url(http_client_t *client);
-CXX_C_API void http_client_clear_base_url(http_client_t *client);
 CXX_C_API void http_client_follow_redirects(http_client_t *client, int follow);
 CXX_C_API void http_client_set_max_redirects(http_client_t *client, int max_redirects);
 
@@ -85,6 +89,27 @@ CXX_C_API void http_client_set_bearer_token(http_client_t *client, const char *t
 CXX_C_API void http_client_set_jwt_auth(http_client_t *client, const char *secret,
                                         const char *claims_json);
 CXX_C_API void http_client_clear_auth(http_client_t *client);
+
+/* ── Proxy configuration ──────────────────────────────────────────── */
+
+/**
+ * @brief Set SOCKS5 proxy for all requests
+ * @param client HTTP client
+ * @param host Proxy server hostname or IP
+ * @param port Proxy server port
+ * @param username Username for authentication (NULL if no auth)
+ * @param password Password for authentication (NULL if no auth)
+ *
+ * Note: Connection pool is disabled when proxy is configured.
+ */
+CXX_C_API void http_client_set_proxy(http_client_t *client, const char *host, 
+                                     uint16_t port, const char *username, 
+                                     const char *password);
+
+/**
+ * @brief Clear proxy configuration
+ */
+CXX_C_API void http_client_clear_proxy(http_client_t *client);
 
 /* ── Core requests (must be called inside a coroutine) ────────────── */
 
@@ -146,6 +171,34 @@ CXX_C_API http_response_t *http_upload_file(http_client_t *client, const char *u
 
 CXX_C_API http_response_t *http_download_file(http_client_t *client, const char *url,
                                               const char *output_path);
+
+/**
+ * @brief Upload file with streaming (low memory usage, progress support)
+ * @param client HTTP client
+ * @param url Target URL
+ * @param file_path Path to file to upload
+ * @param progress_cb Progress callback (can be NULL)
+ * @param progress_ud User data for progress callback
+ * @return Response object (caller must free with http_response_free)
+ */
+CXX_C_API http_response_t *http_upload_file_stream(http_client_t *client, const char *url,
+                                                   const char *file_path,
+                                                   http_progress_cb progress_cb,
+                                                   void *progress_ud);
+
+/**
+ * @brief Download file with streaming (low memory usage, progress support)
+ * @param client HTTP client
+ * @param url Source URL
+ * @param output_path Path to save downloaded file
+ * @param progress_cb Progress callback (can be NULL)
+ * @param progress_ud User data for progress callback
+ * @return Response object (caller must free with http_response_free)
+ */
+CXX_C_API http_response_t *http_download_file_stream(http_client_t *client, const char *url,
+                                                     const char *output_path,
+                                                     http_progress_cb progress_cb,
+                                                     void *progress_ud);
 
 /* ── Cookie jar ───────────────────────────────────────────────────── */
 

@@ -16,7 +16,7 @@ spec("http stats and forms") {
     describe("statistics") {
 
         it("should start at zero") {
-            http_client_t *client = http_client_create();
+            http_client_t *client = http_client_create("http://localhost:8080");
             http_client_stats_t stats;
             http_client_get_stats(client, &stats);
             check_size_eq(stats.total_requests, 0);
@@ -25,7 +25,7 @@ spec("http stats and forms") {
         }
 
         it("should track requests") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_response_t *r = http_get(c, "https://httpbin.org/get");
             if (!is_network_error(r)) {
@@ -83,7 +83,7 @@ spec("http stats and forms") {
     describe("form POST") {
 
         it("should post form data") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_params_t *params = http_params_create();
             http_params_add(params, "name", "Test User");

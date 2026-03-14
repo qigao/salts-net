@@ -24,7 +24,7 @@ struct turbo_script_ctx_s {
     exprtk_env_t env;
     exprtk_node_t *expr;
     imported_module_t *imports;
-     turbo_pool_t scratch_arena;
+     mem_pool_t scratch_arena;
     char error_msg[256];
 
     /* Plugin handles */

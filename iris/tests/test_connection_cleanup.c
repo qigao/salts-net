@@ -16,7 +16,7 @@
 #endif
 
 #include "router.h"
-#include "netcore.h"
+#include "CoroNet.h"
 #include "error_recovery.h"
 
 /* Test data structure for middleware context */

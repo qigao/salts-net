@@ -16,7 +16,7 @@ spec("http headers and auth") {
     describe("response headers") {
 
         it("should parse content type") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_response_t *r = http_get(c, "https://httpbin.org/json");
             if (!is_network_error(r)) {
@@ -37,7 +37,7 @@ spec("http headers and auth") {
     describe("basic auth") {
 
         it("should authenticate with correct credentials") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_client_set_basic_auth(c, "user", "passwd");
             http_response_t *r = http_get(c, "https://httpbin.org/basic-auth/user/passwd");
@@ -54,7 +54,7 @@ spec("http headers and auth") {
     describe("bearer token") {
 
         it("should authenticate with token") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_client_set_bearer_token(c, "my-secret-token");
             http_response_t *r = http_get(c, "https://httpbin.org/bearer");
@@ -71,7 +71,7 @@ spec("http headers and auth") {
     describe("clear auth") {
 
         it("should clear credentials") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_client_set_basic_auth(c, "user", "passwd");
             http_client_clear_auth(c);
@@ -87,7 +87,7 @@ spec("http headers and auth") {
     describe("error codes") {
 
         it("should set error code for invalid url") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_response_t *r = http_get(c, "not-a-valid-url");
             check_not_null(r->error);
             check_int_ne(r->error_code, HTTP_ERROR_NONE);
@@ -96,7 +96,7 @@ spec("http headers and auth") {
         }
 
         it("should set error code for non-existent host") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_connect_timeout(c, 1000);
             http_response_t *r = http_get(c, "https://this-host-definitely-does-not-exist-12345.com");
             check_not_null(r->error);

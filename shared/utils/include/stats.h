@@ -12,7 +12,7 @@ extern "C" {
 
 /* Forward declarations - implementation details hidden */
 typedef struct turbo_stats_s turbo_stats_t;
-typedef struct turbo_pool_stats_s turbo_pool_stats_t;
+typedef struct mem_pool_stats_s mem_pool_stats_t;
 /* Statistics data types */
 typedef enum {
   TURBO_STAT_COUNTER,   /* Monotonic counter (bytes, packets, etc.) */
@@ -46,7 +46,7 @@ typedef struct turbo_stat_entry_s {
 
 /* turbo_stats_t is opaque - implementation in stats.c */
 /* Arena statistics */
-struct turbo_pool_stats_s {
+struct mem_pool_stats_s {
   size_t region_count;        /* Number of regions */
   size_t total_allocated;     /* Total allocated memory */
   size_t total_used;          /* Total used memory */
@@ -92,7 +92,7 @@ typedef struct turbo_transport_stats_s {
   uint64_t kcp_errors;
 
   /* Memory statistics */
-  turbo_pool_stats_t arena_stats;
+  mem_pool_stats_t arena_stats;
 } turbo_transport_stats_t;
 
 /* Protocol-specific aliases */

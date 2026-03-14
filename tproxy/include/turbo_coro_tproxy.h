@@ -2,7 +2,7 @@
 #define coro_TPROXY_H
 
 #include "platform.h"
-#include <netcore.h>
+#include <CoroNet.h>
 
 #include "turbo_coro_rule.h"
 #include <stdbool.h>

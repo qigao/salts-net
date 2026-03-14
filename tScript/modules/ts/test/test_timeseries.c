@@ -14,8 +14,8 @@ spec("timeseries") {
     describe("ts_diff - Differencing") {
 
         it("should calculate first-order difference") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
 
             double data[] = {10, 12, 15, 13, 18};
             double out[5] = {0};
@@ -30,7 +30,7 @@ spec("timeseries") {
             check_float_eq(out[3], -2.0, EPSILON);  // 13 - 15
             check_float_eq(out[4], 5.0, EPSILON);   // 18 - 13
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
@@ -77,8 +77,8 @@ spec("timeseries") {
     describe("ts_hurst - Hurst exponent") {
 
         it("should calculate Hurst exponent for random walk") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
 
             double data[100];
             for (size_t i = 0; i < 100; i++) {
@@ -90,15 +90,15 @@ spec("timeseries") {
             // Hurst should be between 0 and 1
             check(hurst >= 0.0 && hurst <= 1.0);
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("ts_match - Pattern matching") {
 
         it("should find pattern matches in time series") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
 
             double data[] = {1, 2, 3, 2, 1, 2, 3, 4, 3, 2};
             double pattern[] = {1, 2, 3};
@@ -113,15 +113,15 @@ spec("timeseries") {
             // Pattern [1,2,3] appears at index 0 and index 4
             check(out[0] >= 0.0); // Distance metric should be non-negative
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("ts_match_cosine - Cosine similarity matching") {
 
         it("should calculate cosine similarity for pattern matching") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
 
             double data[] = {1, 2, 3, 4, 5, 6, 7, 8};
             double pattern[] = {1, 2, 3};
@@ -137,15 +137,15 @@ spec("timeseries") {
                 check(out[i] >= -1.0 && out[i] <= 1.0);
             }
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("ts_match_dtw - Dynamic Time Warping") {
 
         it("should calculate DTW distance for pattern matching") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
 
             double data[] = {1, 2, 3, 4, 5, 4, 3, 2, 1};
             double pattern[] = {1, 2, 3};
@@ -161,7 +161,7 @@ spec("timeseries") {
                 check(out[i] >= 0.0);
             }
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 }

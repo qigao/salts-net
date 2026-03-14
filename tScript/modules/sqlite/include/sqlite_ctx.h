@@ -26,7 +26,7 @@ typedef struct {
 typedef struct {
     sqlite_ctx_t  *ctx;
     exprtk_env_t  *env;
-    turbo_pool_t *scratch;
+    mem_pool_t *scratch;
 } sqlite_ud_t;
 
 #define SQLITE_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})

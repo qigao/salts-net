@@ -22,7 +22,7 @@ extern "C" {
 
 /* Forward declarations — avoids pulling in exprtk.h / turbo_buffer.h */
 typedef struct exprtk_env_s exprtk_env_t;
-typedef struct turbo_pool_s turbo_pool_t;
+typedef struct mem_pool_s mem_pool_t;
 typedef struct exprtk_module_s exprtk_module_t;
 CXX_C_API void exprtk_env_add_module(exprtk_env_t *env, const exprtk_module_t *mod);
 
@@ -34,7 +34,7 @@ typedef struct ts_plugin_s {
    * Called by turbo_script when import("<name>") is executed.
    * Plugin registers its functions into env.
    * @param env     exprtk_env_t*  — register functions here
-   * @param scratch turbo_pool_t* — temp allocator
+   * @param scratch mem_pool_t* — temp allocator
    * @return opaque plugin instance (passed to unload), or NULL
    */
   void *(*load)(void *env, void *scratch);

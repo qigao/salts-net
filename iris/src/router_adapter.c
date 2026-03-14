@@ -1,6 +1,6 @@
 #include "router_adapter.h"
 #include "router.h"
-#include "netcore.h"
+#include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,8 +8,8 @@
 /**
  * @brief Process HTTP request through router using coro_client
  * 
- * This function serves as the bridge between NetCore's coro_client and the 
- * Iris router system. It takes the raw HTTP request data from a NetCore connection
+ * This function serves as the bridge between CoroNet's coro_client and the 
+ * Iris router system. It takes the raw HTTP request data from a CoroNet connection
  * and passes it to the router for processing.
  * 
  * @param client The coroutine client instance
@@ -17,22 +17,22 @@
  * @param request_len Length of the request data
  * @return 1 if connection should be closed, 0 to keep alive
  */
-int router_process_request(coro_client_t *client, const char *request_data, size_t request_len) {
-  // Call the main router function with NetCore connection
+int router_process_request(coro_socket_t *client, const char *request_data, size_t request_len) {
+  // Call the main router function with CoroNet connection
   return router(client, request_data, request_len);
 }
 
 /**
  * @brief Send HTTP response through coro_client
  * 
- * This function provides a way to send responses through NetCore connections.
+ * This function provides a way to send responses through CoroNet connections.
  * Currently, the router handles response sending internally through the reply() function,
  * so this is mainly for future extensibility.
  * 
  * @param client The coroutine client instance
  * @param res The response structure
  */
-void router_send_response(coro_client_t *client, Res *res) {
+void router_send_response(coro_socket_t *client, Res *res) {
   (void)client; // Client parameter not currently used
   
   if (!client || !res) {

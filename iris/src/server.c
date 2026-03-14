@@ -9,7 +9,7 @@
 #include "error_recovery.h"
 #include "router.h"
 #include "tlog.h"
-#include "netcore.h" /* Use coroutine server */
+#include "CoroNet.h" /* Use coroutine server */
 #include "turbo_thread.h"
 
 #define READ_BUF_SIZE 8192
@@ -17,7 +17,7 @@
 /* Connection context structure - matching definition in router.c */
 typedef struct {
   iris_app_t *app;
-  coro_client_t *client;
+  coro_socket_t *client;
   char buffer[READ_BUF_SIZE];
   size_t buffer_used;
   int keep_alive;
@@ -28,7 +28,7 @@ typedef struct {
 } iris_connection_ctx_t;
 
 /* Global server state */
-static coro_server_t *g_server = NULL;
+static coro_socket_t *g_server = NULL;
 static coro_context_t *g_coro_ctx = NULL;
 static int g_shutdown_requested = 0;
 static void (*g_app_shutdown_hook)(void) = NULL;
@@ -84,7 +84,7 @@ static void cleanup_connection_context(iris_connection_ctx_t *ctx) {
 }
 
 /* Coroutine Handler for each connection */
-static void server_handler(coro_client_t *client, void *arg) {
+static void server_handler(coro_socket_t *client, void *arg) {
   iris_app_t *app = (iris_app_t *)arg;
 
   /* Initialize connection context */
@@ -101,7 +101,7 @@ static void server_handler(coro_client_t *client, void *arg) {
   ctx->request_count = 0;
   
   /* Attach context to client used_data */
-  coro_client_set_user_data(client, ctx);
+  coro_socket_set_user_data(client, ctx);
 
   char *data = NULL;
   size_t len = 0;
@@ -110,7 +110,7 @@ static void server_handler(coro_client_t *client, void *arg) {
   /* Read loop */
   while (1) {
     /* Receive data (yields until data available) */
-    r = coro_client_recv(client, &data, &len);
+    r = coro_socket_recv(client, &data, &len);
     
     if (r != 0) {
       if (r != TURBO_EOF) {
@@ -140,16 +140,16 @@ static void server_handler(coro_client_t *client, void *arg) {
 
   /* Cleanup */
   cleanup_connection_context(ctx);
-  coro_client_set_user_data(client, NULL);
+  coro_socket_set_user_data(client, NULL);
 }
 
 /* Server startup function - decoupled for testing */
-coro_server_t* iris_server_start(iris_app_t *app, coro_context_t *ctx, unsigned short port) {
+coro_socket_t* iris_server_start(iris_app_t *app, coro_context_t *ctx, unsigned short port) {
   if (!ctx) return NULL;
 
   g_coro_ctx = ctx;
 
-  coro_server_t *server = coro_server_create(ctx);
+  coro_socket_t *server = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
   if (!server) {
     TLOG_ERROR("Failed to create server");
     g_coro_ctx = NULL;
@@ -159,10 +159,10 @@ coro_server_t* iris_server_start(iris_app_t *app, coro_context_t *ctx, unsigned 
   char listen_url[64];
   snprintf(listen_url, sizeof(listen_url), "tcp://0.0.0.0:%d", port);
 
-  int r = coro_server_listen(server, listen_url, server_handler, app);
+  int r = coro_socket_listen_url(server, listen_url, server_handler, app);
   if (r != 0) {
     TLOG_ERROR("Failed to start listening: {}", r);
-    coro_server_destroy(server);
+    coro_socket_destroy(server);
     g_coro_ctx = NULL;
     return NULL;
   }
@@ -220,7 +220,7 @@ int iris_app_run(iris_app_t *app, unsigned short port) {
   iris_async_shutdown();
 
   if (g_server) {
-    coro_server_destroy(g_server);
+    coro_socket_destroy(g_server);
     g_server = NULL;
   }
 

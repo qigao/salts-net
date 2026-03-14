@@ -17,9 +17,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "netcore.h"
+#include "CoroNet.h"
 #include "platform.h"
-#include "turbo_coro_client.h"
+#include "turbo_coro_socket.h"
 
 #ifdef __cplusplus
 extern "C" {

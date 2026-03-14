@@ -21,13 +21,13 @@
 typedef struct {
   ts_plugin_handle_t *wasm_plugin;
   exprtk_env_t env;
-  turbo_pool_t scratch;
+  mem_pool_t scratch;
 } test_env_t;
 
 static void test_env_init(test_env_t *t) {
   memset(t, 0, sizeof(*t));
   exprtk_env_init(&t->env);
-  turbo_pool_init(&t->scratch, 4096);
+  mem_init(&t->scratch, 4096);
   t->wasm_plugin = ts_plugin_load(WASM_PLUGIN_DLL);
   if (t->wasm_plugin)
     ts_plugin_init(t->wasm_plugin, &t->env, &t->scratch);
@@ -36,7 +36,7 @@ static void test_env_init(test_env_t *t) {
 static void test_env_free(test_env_t *t) {
   ts_plugin_unload(t->wasm_plugin);
   exprtk_env_free(&t->env);
-  turbo_pool_free(&t->scratch);
+  mem_destroy(&t->scratch);
 }
 
 static exprtk_value_t call_fn(test_env_t *t, const char *name, size_t argc, exprtk_value_t *args) {
@@ -52,7 +52,7 @@ static exprtk_value_t call_fn(test_env_t *t, const char *name, size_t argc, expr
 
 static exprtk_value_t make_str(test_env_t *t, const char *s) {
   size_t len = strlen(s);
-  char *buf = (char *)turbo_pool_alloc(&t->env.arena, len + 1);
+  char *buf = (char *)mem_alloc(&t->env.arena, len + 1);
   memcpy(buf, s, len + 1);
   return (exprtk_value_t){EXPRTK_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
 }
@@ -99,14 +99,14 @@ spec("wasm_module") {
       check_str_eq(h->plugin->name, "wasm");
 
       exprtk_env_t env;
-      turbo_pool_t scratch;
+      mem_pool_t scratch;
       exprtk_env_init(&env);
-      turbo_pool_init(&scratch, 4096);
+      mem_init(&scratch, 4096);
       check_int_eq(ts_plugin_init(h, &env, &scratch), 0);
 
       ts_plugin_unload(h);
       exprtk_env_free(&env);
-      turbo_pool_free(&scratch);
+      mem_destroy(&scratch);
     }
   }
 

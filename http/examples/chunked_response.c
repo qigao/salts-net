@@ -11,7 +11,7 @@ static int is_network_error(http_response_t *r) {
 spec("Chunked Response Test") {
 
   it("should successfully handle chunked transfer encoding") {
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create("https://httpbin.org");
     http_client_set_timeout(c, 10000);
     http_response_t *r = http_get(c, "https://httpbin.org/stream/5");
     if (!is_network_error(r)) {

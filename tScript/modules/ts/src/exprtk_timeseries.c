@@ -13,7 +13,7 @@
 #include "simd_helpers.h"
 
 // Arena allocation macros
-#define TEMP_ALLOC(arena, type, n) ((type *)turbo_pool_alloc(arena, sizeof(type) * (n)))
+#define TEMP_ALLOC(arena, type, n) ((type *)mem_alloc(arena, sizeof(type) * (n)))
 #define TEMP_FREE(arena, ptr) ((void)0)  // Arena-based, no explicit free needed
 
 // zn_normalize is a wrapper around simd_zscore
@@ -59,7 +59,7 @@ static double dtw_dist(const double *a, const double *b, size_t m, double *cost_
 }
 
 
-size_t exprtk_ts_diff(const double *data, size_t n, size_t order, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_diff(const double *data, size_t n, size_t order, double *out, mem_pool_t *arena) {
     if (n <= order) return 0;
     double *tmp = TEMP_ALLOC(arena, double, n); memcpy(tmp, data, n * sizeof(double));
     for (size_t o = 0; o < order; ++o) {
@@ -84,7 +84,7 @@ size_t exprtk_ts_autocorr(const double *data, size_t n, size_t max_lag, double *
     return max_lag + 1;
 }
 
-size_t exprtk_ts_pacf(const double *data, size_t n, size_t max_lag, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_pacf(const double *data, size_t n, size_t max_lag, double *out, mem_pool_t *arena) {
     if (n < 2 || max_lag >= n) return 0;
     double *rho = TEMP_ALLOC(arena, double, max_lag + 1);
 
@@ -107,7 +107,7 @@ size_t exprtk_ts_pacf(const double *data, size_t n, size_t max_lag, double *out,
     TEMP_FREE(arena, rho); TEMP_FREE(arena, phi); return max_lag + 1;
 }
 
-int exprtk_ts_adf(const double *data, size_t n, size_t p, double *out, turbo_pool_t *arena) {
+int exprtk_ts_adf(const double *data, size_t n, size_t p, double *out, mem_pool_t *arena) {
     if (n <= p + 2) return 0;
     size_t m = n - 1 - p;
     double *dy = TEMP_ALLOC(arena, double, m);
@@ -134,7 +134,7 @@ size_t exprtk_ts_garch(const double *returns, size_t n, double alpha, double bet
     return n;
 }
 
-double exprtk_ts_hurst(const double *data, size_t n, double *out, turbo_pool_t *arena) {
+double exprtk_ts_hurst(const double *data, size_t n, double *out, mem_pool_t *arena) {
     if (n < 8) return 0;
     size_t m = 0; for (size_t k = 4; k <= n / 2; k *= 2) m++;
     double *x = TEMP_ALLOC(arena, double, m);
@@ -235,10 +235,10 @@ size_t exprtk_ts_match_cosine(const double *data, const double *pattern, size_t 
     return n - m + 1;
 }
 
-size_t exprtk_ts_match_normalized(const double *data, const double *pattern, size_t n, size_t m, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_match_normalized(const double *data, const double *pattern, size_t n, size_t m, double *out, mem_pool_t *arena) {
     if (n < m || m == 0) return 0;
-    double *p_norm = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m);
-    double *w_norm = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m);
+    double *p_norm = (double *)MEM_ALLOC_ARRAY(arena, double, m);
+    double *w_norm = (double *)MEM_ALLOC_ARRAY(arena, double, m);
     if (!p_norm || !w_norm) return 0;
     
     zn_normalize(pattern, m, p_norm);
@@ -254,10 +254,10 @@ size_t exprtk_ts_match_normalized(const double *data, const double *pattern, siz
 
 size_t exprtk_ts_match_candle(const double *O, const double *H, const double *L, const double *C,
                             const double *pO, const double *pH, const double *pL, const double *pC,
-                            size_t n, size_t m, double *out, turbo_pool_t *arena) {
+                            size_t n, size_t m, double *out, mem_pool_t *arena) {
     if (n < m || m == 0) return 0;
-    double *p_feat = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m * 3);
-    double *w_feat = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m * 3);
+    double *p_feat = (double *)MEM_ALLOC_ARRAY(arena, double, m * 3);
+    double *w_feat = (double *)MEM_ALLOC_ARRAY(arena, double, m * 3);
     if (!p_feat || !w_feat) return 0;
 
     get_candle_features(pO, pH, pL, pC, m, p_feat);
@@ -270,9 +270,9 @@ size_t exprtk_ts_match_candle(const double *O, const double *H, const double *L,
     return n - m + 1;
 }
 
-size_t exprtk_ts_match_dtw(const double *data, const double *pattern, size_t n, size_t m, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_match_dtw(const double *data, const double *pattern, size_t n, size_t m, double *out, mem_pool_t *arena) {
     if (n < m || m == 0) return 0;
-    double *cost_mat = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, (m + 1) * (m + 1));
+    double *cost_mat = (double *)MEM_ALLOC_ARRAY(arena, double, (m + 1) * (m + 1));
     if (!cost_mat) return 0;
     
     for (size_t i = 0; i <= n - m; ++i) {
@@ -282,10 +282,10 @@ size_t exprtk_ts_match_dtw(const double *data, const double *pattern, size_t n, 
     return n - m + 1;
 }
 
-size_t exprtk_ts_match_correl(const double *data, const double *pattern, size_t n, size_t m, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_match_correl(const double *data, const double *pattern, size_t n, size_t m, double *out, mem_pool_t *arena) {
     if (n < m || m == 0) return 0;
-    double *p_norm = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m);
-    double *w_norm = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m);
+    double *p_norm = (double *)MEM_ALLOC_ARRAY(arena, double, m);
+    double *w_norm = (double *)MEM_ALLOC_ARRAY(arena, double, m);
     if (!p_norm || !w_norm) return 0;
     
     zn_normalize(pattern, m, p_norm);
@@ -299,10 +299,10 @@ size_t exprtk_ts_match_correl(const double *data, const double *pattern, size_t 
     return n - m + 1;
 }
 
-size_t exprtk_ts_match_returns(const double *data, const double *pattern, size_t n, size_t m, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_match_returns(const double *data, const double *pattern, size_t n, size_t m, double *out, mem_pool_t *arena) {
     if (n < m || m < 2) return 0;
-    double *p_ret = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m - 1);
-    double *w_ret = (double *)TURBO_POOL_ALLOC_ARRAY(arena, double, m - 1);
+    double *p_ret = (double *)MEM_ALLOC_ARRAY(arena, double, m - 1);
+    double *w_ret = (double *)MEM_ALLOC_ARRAY(arena, double, m - 1);
     if (!p_ret || !w_ret) return 0;
     
     for (size_t j = 0; j < m - 1; ++j) {
@@ -323,12 +323,12 @@ size_t exprtk_ts_match_returns(const double *data, const double *pattern, size_t
 
 // Stub implementations for DWT and EMD (complex algorithms, simplified here)
 size_t exprtk_ts_dwt(const double *data, size_t n, size_t levels, double *approx, double *detail,
-                     turbo_pool_t *arena) {
+                     mem_pool_t *arena) {
     (void)data; (void)n; (void)levels; (void)approx; (void)detail; (void)arena;
     return 0; // TODO: Implement wavelet transform
 }
 
-size_t exprtk_ts_emd(const double *data, size_t n, size_t max_imfs, double *imfs, turbo_pool_t *arena) {
+size_t exprtk_ts_emd(const double *data, size_t n, size_t max_imfs, double *imfs, mem_pool_t *arena) {
     (void)data; (void)n; (void)max_imfs; (void)imfs; (void)arena;
     return 0; // TODO: Implement empirical mode decomposition
 }
@@ -337,7 +337,7 @@ size_t exprtk_ts_emd(const double *data, size_t n, size_t max_imfs, double *imfs
    out[0] = ADF test statistic on residuals
    out[1] = approximate p-value
    out[2] = hedge ratio (beta) */
-size_t exprtk_ts_coint(const double *x, const double *y, size_t n, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_coint(const double *x, const double *y, size_t n, double *out, mem_pool_t *arena) {
     if (n < 10) return 0;
 
     /* Step 1: OLS regression y = beta * x + alpha + epsilon */
@@ -371,7 +371,7 @@ size_t exprtk_ts_coint(const double *x, const double *y, size_t n, double *out, 
 }
 
 /* Spread: spread[i] = y[i] - beta * x[i], where beta = OLS slope */
-size_t exprtk_ts_spread(const double *x, const double *y, size_t n, double *out, turbo_pool_t *arena) {
+size_t exprtk_ts_spread(const double *x, const double *y, size_t n, double *out, mem_pool_t *arena) {
     (void)arena;
     if (n < 2) return 0;
 

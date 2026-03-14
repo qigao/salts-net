@@ -84,7 +84,7 @@ double ta_lowest(const double *src, size_t idx, size_t period) {
   return simd_min(&src[idx - period + 1], period);
 }
 
-void ta_highest_arr(const double *src, size_t n, size_t period, double *dst, turbo_pool_t *arena) {
+void ta_highest_arr(const double *src, size_t n, size_t period, double *dst, mem_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -103,7 +103,7 @@ void ta_highest_arr(const double *src, size_t n, size_t period, double *dst, tur
   TEMP_FREE(arena, deque);
 }
 
-void ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, turbo_pool_t *arena) {
+void ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, mem_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -123,7 +123,7 @@ void ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, turb
 }
 
 void ta_highest_idx_arr(const double *src, size_t n, size_t period, size_t *dst,
-                        turbo_pool_t *arena) {
+                        mem_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);
@@ -143,7 +143,7 @@ void ta_highest_idx_arr(const double *src, size_t n, size_t period, size_t *dst,
 }
 
 void ta_lowest_idx_arr(const double *src, size_t n, size_t period, size_t *dst,
-                       turbo_pool_t *arena) {
+                       mem_pool_t *arena) {
   if (period == 0 || period > n)
     return;
   size_t *deque = TEMP_ALLOC(arena, size_t, n);

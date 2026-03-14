@@ -52,7 +52,7 @@ typedef struct exprtk_node_s exprtk_node_t;
 
 struct exprtk_node_s {
   exprtk_node_type_t type;
-  turbo_pool_t *arena;
+  mem_pool_t *arena;
   int line;
   int column;
   int inferred_type; // Type inference result: EXPRTK_VAL_* or -1 if unknown
@@ -284,7 +284,7 @@ typedef struct exprtk_env_s {
   int aborted;                       // Set to 1 if any safety limit is exceeded
   int last_line;                     // Line of last evaluated node
   int last_column;                   // Column of last evaluated node
-  turbo_pool_t arena;                // For persistent data like script function bodies
+  mem_pool_t arena;                // For persistent data like script function bodies
   exprtk_value_t error_value;        // Value thrown by throw statement
   struct exprtk_env_s *next_closure; // linked list of closure scopes to free
 
@@ -299,7 +299,7 @@ typedef struct {
   exprtk_node_t *root;
   int error;
   char error_msg[256];
-  turbo_pool_t *arena;
+  mem_pool_t *arena;
 } exprtk_parse_ctx_t;
 
 // Token structure passed from Lexer to Parser

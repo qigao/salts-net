@@ -194,8 +194,8 @@ spec("ts_rolling") {
 
     describe("Cointegration") {
         it("should detect cointegrated series") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double x[100], y[100], out[3] = {0};
             for (int i = 0; i < 100; i++) {
                 x[i] = (double)i + sin((double)i * 0.1);
@@ -205,14 +205,14 @@ spec("ts_rolling") {
             check_int_eq(r, 3);
             /* Hedge ratio should be close to 2.0 */
             check(fabs(out[2] - 2.0) < 0.5);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Spread") {
         it("should compute regression spread") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double x[] = {1, 2, 3, 4, 5};
             double y[] = {2, 4, 6, 8, 10};
             double out[5] = {0};
@@ -221,7 +221,7 @@ spec("ts_rolling") {
             /* y = 2*x exactly, spread should be ~0 */
             for (int i = 0; i < 5; i++)
                 check(fabs(out[i]) < EPSILON);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 }

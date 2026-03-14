@@ -1,5 +1,5 @@
 #include "turbo_coro_tproxy.h"
-#include <netcore.h>
+#include <CoroNet.h>
 #include "tinytest.h"
 
 spec("coro_tproxy_advanced") {

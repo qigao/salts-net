@@ -100,16 +100,16 @@ CXX_C_API tstr_v tstr_v_split_next(tstr_v *rest, tstr_v delim);
 
 CXX_C_API char *tstr_v_to_cstr(tstr_v v);
 CXX_C_API char *tstr_v_to_pool(tstr_v v, MemoryPool *pool);
-CXX_C_API char *tstr_v_to_arena(tstr_v v, turbo_pool_t *arena);
+CXX_C_API char *tstr_v_to_arena(tstr_v v, mem_pool_t *arena);
 
 /* ============================================================================
  * Arena/Network interop (zero-copy)
  * ========================================================================= */
 
-struct turbo_pool_slice_s;
+struct mem_slice_s;
 
 /** Create view from arena slice (zero-copy) */
-static inline tstr_v tstr_v_from_slice(const struct turbo_pool_slice_s *slice) {
+static inline tstr_v tstr_v_from_slice(const struct mem_slice_s *slice) {
   tstr_v v;
   if (slice) {
     v.data = slice->data;

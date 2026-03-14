@@ -52,12 +52,12 @@ uint64_t m3_GetTimestamp()
 #include "turbo_buffer.h"
 
 #ifdef _MSC_VER
-static __declspec(thread) turbo_pool_t* g_m3_arena = NULL;
+static __declspec(thread) mem_pool_t* g_m3_arena = NULL;
 #else
-static __thread turbo_pool_t* g_m3_arena = NULL;
+static __thread mem_pool_t* g_m3_arena = NULL;
 #endif
 
-void m3_SetThreadArena (turbo_pool_t* i_arena) {
+void m3_SetThreadArena (mem_pool_t* i_arena) {
     g_m3_arena = i_arena;
 }
 #endif
@@ -79,7 +79,7 @@ void *  m3_Malloc_Impl  (size_t i_size)
 {
 #if d_m3UseArena
     if (g_m3_arena) {
-        void* ptr = turbo_pool_alloc (g_m3_arena, i_size);
+        void* ptr = mem_alloc (g_m3_arena, i_size);
         if (ptr) memset (ptr, 0, i_size);
         return ptr;
     }
@@ -119,7 +119,7 @@ void *  m3_Realloc_Impl  (void * i_ptr, size_t i_newSize, size_t i_oldSize)
 #if d_m3UseArena
     if (g_m3_arena) {
         if (i_newSize <= i_oldSize) return i_ptr;
-        void* newPtr = turbo_pool_alloc (g_m3_arena, i_newSize);
+        void* newPtr = mem_alloc (g_m3_arena, i_newSize);
         if (newPtr) {
             memset (newPtr, 0, i_newSize);
             if (i_ptr) memcpy (newPtr, i_ptr, i_oldSize);
@@ -163,7 +163,7 @@ void *  m3_Malloc_Impl  (size_t i_size)
 {
 #if d_m3UseArena
     if (g_m3_arena) {
-        void* ptr = turbo_pool_alloc (g_m3_arena, i_size);
+        void* ptr = mem_alloc (g_m3_arena, i_size);
         if (ptr) memset (ptr, 0, i_size);
         return ptr;
     }
@@ -184,7 +184,7 @@ void *  m3_Realloc_Impl  (void * i_ptr, size_t i_newSize, size_t i_oldSize)
 #if d_m3UseArena
     if (g_m3_arena) {
         if (i_newSize <= i_oldSize) return i_ptr;
-        void* newPtr = turbo_pool_alloc (g_m3_arena, i_newSize);
+        void* newPtr = mem_alloc (g_m3_arena, i_newSize);
         if (newPtr) {
             memset (newPtr, 0, i_newSize);
             if (i_ptr) memcpy (newPtr, i_ptr, i_oldSize);

@@ -179,7 +179,7 @@ static exprtk_value_t call_script_func(
 
     if (is_variadic) {
         size_t rest_sz = (argc > std_args) ? (argc - std_args) : 0;
-        double *rest_data = (double*)turbo_pool_alloc(&local_env.arena, rest_sz * sizeof(double));
+        double *rest_data = (double*)mem_alloc(&local_env.arena, rest_sz * sizeof(double));
         for (size_t i = 0; i < rest_sz; ++i) {
             exprtk_value_t v = args[std_args + i];
             rest_data[i] = (v.type == EXPRTK_VAL_NUMBER) ? v.data.number : 0;
@@ -209,7 +209,7 @@ static exprtk_value_t call_script_func(
 
 exprtk_value_t exprtk_call_internal(const char *name, size_t argc,
                                     exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
     exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     exprtk_value_t result = zero;
 

@@ -16,7 +16,7 @@
  * Helper: build a small test universe
  * ========================================================================= */
 
-static universe_t *make_test_universe(turbo_pool_t *arena) {
+static universe_t *make_test_universe(mem_pool_t *arena) {
     universe_t *u = universe_create(arena);
     if (!u) return NULL;
 
@@ -53,20 +53,20 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Lifecycle") {
     it("should create and destroy a universe") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
 
       universe_t *u = universe_create(&arena);
       check_not_null(u);
       check_int_eq((int)u->num_assets, 0);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should add assets and finalize") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
 
       universe_t *u = make_test_universe(&arena);
       check_not_null(u);
@@ -75,7 +75,7 @@ suite("Universe Management") {
       check_not_null(u->cum_adj_cache);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -84,8 +84,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Active Mask") {
     it("should activate assets based on start_date") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       /* date=120: AAPL(100), MSFT(100), AMZN(100) active; GOOG(150), TSLA(200) not yet */
@@ -98,12 +98,12 @@ suite("Universe Management") {
       check(!universe_is_active(u, 4));  /* TSLA not yet */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should activate later assets as date progresses") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       /* date=200: all 5 assets are active (AMZN end_date=300 > 200) */
@@ -111,12 +111,12 @@ suite("Universe Management") {
       check_int_eq((int)universe_active_count(u), 5);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should deactivate delisted assets") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 250);
@@ -127,12 +127,12 @@ suite("Universe Management") {
       check_int_eq((int)universe_active_count(u), 4); /* 5 minus AMZN */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should report delisted_today on exact delist date") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 250);
@@ -144,12 +144,12 @@ suite("Universe Management") {
       check_int_eq((int)delisted[0], 3); /* AMZN id=3 */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should fill active_ids correctly") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 120);
@@ -161,7 +161,7 @@ suite("Universe Management") {
       check_int_eq((int)ids[2], 3); /* AMZN */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -170,8 +170,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Price Adjustments") {
     it("should apply split adjustment factor") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = universe_create(&arena);
 
       universe_asset_t asset = {
@@ -201,12 +201,12 @@ suite("Universe Management") {
       check_float_eq(adjusted, 100.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle multiple splits correctly") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = universe_create(&arena);
 
       universe_asset_t asset = {
@@ -231,12 +231,12 @@ suite("Universe Management") {
       check_float_eq(factor, 1.0 / 6.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should bulk-adjust prices with SIMD") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = universe_create(&arena);
 
       universe_asset_t assets[] = {
@@ -264,7 +264,7 @@ suite("Universe Management") {
       check_float_eq(adjusted[1], 100.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -273,8 +273,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Cross-Sectional Rank") {
     it("should rank active assets correctly") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200); /* All 5 active */
@@ -292,12 +292,12 @@ suite("Universe Management") {
       check_float_eq(out[4], 1.0 / 4.0, EPSILON); /* TSLA=20 → rank 1/4 = 0.25 */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should set inactive asset ranks to zero") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 120); /* Only AAPL, MSFT, AMZN active */
@@ -316,7 +316,7 @@ suite("Universe Management") {
       check_float_eq(out[0], 2.0 / 2.0, EPSILON); /* AAPL → 1.0 */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -325,8 +325,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Cross-Sectional Top-N") {
     it("should return top-k asset IDs by value") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200);
@@ -341,12 +341,12 @@ suite("Universe Management") {
       check_int_eq((int)top_ids[2], 2); /* GOOG=30 */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should clamp k to active count") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 120); /* 3 active */
@@ -358,7 +358,7 @@ suite("Universe Management") {
       check_int_eq((int)n, 3); /* only 3 active */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -367,8 +367,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Cross-Sectional Filter") {
     it("should filter assets above threshold") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200);
@@ -385,7 +385,7 @@ suite("Universe Management") {
       check_int_eq(mask[4], 0); /* TSLA=20 */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -394,8 +394,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("SIMD Cross-Sectional Z-Score") {
     it("should z-score normalize active assets") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 16384);
+      mem_pool_t arena;
+      mem_init(&arena, 16384);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200); /* All 5 active */
@@ -416,12 +416,12 @@ suite("Universe Management") {
       check_float_eq(out[0], -out[1], 0.01);        /* Symmetric around mean */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should set inactive slots to zero in zscore") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 16384);
+      mem_pool_t arena;
+      mem_init(&arena, 16384);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 120); /* AAPL, MSFT, AMZN active */
@@ -434,7 +434,7 @@ suite("Universe Management") {
       check_float_eq(out[4], 0.0, EPSILON); /* TSLA inactive */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -443,8 +443,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("SIMD Cross-Sectional Demean") {
     it("should subtract cross-sectional mean from active assets") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 16384);
+      mem_pool_t arena;
+      mem_init(&arena, 16384);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200);
@@ -461,12 +461,12 @@ suite("Universe Management") {
       check_float_eq(out[4], -10.0, EPSILON); /* 20 - 30 */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should set inactive slots to zero in demean") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 16384);
+      mem_pool_t arena;
+      mem_init(&arena, 16384);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 120);
@@ -479,7 +479,7 @@ suite("Universe Management") {
       check_float_eq(out[4], 0.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -488,8 +488,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("SIMD Cross-Sectional Clip") {
     it("should clamp values to range") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200);
@@ -505,7 +505,7 @@ suite("Universe Management") {
       check_float_eq(out[4], 20.0, EPSILON); /* 20 unchanged */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -514,8 +514,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("SIMD Cross-Sectional Sum") {
     it("should sum only active asset values") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 120); /* AAPL, MSFT, AMZN active */
@@ -527,12 +527,12 @@ suite("Universe Management") {
       check_float_eq(sum, 60.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should sum all when all active") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       universe_advance(u, 200);
@@ -543,7 +543,7 @@ suite("Universe Management") {
       check_float_eq(sum, 150.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -552,8 +552,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Lookup") {
     it("should find assets by ID") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       check_int_eq((int)universe_find_asset(u, 0), 0);
@@ -561,12 +561,12 @@ suite("Universe Management") {
       check(universe_find_asset(u, 99) == SIZE_MAX);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should find assets by ticker") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
 
       const universe_asset_t *a = universe_find_by_ticker(u, "GOOG");
@@ -576,7 +576,7 @@ suite("Universe Management") {
       check(universe_find_by_ticker(u, "NOPE") == NULL);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -585,8 +585,8 @@ suite("Universe Management") {
    * ------------------------------------------------------------------- */
   group("Edge Cases") {
     it("should handle empty universe") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = universe_create(&arena);
       universe_finalize(u);
 
@@ -597,12 +597,12 @@ suite("Universe Management") {
       universe_rank(u, values, 0, out); /* n=0 should not crash */
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle single asset universe") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = universe_create(&arena);
 
       universe_asset_t asset = {
@@ -626,12 +626,12 @@ suite("Universe Management") {
       check_float_eq(sum, 42.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle NULL inputs gracefully") {
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 8192);
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
       universe_t *u = make_test_universe(&arena);
       universe_advance(u, 200);
 
@@ -643,7 +643,7 @@ suite("Universe Management") {
       check_float_eq(universe_cross_sum(NULL, NULL, 0), 0.0, EPSILON);
 
       universe_free(u);
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 }

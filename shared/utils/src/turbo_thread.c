@@ -3,9 +3,13 @@
  * @brief Threading primitives and thread pool implementation
  *
  * Cross-platform: Windows SRW Lock + Condition Variable, POSIX pthread.
+ * Thread pool uses lock-free Disruptor + Object Pool for high performance.
  */
 
 #include "turbo_thread.h"
+#include "disruptor.h"
+#include "object_pool.h"
+#include "turbo_atomic.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -46,18 +50,23 @@ void turbo_mutex_init(turbo_mutex_t *mutex) {
 }
 
 void turbo_mutex_destroy(turbo_mutex_t *mutex) {
-    if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) return;
+    if (mutex == NULL || *mutex == NULL) return;
     free(*mutex);
     *mutex = NULL;
 }
 
 void turbo_mutex_lock(turbo_mutex_t *mutex) {
-    if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) return;
+    if (mutex == NULL || *mutex == NULL) return;
     AcquireSRWLockExclusive((PSRWLOCK)*mutex);
 }
 
 void turbo_mutex_unlock(turbo_mutex_t *mutex) {
-    if (mutex == NULL || *mutex == NULL || *mutex == (turbo_mutex_t)(uintptr_t)-1) return;
+    if (mutex == NULL || *mutex == NULL) return;
+    // Debug: catch invalid mutex pointer
+    if ((uintptr_t)*mutex == 0xFFFFFFFFFFFFFFFF || (uintptr_t)*mutex == 0xCDCDCDCDCDCDCDCD) {
+        // Invalid mutex pointer detected!
+        return;
+    }
     ReleaseSRWLockExclusive((PSRWLOCK)*mutex);
 }
 
@@ -90,14 +99,12 @@ void turbo_cond_broadcast(turbo_cond_t *cond) {
 }
 
 void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex) {
-    if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL ||
-        *mutex == (turbo_mutex_t)(uintptr_t)-1) return;
+    if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL) return;
     SleepConditionVariableSRW((PCONDITION_VARIABLE)*cond, (PSRWLOCK)*mutex, INFINITE, 0);
 }
 
 int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns) {
-    if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL ||
-        *mutex == (turbo_mutex_t)(uintptr_t)-1) return UV_EINVAL;
+    if (cond == NULL || *cond == NULL || mutex == NULL || *mutex == NULL) return UV_EINVAL;
     DWORD timeout_ms = (DWORD)(timeout_ns / 1000000ULL);
     BOOL result = SleepConditionVariableSRW((PCONDITION_VARIABLE)*cond, (PSRWLOCK)*mutex, timeout_ms, 0);
     return result ? 0 : UV_ETIMEDOUT;
@@ -340,29 +347,35 @@ void turbo_thread_yield(void) {
 #endif
 
 // =============================================================================
-// Thread Pool (platform-independent)
+// Thread Pool (Lock-Free with Disruptor + Object Pool)
 // =============================================================================
 
 typedef struct task_node_s {
     turbo_task_fn fn;
     void *arg;
-    struct task_node_s *next;
 } task_node_t;
+
+typedef struct worker_context_s {
+    turbo_threadpool_t *pool;
+    disruptor_consumer_t consumer;
+    int worker_id;
+} worker_context_t;
 
 struct turbo_threadpool_s {
     turbo_thread_t *threads;
+    worker_context_t *workers;
     int num_threads;
 
-    task_node_t *head;
-    task_node_t *tail;
-    int pending;
-    int active;
+    disruptor_t *disruptor;
+    object_pool_t *task_pool;
 
-    turbo_mutex_t lock;
-    turbo_cond_t not_empty;
+    turbo_atomic_int_t shutdown;
+    turbo_atomic_int64_t tasks_submitted;
+    turbo_atomic_int64_t tasks_completed;
+
+    // Only for wait/destroy synchronization
+    turbo_mutex_t wait_mutex;
     turbo_cond_t all_done;
-
-    int shutdown;
 };
 
 static int get_cpu_count(void) {
@@ -377,40 +390,70 @@ static int get_cpu_count(void) {
 }
 
 static void worker_entry(void *arg) {
-    turbo_threadpool_t *pool = (turbo_threadpool_t *)arg;
+    worker_context_t *ctx = (worker_context_t *)arg;
+    turbo_threadpool_t *pool = ctx->pool;
 
-    for (;;) {
-        turbo_mutex_lock(&pool->lock);
+    // Register as consumer
+    uint64_t next_sequence = disruptor_consumer_register(pool->disruptor, &ctx->consumer);
 
-        while (pool->head == NULL && !pool->shutdown) {
-            turbo_cond_wait(&pool->not_empty, &pool->lock);
+    // Worker loop
+    while (!turbo_atomic_load(&pool->shutdown)) {
+        disruptor_cursor_t cursor;
+        cursor.sequence = next_sequence;
+
+        // Try non-blocking first to avoid spin
+        if (!disruptor_consumer_wait_for_nonblocking(pool->disruptor, &cursor)) {
+            turbo_sleep_ms(1);
+            continue;
         }
 
-        if (pool->shutdown && pool->head == NULL) {
-            turbo_mutex_unlock(&pool->lock);
-            break;
+        // Process all available tasks in batch
+        for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
+            disruptor_cursor_t read_cursor;
+            read_cursor.sequence = seq;
+
+            // Get task pointer from disruptor
+            task_node_t **task_ptr = (task_node_t **)disruptor_show_entry(pool->disruptor, &read_cursor);
+            if (!task_ptr || !*task_ptr) continue;
+
+            task_node_t *task = *task_ptr;
+
+            // Execute task
+            task->fn(task->arg);
+
+            // Return task to object pool
+            object_pool_free(pool->task_pool, task);
+            *task_ptr = NULL;
+
+            // Update completion counter
+            turbo_atomic_fetch_add64(&pool->tasks_completed, 1);
         }
 
-        task_node_t *node = pool->head;
-        pool->head = node->next;
-        if (pool->head == NULL) {
-            pool->tail = NULL;
-        }
-        pool->pending--;
-        pool->active++;
-
-        turbo_mutex_unlock(&pool->lock);
-
-        node->fn(node->arg);
-        free(node);
-
-        turbo_mutex_lock(&pool->lock);
-        pool->active--;
-        if (pool->pending == 0 && pool->active == 0) {
-            turbo_cond_broadcast(&pool->all_done);
-        }
-        turbo_mutex_unlock(&pool->lock);
+        // Release entries back to disruptor
+        disruptor_consumer_release_entry(pool->disruptor, &ctx->consumer, &cursor);
+        next_sequence = cursor.sequence + 1;
     }
+
+    // Final drain on shutdown
+    disruptor_cursor_t cursor;
+    cursor.sequence = next_sequence;
+    if (disruptor_consumer_wait_for_nonblocking(pool->disruptor, &cursor)) {
+        for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
+            disruptor_cursor_t read_cursor;
+            read_cursor.sequence = seq;
+            task_node_t **task_ptr = (task_node_t **)disruptor_show_entry(pool->disruptor, &read_cursor);
+            if (task_ptr && *task_ptr) {
+                task_node_t *task = *task_ptr;
+                task->fn(task->arg);
+                object_pool_free(pool->task_pool, task);
+                *task_ptr = NULL;
+                turbo_atomic_fetch_add64(&pool->tasks_completed, 1);
+            }
+        }
+        disruptor_consumer_release_entry(pool->disruptor, &ctx->consumer, &cursor);
+    }
+
+    disruptor_consumer_unregister(pool->disruptor, &ctx->consumer);
 }
 
 turbo_threadpool_t *turbo_threadpool_create(int num_threads) {
@@ -421,28 +464,71 @@ turbo_threadpool_t *turbo_threadpool_create(int num_threads) {
     turbo_threadpool_t *pool = calloc(1, sizeof(turbo_threadpool_t));
     if (!pool) return NULL;
 
-    pool->threads = calloc(num_threads, sizeof(turbo_thread_t));
-    if (!pool->threads) {
+    pool->num_threads = num_threads;
+    turbo_atomic_store(&pool->shutdown, 0);
+    turbo_atomic_store64(&pool->tasks_submitted, 0);
+    turbo_atomic_store64(&pool->tasks_completed, 0);
+
+    // Create disruptor (MPMC queue)
+    disruptor_config_t disruptor_config = {
+        .capacity = 4096,  // Power of 2
+        .entry_size = sizeof(task_node_t *),
+        .consumer_capacity = (uint32_t)num_threads
+    };
+    pool->disruptor = disruptor_create(&disruptor_config);
+    if (!pool->disruptor) {
         free(pool);
         return NULL;
     }
 
-    pool->num_threads = num_threads;
-    turbo_mutex_init(&pool->lock);
-    turbo_cond_init(&pool->not_empty);
+    // Create object pool for tasks
+    object_pool_config_t pool_config = {
+        .object_size = sizeof(task_node_t),
+        .initial_capacity = 1024,
+        .max_capacity = 0,  // Unlimited
+        .zero_on_alloc = false
+    };
+    pool->task_pool = object_pool_create(&pool_config);
+    if (!pool->task_pool) {
+        disruptor_destroy(pool->disruptor);
+        free(pool);
+        return NULL;
+    }
+
+    // Initialize wait synchronization
+    turbo_mutex_init(&pool->wait_mutex);
     turbo_cond_init(&pool->all_done);
 
+    // Allocate threads and worker contexts
+    pool->threads = calloc(num_threads, sizeof(turbo_thread_t));
+    pool->workers = calloc(num_threads, sizeof(worker_context_t));
+    if (!pool->threads || !pool->workers) {
+        if (pool->threads) free(pool->threads);
+        if (pool->workers) free(pool->workers);
+        turbo_mutex_destroy(&pool->wait_mutex);
+        turbo_cond_destroy(&pool->all_done);
+        object_pool_destroy(pool->task_pool);
+        disruptor_destroy(pool->disruptor);
+        free(pool);
+        return NULL;
+    }
+
+    // Create worker threads
     for (int i = 0; i < num_threads; i++) {
-        if (turbo_thread_create(&pool->threads[i], worker_entry, pool) != 0) {
-            pool->shutdown = 1;
-            turbo_cond_broadcast(&pool->not_empty);
+        pool->workers[i].pool = pool;
+        pool->workers[i].worker_id = i;
+
+        if (turbo_thread_create(&pool->threads[i], worker_entry, &pool->workers[i]) != 0) {
+            turbo_atomic_store(&pool->shutdown, 1);
             for (int j = 0; j < i; j++) {
                 turbo_thread_join(&pool->threads[j]);
             }
-            turbo_mutex_destroy(&pool->lock);
-            turbo_cond_destroy(&pool->not_empty);
-            turbo_cond_destroy(&pool->all_done);
             free(pool->threads);
+            free(pool->workers);
+            turbo_mutex_destroy(&pool->wait_mutex);
+            turbo_cond_destroy(&pool->all_done);
+            object_pool_destroy(pool->task_pool);
+            disruptor_destroy(pool->disruptor);
             free(pool);
             return NULL;
         }
@@ -454,79 +540,68 @@ turbo_threadpool_t *turbo_threadpool_create(int num_threads) {
 void turbo_threadpool_destroy(turbo_threadpool_t *pool) {
     if (!pool) return;
 
-    turbo_mutex_lock(&pool->lock);
-    pool->shutdown = 1;
-    turbo_cond_broadcast(&pool->not_empty);
-    turbo_mutex_unlock(&pool->lock);
+    // Signal shutdown
+    turbo_atomic_store(&pool->shutdown, 1);
 
+    // Wait for all worker threads to finish
     for (int i = 0; i < pool->num_threads; i++) {
         turbo_thread_join(&pool->threads[i]);
     }
 
-    task_node_t *node = pool->head;
-    while (node) {
-        task_node_t *next = node->next;
-        free(node);
-        node = next;
-    }
-
-    turbo_mutex_destroy(&pool->lock);
-    turbo_cond_destroy(&pool->not_empty);
+    // Clean up resources
+    turbo_mutex_destroy(&pool->wait_mutex);
     turbo_cond_destroy(&pool->all_done);
+    object_pool_destroy(pool->task_pool);
+    disruptor_destroy(pool->disruptor);
+    free(pool->workers);
     free(pool->threads);
     free(pool);
 }
 
 int turbo_threadpool_submit(turbo_threadpool_t *pool, turbo_task_fn task, void *arg) {
     if (!pool || !task) return -1;
+    if (turbo_atomic_load(&pool->shutdown)) return -1;
 
-    task_node_t *node = malloc(sizeof(task_node_t));
+    // Allocate task from object pool (zero malloc)
+    task_node_t *node = (task_node_t *)object_pool_alloc(pool->task_pool);
     if (!node) return -1;
 
     node->fn = task;
     node->arg = arg;
-    node->next = NULL;
 
-    turbo_mutex_lock(&pool->lock);
+    // Publish to disruptor (lock-free)
+    disruptor_cursor_t cursor;
+    disruptor_publisher_next_entry_blocking(pool->disruptor, &cursor);
 
-    if (pool->shutdown) {
-        turbo_mutex_unlock(&pool->lock);
-        free(node);
+    task_node_t **slot = (task_node_t **)disruptor_acquire_entry(pool->disruptor, &cursor);
+    if (!slot) {
+        object_pool_free(pool->task_pool, node);
         return -1;
     }
 
-    if (pool->tail) {
-        pool->tail->next = node;
-    } else {
-        pool->head = node;
-    }
-    pool->tail = node;
-    pool->pending++;
+    *slot = node;
+    disruptor_publisher_commit_entry_blocking(pool->disruptor, &cursor);
 
-    turbo_cond_signal(&pool->not_empty);
-    turbo_mutex_unlock(&pool->lock);
-
+    turbo_atomic_fetch_add64(&pool->tasks_submitted, 1);
     return 0;
 }
 
 void turbo_threadpool_wait(turbo_threadpool_t *pool) {
     if (!pool) return;
 
-    turbo_mutex_lock(&pool->lock);
-    while (pool->pending > 0 || pool->active > 0) {
-        turbo_cond_wait(&pool->all_done, &pool->lock);
+    // Wait until all submitted tasks are completed
+    int64_t submitted = turbo_atomic_load64(&pool->tasks_submitted);
+    while (turbo_atomic_load64(&pool->tasks_completed) < submitted) {
+        turbo_sleep_ms(1);
     }
-    turbo_mutex_unlock(&pool->lock);
 }
 
 int turbo_threadpool_pending(turbo_threadpool_t *pool) {
     if (!pool) return 0;
 
-    turbo_mutex_lock(&pool->lock);
-    int count = pool->pending + pool->active;
-    turbo_mutex_unlock(&pool->lock);
-
-    return count;
+    int64_t submitted = turbo_atomic_load64(&pool->tasks_submitted);
+    int64_t completed = turbo_atomic_load64(&pool->tasks_completed);
+    return (int)(submitted - completed);
 }
 
 int turbo_threadpool_size(turbo_threadpool_t *pool) {

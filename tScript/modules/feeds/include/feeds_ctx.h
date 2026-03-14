@@ -24,7 +24,7 @@ typedef struct feeds_ctx_s {
 typedef struct {
   feeds_ctx_t *ctx;
   exprtk_env_t *env;
-  turbo_pool_t *scratch;
+  mem_pool_t *scratch;
 } feeds_ud_t;
 
 #define FEEDS_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
@@ -40,8 +40,8 @@ typedef struct {
     }                                                                                           \
   } while (0)
 
-static inline char *feeds_arena_cstr(turbo_pool_t *a, tstr_v sv) {
-  char *buf = (char *)turbo_pool_alloc(a, sv.len + 1);
+static inline char *feeds_arena_cstr(mem_pool_t *a, tstr_v sv) {
+  char *buf = (char *)mem_alloc(a, sv.len + 1);
   if (buf) {
     memcpy(buf, sv.data, sv.len);
     buf[sv.len] = '\0';

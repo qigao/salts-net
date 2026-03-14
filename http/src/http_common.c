@@ -150,10 +150,8 @@ void http_cookie_jar_set(http_cookie_jar_t *jar, const char *name, const char *v
     }
     cookie = cookie->next;
   }
-  cookie = (http_cookie_t *)calloc(1, sizeof(http_cookie_t));
+  cookie = http_cookie_create_normalized(name, value, NULL, NULL);
   if (!cookie) return;
-  cookie->name = strdup(name);
-  cookie->value = strdup(value);
   cookie->next = jar->cookies;
   jar->cookies = cookie;
   jar->count++;

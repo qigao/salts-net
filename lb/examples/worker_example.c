@@ -8,19 +8,19 @@
  * The worker handler is identical to a coro_server handler.
  */
 
-#include <netcore/turbo_coro_client.h>
-#include <netcore/turbo_coro_context.h>
+#include "CoroNet/turbo_coro_socket.h"
+#include <CoroNet/turbo_coro_context.h>
 #include "turbo_coro.h"
 #include <stdio.h>
 #include <stdlib.h>
 
 static const char *g_backend_url = "tcp://127.0.0.1:9090";
 
-static void echo_handler(coro_client_t *client) {
+static void echo_handler(coro_socket_t *client) {
     char *data = NULL;
     size_t len = 0;
-    while (coro_client_recv(client, &data, &len) == 0) {
-        coro_client_send(client, data, len);
+    while (coro_socket_recv(client, &data, &len) == 0) {
+        coro_socket_send(client, data, len);
         free(data);
         data = NULL;
     }
@@ -31,16 +31,16 @@ static void worker_loop(coro_t *co, void *arg) {
     coro_context_t *ctx = (coro_context_t *)arg;
 
     while (1) {
-        coro_client_t *c = coro_client_create(ctx);
+        coro_socket_t *c = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
         if (!c) {
             coro_sleep(ctx, 1000);
             continue;
         }
 
         printf("Worker connecting to %s...\n", g_backend_url);
-        if (coro_client_connect(c, g_backend_url) != 0) {
+        if (coro_socket_connect(c, g_backend_url) != 0) {
             printf("Worker connect failed, retrying in 1s\n");
-            coro_client_destroy(c);
+            coro_socket_destroy(c);
             coro_sleep(ctx, 1000);
             continue;
         }
@@ -49,7 +49,7 @@ static void worker_loop(coro_t *co, void *arg) {
         echo_handler(c);
         printf("Worker session ended, reconnecting\n");
 
-        coro_client_destroy(c);
+        coro_socket_destroy(c);
     }
 }
 

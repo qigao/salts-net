@@ -121,7 +121,7 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
     /* Create middleware info */
     MiddlewareInfo *middleware_info = NULL;
     if (app->route_trie) {
-        middleware_info = (MiddlewareInfo *)turbo_pool_alloc(&app->route_trie->param_arena,
+        middleware_info = (MiddlewareInfo *)mem_alloc(&app->route_trie->param_arena,
                                                              sizeof(MiddlewareInfo));
         if (middleware_info) {
             memset(middleware_info, 0, sizeof(MiddlewareInfo));
@@ -141,7 +141,7 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
     if (middleware.count > 0 && middleware.handlers) {
         if (middleware_info->arena_owned) {
             middleware_info->middleware =
-                (MiddlewareHandler *)turbo_pool_alloc(&app->route_trie->param_arena,
+                (MiddlewareHandler *)mem_alloc(&app->route_trie->param_arena,
                                                       sizeof(MiddlewareHandler) * middleware.count);
             if (!middleware_info->middleware) {
                 TLOG_ERROR("iris_app_route: middleware allocation failed");

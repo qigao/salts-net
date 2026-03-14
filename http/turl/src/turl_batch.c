@@ -12,7 +12,7 @@
 #include <string.h>
 #include <tlog.h>
 #include <turbo_coro.h>
-#include "netcore/turbo_coro_context.h"
+#include "CoroNet/turbo_coro_context.h"
 
 
 /**
@@ -35,7 +35,7 @@ static void batch_worker(coro_t *co, void *arg) {
   UNUSED(co);
   batch_download_ctx_t *ctx = (batch_download_ctx_t *)arg;
 
-  http_client_t *client = http_client_create();
+  http_client_t *client = http_client_create(NULL);
   if (!client) {
     TLOG_ERROR("Failed to create HTTP client for batch worker");
     return;

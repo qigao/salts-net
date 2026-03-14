@@ -15,7 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "exprtk_types.h"   /* turbo_pool_t (via exprtk_types -> turbo_buff) */
+#include "exprtk_types.h"   /* mem_pool_t (via exprtk_types -> turbo_buff) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,7 +105,7 @@ typedef struct {
     uint32_t         *delisted_today;
     size_t            num_delisted_today;
 
-    turbo_pool_t    *arena;
+    mem_pool_t    *arena;
 } universe_t;
 
 /* =========================================================================
@@ -117,7 +117,7 @@ typedef struct {
  * @param arena  Lifetime arena; all universe memory is allocated here.
  * @return Pointer to universe, or NULL on OOM.
  */
-universe_t *universe_create(turbo_pool_t *arena);
+universe_t *universe_create(mem_pool_t *arena);
 
 /**
  * @brief Free a universe (releases heap-allocated arrays, not the arena).

@@ -5,7 +5,7 @@
 #include "router.h"
 #include "server.h"
 #include <turbo_coro.h>
-#include <netcore.h>
+#include <CoroNet.h>
 
 /**
  * @file iris.h
@@ -25,7 +25,7 @@
  */
 static inline coro_context_t *iris_context(Req *req) {
   if (req && req->client) {
-    return coro_client_get_context(req->client);
+    return coro_socket_get_context(req->client);
   }
   return coro_context_current();
 }

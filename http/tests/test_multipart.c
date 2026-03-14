@@ -64,7 +64,7 @@ spec("http multipart") {
     describe("upload") {
 
         it("should upload multipart form") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_multipart_form_t *form = http_multipart_form_create();
             http_multipart_form_add_field(form, "name", "Test User");

@@ -48,7 +48,7 @@ spec("http interceptors") {
         it("should call request and response interceptors") {
             request_called = 0;
             response_called = 0;
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_client_add_request_interceptor(c, test_request_interceptor, NULL);
             http_client_add_response_interceptor(c, test_response_interceptor, NULL);
@@ -64,7 +64,7 @@ spec("http interceptors") {
 
     describe("abort") {
         it("should abort request via interceptor") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_add_request_interceptor(c, abort_interceptor, NULL);
             http_response_t *r = http_get(c, "https://httpbin.org/get");
             check_not_null(r);
@@ -77,7 +77,7 @@ spec("http interceptors") {
 
     describe("user data") {
         it("should pass user data to interceptors") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             int req_data = 42;
             int resp_data = 99;
@@ -97,7 +97,7 @@ spec("http interceptors") {
         it("should call all interceptors") {
             request_called = 0;
             response_called = 0;
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_client_add_request_interceptor(c, test_request_interceptor, NULL);
             http_client_add_request_interceptor(c, test_request_interceptor, NULL);
@@ -117,7 +117,7 @@ spec("http interceptors") {
         it("should clear all interceptors") {
             request_called = 0;
             response_called = 0;
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_client_add_request_interceptor(c, test_request_interceptor, NULL);
             http_client_add_response_interceptor(c, test_response_interceptor, NULL);

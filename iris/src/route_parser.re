@@ -148,7 +148,7 @@ bool extract_path_segment_re2c(const char **cursor, const char *limit, path_segm
  * @param result Output tokenized path structure
  * @return 0 on success, -1 on error
  */
-int tokenize_path_re2c(turbo_pool_t *arena, const char *path, tokenized_path_t *result) {
+int tokenize_path_re2c(mem_pool_t *arena, const char *path, tokenized_path_t *result) {
     if (!path || !result) {
         return -1;
     }
@@ -171,7 +171,7 @@ int tokenize_path_re2c(turbo_pool_t *arena, const char *path, tokenized_path_t *
 
     // Allocate segments
     result->capacity = segment_count;
-    result->segments = turbo_pool_alloc(arena, sizeof(path_segment_t) * segment_count);
+    result->segments = mem_alloc(arena, sizeof(path_segment_t) * segment_count);
     if (!result->segments) {
         return -1;
     }

@@ -15,7 +15,7 @@ static int is_rpc_network_error(rpc_call_result_t *r) {
 
 spec("Ethereum JSON-RPC Examples (BDD)") {
     it("should get current block number") {
-        http_client_t *http = http_client_create();
+        http_client_t *http = http_client_create(NULL);
         http_client_set_timeout(http, 10000);
         rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.http_client = http;
@@ -35,7 +35,7 @@ spec("Ethereum JSON-RPC Examples (BDD)") {
     }
 
     it("should get chain ID") {
-        http_client_t *http = http_client_create();
+        http_client_t *http = http_client_create(NULL);
         http_client_set_timeout(http, 10000);
         rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.http_client = http;
@@ -55,7 +55,7 @@ spec("Ethereum JSON-RPC Examples (BDD)") {
     }
 
     it("should get gas price") {
-        http_client_t *http = http_client_create();
+        http_client_t *http = http_client_create(NULL);
         http_client_set_timeout(http, 10000);
         rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.http_client = http;
@@ -75,7 +75,7 @@ spec("Ethereum JSON-RPC Examples (BDD)") {
     }
 
     it("should handle invalid method errors") {
-        http_client_t *http = http_client_create();
+        http_client_t *http = http_client_create(NULL);
         http_client_set_timeout(http, 10000);
         rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.http_client = http;
@@ -95,7 +95,7 @@ spec("Ethereum JSON-RPC Examples (BDD)") {
     }
 
     it("should track statistics") {
-        http_client_t *http = http_client_create();
+        http_client_t *http = http_client_create(NULL);
         http_client_set_timeout(http, 10000);
         rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.http_client = http;
@@ -136,7 +136,7 @@ spec("Ethereum JSON-RPC Examples (BDD)") {
     }
 
     it("should get account balance") {
-        http_client_t *http = http_client_create();
+        http_client_t *http = http_client_create(NULL);
         http_client_set_timeout(http, 15000);
         rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
         config.http_client = http;

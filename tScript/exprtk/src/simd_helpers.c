@@ -503,9 +503,9 @@ int compare_rank_items(const void *a, const void *b) {
     return 0;
 }
 
-double exprtk_median(const double *data, size_t n, turbo_pool_t *arena) {
+double exprtk_median(const double *data, size_t n, mem_pool_t *arena) {
     if (n == 0) return 0;
-    double *sorted = (double*)turbo_pool_alloc(arena, n * sizeof(double));
+    double *sorted = (double*)mem_alloc(arena, n * sizeof(double));
     memcpy(sorted, data, n * sizeof(double));
     qsort(sorted, n, sizeof(double), compare_doubles);
     double res;
@@ -514,10 +514,10 @@ double exprtk_median(const double *data, size_t n, turbo_pool_t *arena) {
     return res;
 }
 
-double exprtk_percentile(const double *data, size_t n, double p, turbo_pool_t *arena) {
+double exprtk_percentile(const double *data, size_t n, double p, mem_pool_t *arena) {
     if (n == 0) return 0;
     p /= 100.0;
-    double *sorted = (double*)turbo_pool_alloc(arena, n * sizeof(double));
+    double *sorted = (double*)mem_alloc(arena, n * sizeof(double));
     memcpy(sorted, data, n * sizeof(double));
     qsort(sorted, n, sizeof(double), compare_doubles);
     double res;
@@ -864,9 +864,9 @@ ols_result_t ols_fit(const double *y, const double *x, size_t n) {
     return r;
 }
 
-int gauss_jordan_invert(double *mat, size_t n, turbo_pool_t *arena) {
+int gauss_jordan_invert(double *mat, size_t n, mem_pool_t *arena) {
     if (n == 0) return 0;
-    double *aug = (double*)turbo_pool_alloc(arena, n * 2 * n * sizeof(double));
+    double *aug = (double*)mem_alloc(arena, n * 2 * n * sizeof(double));
     if (!aug) return 0;
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = 0; j < n; ++j) aug[i * 2 * n + j] = mat[i * n + j];

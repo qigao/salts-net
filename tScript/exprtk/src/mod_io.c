@@ -11,8 +11,8 @@
 
 
 /* ── Helper: null-terminate a tstr_v into the arena ────────────── */
-static char *arena_path(turbo_pool_t *arena, tstr_v sv) {
-  char *p = turbo_pool_alloc(arena, sv.len + 1);
+static char *arena_path(mem_pool_t *arena, tstr_v sv) {
+  char *p = mem_alloc(arena, sv.len + 1);
   if (p) {
     memcpy(p, sv.data, sv.len);
     p[sv.len] = '\0';
@@ -26,14 +26,14 @@ static char *arena_path(turbo_pool_t *arena, tstr_v sv) {
 
 /** read_file(path) → string contents (or 0 on failure) */
 static exprtk_value_t fn_read_file(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
     if (path) {
       turbo_fs_buf_t buf = {0};
       if (turbo_fs_read_file(path, &buf) == 0) {
-        char *data = turbo_pool_alloc(arena, buf.len);
+        char *data = mem_alloc(arena, buf.len);
         if (data) {
           memcpy(data, buf.base, buf.len);
           turbo_fs_buf_free(&buf);
@@ -48,7 +48,7 @@ static exprtk_value_t fn_read_file(size_t argc, exprtk_value_t *args, exprtk_env
 
 /** write_file(path, content) → 0 on success */
 static exprtk_value_t fn_write_file(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -64,7 +64,7 @@ static exprtk_value_t fn_write_file(size_t argc, exprtk_value_t *args, exprtk_en
 
 /** append_file(path, content) → 0 on success */
 static exprtk_value_t fn_append_file(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -87,7 +87,7 @@ static exprtk_value_t fn_append_file(size_t argc, exprtk_value_t *args, exprtk_e
 
 /** file_exists(path) → 1.0 or 0.0 */
 static exprtk_value_t fn_file_exists(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -101,7 +101,7 @@ static exprtk_value_t fn_file_exists(size_t argc, exprtk_value_t *args, exprtk_e
 
 /** file_size(path) → size in bytes (or -1 on failure) */
 static exprtk_value_t fn_file_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -116,14 +116,14 @@ static exprtk_value_t fn_file_size(size_t argc, exprtk_value_t *args, exprtk_env
 
 /** file_stat(path) → vector [size, mtime, is_file, is_dir] (or 0 on failure) */
 static exprtk_value_t fn_file_stat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
     if (path) {
       turbo_fs_stat_t st;
       if (turbo_fs_stat(path, &st) == 0) {
-        double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, 4);
+        double *out = MEM_ALLOC_ARRAY(arena, double, 4);
         if (out) {
           out[0] = (double)st.size;
           out[1] = (double)(st.mtime / 1000000ULL); /* µs → seconds */
@@ -139,7 +139,7 @@ static exprtk_value_t fn_file_stat(size_t argc, exprtk_value_t *args, exprtk_env
 
 /** is_file(path) → 1.0 if regular file, else 0.0 */
 static exprtk_value_t fn_is_file(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -154,7 +154,7 @@ static exprtk_value_t fn_is_file(size_t argc, exprtk_value_t *args, exprtk_env_t
 
 /** is_dir(path) → 1.0 if directory, else 0.0 */
 static exprtk_value_t fn_is_dir(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -173,7 +173,7 @@ static exprtk_value_t fn_is_dir(size_t argc, exprtk_value_t *args, exprtk_env_t 
 
 /** file_remove(path) → 0 on success */
 static exprtk_value_t fn_file_remove(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -185,7 +185,7 @@ static exprtk_value_t fn_file_remove(size_t argc, exprtk_value_t *args, exprtk_e
 
 /** file_rename(old_path, new_path) → 0 on success */
 static exprtk_value_t fn_file_rename(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING) {
     char *old_path = arena_path(arena, args[0].data.string);
@@ -202,7 +202,7 @@ static exprtk_value_t fn_file_rename(size_t argc, exprtk_value_t *args, exprtk_e
 
 /** mkdir(path) → 0 on success */
 static exprtk_value_t fn_mkdir(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -216,7 +216,7 @@ static exprtk_value_t fn_mkdir(size_t argc, exprtk_value_t *args, exprtk_env_t *
 
 /** rmdir(path) → 0 on success */
 static exprtk_value_t fn_rmdir(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -228,14 +228,14 @@ static exprtk_value_t fn_rmdir(size_t argc, exprtk_value_t *args, exprtk_env_t *
 
 /** tmpdir() → temporary directory path string */
 static exprtk_value_t fn_tmpdir(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)env;
   char buf[TURBO_FS_MAX_PATH];
   if (turbo_fs_get_tmpdir(buf, sizeof(buf)) == 0) {
     size_t len = strlen(buf);
-    char *out = turbo_pool_alloc(arena, len + 1);
+    char *out = mem_alloc(arena, len + 1);
     if (out) {
       memcpy(out, buf, len + 1);
       return exprtk_val_str(tstr_v_from_buf(out, len));
@@ -250,7 +250,7 @@ static exprtk_value_t fn_tmpdir(size_t argc, exprtk_value_t *args, exprtk_env_t 
 
 /** path_join(base, relative) → joined path string */
 static exprtk_value_t fn_path_join(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_STRING && args[1].type == EXPRTK_VAL_STRING) {
     char *base = arena_path(arena, args[0].data.string);
@@ -259,7 +259,7 @@ static exprtk_value_t fn_path_join(size_t argc, exprtk_value_t *args, exprtk_env
       char buf[TURBO_FS_MAX_PATH * 2];
       if (turbo_fs_path_join(buf, sizeof(buf), base, rel) == 0) {
         size_t len = strlen(buf);
-        char *out = turbo_pool_alloc(arena, len + 1);
+        char *out = mem_alloc(arena, len + 1);
         if (out) {
           memcpy(out, buf, len + 1);
           return exprtk_val_str(tstr_v_from_buf(out, len));
@@ -272,7 +272,7 @@ static exprtk_value_t fn_path_join(size_t argc, exprtk_value_t *args, exprtk_env
 
 /** path_dirname(path) → directory component string */
 static exprtk_value_t fn_path_dirname(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -280,7 +280,7 @@ static exprtk_value_t fn_path_dirname(size_t argc, exprtk_value_t *args, exprtk_
       char buf[TURBO_FS_MAX_PATH];
       if (turbo_fs_path_dirname(path, buf, sizeof(buf)) == 0) {
         size_t len = strlen(buf);
-        char *out = turbo_pool_alloc(arena, len + 1);
+        char *out = mem_alloc(arena, len + 1);
         if (out) {
           memcpy(out, buf, len + 1);
           return exprtk_val_str(tstr_v_from_buf(out, len));
@@ -293,7 +293,7 @@ static exprtk_value_t fn_path_dirname(size_t argc, exprtk_value_t *args, exprtk_
 
 /** path_basename(path) → filename component string */
 static exprtk_value_t fn_path_basename(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -301,7 +301,7 @@ static exprtk_value_t fn_path_basename(size_t argc, exprtk_value_t *args, exprtk
       char buf[TURBO_FS_MAX_PATH];
       if (turbo_fs_path_basename(path, buf, sizeof(buf)) == 0) {
         size_t len = strlen(buf);
-        char *out = turbo_pool_alloc(arena, len + 1);
+        char *out = mem_alloc(arena, len + 1);
         if (out) {
           memcpy(out, buf, len + 1);
           return exprtk_val_str(tstr_v_from_buf(out, len));
@@ -314,7 +314,7 @@ static exprtk_value_t fn_path_basename(size_t argc, exprtk_value_t *args, exprtk
 
 /** path_is_absolute(path) → 1.0 or 0.0 */
 static exprtk_value_t fn_path_is_absolute(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                          turbo_pool_t *arena) {
+                                          mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     char *path = arena_path(arena, args[0].data.string);
@@ -330,7 +330,7 @@ static exprtk_value_t fn_path_is_absolute(size_t argc, exprtk_value_t *args, exp
 
 /** now() → Unix timestamp (seconds) */
 static exprtk_value_t fn_now(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)env;
@@ -340,7 +340,7 @@ static exprtk_value_t fn_now(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 
 /** date(str) → Unix timestamp (seconds) */
 static exprtk_value_t fn_date(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_STRING) {
     datetime_t dt;
@@ -355,7 +355,7 @@ static exprtk_value_t fn_date(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 
 /** format_date(timestamp [, fmt]) → formatted date string */
 static exprtk_value_t fn_format_date(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 1 || argc == 2) {
     time_t t = (time_t)args[0].data.number;
@@ -366,7 +366,7 @@ static exprtk_value_t fn_format_date(size_t argc, exprtk_value_t *args, exprtk_e
         struct tm *tm_info = localtime(&t);
         if (tm_info && strftime(buf, sizeof(buf), fmt, tm_info) > 0) {
           size_t len = strlen(buf);
-          char *res_buf = turbo_pool_alloc(arena, len);
+          char *res_buf = mem_alloc(arena, len);
           if (res_buf) {
             memcpy(res_buf, buf, len);
             return exprtk_val_str(tstr_v_from_buf(res_buf, len));
@@ -376,7 +376,7 @@ static exprtk_value_t fn_format_date(size_t argc, exprtk_value_t *args, exprtk_e
     } else {
       if (datetime_format_rfc822(t, buf, sizeof(buf)) > 0) {
         size_t len = strlen(buf);
-        char *res_buf = turbo_pool_alloc(arena, len);
+        char *res_buf = mem_alloc(arena, len);
         if (res_buf) {
           memcpy(res_buf, buf, len);
           return exprtk_val_str(tstr_v_from_buf(res_buf, len));
@@ -393,7 +393,7 @@ static exprtk_value_t fn_format_date(size_t argc, exprtk_value_t *args, exprtk_e
 
 /** os_name() → "windows", "linux", "macos", or "unknown" */
 static exprtk_value_t fn_os_name(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)env;
@@ -411,7 +411,7 @@ static exprtk_value_t fn_os_name(size_t argc, exprtk_value_t *args, exprtk_env_t
 
 /** pid() → current process ID */
 static exprtk_value_t fn_pid(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)env;
@@ -421,7 +421,7 @@ static exprtk_value_t fn_pid(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 
 /** uptime_ms() → milliseconds since process start */
 static exprtk_value_t fn_uptime_ms(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)env;
@@ -431,7 +431,7 @@ static exprtk_value_t fn_uptime_ms(size_t argc, exprtk_value_t *args, exprtk_env
 
 /** monotonic_ms() → monotonic clock in milliseconds (never goes backward) */
 static exprtk_value_t fn_monotonic_ms(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)env;

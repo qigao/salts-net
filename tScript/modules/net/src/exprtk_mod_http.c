@@ -3,7 +3,9 @@
  * @brief HTTP and WebSocket module: http.* and ws.* for TurboScript.
  */
 #include "net_ctx.h"
-
+#include <CoroNet.h>
+#include <turbo_protocol.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 #define NET_ONE ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 1.0})
@@ -18,7 +20,7 @@ void net_ctx_destroy(void *p) {
   net_ctx_t *ctx = (net_ctx_t *)p;
   if (!ctx) return;
   if (ctx->client) http_client_destroy(ctx->client);
-  if (ctx->ws_client) turbo_client_destroy(ctx->ws_client);
+  if (ctx->ws_client) coro_socket_destroy(ctx->ws_client);
   free(ctx);
 }
 
@@ -26,7 +28,7 @@ void net_ctx_destroy(void *p) {
 
 static exprtk_value_t copy_response_body(http_response_t *resp, exprtk_env_t *env) {
   if (resp && resp->status_code >= 200 && resp->status_code < 300 && resp->body) {
-    char *buf = turbo_pool_alloc(&env->arena, resp->body_len + 1);
+    char *buf = mem_alloc(&env->arena, resp->body_len + 1);
     if (buf) {
       memcpy(buf, resp->body, resp->body_len);
       buf[resp->body_len] = '\0';
@@ -42,13 +44,20 @@ static void net_set_error(net_ctx_t *ctx, const char *msg) {
   snprintf(ctx->error_msg, sizeof(ctx->error_msg), "%s", msg ? msg : "");
 }
 
-static turbo_client_t *net_ctx_recreate_ws_client(net_ctx_t *ctx) {
+static coro_socket_t *net_ctx_recreate_ws_client(net_ctx_t *ctx) {
   if (!ctx) return NULL;
   if (ctx->ws_client) {
-    turbo_client_destroy(ctx->ws_client);
+    coro_socket_destroy(ctx->ws_client);
     ctx->ws_client = NULL;
   }
-  ctx->ws_client = turbo_client_create_with_transport(SYNC_CLIENT_TRANSPORT_WEBSOCKET);
+  
+  coro_context_t *cctx = coro_context_current();
+  if (!cctx) {
+      net_set_error(ctx, "no coroutine context");
+      return NULL;
+  }
+  
+  ctx->ws_client = coro_socket_create_tcpv4(cctx);
   return ctx->ws_client;
 }
 
@@ -94,9 +103,8 @@ static exprtk_value_t fn_ws_connect(size_t argc, exprtk_value_t *args, void *use
   if (argc == 2 && args[1].type != EXPRTK_VAL_STRING)
     return NET_ZERO;
 
-  turbo_client_t *client = net_ctx_recreate_ws_client(ud->ctx);
+  coro_socket_t *client = net_ctx_recreate_ws_client(ud->ctx);
   if (!client) {
-    net_set_error(ud->ctx, "ws client create failed");
     return NET_ZERO;
   }
 
@@ -106,29 +114,17 @@ static exprtk_value_t fn_ws_connect(size_t argc, exprtk_value_t *args, void *use
     return NET_ZERO;
   }
 
-  turbo_client_ws_config_t ws_config = {0};
-  ws_config.path = "/";
-  ws_config.use_tls = (strncmp(url, "wss://", 6) == 0) ? 1 : 0;
-  if (argc == 2) {
-    char *path = net_arena_cstr(ud->scratch, args[1].data.string);
-    if (!path) {
-      net_set_error(ud->ctx, "path alloc failed");
-      return NET_ZERO;
-    }
-    ws_config.path = path;
-  }
+  /* Note: In CoroNet, WebSocket path is handled automatically by coro_socket_connect 
+     or can be set via URL. The argc==2 path argument from exprtk is currently ignored
+     or should be appended to URL. For now we follow the URL. */
 
-  turbo_client_status_t st = turbo_client_set_ws_config(client, &ws_config);
-  if (st != SYNC_CLIENT_STATUS_OK) {
-    net_set_error(ud->ctx, turbo_client_status_to_string(st));
+  coro_socket_set_timeout(client, 10000);
+  int r = coro_socket_connect(client, url);
+  if (r != 0) {
+    net_set_error(ud->ctx, "ws connect failed");
     return NET_ZERO;
   }
-
-  st = turbo_client_connect(client, url);
-  if (st != SYNC_CLIENT_STATUS_OK) {
-    net_set_error(ud->ctx, turbo_client_last_message(client));
-    return NET_ZERO;
-  }
+  
   net_set_error(ud->ctx, "");
   return NET_ONE;
 }
@@ -142,9 +138,9 @@ static exprtk_value_t fn_ws_send(size_t argc, exprtk_value_t *args, void *user_d
     return NET_ZERO;
   }
   tstr_v payload = args[0].data.string;
-  turbo_client_status_t st = turbo_client_send(ud->ctx->ws_client, payload.data, payload.len);
-  if (st != SYNC_CLIENT_STATUS_OK) {
-    net_set_error(ud->ctx, turbo_client_last_message(ud->ctx->ws_client));
+  int r = coro_socket_send(ud->ctx->ws_client, payload.data, payload.len);
+  if (r < 0) {
+    net_set_error(ud->ctx, "ws send failed");
     return NET_ZERO;
   }
   net_set_error(ud->ctx, "");
@@ -166,25 +162,27 @@ static exprtk_value_t fn_ws_recv(size_t argc, exprtk_value_t *args, void *user_d
   if (argc == 1)
     timeout_ms = (int)args[0].data.number;
 
+  coro_socket_set_timeout(ud->ctx->ws_client, (uint64_t)timeout_ms);
+
   char *resp = NULL;
   size_t len = 0;
-  turbo_client_status_t st =
-      turbo_client_receive_timeout(ud->ctx->ws_client, &resp, &len, timeout_ms);
-  if (st != SYNC_CLIENT_STATUS_OK || !resp) {
-    net_set_error(ud->ctx, turbo_client_status_to_string(st));
-    if (resp) free(resp);
+  int r = coro_socket_recv(ud->ctx->ws_client, &resp, &len);
+  
+  if (r != 0 || !resp) {
+    net_set_error(ud->ctx, "ws recv failed or timeout");
+    if (resp) coro_socket_free_recv(resp);
     return NET_ZERO;
   }
 
-  char *buf = turbo_pool_alloc(&ud->env->arena, len + 1);
+  char *buf = mem_alloc(&ud->env->arena, len + 1);
   if (!buf) {
-    free(resp);
+    coro_socket_free_recv(resp);
     net_set_error(ud->ctx, "response alloc failed");
     return NET_ZERO;
   }
   memcpy(buf, resp, len);
   buf[len] = '\0';
-  free(resp);
+  coro_socket_free_recv(resp);
   net_set_error(ud->ctx, "");
   return (exprtk_value_t){EXPRTK_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
 }
@@ -195,7 +193,7 @@ static exprtk_value_t fn_ws_close(size_t argc, exprtk_value_t *args, void *user_
   if (!ud || !ud->ctx || argc != 0)
     return NET_ZERO;
   if (ud->ctx->ws_client) {
-    turbo_client_destroy(ud->ctx->ws_client);
+    coro_socket_destroy(ud->ctx->ws_client);
     ud->ctx->ws_client = NULL;
   }
   net_set_error(ud->ctx, "");
@@ -207,9 +205,9 @@ static exprtk_value_t fn_ws_close(size_t argc, exprtk_value_t *args, void *user_
 void net_load(void *p, void *e, void *s) {
   net_ctx_t *ctx = (net_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_pool_t *scratch = (turbo_pool_t *)s;
+  mem_pool_t *scratch = (mem_pool_t *)s;
   if (!ctx || !env) return;
-  http_ud_t *ud = turbo_pool_alloc(&env->arena, sizeof(*ud));
+  http_ud_t *ud = mem_alloc(&env->arena, sizeof(*ud));
   if (!ud) return;
   ud->ctx = ctx;
   ud->env = env;

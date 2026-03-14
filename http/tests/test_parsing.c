@@ -73,7 +73,7 @@ spec("http response parsing") {
     describe("URL parsing") {
 
         it("should parse http URL") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 1000);
             http_response_t *r = http_get(c, "http://localhost:9999/test");
             check_not_null(r);

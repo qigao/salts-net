@@ -2,7 +2,7 @@
 #include "tinytest.h"
 #include "http_client.h"
 #include <turbo_coro.h>
-#include <netcore.h>
+#include <CoroNet.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -36,7 +36,7 @@ static int g_coro_batch_ok = 0;
 static void test_batch_in_coro(coro_context_t *ctx) {
     UNUSED(ctx);
     g_coro_batch_ok = 0;
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create(NULL);
     http_batch_request_t reqs[] = {
         {.method = HTTP_GET, .url = "http://invalid1.test.local"},
         {.method = HTTP_GET, .url = "http://invalid2.test.local"},
@@ -61,14 +61,14 @@ spec("http client batch") {
         }
 
         it("should return NULL for NULL requests") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_result_t *r = http_client_batch(c, NULL, 1, 1);
             check(r == NULL);
             http_client_destroy(c);
         }
 
         it("should return NULL for zero count") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_request_t req = {.method = HTTP_GET, .url = "http://example.com"};
             http_batch_result_t *r = http_client_batch(c, &req, 0, 1);
             check(r == NULL);
@@ -76,7 +76,7 @@ spec("http client batch") {
         }
 
         it("should return NULL for negative count") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_request_t req = {.method = HTTP_GET, .url = "http://example.com"};
             http_batch_result_t *r = http_client_batch(c, &req, -1, 1);
             check(r == NULL);
@@ -92,7 +92,7 @@ spec("http client batch") {
     describe("batch execution outside coroutine") {
 
         it("should execute single request") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_request_t req = {
                 .method = HTTP_GET, .url = "http://invalid.test.local",
                 .body = NULL, .body_len = 0
@@ -106,7 +106,7 @@ spec("http client batch") {
         }
 
         it("should execute multiple requests with concurrency") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_request_t reqs[] = {
                 {.method = HTTP_GET, .url = "http://invalid1.test.local"},
                 {.method = HTTP_GET, .url = "http://invalid2.test.local"},
@@ -122,7 +122,7 @@ spec("http client batch") {
         }
 
         it("should clamp concurrency to count") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_request_t req = {
                 .method = HTTP_GET, .url = "http://invalid.test.local"
             };
@@ -134,7 +134,7 @@ spec("http client batch") {
         }
 
         it("should default concurrency to 1 when zero") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create(NULL);
             http_batch_request_t req = {
                 .method = HTTP_GET, .url = "http://invalid.test.local"
             };

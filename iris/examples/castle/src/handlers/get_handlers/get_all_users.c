@@ -3,7 +3,7 @@
 // Callback structure to hold request/response context
 typedef struct
 {
-    turbo_pool_t *pool;
+    mem_pool_t *pool;
     Res *res;
 } ctx_t;
 
@@ -14,14 +14,14 @@ void get_all_users_async(Req *req, Res *res)
 {
     const char *sql = "SELECT id, name, username FROM users;";
 
-    turbo_pool_t *async_pool = malloc(sizeof(turbo_pool_t)); if (!async_pool || turbo_pool_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
+    mem_pool_t *async_pool = malloc(sizeof(mem_pool_t)); if (!async_pool || mem_init(async_pool, 65536) != 0) { if (async_pool) free(async_pool); async_pool = NULL; }
     if (!async_pool) {
         send_text(res, 500, "Arena allocation failed");
         return;
     }
 
     // Create context to pass to callback
-    ctx_t *ctx = turbo_pool_alloc(async_pool, sizeof(ctx_t));
+    ctx_t *ctx = mem_alloc(async_pool, sizeof(ctx_t));
     if (!ctx) {
         send_text(res, 500, "Context allocation failed");
         return;

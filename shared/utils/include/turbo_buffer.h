@@ -1,290 +1,190 @@
-#ifndef TURBO_POOL_BUFFER_H
-#define TURBO_POOL_BUFFER_H
+#ifndef TURBO_MEM_H
+#define TURBO_MEM_H
 
 #include "platform.h"
 #include "turbo_thread.h"
+#include "turbo_atomic.h"
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Forward declarations */
-typedef struct turbo_pool_region_s turbo_pool_region_t;
-typedef struct turbo_pool_s turbo_pool_t;
-typedef struct turbo_pool_buffer_s turbo_pool_buffer_t;
-typedef struct turbo_pool_slice_s turbo_pool_slice_t;
+typedef struct mem_pool_s mem_pool_t;
+typedef struct mem_buffer_s mem_buffer_t;
+typedef struct mem_slice_s mem_slice_t;
 
-#ifndef TURBO_ASSERT
-  #define TURBO_ASSERT(x) assert(x)
+#ifndef MEM_ASSERT
+  #define MEM_ASSERT(x) assert(x)
 #endif
 
-/* Arena flags */
-typedef enum {
-  TURBO_POOL_FLAG_AUTO_GROW = 1 << 0,  /* Automatically allocate new regions */
-  TURBO_POOL_FLAG_ZERO_COPY = 1 << 1,  /* Enable zero-copy optimizations */
-  TURBO_POOL_FLAG_THREAD_SAFE = 1 << 2 /* Thread-safe operations (future) */
-} turbo_pool_flags_t;
-
-/* Buffer flags */
-typedef enum {
-  TURBO_POOL_BUFFER_FLAG_READONLY = 1 << 0, /* Buffer is read-only */
-  TURBO_POOL_BUFFER_FLAG_PINNED = 1 << 1,   /* Buffer cannot be moved */
-  TURBO_POOL_BUFFER_FLAG_SHARED = 1 << 2    /* Buffer is shared between threads */
-} turbo_pool_buffer_flags_t;
-
-/* Memory region with reference counting */
-struct turbo_pool_region_s {
-  char *memory;              /* Region memory */
-  size_t size;               /* Total region size */
-  size_t used;               /* Used bytes in region */
-  uint32_t ref_count;        /* Reference count for zero-copy */
-  turbo_pool_region_t *next; /* Next region in chain */
+struct mem_pool_s {
+  void* slabs[9];
+  turbo_atomic_size_t total_allocated;
+  turbo_atomic_size_t total_used;
+  mem_buffer_t *recycle_head;
+  turbo_atomic_size_t recycle_count;
+  size_t recycle_limit;
+  turbo_mutex_t lock;
 };
 
-/* Enhanced arena structure */
-struct turbo_pool_s {
-  turbo_pool_region_t *head;         /* First region */
-  turbo_pool_region_t *current;      /* Current allocation region */
-  size_t region_count;               /* Number of regions */
-  size_t total_allocated;            /* Total allocated memory */
-  size_t total_used;                 /* Total used memory */
-  uint32_t flags;                    /* Arena flags */
-  turbo_pool_buffer_t *recycle_head; /* Recycled buffer list head */
-  size_t recycle_count;              /* Number of recycled buffers */
-  size_t recycle_limit;              /* Max recycled buffers */
-  turbo_mutex_t lock;                /* Mutex for thread safety */
+struct mem_buffer_s {
+  char *data;
+  size_t capacity;
+  size_t used;
+  turbo_atomic_uint32_t ref_count;
+  mem_pool_t *pool;
+  struct mem_buffer_s *next;
+  int is_external;
+  int is_oversized;  /* 1=malloc, 0=slab */
+  void (*free_cb)(void *, void *);
+  void *free_user_data;
 };
 
-/* Zero-copy buffer */
-struct turbo_pool_buffer_s {
-  char *data;                       /* Buffer data pointer */
-  size_t capacity;                  /* Buffer capacity */
-  size_t used;                      /* Used bytes in buffer */
-  uint32_t ref_count;               /* Reference count */
-  turbo_pool_t *arena;              /* Parent arena (NULL if external) */
-  turbo_pool_region_t *region;      /* Source region (NULL if external) */
-  uint32_t flags;                   /* Buffer flags */
-  struct turbo_pool_buffer_s *next; /* Next pointer for queues/pools */
-
-  /* External memory support (for zero-copy wrapping) */
-  int is_external;                 /* 1 if wrapping external memory, 0 otherwise */
-  void (*free_cb)(void *, void *); /* Callback to free external memory (can be NULL) */
-  void *free_user_data;            /* User data for free callback */
+struct mem_slice_s {
+  char *data;
+  size_t length;
+  mem_buffer_t *buffer;
 };
 
-/* Buffer slice for zero-copy operations */
-struct turbo_pool_slice_s {
-  char *data;                  /* Slice data pointer */
-  size_t length;               /* Slice length */
-  turbo_pool_buffer_t *buffer; /* Source buffer */
-};
-
-/* Arena lifecycle */
 /**
- * @brief Initializes an arena for memory management.
- *
- * @param arena A pointer to the `turbo_pool_t` structure to initialize.
- * @param initial_size The initial size of the first memory region to allocate.
- * @return 0 on success, or a non-zero error code on failure.
+ * @brief Initialize slab pool
+ * @param pool Pool structure
+ * @param initial_size Ignored (for API compatibility)
+ * @return 0 on success, -1 on failure
  */
-CXX_C_API int turbo_pool_init(turbo_pool_t *arena, size_t initial_size);
-/**
- * @brief Frees all memory regions associated with an arena.
- *
- * @param arena A pointer to the `turbo_pool_t` structure to free.
- */
-CXX_C_API void turbo_pool_free(turbo_pool_t *arena);
-/**
- * @brief Resets an arena, making all previously allocated memory available for reuse.
- *        Does not free memory regions, but resets their `used` pointers.
- *
- * @param arena A pointer to the `turbo_pool_t` structure to reset.
- */
-CXX_C_API void turbo_pool_reset(turbo_pool_t *arena);
-/**
- * @brief Trims an arena by freeing unused memory regions.
- *
- * @param arena A pointer to the `turbo_pool_t` structure to trim.
- */
-CXX_C_API void turbo_pool_trim(turbo_pool_t *arena);
-
-/* Memory allocation */
-/**
- * @brief Allocates a block of memory from the arena.
- *
- * @param arena A pointer to the `turbo_pool_t` structure.
- * @param size The number of bytes to allocate.
- * @return A pointer to the allocated memory, or NULL on failure.
- */
-CXX_C_API void *turbo_pool_alloc(turbo_pool_t *arena, size_t size);
+CXX_C_API int mem_init(mem_pool_t *pool, size_t initial_size);
 
 /**
- * @brief Duplicates a string using arena allocation.
- *
- * @param arena A pointer to the `turbo_pool_t` structure.
- * @param str The string to duplicate.
- * @return A pointer to the duplicated string, or NULL on failure.
+ * @brief Get global shared slab pool (lazy init)
+ * @return Pointer to global pool
  */
-CXX_C_API char *turbo_pool_strdup(turbo_pool_t *arena, const char *str);
+CXX_C_API mem_pool_t* mem_global(void);
 
 /**
- * @brief Allocates and formats a string using arena allocation.
- *
- * @param arena A pointer to the `turbo_pool_t` structure.
- * @param fmt Printf-style format string.
- * @param ... Format arguments.
- * @return A pointer to the formatted string, or NULL on failure.
+ * @brief Destroy pool and free all memory
+ * @param pool Pool structure
  */
-CXX_C_API char *turbo_pool_sprintf(turbo_pool_t *arena, const char *fmt, ...);
-
-/* Zero-copy buffer management */
-/**
- * @brief Gets a new or recycled buffer from the arena.
- *
- * @param arena A pointer to the `turbo_pool_t` structure.
- * @param min_size The minimum capacity required for the buffer.
- * @return A pointer to an `turbo_pool_buffer_t` instance, or NULL on failure.
- */
-CXX_C_API turbo_pool_buffer_t *turbo_pool_get_buffer(turbo_pool_t *arena, size_t min_size);
-/**
- * @brief Returns a buffer to the arena's recycle pool.
- *
- * @param buffer A pointer to the `turbo_pool_buffer_t` instance to return.
- */
-CXX_C_API void turbo_pool_release(turbo_pool_buffer_t *buffer);
-
-/* Reference counting */
-/**
- * @brief Increments the reference count of an arena buffer.
- *
- * @param buffer A pointer to the `turbo_pool_buffer_t` instance.
- */
-CXX_C_API void turbo_pool_ref(turbo_pool_buffer_t *buffer);
-/**
- * @brief Decrements the reference count of an arena buffer.
- *        If the reference count drops to zero, the buffer may be recycled or freed.
- *
- * @param buffer A pointer to the `turbo_pool_buffer_t` instance.
- */
-CXX_C_API void turbo_pool_unref(turbo_pool_buffer_t *buffer);
-
-/* Zero-copy external buffer wrapping */
-/**
- * @brief Create an arena buffer that wraps external memory (zero-copy).
- *
- * This creates a lightweight arena buffer that references external memory
- * without copying. The external memory must remain valid until the buffer
- * is released (refcount reaches 0).
- *
- * @param data Pointer to external memory
- * @param size Size of external memory
- * @param free_cb Optional callback to free memory when buffer is released (can be NULL)
- * @param user_data User data passed to free_cb
- * @return Arena buffer wrapping the external memory, or NULL on failure
- *
- * @note The returned buffer has refcount=1. Call turbo_pool_unref()
- *       when done. When refcount reaches 0, free_cb is called if provided.
- *
- * @example
- * // Wrap user buffer without copying
- * char *data = malloc(1024);
- * turbo_pool_buffer_t *buf = turbo_pool_wrap_external(
- *     data, 1024,
- *     [](void *d, void *ud) { free(d); },  // Auto-free when done
- *     NULL
- * );
- * send_buffer(client, buf, 1024);
- * turbo_pool_unref(buf);  // Will call free_cb when refcount=0
- */
-CXX_C_API turbo_pool_buffer_t *
-turbo_pool_wrap_external(void *data, size_t size, void (*free_cb)(void *data, void *user_data),
-                         void *user_data);
+CXX_C_API void mem_destroy(mem_pool_t *pool);
 
 /**
- * @brief Check if an arena buffer wraps external memory.
- *
- * @param buffer The arena buffer
- * @return 1 if external wrapper, 0 if normal arena buffer
+ * @brief Reset pool (mark all blocks as free)
+ * @param pool Pool structure
  */
-CXX_C_API int turbo_pool_is_external(const turbo_pool_buffer_t *buffer);
+CXX_C_API void mem_reset(mem_pool_t *pool);
 
-/* Buffer slicing for zero-copy */
 /**
- * @brief Creates a zero-copy slice from an arena buffer.
- *
- * @param buffer A pointer to the source `turbo_pool_buffer_t` instance.
- * @param offset The starting offset within the buffer.
- * @param length The length of the slice.
- * @return An `turbo_pool_slice_t` structure representing the slice.
+ * @brief Trim empty slabs
+ * @param pool Pool structure
  */
-CXX_C_API turbo_pool_slice_t turbo_pool_slice(turbo_pool_buffer_t *buffer, size_t offset,
-                                              size_t length);
+CXX_C_API void mem_trim(mem_pool_t *pool);
+
 /**
- * @brief Releases a zero-copy slice, decrementing the reference count of its underlying buffer.
- *
- * @param slice A pointer to the `turbo_pool_slice_t` instance to release.
+ * @brief Allocate from slab pool
+ * @param pool Pool structure
+ * @param size Allocation size
+ * @return Pointer to allocated memory, or NULL on failure
  */
-CXX_C_API void turbo_pool_slice_release(turbo_pool_slice_t *slice);
+CXX_C_API void *mem_alloc(mem_pool_t *pool, size_t size);
 
-
-
-/* Convenience macros */
-#define TURBO_POOL_ALLOC(arena, type) ((type *)turbo_pool_alloc(arena, sizeof(type)))
-
-#define TURBO_POOL_ALLOC_ARRAY(arena, type, count)                                                 \
-  ((type *)turbo_pool_alloc(arena, sizeof(type) * (count)))
-
-/* Buffer helpers */
 /**
- * @brief Sets the used bytes for an arena buffer.
- *
- * @param buffer A pointer to the `turbo_pool_buffer_t` instance.
- * @param used The number of bytes currently in use within the buffer.
+ * @brief Duplicate string using pool allocation
+ * @param pool Pool structure
+ * @param str String to duplicate
+ * @return Duplicated string, or NULL on failure
  */
-static inline void turbo_pool_set_used(turbo_pool_buffer_t *buffer, size_t used) {
-  if (!buffer) {
-    return;
-  }
-  if (used > buffer->capacity) {
-    buffer->used = buffer->capacity;
-    return;
-  }
-  buffer->used = used;
+CXX_C_API char *mem_strdup(mem_pool_t *pool, const char *str);
+
+/**
+ * @brief Format string using pool allocation
+ * @param pool Pool structure
+ * @param fmt Printf-style format string
+ * @param ... Format arguments
+ * @return Formatted string, or NULL on failure
+ */
+CXX_C_API char *mem_sprintf(mem_pool_t *pool, const char *fmt, ...);
+
+/**
+ * @brief Get buffer from pool (new or recycled)
+ * @param pool Pool structure
+ * @param min_size Minimum capacity required
+ * @return Buffer instance, or NULL on failure
+ */
+CXX_C_API mem_buffer_t *mem_get_buffer(mem_pool_t *pool, size_t min_size);
+
+/**
+ * @brief Return buffer to pool's recycle list
+ * @param buffer Buffer instance
+ */
+CXX_C_API void mem_release(mem_buffer_t *buffer);
+
+/**
+ * @brief Increment buffer reference count
+ * @param buffer Buffer instance
+ */
+CXX_C_API void mem_ref(mem_buffer_t *buffer);
+
+/**
+ * @brief Decrement buffer reference count (recycle when reaches 0)
+ * @param buffer Buffer instance
+ */
+CXX_C_API void mem_unref(mem_buffer_t *buffer);
+
+/**
+ * @brief Wrap external memory as zero-copy buffer
+ * @param data External memory pointer
+ * @param size Memory size
+ * @param free_cb Callback to free memory when refcount reaches 0 (can be NULL)
+ * @param user_data User data for free_cb
+ * @return Buffer wrapping external memory, or NULL on failure
+ */
+CXX_C_API mem_buffer_t *
+mem_wrap_external(void *data, size_t size, void (*free_cb)(void *data, void *user_data),
+                  void *user_data);
+
+/**
+ * @brief Check if buffer wraps external memory
+ * @param buffer Buffer instance
+ * @return 1 if external, 0 if pool-managed
+ */
+CXX_C_API int mem_is_external(const mem_buffer_t *buffer);
+
+/**
+ * @brief Create zero-copy slice from buffer
+ * @param buffer Source buffer
+ * @param offset Starting offset
+ * @param length Slice length
+ * @return Slice structure
+ */
+CXX_C_API mem_slice_t mem_slice(mem_buffer_t *buffer, size_t offset, size_t length);
+
+/**
+ * @brief Release slice (decrements buffer refcount)
+ * @param slice Slice instance
+ */
+CXX_C_API void mem_slice_release(mem_slice_t *slice);
+
+#define MEM_ALLOC(pool, type) ((type *)mem_alloc(pool, sizeof(type)))
+
+#define MEM_ALLOC_ARRAY(pool, type, count) \
+  ((type *)mem_alloc(pool, sizeof(type) * (count)))
+
+static inline void mem_set_used(mem_buffer_t *buffer, size_t used) {
+  if (!buffer) return;
+  buffer->used = (used > buffer->capacity) ? buffer->capacity : used;
 }
 
-/**
- * @brief Calculates the remaining capacity in an arena buffer.
- *
- * @param buffer A pointer to the `turbo_pool_buffer_t` instance.
- * @return The number of remaining bytes available in the buffer.
- */
-static inline size_t turbo_pool_remaining(const turbo_pool_buffer_t *buffer) {
-  if (!buffer) {
-    return 0;
-  }
-  if (buffer->used > buffer->capacity) {
-    TURBO_ASSERT(0 && "arena buffer used exceeds capacity");
-    return 0;
-  }
+static inline size_t mem_remaining(const mem_buffer_t *buffer) {
+  if (!buffer) return 0;
+  MEM_ASSERT(buffer->used <= buffer->capacity);
   return buffer->capacity - buffer->used;
 }
 
-/**
- * @brief Gets a pointer to the next available write position in an arena buffer.
- *
- * @param buffer A pointer to the `turbo_pool_buffer_t` instance.
- * @return A pointer to the write position, or NULL if the buffer is invalid.
- */
-static inline char *turbo_pool_write_ptr(turbo_pool_buffer_t *buffer) {
-  if (!buffer) {
-    return NULL;
-  }
-  if (buffer->used > buffer->capacity) {
-    TURBO_ASSERT(0 && "arena buffer used exceeds capacity");
-    return NULL;
-  }
+static inline char *mem_write_ptr(mem_buffer_t *buffer) {
+  if (!buffer) return NULL;
+  MEM_ASSERT(buffer->used <= buffer->capacity);
   return buffer->data + buffer->used;
 }
 
@@ -292,4 +192,4 @@ static inline char *turbo_pool_write_ptr(turbo_pool_buffer_t *buffer) {
 }
 #endif
 
-#endif /* TURBO_POOL_BUFFER_H */
+#endif /* TURBO_MEM_H */

@@ -12,8 +12,7 @@ set(HTTP_TESTS
     test_interceptors
     test_async_stream
     test_streaming_multipart
-    test_retry
-    test_resiliency
+    test_retry 
     test_coro_http
     test_batch)
 

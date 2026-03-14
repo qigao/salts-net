@@ -22,7 +22,7 @@
 
 typedef exprtk_value_t (*exprtk_builtin_fn)(
     size_t argc, exprtk_value_t *args,
-    exprtk_env_t *env, turbo_pool_t *arena);
+    exprtk_env_t *env, mem_pool_t *arena);
 
 typedef struct {
     const char *name;
@@ -135,13 +135,13 @@ static inline exprtk_value_t exprtk_list_get(const exprtk_value_t *list, size_t 
  * Arena allocation helpers
  * ========================================================================= */
 
-#ifndef TURBO_POOL_ALLOC_ARRAY
-#define TURBO_POOL_ALLOC_ARRAY(arena, type, n) \
-    ((type*)turbo_pool_alloc((arena), (n) * sizeof(type)))
+#ifndef MEM_ALLOC_ARRAY
+#define MEM_ALLOC_ARRAY(arena, type, n) \
+    ((type*)mem_alloc((arena), (n) * sizeof(type)))
 #endif
 
 #define TEMP_ALLOC(arena, type, n) \
-    ((arena) ? (type*)turbo_pool_alloc((arena), (n) * sizeof(type)) \
+    ((arena) ? (type*)mem_alloc((arena), (n) * sizeof(type)) \
              : (type*)calloc((n), sizeof(type)))
 
 #define TEMP_FREE(arena, ptr) \

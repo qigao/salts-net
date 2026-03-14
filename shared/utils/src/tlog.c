@@ -215,14 +215,14 @@ static uint64_t round_up_pow2_u64(uint64_t value) {
 
 static uint64_t logger_disruptor_capacity(size_t buffer_size_bytes) {
   size_t buffer_bytes = buffer_size_bytes ? buffer_size_bytes : DEFAULT_ASYNC_BUFFER_SIZE;
-  uint64_t entries = (uint64_t)(buffer_bytes / sizeof(turbo_pool_buffer_t *));
+  uint64_t entries = (uint64_t)(buffer_bytes / sizeof(mem_buffer_t *));
   if (entries < 1024U) {
     entries = 1024U;
   }
   return round_up_pow2_u64(entries);
 }
 
-static turbo_pool_buffer_t *async_entry_create(turbo_pool_t *pool, const turbo_log_entry_t *entry) {
+static mem_buffer_t *async_entry_create(mem_pool_t *pool, const turbo_log_entry_t *entry) {
   size_t comp_len = entry->component ? strlen(entry->component) : 0;
   size_t file_len = entry->file ? strlen(entry->file) : 0;
   size_t msg_len = entry->message_len;
@@ -230,11 +230,11 @@ static turbo_pool_buffer_t *async_entry_create(turbo_pool_t *pool, const turbo_l
   size_t total_size = sizeof(async_log_entry_t) + comp_len + STRING_PADDING + file_len +
                       STRING_PADDING + msg_len + STRING_PADDING;
 
-  turbo_pool_buffer_t *buffer = turbo_pool_get_buffer(pool, total_size);
+  mem_buffer_t *buffer = mem_get_buffer(pool, total_size);
   if (!buffer) {
     return NULL;
   }
-  turbo_pool_set_used(buffer, total_size);
+  mem_set_used(buffer, total_size);
 
   async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
 
@@ -689,7 +689,7 @@ struct tlog_s {
   // ---------------------------------------------------------------------------
   // Async payload pool (thread-safe via turbo_buffer)
   // ---------------------------------------------------------------------------
-  turbo_pool_t async_pool;
+  mem_pool_t async_pool;
 
   // ---------------------------------------------------------------------------
   // Background Thread
@@ -707,7 +707,7 @@ struct tlog_s {
 
 // Forward declarations
 static void logger_write_to_sinks(tlog_t *logger, const turbo_log_entry_t *entry);
-static int logger_publish_entry(tlog_t *logger, turbo_pool_buffer_t *buffer);
+static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer);
 
 // =============================================================================
 // Async Thread - Using Disruptor
@@ -737,11 +737,11 @@ static void async_logger_thread(void *arg) {
       read_cursor.sequence = seq;
 
       // Get entry pointer from disruptor
-      turbo_pool_buffer_t **entry_ptr =
-          (turbo_pool_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+      mem_buffer_t **entry_ptr =
+          (mem_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
       if (!entry_ptr || !*entry_ptr) continue;
 
-      turbo_pool_buffer_t *buffer = *entry_ptr;
+      mem_buffer_t *buffer = *entry_ptr;
       async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
 
       // Convert and write to sinks
@@ -758,7 +758,7 @@ static void async_logger_thread(void *arg) {
 
       logger_write_to_sinks(logger, &entry);
       turbo_atomic_fetch_add64(&logger->logs_written, 1);
-      turbo_pool_release(buffer);
+      mem_release(buffer);
       *entry_ptr = NULL;
     }
 
@@ -774,10 +774,10 @@ static void async_logger_thread(void *arg) {
     for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
       disruptor_cursor_t read_cursor;
       read_cursor.sequence = seq;
-      turbo_pool_buffer_t **entry_ptr =
-          (turbo_pool_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+      mem_buffer_t **entry_ptr =
+          (mem_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
       if (entry_ptr && *entry_ptr) {
-        turbo_pool_buffer_t *buffer = *entry_ptr;
+        mem_buffer_t *buffer = *entry_ptr;
         async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
         turbo_log_entry_t entry = {
           .level = ae->level,
@@ -791,7 +791,7 @@ static void async_logger_thread(void *arg) {
         };
         logger_write_to_sinks(logger, &entry);
         turbo_atomic_fetch_add64(&logger->logs_written, 1);
-        turbo_pool_release(buffer);
+        mem_release(buffer);
         *entry_ptr = NULL;
       }
     }
@@ -816,14 +816,14 @@ static void logger_stop_async(tlog_t *logger) {
   turbo_thread_join(&logger->thread);
 }
 
-static int logger_publish_entry(tlog_t *logger, turbo_pool_buffer_t *buffer) {
+static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer) {
   disruptor_cursor_t cursor = {0};
   disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
 
-  turbo_pool_buffer_t **slot =
-      (turbo_pool_buffer_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
+  mem_buffer_t **slot =
+      (mem_buffer_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
   if (!slot || cursor.sequence == 0U) {
-    turbo_pool_release(buffer);
+    mem_release(buffer);
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return -1;
   }
@@ -856,7 +856,7 @@ tlog_t *tlog_create(const tlog_config_t *config) {
   // Create disruptor (replaces custom ring buffer)
   disruptor_config_t disruptor_config = {
     .capacity = disruptor_capacity,
-    .entry_size = sizeof(turbo_pool_buffer_t *),
+    .entry_size = sizeof(mem_buffer_t *),
     .consumer_capacity = 1  // Single consumer
   };
 
@@ -870,7 +870,7 @@ tlog_t *tlog_create(const tlog_config_t *config) {
   // Create async payload pool for log entries
   size_t async_pool_size =
       (config && config->pool_size) ? config->pool_size : DEFAULT_POOL_SIZE;
-  if (turbo_pool_init(&logger->async_pool, async_pool_size) != 0) {
+  if (mem_init(&logger->async_pool, async_pool_size) != 0) {
     disruptor_destroy(logger->disruptor);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
@@ -878,7 +878,7 @@ tlog_t *tlog_create(const tlog_config_t *config) {
   }
 
   if (logger_start_async(logger) != 0) {
-    turbo_pool_free(&logger->async_pool);
+    mem_destroy(&logger->async_pool);
     disruptor_destroy(logger->disruptor);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
@@ -894,7 +894,7 @@ void tlog_destroy(tlog_t *logger) {
 
   logger_stop_async(logger);
   disruptor_destroy(logger->disruptor);
-  turbo_pool_free(&logger->async_pool);
+  mem_destroy(&logger->async_pool);
 
   // Flush and destroy sinks
   for (int i = 0; i < logger->sink_count; i++) {
@@ -1011,7 +1011,7 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
     .message_len = (size_t)msg_len
   };
 
-  turbo_pool_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
+  mem_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
   if (!buffer) {
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return;
@@ -1036,7 +1036,7 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
                              .message = message,
                              .message_len = message_len};
 
-  turbo_pool_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
+  mem_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
   if (!buffer) {
     turbo_atomic_fetch_add64(&logger->logs_dropped, 1);
     return;

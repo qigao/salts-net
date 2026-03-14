@@ -16,8 +16,8 @@ suite("Factor Processing") {
       double in[] = {3.0, 1.0, 4.0, 1.5, 2.0};
       size_t n = 5;
       double out[5];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_rank(in, n, out, &arena);
 
@@ -28,15 +28,15 @@ suite("Factor Processing") {
       check_float_eq(out[3], 1.0, EPSILON); // 1.5 is rank 1
       check_float_eq(out[4], 2.0, EPSILON); // 2.0 is rank 2
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle ties with average rank") {
       double in[] = {1.0, 2.0, 2.0, 3.0};
       size_t n = 4;
       double out[4];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_rank(in, n, out, &arena);
 
@@ -46,21 +46,21 @@ suite("Factor Processing") {
       check_float_eq(out[2], 1.5, EPSILON);  // 2.0 tied, avg rank 1.5
       check_float_eq(out[3], 3.0, EPSILON);  // 3.0 is rank 3
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle single element") {
       double in[] = {42.0};
       double out[1];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_rank(in, 1, out, &arena);
 
       check_int_eq(result, 1);
       check_float_eq(out[0], 0.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -69,8 +69,8 @@ suite("Factor Processing") {
       double in[] = {1.0, 2.0, 3.0, 4.0, 5.0};
       size_t n = 5;
       double out[5];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_zscore(in, n, out, &arena);
 
@@ -92,15 +92,15 @@ suite("Factor Processing") {
       double variance = var_sum / n;
       check_float_eq(variance, 1.0, 0.01);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle zero variance") {
       double in[] = {5.0, 5.0, 5.0, 5.0};
       size_t n = 4;
       double out[4];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_zscore(in, n, out, &arena);
 
@@ -109,21 +109,21 @@ suite("Factor Processing") {
         check_float_eq(out[i], 0.0, EPSILON);
       }
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle single element") {
       double in[] = {42.0};
       double out[1];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_zscore(in, 1, out, &arena);
 
       check_int_eq(result, 1);
       check_float_eq(out[0], 0.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -132,8 +132,8 @@ suite("Factor Processing") {
       double in[] = {1.0, 2.0, 3.0, 4.0, 100.0};
       size_t n = 5;
       double out[5];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_winsorize(in, n, 0.2, out, &arena);
 
@@ -142,15 +142,15 @@ suite("Factor Processing") {
       check(out[4] < 100.0); // Extreme value should be capped
       check(out[0] >= 1.0);  // Lower values should be preserved or raised
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle invalid percentile") {
       double in[] = {1.0, 2.0, 3.0};
       size_t n = 3;
       double out[3];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_winsorize(in, n, 0.6, out, &arena); // Invalid: > 0.5
 
@@ -160,7 +160,7 @@ suite("Factor Processing") {
         check_float_eq(out[i], in[i], EPSILON);
       }
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -169,8 +169,8 @@ suite("Factor Processing") {
       double in[] = {1.0, 2.0, 3.0, 4.0, 5.0};
       size_t n = 5;
       double out[5];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_standardize(in, n, out, &arena);
 
@@ -181,15 +181,15 @@ suite("Factor Processing") {
       check_float_eq(out[3], 0.75, EPSILON);
       check_float_eq(out[4], 1.0, EPSILON);   // Max maps to 1
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle zero range") {
       double in[] = {3.0, 3.0, 3.0};
       size_t n = 3;
       double out[3];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_standardize(in, n, out, &arena);
 
@@ -198,7 +198,7 @@ suite("Factor Processing") {
         check_float_eq(out[i], 0.0, EPSILON);
       }
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -363,8 +363,8 @@ suite("Factor Processing") {
        -0.01, 0.03,  0.02, 0.01   // Asset 3
       };
       double out[4];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_csad(returns, 3, 4, out, &arena);
 
@@ -374,14 +374,14 @@ suite("Factor Processing") {
         check(out[i] >= 0.0);
       }
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should calculate rolling quantile") {
       double in[] = {1.0, 2.0, 3.0, 4.0, 5.0};
       double out[5];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_quantile(in, 5, 3, out, &arena);
 
@@ -391,7 +391,7 @@ suite("Factor Processing") {
       // First value (1.0) in window [1] has rank 0/1 = 0.0
       check_float_eq(out[0], 0.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should calculate fractal volatility dimension") {
@@ -425,8 +425,8 @@ suite("Factor Processing") {
       double prices[] = {100, 101, 102, 101, 103, 104};
       double volumes[] = {1000, 1500, 1200, 1800, 1100, 1300};
       double out[6];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       size_t result = exprtk_vec_cgo(prices, volumes, 6, 3, out, &arena);
 
@@ -437,7 +437,7 @@ suite("Factor Processing") {
       // Later values should be calculated
       check(out[5] != 0.0 || out[5] == 0.0); // Just check it's a valid number
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should calculate salience factor") {

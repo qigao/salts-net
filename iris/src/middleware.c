@@ -134,7 +134,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
 
   // Allocate memory for combined middleware handlers
   MiddlewareHandler* combined_handlers =
-      turbo_pool_alloc(req->arena, sizeof(MiddlewareHandler) * total_middleware_count);
+      mem_alloc(req->arena, sizeof(MiddlewareHandler) * total_middleware_count);
   if (!combined_handlers) {
     TLOG_ERROR("Arena allocation failed for middleware handlers");
     if (middleware_info->handler) {
@@ -156,7 +156,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
   }
 
   // Create middleware chain context (allocated in request arena)
-  Chain* chain = turbo_pool_alloc(req->arena, sizeof(Chain));
+  Chain* chain = mem_alloc(req->arena, sizeof(Chain));
   if (!chain) {
     TLOG_ERROR("Arena allocation failed for middleware chain");
     if (middleware_info->handler) {
@@ -206,7 +206,7 @@ void register_route(const char* method,
   MiddlewareInfo* middleware_info = NULL;
   if (global_route_trie) {
     middleware_info =
-        (MiddlewareInfo *)turbo_pool_alloc(&global_route_trie->param_arena, sizeof(MiddlewareInfo));
+        (MiddlewareInfo *)mem_alloc(&global_route_trie->param_arena, sizeof(MiddlewareInfo));
     if (middleware_info) {
       memset(middleware_info, 0, sizeof(MiddlewareInfo));
       middleware_info->arena_owned = 1;
@@ -224,7 +224,7 @@ void register_route(const char* method,
 
   if (middleware.count > 0 && middleware.handlers) {
     if (middleware_info->arena_owned) {
-      middleware_info->middleware = (MiddlewareHandler *)turbo_pool_alloc(
+      middleware_info->middleware = (MiddlewareHandler *)mem_alloc(
           &global_route_trie->param_arena, sizeof(MiddlewareHandler) * middleware.count);
       if (!middleware_info->middleware) {
         TLOG_ERROR("Memory allocation failed for middleware handlers");

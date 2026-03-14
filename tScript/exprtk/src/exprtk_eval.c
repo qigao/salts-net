@@ -161,7 +161,7 @@ void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *e
                 exprtk_node_t *child = el->data.spread.child;
                 if (child->type == EXPRTK_NODE_VARIABLE) {
                     size_t rest_sz = (rhs_idx < rhs.data.vector.size) ? (rhs.data.vector.size - rhs_idx) : 0;
-                    double *rest_data = (double*)turbo_pool_alloc(target->arena, rest_sz * sizeof(double));
+                    double *rest_data = (double*)mem_alloc(target->arena, rest_sz * sizeof(double));
                     if (rest_sz > 0) {
                         memcpy(rest_data, rhs.data.vector.data + rhs_idx, rest_sz * sizeof(double));
                     }
@@ -236,8 +236,7 @@ void exprtk_env_init_local(exprtk_env_t *env) {
         env->return_value.type = EXPRTK_VAL_NUMBER;
         env->return_value.data.number = 0.0;
         env->parent = NULL;
-        turbo_pool_init(&env->arena, 65536); // 64KB initial
-        env->arena.flags |= TURBO_POOL_FLAG_AUTO_GROW;
+        mem_init(&env->arena, 65536); // 64KB initial
 
         // Safety Limits Defaults
         env->max_recursion = 100;
@@ -349,7 +348,7 @@ void exprtk_env_free(exprtk_env_t *env) {
         closure = next;
     }
     env->next_closure = NULL;
-    turbo_pool_free(&env->arena);
+    mem_destroy(&env->arena);
     if (env->modules) {
         free((void *)env->modules);
         env->modules = NULL;
@@ -526,7 +525,7 @@ typedef struct {
     size_t           argc;
     exprtk_node_t   *obj_node;
     exprtk_env_t    *env;
-    turbo_pool_t   *arena;
+    mem_pool_t   *arena;
 } mc_ctx_t;
 
 /* Helper: get mutable variable from env when obj_node is a VARIABLE */
@@ -697,20 +696,20 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
             if (start >= (int)mc->obj.data.string.len) { start = 0; len = 0; }
             if (start + len > (int)mc->obj.data.string.len) len = (int)mc->obj.data.string.len - start;
             if (len < 0) len = 0;
-            char *buf = (char*)turbo_pool_alloc(mc->arena, len + 1);
+            char *buf = (char*)mem_alloc(mc->arena, len + 1);
             memcpy(buf, mc->obj.data.string.data + start, len);
             buf[len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = len;
             result = exprtk_val_str(sv);
         } else if (strcmp(m, "toUpper") == 0) {
-            char *buf = (char*)turbo_pool_alloc(mc->arena, mc->obj.data.string.len + 1);
+            char *buf = (char*)mem_alloc(mc->arena, mc->obj.data.string.len + 1);
             for (size_t i = 0; i < mc->obj.data.string.len; ++i)
                 buf[i] = (char)toupper((unsigned char)mc->obj.data.string.data[i]);
             buf[mc->obj.data.string.len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = mc->obj.data.string.len;
             result = exprtk_val_str(sv);
         } else if (strcmp(m, "toLower") == 0) {
-            char *buf = (char*)turbo_pool_alloc(mc->arena, mc->obj.data.string.len + 1);
+            char *buf = (char*)mem_alloc(mc->arena, mc->obj.data.string.len + 1);
             for (size_t i = 0; i < mc->obj.data.string.len; ++i)
                 buf[i] = (char)tolower((unsigned char)mc->obj.data.string.data[i]);
             buf[mc->obj.data.string.len] = '\0';
@@ -733,7 +732,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
         exprtk_value_t var; const char *vn;
         if (mc_get_var(mc, &var, &vn) && var.type == EXPRTK_VAL_VECTOR) {
             size_t new_sz = var.data.vector.size + 1;
-            double *new_data = (double*)turbo_pool_alloc(mc->arena, new_sz * sizeof(double));
+            double *new_data = (double*)mem_alloc(mc->arena, new_sz * sizeof(double));
             if (var.data.vector.data)
                 memcpy(new_data, var.data.vector.data, var.data.vector.size * sizeof(double));
             new_data[new_sz - 1] = mc->args[0].data.number;
@@ -763,7 +762,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
     }
 
     if (strcmp(m, "reverse") == 0) {
-        double *data = (double*)turbo_pool_alloc(mc->arena, mc->obj.data.vector.size * sizeof(double));
+        double *data = (double*)mem_alloc(mc->arena, mc->obj.data.vector.size * sizeof(double));
         for (size_t i = 0; i < mc->obj.data.vector.size; ++i)
             data[i] = mc->obj.data.vector.data[mc->obj.data.vector.size - 1 - i];
         return exprtk_val_vec(data, mc->obj.data.vector.size);
@@ -853,7 +852,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
     if (result_len + (slen) + 1 > result_cap) { \
         result_cap = (result_cap == 0) ? 64 : result_cap * 2; \
         if (result_cap < result_len + (slen) + 1) result_cap = result_len + (slen) + 1; \
-        char *new_buf = (char*)turbo_pool_alloc(node->arena, result_cap); \
+        char *new_buf = (char*)mem_alloc(node->arena, result_cap); \
         if (result_buf) memcpy(new_buf, result_buf, result_len); \
         result_buf = new_buf; \
     } \
@@ -912,7 +911,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                 }
             }
             if (!result_buf) {
-                result_buf = (char*)turbo_pool_alloc(node->arena, 1);
+                result_buf = (char*)mem_alloc(node->arena, 1);
                 result_buf[0] = '\0';
             }
             tstr_v sv;
@@ -1104,7 +1103,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     r_len = r_val.data.string.len;
                 }
                 size_t new_len = l_len + r_len;
-                char *new_data = (char*)turbo_pool_alloc(node->arena, new_len + 1);
+                char *new_data = (char*)mem_alloc(node->arena, new_len + 1);
                 if (new_data) {
                     memcpy(new_data, l_data, l_len);
                     memcpy(new_data + l_len, r_data, r_len);
@@ -1254,7 +1253,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             if (!vals && actual_count == 0) return zero;
             if (actual_count == 0) { free(vals); return zero; }
 
-            double *data = (double*)turbo_pool_alloc(&env->arena, actual_count * sizeof(double));
+            double *data = (double*)mem_alloc(&env->arena, actual_count * sizeof(double));
             for (size_t i = 0; i < actual_count; ++i) {
                 data[i] = (vals[i].type == EXPRTK_VAL_NUMBER) ? vals[i].data.number : 0;
             }
@@ -1300,7 +1299,7 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             if (end > (int)arr.data.vector.size) end = (int)arr.data.vector.size;
             if (start > end) return zero;
             size_t count = (size_t)(end - start);
-            double *data = (double*)turbo_pool_alloc(node->arena, count * sizeof(double));
+            double *data = (double*)mem_alloc(node->arena, count * sizeof(double));
             if (!data) return zero;
             for (size_t i = 0; i < count; ++i) {
                 data[i] = arr.data.vector.data[start + i];

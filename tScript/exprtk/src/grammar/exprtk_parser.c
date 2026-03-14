@@ -15,9 +15,9 @@ void exprtkParseTrace(FILE *TraceFILE, char *zTracePrompt);
 
 
 // Deep copy an AST node and its children into a new arena
-exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_arena) {
+exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, mem_pool_t *dest_arena) {
     if (!src) return NULL;
-    exprtk_node_t *dst = (exprtk_node_t*)turbo_pool_alloc(dest_arena, sizeof(exprtk_node_t));
+    exprtk_node_t *dst = (exprtk_node_t*)mem_alloc(dest_arena, sizeof(exprtk_node_t));
     if (!dst) return NULL;
     
     memcpy(dst, src, sizeof(exprtk_node_t));
@@ -27,7 +27,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
         case EXPRTK_NODE_NUMBER:
         case EXPRTK_NODE_VARIABLE:
             if (src->type == EXPRTK_NODE_VARIABLE && src->data.variable.name) {
-                dst->data.variable.name = turbo_pool_strdup(dest_arena, src->data.variable.name);
+                dst->data.variable.name = mem_strdup(dest_arena, src->data.variable.name);
             }
             break;
             
@@ -37,9 +37,9 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
             break;
             
         case EXPRTK_NODE_FUNCTION_CALL:
-            if (src->data.function.name) dst->data.function.name = turbo_pool_strdup(dest_arena, src->data.function.name);
+            if (src->data.function.name) dst->data.function.name = mem_strdup(dest_arena, src->data.function.name);
             if (src->data.function.arg_count > 0) {
-                dst->data.function.args = (exprtk_node_t**)turbo_pool_alloc(dest_arena, src->data.function.arg_count * sizeof(exprtk_node_t*));
+                dst->data.function.args = (exprtk_node_t**)mem_alloc(dest_arena, src->data.function.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.function.arg_count; ++i) {
                     dst->data.function.args[i] = exprtk_node_copy(src->data.function.args[i], dest_arena);
                 }
@@ -48,7 +48,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
             
         case EXPRTK_NODE_CONSTANT_DECL:
         case EXPRTK_NODE_ASSIGNMENT:
-            if (src->data.assignment.name) dst->data.assignment.name = turbo_pool_strdup(dest_arena, src->data.assignment.name);
+            if (src->data.assignment.name) dst->data.assignment.name = mem_strdup(dest_arena, src->data.assignment.name);
             dst->data.assignment.value = exprtk_node_copy(src->data.assignment.value, dest_arena);
             break;
             
@@ -72,7 +72,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
             
         case EXPRTK_NODE_BLOCK:
             if (src->data.block.count > 0) {
-                dst->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(dest_arena, src->data.block.count * sizeof(exprtk_node_t*));
+                dst->data.block.statements = (exprtk_node_t**)mem_alloc(dest_arena, src->data.block.count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.block.count; ++i) {
                     dst->data.block.statements[i] = exprtk_node_copy(src->data.block.statements[i], dest_arena);
                 }
@@ -85,7 +85,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
             
         case EXPRTK_NODE_STRING:
             if (src->data.string.value.data) {
-                char *buf = (char*)turbo_pool_alloc(dest_arena, src->data.string.value.len + 1);
+                char *buf = (char*)mem_alloc(dest_arena, src->data.string.value.len + 1);
                 memcpy(buf, src->data.string.value.data, src->data.string.value.len);
                 buf[src->data.string.value.len] = '\0';
                 dst->data.string.value.data = buf;
@@ -94,7 +94,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
             
         case EXPRTK_NODE_VECTOR:
             if (src->data.vector.count > 0) {
-                dst->data.vector.elements = (exprtk_node_t**)turbo_pool_alloc(dest_arena, src->data.vector.count * sizeof(exprtk_node_t*));
+                dst->data.vector.elements = (exprtk_node_t**)mem_alloc(dest_arena, src->data.vector.count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.vector.count; ++i) {
                     dst->data.vector.elements[i] = exprtk_node_copy(src->data.vector.elements[i], dest_arena);
                 }
@@ -114,9 +114,9 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
             
         case EXPRTK_NODE_FUNCTION_EXPRESSION:
         case EXPRTK_NODE_FUNCTION_DEFINITION:
-            if (src->data.func_def.name) dst->data.func_def.name = turbo_pool_strdup(dest_arena, src->data.func_def.name);
+            if (src->data.func_def.name) dst->data.func_def.name = mem_strdup(dest_arena, src->data.func_def.name);
             if (src->data.func_def.arg_count > 0) {
-                dst->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(dest_arena, src->data.func_def.arg_count * sizeof(exprtk_node_t*));
+                dst->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(dest_arena, src->data.func_def.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.func_def.arg_count; ++i) {
                     dst->data.func_def.arg_params[i] = exprtk_node_copy(src->data.func_def.arg_params[i], dest_arena);
                 }
@@ -127,9 +127,9 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
         case EXPRTK_NODE_MEMBER_CALL:
             dst->data.member_call.object = exprtk_node_copy(src->data.member_call.object, dest_arena);
             if (src->data.member_call.method)
-                dst->data.member_call.method = turbo_pool_strdup(dest_arena, src->data.member_call.method);
+                dst->data.member_call.method = mem_strdup(dest_arena, src->data.member_call.method);
             if (src->data.member_call.arg_count > 0) {
-                dst->data.member_call.args = (exprtk_node_t**)turbo_pool_alloc(dest_arena,
+                dst->data.member_call.args = (exprtk_node_t**)mem_alloc(dest_arena,
                     src->data.member_call.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.member_call.arg_count; ++i)
                     dst->data.member_call.args[i] = exprtk_node_copy(src->data.member_call.args[i], dest_arena);
@@ -153,7 +153,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
         case EXPRTK_NODE_SWITCH:
             dst->data.switch_stmt.value = exprtk_node_copy(src->data.switch_stmt.value, dest_arena);
             if (src->data.switch_stmt.case_count > 0) {
-                dst->data.switch_stmt.cases = (exprtk_node_t**)turbo_pool_alloc(dest_arena, src->data.switch_stmt.case_count * 2 * sizeof(exprtk_node_t*));
+                dst->data.switch_stmt.cases = (exprtk_node_t**)mem_alloc(dest_arena, src->data.switch_stmt.case_count * 2 * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.switch_stmt.case_count * 2; ++i) {
                     dst->data.switch_stmt.cases[i] = exprtk_node_copy(src->data.switch_stmt.cases[i], dest_arena);
                 }
@@ -170,10 +170,10 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
 
         case EXPRTK_NODE_MAP_LITERAL:
             if (src->data.map_literal.count > 0) {
-                dst->data.map_literal.keys = (char**)turbo_pool_alloc(dest_arena, src->data.map_literal.count * sizeof(char*));
-                dst->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(dest_arena, src->data.map_literal.count * sizeof(exprtk_node_t*));
+                dst->data.map_literal.keys = (char**)mem_alloc(dest_arena, src->data.map_literal.count * sizeof(char*));
+                dst->data.map_literal.values = (exprtk_node_t**)mem_alloc(dest_arena, src->data.map_literal.count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < src->data.map_literal.count; ++i) {
-                    dst->data.map_literal.keys[i] = turbo_pool_strdup(dest_arena, src->data.map_literal.keys[i]);
+                    dst->data.map_literal.keys[i] = mem_strdup(dest_arena, src->data.map_literal.keys[i]);
                     dst->data.map_literal.values[i] = exprtk_node_copy(src->data.map_literal.values[i], dest_arena);
                 }
             }
@@ -182,19 +182,19 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
         case EXPRTK_NODE_MEMBER_ACCESS:
             dst->data.member_access.object = exprtk_node_copy(src->data.member_access.object, dest_arena);
             if (src->data.member_access.member)
-                dst->data.member_access.member = turbo_pool_strdup(dest_arena, src->data.member_access.member);
+                dst->data.member_access.member = mem_strdup(dest_arena, src->data.member_access.member);
             break;
 
         case EXPRTK_NODE_MEMBER_SET:
             dst->data.member_set.object = exprtk_node_copy(src->data.member_set.object, dest_arena);
             if (src->data.member_set.member)
-                dst->data.member_set.member = turbo_pool_strdup(dest_arena, src->data.member_set.member);
+                dst->data.member_set.member = mem_strdup(dest_arena, src->data.member_set.member);
             dst->data.member_set.value = exprtk_node_copy(src->data.member_set.value, dest_arena);
             break;
 
         case EXPRTK_NODE_FOR_IN:
             if (src->data.for_in.var_name)
-                dst->data.for_in.var_name = turbo_pool_strdup(dest_arena, src->data.for_in.var_name);
+                dst->data.for_in.var_name = mem_strdup(dest_arena, src->data.for_in.var_name);
             dst->data.for_in.collection = exprtk_node_copy(src->data.for_in.collection, dest_arena);
             dst->data.for_in.body = exprtk_node_copy(src->data.for_in.body, dest_arena);
             break;
@@ -205,7 +205,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
 
         case EXPRTK_NODE_TEMPLATE_STRING:
             if (src->data.template_string.template_str) {
-                dst->data.template_string.template_str = turbo_pool_strdup(dest_arena, src->data.template_string.template_str);
+                dst->data.template_string.template_str = mem_strdup(dest_arena, src->data.template_string.template_str);
             }
             dst->data.template_string.len = src->data.template_string.len;
             break;
@@ -213,7 +213,7 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
         case EXPRTK_NODE_TRY_CATCH:
             dst->data.try_catch.try_body = exprtk_node_copy(src->data.try_catch.try_body, dest_arena);
             if (src->data.try_catch.catch_var)
-                dst->data.try_catch.catch_var = turbo_pool_strdup(dest_arena, src->data.try_catch.catch_var);
+                dst->data.try_catch.catch_var = mem_strdup(dest_arena, src->data.try_catch.catch_var);
             dst->data.try_catch.catch_body = exprtk_node_copy(src->data.try_catch.catch_body, dest_arena);
             break;
 
@@ -225,8 +225,8 @@ exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_are
 }
 
 // Create a new node using the arena
-exprtk_node_t *exprtk_node_create(turbo_pool_t *arena, exprtk_node_type_t type) {
-    exprtk_node_t *n = TURBO_POOL_ALLOC(arena, exprtk_node_t);
+exprtk_node_t *exprtk_node_create(mem_pool_t *arena, exprtk_node_type_t type) {
+    exprtk_node_t *n = MEM_ALLOC(arena, exprtk_node_t);
     if (n) {
         memset(n, 0, sizeof(exprtk_node_t));
         n->type = type;
@@ -278,7 +278,7 @@ exprtk_node_t *exprtk_fold_binary(exprtk_parse_ctx_t *ctx, int op, exprtk_node_t
     // String concatenation folding
     if (op == exprtk_TOKEN_PLUS && left->type == EXPRTK_NODE_STRING && right->type == EXPRTK_NODE_STRING) {
         size_t new_len = left->data.string.value.len + right->data.string.value.len;
-        char *buf = (char*)turbo_pool_alloc(ctx->arena, new_len + 1);
+        char *buf = (char*)mem_alloc(ctx->arena, new_len + 1);
         if (buf) {
             memcpy(buf, left->data.string.value.data, left->data.string.value.len);
             memcpy(buf + left->data.string.value.len, right->data.string.value.data, right->data.string.value.len);
@@ -320,7 +320,7 @@ exprtk_node_t *exprtk_fold_binary(exprtk_parse_ctx_t *ctx, int op, exprtk_node_t
         }
 
         size_t new_len = l_len + r_len;
-        char *buf = (char*)turbo_pool_alloc(ctx->arena, new_len + 1);
+        char *buf = (char*)mem_alloc(ctx->arena, new_len + 1);
         if (buf) {
             memcpy(buf, l_data, l_len);
             memcpy(buf + l_len, r_data, r_len);
@@ -384,7 +384,7 @@ exprtk_node_t *exprtk_fold_if(exprtk_parse_ctx_t *ctx, exprtk_node_t *cond, expr
 }
 
 exprtk_node_t *exprtk_parse_ext(const char *input, size_t length,
-                                 turbo_pool_t *arena, int *error,
+                                 mem_pool_t *arena, int *error,
                                  char *error_msg, size_t error_msg_len) {
     if (!input) return NULL;
     if (length == 0) length = strlen(input);
@@ -431,15 +431,15 @@ exprtk_node_t *exprtk_parse_ext(const char *input, size_t length,
 }
 
 exprtk_node_t *exprtk_parse(const char *input, size_t length) {
-    turbo_pool_t *arena = (turbo_pool_t*)malloc(sizeof(turbo_pool_t));
-    if (!arena || turbo_pool_init(arena, 4096) != 0) {
+    mem_pool_t *arena = (mem_pool_t*)malloc(sizeof(mem_pool_t));
+    if (!arena || mem_init(arena, 4096) != 0) {
         if (arena) free(arena);
         return NULL;
     }
     int err = 0;
     exprtk_node_t *root = exprtk_parse_ext(input, length, arena, &err, NULL, 0);
     if (err || !root) {
-        turbo_pool_free(arena);
+        mem_destroy(arena);
         free(arena);
         return NULL;
     }
@@ -448,8 +448,8 @@ exprtk_node_t *exprtk_parse(const char *input, size_t length) {
 
 void exprtk_free(exprtk_node_t *node) {
     if (!node || !node->arena) return;
-    turbo_pool_t *arena = node->arena;
-    turbo_pool_free(arena);
+    mem_pool_t *arena = node->arena;
+    mem_destroy(arena);
     free(arena);
 }
 

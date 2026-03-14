@@ -62,7 +62,7 @@ static exprtk_value_t fn_sqlite_open(size_t argc, exprtk_value_t *args, void *us
     return SQLITE_ZERO;
   }
 
-  char *path = turbo_pool_alloc(ud->scratch, args[0].data.string.len + 1);
+  char *path = mem_alloc(ud->scratch, args[0].data.string.len + 1);
   if (!path) {
     SQLITE_CTX_ERROR(ud, "sqlite.open: OOM");
     return SQLITE_ZERO;
@@ -111,7 +111,7 @@ static exprtk_value_t fn_sqlite_exec(size_t argc, exprtk_value_t *args, void *us
     return SQLITE_ZERO;
   }
 
-  char *sql = turbo_pool_alloc(ud->scratch, args[1].data.string.len + 1);
+  char *sql = mem_alloc(ud->scratch, args[1].data.string.len + 1);
   if (!sql) {
     SQLITE_CTX_ERROR(ud, "sqlite.exec: OOM");
     return SQLITE_ZERO;
@@ -151,7 +151,7 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
   if (argc >= 3 && args[2].type == EXPRTK_VAL_NUMBER)
     col_idx = (int)args[2].data.number;
 
-  char *sql = turbo_pool_alloc(ud->scratch, args[1].data.string.len + 1);
+  char *sql = mem_alloc(ud->scratch, args[1].data.string.len + 1);
   if (!sql) {
     SQLITE_CTX_ERROR(ud, "sqlite.query_col: OOM");
     return SQLITE_ZERO;
@@ -170,7 +170,7 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
 
   size_t cap = 64;
   size_t len = 0;
-  double *data = turbo_pool_alloc(&ud->env->arena, cap * sizeof(double));
+  double *data = mem_alloc(&ud->env->arena, cap * sizeof(double));
   if (!data) {
     sqlite3_finalize(stmt);
     SQLITE_CTX_ERROR(ud, "sqlite.query_col: OOM");
@@ -180,7 +180,7 @@ static exprtk_value_t fn_sqlite_query_col(size_t argc, exprtk_value_t *args, voi
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     if (len >= cap) {
       cap *= 2;
-      double *new_data = turbo_pool_alloc(&ud->env->arena, cap * sizeof(double));
+      double *new_data = mem_alloc(&ud->env->arena, cap * sizeof(double));
       if (!new_data) {
         sqlite3_finalize(stmt);
         SQLITE_CTX_ERROR(ud, "sqlite.query_col: OOM");
@@ -217,7 +217,7 @@ static exprtk_value_t fn_sqlite_query_scalar(size_t argc, exprtk_value_t *args, 
     return SQLITE_ZERO;
   }
 
-  char *sql = turbo_pool_alloc(ud->scratch, args[1].data.string.len + 1);
+  char *sql = mem_alloc(ud->scratch, args[1].data.string.len + 1);
   if (!sql) {
     SQLITE_CTX_ERROR(ud, "sqlite.query_scalar: OOM");
     return SQLITE_ZERO;
@@ -259,7 +259,7 @@ static exprtk_value_t fn_sqlite_error(size_t argc, exprtk_value_t *args, void *u
   if (len == 0)
     return SQLITE_ZERO;
 
-  char *buf = turbo_pool_alloc(&ud->env->arena, len + 1);
+  char *buf = mem_alloc(&ud->env->arena, len + 1);
   if (!buf) return SQLITE_ZERO;
   memcpy(buf, h->error_msg, len);
   buf[len] = '\0';
@@ -272,10 +272,10 @@ static exprtk_value_t fn_sqlite_error(size_t argc, exprtk_value_t *args, void *u
 void sqlite_load(void *p, void *e, void *s) {
   sqlite_ctx_t *ctx = (sqlite_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_pool_t *scratch = (turbo_pool_t *)s;
+  mem_pool_t *scratch = (mem_pool_t *)s;
   if (!ctx || !env) return;
 
-  sqlite_ud_t *ud = turbo_pool_alloc(&env->arena, sizeof(*ud));
+  sqlite_ud_t *ud = mem_alloc(&env->arena, sizeof(*ud));
   if (!ud) return;
   ud->ctx = ctx;
   ud->env = env;

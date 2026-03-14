@@ -10,7 +10,7 @@
 spec("eth_rpc_integration") {
   describe("Ethereum JSON-RPC") {
     it("should get current block number") {
-      http_client_t *http = http_client_create();
+      http_client_t *http = http_client_create(NULL);
       http_client_set_timeout(http, 15000);
       rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
       config.http_client = http;
@@ -27,7 +27,7 @@ spec("eth_rpc_integration") {
     }
 
     it("should get chain ID (mainnet=0x1)") {
-      http_client_t *http = http_client_create();
+      http_client_t *http = http_client_create(NULL);
       http_client_set_timeout(http, 15000);
       rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
       config.http_client = http;
@@ -44,7 +44,7 @@ spec("eth_rpc_integration") {
     }
 
     it("should get gas price") {
-      http_client_t *http = http_client_create();
+      http_client_t *http = http_client_create(NULL);
       http_client_set_timeout(http, 15000);
       rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
       config.http_client = http;
@@ -61,7 +61,7 @@ spec("eth_rpc_integration") {
     }
 
     it("should handle invalid methods gracefully") {
-      http_client_t *http = http_client_create();
+      http_client_t *http = http_client_create(NULL);
       http_client_set_timeout(http, 15000);
       rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
       config.http_client = http;
@@ -80,7 +80,7 @@ spec("eth_rpc_integration") {
 
   describe("System Metrics Integration") {
     it("should track stats with real requests") {
-      http_client_t *http = http_client_create();
+      http_client_t *http = http_client_create(NULL);
       http_client_set_timeout(http, 15000);
       rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("https://ethereum.publicnode.com/");
       config.http_client = http;

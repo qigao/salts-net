@@ -26,7 +26,7 @@
 /* ========================================================================= */
 
 static exprtk_value_t fn_integrate(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   if ((argc == 3 || argc == 4) && args[0].type == EXPRTK_VAL_STRING) {
     char f_name[256];
     size_t len = args[0].data.string.len;
@@ -66,7 +66,7 @@ static exprtk_value_t fn_integrate(size_t argc, exprtk_value_t *args, exprtk_env
 }
 
 static exprtk_value_t fn_derivative(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   if ((argc == 2 || argc == 3) && args[0].type == EXPRTK_VAL_STRING) {
     char f_name[256];
     size_t len = args[0].data.string.len;
@@ -89,7 +89,7 @@ static exprtk_value_t fn_derivative(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_det2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 4)
@@ -98,7 +98,7 @@ static exprtk_value_t fn_det2(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_det3(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 9)
@@ -107,7 +107,7 @@ static exprtk_value_t fn_det3(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_inv2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 4) {
     double *res = ALLOC_DBL(arena, 4);
@@ -118,7 +118,7 @@ static exprtk_value_t fn_inv2(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_inv3(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 9) {
     double *res = ALLOC_DBL(arena, 9);
@@ -129,7 +129,7 @@ static exprtk_value_t fn_inv3(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_matmul(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   if (argc == 5 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t m = (size_t)args[2].data.number, k = (size_t)args[3].data.number,
@@ -146,7 +146,7 @@ static exprtk_value_t fn_matmul(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_transpose(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 3 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t rows = (size_t)args[1].data.number, cols = (size_t)args[2].data.number;
@@ -162,7 +162,7 @@ static exprtk_value_t fn_transpose(size_t argc, exprtk_value_t *args, exprtk_env
 }
 
 static exprtk_value_t fn_eig2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 4) {
     double *ev = ALLOC_DBL(arena, 2);
@@ -175,7 +175,7 @@ static exprtk_value_t fn_eig2(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_eig3(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2 && args[1].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 9 &&
@@ -185,7 +185,7 @@ static exprtk_value_t fn_eig3(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_trace2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 4)
@@ -194,7 +194,7 @@ static exprtk_value_t fn_trace2(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_sin(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -203,7 +203,7 @@ static exprtk_value_t fn_sin(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_cos(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -212,7 +212,7 @@ static exprtk_value_t fn_cos(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_tan(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -221,7 +221,7 @@ static exprtk_value_t fn_tan(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_sqrt(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -230,7 +230,7 @@ static exprtk_value_t fn_sqrt(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_abs(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   if (argc == 1) {
     if (args[0].type == EXPRTK_VAL_NUMBER)
@@ -248,7 +248,7 @@ static exprtk_value_t fn_abs(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_exp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -257,7 +257,7 @@ static exprtk_value_t fn_exp(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_log(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -266,7 +266,7 @@ static exprtk_value_t fn_log(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_ceil(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -275,7 +275,7 @@ static exprtk_value_t fn_ceil(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_floor(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -284,7 +284,7 @@ static exprtk_value_t fn_floor(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_round(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -293,7 +293,7 @@ static exprtk_value_t fn_round(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_len(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -306,7 +306,7 @@ static exprtk_value_t fn_len(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_min(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -325,7 +325,7 @@ static exprtk_value_t fn_min(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_max(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -344,7 +344,7 @@ static exprtk_value_t fn_max(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_avg(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)arena;
   if (argc != 1 || args[0].type != EXPRTK_VAL_VECTOR) {
     if (env)
@@ -358,7 +358,7 @@ static exprtk_value_t fn_avg(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_sum(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -374,7 +374,7 @@ static exprtk_value_t fn_sum(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_fibonacci(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -383,7 +383,7 @@ static exprtk_value_t fn_fibonacci(size_t argc, exprtk_value_t *args, exprtk_env
 }
 
 static exprtk_value_t fn_gcd(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -393,7 +393,7 @@ static exprtk_value_t fn_gcd(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_normal_rand(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 0 || argc == 2) {
@@ -405,7 +405,7 @@ static exprtk_value_t fn_normal_rand(size_t argc, exprtk_value_t *args, exprtk_e
 }
 
 static exprtk_value_t fn_vector_find_value(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                           turbo_pool_t *arena) {
+                                           mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -420,7 +420,7 @@ static exprtk_value_t fn_vector_find_value(size_t argc, exprtk_value_t *args, ex
 }
 
 static exprtk_value_t fn_vector_find_all(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                         turbo_pool_t *arena) {
+                                         mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     double target = args[1].data.number;
@@ -430,7 +430,7 @@ static exprtk_value_t fn_vector_find_all(size_t argc, exprtk_value_t *args, expr
       if (fabs(args[0].data.vector.data[i] - target) < 1e-9)
         count++;
     }
-    double *res = (double *)turbo_pool_alloc(arena, count * sizeof(double));
+    double *res = (double *)mem_alloc(arena, count * sizeof(double));
     if (res) {
       size_t k = 0;
       for (size_t i = 0; i < n; ++i) {
@@ -444,7 +444,7 @@ static exprtk_value_t fn_vector_find_all(size_t argc, exprtk_value_t *args, expr
 }
 
 static exprtk_value_t fn_median(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 0)
@@ -455,7 +455,7 @@ static exprtk_value_t fn_median(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_percentile(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 0)
@@ -467,7 +467,7 @@ static exprtk_value_t fn_percentile(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_geometric_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -480,7 +480,7 @@ static exprtk_value_t fn_geometric_mean(size_t argc, exprtk_value_t *args, exprt
 }
 
 static exprtk_value_t fn_harmonic_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -492,7 +492,7 @@ static exprtk_value_t fn_harmonic_mean(size_t argc, exprtk_value_t *args, exprtk
 }
 
 static exprtk_value_t fn_skewness(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -504,7 +504,7 @@ static exprtk_value_t fn_skewness(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_kurtosis(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -516,7 +516,7 @@ static exprtk_value_t fn_kurtosis(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_inv_normal_cdf(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -525,7 +525,7 @@ static exprtk_value_t fn_inv_normal_cdf(size_t argc, exprtk_value_t *args, exprt
 }
 
 static exprtk_value_t fn_ols_fit(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 0 || args[0].data.vector.size != args[1].data.vector.size)
@@ -545,7 +545,7 @@ static exprtk_value_t fn_ols_fit(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_inv(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = (size_t)args[1].data.number;
@@ -562,7 +562,7 @@ static exprtk_value_t fn_inv(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_dot(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
@@ -577,7 +577,7 @@ static exprtk_value_t fn_dot(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_cross(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 3 && args[1].data.vector.size == 3) {
@@ -596,7 +596,7 @@ static exprtk_value_t fn_cross(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_norm(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -608,7 +608,7 @@ static exprtk_value_t fn_norm(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_asin(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -617,7 +617,7 @@ static exprtk_value_t fn_asin(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_angle(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
@@ -635,7 +635,7 @@ static exprtk_value_t fn_angle(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_proj(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 3 && args[1].data.vector.size == 3) {
@@ -662,7 +662,7 @@ static exprtk_value_t fn_proj(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 /* Flex Engine SIMD Types & Operations                                       */
 /* ========================================================================= */
 static exprtk_value_t fn_vec_add(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -677,7 +677,7 @@ static exprtk_value_t fn_vec_add(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_vec_sub(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -692,7 +692,7 @@ static exprtk_value_t fn_vec_sub(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_vec_mul(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -707,7 +707,7 @@ static exprtk_value_t fn_vec_mul(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_vec_div(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -722,7 +722,7 @@ static exprtk_value_t fn_vec_div(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_vec_sqr(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -734,7 +734,7 @@ static exprtk_value_t fn_vec_sqr(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_vec_reciprocal(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -746,7 +746,7 @@ static exprtk_value_t fn_vec_reciprocal(size_t argc, exprtk_value_t *args, exprt
 }
 
 static exprtk_value_t fn_vec_scale(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
     size_t n = args[0].data.vector.size;
@@ -760,7 +760,7 @@ static exprtk_value_t fn_vec_scale(size_t argc, exprtk_value_t *args, exprtk_env
 }
 
 static exprtk_value_t fn_vec2_perp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 2) {
     double *res = ALLOC_DBL(arena, 2);
@@ -772,7 +772,7 @@ static exprtk_value_t fn_vec2_perp(size_t argc, exprtk_value_t *args, exprtk_env
 }
 
 static exprtk_value_t fn_vec_normalize(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -789,7 +789,7 @@ static exprtk_value_t fn_vec_normalize(size_t argc, exprtk_value_t *args, exprtk
 }
 
 static exprtk_value_t fn_transform_create(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                          turbo_pool_t *arena) {
+                                          mem_pool_t *arena) {
   (void)env;
   if (argc >= 5) {
     double x = args[0].data.number, y = args[1].data.number;
@@ -819,7 +819,7 @@ static exprtk_value_t fn_transform_create(size_t argc, exprtk_value_t *args, exp
 }
 
 static exprtk_value_t fn_transform_pt(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR &&
       args[0].data.vector.size >= 6 && args[1].data.vector.size >= 2) {
@@ -835,7 +835,7 @@ static exprtk_value_t fn_transform_pt(size_t argc, exprtk_value_t *args, exprtk_
 }
 
 static exprtk_value_t fn_transform_mul(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR &&
       args[0].data.vector.size >= 6 && args[1].data.vector.size >= 6) {
@@ -865,7 +865,7 @@ static int cmp_double_desc(const void *a, const void *b) {
 }
 
 static exprtk_value_t fn_vec_sort(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -882,7 +882,7 @@ static exprtk_value_t fn_vec_sort(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_vec_sort_desc(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -899,7 +899,7 @@ static exprtk_value_t fn_vec_sort_desc(size_t argc, exprtk_value_t *args, exprtk
 }
 
 static exprtk_value_t fn_vec_unique(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -920,7 +920,7 @@ static exprtk_value_t fn_vec_unique(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_vec_reverse(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -936,7 +936,7 @@ static exprtk_value_t fn_vec_reverse(size_t argc, exprtk_value_t *args, exprtk_e
 }
 
 static exprtk_value_t fn_vec_concat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n1 = args[0].data.vector.size, n2 = args[1].data.vector.size;
@@ -956,7 +956,7 @@ static exprtk_value_t fn_vec_concat(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_vec_range(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc < 1 || argc > 2)
     return exprtk_val_num(0);
@@ -986,7 +986,7 @@ static exprtk_value_t fn_vec_range(size_t argc, exprtk_value_t *args, exprtk_env
 }
 
 static exprtk_value_t fn_vec_cumsum(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -1002,7 +1002,7 @@ static exprtk_value_t fn_vec_cumsum(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_vec_diff(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -1019,7 +1019,7 @@ static exprtk_value_t fn_vec_diff(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_transform_inv(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size >= 6) {
     double *m = args[0].data.vector.data;
@@ -1040,7 +1040,7 @@ static exprtk_value_t fn_transform_inv(size_t argc, exprtk_value_t *args, exprtk
 }
 
 static exprtk_value_t fn_rotate_vec(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 3 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER &&
       args[2].type == EXPRTK_VAL_VECTOR) {
@@ -1065,7 +1065,7 @@ static exprtk_value_t fn_rotate_vec(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_lookat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   if (argc == 3 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR &&
       args[2].type == EXPRTK_VAL_VECTOR) {
@@ -1117,7 +1117,7 @@ static exprtk_value_t fn_lookat(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_perspective(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   if (argc == 4) {
     double *res = ALLOC_DBL(arena, 16);
@@ -1140,7 +1140,7 @@ static exprtk_value_t fn_perspective(size_t argc, exprtk_value_t *args, exprtk_e
 }
 
 static exprtk_value_t fn_ortho(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   if (argc == 6) {
     double *res = ALLOC_DBL(arena, 16);
@@ -1163,7 +1163,7 @@ static exprtk_value_t fn_ortho(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_mat4_mul(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 16 && args[1].data.vector.size == 16) {
@@ -1178,7 +1178,7 @@ static exprtk_value_t fn_mat4_mul(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_mat3_mul(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc == 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     if (args[0].data.vector.size == 9 && args[1].data.vector.size == 9) {
@@ -1193,7 +1193,7 @@ static exprtk_value_t fn_mat3_mul(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_acos(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1202,7 +1202,7 @@ static exprtk_value_t fn_acos(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_atan(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1211,7 +1211,7 @@ static exprtk_value_t fn_atan(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_atan2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -1220,7 +1220,7 @@ static exprtk_value_t fn_atan2(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_sinh(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1229,7 +1229,7 @@ static exprtk_value_t fn_sinh(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_cosh(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1238,7 +1238,7 @@ static exprtk_value_t fn_cosh(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_tanh(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1247,7 +1247,7 @@ static exprtk_value_t fn_tanh(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_pow(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -1256,7 +1256,7 @@ static exprtk_value_t fn_pow(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_clamp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   if (argc == 3) {
     double lo = args[1].data.number;
@@ -1282,7 +1282,7 @@ static exprtk_value_t fn_clamp(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_lerp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 3) {
@@ -1295,7 +1295,7 @@ static exprtk_value_t fn_lerp(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_smoothstep(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 3) {
@@ -1316,7 +1316,7 @@ static exprtk_value_t fn_smoothstep(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_radians(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1327,7 +1327,7 @@ static exprtk_value_t fn_radians(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_degrees(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1338,7 +1338,7 @@ static exprtk_value_t fn_degrees(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_is_nan(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1349,7 +1349,7 @@ static exprtk_value_t fn_is_nan(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_is_inf(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1360,7 +1360,7 @@ static exprtk_value_t fn_is_inf(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 static exprtk_value_t fn_hypot(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -1369,7 +1369,7 @@ static exprtk_value_t fn_hypot(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_log1p(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1378,7 +1378,7 @@ static exprtk_value_t fn_log1p(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_expm1(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1387,7 +1387,7 @@ static exprtk_value_t fn_expm1(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_step(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -1396,7 +1396,7 @@ static exprtk_value_t fn_step(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_fract(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1407,7 +1407,7 @@ static exprtk_value_t fn_fract(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_saturate(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc == 1) {
     if (args[0].type == EXPRTK_VAL_NUMBER) {
@@ -1429,7 +1429,7 @@ static exprtk_value_t fn_saturate(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_inverse_lerp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 3) {
@@ -1445,7 +1445,7 @@ static exprtk_value_t fn_inverse_lerp(size_t argc, exprtk_value_t *args, exprtk_
 }
 
 static exprtk_value_t fn_remap(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 5) {
@@ -1463,7 +1463,7 @@ static exprtk_value_t fn_remap(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_relu(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1474,7 +1474,7 @@ static exprtk_value_t fn_relu(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_sigmoid(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1490,7 +1490,7 @@ static exprtk_value_t fn_sigmoid(size_t argc, exprtk_value_t *args, exprtk_env_t
 }
 
 static exprtk_value_t fn_softplus(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1505,7 +1505,7 @@ static exprtk_value_t fn_softplus(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_copysign(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -1514,7 +1514,7 @@ static exprtk_value_t fn_copysign(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 static exprtk_value_t fn_cbrt(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1) {
@@ -1527,7 +1527,7 @@ static exprtk_value_t fn_cbrt(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_exp2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1536,7 +1536,7 @@ static exprtk_value_t fn_exp2(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_logn(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2) {
@@ -1550,7 +1550,7 @@ static exprtk_value_t fn_logn(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_log10(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1559,7 +1559,7 @@ static exprtk_value_t fn_log10(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_log2(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1568,7 +1568,7 @@ static exprtk_value_t fn_log2(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_trunc(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                               turbo_pool_t *arena) {
+                               mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 1)
@@ -1577,7 +1577,7 @@ static exprtk_value_t fn_trunc(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 static exprtk_value_t fn_vec_zscore(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -1595,7 +1595,7 @@ static exprtk_value_t fn_vec_zscore(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 static exprtk_value_t fn_var(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env; (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     double mean, var;
@@ -1606,7 +1606,7 @@ static exprtk_value_t fn_var(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_std(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env; (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     double mean, var;
@@ -1617,7 +1617,7 @@ static exprtk_value_t fn_std(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_sgn(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   if (argc == 1) {
     if (args[0].type == EXPRTK_VAL_NUMBER) {
@@ -1637,7 +1637,7 @@ static exprtk_value_t fn_sgn(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_any(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env; (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
       return exprtk_val_num(simd_any(args[0].data.vector.data, args[0].data.vector.size));
@@ -1645,7 +1645,7 @@ static exprtk_value_t fn_any(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_all(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env; (void)arena;
   if (argc == 1 && args[0].type == EXPRTK_VAL_VECTOR)
       return exprtk_val_num(simd_all(args[0].data.vector.data, args[0].data.vector.size));
@@ -1653,7 +1653,7 @@ static exprtk_value_t fn_all(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_mod(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc == 2)
@@ -1662,7 +1662,7 @@ static exprtk_value_t fn_mod(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 static exprtk_value_t fn_rand(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   (void)argc;

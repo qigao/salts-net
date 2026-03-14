@@ -30,7 +30,7 @@ typedef struct
 // HTTP parsing context structure to hold state during parsing
 typedef struct
 {
-    turbo_pool_t *arena;       // Arena for this context's memory
+    mem_pool_t *arena;       // Arena for this context's memory
     http_parser_impl_t *parser_impl; // Opaque parser implementation (hides llhttp)
 
     // Dynamic URL parsing state
@@ -66,14 +66,14 @@ typedef struct
 } http_context_t;
 
 // Function to initialize the http context 
-CXX_C_API void http_context_init(http_context_t *context, turbo_pool_t *arena);
+CXX_C_API void http_context_init(http_context_t *context, mem_pool_t *arena);
 
 // Function to cleanup the http context
 CXX_C_API void http_context_free(http_context_t *context);
 
 // Parse the query string into request_t structure
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-CXX_C_API void parse_query(turbo_pool_t *arena, const char *query_string, request_t *query);
+/* Phase IRIS-1: Updated to use mem_pool_t */
+CXX_C_API void parse_query(mem_pool_t *arena, const char *query_string, request_t *query);
 
 // Get value by key from request_t structure
 CXX_C_API const char *get_req(const request_t *request, const char *key);

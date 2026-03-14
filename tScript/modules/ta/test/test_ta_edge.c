@@ -24,11 +24,11 @@ spec("ta_edge_cases") {
         }
 
         it("RSI should return 0 for empty input") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double out[1] = {999};
             check_int_eq(exprtk_ta_rsi(NULL, 0, 14, out, &arena), 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
@@ -46,21 +46,21 @@ spec("ta_edge_cases") {
         }
 
         it("RSI should return 0 when period > n") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double in[] = {1, 2, 3};
             double out[3] = {0};
             check_int_eq(exprtk_ta_rsi(in, 3, 14, out, &arena), 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
 
         it("ATR should return 0 when period > n") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double h[] = {2}, l[] = {1}, c[] = {1.5};
             double out[1] = {0};
             check_int_eq(exprtk_ta_atr(h, l, c, 1, 14, out, &arena), 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
@@ -78,12 +78,12 @@ spec("ta_edge_cases") {
         }
 
         it("Chop should return 0 for period < 2") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double h[] = {2,3}, l[] = {1,2}, c[] = {1.5,2.5};
             double out[2] = {0};
             check_int_eq(exprtk_ta_chop(h, l, c, 2, 1, out, &arena), 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
@@ -101,20 +101,20 @@ spec("ta_edge_cases") {
 
     describe("Constant input") {
         it("RSI should be 50 for constant prices") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double in[20];
             double out[20] = {0};
             for (int i = 0; i < 20; i++) in[i] = 100.0;
             size_t r = exprtk_ta_rsi(in, 20, 14, out, &arena);
             check(r > 0);
             /* With no change, RSI should be ~50 or 0 (implementation dependent) */
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
 
         it("BBands upper == lower for constant input") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double in[20], upper[20]={0}, lower[20]={0}, mid[20]={0};
             for (int i = 0; i < 20; i++) in[i] = 50.0;
             size_t r = exprtk_ta_bbands(in, 20, 10, 2.0, upper, mid, lower);
@@ -122,19 +122,19 @@ spec("ta_edge_cases") {
             /* Std dev = 0, so upper == mid == lower */
             check_float_eq(upper[15], mid[15], EPSILON);
             check_float_eq(lower[15], mid[15], EPSILON);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Minimum viable input") {
         it("Fisher should handle period=2 with 2 bars") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 4096);
             double h[] = {10, 12}, l[] = {8, 9};
             double fisher[2]={0}, trigger[2]={0};
             size_t r = exprtk_ta_fisher(h, l, 2, 2, fisher, trigger, &arena);
             check(r == 2);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
 
         it("Ehlers cyber cycle should return 0 for n < 7") {
@@ -152,8 +152,8 @@ spec("ta_edge_cases") {
 
     describe("Monotonic input") {
         it("Supertrend should detect uptrend for rising prices") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double h[30], l[30], c[30];
             for (int i = 0; i < 30; i++) {
                 c[i] = 100.0 + (double)i * 2.0;
@@ -165,7 +165,7 @@ spec("ta_edge_cases") {
             check(r > 0);
             /* Last bar should show uptrend (1) */
             check_float_eq(trend[29], 1.0, EPSILON);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 }

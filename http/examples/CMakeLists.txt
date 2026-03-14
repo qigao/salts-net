@@ -1,5 +1,4 @@
 # HTTP Client Examples
-set(folder_name ${TARGET_NAME}/examples)
 
 # List of example programs
 set(HTTP_EXAMPLES
@@ -16,7 +15,7 @@ set(HTTP_EXAMPLES
 foreach(example_name ${HTTP_EXAMPLES})
   add_executable(${example_name} ${example_name}.c)
   target_link_libraries(${example_name} PRIVATE http_client TurboNet::TinyTest)
-  set_target_properties(${example_name} PROPERTIES FOLDER http/${folder_name})
+  set_target_properties(${example_name} PROPERTIES FOLDER http/examples)
   add_sanitizers(${example_name})
 # Platform-specific settings
   if(WIN32)

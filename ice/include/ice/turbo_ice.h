@@ -22,7 +22,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <platform.h>
-#include <netcore/turbo_coro_context.h>
+#include <CoroNet/turbo_coro_context.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -143,7 +143,7 @@ struct ice_candidate_s {
     uint32_t priority;
 
     /* Internal */
-    void *socket;                   /* UDP socket for this candidate (coro_client_t) */
+    void *socket;                   /* UDP socket for this candidate (coro_socket_t) */
     void *turn_client;              /* TURN client if relay (turbo_turn_client_t) */
     int is_local;                   /* 1 = local, 0 = remote */
     char id[ICE_CANDIDATE_ID_LEN + 1];

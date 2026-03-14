@@ -20,8 +20,8 @@ suite("Portfolio Optimization") {
        -0.01, 0.03,  0.02, 0.01, 0.00   // Asset 3
       };
       double cov[9];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       exprtk_pf_cov_matrix(returns, 3, 5, cov, &arena);
 
@@ -35,20 +35,20 @@ suite("Portfolio Optimization") {
       check_float_eq(cov[2], cov[6], EPSILON);
       check_float_eq(cov[5], cov[7], EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle single asset") {
       double returns[] = {0.01, 0.02, -0.01, 0.03};
       double cov[1];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       exprtk_pf_cov_matrix(returns, 1, 4, cov, &arena);
 
       check(cov[0] > 0.0); // Variance should be positive
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -60,8 +60,8 @@ suite("Portfolio Optimization") {
         0.01, 0.09
       };
       double weights[2];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double variance = exprtk_pf_min_variance(cov, 2, weights, &arena);
 
@@ -76,7 +76,7 @@ suite("Portfolio Optimization") {
       // Variance should be positive
       check(variance >= 0.0);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle equal variance case") {
@@ -85,8 +85,8 @@ suite("Portfolio Optimization") {
         0.00, 0.04
       };
       double weights[2];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       exprtk_pf_min_variance(cov, 2, weights, &arena);
 
@@ -94,7 +94,7 @@ suite("Portfolio Optimization") {
       check_float_eq(weights[0], 0.5, 0.1);
       check_float_eq(weights[1], 0.5, 0.1);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle 3 assets") {
@@ -104,8 +104,8 @@ suite("Portfolio Optimization") {
         0.00, 0.02, 0.16
       };
       double weights[3];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double variance = exprtk_pf_min_variance(cov, 3, weights, &arena);
 
@@ -116,7 +116,7 @@ suite("Portfolio Optimization") {
       // Variance should be positive
       check(variance >= 0.0);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -129,8 +129,8 @@ suite("Portfolio Optimization") {
       };
       double rf = 0.02;  // Risk-free rate
       double weights[2];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double sharpe = exprtk_pf_max_sharpe(mu, cov, 2, rf, weights, &arena);
 
@@ -145,7 +145,7 @@ suite("Portfolio Optimization") {
       check(weights[0] >= 0.0 && weights[0] <= 1.0);
       check(weights[1] >= 0.0 && weights[1] <= 1.0);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle zero risk-free rate") {
@@ -156,8 +156,8 @@ suite("Portfolio Optimization") {
         0.00, 0.02, 0.16
       };
       double weights[3];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double sharpe = exprtk_pf_max_sharpe(mu, cov, 3, 0.0, weights, &arena);
 
@@ -168,7 +168,7 @@ suite("Portfolio Optimization") {
       // Sharpe should be positive
       check(sharpe >= 0.0);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -181,8 +181,8 @@ suite("Portfolio Optimization") {
       };
       double target = 0.10;  // Target 10% return
       double weights[2];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       double variance = exprtk_pf_markowitz(mu, cov, 2, target, weights, &arena);
 
@@ -197,7 +197,7 @@ suite("Portfolio Optimization") {
       // Variance should be positive
       check(variance >= 0.0);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle target at boundary") {
@@ -208,8 +208,8 @@ suite("Portfolio Optimization") {
         0.00, 0.02, 0.16
       };
       double weights[3];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       // Target at minimum
       exprtk_pf_markowitz(mu, cov, 3, 0.05, weights, &arena);
@@ -221,7 +221,7 @@ suite("Portfolio Optimization") {
       sum = weights[0] + weights[1] + weights[2];
       check_float_eq(sum, 1.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 
@@ -230,8 +230,8 @@ suite("Portfolio Optimization") {
       double mu[] = {0.10};
       double cov[] = {0.04};
       double weights[1];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 1024);
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
 
       // Min variance
       exprtk_pf_min_variance(cov, 1, weights, &arena);
@@ -245,7 +245,7 @@ suite("Portfolio Optimization") {
       exprtk_pf_markowitz(mu, cov, 1, 0.10, weights, &arena);
       check_float_eq(weights[0], 1.0, EPSILON);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should handle perfectly correlated assets") {
@@ -254,8 +254,8 @@ suite("Portfolio Optimization") {
         0.04, 0.04
       };
       double weights[2];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       exprtk_pf_min_variance(cov, 2, weights, &arena);
 
@@ -263,7 +263,7 @@ suite("Portfolio Optimization") {
       double sum = weights[0] + weights[1];
       check_float_eq(sum, 1.0, 0.1);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 }

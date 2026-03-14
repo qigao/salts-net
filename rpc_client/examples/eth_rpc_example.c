@@ -219,7 +219,7 @@ int main(void) {
 
   example_retry_logic();
 
-  http_client_t *http = http_client_create();
+  http_client_t *http = http_client_create(NULL);
   http_client_set_timeout(http, 10000);
 
   example_get_block_number(http);

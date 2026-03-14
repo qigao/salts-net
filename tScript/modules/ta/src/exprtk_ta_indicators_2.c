@@ -20,7 +20,7 @@ size_t exprtk_ta_trange(const double *hi, const double *lo, const double *cl, si
 }
 
 size_t exprtk_ta_atr(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                     double *out, turbo_pool_t *arena) {
+                     double *out, mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *tr = TEMP_ALLOC(arena, double, n);
@@ -33,7 +33,7 @@ size_t exprtk_ta_atr(const double *hi, const double *lo, const double *cl, size_
 }
 
 size_t exprtk_ta_natr(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                      double *out, turbo_pool_t *arena) {
+                      double *out, mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *atr = TEMP_ALLOC(arena, double, n);
@@ -155,7 +155,7 @@ size_t exprtk_ta_ad(const double *hi, const double *lo, const double *cl, const 
 }
 
 size_t exprtk_ta_adosc(const double *hi, const double *lo, const double *cl, const double *vol,
-                       size_t n, size_t fast_p, size_t slow_p, double *out, turbo_pool_t *arena) {
+                       size_t n, size_t fast_p, size_t slow_p, double *out, mem_pool_t *arena) {
   if (fast_p == 0 || slow_p == 0 || n < slow_p)
     return 0;
   double *ad = TEMP_ALLOC(arena, double, n);
@@ -186,7 +186,7 @@ size_t exprtk_ta_adosc(const double *hi, const double *lo, const double *cl, con
 }
 
 size_t exprtk_ta_cmf(const double *hi, const double *lo, const double *cl, const double *vol,
-                     size_t n, size_t period, double *out, turbo_pool_t *arena) {
+                     size_t n, size_t period, double *out, mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *mfv = TEMP_ALLOC(arena, double, n);
@@ -230,7 +230,7 @@ size_t exprtk_ta_cmf(const double *hi, const double *lo, const double *cl, const
 }
 
 size_t exprtk_ta_mfi(const double *hi, const double *lo, const double *cl, const double *vol,
-                     size_t n, size_t period, double *out, turbo_pool_t *arena) {
+                     size_t n, size_t period, double *out, mem_pool_t *arena) {
   if (period == 0 || n < period + 1)
     return 0;
   double *tp = TEMP_ALLOC(arena, double, n);
@@ -297,7 +297,7 @@ size_t exprtk_ta_mfi(const double *hi, const double *lo, const double *cl, const
 
 // TA-Lib Trend Indicators
 size_t exprtk_ta_plus_dm(const double *hi, const double *lo, size_t n, size_t period, double *out,
-                         turbo_pool_t *arena) {
+                         mem_pool_t *arena) {
   if (period == 0 || n < 1)
     return 0;
   double *pdm = TEMP_ALLOC(arena, double, n);
@@ -329,7 +329,7 @@ size_t exprtk_ta_plus_dm(const double *hi, const double *lo, size_t n, size_t pe
 }
 
 size_t exprtk_ta_minus_dm(const double *hi, const double *lo, size_t n, size_t period, double *out,
-                          turbo_pool_t *arena) {
+                          mem_pool_t *arena) {
   if (period == 0 || n < 1)
     return 0;
   double *mdm = TEMP_ALLOC(arena, double, n);
@@ -361,7 +361,7 @@ size_t exprtk_ta_minus_dm(const double *hi, const double *lo, size_t n, size_t p
 }
 
 size_t exprtk_ta_plus_di(const double *hi, const double *lo, const double *cl, size_t n,
-                         size_t period, double *out, turbo_pool_t *arena) {
+                         size_t period, double *out, mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *pdm = TEMP_ALLOC(arena, double, n);
@@ -391,7 +391,7 @@ size_t exprtk_ta_plus_di(const double *hi, const double *lo, const double *cl, s
 }
 
 size_t exprtk_ta_minus_di(const double *hi, const double *lo, const double *cl, size_t n,
-                          size_t period, double *out, turbo_pool_t *arena) {
+                          size_t period, double *out, mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *mdm = TEMP_ALLOC(arena, double, n);
@@ -421,7 +421,7 @@ size_t exprtk_ta_minus_di(const double *hi, const double *lo, const double *cl, 
 }
 
 size_t exprtk_ta_dx(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                    double *out, turbo_pool_t *arena) {
+                    double *out, mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *p_di = TEMP_ALLOC(arena, double, n);
@@ -456,7 +456,7 @@ size_t exprtk_ta_dx(const double *hi, const double *lo, const double *cl, size_t
 }
 
 size_t exprtk_ta_adx(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                     double *out, turbo_pool_t *arena) {
+                     double *out, mem_pool_t *arena) {
   if (period == 0 || n < 2 * period)
     return 0;
   double *dx = TEMP_ALLOC(arena, double, n);
@@ -469,7 +469,7 @@ size_t exprtk_ta_adx(const double *hi, const double *lo, const double *cl, size_
 }
 
 size_t exprtk_ta_adxr(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                      double *out, turbo_pool_t *arena) {
+                      double *out, mem_pool_t *arena) {
   if (period == 0 || n < 2 * period)
     return 0; // Changed condition to 2*period as per ADX requirement
   exprtk_ta_adx(hi, lo, cl, n, period, out, arena);
@@ -488,7 +488,7 @@ size_t exprtk_ta_adxr(const double *hi, const double *lo, const double *cl, size
 
 // TA-Lib Statistics Indicators
 size_t exprtk_ta_stddev(const double *in, size_t n, size_t period, double mult, double *out,
-                        turbo_pool_t *arena) {
+                        mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *s1 = TEMP_ALLOC(arena, double, n + 1);
@@ -541,7 +541,7 @@ size_t exprtk_ta_stddev(const double *in, size_t n, size_t period, double mult, 
 }
 
 size_t exprtk_ta_var(const double *in, size_t n, size_t period, double mult, double *out,
-                     turbo_pool_t *arena) {
+                     mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *s1 = TEMP_ALLOC(arena, double, n + 1);

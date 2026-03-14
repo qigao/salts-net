@@ -124,7 +124,7 @@ typedef struct {
  * ========================================================================= */
 
 static int csv_load_assets(provider_t *self, universe_t *u,
-                            const char *source, turbo_pool_t *arena) {
+                            const char *source, mem_pool_t *arena) {
     (void)arena;
     csv_state_t *st = (csv_state_t *)self->user_data;
     char path[640];
@@ -187,7 +187,7 @@ static int csv_load_assets(provider_t *self, universe_t *u,
  * ========================================================================= */
 
 static int csv_load_adjustments(provider_t *self, universe_t *u,
-                                 const char *source, turbo_pool_t *arena) {
+                                 const char *source, mem_pool_t *arena) {
     (void)arena;
     csv_state_t *st = (csv_state_t *)self->user_data;
     char path[640];
@@ -238,7 +238,7 @@ static int csv_load_adjustments(provider_t *self, universe_t *u,
 
 static void *csv_open_stream(provider_t *self, uint32_t asset_id,
                               double start_date, double end_date,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
     (void)arena;
     csv_state_t *st = (csv_state_t *)self->user_data;
 
@@ -268,7 +268,7 @@ static void *csv_open_stream(provider_t *self, uint32_t asset_id,
 static void *csv_open_stream_by_ticker(provider_t *self, const char *ticker,
                                         uint32_t asset_id,
                                         double start_date, double end_date,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
     (void)arena;
     csv_state_t *st = (csv_state_t *)self->user_data;
     char path[640];
@@ -352,12 +352,12 @@ static void csv_close_stream(provider_t *self, void *stream) {
 
 provider_t *provider_csv_create(const universe_market_rules_t *market,
                                  const char *data_dir,
-                                 turbo_pool_t *arena) {
-    provider_t *p = (provider_t *)turbo_pool_alloc(arena, sizeof(provider_t));
+                                 mem_pool_t *arena) {
+    provider_t *p = (provider_t *)mem_alloc(arena, sizeof(provider_t));
     if (!p) return NULL;
     memset(p, 0, sizeof(*p));
 
-    csv_state_t *st = (csv_state_t *)turbo_pool_alloc(arena, sizeof(csv_state_t));
+    csv_state_t *st = (csv_state_t *)mem_alloc(arena, sizeof(csv_state_t));
     if (!st) return NULL;
     strncpy(st->data_dir, data_dir ? data_dir : ".", sizeof(st->data_dir) - 1);
 
@@ -388,7 +388,7 @@ void provider_free(provider_t *p) {
 int provider_load_universe(provider_t *p, universe_t *u,
                             const char *assets_source,
                             const char *adj_source,
-                            turbo_pool_t *arena) {
+                            mem_pool_t *arena) {
     if (!p || !u) return -1;
 
     int rc = p->load_assets(p, u, assets_source, arena);

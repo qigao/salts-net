@@ -288,12 +288,12 @@ void simd_aabb_points_f32(const float* points, size_t n, float out_min[2], float
 /**
  * @brief Compute median of array elements using quickselect.
  */
-double exprtk_median(const double *data, size_t n, turbo_pool_t *arena);
+double exprtk_median(const double *data, size_t n, mem_pool_t *arena);
 
 /**
  * @brief Compute p-th percentile of array elements.
  */
-double exprtk_percentile(const double *data, size_t n, double p, turbo_pool_t *arena);
+double exprtk_percentile(const double *data, size_t n, double p, mem_pool_t *arena);
 
 /**
  * @brief Compute geometric mean of an array.
@@ -385,7 +385,7 @@ ols_result_t ols_fit(const double *y, const double *x, size_t n);
  * @brief In-place matrix inversion using Gauss-Jordan elimination.
  * @return 1 on success, 0 if matrix is singular.
  */
-int gauss_jordan_invert(double *mat, size_t n, turbo_pool_t *arena);
+int gauss_jordan_invert(double *mat, size_t n, mem_pool_t *arena);
 
 
 

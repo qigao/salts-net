@@ -12,7 +12,7 @@
 
 typedef struct turbo_wasm_vm_s {
   turbo_wasm_config_t cfg;
-  turbo_pool_t owned_arena;
+  mem_pool_t owned_arena;
   IM3Environment env;
   IM3Runtime runtime;
   uint8_t *wasm_bytes;
@@ -109,7 +109,7 @@ static int wasm_recreate_engine(turbo_wasm_vm_t *vm, int reset_arena) {
   }
 
   if (reset_arena) {
-    turbo_pool_reset(&vm->owned_arena);
+    mem_reset(&vm->owned_arena);
   }
 
   m3_SetThreadArena(&vm->owned_arena);
@@ -204,7 +204,7 @@ turbo_wasm_vm_t *turbo_wasm_vm_create(const turbo_wasm_config_t *cfg) {
     return NULL;
 
   vm->cfg = cfg ? *cfg : turbo_wasm_config_default();
-  if (turbo_pool_init(&vm->owned_arena, 1U << 20) != 0) {
+  if (mem_init(&vm->owned_arena, 1U << 20) != 0) {
     wasm_set_err(vm, "failed to initialize owned arena");
     free(vm);
     return NULL;
@@ -238,7 +238,7 @@ void turbo_wasm_vm_destroy(turbo_wasm_vm_t *vm) {
   }
 
   wasm_release_bytes(vm);
-  turbo_pool_free(&vm->owned_arena);
+  mem_destroy(&vm->owned_arena);
   free(vm);
 }
 

@@ -1,6 +1,6 @@
 #include "turbo_coro_tproxy.h"
 #include "turbo_coro_bidi_pump.h"
-#include <netcore.h>
+#include <CoroNet.h>
 #include "turbo_coro.h"
 #include "turbo_coro_internal.h"
 #include "turbo_url.h"
@@ -14,7 +14,7 @@
 #include "turbo_parser.h"
 
 struct coro_tproxy_s {
-    coro_server_t **servers;
+    coro_socket_t **servers;
     size_t server_count;
     coro_tproxy_config_t config;
     coro_context_t *ctx;
@@ -30,25 +30,25 @@ static int decode_basic_auth(const char *auth_header, char *user, char *pass) {
 }
 
 // Start Bidi pump — delegates to shared coro_bidi_pump, then destroys upstream
-static void start_bidi_pump(coro_tproxy_t *proxy, coro_client_t *client, coro_client_t *upstream) {
+static void start_bidi_pump(coro_tproxy_t *proxy, coro_socket_t *client, coro_socket_t *upstream) {
     turbo_bidi_pump_config_t pump_config = TURBO_BIDI_PUMP_CONFIG_DEFAULT;
     pump_config.rate_limit_bps = proxy->config.rate_limit_bps;
 
     coro_bidi_pump(client, upstream, &pump_config);
-    coro_client_destroy(upstream);
+    coro_socket_destroy(upstream);
 }
 
 // Handles SOCKS5 Username/Password Auth (Method 0x02)
-static int handle_socks5_auth(coro_client_t *client, coro_tproxy_t *proxy) {
+static int handle_socks5_auth(coro_socket_t *client, coro_tproxy_t *proxy) {
     char *data = NULL;
     size_t len = 0;
     
     // Require Auth Method (0x02 = Username/Password)
     char greeting_resp[] = {0x05, 0x02}; 
-    if (coro_client_send(client, greeting_resp, 2) < 0) return -1;
+    if (coro_socket_send(client, greeting_resp, 2) < 0) return -1;
 
     // Read Auth Request: 0x01 | ULEN | UNAME | PLEN | PASS
-    if (coro_client_recv(client, &data, &len) < 0 || len < 2 || data[0] != 0x01) {
+    if (coro_socket_recv(client, &data, &len) < 0 || len < 2 || data[0] != 0x01) {
         if (data) free(data);
         return -1;
     }
@@ -68,18 +68,18 @@ static int handle_socks5_auth(coro_client_t *client, coro_tproxy_t *proxy) {
     // Validate
     if (strcmp(r_user, proxy->config.auth_user) == 0 && strcmp(r_pass, proxy->config.auth_pass) == 0) {
         char auth_success[] = {0x01, 0x00}; // Success
-        coro_client_send(client, auth_success, 2);
+        coro_socket_send(client, auth_success, 2);
         return 0;
     } else {
         char auth_fail[] = {0x01, 0x01}; // Fail
-        coro_client_send(client, auth_fail, 2);
+        coro_socket_send(client, auth_fail, 2);
         return -1;
     }
 }
 
 struct socks5_udp_ctx {
-    coro_client_t *tcp_client;
-    coro_client_t *udp_relay;
+    coro_socket_t *tcp_client;
+    coro_socket_t *udp_relay;
     struct sockaddr_storage client_udp_addr;
     int client_addr_known;
     int *alive_flag;
@@ -93,8 +93,8 @@ static void udp_associate_pump_coro(coro_t *co, void *arg) {
     struct sockaddr_storage peer;
 
     while (*ctx->alive_flag) {
-        coro_client_set_timeout(ctx->udp_relay, 1000);
-        int r = coro_client_recvfrom(ctx->udp_relay, &data, &len, &peer);
+        coro_socket_set_timeout(ctx->udp_relay, 1000);
+        int r = coro_socket_recvfrom(ctx->udp_relay, &data, &len, &peer);
         if (r == TURBO_ETIMEDOUT) continue;
         if (r < 0 || r == TURBO_EOF) break;
 
@@ -146,7 +146,7 @@ static void udp_associate_pump_coro(coro_t *co, void *arg) {
                 }
                 
                 if (target_valid) {
-                    coro_client_sendto(ctx->udp_relay, data + offset, len - offset, (struct sockaddr*)&target);
+                    coro_socket_sendto(ctx->udp_relay, data + offset, len - offset, (struct sockaddr*)&target);
                 }
             }
         } else {
@@ -172,7 +172,7 @@ static void udp_associate_pump_coro(coro_t *co, void *arg) {
                 
                 if (hdr_len > 0 && len + hdr_len <= sizeof(buf)) {
                     memcpy(buf + hdr_len, data, len);
-                    coro_client_sendto(ctx->udp_relay, buf, len + hdr_len, (struct sockaddr*)&ctx->client_udp_addr);
+                    coro_socket_sendto(ctx->udp_relay, buf, len + hdr_len, (struct sockaddr*)&ctx->client_udp_addr);
                 }
             }
         }
@@ -184,7 +184,7 @@ static void udp_associate_pump_coro(coro_t *co, void *arg) {
     free(ctx);
 }
 
-static void get_client_ip(coro_client_t *client, char *ip_buf, size_t buf_len) {
+static void get_client_ip(coro_socket_t *client, char *ip_buf, size_t buf_len) {
     ip_buf[0] = '\0';
     if (!client) return;
     
@@ -222,10 +222,10 @@ static int is_ip_in_list(const char *list, const char *ip) {
     return 0;
 }
 
-static void on_proxy_connection_impl(coro_client_t *client, void *arg);
+static void on_proxy_connection_impl(coro_socket_t *client, void *arg);
 
 // Wrapper to track connections explicitly
-static void on_proxy_connection(coro_client_t *client, void *arg) {
+static void on_proxy_connection(coro_socket_t *client, void *arg) {
     char peer_ip[64] = {0};
     get_client_ip(client, peer_ip, sizeof(peer_ip));
 
@@ -240,15 +240,15 @@ static void on_proxy_connection(coro_client_t *client, void *arg) {
 }
 
 // Main proxy incoming connection handler implementation
-static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
+static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
     coro_tproxy_t *proxy = (coro_tproxy_t *)arg;
-    coro_context_t *ctx = coro_client_get_context(client);
+    coro_context_t *ctx = coro_socket_get_context(client);
     
     char *data = NULL;
     size_t len = 0;
 
     // Wait for the very first chunk of bytes so we can sniff the protocol (SOCKS5 vs HTTP)
-    if (coro_client_recv(client, &data, &len) < 0 || len == 0) {
+    if (coro_socket_recv(client, &data, &len) < 0 || len == 0) {
         if (data) free(data);
         return;
     }
@@ -277,18 +277,18 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
     // --- 0. UDP RAW FORWARDING ---
     // SOCKS5 UDP ASSOCIATE is more complex (requires TCP control channel tracking).
     // For now, if the incoming transport is UDP, we just treat it as a raw tunnel.
-    // Notice: `coro_client_recv` on a UDP server client will yield the first datagram.
+    // Notice: `coro_socket_recv` on a UDP server client will yield the first datagram.
     // If we have a backend URL (like `udp://remote:9000` or `kcp://`), forward it!
     if (client->transport == TURBO_UDP) {
         if (proxy->config.backend_url) {
-            coro_client_t *upstream = coro_client_create(ctx);
-            if (!upstream || coro_client_connect(upstream, proxy->config.backend_url) != 0) {
-                if (upstream) coro_client_destroy(upstream);
+            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+            if (!upstream || coro_socket_connect(upstream, proxy->config.backend_url) != 0) {
+                if (upstream) coro_socket_destroy(upstream);
                 free(data);
                 return;
             }
             // Send the initial datagram!
-            coro_client_send(upstream, data, len);
+            coro_socket_send(upstream, data, len);
             TURBO_STATS_ADD("tproxy.bytes.in", len);
             free(data);
             
@@ -311,7 +311,7 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
         // Respond to Greeting
         if (!requires_auth) {
             char greeting_resp[] = {0x05, 0x00}; // NO AUTH REQUIRED
-            if (coro_client_send(client, greeting_resp, 2) < 0) { free(data); return; }
+            if (coro_socket_send(client, greeting_resp, 2) < 0) { free(data); return; }
         } else {
             // SOCKS5 Auth Handshake
             if (handle_socks5_auth(client, proxy) < 0) { free(data); return; }
@@ -319,7 +319,7 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
         free(data); data = NULL;
 
         // Connection Request:  0x05 | CMD | RSV | ATYP | DST.ADDR | DST.PORT
-        if (coro_client_recv(client, &data, &len) < 0 || len < 4 || data[1] != 0x01) {
+        if (coro_socket_recv(client, &data, &len) < 0 || len < 4 || data[1] != 0x01) {
             if (data) free(data);
             return;
         }
@@ -329,12 +329,12 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
         } else if (data[1] == 0x03) {
             // UDP ASSOCIATE
             TLOG_INFO("[TProxy] Request: UDP ASSOCIATE");
-            coro_client_t *udp_relay = coro_client_create(ctx);
-            if (coro_client_connect(udp_relay, "udp://0.0.0.0:0") != 0) {
+            coro_socket_t *udp_relay = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+            if (coro_socket_connect(udp_relay, "udp://0.0.0.0:0") != 0) {
                 TLOG_ERROR("[TProxy] Failed to bind local UDP relay port");
                 char fail_resp[] = {0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0};
-                coro_client_send(client, fail_resp, 10);
-                coro_client_destroy(udp_relay);
+                coro_socket_send(client, fail_resp, 10);
+                coro_socket_destroy(udp_relay);
                 free(data);
                 return;
             }
@@ -347,7 +347,7 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
             char success_resp[] = {0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0};
             // Return 0.0.0.0 for IP (many clients use proxy connection IP anyway), but insert correct port
             memcpy(&success_resp[8], &bound_port, 2);
-            coro_client_send(client, success_resp, 10);
+            coro_socket_send(client, success_resp, 10);
 
             int vivo = 1;
             struct socks5_udp_ctx *udp_ctx = calloc(1, sizeof(struct socks5_udp_ctx));
@@ -361,15 +361,15 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
             free(data); data = NULL;
             // The TCP connection serves as the control channel. We wait for it to close.
             while (vivo) {
-                coro_client_set_timeout(client, 1000);
-                int r = coro_client_recv(client, &data, &len);
+                coro_socket_set_timeout(client, 1000);
+                int r = coro_socket_recv(client, &data, &len);
                 if (r == TURBO_ETIMEDOUT) continue;
                 if (r < 0 || r == TURBO_EOF) break;
                 if (data) free(data); data = NULL;
             }
             
             vivo = 0;
-            coro_client_destroy(udp_relay);
+            coro_socket_destroy(udp_relay);
             coro_sleep(ctx, 0); // Allow UDP coroutine to finish cleanly
             return;
 
@@ -425,7 +425,7 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
                 if (action == TURBO_RULE_ACTION_REJECT) {
                     TLOG_WARN("[TProxy] SOCKS5 Request REJECTED by rule: {}", target_host);
                     char fail_resp[] = {0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0};
-                    coro_client_send(client, fail_resp, 10);
+                    coro_socket_send(client, fail_resp, 10);
                     return;
                 }
             }
@@ -444,18 +444,18 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
             }
 
             // Open Upstream
-            coro_client_t *upstream = coro_client_create(ctx);
-        if (!upstream || coro_client_connect(upstream, target_url) != 0) {
-            if (upstream) coro_client_destroy(upstream);
+            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+        if (!upstream || coro_socket_connect(upstream, target_url) != 0) {
+            if (upstream) coro_socket_destroy(upstream);
             TLOG_INFO("[TProxy] Dropped SOCKS5 connection from {} (protocol error)", peer_ip);
             char fail_resp[] = {0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0};
-            coro_client_send(client, fail_resp, 10);
+            coro_socket_send(client, fail_resp, 10);
             return;
         }
 
         // Reply SOCKS5 Success
         char success_resp[] = {0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0};
-        coro_client_send(client, success_resp, 10);
+        coro_socket_send(client, success_resp, 10);
         
         start_bidi_pump(proxy, client, upstream);
         }
@@ -476,7 +476,7 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
         // Simple auth check snippet (omitted real bas64 check for brevity)
         if (proxy->config.auth_user && !strstr(data, "Proxy-Authorization: Basic ")) {
             const char *auth_req = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Proxy\"\r\n\r\n";
-            coro_client_send(client, auth_req, strlen(auth_req));
+            coro_socket_send(client, auth_req, strlen(auth_req));
             free(data);
             TLOG_INFO("[TProxy] Dropped HTTP CONNECT from {} (auth failed)", peer_ip);
             return;
@@ -523,7 +523,7 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
             if (action == TURBO_RULE_ACTION_REJECT) {
                 TLOG_WARN("[TProxy] HTTP Request REJECTED by rule: {}", t_host);
                 char *fail_resp = "HTTP/1.1 403 Forbidden\r\n\r\n";
-                coro_client_send(client, fail_resp, strlen(fail_resp));
+                coro_socket_send(client, fail_resp, strlen(fail_resp));
                 return;
             }
         }
@@ -543,18 +543,18 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
             
         TLOG_INFO("[TProxy] Connecting to -> {}", target_url);
 
-            coro_client_t *upstream = coro_client_create(ctx);
-            if (!upstream || coro_client_connect(upstream, target_url) != 0) {
-                if (upstream) coro_client_destroy(upstream);
+            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+            if (!upstream || coro_socket_connect(upstream, target_url) != 0) {
+                if (upstream) coro_socket_destroy(upstream);
                 TLOG_ERROR("[TProxy] HTTP CONNECT to {} failed", target_url);
                 char *fail_resp = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
-            coro_client_send(client, fail_resp, strlen(fail_resp));
+            coro_socket_send(client, fail_resp, strlen(fail_resp));
             return;
         }
 
         // Connection Success
         const char *success_resp = "HTTP/1.1 200 Connection Established\r\n\r\n";
-        coro_client_send(client, success_resp, strlen(success_resp));
+        coro_socket_send(client, success_resp, strlen(success_resp));
         
         start_bidi_pump(proxy, client, upstream);
         return;
@@ -563,14 +563,14 @@ static void on_proxy_connection_impl(coro_client_t *client, void *arg) {
     } else {
         // Did not match SOCKS5 or HTTP CONNECT. If we have a backend tunnel configured, forward raw.
         if (proxy->config.backend_url) {
-            coro_client_t *upstream = coro_client_create(ctx);
-            if (!upstream || coro_client_connect(upstream, proxy->config.backend_url) != 0) {
-                if (upstream) coro_client_destroy(upstream);
+            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+            if (!upstream || coro_socket_connect(upstream, proxy->config.backend_url) != 0) {
+                if (upstream) coro_socket_destroy(upstream);
                 free(data);
                 return;
             }
             // Send the initial sniffed chunk upstream before pumping!
-            coro_client_send(upstream, data, len);
+            coro_socket_send(upstream, data, len);
             free(data);
             
             start_bidi_pump(proxy, client, upstream);
@@ -589,7 +589,7 @@ typedef struct {
 static void health_check_worker_coro(coro_t *co, void *arg) {
     (void)co;
     health_check_task_t *task = (health_check_task_t *)arg;
-    coro_client_t *client = coro_client_create(task->proxy->ctx);
+    coro_socket_t *client = coro_socket_create(task->proxy->ctx, CORO_SOCKET_TCP_V4);
     if (!client) {
         free(task->url); free(task);
         return;
@@ -597,8 +597,8 @@ static void health_check_worker_coro(coro_t *co, void *arg) {
 
     TLOG_DEBUG("[TProxy] Health checking: %s", task->url);
     uint64_t start = uv_hrtime();
-    coro_client_set_timeout(client, 5000); 
-    int r = coro_client_connect(client, task->url);
+    coro_socket_set_timeout(client, 5000); 
+    int r = coro_socket_connect(client, task->url);
     uint64_t end = uv_hrtime();
 
     bool alive = (r == 0);
@@ -608,7 +608,7 @@ static void health_check_worker_coro(coro_t *co, void *arg) {
         coro_rule_update_health(task->proxy->rule_engine, task->url, alive, latency);
     }
 
-    coro_client_destroy(client);
+    coro_socket_destroy(client);
     free(task->url);
     free(task);
 }
@@ -691,7 +691,7 @@ coro_tproxy_t* coro_tproxy_start(
         }
     }
     size_t capacity = 16;
-    proxy->servers = (coro_server_t **)calloc(capacity, sizeof(coro_server_t *));
+    proxy->servers = (coro_socket_t **)calloc(capacity, sizeof(coro_socket_t *));
     proxy->server_count = 0;
 
     char *urls_copy = strdup(config->listen_urls);
@@ -725,12 +725,12 @@ coro_tproxy_t* coro_tproxy_start(
                     for (int port = start_port; port <= end_port; port++) {
                         if (proxy->server_count >= capacity) {
                             capacity *= 2;
-                            proxy->servers = (coro_server_t **)realloc(proxy->servers, capacity * sizeof(coro_server_t *));
+                            proxy->servers = (coro_socket_t **)realloc(proxy->servers, capacity * sizeof(coro_socket_t *));
                         }
-                        proxy->servers[proxy->server_count] = coro_server_create(ctx);
+                        proxy->servers[proxy->server_count] = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
                         char build_url[256];
                         snprintf(build_url, sizeof(build_url), "%s:%d", token, port);
-                        if (coro_server_listen(proxy->servers[proxy->server_count], build_url, on_proxy_connection, proxy) != 0) {
+                        if (coro_socket_listen_url(proxy->servers[proxy->server_count], build_url, on_proxy_connection, proxy) != 0) {
                             // Stop parsing on failure, allow later cleanup to destroy the ones we successfully created
                         }
                         proxy->server_count++;
@@ -740,10 +740,10 @@ coro_tproxy_t* coro_tproxy_start(
                 // Standard single URL
                 if (proxy->server_count >= capacity) {
                     capacity *= 2;
-                    proxy->servers = (coro_server_t **)realloc(proxy->servers, capacity * sizeof(coro_server_t *));
+                    proxy->servers = (coro_socket_t **)realloc(proxy->servers, capacity * sizeof(coro_socket_t *));
                 }
-                proxy->servers[proxy->server_count] = coro_server_create(ctx);
-                if (coro_server_listen(proxy->servers[proxy->server_count], token, on_proxy_connection, proxy) != 0) {
+                proxy->servers[proxy->server_count] = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+                if (coro_socket_listen_url(proxy->servers[proxy->server_count], token, on_proxy_connection, proxy) != 0) {
                     // Ignore individual bind failures, continue
                 }
                 proxy->server_count++;
@@ -773,7 +773,7 @@ void coro_tproxy_destroy(coro_tproxy_t *proxy) {
     if (!proxy) return;
     if (proxy->servers) {
         for (size_t i = 0; i < proxy->server_count; i++) {
-            if (proxy->servers[i]) coro_server_destroy(proxy->servers[i]);
+            if (proxy->servers[i]) coro_socket_destroy(proxy->servers[i]);
         }
         free(proxy->servers);
     }

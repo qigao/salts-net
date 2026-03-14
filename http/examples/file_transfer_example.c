@@ -17,7 +17,7 @@ spec("File Transfer Test") {
     fprintf(fp, "This is a test file for upload demonstration.");
     fclose(fp);
 
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create("https://httpbin.org");
     http_client_set_timeout(c, 10000);
 
     http_response_t *r = http_upload_file(c, "https://httpbin.org/post", "test_upload_file.txt");

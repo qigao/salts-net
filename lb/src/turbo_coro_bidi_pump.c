@@ -9,17 +9,17 @@
 
 #include "turbo_coro_bidi_pump.h"
 #include <turbo_coro.h>
-#include <netcore/turbo_coro_context.h>
-#include <netcore/turbo_coro_client.h>
-#include <netcore/turbo_coro_internal.h>
+#include <CoroNet/turbo_coro_context.h>
+#include "CoroNet/turbo_coro_socket.h"
+#include <CoroNet/turbo_coro_internal.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <uv.h>
 
 typedef struct {
-    coro_client_t *src;
-    coro_client_t *dst;
+    coro_socket_t *src;
+    coro_socket_t *dst;
     size_t rate_limit_bps;
     size_t bytes_transferred;
     uint64_t start_time;
@@ -34,13 +34,13 @@ static void pump_reverse_coro(coro_t *co, void *arg) {
     size_t len = 0;
 
     while (ctx->alive) {
-        int r = coro_client_recv(ctx->src, &data, &len);
+        int r = coro_socket_recv(ctx->src, &data, &len);
 
         if (r < 0 || r == TURBO_EOF) {
             break;
         }
 
-        r = coro_client_send(ctx->dst, data, len);
+        r = coro_socket_send(ctx->dst, data, len);
         if (r < 0) {
             free(data);
             break;
@@ -52,7 +52,7 @@ static void pump_reverse_coro(coro_t *co, void *arg) {
             uint64_t expected_ns = (ctx->bytes_transferred * 1000000000ULL) /
                                    ctx->rate_limit_bps;
             if (expected_ns > elapsed_ns) {
-                coro_sleep(coro_client_get_context(ctx->src),
+                coro_sleep(coro_socket_get_context(ctx->src),
                                  (expected_ns - elapsed_ns) / 1000000);
             }
         }
@@ -70,7 +70,7 @@ static void pump_reverse_coro(coro_t *co, void *arg) {
     ctx->done = 1;
 }
 
-void coro_bidi_pump(coro_client_t *a, coro_client_t *b,
+void coro_bidi_pump(coro_socket_t *a, coro_socket_t *b,
                            const turbo_bidi_pump_config_t *config) {
     size_t rate = config ? config->rate_limit_bps : 0;
 
@@ -91,13 +91,13 @@ void coro_bidi_pump(coro_client_t *a, coro_client_t *b,
     size_t len = 0;
 
     while (rev->alive) {
-        int r = coro_client_recv(a, &data, &len);
+        int r = coro_socket_recv(a, &data, &len);
 
         if (r < 0 || r == TURBO_EOF) {
             break;
         }
 
-        r = coro_client_send(b, data, len);
+        r = coro_socket_send(b, data, len);
         if (r < 0) {
             free(data);
             break;
@@ -109,7 +109,7 @@ void coro_bidi_pump(coro_client_t *a, coro_client_t *b,
             uint64_t expected_ns =
                 (rev->bytes_transferred * 1000000000ULL) / rate;
             if (expected_ns > elapsed_ns) {
-                coro_sleep(coro_client_get_context(a),
+                coro_sleep(coro_socket_get_context(a),
                                  (expected_ns - elapsed_ns) / 1000000);
             }
         }
@@ -124,7 +124,7 @@ void coro_bidi_pump(coro_client_t *a, coro_client_t *b,
 
     /* Wait for reverse coroutine to truly exit before returning. */
     while (!rev->done) {
-        coro_sleep(coro_client_get_context(a), 10);
+        coro_sleep(coro_socket_get_context(a), 10);
     }
 
     coro_destroy(co);

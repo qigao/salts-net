@@ -1207,8 +1207,8 @@ suite("exprtk_grammar") {
 
     group("Error Reporting") {
         it("should report line and column for syntax errors") {
-            turbo_pool_t arena;
-            turbo_pool_init(&arena, 1024);
+            mem_pool_t arena;
+            mem_init(&arena, 1024);
             int err = 0;
             char err_msg[256] = {0};
             
@@ -1224,12 +1224,12 @@ suite("exprtk_grammar") {
             }
             check_int_eq(strncmp(err_msg, "Syntax error at line 1, col 6 near '*'", 38), 0);
             
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
 
         it("should report line and column for multiline syntax errors") {
-            turbo_pool_t arena;
-            turbo_pool_init(&arena, 1024);
+            mem_pool_t arena;
+            mem_init(&arena, 1024);
             int err = 0;
             char err_msg[256] = {0};
             
@@ -1247,7 +1247,7 @@ suite("exprtk_grammar") {
             }
             check_int_eq(strncmp(err_msg, "Syntax error at line 3, col 7 near 'b'", 38), 0);
             
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 

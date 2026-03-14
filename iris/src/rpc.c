@@ -135,7 +135,7 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
   /* Extract jsonrpc version */
   json_value_t *jsonrpc = json_object_get(root, "jsonrpc");
   if (jsonrpc && json_type(jsonrpc) == JSON_STRING) {
-    rpc_req->jsonrpc = turbo_pool_strdup(req->arena, json_string(jsonrpc));
+    rpc_req->jsonrpc = mem_strdup(req->arena, json_string(jsonrpc));
   }
 
   /* Extract method (required) */
@@ -144,7 +144,7 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
     json_free(root);
     return RPC_ERROR_INVALID_REQUEST;
   }
-  rpc_req->method = turbo_pool_strdup(req->arena, json_string(method));
+  rpc_req->method = mem_strdup(req->arena, json_string(method));
 
   /* Extract params (optional) */
   json_value_t *params = json_object_get(root, "params");
@@ -152,7 +152,7 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
     size_t params_len = 0;
     char *params_str = json_serialize(params, &params_len);
     if (params_str) {
-      rpc_req->params = turbo_pool_strdup(req->arena, params_str);
+      rpc_req->params = mem_strdup(req->arena, params_str);
       json_serialize_free(params_str);
     }
   }
@@ -161,21 +161,21 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
   json_value_t *id = json_object_get(root, "id");
   if (id) {
     if (json_type(id) == JSON_STRING) {
-      /* Phase IRIS-1: Replace arena_sprintf with turbo_pool_alloc + stbsp_snprintf */
+      /* Phase IRIS-1: Replace arena_sprintf with mem_alloc + stbsp_snprintf */
       size_t len = strlen(json_string(id)) + 3; /* quotes + null */
-      rpc_req->id = turbo_pool_alloc(req->arena, len);
+      rpc_req->id = mem_alloc(req->arena, len);
       if (rpc_req->id) {
         stbsp_snprintf((char *)rpc_req->id, len, "\"%s\"", json_string(id));
       }
     } else if (json_type(id) == JSON_NUMBER) {
-      /* Phase IRIS-1: Replace arena_sprintf with turbo_pool_alloc + stbsp_snprintf */
+      /* Phase IRIS-1: Replace arena_sprintf with mem_alloc + stbsp_snprintf */
       size_t len = 32; /* enough for int */
-      rpc_req->id = turbo_pool_alloc(req->arena, len);
+      rpc_req->id = mem_alloc(req->arena, len);
       if (rpc_req->id) {
         stbsp_snprintf((char *)rpc_req->id, len, "%d", (int)json_number(id));
       }
     } else if (json_is_null(id)) {
-      rpc_req->id = turbo_pool_strdup(req->arena, "null");
+      rpc_req->id = mem_strdup(req->arena, "null");
     }
   }
 
@@ -187,8 +187,8 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
   if (!rpc_res || !output || !output_len)
     return -1;
 
-  /* Phase IRIS-1: Updated to use turbo_pool_t */
-  turbo_pool_t *arena = rpc_res->arena;
+  /* Phase IRIS-1: Updated to use mem_pool_t */
+  mem_pool_t *arena = rpc_res->arena;
   if (!arena)
     return -1;
 
@@ -272,7 +272,7 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
   if (!json_str)
     return -1;
 
-  *output = turbo_pool_strdup(arena, json_str);
+  *output = mem_strdup(arena, json_str);
   *output_len = json_len;
   json_serialize_free(json_str);
 
@@ -381,7 +381,7 @@ void rpc_set_result(rpc_response_t *rpc_res, const char *result) {
   if (!rpc_res || !rpc_res->arena)
     return;
 
-  rpc_res->result = turbo_pool_strdup(rpc_res->arena, result);
+  rpc_res->result = mem_strdup(rpc_res->arena, result);
   rpc_res->error_code = 0;
   rpc_res->error_message = NULL;
 }
@@ -391,7 +391,7 @@ void rpc_set_error(rpc_response_t *rpc_res, int error_code, const char *error_me
     return;
 
   rpc_res->error_code = error_code;
-  rpc_res->error_message = turbo_pool_strdup(rpc_res->arena, error_message);
+  rpc_res->error_message = mem_strdup(rpc_res->arena, error_message);
   rpc_res->result = NULL;
 }
 
@@ -419,7 +419,7 @@ const char *rpc_get_param_string(rpc_request_t *rpc_req, const char *key) {
   const char *result = NULL;
 
   if (item && json_type(item) == JSON_STRING) {
-    result = turbo_pool_strdup(rpc_req->arena, json_string(item));
+    result = mem_strdup(rpc_req->arena, json_string(item));
   }
 
   json_free(params);

@@ -44,7 +44,7 @@ void turbo_script_free(turbo_script_ctx_t *ctx) {
     free(ctx->loaded_names[i]);
   }
 
-  turbo_pool_free(&ctx->scratch_arena);
+  mem_destroy(&ctx->scratch_arena);
   free(ctx);
 }
 
@@ -66,8 +66,8 @@ static void set_error_msg(turbo_script_ctx_t *ctx, const char *msg) {
   } while (0)
 
 /* Allocate a null-terminated C string copy in the arena (no free needed) */
-static inline char *arena_cstr(turbo_pool_t *a, tstr_v sv) {
-  char *buf = turbo_pool_alloc(a, sv.len + 1);
+static inline char *arena_cstr(mem_pool_t *a, tstr_v sv) {
+  char *buf = mem_alloc(a, sv.len + 1);
   if (buf) {
     memcpy(buf, sv.data, sv.len);
     buf[sv.len] = '\0';
@@ -87,16 +87,16 @@ static int ts_plugin_already_loaded(turbo_script_ctx_t *ctx, const char *name) {
 }
 
 /* Build platform-specific DLL filename from plugin name */
-static const char *ts_plugin_dll_name(turbo_pool_t *a, const char *name) {
+static const char *ts_plugin_dll_name(mem_pool_t *a, const char *name) {
 #ifdef _WIN32
   size_t len = strlen(name);
-  char *buf = turbo_pool_alloc(a, len + 12); /* name + "_plugin.dll\0" */
+  char *buf = mem_alloc(a, len + 12); /* name + "_plugin.dll\0" */
   if (buf)
     sprintf(buf, "%s_plugin.dll", name);
   return buf;
 #else
   size_t len = strlen(name);
-  char *buf = turbo_pool_alloc(a, len + 15); /* "lib" + name + "_plugin.so\0" */
+  char *buf = mem_alloc(a, len + 15); /* "lib" + name + "_plugin.so\0" */
   if (buf)
     sprintf(buf, "lib%s_plugin.so", name);
   return buf;
@@ -286,7 +286,7 @@ turbo_script_ctx_t *turbo_script_init() {
     return NULL;
 
   exprtk_env_init(&ctx->env);
-  turbo_pool_init(&ctx->scratch_arena, 4096);
+  mem_init(&ctx->scratch_arena, 4096);
 
   // Core built-ins
   exprtk_env_register_func(&ctx->env, "import", ts_import, ctx);
@@ -304,7 +304,7 @@ turbo_script_ctx_t *turbo_script_init_bare(void) {
   if (!ctx)
     return NULL;
   exprtk_env_init(&ctx->env);
-  turbo_pool_init(&ctx->scratch_arena, 4096);
+  mem_init(&ctx->scratch_arena, 4096);
   exprtk_env_register_func(&ctx->env, "import", ts_import, ctx);
   turbo_script_register_modules();
   turbo_script_register_mir(ctx);
@@ -322,7 +322,7 @@ int turbo_script_run(turbo_script_ctx_t *ctx, const char *script) {
     return -1;
 
   /* Reset scratch arena from previous run */
-  turbo_pool_reset(&ctx->scratch_arena);
+  mem_reset(&ctx->scratch_arena);
   ctx->env.aborted = 0;
   ctx->env.curr_nodes = 0;
   ctx->env.curr_loop_iterations = 0;
@@ -390,7 +390,7 @@ int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script) {
     return -1;
 
   /* Reset scratch arena from previous run */
-  turbo_pool_reset(&ctx->scratch_arena);
+  mem_reset(&ctx->scratch_arena);
   ctx->env.aborted = 0;
   ctx->env.curr_nodes = 0;
   ctx->env.curr_loop_iterations = 0;
@@ -453,7 +453,7 @@ int turbo_script_exec(turbo_script_ctx_t *ctx, turbo_script_compiled_t *compiled
   if (!ctx || !compiled || !compiled->ast)
     return -1;
 
-  turbo_pool_reset(&ctx->scratch_arena);
+  mem_reset(&ctx->scratch_arena);
   ctx->env.aborted = 0;
 
   exprtk_value_t res = exprtk_eval(compiled->ast, &ctx->env);
@@ -526,7 +526,7 @@ const char *turbo_script_get_error(turbo_script_ctx_t *ctx) { return ctx ? ctx->
 int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len) {
   if (!ctx || !name || !data || len == 0)
     return -1;
-  double *buf = (double *)turbo_pool_alloc(&ctx->env.arena, len * sizeof(double));
+  double *buf = (double *)mem_alloc(&ctx->env.arena, len * sizeof(double));
   if (!buf)
     return -1;
   memcpy(buf, data, len * sizeof(double));

@@ -127,7 +127,7 @@ CXX_C_API int x509_privkey_to_pem(
 
 /**
  * All-in-one: Generate Ed25519 certificate for TLS (PEM format)
- * Suitable for netcore TLS server/client
+ * Suitable for CoroNet TLS server/client
  * @param common_name Subject CN
  * @param valid_days Validity period
  * @param cert_pem Output: PEM certificate (caller must free())

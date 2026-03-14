@@ -40,7 +40,7 @@ static void exprtk_node_copy_pos(exprtk_node_t *dst, const exprtk_node_t *src) {
 }
 
 static char *exprtk_strdup(exprtk_parse_ctx_t *ctx, const char *s, size_t n) {
-    char *d = (char*)turbo_pool_alloc(ctx->arena, n + 1);
+    char *d = (char*)mem_alloc(ctx->arena, n + 1);
     if (d) {
         memcpy(d, s, n);
         d[n] = '\0';
@@ -49,7 +49,7 @@ static char *exprtk_strdup(exprtk_parse_ctx_t *ctx, const char *s, size_t n) {
 }
 
 static tstr_v exprtk_unescape_to_arena(exprtk_parse_ctx_t *ctx, const char *s, size_t n) {
-    char *d = (char*)turbo_pool_alloc(ctx->arena, n + 1);
+    char *d = (char*)mem_alloc(ctx->arena, n + 1);
     size_t len = 0;
     if (!d) return tstr_v_from_buf(NULL, 0);
     for (size_t i = 0; i < n; ++i) {
@@ -148,7 +148,7 @@ stmts(A) ::= stmt(S). {
             A->data.block.statements = NULL;
         } else {
             A->data.block.count = 1;
-            A->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.block.statements[0] = S;
         }
         exprtk_node_copy_pos(A, S);
@@ -161,7 +161,7 @@ stmts(A) ::= stmts(L) stmt(R). {
         // Skip empty statement
     } else {
         A->data.block.count++;
-        exprtk_node_t **new_stmts = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.block.count * sizeof(exprtk_node_t*));
+        exprtk_node_t **new_stmts = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.block.count * sizeof(exprtk_node_t*));
         memcpy(new_stmts, L->data.block.statements, (A->data.block.count-1) * sizeof(exprtk_node_t*));
         new_stmts[A->data.block.count-1] = R;
         A->data.block.statements = new_stmts;
@@ -268,7 +268,7 @@ switch_cases(A) ::= . {
 switch_cases(A) ::= switch_cases(L) CASE expr(V) COLON block_content(B). {
     A = L;
     A->data.switch_stmt.case_count++;
-    exprtk_node_t **new_cases = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.switch_stmt.case_count * 2 * sizeof(exprtk_node_t*));
+    exprtk_node_t **new_cases = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.switch_stmt.case_count * 2 * sizeof(exprtk_node_t*));
     if (A->data.switch_stmt.case_count > 1) {
         memcpy(new_cases, A->data.switch_stmt.cases, (A->data.switch_stmt.case_count - 1) * 2 * sizeof(exprtk_node_t*));
     }
@@ -349,7 +349,7 @@ func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr(Arg) RPAREN LBRACE block_con
         if (A) {
             A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
             A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.func_def.arg_params[0] = Arg;
             A->data.func_def.body = Body;
             exprtk_node_set_pos(A, &OP);
@@ -377,7 +377,7 @@ func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr_list_2plus(Args) RPAREN LBRA
         if (A) {
             A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
             A->data.func_def.arg_count = Args->data.function.arg_count;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
             for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                 A->data.func_def.arg_params[i] = Args->data.function.args[i];
             }
@@ -420,7 +420,7 @@ expr(A) ::= FUNC(OP) LPAREN expr(Arg) RPAREN LBRACE block_content(Body) RBRACE. 
         if (A) {
             A->data.func_def.name = NULL;
             A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.func_def.arg_params[0] = Arg;
             A->data.func_def.body = Body;
             exprtk_node_set_pos(A, &OP);
@@ -445,7 +445,7 @@ expr(A) ::= FUNC(OP) LPAREN expr_list_2plus(Args) RPAREN LBRACE block_content(Bo
         if (A) {
             A->data.func_def.name = NULL;
             A->data.func_def.arg_count = Args->data.function.arg_count;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
             for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                 A->data.func_def.arg_params[i] = Args->data.function.args[i];
             }
@@ -466,7 +466,7 @@ expr(A) ::= expr(E) ARROW(OP) expr(B). {
         if (A) {
             A->data.func_def.name = NULL;
             A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.func_def.arg_params[0] = E;
             
             exprtk_node_t *body = B;
@@ -476,7 +476,7 @@ expr(A) ::= expr(E) ARROW(OP) expr(B). {
                 ret->data.flow.value = B;
                 exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
                 blk->data.block.count = 1;
-                blk->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+                blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
                 blk->data.block.statements[0] = ret;
                 body = blk;
             }
@@ -509,7 +509,7 @@ expr(A) ::= LPAREN expr_list_2plus(Args) RPAREN ARROW(OP) expr(B). [ARROW] {
             if (A) {
                 A->data.func_def.name = NULL;
                 A->data.func_def.arg_count = Args->data.function.arg_count;
-                A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+                A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                     A->data.func_def.arg_params[i] = Args->data.function.args[i];
                 }
@@ -521,7 +521,7 @@ expr(A) ::= LPAREN expr_list_2plus(Args) RPAREN ARROW(OP) expr(B). [ARROW] {
                     ret->data.flow.value = B;
                     exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
                     blk->data.block.count = 1;
-                    blk->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+                    blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
                     blk->data.block.statements[0] = ret;
                     body = blk;
                 }
@@ -547,7 +547,7 @@ expr(A) ::= LPAREN RPAREN ARROW expr(B). {
             ret->data.flow.value = B;
             exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
             blk->data.block.count = 1;
-            blk->data.block.statements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
             blk->data.block.statements[0] = ret;
             body = blk;
         }
@@ -612,7 +612,7 @@ expr(A) ::= expr(B) EQUAL(OP) expr(C). {
             if (A) {
                 A->data.func_def.name = exprtk_strdup(ctx, B->data.function.name, strlen(B->data.function.name));
                 A->data.func_def.arg_count = B->data.function.arg_count;
-                A->data.func_def.arg_params = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
+                A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
                 for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
                     A->data.func_def.arg_params[i] = B->data.function.args[i];
                 }
@@ -911,7 +911,7 @@ expr(A) ::= expr(F) LPAREN expr(E) RPAREN. {
         if (A) {
             A->data.function.name = exprtk_strdup(ctx, F->data.variable.name, strlen(F->data.variable.name));
             A->data.function.arg_count = 1;
-            A->data.function.args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+            A->data.function.args = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
             A->data.function.args[0] = E;
             exprtk_node_copy_pos(A, F);
         }
@@ -957,7 +957,7 @@ expr(A) ::= expr(B) DOT(OP) VARIABLE(V) LPAREN expr(E) RPAREN. {
         A->data.member_call.object = B;
         A->data.member_call.method = exprtk_strdup(ctx, V.start, V.length);
         A->data.member_call.arg_count = 1;
-        A->data.member_call.args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.member_call.args = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.member_call.args[0] = E;
         exprtk_node_set_pos(A, &OP);
     }
@@ -1038,7 +1038,7 @@ expr(A) ::= expr(B) PIPE(OP) expr(C). {
     } else {
         // Prepend B as first argument to C's function call
         size_t new_count = C->data.function.arg_count + 1;
-        exprtk_node_t **new_args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, new_count * sizeof(exprtk_node_t*));
+        exprtk_node_t **new_args = (exprtk_node_t**)mem_alloc(ctx->arena, new_count * sizeof(exprtk_node_t*));
         new_args[0] = B;
         for (size_t i = 0; i < C->data.function.arg_count; ++i) {
             new_args[i + 1] = C->data.function.args[i];
@@ -1069,9 +1069,9 @@ map_entries(A) ::= VARIABLE(K). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.count = 1;
-        A->data.map_literal.keys = (char**)turbo_pool_alloc(ctx->arena, sizeof(char*));
+        A->data.map_literal.keys = (char**)mem_alloc(ctx->arena, sizeof(char*));
         A->data.map_literal.keys[0] = exprtk_strdup(ctx, K.start, K.length);
-        A->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.map_literal.values = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
         
         exprtk_node_t *v = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
         v->data.variable.name = exprtk_strdup(ctx, K.start, K.length);
@@ -1085,9 +1085,9 @@ map_entries(A) ::= VARIABLE(K) COLON expr(V). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.count = 1;
-        A->data.map_literal.keys = (char**)turbo_pool_alloc(ctx->arena, sizeof(char*));
+        A->data.map_literal.keys = (char**)mem_alloc(ctx->arena, sizeof(char*));
         A->data.map_literal.keys[0] = exprtk_strdup(ctx, K.start, K.length);
-        A->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.map_literal.values = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.map_literal.values[0] = V;
         exprtk_node_set_pos(A, &K);
     }
@@ -1097,9 +1097,9 @@ map_entries(A) ::= SPREAD(OP) expr(E). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_MAP_LITERAL);
     if (A) {
         A->data.map_literal.count = 1;
-        A->data.map_literal.keys = (char**)turbo_pool_alloc(ctx->arena, sizeof(char*));
+        A->data.map_literal.keys = (char**)mem_alloc(ctx->arena, sizeof(char*));
         A->data.map_literal.keys[0] = NULL; // Spread marker
-        A->data.map_literal.values = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.map_literal.values = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.map_literal.values[0] = E;
         exprtk_node_set_pos(A, &OP);
     }
@@ -1109,8 +1109,8 @@ map_entries(A) ::= map_entries(L) COMMA VARIABLE(K). {
     A = L;
     A->data.map_literal.count++;
     size_t c = A->data.map_literal.count;
-    char **new_keys = (char**)turbo_pool_alloc(ctx->arena, c * sizeof(char*));
-    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
+    char **new_keys = (char**)mem_alloc(ctx->arena, c * sizeof(char*));
+    exprtk_node_t **new_vals = (exprtk_node_t**)mem_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
     if (L->data.map_literal.keys) memcpy(new_keys, L->data.map_literal.keys, (c-1) * sizeof(char*));
     if (L->data.map_literal.values) memcpy(new_vals, L->data.map_literal.values, (c-1) * sizeof(exprtk_node_t*));
     
@@ -1127,8 +1127,8 @@ map_entries(A) ::= map_entries(L) COMMA VARIABLE(K) COLON expr(V). {
     A = L;
     A->data.map_literal.count++;
     size_t c = A->data.map_literal.count;
-    char **new_keys = (char**)turbo_pool_alloc(ctx->arena, c * sizeof(char*));
-    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
+    char **new_keys = (char**)mem_alloc(ctx->arena, c * sizeof(char*));
+    exprtk_node_t **new_vals = (exprtk_node_t**)mem_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
     if (L->data.map_literal.keys) memcpy(new_keys, L->data.map_literal.keys, (c-1) * sizeof(char*));
     if (L->data.map_literal.values) memcpy(new_vals, L->data.map_literal.values, (c-1) * sizeof(exprtk_node_t*));
     new_keys[c-1] = exprtk_strdup(ctx, K.start, K.length);
@@ -1141,8 +1141,8 @@ map_entries(A) ::= map_entries(L) COMMA SPREAD(OP) expr(E). {
     A = L;
     A->data.map_literal.count++;
     size_t c = A->data.map_literal.count;
-    char **new_keys = (char**)turbo_pool_alloc(ctx->arena, c * sizeof(char*));
-    exprtk_node_t **new_vals = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
+    char **new_keys = (char**)mem_alloc(ctx->arena, c * sizeof(char*));
+    exprtk_node_t **new_vals = (exprtk_node_t**)mem_alloc(ctx->arena, c * sizeof(exprtk_node_t*));
     if (L->data.map_literal.keys) memcpy(new_keys, L->data.map_literal.keys, (c-1) * sizeof(char*));
     if (L->data.map_literal.values) memcpy(new_vals, L->data.map_literal.values, (c-1) * sizeof(exprtk_node_t*));
     new_keys[c-1] = NULL; // Spread marker
@@ -1156,7 +1156,7 @@ expr_list_2plus(A) ::= expr(E1) COMMA(OP) expr(E2). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
     if (A) {
         A->data.function.arg_count = 2;
-        A->data.function.args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, 2 * sizeof(exprtk_node_t*));
+        A->data.function.args = (exprtk_node_t**)mem_alloc(ctx->arena, 2 * sizeof(exprtk_node_t*));
         A->data.function.args[0] = E1;
         A->data.function.args[1] = E2;
         exprtk_node_set_pos(A, &OP);
@@ -1167,7 +1167,7 @@ expr_list_2plus(A) ::= expr_list_2plus(L) COMMA expr(E). {
     A = L;
     if (A) {
         A->data.function.arg_count++;
-        exprtk_node_t **new_args = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.function.arg_count * sizeof(exprtk_node_t*));
+        exprtk_node_t **new_args = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.function.arg_count * sizeof(exprtk_node_t*));
         if (new_args && A->data.function.args) {
             memcpy(new_args, A->data.function.args, (A->data.function.arg_count-1) * sizeof(exprtk_node_t*));
             new_args[A->data.function.arg_count-1] = E;
@@ -1217,7 +1217,7 @@ vector_elements(A) ::= expr(E). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_VECTOR);
     if (A) {
         A->data.vector.count = 1;
-        A->data.vector.elements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, sizeof(exprtk_node_t*));
+        A->data.vector.elements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
         A->data.vector.elements[0] = E;
         exprtk_node_copy_pos(A, E);
     }
@@ -1226,7 +1226,7 @@ vector_elements(A) ::= expr(E). {
 vector_elements(A) ::= vector_elements(L) COMMA expr(R). {
     A = L;
     A->data.vector.count++;
-    exprtk_node_t **new_elements = (exprtk_node_t**)turbo_pool_alloc(ctx->arena, A->data.vector.count * sizeof(exprtk_node_t*));
+    exprtk_node_t **new_elements = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.vector.count * sizeof(exprtk_node_t*));
     memcpy(new_elements, A->data.vector.elements, (A->data.vector.count - 1) * sizeof(exprtk_node_t*));
     new_elements[A->data.vector.count - 1] = R;
     A->data.vector.elements = new_elements;

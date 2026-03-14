@@ -11,7 +11,7 @@
 #include "turl_websocket.h"
 #include <dotenv.h>
 #include <json_parser.h>
-#include <netcore.h>
+#include <CoroNet.h>
 #include <turbo_coro.h>
 #include <stdio.h>
 #include <stdlib.h>

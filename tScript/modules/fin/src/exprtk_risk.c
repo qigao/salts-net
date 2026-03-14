@@ -124,7 +124,7 @@ double exprtk_optimal_f(const double *trades, size_t n, double *out) {
  */
 size_t exprtk_mc_simulate(double s0, double mu, double sigma, double dt,
                            size_t steps, size_t paths, double *out,
-                           turbo_pool_t *arena) {
+                           mem_pool_t *arena) {
     if (!out || steps == 0 || paths == 0) return 0;
     (void)arena;
 

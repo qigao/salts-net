@@ -2,7 +2,7 @@
 #define ROUTER_ADAPTER_H
 
 #include "router.h"
-#include "netcore.h"
+#include "CoroNet.h"
 #include "platform.h"
 
 #ifdef __cplusplus
@@ -11,7 +11,7 @@ extern "C" {
 
 // Process an incoming request from the async server
 // Returns 1 if connection should be closed, 0 otherwise
-CXX_C_API int router_process_request(coro_client_t *client, const char *data, size_t len);
+CXX_C_API int router_process_request(coro_socket_t *client, const char *data, size_t len);
 
 /**
  * @brief Send HTTP response through coro_client
@@ -19,7 +19,7 @@ CXX_C_API int router_process_request(coro_client_t *client, const char *data, si
  * @param client The coroutine client instance
  * @param res The response structure
  */
-CXX_C_API void router_send_response(coro_client_t *client, Res *res);
+CXX_C_API void router_send_response(coro_socket_t *client, Res *res);
 
 #ifdef __cplusplus
 }

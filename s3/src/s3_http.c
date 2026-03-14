@@ -69,7 +69,7 @@ s3_http_response_t s3_http_execute(coro_context_t *ctx, s3_http_request_t* req) 
     s3_http_response_t res = {0};
     res.headers = S3Headers_init();
 
-    http_client_t *client = http_client_create();    if (!client) {
+    http_client_t *client = http_client_create(NULL);    if (!client) {
         res.error = s3_error_make(-1, "Failed to create HTTP coro client");
         return res;
     }

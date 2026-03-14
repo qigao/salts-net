@@ -4,7 +4,7 @@
  */
 
 #include "snmp_client.h"
-#include "turbo_client.h"
+#include "CoroNet.h"
 #include "turbo_buffer.h"
 #include "memory_pool.h"
 #include <stdlib.h>
@@ -37,8 +37,8 @@ struct snmp_client_s {
     int32_t next_request_id;
     char error_msg[256];
 
-    /* High-level synchronous client */
-    turbo_client_t *client;
+    /* High-level synchronous client (now using coro_socket) */
+    coro_socket_t *sock;
     MemoryPool *response_pool;
 };
 
@@ -125,9 +125,19 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
         }
     }
 
-    /* Initialize synchronous client */
-    client->client = turbo_client_create();
-    if (!client->client) {
+    /* Get current coroutine context */
+    coro_context_t *ctx = coro_context_current();
+    if (!ctx) {
+        TLOG_ERROR("SNMP client must be created within a coroutine context");
+        free(client->host);
+        free(client->community);
+        free(client);
+        return NULL;
+    }
+
+    /* Initialize socket */
+    client->sock = coro_socket_create(ctx, CORO_SOCKET_UDP_V4);
+    if (!client->sock) {
         free(client->host);
         free(client->community);
         free(client);
@@ -138,9 +148,9 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
     char url[256];
     stbsp_snprintf(url, sizeof(url), "udp://%s:%u", client->host, client->port);
     
-    if (turbo_client_connect(client->client, url) != SYNC_CLIENT_STATUS_OK) {
-        TLOG_ERROR("SNMP failed to connect to {:s}: {:s}", url, turbo_client_last_message(client->client));
-        turbo_client_destroy(client->client);
+    if (coro_socket_connect(client->sock, url) != 0) {
+        TLOG_ERROR("SNMP failed to connect to {:s}", url);
+        coro_socket_destroy(client->sock);
         free(client->host);
         free(client->community);
         free(client);
@@ -157,7 +167,7 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
 void snmp_client_destroy(snmp_client_t *client) {
     if (!client) return;
 
-    turbo_client_destroy(client->client);
+    coro_socket_destroy(client->sock);
     free(client->host);
     free(client->community);
     free(client);
@@ -172,32 +182,35 @@ static int send_request_and_wait(
 ) {
     uint32_t attempt = 0;
 
+    /* Set socket timeout */
+    coro_socket_set_timeout(client->sock, client->timeout_ms);
+
     while (attempt <= client->retries) {
         /* Send request */
-        if (turbo_client_send(client->client, (const char *)request, request_len) != SYNC_CLIENT_STATUS_OK) {
-            TLOG_DEBUG("SNMP send error: {:s}", turbo_client_last_message(client->client));
+        if (coro_socket_send(client->sock, request, request_len) != 0) {
+            TLOG_DEBUG("SNMP send error on attempt {:d}", attempt + 1);
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 
-        /* Receive response with timeout */
+        /* Receive response */
         char *data = NULL;
         size_t len = 0;
-        turbo_client_status_t st = turbo_client_receive_timeout(client->client, &data, &len, client->timeout_ms);
+        int res = coro_socket_recv(client->sock, &data, &len);
 
-        if (st == SYNC_CLIENT_STATUS_OK) {
+        if (res == 0) {
             /* Create memory pool for response */
             client->response_pool = pool_create(client->recv_buffer_size);
             if (!client->response_pool) {
-                free(data);
+                coro_socket_free_recv(data);
                 return SNMP_CLIENT_ERROR_MEMORY;
             }
 
             /* Parse SNMP response */
             int result = snmp_parse((const uint8_t *)data, len, response, client->response_pool);
-            free(data);
+            coro_socket_free_recv(data);
 
             if (result > 0) {
-                TLOG_DEBUG("SNMP response received ({:d} bytes)", len);
+                TLOG_DEBUG("SNMP response received ({:d} bytes)", (int)len);
                 return SNMP_CLIENT_OK;
             } else {
                 TLOG_DEBUG("SNMP parse error in response from {:s}", client->host);
@@ -205,14 +218,15 @@ static int send_request_and_wait(
                 client->response_pool = NULL;
                 /* Might be a malformed packet, try next attempt */
             }
-        } else if (st != SYNC_CLIENT_STATUS_IO_ERROR && st != SYNC_CLIENT_STATUS_NOT_READY) {
-            /* For actual non-timeout errors, fail immediately */
-            TLOG_DEBUG("SNMP network error: {:s}", turbo_client_last_message(client->client));
+        } else if (res == UV_ETIMEDOUT) {
+            TLOG_DEBUG("SNMP attempt {:d} timed out for {:s}", attempt + 1, client->host);
+        } else {
+            /* For actual network errors, fail immediately */
+            TLOG_DEBUG("SNMP network error: {:d}", res);
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 
         /* Timeout or parsing error - retry */
-        TLOG_DEBUG("SNMP attempt {:d} failed for {:s}", attempt + 1, client->host);
         attempt++;
     }
 

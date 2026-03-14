@@ -35,7 +35,7 @@ static double z_from_conf(double conf) {
 }
 
 static exprtk_value_t fn_var_hist(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc == 2 && V(0) && a[1].type == EXPRTK_VAL_NUMBER) {
     const double *ret = D(0);
@@ -43,7 +43,7 @@ static exprtk_value_t fn_var_hist(size_t argc, exprtk_value_t *a, exprtk_env_t *
     const double conf = a[1].data.number;
     if (n == 0)
       return exprtk_val_num(0);
-    double *tmp = TURBO_POOL_ALLOC_ARRAY(ar, double, n);
+    double *tmp = MEM_ALLOC_ARRAY(ar, double, n);
     if (!tmp)
       return exprtk_val_num(0);
     for (size_t i = 0; i < n; ++i)
@@ -62,7 +62,7 @@ static exprtk_value_t fn_var_hist(size_t argc, exprtk_value_t *a, exprtk_env_t *
 }
 
 static exprtk_value_t fn_var_param(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   (void)ar;
   if (argc == 2 && V(0) && a[1].type == EXPRTK_VAL_NUMBER) {
@@ -90,7 +90,7 @@ static exprtk_value_t fn_var_param(size_t argc, exprtk_value_t *a, exprtk_env_t 
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_cvar(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_cvar(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   if (!(argc == 2 && V(0) && a[1].type == EXPRTK_VAL_NUMBER))
     return exprtk_val_num(0);
   exprtk_value_t vh = fn_var_hist(argc, a, e, ar);
@@ -113,7 +113,7 @@ static exprtk_value_t fn_cvar(size_t argc, exprtk_value_t *a, exprtk_env_t *e, t
   return exprtk_val_num(sum / (double)cnt);
 }
 
-static exprtk_value_t fn_kelly(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_kelly(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   (void)ar;
   if (argc == 3 && a[0].type == EXPRTK_VAL_NUMBER && a[1].type == EXPRTK_VAL_NUMBER &&
@@ -132,14 +132,14 @@ static exprtk_value_t fn_kelly(size_t argc, exprtk_value_t *a, exprtk_env_t *e, 
 }
 
 static exprtk_value_t fn_drawdown(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc == 1 && V(0)) {
     const size_t n = a[0].data.vector.size;
     const double *eq = D(0);
     if (n == 0)
       return exprtk_val_vec(NULL, 0);
-    double *out = TURBO_POOL_ALLOC_ARRAY(ar, double, n);
+    double *out = MEM_ALLOC_ARRAY(ar, double, n);
     if (!out)
       return exprtk_val_num(0);
     double peak = eq[0];
@@ -154,7 +154,7 @@ static exprtk_value_t fn_drawdown(size_t argc, exprtk_value_t *a, exprtk_env_t *
 }
 
 static exprtk_value_t fn_drawdown_stats(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                        turbo_pool_t *ar) {
+                                        mem_pool_t *ar) {
   (void)e;
   if (argc == 1 && V(0)) {
     const size_t n = a[0].data.vector.size;
@@ -177,7 +177,7 @@ static exprtk_value_t fn_drawdown_stats(size_t argc, exprtk_value_t *a, exprtk_e
       if (dd > max_dd)
         max_dd = dd;
     }
-    double *out = TURBO_POOL_ALLOC_ARRAY(ar, double, 2);
+    double *out = MEM_ALLOC_ARRAY(ar, double, 2);
     if (!out)
       return exprtk_val_num(0);
     out[0] = max_dd;
@@ -188,7 +188,7 @@ static exprtk_value_t fn_drawdown_stats(size_t argc, exprtk_value_t *a, exprtk_e
 }
 
 static exprtk_value_t fn_crossover(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   if (argc == 2 && V(0) && V(1)) {
     const size_t n = a[0].data.vector.size;
@@ -196,7 +196,7 @@ static exprtk_value_t fn_crossover(size_t argc, exprtk_value_t *a, exprtk_env_t 
       return exprtk_val_num(0);
     const double *fast = D(0);
     const double *slow = D(1);
-    double *out = TURBO_POOL_ALLOC_ARRAY(ar, double, n);
+    double *out = MEM_ALLOC_ARRAY(ar, double, n);
     if (!out)
       return exprtk_val_num(0);
     out[0] = 0.0;
@@ -209,7 +209,7 @@ static exprtk_value_t fn_crossover(size_t argc, exprtk_value_t *a, exprtk_env_t 
 }
 
 static exprtk_value_t fn_crossunder(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                    turbo_pool_t *ar) {
+                                    mem_pool_t *ar) {
   (void)e;
   if (argc == 2 && V(0) && V(1)) {
     const size_t n = a[0].data.vector.size;
@@ -217,7 +217,7 @@ static exprtk_value_t fn_crossunder(size_t argc, exprtk_value_t *a, exprtk_env_t
       return exprtk_val_num(0);
     const double *fast = D(0);
     const double *slow = D(1);
-    double *out = TURBO_POOL_ALLOC_ARRAY(ar, double, n);
+    double *out = MEM_ALLOC_ARRAY(ar, double, n);
     if (!out)
       return exprtk_val_num(0);
     out[0] = 0.0;
@@ -230,7 +230,7 @@ static exprtk_value_t fn_crossunder(size_t argc, exprtk_value_t *a, exprtk_env_t
 }
 
 static exprtk_value_t fn_pf_min_variance(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                         turbo_pool_t *ar) {
+                                         mem_pool_t *ar) {
   (void)e;
   if (argc == 1 && V(0)) {
     const double *cov = D(0);
@@ -238,7 +238,7 @@ static exprtk_value_t fn_pf_min_variance(size_t argc, exprtk_value_t *a, exprtk_
     if (m == 4) {
       const double a11 = cov[0], a12 = cov[1], a21 = cov[2], a22 = cov[3];
       const double det = a11 * a22 - a12 * a21;
-      double *w = TURBO_POOL_ALLOC_ARRAY(ar, double, 2);
+      double *w = MEM_ALLOC_ARRAY(ar, double, 2);
       if (!w)
         return exprtk_val_num(0);
       if (fabs(det) < 1e-12) {
@@ -265,7 +265,7 @@ static exprtk_value_t fn_pf_min_variance(size_t argc, exprtk_value_t *a, exprtk_
 }
 
 static exprtk_value_t fn_candle_doji(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if ((argc == 4 || argc == 5) && V(0) && V(1) && V(2) && V(3)) {
     const size_t n = a[0].data.vector.size;
@@ -273,7 +273,7 @@ static exprtk_value_t fn_candle_doji(size_t argc, exprtk_value_t *a, exprtk_env_
       return exprtk_val_num(0);
     const double threshold = (argc == 5 && a[4].type == EXPRTK_VAL_NUMBER) ? a[4].data.number : 0.1;
     const double *o = D(0), *h = D(1), *l = D(2), *c = D(3);
-    double *out = TURBO_POOL_ALLOC_ARRAY(ar, double, n);
+    double *out = MEM_ALLOC_ARRAY(ar, double, n);
     if (!out)
       return exprtk_val_num(0);
     for (size_t i = 0; i < n; ++i) {
@@ -287,14 +287,14 @@ static exprtk_value_t fn_candle_doji(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_candle_hammer(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                       turbo_pool_t *ar) {
+                                       mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0) && V(1) && V(2) && V(3)) {
     const size_t n = a[0].data.vector.size;
     if (a[1].data.vector.size != n || a[2].data.vector.size != n || a[3].data.vector.size != n)
       return exprtk_val_num(0);
     const double *o = D(0), *h = D(1), *l = D(2), *c = D(3);
-    double *out = TURBO_POOL_ALLOC_ARRAY(ar, double, n);
+    double *out = MEM_ALLOC_ARRAY(ar, double, n);
     if (!out)
       return exprtk_val_num(0);
     for (size_t i = 0; i < n; ++i) {
@@ -309,7 +309,7 @@ static exprtk_value_t fn_candle_hammer(size_t argc, exprtk_value_t *a, exprtk_en
 }
 
 #define TA_VP(name, call)                                                                          \
-  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {  \
+  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {  \
     (void)e;                                                                                       \
     if (argc != 2) {                                                                               \
       printf("TA_VP fail argc=%zu\n", argc);                                                       \
@@ -333,7 +333,7 @@ static exprtk_value_t fn_candle_hammer(size_t argc, exprtk_value_t *a, exprtk_en
   }
 
 #define TA_VP_A(name, call)                                                                        \
-  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {  \
+  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {  \
     (void)e;                                                                                       \
     if (argc == 2 && V(0)) {                                                                       \
       size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;                              \
@@ -345,7 +345,7 @@ static exprtk_value_t fn_candle_hammer(size_t argc, exprtk_value_t *a, exprtk_en
   }
 
 #define TA_HLC(name, call)                                                                         \
-  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {  \
+  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {  \
     (void)e;                                                                                       \
     if (argc == 4 && V(0) && V(1) && V(2)) {                                                       \
       size_t n = a[0].data.vector.size, p = (size_t)a[3].data.number;                              \
@@ -357,7 +357,7 @@ static exprtk_value_t fn_candle_hammer(size_t argc, exprtk_value_t *a, exprtk_en
   }
 
 #define BSM(name, call)                                                                            \
-  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {  \
+  static exprtk_value_t name(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {  \
     (void)e;                                                                                       \
     if (argc == 5 && V(0)) {                                                                       \
       size_t n = a[0].data.vector.size;                                                            \
@@ -411,7 +411,7 @@ BSM(fn_ta_bsm_rho_put, exprtk_ta_bsm_rho_put(D(0), D(1), D(2), D(3), D(4), n, o)
 BSM(fn_ta_bsm_iv_call, exprtk_ta_bsm_iv_call(D(0), D(1), D(2), D(3), D(4), n, o))
 BSM(fn_ta_bsm_iv_put, exprtk_ta_bsm_iv_put(D(0), D(1), D(2), D(3), D(4), n, o))
 
-static exprtk_value_t fn_ta_bbi(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_bbi(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 1 && V(0)) {
     size_t n = a[0].data.vector.size;
@@ -422,7 +422,7 @@ static exprtk_value_t fn_ta_bbi(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_hma(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_hma(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 2 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -434,7 +434,7 @@ static exprtk_value_t fn_ta_hma(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_vwap(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                 turbo_pool_t *ar) {
+                                 mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0) && V(1) && V(2) && V(3)) {
     size_t n = a[0].data.vector.size;
@@ -446,7 +446,7 @@ static exprtk_value_t fn_ta_vwap(size_t argc, exprtk_value_t *a, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_ta_donchian(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -458,7 +458,7 @@ static exprtk_value_t fn_ta_donchian(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_donchian_up(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                        turbo_pool_t *ar) {
+                                        mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -470,7 +470,7 @@ static exprtk_value_t fn_ta_donchian_up(size_t argc, exprtk_value_t *a, exprtk_e
 }
 
 static exprtk_value_t fn_ta_donchian_dn(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                        turbo_pool_t *ar) {
+                                        mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -481,7 +481,7 @@ static exprtk_value_t fn_ta_donchian_dn(size_t argc, exprtk_value_t *a, exprtk_e
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_t3(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_t3(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -493,7 +493,7 @@ static exprtk_value_t fn_ta_t3(size_t argc, exprtk_value_t *a, exprtk_env_t *e, 
 }
 
 static exprtk_value_t fn_ta_bbands(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -505,7 +505,7 @@ static exprtk_value_t fn_ta_bbands(size_t argc, exprtk_value_t *a, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ta_bbands_up(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                      turbo_pool_t *ar) {
+                                      mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -517,7 +517,7 @@ static exprtk_value_t fn_ta_bbands_up(size_t argc, exprtk_value_t *a, exprtk_env
 }
 
 static exprtk_value_t fn_ta_bbands_dn(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                      turbo_pool_t *ar) {
+                                      mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -529,7 +529,7 @@ static exprtk_value_t fn_ta_bbands_dn(size_t argc, exprtk_value_t *a, exprtk_env
 }
 
 static exprtk_value_t fn_ta_midprice(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -541,7 +541,7 @@ static exprtk_value_t fn_ta_midprice(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_keltner(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                    turbo_pool_t *ar) {
+                                    mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -565,7 +565,7 @@ static exprtk_value_t fn_ta_keltner(size_t argc, exprtk_value_t *a, exprtk_env_t
 }
 
 static exprtk_value_t fn_ta_keltner_up(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                       turbo_pool_t *ar) {
+                                       mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -580,7 +580,7 @@ static exprtk_value_t fn_ta_keltner_up(size_t argc, exprtk_value_t *a, exprtk_en
 }
 
 static exprtk_value_t fn_ta_keltner_mid(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                        turbo_pool_t *ar) {
+                                        mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -595,7 +595,7 @@ static exprtk_value_t fn_ta_keltner_mid(size_t argc, exprtk_value_t *a, exprtk_e
 }
 
 static exprtk_value_t fn_ta_keltner_dn(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                       turbo_pool_t *ar) {
+                                       mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -610,7 +610,7 @@ static exprtk_value_t fn_ta_keltner_dn(size_t argc, exprtk_value_t *a, exprtk_en
 }
 
 static exprtk_value_t fn_ta_ichimoku(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -638,7 +638,7 @@ static exprtk_value_t fn_ta_ichimoku(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_ichimoku_ten(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                         turbo_pool_t *ar) {
+                                         mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -653,7 +653,7 @@ static exprtk_value_t fn_ta_ichimoku_ten(size_t argc, exprtk_value_t *a, exprtk_
 }
 
 static exprtk_value_t fn_ta_ichimoku_kij(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                         turbo_pool_t *ar) {
+                                         mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -668,7 +668,7 @@ static exprtk_value_t fn_ta_ichimoku_kij(size_t argc, exprtk_value_t *a, exprtk_
 }
 
 static exprtk_value_t fn_ta_ichimoku_sa(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                        turbo_pool_t *ar) {
+                                        mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -684,7 +684,7 @@ static exprtk_value_t fn_ta_ichimoku_sa(size_t argc, exprtk_value_t *a, exprtk_e
 }
 
 static exprtk_value_t fn_ta_ichimoku_sb(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                        turbo_pool_t *ar) {
+                                        mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -700,7 +700,7 @@ static exprtk_value_t fn_ta_ichimoku_sb(size_t argc, exprtk_value_t *a, exprtk_e
 }
 
 static exprtk_value_t fn_ta_ichimoku_chi(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                         turbo_pool_t *ar) {
+                                         mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -715,7 +715,7 @@ static exprtk_value_t fn_ta_ichimoku_chi(size_t argc, exprtk_value_t *a, exprtk_
 }
 
 static exprtk_value_t fn_ta_supertrend(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                       turbo_pool_t *ar) {
+                                       mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -738,7 +738,7 @@ static exprtk_value_t fn_ta_supertrend(size_t argc, exprtk_value_t *a, exprtk_en
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_rma(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_rma(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc >= 2 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -750,7 +750,7 @@ static exprtk_value_t fn_ta_rma(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_zlema(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc >= 2 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -762,7 +762,7 @@ static exprtk_value_t fn_ta_zlema(size_t argc, exprtk_value_t *a, exprtk_env_t *
 }
 
 static exprtk_value_t fn_ta_alma(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                 turbo_pool_t *ar) {
+                                 mem_pool_t *ar) {
   (void)e;
   if (argc >= 2 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -775,7 +775,7 @@ static exprtk_value_t fn_ta_alma(size_t argc, exprtk_value_t *a, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_ta_vidya(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0)) {
     size_t n = a[0].data.vector.size, cp = (size_t)a[1].data.number, ep = (size_t)a[2].data.number;
@@ -786,7 +786,7 @@ static exprtk_value_t fn_ta_vidya(size_t argc, exprtk_value_t *a, exprtk_env_t *
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_rvi(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_rvi(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc >= 3 && V(0)) {
     size_t n = a[0].data.vector.size, sp = (size_t)a[1].data.number, ep = (size_t)a[2].data.number;
@@ -797,7 +797,7 @@ static exprtk_value_t fn_ta_rvi(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_vhf(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_vhf(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc >= 2 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -809,7 +809,7 @@ static exprtk_value_t fn_ta_vhf(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_volatility_ratio(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                             turbo_pool_t *ar) {
+                                             mem_pool_t *ar) {
   (void)e;
   if (argc >= 4 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[3].data.number;
@@ -820,7 +820,7 @@ static exprtk_value_t fn_ta_volatility_ratio(size_t argc, exprtk_value_t *a, exp
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_sar(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_sar(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size;
@@ -832,7 +832,7 @@ static exprtk_value_t fn_ta_sar(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_macd(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                 turbo_pool_t *ar) {
+                                 mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0)) {
     size_t n = a[0].data.vector.size, fp = (size_t)a[1].data.number, sp = (size_t)a[2].data.number,
@@ -845,7 +845,7 @@ static exprtk_value_t fn_ta_macd(size_t argc, exprtk_value_t *a, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_ta_stoch(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc == 5 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size, kp = (size_t)a[3].data.number, dp = (size_t)a[4].data.number;
@@ -857,7 +857,7 @@ static exprtk_value_t fn_ta_stoch(size_t argc, exprtk_value_t *a, exprtk_env_t *
 }
 
 static exprtk_value_t fn_ta_stochrsi(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number, kp = (size_t)a[2].data.number,
@@ -869,7 +869,7 @@ static exprtk_value_t fn_ta_stochrsi(size_t argc, exprtk_value_t *a, exprtk_env_
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_apo(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_apo(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, fp = (size_t)a[1].data.number, sp = (size_t)a[2].data.number;
@@ -880,7 +880,7 @@ static exprtk_value_t fn_ta_apo(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_ppo(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_ppo(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, fp = (size_t)a[1].data.number, sp = (size_t)a[2].data.number;
@@ -892,7 +892,7 @@ static exprtk_value_t fn_ta_ppo(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_ultosc(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   if (argc == 6 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size, p1 = (size_t)a[3].data.number, p2 = (size_t)a[4].data.number,
@@ -905,7 +905,7 @@ static exprtk_value_t fn_ta_ultosc(size_t argc, exprtk_value_t *a, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ta_aroon(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -917,7 +917,7 @@ static exprtk_value_t fn_ta_aroon(size_t argc, exprtk_value_t *a, exprtk_env_t *
 }
 
 static exprtk_value_t fn_ta_aroonosc(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -929,7 +929,7 @@ static exprtk_value_t fn_ta_aroonosc(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_trange(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -940,7 +940,7 @@ static exprtk_value_t fn_ta_trange(size_t argc, exprtk_value_t *a, exprtk_env_t 
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_obv(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_obv(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 2 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size;
@@ -951,7 +951,7 @@ static exprtk_value_t fn_ta_obv(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_ad(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_ad(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0) && V(1) && V(2) && V(3)) {
     size_t n = a[0].data.vector.size;
@@ -963,7 +963,7 @@ static exprtk_value_t fn_ta_ad(size_t argc, exprtk_value_t *a, exprtk_env_t *e, 
 }
 
 static exprtk_value_t fn_ta_adosc(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                  turbo_pool_t *ar) {
+                                  mem_pool_t *ar) {
   (void)e;
   if (argc == 6 && V(0) && V(1) && V(2) && V(3)) {
     size_t n = a[0].data.vector.size, fp = (size_t)a[4].data.number, sp = (size_t)a[5].data.number;
@@ -974,7 +974,7 @@ static exprtk_value_t fn_ta_adosc(size_t argc, exprtk_value_t *a, exprtk_env_t *
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_mfi(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_mfi(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 5 && V(0) && V(1) && V(2) && V(3)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[4].data.number;
@@ -986,7 +986,7 @@ static exprtk_value_t fn_ta_mfi(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_plus_dm(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                    turbo_pool_t *ar) {
+                                    mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -998,7 +998,7 @@ static exprtk_value_t fn_ta_plus_dm(size_t argc, exprtk_value_t *a, exprtk_env_t
 }
 
 static exprtk_value_t fn_ta_minus_dm(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -1010,7 +1010,7 @@ static exprtk_value_t fn_ta_minus_dm(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_stddev(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -1021,7 +1021,7 @@ static exprtk_value_t fn_ta_stddev(size_t argc, exprtk_value_t *a, exprtk_env_t 
   return exprtk_val_num(0);
 }
 
-static exprtk_value_t fn_ta_var(size_t argc, exprtk_value_t *a, exprtk_env_t *e, turbo_pool_t *ar) {
+static exprtk_value_t fn_ta_var(size_t argc, exprtk_value_t *a, exprtk_env_t *e, mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[1].data.number;
@@ -1033,7 +1033,7 @@ static exprtk_value_t fn_ta_var(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
 }
 
 static exprtk_value_t fn_ta_beta(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                 turbo_pool_t *ar) {
+                                 mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -1045,7 +1045,7 @@ static exprtk_value_t fn_ta_beta(size_t argc, exprtk_value_t *a, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_ta_correl(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                   turbo_pool_t *ar) {
+                                   mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
@@ -1057,7 +1057,7 @@ static exprtk_value_t fn_ta_correl(size_t argc, exprtk_value_t *a, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ta_avgprice(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 4 && V(0) && V(1) && V(2) && V(3)) {
     size_t n = a[0].data.vector.size;
@@ -1069,7 +1069,7 @@ static exprtk_value_t fn_ta_avgprice(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_medprice(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 2 && V(0) && V(1)) {
     size_t n = a[0].data.vector.size;
@@ -1081,7 +1081,7 @@ static exprtk_value_t fn_ta_medprice(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_typprice(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -1093,7 +1093,7 @@ static exprtk_value_t fn_ta_typprice(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_wclprice(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                     turbo_pool_t *ar) {
+                                     mem_pool_t *ar) {
   (void)e;
   if (argc == 3 && V(0) && V(1) && V(2)) {
     size_t n = a[0].data.vector.size;
@@ -1105,7 +1105,7 @@ static exprtk_value_t fn_ta_wclprice(size_t argc, exprtk_value_t *a, exprtk_env_
 }
 
 static exprtk_value_t fn_ta_opt_binomial(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
-                                         turbo_pool_t *ar) {
+                                         mem_pool_t *ar) {
   (void)e;
   if (argc == 7) {
     double opt;
@@ -1122,12 +1122,12 @@ static exprtk_value_t fn_ta_opt_binomial(size_t argc, exprtk_value_t *a, exprtk_
  * ========================================================================= */
 
 static exprtk_value_t fn_ta_fisher(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc >= 3 && a[0].type == EXPRTK_VAL_VECTOR && a[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
-    double *fisher = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *trigger = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *fisher = MEM_ALLOC_ARRAY(arena, double, n);
+    double *trigger = MEM_ALLOC_ARRAY(arena, double, n);
     if (fisher && trigger &&
         exprtk_ta_fisher(a[0].data.vector.data, a[1].data.vector.data, n, p, fisher, trigger,
                          arena))
@@ -1137,12 +1137,12 @@ static exprtk_value_t fn_ta_fisher(size_t argc, exprtk_value_t *a, exprtk_env_t 
 }
 
 static exprtk_value_t fn_ta_fisher_trigger(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                           turbo_pool_t *arena) {
+                                           mem_pool_t *arena) {
   (void)env;
   if (argc >= 3 && a[0].type == EXPRTK_VAL_VECTOR && a[1].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size, p = (size_t)a[2].data.number;
-    double *fisher = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *trigger = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *fisher = MEM_ALLOC_ARRAY(arena, double, n);
+    double *trigger = MEM_ALLOC_ARRAY(arena, double, n);
     if (fisher && trigger &&
         exprtk_ta_fisher(a[0].data.vector.data, a[1].data.vector.data, n, p, fisher, trigger,
                          arena))
@@ -1152,7 +1152,7 @@ static exprtk_value_t fn_ta_fisher_trigger(size_t argc, exprtk_value_t *a, exprt
 }
 
 static exprtk_value_t fn_ta_squeeze(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   if (argc >= 3 && a[0].type == EXPRTK_VAL_VECTOR && a[1].type == EXPRTK_VAL_VECTOR &&
       a[2].type == EXPRTK_VAL_VECTOR) {
@@ -1161,9 +1161,9 @@ static exprtk_value_t fn_ta_squeeze(size_t argc, exprtk_value_t *a, exprtk_env_t
     double bb_m = (argc >= 5) ? a[4].data.number : 2.0;
     size_t kc_p = (argc >= 6) ? (size_t)a[5].data.number : 20;
     double kc_m = (argc >= 7) ? a[6].data.number : 1.5;
-    double *sq = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *mom = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *on = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *sq = MEM_ALLOC_ARRAY(arena, double, n);
+    double *mom = MEM_ALLOC_ARRAY(arena, double, n);
+    double *on = MEM_ALLOC_ARRAY(arena, double, n);
     if (sq && mom && on &&
         exprtk_ta_squeeze(a[0].data.vector.data, a[1].data.vector.data, a[2].data.vector.data, n,
                           bb_p, bb_m, kc_p, kc_m, sq, mom, on, arena))
@@ -1173,7 +1173,7 @@ static exprtk_value_t fn_ta_squeeze(size_t argc, exprtk_value_t *a, exprtk_env_t
 }
 
 static exprtk_value_t fn_ta_squeeze_on(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc >= 3 && a[0].type == EXPRTK_VAL_VECTOR && a[1].type == EXPRTK_VAL_VECTOR &&
       a[2].type == EXPRTK_VAL_VECTOR) {
@@ -1182,9 +1182,9 @@ static exprtk_value_t fn_ta_squeeze_on(size_t argc, exprtk_value_t *a, exprtk_en
     double bb_m = (argc >= 5) ? a[4].data.number : 2.0;
     size_t kc_p = (argc >= 6) ? (size_t)a[5].data.number : 20;
     double kc_m = (argc >= 7) ? a[6].data.number : 1.5;
-    double *sq = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *mom = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *on = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *sq = MEM_ALLOC_ARRAY(arena, double, n);
+    double *mom = MEM_ALLOC_ARRAY(arena, double, n);
+    double *on = MEM_ALLOC_ARRAY(arena, double, n);
     if (sq && mom && on &&
         exprtk_ta_squeeze(a[0].data.vector.data, a[1].data.vector.data, a[2].data.vector.data, n,
                           bb_p, bb_m, kc_p, kc_m, sq, mom, on, arena))
@@ -1194,12 +1194,12 @@ static exprtk_value_t fn_ta_squeeze_on(size_t argc, exprtk_value_t *a, exprtk_en
 }
 
 static exprtk_value_t fn_ta_chop(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc >= 4 && a[0].type == EXPRTK_VAL_VECTOR && a[1].type == EXPRTK_VAL_VECTOR &&
       a[2].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size, p = (size_t)a[3].data.number;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (out && exprtk_ta_chop(a[0].data.vector.data, a[1].data.vector.data, a[2].data.vector.data,
                               n, p, out, arena))
       return exprtk_val_vec(out, n);
@@ -1208,12 +1208,12 @@ static exprtk_value_t fn_ta_chop(size_t argc, exprtk_value_t *a, exprtk_env_t *e
 }
 
 static exprtk_value_t fn_ta_ehlers_cyber_cycle(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                               turbo_pool_t *arena) {
+                                               mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && a[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size;
     double alpha = a[1].data.number;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (out && exprtk_ta_ehlers_cyber_cycle(a[0].data.vector.data, n, alpha, out))
       return exprtk_val_vec(out, n);
   }
@@ -1221,12 +1221,12 @@ static exprtk_value_t fn_ta_ehlers_cyber_cycle(size_t argc, exprtk_value_t *a, e
 }
 
 static exprtk_value_t fn_ta_ehlers_itrend(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                          turbo_pool_t *arena) {
+                                          mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && a[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size;
     double alpha = a[1].data.number;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (out && exprtk_ta_ehlers_itrend(a[0].data.vector.data, n, alpha, out))
       return exprtk_val_vec(out, n);
   }
@@ -1234,13 +1234,13 @@ static exprtk_value_t fn_ta_ehlers_itrend(size_t argc, exprtk_value_t *a, exprtk
 }
 
 static exprtk_value_t fn_ta_ehlers_mama(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)env;
   if (argc >= 3 && a[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size;
     double fl = a[1].data.number, sl = a[2].data.number;
-    double *mama = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *fama = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *mama = MEM_ALLOC_ARRAY(arena, double, n);
+    double *fama = MEM_ALLOC_ARRAY(arena, double, n);
     if (mama && fama && exprtk_ta_ehlers_mama(a[0].data.vector.data, n, fl, sl, mama, fama))
       return exprtk_val_vec(mama, n);
   }
@@ -1248,13 +1248,13 @@ static exprtk_value_t fn_ta_ehlers_mama(size_t argc, exprtk_value_t *a, exprtk_e
 }
 
 static exprtk_value_t fn_ta_ehlers_fama(size_t argc, exprtk_value_t *a, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)env;
   if (argc >= 3 && a[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = a[0].data.vector.size;
     double fl = a[1].data.number, sl = a[2].data.number;
-    double *mama = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *fama = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *mama = MEM_ALLOC_ARRAY(arena, double, n);
+    double *fama = MEM_ALLOC_ARRAY(arena, double, n);
     if (mama && fama && exprtk_ta_ehlers_mama(a[0].data.vector.data, n, fl, sl, mama, fama))
       return exprtk_val_vec(fama, n);
   }

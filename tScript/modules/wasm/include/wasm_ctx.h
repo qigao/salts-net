@@ -28,7 +28,7 @@ typedef struct {
 typedef struct {
   wasm_ctx_t *ctx;
   exprtk_env_t *env;
-  turbo_pool_t *scratch;
+  mem_pool_t *scratch;
 } wasm_ud_t;
 
 #define WASM_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
@@ -38,14 +38,14 @@ typedef struct {
     (ud)->env->aborted = 1;                                                                         \
   } while (0)
 
-static inline turbo_pool_t *wasm_tmp_arena(wasm_ud_t *ud) {
+static inline mem_pool_t *wasm_tmp_arena(wasm_ud_t *ud) {
   if (ud->scratch)
     return ud->scratch;
   return &ud->env->arena;
 }
 
-static inline char *wasm_arena_cstr(turbo_pool_t *a, tstr_v sv) {
-  char *buf = (char *)turbo_pool_alloc(a, sv.len + 1);
+static inline char *wasm_arena_cstr(mem_pool_t *a, tstr_v sv) {
+  char *buf = (char *)mem_alloc(a, sv.len + 1);
   if (!buf)
     return NULL;
   memcpy(buf, sv.data, sv.len);

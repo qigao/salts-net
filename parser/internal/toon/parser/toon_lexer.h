@@ -58,7 +58,7 @@ typedef struct {
     struct toonObject *root;
     struct toonObject *last_node; // Tail of the root children list
     struct toonObject *columns;
-    turbo_pool_t *arena;
+    mem_pool_t *arena;
     int error;
     int line;
     char error_msg[256];

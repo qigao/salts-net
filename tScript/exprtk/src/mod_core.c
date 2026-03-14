@@ -14,7 +14,7 @@
  * ========================================================================= */
 
 static exprtk_value_t fn_typeof(size_t argc, exprtk_value_t *args,
-                                 exprtk_env_t *env, turbo_pool_t *arena) {
+                                 exprtk_env_t *env, mem_pool_t *arena) {
     (void)env;
     const char *name = "null";
     size_t len = 4;
@@ -32,7 +32,7 @@ static exprtk_value_t fn_typeof(size_t argc, exprtk_value_t *args,
         }
     }
 
-    char *buf = (char *)turbo_pool_alloc(arena, len + 1);
+    char *buf = (char *)mem_alloc(arena, len + 1);
     if (!buf) return exprtk_val_num(0);
     memcpy(buf, name, len);
     buf[len] = '\0';
@@ -47,43 +47,43 @@ static exprtk_value_t fn_typeof(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 static exprtk_value_t fn_is_number(size_t argc, exprtk_value_t *args,
-                                    exprtk_env_t *env, turbo_pool_t *arena) {
+                                    exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_NUMBER ? 1.0 : 0.0);
 }
 
 static exprtk_value_t fn_is_string(size_t argc, exprtk_value_t *args,
-                                    exprtk_env_t *env, turbo_pool_t *arena) {
+                                    exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_STRING ? 1.0 : 0.0);
 }
 
 static exprtk_value_t fn_is_vector(size_t argc, exprtk_value_t *args,
-                                    exprtk_env_t *env, turbo_pool_t *arena) {
+                                    exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_VECTOR ? 1.0 : 0.0);
 }
 
 static exprtk_value_t fn_is_map(size_t argc, exprtk_value_t *args,
-                                 exprtk_env_t *env, turbo_pool_t *arena) {
+                                 exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_MAP ? 1.0 : 0.0);
 }
 
 static exprtk_value_t fn_is_null(size_t argc, exprtk_value_t *args,
-                                  exprtk_env_t *env, turbo_pool_t *arena) {
+                                  exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_NULL ? 1.0 : 0.0);
 }
 
 static exprtk_value_t fn_is_list(size_t argc, exprtk_value_t *args,
-                                  exprtk_env_t *env, turbo_pool_t *arena) {
+                                  exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_LIST ? 1.0 : 0.0);
 }
 
 static exprtk_value_t fn_is_function(size_t argc, exprtk_value_t *args,
-                                      exprtk_env_t *env, turbo_pool_t *arena) {
+                                      exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     return exprtk_val_num(argc > 0 && args[0].type == EXPRTK_VAL_FUNCTION ? 1.0 : 0.0);
 }
@@ -93,7 +93,7 @@ static exprtk_value_t fn_is_function(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 static exprtk_value_t fn_range(size_t argc, exprtk_value_t *args,
-                                exprtk_env_t *env, turbo_pool_t *arena) {
+                                exprtk_env_t *env, mem_pool_t *arena) {
     (void)env;
     if (argc < 2) return exprtk_val_num(0);
     double start = args[0].data.number;
@@ -111,7 +111,7 @@ static exprtk_value_t fn_range(size_t argc, exprtk_value_t *args,
     n = (size_t)(fabs((end - start) / step)) + 1;
     if (n > 100000) n = 100000; /* safety cap */
 
-    double *data = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *data = MEM_ALLOC_ARRAY(arena, double, n);
     if (!data) return exprtk_val_num(0);
 
     for (size_t i = 0; i < n; ++i) {
@@ -125,7 +125,7 @@ static exprtk_value_t fn_range(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 static exprtk_value_t fn_print(size_t argc, exprtk_value_t *args,
-                                exprtk_env_t *env, turbo_pool_t *arena) {
+                                exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     for (size_t i = 0; i < argc; ++i) {
         if (i > 0) printf(" ");
@@ -155,7 +155,7 @@ static exprtk_value_t fn_print(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 static exprtk_value_t fn_assert(size_t argc, exprtk_value_t *args,
-                                 exprtk_env_t *env, turbo_pool_t *arena) {
+                                 exprtk_env_t *env, mem_pool_t *arena) {
     (void)arena;
     if (argc < 1) return exprtk_val_num(0);
     double cond = (args[0].type == EXPRTK_VAL_NUMBER) ? args[0].data.number : 0;
@@ -176,7 +176,7 @@ static exprtk_value_t fn_assert(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 static exprtk_value_t fn_list(size_t argc, exprtk_value_t *args,
-                               exprtk_env_t *env, turbo_pool_t *arena) {
+                               exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     exprtk_value_t result = exprtk_val_list_empty();
     for (size_t i = 0; i < argc; ++i) {

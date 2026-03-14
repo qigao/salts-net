@@ -6,17 +6,17 @@
 #include "turbo_coro_lb.h"
 #include "turbo_coro.h"
 #include "turbo_coro_bidi_pump.h"
-#include <netcore/turbo_coro_client.h>
-#include <netcore/turbo_coro_context.h>
-#include <netcore/turbo_coro_internal.h>
-#include <netcore/turbo_coro_server.h>
+#include "CoroNet/turbo_coro_socket.h"
+#include <CoroNet/turbo_coro_context.h>
+#include <CoroNet/turbo_coro_internal.h>
+#include "CoroNet/turbo_coro_socket.h"
 #include <stdlib.h>
 #include <string.h>
 
 /* ── Internal data structures ─────────────────────────────── */
 
 typedef struct lb_worker_conn_s {
-  coro_client_t *client;
+  coro_socket_t *client;
   coro_t *co;
   char group[64];
   struct lb_worker_conn_s *next;
@@ -33,8 +33,8 @@ struct coro_lb_s {
   coro_context_t *ctx;
   coro_lb_config_t config;
 
-  coro_server_t *frontend;
-  coro_server_t *backend;
+  coro_socket_t *frontend;
+  coro_socket_t *backend;
 
   lb_worker_conn_t *idle_head;
   int idle_count;
@@ -123,10 +123,10 @@ static lb_worker_conn_t *wait_for_worker(coro_lb_t *lb, const char *group) {
 
 /* ── Worker group name read ───────────────────────────────── */
 
-static void read_group_name(coro_client_t *worker, char *group, size_t group_size) {
+static void read_group_name(coro_socket_t *worker, char *group, size_t group_size) {
   char *data = NULL;
   size_t len = 0;
-  if (coro_client_recv(worker, &data, &len) == 0 && data) {
+  if (coro_socket_recv(worker, &data, &len) == 0 && data) {
     size_t n = len < group_size - 1 ? len : group_size - 1;
     memcpy(group, data, n);
     group[n] = '\0';
@@ -137,14 +137,14 @@ static void read_group_name(coro_client_t *worker, char *group, size_t group_siz
 
 /* ── Filter helper ────────────────────────────────────────── */
 
-static turbo_lb_filter_verdict_t run_filter(coro_lb_t *lb, coro_client_t *client, const char *data,
+static turbo_lb_filter_verdict_t run_filter(coro_lb_t *lb, coro_socket_t *client, const char *data,
                                             size_t len) {
   if (!lb->config.filter_cb) return TURBO_LB_ACCEPT;
 
   turbo_lb_filter_result_t r = lb->config.filter_cb(data, len, lb->config.filter_cb_arg);
 
   if (r.verdict == TURBO_LB_REJECT && r.reject_data && r.reject_len > 0) {
-    coro_client_send(client, r.reject_data, r.reject_len);
+    coro_socket_send(client, r.reject_data, r.reject_len);
   }
   return r.verdict;
 }
@@ -199,7 +199,7 @@ static void frame_buf_consume(frame_buf_t *fb, size_t n) {
  * Returns 0 on success, -1 on error/disconnect.
  * Caller must free(*out).
  */
-static int read_frame(coro_client_t *client, coro_lb_t *lb, frame_buf_t *fb, char **out,
+static int read_frame(coro_socket_t *client, coro_lb_t *lb, frame_buf_t *fb, char **out,
                       size_t *out_len) {
   while (1) {
     ssize_t frame_len = lb->config.frame_cb(fb->buf, fb->len, lb->config.frame_cb_arg);
@@ -217,7 +217,7 @@ static int read_frame(coro_client_t *client, coro_lb_t *lb, frame_buf_t *fb, cha
 
     char *data = NULL;
     size_t len = 0;
-    if (coro_client_recv(client, &data, &len) != 0) return -1;
+    if (coro_socket_recv(client, &data, &len) != 0) return -1;
     int rc = frame_buf_append(fb, data, len);
     free(data);
     if (rc != 0) return -1;
@@ -226,7 +226,7 @@ static int read_frame(coro_client_t *client, coro_lb_t *lb, frame_buf_t *fb, cha
 
 /* ── Backend handler (worker connects) ────────────────────── */
 
-static void on_worker_connect(coro_client_t *worker, void *arg) {
+static void on_worker_connect(coro_socket_t *worker, void *arg) {
   coro_lb_t *lb = (coro_lb_t *)arg;
   if (lb->stopped) return;
 
@@ -254,7 +254,7 @@ static void on_worker_connect(coro_client_t *worker, void *arg) {
 
 /* ── SESSION mode frontend handler ────────────────────────── */
 
-static void on_client_session(coro_client_t *client, void *arg) {
+static void on_client_session(coro_socket_t *client, void *arg) {
   coro_lb_t *lb = (coro_lb_t *)arg;
   if (lb->stopped) return;
 
@@ -263,7 +263,7 @@ static void on_client_session(coro_client_t *client, void *arg) {
   const char *group = NULL;
 
   if (lb->config.route_cb && lb->config.peek_bytes > 0) {
-    int r = coro_client_recv(client, &peeked, &peeked_len);
+    int r = coro_socket_recv(client, &peeked, &peeked_len);
     if (r < 0) return;
     group = lb->config.route_cb(peeked, peeked_len, lb->config.route_cb_arg);
   }
@@ -284,7 +284,7 @@ static void on_client_session(coro_client_t *client, void *arg) {
   }
 
   if (peeked) {
-    coro_client_send(wc->client, peeked, peeked_len);
+    coro_socket_send(wc->client, peeked, peeked_len);
     free(peeked);
   }
 
@@ -301,7 +301,7 @@ static void on_client_session(coro_client_t *client, void *arg) {
 
 /* ── REQUEST mode frontend handler ────────────────────────── */
 
-static void on_client_request(coro_client_t *client, void *arg) {
+static void on_client_request(coro_socket_t *client, void *arg) {
   coro_lb_t *lb = (coro_lb_t *)arg;
   if (lb->stopped) return;
 
@@ -335,7 +335,7 @@ static void on_client_request(coro_client_t *client, void *arg) {
     }
 
     /* Send frame to worker */
-    if (coro_client_send(wc->client, frame, frame_len) < 0) {
+    if (coro_socket_send(wc->client, frame, frame_len) < 0) {
       free(frame);
       /* Worker dead — resume its backend handler, try next worker */
       coro_set_waiting_for_io(wc->co, 0);
@@ -347,7 +347,7 @@ static void on_client_request(coro_client_t *client, void *arg) {
     /* Read response from worker */
     char *resp = NULL;
     size_t resp_len = 0;
-    int recv_ok = coro_client_recv(wc->client, &resp, &resp_len);
+    int recv_ok = coro_socket_recv(wc->client, &resp, &resp_len);
 
     /* Recycle worker back to idle pool */
     push_idle(lb, wc);
@@ -356,7 +356,7 @@ static void on_client_request(coro_client_t *client, void *arg) {
     if (recv_ok != 0) break;
 
     /* Send response to client */
-    if (coro_client_send(client, resp, resp_len) < 0) {
+    if (coro_socket_send(client, resp, resp_len) < 0) {
       free(resp);
       break;
     }
@@ -383,22 +383,22 @@ coro_lb_t *coro_lb_create(coro_context_t *ctx, const coro_lb_config_t *config) {
 int coro_lb_listen(coro_lb_t *lb, const char *url) {
   if (!lb || !url) return TURBO_EINVAL;
 
-  lb->frontend = coro_server_create(lb->ctx);
+  lb->frontend = coro_socket_create(lb->ctx, CORO_SOCKET_TCP_V4);
   if (!lb->frontend) return TURBO_ENOMEM;
 
   coro_handler_fn handler =
       (lb->config.mode == TURBO_LB_MODE_REQUEST) ? on_client_request : on_client_session;
 
-  return coro_server_listen(lb->frontend, url, handler, lb);
+  return coro_socket_listen_url(lb->frontend, url, handler, lb);
 }
 
 int coro_lb_accept_workers(coro_lb_t *lb, const char *url) {
   if (!lb || !url) return TURBO_EINVAL;
 
-  lb->backend = coro_server_create(lb->ctx);
+  lb->backend = coro_socket_create(lb->ctx, CORO_SOCKET_TCP_V4);
   if (!lb->backend) return TURBO_ENOMEM;
 
-  return coro_server_listen(lb->backend, url, on_worker_connect, lb);
+  return coro_socket_listen_url(lb->backend, url, on_worker_connect, lb);
 }
 
 void coro_lb_stop(coro_lb_t *lb) {
@@ -406,11 +406,11 @@ void coro_lb_stop(coro_lb_t *lb) {
   lb->stopped = 1;
 
   if (lb->frontend) {
-    coro_server_destroy(lb->frontend);
+    coro_socket_destroy(lb->frontend);
     lb->frontend = NULL;
   }
   if (lb->backend) {
-    coro_server_destroy(lb->backend);
+    coro_socket_destroy(lb->backend);
     lb->backend = NULL;
   }
 

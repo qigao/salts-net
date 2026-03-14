@@ -14,7 +14,7 @@
 #include "ice/turbo_stun.h"
 #include "ice/turbo_turn.h"
 #include <platform.h>
-#include <netcore/turbo_coro_client.h>
+#include "CoroNet/turbo_coro_socket.h"
 
 #include "turbo_dns.h"
 #include "turbo_str.h"
@@ -260,15 +260,15 @@ static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, co
  * ============================================================================ */
 
 static int create_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *candidate) {
-  coro_client_t *client = coro_client_create(agent->ctx);
+  coro_socket_t *client = coro_socket_create(agent->ctx, CORO_SOCKET_TCP_V4);
   if (!client) return -1;
 
   char url[512];
   stbsp_snprintf(url, sizeof(url), "udp://%s:0", candidate->ip);
 
-  int rc = coro_client_connect(client, url);
+  int rc = coro_socket_connect(client, url);
   if (rc != 0) {
-      coro_client_destroy(client);
+      coro_socket_destroy(client);
       return -1;
   }
 
@@ -276,7 +276,7 @@ static int create_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *ca
   
   struct sockaddr_storage addr;
   memset(&addr, 0, sizeof(addr));
-  if (coro_client_get_local_address(client, &addr) == 0) {
+  if (coro_socket_get_local_address(client, &addr) == 0) {
       if (addr.ss_family == AF_INET) {
           struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr;
           candidate->port = ntohs(addr4->sin_port);
@@ -660,7 +660,7 @@ void ice_agent_destroy(turbo_ice_agent_t *agent) {
   for (int i = 0; i < agent->local_candidate_count; i++) {
     ice_candidate_t *cand = &agent->local_candidates[i];
     if (cand->socket) {
-      coro_client_destroy((coro_client_t *)cand->socket);
+      coro_socket_destroy((coro_socket_t *)cand->socket);
       cand->socket = NULL;
     }
   }
@@ -816,12 +816,12 @@ static void send_connectivity_check(turbo_ice_agent_t *agent, ice_candidate_pair
       rc = turn_client_send((turbo_turn_client_t *)pair->local->turn_client, pair->remote->ip, pair->remote->port, stun_buf, len);
     }
   } else if (pair->local->socket) {
-    coro_client_t *client = (coro_client_t *)pair->local->socket;
+    coro_socket_t *client = (coro_socket_t *)pair->local->socket;
     char url[512];
     stbsp_snprintf(url, sizeof(url), "udp://%s:%u", pair->remote->ip, pair->remote->port);
 
-    coro_client_connect(client, url);
-    rc = coro_client_send(client, (const char *)stun_buf, len);
+    coro_socket_connect(client, url);
+    rc = coro_socket_send(client, (const char *)stun_buf, len);
   }
 
   if (rc == 0) {
@@ -890,11 +890,11 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
     if (local_cand->type == ICE_CANDIDATE_TYPE_RELAY && local_cand->turn_client) {
       turn_client_send((turbo_turn_client_t *)local_cand->turn_client, remote_ip, remote_port, resp_buf, resp_len);
     } else if (local_cand->socket) {
-      coro_client_t *client = (coro_client_t *)local_cand->socket;
+      coro_socket_t *client = (coro_socket_t *)local_cand->socket;
       char url[512];
       stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote_ip, remote_port);
-      coro_client_connect(client, url);
-      coro_client_send(client, (const char *)resp_buf, resp_len);
+      coro_socket_connect(client, url);
+      coro_socket_send(client, (const char *)resp_buf, resp_len);
     }
   } else {
     TLOG_DEBUG("Failed to build STUN response");
@@ -1116,11 +1116,11 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
             if (buf) free(buf);
           }
         } else if (pair->local->socket) {
-          coro_client_t *client = (coro_client_t *)pair->local->socket;
-          coro_client_set_timeout(client, 500);
+          coro_socket_t *client = (coro_socket_t *)pair->local->socket;
+          coro_socket_set_timeout(client, 500);
           char *data = NULL;
           size_t data_len = 0;
-          int rc = coro_client_recv(client, &data, &data_len);
+          int rc = coro_socket_recv(client, &data, &data_len);
           if (rc == 0 && data && data_len > 0) {
             if (stun_is_stun_message((const uint8_t *)data, data_len)) {
               uint16_t msg_type = read_u16_be((const uint8_t *)data);
@@ -1273,11 +1273,11 @@ int ice_agent_send(turbo_ice_agent_t *agent, const void *data, size_t len) {
     return -4;
 
   if (local->type == ICE_CANDIDATE_TYPE_HOST || local->type == ICE_CANDIDATE_TYPE_SRFLX) {
-    coro_client_t *client = (coro_client_t *)local->socket;
+    coro_socket_t *client = (coro_socket_t *)local->socket;
     char url[512];
     stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote->ip, remote->port);
-    coro_client_connect(client, url);
-    int rc = coro_client_send(client, (const char *)data, len);
+    coro_socket_connect(client, url);
+    int rc = coro_socket_send(client, (const char *)data, len);
     return rc;
   } else if (local->type == ICE_CANDIDATE_TYPE_RELAY) {
     if (!local->turn_client) return -5;

@@ -40,6 +40,7 @@ add_custom_command(
 
 set(HTTP_SOURCES
     src/http_client.c
+    src/http_client_api.c
     src/http_common.c
     src/stb_sprintf.c
     src/cookie_parser.c

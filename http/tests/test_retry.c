@@ -29,7 +29,7 @@ spec("http retry policy") {
     describe("set and get") {
 
         it("should store policy") {
-            http_client_t *client = http_client_create();
+            http_client_t *client = http_client_create("http://localhost:8080");
             http_retry_policy_t policy = {
                 .max_retries = 5,
                 .initial_delay_ms = 500,
@@ -50,7 +50,7 @@ spec("http retry policy") {
         }
 
         it("should clear policy") {
-            http_client_t *client = http_client_create();
+            http_client_t *client = http_client_create("http://localhost:8080");
             http_retry_policy_t policy = http_retry_policy_default();
             http_client_set_retry_policy(client, &policy);
             http_client_clear_retry_policy(client);
@@ -64,7 +64,7 @@ spec("http retry policy") {
     describe("behavior") {
 
         it("should retry on 5xx") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_retry_policy_t policy = {
                 .max_retries = 2, .initial_delay_ms = 100,
@@ -79,7 +79,7 @@ spec("http retry policy") {
         }
 
         it("should not retry on success") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_retry_policy_t policy = http_retry_policy_default();
             http_client_set_retry_policy(c, &policy);
@@ -91,7 +91,7 @@ spec("http retry policy") {
         }
 
         it("should retry on connection error") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 3000);
             http_retry_policy_t policy = {
                 .max_retries = 1, .initial_delay_ms = 50,
@@ -105,7 +105,7 @@ spec("http retry policy") {
         }
 
         it("should not retry on 4xx") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_retry_policy_t policy = http_retry_policy_default();
             http_client_set_retry_policy(c, &policy);

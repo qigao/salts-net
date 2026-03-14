@@ -45,8 +45,8 @@ static double read_num(exprtk_env_t *env, const char *name, double def) {
 strategy_ctx_t *strategy_create(universe_t *universe,
                                   provider_t *provider,
                                   const strategy_config_t *cfg,
-                                  turbo_pool_t *arena) {
-    strategy_ctx_t *ctx = (strategy_ctx_t *)turbo_pool_alloc(arena, sizeof(strategy_ctx_t));
+                                  mem_pool_t *arena) {
+    strategy_ctx_t *ctx = (strategy_ctx_t *)mem_alloc(arena, sizeof(strategy_ctx_t));
     if (!ctx) return NULL;
     memset(ctx, 0, sizeof(*ctx));
 
@@ -59,7 +59,7 @@ strategy_ctx_t *strategy_create(universe_t *universe,
 
     /* Allocate per-asset bar windows */
     if (ctx->num_assets > 0) {
-        ctx->windows = (bar_window_t **)turbo_pool_alloc(
+        ctx->windows = (bar_window_t **)mem_alloc(
             arena, ctx->num_assets * sizeof(bar_window_t *));
         if (!ctx->windows) return NULL;
         for (size_t i = 0; i < ctx->num_assets; i++) {
@@ -80,7 +80,7 @@ strategy_ctx_t *strategy_create(universe_t *universe,
     ctx->order_mgr->spread       = ctx->config.spread;
 
     /* Create TurboScript environment */
-    ctx->env = (exprtk_env_t *)turbo_pool_alloc(arena, sizeof(exprtk_env_t));
+    ctx->env = (exprtk_env_t *)mem_alloc(arena, sizeof(exprtk_env_t));
     if (!ctx->env) return NULL;
     exprtk_env_init(ctx->env);
 
@@ -201,13 +201,13 @@ void strategy_reset(strategy_ctx_t *ctx) {
 int strategy_compile(strategy_ctx_t *ctx, const char *code) {
     if (!ctx || !ctx->env || !code) return -1;
     exprtk_parse_ctx_t parse = {0};
-    turbo_pool_t scratch;
-    turbo_pool_init(&scratch, 1024 * 256);
+    mem_pool_t scratch;
+    mem_init(&scratch, 1024 * 256);
     parse.arena = &scratch;
 
-    ctx->parsed = (struct exprtk_parse_ctx_s *)turbo_pool_alloc(
+    ctx->parsed = (struct exprtk_parse_ctx_s *)mem_alloc(
         ctx->arena, sizeof(exprtk_parse_ctx_t));
-    if (!ctx->parsed) { turbo_pool_free(&scratch); return -1; }
+    if (!ctx->parsed) { mem_destroy(&scratch); return -1; }
 
     /* Parse the script */
     exprtk_parse_ctx_t *pc = (exprtk_parse_ctx_t *)ctx->parsed;
@@ -227,7 +227,7 @@ int strategy_compile(strategy_ctx_t *ctx, const char *code) {
     /* Detect on_init/on_bar/on_fill/on_stop hooks */
     if (!err) strategy_init_hooks(ctx);
 
-    turbo_pool_free(&scratch);
+    mem_destroy(&scratch);
     return err ? -1 : 0;
 }
 

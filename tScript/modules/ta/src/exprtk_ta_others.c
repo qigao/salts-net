@@ -12,7 +12,7 @@
 #include <turbo_buffer.h>
 
 
-size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_pool_t *arena) {
+size_t exprtk_ta_bbi(const double *in, size_t n, double *out, mem_pool_t *arena) {
   if (n < 24)
     return 0;
   double *ma3 = TEMP_ALLOC(arena, double, n);
@@ -43,7 +43,7 @@ size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_pool_t *aren
   return n;
 }
 
-size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena) {
+size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena) {
   if (period < 2 || period > n)
     return 0;
   double *wma_half = TEMP_ALLOC(arena, double, n);
@@ -105,7 +105,7 @@ size_t exprtk_ta_vwap(const double *hi, const double *lo, const double *cl, cons
 }
 
 size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t period,
-                          double *upper, double *lower, double *middle, turbo_pool_t *arena) {
+                          double *upper, double *lower, double *middle, mem_pool_t *arena) {
   if (n < period)
     return 0;
   double *hh = TEMP_ALLOC(arena, double, n);
@@ -141,7 +141,7 @@ size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t p
 
 size_t exprtk_ta_keltner(const double *hi, const double *lo, const double *cl, size_t n,
                          size_t ema_p, size_t atr_p, double mult, double *upper, double *middle,
-                         double *lower, turbo_pool_t *arena) {
+                         double *lower, mem_pool_t *arena) {
   if (ema_p == 0 || atr_p == 0 || n < ema_p || n < atr_p)
     return 0;
 
@@ -176,7 +176,7 @@ size_t exprtk_ta_keltner(const double *hi, const double *lo, const double *cl, s
 size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, size_t n,
                           size_t tenkan_p, size_t kijun_p, size_t senkou_p, double *tenkan,
                           double *kijun, double *senkou_a, double *senkou_b, double *chikou,
-                          turbo_pool_t *arena) {
+                          mem_pool_t *arena) {
   if (n < tenkan_p || n < kijun_p || n < senkou_p)
     return 0;
   double *hh_tenkan = TEMP_ALLOC(arena, double, n);
@@ -238,7 +238,7 @@ size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, 
 
 size_t exprtk_ta_supertrend(const double *hi, const double *lo, const double *cl, size_t n,
                             size_t period, double mult, double *trend, double *upper, double *lower,
-                            turbo_pool_t *arena) {
+                            mem_pool_t *arena) {
   if (period == 0 || n < period)
     return 0;
   double *atr = TEMP_ALLOC(arena, double, n);
@@ -304,7 +304,7 @@ size_t exprtk_ta_rma(const double *in, size_t n, size_t period, double *out) {
 }
 
 size_t exprtk_ta_zlema(const double *in, size_t n, size_t period, double *out,
-                       turbo_pool_t *arena) {
+                       mem_pool_t *arena) {
   if (period < 2 || n < period)
     return 0;
   size_t lag = (period - 1) / 2;
@@ -323,7 +323,7 @@ size_t exprtk_ta_zlema(const double *in, size_t n, size_t period, double *out,
 }
 
 size_t exprtk_ta_alma(const double *in, size_t n, size_t period, double offset, double sigma,
-                      double *out, turbo_pool_t *arena) {
+                      double *out, mem_pool_t *arena) {
   if (period < 2 || n < period)
     return 0;
   double *w = TEMP_ALLOC(arena, double, period);
@@ -369,7 +369,7 @@ size_t exprtk_ta_alma(const double *in, size_t n, size_t period, double offset, 
 }
 
 size_t exprtk_ta_vidya(const double *in, size_t n, size_t cmo_p, size_t ema_p, double *out,
-                       turbo_pool_t *arena) {
+                       mem_pool_t *arena) {
   if (n < cmo_p || n < ema_p)
     return 0;
   double *cmo = TEMP_ALLOC(arena, double, n);
@@ -392,7 +392,7 @@ size_t exprtk_ta_vidya(const double *in, size_t n, size_t cmo_p, size_t ema_p, d
 }
 
 size_t exprtk_ta_rvi(const double *in, size_t n, size_t std_p, size_t ema_p, double *out,
-                     turbo_pool_t *arena) {
+                     mem_pool_t *arena) {
   if (n < std_p + ema_p)
     return 0;
   double *std = TEMP_ALLOC(arena, double, n);
@@ -404,7 +404,7 @@ size_t exprtk_ta_rvi(const double *in, size_t n, size_t std_p, size_t ema_p, dou
   return res;
 }
 
-size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena) {
+size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena) {
   if (n < period)
     return 0;
   double *hh = TEMP_ALLOC(arena, double, n);
@@ -436,7 +436,7 @@ size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, tur
 }
 
 size_t exprtk_ta_volatility_ratio(const double *hi, const double *lo, const double *cl, size_t n,
-                                  size_t period, double *out, turbo_pool_t *arena) {
+                                  size_t period, double *out, mem_pool_t *arena) {
   if (n < period)
     return 0;
   double *atr = TEMP_ALLOC(arena, double, n);
@@ -497,7 +497,7 @@ size_t exprtk_ta_arbr(const double *hi, const double *lo, const double *op, cons
 }
 
 size_t exprtk_ta_rsrs(const double *hi, const double *lo, size_t n, size_t n_reg, size_t m_z,
-                      double *slope, double *zscore, turbo_pool_t *arena) {
+                      double *slope, double *zscore, mem_pool_t *arena) {
   if (n < n_reg)
     return 0;
   double *slopes = ALLOC_DBL(arena, n);
@@ -536,7 +536,7 @@ size_t exprtk_ta_rsrs(const double *hi, const double *lo, size_t n, size_t n_reg
 }
 
 size_t exprtk_ta_smart_money(const double *p, const double *v, size_t n, size_t period, double *out,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   if (n < period)
     return 0;
   for (size_t i = period - 1; i < n; i++) {
@@ -560,7 +560,7 @@ size_t exprtk_ta_smart_money(const double *p, const double *v, size_t n, size_t 
 }
 
 size_t exprtk_ta_vmacd_mtm(const double *v, size_t n, size_t period, double *out,
-                           turbo_pool_t *arena) {
+                           mem_pool_t *arena) {
   if (n < 60)
     return 0;
   double *macd = ALLOC_DBL(arena, n);
@@ -599,7 +599,7 @@ size_t exprtk_ta_vmacd_mtm(const double *v, size_t n, size_t period, double *out
 }
 
 size_t exprtk_ta_noise_area(const double *op, const double *cl, size_t n, size_t period,
-                            double *upper, double *lower, turbo_pool_t *arena) {
+                            double *upper, double *lower, mem_pool_t *arena) {
   if (n < period)
     return 0;
   double *dist = ALLOC_DBL(arena, n);
@@ -639,7 +639,7 @@ static int w_factor_cmp(const void *a, const void *b) {
 }
 
 size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cnt, size_t n,
-                          size_t period, double *out, turbo_pool_t *arena) {
+                          size_t period, double *out, mem_pool_t *arena) {
   if (n < period)
     return 0;
   double *avg_size = ALLOC_DBL(arena, n);
@@ -647,7 +647,7 @@ size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cn
     return 0;
   for (size_t i = 0; i < n; i++)
     avg_size[i] = (cnt[i] > 1e-15) ? amt[i] / cnt[i] : 0;
-  size_t *indices = TURBO_POOL_ALLOC_ARRAY(arena, size_t, period);
+  size_t *indices = MEM_ALLOC_ARRAY(arena, size_t, period);
   if (!indices)
     return 0;
   for (size_t i = period - 1; i < n; i++) {
@@ -667,7 +667,7 @@ size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cn
 }
 
 size_t exprtk_ta_cpv(const double *ret, const double *vol, size_t n, size_t period, double *out,
-                     turbo_pool_t *arena) {
+                     mem_pool_t *arena) {
   if (n < period * 2)
     return 0;
   double *corrs = ALLOC_DBL(arena, n);
@@ -699,7 +699,7 @@ size_t exprtk_ta_cpv(const double *ret, const double *vol, size_t n, size_t peri
 }
 
 size_t exprtk_vec_quantile(const double *in, size_t n, size_t period, double *out,
-                           turbo_pool_t *arena) {
+                           mem_pool_t *arena) {
   (void)arena;
   if (n < period)
     return 0;
@@ -716,13 +716,13 @@ size_t exprtk_vec_quantile(const double *in, size_t n, size_t period, double *ou
 }
 
 size_t exprtk_ta_qrs(const double *slope, size_t n, size_t period, double *out,
-                     turbo_pool_t *arena) {
+                     mem_pool_t *arena) {
   (void)arena;
   return exprtk_vec_quantile(slope, n, period, out, arena);
 }
 
 size_t exprtk_ta_alligator(const double *in, size_t n, double *jaw, double *teeth, double *lips,
-                           turbo_pool_t *arena) {
+                           mem_pool_t *arena) {
   if (n < 21)
     return 0;
   double *tmp_j = ALLOC_DBL(arena, n);
@@ -746,7 +746,7 @@ size_t exprtk_ta_alligator(const double *in, size_t n, double *jaw, double *teet
 }
 
 size_t exprtk_ta_shadow(const double *op, const double *hi, const double *lo, const double *cl,
-                        size_t n, double *upper, double *lower, turbo_pool_t *arena) {
+                        size_t n, double *upper, double *lower, mem_pool_t *arena) {
   (void)arena;
   for (size_t i = 0; i < n; i++) {
     double real_top = fmax(op[i], cl[i]);

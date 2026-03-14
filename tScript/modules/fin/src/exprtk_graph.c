@@ -35,7 +35,7 @@
  */
 static int bellman_ford_impl(const double *edges, size_t n_vertices, size_t n_edges,
                               size_t source, double *dist, double *prev,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
     (void)arena;
 
     if (!edges || !dist || !prev || n_vertices == 0 || source >= n_vertices) {
@@ -92,7 +92,7 @@ static int bellman_ford_impl(const double *edges, size_t n_vertices, size_t n_ed
  * @brief exprtk wrapper for Bellman-Ford algorithm.
  */
 exprtk_value_t exprtk_graph_bellman_ford(size_t argc, exprtk_value_t *args,
-                                          exprtk_env_t *env, turbo_pool_t *arena) {
+                                          exprtk_env_t *env, mem_pool_t *arena) {
     (void)env;
 
     if (argc != 6) {
@@ -132,7 +132,7 @@ exprtk_value_t exprtk_graph_bellman_ford(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 exprtk_value_t exprtk_graph_has_negative_cycle(size_t argc, exprtk_value_t *args,
-                                                exprtk_env_t *env, turbo_pool_t *arena) {
+                                                exprtk_env_t *env, mem_pool_t *arena) {
     (void)env;
 
     if (argc != 3) {
@@ -149,8 +149,8 @@ exprtk_value_t exprtk_graph_has_negative_cycle(size_t argc, exprtk_value_t *args
     size_t n_edges = (size_t)args[2].data.number;
 
     /* Allocate temporary arrays */
-    double *dist = TURBO_POOL_ALLOC_ARRAY(arena, double, n_vertices);
-    double *prev = TURBO_POOL_ALLOC_ARRAY(arena, double, n_vertices);
+    double *dist = MEM_ALLOC_ARRAY(arena, double, n_vertices);
+    double *prev = MEM_ALLOC_ARRAY(arena, double, n_vertices);
     if (!dist || !prev) {
         return exprtk_val_num(NAN);
     }
@@ -166,7 +166,7 @@ exprtk_value_t exprtk_graph_has_negative_cycle(size_t argc, exprtk_value_t *args
  * ========================================================================= */
 
 exprtk_value_t exprtk_graph_extract_path(size_t argc, exprtk_value_t *args,
-                                          exprtk_env_t *env, turbo_pool_t *arena) {
+                                          exprtk_env_t *env, mem_pool_t *arena) {
     (void)env;
     (void)arena;
 
@@ -231,7 +231,7 @@ exprtk_value_t exprtk_graph_extract_path(size_t argc, exprtk_value_t *args,
  * ========================================================================= */
 
 exprtk_value_t exprtk_graph_detect_arbitrage(size_t argc, exprtk_value_t *args,
-                                              exprtk_env_t *env, turbo_pool_t *arena) {
+                                              exprtk_env_t *env, mem_pool_t *arena) {
     (void)env;
 
     if (argc != 2) {
@@ -252,7 +252,7 @@ exprtk_value_t exprtk_graph_detect_arbitrage(size_t argc, exprtk_value_t *args,
 
     /* Build edge list with -log(rate) weights */
     size_t n_edges = n * (n - 1);  /* Complete graph minus self-loops */
-    double *edges = TURBO_POOL_ALLOC_ARRAY(arena, double, n_edges * 3);
+    double *edges = MEM_ALLOC_ARRAY(arena, double, n_edges * 3);
     if (!edges) {
         return exprtk_val_num(NAN);
     }
@@ -272,8 +272,8 @@ exprtk_value_t exprtk_graph_detect_arbitrage(size_t argc, exprtk_value_t *args,
     }
 
     /* Allocate temporary arrays */
-    double *dist = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
-    double *prev = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *dist = MEM_ALLOC_ARRAY(arena, double, n);
+    double *prev = MEM_ALLOC_ARRAY(arena, double, n);
     if (!dist || !prev) {
         return exprtk_val_num(NAN);
     }

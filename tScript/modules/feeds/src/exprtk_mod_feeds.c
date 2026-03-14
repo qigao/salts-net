@@ -174,7 +174,7 @@ static exprtk_value_t fn_csv_get(size_t argc, exprtk_value_t *args, void *user_d
   if (val) {
     char *buf;
     len = strlen(val);
-    buf = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
+    buf = (char *)mem_alloc(&ud->env->arena, len + 1);
     if (buf) {
       memcpy(buf, val, len + 1);
       ret.type = EXPRTK_VAL_STRING;
@@ -257,7 +257,7 @@ static exprtk_value_t fn_csv_col(size_t argc, exprtk_value_t *args, void *user_d
     return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {NULL, 0}};
   }
 
-  data = (double *)turbo_pool_alloc(&ud->env->arena, row_count * sizeof(double));
+  data = (double *)mem_alloc(&ud->env->arena, row_count * sizeof(double));
   if (!data) {
     ptr = doc;
     turbo_free_csv(&ptr);
@@ -312,7 +312,7 @@ static exprtk_value_t fn_csv_write(size_t argc, exprtk_value_t *args, void *user
 /* == CSV filter =========================================================== */
 
 typedef struct {
-  turbo_pool_t *arena;
+  mem_pool_t *arena;
   char *buf;
   size_t len;
   size_t cap;
@@ -328,7 +328,7 @@ static int feeds_buf_ensure(feeds_buf_t *fb, size_t need_more) {
   }
 
   {
-    char *nb = (char *)turbo_pool_alloc(fb->arena, fb->cap);
+    char *nb = (char *)mem_alloc(fb->arena, fb->cap);
     if (!nb)
       return 0;
     if (fb->buf && fb->len > 0) {
@@ -445,7 +445,7 @@ static exprtk_value_t fn_csv_filter(size_t argc, exprtk_value_t *args, void *use
 
   fb.arena = &ud->env->arena;
   fb.cap = 1024;
-  fb.buf = (char *)turbo_pool_alloc(fb.arena, fb.cap);
+  fb.buf = (char *)mem_alloc(fb.arena, fb.cap);
   if (!fb.buf) {
     turbo_dsv_filter_destroy(filter);
     ptr = doc;
@@ -698,7 +698,7 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
       return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {NULL, 0}};
     }
 
-    data = (double *)turbo_pool_alloc(&ud->env->arena, len * sizeof(double));
+    data = (double *)mem_alloc(&ud->env->arena, len * sizeof(double));
     if (!data) {
       FEEDS_ERROR(ud, "csv.col: OOM");
       return FEEDS_ZERO;
@@ -734,7 +734,7 @@ static exprtk_value_t fn_csv_col_v2(size_t argc, exprtk_value_t *args, void *use
       return (exprtk_value_t){EXPRTK_VAL_VECTOR, .data.vector = {NULL, 0}};
     }
 
-    data = (double *)turbo_pool_alloc(&ud->env->arena, row_count * sizeof(double));
+    data = (double *)mem_alloc(&ud->env->arena, row_count * sizeof(double));
     if (!data) {
       FEEDS_ERROR(ud, "csv.col: OOM");
       return FEEDS_ZERO;
@@ -791,7 +791,7 @@ static exprtk_value_t fn_json_query(size_t argc, exprtk_value_t *args, void *use
       case TURBO_JSON_STRING: {
         const char *s = turbo_json_string(val);
         size_t len = s ? strlen(s) : 0;
-        char *buf = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
+        char *buf = (char *)mem_alloc(&ud->env->arena, len + 1);
         if (buf && s) {
           memcpy(buf, s, len + 1);
           ret.type = EXPRTK_VAL_STRING;
@@ -844,7 +844,7 @@ static exprtk_value_t fn_json_to_vec(size_t argc, exprtk_value_t *args, void *us
   }
 
   size = turbo_json_array_size(root);
-  data = (double *)turbo_pool_alloc(&ud->env->arena, size * sizeof(double));
+  data = (double *)mem_alloc(&ud->env->arena, size * sizeof(double));
   if (!data) {
     void *ptr = root;
     turbo_free_json(&ptr);
@@ -894,7 +894,7 @@ static exprtk_value_t fn_xml_root_name(size_t argc, exprtk_value_t *args, void *
   name = root ? turbo_xml_node_name(root) : NULL;
   if (name) {
     size_t len = strlen(name);
-    char *buf = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
+    char *buf = (char *)mem_alloc(&ud->env->arena, len + 1);
     if (buf) {
       memcpy(buf, name, len + 1);
       ret.type = EXPRTK_VAL_STRING;
@@ -914,13 +914,13 @@ static exprtk_value_t fn_xml_root_name(size_t argc, exprtk_value_t *args, void *
 void feeds_load(void *p, void *e, void *s) {
   feeds_ctx_t *ctx = (feeds_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_pool_t *scratch = (turbo_pool_t *)s;
+  mem_pool_t *scratch = (mem_pool_t *)s;
   feeds_ud_t *ud;
 
   if (!ctx || !env)
     return;
 
-  ud = (feeds_ud_t *)turbo_pool_alloc(&env->arena, sizeof(*ud));
+  ud = (feeds_ud_t *)mem_alloc(&env->arena, sizeof(*ud));
   if (!ud)
     return;
 

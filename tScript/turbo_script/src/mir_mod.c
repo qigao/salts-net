@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static inline char *mir_arena_cstr(turbo_pool_t *a, tstr_v sv) {
-  char *buf = turbo_pool_alloc(a, sv.len + 1);
+static inline char *mir_arena_cstr(mem_pool_t *a, tstr_v sv) {
+  char *buf = mem_alloc(a, sv.len + 1);
   if (buf) {
     memcpy(buf, sv.data, sv.len);
     buf[sv.len] = '\0';

@@ -19,17 +19,43 @@ extern "C" {
 
 /* ── HTTP methods — values match llhttp_method ────────────────────── */
 
-typedef int http_method_t;
-
+#ifndef HTTP_DELETE
 #define HTTP_DELETE  0
+#endif
+
+#ifndef HTTP_GET
 #define HTTP_GET     1
+#endif
+
+#ifndef HTTP_HEAD
 #define HTTP_HEAD    2
+#endif
+
+#ifndef HTTP_POST
 #define HTTP_POST    3
+#endif
+
+#ifndef HTTP_PUT
 #define HTTP_PUT     4
+#endif
+
+#ifndef HTTP_CONNECT
 #define HTTP_CONNECT 5
+#endif
+
+#ifndef HTTP_OPTIONS
 #define HTTP_OPTIONS 6
+#endif
+
+#ifndef HTTP_TRACE
 #define HTTP_TRACE   7
+#endif
+
+#ifndef HTTP_PATCH
 #define HTTP_PATCH   28
+#endif
+
+typedef int http_method_t;
 
 /* ── Error codes ─────────────────────────────────────────────────── */
 
@@ -46,7 +72,8 @@ typedef enum {
   HTTP_ERROR_PARSE_FAILED,
   HTTP_ERROR_TOO_MANY_REDIRECTS,
   HTTP_ERROR_MEMORY_ALLOCATION,
-  HTTP_ERROR_CANCELLED
+  HTTP_ERROR_CANCELLED,
+  HTTP_ERROR_FILE_IO
 } http_error_code_t;
 
 /* ── Response ────────────────────────────────────────────────────── */

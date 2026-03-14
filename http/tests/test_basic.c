@@ -9,7 +9,7 @@ spec("http client basic") {
     describe("client lifecycle") {
 
         it("should create and destroy") {
-            http_client_t *client = http_client_create();
+            http_client_t *client = http_client_create("http://localhost:8080");
             check_not_null(client);
             http_client_destroy(client);
         }
@@ -24,7 +24,7 @@ spec("http client basic") {
         static http_client_t *client;
 
         before_each() {
-            client = http_client_create();
+            client = http_client_create("http://localhost:8080");
         }
         after_each() {
             http_client_destroy(client);
@@ -43,11 +43,8 @@ spec("http client basic") {
             check(1);
         }
 
-        it("should set base url") {
-            http_client_set_base_url(client, "http://api.example.com");
-            check_str_eq(http_client_get_base_url(client), "http://api.example.com");
-            http_client_clear_base_url(client);
-            check(http_client_get_base_url(client) == NULL);
+        it("should get base url") {
+            check_str_eq(http_client_get_base_url(client), "http://localhost:8080");
         }
 
         it("should set follow redirects") {
@@ -67,7 +64,7 @@ spec("http client basic") {
         static http_client_t *client;
 
         before_each() {
-            client = http_client_create();
+            client = http_client_create("http://localhost:8080");
         }
         after_each() {
             http_client_destroy(client);
@@ -103,7 +100,7 @@ spec("http client basic") {
         static http_client_t *client;
 
         before_each() {
-            client = http_client_create();
+            client = http_client_create("http://localhost:8080");
         }
         after_each() {
             http_client_destroy(client);
@@ -142,7 +139,7 @@ spec("http client basic") {
         }
 
         it("should return error for NULL url") {
-            http_client_t *client = http_client_create();
+            http_client_t *client = http_client_create("http://localhost:8080");
             http_response_t *resp = http_get(client, NULL);
             check_not_null(resp);
             if (resp) {
@@ -153,7 +150,7 @@ spec("http client basic") {
         }
 
         it("should handle malformed url") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_response_t *r = http_get(c, "not-a-url");
             check_not_null(r);
             http_response_free(r);

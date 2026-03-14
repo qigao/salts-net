@@ -51,7 +51,7 @@ static toonObject *post_process_table(toon_parse_ctx_t *ctx, toonObject *table, 
             
             toonObject *prop = val; 
             
-            prop->key = turbo_pool_strdup(ctx->arena, col_name->str.ptr);
+            prop->key = mem_strdup(ctx->arena, col_name->str.ptr);
             
             if (!last_prop) {
                 row_obj->child = prop;
@@ -101,14 +101,14 @@ node(A) ::= error NEWLINE. { ctx->error = 0; ctx->error_msg[0] = '\0'; A.head = 
 
 pair(A) ::= KEY(K) COLON value(V). {
     A = V;
-    A->key = turbo_pool_alloc(ctx->arena, K.length + 1);
+    A->key = mem_alloc(ctx->arena, K.length + 1);
     memcpy(A->key, K.value, K.length);
     A->key[K.length] = '\0';
 }
 
 pair(A) ::= KEY(K) COLON NEWLINE INDENT children(C) DEDENT. {
     A = TOONc_newObjectArena(ctx->arena, KV_OBJ);
-    A->key = turbo_pool_alloc(ctx->arena, K.length + 1);
+    A->key = mem_alloc(ctx->arena, K.length + 1);
     memcpy(A->key, K.value, K.length);
     A->key[K.length] = '\0';
     A->child = C;
@@ -116,21 +116,21 @@ pair(A) ::= KEY(K) COLON NEWLINE INDENT children(C) DEDENT. {
 
 pair(A) ::= KEY(K) LBRACKET NUMBER RBRACKET COLON list_values(L) NEWLINE. {
     A = L;
-    A->key = turbo_pool_alloc(ctx->arena, K.length + 1);
+    A->key = mem_alloc(ctx->arena, K.length + 1);
     memcpy(A->key, K.value, K.length);
     A->key[K.length] = '\0';
 }
 
 pair(A) ::= KEY(K) LBRACKET NUMBER(N) RBRACKET COLON NEWLINE. {
     A = TOONc_newListObjArena(ctx->arena, (size_t)N.int_val);
-    A->key = turbo_pool_alloc(ctx->arena, K.length + 1);
+    A->key = mem_alloc(ctx->arena, K.length + 1);
     memcpy(A->key, K.value, K.length);
     A->key[K.length] = '\0';
 }
 
 pair(A) ::= KEY(K) LBRACKET NUMBER(N) RBRACKET LBRACE column_names(C) RBRACE COLON NEWLINE INDENT table_rows(T) DEDENT. {
     A = post_process_table(ctx, T, C);
-    A->key = turbo_pool_alloc(ctx->arena, K.length + 1);
+    A->key = mem_alloc(ctx->arena, K.length + 1);
     memcpy(A->key, K.value, K.length);
     A->key[K.length] = '\0';
     TOONc_listReserveArena(ctx->arena, A, (size_t)N.int_val);
@@ -139,7 +139,7 @@ pair(A) ::= KEY(K) LBRACKET NUMBER(N) RBRACKET LBRACE column_names(C) RBRACE COL
 pair(A) ::= KEY(K) LBRACKET NUMBER RBRACKET LBRACE column_names(C) RBRACE COLON NEWLINE. [PREFER_SHIFT] {
     // Empty table
     A = TOONc_newListObjArena(ctx->arena, 0);
-    A->key = turbo_pool_alloc(ctx->arena, K.length + 1);
+    A->key = mem_alloc(ctx->arena, K.length + 1);
     memcpy(A->key, K.value, K.length);
     A->key[K.length] = '\0';
     // TOONc_free(C);

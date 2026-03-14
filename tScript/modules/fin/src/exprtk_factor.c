@@ -27,11 +27,11 @@
  *
  * Example: [3.0, 1.0, 4.0, 1.5, 2.0] → [2, 0, 4, 1, 3]
  */
-size_t exprtk_vec_rank(const double *in, size_t n, double *out, turbo_pool_t *arena) {
+size_t exprtk_vec_rank(const double *in, size_t n, double *out, mem_pool_t *arena) {
     if (!in || !out || n == 0) return 0;
 
     /* Create index-value pairs */
-    rank_item_t *items = TURBO_POOL_ALLOC_ARRAY(arena, rank_item_t, n);
+    rank_item_t *items = MEM_ALLOC_ARRAY(arena, rank_item_t, n);
     if (!items) return 0;
 
     for (size_t i = 0; i < n; i++) {
@@ -74,7 +74,7 @@ size_t exprtk_vec_rank(const double *in, size_t n, double *out, turbo_pool_t *ar
  *
  * Example: [1, 2, 3, 4, 5] → [-1.414, -0.707, 0, 0.707, 1.414]
  */
-size_t exprtk_vec_zscore(const double *in, size_t n, double *out, turbo_pool_t *arena) {
+size_t exprtk_vec_zscore(const double *in, size_t n, double *out, mem_pool_t *arena) {
     (void)arena;
     if (!in || !out || n == 0) return 0;
     if (n == 1) {
@@ -119,7 +119,7 @@ size_t exprtk_vec_zscore(const double *in, size_t n, double *out, turbo_pool_t *
  * Example: [1, 2, 3, 100], limit=0.25 → [1.75, 2, 3, 3.25]
  */
 size_t exprtk_vec_winsorize(const double *in, size_t n, double limit_pct,
-                             double *out, turbo_pool_t *arena) {
+                             double *out, mem_pool_t *arena) {
     if (!in || !out || n == 0) return 0;
     if (limit_pct <= 0.0 || limit_pct >= 0.5) {
         /* Invalid percentile, just copy */
@@ -128,7 +128,7 @@ size_t exprtk_vec_winsorize(const double *in, size_t n, double limit_pct,
     }
 
     /* Sort to find percentiles */
-    double *sorted = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *sorted = MEM_ALLOC_ARRAY(arena, double, n);
     if (!sorted) return 0;
     memcpy(sorted, in, n * sizeof(double));
     qsort(sorted, n, sizeof(double), compare_doubles);
@@ -164,7 +164,7 @@ size_t exprtk_vec_winsorize(const double *in, size_t n, double limit_pct,
  *
  * Example: [1, 2, 3, 4, 5] → [0, 0.25, 0.5, 0.75, 1.0]
  */
-size_t exprtk_vec_standardize(const double *in, size_t n, double *out, turbo_pool_t *arena) {
+size_t exprtk_vec_standardize(const double *in, size_t n, double *out, mem_pool_t *arena) {
     (void)arena;
     if (!in || !out || n == 0) return 0;
     if (n == 1) {
@@ -502,10 +502,10 @@ double exprtk_vec_efficiency(const double *price, size_t n) {
  * @param np Number of periods
  * @param out Output array (length np)
  */
-size_t exprtk_vec_csad(const double *rets, size_t na, size_t np, double *out, turbo_pool_t *arena) {
+size_t exprtk_vec_csad(const double *rets, size_t na, size_t np, double *out, mem_pool_t *arena) {
     if (!rets || !out || na == 0 || np == 0) return 0;
 
-    double *cross_mean = TURBO_POOL_ALLOC_ARRAY(arena, double, np);
+    double *cross_mean = MEM_ALLOC_ARRAY(arena, double, np);
     if (!cross_mean) return 0;
 
     /* Calculate cross-sectional mean for each period */
@@ -539,11 +539,11 @@ size_t exprtk_vec_csad(const double *rets, size_t na, size_t np, double *out, tu
  * @param period Rolling window size
  * @param out Output array (length n)
  */
-size_t exprtk_vec_quantile(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena) {
+size_t exprtk_vec_quantile(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena) {
     if (!in || !out || n == 0 || period == 0) return 0;
     if (period > n) period = n;
 
-    double *window = TURBO_POOL_ALLOC_ARRAY(arena, double, period);
+    double *window = MEM_ALLOC_ARRAY(arena, double, period);
     if (!window) return 0;
 
     for (size_t i = 0; i < n; i++) {
@@ -662,11 +662,11 @@ double exprtk_vec_apm(const double *ret_am, const double *ret_pm, size_t n) {
  * @param period Rolling window
  * @param out Output array
  */
-size_t exprtk_vec_cgo(const double *p, const double *v, size_t n, size_t period, double *out, turbo_pool_t *arena) {
+size_t exprtk_vec_cgo(const double *p, const double *v, size_t n, size_t period, double *out, mem_pool_t *arena) {
     if (!p || !v || !out || n == 0 || period == 0) return 0;
     if (period > n) period = n;
 
-    double *returns = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *returns = MEM_ALLOC_ARRAY(arena, double, n);
     if (!returns) return 0;
 
     /* Calculate returns */

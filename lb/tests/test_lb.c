@@ -5,7 +5,7 @@
 
 #include "turbo_coro_lb.h"
 #include "turbo_coro_bidi_pump.h"
-#include <netcore.h> 
+#include <CoroNet.h> 
 #include "turbo_coro.h"
 #include "tinytest.h"
 #include <string.h>
@@ -24,23 +24,23 @@ static void echo_worker_coro(coro_t *co, void *arg) {
     (void)co;
     worker_ctx_t *wctx = (worker_ctx_t *)arg;
 
-    coro_client_t *c = coro_client_create(wctx->ctx);
+    coro_socket_t *c = coro_socket_create(wctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_client_connect(c, wctx->backend_url) != 0) {
-        coro_client_destroy(c);
+    if (coro_socket_connect(c, wctx->backend_url) != 0) {
+        coro_socket_destroy(c);
         return;
     }
 
     char *data = NULL;
     size_t len = 0;
-    while (coro_client_recv(c, &data, &len) == 0) {
-        coro_client_send(c, data, len);
+    while (coro_socket_recv(c, &data, &len) == 0) {
+        coro_socket_send(c, data, len);
         free(data);
         data = NULL;
     }
 
     wctx->sessions_served++;
-    coro_client_destroy(c);
+    coro_socket_destroy(c);
 }
 
 typedef struct {
@@ -59,20 +59,20 @@ static void test_client_coro(coro_t *co, void *arg) {
     /* Small delay to let worker register */
     coro_sleep(cctx->ctx, 50);
 
-    coro_client_t *c = coro_client_create(cctx->ctx);
+    coro_socket_t *c = coro_socket_create(cctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_client_connect(c, cctx->frontend_url) != 0) {
-        coro_client_destroy(c);
+    if (coro_socket_connect(c, cctx->frontend_url) != 0) {
+        coro_socket_destroy(c);
         return;
     }
 
     size_t slen = strlen(cctx->send_data);
-    coro_client_send(c, cctx->send_data, slen);
+    coro_socket_send(c, cctx->send_data, slen);
 
     char *data = NULL;
     size_t len = 0;
-    coro_client_set_timeout(c, 2000);
-    if (coro_client_recv(c, &data, &len) == 0 && data) {
+    coro_socket_set_timeout(c, 2000);
+    if (coro_socket_recv(c, &data, &len) == 0 && data) {
         size_t copy = len < sizeof(cctx->recv_buf) - 1
                           ? len
                           : sizeof(cctx->recv_buf) - 1;
@@ -83,7 +83,7 @@ static void test_client_coro(coro_t *co, void *arg) {
         free(data);
     }
 
-    coro_client_destroy(c);
+    coro_socket_destroy(c);
 
     /* Stop the loop after test completes */
     coro_sleep(cctx->ctx, 100);
@@ -104,27 +104,27 @@ static void l7_echo_worker_coro(coro_t *co, void *arg) {
     (void)co;
     l7_worker_ctx_t *wctx = (l7_worker_ctx_t *)arg;
 
-    coro_client_t *c = coro_client_create(wctx->ctx);
+    coro_socket_t *c = coro_socket_create(wctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_client_connect(c, wctx->backend_url) != 0) {
-        coro_client_destroy(c);
+    if (coro_socket_connect(c, wctx->backend_url) != 0) {
+        coro_socket_destroy(c);
         return;
     }
 
     /* First message = group name */
-    coro_client_send(c, wctx->group, strlen(wctx->group));
+    coro_socket_send(c, wctx->group, strlen(wctx->group));
 
     /* Echo with tag prefix so test can verify which worker handled it */
     char *data = NULL;
     size_t len = 0;
-    while (coro_client_recv(c, &data, &len) == 0) {
+    while (coro_socket_recv(c, &data, &len) == 0) {
         size_t tag_len = strlen(wctx->tag);
         size_t total = tag_len + len;
         char *resp = (char *)malloc(total);
         if (resp) {
             memcpy(resp, wctx->tag, tag_len);
             memcpy(resp + tag_len, data, len);
-            coro_client_send(c, resp, total);
+            coro_socket_send(c, resp, total);
             free(resp);
         }
         free(data);
@@ -132,7 +132,7 @@ static void l7_echo_worker_coro(coro_t *co, void *arg) {
     }
 
     wctx->sessions_served++;
-    coro_client_destroy(c);
+    coro_socket_destroy(c);
 }
 
 /* Route callback: "API:..." → "api", "WEB:..." → "web" */
@@ -159,19 +159,19 @@ static void l7_test_client_coro(coro_t *co, void *arg) {
 
     coro_sleep(cctx->ctx, 100);
 
-    coro_client_t *c = coro_client_create(cctx->ctx);
+    coro_socket_t *c = coro_socket_create(cctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_client_connect(c, cctx->frontend_url) != 0) {
-        coro_client_destroy(c);
+    if (coro_socket_connect(c, cctx->frontend_url) != 0) {
+        coro_socket_destroy(c);
         return;
     }
 
-    coro_client_send(c, cctx->send_data, strlen(cctx->send_data));
+    coro_socket_send(c, cctx->send_data, strlen(cctx->send_data));
 
     char *data = NULL;
     size_t len = 0;
-    coro_client_set_timeout(c, 2000);
-    if (coro_client_recv(c, &data, &len) == 0 && data) {
+    coro_socket_set_timeout(c, 2000);
+    if (coro_socket_recv(c, &data, &len) == 0 && data) {
         size_t copy = len < sizeof(cctx->recv_buf) - 1 ? len : sizeof(cctx->recv_buf) - 1;
         memcpy(cctx->recv_buf, data, copy);
         cctx->recv_buf[copy] = '\0';
@@ -179,7 +179,7 @@ static void l7_test_client_coro(coro_t *co, void *arg) {
         free(data);
     }
 
-    coro_client_destroy(c);
+    coro_socket_destroy(c);
 
     if (cctx->stop_after) {
         coro_sleep(cctx->ctx, 100);
@@ -228,25 +228,25 @@ static void req_echo_worker_coro(coro_t *co, void *arg) {
     (void)co;
     req_worker_ctx_t *wctx = (req_worker_ctx_t *)arg;
 
-    coro_client_t *c = coro_client_create(wctx->ctx);
+    coro_socket_t *c = coro_socket_create(wctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_client_connect(c, wctx->backend_url) != 0) {
-        coro_client_destroy(c);
+    if (coro_socket_connect(c, wctx->backend_url) != 0) {
+        coro_socket_destroy(c);
         return;
     }
 
     char *data = NULL;
     size_t len = 0;
-    while (coro_client_recv(c, &data, &len) == 0) {
+    while (coro_socket_recv(c, &data, &len) == 0) {
         /* Flip type byte high bit as response marker */
         if (len >= 1) data[0] = (char)((unsigned char)data[0] | 0x80);
-        coro_client_send(c, data, len);
+        coro_socket_send(c, data, len);
         wctx->messages_handled++;
         free(data);
         data = NULL;
     }
 
-    coro_client_destroy(c);
+    coro_socket_destroy(c);
 }
 
 /* REQUEST mode client: sends TLV messages, receives responses */
@@ -268,23 +268,23 @@ static void tlv_test_client_coro(coro_t *co, void *arg) {
 
     coro_sleep(cctx->ctx, 100);
 
-    coro_client_t *c = coro_client_create(cctx->ctx);
+    coro_socket_t *c = coro_socket_create(cctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_client_connect(c, cctx->frontend_url) != 0) {
-        coro_client_destroy(c);
+    if (coro_socket_connect(c, cctx->frontend_url) != 0) {
+        coro_socket_destroy(c);
         return;
     }
 
     size_t msg_len = 0;
     char *msg = make_tlv(cctx->send_type, cctx->send_payload,
                           strlen(cctx->send_payload), &msg_len);
-    coro_client_send(c, msg, msg_len);
+    coro_socket_send(c, msg, msg_len);
     free(msg);
 
     char *data = NULL;
     size_t len = 0;
-    coro_client_set_timeout(c, 2000);
-    if (coro_client_recv(c, &data, &len) == 0 && data && len >= 3) {
+    coro_socket_set_timeout(c, 2000);
+    if (coro_socket_recv(c, &data, &len) == 0 && data && len >= 3) {
         cctx->recv_type = (uint8_t)data[0];
         uint16_t plen =
             (uint16_t)((unsigned char)data[1] << 8 | (unsigned char)data[2]);
@@ -297,7 +297,7 @@ static void tlv_test_client_coro(coro_t *co, void *arg) {
         free(data);
     }
 
-    coro_client_destroy(c);
+    coro_socket_destroy(c);
 
     if (cctx->stop_after) {
         coro_sleep(cctx->ctx, 100);

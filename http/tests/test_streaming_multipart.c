@@ -41,11 +41,11 @@ spec("http streaming multipart") {
     describe("coro upload") {
 
         it("should upload multipart form with file") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("https://httpbin.org/");
             http_client_set_timeout(c, 15000);
             http_multipart_form_t *form = http_multipart_form_create();
             http_multipart_form_add_file_path(form, "file", TEST_FILE, "application/octet-stream");
-            http_response_t *r = http_post_multipart(c, "https://httpbin.org/post", form);
+            http_response_t *r = http_post_multipart(c, "post", form);
             if (!is_network_error(r)) {
                 check_int_eq(r->status_code, 200);
                 check_not_null(r->body);

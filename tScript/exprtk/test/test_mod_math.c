@@ -286,8 +286,8 @@ spec("SIMD Math Module") {
 
     describe("Gauss-Jordan Inversion") {
         it("should invert identity matrix") {
-            turbo_pool_t arena;
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena;
+            mem_init(&arena, 4096);
 
             double I[] = {1, 0, 0, 1};  // 2x2 identity
             double result[4];
@@ -300,12 +300,12 @@ spec("SIMD Math Module") {
                 check_double_eq(result[i], I[i], TEST_TOLERANCE);
             }
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
 
         it("should invert 2x2 matrix") {
-            turbo_pool_t arena;
-            turbo_pool_init(&arena, 4096);
+            mem_pool_t arena;
+            mem_init(&arena, 4096);
 
             // [4 7]  inverse is [0.6 -0.7]
             // [2 6]             [-0.2 0.4]
@@ -319,7 +319,7 @@ spec("SIMD Math Module") {
                 check_double_eq(A[i], expected[i], 1e-9);
             }
 
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 

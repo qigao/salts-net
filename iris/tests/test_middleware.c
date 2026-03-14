@@ -13,7 +13,7 @@
 #include "iris_app.h"
 #include "turbo_buffer.h"
 
-static turbo_pool_t arena;
+static mem_pool_t arena;
 
 /* Test tracking variables */
 static int middleware_call_order[10];
@@ -75,7 +75,7 @@ static void test_handler(Req *req, Res *res) {
 
 spec("middleware") {
     before_each() {
-        turbo_pool_init(&arena, 4096);
+        mem_init(&arena, 4096);
         reset_tracking();
         /* Reset both legacy middleware and default app */
         iris_app_reset_default();
@@ -83,7 +83,7 @@ spec("middleware") {
     }
 
     after_each() {
-        turbo_pool_free(&arena);
+        mem_destroy(&arena);
         iris_app_reset_default();
         reset_middleware();
     }

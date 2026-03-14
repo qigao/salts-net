@@ -96,7 +96,7 @@ int strategy_walk_forward(strategy_ctx_t *ctx,
                           double start_date, double end_date,
                           const wfo_config_t *cfg,
                           wfo_result_t *result,
-                          turbo_pool_t *arena);
+                          mem_pool_t *arena);
 
 #ifdef __cplusplus
 }

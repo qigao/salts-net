@@ -9,7 +9,7 @@ target_link_libraries(
           $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
           c-ares::cares)
 
-# DNS test using turbo_dns API (requires netcore for turbo_dns.h)
+# DNS test using turbo_dns API (requires CoroNet for turbo_dns.h)
 add_executable(test_dns test_dns.c)
 
 target_link_libraries(

@@ -19,62 +19,62 @@ const exprtk_module_t *exprtk_module_ta(void);
 size_t exprtk_ta_sma(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_ema(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_wma(const double *in, size_t n, size_t period, double *out);
-size_t exprtk_ta_dema(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
-size_t exprtk_ta_tema(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
+size_t exprtk_ta_dema(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
+size_t exprtk_ta_tema(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_kama(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_t3(const double *in, size_t n, size_t period, double vfactor, double *out,
-                    turbo_pool_t *arena);
+                    mem_pool_t *arena);
 size_t exprtk_ta_trima(const double *in, size_t n, size_t period, double *out,
-                       turbo_pool_t *arena);
+                       mem_pool_t *arena);
 size_t exprtk_ta_bbands(const double *in, size_t n, size_t period, double mult, double *upper,
                         double *middle, double *lower);
 size_t exprtk_ta_midpoint(const double *in, size_t n, size_t period, double *out,
-                          turbo_pool_t *arena);
+                          mem_pool_t *arena);
 size_t exprtk_ta_midprice(const double *hi, const double *lo, size_t n, size_t period, double *out,
-                          turbo_pool_t *arena);
+                          mem_pool_t *arena);
 size_t exprtk_ta_sar(const double *hi, const double *lo, size_t n, double accel_init,
                      double accel_max, double *out);
 size_t exprtk_ta_savgol(const double *in, size_t n, size_t window, double *out);
-size_t exprtk_ta_bbi(const double *in, size_t n, double *out, turbo_pool_t *arena);
-size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
+size_t exprtk_ta_bbi(const double *in, size_t n, double *out, mem_pool_t *arena);
+size_t exprtk_ta_hma(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_supertrend(const double *hi, const double *lo, const double *cl, size_t n,
                             size_t period, double mult, double *trend, double *upper, double *lower,
-                            turbo_pool_t *arena);
+                            mem_pool_t *arena);
 
 size_t exprtk_ta_vwap(const double *hi, const double *lo, const double *cl, const double *vol,
                       size_t n, double *out);
 size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t period,
-                          double *upper, double *lower, double *middle, turbo_pool_t *arena);
+                          double *upper, double *lower, double *middle, mem_pool_t *arena);
 size_t exprtk_ta_keltner(const double *hi, const double *lo, const double *cl, size_t n,
                          size_t ema_p, size_t atr_p, double mult, double *upper, double *middle,
-                         double *lower, turbo_pool_t *arena);
+                         double *lower, mem_pool_t *arena);
 size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, size_t n,
                           size_t tenkan_p, size_t kijun_p, size_t senkou_p, double *tenkan,
                           double *kijun, double *senkou_a, double *senkou_b, double *chikou,
-                          turbo_pool_t *arena);
+                          mem_pool_t *arena);
 
 size_t exprtk_ta_pivot_high(const double *hi, size_t n, size_t left, size_t right, double *out);
 size_t exprtk_ta_pivot_low(const double *lo, size_t n, size_t left, size_t right, double *out);
 size_t exprtk_ta_rma(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_zlema(const double *in, size_t n, size_t period, double *out,
-                       turbo_pool_t *arena);
+                       mem_pool_t *arena);
 size_t exprtk_ta_alma(const double *in, size_t n, size_t period, double offset, double sigma,
-                      double *out, turbo_pool_t *arena);
+                      double *out, mem_pool_t *arena);
 size_t exprtk_ta_vidya(const double *in, size_t n, size_t cmo_p, size_t ema_p, double *out,
-                       turbo_pool_t *arena);
+                       mem_pool_t *arena);
 size_t exprtk_ta_rvi(const double *in, size_t n, size_t std_p, size_t ema_p, double *out,
-                     turbo_pool_t *arena);
-size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
+                     mem_pool_t *arena);
+size_t exprtk_ta_vhf(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_volatility_ratio(const double *hi, const double *lo, const double *cl, size_t n,
-                                  size_t period, double *out, turbo_pool_t *arena);
+                                  size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_er(const double *in, size_t n, size_t period, double *out);
-size_t exprtk_ta_bias(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
-size_t exprtk_ta_psy(const double *cl, size_t n, size_t period, double *out, turbo_pool_t *arena);
+size_t exprtk_ta_bias(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
+size_t exprtk_ta_psy(const double *cl, size_t n, size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_pressure(const double *hi, const double *lo, const double *cl, const double *vol,
                           size_t n, double *buy_pres, double *sell_pres);
 size_t exprtk_ta_kvo(const double *hi, const double *lo, const double *cl, const double *vol,
                      size_t n, size_t fast_p, size_t slow_p, size_t sig_p, double *kvo, double *sig,
-                     turbo_pool_t *arena);
+                     mem_pool_t *arena);
 size_t exprtk_ta_arbr(const double *hi, const double *lo, const double *op, const double *cl,
                       size_t n, size_t period, double *ar, double *br);
 size_t exprtk_candle_body_size(const double *O, const double *C, const double *H, const double *L,
@@ -90,90 +90,90 @@ size_t exprtk_candle_fuzzy_bear(const double *O, const double *H, const double *
                                 size_t n, double *out);
 
 /* TA-Lib Momentum */
-size_t exprtk_ta_rsi(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
+size_t exprtk_ta_rsi(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_macd(const double *in, size_t n, size_t fast_p, size_t slow_p, size_t sig_p,
-                      double *line, double *sig, double *hist, turbo_pool_t *arena);
+                      double *line, double *sig, double *hist, mem_pool_t *arena);
 size_t exprtk_ta_stoch(const double *hi, const double *lo, const double *cl, size_t n, size_t k_p,
-                       size_t d_p, double *out_k, double *out_d, turbo_pool_t *arena);
+                       size_t d_p, double *out_k, double *out_d, mem_pool_t *arena);
 size_t exprtk_ta_stochrsi(const double *in, size_t n, size_t rsi_p, size_t k_p, size_t d_p,
-                          double *out_k, double *out_d, turbo_pool_t *arena);
+                          double *out_k, double *out_d, mem_pool_t *arena);
 size_t exprtk_ta_willr(const double *hi, const double *lo, const double *cl, size_t n,
-                       size_t period, double *out, turbo_pool_t *arena);
+                       size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_cci(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                     double *out, turbo_pool_t *arena);
+                     double *out, mem_pool_t *arena);
 size_t exprtk_ta_mom(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_roc(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_apo(const double *in, size_t n, size_t fast_p, size_t slow_p, double *out,
-                     turbo_pool_t *arena);
+                     mem_pool_t *arena);
 size_t exprtk_ta_ppo(const double *in, size_t n, size_t fast_p, size_t slow_p, double *out,
-                     turbo_pool_t *arena);
-size_t exprtk_ta_trix(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
+                     mem_pool_t *arena);
+size_t exprtk_ta_trix(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_ultosc(const double *hi, const double *lo, const double *cl, size_t n, size_t p1,
-                        size_t p2, size_t p3, double *out, turbo_pool_t *arena);
+                        size_t p2, size_t p3, double *out, mem_pool_t *arena);
 size_t exprtk_ta_aroon(const double *hi, const double *lo, size_t n, size_t period, double *up,
-                       double *dn, turbo_pool_t *arena);
+                       double *dn, mem_pool_t *arena);
 
 size_t exprtk_ta_aroonosc(const double *hi, const double *lo, size_t n, size_t period, double *out,
-                          turbo_pool_t *arena);
-size_t exprtk_ta_cmo(const double *in, size_t n, size_t period, double *out, turbo_pool_t *arena);
+                          mem_pool_t *arena);
+size_t exprtk_ta_cmo(const double *in, size_t n, size_t period, double *out, mem_pool_t *arena);
 
 /* TA-Lib Volatility */
 size_t exprtk_ta_trange(const double *hi, const double *lo, const double *cl, size_t n,
                         double *out);
 size_t exprtk_ta_atr(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                     double *out, turbo_pool_t *arena);
+                     double *out, mem_pool_t *arena);
 size_t exprtk_ta_rsrs(const double *hi, const double *lo, size_t n, size_t n_reg, size_t m_z,
-                      double *slope, double *zscore, turbo_pool_t *arena);
+                      double *slope, double *zscore, mem_pool_t *arena);
 size_t exprtk_ta_smart_money(const double *p, const double *v, size_t n, size_t period, double *out,
-                             turbo_pool_t *arena);
+                             mem_pool_t *arena);
 size_t exprtk_ta_qrs(const double *slope, size_t n, size_t period, double *out,
-                     turbo_pool_t *arena);
+                     mem_pool_t *arena);
 size_t exprtk_ta_vmacd_mtm(const double *v, size_t n, size_t period, double *out,
-                           turbo_pool_t *arena);
+                           mem_pool_t *arena);
 size_t exprtk_ta_noise_area(const double *op, const double *cl, size_t n, size_t period,
-                            double *upper, double *lower, turbo_pool_t *arena);
+                            double *upper, double *lower, mem_pool_t *arena);
 size_t exprtk_ta_w_factor(const double *ret, const double *amt, const double *cnt, size_t n,
-                          size_t period, double *out, turbo_pool_t *arena);
+                          size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_cpv(const double *ret, const double *vol, size_t n, size_t period, double *out,
-                     turbo_pool_t *arena);
+                     mem_pool_t *arena);
 size_t exprtk_ta_smma(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_alligator(const double *in, size_t n, double *jaw, double *teeth, double *lips,
-                           turbo_pool_t *arena);
+                           mem_pool_t *arena);
 size_t exprtk_ta_natr(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                      double *out, turbo_pool_t *arena);
+                      double *out, mem_pool_t *arena);
 
 /* TA-Lib Volume */
 size_t exprtk_ta_obv(const double *cl, const double *vol, size_t n, double *out);
 size_t exprtk_ta_ad(const double *hi, const double *lo, const double *cl, const double *vol,
                     size_t n, double *out);
 size_t exprtk_ta_shadow(const double *op, const double *hi, const double *lo, const double *cl,
-                        size_t n, double *upper, double *lower, turbo_pool_t *arena);
+                        size_t n, double *upper, double *lower, mem_pool_t *arena);
 size_t exprtk_ta_adosc(const double *hi, const double *lo, const double *cl, const double *vol,
-                       size_t n, size_t fast_p, size_t slow_p, double *out, turbo_pool_t *arena);
+                       size_t n, size_t fast_p, size_t slow_p, double *out, mem_pool_t *arena);
 size_t exprtk_ta_mfi(const double *hi, const double *lo, const double *cl, const double *vol,
-                     size_t n, size_t period, double *out, turbo_pool_t *arena);
+                     size_t n, size_t period, double *out, mem_pool_t *arena);
 
 /* TA-Lib Trend */
 size_t exprtk_ta_plus_dm(const double *hi, const double *lo, size_t n, size_t period, double *out,
-                         turbo_pool_t *arena);
+                         mem_pool_t *arena);
 size_t exprtk_ta_minus_dm(const double *hi, const double *lo, size_t n, size_t period, double *out,
-                          turbo_pool_t *arena);
+                          mem_pool_t *arena);
 size_t exprtk_ta_plus_di(const double *hi, const double *lo, const double *cl, size_t n,
-                         size_t period, double *out, turbo_pool_t *arena);
+                         size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_minus_di(const double *hi, const double *lo, const double *cl, size_t n,
-                          size_t period, double *out, turbo_pool_t *arena);
+                          size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_dx(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                    double *out, turbo_pool_t *arena);
+                    double *out, mem_pool_t *arena);
 size_t exprtk_ta_adx(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                     double *out, turbo_pool_t *arena);
+                     double *out, mem_pool_t *arena);
 size_t exprtk_ta_adxr(const double *hi, const double *lo, const double *cl, size_t n, size_t period,
-                      double *out, turbo_pool_t *arena);
+                      double *out, mem_pool_t *arena);
 
 /* TA-Lib Statistics */
 size_t exprtk_ta_stddev(const double *in, size_t n, size_t period, double mult, double *out,
-                        turbo_pool_t *arena);
+                        mem_pool_t *arena);
 size_t exprtk_ta_var(const double *in, size_t n, size_t period, double mult, double *out,
-                     turbo_pool_t *arena);
+                     mem_pool_t *arena);
 size_t exprtk_ta_linearreg(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_linearreg_slope(const double *in, size_t n, size_t period, double *out);
 size_t exprtk_ta_linearreg_intercept(const double *in, size_t n, size_t period, double *out);
@@ -217,17 +217,17 @@ size_t exprtk_ta_bsm_iv_call(const double *price, const double *S, const double 
 size_t exprtk_ta_bsm_iv_put(const double *price, const double *S, const double *K, const double *T,
                             const double *r, size_t n, double *out);
 size_t exprtk_ta_opt_binomial(double S, double K, double T, double r, double sigma, size_t steps,
-                              int is_call, double *out, turbo_pool_t *arena);
+                              int is_call, double *out, mem_pool_t *arena);
 
 /* TA New Indicators */
 size_t exprtk_ta_fisher(const double *hi, const double *lo, size_t n, size_t period,
-                         double *fisher, double *trigger, turbo_pool_t *arena);
+                         double *fisher, double *trigger, mem_pool_t *arena);
 size_t exprtk_ta_squeeze(const double *hi, const double *lo, const double *cl, size_t n,
                           size_t bb_p, double bb_m, size_t kc_p, double kc_m,
                           double *squeeze, double *momentum, double *on_off,
-                          turbo_pool_t *arena);
+                          mem_pool_t *arena);
 size_t exprtk_ta_chop(const double *hi, const double *lo, const double *cl, size_t n,
-                       size_t period, double *out, turbo_pool_t *arena);
+                       size_t period, double *out, mem_pool_t *arena);
 size_t exprtk_ta_ehlers_cyber_cycle(const double *in, size_t n, double alpha, double *out);
 size_t exprtk_ta_ehlers_itrend(const double *in, size_t n, double alpha, double *out);
 size_t exprtk_ta_ehlers_mama(const double *in, size_t n, double fast_limit, double slow_limit,
@@ -249,10 +249,10 @@ void   ta_smma(const double *in, size_t n, size_t period, double *out);
 
 double ta_highest(const double *src, size_t idx, size_t period);
 double ta_lowest(const double *src, size_t idx, size_t period);
-void   ta_highest_arr(const double *src, size_t n, size_t period, double *dst, turbo_pool_t *arena);
-void   ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, turbo_pool_t *arena);
-void   ta_highest_idx_arr(const double *src, size_t n, size_t period, size_t *dst, turbo_pool_t *arena);
-void   ta_lowest_idx_arr(const double *src, size_t n, size_t period, size_t *dst, turbo_pool_t *arena);
+void   ta_highest_arr(const double *src, size_t n, size_t period, double *dst, mem_pool_t *arena);
+void   ta_lowest_arr(const double *src, size_t n, size_t period, double *dst, mem_pool_t *arena);
+void   ta_highest_idx_arr(const double *src, size_t n, size_t period, size_t *dst, mem_pool_t *arena);
+void   ta_lowest_idx_arr(const double *src, size_t n, size_t period, size_t *dst, mem_pool_t *arena);
 size_t ta_highest_idx(const double *src, size_t idx, size_t period);
 size_t ta_lowest_idx(const double *src, size_t idx, size_t period);
 

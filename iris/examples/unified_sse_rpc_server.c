@@ -82,7 +82,7 @@ static int math_add_handler(Req *req, Res *res, rpc_request_t *rpc_req, rpc_resp
         rpc_set_error(rpc_res, RPC_ERROR_INVALID_PARAMS, "Missing parameters 'a' and 'b'");
         return -1;
     }
-    char *result_json = turbo_pool_sprintf(rpc_res->arena, "%lld", (long long)(a + b));
+    char *result_json = mem_sprintf(rpc_res->arena, "%lld", (long long)(a + b));
     rpc_set_result(rpc_res, result_json);
     return 0;
 }

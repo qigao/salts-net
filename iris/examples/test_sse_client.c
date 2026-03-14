@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <platform.h>
-#include "netcore.h"
+#include "CoroNet.h"
 #include <turbo_coro.h>
 #include <http_client.h>
 #include <rpc_client.h>
@@ -29,7 +29,7 @@ static void sse_coro_entry(coro_t *co, void *arg) {
     (void)co;
     coro_context_t *ctx = (coro_context_t *)arg;
 
-    http_client_t *client = http_client_create();    http_client_set_timeout(client, 30000);
+    http_client_t *client = http_client_create(NULL);    http_client_set_timeout(client, 30000);
 
     printf("\n=== HTTP SSE GET Test ===\n");
     printf("Connecting to http://localhost:8080/stream...\n");

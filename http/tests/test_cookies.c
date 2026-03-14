@@ -11,7 +11,26 @@ static int is_network_error(http_response_t *r) {
           r->error_code == HTTP_ERROR_DNS_FAILED);
 }
 
+#include <stdio.h>
+#include <CoroNet/turbo_coro.h>
+#include "tlog.h"
+
+static int logger_initialized = 0;
+static void setup_logging(void) {
+  if (logger_initialized)
+    return;
+  tlog_config_t log_cfg = {.min_level = TURBO_LOG_LEVEL_DEBUG, .buffer_size = 64 * 1024, .pool_size = 32 * 1024};
+  tlog_t *logger = tlog_create(&log_cfg);
+  turbo_console_sink_opts_t console_opts = {
+      .output = stdout, .use_colors = 1, .pattern = TURBO_LOG_FULL_PATTERN};
+  tlog_add_sink(logger, turbo_sink_console_create(&console_opts));
+  tlog_set_default(logger);
+  http_client_init_logging(logger);
+  logger_initialized = 1;
+}
+
 spec("http cookies") {
+  before() { setup_logging(); }
 
     describe("cookie jar") {
 
@@ -68,7 +87,7 @@ spec("http cookies") {
     describe("automatic handling") {
 
         it("should store cookies from Set-Cookie header") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_cookie_jar_t *jar = http_cookie_jar_create();
             http_client_set_cookie_jar(c, jar);
@@ -83,7 +102,7 @@ spec("http cookies") {
         }
 
         it("should work without cookie jar") {
-            http_client_t *c = http_client_create();
+            http_client_t *c = http_client_create("http://localhost:8080");
             http_client_set_timeout(c, 10000);
             http_response_t *r = http_get(c, "https://httpbin.org/get");
             if (!is_network_error(r)) {

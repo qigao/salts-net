@@ -8,14 +8,14 @@
  *   2. The new bar is appended (optionally with price adjustment).
  *   3. The linearized view is updated for binding into TurboScript vectors.
  *
- * All memory lives inside a caller-supplied turbo_pool_t.
+ * All memory lives inside a caller-supplied mem_pool_t.
  */
 #ifndef BAR_WINDOW_H
 #define BAR_WINDOW_H
 
 #include <stddef.h>
 #include <stdbool.h>
-#include "exprtk_types.h"   /* turbo_pool_t (via exprtk_types -> turbo_buff) */
+#include "exprtk_types.h"   /* mem_pool_t (via exprtk_types -> turbo_buff) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,7 +67,7 @@ typedef struct {
  * @param arena     All allocations are made from this arena.
  * @return Pointer to window, or NULL on OOM.
  */
-bar_window_t *bar_window_create(size_t capacity, turbo_pool_t *arena);
+bar_window_t *bar_window_create(size_t capacity, mem_pool_t *arena);
 
 /**
  * @brief Reset the window to empty (does not free memory).

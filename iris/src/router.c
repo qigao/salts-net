@@ -4,7 +4,7 @@
 #include "middleware.h"
 #include "route_trie.h"
 #include "security.h"
-#include "netcore/turbo_coro_client.h"
+#include "CoroNet/turbo_coro_socket.h"
 #include "turbo_str.h"
 #include "tlog.h"
 #include <ctype.h>
@@ -22,7 +22,7 @@ struct http_parser_impl {
 
 /* Forward declaration of connection context structure from server_refactored.c */
 typedef struct {
-  coro_client_t *client;
+  coro_socket_t *client;
   char buffer[8192]; /* READ_BUF_SIZE */
   size_t buffer_used;
   int keep_alive;
@@ -35,12 +35,12 @@ typedef struct {
 // Write request structure definition (forward declared in router.h)
 // Write request structure definition (forward declared in router.h)
 struct write_req_s {
-  coro_client_t *client;
+  coro_socket_t *client;
   char *data; // Heap allocated (managed by caller)
 };
 
-// Sends error responses (400, 413, 414, or 500) - uses NetCore send
-static void send_error(coro_client_t *client, int error_code) {
+// Sends error responses (400, 413, 414, or 500) - uses CoroNet send
+static void send_error(coro_socket_t *client, int error_code) {
   if (!client)
     return;
 
@@ -85,7 +85,7 @@ static void send_error(coro_client_t *client, int error_code) {
     return;
 
   size_t len = strlen(err);
-  int status = coro_client_send(client, err, len);
+  int status = coro_socket_send(client, err, len);
   if (status != 0) {
     TLOG_ERROR("Send error: %d", status);
   }
@@ -93,19 +93,19 @@ static void send_error(coro_client_t *client, int error_code) {
 
 // Separates URL into path and query string components
 // Example: /users/123?active=true -> path="/users/123", query="active=true"
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-static int extract_path_and_query(turbo_pool_t *arena, char *url_buf, char **path, char **query) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+static int extract_path_and_query(mem_pool_t *arena, char *url_buf, char **path, char **query) {
   if (!arena || !url_buf || !path || !query)
     return -1;
 
   char *qmark = strchr(url_buf, '?');
   if (qmark) {
     *qmark = '\0';
-    *path = turbo_pool_strdup(arena, url_buf);
-    *query = turbo_pool_strdup(arena, qmark + 1);
+    *path = mem_strdup(arena, url_buf);
+    *query = mem_strdup(arena, qmark + 1);
   } else {
-    *path = turbo_pool_strdup(arena, url_buf);
-    *query = turbo_pool_strdup(arena, "");
+    *path = mem_strdup(arena, url_buf);
+    *query = mem_strdup(arena, "");
   }
 
   if (!*path || !*query)
@@ -113,7 +113,7 @@ static int extract_path_and_query(turbo_pool_t *arena, char *url_buf, char **pat
 
   // If path is empty, treat it as root
   if ((*path)[0] == '\0') {
-    *path = turbo_pool_strdup(arena, "/");
+    *path = mem_strdup(arena, "/");
     if (!*path)
       return -1;
   }
@@ -122,15 +122,15 @@ static int extract_path_and_query(turbo_pool_t *arena, char *url_buf, char **pat
 
 // Extracts URL parameters from a previously matched route
 // Example: From route /users/:id matched with /users/123, extracts parameter id=123
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-static int extract_url_params(turbo_pool_t *arena, const route_match_t *match,
+/* Phase IRIS-1: Updated to use mem_pool_t */
+static int extract_url_params(mem_pool_t *arena, const route_match_t *match,
                               request_t *url_params) {
   if (!arena || !match || !url_params)
     return -1;
 
   if (url_params->capacity == 0) {
     url_params->capacity = match->param_count > 0 ? match->param_count : 1;
-    url_params->items = turbo_pool_alloc(arena, sizeof(request_item_t) * url_params->capacity);
+    url_params->items = mem_alloc(arena, sizeof(request_item_t) * url_params->capacity);
     if (!url_params->items) {
       url_params->capacity = 0;
       return -1;
@@ -143,8 +143,8 @@ static int extract_url_params(turbo_pool_t *arena, const route_match_t *match,
   }
 
   for (int i = 0; i < match->param_count && url_params->count < url_params->capacity; i++) {
-    char *key = turbo_pool_alloc(arena, match->params[i].key.len + 1);
-    char *value = turbo_pool_alloc(arena, match->params[i].value.len + 1);
+    char *key = mem_alloc(arena, match->params[i].key.len + 1);
+    char *value = mem_alloc(arena, match->params[i].value.len + 1);
 
     if (!key || !value) {
       return -1;
@@ -210,14 +210,14 @@ void *get_context(Req *req) {
  * @param data The data to attach
  * @param cleanup Cleanup function to call when connection is closed
  */
-void set_connection_context(coro_client_t *client, void *data,
+void set_connection_context(coro_socket_t *client, void *data,
                             void (*cleanup)(void *)) {
   if (!client) {
     return;
   }
 
-  /* Get the connection context from NetCore */
-  void *ctx_ptr = coro_client_get_user_data(client);
+  /* Get the connection context from CoroNet */
+  void *ctx_ptr = coro_socket_get_user_data(client);
   if (!ctx_ptr) {
     /* No connection context exists - this shouldn't happen in normal operation */
     TLOG_ERROR("Warning: Attempting to set connection context on connection without context");
@@ -242,13 +242,13 @@ void set_connection_context(coro_client_t *client, void *data,
  * @param client The connection to get data from
  * @return The middleware data, or NULL if none set
  */
-void *get_connection_context(coro_client_t *client) {
+void *get_connection_context(coro_socket_t *client) {
   if (!client) {
     return NULL;
   }
 
-  /* Get the connection context from NetCore */
-  void *ctx_ptr = coro_client_get_user_data(client);
+  /* Get the connection context from CoroNet */
+  void *ctx_ptr = coro_socket_get_user_data(client);
   if (!ctx_ptr) {
     return NULL;
   }
@@ -259,20 +259,20 @@ void *get_connection_context(coro_client_t *client) {
 }
 
 // Create and initialize Req
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-static Req *create_req(turbo_pool_t *arena, struct iris_app *app, coro_client_t *client) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+static Req *create_req(mem_pool_t *arena, struct iris_app *app, coro_socket_t *client) {
   if (!arena)
     return NULL;
 
   /* Phase IRIS-1: Allocate Req from arena */
-  Req *req = turbo_pool_alloc(arena, sizeof(Req));
+  Req *req = mem_alloc(arena, sizeof(Req));
   if (!req)
     return NULL;
 
   memset(req, 0, sizeof(Req));
   req->app = app;               /* Association with application instance */
   req->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
-  req->client = client;         /* NetCore migration: use client */
+  req->client = client;         /* CoroNet migration: use client */
   req->method = NULL;
   req->path = NULL;
   req->body = NULL;
@@ -290,7 +290,7 @@ static Req *create_req(turbo_pool_t *arena, struct iris_app *app, coro_client_t 
   req->context.arena = arena;
 
   // Initialize security context
-  req->security = turbo_pool_alloc(arena, sizeof(iris_security_context_t));
+  req->security = mem_alloc(arena, sizeof(iris_security_context_t));
   if (!req->security) {
     return NULL;
   }
@@ -301,21 +301,21 @@ static Req *create_req(turbo_pool_t *arena, struct iris_app *app, coro_client_t 
 }
 
 // Create and initialize Res
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-static Res *create_res(turbo_pool_t *arena, coro_client_t *client) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+static Res *create_res(mem_pool_t *arena, coro_socket_t *client) {
   if (!arena)
     return NULL;
 
   /* Phase IRIS-1: Allocate Res from arena */
-  Res *res = turbo_pool_alloc(arena, sizeof(Res));
+  Res *res = mem_alloc(arena, sizeof(Res));
   if (!res)
     return NULL;
 
   memset(res, 0, sizeof(Res));
   res->arena = arena;           /* Phase IRIS-1: Store pointer to shared arena */
-  res->client = client;         /* NetCore migration: use client */
+  res->client = client;         /* CoroNet migration: use client */
   res->status = 200;
-  res->content_type = turbo_pool_strdup(arena, "text/plain"); /* Phase IRIS-1: Updated */
+  res->content_type = mem_strdup(arena, "text/plain"); /* Phase IRIS-1: Updated */
   res->body = NULL;
   res->body_len = 0;
   res->keep_alive = 1;
@@ -327,13 +327,13 @@ static Res *create_res(turbo_pool_t *arena, coro_client_t *client) {
 }
 
 // Create and initialize http_context_t
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-static http_context_t *create_http_context(turbo_pool_t *arena) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+static http_context_t *create_http_context(mem_pool_t *arena) {
   if (!arena)
     return NULL;
 
   http_context_t *context =
-      turbo_pool_alloc(arena, sizeof(http_context_t)); /* Phase IRIS-1: Updated */
+      mem_alloc(arena, sizeof(http_context_t)); /* Phase IRIS-1: Updated */
   if (!context)
     return NULL;
 
@@ -357,8 +357,8 @@ static void cleanup_request_t(request_t *req_data) {
   req_data->capacity = 0;
 }
 
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-request_t copy_request_t(turbo_pool_t *arena, const request_t *original) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+request_t copy_request_t(mem_pool_t *arena, const request_t *original) {
   request_t copy;
   memset(&copy, 0, sizeof(request_t));
 
@@ -369,7 +369,7 @@ request_t copy_request_t(turbo_pool_t *arena, const request_t *original) {
     // Allocate items array in arena
     copy.capacity = original->capacity;
     copy.count = original->count;
-    copy.items = turbo_pool_alloc(arena, copy.capacity * sizeof(request_item_t));
+    copy.items = mem_alloc(arena, copy.capacity * sizeof(request_item_t));
 
     if (!copy.items) {
       copy.capacity = 0;
@@ -380,7 +380,7 @@ request_t copy_request_t(turbo_pool_t *arena, const request_t *original) {
     // Copy each item using arena
     for (int i = 0; i < original->count; i++) {
       if (original->items[i].key) {
-        copy.items[i].key = turbo_pool_strdup(arena, original->items[i].key);
+        copy.items[i].key = mem_strdup(arena, original->items[i].key);
         if (!copy.items[i].key) {
           // Arena allocation failed - clear and return
           memset(&copy, 0, sizeof(request_t));
@@ -391,7 +391,7 @@ request_t copy_request_t(turbo_pool_t *arena, const request_t *original) {
       }
 
       if (original->items[i].value) {
-        copy.items[i].value = turbo_pool_strdup(arena, original->items[i].value);
+        copy.items[i].value = mem_strdup(arena, original->items[i].value);
         if (!copy.items[i].value) {
           // Arena allocation failed - clear and return
           memset(&copy, 0, sizeof(request_t));
@@ -519,25 +519,25 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
   if (!req || !req->arena || !context)
     return -1;
 
-  turbo_pool_t *arena = req->arena;
+  mem_pool_t *arena = req->arena;
 
   // Copy method
   if (context->method) {
-    req->method = turbo_pool_strdup(arena, context->method);
+    req->method = mem_strdup(arena, context->method);
     if (!req->method)
       return -1;
   }
 
   // Copy path
   if (path) {
-    req->path = turbo_pool_strdup(arena, path);
+    req->path = mem_strdup(arena, path);
     if (!req->path)
       return -1;
   }
 
   // Copy body
   if (context->body && context->body_length > 0) {
-    req->body = turbo_pool_alloc(arena, context->body_length + 1);
+    req->body = mem_alloc(arena, context->body_length + 1);
     if (!req->body)
       return -1;
     memcpy(req->body, context->body, context->body_length);
@@ -552,7 +552,7 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
   return 0;
 }
 
-// Composes and sends the response (headers + body) using NetCore send
+// Composes and sends the response (headers + body) using CoroNet send
 void reply(Res *res, int status, const char *content_type, const void *body, size_t body_len) {
   if (!res || !res->client) {
     return;
@@ -731,13 +731,13 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
     memcpy(response + written, escaped_body, escaped_body_len);
   }
 
-  // Send using NetCore API
-  int result = coro_client_send(res->client, response, total_len);
+  // Send using CoroNet API
+  int result = coro_socket_send(res->client, response, total_len);
   if (result != 0) {
     TLOG_ERROR("Send error: %d", result);
   }
 
-  // Free the response buffer immediately since NetCore copies the data
+  // Free the response buffer immediately since CoroNet copies the data
   free(response);
 
   // Free escaped buffer if allocated
@@ -774,7 +774,7 @@ void reply_stream_start(Res *res, int status) {
                          status, date_str);
 
   if (n > 0) {
-    coro_client_send(res->client, headers, n);
+    coro_socket_send(res->client, headers, n);
   }
 }
 
@@ -800,11 +800,11 @@ void reply_stream_chunk(Res *res, const char *data) {
   stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", payload_len);
   
   // Send length
-  coro_client_send(res->client, hex_len, strlen(hex_len));
+  coro_socket_send(res->client, hex_len, strlen(hex_len));
   // Send payload
-  coro_client_send(res->client, payload, payload_len);
+  coro_socket_send(res->client, payload, payload_len);
   // Send trailing CRLF
-  coro_client_send(res->client, "\r\n", 2);
+  coro_socket_send(res->client, "\r\n", 2);
   
   free(payload);
 }
@@ -816,7 +816,7 @@ void reply_stream_end(Res *res) {
   // Send the zero-length chunk to signal end of stream
   // Format: 0\r\n\r\n
   const char *end_chunk = "0\r\n\r\n";
-  coro_client_send(res->client, end_chunk, strlen(end_chunk));
+  coro_socket_send(res->client, end_chunk, strlen(end_chunk));
 }
 
 // =============================================================================
@@ -845,7 +845,7 @@ static void send_headers_only(Res *res, int status, const char *content_type,
                          res->keep_alive ? "keep-alive" : "close");
 
   if (n > 0) {
-    coro_client_send(res->client, headers, n);
+    coro_socket_send(res->client, headers, n);
   }
 }
 
@@ -881,7 +881,7 @@ int reply_file(Res *res, int status, const char *content_type, const char *file_
   }
 
   send_headers_only(res, status, content_type, (size_t)file_size, NULL);
-  coro_client_send(res->client, data, (size_t)file_size);
+  coro_socket_send(res->client, data, (size_t)file_size);
   free(data);
   return 0;
 }
@@ -930,7 +930,7 @@ int reply_download(Res *res, const char *file_path, const char *download_name) {
                  "Content-Disposition: attachment; filename=\"%s\"\r\n", filename);
 
   send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra);
-  coro_client_send(res->client, data, (size_t)file_size);
+  coro_socket_send(res->client, data, (size_t)file_size);
   free(data);
   return 0;
 }
@@ -957,7 +957,7 @@ void reply_chunked_start(Res *res, int status, const char *content_type) {
                          res->keep_alive ? "keep-alive" : "close");
 
   if (n > 0) {
-    coro_client_send(res->client, headers, n);
+    coro_socket_send(res->client, headers, n);
   }
 }
 
@@ -968,9 +968,9 @@ void reply_chunked_write(Res *res, const void *data, size_t len) {
   char hex_len[32];
   int n = stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", len);
   if (n > 0) {
-    coro_client_send(res->client, hex_len, n);
-    coro_client_send(res->client, data, len);
-    coro_client_send(res->client, "\r\n", 2);
+    coro_socket_send(res->client, hex_len, n);
+    coro_socket_send(res->client, data, len);
+    coro_socket_send(res->client, "\r\n", 2);
   }
 }
 
@@ -978,7 +978,7 @@ void reply_chunked_end(Res *res) {
   if (!res || !res->client)
     return;
 
-  coro_client_send(res->client, "0\r\n\r\n", 5);
+  coro_socket_send(res->client, "0\r\n\r\n", 5);
 }
 
 #define DEFAULT_CHUNK_SIZE (64 * 1024)
@@ -1123,7 +1123,7 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx, cons
 }
 
 // Main router function
-int iris_app_execute(iris_app_t *app, coro_client_t *client, const char *request_data,
+int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request_data,
                      size_t request_len) {
   if (!app || !client || !request_data || request_len == 0) {
     if (client)
@@ -1132,8 +1132,8 @@ int iris_app_execute(iris_app_t *app, coro_client_t *client, const char *request
   }
 
   // Phase IRIS-1: Create request arena (8KB initial - enough for typical HTTP request)
-  turbo_pool_t arena;
-  if (turbo_pool_init(&arena, 8192) != 0) {
+  mem_pool_t arena;
+  if (mem_init(&arena, 8192) != 0) {
     send_error(client, 500);
     return 1; // Close connection on arena init failure
   }
@@ -1302,12 +1302,12 @@ cleanup:
   }
 
   // Phase IRIS-1: Free the entire arena (handles all request/response memory)
-  turbo_pool_free(&arena);
+  mem_destroy(&arena);
 
   return should_close;
 }
 
-int router(coro_client_t *client, const char *request_data, size_t request_len) {
+int router(coro_socket_t *client, const char *request_data, size_t request_len) {
   return iris_app_execute(iris_app_default(), client, request_data, request_len);
 }
 
@@ -1325,7 +1325,7 @@ void set_header(Res *res, const char *name, const char *value) {
     if (res->arena) {
       // Arena-based allocation
       /* Phase IRIS-1: turbo_arena doesn't have realloc, so alloc + memcpy */
-      tmp = turbo_pool_alloc(res->arena, new_cap * sizeof(http_header_t));
+      tmp = mem_alloc(res->arena, new_cap * sizeof(http_header_t));
       if (tmp && res->headers && res->header_capacity > 0) {
         memcpy(tmp, res->headers, res->header_capacity * sizeof(http_header_t));
       }
@@ -1345,8 +1345,8 @@ void set_header(Res *res, const char *name, const char *value) {
 
   if (res->arena) {
     // Arena-based string allocation
-    res->headers[res->header_count].name = turbo_pool_strdup(res->arena, name);
-    res->headers[res->header_count].value = turbo_pool_strdup(res->arena, value);
+    res->headers[res->header_count].name = mem_strdup(res->arena, name);
+    res->headers[res->header_count].value = mem_strdup(res->arena, value);
   } else {
     // Malloc-based string allocation
     res->headers[res->header_count].name = strdup(name);
@@ -1431,7 +1431,7 @@ Req *copy_req(const Req *original) {
 
   // Copy primitive fields
   copy->arena = NULL;
-  copy->client = original->client; /* NetCore migration: use client */
+  copy->client = original->client; /* CoroNet migration: use client */
   copy->body_len = original->body_len;
 
   // Deep copy method string
@@ -1508,30 +1508,30 @@ Req *copy_req(const Req *original) {
   return copy;
 }
 
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-Req *arena_copy_req(turbo_pool_t *target_arena, const Req *original) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+Req *arena_copy_req(mem_pool_t *target_arena, const Req *original) {
   if (!original || !target_arena)
     return NULL;
 
   // Allocate on target arena
-  Req *copy = turbo_pool_alloc(target_arena, sizeof(Req));
+  Req *copy = mem_alloc(target_arena, sizeof(Req));
   if (!copy)
     return NULL;
 
   // Copy primitive fields
   copy->arena = target_arena;
-  copy->client = original->client; /* NetCore migration: use client */
+  copy->client = original->client; /* CoroNet migration: use client */
   copy->body_len = original->body_len;
 
   // Deep copy strings using target arena
   if (original->method)
-    copy->method = turbo_pool_strdup(target_arena, original->method);
+    copy->method = mem_strdup(target_arena, original->method);
 
   if (original->path)
-    copy->path = turbo_pool_strdup(target_arena, original->path);
+    copy->path = mem_strdup(target_arena, original->path);
 
   if (original->body && original->body_len > 0) {
-    copy->body = turbo_pool_alloc(target_arena, original->body_len + 1);
+    copy->body = mem_alloc(target_arena, original->body_len + 1);
     memcpy(copy->body, original->body, original->body_len);
     copy->body[original->body_len] = '\0';
   }
@@ -1546,7 +1546,7 @@ Req *arena_copy_req(turbo_pool_t *target_arena, const Req *original) {
   copy->context.arena = target_arena;
 
   // Copy security context using target arena
-  copy->security = turbo_pool_alloc(target_arena, sizeof(iris_security_context_t));
+  copy->security = mem_alloc(target_arena, sizeof(iris_security_context_t));
   if (!copy->security) {
     return NULL;
   }
@@ -1560,13 +1560,13 @@ Req *arena_copy_req(turbo_pool_t *target_arena, const Req *original) {
   return copy;
 }
 
-/* Phase IRIS-1: Updated to use turbo_pool_t */
-Res *arena_copy_res(turbo_pool_t *target_arena, const Res *original) {
+/* Phase IRIS-1: Updated to use mem_pool_t */
+Res *arena_copy_res(mem_pool_t *target_arena, const Res *original) {
   if (!original || !target_arena)
     return NULL;
 
   // Allocate on target arena
-  Res *copy = turbo_pool_alloc(target_arena, sizeof(Res));
+  Res *copy = mem_alloc(target_arena, sizeof(Res));
   if (!copy)
     return NULL;
 
@@ -1576,18 +1576,18 @@ Res *arena_copy_res(turbo_pool_t *target_arena, const Res *original) {
   copy->client = original->client;
 
   if (original->content_type)
-    copy->content_type = turbo_pool_strdup(target_arena, original->content_type);
+    copy->content_type = mem_strdup(target_arena, original->content_type);
 
   // Copy headers array in target arena
   if (original->header_capacity > 0) {
     copy->headers =
-        turbo_pool_alloc(target_arena, original->header_capacity * sizeof(http_header_t));
+        mem_alloc(target_arena, original->header_capacity * sizeof(http_header_t));
 
     for (int i = 0; i < original->header_count; ++i) {
       if (original->headers[i].name)
-        copy->headers[i].name = turbo_pool_strdup(target_arena, original->headers[i].name);
+        copy->headers[i].name = mem_strdup(target_arena, original->headers[i].name);
       if (original->headers[i].value)
-        copy->headers[i].value = turbo_pool_strdup(target_arena, original->headers[i].value);
+        copy->headers[i].value = mem_strdup(target_arena, original->headers[i].value);
     }
   }
 

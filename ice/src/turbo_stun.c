@@ -198,18 +198,18 @@ int stun_binding_request(coro_context_t *ctx,
   int timeout_ms = config->timeout_ms ? config->timeout_ms : 3000;
   int retries = config->retries ? config->retries : 3;
 
-  coro_client_t *client = coro_client_create(ctx);
+  coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
   if (!client)
     return -2;
 
-  coro_client_set_timeout(client, timeout_ms);
+  coro_socket_set_timeout(client, timeout_ms);
 
   char url[512];
   snprintf(url, sizeof(url), "udp://%s:%u", config->server_host, port);
 
-  int rc = coro_client_connect(client, url);
+  int rc = coro_socket_connect(client, url);
   if (rc != 0) {
-    coro_client_destroy(client);
+    coro_socket_destroy(client);
     return -3;
   }
 
@@ -222,13 +222,13 @@ int stun_binding_request(coro_context_t *ctx,
     uint8_t buffer[STUN_HEADER_SIZE];
     size_t len = stun_build_binding_request(buffer, &txn_id);
 
-    rc = coro_client_send(client, (const char *)buffer, len);
+    rc = coro_socket_send(client, (const char *)buffer, len);
     if (rc != 0)
       break;
 
     char *data = NULL;
     size_t data_len = 0;
-    rc = coro_client_recv(client, &data, &data_len);
+    rc = coro_socket_recv(client, &data, &data_len);
 
     if (rc == 0 && data && data_len > 0) {
       if (stun_is_stun_message((const uint8_t *)data, data_len)) {
@@ -247,7 +247,7 @@ int stun_binding_request(coro_context_t *ctx,
       coro_sleep(ctx, timeout_ms);
   }
 
-  coro_client_destroy(client);
+  coro_socket_destroy(client);
   return result;
 }
 

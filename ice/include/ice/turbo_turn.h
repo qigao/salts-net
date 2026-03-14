@@ -11,9 +11,9 @@
 #define TURBO_TURN_H
 
 #include "turbo_stun.h"
-#include "netcore.h"
+#include "CoroNet.h"
 #include "platform.h"
-#include "turbo_coro_client.h"
+#include "turbo_coro_socket.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -130,7 +130,7 @@ typedef struct {
  * TURN client structure (coroutine-based)
  */
 struct turbo_turn_client_s {
-    coro_client_t *client;
+    coro_socket_t *client;
     coro_context_t *ctx;
 
     /* Server */

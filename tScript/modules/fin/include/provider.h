@@ -19,7 +19,7 @@
 #include "universe.h"       /* universe_t, universe_asset_t */
 #include "market_rules.h"   /* universe_market_rules_t      */
 #include "bar_window.h"     /* bar_window_t                 */
-#include "exprtk_types.h"   /* turbo_pool_t                */
+#include "exprtk_types.h"   /* mem_pool_t                */
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,7 +59,7 @@ struct provider_s {
     int (*load_assets)(provider_t *self,
                        universe_t *u,
                        const char *source,
-                       turbo_pool_t *arena);
+                       mem_pool_t *arena);
 
     /**
      * Load price-adjustment events (splits, dividends) into the universe.
@@ -68,7 +68,7 @@ struct provider_s {
     int (*load_adjustments)(provider_t *self,
                             universe_t *u,
                             const char *source,
-                            turbo_pool_t *arena);
+                            mem_pool_t *arena);
 
     /* ── Bar Streaming ──────────────────────────────────────────────────── */
 
@@ -81,7 +81,7 @@ struct provider_s {
                          uint32_t asset_id,
                          double start_date,
                          double end_date,
-                         turbo_pool_t *arena);
+                         mem_pool_t *arena);
 
     /**
      * Fetch the next bar from the stream.
@@ -109,7 +109,7 @@ struct provider_s {
                                universe_t *u,
                                double start_date,
                                double end_date,
-                               turbo_pool_t *arena);
+                               mem_pool_t *arena);
 
     /**
      * Fetch one date slice from a multi-asset stream.
@@ -154,7 +154,7 @@ struct provider_s {
  */
 provider_t *provider_csv_create(const universe_market_rules_t *market,
                                  const char *data_dir,
-                                 turbo_pool_t *arena);
+                                 mem_pool_t *arena);
 
 /**
  * @brief Free a provider created by provider_csv_create().
@@ -172,7 +172,7 @@ void provider_free(provider_t *p);
 int provider_load_universe(provider_t *p, universe_t *u,
                             const char *assets_source,
                             const char *adj_source,     /* NULL to skip */
-                            turbo_pool_t *arena);
+                            mem_pool_t *arena);
 
 /**
  * @brief Stream all bars for a single asset into a bar_window.

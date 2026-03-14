@@ -12,12 +12,12 @@ static int is_network_error(http_response_t *r) {
 spec("Concurrent HTTP Batch Fetch Test") {
 
   it("should fetch multiple URLs concurrently using http_client_batch") {
-    http_client_t *c = http_client_create();
+    http_client_t *c = http_client_create("https://httpbin.org");
     http_client_set_timeout(c, 10000);
     http_client_set_user_agent(c, "TurboNet-Batch/1.0");
 
     /* Quick connectivity check */
-    http_response_t *probe = http_get(c, "https://httpbin.org/get");
+    http_response_t *probe = http_get(c, "get");
     if (is_network_error(probe)) {
       http_response_free(probe);
       http_client_destroy(c);
@@ -26,10 +26,10 @@ spec("Concurrent HTTP Batch Fetch Test") {
     http_response_free(probe);
 
     http_batch_request_t reqs[] = {
-      {.method = HTTP_GET, .url = "https://httpbin.org/get"},
-      {.method = HTTP_GET, .url = "https://httpbin.org/ip"},
-      {.method = HTTP_GET, .url = "https://httpbin.org/user-agent"},
-      {.method = HTTP_GET, .url = "https://httpbin.org/headers"},
+      {.method = HTTP_GET, .url = "get"},
+      {.method = HTTP_GET, .url = "ip"},
+      {.method = HTTP_GET, .url = "user-agent"},
+      {.method = HTTP_GET, .url = "headers"},
     };
     int count = sizeof(reqs) / sizeof(reqs[0]);
 

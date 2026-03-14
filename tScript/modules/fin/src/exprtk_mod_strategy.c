@@ -76,7 +76,7 @@ static void env_set_num(exprtk_env_t *env, const char *name, double val) {
  * Sets signal=+1, size=..., stop_loss=..., take_profit=...
  */
 exprtk_value_t fn_buy(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)arena;
   double sz = (argc >= 1 && args[0].type == EXPRTK_VAL_NUMBER) ? args[0].data.number : 0.1;
   double sl = (argc >= 2 && args[1].type == EXPRTK_VAL_NUMBER) ? args[1].data.number : 0.0;
@@ -93,7 +93,7 @@ exprtk_value_t fn_buy(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * Sets signal=-1 (close long or open short if allowed by market rules).
  */
 exprtk_value_t fn_sell(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)arena;
   double sz = (argc >= 1 && args[0].type == EXPRTK_VAL_NUMBER) ? args[0].data.number : 1.0;
   double sl = (argc >= 2 && args[1].type == EXPRTK_VAL_NUMBER) ? args[1].data.number : 0.0;
@@ -110,7 +110,7 @@ exprtk_value_t fn_sell(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * Signal = 0 → close any open position, submit no new trade.
  */
 exprtk_value_t fn_flat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -122,7 +122,7 @@ exprtk_value_t fn_flat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * set_sl(price)  — update stop-loss without changing signal
  */
 exprtk_value_t fn_set_sl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_NUMBER)
     env_set_num(env, "stop_loss", args[0].data.number);
@@ -133,7 +133,7 @@ exprtk_value_t fn_set_sl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * set_tp(price)  — update take-profit without changing signal
  */
 exprtk_value_t fn_set_tp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_NUMBER)
     env_set_num(env, "take_profit", args[0].data.number);
@@ -144,7 +144,7 @@ exprtk_value_t fn_set_tp(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * set_trailing_sl(distance, is_pct)  — update trailing stop-loss
  */
 exprtk_value_t fn_set_trailing_sl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                         turbo_pool_t *arena) {
+                                         mem_pool_t *arena) {
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_NUMBER) {
     env_set_num(env, "trailing_dist", args[0].data.number);
@@ -159,7 +159,7 @@ exprtk_value_t fn_set_trailing_sl(size_t argc, exprtk_value_t *args, exprtk_env_
  * limit_order(signal, limit_price, bars_valid)
  */
 exprtk_value_t fn_limit_order(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)arena;
   if (argc >= 2) {
     env_set_num(env, "signal", args[0].data.number);
@@ -176,7 +176,7 @@ exprtk_value_t fn_limit_order(size_t argc, exprtk_value_t *args, exprtk_env_t *e
  * stop_order(signal, stop_price, bars_valid)
  */
 exprtk_value_t fn_stop_order(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)arena;
   if (argc >= 2) {
     env_set_num(env, "signal", args[0].data.number);
@@ -200,7 +200,7 @@ exprtk_value_t fn_stop_order(size_t argc, exprtk_value_t *args, exprtk_env_t *en
  * Typically called from inside a loop over all active assets.
  */
 exprtk_value_t fn_rank_pct(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 3) {
@@ -219,12 +219,12 @@ exprtk_value_t fn_rank_pct(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  *   Elements equal to 0 are treated as inactive and returned as 0.
  */
 exprtk_value_t fn_vec_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     double *src = args[0].data.vector.data;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -259,13 +259,13 @@ exprtk_value_t fn_vec_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * → Returns a binary mask vector: 1 for the k highest non-zero scores.
  */
 exprtk_value_t fn_vec_top(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     size_t k = (size_t)args[1].data.number;
     double *src = args[0].data.vector.data;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -295,13 +295,13 @@ exprtk_value_t fn_vec_top(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * → Binary mask: 1 where value > threshold AND value != 0 (active).
  */
 exprtk_value_t fn_vec_filter_gt(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     double thr = args[1].data.number;
     double *src = args[0].data.vector.data;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
     for (size_t i = 0; i < n; i++)
@@ -316,13 +316,13 @@ exprtk_value_t fn_vec_filter_gt(size_t argc, exprtk_value_t *args, exprtk_env_t 
  * → Binary mask: 1 where value < threshold AND value != 0 (active).
  */
 exprtk_value_t fn_vec_filter_lt(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
     double thr = args[1].data.number;
     double *src = args[0].data.vector.data;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
     for (size_t i = 0; i < n; i++)
@@ -338,7 +338,7 @@ exprtk_value_t fn_vec_filter_lt(size_t argc, exprtk_value_t *args, exprtk_env_t 
  * Useful for turning a binary filter into a list of targets to iterate over.
  */
 exprtk_value_t fn_vec_where(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -351,7 +351,7 @@ exprtk_value_t fn_vec_where(size_t argc, exprtk_value_t *args, exprtk_env_t *env
         count++;
     }
 
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, count);
+    double *out = MEM_ALLOC_ARRAY(arena, double, count);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -386,7 +386,7 @@ static int sort_pair_cmp(const void *a, const void *b) {
  * -> Returns a vector of indices [0...N-1] sorted by values[i] descending.
  */
 exprtk_value_t fn_vec_sort_idx(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
     size_t n = args[0].data.vector.size;
@@ -394,7 +394,7 @@ exprtk_value_t fn_vec_sort_idx(size_t argc, exprtk_value_t *args, exprtk_env_t *
     if (n == 0)
       return args[0];
 
-    sort_pair_t *pairs = TURBO_POOL_ALLOC_ARRAY(arena, sort_pair_t, n);
+    sort_pair_t *pairs = MEM_ALLOC_ARRAY(arena, sort_pair_t, n);
     if (!pairs)
       return exprtk_val_num(0.0);
 
@@ -405,7 +405,7 @@ exprtk_value_t fn_vec_sort_idx(size_t argc, exprtk_value_t *args, exprtk_env_t *
 
     qsort(pairs, n, sizeof(sort_pair_t), sort_pair_cmp);
 
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -423,14 +423,14 @@ exprtk_value_t fn_vec_sort_idx(size_t argc, exprtk_value_t *args, exprtk_env_t *
  * Positive n shifts right (forward in time), negative n shifts left (back in time).
  */
 exprtk_value_t fn_vec_shift(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
     size_t n = args[0].data.vector.size;
     double *src = args[0].data.vector.data;
     int shift = (int)args[1].data.number;
 
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
     memset(out, 0, n * sizeof(double));
@@ -451,7 +451,7 @@ exprtk_value_t fn_vec_shift(size_t argc, exprtk_value_t *args, exprtk_env_t *env
  * -> Returns Pearson correlation coefficient [-1, 1].
  */
 exprtk_value_t fn_vec_corr(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
@@ -493,7 +493,7 @@ exprtk_value_t fn_vec_corr(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * The runner binds "position" before each bar, so this just proxies it.
  */
 exprtk_value_t fn_pos(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                             turbo_pool_t *arena) {
+                             mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -505,7 +505,7 @@ exprtk_value_t fn_pos(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * → Returns the average entry price (runner binds "entry_price" in env).
  */
 exprtk_value_t fn_entry_px(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -516,7 +516,7 @@ exprtk_value_t fn_entry_px(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * is_long()   → 1 if position > 0, else 0.
  */
 exprtk_value_t fn_is_long(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -527,7 +527,7 @@ exprtk_value_t fn_is_long(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * is_short()  → 1 if position < 0, else 0.
  */
 exprtk_value_t fn_is_short(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -538,7 +538,7 @@ exprtk_value_t fn_is_short(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * is_flat()  → 1 if position == 0, else 0.
  */
 exprtk_value_t fn_is_flat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -551,7 +551,7 @@ exprtk_value_t fn_is_flat(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * → (current_close - entry_price) * position  (inferred from env vars)
  */
 exprtk_value_t fn_unrealized_pnl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -570,7 +570,7 @@ exprtk_value_t fn_unrealized_pnl(size_t argc, exprtk_value_t *args, exprtk_env_t
  * → Kelly fraction: w - (1-w)/ratio, clamped to [0,1].
  */
 exprtk_value_t fn_kelly_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 3) {
@@ -596,7 +596,7 @@ exprtk_value_t fn_kelly_size(size_t argc, exprtk_value_t *args, exprtk_env_t *en
  *   size = risk_pct / |entry - stop_loss| × entry
  */
 exprtk_value_t fn_risk_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 3) {
@@ -620,7 +620,7 @@ exprtk_value_t fn_risk_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env
  * Convenience: caller subtracts from entry to get the SL price.
  */
 exprtk_value_t fn_atr_sl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 2)
@@ -640,7 +640,7 @@ exprtk_value_t fn_atr_sl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * num_trades()  → total closed trades so far.
  */
 exprtk_value_t fn_num_trades(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -651,7 +651,7 @@ exprtk_value_t fn_num_trades(size_t argc, exprtk_value_t *args, exprtk_env_t *en
  * cum_pnl()  → cumulative realized P&L.
  */
 exprtk_value_t fn_cum_pnl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -662,7 +662,7 @@ exprtk_value_t fn_cum_pnl(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * win_rate()  → fraction of closed trades that were profitable (0..1).
  */
 exprtk_value_t fn_win_rate(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)argc;
   (void)args;
   (void)arena;
@@ -680,7 +680,7 @@ exprtk_value_t fn_win_rate(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * Equivalent to vec[n-1] but works without knowing n in script.
  */
 exprtk_value_t fn_last(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size > 0) {
@@ -694,7 +694,7 @@ exprtk_value_t fn_last(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * prev(vec[], k=1) → return the k-th element from the end (0 = most recent).
  */
 exprtk_value_t fn_prev(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                              turbo_pool_t *arena) {
+                              mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -710,7 +710,7 @@ exprtk_value_t fn_prev(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_sum(vec[]) → sum of all elements.
  */
 exprtk_value_t fn_vec_sum(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -723,7 +723,7 @@ exprtk_value_t fn_vec_sum(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_mean(vec[]) → arithmetic mean.
  */
 exprtk_value_t fn_vec_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size > 0) {
@@ -738,7 +738,7 @@ exprtk_value_t fn_vec_mean(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_std(vec[]) → population std-dev.
  */
 exprtk_value_t fn_vec_std(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size > 1) {
@@ -756,7 +756,7 @@ exprtk_value_t fn_vec_std(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_max(vec[]) / vec_min(vec[])
  */
 exprtk_value_t fn_vec_max(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size > 0) {
@@ -766,7 +766,7 @@ exprtk_value_t fn_vec_max(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
 }
 
 exprtk_value_t fn_vec_min(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR && args[0].data.vector.size > 0) {
@@ -780,7 +780,7 @@ exprtk_value_t fn_vec_min(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * -> Returns a vector of rolling maximums.
  */
 exprtk_value_t fn_vec_roll_max(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
     size_t n = args[0].data.vector.size;
@@ -789,7 +789,7 @@ exprtk_value_t fn_vec_roll_max(size_t argc, exprtk_value_t *args, exprtk_env_t *
       return args[0];
 
     double *src = args[0].data.vector.data;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -809,7 +809,7 @@ exprtk_value_t fn_vec_roll_max(size_t argc, exprtk_value_t *args, exprtk_env_t *
  * vec_roll_min(v[], window)
  */
 exprtk_value_t fn_vec_roll_min(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
     size_t n = args[0].data.vector.size;
@@ -818,7 +818,7 @@ exprtk_value_t fn_vec_roll_min(size_t argc, exprtk_value_t *args, exprtk_env_t *
       return args[0];
 
     double *src = args[0].data.vector.data;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -839,7 +839,7 @@ exprtk_value_t fn_vec_roll_min(size_t argc, exprtk_value_t *args, exprtk_env_t *
  * -> Element-wise maximum of two vectors (or vector and scalar).
  */
 exprtk_value_t fn_vec_vmax(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc >= 2) {
     size_t n = 0;
@@ -867,7 +867,7 @@ exprtk_value_t fn_vec_vmax(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
     if (n == 0)
       return exprtk_val_num(fmax(s1, s2));
 
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -887,7 +887,7 @@ exprtk_value_t fn_vec_vmax(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_vmin(v1[], v2[])
  */
 exprtk_value_t fn_vec_vmin(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc >= 2) {
     size_t n = 0;
@@ -915,7 +915,7 @@ exprtk_value_t fn_vec_vmin(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
     if (n == 0)
       return exprtk_val_num(fmin(s1, s2));
 
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
 
@@ -936,12 +936,12 @@ exprtk_value_t fn_vec_vmin(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * -> Creates a vector of size n filled with val.
  */
 exprtk_value_t fn_vec_fill(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                  turbo_pool_t *arena) {
+                                  mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_NUMBER && args[1].type == EXPRTK_VAL_NUMBER) {
     size_t n = (size_t)args[0].data.number;
     double val = args[1].data.number;
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
     for (size_t i = 0; i < n; i++)
@@ -956,7 +956,7 @@ exprtk_value_t fn_vec_fill(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * -> Returns the value at idx.
  */
 exprtk_value_t fn_vec_at(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_NUMBER) {
@@ -973,7 +973,7 @@ exprtk_value_t fn_vec_at(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_any(v[]) -> scalar 1.0 if any element is non-zero, else 0.0.
  */
 exprtk_value_t fn_vec_any(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -989,7 +989,7 @@ exprtk_value_t fn_vec_any(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * vec_all(v[]) -> scalar 1.0 if all elements are non-zero, else 0.0.
  */
 exprtk_value_t fn_vec_all(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -1010,14 +1010,14 @@ exprtk_value_t fn_vec_all(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * -> Vector of 1.0 (cross-over), -1.0 (cross-under), or 0.0.
  */
 exprtk_value_t fn_vec_cross(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                   turbo_pool_t *arena) {
+                                   mem_pool_t *arena) {
   (void)env;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
     size_t n1 = args[0].data.vector.size;
     size_t n2 = args[1].data.vector.size;
     size_t n = (n1 < n2) ? n1 : n2;
 
-    double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, n);
+    double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out)
       return exprtk_val_num(0.0);
     memset(out, 0, n * sizeof(double));
@@ -1046,7 +1046,7 @@ exprtk_value_t fn_vec_cross(size_t argc, exprtk_value_t *args, exprtk_env_t *env
  * Default mode is 0.
  */
 exprtk_value_t fn_vec_resample(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc < 2 || args[0].type != EXPRTK_VAL_VECTOR || args[1].type != EXPRTK_VAL_NUMBER) {
     return exprtk_val_num(NAN);
@@ -1069,7 +1069,7 @@ exprtk_value_t fn_vec_resample(size_t argc, exprtk_value_t *args, exprtk_env_t *
   if (out_len == 0)
     out_len = 1; /* at least 1 if partial period */
 
-  double *out = TURBO_POOL_ALLOC_ARRAY(arena, double, out_len);
+  double *out = MEM_ALLOC_ARRAY(arena, double, out_len);
   if (!out)
     return exprtk_val_num(NAN);
 
@@ -1129,7 +1129,7 @@ exprtk_value_t fn_vec_resample(size_t argc, exprtk_value_t *args, exprtk_env_t *
  * ========================================================================= */
 
 exprtk_value_t fn_sharpe(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -1142,7 +1142,7 @@ exprtk_value_t fn_sharpe(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
 }
 
 exprtk_value_t fn_sortino(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -1155,7 +1155,7 @@ exprtk_value_t fn_sortino(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
 }
 
 exprtk_value_t fn_calmar(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                turbo_pool_t *arena) {
+                                mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR) {
@@ -1166,7 +1166,7 @@ exprtk_value_t fn_calmar(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
 }
 
 exprtk_value_t fn_profit_factor(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                       turbo_pool_t *arena) {
+                                       mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR)
@@ -1175,7 +1175,7 @@ exprtk_value_t fn_profit_factor(size_t argc, exprtk_value_t *args, exprtk_env_t 
 }
 
 exprtk_value_t fn_expectancy(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                    turbo_pool_t *arena) {
+                                    mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR)
@@ -1184,7 +1184,7 @@ exprtk_value_t fn_expectancy(size_t argc, exprtk_value_t *args, exprtk_env_t *en
 }
 
 exprtk_value_t fn_payoff_ratio(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR)
@@ -1193,7 +1193,7 @@ exprtk_value_t fn_payoff_ratio(size_t argc, exprtk_value_t *args, exprtk_env_t *
 }
 
 exprtk_value_t fn_max_dd_duration(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                         turbo_pool_t *arena) {
+                                         mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR)
@@ -1203,7 +1203,7 @@ exprtk_value_t fn_max_dd_duration(size_t argc, exprtk_value_t *args, exprtk_env_
 }
 
 exprtk_value_t fn_ulcer_index(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                     turbo_pool_t *arena) {
+                                     mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 1 && args[0].type == EXPRTK_VAL_VECTOR)
@@ -1212,7 +1212,7 @@ exprtk_value_t fn_ulcer_index(size_t argc, exprtk_value_t *args, exprtk_env_t *e
 }
 
 exprtk_value_t fn_information_ratio(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                           turbo_pool_t *arena) {
+                                           mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR)
@@ -1222,7 +1222,7 @@ exprtk_value_t fn_information_ratio(size_t argc, exprtk_value_t *args, exprtk_en
 }
 
 exprtk_value_t fn_treynor(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                 turbo_pool_t *arena) {
+                                 mem_pool_t *arena) {
   (void)env;
   (void)arena;
   if (argc >= 2 && args[0].type == EXPRTK_VAL_VECTOR && args[1].type == EXPRTK_VAL_VECTOR) {
@@ -1243,7 +1243,7 @@ exprtk_value_t fn_treynor(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
  * Reuses fn_vec_resample logic with all 5 modes at once.
  */
 exprtk_value_t fn_resample_ohlcv(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                        turbo_pool_t *arena) {
+                                        mem_pool_t *arena) {
   (void)env;
   if (argc < 6)
     return exprtk_val_num(NAN);
@@ -1272,11 +1272,11 @@ exprtk_value_t fn_resample_ohlcv(size_t argc, exprtk_value_t *args, exprtk_env_t
   const double *C = args[3].data.vector.data;
   const double *V = args[4].data.vector.data;
 
-  double *ro = TURBO_POOL_ALLOC_ARRAY(arena, double, out_len);
-  double *rh = TURBO_POOL_ALLOC_ARRAY(arena, double, out_len);
-  double *rl = TURBO_POOL_ALLOC_ARRAY(arena, double, out_len);
-  double *rc = TURBO_POOL_ALLOC_ARRAY(arena, double, out_len);
-  double *rv = TURBO_POOL_ALLOC_ARRAY(arena, double, out_len);
+  double *ro = MEM_ALLOC_ARRAY(arena, double, out_len);
+  double *rh = MEM_ALLOC_ARRAY(arena, double, out_len);
+  double *rl = MEM_ALLOC_ARRAY(arena, double, out_len);
+  double *rc = MEM_ALLOC_ARRAY(arena, double, out_len);
+  double *rv = MEM_ALLOC_ARRAY(arena, double, out_len);
   if (!ro || !rh || !rl || !rc || !rv)
     return exprtk_val_num(NAN);
 
@@ -1341,7 +1341,7 @@ exprtk_value_t fn_resample_ohlcv(size_t argc, exprtk_value_t *args, exprtk_env_t
  * metric:           0=sharpe, 1=sortino, 2=calmar, 3=profit_factor
  */
 exprtk_value_t fn_walk_forward(size_t argc, exprtk_value_t *args, exprtk_env_t *env,
-                                      turbo_pool_t *arena) {
+                                      mem_pool_t *arena) {
   (void)env;
   if (argc < 6)
     return exprtk_val_num(NAN);
@@ -1353,7 +1353,7 @@ exprtk_value_t fn_walk_forward(size_t argc, exprtk_value_t *args, exprtk_env_t *
   if (np == 0)
     return exprtk_val_num(NAN);
 
-  const char **names = (const char **)TURBO_POOL_ALLOC_ARRAY(arena, const char *, np);
+  const char **names = (const char **)MEM_ALLOC_ARRAY(arena, const char *, np);
   if (!names)
     return exprtk_val_num(NAN);
   for (size_t i = 0; i < np; i++) {

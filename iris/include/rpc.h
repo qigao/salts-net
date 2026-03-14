@@ -45,7 +45,7 @@ typedef enum {
  * @brief RPC Request structure
  */
 typedef struct {
-  turbo_pool_t *arena;    /**< Arena for memory allocation */
+  mem_pool_t *arena;    /**< Arena for memory allocation */
   char *jsonrpc;           /**< Protocol version (e.g., "2.0") */
   char *method;            /**< Method name */
   char *params;            /**< Parameters (JSON string) */
@@ -59,7 +59,7 @@ typedef struct {
  * @brief RPC Response structure
  */
 typedef struct {
-  turbo_pool_t *arena;    /**< Arena for memory allocation */
+  mem_pool_t *arena;    /**< Arena for memory allocation */
   char *jsonrpc;           /**< Protocol version */
   char *result;            /**< Result (JSON string) */
   char *error_message;     /**< Error message */
@@ -111,7 +111,7 @@ typedef struct rpc_context_s {
   rpc_method_t *methods;
   size_t method_count;
   size_t method_capacity;
-  turbo_pool_t *arena;
+  mem_pool_t *arena;
 } rpc_context_t;
 
 /**

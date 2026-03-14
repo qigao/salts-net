@@ -55,7 +55,7 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         }
     }
 
-    client = http_client_create();
+    client = http_client_create(NULL);
     if (!client) {
         TLOG_ERROR("Failed to create HTTP client");
         ret = 1;

@@ -1,28 +1,23 @@
 # Common module tests
 
 # Define list of test files
-set(TEST_FILES
-    test_arena_buffer.c
-    test_arena.c
+set(TEST_FILES 
+    test_base64_utils.c
     test_dns_pref.c
     test_fmt.c
     test_memory_pool.c
     test_mmap.c
-    test_simple_arena.c
     test_tlog.c
     test_stc.c
     test_fmt_re2c.c
     test_fmt_bench.c
-    test_str_bench.c
-    test_arena_multithread.c
+    test_str_bench.c 
     test_mutex.c
     test_turbo_fs.c
     test_turbo_str.c
     test_native_timer.c
     test_url_codec.c
-    test_threadpool.c
-    test_coro.c
-    test_mmap_group.c
+    test_threadpool.c 
     test_url.c
     test_url_helpers.c
     test_turbo_ring.c
@@ -38,6 +33,7 @@ set(TEST_FILES
     bench_turbo_ring.c
     bench_ring_comparison.c
     bench_disruptor.c
+    test_mem_pool.c
     )
 
 # C++ test files

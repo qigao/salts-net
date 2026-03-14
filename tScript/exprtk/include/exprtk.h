@@ -15,14 +15,14 @@
 extern "C" {
 #endif
 
-#define ALLOC_DBL(arena, n) TURBO_POOL_ALLOC_ARRAY(arena, double, n)
-#define ALLOC_FLT(arena, n) TURBO_POOL_ALLOC_ARRAY(arena, float, n)
+#define ALLOC_DBL(arena, n) MEM_ALLOC_ARRAY(arena, double, n)
+#define ALLOC_FLT(arena, n) MEM_ALLOC_ARRAY(arena, float, n)
 
 // Parse the input string into an AST (simplified API, creates internal arena if needed)
 CXX_C_API exprtk_node_t *exprtk_parse(const char *input, size_t length);
 
 // Extended parse API allowing custom arena and error reporting
-CXX_C_API exprtk_node_t *exprtk_parse_ext(const char *input, size_t length, turbo_pool_t *arena, int *error,
+CXX_C_API exprtk_node_t *exprtk_parse_ext(const char *input, size_t length, mem_pool_t *arena, int *error,
                                           char *error_msg, size_t error_msg_len);
 
 // Validate AST (undefined variables, duplicate params, simple type checks)
@@ -39,7 +39,7 @@ CXX_C_API size_t exprtk_node_count(const exprtk_node_t *node);
 CXX_C_API size_t exprtk_node_depth(const exprtk_node_t *node);
 
 // Node allocation (internal/parser use)
-CXX_C_API exprtk_node_t *exprtk_node_create(turbo_pool_t *arena, exprtk_node_type_t type);
+CXX_C_API exprtk_node_t *exprtk_node_create(mem_pool_t *arena, exprtk_node_type_t type);
 
 // Environment management
 CXX_C_API void exprtk_env_init(exprtk_env_t *env);
@@ -65,12 +65,12 @@ CXX_C_API exprtk_builtin_fn exprtk_registry_find(const char *name);
  * Called by the evaluator for NODE_FUNCTION_CALL.
  */
 CXX_C_API exprtk_value_t exprtk_call_internal(const char *name, size_t argc, exprtk_value_t *args,
-                                              exprtk_env_t *env, turbo_pool_t *arena);
+                                              exprtk_env_t *env, mem_pool_t *arena);
 
 CXX_C_API exprtk_builtin_fn exprtk_find_builtin(const char *name, exprtk_env_t *env);
 
-CXX_C_API exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, turbo_pool_t *dest_arena);
-CXX_C_API exprtk_node_t *exprtk_node_create(turbo_pool_t *arena, exprtk_node_type_t type);
+CXX_C_API exprtk_node_t *exprtk_node_copy(const exprtk_node_t *src, mem_pool_t *dest_arena);
+CXX_C_API exprtk_node_t *exprtk_node_create(mem_pool_t *arena, exprtk_node_type_t type);
 CXX_C_API void eval_destructure(exprtk_node_t *target, exprtk_value_t rhs, exprtk_env_t *env,
                                 int is_constant);
 CXX_C_API void exprtk_env_init_local(exprtk_env_t *env);

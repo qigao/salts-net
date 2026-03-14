@@ -18,7 +18,7 @@
 /* ========================================================================= */
 
 size_t exprtk_ta_fisher(const double *hi, const double *lo, size_t n, size_t period,
-                         double *fisher, double *trigger, turbo_pool_t *arena) {
+                         double *fisher, double *trigger, mem_pool_t *arena) {
     (void)arena;
     if (period < 2 || n < period) return 0;
 
@@ -66,7 +66,7 @@ size_t exprtk_ta_fisher(const double *hi, const double *lo, size_t n, size_t per
 size_t exprtk_ta_squeeze(const double *hi, const double *lo, const double *cl, size_t n,
                           size_t bb_p, double bb_m, size_t kc_p, double kc_m,
                           double *squeeze, double *momentum, double *on_off,
-                          turbo_pool_t *arena) {
+                          mem_pool_t *arena) {
     size_t min_p = (bb_p > kc_p) ? bb_p : kc_p;
     if (n < min_p) return 0;
 
@@ -121,7 +121,7 @@ size_t exprtk_ta_squeeze(const double *hi, const double *lo, const double *cl, s
 /* ========================================================================= */
 
 size_t exprtk_ta_chop(const double *hi, const double *lo, const double *cl, size_t n,
-                       size_t period, double *out, turbo_pool_t *arena) {
+                       size_t period, double *out, mem_pool_t *arena) {
     if (period < 2 || n < period + 1) return 0;
 
     double *atr_arr = ALLOC_DBL(arena, n);

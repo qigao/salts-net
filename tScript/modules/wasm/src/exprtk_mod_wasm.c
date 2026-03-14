@@ -168,7 +168,7 @@ static exprtk_value_t fn_wasm_call(size_t argc, exprtk_value_t *args, void *user
 
   wasm_argc = (uint32_t)(argc - 2);
   if (wasm_argc > 0) {
-    wasm_argv = (const char **)turbo_pool_alloc(wasm_tmp_arena(ud), sizeof(char *) * wasm_argc);
+    wasm_argv = (const char **)mem_alloc(wasm_tmp_arena(ud), sizeof(char *) * wasm_argc);
     if (!wasm_argv) {
       wasm_set_handle_error(ud, h, "wasm.call: OOM");
       return WASM_ZERO;
@@ -184,7 +184,7 @@ static exprtk_value_t fn_wasm_call(size_t argc, exprtk_value_t *args, void *user
         return WASM_ZERO;
       }
     } else if (v->type == EXPRTK_VAL_NUMBER) {
-      char *num = (char *)turbo_pool_alloc(wasm_tmp_arena(ud), 64);
+      char *num = (char *)mem_alloc(wasm_tmp_arena(ud), 64);
       if (!num) {
         wasm_set_handle_error(ud, h, "wasm.call: OOM");
         return WASM_ZERO;
@@ -250,7 +250,7 @@ static exprtk_value_t fn_wasm_last_error(size_t argc, exprtk_value_t *args, void
     return WASM_ZERO;
 
   len = strlen(msg);
-  out = (char *)turbo_pool_alloc(&ud->env->arena, len + 1);
+  out = (char *)mem_alloc(&ud->env->arena, len + 1);
   if (!out)
     return WASM_ZERO;
   memcpy(out, msg, len + 1);
@@ -262,13 +262,13 @@ static exprtk_value_t fn_wasm_last_error(size_t argc, exprtk_value_t *args, void
 void wasm_load(void *p, void *e, void *s) {
   wasm_ctx_t *ctx = (wasm_ctx_t *)p;
   exprtk_env_t *env = (exprtk_env_t *)e;
-  turbo_pool_t *scratch = (turbo_pool_t *)s;
+  mem_pool_t *scratch = (mem_pool_t *)s;
   wasm_ud_t *ud;
 
   if (!ctx || !env)
     return;
 
-  ud = (wasm_ud_t *)turbo_pool_alloc(&env->arena, sizeof(*ud));
+  ud = (wasm_ud_t *)mem_alloc(&env->arena, sizeof(*ud));
   if (!ud)
     return;
   ud->ctx = ctx;

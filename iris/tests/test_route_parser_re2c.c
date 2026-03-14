@@ -8,16 +8,16 @@
 #include "turbo_buffer.h"
 #include <string.h>
 
-static turbo_pool_t test_arena;
+static mem_pool_t test_arena;
 
 spec("route_parser_re2c") {
     before_each() {
-        int ret = turbo_pool_init(&test_arena, 4096);
+        int ret = mem_init(&test_arena, 4096);
         check_int_eq(ret, 0);
     }
 
     after_each() {
-        turbo_pool_free(&test_arena);
+        mem_destroy(&test_arena);
     }
 
     /* HTTP Method Parsing Tests */

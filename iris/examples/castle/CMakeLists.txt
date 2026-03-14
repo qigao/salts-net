@@ -32,7 +32,7 @@ target_include_directories(castle PRIVATE
 target_link_libraries(castle PRIVATE
     iris
     iris_vendors
-    NetCore
+    CoroNet
     TurboNet::PostgreSQL
     OpenSSL::SSL
     OpenSSL::Crypto

@@ -8,8 +8,8 @@
  * Usage: worker_tlv_example [lb_backend_url]
  */
 
-#include <netcore/turbo_coro_client.h>
-#include <netcore/turbo_coro_context.h>
+#include "CoroNet/turbo_coro_socket.h"
+#include <CoroNet/turbo_coro_context.h>
 #include "turbo_coro.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,13 +22,13 @@ static void worker_loop(coro_t *co, void *arg) {
     coro_context_t *ctx = (coro_context_t *)arg;
 
     while (1) {
-        coro_client_t *c = coro_client_create(ctx);
+        coro_socket_t *c = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
         if (!c) { coro_sleep(ctx, 1000); continue; }
 
         printf("Connecting to %s...\n", g_backend_url);
-        if (coro_client_connect(c, g_backend_url) != 0) {
+        if (coro_socket_connect(c, g_backend_url) != 0) {
             printf("Connect failed, retrying in 1s\n");
-            coro_client_destroy(c);
+            coro_socket_destroy(c);
             coro_sleep(ctx, 1000);
             continue;
         }
@@ -38,7 +38,7 @@ static void worker_loop(coro_t *co, void *arg) {
         size_t len = 0;
         int count = 0;
 
-        while (coro_client_recv(c, &data, &len) == 0) {
+        while (coro_socket_recv(c, &data, &len) == 0) {
             if (len >= 3) {
                 uint8_t type = (uint8_t)data[0];
                 uint16_t plen =
@@ -50,13 +50,13 @@ static void worker_loop(coro_t *co, void *arg) {
                 /* Response: set high bit on type */
                 data[0] = (char)(type | 0x80);
             }
-            coro_client_send(c, data, len);
+            coro_socket_send(c, data, len);
             free(data);
             data = NULL;
         }
 
         printf("Disconnected after %d messages, reconnecting\n", count);
-        coro_client_destroy(c);
+        coro_socket_destroy(c);
     }
 }
 

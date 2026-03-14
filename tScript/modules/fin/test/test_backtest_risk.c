@@ -228,8 +228,8 @@ suite("Backtest and Risk") {
       size_t steps = 10;
       size_t paths = 5;
       double out[50]; // 5 paths × 10 steps
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       srand(42); // Fixed seed for reproducibility
       size_t result = exprtk_mc_simulate(s0, mu, sigma, dt, steps, paths, out, &arena);
@@ -244,7 +244,7 @@ suite("Backtest and Risk") {
         check(out[i] > 0.0);
       }
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
 
     it("should generate different paths") {
@@ -255,8 +255,8 @@ suite("Backtest and Risk") {
       size_t steps = 10;
       size_t paths = 3;
       double out[30];
-      turbo_pool_t arena;
-      turbo_pool_init(&arena, 4096);
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
 
       srand(123);
       exprtk_mc_simulate(s0, mu, sigma, dt, steps, paths, out, &arena);
@@ -268,7 +268,7 @@ suite("Backtest and Risk") {
 
       check(fabs(final1 - final2) > 0.1 || fabs(final2 - final3) > 0.1);
 
-      turbo_pool_free(&arena);
+      mem_destroy(&arena);
     }
   }
 }

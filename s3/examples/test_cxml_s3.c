@@ -2,7 +2,7 @@
 #include "s3/s3_response.h"
 #include "tinytest.h"
 #include <http_client.h>
-#include <netcore/turbo_coro_context.h>
+#include <CoroNet/turbo_coro_context.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +46,7 @@ static void test_real_list_buckets(void *arg) {
   coro_context_t *ctx = ((coro_context_t **)arg)[1];
 
   // Step 1: Raw HTTP GET to fetch and dump the XML body
-  http_client_t *hc = http_client_create();  http_client_set_timeout(hc, 30000);
+  http_client_t *hc = http_client_create(NULL);  http_client_set_timeout(hc, 30000);
   http_response_t *raw = http_get(hc, "https://play.min.io/");
   if (raw && raw->status_code == 200 && raw->body && raw->body_len > 0) {
     printf("  Raw response: status=%d body_len=%zu\n", raw->status_code, raw->body_len);

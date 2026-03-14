@@ -10,8 +10,8 @@
  * then runs a normal echo handler — identical to a coro_server handler.
  */
 
-#include <netcore/turbo_coro_client.h>
-#include <netcore/turbo_coro_context.h>
+#include "CoroNet/turbo_coro_socket.h"
+#include <CoroNet/turbo_coro_context.h>
 #include "turbo_coro.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,10 +20,10 @@
 static const char *g_backend_url = "tcp://127.0.0.1:9090";
 static const char *g_group = "default";
 
-static void echo_handler(coro_client_t *client) {
+static void echo_handler(coro_socket_t *client) {
     char *data = NULL;
     size_t len = 0;
-    while (coro_client_recv(client, &data, &len) == 0) {
+    while (coro_socket_recv(client, &data, &len) == 0) {
         /* Echo back with group tag */
         size_t glen = strlen(g_group);
         size_t total = 1 + glen + 1 + len; /* [group]data */
@@ -33,7 +33,7 @@ static void echo_handler(coro_client_t *client) {
             memcpy(resp + 1, g_group, glen);
             resp[1 + glen] = ']';
             memcpy(resp + 2 + glen, data, len);
-            coro_client_send(client, resp, 2 + glen + len);
+            coro_socket_send(client, resp, 2 + glen + len);
             free(resp);
         }
         free(data);
@@ -46,28 +46,28 @@ static void worker_loop(coro_t *co, void *arg) {
     coro_context_t *ctx = (coro_context_t *)arg;
 
     while (1) {
-        coro_client_t *c = coro_client_create(ctx);
+        coro_socket_t *c = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
         if (!c) {
             coro_sleep(ctx, 1000);
             continue;
         }
 
         printf("[%s] Connecting to %s...\n", g_group, g_backend_url);
-        if (coro_client_connect(c, g_backend_url) != 0) {
+        if (coro_socket_connect(c, g_backend_url) != 0) {
             printf("[%s] Connect failed, retrying in 1s\n", g_group);
-            coro_client_destroy(c);
+            coro_socket_destroy(c);
             coro_sleep(ctx, 1000);
             continue;
         }
 
         /* Register group name */
-        coro_client_send(c, g_group, strlen(g_group));
+        coro_socket_send(c, g_group, strlen(g_group));
         printf("[%s] Registered, waiting for client\n", g_group);
 
         echo_handler(c);
         printf("[%s] Session ended, reconnecting\n", g_group);
 
-        coro_client_destroy(c);
+        coro_socket_destroy(c);
     }
 }
 

@@ -8,7 +8,7 @@
 #include "turbo_buffer.h"
 #include "request.h"
 #include "platform.h"
-#include "netcore/turbo_coro_client.h"
+#include "CoroNet/turbo_coro_socket.h"
 #include "security.h"
 
 #ifdef __cplusplus
@@ -95,14 +95,14 @@ typedef struct {
   void *data;
   size_t size;
   void (*cleanup)(void *data);
-  turbo_pool_t *arena; /* Phase IRIS-1: Changed from Arena* */
+  mem_pool_t *arena; /* Phase IRIS-1: Changed from Arena* */
 } req_context_t;
 
 // Arena-aware Request structure
 typedef struct Req {
   struct iris_app *app; /* Pointer to the application instance */
-  turbo_pool_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
-  coro_client_t *client; /* Coroutine client connection */
+  mem_pool_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
+  coro_socket_t *client; /* Coroutine client connection */
   char *method;
   char *path;
   char *body;
@@ -125,8 +125,8 @@ typedef struct {
 
 // Arena-aware Response structure
 typedef struct Res {
-  turbo_pool_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
-  coro_client_t *client; /* Coroutine client connection */
+  mem_pool_t *arena; /* Phase IRIS-1: Pointer to shared request/response arena */
+  coro_socket_t *client; /* Coroutine client connection */
   int status;
   char *content_type; // Arena allocated string
   void *body;         // Arena allocated if owned by Res
@@ -157,10 +157,10 @@ struct iris_app;
 CXX_C_API void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *middleware_info);
 
 // Function declarations
-CXX_C_API int iris_app_execute(struct iris_app *app, coro_client_t *client, const char *request_data, size_t request_len);
-CXX_C_API int router(coro_client_t *client, const char *request_data, size_t request_len);
-CXX_C_API Req *arena_copy_req(turbo_pool_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
-CXX_C_API Res *arena_copy_res(turbo_pool_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
+CXX_C_API int iris_app_execute(struct iris_app *app, coro_socket_t *client, const char *request_data, size_t request_len);
+CXX_C_API int router(coro_socket_t *client, const char *request_data, size_t request_len);
+CXX_C_API Req *arena_copy_req(mem_pool_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
+CXX_C_API Res *arena_copy_res(mem_pool_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Req *copy_req(const Req *original);
 CXX_C_API Res *copy_res(const Res *original);
 CXX_C_API void destroy_req(Req *req);
@@ -174,8 +174,8 @@ CXX_C_API void set_context(Req *req, void *data, size_t size, void (*cleanup)(vo
 CXX_C_API void *get_context(Req *req);
 
 // Connection context management functions
-CXX_C_API void set_connection_context(coro_client_t *client, void *data, void (*cleanup)(void *));
-CXX_C_API void *get_connection_context(coro_client_t *client);
+CXX_C_API void set_connection_context(coro_socket_t *client, void *data, void (*cleanup)(void *));
+CXX_C_API void *get_connection_context(coro_socket_t *client);
 
 // Convenience response functions
 static inline void send_text(Res *res, int status, const char *body) {

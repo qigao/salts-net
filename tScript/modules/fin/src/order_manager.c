@@ -214,8 +214,8 @@ void order_manager_report_fill(order_manager_t *mgr,
 order_manager_t *order_manager_create(const universe_market_rules_t *rules,
                                        double cash0,
                                        size_t asset_cap,
-                                       turbo_pool_t *arena) {
-    order_manager_t *mgr = (order_manager_t *)turbo_pool_alloc(arena, sizeof(order_manager_t));
+                                       mem_pool_t *arena) {
+    order_manager_t *mgr = (order_manager_t *)mem_alloc(arena, sizeof(order_manager_t));
     if (!mgr) return NULL;
     memset(mgr, 0, sizeof(*mgr));
 

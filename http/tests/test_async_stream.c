@@ -28,10 +28,10 @@ spec("http async streaming") {
     it("should stream GET from httpbin") {
         s_stream_total = 0;
         s_stream_chunks = 0;
-        http_client_t *c = http_client_create();
+        http_client_t *c = http_client_create(NULL);
         http_client_set_timeout(c, 15000);
         http_response_t *r = http_receive_stream_get(
-            c, "https://httpbin.org/stream/5", stream_cb, NULL);
+            c, "https://mockhttp.org/stream/5", stream_cb, NULL);
         if (!is_network_error(r)) {
             check_int_eq(r->status_code, 200);
             check(s_stream_chunks > 0);
@@ -44,10 +44,10 @@ spec("http async streaming") {
     it("should not accumulate body in stream mode") {
         s_stream_total = 0;
         s_stream_chunks = 0;
-        http_client_t *c = http_client_create();
+        http_client_t *c = http_client_create(NULL);
         http_client_set_timeout(c, 10000);
         http_response_t *r = http_receive_stream_get(
-            c, "https://httpbin.org/bytes/500", stream_cb, NULL);
+            c, "https://mockhttp.org/bytes/500", stream_cb, NULL);
         if (!is_network_error(r)) {
             check_int_eq(r->status_code, 200);
             check_size_eq(s_stream_total, 500);

@@ -31,22 +31,22 @@ spec("ta_advanced") {
 
     describe("Ichimoku") {
         it("should produce 5 output vectors") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double tenkan[N]={0}, kijun[N]={0}, sa[N]={0}, sb[N]={0}, chikou[N]={0};
             size_t r = exprtk_ta_ichimoku(hi, lo, cl, N, 9, 26, 52, tenkan, kijun, sa, sb, chikou, &arena);
             check(r > 0);
             /* Tenkan should be midpoint of 9-period high/low */
             check(tenkan[9] > 0);
             check(kijun[25] > 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Keltner Channels") {
         it("should produce upper > mid > lower") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double upper[N]={0}, mid[N]={0}, lower[N]={0};
             size_t r = exprtk_ta_keltner(hi, lo, cl, N, 20, 10, 1.5, upper, mid, lower, &arena);
             check(r > 0);
@@ -54,14 +54,14 @@ spec("ta_advanced") {
                 check(upper[i] >= mid[i]);
                 check(mid[i] >= lower[i]);
             }
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Alligator") {
         it("should produce jaw/teeth/lips") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double jaw[N]={0}, teeth[N]={0}, lips[N]={0};
             size_t r = exprtk_ta_alligator(cl, N, jaw, teeth, lips, &arena);
             check(r > 0);
@@ -69,7 +69,7 @@ spec("ta_advanced") {
             check(jaw[20] > 0);
             check(teeth[20] > 0);
             check(lips[20] > 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
@@ -95,8 +95,8 @@ spec("ta_advanced") {
 
     describe("Shadow") {
         it("should produce upper and lower shadow ratios") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double upper[N]={0}, lower[N]={0};
             size_t r = exprtk_ta_shadow(op, hi, lo, cl, N, upper, lower, &arena);
             check(r > 0);
@@ -104,14 +104,14 @@ spec("ta_advanced") {
                 check(upper[i] >= 0.0);
                 check(lower[i] >= 0.0);
             }
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Fisher Transform") {
         it("should produce fisher and trigger lines") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double fisher[N]={0}, trigger[N]={0};
             size_t r = exprtk_ta_fisher(hi, lo, N, 10, fisher, trigger, &arena);
             check(r == N);
@@ -119,14 +119,14 @@ spec("ta_advanced") {
             check(fisher[15] != 0.0);
             /* Trigger is previous fisher */
             check_float_eq(trigger[16], fisher[15], EPSILON);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Squeeze Momentum") {
         it("should detect squeeze on/off") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double sq[N]={0}, mom[N]={0}, on[N]={0};
             size_t r = exprtk_ta_squeeze(hi, lo, cl, N, 20, 2.0, 20, 1.5, sq, mom, on, &arena);
             check(r > 0);
@@ -134,21 +134,21 @@ spec("ta_advanced") {
             for (size_t i = 20; i < N; i++) {
                 check(on[i] == 0.0 || on[i] == 1.0);
             }
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Choppiness Index") {
         it("should produce values in 0-100 range") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double out[N]={0};
             size_t r = exprtk_ta_chop(hi, lo, cl, N, 14, out, &arena);
             check(r > 0);
             for (size_t i = 14; i < N; i++) {
                 check(out[i] >= 0.0 && out[i] <= 100.0);
             }
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
@@ -187,19 +187,19 @@ spec("ta_advanced") {
 
     describe("RSRS") {
         it("should produce slope and zscore") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double slope[N]={0}, zscore[N]={0};
             size_t r = exprtk_ta_rsrs(hi, lo, N, 10, 10, slope, zscore, &arena);
             check(r > 0);
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 
     describe("Smart Money") {
         it("should produce correlation values") {
-            turbo_pool_t arena = {0};
-            turbo_pool_init(&arena, 65536);
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
             double out[N]={0};
             size_t r = exprtk_ta_smart_money(cl, vol, N, 10, out, &arena);
             check(r > 0);
@@ -207,7 +207,7 @@ spec("ta_advanced") {
             for (size_t i = 10; i < N; i++) {
                 check(out[i] >= -1.01 && out[i] <= 1.01);
             }
-            turbo_pool_free(&arena);
+            mem_destroy(&arena);
         }
     }
 }

@@ -5,6 +5,7 @@ set(HTTP_EXAMPLES
     test_https
     chunked_response
     file_transfer_example
+    file_transfer_stream_example
     advanced_features_example
     jwt_auth_example
     http_client_multithread

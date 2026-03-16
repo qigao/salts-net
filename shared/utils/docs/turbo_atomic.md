@@ -7,39 +7,39 @@
 ```c
 #include "turbo_atomic.h"
 
-turbo_atomic_int_t counter = {0};
+t_atomic_int_t counter = {0};
 
-int new_val = turbo_atomic_inc(&counter);           // 返回新值
-int new_val = turbo_atomic_dec(&counter);           // 返回新值
-int old_val = turbo_atomic_fetch_add(&counter, 5);  // 返回旧值
-int old_val = turbo_atomic_fetch_sub(&counter, 3);  // 返回旧值
+int new_val = t_atomic_inc(&counter);           // 返回新值
+int new_val = t_atomic_dec(&counter);           // 返回新值
+int old_val = t_atomic_fetch_add(&counter, 5);  // 返回旧值
+int old_val = t_atomic_fetch_sub(&counter, 3);  // 返回旧值
 
-int val = turbo_atomic_load(&counter);
-turbo_atomic_store(&counter, 42);
+int val = t_atomic_load(&counter);
+t_atomic_store(&counter, 42);
 
 // CAS：期望值匹配时替换，返回 1 成功 / 0 失败
-int ok = turbo_atomic_cas(&counter, 42, 100);
+int ok = t_atomic_cas(&counter, 42, 100);
 ```
 
 ## int64 操作
 
 ```c
-turbo_atomic_int64_t bytes = {0};
+t_atomic_int64_t bytes = {0};
 
-int64_t val = turbo_atomic_load64(&bytes);
-turbo_atomic_store64(&bytes, 1024);
-int64_t old = turbo_atomic_fetch_add64(&bytes, 512);
-int64_t old = turbo_atomic_fetch_sub64(&bytes, 256);
+int64_t val = t_atomic_load64(&bytes);
+t_atomic_store64(&bytes, 1024);
+int64_t old = t_atomic_fetch_add64(&bytes, 512);
+int64_t old = t_atomic_fetch_sub64(&bytes, 256);
 ```
 
 ## uint16 操作
 
 ```c
-turbo_atomic_uint16_t seq = {0};
+t_atomic_uint16_t seq = {0};
 
-uint16_t old = turbo_atomic_fetch_add_uint16(&seq, 1);
-turbo_atomic_store_uint16(&seq, 0);
-uint16_t val = turbo_atomic_load_uint16(&seq);
+uint16_t old = t_atomic_fetch_add_uint16(&seq, 1);
+t_atomic_store_uint16(&seq, 0);
+uint16_t val = t_atomic_load_uint16(&seq);
 ```
 
 ## 注意

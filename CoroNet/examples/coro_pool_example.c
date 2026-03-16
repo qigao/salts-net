@@ -7,6 +7,7 @@
  */
 
 #include "CoroNet/turbo_coro_pool.h"
+#include "CoroNet/turbo_coro_context.h"
 #include "turbo_coro.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,13 @@ static void worker_task(coro_t *co, void *arg) {
 int main(void) {
     printf("=== Coroutine Object Pool Example ===\n\n");
 
+    /* Create a context (required for arena allocation) */
+    coro_context_t *ctx = coro_context_create(NULL);
+    if (!ctx) {
+        fprintf(stderr, "Failed to create context\n");
+        return 1;
+    }
+
     /* Create a coroutine object pool */
     coro_object_pool_config_t config = {
         .initial_capacity = 4,   /* Pre-allocate 4 coroutines */
@@ -36,9 +44,10 @@ int main(void) {
         .stack_size = 0          /* Use default stack size */
     };
 
-    coro_object_pool_t *pool = coro_object_pool_create(&config);
+    coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
     if (!pool) {
         fprintf(stderr, "Failed to create coroutine pool\n");
+        coro_context_destroy(ctx);
         return 1;
     }
 
@@ -95,6 +104,9 @@ int main(void) {
     printf("\n--- Destroying pool ---\n");
     coro_object_pool_destroy(pool);
     printf("Pool destroyed\n");
+
+    /* Destroy context */
+    coro_context_destroy(ctx);
 
     printf("\n=== Example completed successfully ===\n");
     return 0;

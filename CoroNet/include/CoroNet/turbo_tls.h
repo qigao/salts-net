@@ -52,7 +52,7 @@ struct turbo_tls_context_s {
 /* TLS client with zero-copy capabilities */
 struct turbo_tls_client_s {
   uv_tcp_t handle;
-  mem_pool_t* arena;
+  mem_pool_t *arena;
   turbo_tls_context_t *context;
 
   /* TLS implementation */
@@ -96,8 +96,7 @@ struct turbo_tls_client_s {
   void *user_data;
 
   /* Allocation callback for reads */
-  void (*alloc_cb)(turbo_tls_client_t *client, size_t suggested_size,
-                   uv_buf_t *buf);
+  void (*alloc_cb)(turbo_tls_client_t *client, size_t suggested_size, uv_buf_t *buf);
   uv_buf_t alloc_buf;
 };
 
@@ -105,7 +104,7 @@ struct turbo_tls_client_s {
 struct turbo_tls_server_s {
   uv_tcp_t *handle;
   uv_loop_t *loop;
-  mem_pool_t* arena;
+  mem_pool_t *arena;
   turbo_tls_context_t *context;
 
   /* Callbacks */
@@ -120,47 +119,40 @@ struct turbo_tls_server_s {
   void *user_data;
 };
 
-
-
 /* TLS context management */
 CXX_C_API int turbo_tls_context_init(turbo_tls_context_t *context, int flags);
 CXX_C_API void turbo_tls_context_destroy(turbo_tls_context_t *context);
-CXX_C_API void turbo_tls_context_set_verify_flags(turbo_tls_context_t *context,
-                                                  int verify_flags);
-CXX_C_API int turbo_tls_context_add_trusted_certs(turbo_tls_context_t *context,
-                                                  const char *cert, size_t length);
+CXX_C_API void turbo_tls_context_set_verify_flags(turbo_tls_context_t *context, int verify_flags);
+CXX_C_API int turbo_tls_context_add_trusted_certs(turbo_tls_context_t *context, const char *cert,
+                                                  size_t length);
 CXX_C_API int turbo_tls_context_set_cert(turbo_tls_context_t *context, const char *cert,
                                          size_t length);
-CXX_C_API int turbo_tls_context_set_private_key(turbo_tls_context_t *context,
-                                                const char *key, size_t length);
+CXX_C_API int turbo_tls_context_set_private_key(turbo_tls_context_t *context, const char *key,
+                                                size_t length);
 
 /* Server lifecycle */
 CXX_C_API int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop,
                                     turbo_tls_context_t *context, const char *host,
                                     unsigned short port);
 CXX_C_API int turbo_tls_server_start(turbo_tls_server_t *server, turbo_recv_cb on_recv,
-                                     turbo_connect_cb on_connect,
-                                     turbo_close_cb on_close);
+                                     turbo_connect_cb on_connect, turbo_close_cb on_close);
 CXX_C_API void turbo_tls_server_stop(turbo_tls_server_t *server);
 
 /* Client lifecycle */
 CXX_C_API turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop,
                                                       turbo_tls_context_t *context);
-CXX_C_API int turbo_tls_client_set_hostname(turbo_tls_client_t *client,
-                                            const char *hostname, size_t length);
+CXX_C_API int turbo_tls_client_set_hostname(turbo_tls_client_t *client, const char *hostname,
+                                            size_t length);
 CXX_C_API int turbo_tls_client_connect(turbo_tls_client_t *client, const char *host,
                                        unsigned short port, turbo_recv_cb on_recv,
-                                       turbo_connect_cb on_connect,
-                                       turbo_close_cb on_close);
+                                       turbo_connect_cb on_connect, turbo_close_cb on_close);
 CXX_C_API void turbo_tls_client_close(turbo_tls_client_t *client);
 
 /* Zero-copy send operations */
-CXX_C_API mem_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client,
-                                                          size_t min_size);
+CXX_C_API mem_buffer_t *turbo_tls_get_send_buffer(turbo_tls_client_t *client, size_t min_size);
 CXX_C_API int turbo_tls_send_buffer(turbo_tls_client_t *client, mem_buffer_t *buffer,
                                     size_t length);
-CXX_C_API void turbo_tls_discard_buffer(turbo_tls_client_t *client,
-                                        mem_buffer_t *buffer);
+CXX_C_API void turbo_tls_discard_buffer(turbo_tls_client_t *client, mem_buffer_t *buffer);
 
 /* Fallback copy-based send */
 CXX_C_API int turbo_tls_send(turbo_tls_client_t *client, const char *data, size_t length);
@@ -182,10 +174,7 @@ CXX_C_API int turbo_tls_flush(turbo_tls_client_t *client);
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-CXX_C_API int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_iovec_t *iov,
-                              size_t iovcnt);
-
-
+CXX_C_API int turbo_tls_sendv(turbo_tls_client_t *client, const turbo_iovec_t *iov, size_t iovcnt);
 
 /* Memory management */
 CXX_C_API void turbo_tls_trim_memory(turbo_tls_server_t *server);
@@ -198,31 +187,31 @@ CXX_C_API void turbo_tls_trim_memory(turbo_tls_server_t *server);
  * @return 0 on success, error code on failure.
  */
 CXX_C_API int turbo_tls_client_get_peer_cert_pem(turbo_tls_client_t *client, char *buffer,
-                                                  size_t *length);
+                                                 size_t *length);
 
 /* Zero-copy convenience macros */
 
 /* Get buffer, write data, send buffer */
-#define TURBO_TLS_ZERO_COPY_SEND(client, data_size, write_code)                 \
-  do {                                                                         \
-    mem_buffer_t *_buf = turbo_tls_get_send_buffer(client, data_size);   \
-    if (_buf) {                                                                \
-      char *_ptr = _buf->data;                                                 \
-      write_code;                                                              \
-      mem_set_used(_buf, data_size);                             \
-      turbo_tls_send_buffer(client, _buf, data_size);                           \
-      mem_unref(_buf);                                           \
-    }                                                                          \
+#define TURBO_TLS_ZERO_COPY_SEND(client, data_size, write_code)                                    \
+  do {                                                                                             \
+    mem_buffer_t *_buf = turbo_tls_get_send_buffer(client, data_size);                             \
+    if (_buf) {                                                                                    \
+      char *_ptr = _buf->data;                                                                     \
+      write_code;                                                                                  \
+      mem_set_used(_buf, data_size);                                                               \
+      turbo_tls_send_buffer(client, _buf, data_size);                                              \
+      mem_unref(_buf);                                                                             \
+    }                                                                                              \
   } while (0)
 
 /* Process received data directly from slice */
-#define TURBO_TLS_ZERO_COPY_PROCESS(slice, process_code)                        \
-  do {                                                                         \
-    if ((slice) && (slice)->data && (slice)->length > 0) {                     \
-      const char *_data = (slice)->data;                                       \
-      size_t _len = (slice)->length;                                           \
-      process_code;                                                            \
-    }                                                                          \
+#define TURBO_TLS_ZERO_COPY_PROCESS(slice, process_code)                                           \
+  do {                                                                                             \
+    if ((slice) && (slice)->data && (slice)->length > 0) {                                         \
+      const char *_data = (slice)->data;                                                           \
+      size_t _len = (slice)->length;                                                               \
+      process_code;                                                                                \
+    }                                                                                              \
   } while (0)
 
 #ifdef __cplusplus

@@ -169,9 +169,9 @@ spec("Priority Queue Comparison - Single Thread") {
 
 typedef struct {
   void *queue;
-  turbo_atomic_bool_t start;
-  turbo_atomic_uint32_t produced;
-  turbo_atomic_uint32_t consumed;
+  t_atomic_bool_t start;
+  t_atomic_uint32_t produced;
+  t_atomic_uint32_t consumed;
   size_t target;
 } mt_bench_context_t;
 
@@ -179,12 +179,12 @@ static void spsc_producer(void *arg) {
   mt_bench_context_t *ctx = (mt_bench_context_t *)arg;
   bucket_priority_queue_spsc_t *queue = (bucket_priority_queue_spsc_t *)ctx->queue;
 
-  while (!turbo_atomic_load_bool(&ctx->start)) {}
+  while (!t_atomic_load_bool(&ctx->start)) {}
 
   for (size_t i = 0; i < ctx->target; ++i) {
     bucket_priority_spsc_t priority = (bucket_priority_spsc_t)(i % BUCKET_PRIORITY_SPSC_COUNT);
     while (!bucket_priority_queue_spsc_push(queue, priority, i)) {}
-    turbo_atomic_fetch_add_uint32(&ctx->produced, 1);
+    t_atomic_fetch_add_uint32(&ctx->produced, 1);
   }
 }
 
@@ -192,12 +192,12 @@ static void spsc_consumer(void *arg) {
   mt_bench_context_t *ctx = (mt_bench_context_t *)arg;
   bucket_priority_queue_spsc_t *queue = (bucket_priority_queue_spsc_t *)ctx->queue;
 
-  while (!turbo_atomic_load_bool(&ctx->start)) {}
+  while (!t_atomic_load_bool(&ctx->start)) {}
 
   bucket_priority_spsc_value_t value;
-  while (turbo_atomic_load_uint32(&ctx->consumed) < ctx->target) {
+  while (t_atomic_load_uint32(&ctx->consumed) < ctx->target) {
     if (bucket_priority_queue_spsc_pop(queue, &value)) {
-      turbo_atomic_fetch_add_uint32(&ctx->consumed, 1);
+      t_atomic_fetch_add_uint32(&ctx->consumed, 1);
     }
   }
 }
@@ -206,12 +206,12 @@ static void mpmc_producer(void *arg) {
   mt_bench_context_t *ctx = (mt_bench_context_t *)arg;
   bucket_priority_queue_mpmc_t *queue = (bucket_priority_queue_mpmc_t *)ctx->queue;
 
-  while (!turbo_atomic_load_bool(&ctx->start)) {}
+  while (!t_atomic_load_bool(&ctx->start)) {}
 
   for (size_t i = 0; i < ctx->target; ++i) {
     bucket_priority_mpmc_t priority = (bucket_priority_mpmc_t)(i % BUCKET_PRIORITY_MPMC_COUNT);
     while (!bucket_priority_queue_mpmc_try_push(queue, priority, i)) {}
-    turbo_atomic_fetch_add_uint32(&ctx->produced, 1);
+    t_atomic_fetch_add_uint32(&ctx->produced, 1);
   }
 }
 
@@ -219,12 +219,12 @@ static void mpmc_consumer(void *arg) {
   mt_bench_context_t *ctx = (mt_bench_context_t *)arg;
   bucket_priority_queue_mpmc_t *queue = (bucket_priority_queue_mpmc_t *)ctx->queue;
 
-  while (!turbo_atomic_load_bool(&ctx->start)) {}
+  while (!t_atomic_load_bool(&ctx->start)) {}
 
   bucket_priority_mpmc_value_t value;
-  while (turbo_atomic_load_uint32(&ctx->consumed) < ctx->target) {
+  while (t_atomic_load_uint32(&ctx->consumed) < ctx->target) {
     if (bucket_priority_queue_mpmc_try_pop(queue, &value)) {
-      turbo_atomic_fetch_add_uint32(&ctx->consumed, 1);
+      t_atomic_fetch_add_uint32(&ctx->consumed, 1);
     }
   }
 }
@@ -251,7 +251,7 @@ spec("Priority Queue Comparison - Multi-threaded") {
       turbo_thread_create(&producer, spsc_producer, &ctx);
       turbo_thread_create(&consumer, spsc_consumer, &ctx);
 
-      turbo_atomic_store_bool(&ctx.start, true);
+      t_atomic_store_bool(&ctx.start, true);
 
       turbo_thread_join(&producer);
       turbo_thread_join(&consumer);
@@ -277,7 +277,7 @@ spec("Priority Queue Comparison - Multi-threaded") {
       turbo_thread_create(&producer, mpmc_producer, &ctx);
       turbo_thread_create(&consumer, mpmc_consumer, &ctx);
 
-      turbo_atomic_store_bool(&ctx.start, true);
+      t_atomic_store_bool(&ctx.start, true);
 
       turbo_thread_join(&producer);
       turbo_thread_join(&consumer);

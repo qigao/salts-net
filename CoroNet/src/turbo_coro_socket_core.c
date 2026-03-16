@@ -190,7 +190,12 @@ coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type) 
   s->loop = ctx->loop;
   s->ctx = ctx;
   s->ref_count = 1;
-  s->arena = (mem_pool_t *)coro_get_memory_pool();
+  /* Always use context's arena - no fallback to global pool.
+     Good taste: eliminate special cases, context is always required. */
+  if (!ctx || !ctx->arena) {
+    return; /* Fail fast: context with arena is mandatory */
+  }
+  s->arena = ctx->arena;
   uv_timer_init(s->loop, &s->timer);
   s->timer.data = s;
 

@@ -75,6 +75,7 @@ add_subdirectory(mustache)
 add_subdirectory(ice)
 add_subdirectory(lb)
 add_subdirectory(tproxy)
+add_subdirectory(email)
 
 # Package Configuration
 include(CMakePackageConfigHelpers)

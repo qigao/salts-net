@@ -143,12 +143,14 @@ static void lib_init(void) {
 }
 
 /* Arena pool operations */
-static int turbo_tls_arena_pool_init(turbo_tls_arena_pool_t *pool) {
+static int turbo_tls_arena_pool_init(turbo_tls_arena_pool_t *pool, mem_pool_t *parent_arena) {
   pool->buffer_size = 8192;
   pool->ret = -1;
   pool->current_buffer = NULL;
 
-  pool->arena = (mem_pool_t*)coro_get_memory_pool(); return 0;
+  /* Use parent arena (from client/server) */
+  pool->arena = parent_arena;
+  return 0;
 }
 
 static void turbo_tls_arena_pool_destroy(turbo_tls_arena_pool_t *pool) {
@@ -1063,8 +1065,8 @@ static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
   client->outgoing_ring = malloc(sizeof(turbo_tls_arena_pool_t));
 
   if (!client->incoming_ring || !client->outgoing_ring ||
-      turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->incoming_ring) != 0 ||
-      turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->outgoing_ring) != 0) {
+      turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->incoming_ring, client->arena) != 0 ||
+      turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->outgoing_ring, client->arena) != 0) {
     uv_close((uv_handle_t *)&client->handle, on_tls_handle_closed);
     return;
   }
@@ -1079,8 +1081,8 @@ static void on_tls_new_connection(uv_stream_t *server_stream, int status) {
   }
 
   /* Setup receive buffers */
-  client->recv_buffer1 = mem_get_buffer(client->arena, 8192);
-  client->recv_buffer2 = mem_get_buffer(client->arena, 8192);
+  client->recv_buffer1 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
+  client->recv_buffer2 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
 
   if (!client->recv_buffer1) {
     uv_close((uv_handle_t *)&client->handle, on_tls_handle_closed);
@@ -1264,12 +1266,18 @@ turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop, turbo_tls_context_t
   client->is_client_mode = 1;
   client->context = context;
 
-  /* Initialize client arena */
-  client->arena = (mem_pool_t*)coro_get_memory_pool();
+  /* Initialize client arena with pre-allocated size */
+  client->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  if (!client->arena || mem_init(client->arena, MEM_ARENA_CLIENT_INIT_SIZE) != 0) {
+    if (client->arena) free(client->arena);
+    free(client);
+    return NULL;
+  }
 
   /* Initialize TCP handle */
   if (uv_tcp_init(loop, &client->handle) != 0) {
-    
+    mem_destroy(client->arena);
+    free(client->arena);
     free(client);
     return NULL;
   }
@@ -1277,8 +1285,8 @@ turbo_tls_client_t *turbo_tls_client_create(uv_loop_t *loop, turbo_tls_context_t
   client->handle.data = client;
 
   /* Setup receive buffers */
-  client->recv_buffer1 = mem_get_buffer(client->arena, 8192);
-  client->recv_buffer2 = mem_get_buffer(client->arena, 8192);
+  client->recv_buffer1 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
+  client->recv_buffer2 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
 
   /* Setup write IOV array */
   client->write_iov_capacity = 16;
@@ -1324,8 +1332,8 @@ static void on_tls_client_connected(uv_connect_t *req, int status) {
     client->outgoing_ring = malloc(sizeof(turbo_tls_arena_pool_t));
 
     if (!client->incoming_ring || !client->outgoing_ring ||
-        turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->incoming_ring) != 0 ||
-        turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->outgoing_ring) != 0) {
+        turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->incoming_ring, client->arena) != 0 ||
+        turbo_tls_arena_pool_init((turbo_tls_arena_pool_t *)client->outgoing_ring, client->arena) != 0) {
       turbo_tls_client_close(client);
       return;
     }
@@ -1657,13 +1665,18 @@ int turbo_tls_server_init(turbo_tls_server_t *server, uv_loop_t *loop, turbo_tls
   server->context = context;
   server->active_connections = 0;
 
-  /* Initialize arena */
-  server->arena = (mem_pool_t*)coro_get_memory_pool();
+  /* Initialize arena with pre-allocated size */
+  server->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  if (!server->arena || mem_init(server->arena, MEM_ARENA_SERVER_INIT_SIZE) != 0) {
+    if (server->arena) free(server->arena);
+    return UV_ENOMEM;
+  }
 
   /* Initialize TCP handle */
   server->handle = (uv_tcp_t *)malloc(sizeof(uv_tcp_t));
   if (!server->handle) {
-    
+    mem_destroy(server->arena);
+    free(server->arena);
     return UV_ENOMEM;
   }
 

@@ -1,11 +1,10 @@
 #ifndef TURBO_SCRIPT_H
 #define TURBO_SCRIPT_H
 
+#include "platform.h"
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
-#include "platform.h"
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,10 +14,17 @@ typedef struct turbo_script_ctx_s turbo_script_ctx_t;
 typedef struct turbo_script_compiled_s turbo_script_compiled_t;
 typedef struct coro_context_s coro_context_t;
 typedef struct exprtk_value_s exprtk_value_t;
+
+typedef enum {
+    TURBO_SCRIPT_INIT_DEFAULT = 0,
+    TURBO_SCRIPT_INIT_BARE = 1,
+} turbo_script_init_flags_t;
+
 /**
  * @brief Initialize a new Turbo Script context.
+ * @param flags TURBO_SCRIPT_INIT_DEFAULT for full init, TURBO_SCRIPT_INIT_BARE for plugin-based init.
  */
-CXX_C_API turbo_script_ctx_t *turbo_script_init();
+CXX_C_API turbo_script_ctx_t *turbo_script_init(turbo_script_init_flags_t flags);
 
 /**
  * @brief Set the coroutine context for networking/async operations.
@@ -31,8 +37,7 @@ CXX_C_API void turbo_script_set_coro_context(turbo_script_ctx_t *ctx, coro_conte
 CXX_C_API void turbo_script_free(turbo_script_ctx_t *ctx);
 
 /**
- * @brief Run a script from a string.
- *
+ * @brief Run a script from a string. Uses interpreter (stable, feature-complete).
  * @param ctx Context.
  * @param script Script content.
  * @return 0 on success, <0 on failure.
@@ -40,24 +45,51 @@ CXX_C_API void turbo_script_free(turbo_script_ctx_t *ctx);
 CXX_C_API int turbo_script_run(turbo_script_ctx_t *ctx, const char *script);
 
 /**
- * @brief Run a script from a string and print the evaluated result to stdout.
- * Intended for REPL use.
- *
+ * @brief Run a script using JIT compiler for maximum performance.
+ * Note: Some features may not be supported in JIT mode. Use turbo_script_run() for full compatibility.
  * @param ctx Context.
  * @param script Script content.
  * @return 0 on success, <0 on failure.
  */
-CXX_C_API int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script);
-
+CXX_C_API int turbo_script_run_jit(turbo_script_ctx_t *ctx, const char *script);
 
 /**
- * @brief Run a script from a file.
- *
+ * @brief Run a script and print the result to stdout (for REPL use).
+ * @param ctx Context.
+ * @param script Script content.
+ * @return 0 on success, <0 on failure.
+ */
+CXX_C_API int turbo_script_run_and_print(turbo_script_ctx_t *ctx, const char *script);
+
+/**
+ * @brief Run a script from a file. Uses JIT if available, falls back to interpreter.
  * @param ctx Context.
  * @param filename File path.
  * @return 0 on success, <0 on failure.
  */
 CXX_C_API int turbo_script_run_file(turbo_script_ctx_t *ctx, const char *filename);
+
+/**
+ * @brief Compile a script into a reusable compiled object. Uses JIT if available.
+ * @return Compiled object, or NULL on parse error.
+ */
+CXX_C_API turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx,
+                                                        const char *script);
+
+/**
+ * @brief Execute a previously compiled script.
+ */
+CXX_C_API int turbo_script_exec(turbo_script_ctx_t *ctx, turbo_script_compiled_t *compiled);
+
+/**
+ * @brief Free a compiled script object.
+ */
+CXX_C_API void turbo_script_compiled_free(turbo_script_compiled_t *compiled);
+
+/**
+ * @brief Get error message of last operation.
+ */
+CXX_C_API const char *turbo_script_get_error(turbo_script_ctx_t *ctx);
 
 /**
  * @brief Bind a number variable into the script environment.
@@ -70,43 +102,27 @@ CXX_C_API void bind_num(turbo_script_ctx_t *ctx, const char *name, double value)
 CXX_C_API void bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value);
 
 /**
- * @brief Get a number variable from the script environment.
- * Returns 0.0 if not found or not a number.
- */
-CXX_C_API double get_num(turbo_script_ctx_t *ctx, const char *name);
-
-/**
- * @brief Get error message of last operation.
- */
-CXX_C_API const char *turbo_script_get_error(turbo_script_ctx_t *ctx);
-
-/**
- * @brief Compile a script into a reusable compiled object.
- * @return Compiled object, or NULL on parse error.
- */
-CXX_C_API turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx, const char *script);
-
-/**
- * @brief Execute a previously compiled script.
- * @return 0 on success, -1 if aborted.
- */
-CXX_C_API int turbo_script_exec(turbo_script_ctx_t *ctx, turbo_script_compiled_t *compiled);
-
-/**
- * @brief Free a compiled script object.
- */
-CXX_C_API void turbo_script_compiled_free(turbo_script_compiled_t *compiled);
-
-/**
  * @brief Bind a double[] vector into the script environment.
  */
 CXX_C_API int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len);
 
 /**
- * @brief Get a vector variable from the script environment.
- * @return 0 on success, -1 if not found or not a vector.
+ * @brief Native function signature for user-registered functions.
  */
-CXX_C_API int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size_t *len);
+typedef exprtk_value_t (*turbo_script_func_t)(size_t arg_count, exprtk_value_t *args,
+                                              void *user_data);
+
+/**
+ * @brief Register a native C function callable from script.
+ */
+CXX_C_API void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn,
+                         void *user_data);
+
+/**
+ * @brief Get a number variable from the script environment.
+ * Returns 0.0 if not found or not a number.
+ */
+CXX_C_API double get_num(turbo_script_ctx_t *ctx, const char *name);
 
 /**
  * @brief Get a string variable from the script environment.
@@ -114,22 +130,11 @@ CXX_C_API int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **
  */
 CXX_C_API const char *get_str(turbo_script_ctx_t *ctx, const char *name);
 
-
 /**
- * @brief Native function signature for user-registered functions.
+ * @brief Get a vector variable from the script environment.
+ * @return 0 on success, -1 if not found or not a vector.
  */
-typedef exprtk_value_t (*turbo_script_func_t)(size_t arg_count, exprtk_value_t *args, void *user_data);
-
-/**
- * @brief Register a native C function callable from script.
- */
-CXX_C_API void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn, void *user_data);
-
-/**
- * @brief Initialize a bare context with only core engine + import.
- * Use import("name") to load plugin modules on demand.
- */
-CXX_C_API turbo_script_ctx_t *turbo_script_init_bare(void);
+CXX_C_API int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size_t *len);
 
 /**
  * @brief Load a plugin by name from C code.
@@ -139,23 +144,9 @@ CXX_C_API turbo_script_ctx_t *turbo_script_init_bare(void);
 CXX_C_API int turbo_script_load_plugin(turbo_script_ctx_t *ctx, const char *name);
 
 /**
- * @brief Compile a TurboScript into a MIR module for JIT execution.
- * @return 0 on success, <0 on error.
+ * @brief Convert an exprtk_value_t to boolean (0.0 or 1.0).
  */
-CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script);
-
-/**
- * @brief Run a TurboScript using the MIR JIT engine.
- * @return 0 on success, <0 on error.
- */
-CXX_C_API int turbo_script_run_jit(turbo_script_ctx_t *ctx, const char *script);
-
-/**
- * @brief Execute the last compiled MIR module (no recompilation).
- * @return 0 on success, <0 on error.
- */
-CXX_C_API int turbo_script_exec_jit(turbo_script_ctx_t *ctx);
-
+CXX_C_API bool turbo_script_value_as_bool(exprtk_value_t val);
 
 #ifdef __cplusplus
 }

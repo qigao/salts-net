@@ -9,6 +9,9 @@
 #include "base64_utils.h"
 #include "turbo_str.h"
 #include "turbo_url.h"
+#include "mime_parser.h"
+#include "mime_content_disposition.h"
+#include "mime_encoded_word.h"
 #include <cjwt/cjwt.h>
 #include <fcntl.h>
 #include <CoroNet/turbo_coro_context.h>
@@ -732,7 +735,7 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
   if (form) {
     req = tstr_cat_fmt(req, "Content-Type: multipart/form-data; boundary=%s\r\n", form->boundary);
     req = tstr_cat(req, "Transfer-Encoding: chunked\r\n");
-  } else if (body && body_len > 0) {
+  } else if (body_len > 0) {
     char cl[64];
     stbsp_snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", body_len);
     req = tstr_cat(req, cl);
@@ -1103,10 +1106,18 @@ static int send_http_request(http_client_t *c, coro_socket_t *transport, tstr_t 
     while (sr == 0 && (bytes_read = read_cb(read_buf, sizeof(read_buf), read_cb_ud)) > 0) {
       if (bytes_read == (size_t)-1)
         break;
-      send_chunk(&sr, transport, read_buf, bytes_read);
+      /* If body_len is set (Content-Length), send directly; otherwise use chunked */
+      if (body_len > 0) {
+        send_ok(&sr, transport, read_buf, bytes_read);
+      } else {
+        send_chunk(&sr, transport, read_buf, bytes_read);
+      }
       c->stats.bytes_sent += bytes_read;
     }
-    send_ok(&sr, transport, "0\r\n\r\n", 5);
+    /* Send chunked trailer only if using chunked encoding */
+    if (body_len == 0) {
+      send_ok(&sr, transport, "0\r\n\r\n", 5);
+    }
   }
   /* Send regular body */
   else if (body && body_len > 0) {
@@ -1658,7 +1669,10 @@ http_response_t *http_upload_file(http_client_t *client, const char *url,
     return r;
   }
 
-  http_response_t *resp = do_request_full(client, HTTP_POST, url, NULL, 0,
+  /* Set Content-Type header for binary upload */
+  const char *headers[] = {"Content-Type: application/octet-stream"};
+
+  http_response_t *resp = do_request_full(client, HTTP_POST, url, headers, 1,
                                           buf.base, buf.len, NULL, NULL, NULL, NULL, NULL);
 
   turbo_fs_buf_free(&buf);
@@ -1765,8 +1779,11 @@ http_response_t *http_upload_file_stream(http_client_t *client, const char *url,
     .progress_ud = progress_ud
   };
 
-  http_response_t *resp = do_request_full(client, HTTP_POST, url, NULL, 0,
-                                          NULL, 0, NULL, NULL, NULL,
+  /* Set Content-Type header for binary upload */
+  const char *headers[] = {"Content-Type: application/octet-stream"};
+
+  http_response_t *resp = do_request_full(client, HTTP_POST, url, headers, 1,
+                                          NULL, stat.size, NULL, NULL, NULL,
                                           upload_read_cb, &ctx);
 
   turbo_fs_close(fd);
@@ -1803,4 +1820,198 @@ http_response_t *http_download_file_stream(http_client_t *client, const char *ur
 
   turbo_fs_close(fd);
   return resp;
+}
+
+/* ── Resume Download (Range Requests) ─────────────────────────────── */
+
+#define DEFAULT_RETRY_COUNT 5
+#define DEFAULT_RETRY_DELAY_MS 1000
+
+typedef struct {
+    char url[2048];
+    char output_path[1024];
+    size_t downloaded_bytes;
+    size_t total_bytes;
+} http_resume_state_t;
+
+static int save_resume_state(const char* resume_file, const http_resume_state_t* state) {
+    if (!resume_file || !state) return -1;
+
+    FILE* fp = fopen(resume_file, "wb");
+    if (!fp) return -1;
+
+    size_t written = fwrite(state, sizeof(http_resume_state_t), 1, fp);
+    fclose(fp);
+
+    return (written == 1) ? 0 : -1;
+}
+
+static int load_resume_state(const char* resume_file, http_resume_state_t* state) {
+    if (!resume_file || !state) return -1;
+
+    FILE* fp = fopen(resume_file, "rb");
+    if (!fp) return -1;
+
+    size_t read = fread(state, sizeof(http_resume_state_t), 1, fp);
+    fclose(fp);
+
+    return (read == 1) ? 0 : -1;
+}
+
+http_response_t *http_download_file_resume(
+    http_client_t *client,
+    const char *url,
+    const char *output_path,
+    const http_resume_options_t *options,
+    http_progress_cb progress_cb,
+    void *progress_ud) {
+
+    if (!client || !url || !output_path)
+        return NULL;
+
+    /* Parse options */
+    const char* resume_file = options ? options->resume_file : NULL;
+    int retry_count = options && options->retry_count > 0 ? options->retry_count : DEFAULT_RETRY_COUNT;
+    int retry_delay_ms = options && options->retry_delay_ms > 0 ? options->retry_delay_ms : DEFAULT_RETRY_DELAY_MS;
+
+    /* Try to load resume state */
+    http_resume_state_t state = {0};
+    int resuming = 0;
+    size_t start_byte = 0;
+
+    if (resume_file && load_resume_state(resume_file, &state) == 0) {
+        /* Validate resume state */
+        if (strcmp(state.url, url) == 0 && strcmp(state.output_path, output_path) == 0) {
+            /* Check if partial file exists */
+            turbo_fs_stat_t stat;
+            if (turbo_fs_stat(output_path, &stat) == 0 && stat.size == state.downloaded_bytes) {
+                resuming = 1;
+                start_byte = state.downloaded_bytes;
+            }
+        }
+    }
+
+    /* Initialize resume state if not resuming */
+    if (!resuming && resume_file) {
+        strncpy(state.url, url, sizeof(state.url) - 1);
+        strncpy(state.output_path, output_path, sizeof(state.output_path) - 1);
+        state.downloaded_bytes = 0;
+        state.total_bytes = 0;
+    }
+
+    /* Open file for append if resuming, otherwise create new */
+    int open_flags = resuming ?
+        (TURBO_FS_O_WRONLY | TURBO_FS_O_APPEND) :
+        (TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC);
+
+    turbo_file_t fd = turbo_fs_open(output_path, open_flags, 0644);
+    if (fd < 0) {
+        http_response_t *r = (http_response_t *)calloc(1, sizeof(http_response_t));
+        if (r) {
+            r->error_code = HTTP_ERROR_FILE_IO;
+            r->error = strdup("Failed to open output file");
+        }
+        return r;
+    }
+
+    /* Retry loop */
+    int attempt = 0;
+    http_response_t *resp = NULL;
+
+    while (attempt < retry_count) {
+        /* Build Range header if resuming */
+        const char *headers[1] = {NULL};
+        char range_header[256];
+        int header_count = 0;
+
+        if (start_byte > 0) {
+            snprintf(range_header, sizeof(range_header), "Range: bytes=%zu-", start_byte);
+            headers[0] = range_header;
+            header_count = 1;
+        }
+
+        /* Download context */
+        download_stream_ctx_t ctx = {
+            .fd = fd,
+            .total_size = state.total_bytes,
+            .transferred = start_byte,
+            .progress_cb = progress_cb,
+            .progress_ud = progress_ud
+        };
+
+        /* Execute request */
+        resp = do_request_full(client, HTTP_GET, url, headers, header_count,
+                               NULL, 0, download_write_cb, &ctx,
+                               NULL, NULL, NULL);
+
+        /* Check response */
+        if (resp && (resp->status_code == 200 || resp->status_code == 206)) {
+            /* Success */
+            if (resp->status_code == 206) {
+                /* Partial content - update state */
+                state.downloaded_bytes = ctx.transferred;
+                if (ctx.total_size > 0) {
+                    state.total_bytes = ctx.total_size;
+                }
+            } else {
+                /* Full content - mark as complete */
+                state.downloaded_bytes = ctx.transferred;
+                state.total_bytes = ctx.transferred;
+            }
+
+            /* Delete resume file on success */
+            if (resume_file && state.downloaded_bytes >= state.total_bytes) {
+                remove(resume_file);
+            } else if (resume_file) {
+                /* Save progress */
+                save_resume_state(resume_file, &state);
+            }
+
+            turbo_fs_close(fd);
+            return resp;
+        }
+
+        /* Failure - retry */
+        attempt++;
+        if (attempt < retry_count) {
+            /* Save current progress */
+            if (resume_file) {
+                state.downloaded_bytes = ctx.transferred;
+                save_resume_state(resume_file, &state);
+            }
+
+            /* Exponential backoff */
+            int delay = retry_delay_ms * (1 << (attempt - 1));
+            if (delay > 30000) delay = 30000;  /* Max 30 seconds */
+
+            /* Sleep */
+#ifdef _WIN32
+            Sleep(delay);
+#else
+            usleep(delay * 1000);
+#endif
+
+            /* Update start byte for next attempt */
+            start_byte = ctx.transferred;
+
+            /* Free failed response */
+            if (resp) {
+                http_response_free(resp);
+                resp = NULL;
+            }
+        }
+    }
+
+    /* All retries failed */
+    turbo_fs_close(fd);
+
+    if (!resp) {
+        resp = (http_response_t *)calloc(1, sizeof(http_response_t));
+        if (resp) {
+            resp->error_code = HTTP_ERROR_TIMEOUT;
+            resp->error = strdup("Download failed after retries");
+        }
+    }
+
+    return resp;
 }

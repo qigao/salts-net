@@ -2095,7 +2095,7 @@ static void ts_emit_map_prologue(ts_mir_compiler_t *c) {
  * Public API: Compile, Exec, Run
  * ========================================================================= */
 
-int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script) {
+CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script) {
   if (!ctx || !script) return -1;
   if (!ctx->mir_ctx) ctx->mir_ctx = MIR_init();
 
@@ -2207,7 +2207,7 @@ int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script) {
   return 0;
 }
 
-int turbo_script_exec_jit(turbo_script_ctx_t *ctx) {
+CXX_C_API int turbo_script_exec_jit(turbo_script_ctx_t *ctx) {
   if (!ctx || !ctx->mir_last_fn) return -1;
 
   /*  Direct call via cached pointer — no module list traversal */
@@ -2231,7 +2231,7 @@ static uint64_t ts_hash_script(const char *s) {
   return h;
 }
 
-int turbo_script_run_jit(turbo_script_ctx_t *ctx, const char *script) {
+CXX_C_API int turbo_script_run_jit(turbo_script_ctx_t *ctx, const char *script) {
   if (!ctx || !script) return -1;
 
   /*  Check compile cache — skip parse/compile on hit */

@@ -12,6 +12,12 @@
 #include <uv.h>
 #include "tlog.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sched.h>
+#endif
+
 /* Compile-time guarantee: turbo error codes == libuv error codes.
    MSVC C11 mode uses _Static_assert; C23/C++ use static_assert. */
 #ifndef __cplusplus
@@ -58,8 +64,27 @@ coro_context_t *coro_context_create(void *loop) {
     ctx->owns_loop = 1;
   }
 
-  /* Initialize internal memory arena (64KB initial chunk) */
-  ctx->arena = (mem_pool_t*)coro_get_memory_pool();
+  /* Initialize internal memory arena - each context has its own isolated pool */
+  ctx->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  if (!ctx->arena) {
+    if (ctx->owns_loop) {
+      uv_loop_close(ctx->loop);
+      free(ctx->loop);
+    }
+    free(ctx);
+    return NULL;
+  }
+  /* Pre-allocate 128KB to reduce fragmentation for typical workloads */
+  if (mem_init(ctx->arena, MEM_ARENA_CONTEXT_INIT_SIZE) != 0) {
+    free(ctx->arena);
+    if (ctx->owns_loop) {
+      uv_loop_close(ctx->loop);
+      free(ctx->loop);
+    }
+    free(ctx);
+    return NULL;
+  }
+  ctx->owns_arena = 1;
 
   /* Initialize lazy task list */
   ctx->task_capacity = 8;
@@ -86,8 +111,8 @@ coro_context_t *coro_context_create(void *loop) {
     return NULL;
   }
 
-  /* Create coroutine pool with default config */
-  ctx->pool = coro_object_pool_create(NULL);
+  /* Create coroutine pool with context's arena */
+  ctx->pool = coro_object_pool_create(NULL, ctx);
 
   /* Initialize post queue early to avoid race conditions when posting from other threads.
      The post_async handle must be initialized on the loop thread, but we expect
@@ -195,8 +220,12 @@ void coro_context_destroy(coro_context_t *ctx) {
   ctx->task_count = 0;
   ctx->task_capacity = 0;
 
-  /* Cleanup arena (this frees task objects and tasks array) */
-  
+  /* Cleanup arena: destroy and free since each context owns its arena */
+  if (ctx->arena && ctx->owns_arena) {
+    mem_destroy(ctx->arena);
+    free(ctx->arena);
+    ctx->arena = NULL;
+  }
 
   if (ctx->post_initialized) {
     uv_close((uv_handle_t *)&ctx->post_async, NULL);
@@ -248,8 +277,8 @@ const char *turbo_strerror(int err) { return uv_strerror(err); }
 static void post_async_cb(uv_async_t *handle) {
   coro_context_t *ctx = (coro_context_t *)handle->data;
   
-  int tail = turbo_atomic_load(&ctx->post_tail);
-  int head = turbo_atomic_load(&ctx->post_head);
+  int tail = t_atomic_load(&ctx->post_tail);
+  int head = t_atomic_load(&ctx->post_head);
   
   /* Drain all pending slots */
   while (tail != head) {
@@ -257,7 +286,7 @@ static void post_async_cb(uv_async_t *handle) {
     slot->fn(slot->arg);
     
     tail = (tail + 1) & (ctx->post_ring_size - 1);
-    turbo_atomic_store(&ctx->post_tail, tail);
+    t_atomic_store(&ctx->post_tail, tail);
   }
 }
 
@@ -270,13 +299,13 @@ static void post_async_cb(uv_async_t *handle) {
 static int ensure_post_queue(coro_context_t *ctx) {
   if (ctx->post_initialized) return 0;
   
-  /* Default ring size: 4096 slots (can handle burst of 4095 concurrent posts) */
-  ctx->post_ring_size = 4096;
+  /* Default ring size: 16384 slots (can handle burst of 16383 concurrent posts) */
+  ctx->post_ring_size = 16384;
   ctx->post_ring = (coro_post_slot_t *)calloc(ctx->post_ring_size, sizeof(coro_post_slot_t));
   if (!ctx->post_ring) return TURBO_ENOMEM;
   
-  turbo_atomic_store(&ctx->post_head, 0);
-  turbo_atomic_store(&ctx->post_tail, 0);
+  t_atomic_store(&ctx->post_head, 0);
+  t_atomic_store(&ctx->post_tail, 0);
   
   int r = uv_async_init(ctx->loop, &ctx->post_async, post_async_cb);
   if (r != 0) {
@@ -306,14 +335,14 @@ int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg) {
 
   if (!ctx->post_initialized) return TURBO_EINVAL;
 
-  /* Lock-free enqueue: CAS on head index */
-  int head = turbo_atomic_load(&ctx->post_head);
-  int tail = turbo_atomic_load(&ctx->post_tail);
+  /* Lock-free enqueue: try once, fail fast if full */
+  int head = t_atomic_load(&ctx->post_head);
+  int tail = t_atomic_load(&ctx->post_tail);
   int next_head = (head + 1) & (ctx->post_ring_size - 1);
   
-  /* Ring full? (leave one slot empty to distinguish full from empty) */
+  /* Ring full? Return error for caller to handle */
   if (next_head == tail) {
-    return TURBO_ENOMEM; /* Caller should retry or increase ring size */
+    return TURBO_ENOMEM;
   }
   
   /* Write to slot (safe: only producer writes to head index) */
@@ -321,7 +350,7 @@ int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg) {
   ctx->post_ring[head].arg = arg;
   
   /* Publish: advance head atomically */
-  turbo_atomic_store(&ctx->post_head, next_head);
+  t_atomic_store(&ctx->post_head, next_head);
 
   return uv_async_send(&ctx->post_async);
 }
@@ -648,19 +677,18 @@ void coro_sleep(coro_context_t *ctx, uint64_t ms) {
 #include "turbo_buffer.h"
 #include "turbo_atomic.h"
 
-static mem_pool_t *g_coronet_pool = NULL;
-static turbo_once_t g_coronet_pool_once = TURBO_ONCE_INIT;
-
-static void coronet_pool_init_cb(void) {
-    mem_pool_t *pool = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
-    if (pool && mem_init(pool, 0) == 0) {
-        g_coronet_pool = pool;
-    } else {
-        if (pool) free(pool);
-    }
-}
-
+/**
+ * @brief Global fallback memory pool for legacy code.
+ * 
+ * DEPRECATED: This global pool should NOT be used by new code.
+ * All CoroNet components now require a coro_context_t with its own arena.
+ * This function is kept only for backward compatibility with external code
+ * that may still reference it, but will return NULL to force proper migration.
+ * 
+ * @return NULL (deprecated, use ctx->arena instead)
+ */
 void* coro_get_memory_pool(void) {
-    turbo_once(&g_coronet_pool_once, coronet_pool_init_cb);
-    return g_coronet_pool;
+    /* Return NULL to force callers to use context-specific arenas.
+       Good taste: fail fast rather than hide problems with fallbacks. */
+    return NULL;
 }

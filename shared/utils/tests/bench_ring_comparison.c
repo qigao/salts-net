@@ -77,7 +77,7 @@ typedef struct {
     size_t count;
     size_t batch_size;
     bool use_memcpy;
-    turbo_atomic_int_t start;
+    t_atomic_int_t start;
 } spsc_ctx_t;
 
 static void spsc_producer_thread(void *arg) {
@@ -85,7 +85,7 @@ static void spsc_producer_thread(void *arg) {
     uint8_t local_buf[4096];
     memset(local_buf, 0xAA, sizeof(local_buf));
 
-    while (turbo_atomic_load(&ctx->start) == 0) {
+    while (t_atomic_load(&ctx->start) == 0) {
         turbo_sleep_ms(1);
     }
 
@@ -111,7 +111,7 @@ static void spsc_consumer_thread(void *arg) {
     spsc_ctx_t *ctx = (spsc_ctx_t *)arg;
     uint8_t local_buf[4096];
 
-    while (turbo_atomic_load(&ctx->start) == 0) {
+    while (t_atomic_load(&ctx->start) == 0) {
         turbo_sleep_ms(1);
     }
 
@@ -151,7 +151,7 @@ static void run_spsc_bench(__bdd_config_type__ *__bdd_config__,
     ctx.count = count;
     ctx.batch_size = batch;
     ctx.use_memcpy = use_memcpy;
-    turbo_atomic_store(&ctx.start, 0);
+    t_atomic_store(&ctx.start, 0);
 
     turbo_thread_t prod, cons;
     turbo_thread_create(&prod, spsc_producer_thread, &ctx);
@@ -159,7 +159,7 @@ static void run_spsc_bench(__bdd_config_type__ *__bdd_config__,
 
     turbo_sleep_ms(50);
     uint64_t start_time = turbo_hrtime();
-    turbo_atomic_store(&ctx.start, 1);
+    t_atomic_store(&ctx.start, 1);
 
     turbo_thread_join(&prod);
     turbo_thread_join(&cons);

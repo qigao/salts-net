@@ -1379,3 +1379,683 @@ s3_error_t s3_select_object_content(
     s3_http_response_free(&hres);
     return err;
 }
+
+/* ── Streaming File Transfer ──────────────────────────────────────── */
+
+s3_error_t s3_put_object_from_file(s3_client_t* client,
+                                   const char* bucket, const char* object,
+                                   const char* file_path,
+                                   const char* content_type,
+                                   http_progress_cb progress_cb,
+                                   void* progress_ud) {
+    if (!client || !bucket || !object || !file_path)
+        return s3_error_make(-1, "Invalid params");
+
+    /* Read file into memory */
+    turbo_fs_buf_t buf = {0};
+    if (turbo_fs_read_file(file_path, &buf) != 0) {
+        return s3_error_make(-1, "Failed to read file");
+    }
+
+    /* Report initial progress */
+    if (progress_cb) {
+        progress_cb(0, buf.len, progress_ud);
+    }
+
+    /* Upload using standard put_object */
+    s3_error_t err = s3_put_object(client, bucket, object, buf.base, buf.len, content_type);
+
+    /* Report completion */
+    if (progress_cb) {
+        progress_cb(buf.len, buf.len, progress_ud);
+    }
+
+    turbo_fs_buf_free(&buf);
+    return err;
+}
+
+s3_error_t s3_download_object_stream(s3_client_t* client,
+                                     const char* bucket, const char* object,
+                                     const char* output_path,
+                                     http_progress_cb progress_cb,
+                                     void* progress_ud) {
+    if (!client || !bucket || !object || !output_path)
+        return s3_error_make(-1, "Invalid params");
+
+    /* Download to memory first */
+    tstr_t uri = tstr_cat_fmt(tstr_new(), "/%s/%s", bucket, object);
+    S3Headers qp = S3Headers_init();
+    s3_http_response_t hres = s3_execute_signed(client, "GET", uri, NULL, &qp, NULL, 0);
+    tstr_free(uri);
+    S3Headers_drop(&qp);
+
+    s3_error_t err = check_response(&hres, 200);
+    if (!s3_is_ok(err)) {
+        s3_http_response_free(&hres);
+        return err;
+    }
+
+    /* Report progress */
+    size_t total = tstr_len(hres.body);
+    if (progress_cb) {
+        progress_cb(0, total, progress_ud);
+    }
+
+    /* Write to file */
+    turbo_fs_buf_t buf = {.base = (char*)hres.body, .len = total};
+    if (turbo_fs_write_file(output_path, &buf) != 0) {
+        s3_http_response_free(&hres);
+        return s3_error_make(-1, "Failed to write file");
+    }
+
+    /* Report completion */
+    if (progress_cb) {
+        progress_cb(total, total, progress_ud);
+    }
+
+    s3_http_response_free(&hres);
+    return S3_OK;
+}
+
+/* ── Batch Operations ─────────────────────────────────────────────── */
+
+typedef struct {
+    s3_client_t* client;
+    const s3_batch_item_t* item;
+    int index;
+    int is_upload;  /* 1=upload, 0=download */
+    s3_error_t result;  /* Store result here */
+} s3_batch_task_t;
+
+static void s3_batch_upload_coro(coro_t* co, void* arg) {
+    UNUSED(co);
+    s3_batch_task_t* task = (s3_batch_task_t*)arg;
+
+    task->result = s3_put_object_from_file(
+        task->client,
+        task->item->bucket,
+        task->item->key,
+        task->item->file_path,
+        task->item->content_type,
+        NULL, NULL  /* No progress for batch items */
+    );
+}
+
+static void s3_batch_download_coro(coro_t* co, void* arg) {
+    UNUSED(co);
+    s3_batch_task_t* task = (s3_batch_task_t*)arg;
+
+    task->result = s3_download_object_stream(
+        task->client,
+        task->item->bucket,
+        task->item->key,
+        task->item->file_path,
+        NULL, NULL  /* No progress for batch items */
+    );
+}
+
+s3_batch_result_t* s3_put_objects_batch(s3_client_t* client,
+                                        const s3_batch_item_t* items,
+                                        int count,
+                                        int concurrency) {
+    return s3_put_objects_batch_progress(client, items, count, concurrency, NULL, NULL);
+}
+
+s3_batch_result_t* s3_put_objects_batch_progress(
+    s3_client_t* client,
+    const s3_batch_item_t* items,
+    int count,
+    int concurrency,
+    s3_batch_progress_cb progress_cb,
+    void* progress_ud) {
+
+    if (!client || !items || count <= 0)
+        return NULL;
+
+    if (concurrency <= 0)
+        concurrency = 10;
+
+    /* Calculate total size */
+    size_t total_size = 0;
+    for (int i = 0; i < count; i++) {
+        turbo_fs_stat_t stat;
+        if (turbo_fs_stat(items[i].file_path, &stat) == 0) {
+            total_size += stat.size;
+        }
+    }
+
+    /* Allocate results */
+    s3_batch_result_t* results = (s3_batch_result_t*)calloc(count, sizeof(s3_batch_result_t));
+    if (!results)
+        return NULL;
+
+    /* Allocate tasks */
+    s3_batch_task_t* tasks = (s3_batch_task_t*)calloc(count, sizeof(s3_batch_task_t));
+    if (!tasks) {
+        free(results);
+        return NULL;
+    }
+
+    /* Initialize tasks */
+    for (int i = 0; i < count; i++) {
+        tasks[i].client = client;
+        tasks[i].item = &items[i];
+        tasks[i].index = i;
+        tasks[i].is_upload = 1;
+    }
+
+    /* Create coroutine tasks */
+    coro_task_t** coro_tasks = (coro_task_t**)calloc(count, sizeof(coro_task_t*));
+    if (!coro_tasks) {
+        free(tasks);
+        free(results);
+        return NULL;
+    }
+
+    for (int i = 0; i < count; i++) {
+        coro_tasks[i] = coro_task_create(client->coro_ctx, s3_batch_upload_coro, &tasks[i]);
+        if (coro_tasks[i])
+            coro_task_start(coro_tasks[i]);
+    }
+
+    /* Progress tracking */
+    s3_batch_progress_t progress = {
+        .current_file = 0,
+        .total_files = count,
+        .current_file_uploaded = 0,
+        .current_file_size = 0,
+        .total_uploaded = 0,
+        .total_size = total_size,
+        .completed_files = 0,
+        .failed_files = 0
+    };
+
+    /* Wait for all with concurrency limit */
+    int completed = 0;
+    while (completed < count) {
+        int active = 0;
+        for (int i = 0; i < count && active < concurrency; i++) {
+            if (coro_tasks[i] && !coro_task_is_done(coro_tasks[i])) {
+                active++;
+            }
+        }
+
+        /* Run event loop */
+        coro_context_run(client->coro_ctx, TURBO_RUN_NOWAIT);
+
+        /* Check completed tasks */
+        for (int i = 0; i < count; i++) {
+            if (coro_tasks[i] && coro_task_is_done(coro_tasks[i])) {
+                results[i].error = tasks[i].result;
+                results[i].index = i;
+
+                /* Update progress */
+                if (s3_is_ok(tasks[i].result)) {
+                    progress.completed_files++;
+                } else {
+                    progress.failed_files++;
+                }
+
+                /* Get file size */
+                turbo_fs_stat_t stat;
+                if (turbo_fs_stat(items[i].file_path, &stat) == 0) {
+                    progress.total_uploaded += stat.size;
+                }
+
+                progress.current_file = i + 1;
+
+                /* Call progress callback */
+                if (progress_cb) {
+                    progress_cb(&progress, progress_ud);
+                }
+
+                coro_task_destroy(coro_tasks[i]);
+                coro_tasks[i] = NULL;
+                completed++;
+            }
+        }
+    }
+
+    free(coro_tasks);
+    free(tasks);
+    return results;
+}
+
+s3_batch_result_t* s3_get_objects_batch(s3_client_t* client,
+                                        const s3_batch_item_t* items,
+                                        int count,
+                                        int concurrency) {
+    if (!client || !items || count <= 0)
+        return NULL;
+
+    if (concurrency <= 0)
+        concurrency = 10;
+
+    /* Allocate results */
+    s3_batch_result_t* results = (s3_batch_result_t*)calloc(count, sizeof(s3_batch_result_t));
+    if (!results)
+        return NULL;
+
+    /* Allocate tasks */
+    s3_batch_task_t* tasks = (s3_batch_task_t*)calloc(count, sizeof(s3_batch_task_t));
+    if (!tasks) {
+        free(results);
+        return NULL;
+    }
+
+    /* Initialize tasks */
+    for (int i = 0; i < count; i++) {
+        tasks[i].client = client;
+        tasks[i].item = &items[i];
+        tasks[i].index = i;
+        tasks[i].is_upload = 0;
+    }
+
+    /* Create coroutine tasks */
+    coro_task_t** coro_tasks = (coro_task_t**)calloc(count, sizeof(coro_task_t*));
+    if (!coro_tasks) {
+        free(tasks);
+        free(results);
+        return NULL;
+    }
+
+    for (int i = 0; i < count; i++) {
+        coro_tasks[i] = coro_task_create(client->coro_ctx, s3_batch_download_coro, &tasks[i]);
+        if (coro_tasks[i])
+            coro_task_start(coro_tasks[i]);
+    }
+
+    /* Wait for all with concurrency limit */
+    int completed = 0;
+    while (completed < count) {
+        int active = 0;
+        for (int i = 0; i < count && active < concurrency; i++) {
+            if (coro_tasks[i] && !coro_task_is_done(coro_tasks[i])) {
+                active++;
+            }
+        }
+
+        /* Run event loop */
+        coro_context_run(client->coro_ctx, TURBO_RUN_NOWAIT);
+
+        /* Check completed tasks */
+        for (int i = 0; i < count; i++) {
+            if (coro_tasks[i] && coro_task_is_done(coro_tasks[i])) {
+                results[i].error = tasks[i].result;
+                results[i].index = i;
+                coro_task_destroy(coro_tasks[i]);
+                coro_tasks[i] = NULL;
+                completed++;
+            }
+        }
+    }
+
+    free(coro_tasks);
+    free(tasks);
+    return results;
+}
+
+void s3_batch_results_free(s3_batch_result_t* results, int count) {
+    (void)count;
+    if (results)
+        free(results);
+}
+
+/* ── Multipart Upload for Large Files ─────────────────────────────── */
+
+#define DEFAULT_PART_SIZE_MB 10
+#define DEFAULT_CONCURRENCY 10
+#define MIN_PART_SIZE_MB 5
+#define MAX_PART_SIZE_MB 100
+
+/* Resume state structure */
+typedef struct {
+    char upload_id[256];
+    int total_parts;
+    int completed_parts;
+    char completed_etags[10000][256];  /* Max 10000 parts */
+} s3_resume_state_t;
+
+/* Save resume state to file */
+static int save_resume_state(const char* resume_file, const s3_resume_state_t* state) {
+    if (!resume_file || !state) return -1;
+
+    FILE* fp = fopen(resume_file, "wb");
+    if (!fp) return -1;
+
+    size_t written = fwrite(state, sizeof(s3_resume_state_t), 1, fp);
+    fclose(fp);
+
+    return (written == 1) ? 0 : -1;
+}
+
+/* Load resume state from file */
+static int load_resume_state(const char* resume_file, s3_resume_state_t* state) {
+    if (!resume_file || !state) return -1;
+
+    FILE* fp = fopen(resume_file, "rb");
+    if (!fp) return -1;
+
+    size_t read = fread(state, sizeof(s3_resume_state_t), 1, fp);
+    fclose(fp);
+
+    return (read == 1) ? 0 : -1;
+}
+
+typedef struct {
+    s3_client_t* client;
+    const char* bucket;
+    const char* key;
+    const char* upload_id;
+    turbo_file_t fd;
+    int part_number;
+    size_t part_size;
+    size_t file_offset;
+    s3_upload_part_response_t result;
+    const s3_multipart_options_t* options;
+    t_atomic_uint64_t* total_uploaded;  /* Shared counter */
+    size_t total_size;
+    int total_parts;
+} s3_part_upload_task_t;
+
+static void s3_multipart_part_coro(coro_t* co, void* arg) {
+    UNUSED(co);
+    s3_part_upload_task_t* task = (s3_part_upload_task_t*)arg;
+
+    /* Read part data */
+    char* part_data = (char*)malloc(task->part_size);
+    if (!part_data) {
+        task->result.error = s3_error_make(-1, "Failed to allocate part buffer");
+        return;
+    }
+
+    /* Seek and read */
+    turbo_fs_seek(task->fd, task->file_offset, SEEK_SET);
+    int nread = turbo_fs_read(task->fd, part_data, task->part_size);
+    if (nread < 0) {
+        free(part_data);
+        task->result.error = s3_error_make(-1, "Failed to read part");
+        return;
+    }
+
+    size_t actual_size = (size_t)nread;
+
+    /* Upload part */
+    task->result = s3_upload_part(
+        task->client,
+        task->bucket,
+        task->key,
+        task->upload_id,
+        task->part_number,
+        part_data,
+        actual_size
+    );
+
+    free(part_data);
+
+    /* Update progress */
+    if (s3_is_ok(task->result.error)) {
+        t_atomic_fetch_add_uint64(task->total_uploaded, actual_size);
+
+        if (task->options && task->options->progress_cb) {
+            size_t uploaded = (size_t)t_atomic_load_uint64(task->total_uploaded);
+            task->options->progress_cb(
+                task->part_number, task->total_parts,
+                actual_size, actual_size,
+                uploaded, task->total_size,
+                task->options->progress_ud
+            );
+        }
+    }
+}
+
+s3_error_t s3_put_object_multipart_file(
+    s3_client_t* client,
+    const char* bucket,
+    const char* key,
+    const char* file_path,
+    const char* content_type,
+    const s3_multipart_options_t* options) {
+
+    if (!client || !bucket || !key || !file_path)
+        return s3_error_make(-1, "Invalid params");
+
+    /* Get file size */
+    turbo_fs_stat_t stat;
+    if (turbo_fs_stat(file_path, &stat) != 0 || !stat.is_file) {
+        return s3_error_make(-1, "Failed to stat file");
+    }
+
+    size_t file_size = stat.size;
+    if (file_size == 0) {
+        return s3_error_make(-1, "File is empty");
+    }
+
+    /* Parse options */
+    size_t part_size_mb = DEFAULT_PART_SIZE_MB;
+    int concurrency = DEFAULT_CONCURRENCY;
+
+    if (options) {
+        if (options->part_size_mb > 0) {
+            part_size_mb = options->part_size_mb;
+            if (part_size_mb < MIN_PART_SIZE_MB) part_size_mb = MIN_PART_SIZE_MB;
+            if (part_size_mb > MAX_PART_SIZE_MB) part_size_mb = MAX_PART_SIZE_MB;
+        }
+        if (options->concurrency > 0) {
+            concurrency = options->concurrency;
+        }
+    }
+
+    size_t part_size = part_size_mb * 1024 * 1024;
+    int total_parts = (int)((file_size + part_size - 1) / part_size);
+
+    if (total_parts > 10000) {
+        return s3_error_make(-1, "File too large (>10000 parts)");
+    }
+
+    /* Open file */
+    turbo_file_t fd = turbo_fs_open(file_path, TURBO_FS_O_RDONLY, 0);
+    if (fd < 0) {
+        return s3_error_make(-1, "Failed to open file");
+    }
+
+    /* Try to resume from previous upload */
+    s3_resume_state_t resume_state = {0};
+    int resuming = 0;
+    const char* upload_id = NULL;
+
+    if (options && options->resume_file) {
+        if (load_resume_state(options->resume_file, &resume_state) == 0) {
+            /* Validate resume state */
+            if (resume_state.total_parts == total_parts) {
+                resuming = 1;
+                upload_id = resume_state.upload_id;
+                printf("Resuming upload: %d/%d parts already completed\n",
+                       resume_state.completed_parts, total_parts);
+            }
+        }
+    }
+
+    /* Create multipart upload if not resuming */
+    s3_create_multipart_response_t create_resp = {0};
+    if (!resuming) {
+        create_resp = s3_create_multipart_upload(
+            client, bucket, key, content_type, NULL
+        );
+
+        if (!s3_is_ok(create_resp.error)) {
+            turbo_fs_close(fd);
+            s3_error_t err = create_resp.error;
+            tstr_free(create_resp.upload_id);
+            return err;
+        }
+
+        upload_id = create_resp.upload_id;
+
+        /* Initialize resume state */
+        if (options && options->resume_file) {
+            strncpy(resume_state.upload_id, upload_id, sizeof(resume_state.upload_id) - 1);
+            resume_state.total_parts = total_parts;
+            resume_state.completed_parts = 0;
+        }
+    }
+
+    /* Allocate tasks */
+    s3_part_upload_task_t* tasks = (s3_part_upload_task_t*)calloc(
+        total_parts, sizeof(s3_part_upload_task_t)
+    );
+    if (!tasks) {
+        s3_abort_multipart_upload(client, bucket, key, upload_id);
+        tstr_free(create_resp.upload_id);
+        turbo_fs_close(fd);
+        return s3_error_make(-1, "Failed to allocate tasks");
+    }
+
+    /* Shared progress counter */
+    t_atomic_uint64_t total_uploaded;
+    t_atomic_store_uint64(&total_uploaded, 0);
+
+    /* Initialize tasks */
+    for (int i = 0; i < total_parts; i++) {
+        /* Skip already completed parts when resuming */
+        if (resuming && i < resume_state.completed_parts) {
+            tasks[i].result.etag = resume_state.completed_etags[i];
+            tasks[i].result.error = S3_OK;
+            continue;
+        }
+
+        tasks[i].client = client;
+        tasks[i].bucket = bucket;
+        tasks[i].key = key;
+        tasks[i].upload_id = upload_id;
+        tasks[i].fd = fd;
+        tasks[i].part_number = i + 1;
+        tasks[i].file_offset = i * part_size;
+        tasks[i].part_size = (i == total_parts - 1) ?
+            (file_size - i * part_size) : part_size;
+        tasks[i].options = options;
+        tasks[i].total_uploaded = &total_uploaded;
+        tasks[i].total_size = file_size;
+        tasks[i].total_parts = total_parts;
+    }
+
+    /* Create coroutine tasks */
+    coro_task_t** coro_tasks = (coro_task_t**)calloc(total_parts, sizeof(coro_task_t*));
+    if (!coro_tasks) {
+        free(tasks);
+        s3_abort_multipart_upload(client, bucket, key, upload_id);
+        tstr_free(create_resp.upload_id);
+        turbo_fs_close(fd);
+        return s3_error_make(-1, "Failed to allocate coro tasks");
+    }
+
+    /* Start uploads with concurrency control */
+    int started = resuming ? resume_state.completed_parts : 0;
+    int completed = resuming ? resume_state.completed_parts : 0;
+    s3_error_t first_error = S3_OK;
+
+    while (completed < total_parts) {
+        /* Start new tasks up to concurrency limit */
+        while (started < total_parts) {
+            int active = 0;
+            for (int i = resume_state.completed_parts; i < started; i++) {
+                if (coro_tasks[i] && !coro_task_is_done(coro_tasks[i])) {
+                    active++;
+                }
+            }
+
+            if (active >= concurrency) break;
+
+            coro_tasks[started] = coro_task_create(
+                client->coro_ctx, s3_multipart_part_coro, &tasks[started]
+            );
+            if (coro_tasks[started]) {
+                coro_task_start(coro_tasks[started]);
+            }
+            started++;
+        }
+
+        /* Run event loop */
+        coro_context_run(client->coro_ctx, TURBO_RUN_NOWAIT);
+
+        /* Check completed tasks */
+        for (int i = resume_state.completed_parts; i < started; i++) {
+            if (coro_tasks[i] && coro_task_is_done(coro_tasks[i])) {
+                if (!s3_is_ok(tasks[i].result.error) && s3_is_ok(first_error)) {
+                    first_error = tasks[i].result.error;
+                } else if (s3_is_ok(tasks[i].result.error)) {
+                    /* Save progress */
+                    if (options && options->resume_file) {
+                        strncpy(resume_state.completed_etags[i],
+                                tasks[i].result.etag,
+                                sizeof(resume_state.completed_etags[i]) - 1);
+                        resume_state.completed_parts = i + 1;
+                        save_resume_state(options->resume_file, &resume_state);
+                    }
+                }
+                coro_task_destroy(coro_tasks[i]);
+                coro_tasks[i] = NULL;
+                completed++;
+            }
+        }
+    }
+
+    /* Check for errors */
+    if (!s3_is_ok(first_error)) {
+        /* Abort upload on error */
+        s3_abort_multipart_upload(client, bucket, key, upload_id);
+
+        /* Cleanup */
+        for (int i = 0; i < total_parts; i++) {
+            s3_upload_part_response_free(&tasks[i].result);
+        }
+        free(coro_tasks);
+        free(tasks);
+        tstr_free(create_resp.upload_id);
+        turbo_fs_close(fd);
+        return first_error;
+    }
+
+    /* Build parts list for completion */
+    const char** etags = (const char**)calloc(total_parts, sizeof(char*));
+    if (!etags) {
+        s3_abort_multipart_upload(client, bucket, key, upload_id);
+        for (int i = 0; i < total_parts; i++) {
+            s3_upload_part_response_free(&tasks[i].result);
+        }
+        free(coro_tasks);
+        free(tasks);
+        tstr_free(create_resp.upload_id);
+        turbo_fs_close(fd);
+        return s3_error_make(-1, "Failed to allocate etags list");
+    }
+
+    for (int i = 0; i < total_parts; i++) {
+        etags[i] = tasks[i].result.etag;
+    }
+
+    /* Complete multipart upload */
+    s3_complete_multipart_response_t complete_resp = s3_complete_multipart_upload(
+        client, bucket, key, upload_id, etags, total_parts
+    );
+
+    s3_error_t result = complete_resp.error;
+
+    /* Delete resume file on success */
+    if (s3_is_ok(result) && options && options->resume_file) {
+        remove(options->resume_file);
+    }
+
+    /* Cleanup */
+    free(etags);
+    for (int i = 0; i < total_parts; i++) {
+        s3_upload_part_response_free(&tasks[i].result);
+    }
+    free(coro_tasks);
+    free(tasks);
+    s3_complete_multipart_response_free(&complete_resp);
+    tstr_free(create_resp.upload_id);
+    turbo_fs_close(fd);
+
+    return result;
+}

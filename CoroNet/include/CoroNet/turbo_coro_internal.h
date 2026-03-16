@@ -96,8 +96,8 @@ struct coro_context_s {
   int post_initialized;            /**< 1 = post queue is initialized */
   coro_post_slot_t *post_ring;     /**< Ring buffer for posted tasks */
   int post_ring_size;              /**< Size of ring buffer (power of 2) */
-  turbo_atomic_int_t post_head;    /**< Producer index (write) */
-  turbo_atomic_int_t post_tail;    /**< Consumer index (read) */
+  t_atomic_int_t post_head;    /**< Producer index (write) */
+  t_atomic_int_t post_tail;    /**< Consumer index (read) */
 
   /* Lazy tasks (deferred execution) */
   coro_task_t **tasks; /**< Dynamic array of lazy tasks */
@@ -120,6 +120,9 @@ struct coro_context_s {
 
   /** Internal memory arena for small, frequent allocations */
   mem_pool_t *arena;
+  
+  /** 1 = we allocated arena, 0 = external (for backward compatibility) */
+  int owns_arena;
 };
 typedef struct coro_transport_ops_s coro_transport_ops_t;
 

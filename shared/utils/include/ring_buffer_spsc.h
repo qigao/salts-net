@@ -42,8 +42,8 @@ typedef struct {
   uint8_t *data;     /**< Pointer to the data array */
 
   /* Cache-line aligned to prevent false sharing */
-  alignas(64) turbo_atomic_size_t write_pos;  /**< Write position (producer only) */
-  alignas(64) turbo_atomic_size_t read_pos;   /**< Read position (consumer only) */
+  alignas(64) atomic_size_t write_pos;  /**< Write position (producer only) */
+  alignas(64) atomic_size_t read_pos;   /**< Read position (consumer only) */
 } ring_spsc_t;
 
 /******************** FUNCTION PROTOTYPES *********************/

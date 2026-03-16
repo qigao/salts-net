@@ -10,7 +10,6 @@
 #include "turbo_callbacks.h"
 #include "turbo_iovec.h"
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,7 +21,7 @@ typedef struct turbo_pipe_client_s turbo_pipe_client_t;
 /* Pipe client structure */
 typedef struct turbo_pipe_client_s {
   uv_pipe_t handle;
-  mem_pool_t* arena;
+  mem_pool_t *arena;
 
   /* Server reference (for server-side clients) */
   turbo_pipe_server_t *server;
@@ -53,14 +52,14 @@ typedef struct turbo_pipe_client_s {
   int managed; /* 1 = life managed by caller (socket wrapper) */
 
   /* User data */
-  void *user_data;                         /**< User-defined data */
+  void *user_data; /**< User-defined data */
 } turbo_pipe_client_t;
 
 /* Pipe server structure */
 typedef struct turbo_pipe_server_s {
   uv_pipe_t *handle;
   uv_loop_t *loop;
-  mem_pool_t* arena;
+  mem_pool_t *arena;
 
   /* Callbacks */
   turbo_recv_cb on_recv;
@@ -81,8 +80,7 @@ typedef struct turbo_pipe_server_s {
  * "\\.\pipe\my_pipe" on Windows).
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_pipe_server_init(turbo_pipe_server_t *server, uv_loop_t *loop,
-                           const char *name);
+int turbo_pipe_server_init(turbo_pipe_server_t *server, uv_loop_t *loop, const char *name);
 /**
  * @brief Starts the Pipe server, making it ready to accept client connections.
  *
@@ -95,15 +93,14 @@ typedef struct turbo_pipe_server_s {
  * is closed.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_pipe_server_start(turbo_pipe_server_t *server, turbo_recv_cb on_recv,
-                             turbo_connect_cb on_connect,
-                             turbo_close_cb on_close);
+int turbo_pipe_server_start(turbo_pipe_server_t *server, turbo_recv_cb on_recv,
+                            turbo_connect_cb on_connect, turbo_close_cb on_close);
 /**
  * @brief Stops the Pipe server and closes all active client connections.
  *
  * @param server A pointer to the `turbo_pipe_server_t` instance to stop.
  */
-  void turbo_pipe_server_stop(turbo_pipe_server_t *server);
+void turbo_pipe_server_stop(turbo_pipe_server_t *server);
 
 /* Client functions */
 /**
@@ -113,7 +110,7 @@ typedef struct turbo_pipe_server_s {
  * @return A pointer to the newly created `turbo_pipe_client_t` instance, or
  * NULL on failure.
  */
-  turbo_pipe_client_t *turbo_pipe_client_create(uv_loop_t *loop);
+turbo_pipe_client_t *turbo_pipe_client_create(uv_loop_t *loop);
 /**
  * @brief Connects the Pipe client to a specified Pipe server.
  *
@@ -128,16 +125,14 @@ typedef struct turbo_pipe_server_s {
  * @return 0 on success (connection initiated), or a non-zero error code on
  * failure.
  */
-  int turbo_pipe_client_connect(turbo_pipe_client_t *client, const char *name,
-                              turbo_recv_cb on_recv,
-                              turbo_connect_cb on_connect,
-                              turbo_close_cb on_close);
+int turbo_pipe_client_connect(turbo_pipe_client_t *client, const char *name, turbo_recv_cb on_recv,
+                              turbo_connect_cb on_connect, turbo_close_cb on_close);
 /**
  * @brief Closes the Pipe client connection and frees its resources.
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance to close.
  */
-  void turbo_pipe_client_close(turbo_pipe_client_t *client);
+void turbo_pipe_client_close(turbo_pipe_client_t *client);
 
 /* Zero-copy send functions */
 /**
@@ -149,8 +144,7 @@ typedef struct turbo_pipe_server_s {
  * @return A pointer to an `mem_buffer_t` suitable for sending, or NULL
  * on failure.
  */
-  mem_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *client,
-                                                 size_t min_size);
+mem_buffer_t *turbo_pipe_get_send_buffer(turbo_pipe_client_t *client, size_t min_size);
 /**
  * @brief Sends data from a zero-copy arena buffer through the Pipe client.
  *
@@ -160,8 +154,7 @@ typedef struct turbo_pipe_server_s {
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_pipe_send_buffer(turbo_pipe_client_t *client,
-                           mem_buffer_t *buffer, size_t length);
+int turbo_pipe_send_buffer(turbo_pipe_client_t *client, mem_buffer_t *buffer, size_t length);
 /**
  * @brief Starts reading data on a Pipe client.
  *
@@ -171,14 +164,14 @@ typedef struct turbo_pipe_server_s {
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_pipe_read_start(turbo_pipe_client_t *client);
+int turbo_pipe_read_start(turbo_pipe_client_t *client);
 
 /**
  * @brief Stops reading data on a Pipe client.
  *
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  */
-  void turbo_pipe_read_stop(turbo_pipe_client_t *client);
+void turbo_pipe_read_stop(turbo_pipe_client_t *client);
 
 /**
  * @brief Flushes any pending send data in the Pipe client's queue.
@@ -186,7 +179,7 @@ typedef struct turbo_pipe_server_s {
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_pipe_flush(turbo_pipe_client_t *client);
+int turbo_pipe_flush(turbo_pipe_client_t *client);
 
 /**
  * @brief Send multiple buffers atomically (scatter-gather send).
@@ -196,7 +189,7 @@ typedef struct turbo_pipe_server_s {
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-  int turbo_pipe_sendv(turbo_pipe_client_t *client, const turbo_iovec_t *iov, size_t iovcnt);
+int turbo_pipe_sendv(turbo_pipe_client_t *client, const turbo_iovec_t *iov, size_t iovcnt);
 
 /* Fallback copy-based send */
 /**
@@ -207,8 +200,7 @@ typedef struct turbo_pipe_server_s {
  * @param length The length of the data to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_pipe_send(turbo_pipe_client_t *client, const char *data,
-                    size_t length);
+int turbo_pipe_send(turbo_pipe_client_t *client, const char *data, size_t length);
 
 /* Buffer management */
 /**
@@ -217,10 +209,7 @@ typedef struct turbo_pipe_server_s {
  * @param client A pointer to the `turbo_pipe_client_t` instance.
  * @param buffer A pointer to the `mem_buffer_t` to discard.
  */
-  void turbo_pipe_discard_buffer(turbo_pipe_client_t *client,
-                               mem_buffer_t *buffer);
-
-
+void turbo_pipe_discard_buffer(turbo_pipe_client_t *client, mem_buffer_t *buffer);
 
 /* Memory management */
 /**
@@ -228,7 +217,7 @@ typedef struct turbo_pipe_server_s {
  *
  * @param server A pointer to the `turbo_pipe_server_t` instance.
  */
-  void turbo_pipe_trim_memory(turbo_pipe_server_t *server);
+void turbo_pipe_trim_memory(turbo_pipe_server_t *server);
 /**
  * @brief Gets the current memory usage of the Pipe server's internal memory
  * pools.
@@ -242,7 +231,7 @@ typedef struct turbo_pipe_server_s {
  * @brief Cleans up global Pipe memory pools.
  *        This should be called once when the application is shutting down.
  */
-  void turbo_pipe_cleanup_pools(void);
+void turbo_pipe_cleanup_pools(void);
 
 #ifdef __cplusplus
 }

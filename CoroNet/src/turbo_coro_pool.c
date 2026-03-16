@@ -46,9 +46,11 @@ static pool_entry_t *create_entry(coro_object_pool_t *pool);
 
 /* ── Lifecycle ────────────────────────────────────────────── */
 
-coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *config) {
+coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *config,
+                                            coro_context_t *ctx) {
     coro_object_pool_config_t defaults = CORO_OBJECT_POOL_CONFIG_DEFAULT;
     if (!config) config = &defaults;
+    if (!ctx || !ctx->arena) return NULL;
 
     coro_object_pool_t *pool = (coro_object_pool_t *)calloc(1, sizeof(*pool));
     if (!pool) return NULL;
@@ -59,8 +61,8 @@ coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *con
     pool->active_count = 0;
     pool->total_capacity = 0;
 
-    /* Use global slab pool */
-    pool->arena = (mem_pool_t*)coro_get_memory_pool();
+    /* Use context's arena for entry shells */
+    pool->arena = ctx->arena;
 
     /* Pre-allocate initial_capacity entry shells (coroutines created on-demand) */
     for (size_t i = 0; i < config->initial_capacity; i++) {

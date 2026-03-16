@@ -5,6 +5,7 @@
 
 #include "turbo_coro.h"
 #include "CoroNet/turbo_coro_pool.h"
+#include "CoroNet/turbo_coro_context.h"
 #include "tinytest.h"
 #include <stdio.h>
 #include <string.h>
@@ -172,17 +173,25 @@ spec("Coroutine Tests") {
 
 spec("Object Pool Tests") {
     it("should create and destroy pool") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+        
         coro_object_pool_config_t config = CORO_OBJECT_POOL_CONFIG_DEFAULT;
-        coro_object_pool_t *pool = coro_object_pool_create(&config);
+        coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
         check_not_null(pool);
         check_int_eq(coro_object_pool_free_count(pool), 16);
         check_int_eq(coro_object_pool_active_count(pool), 0);
         coro_object_pool_destroy(pool);
+        
+        coro_context_destroy(ctx);
     }
 
     it("should acquire and release coroutines") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+        
         coro_object_pool_config_t config = {.initial_capacity = 2, .max_capacity = 4, .stack_size = 0};
-        coro_object_pool_t *pool = coro_object_pool_create(&config);
+        coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
         
         int counter = 0;
         coro_t *co1 = coro_object_pool_acquire(pool, sched_worker, &counter);
@@ -206,11 +215,15 @@ spec("Object Pool Tests") {
         check_int_eq(coro_object_pool_free_count(pool), 2);
         
         coro_object_pool_destroy(pool);
+        coro_context_destroy(ctx);
     }
 
     it("should respect max capacity") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+        
         coro_object_pool_config_t config = {.initial_capacity = 1, .max_capacity = 2, .stack_size = 0};
-        coro_object_pool_t *pool = coro_object_pool_create(&config);
+        coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
         
         int counter = 0;
         coro_t *co1 = coro_object_pool_acquire(pool, sched_fast, &counter);
@@ -228,11 +241,15 @@ spec("Object Pool Tests") {
         coro_object_pool_release(pool, co2);
         
         coro_object_pool_destroy(pool);
+        coro_context_destroy(ctx);
     }
 
     it("should reuse coroutines") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+        
         coro_object_pool_config_t config = {.initial_capacity = 1, .max_capacity = 1, .stack_size = 0};
-        coro_object_pool_t *pool = coro_object_pool_create(&config);
+        coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
         
         int c1 = 0, c2 = 0;
         
@@ -251,6 +268,7 @@ spec("Object Pool Tests") {
         check_int_eq(c2, 3);
         
         coro_object_pool_destroy(pool);
+        coro_context_destroy(ctx);
     }
 }
 

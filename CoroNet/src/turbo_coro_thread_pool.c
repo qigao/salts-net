@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <uv.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sched.h>
+#endif
+
 #define UNUSED(x) (void)(x)
 
 /* ── Private task proxy structure ─────────────────────────── */
@@ -20,7 +26,7 @@ struct coro_thread_pool_s {
     coro_context_t **contexts;
     turbo_thread_t *threads;
     int thread_count;
-    turbo_atomic_int_t next_thread;
+    t_atomic_int_t next_thread;
     volatile int stopping;
     mem_pool_t* task_arena;        /**< Arena for task proxies */
 };
@@ -61,10 +67,15 @@ coro_thread_pool_t *coro_thread_pool_create(int num_threads) {
     if (!pool) return NULL;
 
     pool->thread_count = num_threads;
-    turbo_atomic_store(&pool->next_thread, 0);
+    t_atomic_store(&pool->next_thread, 0);
     
-    /* Initialize task proxy arena (128KB initial chunk) */
-    pool->task_arena = (mem_pool_t*)coro_get_memory_pool();
+    /* Initialize task proxy arena with pre-allocated size */
+    pool->task_arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+    if (!pool->task_arena || mem_init(pool->task_arena, MEM_ARENA_POOL_INIT_SIZE) != 0) {
+        if (pool->task_arena) free(pool->task_arena);
+        coro_thread_pool_destroy(pool);
+        return NULL;
+    }
 
     pool->contexts = (coro_context_t **)calloc(num_threads, sizeof(coro_context_t *));
     pool->threads = (turbo_thread_t *)calloc(num_threads, sizeof(turbo_thread_t));
@@ -144,7 +155,7 @@ int coro_thread_pool_spawn(coro_thread_pool_t *pool, coro_fn fn, void *arg) {
     if (!pool || !fn || pool->stopping) return -1;
 
     /* Use atomic increment for fair distribution */
-    int idx = turbo_atomic_fetch_add(&pool->next_thread, 1) % pool->thread_count;
+    int idx = t_atomic_fetch_add(&pool->next_thread, 1) % pool->thread_count;
     coro_context_t *target_ctx = pool->contexts[idx];
 
     /* Good taste: Use recycled buffers from the task arena instead of malloc */
@@ -157,7 +168,11 @@ int coro_thread_pool_spawn(coro_thread_pool_t *pool, coro_fn fn, void *arg) {
     pa->arg = arg;
     pa->buffer = buf;
 
-    return coro_post(target_ctx, spawn_proxy, pa);
+    int ret = coro_post(target_ctx, spawn_proxy, pa);
+    if (ret != 0) {
+        mem_release(buf);
+    }
+    return ret;
 }
 
 coro_context_t *coro_thread_pool_get_context(coro_thread_pool_t *pool, int index) {

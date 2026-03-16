@@ -280,7 +280,7 @@ static exprtk_value_t ts_print(size_t argc, exprtk_value_t *args, void *user_dat
 
 #include "turbo_script_internal.h"
 
-turbo_script_ctx_t *turbo_script_init() {
+turbo_script_ctx_t *turbo_script_init(turbo_script_init_flags_t flags) {
   turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)calloc(1, sizeof(turbo_script_ctx_t));
   if (!ctx)
     return NULL;
@@ -288,26 +288,15 @@ turbo_script_ctx_t *turbo_script_init() {
   exprtk_env_init(&ctx->env);
   mem_init(&ctx->scratch_arena, 4096);
 
-  // Core built-ins
   exprtk_env_register_func(&ctx->env, "import", ts_import, ctx);
-  exprtk_env_register_func(&ctx->env, "print", ts_print, ctx);
 
-  // Global Registry
+  if (flags == TURBO_SCRIPT_INIT_DEFAULT) {
+    exprtk_env_register_func(&ctx->env, "print", ts_print, ctx);
+  }
+
   turbo_script_register_modules();
   turbo_script_register_mir(ctx);
 
-  return ctx;
-}
-
-turbo_script_ctx_t *turbo_script_init_bare(void) {
-  turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)calloc(1, sizeof(turbo_script_ctx_t));
-  if (!ctx)
-    return NULL;
-  exprtk_env_init(&ctx->env);
-  mem_init(&ctx->scratch_arena, 4096);
-  exprtk_env_register_func(&ctx->env, "import", ts_import, ctx);
-  turbo_script_register_modules();
-  turbo_script_register_mir(ctx);
   return ctx;
 }
 
@@ -321,7 +310,7 @@ int turbo_script_run(turbo_script_ctx_t *ctx, const char *script) {
   if (!ctx || !script)
     return -1;
 
-  /* Reset scratch arena from previous run */
+  /* Always use interpreter for turbo_script_run() - stable and feature-complete */
   mem_reset(&ctx->scratch_arena);
   ctx->env.aborted = 0;
   ctx->env.curr_nodes = 0;
@@ -423,6 +412,17 @@ int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script) {
   return ctx->env.aborted ? -1 : 0;
 }
 
+int turbo_script_run_and_print(turbo_script_ctx_t *ctx, const char *script) {
+  /* In DEBUG mode, use interpreter with result printing */
+#ifdef DEBUG
+  return turbo_script_repl_run(ctx, script);
+#else
+  /* In production mode, JIT doesn't support result printing yet */
+  /* TODO: implement result capture for JIT mode */
+  return turbo_script_run(ctx, script);
+#endif
+}
+
 
 turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx, const char *script) {
   if (!ctx || !script)
@@ -456,11 +456,34 @@ int turbo_script_exec(turbo_script_ctx_t *ctx, turbo_script_compiled_t *compiled
   mem_reset(&ctx->scratch_arena);
   ctx->env.aborted = 0;
 
-  exprtk_value_t res = exprtk_eval(compiled->ast, &ctx->env);
+  exprtk_value_t res =  exprtk_eval(compiled->ast, &ctx->env);
   (void)res;
 
   return ctx->env.aborted ? -1 : 0;
 }
+
+  
+bool turbo_script_value_as_bool(exprtk_value_t val) {
+  switch (val.type) {
+    case EXPRTK_VAL_NUMBER:
+      return fabs(val.data.number) > 1e-9;
+    case EXPRTK_VAL_STRING:
+      return val.data.string.len > 0;
+    case EXPRTK_VAL_VECTOR:
+      return val.data.vector.size > 0;
+    case EXPRTK_VAL_MAP:
+      return exprtk_map_count(&val) > 0;
+    case EXPRTK_VAL_LIST:
+      return val.data.list.count > 0;
+    case EXPRTK_VAL_NULL:
+      return false;
+    case EXPRTK_VAL_FUNCTION:
+      return true;
+    default:
+      return false;
+  }
+}
+
 
 void turbo_script_compiled_free(turbo_script_compiled_t *compiled) {
   if (!compiled)

@@ -12,6 +12,12 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sched.h>
+#endif
+
 #define BENCH_URL "tcp://127.0.0.1:18951"
 /* Reduced to 10k to fit in memory with ASan overhead */
 #define TOTAL_TASKS 10000
@@ -19,7 +25,8 @@
 /* ── Helpers ───────────────────────────────────────────────── */
 
 typedef struct {
-    turbo_atomic_int_t count;
+    t_atomic_int_t count;
+    int expected;
     turbo_mutex_t mutex;
     turbo_cond_t cond;
 } sync_counter_t;
@@ -32,17 +39,21 @@ static void nop_coro(coro_t *co, void *arg) {
 
 static void nop_coro_count(coro_t *co, void *arg) {
     (void)co;
-    turbo_atomic_inc((turbo_atomic_int_t*)arg);
+    t_atomic_inc((t_atomic_int_t*)arg);
 }
 
 static void nop_coro_sync(coro_t *co, void *arg) {
     (void)co;
     sync_counter_t *sc = (sync_counter_t*)arg;
     
-    turbo_mutex_lock(&sc->mutex);
-    turbo_atomic_inc(&sc->count);
-    turbo_cond_signal(&sc->cond);
-    turbo_mutex_unlock(&sc->mutex);
+    int new_count = t_atomic_inc(&sc->count);
+    
+    /* Only signal when all expected tasks complete to avoid lost wakeup */
+    if (new_count == sc->expected) {
+        turbo_mutex_lock(&sc->mutex);
+        turbo_cond_signal(&sc->cond);
+        turbo_mutex_unlock(&sc->mutex);
+    }
 }
 
 static void bench_server_handler(coro_socket_t *client, void *arg) {
@@ -56,7 +67,7 @@ static void bench_server_handler(coro_socket_t *client, void *arg) {
 
 typedef struct {
     coro_pool_t *p;
-    turbo_atomic_bool_t *done;
+    t_atomic_bool_t *done;
 } conn_bench_state_t;
 
 static void conn_bench_task(coro_t *co, void *arg) {
@@ -66,7 +77,7 @@ static void conn_bench_task(coro_t *co, void *arg) {
         coro_socket_t *sock = NULL;
         if (coro_pool_borrow(s->p, &sock) == 0) coro_pool_return(s->p, sock);
     }
-    turbo_atomic_store_bool(s->done, true);
+    t_atomic_store_bool(s->done, true);
 }
 
 static void open_pool_task(coro_t *co, void *arg) {
@@ -83,18 +94,40 @@ spec("coro_pools_bench") {
         
         benchmark("spawn_throughput_10k", 20) {
             sync_counter_t sc;
-            turbo_atomic_store(&sc.count, 0);
+            t_atomic_store(&sc.count, 0);
+            sc.expected = TOTAL_TASKS;
             turbo_mutex_init(&sc.mutex);
             turbo_cond_init(&sc.cond);
             
-            /* Spawn all tasks */
+            /* Spawn all tasks with backpressure handling */
             for (int i = 0; i < TOTAL_TASKS; i++) {
-                coro_thread_pool_spawn(pool, nop_coro_sync, &sc);
+                int ret;
+                int retry = 0;
+                while ((ret = coro_thread_pool_spawn(pool, nop_coro_sync, &sc)) != 0) {
+                    if (ret == TURBO_ENOMEM) {
+                        /* Ring buffer full - yield and retry */
+                        retry++;
+                        if (retry > 1000) {
+                            fprintf(stderr, "Failed to spawn task %d after 1000 retries\n", i);
+                            sc.expected = i; /* Adjust expected count */
+                            break;
+                        }
+                        #ifdef _WIN32
+                            SwitchToThread();
+                        #else
+                            sched_yield();
+                        #endif
+                    } else {
+                        fprintf(stderr, "Failed to spawn task %d: %d\n", i, ret);
+                        sc.expected = i; /* Adjust expected count */
+                        break;
+                    }
+                }
             }
             
             /* Wait for completion using condition variable (no busy-wait) */
             turbo_mutex_lock(&sc.mutex);
-            while (turbo_atomic_load(&sc.count) < TOTAL_TASKS) {
+            while (t_atomic_load(&sc.count) < sc.expected) {
                 turbo_cond_wait(&sc.cond, &sc.mutex);
             }
             turbo_mutex_unlock(&sc.mutex);
@@ -107,9 +140,10 @@ spec("coro_pools_bench") {
     }
 
     bench("coro_object_pool") {
+        coro_context_t *ctx = coro_context_create(NULL);
         coro_object_pool_config_t cfg = CORO_OBJECT_POOL_CONFIG_DEFAULT;
         cfg.initial_capacity = 1024; /* Be realistic with ASan */
-        coro_object_pool_t *pool = coro_object_pool_create(&cfg);
+        coro_object_pool_t *pool = coro_object_pool_create(&cfg, ctx);
         coro_t *cos[100];
         
         benchmark("acquire_release_10k", 100) {
@@ -123,6 +157,7 @@ spec("coro_pools_bench") {
         }
         
         coro_object_pool_destroy(pool);
+        coro_context_destroy(ctx);
     }
 
     bench("coro_connection_pool") {
@@ -141,12 +176,12 @@ spec("coro_pools_bench") {
         while(!coro_task_is_done(open_task)) coro_context_run(ctx, TURBO_RUN_ONCE);
 
         benchmark("borrow_return_1k", 50) {
-            turbo_atomic_bool_t done;
-            turbo_atomic_store_bool(&done, false);
+            t_atomic_bool_t done;
+            t_atomic_store_bool(&done, false);
             conn_bench_state_t s = { pool, &done };
             coro_context_spawn(ctx, conn_bench_task, &s);
 
-            while (!turbo_atomic_load_bool(&done)) {
+            while (!t_atomic_load_bool(&done)) {
                 coro_context_run(ctx, TURBO_RUN_ONCE);
             }
         }

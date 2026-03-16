@@ -2,8 +2,8 @@
 #define TURBO_MEM_H
 
 #include "platform.h"
-#include "turbo_thread.h"
 #include "turbo_atomic.h"
+#include "turbo_thread.h"
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -11,6 +11,23 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Memory buffer size constants */
+#define MEM_RECV_BUFFER_SIZE 8192
+#define MEM_SEND_BUFFER_SIZE 8192
+#define MEM_HANDSHAKE_BUFFER_SIZE 4096
+#define MEM_FRAME_BUFFER_SIZE 65536
+#define MEM_FRAGMENT_BUFFER_SIZE (1024 * 1024)
+
+/* Pool configuration constants */
+#define MEM_WRITE_IOV_CAPACITY 64
+#define MEM_SEND_OP_POOL_CAPACITY 256
+
+/* Arena initial sizes (pre-allocate to reduce fragmentation) */
+#define MEM_ARENA_CONTEXT_INIT_SIZE (128 * 1024) /* 128KB for coro_context */
+#define MEM_ARENA_SERVER_INIT_SIZE (256 * 1024)  /* 256KB for servers (more connections) */
+#define MEM_ARENA_CLIENT_INIT_SIZE (64 * 1024)   /* 64KB for clients */
+#define MEM_ARENA_POOL_INIT_SIZE (64 * 1024)     /* 64KB for connection pools */
 
 typedef struct mem_pool_s mem_pool_t;
 typedef struct mem_buffer_s mem_buffer_t;
@@ -21,11 +38,11 @@ typedef struct mem_slice_s mem_slice_t;
 #endif
 
 struct mem_pool_s {
-  void* slabs[9];
-  turbo_atomic_size_t total_allocated;
-  turbo_atomic_size_t total_used;
+  void *slabs[9];
+  t_atomic_size_t total_allocated;
+  t_atomic_size_t total_used;
   mem_buffer_t *recycle_head;
-  turbo_atomic_size_t recycle_count;
+  t_atomic_size_t recycle_count;
   size_t recycle_limit;
   turbo_mutex_t lock;
 };
@@ -34,11 +51,11 @@ struct mem_buffer_s {
   char *data;
   size_t capacity;
   size_t used;
-  turbo_atomic_uint32_t ref_count;
+  t_atomic_uint32_t ref_count;
   mem_pool_t *pool;
   struct mem_buffer_s *next;
   int is_external;
-  int is_oversized;  /* 1=malloc, 0=slab */
+  int is_oversized; /* 1=malloc, 0=slab */
   void (*free_cb)(void *, void *);
   void *free_user_data;
 };
@@ -61,7 +78,7 @@ CXX_C_API int mem_init(mem_pool_t *pool, size_t initial_size);
  * @brief Get global shared slab pool (lazy init)
  * @return Pointer to global pool
  */
-CXX_C_API mem_pool_t* mem_global(void);
+CXX_C_API mem_pool_t *mem_global(void);
 
 /**
  * @brief Destroy pool and free all memory
@@ -140,9 +157,9 @@ CXX_C_API void mem_unref(mem_buffer_t *buffer);
  * @param user_data User data for free_cb
  * @return Buffer wrapping external memory, or NULL on failure
  */
-CXX_C_API mem_buffer_t *
-mem_wrap_external(void *data, size_t size, void (*free_cb)(void *data, void *user_data),
-                  void *user_data);
+CXX_C_API mem_buffer_t *mem_wrap_external(void *data, size_t size,
+                                          void (*free_cb)(void *data, void *user_data),
+                                          void *user_data);
 
 /**
  * @brief Check if buffer wraps external memory
@@ -168,8 +185,7 @@ CXX_C_API void mem_slice_release(mem_slice_t *slice);
 
 #define MEM_ALLOC(pool, type) ((type *)mem_alloc(pool, sizeof(type)))
 
-#define MEM_ALLOC_ARRAY(pool, type, count) \
-  ((type *)mem_alloc(pool, sizeof(type) * (count)))
+#define MEM_ALLOC_ARRAY(pool, type, count) ((type *)mem_alloc(pool, sizeof(type) * (count)))
 
 static inline void mem_set_used(mem_buffer_t *buffer, size_t used) {
   if (!buffer) return;

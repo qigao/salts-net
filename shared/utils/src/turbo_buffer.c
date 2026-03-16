@@ -177,8 +177,8 @@ static void* slab_alloc_nolock(mem_pool_t* pool, int class_idx) {
         *slab_list = slab;
 
         size_t slab_bytes = slab->block_size * slab->block_count;
-        turbo_atomic_fetch_add_uint64(
-            (turbo_atomic_uint64_t*)&pool->total_allocated, slab_bytes);
+        t_atomic_fetch_add_uint64(
+            (t_atomic_uint64_t*)&pool->total_allocated, slab_bytes);
     }
 
     /* Pop from free list — node sits after slab_tag_t */
@@ -186,8 +186,8 @@ static void* slab_alloc_nolock(mem_pool_t* pool, int class_idx) {
     slab->free_list = node->next;
     slab->free_count--;
 
-    turbo_atomic_fetch_add_uint64(
-        (turbo_atomic_uint64_t*)&pool->total_used, slab->block_size);
+    t_atomic_fetch_add_uint64(
+        (t_atomic_uint64_t*)&pool->total_used, slab->block_size);
 
     /* Return the user pointer (after the tag) */
     return (void*)node;
@@ -209,8 +209,8 @@ static void slab_free_nolock(mem_pool_t* pool, void* user_ptr, int class_idx) {
     slab->free_list = node;
     slab->free_count++;
 
-    turbo_atomic_fetch_sub_uint64(
-        (turbo_atomic_uint64_t*)&pool->total_used, slab->block_size);
+    t_atomic_fetch_sub_uint64(
+        (t_atomic_uint64_t*)&pool->total_used, slab->block_size);
 
     (void)pool;
     (void)class_idx;
@@ -238,9 +238,9 @@ int mem_init(mem_pool_t* pool, size_t initial_size) {
 
     memset(pool, 0, sizeof(*pool));
 
-    turbo_atomic_store_size_relaxed(&pool->total_allocated, 0);
-    turbo_atomic_store_size_relaxed(&pool->total_used, 0);
-    turbo_atomic_store_size_relaxed(&pool->recycle_count, 0);
+    t_atomic_store_size_relaxed(&pool->total_allocated, 0);
+    t_atomic_store_size_relaxed(&pool->total_used, 0);
+    t_atomic_store_size_relaxed(&pool->recycle_count, 0);
     pool->recycle_limit = MEM_RECYCLE_LIMIT;
 
     turbo_mutex_init(&pool->lock);
@@ -301,11 +301,11 @@ void mem_reset(mem_pool_t* pool) {
         }
     }
 
-    turbo_atomic_store_size_relaxed(&pool->total_used, 0);
+    t_atomic_store_size_relaxed(&pool->total_used, 0);
 
     /* Clear recycle list to avoid dangling pointers */
     pool->recycle_head = NULL;
-    turbo_atomic_store_size_relaxed(&pool->recycle_count, 0);
+    t_atomic_store_size_relaxed(&pool->recycle_count, 0);
 
     turbo_mutex_unlock(&pool->lock);
 
@@ -327,8 +327,8 @@ void mem_trim(mem_pool_t* pool) {
             if (slab->free_count == slab->block_count) {
                 *prev = next;
                 size_t slab_bytes = slab->block_size * slab->block_count;
-                turbo_atomic_fetch_sub_uint64(
-                    (turbo_atomic_uint64_t*)&pool->total_allocated, slab_bytes);
+                t_atomic_fetch_sub_uint64(
+                    (t_atomic_uint64_t*)&pool->total_allocated, slab_bytes);
                 free_slab(slab);
             } else {
                 prev = &slab->next;
@@ -356,8 +356,8 @@ void* mem_alloc(mem_pool_t* pool, size_t size) {
         oversize_header_t* hdr = (oversize_header_t*)malloc(alloc_size);
         if (!hdr) return NULL;
         hdr->total_size = alloc_size;
-        turbo_atomic_fetch_add_uint64(
-            (turbo_atomic_uint64_t*)&pool->total_used, alloc_size);
+        t_atomic_fetch_add_uint64(
+            (t_atomic_uint64_t*)&pool->total_used, alloc_size);
         return (char*)hdr + sizeof(oversize_header_t);
     }
 
@@ -416,23 +416,28 @@ static void pool_push_recycled_buffer_nolock(mem_pool_t* pool, mem_buffer_t* buf
     if (!pool || !buffer) return;
     if (pool->recycle_limit == 0) return;
 
-    size_t count = turbo_atomic_load_size_relaxed(&pool->recycle_count);
+    size_t count = t_atomic_load_size_relaxed(&pool->recycle_count);
     if (count >= pool->recycle_limit) {
-        /* Release back to slab instead of dropping */
-        void* user_ptr = (char*)buffer + sizeof(slab_tag_t);
-        size_t total = sizeof(mem_buffer_t) + buffer->capacity + sizeof(slab_tag_t);
-        int class_idx = size_class_index(total);
-        if (class_idx >= 0) {
-            slab_free_nolock(pool, user_ptr, class_idx);
+        /* Recycle pool full: release back to slab for reuse.
+           Good taste: no special case - oversized buffers were never in slab,
+           so we just free them directly. */
+        if (!buffer->is_oversized) {
+            void* user_ptr = (char*)buffer + sizeof(slab_tag_t);
+            size_t total = sizeof(mem_buffer_t) + buffer->capacity + sizeof(slab_tag_t);
+            int class_idx = size_class_index(total);
+            if (class_idx >= 0) {
+                slab_free_nolock(pool, user_ptr, class_idx);
+            }
         }
+        /* Oversized buffers are already freed in release_internal_buffer */
         return;
     }
 
     buffer->used = 0;
     buffer->next = pool->recycle_head;
     pool->recycle_head = buffer;
-    turbo_atomic_fetch_add_uint64(
-        (turbo_atomic_uint64_t*)&pool->recycle_count, 1);
+    t_atomic_fetch_add_uint64(
+        (t_atomic_uint64_t*)&pool->recycle_count, 1);
 }
 
 static mem_buffer_t* pool_pop_recycled_buffer_nolock(
@@ -445,10 +450,10 @@ static mem_buffer_t* pool_pop_recycled_buffer_nolock(
     while (buffer) {
         if (buffer->capacity >= min_size) {
             *prev = buffer->next;
-            turbo_atomic_fetch_sub_uint64(
-                (turbo_atomic_uint64_t*)&pool->recycle_count, 1);
+            t_atomic_fetch_sub_uint64(
+                (t_atomic_uint64_t*)&pool->recycle_count, 1);
             buffer->next = NULL;
-            turbo_atomic_store_uint32(&buffer->ref_count, 1);
+            t_atomic_store_uint32(&buffer->ref_count, 1);
             buffer->pool = pool;
 
             /* Re-mark allocation type (handles pre-existing recycled oversized buffers) */
@@ -489,8 +494,8 @@ mem_buffer_t* mem_get_buffer(mem_pool_t* pool, size_t min_size) {
             /* Oversized buffer: direct malloc */
             raw = malloc(total_size);
             if (raw) {
-                turbo_atomic_fetch_add_uint64(
-                    (turbo_atomic_uint64_t*)&pool->total_used, total_size);
+                t_atomic_fetch_add_uint64(
+                    (t_atomic_uint64_t*)&pool->total_used, total_size);
                 buffer = (mem_buffer_t*)raw;
                 buffer->is_oversized = 1;
             }
@@ -500,7 +505,7 @@ mem_buffer_t* mem_get_buffer(mem_pool_t* pool, size_t min_size) {
             buffer->data = (char*)buffer + sizeof(mem_buffer_t);
             buffer->capacity = aligned_size;
             buffer->used = 0;
-            turbo_atomic_store_uint32(&buffer->ref_count, 1);
+            t_atomic_store_uint32(&buffer->ref_count, 1);
             buffer->pool = pool;
             buffer->next = NULL;
             buffer->is_external = 0;
@@ -515,7 +520,7 @@ mem_buffer_t* mem_get_buffer(mem_pool_t* pool, size_t min_size) {
 
 void mem_ref(mem_buffer_t* buffer) {
     if (!buffer) return;
-    turbo_atomic_fetch_add_uint32(&buffer->ref_count, 1);
+    t_atomic_fetch_add_uint32(&buffer->ref_count, 1);
 }
 
 static void release_external_buffer(mem_buffer_t* buffer) {
@@ -532,8 +537,8 @@ static void release_internal_buffer(mem_buffer_t* buffer) {
     /* Free oversized buffers directly, don't recycle */
     if (buffer->is_oversized) {
         size_t total_size = sizeof(mem_buffer_t) + buffer->capacity;
-        turbo_atomic_fetch_sub_uint64(
-            (turbo_atomic_uint64_t*)&pool->total_used, total_size);
+        t_atomic_fetch_sub_uint64(
+            (t_atomic_uint64_t*)&pool->total_used, total_size);
         free(buffer);
         return;
     }
@@ -547,7 +552,7 @@ static void release_internal_buffer(mem_buffer_t* buffer) {
 void mem_unref(mem_buffer_t* buffer) {
     if (!buffer) return;
 
-    uint32_t old_ref = turbo_atomic_fetch_sub_uint32(&buffer->ref_count, 1);
+    uint32_t old_ref = t_atomic_fetch_sub_uint32(&buffer->ref_count, 1);
     if (old_ref == 1) {
         buffer->is_external
             ? release_external_buffer(buffer)
@@ -598,7 +603,7 @@ mem_buffer_t* mem_wrap_external(void* data, size_t size,
     buffer->data = (char*)data;
     buffer->capacity = size;
     buffer->used = size;
-    turbo_atomic_store_uint32(&buffer->ref_count, 1);
+    t_atomic_store_uint32(&buffer->ref_count, 1);
     buffer->is_external = 1;
     buffer->free_cb = free_cb;
     buffer->free_user_data = user_data;

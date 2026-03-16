@@ -5,8 +5,6 @@
  * @file http_client.h
  * @brief Coroutine-based HTTP client — write sequential code, no callbacks.
  *
- * Every request function MUST be called from inside a coroutine.
- * The caller gets a response struct back directly — no callbacks needed.
  */
 
 #include <platform.h>
@@ -199,6 +197,47 @@ CXX_C_API http_response_t *http_download_file_stream(http_client_t *client, cons
                                                      const char *output_path,
                                                      http_progress_cb progress_cb,
                                                      void *progress_ud);
+
+/* ── Resume Download (Range Requests) ─────────────────────────────── */
+
+/**
+ * @brief Resume options for download
+ */
+typedef struct {
+    const char* resume_file;    /* Resume state file (e.g., "download.state") */
+    int retry_count;            /* Max retry attempts on failure (0 = infinite) */
+    int retry_delay_ms;         /* Delay between retries in milliseconds */
+} http_resume_options_t;
+
+/**
+ * @brief Download file with resume support (for unstable networks)
+ * @param client HTTP client
+ * @param url Source URL
+ * @param output_path Path to save downloaded file
+ * @param options Resume options (can be NULL for defaults)
+ * @param progress_cb Progress callback (can be NULL)
+ * @param progress_ud User data for progress callback
+ * @return Response object (caller must free with http_response_free)
+ *
+ * Features:
+ * - Automatic resume on network failure
+ * - Uses HTTP Range requests (Range: bytes=N-)
+ * - Saves progress to resume_file
+ * - Retries with exponential backoff
+ * - Works on mobile/unstable networks
+ *
+ * Server requirements:
+ * - Must support Range requests (Accept-Ranges: bytes)
+ * - Must return 206 Partial Content for Range requests
+ */
+CXX_C_API http_response_t *http_download_file_resume(
+    http_client_t *client,
+    const char *url,
+    const char *output_path,
+    const http_resume_options_t *options,
+    http_progress_cb progress_cb,
+    void *progress_ud
+);
 
 /* ── Cookie jar ───────────────────────────────────────────────────── */
 

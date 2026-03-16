@@ -63,8 +63,13 @@ turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use
   client->is_tls = use_tls;
   client->state = TURBO_WS_STATE_CONNECTING;
 
-  // Use global memory pool (do not allocate or free)
-  client->conn_arena = (mem_pool_t *)coro_get_memory_pool();
+  // Initialize arena with pre-allocated size
+  client->conn_arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  if (!client->conn_arena || mem_init(client->conn_arena, MEM_ARENA_CLIENT_INIT_SIZE) != 0) {
+    if (client->conn_arena) free(client->conn_arena);
+    free(client);
+    return NULL;
+  }
 
   // Copy config (allocate from arena)
   if (config->path) {

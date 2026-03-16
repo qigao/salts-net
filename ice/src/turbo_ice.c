@@ -45,11 +45,11 @@
 /* Thread-safe random seeding using atomic CAS */
 #include "turbo_atomic.h"
 
-static turbo_atomic_int_t g_random_seeded = TURBO_ATOMIC_INIT(0);
+static t_atomic_int_t g_random_seeded = T_ATOMIC_INIT(0);
 
 static void ensure_random_seeded(void) {
-  if (turbo_atomic_load(&g_random_seeded) == 0) {
-    if (turbo_atomic_cas(&g_random_seeded, 0, 1)) {
+  if (t_atomic_load(&g_random_seeded) == 0) {
+    if (t_atomic_cas(&g_random_seeded, 0, 1)) {
       srand((unsigned int)time(NULL) ^ (unsigned int)turbo_getpid());
     }
   }

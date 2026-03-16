@@ -23,7 +23,7 @@ static exprtk_value_t test_triple_fn(size_t argc, exprtk_value_t *args, void *us
 spec("turbo_script") {
   describe("Basics") {
     it("should execute math scripts") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_not_null(ctx);
 
       check_int_eq(turbo_script_run(ctx, " x = 10; y = x * 2;"), 0);
@@ -33,7 +33,7 @@ spec("turbo_script") {
     }
 
     it("should support the var keyword") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_run(ctx, " var "
                                          "a = 123; var b = 456; var c = a + b;"),
                    0);
@@ -42,7 +42,7 @@ spec("turbo_script") {
     }
 
     it("should support complex expressions and multiple assignments") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = " a = 5; "
                            "b = 10; "
                            "c = (a + b) * 2; "
@@ -54,7 +54,7 @@ spec("turbo_script") {
     }
 
     it("should persist variables across multiple runs") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_run(ctx, " x = 100;"), 0);
       check_int_eq(turbo_script_run(ctx, " y = x + 50;"), 0);
       check_float_eq(get_num(ctx, "y"), 150.0, 0.001);
@@ -62,7 +62,7 @@ spec("turbo_script") {
     }
 
     it("should support simple control flow") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = " sum = 0; "
                            "i = 0; "
                            "while (i < 5) { "
@@ -77,7 +77,7 @@ spec("turbo_script") {
 
   describe("DateTime") {
     it("should support date parsing and now()") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       // 2024-01-01 12:00:00 UTC is 1704110400
       int res = turbo_script_run(ctx, "t = date(\"2024-01-01 12:00:00\");");
@@ -95,7 +95,7 @@ spec("turbo_script") {
 
   describe("JSON") {
     it("should support json_query") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " js = "
                            "\"{\\\"user\\\": \\\"bob\\\", \\\"score\\\": 42}\";"
@@ -113,7 +113,7 @@ spec("turbo_script") {
 
   describe("String Utilities") {
     it("should support string conversions and tokens") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var s = \"123.45\";"
                            "var n = str_to_num(s);"
@@ -135,7 +135,7 @@ spec("turbo_script") {
 
   describe("File System") {
     it("should support file operations") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       // 1. Write
       check_int_eq(turbo_script_run(ctx, "res "
@@ -179,7 +179,7 @@ spec("turbo_script") {
 
   describe("Vector Functions") {
     it("should support split, avg, len, sum, min, max") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = " data = \"10,20,30,40,50\";"
                            "v = split(data, \",\");"
                            "a = vec.avg(v);"
@@ -201,7 +201,7 @@ spec("turbo_script") {
 
   describe("Error Handling") {
     it("should report parse errors") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       // Missing semicolon or invalid syntax
       check_int_eq(turbo_script_run(ctx, "x = 10 + * 5"), -1);
       check_not_null(turbo_script_get_error(ctx));
@@ -213,7 +213,7 @@ spec("turbo_script") {
     it("SMA crossover signal generation") {
       // Scenario: A researcher loads daily closing prices and generates
       // buy/sell signals based on SMA(5) crossing above/below SMA(10).
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
 
       const char *script =
@@ -260,7 +260,7 @@ spec("turbo_script") {
 
     it("RSI oversold screener") {
       // Scenario: A researcher screens for oversold stocks (RSI < 30)
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
 
       const char *script =
@@ -298,7 +298,7 @@ spec("turbo_script") {
     it("Multi-indicator confluence scoring") {
       // Scenario: A researcher combines multiple indicators into a
       // composite score to rank stocks. Score range: 0 (bearish) to 100 (bullish).
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
 
       const char *script =
@@ -360,7 +360,7 @@ spec("turbo_script") {
     it("Options pricing: BSM call vs put parity") {
       // Scenario: A researcher verifies put-call parity:
       // C - P = S * e^(-qT) - K * e^(-rT)  (for q=0: C - P ≈ S - K*e^(-rT))
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
 
       const char *script =
@@ -416,7 +416,7 @@ spec("turbo_script") {
     it("CSV data pipeline: split -> analyze -> score") {
       // Scenario: A researcher loads CSV price data from a string,
       // splits it into a vector, and runs TA analysis.
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
 
       const char *script =
@@ -462,7 +462,7 @@ spec("turbo_script") {
 
   describe("Function Syntax (func)") {
     it("should allow defining and calling func in script") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "func double_val(x) { "
                            "  return x * 2; "
                            "}"
@@ -474,7 +474,7 @@ spec("turbo_script") {
     }
 
     it("should support recursion with func") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "func factorial(n) { "
                            "  if (n <= 1) { return 1; } "
                            "  else { return n * factorial(n - 1); } "
@@ -489,7 +489,7 @@ spec("turbo_script") {
 
   describe("Modules") {
     it("should support importing external scripts") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       // Write it using native file_write (or just setup beforehand? native is easier if we have
       // ctx) But we can use turbo_script_run to write it!
@@ -513,7 +513,7 @@ spec("turbo_script") {
 
   describe("TA Indicators and JSON Vectors") {
     it("should compute SMA and RSI on mocked Polymarket data") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
       turbo_script_load_plugin(ctx, "feeds");
 
@@ -557,16 +557,17 @@ spec("turbo_script") {
 
   describe("Compile/Exec Separation") {
     it("should compile once and exec twice with different x") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_compiled_t *compiled = turbo_script_compile(ctx, "y = x * 2;");
       check_not_null(compiled);
 
       bind_num(ctx, "x", 5.0);
-      check_int_eq(turbo_script_exec(ctx, compiled), 0);
+      turbo_script_exec(ctx, compiled);
+
       check_float_eq(get_num(ctx, "y"), 10.0, 0.001);
 
       bind_num(ctx, "x", 100.0);
-      check_int_eq(turbo_script_exec(ctx, compiled), 0);
+      turbo_script_exec(ctx, compiled);
       check_float_eq(get_num(ctx, "y"), 200.0, 0.001);
 
       turbo_script_compiled_free(compiled);
@@ -574,7 +575,7 @@ spec("turbo_script") {
     }
 
     it("should return NULL on compile error") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_compiled_t *compiled = turbo_script_compile(ctx, "x = 10 + * 5");
       check_null(compiled);
       turbo_script_free(ctx);
@@ -583,7 +584,7 @@ spec("turbo_script") {
 
   describe("Vector Data Channel") {
     it("should inject double[] from C and read back from script") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       double data[] = {1.0, 2.0, 3.0, 4.0, 5.0};
       check_int_eq(bind_vec(ctx, "v", data, 5), 0);
 
@@ -597,7 +598,7 @@ spec("turbo_script") {
     }
 
     it("should extract vector from script back to C") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_run(ctx, "v = "
                                          "split(\"10,20,30\", \",\");"),
                    0);
@@ -614,7 +615,7 @@ spec("turbo_script") {
     }
 
     it("should return -1 for not-found vector") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const double *out = NULL;
       size_t out_len = 0;
       check_int_eq(get_vec(ctx, "nonexistent", &out, &out_len), -1);
@@ -624,7 +625,7 @@ spec("turbo_script") {
 
   describe("String Variable Access") {
     it("should roundtrip set_var_str and get_var_str") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       bind_str(ctx, "greeting", "hello world");
       const char *val = get_str(ctx, "greeting");
       check_not_null(val);
@@ -633,7 +634,7 @@ spec("turbo_script") {
     }
 
     it("should return NULL for wrong type") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       bind_num(ctx, "num", 42.0);
       const char *val = get_str(ctx, "num");
       check_null(val);
@@ -643,7 +644,7 @@ spec("turbo_script") {
 
   describe("User Function Registration") {
     it("should bind C function and call from script") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       bind_func(ctx, "triple", test_triple_fn, NULL);
       check_int_eq(turbo_script_run(ctx, "r = triple(7);"), 0);
@@ -655,14 +656,14 @@ spec("turbo_script") {
 
   describe("Error Propagation") {
     it("should abort on wrong arg type") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       int res = turbo_script_run(ctx, "r = vec.avg(42);");
       check_int_eq(res, -1);
       turbo_script_free(ctx);
     }
 
     it("should not abort on runtime failure like missing file") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       int res = turbo_script_run(ctx, "data = "
                                       "read_file(\"nonexistent_file_xyz.txt\");");
       check_int_eq(res, 0);
@@ -672,7 +673,7 @@ spec("turbo_script") {
 
   describe("Grammar: Compound Assignment") {
     it("should support += -= *= /=") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "x = 10; "
                            "x += 5; " // 15
                            "x -= 3; " // 12
@@ -686,7 +687,7 @@ spec("turbo_script") {
 
   describe("Grammar: For Loop") {
     it("should support for(init; cond; post) { body }") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "sum = 0; "
                            "for (i = 0; i < 10; i += 1) { "
                            "  sum += i; "
@@ -699,7 +700,7 @@ spec("turbo_script") {
 
   describe("Grammar: Vector Slicing") {
     it("should support arr[start..end] slicing") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "v = [10, 20, 30, 40, 50]; "
                            "s = v[1..4]; "
                            "l = vec.len(s); "
@@ -713,7 +714,7 @@ spec("turbo_script") {
 
   describe("Quant: Risk Metrics") {
     it("should compute VaR, CVaR, Kelly criterion") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
       const char *script =
           " returns = [-0.02, 0.01, -0.03, "
@@ -746,7 +747,7 @@ spec("turbo_script") {
     }
 
     it("should compute drawdown stats") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
       const char *script = "equity = [100, "
                            "105, 103, 108, 106, 110, 107, 112, 115, 113]; "
@@ -769,7 +770,7 @@ spec("turbo_script") {
 
   describe("Quant: Signal Detection") {
     it("should detect crossover and crossunder") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
       const char *script = " fast = [1, 3, 5, 4, 2, 4, 6]; "
                            "slow = [2, 2, 4, 5, 3, 3, 5]; "
@@ -791,7 +792,7 @@ spec("turbo_script") {
 
   describe("Quant: Candlestick Patterns") {
     it("should detect doji and hammer patterns") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
       const char *script =
           // Doji: open ≈ close, long shadows
@@ -817,7 +818,7 @@ spec("turbo_script") {
 
   describe("Quant: Portfolio Optimization") {
     it("should compute minimum variance weights") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ta");
       const char *script =
           // 2x2 covariance matrix (2 assets): [var1, cov12, cov21, var2]
@@ -845,7 +846,7 @@ spec("turbo_script") {
 
   describe("Scientific: Advanced Statistics") {
     it("should compute median, percentile, skewness, kurtosis") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "v = [1, 2, 3, 4, "
                            "5, 6, 7, 8, 9, 10]; "
                            "med = median(v); "
@@ -881,7 +882,7 @@ spec("turbo_script") {
     }
 
     it("should compute cumsum, cumprod, rank, zscore") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "v = [3, 1, 4, 1, 5]; "
                            "cs = vec.cumsum(v); "
                            "rk = rank(v); "
@@ -902,7 +903,7 @@ spec("turbo_script") {
 
   describe("Scientific: Time Series") {
     it("should compute diff, autocorrelation, hurst exponent") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       turbo_script_load_plugin(ctx, "ts");
       turbo_script_load_plugin(ctx, "vec");
       const char *script = "v = [100, 102, "
@@ -931,7 +932,7 @@ spec("turbo_script") {
 
   describe("Scientific: Calculus") {
     it("should integrate and differentiate script functions") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script =
           // Define f(x) = x^2, integrate from 0 to 3 → should be 9
           "func f(x) { return x * x; }; "
@@ -957,7 +958,7 @@ spec("turbo_script") {
 
   describe("Scientific: Math Builtins") {
     it("should support trig, log, exp, rounding") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "s = sin(0); "
                            "c = cos(0); "
                            "sq = sqrt(144); "
@@ -988,7 +989,7 @@ spec("turbo_script") {
 
   describe("Scientific: String Builtins") {
     it("should support lower, upper, trim, contains, substr, replace") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "lo = lower(\"HELLO\"); "
                            "up = upper(\"hello\"); "
                            "tr = trim(\"  hi  \"); "
@@ -1011,7 +1012,7 @@ spec("turbo_script") {
 
   describe("Scientific: Matrix Operations") {
     it("should compute determinant, inverse, matmul for 2x2") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script =
           // Matrix A = [[1,2],[3,4]], det = 1*4 - 2*3 = -2
           "A = [1, 2, 3, 4]; "
@@ -1038,7 +1039,7 @@ spec("turbo_script") {
 
   describe("Module Import: dot notation") {
     it("should import fs module and use dot notation") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_not_null(ctx);
 
       const char *script = ""
@@ -1060,7 +1061,7 @@ spec("turbo_script") {
     }
 
     it("should import json module and use dot notation") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_not_null(ctx);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
@@ -1078,7 +1079,7 @@ spec("turbo_script") {
     }
 
     it("should still support file import with init_bare") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_not_null(ctx);
 
       turbo_script_run(ctx, ""
@@ -1097,7 +1098,7 @@ spec("turbo_script") {
 
   describe("CSV Module") {
     it("should count rows and columns") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = "
@@ -1116,7 +1117,7 @@ spec("turbo_script") {
     }
 
     it("should get cell value as string") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = "
@@ -1132,7 +1133,7 @@ spec("turbo_script") {
     }
 
     it("should get cell value as number") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = "
@@ -1146,7 +1147,7 @@ spec("turbo_script") {
     }
 
     it("should extract column as numeric vector by index") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script =
@@ -1167,7 +1168,7 @@ spec("turbo_script") {
     }
 
     it("should extract column as numeric vector by name") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script =
@@ -1183,7 +1184,7 @@ spec("turbo_script") {
     }
 
     it("should run csv.col into TA pipeline") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_load_plugin(ctx, "ta"), 0);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
@@ -1208,7 +1209,7 @@ spec("turbo_script") {
     }
 
     it("should filter rows and count matches") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = "
@@ -1225,7 +1226,7 @@ spec("turbo_script") {
     }
 
     it("should filter rows and return matching content") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = "
@@ -1243,7 +1244,7 @@ spec("turbo_script") {
     }
 
     it("should work via import mechanism") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = ""
                            "import(\"feeds\");"
@@ -1260,7 +1261,7 @@ spec("turbo_script") {
 
   describe("DSV Filter via Script API") {
     it("should filter rows based on number column") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script =
@@ -1282,7 +1283,7 @@ spec("turbo_script") {
     }
 
     it("should filter rows based on string column") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = "
@@ -1300,7 +1301,7 @@ spec("turbo_script") {
     }
 
     it("should count zero matches correctly") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       check_int_eq(turbo_script_load_plugin(ctx, "feeds"), 0);
 
       const char *script = "var data = \"a_n,b_n\\n1,2\\n3,4\";"
@@ -1315,7 +1316,7 @@ spec("turbo_script") {
 
   describe("Vector Sort") {
     it("should sort ascending") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = "var v = [3, 1, 4, 1, 5, 9, 2, 6];"
                            "var s = vec.sort(v);"
@@ -1328,7 +1329,7 @@ spec("turbo_script") {
     }
 
     it("should sort descending") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = "var v = [3, 1, 4, 1, 5];"
                            "var s = vec.sort_desc(v);"
@@ -1341,7 +1342,7 @@ spec("turbo_script") {
     }
 
     it("should not modify original vector") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [3, 1, 2];"
                            "var s = vec.sort(v);"
                            "var orig_first = v[0];";
@@ -1351,7 +1352,7 @@ spec("turbo_script") {
     }
 
     it("should handle single element") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = " var v = [42];"
                            "var s = vec.sort(v);"
                            "var val = s[0];";
@@ -1363,7 +1364,7 @@ spec("turbo_script") {
 
   describe("Vector Unique") {
     it("should remove duplicates and sort") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [3, 1, 2, 1, 3, 2];"
                            "var u = vec.unique(v);"
                            "var n = vec.len(u);"
@@ -1377,7 +1378,7 @@ spec("turbo_script") {
     }
 
     it("should handle all same values") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [5, 5, 5, 5];"
                            "var u = vec.unique(v);"
                            "var n = vec.len(u);";
@@ -1389,7 +1390,7 @@ spec("turbo_script") {
 
   describe("String Join") {
     it("should join vector with delimiter") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [1, 2, 3];"
                            "var s = join(v, \",\");";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1400,7 +1401,7 @@ spec("turbo_script") {
     }
 
     it("should handle single element") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [42];"
                            "var s = join(v, \"-\");";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1413,7 +1414,7 @@ spec("turbo_script") {
 
   describe("CSV Write") {
     it("should write and read back CSV file") {
-      turbo_script_ctx_t *ctx = turbo_script_init_bare();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
       turbo_script_load_plugin(ctx, "feeds");
 
       int r1 = turbo_script_run(ctx, "var data = \"name,age,role\\nAlice,30,dev\\nBob,40,mgr\";"
@@ -1435,7 +1436,7 @@ spec("turbo_script") {
 
   describe("Vector Reverse") {
     it("should reverse a vector") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [1, 2, 3, 4, 5];"
                            "var r = vec.reverse(v);"
@@ -1448,7 +1449,7 @@ spec("turbo_script") {
     }
 
     it("should handle single element") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [42];"
                            "var r = vec.reverse(v);"
@@ -1459,7 +1460,7 @@ spec("turbo_script") {
     }
 
     it("should not modify original vector") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [1, 2, 3];"
                            "var r = vec.reverse(v);"
@@ -1472,7 +1473,7 @@ spec("turbo_script") {
 
   describe("Vector Concat") {
     it("should merge two vectors") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var a = [1, 2, 3];"
                            "var b = [4, 5];"
@@ -1486,7 +1487,7 @@ spec("turbo_script") {
     }
 
     it("should handle one empty vector") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       bind_vec(ctx, "a", (const double[]){1.0, 2.0}, 2);
       const char *script = " var b = vec.range(0);"
@@ -1500,7 +1501,7 @@ spec("turbo_script") {
 
   describe("Vector Range") {
     it("should generate vec.range(5)") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = vec.range(5);"
                            "var n = vec.len(v);"
@@ -1514,7 +1515,7 @@ spec("turbo_script") {
     }
 
     it("should generate vec.range(2, 5)") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = vec.range(2, 5);"
                            "var n = vec.len(v);"
@@ -1528,7 +1529,7 @@ spec("turbo_script") {
     }
 
     it("should return empty for vec.range(0)") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = "var v = vec.range(0);"
                            "var n = vec.len(v);";
@@ -1540,7 +1541,7 @@ spec("turbo_script") {
 
   describe("Vector Cumsum") {
     it("should compute cumulative sum") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [1, 2, 3];"
                            "var cs = vec.cumsum(v);"
                            "var a = cs[0];"
@@ -1554,7 +1555,7 @@ spec("turbo_script") {
     }
 
     it("should handle single element") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var v = [42];"
                            "var cs = vec.cumsum(v);"
                            "var val = cs[0];";
@@ -1566,7 +1567,7 @@ spec("turbo_script") {
 
   describe("Vector Diff") {
     it("should compute first-order differences") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [1, 3, 6];"
                            "var d = vec.diff(v);"
@@ -1581,7 +1582,7 @@ spec("turbo_script") {
     }
 
     it("should return empty for single element") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [42];"
                            "var d = vec.diff(v);"
@@ -1594,7 +1595,7 @@ spec("turbo_script") {
 
   describe("Vector Find") {
     it("should return index when found") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [10, 20, 30, 40];"
                            "var idx = vec.find(v, 30);";
@@ -1604,7 +1605,7 @@ spec("turbo_script") {
     }
 
     it("should return -1 when not found") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 
       const char *script = " var v = [10, 20, 30];"
                            "var idx = vec.find(v, 99);";
@@ -1616,7 +1617,7 @@ spec("turbo_script") {
 
   describe("String Format") {
     it("should format with %%s and %%d") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var s = "
                            "format(\"%s is %d\", \"age\", 30);";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1627,7 +1628,7 @@ spec("turbo_script") {
     }
 
     it("should format with %%g") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var s = format(\"pi=%g\", 3.14);";
       check_int_eq(turbo_script_run(ctx, script), 0);
       const char *val = get_str(ctx, "s");
@@ -1637,7 +1638,7 @@ spec("turbo_script") {
     }
 
     it("should escape %% as literal percent") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var s = format(\"%d%%\", 100);";
       check_int_eq(turbo_script_run(ctx, script), 0);
       const char *val = get_str(ctx, "s");
@@ -1649,7 +1650,7 @@ spec("turbo_script") {
 
   describe("Print") {
     it("should not crash and return 0") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "var r = "
                            "print(\"hello\", 42, [1, 2, 3]);";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1660,7 +1661,7 @@ spec("turbo_script") {
 
   describe("IO Module: File Operations") {
     it("should append_file content") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "write_file(\"_test_append.txt\", \"hello\"); "
                            "var r = append_file(\"_test_append.txt\", \" world\"); "
@@ -1678,7 +1679,7 @@ spec("turbo_script") {
     }
 
     it("should get file_size") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "write_file(\"_test_size.txt\", \"12345\"); "
                            "var sz = file_size(\"_test_size.txt\"); "
@@ -1692,7 +1693,7 @@ spec("turbo_script") {
     }
 
     it("should return -1 for file_size on missing file") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var sz = file_size(\"_nonexistent_xyz.txt\");";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1701,7 +1702,7 @@ spec("turbo_script") {
     }
 
     it("should get file_stat vector [size, mtime, is_file, is_dir]") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "write_file(\"_test_stat.txt\", \"abc\"); "
                            "var st = file_stat(\"_test_stat.txt\"); "
@@ -1722,7 +1723,7 @@ spec("turbo_script") {
     }
 
     it("should check is_file and is_dir") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "write_file(\"_test_isfile.txt\", \"x\"); "
                            "var f = is_file(\"_test_isfile.txt\"); "
@@ -1738,7 +1739,7 @@ spec("turbo_script") {
     }
 
     it("should rename a file") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "write_file(\"_test_rename_a.txt\", \"renamed\"); "
                            "var r = file_rename(\"_test_rename_a.txt\", \"_test_rename_b.txt\"); "
@@ -1758,7 +1759,7 @@ spec("turbo_script") {
 
   describe("IO Module: Directory Operations") {
     it("should mkdir and rmdir") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var r1 = mkdir(\"_test_dir_io\"); "
                            "var exists = is_dir(\"_test_dir_io\"); "
@@ -1776,7 +1777,7 @@ spec("turbo_script") {
     }
 
     it("should return tmpdir as a string") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var td = tmpdir(); "
                            "var exists = is_dir(td);";
@@ -1793,7 +1794,7 @@ spec("turbo_script") {
 
   describe("IO Module: Path Utilities") {
     it("should join paths") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var p = path_join(\"foo\", \"bar.txt\");";
       int res = turbo_script_run(ctx, script);
@@ -1807,7 +1808,7 @@ spec("turbo_script") {
     }
 
     it("should extract dirname and basename") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 #ifdef _WIN32
       const char *script = ""
                            "var d = path_dirname(\"C:\\\\foo\\\\bar.txt\"); "
@@ -1831,7 +1832,7 @@ spec("turbo_script") {
     }
 
     it("should detect absolute vs relative paths") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
 #ifdef _WIN32
       const char *script = ""
                            "var a = path_is_absolute(\"C:\\\\foo\"); "
@@ -1853,7 +1854,7 @@ spec("turbo_script") {
 
   describe("IO Module: Date/Time") {
     it("should return now() as a positive timestamp") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var t = now();";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1862,7 +1863,7 @@ spec("turbo_script") {
     }
 
     it("should parse date string to timestamp") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var t = date(\"2024-01-01 00:00:00\");";
       int res = turbo_script_run(ctx, script);
@@ -1874,7 +1875,7 @@ spec("turbo_script") {
     }
 
     it("should format_date with default and custom format") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var t = now(); "
                            "var s1 = format_date(t); "
@@ -1895,7 +1896,7 @@ spec("turbo_script") {
 
   describe("IO Module: Platform Info") {
     it("should return os_name as a known string") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var os = os_name();";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1906,7 +1907,7 @@ spec("turbo_script") {
     }
 
     it("should return pid as a positive number") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var p = pid();";
       check_int_eq(turbo_script_run(ctx, script), 0);
@@ -1915,7 +1916,7 @@ spec("turbo_script") {
     }
 
     it("should return uptime_ms and monotonic_ms as non-negative") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var u = uptime_ms(); "
                            "var m = monotonic_ms();";
@@ -1931,7 +1932,7 @@ spec("turbo_script") {
 
   describe("IO Module: End-to-End Pipeline") {
     it("should write, append, stat, read, rename, remove in sequence") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "write_file(\"_test_e2e.txt\", \"line1\\n\"); "
                            "append_file(\"_test_e2e.txt\", \"line2\\n\"); "
@@ -1956,7 +1957,7 @@ spec("turbo_script") {
     }
 
     it("should use tmpdir + path_join for temp file workflow") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = ""
                            "var td = tmpdir(); "
                            "var p = path_join(td, \"_test_tmpfile.txt\"); "

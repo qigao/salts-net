@@ -24,20 +24,20 @@ typedef struct turbo_udp_s turbo_udp_t;
 
 /* Enhanced UDP server structure */
 struct turbo_udp_s {
-  uv_loop_t *loop;     /* Event loop */
-  uv_udp_t *handle;    /* UDP handle */
-  mem_pool_t* arena; /* Memory arena */
+  uv_loop_t *loop;   /* Event loop */
+  uv_udp_t *handle;  /* UDP handle */
+  mem_pool_t *arena; /* Memory arena */
 
   /* Receive buffers (ping-pong for zero-copy) */
   mem_buffer_t *recv_buffer1; /* Primary receive buffer */
   mem_buffer_t *recv_buffer2; /* Secondary receive buffer */
-  int recv_toggle;                    /* Buffer toggle state */
+  int recv_toggle;            /* Buffer toggle state */
 
   /* Callbacks */
   turbo_recv_cb on_recv; /* Receive callback */
-  
+
   /* User data */
-  void *user_data;       /* Application-supplied opaque pointer */
+  void *user_data; /* Application-supplied opaque pointer */
 };
 
 /* Server lifecycle */
@@ -47,8 +47,7 @@ CXX_C_API int turbo_udp_server_start(turbo_udp_server_t *server, turbo_recv_cb c
 CXX_C_API void turbo_udp_server_stop(turbo_udp_server_t *server);
 
 /* Zero-copy send operations */
-CXX_C_API mem_buffer_t *turbo_udp_get_send_buffer(turbo_udp_server_t *server,
-                                                          size_t min_size);
+CXX_C_API mem_buffer_t *turbo_udp_get_send_buffer(turbo_udp_server_t *server, size_t min_size);
 CXX_C_API int turbo_udp_send_buffer(turbo_udp_server_t *server, const struct sockaddr *dest,
                                     mem_buffer_t *buffer, size_t length);
 
@@ -59,8 +58,8 @@ CXX_C_API int turbo_udp_send(turbo_udp_server_t *server, const struct sockaddr *
 /* Client-style operations */
 CXX_C_API int turbo_udp_connect(turbo_udp_client_t *client, const char *host, unsigned short port);
 CXX_C_API int turbo_udp_send_connected(turbo_udp_client_t *client, const char *data, size_t length);
-CXX_C_API int turbo_udp_send_buffer_connected(turbo_udp_client_t *client,
-                                              mem_buffer_t *buffer, size_t length);
+CXX_C_API int turbo_udp_send_buffer_connected(turbo_udp_client_t *client, mem_buffer_t *buffer,
+                                              size_t length);
 
 /* Multicast operations */
 CXX_C_API int turbo_udp_join_multicast_group(turbo_udp_t *udp, const char *multicast_addr,
@@ -70,8 +69,6 @@ CXX_C_API int turbo_udp_leave_multicast_group(turbo_udp_t *udp, const char *mult
 CXX_C_API int turbo_udp_set_multicast_loop(turbo_udp_t *udp, int on);
 CXX_C_API int turbo_udp_set_multicast_ttl(turbo_udp_t *udp, int ttl);
 CXX_C_API int turbo_udp_set_broadcast(turbo_udp_t *udp, int on);
-
-
 
 /* Memory management */
 CXX_C_API void turbo_udp_trim_memory(turbo_udp_server_t *server);
@@ -95,13 +92,13 @@ CXX_C_API int turbo_udp_sendv_connected(turbo_udp_client_t *client, const turbo_
 /* Get buffer, write data, send buffer */
 #define TURBO_UDP_ZERO_COPY_SEND(server, dest, data_size, write_code)                              \
   do {                                                                                             \
-    mem_buffer_t *_buf = turbo_udp_get_send_buffer(server, data_size);                     \
+    mem_buffer_t *_buf = turbo_udp_get_send_buffer(server, data_size);                             \
     if (_buf) {                                                                                    \
       char *_ptr = _buf->data;                                                                     \
       write_code;                                                                                  \
-      mem_set_used(_buf, data_size);                                                \
+      mem_set_used(_buf, data_size);                                                               \
       turbo_udp_send_buffer(server, dest, _buf, data_size);                                        \
-      mem_unref(_buf);                                                              \
+      mem_unref(_buf);                                                                             \
     }                                                                                              \
   } while (0)
 

@@ -44,7 +44,7 @@ bool bucket_priority_queue_mpmc_init(bucket_priority_queue_mpmc_t *queue,
     // Register the shared logical consumer
     uint64_t initial_seq = disruptor_consumer_register(queue->buckets[i].disruptor, &queue->buckets[i].shared_consumer);
     queue->buckets[i].next_read_sequence = initial_seq;
-    turbo_atomic_store_uint32(&queue->buckets[i].pop_lock, 0);
+    t_atomic_store_uint32(&queue->buckets[i].pop_lock, 0);
   }
 
   return true;
@@ -115,7 +115,7 @@ bool bucket_priority_queue_mpmc_try_pop(
     bucket_priority_bucket_mpmc_t *bucket = &queue->buckets[i];
     
     // Attempt to acquire pop spinlock
-    if (turbo_atomic_cas_uint32(&bucket->pop_lock, 0, 1)) {
+    if (t_atomic_cas_uint32(&bucket->pop_lock, 0, 1)) {
       disruptor_t *disruptor = bucket->disruptor;
       uint64_t seq = bucket->next_read_sequence;
       disruptor_cursor_t cursor = {.sequence = seq};
@@ -135,12 +135,12 @@ bool bucket_priority_queue_mpmc_try_pop(
         disruptor_consumer_release_entry(disruptor, &bucket->shared_consumer, &read_cursor);
 
         // Unlock
-        turbo_atomic_store_uint32(&bucket->pop_lock, 0);
+        t_atomic_store_uint32(&bucket->pop_lock, 0);
         return true;
       }
       
       // Unlock
-      turbo_atomic_store_uint32(&bucket->pop_lock, 0);
+      t_atomic_store_uint32(&bucket->pop_lock, 0);
     }
   }
 

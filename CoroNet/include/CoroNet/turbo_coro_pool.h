@@ -24,6 +24,7 @@
 
 #include "platform.h"
 #include "turbo_coro.h"
+#include "turbo_coro_context.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -49,9 +50,11 @@ typedef struct {
 /**
  * @brief Create a coroutine object pool
  * @param config Pool configuration (NULL for defaults)
+ * @param ctx Coroutine context (required for arena allocation)
  * @return Pool handle or NULL on failure
  */
-CXX_C_API coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *config);
+CXX_C_API coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *config,
+                                                       coro_context_t *ctx);
 
 /**
  * @brief Destroy the pool and free all coroutines

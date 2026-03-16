@@ -47,8 +47,16 @@ struct turbo_script_ctx_s {
 struct turbo_script_compiled_s {
     exprtk_node_t *ast;
 };
+
 /* Built-in module accessors */
 void turbo_script_register_modules(void);
 void turbo_script_register_mir(struct turbo_script_ctx_s *ctx);
+
+/* Internal JIT API - for testing and advanced use */
+CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script);
+CXX_C_API int turbo_script_exec_jit(turbo_script_ctx_t *ctx);
+
+/* Internal REPL helper */
+int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script);
 
 #endif /* TURBO_SCRIPT_INTERNAL_H */

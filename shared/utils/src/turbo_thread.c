@@ -369,9 +369,9 @@ struct turbo_threadpool_s {
     disruptor_t *disruptor;
     object_pool_t *task_pool;
 
-    turbo_atomic_int_t shutdown;
-    turbo_atomic_int64_t tasks_submitted;
-    turbo_atomic_int64_t tasks_completed;
+    t_atomic_int_t shutdown;
+    t_atomic_int64_t tasks_submitted;
+    t_atomic_int64_t tasks_completed;
 
     // Only for wait/destroy synchronization
     turbo_mutex_t wait_mutex;
@@ -397,7 +397,7 @@ static void worker_entry(void *arg) {
     uint64_t next_sequence = disruptor_consumer_register(pool->disruptor, &ctx->consumer);
 
     // Worker loop
-    while (!turbo_atomic_load(&pool->shutdown)) {
+    while (!t_atomic_load(&pool->shutdown)) {
         disruptor_cursor_t cursor;
         cursor.sequence = next_sequence;
 
@@ -426,7 +426,7 @@ static void worker_entry(void *arg) {
             *task_ptr = NULL;
 
             // Update completion counter
-            turbo_atomic_fetch_add64(&pool->tasks_completed, 1);
+            t_atomic_fetch_add64(&pool->tasks_completed, 1);
         }
 
         // Release entries back to disruptor
@@ -447,7 +447,7 @@ static void worker_entry(void *arg) {
                 task->fn(task->arg);
                 object_pool_free(pool->task_pool, task);
                 *task_ptr = NULL;
-                turbo_atomic_fetch_add64(&pool->tasks_completed, 1);
+                t_atomic_fetch_add64(&pool->tasks_completed, 1);
             }
         }
         disruptor_consumer_release_entry(pool->disruptor, &ctx->consumer, &cursor);
@@ -465,9 +465,9 @@ turbo_threadpool_t *turbo_threadpool_create(int num_threads) {
     if (!pool) return NULL;
 
     pool->num_threads = num_threads;
-    turbo_atomic_store(&pool->shutdown, 0);
-    turbo_atomic_store64(&pool->tasks_submitted, 0);
-    turbo_atomic_store64(&pool->tasks_completed, 0);
+    t_atomic_store(&pool->shutdown, 0);
+    t_atomic_store64(&pool->tasks_submitted, 0);
+    t_atomic_store64(&pool->tasks_completed, 0);
 
     // Create disruptor (MPMC queue)
     disruptor_config_t disruptor_config = {
@@ -519,7 +519,7 @@ turbo_threadpool_t *turbo_threadpool_create(int num_threads) {
         pool->workers[i].worker_id = i;
 
         if (turbo_thread_create(&pool->threads[i], worker_entry, &pool->workers[i]) != 0) {
-            turbo_atomic_store(&pool->shutdown, 1);
+            t_atomic_store(&pool->shutdown, 1);
             for (int j = 0; j < i; j++) {
                 turbo_thread_join(&pool->threads[j]);
             }
@@ -541,7 +541,7 @@ void turbo_threadpool_destroy(turbo_threadpool_t *pool) {
     if (!pool) return;
 
     // Signal shutdown
-    turbo_atomic_store(&pool->shutdown, 1);
+    t_atomic_store(&pool->shutdown, 1);
 
     // Wait for all worker threads to finish
     for (int i = 0; i < pool->num_threads; i++) {
@@ -560,7 +560,7 @@ void turbo_threadpool_destroy(turbo_threadpool_t *pool) {
 
 int turbo_threadpool_submit(turbo_threadpool_t *pool, turbo_task_fn task, void *arg) {
     if (!pool || !task) return -1;
-    if (turbo_atomic_load(&pool->shutdown)) return -1;
+    if (t_atomic_load(&pool->shutdown)) return -1;
 
     // Allocate task from object pool (zero malloc)
     task_node_t *node = (task_node_t *)object_pool_alloc(pool->task_pool);
@@ -582,7 +582,7 @@ int turbo_threadpool_submit(turbo_threadpool_t *pool, turbo_task_fn task, void *
     *slot = node;
     disruptor_publisher_commit_entry_blocking(pool->disruptor, &cursor);
 
-    turbo_atomic_fetch_add64(&pool->tasks_submitted, 1);
+    t_atomic_fetch_add64(&pool->tasks_submitted, 1);
     return 0;
 }
 
@@ -590,8 +590,8 @@ void turbo_threadpool_wait(turbo_threadpool_t *pool) {
     if (!pool) return;
 
     // Wait until all submitted tasks are completed
-    int64_t submitted = turbo_atomic_load64(&pool->tasks_submitted);
-    while (turbo_atomic_load64(&pool->tasks_completed) < submitted) {
+    int64_t submitted = t_atomic_load64(&pool->tasks_submitted);
+    while (t_atomic_load64(&pool->tasks_completed) < submitted) {
         turbo_sleep_ms(1);
     }
 }
@@ -599,8 +599,8 @@ void turbo_threadpool_wait(turbo_threadpool_t *pool) {
 int turbo_threadpool_pending(turbo_threadpool_t *pool) {
     if (!pool) return 0;
 
-    int64_t submitted = turbo_atomic_load64(&pool->tasks_submitted);
-    int64_t completed = turbo_atomic_load64(&pool->tasks_completed);
+    int64_t submitted = t_atomic_load64(&pool->tasks_submitted);
+    int64_t completed = t_atomic_load64(&pool->tasks_completed);
     return (int)(submitted - completed);
 }
 

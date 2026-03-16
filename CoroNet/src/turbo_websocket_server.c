@@ -71,8 +71,13 @@ turbo_websocket_server_create(uv_loop_t *loop, int use_tls,
   server->config = *config;
   server->next_connection_id = 1;
 
-  // Use global memory pool for zero-copy buffers
-  server->buffer_pool = (mem_pool_t *)coro_get_memory_pool();
+  // Initialize arena with pre-allocated size for zero-copy buffers
+  server->buffer_pool = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  if (!server->buffer_pool || mem_init(server->buffer_pool, MEM_ARENA_SERVER_INIT_SIZE) != 0) {
+    if (server->buffer_pool) free(server->buffer_pool);
+    free(server);
+    return NULL;
+  }
 
   return server;
 }
@@ -266,8 +271,8 @@ static void ws_server_on_connection(void *handle, int status, void *peer) {
   conn->id = server->next_connection_id++;
   conn->transport_client = handle;
 
-  // Use global memory pool (do not allocate or free)
-  conn->conn_arena = (mem_pool_t *)coro_get_memory_pool();
+  // Use server's arena (do not allocate or free)
+  conn->conn_arena = server->buffer_pool;
 
   // Allocate handshake buffer
   conn->handshake_recv_buffer = mem_get_buffer(conn->conn_arena, 4096);

@@ -91,8 +91,8 @@ coro_pool_t *coro_pool_create(coro_context_t *ctx, const coro_pool_config_t *con
   pool->loop = ctx->loop;
   pool->config = *config;
 
-  /* Initialize management arena (64KB initially) */
-  pool->arena = (mem_pool_t*)coro_get_memory_pool();
+  /* Initialize management arena from context's arena */
+  pool->arena = ctx->arena;
 
   /* Allocate slots from arena */
   pool->slots = (pool_slot_t *)mem_alloc(pool->arena, config->max_size * sizeof(pool_slot_t));

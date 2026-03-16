@@ -170,13 +170,18 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop, const cha
   memset(server, 0, sizeof(*server));
   server->loop = loop;
 
-  /* Initialize arena */
-  server->arena = (mem_pool_t*)coro_get_memory_pool();
+  /* Initialize arena with pre-allocated size */
+  server->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  if (!server->arena || mem_init(server->arena, MEM_ARENA_SERVER_INIT_SIZE) != 0) {
+    if (server->arena) free(server->arena);
+    return UV_ENOMEM;
+  }
 
   /* Create UDP handle */
   server->handle = (uv_udp_t *)malloc(sizeof(uv_udp_t));
   if (!server->handle) {
-    
+    mem_destroy(server->arena);
+    free(server->arena);
     return UV_ENOMEM;
   }
 
@@ -190,8 +195,8 @@ int turbo_udp_server_init(turbo_udp_server_t *server, uv_loop_t *loop, const cha
   server->handle->data = server;
 
   /* Allocate receive buffers from arena */
-  server->recv_buffer1 = mem_get_buffer(server->arena, 8192);
-  server->recv_buffer2 = mem_get_buffer(server->arena, 8192);
+  server->recv_buffer1 = mem_get_buffer(server->arena, MEM_RECV_BUFFER_SIZE);
+  server->recv_buffer2 = mem_get_buffer(server->arena, MEM_RECV_BUFFER_SIZE);
 
   if (!server->recv_buffer1) {
     uv_close((uv_handle_t *)server->handle, on_handle_closed);

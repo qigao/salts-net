@@ -9,15 +9,15 @@
 
 typedef struct {
   bucket_priority_queue_spsc_t *queue;
-  turbo_atomic_bool_t start;
-  turbo_atomic_bool_t done;
+  t_atomic_bool_t start;
+  t_atomic_bool_t done;
   size_t items_to_process;
 } thread_context_t;
 
 static void producer_thread(void *arg) {
   thread_context_t *ctx = (thread_context_t *)arg;
 
-  while (!turbo_atomic_load_bool(&ctx->start)) {
+  while (!t_atomic_load_bool(&ctx->start)) {
     // Wait for start signal
   }
 
@@ -30,14 +30,14 @@ static void producer_thread(void *arg) {
     }
   }
 
-  turbo_atomic_store_bool(&ctx->done, true);
+  t_atomic_store_bool(&ctx->done, true);
 }
 
 static void consumer_thread(void *arg) {
   thread_context_t *ctx = (thread_context_t *)arg;
   size_t consumed = 0;
 
-  while (!turbo_atomic_load_bool(&ctx->start)) {
+  while (!t_atomic_load_bool(&ctx->start)) {
     // Wait for start signal
   }
 
@@ -48,7 +48,7 @@ static void consumer_thread(void *arg) {
     }
   }
 
-  turbo_atomic_store_bool(&ctx->done, true);
+  t_atomic_store_bool(&ctx->done, true);
 }
 
 spec("Bucket Priority Queue SPSC") {
@@ -211,15 +211,15 @@ spec("Bucket Priority Queue SPSC") {
     check(turbo_thread_create(&consumer, consumer_thread, &consumer_ctx) == 0);
 
     // Start both threads
-    turbo_atomic_store_bool(&producer_ctx.start, true);
-    turbo_atomic_store_bool(&consumer_ctx.start, true);
+    t_atomic_store_bool(&producer_ctx.start, true);
+    t_atomic_store_bool(&consumer_ctx.start, true);
 
     // Wait for completion
     turbo_thread_join(&producer);
     turbo_thread_join(&consumer);
 
-    check(turbo_atomic_load_bool(&producer_ctx.done));
-    check(turbo_atomic_load_bool(&consumer_ctx.done));
+    check(t_atomic_load_bool(&producer_ctx.done));
+    check(t_atomic_load_bool(&consumer_ctx.done));
     check(bucket_priority_queue_spsc_empty(&queue));
 
     bucket_priority_queue_spsc_destroy(&queue);

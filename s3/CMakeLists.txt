@@ -22,6 +22,7 @@ set(S3_SOURCES
     src/s3_error.c
     src/s3_http.c
     src/s3_multimap.c
+    src/s3_multipart.c
     src/s3_response.c
     src/s3_signer.c
     src/s3_time.c
@@ -39,6 +40,7 @@ set(S3_HEADERS
     include/s3/s3_credentials.h
     include/s3/s3_error.h
     include/s3/s3_multimap.h
+    include/s3/s3_multipart.h
     include/s3/s3_response.h
     include/s3/s3_signer.h
     include/s3/s3_time.h
@@ -87,14 +89,4 @@ install(
   PATTERN "*.h")
 
 # Tests (TinyTest BDD)
-add_executable(test_s3_client examples/test_s3_client.c)
-target_link_libraries(test_s3_client PRIVATE TurboNet::S3
-                                                TurboNet::TinyTest)
-set_target_properties(test_s3_client PROPERTIES FOLDER "s3/tests")
-add_test(NAME test_s3_client COMMAND test_s3_client)
-
-add_executable(test_cxml_s3 examples/test_cxml_s3.c)
-target_link_libraries(test_cxml_s3 PRIVATE TurboNet::S3
-                                              TurboNet::TinyTest)
-set_target_properties(test_cxml_s3 PROPERTIES FOLDER "s3/tests")
-add_test(NAME test_cxml_s3 COMMAND test_cxml_s3)
+add_subdirectory(tests)

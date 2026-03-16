@@ -26,51 +26,48 @@ typedef struct turbo_kcp_client_s turbo_kcp_client_t;
 /* KCP context for connection management */
 typedef struct turbo_kcp_context_s turbo_kcp_context_t;
 
-
 /* Enhanced KCP server structure */
 struct turbo_kcp_server_s {
-    uv_loop_t* loop;                        /* Event loop */
-    uv_udp_t* handle;                       /* UDP handle */
-    mem_pool_t* arena;            /* Memory arena */
+  uv_loop_t *loop;   /* Event loop */
+  uv_udp_t *handle;  /* UDP handle */
+  mem_pool_t *arena; /* Memory arena */
 
-    /* Receive buffers (ping-pong for zero-copy) */
-    mem_buffer_t* recv_buffer1;      /* Primary receive buffer */
-    mem_buffer_t* recv_buffer2;      /* Secondary receive buffer */
-    int recv_toggle;                        /* Buffer toggle state */
+  /* Receive buffers (ping-pong for zero-copy) */
+  mem_buffer_t *recv_buffer1; /* Primary receive buffer */
+  mem_buffer_t *recv_buffer2; /* Secondary receive buffer */
+  int recv_toggle;            /* Buffer toggle state */
 
-    /* Callbacks */
-    turbo_recv_cb on_recv;      /* Receive callback */
-    turbo_accept_cb on_accept; /* New connection callback */
+  /* Callbacks */
+  turbo_recv_cb on_recv;     /* Receive callback */
+  turbo_accept_cb on_accept; /* New connection callback */
 
-    /* Client management */
-    void* client_map;                       /* Client mapping (hashmap) */
-    turbo_kcp_client_t* connecting_client;  /* Client waiting for ACK (client-mode only) */
-    
-    /* User data */
-    void* user_data;                        /* Application-supplied opaque pointer */
+  /* Client management */
+  void *client_map;                      /* Client mapping (hashmap) */
+  turbo_kcp_client_t *connecting_client; /* Client waiting for ACK (client-mode only) */
+
+  /* User data */
+  void *user_data; /* Application-supplied opaque pointer */
 };
 
 /* Enhanced KCP client structure */
 struct turbo_kcp_client_s {
-    turbo_kcp_server_t* server;     /* Parent server */
-    turbo_kcp_context_t* kcp_ctx;            /* KCP context */
-    uint32_t conv_id;                       /* Conversation ID */
-    struct sockaddr_storage peer_addr;      /* Peer address */
+  turbo_kcp_server_t *server;        /* Parent server */
+  turbo_kcp_context_t *kcp_ctx;      /* KCP context */
+  uint32_t conv_id;                  /* Conversation ID */
+  struct sockaddr_storage peer_addr; /* Peer address */
 
-    /* Client state */
-    int connected;                          /* Connection state */
-    int connecting;                         /* Waiting for server ACK */
-    int is_client_mode;                     /* True for client-initiated connections */
-    uv_timer_t update_timer;                /* KCP update timer */
-    int timer_active;                       /* Timer state */
+  /* Client state */
+  int connected;           /* Connection state */
+  int connecting;          /* Waiting for server ACK */
+  int is_client_mode;      /* True for client-initiated connections */
+  uv_timer_t update_timer; /* KCP update timer */
+  int timer_active;        /* Timer state */
 
-    /* Callbacks */
-    turbo_connect_cb on_connect; /* Connect callback */
-    void *user_data; /* User data */
-    int is_managed; /* 1 = heap allocated by protocol stack, 0 = caller-managed */
+  /* Callbacks */
+  turbo_connect_cb on_connect; /* Connect callback */
+  void *user_data;             /* User data */
+  int is_managed;              /* 1 = heap allocated by protocol stack, 0 = caller-managed */
 };
-
-
 
 /* Server lifecycle */
 /**
@@ -82,8 +79,8 @@ struct turbo_kcp_client_s {
  * @param port The port number to listen on.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_server_init(turbo_kcp_server_t* server, uv_loop_t* loop,
-                                 const char* host, unsigned short port);
+int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const char *host,
+                          unsigned short port);
 /**
  * @brief Starts the KCP server, making it ready to accept connections and receive data.
  *
@@ -92,15 +89,14 @@ struct turbo_kcp_client_s {
  * @param recv_cb The callback function to be invoked when data is received from a client.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_server_start(turbo_kcp_server_t* server, 
-                                  turbo_accept_cb accept_cb,
-                                  turbo_recv_cb recv_cb);
+int turbo_kcp_server_start(turbo_kcp_server_t *server, turbo_accept_cb accept_cb,
+                           turbo_recv_cb recv_cb);
 /**
  * @brief Stops the KCP server and cleans up its resources.
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance to stop.
  */
-  void turbo_kcp_server_stop(turbo_kcp_server_t* server);
+void turbo_kcp_server_stop(turbo_kcp_server_t *server);
 
 /* KCP configuration */
 /**
@@ -113,8 +109,8 @@ struct turbo_kcp_client_s {
  * @param nc 0: normal, 1: disable congestion control.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_server_set_nodelay(turbo_kcp_server_t* server,
-                                        int nodelay, int interval, int resend, int nc);
+int turbo_kcp_server_set_nodelay(turbo_kcp_server_t *server, int nodelay, int interval, int resend,
+                                 int nc);
 /**
  * @brief Sets the KCP send and receive window sizes for all clients connected to the server.
  *
@@ -123,8 +119,7 @@ struct turbo_kcp_client_s {
  * @param rcvwnd Receive window size.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_server_set_wndsize(turbo_kcp_server_t* server,
-                                        int sndwnd, int rcvwnd);
+int turbo_kcp_server_set_wndsize(turbo_kcp_server_t *server, int sndwnd, int rcvwnd);
 /**
  * @brief Sets the KCP Maximum Transmission Unit (MTU) for all clients connected to the server.
  *
@@ -132,7 +127,7 @@ struct turbo_kcp_client_s {
  * @param mtu The MTU value in bytes.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_server_set_mtu(turbo_kcp_server_t* server, int mtu);
+int turbo_kcp_server_set_mtu(turbo_kcp_server_t *server, int mtu);
 
 /* Client lifecycle */
 /**
@@ -142,7 +137,7 @@ struct turbo_kcp_client_s {
  * @param loop The libuv event loop to associate with the client.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_client_init(turbo_kcp_client_t* client, uv_loop_t* loop);
+int turbo_kcp_client_init(turbo_kcp_client_t *client, uv_loop_t *loop);
 /**
  * @brief Connects the KCP client to a specified remote host and port.
  *
@@ -153,16 +148,14 @@ struct turbo_kcp_client_s {
  * @param recv_cb The callback function to be invoked when data is received from the server.
  * @return 0 on success (connection initiated), or a non-zero error code on failure.
  */
-  int turbo_kcp_client_connect(turbo_kcp_client_t* client,
-                                   const char* host, unsigned short port,
-                                   turbo_connect_cb connect_cb,
-                                   turbo_recv_cb recv_cb);
+int turbo_kcp_client_connect(turbo_kcp_client_t *client, const char *host, unsigned short port,
+                             turbo_connect_cb connect_cb, turbo_recv_cb recv_cb);
 /**
  * @brief Closes the KCP client connection and frees its resources.
  *
  * @param client A pointer to the `turbo_kcp_client_t` instance to close.
  */
-  void turbo_kcp_client_close(turbo_kcp_client_t* client);
+void turbo_kcp_client_close(turbo_kcp_client_t *client);
 
 /* Zero-copy send operations */
 /**
@@ -172,7 +165,7 @@ struct turbo_kcp_client_s {
  * @param min_size The minimum required size for the buffer.
  * @return A pointer to an `mem_buffer_t` suitable for sending, or NULL on failure.
  */
-  mem_buffer_t* turbo_kcp_get_send_buffer(turbo_kcp_server_t* server, size_t min_size);
+mem_buffer_t *turbo_kcp_get_send_buffer(turbo_kcp_server_t *server, size_t min_size);
 /**
  * @brief Sends data from a zero-copy arena buffer to a KCP client.
  *
@@ -181,8 +174,7 @@ struct turbo_kcp_client_s {
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_send_buffer(turbo_kcp_client_t* client,
-                                 mem_buffer_t* buffer, size_t length);
+int turbo_kcp_send_buffer(turbo_kcp_client_t *client, mem_buffer_t *buffer, size_t length);
 
 /* Fallback copy-based send operations */
 /**
@@ -193,7 +185,7 @@ struct turbo_kcp_client_s {
  * @param length The length of the data to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_send(turbo_kcp_client_t* client, const char* data, size_t length);
+int turbo_kcp_send(turbo_kcp_client_t *client, const char *data, size_t length);
 
 /* Client send operations */
 /**
@@ -204,7 +196,7 @@ struct turbo_kcp_client_s {
  * @param length The length of the data to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_client_send(turbo_kcp_client_t* client, const char* data, size_t length);
+int turbo_kcp_client_send(turbo_kcp_client_t *client, const char *data, size_t length);
 /**
  * @brief Sends data from a zero-copy arena buffer to a KCP client.
  *
@@ -213,10 +205,7 @@ struct turbo_kcp_client_s {
  * @param length The actual length of the data within the buffer to send.
  * @return 0 on success, or a non-zero error code on failure.
  */
-  int turbo_kcp_client_send_buffer(turbo_kcp_client_t* client,
-                                        mem_buffer_t* buffer, size_t length);
-
-
+int turbo_kcp_client_send_buffer(turbo_kcp_client_t *client, mem_buffer_t *buffer, size_t length);
 
 /* Memory management */
 /**
@@ -224,7 +213,7 @@ struct turbo_kcp_client_s {
  *
  * @param server A pointer to the `turbo_kcp_server_t` instance.
  */
-  void turbo_kcp_trim_memory(turbo_kcp_server_t* server);
+void turbo_kcp_trim_memory(turbo_kcp_server_t *server);
 /**
  * @brief Gets the current memory usage of the KCP server's internal memory pools.
  *
@@ -237,7 +226,7 @@ struct turbo_kcp_client_s {
  * @brief Cleans up global KCP memory pools.
  *        This should be called once when the application is shutting down.
  */
-  void turbo_kcp_cleanup_pools(void);
+void turbo_kcp_cleanup_pools(void);
 
 /* Convenience macros for zero-copy workflow */
 
@@ -249,28 +238,30 @@ struct turbo_kcp_client_s {
  * @param iovcnt Number of elements in the iov array.
  * @return 0 on success, error code on failure.
  */
-  int turbo_kcp_client_sendv(turbo_kcp_client_t* client, const turbo_iovec_t* iov, size_t iovcnt);
+int turbo_kcp_client_sendv(turbo_kcp_client_t *client, const turbo_iovec_t *iov, size_t iovcnt);
 
 /* Get buffer, write data, send buffer */
-#define TURBO_KCP_ZERO_COPY_SEND(client, data_size, write_code) do { \
-    mem_buffer_t* _buf = turbo_kcp_get_send_buffer((client)->server, data_size); \
-    if (_buf) { \
-        char* _ptr = _buf->data; \
-        write_code; \
-        mem_set_used(_buf, data_size); \
-        turbo_kcp_send_buffer(client, _buf, data_size); \
-        mem_unref(_buf); \
-    } \
-} while(0)
+#define TURBO_KCP_ZERO_COPY_SEND(client, data_size, write_code)                                    \
+  do {                                                                                             \
+    mem_buffer_t *_buf = turbo_kcp_get_send_buffer((client)->server, data_size);                   \
+    if (_buf) {                                                                                    \
+      char *_ptr = _buf->data;                                                                     \
+      write_code;                                                                                  \
+      mem_set_used(_buf, data_size);                                                               \
+      turbo_kcp_send_buffer(client, _buf, data_size);                                              \
+      mem_unref(_buf);                                                                             \
+    }                                                                                              \
+  } while (0)
 
 /* Zero-copy receive pattern */
-#define TURBO_KCP_ZERO_COPY_PROCESS(slice, process_code) do { \
-    if ((slice) && (slice)->data && (slice)->length > 0) { \
-        const char* _data = (slice)->data; \
-        size_t _len = (slice)->length; \
-        process_code; \
-    } \
-} while(0)
+#define TURBO_KCP_ZERO_COPY_PROCESS(slice, process_code)                                           \
+  do {                                                                                             \
+    if ((slice) && (slice)->data && (slice)->length > 0) {                                         \
+      const char *_data = (slice)->data;                                                           \
+      size_t _len = (slice)->length;                                                               \
+      process_code;                                                                                \
+    }                                                                                              \
+  } while (0)
 
 #ifdef __cplusplus
 }

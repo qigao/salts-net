@@ -27,7 +27,7 @@ typedef struct {
   disruptor_t *disruptor;
   disruptor_consumer_t shared_consumer;
   uint64_t next_read_sequence;
-  turbo_atomic_uint32_t pop_lock;
+  t_atomic_uint32_t pop_lock;
 } bucket_priority_bucket_mpmc_t;
 
 typedef struct {

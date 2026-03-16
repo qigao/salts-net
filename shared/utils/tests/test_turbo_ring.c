@@ -17,7 +17,7 @@ spec("Turbo Ring (LFBB) Tests") {
     it("should initialize correctly") {
         check_ptr_eq(ring.data, buffer_data);
         check_size_eq(ring.size, BUFFER_SIZE);
-        // Using atomic_load_explicit to be safe, although ring matches struct members
+        // Using t_atomic_load_explicit to be safe, although ring matches struct members
         check_size_eq(ring.r, 0);
         check_size_eq(ring.w, 0);
         check_size_eq(ring.i, 0);

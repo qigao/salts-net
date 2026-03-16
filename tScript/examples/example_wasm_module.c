@@ -27,12 +27,12 @@ static int write_fib32_file(const char *path) {
 
 int main(void) {
   const char *wasm_file = "example_fib32.wasm";
-  turbo_script_ctx_t *ctx = turbo_script_init_bare();
+  turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
   const char *script;
   int rc;
 
   if (!ctx) {
-    fprintf(stderr, "turbo_script_init_bare failed\n");
+    fprintf(stderr, "turbo_script_init failed\n");
     return 1;
   }
 

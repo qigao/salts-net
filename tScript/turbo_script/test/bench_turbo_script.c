@@ -10,19 +10,19 @@ spec("TurboScript Benchmark") {
     bench("Loops and Math") {
       
       benchmark("1000 iters loop", 1000) {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         turbo_script_run(ctx, "sum = 0; for (i = 0; i < 1000; i += 1) { sum += i; }");
         turbo_script_free(ctx);
       }
 
       benchmark("10000 iters loop", 100) {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         turbo_script_run(ctx, "sum = 0; for (i = 0; i < 10000; i += 1) { sum += i; }");
         turbo_script_free(ctx);
       }
 
       benchmark("complex math 1000", 1000) {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         const char *script = "a = 10.5; b = 20.3; for(i=0; i<1000; i+=1) { c = (a * b) + (a / b) - (a + b); }";
         turbo_script_run(ctx, script);
         turbo_script_free(ctx);
@@ -30,7 +30,7 @@ spec("TurboScript Benchmark") {
     }
     
     bench("Re-using context (Eval only)") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       
       benchmark("loop 1000 (re-use ctx)", 1000) {
         turbo_script_run(ctx, "sum = 0; for (i = 0; i < 1000; i += 1) { sum += i; }");
@@ -40,7 +40,7 @@ spec("TurboScript Benchmark") {
     }
     
     bench("Compile vs Run") {
-      turbo_script_ctx_t *ctx = turbo_script_init();
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       const char *script = "sum = 0; for (i = 0; i < 1000; i += 1) { sum += i; }";
       turbo_script_compiled_t *compiled = turbo_script_compile(ctx, script);
 
@@ -57,7 +57,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Function Overhead") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         turbo_script_run(ctx, "func add(a, b) { return a + b; }");
         
         benchmark("inline add 1000", 1000) {
@@ -74,7 +74,7 @@ spec("TurboScript Benchmark") {
   describe("Native JIT Comparison") {
 
     bench("Small Loop (1,000 iterations)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         const char *script_1k = "sum = 0; for (i = 0; i < 1000; i += 1) { sum += i; }";
         turbo_script_compile_mir(ctx, script_1k);
         benchmark("Interpreter", 1000) {
@@ -87,7 +87,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Large Loop (100,000 iterations)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script_100k = "sum = 0; for (i = 0; i < 100000; i += 1) { sum += i; }";
@@ -105,7 +105,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Arithmetic Intensity (FMA-heavy)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -128,7 +128,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Nested Loops (100 x 100)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -152,7 +152,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Branchy Code (if/else chain)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -179,7 +179,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Compound Assignment Ops") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -202,7 +202,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Function Calls in Loop") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 100000000;
         turbo_script_run(ctx, "func square(x) { return x * x; }");
@@ -231,7 +231,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Comparison-Heavy (min/max search)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -255,7 +255,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Switch in Loop") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -283,7 +283,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Power & Modulo (math-heavy)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -305,7 +305,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Logical Operators (short-circuit)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         const char *script =
@@ -329,7 +329,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Vector Sum (10,000 elements)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         /* Create a 10K element vector */
@@ -357,7 +357,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Dot Product (1,000 elements)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         double *a_data = (double *)malloc(1000 * sizeof(double));
@@ -386,7 +386,7 @@ spec("TurboScript Benchmark") {
     }
 
     bench("Map Field Access (pre-bound, 10K reads)") {
-        turbo_script_ctx_t *ctx = turbo_script_init();
+        turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
         ctx->env.max_loop_iterations = 1000000;
         ctx->env.max_nodes = 10000000;
         /* Create a map before JIT compile so keys get resolved at compile time */
@@ -413,15 +413,15 @@ spec("TurboScript Benchmark") {
   describe("Lifecycle & Engine Overheads") {
       bench("System Costs") {
           benchmark("init_bare + free", 100) {
-              turbo_script_ctx_t *c = turbo_script_init_bare();
+              turbo_script_ctx_t *c = turbo_script_init(TURBO_SCRIPT_INIT_BARE);
               turbo_script_free(c);
           }
           benchmark("init_full + free", 100) {
-              turbo_script_ctx_t *c = turbo_script_init();
+              turbo_script_ctx_t *c = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
               turbo_script_free(c);
           }
 
-          turbo_script_ctx_t *ctx = turbo_script_init();
+          turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
           const char *s = "x = 1; y = 2; z = x + y;";
           benchmark("compile/parse only", 1000) {
               turbo_script_compiled_t *comp = turbo_script_compile(ctx, s);

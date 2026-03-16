@@ -18,6 +18,6 @@ add_subdirectory(internal/cmd_parser)
 add_subdirectory(internal/toon)
 add_subdirectory(internal/toml)
 add_subdirectory(internal/datetime_parser)
-
+add_subdirectory(internal/mime_parser)
 add_subdirectory(turbo_parser)
  

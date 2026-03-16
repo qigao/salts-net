@@ -250,8 +250,13 @@ static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
     client->on_connect = server->on_connect;
     client->on_close = server->on_close;
     
-    /* Initialize client arena */
-    client->arena = (mem_pool_t*)coro_get_memory_pool();
+    /* Initialize client arena with pre-allocated size */
+    client->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+    if (!client->arena || mem_init(client->arena, MEM_ARENA_CLIENT_INIT_SIZE) != 0) {
+        if (client->arena) free(client->arena);
+        free(client);
+        return;
+    }
     /* Initialize TCP handle */
     if (uv_tcp_init(server->loop, &client->handle) != 0) {
         
@@ -268,8 +273,8 @@ static void on_tcp_new_connection(uv_stream_t* server_stream, int status) {
     }
     
     /* Setup receive buffers */
-    client->recv_buffer1 = mem_get_buffer(client->arena, 8192);
-    client->recv_buffer2 = mem_get_buffer(client->arena, 8192);
+    client->recv_buffer1 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
+    client->recv_buffer2 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
     
     if (!client->recv_buffer1) {
         uv_close((uv_handle_t*)&client->handle, on_tcp_handle_closed);
@@ -398,12 +403,18 @@ turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop) {
     
     client->is_client_mode = 1;
     
-    /* Initialize client arena */
-    client->arena = (mem_pool_t*)coro_get_memory_pool();
+    /* Initialize client arena with pre-allocated size */
+    client->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+    if (!client->arena || mem_init(client->arena, MEM_ARENA_CLIENT_INIT_SIZE) != 0) {
+        if (client->arena) free(client->arena);
+        free(client);
+        return NULL;
+    }
     
     /* Initialize TCP handle */
     if (uv_tcp_init(loop, &client->handle) != 0) {
-        
+        mem_destroy(client->arena);
+        free(client->arena);
         free(client);
         return NULL;
     }
@@ -411,8 +422,8 @@ turbo_tcp_client_t* turbo_tcp_client_create(uv_loop_t* loop) {
     client->handle.data = client;
     
     /* Setup receive buffers */
-    client->recv_buffer1 = mem_get_buffer(client->arena, 8192);
-    client->recv_buffer2 = mem_get_buffer(client->arena, 8192);
+    client->recv_buffer1 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
+    client->recv_buffer2 = mem_get_buffer(client->arena, MEM_RECV_BUFFER_SIZE);
     
     /* Setup write IOV array */
     client->write_iov_capacity = 64;

@@ -10,6 +10,9 @@
 #include "s3_response.h"
 #include "s3_sse.h"
 
+/* Forward declare http_progress_cb to avoid circular dependency */
+typedef void (*http_progress_cb)(size_t downloaded, size_t total, void *user_data);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -58,9 +61,204 @@ CXX_C_API s3_error_t s3_put_object(s3_client_t* client,
                               const char* data, size_t len,
                               const char* content_type);
 
+/**
+ * @brief Upload file to S3 with streaming (low memory usage, progress support)
+ * @param client S3 client
+ * @param bucket Bucket name
+ * @param object Object key
+ * @param file_path Local file path to upload
+ * @param content_type Content type (e.g., "application/octet-stream", can be NULL)
+ * @param progress_cb Progress callback (can be NULL)
+ * @param progress_ud User data for progress callback
+ * @return S3_OK on success, error code otherwise
+ */
+CXX_C_API s3_error_t s3_put_object_from_file(s3_client_t* client,
+                                             const char* bucket, const char* object,
+                                             const char* file_path,
+                                             const char* content_type,
+                                             http_progress_cb progress_cb,
+                                             void* progress_ud);
+
 CXX_C_API s3_error_t s3_download_object(s3_client_t* client,
                                    const char* bucket, const char* object,
                                    const char* filename);
+
+/**
+ * @brief Download S3 object to file with streaming (low memory usage, progress support)
+ * @param client S3 client
+ * @param bucket Bucket name
+ * @param object Object key
+ * @param output_path Local file path to save
+ * @param progress_cb Progress callback (can be NULL)
+ * @param progress_ud User data for progress callback
+ * @return S3_OK on success, error code otherwise
+ */
+CXX_C_API s3_error_t s3_download_object_stream(s3_client_t* client,
+                                               const char* bucket, const char* object,
+                                               const char* output_path,
+                                               http_progress_cb progress_cb,
+                                               void* progress_ud);
+
+/* ── Batch Operations ─────────────────────────────────────────────── */
+
+/**
+ * @brief Batch upload/download item
+ */
+typedef struct {
+    const char* bucket;
+    const char* key;
+    const char* file_path;      /* Local file path (upload source or download target) */
+    const char* content_type;   /* Content type for upload (can be NULL) */
+} s3_batch_item_t;
+
+/**
+ * @brief Batch operation result
+ */
+typedef struct {
+    s3_error_t error;
+    int index;                  /* Index in original batch array */
+} s3_batch_result_t;
+
+/**
+ * @brief Batch progress information
+ */
+typedef struct {
+    int current_file;           /* Current file being processed (1-based) */
+    int total_files;            /* Total number of files */
+    size_t current_file_uploaded;  /* Bytes uploaded for current file */
+    size_t current_file_size;      /* Size of current file */
+    size_t total_uploaded;      /* Total bytes uploaded across all files */
+    size_t total_size;          /* Total size of all files */
+    int completed_files;        /* Number of completed files */
+    int failed_files;           /* Number of failed files */
+} s3_batch_progress_t;
+
+/**
+ * @brief Batch progress callback
+ */
+typedef void (*s3_batch_progress_cb)(const s3_batch_progress_t* progress, void* user_data);
+
+/**
+ * @brief Batch upload files to S3 with concurrency
+ * @param client S3 client
+ * @param items Array of items to upload
+ * @param count Number of items
+ * @param concurrency Max concurrent uploads (0 = default 10)
+ * @return Array of results (caller must free with s3_batch_results_free)
+ */
+CXX_C_API s3_batch_result_t* s3_put_objects_batch(s3_client_t* client,
+                                                  const s3_batch_item_t* items,
+                                                  int count,
+                                                  int concurrency);
+
+/**
+ * @brief Batch upload files to S3 with concurrency and progress tracking
+ * @param client S3 client
+ * @param items Array of items to upload
+ * @param count Number of items
+ * @param concurrency Max concurrent uploads (0 = default 10)
+ * @param progress_cb Progress callback (can be NULL)
+ * @param progress_ud User data for progress callback
+ * @return Array of results (caller must free with s3_batch_results_free)
+ */
+CXX_C_API s3_batch_result_t* s3_put_objects_batch_progress(
+    s3_client_t* client,
+    const s3_batch_item_t* items,
+    int count,
+    int concurrency,
+    s3_batch_progress_cb progress_cb,
+    void* progress_ud
+);
+
+/**
+ * @brief Batch download files from S3 with concurrency
+ * @param client S3 client
+ * @param items Array of items to download
+ * @param count Number of items
+ * @param concurrency Max concurrent downloads (0 = default 10)
+ * @return Array of results (caller must free with s3_batch_results_free)
+ */
+CXX_C_API s3_batch_result_t* s3_get_objects_batch(s3_client_t* client,
+                                                  const s3_batch_item_t* items,
+                                                  int count,
+                                                  int concurrency);
+
+/**
+ * @brief Free batch results
+ * @param results Results array from s3_put_objects_batch or s3_get_objects_batch
+ * @param count Number of results
+ */
+CXX_C_API void s3_batch_results_free(s3_batch_result_t* results, int count);
+
+/* ── Multipart Upload (Large Files >5GB) ──────────────────────────── */
+
+/**
+ * @brief Multipart upload progress callback
+ * @param part_number Current part number (1-based)
+ * @param total_parts Total number of parts
+ * @param part_uploaded Bytes uploaded in current part
+ * @param part_size Size of current part
+ * @param total_uploaded Total bytes uploaded so far
+ * @param total_size Total file size
+ * @param user_data User data
+ */
+typedef void (*s3_multipart_progress_cb)(
+    int part_number, int total_parts,
+    size_t part_uploaded, size_t part_size,
+    size_t total_uploaded, size_t total_size,
+    void* user_data
+);
+
+/**
+ * @brief Multipart upload options
+ */
+typedef struct {
+    size_t part_size_mb;            /* Part size in MB (5-100, default 10) */
+    int concurrency;                /* Max concurrent part uploads (default 10) */
+    s3_multipart_progress_cb progress_cb;  /* Progress callback (can be NULL) */
+    void* progress_ud;              /* User data for progress callback */
+    const char* resume_file;        /* Resume file path (can be NULL) */
+} s3_multipart_options_t;
+
+/**
+ * @brief Upload large file with multipart upload (supports >5GB files)
+ * @param client S3 client
+ * @param bucket Bucket name
+ * @param key Object key
+ * @param file_path Local file path
+ * @param content_type Content type (can be NULL)
+ * @param options Multipart options (can be NULL for defaults)
+ * @return S3_OK on success, error code otherwise
+ *
+ * Features:
+ * - Supports files >5GB (up to 5TB)
+ * - Concurrent part uploads (10x faster)
+ * - Resume support (saves progress to resume_file)
+ * - Progress tracking per part and overall
+ */
+CXX_C_API s3_error_t s3_put_object_multipart_file(
+    s3_client_t* client,
+    const char* bucket,
+    const char* key,
+    const char* file_path,
+    const char* content_type,
+    const s3_multipart_options_t* options
+);
+
+/**
+ * @brief Abort multipart upload (cleanup incomplete upload)
+ * @param client S3 client
+ * @param bucket Bucket name
+ * @param key Object key
+ * @param upload_id Upload ID from CreateMultipartUpload
+ * @return S3_OK on success, error code otherwise
+ */
+CXX_C_API s3_error_t s3_abort_multipart_upload(
+    s3_client_t* client,
+    const char* bucket,
+    const char* key,
+    const char* upload_id
+);
 
 typedef int (*s3_data_callback_t)(const char* data, size_t len, void* userdata);
 

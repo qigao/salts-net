@@ -277,16 +277,17 @@ const char *turbo_strerror(int err) { return uv_strerror(err); }
 static void post_async_cb(uv_async_t *handle) {
   coro_context_t *ctx = (coro_context_t *)handle->data;
   
-  int tail = t_atomic_load(&ctx->post_tail);
-  int head = t_atomic_load(&ctx->post_head);
-  
   /* Drain all pending slots */
-  while (tail != head) {
-    coro_post_slot_t *slot = &ctx->post_ring[tail];
-    slot->fn(slot->arg);
+  while (1) {
+    int tail = atomic_load_explicit(&ctx->post_tail, memory_order_relaxed);
+    int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
     
-    tail = (tail + 1) & (ctx->post_ring_size - 1);
-    t_atomic_store(&ctx->post_tail, tail);
+    if (tail == head) break;
+    
+    coro_post_slot_t slot = ctx->post_ring[tail];
+    atomic_store_explicit(&ctx->post_tail, (tail + 1) & (ctx->post_ring_size - 1), memory_order_release);
+    
+    slot.fn(slot.arg1, slot.arg2);
   }
 }
 
@@ -304,8 +305,9 @@ static int ensure_post_queue(coro_context_t *ctx) {
   ctx->post_ring = (coro_post_slot_t *)calloc(ctx->post_ring_size, sizeof(coro_post_slot_t));
   if (!ctx->post_ring) return TURBO_ENOMEM;
   
-  t_atomic_store(&ctx->post_head, 0);
-  t_atomic_store(&ctx->post_tail, 0);
+  atomic_store_explicit(&ctx->post_head, 0, memory_order_relaxed);
+  atomic_store_explicit(&ctx->post_tail, 0, memory_order_relaxed);
+  atomic_store_explicit(&ctx->post_lock, 0, memory_order_relaxed);
   
   int r = uv_async_init(ctx->loop, &ctx->post_async, post_async_cb);
   if (r != 0) {
@@ -330,27 +332,48 @@ static int ensure_post_queue(coro_context_t *ctx) {
  * @param arg Opaque argument for callback
  * @return 0 on success, TURBO_EINVAL if invalid params, TURBO_ENOMEM if ring full
  */
-int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg) {
+int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2) {
   if (!ctx || !fn) return TURBO_EINVAL;
 
   if (!ctx->post_initialized) return TURBO_EINVAL;
 
-  /* Lock-free enqueue: try once, fail fast if full */
-  int head = t_atomic_load(&ctx->post_head);
-  int tail = t_atomic_load(&ctx->post_tail);
+  /* Good taste: Check capacity BEFORE acquiring lock (optimistic fast path).
+   * This eliminates contention when the ring buffer is full - threads fail fast
+   * instead of spinning on the lock only to discover the buffer is full. */
+  int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
+  int tail = atomic_load_explicit(&ctx->post_tail, memory_order_acquire);
   int next_head = (head + 1) & (ctx->post_ring_size - 1);
-  
-  /* Ring full? Return error for caller to handle */
+
   if (next_head == tail) {
-    return TURBO_ENOMEM;
+      /* Ring buffer full - fail fast without spinning */
+      return TURBO_ENOMEM;
   }
-  
-  /* Write to slot (safe: only producer writes to head index) */
+
+  /* Lock the producer side */
+  while (atomic_exchange_explicit(&ctx->post_lock, 1, memory_order_acquire)) {
+      #ifdef _WIN32
+      YieldProcessor();
+      #else
+      __asm__ volatile("pause" ::: "memory");
+      #endif
+  }
+
+  /* Re-check after acquiring lock (TOCTOU protection) */
+  head = atomic_load_explicit(&ctx->post_head, memory_order_relaxed);
+  tail = atomic_load_explicit(&ctx->post_tail, memory_order_acquire);
+  next_head = (head + 1) & (ctx->post_ring_size - 1);
+
+  if (next_head == tail) {
+      atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
+      return TURBO_ENOMEM;
+  }
+
   ctx->post_ring[head].fn = fn;
-  ctx->post_ring[head].arg = arg;
-  
-  /* Publish: advance head atomically */
-  t_atomic_store(&ctx->post_head, next_head);
+  ctx->post_ring[head].arg1 = arg1;
+  ctx->post_ring[head].arg2 = arg2;
+
+  atomic_store_explicit(&ctx->post_head, next_head, memory_order_release);
+  atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
 
   return uv_async_send(&ctx->post_async);
 }
@@ -672,23 +695,3 @@ void coro_sleep(coro_context_t *ctx, uint64_t ms) {
   coro_yield();
 }
 
-/* ── Memory Pool ────────────────────────────────────────────── */
-
-#include "turbo_buffer.h"
-#include "turbo_atomic.h"
-
-/**
- * @brief Global fallback memory pool for legacy code.
- * 
- * DEPRECATED: This global pool should NOT be used by new code.
- * All CoroNet components now require a coro_context_t with its own arena.
- * This function is kept only for backward compatibility with external code
- * that may still reference it, but will return NULL to force proper migration.
- * 
- * @return NULL (deprecated, use ctx->arena instead)
- */
-void* coro_get_memory_pool(void) {
-    /* Return NULL to force callers to use context-specific arenas.
-       Good taste: fail fast rather than hide problems with fallbacks. */
-    return NULL;
-}

@@ -2,7 +2,15 @@
 #define TURBO_MEM_H
 
 #include "platform.h"
-#include "turbo_atomic.h"
+#ifdef __cplusplus
+  #include <atomic>
+  #define ATOMIC_SIZE_T std::atomic<size_t>
+  #define ATOMIC_UINT32_T std::atomic<uint32_t>
+#else
+  #include <stdatomic.h>
+  #define ATOMIC_SIZE_T _Atomic size_t
+  #define ATOMIC_UINT32_T _Atomic uint32_t
+#endif
 #include "turbo_thread.h"
 #include <assert.h>
 #include <stddef.h>
@@ -39,10 +47,10 @@ typedef struct mem_slice_s mem_slice_t;
 
 struct mem_pool_s {
   void *slabs[9];
-  t_atomic_size_t total_allocated;
-  t_atomic_size_t total_used;
+  ATOMIC_SIZE_T total_allocated;
+  ATOMIC_SIZE_T total_used;
   mem_buffer_t *recycle_head;
-  t_atomic_size_t recycle_count;
+  ATOMIC_SIZE_T recycle_count;
   size_t recycle_limit;
   turbo_mutex_t lock;
 };
@@ -51,7 +59,7 @@ struct mem_buffer_s {
   char *data;
   size_t capacity;
   size_t used;
-  t_atomic_uint32_t ref_count;
+  ATOMIC_UINT32_T ref_count;
   mem_pool_t *pool;
   struct mem_buffer_s *next;
   int is_external;

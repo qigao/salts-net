@@ -1,7 +1,7 @@
 #include "platform.h"
 #include "turbo_thread.h"
 #include "tinytest.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 

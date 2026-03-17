@@ -16,8 +16,14 @@ spec("coro_tproxy_advanced") {
       
       coro_tproxy_t *proxy = coro_tproxy_start(ctx, &config);
       check(proxy != NULL);
-      
+
       coro_tproxy_destroy(proxy);
+
+      // Pump the loop to let handler coroutines finish cleanup
+      for (int i = 0; i < 50; i++) {
+          coro_context_run(ctx, TURBO_RUN_NOWAIT);
+      }
+
       coro_context_destroy(ctx);
     }
 

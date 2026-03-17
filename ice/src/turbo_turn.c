@@ -743,7 +743,7 @@ int turn_client_recv(turbo_turn_client_t *tc,
     size_t data_len = 0;
     int rc = coro_socket_recv(tc->client, &data, &data_len);
     if (rc != 0) {
-        if (data) free(data);
+        if (data) coro_socket_free_recv(data);
         return rc;
     }
 

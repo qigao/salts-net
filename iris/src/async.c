@@ -49,7 +49,7 @@ static void task_worker(void *arg) {
 
     if (task->awaiting_coro) {
         coro_post(task->coro_ctx, (coro_post_fn)coro_resume,
-                        task->awaiting_coro);
+                        task->awaiting_coro, NULL);
     } else if (task->done_fn) {
         task->done_fn(task->context, task->result, task->error);
         if (task->error) free(task->error);

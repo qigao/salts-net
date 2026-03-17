@@ -125,15 +125,15 @@ static void server_handler(coro_socket_t *client, void *arg) {
       /* Process request via app-aware router */
       /* iris_app_execute returns 1 to close, 0 to keep alive */
       int should_close = iris_app_execute(app, client, data, len);
-      
-      free(data);
+
+      coro_socket_free_recv(data);
       data = NULL;
 
       if (should_close) {
         break;
       }
     } else {
-      if (data) free(data);
+      if (data) coro_socket_free_recv(data);
       break;
     }
   }

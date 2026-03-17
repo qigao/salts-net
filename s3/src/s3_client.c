@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <turbo_str.h>
 #include <turbo_fs.h>
 #include <fmt.h>
@@ -1753,7 +1754,7 @@ typedef struct {
     size_t file_offset;
     s3_upload_part_response_t result;
     const s3_multipart_options_t* options;
-    t_atomic_uint64_t* total_uploaded;  /* Shared counter */
+    _Atomic uint64_t* total_uploaded;  /* Shared counter */
     size_t total_size;
     int total_parts;
 } s3_part_upload_task_t;
@@ -1795,10 +1796,10 @@ static void s3_multipart_part_coro(coro_t* co, void* arg) {
 
     /* Update progress */
     if (s3_is_ok(task->result.error)) {
-        t_atomic_fetch_add_uint64(task->total_uploaded, actual_size);
+        atomic_fetch_add(task->total_uploaded, actual_size);
 
         if (task->options && task->options->progress_cb) {
-            size_t uploaded = (size_t)t_atomic_load_uint64(task->total_uploaded);
+            size_t uploaded = (size_t)atomic_load(task->total_uploaded);
             task->options->progress_cb(
                 task->part_number, task->total_parts,
                 actual_size, actual_size,
@@ -1912,8 +1913,7 @@ s3_error_t s3_put_object_multipart_file(
     }
 
     /* Shared progress counter */
-    t_atomic_uint64_t total_uploaded;
-    t_atomic_store_uint64(&total_uploaded, 0);
+    _Atomic uint64_t total_uploaded = 0;
 
     /* Initialize tasks */
     for (int i = 0; i < total_parts; i++) {

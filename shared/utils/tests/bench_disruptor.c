@@ -2,7 +2,7 @@
 #include "tinytest.h"
 #include "platform.h"
 #include "turbo_thread.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -17,7 +17,7 @@ typedef struct {
     size_t count;
     size_t batch_size;
     bool use_memcpy;
-    t_atomic_int_t *start;
+    atomic_int *start;
 } producer_ctx_t;
 
 typedef struct {
@@ -26,7 +26,7 @@ typedef struct {
     size_t count;
     size_t batch_size;
     bool use_memcpy;
-    t_atomic_int_t *start;
+    atomic_int *start;
 } consumer_ctx_t;
 
 static void producer_thread(void *arg) {
@@ -35,7 +35,7 @@ static void producer_thread(void *arg) {
     memset(local_buf, 0xAA, sizeof(local_buf));
     size_t entry_size = disruptor_entry_size(ctx->disruptor);
 
-    while (t_atomic_load(ctx->start) == 0) {
+    while (atomic_load(ctx->start) == 0) {
         turbo_sleep_ms(1);
     }
 
@@ -65,7 +65,7 @@ static void consumer_thread(void *arg) {
     uint8_t local_buf[4096];
     size_t entry_size = disruptor_entry_size(ctx->disruptor);
 
-    while (t_atomic_load(ctx->start) == 0) {
+    while (atomic_load(ctx->start) == 0) {
         turbo_sleep_ms(1);
     }
 
@@ -120,8 +120,8 @@ static void run_bench(__bdd_config_type__ *__bdd_config__, const char *name, siz
     };
     disruptor_t *disruptor = disruptor_create(&d_cfg);
     
-    t_atomic_int_t start_flag;
-    t_atomic_store(&start_flag, 0);
+    atomic_int start_flag;
+    atomic_store(&start_flag, 0);
 
     producer_ctx_t p_ctx[8];
     consumer_ctx_t c_ctx[8];
@@ -151,7 +151,7 @@ static void run_bench(__bdd_config_type__ *__bdd_config__, const char *name, siz
 
     turbo_sleep_ms(50);
     uint64_t start_time = turbo_hrtime();
-    t_atomic_store(&start_flag, 1);
+    atomic_store(&start_flag, 1);
 
     for (size_t i = 0; i < num_prods; ++i) {
         turbo_thread_join(&prods[i]);

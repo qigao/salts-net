@@ -3,7 +3,13 @@
 #define RING_BUFFER_SPSC_H
 
 #include "platform.h"
-#include "turbo_atomic.h"
+#ifdef __cplusplus
+  #include <atomic>
+  #define ATOMIC_SIZE_T std::atomic<size_t>
+#else
+  #include <stdatomic.h>
+  #define ATOMIC_SIZE_T _Atomic size_t
+#endif
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -42,8 +48,8 @@ typedef struct {
   uint8_t *data;     /**< Pointer to the data array */
 
   /* Cache-line aligned to prevent false sharing */
-  alignas(64) atomic_size_t write_pos;  /**< Write position (producer only) */
-  alignas(64) atomic_size_t read_pos;   /**< Read position (consumer only) */
+  alignas(64) ATOMIC_SIZE_T write_pos;  /**< Write position (producer only) */
+  alignas(64) ATOMIC_SIZE_T read_pos;   /**< Read position (consumer only) */
 } ring_spsc_t;
 
 /******************** FUNCTION PROTOTYPES *********************/

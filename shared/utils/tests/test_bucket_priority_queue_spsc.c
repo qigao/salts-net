@@ -1,7 +1,7 @@
 #include "bucket_priority_queue_spsc.h"
 #include "tinytest.h"
 #include "turbo_thread.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 
 #include <stdbool.h>
 
@@ -9,15 +9,15 @@
 
 typedef struct {
   bucket_priority_queue_spsc_t *queue;
-  t_atomic_bool_t start;
-  t_atomic_bool_t done;
+  _Atomic int start;
+  _Atomic int done;
   size_t items_to_process;
 } thread_context_t;
 
 static void producer_thread(void *arg) {
   thread_context_t *ctx = (thread_context_t *)arg;
 
-  while (!t_atomic_load_bool(&ctx->start)) {
+  while (!(atomic_load(&ctx->start) != 0)) {
     // Wait for start signal
   }
 
@@ -30,14 +30,14 @@ static void producer_thread(void *arg) {
     }
   }
 
-  t_atomic_store_bool(&ctx->done, true);
+  atomic_store(&ctx->done, (true) ? 1 : 0);
 }
 
 static void consumer_thread(void *arg) {
   thread_context_t *ctx = (thread_context_t *)arg;
   size_t consumed = 0;
 
-  while (!t_atomic_load_bool(&ctx->start)) {
+  while (!(atomic_load(&ctx->start) != 0)) {
     // Wait for start signal
   }
 
@@ -48,7 +48,7 @@ static void consumer_thread(void *arg) {
     }
   }
 
-  t_atomic_store_bool(&ctx->done, true);
+  atomic_store(&ctx->done, (true) ? 1 : 0);
 }
 
 spec("Bucket Priority Queue SPSC") {
@@ -211,15 +211,15 @@ spec("Bucket Priority Queue SPSC") {
     check(turbo_thread_create(&consumer, consumer_thread, &consumer_ctx) == 0);
 
     // Start both threads
-    t_atomic_store_bool(&producer_ctx.start, true);
-    t_atomic_store_bool(&consumer_ctx.start, true);
+    atomic_store(&producer_ctx.start, (true) ? 1 : 0);
+    atomic_store(&consumer_ctx.start, (true) ? 1 : 0);
 
     // Wait for completion
     turbo_thread_join(&producer);
     turbo_thread_join(&consumer);
 
-    check(t_atomic_load_bool(&producer_ctx.done));
-    check(t_atomic_load_bool(&consumer_ctx.done));
+    check((atomic_load(&producer_ctx.done) != 0));
+    check((atomic_load(&consumer_ctx.done) != 0));
     check(bucket_priority_queue_spsc_empty(&queue));
 
     bucket_priority_queue_spsc_destroy(&queue);

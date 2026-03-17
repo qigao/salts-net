@@ -3,7 +3,13 @@
 
 #include "platform.h"
 #include "disruptor.h"
-#include "turbo_atomic.h"
+#ifdef __cplusplus
+  #include <atomic>
+  #define ATOMIC_UINT32_T std::atomic<uint32_t>
+#else
+  #include <stdatomic.h>
+  #define ATOMIC_UINT32_T _Atomic uint32_t
+#endif
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -27,7 +33,7 @@ typedef struct {
   disruptor_t *disruptor;
   disruptor_consumer_t shared_consumer;
   uint64_t next_read_sequence;
-  t_atomic_uint32_t pop_lock;
+  ATOMIC_UINT32_T pop_lock;
 } bucket_priority_bucket_mpmc_t;
 
 typedef struct {

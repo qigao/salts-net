@@ -42,7 +42,7 @@ static void pump_reverse_coro(coro_t *co, void *arg) {
 
         r = coro_socket_send(ctx->dst, data, len);
         if (r < 0) {
-            free(data);
+            coro_socket_free_recv(data);
             break;
         }
 
@@ -58,7 +58,7 @@ static void pump_reverse_coro(coro_t *co, void *arg) {
         }
 
 
-        free(data);
+        coro_socket_free_recv(data);
         data = NULL;
     }
 
@@ -99,7 +99,7 @@ void coro_bidi_pump(coro_socket_t *a, coro_socket_t *b,
 
         r = coro_socket_send(b, data, len);
         if (r < 0) {
-            free(data);
+            coro_socket_free_recv(data);
             break;
         }
 
@@ -114,7 +114,7 @@ void coro_bidi_pump(coro_socket_t *a, coro_socket_t *b,
             }
         }
 
-        free(data);
+        coro_socket_free_recv(data);
         data = NULL;
     }
 

@@ -36,8 +36,8 @@ bool ring_spsc_init(ring_spsc_t *inst, uint8_t *data_array, size_t size) {
   inst->mask = size - 1;
 
   /* Initialize atomic counters */
-  t_atomic_store_size_relaxed(&inst->write_pos, 0);
-  t_atomic_store_size_relaxed(&inst->read_pos, 0);
+  atomic_store_explicit(&inst->write_pos, 0, memory_order_relaxed);
+  atomic_store_explicit(&inst->read_pos, 0, memory_order_relaxed);
 
   return true;
 }
@@ -53,10 +53,10 @@ uint8_t *ring_spsc_write_acquire(ring_spsc_t *inst, size_t size_required) {
   }
 
   /* Load current write position (relaxed - only producer modifies this) */
-  const size_t w = t_atomic_load_size_relaxed(&inst->write_pos);
+  const size_t w = atomic_load_explicit(&inst->write_pos, memory_order_relaxed);
 
   /* Load read position with acquire to see consumer's updates */
-  const size_t r = t_atomic_load_size_acquire(&inst->read_pos);
+  const size_t r = atomic_load(&inst->read_pos);
 
   /* Calculate available space (reserve 1 byte to distinguish full from empty) */
   const size_t used = w - r;
@@ -90,8 +90,8 @@ void ring_spsc_write_release(ring_spsc_t *inst, size_t bytes_written) {
   /* Advance write position with release semantics
    * This makes the written data visible to the consumer
    */
-  const size_t w = t_atomic_load_size_relaxed(&inst->write_pos);
-  t_atomic_store_size_release(&inst->write_pos, w + bytes_written);
+  const size_t w = atomic_load_explicit(&inst->write_pos, memory_order_relaxed);
+  atomic_store(&inst->write_pos, w + bytes_written);
 }
 
 uint8_t *ring_spsc_read_acquire(ring_spsc_t *inst, size_t *available) {
@@ -100,10 +100,10 @@ uint8_t *ring_spsc_read_acquire(ring_spsc_t *inst, size_t *available) {
   assert(available != NULL);
 
   /* Load current read position (relaxed - only consumer modifies this) */
-  const size_t r = t_atomic_load_size_relaxed(&inst->read_pos);
+  const size_t r = atomic_load_explicit(&inst->read_pos, memory_order_relaxed);
 
   /* Load write position with acquire to see producer's updates */
-  const size_t w = t_atomic_load_size_acquire(&inst->write_pos);
+  const size_t w = atomic_load(&inst->write_pos);
 
   /* Calculate available data */
   const size_t data_available = w - r;
@@ -127,15 +127,15 @@ void ring_spsc_read_release(ring_spsc_t *inst, size_t bytes_read) {
   /* Advance read position with release semantics
    * This makes the freed space visible to the producer
    */
-  const size_t r = t_atomic_load_size_relaxed(&inst->read_pos);
-  t_atomic_store_size_release(&inst->read_pos, r + bytes_read);
+  const size_t r = atomic_load_explicit(&inst->read_pos, memory_order_relaxed);
+  atomic_store(&inst->read_pos, r + bytes_read);
 }
 
 size_t ring_spsc_write_available(const ring_spsc_t *inst) {
   assert(inst != NULL);
 
-  const size_t w = t_atomic_load_size_relaxed(&inst->write_pos);
-  const size_t r = t_atomic_load_size_acquire(&inst->read_pos);
+  const size_t w = atomic_load_explicit(&inst->write_pos, memory_order_relaxed);
+  const size_t r = atomic_load(&inst->read_pos);
 
   const size_t used = w - r;
   return inst->size - used - 1;
@@ -144,8 +144,8 @@ size_t ring_spsc_write_available(const ring_spsc_t *inst) {
 size_t ring_spsc_read_available(const ring_spsc_t *inst) {
   assert(inst != NULL);
 
-  const size_t w = t_atomic_load_size_acquire(&inst->write_pos);
-  const size_t r = t_atomic_load_size_relaxed(&inst->read_pos);
+  const size_t w = atomic_load(&inst->write_pos);
+  const size_t r = atomic_load_explicit(&inst->read_pos, memory_order_relaxed);
 
   return w - r;
 }

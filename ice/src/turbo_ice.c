@@ -43,13 +43,14 @@
 #endif
 
 /* Thread-safe random seeding using atomic CAS */
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 
-static t_atomic_int_t g_random_seeded = T_ATOMIC_INIT(0);
+static atomic_int g_random_seeded = 0;
 
 static void ensure_random_seeded(void) {
-  if (t_atomic_load(&g_random_seeded) == 0) {
-    if (t_atomic_cas(&g_random_seeded, 0, 1)) {
+  if (atomic_load_explicit(&g_random_seeded, memory_order_acquire) == 0) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&g_random_seeded, &expected, 1)) {
       srand((unsigned int)time(NULL) ^ (unsigned int)turbo_getpid());
     }
   }
@@ -1130,9 +1131,9 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
                 handle_stun_request(agent, (const uint8_t *)data, data_len, NULL, pair->local);
               }
             }
-            free(data);
+            coro_socket_free_recv(data);
           } else {
-            if (data) free(data);
+            if (data) coro_socket_free_recv(data);
           }
         }
 

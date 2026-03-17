@@ -49,21 +49,21 @@ static int handle_socks5_auth(coro_socket_t *client, coro_tproxy_t *proxy) {
 
     // Read Auth Request: 0x01 | ULEN | UNAME | PLEN | PASS
     if (coro_socket_recv(client, &data, &len) < 0 || len < 2 || data[0] != 0x01) {
-        if (data) free(data);
+        if (data) coro_socket_free_recv(data);
         return -1;
     }
 
     int ulen = (unsigned char)data[1];
-    if (len < (size_t)(2 + ulen + 1)) { free(data); return -1; }
-    
+    if (len < (size_t)(2 + ulen + 1)) { coro_socket_free_recv(data); return -1; }
+
     int plen = (unsigned char)data[2 + ulen];
-    if (len < (size_t)(2 + ulen + 1 + plen)) { free(data); return -1; }
+    if (len < (size_t)(2 + ulen + 1 + plen)) { coro_socket_free_recv(data); return -1; }
 
     char r_user[256] = {0};
     char r_pass[256] = {0};
     memcpy(r_user, &data[2], ulen);
     memcpy(r_pass, &data[2 + ulen + 1], plen);
-    free(data);
+    coro_socket_free_recv(data);
 
     // Validate
     if (strcmp(r_user, proxy->config.auth_user) == 0 && strcmp(r_pass, proxy->config.auth_pass) == 0) {
@@ -249,28 +249,28 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
 
     // Wait for the very first chunk of bytes so we can sniff the protocol (SOCKS5 vs HTTP)
     if (coro_socket_recv(client, &data, &len) < 0 || len == 0) {
-        if (data) free(data);
+        if (data) coro_socket_free_recv(data);
         return;
     }
-    
+
     char peer_ip[64] = {0};
     get_client_ip(client, peer_ip, sizeof(peer_ip));
-    
+
     // Check Blacklist
     if (proxy->config.blacklist_ips && peer_ip[0] != '\0') {
         if (is_ip_in_list(proxy->config.blacklist_ips, peer_ip)) {
             TLOG_WARN("[TProxy] Blocked {} (blacklisted)", peer_ip);
-            free(data);
+            coro_socket_free_recv(data);
             return;
         }
     }
 
     // Check Whitelist
     if (proxy->config.whitelist_ips && peer_ip[0] != '\0') {
-       if (!is_ip_in_list(proxy->config.whitelist_ips, peer_ip)) { 
+       if (!is_ip_in_list(proxy->config.whitelist_ips, peer_ip)) {
            TLOG_WARN("[TProxy] Blocked {} (not in whitelist)", peer_ip);
-           free(data); 
-           return; 
+           coro_socket_free_recv(data);
+           return;
        }
     }
 
@@ -284,20 +284,20 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
             if (!upstream || coro_socket_connect(upstream, proxy->config.backend_url) != 0) {
                 if (upstream) coro_socket_destroy(upstream);
-                free(data);
+                coro_socket_free_recv(data);
                 return;
             }
             // Send the initial datagram!
             coro_socket_send(upstream, data, len);
             TURBO_STATS_ADD("tproxy.bytes.in", len);
-            free(data);
+            coro_socket_free_recv(data);
             
             TLOG_INFO("[TProxy] Forwarding raw UDP to {}", proxy->config.backend_url);
             // Pump any subsequent data between that specific client peer and upstream.
             start_bidi_pump(proxy, client, upstream);
         } else {
             // Cannot transparently proxy UDP without a known backend or full SOCKS5 UDP relay tracking.
-        if (data) free(data);
+        if (data) coro_socket_free_recv(data);
         }
         return;
     }
@@ -307,20 +307,20 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
     // --- 1. DETECT SOCKS5 (Starts with 0x05) ---
     if (proxy->config.enable_socks5 && data[0] == 0x05) {
         int requires_auth = (proxy->config.auth_user != NULL);
-        
+
         // Respond to Greeting
         if (!requires_auth) {
             char greeting_resp[] = {0x05, 0x00}; // NO AUTH REQUIRED
-            if (coro_socket_send(client, greeting_resp, 2) < 0) { free(data); return; }
+            if (coro_socket_send(client, greeting_resp, 2) < 0) { coro_socket_free_recv(data); return; }
         } else {
             // SOCKS5 Auth Handshake
-            if (handle_socks5_auth(client, proxy) < 0) { free(data); return; }
+            if (handle_socks5_auth(client, proxy) < 0) { coro_socket_free_recv(data); return; }
         }
-        free(data); data = NULL;
+        coro_socket_free_recv(data); data = NULL;
 
         // Connection Request:  0x05 | CMD | RSV | ATYP | DST.ADDR | DST.PORT
         if (coro_socket_recv(client, &data, &len) < 0 || len < 4 || data[1] != 0x01) {
-            if (data) free(data);
+            if (data) coro_socket_free_recv(data);
             return;
         }
 
@@ -335,7 +335,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
                 char fail_resp[] = {0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0};
                 coro_socket_send(client, fail_resp, 10);
                 coro_socket_destroy(udp_relay);
-                free(data);
+                coro_socket_free_recv(data);
                 return;
             }
 
@@ -358,14 +358,14 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             coro_t *co = coro_create(udp_associate_pump_coro, udp_ctx, NULL);
             coro_resume(co);
 
-            free(data); data = NULL;
+            coro_socket_free_recv(data); data = NULL;
             // The TCP connection serves as the control channel. We wait for it to close.
             while (vivo) {
                 coro_socket_set_timeout(client, 1000);
                 int r = coro_socket_recv(client, &data, &len);
                 if (r == TURBO_ETIMEDOUT) continue;
                 if (r < 0 || r == TURBO_EOF) break;
-                if (data) free(data); data = NULL;
+                if (data) coro_socket_free_recv(data); data = NULL;
             }
             
             vivo = 0;

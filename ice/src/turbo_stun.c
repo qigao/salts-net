@@ -233,14 +233,14 @@ int stun_binding_request(coro_context_t *ctx,
     if (rc == 0 && data && data_len > 0) {
       if (stun_is_stun_message((const uint8_t *)data, data_len)) {
         result = stun_parse_binding_response((const uint8_t *)data, data_len, &txn_id, mapped);
-        free(data);
+        coro_socket_free_recv(data);
         if (result == 0)
           break;
       } else {
-        free(data);
+        coro_socket_free_recv(data);
       }
     } else {
-      free(data);
+      coro_socket_free_recv(data);
     }
 
     if (attempt + 1 < retries)

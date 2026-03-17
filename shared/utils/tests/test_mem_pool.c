@@ -14,7 +14,7 @@
  */
 
 #include "turbo_buffer.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 #include "turbo_thread.h"
 #include "tinytest.h"
 #include <string.h>
@@ -170,8 +170,8 @@ spec("Memory Pool & Allocator") {
                 mem_alloc(&pool, 64);
             }
 
-            size_t after_first = t_atomic_load_size_relaxed(
-                &pool.total_allocated);
+            size_t after_first = atomic_load_explicit(
+                &pool.total_allocated, memory_order_relaxed);
             check(after_first > 0);
 
             mem_reset(&pool);
@@ -180,8 +180,8 @@ spec("Memory Pool & Allocator") {
                 mem_alloc(&pool, 64);
             }
 
-            size_t after_second = t_atomic_load_size_relaxed(
-                &pool.total_allocated);
+            size_t after_second = atomic_load_explicit(
+                &pool.total_allocated, memory_order_relaxed);
             check_size_eq(after_second, after_first);
         }
 
@@ -190,15 +190,15 @@ spec("Memory Pool & Allocator") {
                 mem_alloc(&pool, 128);
             }
 
-            size_t before_trim = t_atomic_load_size_relaxed(
-                &pool.total_allocated);
+            size_t before_trim = atomic_load_explicit(
+                &pool.total_allocated, memory_order_relaxed);
             check(before_trim > 0);
 
             mem_reset(&pool);
             mem_trim(&pool);
 
-            size_t after_trim = t_atomic_load_size_relaxed(
-                &pool.total_allocated);
+            size_t after_trim = atomic_load_explicit(
+                &pool.total_allocated, memory_order_relaxed);
             check(after_trim < before_trim);
         }
 
@@ -209,7 +209,7 @@ spec("Memory Pool & Allocator") {
             }
             mem_reset(&pool);
 
-            size_t warm = t_atomic_load_size_relaxed(&pool.total_allocated);
+            size_t warm = atomic_load_explicit(&pool.total_allocated, memory_order_relaxed);
 
             /* 50 identical cycles should not grow */
             for (int cycle = 0; cycle < 50; cycle++) {
@@ -219,7 +219,7 @@ spec("Memory Pool & Allocator") {
                 mem_reset(&pool);
             }
 
-            size_t final = t_atomic_load_size_relaxed(&pool.total_allocated);
+            size_t final = atomic_load_explicit(&pool.total_allocated, memory_order_relaxed);
             check_size_eq(final, warm);
         }
 
@@ -228,12 +228,12 @@ spec("Memory Pool & Allocator") {
                 mem_alloc(&pool, 64);
             }
 
-            size_t used_before = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t used_before = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check(used_before > 0);
 
             mem_reset(&pool);
 
-            size_t used_after = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t used_after = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check_size_eq(used_after, 0);
         }
     }
@@ -291,7 +291,7 @@ spec("Memory Pool & Allocator") {
 
             check_not_null(buf);
             check_size_ge(buf->capacity, 1024);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
             check_int_eq(buf->is_external, 0);
             check_size_eq(buf->used, 0);
             check(buf->pool == &pool);
@@ -315,19 +315,19 @@ spec("Memory Pool & Allocator") {
 
         it("should handle ref/unref lifecycle") {
             mem_buffer_t* buf = mem_get_buffer(&pool, 256);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
 
             mem_ref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 2);
+            check_int_eq(atomic_load(&buf->ref_count), 2);
 
             mem_ref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 3);
+            check_int_eq(atomic_load(&buf->ref_count), 3);
 
             mem_unref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 2);
+            check_int_eq(atomic_load(&buf->ref_count), 2);
 
             mem_unref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
 
             mem_unref(buf);  /* recycles */
         }
@@ -340,7 +340,7 @@ spec("Memory Pool & Allocator") {
                 mem_release(buf);
             }
 
-            size_t count = t_atomic_load_size_relaxed(&pool.recycle_count);
+            size_t count = atomic_load_explicit(&pool.recycle_count, memory_order_relaxed);
             check(count <= limit);
         }
 
@@ -399,10 +399,10 @@ spec("Memory Pool & Allocator") {
             check(memcmp(slice.data, "Hello", 5) == 0);
 
             /* Slice increments refcount */
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 2);
+            check_int_eq(atomic_load(&buf->ref_count), 2);
 
             mem_slice_release(&slice);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
 
             mem_release(buf);
         }
@@ -457,13 +457,13 @@ spec("Memory Pool & Allocator") {
             }
 
             /* 1 (buf) + 5 (slices) = 6 */
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 6);
+            check_int_eq(atomic_load(&buf->ref_count), 6);
 
             for (int i = 0; i < 5; i++) {
                 mem_slice_release(&slices[i]);
             }
 
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
             mem_release(buf);
         }
     }
@@ -483,7 +483,7 @@ spec("Memory Pool & Allocator") {
             check_not_null(buf);
             check_int_eq(mem_is_external(buf), 1);
             check_str_eq(buf->data, "External");
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
             check_size_eq(buf->capacity, 100);
             check_size_eq(buf->used, 100);
 
@@ -518,7 +518,7 @@ spec("Memory Pool & Allocator") {
 
             mem_buffer_t* buf = mem_wrap_external(ext, 64, test_free_cb, NULL);
             mem_ref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 2);
+            check_int_eq(atomic_load(&buf->ref_count), 2);
 
             mem_unref(buf);
             check_int_eq(g_free_called, 0);  /* still alive */
@@ -544,7 +544,7 @@ spec("Memory Pool & Allocator") {
                 turbo_thread_destroy(&threads[i]);
             }
 
-            size_t used = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t used = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check(used > 0);
             #undef ALLOC_THREADS
         }
@@ -663,22 +663,22 @@ spec("Memory Pool & Allocator") {
 
     describe("Leak Fixes") {
         it("should not leak oversized buffers (>8192 bytes)") {
-            size_t used_before = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t used_before = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
 
             /* Allocate 1MB buffer (triggers oversized path) */
             mem_buffer_t* buf = mem_get_buffer(&pool, 1024 * 1024);
             check_not_null(buf);
             check_int_eq(buf->is_oversized, 1);
 
-            size_t used_after_alloc = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t used_after_alloc = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check(used_after_alloc > used_before);
 
             /* Release should free, not recycle */
             mem_unref(buf);
 
-            size_t used_after_free = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t used_after_free = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check(used_after_free < used_after_alloc);
-            check_size_eq(t_atomic_load_size_relaxed(&pool.recycle_count), 0);
+            check_size_eq(atomic_load_explicit(&pool.recycle_count, memory_order_relaxed), 0);
         }
 
         it("should not leak on recycle overflow") {
@@ -698,7 +698,7 @@ spec("Memory Pool & Allocator") {
             }
 
             /* Verify: max 10 in recycle list, rest freed to slab */
-            size_t count = t_atomic_load_size_relaxed(&pool.recycle_count);
+            size_t count = atomic_load_explicit(&pool.recycle_count, memory_order_relaxed);
             check(count <= 10);
         }
 
@@ -727,13 +727,13 @@ spec("Memory Pool & Allocator") {
                 mem_unref(buf);
             }
 
-            size_t count_before = t_atomic_load_size_relaxed(&pool.recycle_count);
+            size_t count_before = atomic_load_explicit(&pool.recycle_count, memory_order_relaxed);
             check(count_before > 0);
 
             /* Reset should clear recycle list */
             mem_reset(&pool);
 
-            size_t count_after = t_atomic_load_size_relaxed(&pool.recycle_count);
+            size_t count_after = atomic_load_explicit(&pool.recycle_count, memory_order_relaxed);
             check_size_eq(count_after, 0);
             check_null(pool.recycle_head);
         }
@@ -743,46 +743,46 @@ spec("Memory Pool & Allocator") {
 
     describe("Counters") {
         it("should track total_used correctly") {
-            size_t initial = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t initial = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check_size_eq(initial, 0);
 
             mem_alloc(&pool, 128);
 
-            size_t after = t_atomic_load_size_relaxed(&pool.total_used);
+            size_t after = atomic_load_explicit(&pool.total_used, memory_order_relaxed);
             check(after > initial);
         }
 
         it("should track total_allocated on slab creation") {
-            size_t before = t_atomic_load_size_relaxed(
-                &pool.total_allocated);
+            size_t before = atomic_load_explicit(
+                &pool.total_allocated, memory_order_relaxed);
 
             mem_alloc(&pool, 64);
 
-            size_t after = t_atomic_load_size_relaxed(
-                &pool.total_allocated);
+            size_t after = atomic_load_explicit(
+                &pool.total_allocated, memory_order_relaxed);
             check(after >= before);
         }
 
         it("should track recycle_count") {
             mem_buffer_t* buf = mem_get_buffer(&pool, 256);
-            size_t before = t_atomic_load_size_relaxed(&pool.recycle_count);
+            size_t before = atomic_load_explicit(&pool.recycle_count, memory_order_relaxed);
 
             mem_release(buf);
 
-            size_t after = t_atomic_load_size_relaxed(&pool.recycle_count);
+            size_t after = atomic_load_explicit(&pool.recycle_count, memory_order_relaxed);
             check(after > before);
         }
 
         it("should maintain refcount atomically") {
             mem_buffer_t* buf = mem_get_buffer(&pool, 256);
 
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
 
             mem_ref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 2);
+            check_int_eq(atomic_load(&buf->ref_count), 2);
 
             mem_unref(buf);
-            check_int_eq(t_atomic_load_uint32(&buf->ref_count), 1);
+            check_int_eq(atomic_load(&buf->ref_count), 1);
 
             mem_unref(buf);  /* recycles */
         }

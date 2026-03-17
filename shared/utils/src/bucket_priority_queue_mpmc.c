@@ -44,7 +44,7 @@ bool bucket_priority_queue_mpmc_init(bucket_priority_queue_mpmc_t *queue,
     // Register the shared logical consumer
     uint64_t initial_seq = disruptor_consumer_register(queue->buckets[i].disruptor, &queue->buckets[i].shared_consumer);
     queue->buckets[i].next_read_sequence = initial_seq;
-    t_atomic_store_uint32(&queue->buckets[i].pop_lock, 0);
+    atomic_store(&queue->buckets[i].pop_lock, 0);
   }
 
   return true;
@@ -113,9 +113,10 @@ bool bucket_priority_queue_mpmc_try_pop(
   // Poll from highest priority first (CRITICAL -> LOW)
   for (int i = BUCKET_PRIORITY_MPMC_CRITICAL; i >= BUCKET_PRIORITY_MPMC_LOW; --i) {
     bucket_priority_bucket_mpmc_t *bucket = &queue->buckets[i];
-    
+
     // Attempt to acquire pop spinlock
-    if (t_atomic_cas_uint32(&bucket->pop_lock, 0, 1)) {
+    uint32_t expected = 0;
+    if (atomic_compare_exchange_strong(&bucket->pop_lock, &expected, 1)) {
       disruptor_t *disruptor = bucket->disruptor;
       uint64_t seq = bucket->next_read_sequence;
       disruptor_cursor_t cursor = {.sequence = seq};
@@ -127,20 +128,20 @@ bool bucket_priority_queue_mpmc_try_pop(
             (const bucket_priority_mpmc_value_t *)disruptor_show_entry(disruptor, &read_cursor);
 
         *out_value = *entry;
-        
+
         // Update local tracking
         bucket->next_read_sequence = seq + 1;
-        
+
         // Release entry to disruptor
         disruptor_consumer_release_entry(disruptor, &bucket->shared_consumer, &read_cursor);
 
         // Unlock
-        t_atomic_store_uint32(&bucket->pop_lock, 0);
+        atomic_store(&bucket->pop_lock, 0);
         return true;
       }
       
       // Unlock
-      t_atomic_store_uint32(&bucket->pop_lock, 0);
+      atomic_store(&bucket->pop_lock, 0);
     }
   }
 

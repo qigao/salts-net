@@ -24,7 +24,7 @@
 #include "turbo_buffer.h"
 #include "sds.h"
 #include "stb_sprintf.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 #include "turbo_fs.h"
 #include "turbo_mmap.h"
 #include "disruptor.h"
@@ -469,9 +469,9 @@ typedef struct {
   turbo_file_t fd;
   char *path;
   compiled_pattern_t pattern;
-  t_atomic_int64_t offset;
-  t_atomic_int64_t bytes_written; // Summary counter for current file size
-  t_atomic_int_t rotate_flag;     // 1 => rotate before next write
+  _Atomic int64_t offset;
+  _Atomic int64_t bytes_written; // Summary counter for current file size
+  atomic_int rotate_flag;     // 1 => rotate before next write
   size_t max_size;
   int max_files;
   turbo_mutex_t rotate_mutex;
@@ -504,9 +504,9 @@ static void file_sink_rotate(file_sink_t *fs) {
   fs->fd = turbo_fs_open(fs->path, TURBO_FS_O_WRONLY | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC,
                          TURBO_FS_DEFAULT_MODE);
   if (fs->fd != TURBO_INVALID_FILE) {
-    t_atomic_store64(&fs->offset, 0);
-    t_atomic_store64(&fs->bytes_written, 0);
-    t_atomic_store(&fs->rotate_flag, 0);
+    atomic_store(&fs->offset, 0);
+    atomic_store(&fs->bytes_written, 0);
+    atomic_store(&fs->rotate_flag, 0);
   }
 
   turbo_mutex_unlock(&fs->rotate_mutex);
@@ -523,23 +523,23 @@ static void file_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *ent
     return;
   line[len++] = '\n';
 
-  if (fs->max_size > 0 && t_atomic_load(&fs->rotate_flag)) {
+  if (fs->max_size > 0 && atomic_load(&fs->rotate_flag)) {
     file_sink_rotate(fs);
   }
   if (fs->fd == TURBO_INVALID_FILE) {
     return;
   }
 
-  int64_t write_offset = t_atomic_fetch_add64(&fs->offset, len);
+  int64_t write_offset = atomic_fetch_add(&fs->offset, len);
   int written = turbo_fs_pwrite(fs->fd, line, (size_t)len, write_offset);
   if (written <= 0) {
     return;
   }
 
   if (fs->max_size > 0) {
-    int64_t total_written = t_atomic_fetch_add64(&fs->bytes_written, written) + written;
+    int64_t total_written = atomic_fetch_add(&fs->bytes_written, written) + written;
     if (total_written >= (int64_t)fs->max_size) {
-      t_atomic_store(&fs->rotate_flag, 1);
+      atomic_store(&fs->rotate_flag, 1);
       file_sink_rotate(fs);
     }
   }
@@ -603,13 +603,13 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   if (opts->append) {
     int64_t pos = turbo_fs_seek(sink->fd, 0, SEEK_END);
     int64_t initial = pos > 0 ? pos : 0;
-    t_atomic_store64(&sink->offset, initial);
-    t_atomic_store64(&sink->bytes_written, initial);
+    atomic_store(&sink->offset, initial);
+    atomic_store(&sink->bytes_written, initial);
   } else {
-    t_atomic_store64(&sink->offset, 0);
-    t_atomic_store64(&sink->bytes_written, 0);
+    atomic_store(&sink->offset, 0);
+    atomic_store(&sink->bytes_written, 0);
   }
-  t_atomic_store(&sink->rotate_flag, 0);
+  atomic_store(&sink->rotate_flag, 0);
 
   return &sink->base;
 }
@@ -694,15 +694,15 @@ struct tlog_s {
   // ---------------------------------------------------------------------------
   // Background Thread
   // ---------------------------------------------------------------------------
-  t_atomic_int_t running;
+  atomic_int running;
   turbo_thread_t thread;
 
   // ---------------------------------------------------------------------------
   // Stats
   // ---------------------------------------------------------------------------
-  alignas(64) t_atomic_int64_t logs_written;
-  alignas(64) t_atomic_int64_t logs_dropped;
-  alignas(64) t_atomic_int64_t logs_published;  // Total published to disruptor
+  alignas(64) _Atomic int64_t logs_written;
+  alignas(64) _Atomic int64_t logs_dropped;
+  alignas(64) _Atomic int64_t logs_published;  // Total published to disruptor
 };
 
 // Forward declarations
@@ -720,7 +720,7 @@ static void async_logger_thread(void *arg) {
   uint64_t next_sequence = disruptor_consumer_register(logger->disruptor, &logger->consumer);
 
   // Consumer loop
-  while (t_atomic_load(&logger->running)) {
+  while (atomic_load(&logger->running)) {
     disruptor_cursor_t cursor;
     cursor.sequence = next_sequence;
 
@@ -757,7 +757,7 @@ static void async_logger_thread(void *arg) {
       };
 
       logger_write_to_sinks(logger, &entry);
-      t_atomic_fetch_add64(&logger->logs_written, 1);
+      atomic_fetch_add(&logger->logs_written, 1);
       mem_release(buffer);
       *entry_ptr = NULL;
     }
@@ -790,7 +790,7 @@ static void async_logger_thread(void *arg) {
           .message_len = ae->message_len
         };
         logger_write_to_sinks(logger, &entry);
-        t_atomic_fetch_add64(&logger->logs_written, 1);
+        atomic_fetch_add(&logger->logs_written, 1);
         mem_release(buffer);
         *entry_ptr = NULL;
       }
@@ -802,7 +802,7 @@ static void async_logger_thread(void *arg) {
 }
 
 static int logger_start_async(tlog_t *logger) {
-  t_atomic_store(&logger->running, 1);
+  atomic_store(&logger->running, 1);
 
   if (turbo_thread_create(&logger->thread, async_logger_thread, logger) != 0) {
     return -1;
@@ -812,7 +812,7 @@ static int logger_start_async(tlog_t *logger) {
 }
 
 static void logger_stop_async(tlog_t *logger) {
-  t_atomic_store(&logger->running, 0);
+  atomic_store(&logger->running, 0);
   turbo_thread_join(&logger->thread);
 }
 
@@ -824,13 +824,13 @@ static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer) {
       (mem_buffer_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
   if (!slot || cursor.sequence == 0U) {
     mem_release(buffer);
-    t_atomic_fetch_add64(&logger->logs_dropped, 1);
+    atomic_fetch_add(&logger->logs_dropped, 1);
     return -1;
   }
 
   *slot = buffer;
   disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
-  t_atomic_fetch_add64(&logger->logs_published, 1);
+  atomic_fetch_add(&logger->logs_published, 1);
   return 0;
 }
 
@@ -847,9 +847,9 @@ tlog_t *tlog_create(const tlog_config_t *config) {
 
   turbo_mutex_init(&logger->sink_mutex);
 
-  t_atomic_store64(&logger->logs_written, 0);
-  t_atomic_store64(&logger->logs_dropped, 0);
-  t_atomic_store64(&logger->logs_published, 0);
+  atomic_store(&logger->logs_written, 0);
+  atomic_store(&logger->logs_dropped, 0);
+  atomic_store(&logger->logs_published, 0);
 
   uint64_t disruptor_capacity = logger_disruptor_capacity(config ? config->buffer_size : 0);
 
@@ -955,8 +955,8 @@ void tlog_flush(tlog_t *logger) {
     return;
 
   // Wait for all currently published logs to be written.
-  int64_t published = t_atomic_load64(&logger->logs_published);
-  while (t_atomic_load64(&logger->logs_written) < published) {
+  int64_t published = atomic_load(&logger->logs_published);
+  while (atomic_load(&logger->logs_written) < published) {
     turbo_sleep_ms(1);
   }
 
@@ -1013,7 +1013,7 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
 
   mem_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
   if (!buffer) {
-    t_atomic_fetch_add64(&logger->logs_dropped, 1);
+    atomic_fetch_add(&logger->logs_dropped, 1);
     return;
   }
 
@@ -1038,7 +1038,7 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
 
   mem_buffer_t *buffer = async_entry_create(&logger->async_pool, &entry);
   if (!buffer) {
-    t_atomic_fetch_add64(&logger->logs_dropped, 1);
+    atomic_fetch_add(&logger->logs_dropped, 1);
     return;
   }
 
@@ -1064,11 +1064,11 @@ turbo_log_level_t tlog_get_level(const tlog_t *logger) {
 // =============================================================================
 
 uint64_t tlog_get_written(const tlog_t *logger) {
-  return logger ? t_atomic_load64(&((tlog_t *)logger)->logs_written) : 0;
+  return logger ? atomic_load(&((tlog_t *)logger)->logs_written) : 0;
 }
 
 uint64_t tlog_get_dropped(const tlog_t *logger) {
-  return logger ? t_atomic_load64(&((tlog_t *)logger)->logs_dropped) : 0;
+  return logger ? atomic_load(&((tlog_t *)logger)->logs_dropped) : 0;
 }
 
 int tlog_get_queue_size(const tlog_t *logger) {

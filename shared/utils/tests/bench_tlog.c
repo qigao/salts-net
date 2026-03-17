@@ -5,7 +5,6 @@
 
 #include "tinytest.h"
 #include "tlog.h"
-#include "turbo_atomic.h"
 #include "turbo_fs.h"
 #include "turbo_thread.h"
 #include <stdint.h>
@@ -15,43 +14,6 @@
 #define ITERS_FAST 1000000
 #define ITERS_NORMAL 200000
 #define ITERS_HEAVY 1000000
-typedef struct {
-  double sum_ms;
-  double min_ms;
-  double max_ms;
-  uint64_t samples;
-} mt_measure_t;
-
-static void mt_measure_init(mt_measure_t *m) {
-  m->sum_ms = 0.0;
-  m->min_ms = 1e18;
-  m->max_ms = 0.0;
-  m->samples = 0;
-}
-
-static void mt_measure_record(mt_measure_t *m, double elapsed_ms) {
-  m->sum_ms += elapsed_ms;
-  if (elapsed_ms < m->min_ms) m->min_ms = elapsed_ms;
-  if (elapsed_ms > m->max_ms) m->max_ms = elapsed_ms;
-  m->samples++;
-}
-
-static void print_mt_throughput(const char *label, const mt_measure_t *m, uint64_t logs_per_round,
-                                size_t payload_bytes_per_log) {
-  if (!m || m->samples == 0 || m->sum_ms <= 0.0) {
-    return;
-  }
-
-  uint64_t total_logs = logs_per_round * m->samples;
-  double seconds = m->sum_ms / 1000.0;
-  double logs_per_sec = (double)total_logs / seconds;
-  double mb_per_sec =
-      ((double)total_logs * (double)payload_bytes_per_log) / (1024.0 * 1024.0) / seconds;
-  double avg_round_ms = m->sum_ms / (double)m->samples;
-
-  printf("      -> %s: logs/s=%.0f payload_MB/s=%.2f avg_round_ms=%.3f min_ms=%.3f max_ms=%.3f\n",
-         label, logs_per_sec, mb_per_sec, avg_round_ms, m->min_ms, m->max_ms);
-}
 
 static volatile int sink_n = 0;
 

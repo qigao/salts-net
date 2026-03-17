@@ -1,7 +1,7 @@
 #include "bucket_priority_queue_mpmc.h"
 #include "tinytest.h"
 #include "turbo_thread.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 
 #include <stdbool.h>
 
@@ -11,24 +11,24 @@
 
 typedef struct {
   bucket_priority_queue_mpmc_t *queue;
-  t_atomic_bool_t start;
-  t_atomic_bool_t done;
+  _Atomic int start;
+  _Atomic int done;
   size_t items_to_process;
   size_t thread_id;
 } producer_context_t;
 
 typedef struct {
   bucket_priority_queue_mpmc_t *queue;
-  t_atomic_bool_t start;
-  t_atomic_bool_t done;
-  t_atomic_uint32_t consumed_count;
+  _Atomic int start;
+  _Atomic int done;
+  _Atomic uint32_t consumed_count;
   size_t target_count;
 } consumer_context_t;
 
 static void producer_thread(void *arg) {
   producer_context_t *ctx = (producer_context_t *)arg;
 
-  while (!t_atomic_load_bool(&ctx->start)) {
+  while (!(atomic_load(&ctx->start) != 0)) {
     // Wait for start signal
   }
 
@@ -42,24 +42,24 @@ static void producer_thread(void *arg) {
     }
   }
 
-  t_atomic_store_bool(&ctx->done, true);
+  atomic_store(&ctx->done, (true) ? 1 : 0);
 }
 
 static void consumer_thread(void *arg) {
   consumer_context_t *ctx = (consumer_context_t *)arg;
 
-  while (!t_atomic_load_bool(&ctx->start)) {
+  while (!(atomic_load(&ctx->start) != 0)) {
     // Wait for start signal
   }
 
-  while (t_atomic_load_uint32(&ctx->consumed_count) < ctx->target_count) {
+  while (atomic_load(&ctx->consumed_count) < ctx->target_count) {
     bucket_priority_mpmc_value_t value;
     if (bucket_priority_queue_mpmc_try_pop(ctx->queue, &value)) {
-      t_atomic_fetch_add_uint32(&ctx->consumed_count, 1);
+      atomic_fetch_add(&ctx->consumed_count, 1);
     }
   }
 
-  t_atomic_store_bool(&ctx->done, true);
+  atomic_store(&ctx->done, (true) ? 1 : 0);
 }
 
 spec("Bucket Priority Queue MPMC") {
@@ -143,27 +143,27 @@ spec("Bucket Priority Queue MPMC") {
 
     // Start all threads
     for (size_t i = 0; i < NUM_PRODUCERS; ++i) {
-      t_atomic_store_bool(&producers[i].start, true);
+      atomic_store(&producers[i].start, (true) ? 1 : 0);
     }
     for (size_t i = 0; i < NUM_CONSUMERS; ++i) {
-      t_atomic_store_bool(&consumers[i].start, true);
+      atomic_store(&consumers[i].start, (true) ? 1 : 0);
     }
 
     // Wait for completion
     for (size_t i = 0; i < NUM_PRODUCERS; ++i) {
       turbo_thread_join(&producer_threads[i]);
-      check(t_atomic_load_bool(&producers[i].done));
+      check((atomic_load(&producers[i].done) != 0));
     }
 
     for (size_t i = 0; i < NUM_CONSUMERS; ++i) {
       turbo_thread_join(&consumer_threads[i]);
-      check(t_atomic_load_bool(&consumers[i].done));
+      check((atomic_load(&consumers[i].done) != 0));
     }
 
     // Verify total consumed
     uint32_t total_consumed = 0;
     for (size_t i = 0; i < NUM_CONSUMERS; ++i) {
-      total_consumed += t_atomic_load_uint32(&consumers[i].consumed_count);
+      total_consumed += atomic_load(&consumers[i].consumed_count);
     }
     check_size_eq(total_consumed, TEST_ITEMS);
 

@@ -131,7 +131,7 @@ static void read_group_name(coro_socket_t *worker, char *group, size_t group_siz
     memcpy(group, data, n);
     group[n] = '\0';
     if (n > 0 && group[n - 1] == '\n') group[n - 1] = '\0';
-    free(data);
+    coro_socket_free_recv(data);
   }
 }
 
@@ -219,7 +219,7 @@ static int read_frame(coro_socket_t *client, coro_lb_t *lb, frame_buf_t *fb, cha
     size_t len = 0;
     if (coro_socket_recv(client, &data, &len) != 0) return -1;
     int rc = frame_buf_append(fb, data, len);
-    free(data);
+    coro_socket_free_recv(data);
     if (rc != 0) return -1;
   }
 }
@@ -357,10 +357,10 @@ static void on_client_request(coro_socket_t *client, void *arg) {
 
     /* Send response to client */
     if (coro_socket_send(client, resp, resp_len) < 0) {
-      free(resp);
+      coro_socket_free_recv(resp);
       break;
     }
-    free(resp);
+    coro_socket_free_recv(resp);
   }
 
   lb->active_conns--;

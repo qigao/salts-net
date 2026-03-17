@@ -1,7 +1,8 @@
 #include "CoroNet/turbo_coro_thread_pool.h"
+#include "CoroNet/turbo_coro_pool.h"
 #include "turbo_coro_internal.h"
 #include "turbo_thread.h"
-#include "turbo_atomic.h"
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <uv.h>
 
@@ -13,22 +14,12 @@
 
 #define UNUSED(x) (void)(x)
 
-/* ── Private task proxy structure ─────────────────────────── */
-
-typedef struct {
-    coro_context_t *ctx;
-    coro_fn fn;
-    void *arg;
-    mem_buffer_t *buffer; /**< Underlying buffer for recycling */
-} proxy_arg_t;
-
 struct coro_thread_pool_s {
     coro_context_t **contexts;
     turbo_thread_t *threads;
     int thread_count;
-    t_atomic_int_t next_thread;
+    atomic_int next_thread;
     volatile int stopping;
-    mem_pool_t* task_arena;        /**< Arena for task proxies */
 };
 
 /* ── Worker Logic ─────────────────────────────────────────── */
@@ -67,15 +58,7 @@ coro_thread_pool_t *coro_thread_pool_create(int num_threads) {
     if (!pool) return NULL;
 
     pool->thread_count = num_threads;
-    t_atomic_store(&pool->next_thread, 0);
-    
-    /* Initialize task proxy arena with pre-allocated size */
-    pool->task_arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
-    if (!pool->task_arena || mem_init(pool->task_arena, MEM_ARENA_POOL_INIT_SIZE) != 0) {
-        if (pool->task_arena) free(pool->task_arena);
-        coro_thread_pool_destroy(pool);
-        return NULL;
-    }
+    atomic_store_explicit(&pool->next_thread, 0, memory_order_relaxed);
 
     pool->contexts = (coro_context_t **)calloc(num_threads, sizeof(coro_context_t *));
     pool->threads = (turbo_thread_t *)calloc(num_threads, sizeof(turbo_thread_t));
@@ -88,6 +71,25 @@ coro_thread_pool_t *coro_thread_pool_create(int num_threads) {
     for (int i = 0; i < num_threads; i++) {
         pool->contexts[i] = coro_context_create(NULL);
         if (!pool->contexts[i]) {
+            coro_thread_pool_destroy(pool);
+            return NULL;
+        }
+
+        /* Good taste: Configure larger object pool for high-throughput scenarios.
+         * Default pool (16 initial, 1024 max) is too small for burst workloads.
+         * Pre-allocate enough coroutines to handle typical burst without dynamic allocation. */
+        coro_object_pool_config_t pool_cfg = {
+            .initial_capacity = 256,   /* Pre-allocate 256 coroutines per thread */
+            .max_capacity = 4096,      /* Allow up to 4096 per thread (16k total for 4 threads) */
+            .stack_size = 0            /* Use default stack size */
+        };
+
+        /* Replace the default pool with our optimized one */
+        if (pool->contexts[i]->pool) {
+            coro_object_pool_destroy(pool->contexts[i]->pool);
+        }
+        pool->contexts[i]->pool = coro_object_pool_create(&pool_cfg, pool->contexts[i]);
+        if (!pool->contexts[i]->pool) {
             coro_thread_pool_destroy(pool);
             return NULL;
         }
@@ -141,38 +143,21 @@ void coro_thread_pool_destroy(coro_thread_pool_t *pool) {
     free(pool);
 }
 
-static void spawn_proxy(void *arg) {
-    proxy_arg_t *pa = (proxy_arg_t *)arg;
-    coro_context_spawn(pa->ctx, pa->fn, pa->arg);
-    
-    /* Good taste: Recycle the proxy back to the pool-wide arena */
-    if (pa->buffer) {
-        mem_release(pa->buffer);
-    }
+static void spawn_proxy(void *arg1, void *arg2) {
+    coro_fn fn = (coro_fn)arg1;
+    void *arg = arg2;
+    coro_context_spawn(coro_context_current(), fn, arg);
 }
 
 int coro_thread_pool_spawn(coro_thread_pool_t *pool, coro_fn fn, void *arg) {
     if (!pool || !fn || pool->stopping) return -1;
 
     /* Use atomic increment for fair distribution */
-    int idx = t_atomic_fetch_add(&pool->next_thread, 1) % pool->thread_count;
+    int idx = atomic_fetch_add(&pool->next_thread, 1) % pool->thread_count;
     coro_context_t *target_ctx = pool->contexts[idx];
 
-    /* Good taste: Use recycled buffers from the task arena instead of malloc */
-    mem_buffer_t *buf = mem_get_buffer(pool->task_arena, sizeof(proxy_arg_t));
-    if (!buf) return -2;
-
-    proxy_arg_t *pa = (proxy_arg_t *)buf->data;
-    pa->ctx = target_ctx;
-    pa->fn = fn;
-    pa->arg = arg;
-    pa->buffer = buf;
-
-    int ret = coro_post(target_ctx, spawn_proxy, pa);
-    if (ret != 0) {
-        mem_release(buf);
-    }
-    return ret;
+    /* Good taste: Passes fn and arg directly through lock-free MPSC queue, zero allocations! */
+    return coro_post(target_ctx, spawn_proxy, (void*)fn, arg);
 }
 
 coro_context_t *coro_thread_pool_get_context(coro_thread_pool_t *pool, int index) {

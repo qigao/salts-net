@@ -83,7 +83,8 @@ void coro_socket_handle_transport_close(coro_socket_t *s);
 /** @brief Slot in the lock-free ring buffer for post queue. */
 typedef struct {
   coro_post_fn fn;  /**< Callback to invoke */
-  void *arg;        /**< Opaque argument for @p fn */
+  void *arg1;       /**< First argument for @p fn */
+  void *arg2;       /**< Second argument for @p fn */
 } coro_post_slot_t;
 
 /** @brief Internal layout of the opaque event-loop context. */
@@ -91,13 +92,14 @@ struct coro_context_s {
   uv_loop_t *loop; /**< libuv event loop */
   int owns_loop;   /**< 1 = we allocated it, 0 = external */
 
-  /* Thread-safe post queue (lock-free ring buffer) */
+  /* Thread-safe post queue */
   uv_async_t post_async;           /**< Async handle to wake the loop */
   int post_initialized;            /**< 1 = post queue is initialized */
   coro_post_slot_t *post_ring;     /**< Ring buffer for posted tasks */
   int post_ring_size;              /**< Size of ring buffer (power of 2) */
-  t_atomic_int_t post_head;    /**< Producer index (write) */
-  t_atomic_int_t post_tail;    /**< Consumer index (read) */
+  atomic_int post_head;    /**< Producer index (write) */
+  atomic_int post_tail;    /**< Consumer index (read) */
+  atomic_int post_lock;    /**< Producer spinlock for MPSC */
 
   /* Lazy tasks (deferred execution) */
   coro_task_t **tasks; /**< Dynamic array of lazy tasks */

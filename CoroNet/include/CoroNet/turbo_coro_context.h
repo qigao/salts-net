@@ -133,7 +133,7 @@ CXX_C_API int coro_context_coro_count(coro_context_t *ctx);
 CXX_C_API uint64_t coro_context_now(coro_context_t *ctx);
 
 /** Callback type for coro_post(). */
-typedef void (*coro_post_fn)(void *arg);
+typedef void (*coro_post_fn)(void *arg1, void *arg2);
 
 /**
  * @brief Post a callback to the event loop thread (thread-safe).
@@ -143,10 +143,11 @@ typedef void (*coro_post_fn)(void *arg);
  *
  * @param ctx  Event-loop context
  * @param fn   Callback to invoke on the loop thread
- * @param arg  Opaque argument passed to @p fn
+ * @param arg1 First opaque argument
+ * @param arg2 Second opaque argument
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg);
+CXX_C_API int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2);
 
 /**
  * @brief Return a human-readable error string for an error code.

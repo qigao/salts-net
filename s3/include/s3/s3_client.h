@@ -43,7 +43,7 @@ CXX_C_API s3_error_t s3_remove_bucket(s3_client_t* client, const char* bucket);
 CXX_C_API int           s3_bucket_exists(s3_client_t* client, const char* bucket, s3_error_t* err);
 
 typedef struct {
-    S3BucketVec  buckets;
+    S3BucketVec*  buckets;
     s3_error_t   error;
 } s3_list_buckets_response_t;
 
@@ -387,7 +387,7 @@ CXX_C_API tstr_t s3_get_presigned_object_url(
 
 typedef struct {
     tstr_t url;
-    S3Headers form_data;
+    S3Headers* form_data;
     s3_error_t error;
 } s3_presigned_post_t;
 

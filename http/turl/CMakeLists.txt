@@ -12,7 +12,7 @@ add_executable(${turl_name} turl.c)
 target_link_libraries(
   turl_lib
   PUBLIC 
-         TurboNet::Core
+         TurboNet::CoroNet
          TurboNet::Mustache
          TurboNet::JsonParser
          TurboNet::CmdParser

@@ -390,7 +390,7 @@ suite("TBE Schema Parser") {
       when("parsing first schema") {
         parse_schema("composite First { int32 x; }", strlen("composite First { int32 x; }"), root, NULL);
 
-        AND_WHEN("parsing second schema") {
+        and_when("parsing second schema") {
           parse_schema("enum State { Idle = 1; } message Second { int32 y; }",
                       strlen("enum State { Idle = 1; } message Second { int32 y; }"), root, NULL);
 
@@ -451,7 +451,7 @@ suite("TBE Schema Parser") {
           map_add(root, list);
         }
 
-        AND_WHEN("freeing root") {
+        and_when("freeing root") {
           node_free(root);
 
           then("should free everything without leak") {

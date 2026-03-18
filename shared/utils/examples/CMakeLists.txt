@@ -13,7 +13,7 @@ target_link_libraries(
 add_executable(test_dns test_dns.c)
 
 target_link_libraries(
-  test_dns PRIVATE TurboNet::Utils TurboNet::Core
+  test_dns PRIVATE TurboNet::Utils TurboNet::CoroNet
                    $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>)
 
 # Synchronous DNS example

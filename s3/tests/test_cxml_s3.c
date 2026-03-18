@@ -1,5 +1,6 @@
 #include "s3/s3_client.h"
 #include "s3/s3_response.h"
+#include "../src/s3_types_vec.h"
 #include "tinytest.h"
 #include <http_client.h>
 #include <CoroNet/turbo_coro_context.h>
@@ -59,8 +60,8 @@ static void test_real_list_buckets(void *arg) {
     // Try parsing the raw body directly
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(raw->body);
     if (s3_is_ok(res.error)) {
-      printf("  Parsed %d buckets from raw body\n", (int)S3BucketVec_size(&res.buckets));
-      check((int)S3BucketVec_size(&res.buckets) > 0);
+      printf("  Parsed %d buckets from raw body\n", (int)S3BucketVec_size(res.buckets));
+      check((int)S3BucketVec_size(res.buckets) > 0);
     } else {
       printf("  PARSE ERROR on raw body: %s\n", res.error.message);
 
@@ -72,7 +73,7 @@ static void test_real_list_buckets(void *arg) {
       }
     }
     check(s3_is_ok(res.error));
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
   } else {
     printf("  Raw HTTP failed: status=%d error=%s\n", raw ? raw->status_code : -1,
@@ -94,8 +95,8 @@ static void test_real_list_buckets(void *arg) {
 
   s3_list_buckets_response_t resp = s3_list_buckets(client);
   if (s3_is_ok(resp.error)) {
-    printf("  s3_list_buckets: %d buckets\n", (int)S3BucketVec_size(&resp.buckets));
-    check((int)S3BucketVec_size(&resp.buckets) > 0);
+    printf("  s3_list_buckets: %d buckets\n", (int)S3BucketVec_size(resp.buckets));
+    check((int)S3BucketVec_size(resp.buckets) > 0);
   } else {
     printf("  s3_list_buckets error: %s\n", resp.error.message);
   }
@@ -134,8 +135,8 @@ spec("cxml S3 XML Parser Tests") {
     printf("  xml len = %zu\n", tstr_len(xml));
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
-    check_int_eq((int)S3BucketVec_size(&res.buckets), 1);
-    S3BucketVec_drop(&res.buckets);
+    check_int_eq((int)S3BucketVec_size(res.buckets), 1);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
     tstr_free(xml);
   }
@@ -146,11 +147,11 @@ spec("cxml S3 XML Parser Tests") {
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
     if (s3_is_ok(res.error)) {
-      check_int_eq((int)S3BucketVec_size(&res.buckets), 10);
+      check_int_eq((int)S3BucketVec_size(res.buckets), 10);
     } else {
       printf("  PARSE ERROR: %s\n", res.error.message);
     }
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
     tstr_free(xml);
   }
@@ -161,11 +162,11 @@ spec("cxml S3 XML Parser Tests") {
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
     if (s3_is_ok(res.error)) {
-      check_int_eq((int)S3BucketVec_size(&res.buckets), 100);
+      check_int_eq((int)S3BucketVec_size(res.buckets), 100);
     } else {
       printf("  PARSE ERROR: %s\n", res.error.message);
     }
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
     tstr_free(xml);
   }
@@ -176,11 +177,11 @@ spec("cxml S3 XML Parser Tests") {
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
     if (s3_is_ok(res.error)) {
-      check_int_eq((int)S3BucketVec_size(&res.buckets), 500);
+      check_int_eq((int)S3BucketVec_size(res.buckets), 500);
     } else {
       printf("  PARSE ERROR: %s\n", res.error.message);
     }
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
     tstr_free(xml);
   }
@@ -191,11 +192,11 @@ spec("cxml S3 XML Parser Tests") {
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
     if (s3_is_ok(res.error)) {
-      check_int_eq((int)S3BucketVec_size(&res.buckets), 1000);
+      check_int_eq((int)S3BucketVec_size(res.buckets), 1000);
     } else {
       printf("  PARSE ERROR: %s\n", res.error.message);
     }
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
     tstr_free(xml);
   }
@@ -206,11 +207,11 @@ spec("cxml S3 XML Parser Tests") {
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
     if (s3_is_ok(res.error)) {
-      check_int_eq((int)S3BucketVec_size(&res.buckets), 2000);
+      check_int_eq((int)S3BucketVec_size(res.buckets), 2000);
     } else {
       printf("  PARSE ERROR: %s\n", res.error.message);
     }
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
     tstr_free(xml);
   }
@@ -227,12 +228,12 @@ spec("cxml S3 XML Parser Tests") {
     s3_list_buckets_parser_res_t res = s3_parse_list_buckets_xml(xml);
     check(s3_is_ok(res.error));
     if (s3_is_ok(res.error)) {
-      check_int_eq((int)S3BucketVec_size(&res.buckets), 1);
-      check_str_eq(S3BucketVec_at(&res.buckets, 0)->name, "my-bucket");
+      check_int_eq((int)S3BucketVec_size(res.buckets), 1);
+      check_str_eq(S3BucketVec_at(res.buckets, 0)->name, "my-bucket");
     } else {
       printf("  PARSE ERROR: %s\n", res.error.message);
     }
-    S3BucketVec_drop(&res.buckets);
+    S3BucketVec_drop(res.buckets); free(res.buckets);
     s3_error_free(&res.error);
   }
 

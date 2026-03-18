@@ -1,4 +1,5 @@
 #include "s3/s3_client.h"
+#include "../src/s3_types_vec.h"
 #include <turbo_str.h>
 #include <turbo_coro.h>
 #include <CoroNet/turbo_coro_context.h>
@@ -176,9 +177,9 @@ suite("S3 Client Migration Tests") {
     it("should successfully list buckets from a mock/real server") {
         s3_list_buckets_response_t resp = s3_list_buckets(tctx.client);
         if (s3_is_ok(resp.error)) {
-            printf("Found %d buckets\n", (int)S3BucketVec_size(&resp.buckets));
+            printf("Found %d buckets\n", (int)S3BucketVec_size(resp.buckets));
             int found = 0;
-            c_foreach (i, S3BucketVec, resp.buckets) {
+            c_foreach (i, S3BucketVec, *resp.buckets) {
                 if (strcmp(i.ref->name, tctx.test_bucket) == 0) found = 1;
             }
             check(found);

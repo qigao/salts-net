@@ -35,6 +35,7 @@ typedef struct Value Value;
 typedef struct DataBindValueApi {
     Value* (*create_object)(void);
     void   (*set_field_int)(Value* obj, const char* name, int32_t val);
+    void   (*set_field_int64)(Value* obj, const char* name, int64_t val);
     void   (*set_field_double)(Value* obj, const char* name, double val);
     void   (*set_field_string)(Value* obj, const char* name, const char* val);
     void   (*set_field_bytes)(Value* obj, const char* name, const uint8_t* data, size_t len);

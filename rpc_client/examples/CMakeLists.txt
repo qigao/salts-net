@@ -4,7 +4,7 @@
 add_executable(rpc_eth_example eth_rpc_example.c)
 
 target_link_libraries(rpc_eth_example PRIVATE rpc_client http_client
-                                               TurboNet::Core)
+                                               TurboNet::CoroNet)
 
 set_target_properties(
   rpc_eth_example PROPERTIES FOLDER "http/rpc_client/examples"

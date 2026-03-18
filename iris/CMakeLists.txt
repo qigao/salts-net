@@ -48,7 +48,7 @@ set_target_properties(
 # Link libraries first - vcpkg style
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Core
+  PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::CoroNet
   $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE llhttp::llhttp_static
           kcp::kcp

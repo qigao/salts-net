@@ -2,6 +2,17 @@
 #include <string.h>
 #include <math.h>
 
+static void verify_even(int n) {
+    it("should be even") {
+        check(n % 2 == 0, "expected %d to be even", n);
+    }
+}
+
+static void check_in_range(int val, int min, int max) {
+    /* No 'it' block here, just a reusable assertion called inside a test */
+    check(val >= min && val <= max, "expected %d to be in [%d, %d]", val, min, max);
+}
+
 suite("tinytest C Example") {
 
     static int a, b;
@@ -152,6 +163,17 @@ suite("tinytest C Example") {
 
             check_int_eq(tt_remove_tree(dir), 0);
             free(dir);
+        }
+    }
+
+    group("Function organization") {
+        /* Helpers containing 'it' or 'describe' should be called at group/suite level */
+        verify_even(42);
+        verify_even(100);
+
+        it("should allow calling functions WITH NO 'it' inside tests") {
+            int score = 85;
+            check_in_range(score, 0, 100);
         }
     }
 

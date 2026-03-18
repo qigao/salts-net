@@ -7,11 +7,9 @@
  * A single-header testing library providing:
  *   - BDD syntax:  spec/describe/it/before/after/before_each/after_each
  *   - TDD syntax:  TEST_CASE/SECTION/check macros
- *   - Catch2-style: REQUIRE/CHECK, GIVEN/WHEN/THEN, INFO/CAPTURE, SECTION
- *   - Catch2 matchers: WithinRel, WithinAbs, string ends_with/contains
  *   - Typed assertions: check_int_eq, check_str_eq, check_float_eq, etc.
  *   - C++ templates: check_equal<T>, check_not_equal<T>, check_greater<T>, check_less<T>
- *   - Exception testing: REQUIRE_THROWS, REQUIRE_THROWS_AS, REQUIRE_NOTHROW, etc.
+ *   - Exception testing: check_throws, check_throws_as, check_nothrow, etc.
  *   - Benchmarking: benchmark("name", N) { code; }
  *   - Output formats: colored console, TAP, JUnit XML
  *   - Test filtering: --filter, --list, focus (fit/it_only), skip (xit)
@@ -127,6 +125,18 @@ extern "C" {
 #define __BDD_COLOR_YELLOW__ "\x1B[33m"
 #define __BDD_COLOR_BOLD__ "\x1B[1m"
 #define __BDD_COLOR_MAGENTA__ "\x1B[35m"
+
+#ifndef __BDD_TLS
+  #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+    #define __BDD_TLS _Thread_local
+  #elif defined(_MSC_VER)
+    #define __BDD_TLS __declspec(thread)
+  #elif defined(__GNUC__) || defined(__clang__)
+    #define __BDD_TLS __thread
+  #else
+    #define __BDD_TLS
+  #endif
+#endif
 
 /* Cross-platform high-resolution timer */
 static inline double __bdd_get_time_ms__(void) {
@@ -817,9 +827,12 @@ static void __bdd_node_free__(__bdd_node__ *n) {
 }
 
 static __bdd_spec_fn__ __bdd_current_spec_fn__ = NULL;
-static inline void __bdd_test_main__(__bdd_config_type__ *__bdd_config__) {
+static __BDD_TLS __bdd_config_type__ *__bdd_active_config__ = NULL;
+
+static inline void __bdd_test_main__(__bdd_config_type__ *config) {
+  __bdd_active_config__ = config;
   if (__bdd_current_spec_fn__) {
-    __bdd_current_spec_fn__(__bdd_config__);
+    __bdd_current_spec_fn__(config);
   }
 }
 static char *__bdd_vformat__(const char *format, va_list va);
@@ -1554,9 +1567,9 @@ int main(int argc, char **argv) {
 #define __BDD_NODE__(flags, node_list, type, ...)                                                  \
   for (bool __BDD_CAT2(__bdd_has_run_, __LINE__) = 0;                                              \
        (!__BDD_CAT2(__bdd_has_run_, __LINE__) &&                                                   \
-        __bdd_enter_node__(flags, __bdd_config__, (type),                                          \
+        __bdd_enter_node__(flags, __bdd_active_config__, (type),                                   \
                            offsetof(struct __bdd_node__, node_list), __VA_ARGS__));                \
-       __bdd_exit_node__(__bdd_config__), __BDD_CAT2(__bdd_has_run_, __LINE__) = 1)
+       __bdd_exit_node__(__bdd_active_config__), __BDD_CAT2(__bdd_has_run_, __LINE__) = 1)
 
 #define describe(...)                                                                              \
   __BDD_NODE__(__bdd_node_flags_none__, list_children, __BDD_NODE_GROUP__, __VA_ARGS__)
@@ -1591,7 +1604,7 @@ int main(int argc, char **argv) {
   #define context(name) describe(name)
 #endif
 
-#define bdd_invoke(func, ...) func(__bdd_config__, ##__VA_ARGS__)
+#define bdd_invoke(func, ...) func(__bdd_active_config__, ##__VA_ARGS__)
 
 #define __BDD_MACRO__(M, ...) __BDD_OVERLOAD__(M, __BDD_COUNT_ARGS__(__VA_ARGS__))(__VA_ARGS__)
 #define __BDD_OVERLOAD__(macro_name, suffix) __BDD_EXPAND_OVERLOAD__(macro_name, suffix)
@@ -1611,22 +1624,22 @@ static inline int __bdd_eval_bool__(int v) { return v; }
 
 #define __BDD_CHECK__(condition, ...)                                                              \
   if (!__bdd_eval_bool__(!!(condition))) {                                                         \
-    ++__bdd_config__->assertion_count;                                                             \
-    ++__bdd_config__->assertion_failed_count;                                                      \
+    ++__bdd_active_config__->assertion_count;                                                      \
+    ++__bdd_active_config__->assertion_failed_count;                                               \
     char *message = __bdd_format__(__VA_ARGS__);                                                   \
-    const char *fmt = __bdd_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__;           \
-    __bdd_config__->location = __BDD_CONST_CAST(char *, "at " __FILE__ ":" __STRING__LINE__);      \
+    const char *fmt = __bdd_active_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__;     \
+    __bdd_active_config__->location = __BDD_CONST_CAST(char *, "at " __FILE__ ":" __STRING__LINE__); \
     size_t bufflen = strlen(fmt) + strlen(message) + 1;                                            \
-    __bdd_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));                     \
-    if (__bdd_config__->use_color) {                                                               \
-      snprintf(__bdd_config__->error, bufflen, __BDD_FMT_COLOR__, message);                        \
+    __bdd_active_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));              \
+    if (__bdd_active_config__->use_color) {                                                        \
+      snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, message);                 \
     } else {                                                                                       \
-      snprintf(__bdd_config__->error, bufflen, __BDD_FMT_PLAIN__, message);                        \
+      snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, message);                 \
     }                                                                                              \
     free(message);                                                                                 \
     return;                                                                                        \
   } else {                                                                                         \
-    ++__bdd_config__->assertion_count;                                                             \
+    ++__bdd_active_config__->assertion_count;                                                      \
   }
 
 #define __BDD_CHECK_ONE__(condition) __BDD_CHECK__(condition, #condition)
@@ -1788,7 +1801,7 @@ static inline int __bdd_eval_bool__(int v) { return v; }
   __BDD_WARN__((actual) <= (expected), "expected <= %f but got %f",                                \
                __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
 
-/* Relative tolerance: |actual - expected| <= rel * |expected| (Catch2 WithinRel equivalent) */
+/* Relative tolerance: |actual - expected| <= rel * |expected| */
 #define check_float_within_rel(actual, expected, rel)                                              \
   __BDD_CHECK__(fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=             \
                     __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),              \
@@ -1802,7 +1815,7 @@ static inline int __bdd_eval_bool__(int v) { return v; }
                __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                  \
                fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
 
-/* Absolute tolerance (Catch2 WithinAbs equivalent) — same as check_float_eq but named for clarity
+/* Absolute tolerance — same as check_float_eq but named for clarity
  */
 #define check_float_within_abs(actual, expected, margin) check_float_eq(actual, expected, margin)
 #define check_float_within_abs_warn(actual, expected, margin)                                      \
@@ -2189,15 +2202,16 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
     }                                                                                              \
   } while (0)
 
-/* --- Non-fatal assertion (Catch2 CHECK equivalent) --- */
+/* --- Non-fatal assertion --- */
 #define __BDD_WARN__(condition, ...)                                                               \
   if (!__bdd_eval_bool__(!!(condition))) {                                                         \
-    ++__bdd_config__->assertion_count;                                                             \
+    ++__bdd_active_config__->assertion_count;                                                      \
     char *message = __bdd_format__(__VA_ARGS__);                                                   \
-    ++__bdd_config__->warn_count;                                                                  \
-    __bdd_indent__(stdout,                                                                         \
-                   __bdd_config__->current_test ? __bdd_config__->current_test->level + 1 : 1);    \
-    if (__bdd_config__->use_color) {                                                               \
+    ++__bdd_active_config__->warn_count;                                                           \
+    __bdd_indent__(stdout, __bdd_active_config__->current_test                                    \
+                               ? __bdd_active_config__->current_test->level + 1                    \
+                               : 1);                                                               \
+    if (__bdd_active_config__->use_color) {                                                        \
       printf(__BDD_COLOR_YELLOW__ "Warning:" __BDD_COLOR_RESET__ " %s", message);                  \
     } else {                                                                                       \
       printf("Warning: %s", message);                                                              \
@@ -2205,34 +2219,34 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
     printf(" at " __FILE__ ":" __STRING__LINE__ "\n");                                             \
     free(message);                                                                                 \
   } else {                                                                                         \
-    ++__bdd_config__->assertion_count;                                                             \
+    ++__bdd_active_config__->assertion_count;                                                      \
   }
 
 #define __BDD_WARN_ONE__(condition) __BDD_WARN__(condition, #condition)
 
 #define check_warn(...) __BDD_MACRO__(__BDD_WARN_, __VA_ARGS__)
 
-/* --- Info context (Catch2 INFO / CAPTURE equivalent) --- */
+/* --- Info context --- */
 #define info(...)                                                                                  \
   do {                                                                                             \
     char *__bdd_info_msg__ = __bdd_format__(__VA_ARGS__);                                          \
     size_t __bdd_info_msg_len__ = strlen(__bdd_info_msg__);                                        \
-    if (__bdd_config__->info_len + __bdd_info_msg_len__ + 2 <                                      \
-        sizeof(__bdd_config__->info_buffer)) {                                                     \
-      if (__bdd_config__->info_len > 0) {                                                          \
-        __bdd_config__->info_buffer[__bdd_config__->info_len++] = ' ';                             \
+    if (__bdd_active_config__->info_len + __bdd_info_msg_len__ + 2 <                               \
+        sizeof(__bdd_active_config__->info_buffer)) {                                              \
+      if (__bdd_active_config__->info_len > 0) {                                                   \
+        __bdd_active_config__->info_buffer[__bdd_active_config__->info_len++] = ' ';              \
       }                                                                                            \
-      memcpy(__bdd_config__->info_buffer + __bdd_config__->info_len, __bdd_info_msg__,             \
+      memcpy(__bdd_active_config__->info_buffer + __bdd_active_config__->info_len, __bdd_info_msg__, \
              __bdd_info_msg_len__);                                                                \
-      __bdd_config__->info_len += __bdd_info_msg_len__;                                            \
-      __bdd_config__->info_buffer[__bdd_config__->info_len] = '\0';                                \
+      __bdd_active_config__->info_len += __bdd_info_msg_len__;                                     \
+      __bdd_active_config__->info_buffer[__bdd_active_config__->info_len] = '\0';                 \
     }                                                                                              \
     free(__bdd_info_msg__);                                                                        \
   } while (0)
 
 #define capture(var, fmt) info(#var "=" fmt, (var))
 
-/* --- BDD aliases (Catch2 GIVEN/WHEN/THEN) --- */
+/* --- BDD keywords (given/when/then) --- */
 #define given(...) describe("Given " __VA_ARGS__)
 #define when(...) describe("When " __VA_ARGS__)
 #define then(...) it("Then " __VA_ARGS__)
@@ -2240,10 +2254,10 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 #define and_when(...) describe("And when " __VA_ARGS__)
 #define and_then(...) it("And then " __VA_ARGS__)
 
-/* --- Section (Catch2 SECTION equivalent) --- */
+/* --- Section (TDD SECTION equivalent) --- */
 #define section(...) describe(__VA_ARGS__)
 
-/* --- TEST_CASE (Catch2 TEST_CASE equivalent) --- */
+/* --- TEST_CASE (TDD test case) --- */
 /* TEST_CASE("description") or TEST_CASE("description", "[tag]") */
 #define __BDD_TEST_CASE_1__(desc) it(desc)
 #define __BDD_TEST_CASE_2__(desc, tag) it(desc)
@@ -2251,22 +2265,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 #define TEST_CASE(...)                                                                             \
   __BDD_TEST_CASE_SELECT__(__VA_ARGS__, __BDD_TEST_CASE_2__, __BDD_TEST_CASE_1__)(__VA_ARGS__)
 
-/* --- Catch2 REQUIRE/CHECK aliases --- */
-#define REQUIRE(...) check(__VA_ARGS__)
-#define CHECK(...) check_warn(__VA_ARGS__)
-#define REQUIRE_FALSE(e) check(!(e))
-#define CHECK_FALSE(e) check_warn(!(e))
-#define INFO(...) info(__VA_ARGS__)
-#define CAPTURE(var, fmt) capture(var, fmt)
-#define SECTION(...) section(__VA_ARGS__)
-#define GIVEN(...) given(__VA_ARGS__)
-#define WHEN(...) when(__VA_ARGS__)
-#define THEN(...) then(__VA_ARGS__)
-#define AND_GIVEN(...) and_given(__VA_ARGS__)
-#define AND_WHEN(...) and_when(__VA_ARGS__)
-#define AND_THEN(...) and_then(__VA_ARGS__)
-
-/* --- Benchmark (Catch2 BENCHMARK equivalent) --- */
+/* --- Benchmarking --- */
 /* Usage: benchmark("name", iterations) { code; }
  * Runs the block `iterations` times and prints avg/min/max timing. */
 #if BDD_BENCH_COLLECT
@@ -2280,7 +2279,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
           double __sum;                                                                            \
         } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0};                           \
         !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                 \
-          __bdd_bench_add__(__bdd_config__, (name), __bdd_bm__.__n, __bdd_bm__.__sum,              \
+          __bdd_bench_add__(__bdd_active_config__, (name), __bdd_bm__.__n, __bdd_bm__.__sum,       \
                             __bdd_bm__.__min, __bdd_bm__.__max))                                   \
       for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
         for (double __bdd_bm_t0__ = __bdd_get_time_ms__(), __bdd_bm_t1__ = 0; __bdd_bm_t1__ == 0;  \
@@ -2304,8 +2303,9 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
         __bdd_bm__.__done = 1,                                                                     \
           __bdd_bench_print__(                                                                     \
               (name), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min, __bdd_bm__.__max,        \
-              __bdd_config__->current_test ? __bdd_config__->current_test->level + 1 : 1,          \
-              __bdd_config__->use_color))                                                          \
+              __bdd_active_config__->current_test ? __bdd_active_config__->current_test->level + 1 \
+                                                  : 1,                                             \
+              __bdd_active_config__->use_color))                                                   \
       for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
         for (double __bdd_bm_t0__ = __bdd_get_time_ms__(), __bdd_bm_t1__ = 0; __bdd_bm_t1__ == 0;  \
              __bdd_bm_t1__ = __bdd_get_time_ms__() - __bdd_bm_t0__,                                \
@@ -2693,10 +2693,10 @@ namespace __bdd_cpp__ {
       }                                                                                            \
     } while (0)
 
-  /* --- Exception testing macros (Catch2 equivalents) --- */
+  /* --- Exception testing macros --- */
 
-  /* REQUIRE_THROWS(expr) — must throw any exception */
-  #define REQUIRE_THROWS(expr)                                                                     \
+  /* check_throws(expr) — must throw any exception */
+  #define check_throws(expr)                                                                       \
     do {                                                                                           \
       bool __bdd_threw__ = false;                                                                  \
       try {                                                                                        \
@@ -2707,8 +2707,8 @@ namespace __bdd_cpp__ {
       __BDD_CHECK__(__bdd_threw__, "expected exception but none was thrown");                      \
     } while (0)
 
-  /* REQUIRE_THROWS_AS(expr, ExType) — must throw specific type */
-  #define REQUIRE_THROWS_AS(expr, ExType)                                                          \
+  /* check_throws_as(expr, ExType) — must throw specific type */
+  #define check_throws_as(expr, ExType)                                                            \
     do {                                                                                           \
       bool __bdd_threw_correct__ = false;                                                          \
       bool __bdd_threw_other__ = false;                                                            \
@@ -2726,8 +2726,8 @@ namespace __bdd_cpp__ {
       }                                                                                            \
     } while (0)
 
-  /* REQUIRE_THROWS_WITH(expr, msg) — must throw with what() containing msg */
-  #define REQUIRE_THROWS_WITH(expr, msg)                                                           \
+  /* check_throws_with(expr, msg) — must throw with what() containing msg */
+  #define check_throws_with(expr, msg)                                                             \
     do {                                                                                           \
       bool __bdd_threw__ = false;                                                                  \
       std::string __bdd_what__;                                                                    \
@@ -2749,8 +2749,8 @@ namespace __bdd_cpp__ {
       }                                                                                            \
     } while (0)
 
-  /* REQUIRE_NOTHROW(expr) — must not throw */
-  #define REQUIRE_NOTHROW(expr)                                                                    \
+  /* check_nothrow(expr) — must not throw */
+  #define check_nothrow(expr)                                                                      \
     do {                                                                                           \
       bool __bdd_threw__ = false;                                                                  \
       std::string __bdd_what__;                                                                    \
@@ -2770,8 +2770,8 @@ namespace __bdd_cpp__ {
       }                                                                                            \
     } while (0)
 
-  /* CHECK variants — non-fatal versions */
-  #define CHECK_THROWS(expr)                                                                       \
+  /* Non-fatal versions */
+  #define check_throws_warn(expr)                                                                  \
     do {                                                                                           \
       bool __bdd_threw__ = false;                                                                  \
       try {                                                                                        \
@@ -2782,7 +2782,7 @@ namespace __bdd_cpp__ {
       __BDD_WARN__(__bdd_threw__, "expected exception but none was thrown");                       \
     } while (0)
 
-  #define CHECK_THROWS_AS(expr, ExType)                                                            \
+  #define check_throws_as_warn(expr, ExType)                                                       \
     do {                                                                                           \
       bool __bdd_threw_correct__ = false;                                                          \
       bool __bdd_threw_other__ = false;                                                            \
@@ -2800,7 +2800,7 @@ namespace __bdd_cpp__ {
       }                                                                                            \
     } while (0)
 
-  #define CHECK_THROWS_WITH(expr, msg)                                                             \
+  #define check_throws_with_warn(expr, msg)                                                        \
     do {                                                                                           \
       bool __bdd_threw__ = false;                                                                  \
       std::string __bdd_what__;                                                                    \
@@ -2822,7 +2822,7 @@ namespace __bdd_cpp__ {
       }                                                                                            \
     } while (0)
 
-  #define CHECK_NOTHROW(expr)                                                                      \
+  #define check_nothrow_warn(expr)                                                                 \
     do {                                                                                           \
       bool __bdd_threw__ = false;                                                                  \
       std::string __bdd_what__;                                                                    \

@@ -21,7 +21,7 @@ target_include_directories(
   turbo_ice PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                    $<INSTALL_INTERFACE:include>)
 
-target_link_libraries(turbo_ice PUBLIC TurboNet::Core OpenSSL::SSL
+target_link_libraries(turbo_ice PUBLIC TurboNet::CoroNet OpenSSL::SSL
                                        OpenSSL::Crypto TurboNet::Utils)
 
 if(WIN32)

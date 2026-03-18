@@ -12,14 +12,14 @@ extern "C" {
 CXX_C_API s3_error_t s3_parse_error_xml(const char* xml_data);
 
 typedef struct {
-    S3BucketVec buckets;
+    S3BucketVec* buckets;
     s3_error_t error;
 } s3_list_buckets_parser_res_t;
 
 CXX_C_API s3_list_buckets_parser_res_t s3_parse_list_buckets_xml(const char* xml_data);
 
 typedef struct {
-    S3ItemVec items;
+    S3ItemVec* items;
     int is_truncated;
     tstr_t next_continuation_token;
     s3_error_t error;

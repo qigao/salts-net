@@ -259,37 +259,37 @@ suite("tinytest C++ Example") {
   describe("Exception testing") {
     static Calculator calc;
 
-    it("should catch division by zero") { REQUIRE_THROWS(calc.divide(1.0, 0.0)); }
+    it("should catch division by zero") { check_throws(calc.divide(1.0, 0.0)); }
 
     it("should catch specific exception type") {
-      REQUIRE_THROWS_AS(calc.divide(1.0, 0.0), std::invalid_argument);
+      check_throws_as(calc.divide(1.0, 0.0), std::invalid_argument);
     }
 
     it("should match exception message") {
-      REQUIRE_THROWS_WITH(calc.divide(1.0, 0.0), "division by zero");
+      check_throws_with(calc.divide(1.0, 0.0), "division by zero");
     }
 
-    it("should pass when no exception thrown") { REQUIRE_NOTHROW(calc.divide(10.0, 2.0)); }
+    it("should pass when no exception thrown") { check_nothrow(calc.divide(10.0, 2.0)); }
 
     it("should detect wrong exception type") {
-      CHECK_THROWS_AS(calc.divide(1.0, 0.0), std::invalid_argument);
+      check_throws_as_warn(calc.divide(1.0, 0.0), std::invalid_argument);
     }
 
-    it("should use CHECK_NOTHROW for non-fatal") {
-      CHECK_NOTHROW(calc.add(1, 2));
-      CHECK_NOTHROW(calc.subtract(5, 3));
+    it("should use check_nothrow_warn for non-fatal") {
+      check_nothrow_warn(calc.add(1, 2));
+      check_nothrow_warn(calc.subtract(5, 3));
     }
 
     it("should throw from lambda") {
       auto bad = []() -> int { throw std::runtime_error("boom"); };
-      REQUIRE_THROWS(bad());
-      REQUIRE_THROWS_AS(bad(), std::runtime_error);
-      REQUIRE_THROWS_WITH(bad(), "boom");
+      check_throws(bad());
+      check_throws_as(bad(), std::runtime_error);
+      check_throws_with(bad(), "boom");
     }
 
     it("should not throw from lambda") {
       auto good = []() -> int { return 42; };
-      REQUIRE_NOTHROW(good());
+      check_nothrow(good());
       check_equal(good(), 42);
     }
   }

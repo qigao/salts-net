@@ -4,7 +4,9 @@
 
 set(TARGET_NAME data_bind)
 
-add_library(${TARGET_NAME} SHARED data_bind.c data_bind.h tbe_helpers.c)
+add_library(${TARGET_NAME} SHARED data_bind.c data_bind.h 
+tbe_helpers.c mustache_node_driver.c mustache_node_driver.h
+)
 add_library(TurboNet::DataBind ALIAS ${TARGET_NAME})
 
 target_compile_definitions(${TARGET_NAME} PRIVATE DATA_BIND_BUILD_DLL)
@@ -21,7 +23,9 @@ target_link_libraries(${TARGET_NAME}
   PRIVATE
     TurboNet::SchemaBE
     mir_static
+  PUBLIC
     TurboNet::Utils
+    TurboNet::Mustache
 )
 
 set_target_properties(${TARGET_NAME} PROPERTIES 

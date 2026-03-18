@@ -1,6 +1,7 @@
 #include "s3/s3_client.h"
 #include "s3/s3_signer.h"
 #include "s3/s3_response.h"
+#include "s3_types_vec.h"
 #include "s3/s3_xml_builder.h"
 #include "s3_http.h"
 #include "s3_client_internal.h"
@@ -133,7 +134,11 @@ void s3_remove_objects_response_free(s3_remove_objects_response_t* resp) {
 void s3_presigned_post_free(s3_presigned_post_t* p) {
     if (!p) return;
     tstr_free(p->url);
-    S3Headers_drop(&p->form_data);
+    if (p->form_data) {
+        S3Headers_drop(p->form_data);
+        free(p->form_data);
+        p->form_data = NULL;
+    }
     s3_error_free(&p->error);
     p->url = NULL;
 }
@@ -152,7 +157,8 @@ void s3_select_request_free(s3_select_request_t* req) {
 
 s3_list_buckets_response_t s3_list_buckets(s3_client_t* client) {
     s3_list_buckets_response_t res = {0};
-    res.buckets = S3BucketVec_init();
+    res.buckets = malloc(sizeof(S3BucketVec));
+    *res.buckets = S3BucketVec_init();
     if (!client || !client->provider) {
         res.error = s3_error_make(-1, "Invalid client or provider");
         return res;
@@ -165,7 +171,8 @@ s3_list_buckets_response_t s3_list_buckets(s3_client_t* client) {
     res.error = check_response(&hres, 200);
     if (s3_is_ok(res.error)) {
         s3_list_buckets_parser_res_t pres = s3_parse_list_buckets_xml(hres.body);
-        S3BucketVec_drop(&res.buckets);
+        S3BucketVec_drop(res.buckets);
+        free(res.buckets);
         res.buckets = pres.buckets;
         res.error = pres.error;
     }
@@ -175,7 +182,11 @@ s3_list_buckets_response_t s3_list_buckets(s3_client_t* client) {
 
 void s3_list_buckets_free(s3_list_buckets_response_t* resp) {
     if (!resp) return;
-    S3BucketVec_drop(&resp->buckets);
+    if (resp->buckets) {
+        S3BucketVec_drop(resp->buckets);
+        free(resp->buckets);
+        resp->buckets = NULL;
+    }
     s3_error_free(&resp->error);
 }
 
@@ -580,7 +591,7 @@ struct s3_list_objects_iter_s {
     int recursive;
     int is_truncated;
     tstr_t continuation_token;
-    S3ItemVec items;
+    S3ItemVec* items;
     size_t current_idx;
     s3_error_t error;
 };
@@ -596,7 +607,8 @@ s3_list_objects_iter_t* s3_list_objects(s3_client_t* client,
     iter->bucket = tstr_dup(bucket);
     iter->prefix = prefix ? tstr_dup(prefix) : tstr_new();
     iter->recursive = recursive;
-    iter->items = S3ItemVec_init();
+    iter->items = malloc(sizeof(S3ItemVec));
+    *iter->items = S3ItemVec_init();
     iter->is_truncated = 1;
     iter->error = S3_OK;
     return iter;
@@ -618,7 +630,8 @@ static void s3_list_objects_fetch_next_page(s3_list_objects_iter_t* iter) {
 
     if (s3_is_ok(hres.error) && hres.status_code == 200) {
         s3_list_objects_parser_res_t pres = s3_parse_list_objects_xml(hres.body);
-        S3ItemVec_drop(&iter->items);
+        S3ItemVec_drop(iter->items);
+        free(iter->items);
         iter->items = pres.items;
         iter->is_truncated = pres.is_truncated;
         tstr_free(iter->continuation_token);
@@ -639,13 +652,13 @@ static void s3_list_objects_fetch_next_page(s3_list_objects_iter_t* iter) {
 
 int s3_list_objects_next(s3_list_objects_iter_t* iter, s3_item_t* item) {
     if (!iter) return 0;
-    while (iter->current_idx >= S3ItemVec_size(&iter->items)) {
+    while (iter->current_idx >= S3ItemVec_size(iter->items)) {
         if (!iter->is_truncated) return 0;
         s3_list_objects_fetch_next_page(iter);
         if (!s3_is_ok(iter->error)) return 0;
-        if (S3ItemVec_size(&iter->items) == 0 && !iter->is_truncated) return 0;
+        if (S3ItemVec_size(iter->items) == 0 && !iter->is_truncated) return 0;
     }
-    *item = s3_item_clone(*S3ItemVec_at(&iter->items, iter->current_idx));
+    *item = s3_item_clone(*S3ItemVec_at(iter->items, iter->current_idx));
     iter->current_idx++;
     return 1;
 }
@@ -660,7 +673,10 @@ void s3_list_objects_free(s3_list_objects_iter_t* iter) {
     tstr_free(iter->bucket);
     tstr_free(iter->prefix);
     tstr_free(iter->continuation_token);
-    S3ItemVec_drop(&iter->items);
+    if (iter->items) {
+        S3ItemVec_drop(iter->items);
+        free(iter->items);
+    }
     s3_error_free(&iter->error);
     free(iter);
 }
@@ -1067,7 +1083,8 @@ s3_presigned_post_t s3_get_presigned_post_form_data(
     s3_client_t* client, const char* bucket, const char* object,
     int expires_secs) {
     s3_presigned_post_t res = {0};
-    res.form_data = S3Headers_init();
+    res.form_data = malloc(sizeof(S3Headers));
+    *res.form_data = S3Headers_init();
     if (!client || !bucket || !object) {
         res.error = s3_error_make(-1, "Invalid params");
         return res;
@@ -1106,7 +1123,7 @@ s3_presigned_post_t s3_get_presigned_post_form_data(
     res.error = s3_signer_post_presign_v4(client->base_url.region,
                                               creds.access_key, creds.secret_key,
                                               creds.session_token, s3_time_now(),
-                                              policy_b64, &res.form_data);
+                                              policy_b64, res.form_data);
 
     s3_credentials_clear(&creds);
     tstr_free(policy);

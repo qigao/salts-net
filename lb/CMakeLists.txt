@@ -24,7 +24,7 @@ target_include_directories(
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../common/include>)
 
 # Link libraries
-target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Core)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::CoroNet)
 
 add_subdirectory(tests)
 

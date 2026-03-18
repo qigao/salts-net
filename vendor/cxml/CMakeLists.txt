@@ -172,7 +172,7 @@ target_link_libraries(cxml_tests PRIVATE cxml)
 target_include_directories(cxml_tests PRIVATE tests)
 set_target_properties(cxml_tests PROPERTIES FOLDER vendor/cxml)
 
-install(TARGETS cxml DESTINATION cxml/lib)
-install(DIRECTORY ${CXML_INCLUDES} DESTINATION cxml/include)
+# install(TARGETS cxml DESTINATION cxml/lib)
+# install(DIRECTORY ${CXML_INCLUDES} DESTINATION cxml/include)
 
 # credits: lamarrr/stx

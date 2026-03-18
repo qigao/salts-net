@@ -71,7 +71,7 @@ target_include_directories(
 target_link_libraries(
   http_client
   PUBLIC
-    TurboNet::Utils TurboNet::Core zstd::libzstd
+    TurboNet::Utils TurboNet::CoroNet zstd::libzstd
     $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE
     llhttp::llhttp_static cjwt sds

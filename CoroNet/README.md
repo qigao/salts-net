@@ -170,7 +170,7 @@ int size = turbo_config_get_int("tcp.recv_buffer_size", 8192);
 ```bash
 # Add to your CMake project
 find_package(TurboNet REQUIRED)
-target_link_libraries(your_target TurboNet::Core)
+target_link_libraries(your_target TurboNet::CoroNet)
 ```
 
 ## Dependencies

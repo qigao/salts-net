@@ -2,6 +2,7 @@
 #define SRC_S3_HTTP_H
 
 #include "s3/s3_multimap.h"
+#include "s3_multimap_impl.h"
 #include "s3/s3_error.h"
 #include "s3/s3_client.h"
 #include <http_client.h>

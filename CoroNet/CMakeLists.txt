@@ -9,14 +9,14 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
 
 # Build SHARED library (DLL)
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-add_library(TurboNet::Core ALIAS ${TARGET_NAME})
+add_library(TurboNet::CoroNet ALIAS ${TARGET_NAME})
 
 # Set target properties
 set_target_properties(
   ${TARGET_NAME}
   PROPERTIES VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}
-             OUTPUT_NAME coronet)
+             OUTPUT_NAME CoroNet)
 
 target_include_directories(
   ${TARGET_NAME}
@@ -39,12 +39,12 @@ target_link_libraries(
 
 # Set target properties
 set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${TARGET_NAME}
-                                                EXPORT_NAME Core)
+                                                EXPORT_NAME CoroNet)
 
 # Build STATIC library for internal use (tests)
 set(STATIC_TARGET_NAME ${TARGET_NAME}_static)
 add_library(${STATIC_TARGET_NAME} STATIC ${SOURCE_FILES})
-add_library(TurboNet::Core_static ALIAS ${STATIC_TARGET_NAME})
+add_library(TurboNet::CoroNet_static ALIAS ${STATIC_TARGET_NAME})
 
 set_target_properties(${STATIC_TARGET_NAME} PROPERTIES OUTPUT_NAME coronet_static
                                                         FOLDER ${TARGET_NAME})

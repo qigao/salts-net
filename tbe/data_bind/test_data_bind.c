@@ -17,12 +17,13 @@
 
 #define MAX_FIELDS 32
 
-typedef enum { FIELD_INT, FIELD_DOUBLE, FIELD_STRING, FIELD_BYTES } FieldType;
+typedef enum { FIELD_INT, FIELD_INT64, FIELD_DOUBLE, FIELD_STRING, FIELD_BYTES } FieldType;
 
 typedef struct {
     char name[128];
     FieldType type;
     int32_t  int_val;
+    int64_t  int64_val;
     double   dbl_val;
     char     str_val[256];
     uint8_t  bytes_val[256];
@@ -47,6 +48,14 @@ static void mock_set_field_int(Value* obj, const char* name, int32_t val) {
     strncpy(f->name, name, sizeof(f->name) - 1);
     f->type = FIELD_INT;
     f->int_val = val;
+}
+
+static void mock_set_field_int64(Value* obj, const char* name, int64_t val) {
+    if (!obj || obj->field_count >= MAX_FIELDS) return;
+    MockField* f = &obj->fields[obj->field_count++];
+    strncpy(f->name, name, sizeof(f->name) - 1);
+    f->type = FIELD_INT64;
+    f->int64_val = val;
 }
 
 static void mock_set_field_double(Value* obj, const char* name, double val) {
@@ -75,11 +84,12 @@ static void mock_set_field_bytes(Value* obj, const char* name, const uint8_t* da
 }
 
 static DataBindValueApi test_api = {
-    .create_object   = mock_create_object,
-    .set_field_int    = mock_set_field_int,
-    .set_field_double = mock_set_field_double,
-    .set_field_string = mock_set_field_string,
-    .set_field_bytes  = mock_set_field_bytes,
+    .create_object    = mock_create_object,
+    .set_field_int     = mock_set_field_int,
+    .set_field_int64   = mock_set_field_int64,
+    .set_field_double  = mock_set_field_double,
+    .set_field_string  = mock_set_field_string,
+    .set_field_bytes   = mock_set_field_bytes,
 };
 
 /* ───── Helpers to look up fields by name ───── */
@@ -185,10 +195,10 @@ suite("Data Bind") {
                         if (f) { check(f->type == FIELD_INT); check(f->int_val == 42); }
                     }
 
-                    then("uint64 field d should be 1000000 (as double)") {
+                    then("uint64 field d should be 1000000 (as int64)") {
                         MockField* f = find_field(v, "d");
                         check_not_null(f);
-                        if (f) { check(f->type == FIELD_DOUBLE); check(fabs(f->dbl_val - 1000000.0) < 1.0); }
+                        if (f) { check(f->type == FIELD_INT64); check(f->int64_val == 1000000LL); }
                     }
 
                     if (v) free(v);
@@ -422,11 +432,12 @@ suite("Data Bind") {
     section("NULL set_field_bytes callback") {
         given("an API without set_field_bytes") {
             DataBindValueApi api_no_bytes = {
-                .create_object   = mock_create_object,
-                .set_field_int    = mock_set_field_int,
-                .set_field_double = mock_set_field_double,
-                .set_field_string = mock_set_field_string,
-                .set_field_bytes  = NULL  /* NULL callback */
+                .create_object    = mock_create_object,
+                .set_field_int     = mock_set_field_int,
+                .set_field_int64   = mock_set_field_int64,
+                .set_field_double  = mock_set_field_double,
+                .set_field_string  = mock_set_field_string,
+                .set_field_bytes   = NULL  /* NULL callback */
             };
 
             write_schema("test_no_bytes.tbe",
@@ -506,6 +517,102 @@ suite("Data Bind") {
             }
 
             remove("test_many_msgs.tbe");
+        }
+    }
+
+    section("Variable-length String Parsing") {
+        given("a schema with string field") {
+            write_schema("test_varstr.tbe",
+                "message Msg { string name; }\n");
+
+            DataBind* codec = data_bind_create("test_varstr.tbe", &test_api);
+            check_not_null(codec);
+
+            if (codec) {
+                when("parsing buffer with varstr 'Turbo'") {
+                    uint8_t buf[7];
+                    *(uint16_t*)buf = 5;       /* length = 5 */
+                    memcpy(buf + 2, "Turbo", 5);
+                    Value* v = data_bind_parse(codec, "Msg", buf, sizeof(buf));
+
+                    then("should succeed") {
+                        check_not_null(v);
+                    }
+
+                    then("name should be 'Turbo'") {
+                        MockField* f = find_field(v, "name");
+                        check_not_null(f);
+                        if (f) {
+                            check(f->type == FIELD_STRING);
+                            check(strcmp(f->str_val, "Turbo") == 0);
+                        }
+                    }
+
+                    if (v) free(v);
+                }
+
+                data_bind_free(codec);
+            }
+            remove("test_varstr.tbe");
+        }
+    section("Extended Types Parsing") {
+        given("a schema with bool, float, double and multi-size enums") {
+            write_schema("test_extended.tbe",
+                "enum LargeEnum <uint32> { Big = 0x12345678; }\n"
+                "message Ext {\n"
+                "    bool flag;\n"
+                "    float f_val;\n"
+                "    double d_val;\n"
+                "    LargeEnum le;\n"
+                "}\n");
+
+            DataBind* codec = data_bind_create("test_extended.tbe", &test_api);
+            check_not_null(codec);
+
+            if (codec) {
+                when("parsing buffer with extended types") {
+                    uint8_t buf[1 + 4 + 8 + 4];
+                    buf[0] = 1;                                  /* bool flag = true */
+                    *(float*)(buf + 1) = 3.14f;                 /* float f_val */
+                    *(double*)(buf + 5) = 2.718281828;          /* double d_val */
+                    *(uint32_t*)(buf + 13) = 0x12345678;        /* LargeEnum le (uint32) */
+
+                    Value* v = data_bind_parse(codec, "Ext", buf, sizeof(buf));
+
+                    then("should succeed") {
+                        check_not_null(v);
+                    }
+
+                    then("bool flag should be 1") {
+                        MockField* f = find_field(v, "flag");
+                        check_not_null(f);
+                        if (f) { check(f->type == FIELD_INT); check(f->int_val == 1); }
+                    }
+
+                    then("float f_val should be approx 3.14") {
+                        MockField* f = find_field(v, "f_val");
+                        check_not_null(f);
+                        if (f) { check(f->type == FIELD_DOUBLE); check(fabs(f->dbl_val - 3.14) < 1e-4); }
+                    }
+
+                    then("double d_val should be approx 2.71828") {
+                        MockField* f = find_field(v, "d_val");
+                        check_not_null(f);
+                        if (f) { check(f->type == FIELD_DOUBLE); check(fabs(f->dbl_val - 2.718281828) < 1e-9); }
+                    }
+
+                    then("LargeEnum le should be 0x12345678") {
+                        MockField* f = find_field(v, "le");
+                        check_not_null(f);
+                        if (f) { check(f->type == FIELD_INT); check(f->int_val == 0x12345678); }
+                    }
+
+                    if (v) free(v);
+                }
+
+                data_bind_free(codec);
+            }
+            remove("test_extended.tbe");
         }
     }
 }

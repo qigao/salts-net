@@ -1,4 +1,5 @@
 #include "s3/s3_response.h"
+#include "s3_types_vec.h"
 #include "s3/s3_time.h"
 #include "s3_xml_helpers.h"
 #include <turbo_str.h>
@@ -51,8 +52,9 @@ s3_error_t s3_parse_error_xml(const char* xml_data) {
 
 s3_list_buckets_parser_res_t s3_parse_list_buckets_xml(const char* xml_data) {
     s3_list_buckets_parser_res_t res = {0};
-    res.buckets = S3BucketVec_init();
-    
+    res.buckets = malloc(sizeof(S3BucketVec));
+    *res.buckets = S3BucketVec_init();
+
     void* doc = cxml_load_string(xml_data);
     if (!doc) {
         res.error = s3_error_make(-1, "Failed to parse XML");
@@ -65,15 +67,15 @@ s3_list_buckets_parser_res_t s3_parse_list_buckets_xml(const char* xml_data) {
         cxml_list items;
         cxml_list_init(&items);
         cxml_find_all(buckets_node, "<Bucket>/", &items);
-        
+
         cxml_for (node, &items) {
             cxml_elem_node* btnode = (cxml_elem_node*)node;
             s3_bucket_t b;
             b.name = mxml_child_text_dup(btnode, "Name");
             tstr_t date_str = mxml_child_text_dup(btnode, "CreationDate");
             // Placeholder: convert date_str to time_t
-            b.creation_date = 0; 
-            S3BucketVec_push(&res.buckets, b);
+            b.creation_date = 0;
+            S3BucketVec_push(res.buckets, b);
             tstr_free(date_str);
         }
         cxml_list_free(&items);
@@ -86,8 +88,9 @@ s3_list_buckets_parser_res_t s3_parse_list_buckets_xml(const char* xml_data) {
 
 s3_list_objects_parser_res_t s3_parse_list_objects_xml(const char* xml_data) {
     s3_list_objects_parser_res_t res = {0};
-    res.items = S3ItemVec_init();
-    
+    res.items = malloc(sizeof(S3ItemVec));
+    *res.items = S3ItemVec_init();
+
     void* doc = cxml_load_string(xml_data);
     if (!doc) {
         res.error = s3_error_make(-1, "Failed to parse XML");
@@ -118,7 +121,7 @@ s3_list_objects_parser_res_t s3_parse_list_objects_xml(const char* xml_data) {
         tstr_t size_str = mxml_child_text_dup(inode, "Size");
         item.size = (size_t)atoll(size_str);
         tstr_free(size_str);
-        
+
         item.etag = mxml_child_text_dup(inode, "ETag");
         tstr_t lm_str = mxml_child_text_dup(inode, "LastModified");
         // Convert to time_t if needed, for now just placeholder
@@ -128,7 +131,7 @@ s3_list_objects_parser_res_t s3_parse_list_objects_xml(const char* xml_data) {
         item.storage_class = mxml_child_text_dup(inode, "StorageClass");
         item.is_prefix = 0;
 
-        S3ItemVec_push(&res.items, item);
+        S3ItemVec_push(res.items, item);
     }
     cxml_list_free(&items);
 
@@ -140,7 +143,7 @@ s3_list_objects_parser_res_t s3_parse_list_objects_xml(const char* xml_data) {
         s3_item_t item = {0};
         item.name = mxml_child_text_dup(pnode, "Prefix");
         item.is_prefix = 1;
-        S3ItemVec_push(&res.items, item);
+        S3ItemVec_push(res.items, item);
     }
     cxml_list_free(&items);
 
@@ -151,7 +154,11 @@ s3_list_objects_parser_res_t s3_parse_list_objects_xml(const char* xml_data) {
 
 void s3_list_objects_parser_res_free(s3_list_objects_parser_res_t* res) {
     if (!res) return;
-    S3ItemVec_drop(&res->items);
+    if (res->items) {
+        S3ItemVec_drop(res->items);
+        free(res->items);
+        res->items = NULL;
+    }
     tstr_free(res->next_continuation_token);
     s3_error_free(&res->error);
     res->next_continuation_token = NULL;

@@ -2,7 +2,7 @@
 
 Single-header BDD/TDD testing framework for C and C++. Zero dependencies beyond libc.
 
-Features: spec/describe/it, Catch2-style REQUIRE/CHECK/GIVEN/WHEN/THEN, typed assertions, benchmarking, TAP, JUnit XML, color output, test filtering.
+Features: spec/describe/it, given/when/then, TDD TEST_CASE/SECTION, check/check_warn, typed assertions, benchmarking, TAP, JUnit XML, color output, test filtering.
 
 ## Quick Start
 
@@ -46,15 +46,6 @@ check(x > 0, "expected positive but got %d", x);
 ```c
 check_warn(a == 1);
 check_warn(b == 2);
-```
-
-### Catch2 Aliases
-
-```c
-REQUIRE(x > 0);          /* same as check() */
-CHECK(x > 0);            /* same as check_warn() */
-REQUIRE_FALSE(done);     /* check(!(done)) */
-CHECK_FALSE(done);       /* check_warn(!(done)) */
 ```
 
 ### Typed Assertions
@@ -136,8 +127,6 @@ check_str_array_eq(actual, expected, n);
 ```c
 info("request_id=%d", req_id);     /* prints on failure only */
 capture(count, "%d");              /* expands to info("count=%d", count) */
-INFO("same as info");              /* Catch2 alias */
-CAPTURE(count, "%d");              /* Catch2 alias */
 ```
 
 ## Test Structure
@@ -152,7 +141,7 @@ spec("my module") {
 }
 ```
 
-### TEST_CASE / SECTION (Catch2 style)
+### TEST_CASE / SECTION (TDD style)
 
 ```c
 spec("tests") {
@@ -187,8 +176,6 @@ spec("account") {
     }
 }
 ```
-
-Uppercase aliases also available: `GIVEN`, `WHEN`, `THEN`, `AND_GIVEN`, `AND_WHEN`, `AND_THEN`.
 
 ### Focus / Skip / Expected Failure
 
@@ -291,19 +278,19 @@ check_less(actual, expected);        /* T < T */
 
 ## C++ Exception Testing
 
-Catch2-compatible exception assertion macros.
+Lowercase assertion macros for testing exceptions.
 
 ```cpp
 /* Fatal — test stops on failure */
-REQUIRE_THROWS(expr);                /* must throw any exception */
-REQUIRE_THROWS_AS(expr, ExType);     /* must throw specific type */
-REQUIRE_THROWS_WITH(expr, "msg");    /* what() must contain "msg" */
-REQUIRE_NOTHROW(expr);               /* must not throw */
+check_throws(expr);                /* must throw any exception */
+check_throws_as(expr, ExType);     /* must throw specific type */
+check_throws_with(expr, "msg");    /* what() must contain "msg" */
+check_nothrow(expr);               /* must not throw */
 
 /* Non-fatal — test continues on failure */
-CHECK_THROWS(expr);
-CHECK_THROWS_AS(expr, ExType);
-CHECK_NOTHROW(expr);
+check_throws_warn(expr);
+check_throws_as_warn(expr, ExType);
+check_nothrow_warn(expr);
 ```
 
 Example:
@@ -319,12 +306,12 @@ int divide(int a, int b) {
 
 spec("exception tests") {
     it("should throw on division by zero") {
-        REQUIRE_THROWS_AS(divide(1, 0), std::invalid_argument);
-        REQUIRE_THROWS_WITH(divide(1, 0), "division by zero");
+        check_throws_as(divide(1, 0), std::invalid_argument);
+        check_throws_with(divide(1, 0), "division by zero");
     }
 
     it("should not throw on valid input") {
-        REQUIRE_NOTHROW(divide(10, 2));
+        check_nothrow(divide(10, 2));
         check_equal(divide(10, 2), 5);
     }
 }

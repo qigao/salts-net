@@ -124,12 +124,34 @@ spec("turbo_script_mir") {
     it("should return -1 on NULL script") {
       turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_compile_mir(ctx, NULL), -1);
+      check_int_eq((int)turbo_script_get_error_code(ctx), (int)TURBO_SCRIPT_ERROR_ARGUMENT);
       turbo_script_free(ctx);
     }
 
     it("should return -1 on invalid syntax") {
       turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_compile_mir(ctx, "??? +++"), -1);
+      check_int_eq((int)turbo_script_get_error_code(ctx), (int)TURBO_SCRIPT_ERROR_PARSE);
+      check_not_null(strstr(turbo_script_get_error(ctx), "line 1"));
+      turbo_script_free(ctx);
+    }
+
+    it("should compile and execute scripts with more than 128 variables") {
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
+      char script[4096];
+      size_t len = 0;
+
+      memset(script, 0, sizeof(script));
+      for (int i = 0; i < 129; ++i) {
+        len += (size_t)snprintf(script + len, sizeof(script) - len, "v%d = %d;", i, i);
+      }
+
+      check_int_eq(turbo_script_compile_mir(ctx, script), 0);
+      check_int_eq(turbo_script_exec_jit(ctx), 0);
+      check_null(strstr(turbo_script_get_error(ctx), "variable limit exceeded"));
+      check_double_eq(get_num(ctx, "v0"), 0.0, EPS);
+      check_double_eq(get_num(ctx, "v64"), 64.0, EPS);
+      check_double_eq(get_num(ctx, "v128"), 128.0, EPS);
       turbo_script_free(ctx);
     }
   }
@@ -190,6 +212,7 @@ spec("turbo_script_mir") {
     it("should return -1 on NULL script") {
       turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_run_jit(ctx, NULL), -1);
+      check_int_eq((int)turbo_script_get_error_code(ctx), (int)TURBO_SCRIPT_ERROR_ARGUMENT);
       turbo_script_free(ctx);
     }
 
@@ -224,6 +247,7 @@ spec("turbo_script_mir") {
     it("should return -1 when no module compiled") {
       turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
       check_int_eq(turbo_script_exec_jit(ctx), -1);
+      check_int_eq((int)turbo_script_get_error_code(ctx), (int)TURBO_SCRIPT_ERROR_STATE);
       turbo_script_free(ctx);
     }
   }

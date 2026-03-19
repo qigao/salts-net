@@ -28,6 +28,7 @@
 /* Internal registry */
 void exprtk_registry_init(void);
 exprtk_builtin_fn exprtk_registry_find(const char *name);
+exprtk_value_t exprtk_value_clone_to_env(exprtk_value_t value, exprtk_env_t *dst_env);
 
 /* Built-in module accessors */
 const exprtk_module_t *exprtk_module_math(void);

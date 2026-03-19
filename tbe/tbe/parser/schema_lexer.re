@@ -119,6 +119,14 @@ lex_start:
         }
 
         // Literals
+        "0x" [0-9a-fA-F]+ {
+            token->type = SCHEMA_TOKEN_NUMBER;
+            token->value = token_start;
+            token->length = (size_t)(YYCURSOR - token_start);
+            lexer->cursor = YYCURSOR;
+            return 1;
+        }
+
         [0-9]+ {
             token->type = SCHEMA_TOKEN_NUMBER;
             token->value = token_start;

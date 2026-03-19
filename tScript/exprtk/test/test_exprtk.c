@@ -5,11 +5,55 @@
  */
 
 #include "exprtk.h"
+#include "exprtk_lexer.h"
 #include "exprtk_module.h"
 #include "tinytest.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include <math.h>
+void exprtkParse(void *yyp, int yymajor, exprtk_token_t yyminor, exprtk_parse_ctx_t *ctx);
+void *exprtkParseAlloc(void *(*mallocProc)(size_t));
+void exprtkParseFree(void *p, void (*freeProc)(void *));
+
+static exprtk_node_t *parse_with_recovery_state(const char *input, mem_pool_t *arena,
+                                                exprtk_parse_ctx_t *ctx_out) {
+    exprtk_lexer_t lexer;
+    exprtk_parse_ctx_t ctx;
+    exprtk_token_t token;
+    void *parser;
+    int ret;
+
+    memset(&ctx, 0, sizeof(ctx));
+    memset(&token, 0, sizeof(token));
+    ctx.arena = arena;
+
+    parser = exprtkParseAlloc(malloc);
+    if (!parser) return NULL;
+
+    exprtk_lexer_init(&lexer, input, strlen(input));
+    while ((ret = exprtk_lexer_next(&lexer, &token)) > 0) {
+        exprtkParse(parser, ret, token, &ctx);
+        if (ctx.fatal_error) break;
+    }
+
+    if (ret < 0) {
+        ctx.error = 1;
+        ctx.fatal_error = 1;
+        if (ctx.error_msg[0] == '\0') {
+            snprintf(ctx.error_msg, sizeof(ctx.error_msg), "Lexer error at line %d", lexer.line);
+        }
+    } else if (!ctx.fatal_error) {
+        exprtk_token_t end_token;
+        memset(&end_token, 0, sizeof(end_token));
+        exprtkParse(parser, 0, end_token, &ctx);
+    }
+
+    exprtkParseFree(parser, free);
+    if (ctx_out) *ctx_out = ctx;
+    return ctx.root;
+}
 
 /* Helper for native function testing */
 static exprtk_value_t native_double(size_t argc, exprtk_value_t *args, void *ud) {
@@ -1201,6 +1245,25 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             check_float_eq(exprtk_eval(root, &env).data.number, 1.0, 0.001);
+            exprtk_free(root);
+            exprtk_env_free(&env);
+        }
+
+        it("should free shared list ownership without double-free") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+            const char *input =
+                "l = list(1, 2, 3); "
+                "alias = l; "
+                "rev = l.reverse(); "
+                "m = map{left: l, right: alias}; "
+                "keys = m.keys(); "
+                "vals = m.values(); "
+                "vals.length() + rev[0]";
+            exprtk_node_t *root = exprtk_parse(input, 0);
+            check_not_null(root);
+            check_float_eq(exprtk_eval(root, &env).data.number, 5.0, 0.001);
+            exprtk_free(root);
             exprtk_env_free(&env);
         }
     }
@@ -1247,6 +1310,38 @@ suite("exprtk_grammar") {
             }
             check_int_eq(strncmp(err_msg, "Syntax error at line 3, col 7 near 'b'", 38), 0);
             
+            mem_destroy(&arena);
+        }
+
+        it("should recover from a broken block at the closing brace") {
+            mem_pool_t arena;
+            exprtk_parse_ctx_t parse_ctx;
+            exprtk_node_t *root;
+            const char *input =
+                "head = 1;\n"
+                "if (flag) { broken + }\n"
+                "tail = 4;\n";
+
+            mem_init(&arena, 1024);
+            memset(&parse_ctx, 0, sizeof(parse_ctx));
+
+            root = parse_with_recovery_state(input, &arena, &parse_ctx);
+
+            check_not_null(root);
+            check_int_eq(parse_ctx.error, 1);
+            check_int_eq(parse_ctx.fatal_error, 0);
+            check_int_eq(root->type, EXPRTK_NODE_BLOCK);
+            check_int_eq(root->data.block.count, 3);
+            check_int_eq(root->data.block.statements[1]->type, EXPRTK_NODE_IF);
+            check_int_eq(root->data.block.statements[1]->data.if_stmt.if_branch->type,
+                         EXPRTK_NODE_BLOCK);
+            check_int_eq(root->data.block.statements[1]->data.if_stmt.if_branch->data.block.count,
+                         0);
+            check_int_eq(root->data.block.statements[2]->type, EXPRTK_NODE_ASSIGNMENT);
+            check_int_eq(strcmp(root->data.block.statements[2]->data.assignment.name, "tail"), 0);
+            check_int_eq(strncmp(parse_ctx.error_msg,
+                                 "Syntax error at line 2, col 22 near '}'", 39), 0);
+
             mem_destroy(&arena);
         }
     }

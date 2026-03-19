@@ -23,9 +23,12 @@ typedef struct imported_module_s {
 struct turbo_script_ctx_s {
     exprtk_env_t env;
     exprtk_node_t *expr;
+    char *expr_source;
     imported_module_t *imports;
-     mem_pool_t scratch_arena;
+    mem_pool_t scratch_arena;
+    char *current_script_dir;
     char error_msg[256];
+    turbo_script_error_code_t error_code;
 
     /* Plugin handles */
     ts_plugin_handle_t *plugins[TS_MAX_PLUGINS];
@@ -47,6 +50,8 @@ struct turbo_script_ctx_s {
 struct turbo_script_compiled_s {
     exprtk_node_t *ast;
 };
+
+exprtk_node_t *turbo_script_parse_with_error(turbo_script_ctx_t *ctx, const char *script);
 
 /* Built-in module accessors */
 void turbo_script_register_modules(void);

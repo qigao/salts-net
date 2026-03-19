@@ -6,7 +6,7 @@
  *
  * A single-header testing library providing:
  *   - BDD syntax:  spec/describe/it/before/after/before_each/after_each
- *   - TDD syntax:  TEST_CASE/SECTION/check macros
+ *   - TDD syntax:  suite/section/it/check macros
  *   - Typed assertions: check_int_eq, check_str_eq, check_float_eq, etc.
  *   - C++ templates: check_equal<T>, check_not_equal<T>, check_greater<T>, check_less<T>
  *   - Exception testing: check_throws, check_throws_as, check_nothrow, etc.
@@ -66,6 +66,7 @@ extern "C" {
 #endif
 
 #include <math.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -136,6 +137,13 @@ extern "C" {
   #else
     #define __BDD_TLS
   #endif
+#endif
+
+/* Cross-TU shared globals for header-only library */
+#if defined(_MSC_VER)
+  #define __BDD_SELECTANY __declspec(selectany)
+#else
+  #define __BDD_SELECTANY __attribute__((weak))
 #endif
 
 /* Cross-platform high-resolution timer */
@@ -628,6 +636,9 @@ typedef struct __bdd_config_type__ {
   size_t assertion_failed_count;
   char info_buffer[2048];
   size_t info_len;
+  char location_buf[512];
+  jmp_buf jump_buffer;
+  bool skip_subsequent;
   bool list_only;
   const char *filter;
   __bdd_bench_entry__ *bench_entries;
@@ -826,8 +837,8 @@ static void __bdd_node_free__(__bdd_node__ *n) {
   free(n);
 }
 
-static __bdd_spec_fn__ __bdd_current_spec_fn__ = NULL;
-static __BDD_TLS __bdd_config_type__ *__bdd_active_config__ = NULL;
+__BDD_SELECTANY __BDD_TLS __bdd_spec_fn__ __bdd_current_spec_fn__ = NULL;
+__BDD_SELECTANY __BDD_TLS __bdd_config_type__ *__bdd_active_config__ = NULL;
 
 static inline void __bdd_test_main__(__bdd_config_type__ *config) {
   __bdd_active_config__ = config;
@@ -1053,13 +1064,24 @@ static void __bdd_run__(__bdd_config_type__ *config) {
     }
 
     if (!skipped) {
+      if (config->error) {
+        free(config->error);
+        config->error = NULL;
+      }
+      config->location = NULL;
+      config->info_buffer[0] = '\0';
+      config->info_len = 0;
+      config->skip_subsequent = false;
+
       if (step->flags & __bdd_node_flags_benchmark__) {
         __bdd_bench_reset__(config);
       }
-      config->info_buffer[0] = '\0';
-      config->info_len = 0;
+
       double start_time = __bdd_get_time_ms__();
-      __bdd_test_main__(config);
+      if (setjmp(config->jump_buffer) == 0) {
+        __bdd_test_main__(config);
+      }
+      /* If longjmp happens, node_stack might be unbalanced. TEST_RUN resets it in main(). */
       double end_time = __bdd_get_time_ms__();
       step->execution_time_ms = end_time - start_time;
       if (step->flags & __bdd_node_flags_benchmark__) {
@@ -1467,6 +1489,11 @@ int main(int argc, char **argv) {
       __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, steps->values[j]);
       config.node_stack->size = 1;
       config.id = 0;
+      if (config.error) {
+        free(config.error);
+        config.error = NULL;
+      }
+      config.location = NULL;
       config.current_test = step;
       __bdd_run__(&config);
     }
@@ -1622,27 +1649,39 @@ int main(int argc, char **argv) {
 
 static inline int __bdd_eval_bool__(int v) { return v; }
 
-#define __BDD_CHECK__(condition, ...)                                                              \
-  if (!__bdd_eval_bool__(!!(condition))) {                                                         \
-    ++__bdd_active_config__->assertion_count;                                                      \
-    ++__bdd_active_config__->assertion_failed_count;                                               \
-    char *message = __bdd_format__(__VA_ARGS__);                                                   \
-    const char *fmt = __bdd_active_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__;     \
-    __bdd_active_config__->location = __BDD_CONST_CAST(char *, "at " __FILE__ ":" __STRING__LINE__); \
-    size_t bufflen = strlen(fmt) + strlen(message) + 1;                                            \
-    __bdd_active_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));              \
-    if (__bdd_active_config__->use_color) {                                                        \
-      snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, message);                 \
-    } else {                                                                                       \
-      snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, message);                 \
-    }                                                                                              \
-    free(message);                                                                                 \
-    return;                                                                                        \
-  } else {                                                                                         \
-    ++__bdd_active_config__->assertion_count;                                                      \
-  }
+/* Internal implementation that takes file and line */
+#define __BDD_CHECK_IMPL__(condition, file, line, ...)                                                 \
+  do {                                                                                                 \
+    if (!__bdd_eval_bool__(!!(condition))) {                                                         \
+      if (__bdd_active_config__) {                                                                   \
+        ++__bdd_active_config__->assertion_count;                                                    \
+        ++__bdd_active_config__->assertion_failed_count;                                             \
+        if (__bdd_active_config__->run == __BDD_TEST_RUN__ && !__bdd_active_config__->error) {        \
+          char *message = __bdd_format__(__VA_ARGS__);                                               \
+          const char *fmt = __bdd_active_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__; \
+          snprintf(__bdd_active_config__->location_buf, sizeof(__bdd_active_config__->location_buf), \
+                   "at %s:%s", file, line);                                                          \
+          __bdd_active_config__->location = __bdd_active_config__->location_buf;                     \
+          size_t bufflen = strlen(fmt) + strlen(message) + 1;                                        \
+          __bdd_active_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));          \
+          if (__bdd_active_config__->use_color) {                                                    \
+            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, message);             \
+          } else {                                                                                   \
+            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, message);             \
+          }                                                                                          \
+          free(message);                                                                             \
+          longjmp(__bdd_active_config__->jump_buffer, 1);                                            \
+        }                                                                                            \
+      }                                                                                              \
+    } else {                                                                                         \
+      if (__bdd_active_config__) ++__bdd_active_config__->assertion_count;                           \
+    }                                                                                                \
+  } while (0)
 
-#define __BDD_CHECK_ONE__(condition) __BDD_CHECK__(condition, #condition)
+/* Wrapper that captures __FILE__ and __LINE__ */
+#define __BDD_CHECK__(condition, ...) __BDD_CHECK_IMPL__(condition, __FILE__, __STRING__LINE__, __VA_ARGS__)
+
+#define __BDD_CHECK_ONE__(condition) __BDD_CHECK_IMPL__(condition, __FILE__, __STRING__LINE__, #condition)
 
 #define check(...) __BDD_MACRO__(__BDD_CHECK_, __VA_ARGS__)
 
@@ -2203,7 +2242,8 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
   } while (0)
 
 /* --- Non-fatal assertion --- */
-#define __BDD_WARN__(condition, ...)                                                               \
+/* Internal implementation that takes file and line */
+#define __BDD_WARN_IMPL__(condition, file, line, ...)                                                  \
   if (!__bdd_eval_bool__(!!(condition))) {                                                         \
     ++__bdd_active_config__->assertion_count;                                                      \
     char *message = __bdd_format__(__VA_ARGS__);                                                   \
@@ -2216,13 +2256,16 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
     } else {                                                                                       \
       printf("Warning: %s", message);                                                              \
     }                                                                                              \
-    printf(" at " __FILE__ ":" __STRING__LINE__ "\n");                                             \
+    printf(" at %s:%s\n", file, line);                                                             \
     free(message);                                                                                 \
   } else {                                                                                         \
     ++__bdd_active_config__->assertion_count;                                                      \
   }
 
-#define __BDD_WARN_ONE__(condition) __BDD_WARN__(condition, #condition)
+/* Wrapper that captures __FILE__ and __LINE__ */
+#define __BDD_WARN__(condition, ...) __BDD_WARN_IMPL__(condition, __FILE__, __STRING__LINE__, __VA_ARGS__)
+
+#define __BDD_WARN_ONE__(condition) __BDD_WARN_IMPL__(condition, __FILE__, __STRING__LINE__, #condition)
 
 #define check_warn(...) __BDD_MACRO__(__BDD_WARN_, __VA_ARGS__)
 
@@ -2256,15 +2299,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 
 /* --- Section (TDD SECTION equivalent) --- */
 #define section(...) describe(__VA_ARGS__)
-
-/* --- TEST_CASE (TDD test case) --- */
-/* TEST_CASE("description") or TEST_CASE("description", "[tag]") */
-#define __BDD_TEST_CASE_1__(desc) it(desc)
-#define __BDD_TEST_CASE_2__(desc, tag) it(desc)
-#define __BDD_TEST_CASE_SELECT__(_1, _2, NAME, ...) NAME
-#define TEST_CASE(...)                                                                             \
-  __BDD_TEST_CASE_SELECT__(__VA_ARGS__, __BDD_TEST_CASE_2__, __BDD_TEST_CASE_1__)(__VA_ARGS__)
-
+ 
 /* --- Benchmarking --- */
 /* Usage: benchmark("name", iterations) { code; }
  * Runs the block `iterations` times and prints avg/min/max timing. */

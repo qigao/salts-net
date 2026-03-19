@@ -1,5 +1,6 @@
 #include "exprtk.h"
 #include "exprtk_module.h"
+#include "object_pool.h"
 #include "turbo_script.h"
 #include "turbo_script_internal.h"
 
@@ -9,6 +10,8 @@
 #include <mir.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
+#include <stdarg.h>
 #include <string.h>
 
 /* =========================================================================
@@ -98,17 +101,22 @@ typedef struct {
 } ts_compiled_func_t;
 
 typedef struct {
+  char *name;
+  MIR_reg_t reg;
+} ts_mir_var_entry_t;
+
+typedef struct {
   MIR_context_t ctx;
   MIR_item_t func;
   MIR_module_t module;
   turbo_script_ctx_t *ts_ctx;
 
-  struct {
-    char *name;
-    MIR_reg_t reg;
-  } vars[128];
+  ts_mir_var_entry_t **vars;
   int var_count;
+  int var_capacity;
   int tmp_count;
+  int failed;
+  object_pool_t *var_pool;
 
   /*  loop stack for break/continue */
   loop_frame_t loop_stack[MAX_LOOP_DEPTH];
@@ -119,9 +127,6 @@ typedef struct {
 
   /*  ctx_ptr register (first function argument) */
   MIR_reg_t ctx_reg;
-
-  /*  track variable names for epilogue store-back */
-  char *var_names[128]; /* parallel to vars[], kept alive */
 
   /*  compiled script functions */
   ts_compiled_func_t compiled_funcs[MAX_COMPILED_FUNCS];
@@ -145,6 +150,22 @@ typedef struct {
   int map_ptr_count;
 } ts_mir_compiler_t;
 
+static void ts_mir_fail(ts_mir_compiler_t *c, const char *fmt, ...) {
+  va_list args;
+
+  if (!c || c->failed)
+    return;
+
+  c->failed = 1;
+  if (!c->ts_ctx)
+    return;
+
+  c->ts_ctx->error_code = TURBO_SCRIPT_ERROR_JIT;
+  va_start(args, fmt);
+  vsnprintf(c->ts_ctx->error_msg, sizeof(c->ts_ctx->error_msg), fmt, args);
+  va_end(args);
+}
+
 static MIR_reg_t new_temp_reg(ts_mir_compiler_t *c) {
   char name[32];
   snprintf(name, sizeof(name), "_t%d", c->tmp_count++);
@@ -163,17 +184,100 @@ static MIR_reg_t new_temp_preg(ts_mir_compiler_t *c) {
   return MIR_new_func_reg(c->ctx, c->func->u.func, MIR_T_P, name);
 }
 
+static int ts_mir_ensure_var_capacity(ts_mir_compiler_t *c, int needed) {
+  ts_mir_var_entry_t **new_vars = NULL;
+  int new_capacity = 0;
+
+  if (needed <= c->var_capacity)
+    return 1;
+
+  new_capacity = c->var_capacity > 0 ? c->var_capacity * 2 : 32;
+  if (new_capacity < needed)
+    new_capacity = needed;
+
+  new_vars = (ts_mir_var_entry_t **)realloc(c->vars, (size_t)new_capacity * sizeof(*new_vars));
+  if (!new_vars) {
+    ts_mir_fail(c, "JIT compile error: out of memory growing variable table");
+    return 0;
+  }
+
+  c->vars = new_vars;
+  c->var_capacity = new_capacity;
+  return 1;
+}
+
 static MIR_reg_t get_or_create_reg(ts_mir_compiler_t *c, const char *name) {
+  ts_mir_var_entry_t *entry = NULL;
+
   for (int i = 0; i < c->var_count; i++) {
-    if (strcmp(c->vars[i].name, name) == 0) return c->vars[i].reg;
+    if (strcmp(c->vars[i]->name, name) == 0) return c->vars[i]->reg;
   }
-  if (c->var_count < 128) {
-    c->vars[c->var_count].name = strdup(name);
-    c->var_names[c->var_count] = c->vars[c->var_count].name;
-    c->vars[c->var_count].reg = MIR_new_func_reg(c->ctx, c->func->u.func, MIR_T_D, name);
-    return c->vars[c->var_count++].reg;
+
+  if (!ts_mir_ensure_var_capacity(c, c->var_count + 1))
+    return new_temp_reg(c);
+
+  entry = (ts_mir_var_entry_t *)object_pool_alloc(c->var_pool);
+  if (!entry) {
+    ts_mir_fail(c, "JIT compile error: out of memory allocating variable entry for '%s'",
+                name ? name : "<unnamed>");
+    return new_temp_reg(c);
   }
-  return 0;
+
+  entry->name = strdup(name);
+  if (!entry->name) {
+    object_pool_free(c->var_pool, entry);
+    ts_mir_fail(c, "JIT compile error: out of memory duplicating variable name '%s'",
+                name ? name : "<unnamed>");
+    return new_temp_reg(c);
+  }
+  entry->reg = MIR_new_func_reg(c->ctx, c->func->u.func, MIR_T_D, name);
+  c->vars[c->var_count++] = entry;
+  return entry->reg;
+}
+
+static void ts_mir_discard_current_vars(ts_mir_compiler_t *c) {
+  if (!c)
+    return;
+  free(c->vars);
+  c->vars = NULL;
+  c->var_count = 0;
+  c->var_capacity = 0;
+}
+
+static void ts_mir_destroy_var_pool(ts_mir_compiler_t *c) {
+  if (!c)
+    return;
+  ts_mir_discard_current_vars(c);
+  if (c->var_pool) {
+    object_pool_destroy(c->var_pool);
+    c->var_pool = NULL;
+  }
+}
+
+static int ts_mir_bind_existing_reg(ts_mir_compiler_t *c, const char *name, MIR_reg_t reg) {
+  ts_mir_var_entry_t *entry = NULL;
+
+  if (!ts_mir_ensure_var_capacity(c, c->var_count + 1))
+    return 0;
+
+  entry = (ts_mir_var_entry_t *)object_pool_alloc(c->var_pool);
+  if (!entry) {
+    ts_mir_fail(c, "JIT compile error: out of memory allocating parameter entry for '%s'",
+                name ? name : "<unnamed>");
+    return 0;
+  }
+
+  entry->name = strdup(name);
+  if (!entry->name) {
+    object_pool_free(c->var_pool, entry);
+    ts_mir_fail(c, "JIT compile error: out of memory duplicating parameter name '%s'",
+                name ? name : "<unnamed>");
+    return 0;
+  }
+
+  entry->reg = reg;
+  c->vars[c->var_count++] = entry;
+  return 1;
 }
 
 /* Forward declarations */
@@ -195,6 +299,78 @@ static MIR_reg_t ts_emit_member_access(ts_mir_compiler_t *c, const char *obj_nam
 static void ts_emit_sync_to_env(ts_mir_compiler_t *c);
 static void ts_emit_reload_from_env(ts_mir_compiler_t *c);
 static MIR_reg_t ts_emit_eval_node(ts_mir_compiler_t *c, exprtk_node_t *node, int full_sync);
+
+typedef struct {
+  const char *name;
+  size_t proto_offset;
+  size_t import_offset;
+} ts_math_dispatch_entry_t;
+
+static int ts_math_dispatch_cmp(const void *key, const void *entry) {
+  return strcmp((const char *)key, ((const ts_math_dispatch_entry_t *)entry)->name);
+}
+
+static int ts_find_math_dispatch(ts_mir_compiler_t *c, const char *name, size_t argc,
+                                 MIR_item_t *proto, MIR_item_t *import) {
+  static const ts_math_dispatch_entry_t unary_table[] = {
+      {"abs", offsetof(ts_mir_externals_t, fabs_proto), offsetof(ts_mir_externals_t, fabs_import)},
+      {"acos", offsetof(ts_mir_externals_t, acos_proto),
+       offsetof(ts_mir_externals_t, acos_import)},
+      {"asin", offsetof(ts_mir_externals_t, asin_proto),
+       offsetof(ts_mir_externals_t, asin_import)},
+      {"atan", offsetof(ts_mir_externals_t, atan_proto),
+       offsetof(ts_mir_externals_t, atan_import)},
+      {"ceil", offsetof(ts_mir_externals_t, ceil_proto),
+       offsetof(ts_mir_externals_t, ceil_import)},
+      {"cos", offsetof(ts_mir_externals_t, cos_proto), offsetof(ts_mir_externals_t, cos_import)},
+      {"exp", offsetof(ts_mir_externals_t, exp_proto), offsetof(ts_mir_externals_t, exp_import)},
+      {"floor", offsetof(ts_mir_externals_t, floor_proto),
+       offsetof(ts_mir_externals_t, floor_import)},
+      {"log", offsetof(ts_mir_externals_t, log_proto), offsetof(ts_mir_externals_t, log_import)},
+      {"round", offsetof(ts_mir_externals_t, round_proto),
+       offsetof(ts_mir_externals_t, round_import)},
+      {"sin", offsetof(ts_mir_externals_t, sin_proto), offsetof(ts_mir_externals_t, sin_import)},
+      {"sqrt", offsetof(ts_mir_externals_t, sqrt_proto),
+       offsetof(ts_mir_externals_t, sqrt_import)},
+      {"tan", offsetof(ts_mir_externals_t, tan_proto), offsetof(ts_mir_externals_t, tan_import)},
+  };
+  static const ts_math_dispatch_entry_t binary_table[] = {
+      {"atan2", offsetof(ts_mir_externals_t, atan2_proto),
+       offsetof(ts_mir_externals_t, atan2_import)},
+      {"max", offsetof(ts_mir_externals_t, fmax_proto),
+       offsetof(ts_mir_externals_t, fmax_import)},
+      {"min", offsetof(ts_mir_externals_t, fmin_proto),
+       offsetof(ts_mir_externals_t, fmin_import)},
+  };
+
+  const ts_math_dispatch_entry_t *table = NULL;
+  size_t table_count = 0;
+  const ts_math_dispatch_entry_t *entry = NULL;
+  char *ext_base = NULL;
+
+  if (!c || !name || !proto || !import)
+    return 0;
+
+  if (argc == 1) {
+    table = unary_table;
+    table_count = sizeof(unary_table) / sizeof(unary_table[0]);
+  } else if (argc == 2) {
+    table = binary_table;
+    table_count = sizeof(binary_table) / sizeof(binary_table[0]);
+  } else {
+    return 0;
+  }
+
+  entry = (const ts_math_dispatch_entry_t *)bsearch(name, table, table_count, sizeof(table[0]),
+                                                    ts_math_dispatch_cmp);
+  if (!entry)
+    return 0;
+
+  ext_base = (char *)&c->ext;
+  *proto = *(MIR_item_t *)(ext_base + entry->proto_offset);
+  *import = *(MIR_item_t *)(ext_base + entry->import_offset);
+  return 1;
+}
 static size_t ts_compile_call_args(ts_mir_compiler_t *c, size_t argc, exprtk_node_t **args,
                                    MIR_reg_t out_regs[16]);
 static MIR_reg_t ts_emit_index_access(ts_mir_compiler_t *c, const char *name,
@@ -225,46 +401,7 @@ static int ts_emit_direct_math_call(ts_mir_compiler_t *c, const char *name, size
   MIR_item_t proto = NULL, import = NULL;
 
   if (argc == 1) {
-    if (strcmp(name, "sin") == 0) {
-      proto = c->ext.sin_proto;
-      import = c->ext.sin_import;
-    } else if (strcmp(name, "cos") == 0) {
-      proto = c->ext.cos_proto;
-      import = c->ext.cos_import;
-    } else if (strcmp(name, "sqrt") == 0) {
-      proto = c->ext.sqrt_proto;
-      import = c->ext.sqrt_import;
-    } else if (strcmp(name, "abs") == 0) {
-      proto = c->ext.fabs_proto;
-      import = c->ext.fabs_import;
-    } else if (strcmp(name, "floor") == 0) {
-      proto = c->ext.floor_proto;
-      import = c->ext.floor_import;
-    } else if (strcmp(name, "ceil") == 0) {
-      proto = c->ext.ceil_proto;
-      import = c->ext.ceil_import;
-    } else if (strcmp(name, "log") == 0) {
-      proto = c->ext.log_proto;
-      import = c->ext.log_import;
-    } else if (strcmp(name, "exp") == 0) {
-      proto = c->ext.exp_proto;
-      import = c->ext.exp_import;
-    } else if (strcmp(name, "round") == 0) {
-      proto = c->ext.round_proto;
-      import = c->ext.round_import;
-    } else if (strcmp(name, "tan") == 0) {
-      proto = c->ext.tan_proto;
-      import = c->ext.tan_import;
-    } else if (strcmp(name, "asin") == 0) {
-      proto = c->ext.asin_proto;
-      import = c->ext.asin_import;
-    } else if (strcmp(name, "acos") == 0) {
-      proto = c->ext.acos_proto;
-      import = c->ext.acos_import;
-    } else if (strcmp(name, "atan") == 0) {
-      proto = c->ext.atan_proto;
-      import = c->ext.atan_import;
-    }
+    if (!ts_find_math_dispatch(c, name, argc, &proto, &import)) return 0;
     if (!proto) return 0;
     MIR_append_insn(c->ctx, c->func,
                     MIR_new_call_insn(c->ctx, 4, MIR_new_ref_op(c->ctx, proto),
@@ -274,16 +411,7 @@ static int ts_emit_direct_math_call(ts_mir_compiler_t *c, const char *name, size
   }
 
   if (argc == 2) {
-    if (strcmp(name, "max") == 0) {
-      proto = c->ext.fmax_proto;
-      import = c->ext.fmax_import;
-    } else if (strcmp(name, "min") == 0) {
-      proto = c->ext.fmin_proto;
-      import = c->ext.fmin_import;
-    } else if (strcmp(name, "atan2") == 0) {
-      proto = c->ext.atan2_proto;
-      import = c->ext.atan2_import;
-    }
+    if (!ts_find_math_dispatch(c, name, argc, &proto, &import)) return 0;
     if (!proto) return 0;
     MIR_append_insn(c->ctx, c->func,
                     MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, proto),
@@ -436,8 +564,8 @@ static void ts_emit_sync_to_env(ts_mir_compiler_t *c) {
                     MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.store_var_proto),
                                       MIR_new_ref_op(c->ctx, c->ext.store_var_import),
                                       MIR_new_reg_op(c->ctx, c->ctx_reg),
-                                      MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name),
-                                      MIR_new_reg_op(c->ctx, c->vars[i].reg)));
+                                      MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name),
+                                      MIR_new_reg_op(c->ctx, c->vars[i]->reg)));
   }
 }
 
@@ -447,8 +575,9 @@ static void ts_emit_reload_from_env(ts_mir_compiler_t *c) {
                     MIR_new_call_insn(
                         c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.load_var_proto),
                         MIR_new_ref_op(c->ctx, c->ext.load_var_import),
-                        MIR_new_reg_op(c->ctx, c->vars[i].reg), MIR_new_reg_op(c->ctx, c->ctx_reg),
-                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name)));
+                        MIR_new_reg_op(c->ctx, c->vars[i]->reg),
+                        MIR_new_reg_op(c->ctx, c->ctx_reg),
+                        MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name)));
   }
 }
 
@@ -623,20 +752,16 @@ static void ts_compile_script_func(ts_mir_compiler_t *c, const char *name,
   /* Save parent compiler state */
   MIR_item_t saved_func = c->func;
   int saved_var_count = c->var_count;
+  int saved_var_capacity = c->var_capacity;
   int saved_tmp_count = c->tmp_count;
   int saved_loop_depth = c->loop_depth;
   MIR_reg_t saved_ctx_reg = c->ctx_reg;
-
-  struct {
-    char *name;
-    MIR_reg_t reg;
-  } saved_vars[128];
-  char *saved_var_names[128];
-  memcpy(saved_vars, c->vars, sizeof(c->vars));
-  memcpy(saved_var_names, c->var_names, sizeof(c->var_names));
+  ts_mir_var_entry_t **saved_vars = c->vars;
 
   /* Reset compiler state for the new function */
+  c->vars = NULL;
   c->var_count = 0;
+  c->var_capacity = 0;
   c->tmp_count = 0;
   c->loop_depth = 0;
   c->ctx_reg = 0; /* No ctx_ptr in compiled functions — disables var sync in return */
@@ -661,10 +786,7 @@ static void ts_compile_script_func(ts_mir_compiler_t *c, const char *name,
   /* Map parameter names to their MIR registers */
   for (size_t i = 0; i < arg_count; i++) {
     const char *pname = arg_params[i]->data.variable.name;
-    c->vars[c->var_count].name = strdup(pname);
-    c->var_names[c->var_count] = c->vars[c->var_count].name;
-    c->vars[c->var_count].reg = MIR_reg(c->ctx, pname, new_func->u.func);
-    c->var_count++;
+    if (!ts_mir_bind_existing_reg(c, pname, MIR_reg(c->ctx, pname, new_func->u.func))) break;
   }
 
   /* Compile the function body */
@@ -693,13 +815,14 @@ static void ts_compile_script_func(ts_mir_compiler_t *c, const char *name,
   c->compiled_funcs[idx].arg_count = arg_count;
 
   /* Restore parent compiler state */
+  free(c->vars);
   c->func = saved_func;
+  c->vars = saved_vars;
   c->var_count = saved_var_count;
+  c->var_capacity = saved_var_capacity;
   c->tmp_count = saved_tmp_count;
   c->loop_depth = saved_loop_depth;
   c->ctx_reg = saved_ctx_reg;
-  memcpy(c->vars, saved_vars, sizeof(c->vars));
-  memcpy(c->var_names, saved_var_names, sizeof(c->var_names));
 }
 
 /* Pre-scan AST for function definitions and compile them as MIR functions.
@@ -1018,7 +1141,7 @@ static int ts_try_fold_constant(exprtk_node_t *node, double *out) {
  * ========================================================================= */
 
 static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
-  if (!node) return 0;
+  if (!c || c->failed || !node) return 0;
 
   /*  Try constant folding before anything else */
   {
@@ -1349,7 +1472,7 @@ static MIR_reg_t ts_compile_expr(ts_mir_compiler_t *c, exprtk_node_t *node) {
 
 static void ts_compile_branch_false(ts_mir_compiler_t *c, exprtk_node_t *node,
                                     MIR_label_t false_label) {
-  if (!node) return;
+  if (!c || c->failed || !node) return;
 
   /* Binary comparison → single DBXX branch instruction */
   if (node->type == EXPRTK_NODE_BINARY_OP) {
@@ -1432,7 +1555,7 @@ static void ts_compile_branch_false(ts_mir_compiler_t *c, exprtk_node_t *node,
 /*  Branch to true_label when condition is true (helper for OR) */
 static void ts_compile_branch_true(ts_mir_compiler_t *c, exprtk_node_t *node,
                                    MIR_label_t true_label) {
-  if (!node) return;
+  if (!c || c->failed || !node) return;
 
   if (node->type == EXPRTK_NODE_BINARY_OP && node->data.binary.left != NULL) {
     MIR_insn_code_t bop = 0;
@@ -1481,7 +1604,7 @@ static void ts_compile_branch_true(ts_mir_compiler_t *c, exprtk_node_t *node,
  * ========================================================================= */
 
 static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
-  if (!node) return;
+  if (!c || c->failed || !node) return;
 
   switch (node->type) {
   case EXPRTK_NODE_BLOCK:
@@ -1622,11 +1745,11 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
         for (int i = 0; i < c->var_count; i++) {
           MIR_append_insn(
               c->ctx, c->func,
-              MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.store_var_proto),
+                                MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.store_var_proto),
                                 MIR_new_ref_op(c->ctx, c->ext.store_var_import),
                                 MIR_new_reg_op(c->ctx, c->ctx_reg),
-                                MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name),
-                                MIR_new_reg_op(c->ctx, c->vars[i].reg)));
+                                MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name),
+                                MIR_new_reg_op(c->ctx, c->vars[i]->reg)));
         }
       }
       MIR_append_insn(c->ctx, c->func,
@@ -1735,11 +1858,11 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
       for (int i = 0; i < c->var_count; i++) {
         MIR_append_insn(
             c->ctx, c->func,
-            MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.store_var_proto),
+                              MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.store_var_proto),
                               MIR_new_ref_op(c->ctx, c->ext.store_var_import),
                               MIR_new_reg_op(c->ctx, c->ctx_reg),
-                              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name),
-                              MIR_new_reg_op(c->ctx, c->vars[i].reg)));
+                              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name),
+                              MIR_new_reg_op(c->ctx, c->vars[i]->reg)));
       }
       MIR_reg_t res = new_temp_reg(c);
       MIR_append_insn(c->ctx, c->func,
@@ -1751,11 +1874,11 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
       for (int i = 0; i < c->var_count; i++) {
         MIR_append_insn(
             c->ctx, c->func,
-            MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.load_var_proto),
+                              MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.load_var_proto),
                               MIR_new_ref_op(c->ctx, c->ext.load_var_import),
-                              MIR_new_reg_op(c->ctx, c->vars[i].reg),
+                              MIR_new_reg_op(c->ctx, c->vars[i]->reg),
                               MIR_new_reg_op(c->ctx, c->ctx_reg),
-                              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name)));
+                              MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name)));
       }
     }
     break;
@@ -2047,8 +2170,9 @@ static void ts_emit_var_prologue(ts_mir_compiler_t *c) {
                      MIR_new_call_insn(
                          c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.load_var_proto),
                          MIR_new_ref_op(c->ctx, c->ext.load_var_import),
-                         MIR_new_reg_op(c->ctx, c->vars[i].reg), MIR_new_reg_op(c->ctx, c->ctx_reg),
-                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name)));
+                         MIR_new_reg_op(c->ctx, c->vars[i]->reg),
+                         MIR_new_reg_op(c->ctx, c->ctx_reg),
+                         MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name)));
   }
 }
 
@@ -2059,8 +2183,8 @@ static void ts_emit_var_epilogue(ts_mir_compiler_t *c) {
                     MIR_new_call_insn(c->ctx, 5, MIR_new_ref_op(c->ctx, c->ext.store_var_proto),
                                       MIR_new_ref_op(c->ctx, c->ext.store_var_import),
                                       MIR_new_reg_op(c->ctx, c->ctx_reg),
-                                      MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i].name),
-                                      MIR_new_reg_op(c->ctx, c->vars[i].reg)));
+                                      MIR_new_uint_op(c->ctx, (uint64_t)(uintptr_t)c->vars[i]->name),
+                                      MIR_new_reg_op(c->ctx, c->vars[i]->reg)));
   }
 }
 
@@ -2096,10 +2220,19 @@ static void ts_emit_map_prologue(ts_mir_compiler_t *c) {
  * ========================================================================= */
 
 CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *script) {
-  if (!ctx || !script) return -1;
+  object_pool_config_t var_pool_config = {0};
+
+  if (!ctx) return -1;
+  ctx->error_code = TURBO_SCRIPT_ERROR_NONE;
+  ctx->error_msg[0] = '\0';
+  if (!script) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_ARGUMENT;
+    snprintf(ctx->error_msg, sizeof(ctx->error_msg), "JIT compile error: script is NULL");
+    return -1;
+  }
   if (!ctx->mir_ctx) ctx->mir_ctx = MIR_init();
 
-  exprtk_node_t *ast = exprtk_parse(script, 0);
+  exprtk_node_t *ast = turbo_script_parse_with_error(ctx, script);
   if (!ast) return -1;
 
   char mod_name[64];
@@ -2112,6 +2245,18 @@ CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *scri
   compiler.ctx = ctx->mir_ctx;
   compiler.module = mod;
   compiler.ts_ctx = ctx;
+  var_pool_config.object_size = sizeof(ts_mir_var_entry_t);
+  var_pool_config.initial_capacity = 32;
+  var_pool_config.max_capacity = 0;
+  var_pool_config.zero_on_alloc = true;
+  compiler.var_pool = object_pool_create(&var_pool_config);
+  if (!compiler.var_pool) {
+    exprtk_free(ast);
+    ctx->error_code = TURBO_SCRIPT_ERROR_OOM;
+    snprintf(ctx->error_msg, sizeof(ctx->error_msg),
+             "JIT compile error: failed to create variable pool");
+    return -1;
+  }
 
   /*  Setup external call prototypes and imports (before func) */
   ts_setup_externals(&compiler);
@@ -2174,12 +2319,20 @@ CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *scri
   MIR_finish_func(ctx->mir_ctx);
   MIR_finish_module(ctx->mir_ctx);
 
+  if (compiler.failed) {
+    exprtk_free(ast);
+    ts_mir_destroy_var_pool(&compiler);
+    if (ctx->error_code == TURBO_SCRIPT_ERROR_NONE)
+      ctx->error_code = TURBO_SCRIPT_ERROR_JIT;
+    return -1;
+  }
+
   /*  Keep AST alive -- don't free it. Node pointers are baked into JIT code.
    * Variable name strings (strdup'd in get_or_create_reg) are also baked in as pointer
    * immediates for load_var/store_var calls. We intentionally leak them here;
    * they'll be freed when the MIR context is destroyed. */
   /* exprtk_free(ast); -- intentionally NOT freed */
-  /* for(int i=0; i<compiler.var_count; i++) free(compiler.vars[i].name); -- NOT freed */
+  /* Variable-entry storage is owned by compiler.var_pool and released below. */
 
   MIR_load_module(ctx->mir_ctx, mod);
 
@@ -2204,11 +2357,19 @@ CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *scri
     }
   }
 
+  ts_mir_destroy_var_pool(&compiler);
   return 0;
 }
 
 CXX_C_API int turbo_script_exec_jit(turbo_script_ctx_t *ctx) {
-  if (!ctx || !ctx->mir_last_fn) return -1;
+  if (!ctx) return -1;
+  ctx->error_code = TURBO_SCRIPT_ERROR_NONE;
+  ctx->error_msg[0] = '\0';
+  if (!ctx->mir_last_fn) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_STATE;
+    snprintf(ctx->error_msg, sizeof(ctx->error_msg), "JIT exec error: no compiled module");
+    return -1;
+  }
 
   /*  Direct call via cached pointer — no module list traversal */
   typedef double (*jit_fn_t)(void *);
@@ -2232,7 +2393,14 @@ static uint64_t ts_hash_script(const char *s) {
 }
 
 CXX_C_API int turbo_script_run_jit(turbo_script_ctx_t *ctx, const char *script) {
-  if (!ctx || !script) return -1;
+  if (!ctx) return -1;
+  ctx->error_code = TURBO_SCRIPT_ERROR_NONE;
+  ctx->error_msg[0] = '\0';
+  if (!script) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_ARGUMENT;
+    snprintf(ctx->error_msg, sizeof(ctx->error_msg), "JIT run error: script is NULL");
+    return -1;
+  }
 
   /*  Check compile cache — skip parse/compile on hit */
   uint64_t hash = ts_hash_script(script);

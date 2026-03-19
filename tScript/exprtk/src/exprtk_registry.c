@@ -3,8 +3,7 @@
  * @brief Unified registry for module-based built-in function dispatch.
  */
 
-#include "exprtk_module.h"
-#include "exprtk.h"
+#include "exprtk_internal.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -87,7 +86,6 @@ void exprtk_registry_init(void) {
     if (g_registry_ready) return;
 
     /* Register core module by default */
-    extern const exprtk_module_t *exprtk_module_core(void);
     exprtk_registry_add_module(exprtk_module_core());
 
     qsort(g_registry, g_registry_count, sizeof(exprtk_func_entry_t), entry_cmp);
@@ -189,6 +187,7 @@ static exprtk_value_t call_script_func(
     }
 
     exprtk_value_t result = exprtk_eval(body, &local_env);
+    result = exprtk_value_clone_to_env(result, caller_env);
 
     caller_env->curr_nodes = local_env.curr_nodes;
     caller_env->curr_loop_iterations = local_env.curr_loop_iterations;
@@ -197,10 +196,10 @@ static exprtk_value_t call_script_func(
 
     /* Propagate flow (return, throw) */
     if (local_env.flow == exprtk_FLOW_RETURN) {
-        result = local_env.return_value;
+        result = exprtk_value_clone_to_env(local_env.return_value, caller_env);
     } else if (local_env.flow == exprtk_FLOW_THROW) {
         caller_env->flow = exprtk_FLOW_THROW;
-        caller_env->error_value = local_env.error_value;
+        caller_env->error_value = exprtk_value_clone_to_env(local_env.error_value, caller_env);
     }
 
     exprtk_env_free(&local_env);

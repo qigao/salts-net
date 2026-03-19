@@ -8,15 +8,109 @@
 #include <mir-gen.h>
 #include <mir.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static void ts_print_value(const exprtk_value_t *val, int repl_mode);
+static void set_error_msg(turbo_script_ctx_t *ctx, const char *msg);
+static void set_error(turbo_script_ctx_t *ctx, turbo_script_error_code_t code, const char *msg);
+static void clear_error(turbo_script_ctx_t *ctx);
+
+const char *turbo_script_version(void) { return TURBO_SCRIPT_VERSION_STRING; }
+
+static int ts_copy_path(char *dst, size_t dst_size, const char *src) {
+  if (!dst || dst_size == 0 || !src)
+    return -1;
+
+  size_t len = strlen(src);
+  if (len >= dst_size)
+    return -1;
+
+  memcpy(dst, src, len + 1);
+  return 0;
+}
+
+static int ts_push_script_dir(turbo_script_ctx_t *ctx, const char *path, char **prev_dir) {
+  char dirname[TURBO_FS_MAX_PATH];
+  char *new_dir = NULL;
+
+  if (!ctx || !path || !prev_dir)
+    return -1;
+  if (turbo_fs_path_dirname(path, dirname, sizeof(dirname)) != 0)
+    return -1;
+
+  new_dir = strdup(dirname);
+  if (!new_dir)
+    return -1;
+
+  *prev_dir = ctx->current_script_dir;
+  ctx->current_script_dir = new_dir;
+  return 0;
+}
+
+static void ts_pop_script_dir(turbo_script_ctx_t *ctx, char *prev_dir) {
+  if (!ctx)
+    return;
+
+  free(ctx->current_script_dir);
+  ctx->current_script_dir = prev_dir;
+}
+
+static int ts_resolve_script_path(turbo_script_ctx_t *ctx, const char *name, char *resolved,
+                                  size_t resolved_size) {
+  if (!ctx || !name || !resolved || resolved_size == 0)
+    return -1;
+
+  while (name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
+    name += 2;
+  }
+
+  if (turbo_fs_path_is_absolute(name) || !ctx->current_script_dir || !ctx->current_script_dir[0]) {
+    return ts_copy_path(resolved, resolved_size, name);
+  }
+
+  return turbo_fs_path_join(resolved, resolved_size, ctx->current_script_dir, name);
+}
+
+static int ts_prepare_expr(turbo_script_ctx_t *ctx, const char *script) {
+  if (!ctx || !script)
+    return -1;
+
+  if (ctx->expr && ctx->expr_source && strcmp(ctx->expr_source, script) == 0) {
+    clear_error(ctx);
+    return 0;
+  }
+
+  if (ctx->expr) {
+    exprtk_free(ctx->expr);
+    ctx->expr = NULL;
+  }
+  free(ctx->expr_source);
+  ctx->expr_source = NULL;
+
+  ctx->expr = turbo_script_parse_with_error(ctx, script);
+  if (!ctx->expr)
+    return -1;
+
+  ctx->expr_source = strdup(script);
+  if (!ctx->expr_source) {
+    exprtk_free(ctx->expr);
+    ctx->expr = NULL;
+    set_error(ctx, TURBO_SCRIPT_ERROR_OOM, "Out of memory");
+    return -1;
+  }
+
+  return 0;
+}
 
 void turbo_script_free(turbo_script_ctx_t *ctx) {
   if (!ctx)
     return;
   if (ctx->expr)
     exprtk_free(ctx->expr);
+  free(ctx->expr_source);
 
   // Free imported modules
   imported_module_t *mod = ctx->imports;
@@ -44,35 +138,76 @@ void turbo_script_free(turbo_script_ctx_t *ctx) {
     free(ctx->loaded_names[i]);
   }
 
+  free(ctx->current_script_dir);
   mem_destroy(&ctx->scratch_arena);
   free(ctx);
 }
 
 static void set_error_msg(turbo_script_ctx_t *ctx, const char *msg) {
-  if (ctx) {
-    if (msg)
-      strncpy(ctx->error_msg, msg, sizeof(ctx->error_msg) - 1);
-    else
-      ctx->error_msg[0] = '\0';
+  if (!ctx)
+    return;
+  if (msg) {
+    strncpy(ctx->error_msg, msg, sizeof(ctx->error_msg) - 1);
+    ctx->error_msg[sizeof(ctx->error_msg) - 1] = '\0';
+    return;
   }
+  ctx->error_msg[0] = '\0';
+}
+
+static void set_error(turbo_script_ctx_t *ctx, turbo_script_error_code_t code, const char *msg) {
+  if (!ctx)
+    return;
+  ctx->error_code = code;
+  set_error_msg(ctx, msg);
+}
+
+static void clear_error(turbo_script_ctx_t *ctx) {
+  if (!ctx)
+    return;
+  ctx->error_code = TURBO_SCRIPT_ERROR_NONE;
+  set_error_msg(ctx, NULL);
 }
 
 /* Zero-value shorthand */
 #define TS_ZERO ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 0.0})
-#define TS_ERROR(ctx, msg)                                                                         \
+#define TS_ERROR(ctx, code, msg)                                                                   \
   do {                                                                                             \
-    set_error_msg(ctx, msg);                                                                       \
+    set_error(ctx, code, msg);                                                                     \
     (ctx)->env.aborted = 1;                                                                        \
   } while (0)
 
-/* Allocate a null-terminated C string copy in the arena (no free needed) */
-static inline char *arena_cstr(mem_pool_t *a, tstr_v sv) {
-  char *buf = mem_alloc(a, sv.len + 1);
-  if (buf) {
-    memcpy(buf, sv.data, sv.len);
-    buf[sv.len] = '\0';
+exprtk_node_t *turbo_script_parse_with_error(turbo_script_ctx_t *ctx, const char *script) {
+  mem_pool_t *arena = NULL;
+  exprtk_node_t *root = NULL;
+  int err = 0;
+
+  if (!ctx || !script)
+    return NULL;
+
+  clear_error(ctx);
+
+  arena = (mem_pool_t *)malloc(sizeof(*arena));
+  if (!arena) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_OOM, "Out of memory");
+    return NULL;
   }
-  return buf;
+  if (mem_init(arena, 4096) != 0) {
+    free(arena);
+    set_error(ctx, TURBO_SCRIPT_ERROR_OOM, "Out of memory");
+    return NULL;
+  }
+
+  root = exprtk_parse_ext(script, 0, arena, &err, ctx->error_msg, sizeof(ctx->error_msg));
+  if (!err && root)
+    return root;
+
+  if (ctx->error_msg[0] == '\0')
+    set_error(ctx, TURBO_SCRIPT_ERROR_PARSE, "Parse error");
+  else
+    ctx->error_code = TURBO_SCRIPT_ERROR_PARSE;
+  mem_destroy(arena);
+  free(arena);
+  return NULL;
 }
 
 /* ── Plugin helpers ───────────────────────────────────────────────── */
@@ -166,14 +301,18 @@ static int ts_mark_script_imported(turbo_script_ctx_t *ctx, const char *name) {
 static int ts_run_script_file_in_env(turbo_script_ctx_t *ctx, const char *filename) {
   turbo_fs_buf_t buf;
   exprtk_node_t *ast = NULL;
+  char *prev_dir = NULL;
   int rc = -1;
 
-  if (turbo_fs_read_file(filename, &buf) != 0)
+  if (turbo_fs_read_file(filename, &buf) != 0) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_IO, "import: failed to read script");
     return -1;
+  }
 
   char *script = (char *)malloc(buf.len + 1);
   if (!script) {
     turbo_fs_buf_free(&buf);
+    set_error(ctx, TURBO_SCRIPT_ERROR_OOM, "import: out of memory");
     return -1;
   }
 
@@ -181,20 +320,33 @@ static int ts_run_script_file_in_env(turbo_script_ctx_t *ctx, const char *filena
   script[buf.len] = '\0';
   turbo_fs_buf_free(&buf);
 
-  ast = exprtk_parse(script, 0);
+  if (ts_push_script_dir(ctx, filename, &prev_dir) != 0) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_IO, "import: path too long");
+    goto done;
+  }
+
+  ast = turbo_script_parse_with_error(ctx, script);
   if (!ast) {
-    set_error_msg(ctx, "import: parse error");
+    char parse_error[sizeof(ctx->error_msg)];
+    strncpy(parse_error, ctx->error_msg, sizeof(parse_error) - 1);
+    parse_error[sizeof(parse_error) - 1] = '\0';
+    snprintf(ctx->error_msg, sizeof(ctx->error_msg), "import '%s': %s", filename, parse_error);
     goto done;
   }
 
   if (exprtk_validate(ast, &ctx->env, ctx->error_msg, sizeof(ctx->error_msg)) != 0) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_VALIDATE;
     goto done;
   }
 
   (void)exprtk_eval(ast, &ctx->env);
+  if (ctx->env.aborted && ctx->error_code == TURBO_SCRIPT_ERROR_NONE)
+    ctx->error_code = TURBO_SCRIPT_ERROR_RUNTIME;
   rc = ctx->env.aborted ? -1 : 0;
 
 done:
+  if (ctx->current_script_dir != prev_dir)
+    ts_pop_script_dir(ctx, prev_dir);
   if (ast)
     exprtk_free(ast);
   free(script);
@@ -204,24 +356,30 @@ done:
 static exprtk_value_t ts_import(size_t argc, exprtk_value_t *args, void *user_data) {
   turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)user_data;
   if (argc != 1 || args[0].type != EXPRTK_VAL_STRING) {
-    TS_ERROR(ctx, "import: expected 1 string arg");
+    TS_ERROR(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "import: expected 1 string arg");
     return TS_ZERO;
   }
 
-  char *name = arena_cstr(&ctx->scratch_arena, args[0].data.string);
+  char *name = exprtk_arena_cstr(&ctx->scratch_arena, args[0].data.string);
+  char resolved[TURBO_FS_MAX_PATH];
   if (!name) {
-    TS_ERROR(ctx, "import: out of memory");
+    TS_ERROR(ctx, TURBO_SCRIPT_ERROR_OOM, "import: out of memory");
     return TS_ZERO;
   }
 
   if (ts_is_script_import(name)) {
-    if (!ts_script_already_imported(ctx, name)) {
-      if (ts_run_script_file_in_env(ctx, name) != 0) {
-        TS_ERROR(ctx, "import: failed to load script");
+    if (ts_resolve_script_path(ctx, name, resolved, sizeof(resolved)) != 0) {
+      TS_ERROR(ctx, TURBO_SCRIPT_ERROR_IO, "import: path too long");
+      return TS_ZERO;
+    }
+
+    if (!ts_script_already_imported(ctx, resolved)) {
+      if (ts_run_script_file_in_env(ctx, resolved) != 0) {
+        ctx->env.aborted = 1;
         return TS_ZERO;
       }
-      if (ts_mark_script_imported(ctx, name) != 0) {
-        TS_ERROR(ctx, "import: out of memory");
+      if (ts_mark_script_imported(ctx, resolved) != 0) {
+        TS_ERROR(ctx, TURBO_SCRIPT_ERROR_OOM, "import: out of memory");
         return TS_ZERO;
       }
     }
@@ -232,7 +390,7 @@ static exprtk_value_t ts_import(size_t argc, exprtk_value_t *args, void *user_da
     return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 1.0};
   }
 
-  TS_ERROR(ctx, "import: failed to load plugin");
+  TS_ERROR(ctx, TURBO_SCRIPT_ERROR_PLUGIN, "import: failed to load plugin");
   return TS_ZERO;
 }
 
@@ -241,44 +399,64 @@ static exprtk_value_t ts_print(size_t argc, exprtk_value_t *args, void *user_dat
   for (size_t i = 0; i < argc; ++i) {
     if (i > 0)
       printf(" ");
-    switch (args[i].type) {
-    case EXPRTK_VAL_NUMBER:
-      printf("%g", args[i].data.number);
-      break;
-    case EXPRTK_VAL_STRING:
-      printf("%.*s", (int)args[i].data.string.len, args[i].data.string.data);
-      break;
-    case EXPRTK_VAL_VECTOR: {
-      size_t n = args[i].data.vector.size;
-      printf("[");
-      for (size_t j = 0; j < n; ++j) {
-        if (j > 0)
-          printf(", ");
-        printf("%g", args[i].data.vector.data[j]);
-      }
-      printf("]");
-      break;
-    }
-    case EXPRTK_VAL_MAP:
-      printf("{map:%zu}", exprtk_map_count(&args[i]));
-      break;
-    case EXPRTK_VAL_LIST:
-      printf("[list:%zu]", args[i].data.list.count);
-      break;
-    case EXPRTK_VAL_NULL:
-      printf("null");
-      break;
-    default:
-      printf("[unknown type %d]", args[i].type);
-      break;
-    }
+    ts_print_value(&args[i], 0);
   }
   printf("\n");
   fflush(stdout);
   return TS_ZERO;
 }
 
-#include "turbo_script_internal.h"
+static void ts_print_vector(const exprtk_value_t *val) {
+  size_t n = val->data.vector.size;
+  printf("[");
+  for (size_t j = 0; j < n; ++j) {
+    if (j > 0)
+      printf(", ");
+    printf("%g", val->data.vector.data[j]);
+  }
+  printf("]");
+}
+
+static void ts_print_value(const exprtk_value_t *val, int repl_mode) {
+  switch (val->type) {
+  case EXPRTK_VAL_NUMBER:
+    printf("%g", val->data.number);
+    break;
+  case EXPRTK_VAL_STRING:
+    printf("%.*s", (int)val->data.string.len, val->data.string.data);
+    break;
+  case EXPRTK_VAL_VECTOR:
+    ts_print_vector(val);
+    break;
+  case EXPRTK_VAL_MAP:
+    if (repl_mode)
+      printf("{map}");
+    else
+      printf("{map:%zu}", exprtk_map_count(val));
+    break;
+  case EXPRTK_VAL_LIST:
+    if (repl_mode)
+      printf("[list]");
+    else
+      printf("[list:%zu]", val->data.list.count);
+    break;
+  case EXPRTK_VAL_NULL:
+    printf("null");
+    break;
+  case EXPRTK_VAL_FUNCTION:
+    if (repl_mode)
+      printf("[function]");
+    else
+      printf("[unknown type %d]", val->type);
+    break;
+  default:
+    if (repl_mode)
+      printf("[unknown]");
+    else
+      printf("[unknown type %d]", val->type);
+    break;
+  }
+}
 
 turbo_script_ctx_t *turbo_script_init(turbo_script_init_flags_t flags) {
   turbo_script_ctx_t *ctx = (turbo_script_ctx_t *)calloc(1, sizeof(turbo_script_ctx_t));
@@ -301,102 +479,75 @@ turbo_script_ctx_t *turbo_script_init(turbo_script_init_flags_t flags) {
 }
 
 int turbo_script_load_plugin(turbo_script_ctx_t *ctx, const char *name) {
-  if (!ctx || !name)
+  if (!ctx)
     return -1;
-  return ts_load_plugin(ctx, name);
+  if (!name) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "plugin name is NULL");
+    return -1;
+  }
+  clear_error(ctx);
+  if (ts_load_plugin(ctx, name) != 0) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_PLUGIN, "failed to load plugin");
+    return -1;
+  }
+  return 0;
 }
 
 int turbo_script_run(turbo_script_ctx_t *ctx, const char *script) {
-  if (!ctx || !script)
+  if (!ctx)
     return -1;
+  if (!script) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "script is NULL");
+    return -1;
+  }
 
   /* Always use interpreter for turbo_script_run() - stable and feature-complete */
   mem_reset(&ctx->scratch_arena);
+  clear_error(ctx);
   ctx->env.aborted = 0;
   ctx->env.curr_nodes = 0;
   ctx->env.curr_loop_iterations = 0;
   ctx->env.curr_recursion = 0;
 
-  if (ctx->expr) {
-    exprtk_free(ctx->expr);
-    ctx->expr = NULL;
-  }
-
-  ctx->expr = exprtk_parse(script, 0);
-  if (!ctx->expr) {
-    set_error_msg(ctx, "Parse error");
+  if (ts_prepare_expr(ctx, script) != 0) {
     return -1;
   }
 
   if (exprtk_validate(ctx->expr, &ctx->env, ctx->error_msg, sizeof(ctx->error_msg)) != 0) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_VALIDATE;
     return -1;
   }
 
   exprtk_value_t res = exprtk_eval(ctx->expr, &ctx->env);
   (void)res;
+  if (ctx->env.aborted && ctx->error_code == TURBO_SCRIPT_ERROR_NONE)
+    ctx->error_code = TURBO_SCRIPT_ERROR_RUNTIME;
 
   return ctx->env.aborted ? -1 : 0;
 }
 
-static void print_repl_val(exprtk_value_t *val, turbo_script_ctx_t *ctx) {
-  switch (val->type) {
-    case EXPRTK_VAL_NUMBER:
-      printf("%g\n", val->data.number);
-      break;
-    case EXPRTK_VAL_STRING:
-      printf("%.*s\n", (int)val->data.string.len, val->data.string.data);
-      break;
-    case EXPRTK_VAL_VECTOR: {
-      size_t n = val->data.vector.size;
-      printf("[");
-      for (size_t j = 0; j < n; ++j) {
-        if (j > 0) printf(", ");
-        printf("%g", val->data.vector.data[j]);
-      }
-      printf("]\n");
-      break;
-    }
-    case EXPRTK_VAL_MAP:
-      printf("{map}\n");
-      break;
-    case EXPRTK_VAL_LIST:
-      printf("[list]\n");
-      break;
-    case EXPRTK_VAL_NULL:
-      printf("null\n");
-      break;
-    case EXPRTK_VAL_FUNCTION:
-      printf("[function]\n");
-      break;
-    default:
-      printf("[unknown]\n");
-      break;
-  }
-}
-
 int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script) {
-  if (!ctx || !script)
+  if (!ctx)
     return -1;
+  if (!script) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "script is NULL");
+    return -1;
+  }
 
   /* Reset scratch arena from previous run */
   mem_reset(&ctx->scratch_arena);
+  clear_error(ctx);
   ctx->env.aborted = 0;
   ctx->env.curr_nodes = 0;
   ctx->env.curr_loop_iterations = 0;
   ctx->env.curr_recursion = 0;
 
-  if (ctx->expr) {
-    exprtk_free(ctx->expr);
-    ctx->expr = NULL;
-  }
-
-  ctx->expr = exprtk_parse(script, 0);
-  if (!ctx->expr) {
-    set_error_msg(ctx, "Parse error");
+  if (ts_prepare_expr(ctx, script) != 0) {
     return -1;
   }
 
   if (exprtk_validate(ctx->expr, &ctx->env, ctx->error_msg, sizeof(ctx->error_msg)) != 0) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_VALIDATE;
     return -1;
   }
 
@@ -405,36 +556,38 @@ int turbo_script_repl_run(turbo_script_ctx_t *ctx, const char *script) {
      int is_block = ctx->expr->type == EXPRTK_NODE_BLOCK;
      int empty_block = is_block && ctx->expr->data.block.count == 0;
      if (!empty_block) {
-       print_repl_val(&res, ctx);
+       ts_print_value(&res, 1);
+       printf("\n");
      }
   }
+  if (ctx->env.aborted && ctx->error_code == TURBO_SCRIPT_ERROR_NONE)
+    ctx->error_code = TURBO_SCRIPT_ERROR_RUNTIME;
 
   return ctx->env.aborted ? -1 : 0;
 }
 
 int turbo_script_run_and_print(turbo_script_ctx_t *ctx, const char *script) {
-  /* In DEBUG mode, use interpreter with result printing */
-#ifdef DEBUG
   return turbo_script_repl_run(ctx, script);
-#else
-  /* In production mode, JIT doesn't support result printing yet */
-  /* TODO: implement result capture for JIT mode */
-  return turbo_script_run(ctx, script);
-#endif
 }
 
 
 turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx, const char *script) {
-  if (!ctx || !script)
+  if (!ctx)
     return NULL;
+  if (!script) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "script is NULL");
+    return NULL;
+  }
 
-  exprtk_node_t *ast = exprtk_parse(script, 0);
+  clear_error(ctx);
+
+  exprtk_node_t *ast = turbo_script_parse_with_error(ctx, script);
   if (!ast) {
-    set_error_msg(ctx, "Parse error");
     return NULL;
   }
 
   if (exprtk_validate(ast, &ctx->env, ctx->error_msg, sizeof(ctx->error_msg)) != 0) {
+    ctx->error_code = TURBO_SCRIPT_ERROR_VALIDATE;
     exprtk_free(ast);
     return NULL;
   }
@@ -442,6 +595,7 @@ turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx, const cha
   turbo_script_compiled_t *compiled =
       (turbo_script_compiled_t *)malloc(sizeof(turbo_script_compiled_t));
   if (!compiled) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_OOM, "Out of memory");
     exprtk_free(ast);
     return NULL;
   }
@@ -450,14 +604,21 @@ turbo_script_compiled_t *turbo_script_compile(turbo_script_ctx_t *ctx, const cha
 }
 
 int turbo_script_exec(turbo_script_ctx_t *ctx, turbo_script_compiled_t *compiled) {
-  if (!ctx || !compiled || !compiled->ast)
+  if (!ctx)
     return -1;
+  if (!compiled || !compiled->ast) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "compiled script is NULL");
+    return -1;
+  }
 
   mem_reset(&ctx->scratch_arena);
+  clear_error(ctx);
   ctx->env.aborted = 0;
 
   exprtk_value_t res =  exprtk_eval(compiled->ast, &ctx->env);
   (void)res;
+  if (ctx->env.aborted && ctx->error_code == TURBO_SCRIPT_ERROR_NONE)
+    ctx->error_code = TURBO_SCRIPT_ERROR_RUNTIME;
 
   return ctx->env.aborted ? -1 : 0;
 }
@@ -494,17 +655,26 @@ void turbo_script_compiled_free(turbo_script_compiled_t *compiled) {
 }
 
 int turbo_script_run_file(turbo_script_ctx_t *ctx, const char *filename) {
-  if (!ctx || !filename)
+  char *prev_dir = NULL;
+  if (!ctx)
     return -1;
+  if (!filename) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_ARGUMENT, "filename is NULL");
+    return -1;
+  }
 
+  clear_error(ctx);
   turbo_fs_buf_t buf;
-  if (turbo_fs_read_file(filename, &buf) != 0)
+  if (turbo_fs_read_file(filename, &buf) != 0) {
+    set_error(ctx, TURBO_SCRIPT_ERROR_IO, "run_file: failed to read file");
     return -1;
+  }
 
   /* Ensure null-termination */
   char *script = (char *)malloc(buf.len + 1);
   if (!script) {
     turbo_fs_buf_free(&buf);
+    set_error(ctx, TURBO_SCRIPT_ERROR_OOM, "run_file: out of memory");
     return -1;
   }
 
@@ -512,22 +682,29 @@ int turbo_script_run_file(turbo_script_ctx_t *ctx, const char *filename) {
   script[buf.len] = '\0';
   turbo_fs_buf_free(&buf);
 
+  if (ts_push_script_dir(ctx, filename, &prev_dir) != 0) {
+    free(script);
+    set_error(ctx, TURBO_SCRIPT_ERROR_IO, "run_file: path too long");
+    return -1;
+  }
+
   int ret = turbo_script_run(ctx, script);
+  ts_pop_script_dir(ctx, prev_dir);
   free(script);
   return ret;
 }
 
-void bind_num(turbo_script_ctx_t *ctx, const char *name, double value) {
+void ts_bind_num(turbo_script_ctx_t *ctx, const char *name, double value) {
   if (!ctx)
     return;
   exprtk_value_t v = {EXPRTK_VAL_NUMBER, .data.number = value};
   exprtk_env_set(&ctx->env, name, v);
 }
 
-void bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value) {
+void ts_bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value) {
   if (!ctx || !name || !value)
     return;
-  char *buf = arena_cstr(&ctx->env.arena, tstr_v_from_cstr(value));
+  char *buf = exprtk_arena_cstr(&ctx->env.arena, tstr_v_from_cstr(value));
   if (buf) {
     size_t len = strlen(buf);
     exprtk_value_t v = {EXPRTK_VAL_STRING, .data.string = tstr_v_from_buf(buf, len)};
@@ -535,7 +712,7 @@ void bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value) {
   }
 }
 
-double get_num(turbo_script_ctx_t *ctx, const char *name) {
+double ts_get_num(turbo_script_ctx_t *ctx, const char *name) {
   if (!ctx)
     return 0.0;
   exprtk_value_t v = exprtk_env_get(&ctx->env, name);
@@ -546,7 +723,11 @@ double get_num(turbo_script_ctx_t *ctx, const char *name) {
 
 const char *turbo_script_get_error(turbo_script_ctx_t *ctx) { return ctx ? ctx->error_msg : ""; }
 
-int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len) {
+turbo_script_error_code_t turbo_script_get_error_code(turbo_script_ctx_t *ctx) {
+  return ctx ? ctx->error_code : TURBO_SCRIPT_ERROR_ARGUMENT;
+}
+
+int ts_bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len) {
   if (!ctx || !name || !data || len == 0)
     return -1;
   double *buf = (double *)mem_alloc(&ctx->env.arena, len * sizeof(double));
@@ -558,7 +739,7 @@ int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size
   return 0;
 }
 
-int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size_t *len) {
+int ts_get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size_t *len) {
   if (!ctx || !name || !data || !len)
     return -1;
   exprtk_value_t v = exprtk_env_get(&ctx->env, name);
@@ -569,7 +750,7 @@ int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size
   return 0;
 }
 
-const char *get_str(turbo_script_ctx_t *ctx, const char *name) {
+const char *ts_get_str(turbo_script_ctx_t *ctx, const char *name) {
   if (!ctx || !name)
     return NULL;
   exprtk_value_t v = exprtk_env_get(&ctx->env, name);
@@ -578,8 +759,36 @@ const char *get_str(turbo_script_ctx_t *ctx, const char *name) {
   return v.data.string.data;
 }
 
-void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn, void *user_data) {
+void ts_bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn,
+                  void *user_data) {
   if (!ctx || !name || !fn)
     return;
   exprtk_env_register_func(&ctx->env, name, fn, user_data);
+}
+
+void bind_num(turbo_script_ctx_t *ctx, const char *name, double value) {
+  ts_bind_num(ctx, name, value);
+}
+
+void bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value) {
+  ts_bind_str(ctx, name, value);
+}
+
+double get_num(turbo_script_ctx_t *ctx, const char *name) { return ts_get_num(ctx, name); }
+
+int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len) {
+  return ts_bind_vec(ctx, name, data, len);
+}
+
+int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size_t *len) {
+  return ts_get_vec(ctx, name, data, len);
+}
+
+const char *get_str(turbo_script_ctx_t *ctx, const char *name) {
+  return ts_get_str(ctx, name);
+}
+
+void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn,
+               void *user_data) {
+  ts_bind_func(ctx, name, fn, user_data);
 }

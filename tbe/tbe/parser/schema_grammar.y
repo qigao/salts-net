@@ -33,7 +33,7 @@ static char *tok_strdup(schema_token_t t) {
 static int tok_to_ull(schema_token_t t, unsigned long long *out) {
     char *text = tok_strdup(t);
     char *end = NULL;
-    unsigned long long value = strtoull(text, &end, 10);
+    unsigned long long value = strtoull(text, &end, 0);
     int ok = (text[0] != '\0' && end && *end == '\0');
 
     free(text);

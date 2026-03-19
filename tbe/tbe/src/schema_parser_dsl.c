@@ -190,6 +190,7 @@ typedef struct {
 } type_info_t;
 
 static const type_info_t TYPE_TABLE[] = {
+    {"bool",    1, "u8",  "uint8_t"},
     {"uint8_t", 1, "u8",  "uint8_t"},
     {"uint8",   1, "u8",  "uint8_t"},
     {"byte",    1, "u8",  "uint8_t"},

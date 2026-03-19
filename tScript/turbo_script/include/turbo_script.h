@@ -15,16 +15,39 @@ typedef struct turbo_script_compiled_s turbo_script_compiled_t;
 typedef struct coro_context_s coro_context_t;
 typedef struct exprtk_value_s exprtk_value_t;
 
+#define TURBO_SCRIPT_VERSION_MAJOR 1
+#define TURBO_SCRIPT_VERSION_MINOR 0
+#define TURBO_SCRIPT_VERSION_PATCH 0
+#define TURBO_SCRIPT_VERSION_STRING "1.0.0"
+
 typedef enum {
     TURBO_SCRIPT_INIT_DEFAULT = 0,
     TURBO_SCRIPT_INIT_BARE = 1,
 } turbo_script_init_flags_t;
+
+typedef enum {
+    TURBO_SCRIPT_ERROR_NONE = 0,
+    TURBO_SCRIPT_ERROR_ARGUMENT,
+    TURBO_SCRIPT_ERROR_PARSE,
+    TURBO_SCRIPT_ERROR_VALIDATE,
+    TURBO_SCRIPT_ERROR_RUNTIME,
+    TURBO_SCRIPT_ERROR_IO,
+    TURBO_SCRIPT_ERROR_PLUGIN,
+    TURBO_SCRIPT_ERROR_JIT,
+    TURBO_SCRIPT_ERROR_OOM,
+    TURBO_SCRIPT_ERROR_STATE,
+} turbo_script_error_code_t;
 
 /**
  * @brief Initialize a new Turbo Script context.
  * @param flags TURBO_SCRIPT_INIT_DEFAULT for full init, TURBO_SCRIPT_INIT_BARE for plugin-based init.
  */
 CXX_C_API turbo_script_ctx_t *turbo_script_init(turbo_script_init_flags_t flags);
+
+/**
+ * @brief Get Turbo Script ABI/API version string.
+ */
+CXX_C_API const char *turbo_script_version(void);
 
 /**
  * @brief Set the coroutine context for networking/async operations.
@@ -92,19 +115,25 @@ CXX_C_API void turbo_script_compiled_free(turbo_script_compiled_t *compiled);
 CXX_C_API const char *turbo_script_get_error(turbo_script_ctx_t *ctx);
 
 /**
+ * @brief Get categorized error code of last operation.
+ */
+CXX_C_API turbo_script_error_code_t turbo_script_get_error_code(turbo_script_ctx_t *ctx);
+
+/**
  * @brief Bind a number variable into the script environment.
  */
-CXX_C_API void bind_num(turbo_script_ctx_t *ctx, const char *name, double value);
+CXX_C_API void ts_bind_num(turbo_script_ctx_t *ctx, const char *name, double value);
 
 /**
  * @brief Bind a string variable into the script environment.
  */
-CXX_C_API void bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value);
+CXX_C_API void ts_bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value);
 
 /**
  * @brief Bind a double[] vector into the script environment.
  */
-CXX_C_API int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len);
+CXX_C_API int ts_bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data,
+                          size_t len);
 
 /**
  * @brief Native function signature for user-registered functions.
@@ -115,26 +144,38 @@ typedef exprtk_value_t (*turbo_script_func_t)(size_t arg_count, exprtk_value_t *
 /**
  * @brief Register a native C function callable from script.
  */
-CXX_C_API void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn,
-                         void *user_data);
+CXX_C_API void ts_bind_func(turbo_script_ctx_t *ctx, const char *name,
+                            turbo_script_func_t fn, void *user_data);
 
 /**
  * @brief Get a number variable from the script environment.
  * Returns 0.0 if not found or not a number.
  */
-CXX_C_API double get_num(turbo_script_ctx_t *ctx, const char *name);
+CXX_C_API double ts_get_num(turbo_script_ctx_t *ctx, const char *name);
 
 /**
  * @brief Get a string variable from the script environment.
  * @return Pointer to null-terminated string, or NULL if not found/not a string.
  */
-CXX_C_API const char *get_str(turbo_script_ctx_t *ctx, const char *name);
+CXX_C_API const char *ts_get_str(turbo_script_ctx_t *ctx, const char *name);
 
 /**
  * @brief Get a vector variable from the script environment.
  * @return 0 on success, -1 if not found or not a vector.
  */
-CXX_C_API int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data, size_t *len);
+CXX_C_API int ts_get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data,
+                         size_t *len);
+
+/* Compatibility exports kept for existing callers. */
+CXX_C_API void bind_num(turbo_script_ctx_t *ctx, const char *name, double value);
+CXX_C_API void bind_str(turbo_script_ctx_t *ctx, const char *name, const char *value);
+CXX_C_API int bind_vec(turbo_script_ctx_t *ctx, const char *name, const double *data, size_t len);
+CXX_C_API void bind_func(turbo_script_ctx_t *ctx, const char *name, turbo_script_func_t fn,
+                         void *user_data);
+CXX_C_API double get_num(turbo_script_ctx_t *ctx, const char *name);
+CXX_C_API const char *get_str(turbo_script_ctx_t *ctx, const char *name);
+CXX_C_API int get_vec(turbo_script_ctx_t *ctx, const char *name, const double **data,
+                      size_t *len);
 
 /**
  * @brief Load a plugin by name from C code.

@@ -298,6 +298,7 @@ typedef struct exprtk_env_s {
 typedef struct {
   exprtk_node_t *root;
   int error;
+  int fatal_error;
   char error_msg[256];
   mem_pool_t *arena;
 } exprtk_parse_ctx_t;

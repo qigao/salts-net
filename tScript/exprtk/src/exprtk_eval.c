@@ -37,7 +37,7 @@ static void mir_std_free(void *ptr, void *user_data) {
     free(ptr);
 }
 
-static struct MIR_alloc mir_std_alloc_struct = {
+static const struct MIR_alloc mir_std_alloc_struct = {
     mir_std_malloc,
     mir_std_calloc,
     mir_std_realloc,
@@ -45,7 +45,7 @@ static struct MIR_alloc mir_std_alloc_struct = {
     NULL
 };
 
-static MIR_alloc_t mir_std_alloc = &mir_std_alloc_struct;
+static MIR_alloc_t mir_std_alloc = (MIR_alloc_t)&mir_std_alloc_struct;
 
 // Hash table entry for variables
 typedef struct {
@@ -70,6 +70,51 @@ static int var_eq(exprtk_var_entry_t e1, exprtk_var_entry_t e2, void *arg) {
     (void)arg;
     return strcmp(e1.name, e2.name) == 0;
 }
+
+typedef struct {
+    void **items;
+    size_t count;
+    size_t capacity;
+} exprtk_ptr_set_t;
+
+typedef struct {
+    exprtk_ptr_set_t lists;
+    exprtk_ptr_set_t maps;
+} exprtk_release_state_t;
+
+static int ptr_set_mark_seen(exprtk_ptr_set_t *set, void *ptr) {
+    if (!set || !ptr) return 0;
+
+    for (size_t i = 0; i < set->count; ++i) {
+        if (set->items[i] == ptr) return 0;
+    }
+
+    if (set->count == set->capacity) {
+        size_t new_capacity = set->capacity ? set->capacity * 2 : 8;
+        void **new_items = (void**)realloc(set->items, new_capacity * sizeof(void*));
+        if (!new_items) return 0;
+        set->items = new_items;
+        set->capacity = new_capacity;
+    }
+
+    set->items[set->count++] = ptr;
+    return 1;
+}
+
+static void exprtk_release_state_destroy(exprtk_release_state_t *state) {
+    if (!state) return;
+
+    free(state->lists.items);
+    free(state->maps.items);
+    state->lists.items = NULL;
+    state->maps.items = NULL;
+    state->lists.count = 0;
+    state->maps.count = 0;
+    state->lists.capacity = 0;
+    state->maps.capacity = 0;
+}
+
+static void exprtk_release_value(exprtk_value_t *value, exprtk_release_state_t *state);
 
 // Error throwing helper (Phase 2)
 static exprtk_value_t throw_error(exprtk_env_t *env, const exprtk_node_t *node, const char *fmt, ...) {
@@ -99,6 +144,60 @@ static const char* type_name(int type) {
         case EXPRTK_VAL_LIST: return "list";
         case EXPRTK_VAL_FUNCTION: return "function";
         default: return "unknown";
+    }
+}
+
+exprtk_value_t exprtk_value_clone_to_env(exprtk_value_t value, exprtk_env_t *dst_env) {
+    if (!dst_env) return value;
+
+    switch (value.type) {
+        case EXPRTK_VAL_STRING: {
+            if (!value.data.string.data) return value;
+            char *buf = (char*)mem_alloc(&dst_env->arena, value.data.string.len + 1);
+            if (!buf) {
+                tstr_v empty = {0};
+                return exprtk_val_str(empty);
+            }
+            memcpy(buf, value.data.string.data, value.data.string.len);
+            buf[value.data.string.len] = '\0';
+            tstr_v copied;
+            copied.data = buf;
+            copied.len = value.data.string.len;
+            return exprtk_val_str(copied);
+        }
+        case EXPRTK_VAL_VECTOR: {
+            if (!value.data.vector.data || value.data.vector.size == 0) return value;
+            double *data = (double*)mem_alloc(&dst_env->arena, value.data.vector.size * sizeof(double));
+            if (!data) return exprtk_val_vec(NULL, 0);
+            memcpy(data, value.data.vector.data, value.data.vector.size * sizeof(double));
+            return exprtk_val_vec(data, value.data.vector.size);
+        }
+        case EXPRTK_VAL_LIST: {
+            exprtk_value_t cloned = exprtk_val_list_empty();
+            if (!value.data.list.items || value.data.list.count == 0) return cloned;
+
+            exprtk_value_t *items =
+                (exprtk_value_t*)malloc(value.data.list.count * sizeof(exprtk_value_t));
+            if (!items) return cloned;
+
+            for (size_t i = 0; i < value.data.list.count; ++i) {
+                items[i] = exprtk_value_clone_to_env(value.data.list.items[i], dst_env);
+            }
+            return exprtk_val_list(items, value.data.list.count);
+        }
+        case EXPRTK_VAL_MAP: {
+            exprtk_value_t cloned = exprtk_val_map();
+            exprtk_map_iter_t it = exprtk_map_iter_begin(&value);
+            const char *key;
+            exprtk_value_t child;
+            while (exprtk_map_iter_next(&it, &key, &child)) {
+                exprtk_value_t cloned_child = exprtk_value_clone_to_env(child, dst_env);
+                exprtk_map_set(&cloned, key, cloned_child);
+            }
+            return cloned;
+        }
+        default:
+            return value;
     }
 }
 
@@ -316,8 +415,50 @@ exprtk_env_t* exprtk_env_snapshot(exprtk_env_t *env) {
     return new_env;
 }
 
+static void exprtk_release_map_value(exprtk_value_t *map, exprtk_release_state_t *state) {
+    if (!map || map->type != EXPRTK_VAL_MAP || !map->data.map.htab) return;
+    if (!ptr_set_mark_seen(&state->maps, map->data.map.htab)) return;
+
+    exprtk_map_iter_t it = exprtk_map_iter_begin(map);
+    exprtk_value_t child;
+    while (exprtk_map_iter_next(&it, NULL, &child)) {
+        exprtk_release_value(&child, state);
+    }
+
+    exprtk_map_free(map);
+}
+
+static void exprtk_release_list_value(exprtk_value_t *list, exprtk_release_state_t *state) {
+    if (!list || list->type != EXPRTK_VAL_LIST || !list->data.list.items) return;
+    if (!ptr_set_mark_seen(&state->lists, list->data.list.items)) return;
+
+    for (size_t i = 0; i < list->data.list.count; ++i) {
+        exprtk_release_value(&list->data.list.items[i], state);
+    }
+
+    free(list->data.list.items);
+    list->data.list.items = NULL;
+    list->data.list.count = 0;
+    list->data.list.capacity = 0;
+}
+
+static void exprtk_release_value(exprtk_value_t *value, exprtk_release_state_t *state) {
+    if (!value || !state) return;
+
+    switch (value->type) {
+        case EXPRTK_VAL_LIST:
+            exprtk_release_list_value(value, state);
+            break;
+        case EXPRTK_VAL_MAP:
+            exprtk_release_map_value(value, state);
+            break;
+        default:
+            break;
+    }
+}
+
 // Helper to manually free hash table entries
-static void free_htab_entries(HTAB(exprtk_var_entry_t) *htab) {
+static void free_htab_entries(HTAB(exprtk_var_entry_t) *htab, exprtk_release_state_t *state) {
     if (!htab) return;
 
     // Iterate through all entries and free them manually
@@ -328,14 +469,12 @@ static void free_htab_entries(HTAB(exprtk_var_entry_t) *htab) {
         if (els_addr[i].hash != HTAB_DELETED_HASH) {
             exprtk_var_entry_t entry = els_addr[i].el;
             free(entry.name);
-            if (entry.value.type == EXPRTK_VAL_MAP) {
-                exprtk_map_free(&entry.value);
-            }
+            exprtk_release_value(&entry.value, state);
         }
     }
 }
 
-void exprtk_env_free(exprtk_env_t *env) {
+static void exprtk_env_free_internal(exprtk_env_t *env, exprtk_release_state_t *state) {
     if (!env) return;
 
     /* Free all captured closure environments */
@@ -343,7 +482,7 @@ void exprtk_env_free(exprtk_env_t *env) {
     while (closure) {
         exprtk_env_t *next = closure->next_closure;
         closure->next_closure = NULL;
-        exprtk_env_free(closure);
+        exprtk_env_free_internal(closure, state);
         free(closure);
         closure = next;
     }
@@ -363,7 +502,7 @@ void exprtk_env_free(exprtk_env_t *env) {
     // Destroy hash table (manually free entries first)
     if (env->vars) {
         HTAB(exprtk_var_entry_t) *htab = (HTAB(exprtk_var_entry_t)*)env->vars;
-        free_htab_entries(htab);
+        free_htab_entries(htab, state);
         HTAB_OP(exprtk_var_entry_t, destroy)(&htab);
         env->vars = NULL;
     }
@@ -381,6 +520,14 @@ void exprtk_env_free(exprtk_env_t *env) {
         fcurr = fnext;
     }
     env->funcs = NULL;
+}
+
+void exprtk_env_free(exprtk_env_t *env) {
+    exprtk_release_state_t state;
+
+    memset(&state, 0, sizeof(state));
+    exprtk_env_free_internal(env, &state);
+    exprtk_release_state_destroy(&state);
 }
 
 exprtk_value_t exprtk_env_get(exprtk_env_t *env, const char *name) {
@@ -456,6 +603,23 @@ void exprtk_env_add_module(exprtk_env_t *env, const exprtk_module_t *mod) {
     env->mod_cache_count = 0;
 }
 
+static int grow_value_array(exprtk_value_t **vals, size_t *cap, size_t needed) {
+    if (!vals || !cap) return 0;
+    if (needed <= *cap) return 1;
+
+    size_t new_cap = (*cap > 0) ? *cap : 4;
+    while (new_cap < needed) {
+        new_cap *= 2;
+    }
+
+    exprtk_value_t *new_vals = (exprtk_value_t*)realloc(*vals, new_cap * sizeof(exprtk_value_t));
+    if (!new_vals) return 0;
+
+    *vals = new_vals;
+    *cap = new_cap;
+    return 1;
+}
+
 static exprtk_value_t* eval_expand_args(exprtk_node_t **nodes, size_t count, exprtk_env_t *env, size_t *out_count) {
     size_t cap = count > 0 ? count : 4;
     exprtk_value_t *vals = (exprtk_value_t*)malloc(cap * sizeof(exprtk_value_t));
@@ -469,42 +633,27 @@ static exprtk_value_t* eval_expand_args(exprtk_node_t **nodes, size_t count, exp
         if (nodes[i]->type == EXPRTK_NODE_SPREAD) {
             exprtk_value_t el = exprtk_eval(nodes[i]->data.spread.child, env);
             if (el.type == EXPRTK_VAL_VECTOR) {
-                if (actual + el.data.vector.size > cap) {
-                    cap = actual + el.data.vector.size;
-                    exprtk_value_t *new_vals = (exprtk_value_t*)realloc(vals, cap * sizeof(exprtk_value_t));
-                    if (!new_vals) {
-                        free(vals);
-                        *out_count = 0;
-                        return NULL;
-                    }
-                    vals = new_vals;
+                if (!grow_value_array(&vals, &cap, actual + el.data.vector.size)) {
+                    free(vals);
+                    *out_count = 0;
+                    return NULL;
                 }
                 for (size_t j = 0; j < el.data.vector.size; ++j) {
                     vals[actual++] = exprtk_val_num(el.data.vector.data[j]);
                 }
             } else {
-                if (actual + 1 > cap) {
-                    cap = (cap == 0) ? 4 : cap * 2;
-                    exprtk_value_t *new_vals = (exprtk_value_t*)realloc(vals, cap * sizeof(exprtk_value_t));
-                    if (!new_vals) {
-                        free(vals);
-                        *out_count = 0;
-                        return NULL;
-                    }
-                    vals = new_vals;
-                }
-                vals[actual++] = el;
-            }
-        } else {
-            if (actual + 1 > cap) {
-                cap = (cap == 0) ? 4 : cap * 2;
-                exprtk_value_t *new_vals = (exprtk_value_t*)realloc(vals, cap * sizeof(exprtk_value_t));
-                if (!new_vals) {
+                if (!grow_value_array(&vals, &cap, actual + 1)) {
                     free(vals);
                     *out_count = 0;
                     return NULL;
                 }
-                vals = new_vals;
+                vals[actual++] = el;
+            }
+        } else {
+            if (!grow_value_array(&vals, &cap, actual + 1)) {
+                free(vals);
+                *out_count = 0;
+                return NULL;
             }
             vals[actual++] = exprtk_eval(nodes[i], env);
         }
@@ -534,6 +683,20 @@ static int mc_get_var(mc_ctx_t *mc, exprtk_value_t *out, const char **name) {
     *name = mc->obj_node->data.variable.name;
     *out = exprtk_env_get(mc->env, *name);
     return 1;
+}
+
+static exprtk_value_t *mc_prepare_call_args(mc_ctx_t *mc, exprtk_value_t *stack_args, size_t stack_cap) {
+    size_t call_argc = mc->argc + 1;
+    exprtk_value_t *call_args = stack_args;
+
+    if (call_argc > stack_cap) {
+        call_args = (exprtk_value_t*)malloc(call_argc * sizeof(exprtk_value_t));
+        if (!call_args) return NULL;
+    }
+
+    call_args[0] = mc->obj;
+    if (mc->argc > 0) memcpy(call_args + 1, mc->args, mc->argc * sizeof(exprtk_value_t));
+    return call_args;
 }
 
 static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
@@ -658,17 +821,15 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
 static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
     exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
+    exprtk_value_t stack_args[8];
 
     if (strcmp(m, "length") == 0 || strcmp(m, "size") == 0)
         return exprtk_val_num((double)mc->obj.data.string.len);
 
     /* Dispatch to registry: string methods expect (this, ...args) */
     size_t call_argc = mc->argc + 1;
-    exprtk_value_t *call_args = (exprtk_value_t*)malloc(call_argc * sizeof(exprtk_value_t));
+    exprtk_value_t *call_args = mc_prepare_call_args(mc, stack_args, 8);
     if (!call_args) return zero;
-
-    call_args[0] = mc->obj;
-    if (mc->argc > 0) memcpy(call_args + 1, mc->args, mc->argc * sizeof(exprtk_value_t));
 
     char full_name[128];
     snprintf(full_name, sizeof(full_name), "string.%s", m);
@@ -717,13 +878,14 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
             result = exprtk_val_str(sv);
         }
     }
-    free(call_args);
+    if (call_args != stack_args) free(call_args);
     return result;
 }
 
 static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
     exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
+    exprtk_value_t stack_args[8];
 
     if (strcmp(m, "length") == 0 || strcmp(m, "size") == 0)
         return exprtk_val_num((double)mc->obj.data.vector.size);
@@ -770,11 +932,8 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
 
     /* Registry dispatch: try multiple namespace prefixes */
     size_t call_argc = mc->argc + 1;
-    exprtk_value_t *call_args = (exprtk_value_t*)malloc(call_argc * sizeof(exprtk_value_t));
+    exprtk_value_t *call_args = mc_prepare_call_args(mc, stack_args, 8);
     if (!call_args) return zero;
-
-    call_args[0] = mc->obj;
-    if (mc->argc > 0) memcpy(call_args + 1, mc->args, mc->argc * sizeof(exprtk_value_t));
 
     static const char *prefixes[] = { "vec_", "ta.", "ts.", "stats.", "math.", NULL };
     exprtk_builtin_fn fn = NULL;
@@ -813,7 +972,7 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
             result = exprtk_val_num(v);
         }
     }
-    free(call_args);
+    if (call_args != stack_args) free(call_args);
     return result;
 }
 
@@ -1455,14 +1614,15 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
 
                 /* Evaluate catch body */
                 result = exprtk_eval(node->data.try_catch.catch_body, &catch_env);
+                result = exprtk_value_clone_to_env(result, env);
 
                 env->curr_nodes = catch_env.curr_nodes;
                 env->curr_loop_iterations = catch_env.curr_loop_iterations;
                 env->aborted = catch_env.aborted;
                 if (catch_env.flow != exprtk_FLOW_NORMAL) {
                     env->flow = catch_env.flow;
-                    env->return_value = catch_env.return_value;
-                    env->error_value = catch_env.error_value;
+                    env->return_value = exprtk_value_clone_to_env(catch_env.return_value, env);
+                    env->error_value = exprtk_value_clone_to_env(catch_env.error_value, env);
                 }
 
                 exprtk_env_free(&catch_env);

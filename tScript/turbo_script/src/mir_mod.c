@@ -13,15 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static inline char *mir_arena_cstr(mem_pool_t *a, tstr_v sv) {
-  char *buf = mem_alloc(a, sv.len + 1);
-  if (buf) {
-    memcpy(buf, sv.data, sv.len);
-    buf[sv.len] = '\0';
-  }
-  return buf;
-}
-
 static MIR_item_t mir_get_global_item(MIR_context_t ctx, const char *name) {
   if (!ctx)
     return NULL;
@@ -129,4 +120,3 @@ void turbo_script_register_mir(turbo_script_ctx_t *ctx) {
   exprtk_env_register_func(&ctx->env, "mir.load", ts_mir_load, ctx);
   exprtk_env_register_func(&ctx->env, "mir.call", ts_mir_call, ctx);
 }
-

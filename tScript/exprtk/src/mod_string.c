@@ -82,13 +82,6 @@ static bool mod_to_bool(const char *s, bool *out) {
     return false;
 }
 
-/* Allocate a null-terminated C string in arena from a tstr_v */
-static inline char *mod_arena_cstr(mem_pool_t *a, tstr_v sv) {
-    char *buf = mem_alloc(a, sv.len + 1);
-    if (buf) { memcpy(buf, sv.data, sv.len); buf[sv.len] = '\0'; }
-    return buf;
-}
-
 static exprtk_value_t fn_size(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena) {
     (void)env; (void)arena;
     if (argc == 1 && args[0].type == EXPRTK_VAL_STRING)
@@ -263,8 +256,8 @@ static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_
                    || args[2].type != EXPRTK_VAL_NUMBER)
         return exprtk_val_num(0);
 
-    char *input = mod_arena_cstr(arena, args[0].data.string);
-    char *delim = mod_arena_cstr(arena, args[1].data.string);
+    char *input = exprtk_arena_cstr(arena, args[0].data.string);
+    char *delim = exprtk_arena_cstr(arena, args[1].data.string);
     size_t index = (size_t)args[2].data.number;
 
     size_t count = 0;
@@ -291,8 +284,8 @@ static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *
                    || args[1].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
 
-    char *input = mod_arena_cstr(arena, args[0].data.string);
-    char *delim = mod_arena_cstr(arena, args[1].data.string);
+    char *input = exprtk_arena_cstr(arena, args[0].data.string);
+    char *delim = exprtk_arena_cstr(arena, args[1].data.string);
 
     size_t count = 0;
     char **tokens = mod_tokenize(input, args[0].data.string.len, delim, true, &count);
@@ -317,8 +310,8 @@ static exprtk_value_t fn_token_count(size_t argc, exprtk_value_t *args, exprtk_e
                    || args[1].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
 
-    char *input = mod_arena_cstr(arena, args[0].data.string);
-    char *delim = mod_arena_cstr(arena, args[1].data.string);
+    char *input = exprtk_arena_cstr(arena, args[0].data.string);
+    char *delim = exprtk_arena_cstr(arena, args[1].data.string);
 
     size_t count = 0;
     char **tokens = mod_tokenize(input, args[0].data.string.len, delim, true, &count);
@@ -331,7 +324,7 @@ static exprtk_value_t fn_to_num(size_t argc, exprtk_value_t *args, exprtk_env_t 
     (void)env;
     if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
-    char *s = mod_arena_cstr(arena, args[0].data.string);
+    char *s = exprtk_arena_cstr(arena, args[0].data.string);
     double val = 0.0;
     mod_to_double(s, &val);
     return exprtk_val_num(val);
@@ -358,7 +351,7 @@ static exprtk_value_t fn_to_int(size_t argc, exprtk_value_t *args, exprtk_env_t 
     (void)env;
     if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
-    char *s = mod_arena_cstr(arena, args[0].data.string);
+    char *s = exprtk_arena_cstr(arena, args[0].data.string);
     long long val = 0;
     mod_to_int(s, &val);
     return exprtk_val_num((double)val);
@@ -374,7 +367,7 @@ static exprtk_value_t fn_to_bool(size_t argc, exprtk_value_t *args, exprtk_env_t
     (void)env;
     if (argc != 1 || args[0].type != EXPRTK_VAL_STRING)
         return exprtk_val_num(0);
-    char *s = mod_arena_cstr(arena, args[0].data.string);
+    char *s = exprtk_arena_cstr(arena, args[0].data.string);
     bool val = false;
     mod_to_bool(s, &val);
     return exprtk_val_num(val ? 1.0 : 0.0);

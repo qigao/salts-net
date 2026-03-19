@@ -407,13 +407,16 @@ exprtk_node_t *exprtk_parse_ext(const char *input, size_t length,
     int ret;
     while ((ret = exprtk_lexer_next(&lexer, &token)) > 0) {
         exprtkParse(parser, ret, token, &ctx);
-        if (ctx.error) break;
+        if (ctx.fatal_error) break;
     }
 
     if (ret < 0) {
-        snprintf(ctx.error_msg, sizeof(ctx.error_msg), "Lexer error at line %d", lexer.line);
         ctx.error = 1;
-    } else if (!ctx.error) {
+        ctx.fatal_error = 1;
+        if (ctx.error_msg[0] == '\0') {
+            snprintf(ctx.error_msg, sizeof(ctx.error_msg), "Lexer error at line %d", lexer.line);
+        }
+    } else if (!ctx.fatal_error) {
         exprtk_token_t end_token;
         memset(&end_token, 0, sizeof(end_token));
         exprtkParse(parser, 0, end_token, &ctx);

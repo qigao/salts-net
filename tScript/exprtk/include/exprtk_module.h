@@ -131,6 +131,15 @@ static inline exprtk_value_t exprtk_list_get(const exprtk_value_t *list, size_t 
     return list->data.list.items[idx];
 }
 
+static inline char *exprtk_arena_cstr(mem_pool_t *arena, tstr_v sv) {
+    char *buf = (char*)mem_alloc(arena, sv.len + 1);
+    if (buf) {
+        memcpy(buf, sv.data, sv.len);
+        buf[sv.len] = '\0';
+    }
+    return buf;
+}
+
 /* =========================================================================
  * Arena allocation helpers
  * ========================================================================= */

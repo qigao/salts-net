@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <math.h>
 
 static exprtk_node_t *exprtk_node_new(exprtk_parse_ctx_t *ctx, exprtk_node_type_t type) {
@@ -72,9 +73,142 @@ static tstr_v exprtk_unescape_to_arena(exprtk_parse_ctx_t *ctx, const char *s, s
     return tstr_v_from_buf(d, len);
 }
 
+static void exprtk_record_parse_error(exprtk_parse_ctx_t *ctx, int fatal, const char *fmt, ...) {
+    va_list args;
+
+    if (!ctx) return;
+
+    ctx->error = 1;
+    if (fatal) ctx->fatal_error = 1;
+    if (ctx->error_msg[0] != '\0') return;
+
+    va_start(args, fmt);
+    vsnprintf(ctx->error_msg, sizeof(ctx->error_msg), fmt, args);
+    va_end(args);
+}
+
+static exprtk_node_t *exprtk_make_empty_block(exprtk_parse_ctx_t *ctx, const exprtk_token_t *token) {
+    exprtk_node_t *block = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
+    if (!block) return NULL;
+    block->data.block.count = 0;
+    block->data.block.statements = NULL;
+    exprtk_node_set_pos(block, token);
+    return block;
+}
+
 exprtk_node_t *exprtk_fold_binary(exprtk_parse_ctx_t *ctx, int op, exprtk_node_t *left, exprtk_node_t *right);
 exprtk_node_t *exprtk_fold_unary(exprtk_parse_ctx_t *ctx, int op, exprtk_node_t *child);
 exprtk_node_t *exprtk_fold_if(exprtk_parse_ctx_t *ctx, exprtk_node_t *cond, exprtk_node_t *if_branch, exprtk_node_t *else_branch);
+
+static int exprtk_is_valid_param_node(const exprtk_node_t *node) {
+    if (!node) return 0;
+    return node->type == EXPRTK_NODE_VARIABLE ||
+           node->type == EXPRTK_NODE_VECTOR ||
+           node->type == EXPRTK_NODE_MAP_LITERAL ||
+           node->type == EXPRTK_NODE_SPREAD ||
+           node->type == EXPRTK_NODE_ASSIGNMENT;
+}
+
+static int exprtk_validate_param_list(exprtk_parse_ctx_t *ctx, exprtk_node_t **params,
+                                      size_t count, const char *error_msg) {
+    for (size_t i = 0; i < count; ++i) {
+        exprtk_node_t *param = params[i];
+        if (!exprtk_is_valid_param_node(param)) {
+            exprtk_record_parse_error(ctx, 1, "%s", error_msg);
+            return 0;
+        }
+        if (param->type == EXPRTK_NODE_SPREAD && i + 1 != count) {
+            exprtk_record_parse_error(ctx, 1, "%s", error_msg);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static exprtk_node_t *exprtk_wrap_implicit_return(exprtk_parse_ctx_t *ctx, exprtk_node_t *body,
+                                                  int flow_type) {
+    if (!body || body->type == EXPRTK_NODE_BLOCK) return body;
+
+    exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
+    exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
+    if (!ret || !blk) return NULL;
+
+    ret->data.flow.type = flow_type;
+    ret->data.flow.value = body;
+    exprtk_node_copy_pos(ret, body);
+
+    blk->data.block.count = 1;
+    blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
+    if (!blk->data.block.statements) return NULL;
+    blk->data.block.statements[0] = ret;
+    exprtk_node_copy_pos(blk, body);
+    return blk;
+}
+
+static exprtk_node_t *exprtk_make_function_node(exprtk_parse_ctx_t *ctx, exprtk_node_type_t type,
+                                                char *name, exprtk_node_t **params,
+                                                size_t param_count, exprtk_node_t *body,
+                                                const exprtk_token_t *token,
+                                                int wrap_implicit_return,
+                                                int implicit_return_flow_type) {
+    exprtk_node_t *node = exprtk_node_new(ctx, type);
+    if (!node) return NULL;
+
+    node->data.func_def.name = name;
+    node->data.func_def.arg_count = param_count;
+    node->data.func_def.arg_params = NULL;
+    if (param_count > 0) {
+        node->data.func_def.arg_params =
+            (exprtk_node_t**)mem_alloc(ctx->arena, param_count * sizeof(exprtk_node_t*));
+        if (!node->data.func_def.arg_params) return NULL;
+        for (size_t i = 0; i < param_count; ++i) {
+            node->data.func_def.arg_params[i] = params[i];
+        }
+    }
+
+    node->data.func_def.body =
+        wrap_implicit_return ? exprtk_wrap_implicit_return(ctx, body, implicit_return_flow_type)
+                             : body;
+    if (!node->data.func_def.body) return NULL;
+    exprtk_node_set_pos(node, token);
+    return node;
+}
+
+static exprtk_node_t *exprtk_copy_variable(exprtk_parse_ctx_t *ctx, const exprtk_node_t *node) {
+    exprtk_node_t *copy = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
+    if (!copy || !node || !node->data.variable.name) return NULL;
+    copy->data.variable.name =
+        exprtk_strdup(ctx, node->data.variable.name, strlen(node->data.variable.name));
+    exprtk_node_copy_pos(copy, node);
+    return copy;
+}
+
+static exprtk_node_t *exprtk_make_compound_assign(exprtk_parse_ctx_t *ctx, exprtk_node_t *target,
+                                                  int op, exprtk_node_t *value,
+                                                  const exprtk_token_t *token) {
+    exprtk_node_t *expr = NULL;
+    exprtk_node_t *assign = NULL;
+
+    if (!target || target->type != EXPRTK_NODE_VARIABLE) {
+        exprtk_record_parse_error(ctx, 1, "Invalid assignment target");
+        return NULL;
+    }
+
+    expr = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
+    if (!expr) return NULL;
+    expr->data.binary.op = op;
+    expr->data.binary.left = exprtk_copy_variable(ctx, target);
+    expr->data.binary.right = value;
+    exprtk_node_set_pos(expr, token);
+
+    assign = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
+    if (!assign) return NULL;
+    assign->data.assignment.name =
+        exprtk_strdup(ctx, target->data.variable.name, strlen(target->data.variable.name));
+    assign->data.assignment.value = expr;
+    exprtk_node_set_pos(assign, token);
+    return assign;
+}
 
 }
 
@@ -123,21 +257,18 @@ block_content(A) ::= stmts(S). {
 stmt(A) ::= expr(E) SEMICOLON. { A = E; }
 stmt(A) ::= expr(E). [LOWER_THAN_ELSE] { A = E; }
 stmt(A) ::= SEMICOLON(OP). {
-    // Empty statement - return a NOP or empty block
-    A = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
-    if (A) {
-        A->data.block.count = 0;
-        A->data.block.statements = NULL;
-        exprtk_node_set_pos(A, &OP);
-    }
+    A = exprtk_make_empty_block(ctx, &OP);
 }
 stmt(A) ::= error SEMICOLON(OP). {
-    A = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
-    if (A) {
-        A->data.block.count = 0;
-        A->data.block.statements = NULL;
-        exprtk_node_set_pos(A, &OP);
-    }
+    A = exprtk_make_empty_block(ctx, &OP);
+}
+
+block(A) ::= LBRACE block_content(B) RBRACE. {
+    A = B;
+}
+
+block(A) ::= LBRACE error RBRACE(OP). {
+    A = exprtk_make_empty_block(ctx, &OP);
 }
 
 stmts(A) ::= stmt(S). {
@@ -169,7 +300,7 @@ stmts(A) ::= stmts(L) stmt(R). {
 }
 
 // Control Flow
-expr(A) ::= LBRACE block_content(B) RBRACE. {
+expr(A) ::= block(B). {
     A = B;
 }
 
@@ -317,7 +448,7 @@ expr(A) ::= THROW(OP) expr(V). {
 }
 
 // try { ... } catch (e) { ... }
-expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LPAREN VARIABLE(V) RPAREN LBRACE block_content(C) RBRACE. {
+expr(A) ::= TRY(OP) block(T) CATCH LPAREN VARIABLE(V) RPAREN block(C). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_TRY_CATCH);
     if (A) {
         A->data.try_catch.try_body = T;
@@ -328,7 +459,7 @@ expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LPAREN VARIABLE(V) RPAR
 }
 
 // try { ... } catch { ... } (no variable binding)
-expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LBRACE block_content(C) RBRACE. {
+expr(A) ::= TRY(OP) block(T) CATCH block(C). {
     A = exprtk_node_new(ctx, EXPRTK_NODE_TRY_CATCH);
     if (A) {
         A->data.try_catch.try_body = T;
@@ -339,219 +470,93 @@ expr(A) ::= TRY(OP) LBRACE block_content(T) RBRACE CATCH LBRACE block_content(C)
 }
 
 // Function Definition (Go-like)
-func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr(Arg) RPAREN LBRACE block_content(Body) RBRACE. {
-    if (Arg->type != EXPRTK_NODE_VARIABLE && Arg->type != EXPRTK_NODE_VECTOR && Arg->type != EXPRTK_NODE_MAP_LITERAL && Arg->type != EXPRTK_NODE_SPREAD && Arg->type != EXPRTK_NODE_ASSIGNMENT) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
+func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr(Arg) RPAREN block(Body). {
+    exprtk_node_t *params[1] = {Arg};
+    if (!exprtk_validate_param_list(ctx, params, 1, "Invalid function parameter pattern")) {
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
-        if (A) {
-            A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
-            A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
-            A->data.func_def.arg_params[0] = Arg;
-            A->data.func_def.body = Body;
-            exprtk_node_set_pos(A, &OP);
-        }
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_DEFINITION,
+                                      exprtk_strdup(ctx, Name.start, Name.length),
+                                      params, 1, Body, &OP, 0, 0);
     }
 }
 
-func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr_list_2plus(Args) RPAREN LBRACE block_content(Body) RBRACE. {
-    int valid = 1;
-    for (size_t i = 0; i < Args->data.function.arg_count; ++i) {
-        exprtk_node_t *arg = Args->data.function.args[i];
-        if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL && arg->type != EXPRTK_NODE_SPREAD && arg->type != EXPRTK_NODE_ASSIGNMENT) {
-            valid = 0; break;
-        }
-        if (arg->type == EXPRTK_NODE_SPREAD && i != Args->data.function.arg_count - 1) {
-            valid = 0; break;
-        }
-    }
-    if (!valid) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
+func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN expr_list_2plus(Args) RPAREN block(Body). {
+    if (!exprtk_validate_param_list(ctx, Args->data.function.args, Args->data.function.arg_count,
+                                    "Invalid function parameter pattern")) {
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
-        if (A) {
-            A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
-            A->data.func_def.arg_count = Args->data.function.arg_count;
-            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
-            for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
-                A->data.func_def.arg_params[i] = Args->data.function.args[i];
-            }
-            A->data.func_def.body = Body;
-            exprtk_node_set_pos(A, &OP);
-        }
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_DEFINITION,
+                                      exprtk_strdup(ctx, Name.start, Name.length),
+                                      Args->data.function.args, Args->data.function.arg_count,
+                                      Body, &OP, 0, 0);
     }
 }
 
-func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN RPAREN LBRACE block_content(Body) RBRACE. {
-    A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
-    if (A) {
-        A->data.func_def.name = exprtk_strdup(ctx, Name.start, Name.length);
-        A->data.func_def.arg_count = 0;
-        A->data.func_def.arg_params = NULL;
-        A->data.func_def.body = Body;
-        exprtk_node_set_pos(A, &OP);
-    }
+func_def(A) ::= FUNC(OP) VARIABLE(Name) LPAREN RPAREN block(Body). {
+    A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_DEFINITION,
+                                  exprtk_strdup(ctx, Name.start, Name.length),
+                                  NULL, 0, Body, &OP, 0, 0);
 }
 
 // Anonymous function expressions: func(params) { body }  (no name → first-class value)
-expr(A) ::= FUNC(OP) LPAREN RPAREN LBRACE block_content(Body) RBRACE. {
-    A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION);
-    if (A) {
-        A->data.func_def.name = NULL;
-        A->data.func_def.arg_count = 0;
-        A->data.func_def.arg_params = NULL;
-        A->data.func_def.body = Body;
-        exprtk_node_set_pos(A, &OP);
+expr(A) ::= FUNC(OP) LPAREN RPAREN block(Body). {
+    A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION,
+                                  NULL, NULL, 0, Body, &OP, 0, 0);
+}
+
+expr(A) ::= FUNC(OP) LPAREN expr(Arg) RPAREN block(Body). {
+    exprtk_node_t *params[1] = {Arg};
+    if (!exprtk_validate_param_list(ctx, params, 1, "Invalid function parameter pattern")) {
+        A = NULL;
+    } else {
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION,
+                                      NULL, params, 1, Body, &OP, 0, 0);
     }
 }
 
-expr(A) ::= FUNC(OP) LPAREN expr(Arg) RPAREN LBRACE block_content(Body) RBRACE. {
-    if (Arg->type != EXPRTK_NODE_VARIABLE && Arg->type != EXPRTK_NODE_VECTOR && Arg->type != EXPRTK_NODE_MAP_LITERAL && Arg->type != EXPRTK_NODE_SPREAD && Arg->type != EXPRTK_NODE_ASSIGNMENT) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
+expr(A) ::= FUNC(OP) LPAREN expr_list_2plus(Args) RPAREN block(Body). {
+    if (!exprtk_validate_param_list(ctx, Args->data.function.args, Args->data.function.arg_count,
+                                    "Invalid function parameter pattern")) {
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION);
-        if (A) {
-            A->data.func_def.name = NULL;
-            A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
-            A->data.func_def.arg_params[0] = Arg;
-            A->data.func_def.body = Body;
-            exprtk_node_set_pos(A, &OP);
-        }
-    }
-}
-
-expr(A) ::= FUNC(OP) LPAREN expr_list_2plus(Args) RPAREN LBRACE block_content(Body) RBRACE. {
-    int valid = 1;
-    for (size_t i = 0; i < Args->data.function.arg_count; ++i) {
-        exprtk_node_t *arg = Args->data.function.args[i];
-        if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL && arg->type != EXPRTK_NODE_SPREAD && arg->type != EXPRTK_NODE_ASSIGNMENT) {
-            valid = 0; break;
-        }
-    }
-    if (!valid) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
-        A = NULL;
-    } else {
-        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION);
-        if (A) {
-            A->data.func_def.name = NULL;
-            A->data.func_def.arg_count = Args->data.function.arg_count;
-            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
-            for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
-                A->data.func_def.arg_params[i] = Args->data.function.args[i];
-            }
-            A->data.func_def.body = Body;
-            exprtk_node_set_pos(A, &OP);
-        }
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_EXPRESSION,
+                                      NULL, Args->data.function.args,
+                                      Args->data.function.arg_count, Body, &OP, 0, 0);
     }
 }
 
 // Arrow functions
 expr(A) ::= expr(E) ARROW(OP) expr(B). {
-    if (!E || !B || (E->type != EXPRTK_NODE_VARIABLE && E->type != EXPRTK_NODE_VECTOR && E->type != EXPRTK_NODE_MAP_LITERAL && E->type != EXPRTK_NODE_SPREAD && E->type != EXPRTK_NODE_ASSIGNMENT)) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid arrow function parameter pattern");
+    exprtk_node_t *params[1] = {E};
+    if (!B || !exprtk_validate_param_list(ctx, params, 1, "Invalid arrow function parameter pattern")) {
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
-        if (A) {
-            A->data.func_def.name = NULL;
-            A->data.func_def.arg_count = 1;
-            A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
-            A->data.func_def.arg_params[0] = E;
-            
-            exprtk_node_t *body = B;
-            if (B->type != EXPRTK_NODE_BLOCK) {
-                exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
-                ret->data.flow.type = exprtk_TOKEN_RETURN;
-                ret->data.flow.value = B;
-                exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
-                blk->data.block.count = 1;
-                blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
-                blk->data.block.statements[0] = ret;
-                body = blk;
-            }
-            A->data.func_def.body = body;
-            exprtk_node_set_pos(A, &OP);
-        }
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_DEFINITION,
+                                      NULL, params, 1, B, &OP, 1, exprtk_TOKEN_RETURN);
     }
 }
 
 expr(A) ::= LPAREN expr_list_2plus(Args) RPAREN ARROW(OP) expr(B). [ARROW] {
     if (!Args || !B) {
         A = NULL;
+    } else if (!exprtk_validate_param_list(ctx, Args->data.function.args,
+                                           Args->data.function.arg_count,
+                                           "Invalid arrow function parameter pattern")) {
+        A = NULL;
     } else {
-        int valid = 1;
-        for (size_t i = 0; i < Args->data.function.arg_count; ++i) {
-            exprtk_node_t *arg = Args->data.function.args[i];
-            if (arg->type != EXPRTK_NODE_VARIABLE && arg->type != EXPRTK_NODE_VECTOR && arg->type != EXPRTK_NODE_MAP_LITERAL && arg->type != EXPRTK_NODE_SPREAD && arg->type != EXPRTK_NODE_ASSIGNMENT) {
-                valid = 0; break;
-            }
-            if (arg->type == EXPRTK_NODE_SPREAD && i != Args->data.function.arg_count - 1) {
-                valid = 0; break;
-            }
-        }
-        if (!valid) {
-            ctx->error = 1;
-            snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid arrow function parameter pattern");
-            A = NULL;
-        } else {
-            A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
-            if (A) {
-                A->data.func_def.name = NULL;
-                A->data.func_def.arg_count = Args->data.function.arg_count;
-                A->data.func_def.arg_params = (exprtk_node_t**)mem_alloc(ctx->arena, A->data.func_def.arg_count * sizeof(exprtk_node_t*));
-                for (size_t i = 0; i < A->data.func_def.arg_count; ++i) {
-                    A->data.func_def.arg_params[i] = Args->data.function.args[i];
-                }
-                
-                exprtk_node_t *body = B;
-                if (B->type != EXPRTK_NODE_BLOCK) {
-                    exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
-                    ret->data.flow.type = exprtk_TOKEN_RETURN;
-                    ret->data.flow.value = B;
-                    exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
-                    blk->data.block.count = 1;
-                    blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
-                    blk->data.block.statements[0] = ret;
-                    body = blk;
-                }
-                A->data.func_def.body = body;
-                exprtk_node_set_pos(A, &OP);
-            }
-        }
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_DEFINITION,
+                                      NULL, Args->data.function.args,
+                                      Args->data.function.arg_count, B, &OP, 1, exprtk_TOKEN_RETURN);
     }
 }
 
-expr(A) ::= LPAREN RPAREN ARROW expr(B). {
+expr(A) ::= LPAREN RPAREN ARROW(OP) expr(B). {
     if (!B) {
         A = NULL;
     } else {
-        A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
-        A->data.func_def.name = NULL;
-        A->data.func_def.arg_count = 0;
-        A->data.func_def.arg_params = NULL;
-        exprtk_node_t *body = B;
-        if (B->type != EXPRTK_NODE_BLOCK) {
-            exprtk_node_t *ret = exprtk_node_new(ctx, EXPRTK_NODE_FLOW);
-            ret->data.flow.type = exprtk_TOKEN_RETURN;
-            ret->data.flow.value = B;
-            exprtk_node_t *blk = exprtk_node_new(ctx, EXPRTK_NODE_BLOCK);
-            blk->data.block.count = 1;
-            blk->data.block.statements = (exprtk_node_t**)mem_alloc(ctx->arena, sizeof(exprtk_node_t*));
-            blk->data.block.statements[0] = ret;
-            body = blk;
-        }
-        A->data.func_def.body = body;
+        A = exprtk_make_function_node(ctx, EXPRTK_NODE_FUNCTION_DEFINITION,
+                                      NULL, NULL, 0, B, &OP, 1, exprtk_TOKEN_RETURN);
     }
 }
 
@@ -604,8 +609,7 @@ expr(A) ::= expr(B) EQUAL(OP) expr(C). {
             }
         }
         if (!valid) {
-            ctx->error = 1;
-            snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function parameter pattern");
+            exprtk_record_parse_error(ctx, 1, "Invalid function parameter pattern");
             A = NULL;
         } else {
             A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_DEFINITION);
@@ -621,8 +625,7 @@ expr(A) ::= expr(B) EQUAL(OP) expr(C). {
             }
         }
     } else {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid l-value for assignment");
+        exprtk_record_parse_error(ctx, 1, "Invalid l-value for assignment");
         A = NULL;
     }
 }
@@ -713,28 +716,7 @@ expr(A) ::= CONST(OP) MAP LBRACE map_entries(E) RBRACE EQUAL expr(C). {
 // Let's just implement `ASSIGN` first to fix conflicts/warnings, and add `ASSIGN_ADD` etc later or now.
 // I will implement `ASSIGN_ADD` by constructing `x = x + c` semantic tree.
 expr(A) ::= expr(B) ASSIGN_ADD(OP) expr(C). {
-     if (B->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1; A = NULL;
-    } else {
-        exprtk_node_t *add = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
-        if (add) {
-            add->data.binary.op = exprtk_TOKEN_PLUS;
-            add->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
-            if (add->data.binary.left) {
-                add->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-                exprtk_node_copy_pos(add->data.binary.left, B);
-            }
-            add->data.binary.right = C;
-            exprtk_node_set_pos(add, &OP);
-        }
-        
-        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
-        if (A) {
-            A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-            A->data.assignment.value = add;
-            exprtk_node_set_pos(A, &OP);
-        }
-    }
+     A = exprtk_make_compound_assign(ctx, B, exprtk_TOKEN_PLUS, C, &OP);
 }
 // Repeat for other compound assignments or leave them for now to pass build?
 // I'll leave others for now to minimize code size in this turn, focus on fixing build.
@@ -742,78 +724,15 @@ expr(A) ::= expr(B) ASSIGN_ADD(OP) expr(C). {
 // But I defined precedence for them, so I should use them.
 // I'll just do ASSIGN_SUB for completeness.
 expr(A) ::= expr(B) ASSIGN_SUB(OP) expr(C). {
-     if (B->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1; A = NULL;
-    } else {
-        exprtk_node_t *op = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
-        if (op) {
-            op->data.binary.op = exprtk_TOKEN_MINUS;
-            op->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
-            if (op->data.binary.left) {
-                op->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-                exprtk_node_copy_pos(op->data.binary.left, B);
-            }
-            op->data.binary.right = C;
-            exprtk_node_set_pos(op, &OP);
-        }
-        
-        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
-        if (A) {
-            A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-            A->data.assignment.value = op;
-            exprtk_node_set_pos(A, &OP);
-        }
-    }
+     A = exprtk_make_compound_assign(ctx, B, exprtk_TOKEN_MINUS, C, &OP);
 }
 
 expr(A) ::= expr(B) ASSIGN_MUL(OP) expr(C). {
-     if (B->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1; A = NULL;
-    } else {
-        exprtk_node_t *op = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
-        if (op) {
-            op->data.binary.op = exprtk_TOKEN_MULTIPLY;
-            op->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
-            if (op->data.binary.left) {
-                op->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-                exprtk_node_copy_pos(op->data.binary.left, B);
-            }
-            op->data.binary.right = C;
-            exprtk_node_set_pos(op, &OP);
-        }
-        
-        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
-        if (A) {
-            A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-            A->data.assignment.value = op;
-            exprtk_node_set_pos(A, &OP);
-        }
-    }
+     A = exprtk_make_compound_assign(ctx, B, exprtk_TOKEN_MULTIPLY, C, &OP);
 }
 
 expr(A) ::= expr(B) ASSIGN_DIV(OP) expr(C). {
-     if (B->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1; A = NULL;
-    } else {
-        exprtk_node_t *op = exprtk_node_new(ctx, EXPRTK_NODE_BINARY_OP);
-        if (op) {
-            op->data.binary.op = exprtk_TOKEN_DIVIDE;
-            op->data.binary.left = exprtk_node_new(ctx, EXPRTK_NODE_VARIABLE);
-            if (op->data.binary.left) {
-                op->data.binary.left->data.variable.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-                exprtk_node_copy_pos(op->data.binary.left, B);
-            }
-            op->data.binary.right = C;
-            exprtk_node_set_pos(op, &OP);
-        }
-        
-        A = exprtk_node_new(ctx, EXPRTK_NODE_ASSIGNMENT);
-        if (A) {
-            A->data.assignment.name = exprtk_strdup(ctx, B->data.variable.name, strlen(B->data.variable.name));
-            A->data.assignment.value = op;
-            exprtk_node_set_pos(A, &OP);
-        }
-    }
+     A = exprtk_make_compound_assign(ctx, B, exprtk_TOKEN_DIVIDE, C, &OP);
 }
 // Skip MUL/DIV for now to keep it short.
 
@@ -903,8 +822,7 @@ expr(A) ::= VARIABLE(V). {
 
 expr(A) ::= expr(F) LPAREN expr(E) RPAREN. {
     if (F->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function call");
+        exprtk_record_parse_error(ctx, 1, "Invalid function call");
         A = NULL;
     } else {
         A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
@@ -920,8 +838,7 @@ expr(A) ::= expr(F) LPAREN expr(E) RPAREN. {
 
 expr(A) ::= expr(F) LPAREN expr_list_2plus(L) RPAREN. {
     if (F->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function call");
+        exprtk_record_parse_error(ctx, 1, "Invalid function call");
         A = NULL;
     } else {
         A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
@@ -936,8 +853,7 @@ expr(A) ::= expr(F) LPAREN expr_list_2plus(L) RPAREN. {
 
 expr(A) ::= expr(F) LPAREN RPAREN. {
     if (F->type != EXPRTK_NODE_VARIABLE) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Invalid function call");
+        exprtk_record_parse_error(ctx, 1, "Invalid function call");
         A = NULL;
     } else {
         A = exprtk_node_new(ctx, EXPRTK_NODE_FUNCTION_CALL);
@@ -1032,8 +948,7 @@ expr(A) ::= expr(B) QUESTION_DOT(OP) VARIABLE(V). [MEMBER_PREC] {
 // This rewrites the RHS function call to prepend the LHS as the first argument.
 expr(A) ::= expr(B) PIPE(OP) expr(C). {
     if (!C || C->type != EXPRTK_NODE_FUNCTION_CALL) {
-        ctx->error = 1;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Pipe operator requires a function call on the right side");
+        exprtk_record_parse_error(ctx, 1, "Pipe operator requires a function call on the right side");
         A = NULL;
     } else {
         // Prepend B as first argument to C's function call
@@ -1235,14 +1150,17 @@ vector_elements(A) ::= vector_elements(L) COMMA expr(R). {
 %syntax_error {
     ctx->error = 1;
     if (TOKEN.start && TOKEN.length > 0) {
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Syntax error at line %d, col %d near '%.*s'", TOKEN.line, TOKEN.column, (int)TOKEN.length, TOKEN.start);
+        exprtk_record_parse_error(ctx, 0, "Syntax error at line %d, col %d near '%.*s'",
+                                  TOKEN.line, TOKEN.column, (int)TOKEN.length, TOKEN.start);
     } else {
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Syntax error at line %d, col %d", TOKEN.line, TOKEN.column);
+        exprtk_record_parse_error(ctx, 0, "Syntax error at line %d, col %d",
+                                  TOKEN.line, TOKEN.column);
     }
 }
 
 %parse_failure {
     ctx->error = 1;
+    ctx->fatal_error = 1;
     if (ctx->error_msg[0] == '\0') {
         snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Parse failure");
     }

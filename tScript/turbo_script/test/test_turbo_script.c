@@ -1,6 +1,8 @@
 #include "exprtk_types.h"
 #include "tinytest.h"
+#include "turbo_fs.h"
 #include "turbo_script.h"
+#include "../src/turbo_script_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +30,51 @@ spec("turbo_script") {
 
       check_int_eq(turbo_script_run(ctx, " x = 10; y = x * 2;"), 0);
       check_float_eq(get_num(ctx, "y"), 20.0, 0.001);
+
+      turbo_script_free(ctx);
+    }
+
+    it("should support prefixed binding helpers without breaking old ones") {
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
+      check_not_null(ctx);
+
+      ts_bind_num(ctx, "x", 7.0);
+      check_float_eq(ts_get_num(ctx, "x"), 7.0, 0.001);
+      bind_num(ctx, "x", 9.0);
+      check_float_eq(get_num(ctx, "x"), 9.0, 0.001);
+
+      turbo_script_free(ctx);
+    }
+
+    it("should expose a stable version string") {
+      check_str_eq(turbo_script_version(), TURBO_SCRIPT_VERSION_STRING);
+    }
+
+    it("should reuse parsed ast for repeated runs of the same script") {
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
+      exprtk_node_t *first_expr = NULL;
+      exprtk_node_t *assign = NULL;
+      check_not_null(ctx);
+
+      check_int_eq(turbo_script_run(ctx, "x = 1; y = x + 2;"), 0);
+      first_expr = ctx->expr;
+      check_not_null(first_expr);
+
+      check_int_eq(turbo_script_run(ctx, "x = 1; y = x + 2;"), 0);
+      check_ptr_eq(ctx->expr, first_expr);
+      check_float_eq(get_num(ctx, "y"), 3.0, 0.001);
+
+      check_int_eq(turbo_script_run(ctx, "x = 2; y = x + 2;"), 0);
+      check_float_eq(get_num(ctx, "y"), 4.0, 0.001);
+      check_str_eq(ctx->expr_source, "x = 2; y = x + 2;");
+      check_int_eq(ctx->expr->type, EXPRTK_NODE_BLOCK);
+      check_int_eq((int)ctx->expr->data.block.count, 2);
+      assign = ctx->expr->data.block.statements[0];
+      check_not_null(assign);
+      check_int_eq(assign->type, EXPRTK_NODE_ASSIGNMENT);
+      check_not_null(assign->data.assignment.value);
+      check_int_eq(assign->data.assignment.value->type, EXPRTK_NODE_NUMBER);
+      check_float_eq(assign->data.assignment.value->data.number, 2.0, 0.001);
 
       turbo_script_free(ctx);
     }
@@ -202,9 +249,11 @@ spec("turbo_script") {
   describe("Error Handling") {
     it("should report parse errors") {
       turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
-      // Missing semicolon or invalid syntax
       check_int_eq(turbo_script_run(ctx, "x = 10 + * 5"), -1);
       check_not_null(turbo_script_get_error(ctx));
+      check_int_eq((int)turbo_script_get_error_code(ctx), (int)TURBO_SCRIPT_ERROR_PARSE);
+      check_not_null(strstr(turbo_script_get_error(ctx), "line 1"));
+      check_not_null(strstr(turbo_script_get_error(ctx), "near '*'"));
       turbo_script_free(ctx);
     }
   }
@@ -507,6 +556,43 @@ spec("turbo_script") {
 
       // Clean up
       turbo_script_run(ctx, "file_remove(\"utils.ts\");");
+      turbo_script_free(ctx);
+    }
+
+    it("should resolve nested relative script imports from run_file") {
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
+      const char *root_dir = "_ts_import_rel";
+      const char *util_src = "func helper(x) { return x + 1; };";
+      const char *child_src = "import(\"./utils.ts\");";
+      const char *main_src = "import(\"sub/child.ts\"); res = helper(7);";
+      char sub_dir[TURBO_FS_MAX_PATH];
+      char main_path[TURBO_FS_MAX_PATH];
+      char child_path[TURBO_FS_MAX_PATH];
+      char util_path[TURBO_FS_MAX_PATH];
+      turbo_fs_buf_t buf;
+
+      check_int_eq(turbo_fs_mkdir(root_dir, 0755), 0);
+      check_int_eq(turbo_fs_path_join(sub_dir, sizeof(sub_dir), root_dir, "sub"), 0);
+      check_int_eq(turbo_fs_mkdir(sub_dir, 0755), 0);
+      check_int_eq(turbo_fs_path_join(main_path, sizeof(main_path), root_dir, "main.ts"), 0);
+      check_int_eq(turbo_fs_path_join(child_path, sizeof(child_path), sub_dir, "child.ts"), 0);
+      check_int_eq(turbo_fs_path_join(util_path, sizeof(util_path), sub_dir, "utils.ts"), 0);
+
+      buf = turbo_fs_buf_init((char *)util_src, strlen(util_src));
+      check_int_eq(turbo_fs_write_file(util_path, &buf), 0);
+      buf = turbo_fs_buf_init((char *)child_src, strlen(child_src));
+      check_int_eq(turbo_fs_write_file(child_path, &buf), 0);
+      buf = turbo_fs_buf_init((char *)main_src, strlen(main_src));
+      check_int_eq(turbo_fs_write_file(main_path, &buf), 0);
+
+      check_int_eq(turbo_script_run_file(ctx, main_path), 0);
+      check_float_eq(get_num(ctx, "res"), 8.0, 0.001);
+
+      check_int_eq(turbo_fs_unlink(main_path), 0);
+      check_int_eq(turbo_fs_unlink(child_path), 0);
+      check_int_eq(turbo_fs_unlink(util_path), 0);
+      check_int_eq(turbo_fs_rmdir(sub_dir), 0);
+      check_int_eq(turbo_fs_rmdir(root_dir), 0);
       turbo_script_free(ctx);
     }
   }

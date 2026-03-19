@@ -48,6 +48,17 @@ static exprtk_value_t call_fn(test_env_t *t, const char *name, size_t argc, expr
   return (exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = -999.0};
 }
 
+static exprtk_func_t *find_native_env(exprtk_env_t *env, const char *name) {
+  exprtk_func_t *fn = env->funcs;
+  while (fn) {
+    if (!fn->is_script && strcmp(fn->name, name) == 0) {
+      return fn;
+    }
+    fn = fn->next;
+  }
+  return NULL;
+}
+
 static exprtk_value_t make_str(test_env_t *t, const char *s) {
   size_t len = strlen(s);
   char *buf = (char *)mem_alloc(&t->env.arena, len + 1);
@@ -72,6 +83,24 @@ spec("feeds_plugin") {
       exprtk_env_init(&env);
       mem_init(&scratch, 4096);
       check_int_eq(ts_plugin_init(h, &env, &scratch), 0);
+      check_not_null(find_native_env(&env, "csv.open_http"));
+      check_not_null(find_native_env(&env, "csv.stream_http"));
+      check_not_null(find_native_env(&env, "json.query_http"));
+      check_not_null(find_native_env(&env, "json.to_vec_http"));
+      check_not_null(find_native_env(&env, "xml.root_name_http"));
+      check_not_null(find_native_env(&env, "net.get"));
+      check_not_null(find_native_env(&env, "net.post"));
+      check_not_null(find_native_env(&env, "net.status"));
+      check_not_null(find_native_env(&env, "net.headers"));
+      check_not_null(find_native_env(&env, "net.header"));
+      check_not_null(find_native_env(&env, "net.content_type"));
+      check_not_null(find_native_env(&env, "net.content_length"));
+      check_not_null(find_native_env(&env, "net.download"));
+      check_not_null(find_native_env(&env, "net.download_stream"));
+      check_not_null(find_native_env(&env, "net.upload_file"));
+      check_not_null(find_native_env(&env, "net.upload_file_stream"));
+      check_not_null(find_native_env(&env, "net.stream_get"));
+      check_not_null(find_native_env(&env, "net.stream_post"));
 
       ts_plugin_unload(h);
       exprtk_env_free(&env);

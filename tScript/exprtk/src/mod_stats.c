@@ -208,7 +208,7 @@ static exprtk_value_t fn_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *e
         size_t n = args[0].data.vector.size;
         if (n > 0) {
             double *res = ALLOC_DBL(arena, n);
-            rank_item_t *items = (rank_item_t*)malloc(n * sizeof(rank_item_t));
+            rank_item_t *items = TEMP_ALLOC(arena, rank_item_t, n);
             if (res && items) {
                 for (size_t i = 0; i < n; ++i) { items[i].idx = i; items[i].val = args[0].data.vector.data[i]; }
                 qsort(items, n, sizeof(rank_item_t), compare_rank_items);
@@ -220,10 +220,8 @@ static exprtk_value_t fn_rank(size_t argc, exprtk_value_t *args, exprtk_env_t *e
                     for (size_t k = i; k < j; ++k) res[items[k].idx] = avg_rank;
                     i = j;
                 }
-                free(items);
                 return exprtk_val_vec(res, n);
             }
-            if (items) free(items);
         }
     }
     return exprtk_val_num(0);

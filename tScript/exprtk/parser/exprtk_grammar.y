@@ -214,7 +214,6 @@ static exprtk_node_t *exprtk_make_compound_assign(exprtk_parse_ctx_t *ctx, exprt
 
 %token SPREAD.
 
-
 // Precedence (lowest to highest)
 %left SEMICOLON.
 %left RETURN BREAK CONTINUE FUNC MAP TRY CATCH THROW. // Low precedence for flow control

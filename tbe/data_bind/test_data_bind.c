@@ -17,8 +17,19 @@
 /* ───── Mock Value: stores up to 32 named fields ───── */
 
 #define MAX_FIELDS 32
+#define MAX_CONTAINER_ITEMS 16
 
-typedef enum { FIELD_INT, FIELD_INT64, FIELD_DOUBLE, FIELD_STRING, FIELD_BYTES } FieldType;
+typedef enum { FIELD_INT, FIELD_INT64, FIELD_DOUBLE, FIELD_STRING, FIELD_BYTES, FIELD_LIST, FIELD_SET, FIELD_MAP } FieldType;
+
+typedef struct {
+  int count;
+  int32_t int_items[MAX_CONTAINER_ITEMS];
+  int64_t int64_items[MAX_CONTAINER_ITEMS];
+  double dbl_items[MAX_CONTAINER_ITEMS];
+  char str_items[MAX_CONTAINER_ITEMS][64];
+  char map_keys[MAX_CONTAINER_ITEMS][64];
+  struct Value *obj_items[MAX_CONTAINER_ITEMS];
+} MockList;
 
 typedef struct {
   char name[128];
@@ -29,6 +40,7 @@ typedef struct {
   char str_val[256];
   uint8_t bytes_val[256];
   size_t bytes_len;
+  MockList list_val;
 } MockField;
 
 typedef struct Value {
@@ -84,6 +96,95 @@ static void mock_set_field_bytes(Value *obj, const char *name, const uint8_t *da
   if (data) memcpy(f->bytes_val, data, f->bytes_len);
 }
 
+static Value *mock_create_list(void) { return (Value *)calloc(1, sizeof(Value)); }
+
+static void mock_add_list_item_int(Value *list, int32_t val) {
+  if (!list) return;
+  MockList *l = &list->fields[0].list_val;
+  if (l->count < MAX_CONTAINER_ITEMS) l->int_items[l->count++] = val;
+}
+
+static void mock_add_list_item_int64(Value *list, int64_t val) {
+  if (!list) return;
+  MockList *l = &list->fields[0].list_val;
+  if (l->count < MAX_CONTAINER_ITEMS) l->int64_items[l->count++] = val;
+}
+
+static void mock_add_list_item_double(Value *list, double val) {
+  if (!list) return;
+  MockList *l = &list->fields[0].list_val;
+  if (l->count < MAX_CONTAINER_ITEMS) l->dbl_items[l->count++] = val;
+}
+
+static void mock_add_list_item_string(Value *list, const char *val) {
+  if (!list || val == NULL) return;
+  MockList *l = &list->fields[0].list_val;
+  if (l->count < MAX_CONTAINER_ITEMS) strncpy(l->str_items[l->count++], val, 63);
+}
+
+static void mock_add_list_item_object(Value *list, Value *obj) {
+  if (!list) return;
+  MockList *l = &list->fields[0].list_val;
+  if (l->count < MAX_CONTAINER_ITEMS) l->obj_items[l->count++] = obj;
+}
+
+static void mock_set_field_list(Value *obj, const char *name, Value *list) {
+  if (!obj || obj->field_count >= MAX_FIELDS) return;
+  MockField *f = &obj->fields[obj->field_count++];
+  strncpy(f->name, name, sizeof(f->name) - 1);
+  f->type = FIELD_LIST;
+  if (list) f->list_val = list->fields[0].list_val;
+  free(list);
+}
+
+static Value *mock_create_set(void) { return (Value *)calloc(1, sizeof(Value)); }
+static void mock_add_set_item_int(Value *set, int32_t val) { mock_add_list_item_int(set, val); }
+static void mock_add_set_item_double(Value *set, double val) { mock_add_list_item_double(set, val); }
+static void mock_add_set_item_string(Value *set, const char *val) { mock_add_list_item_string(set, val); }
+static void mock_set_field_set(Value *obj, const char *name, Value *set) {
+  if (!obj || obj->field_count >= MAX_FIELDS) return;
+  MockField *f = &obj->fields[obj->field_count++];
+  strncpy(f->name, name, sizeof(f->name) - 1);
+  f->type = FIELD_SET;
+  if (set) f->list_val = set->fields[0].list_val;
+  free(set);
+}
+
+static Value *mock_create_map(void) { return (Value *)calloc(1, sizeof(Value)); }
+static void mock_add_map_entry_string_string(Value *map, const char *key, const char *val) {
+  if (!map || key == NULL || val == NULL) return;
+  MockList *m = &map->fields[0].list_val;
+  if (m->count < MAX_CONTAINER_ITEMS) {
+    strncpy(m->map_keys[m->count], key, 63);
+    strncpy(m->str_items[m->count], val, 63);
+    m->count++;
+  }
+}
+static void mock_add_map_entry_string_int(Value *map, const char *key, int32_t val) {
+  if (!map || key == NULL) return;
+  MockList *m = &map->fields[0].list_val;
+  if (m->count < MAX_CONTAINER_ITEMS) {
+    strncpy(m->map_keys[m->count], key, 63);
+    m->int_items[m->count++] = val;
+  }
+}
+static void mock_add_map_entry_string_double(Value *map, const char *key, double val) {
+  if (!map || key == NULL) return;
+  MockList *m = &map->fields[0].list_val;
+  if (m->count < MAX_CONTAINER_ITEMS) {
+    strncpy(m->map_keys[m->count], key, 63);
+    m->dbl_items[m->count++] = val;
+  }
+}
+static void mock_set_field_map(Value *obj, const char *name, Value *map) {
+  if (!obj || obj->field_count >= MAX_FIELDS) return;
+  MockField *f = &obj->fields[obj->field_count++];
+  strncpy(f->name, name, sizeof(f->name) - 1);
+  f->type = FIELD_MAP;
+  if (map) f->list_val = map->fields[0].list_val;
+  free(map);
+}
+
 static DataBindValueApi test_api = {
     .create_object = mock_create_object,
     .set_field_int = mock_set_field_int,
@@ -91,6 +192,23 @@ static DataBindValueApi test_api = {
     .set_field_double = mock_set_field_double,
     .set_field_string = mock_set_field_string,
     .set_field_bytes = mock_set_field_bytes,
+    .create_list = mock_create_list,
+    .add_list_item_int = mock_add_list_item_int,
+    .add_list_item_int64 = mock_add_list_item_int64,
+    .add_list_item_double = mock_add_list_item_double,
+    .add_list_item_string = mock_add_list_item_string,
+    .add_list_item_object = mock_add_list_item_object,
+    .set_field_list = mock_set_field_list,
+    .create_set = mock_create_set,
+    .add_set_item_int = mock_add_set_item_int,
+    .add_set_item_double = mock_add_set_item_double,
+    .add_set_item_string = mock_add_set_item_string,
+    .set_field_set = mock_set_field_set,
+    .create_map = mock_create_map,
+    .add_map_entry_string_string = mock_add_map_entry_string_string,
+    .add_map_entry_string_int = mock_add_map_entry_string_int,
+    .add_map_entry_string_double = mock_add_map_entry_string_double,
+    .set_field_map = mock_set_field_map,
 };
 
 /* ───── Helpers to look up fields by name ───── */
@@ -512,9 +630,9 @@ suite("Data Bind") {
 
       if (codec) {
         when("parsing buffer with varstr 'Turbo'") {
-          uint8_t buf[7];
-          *(uint16_t *)buf = 5; /* length = 5 */
-          memcpy(buf + 2, "Turbo", 5);
+          uint8_t buf[9];
+          *(uint32_t *)buf = 5; /* length = 5 */
+          memcpy(buf + 4, "Turbo", 5);
           Value *v = data_bind_parse(codec, "Msg", buf, sizeof(buf));
 
           then("should succeed") { check_not_null(v); }
@@ -534,6 +652,134 @@ suite("Data Bind") {
         data_bind_free(codec);
       }
       remove("test_varstr.tbe");
+    }
+  }
+
+  section("Fixed Array Parsing") {
+    given("a schema with uint32 fixed array") {
+      write_schema("test_array.tbe", "message Arr { uint32[3] values; }\n");
+
+      DataBind *codec = data_bind_create("test_array.tbe", &test_api);
+      check_not_null(codec);
+
+      if (codec) {
+        when("parsing three values") {
+          uint8_t buf[12];
+          *(uint32_t *)(buf + 0) = 11;
+          *(uint32_t *)(buf + 4) = 22;
+          *(uint32_t *)(buf + 8) = 33;
+          Value *v = data_bind_parse(codec, "Arr", buf, sizeof(buf));
+
+          then("result should be non-null") { check_not_null(v); }
+
+          then("values should be stored in list order") {
+            MockField *f = find_field(v, "values");
+            check_not_null(f);
+            if (f) {
+              check(f->type == FIELD_LIST);
+              check(f->list_val.count == 3);
+              check(f->list_val.int_items[0] == 11);
+              check(f->list_val.int_items[1] == 22);
+              check(f->list_val.int_items[2] == 33);
+            }
+          }
+
+          if (v) free(v);
+        }
+
+        data_bind_free(codec);
+      }
+
+      remove("test_array.tbe");
+    }
+  }
+
+  section("Group Parsing") {
+    given("a schema with repeating group and trailing var-data") {
+      write_schema("test_group.tbe",
+                   "group Level { uint64 price; uint32 qty; }\n"
+                   "message Book { uint32 seq; group<Level> bids; string symbol; bytes source; }\n");
+
+      DataBind *codec = data_bind_create("test_group.tbe", &test_api);
+      check_not_null(codec);
+
+      if (codec) {
+        when("parsing two group entries") {
+          uint8_t buf[4 + 4 + 24 + 4 + 4 + 4 + 3];
+          memset(buf, 0, sizeof(buf));
+          *(uint32_t *)(buf + 0) = 7;
+          *(uint16_t *)(buf + 4) = 12; /* blockLength */
+          *(uint16_t *)(buf + 6) = 2;  /* numInGroup */
+          *(uint64_t *)(buf + 8) = 100;
+          *(uint32_t *)(buf + 16) = 10;
+          *(uint64_t *)(buf + 20) = 200;
+          *(uint32_t *)(buf + 28) = 20;
+          *(uint32_t *)(buf + 32) = 4;
+          memcpy(buf + 36, "ABCD", 4);
+          *(uint32_t *)(buf + 40) = 3;
+          buf[44] = 1;
+          buf[45] = 2;
+          buf[46] = 3;
+
+          Value *v = data_bind_parse(codec, "Book", buf, sizeof(buf));
+
+          then("result should be non-null") { check_not_null(v); }
+
+          then("bids should contain two objects") {
+            MockField *f = find_field(v, "bids");
+            check_not_null(f);
+            if (f) {
+              Value *bid0;
+              Value *bid1;
+              MockField *p0;
+              MockField *q0;
+              MockField *p1;
+              MockField *q1;
+
+              check(f->type == FIELD_LIST);
+              check(f->list_val.count == 2);
+
+              bid0 = f->list_val.obj_items[0];
+              bid1 = f->list_val.obj_items[1];
+              check_not_null(bid0);
+              check_not_null(bid1);
+
+              p0 = find_field(bid0, "price");
+              q0 = find_field(bid0, "qty");
+              p1 = find_field(bid1, "price");
+              q1 = find_field(bid1, "qty");
+              check_not_null(p0);
+              check_not_null(q0);
+              check_not_null(p1);
+              check_not_null(q1);
+              if (p0) check(p0->int64_val == 100);
+              if (q0) check(q0->int_val == 10);
+              if (p1) check(p1->int64_val == 200);
+              if (q1) check(q1->int_val == 20);
+            }
+          }
+
+          then("symbol and source should be parsed after the group") {
+            MockField *sym = find_field(v, "symbol");
+            MockField *src = find_field(v, "source");
+            check_not_null(sym);
+            check_not_null(src);
+            if (sym) check(strcmp(sym->str_val, "ABCD") == 0);
+            if (src) {
+              check(src->bytes_len == 3);
+              check(src->bytes_val[0] == 1);
+              check(src->bytes_val[1] == 2);
+              check(src->bytes_val[2] == 3);
+            }
+          }
+
+          if (v) free(v);
+        }
+
+        data_bind_free(codec);
+      }
+
+      remove("test_group.tbe");
     }
   }
 
@@ -609,6 +855,93 @@ suite("Data Bind") {
         }
         remove("test_extended.tbe");
       }
-    }
- 
+   
 
+  section("Set Parsing") {
+    given("a schema with set<string> field") {
+      write_schema("test_set.tbe", "message Tags { set<string> tags; }\n");
+
+      DataBind *codec = data_bind_create("test_set.tbe", &test_api);
+      check_not_null(codec);
+
+      if (codec) {
+        when("parsing buffer with two set items") {
+          uint8_t buf[14];
+          memset(buf, 0, sizeof(buf));
+          *(uint32_t *)(buf + 0) = 2;
+          *(uint32_t *)(buf + 4) = 1;
+          buf[8] = 'A';
+          *(uint32_t *)(buf + 9) = 1;
+          buf[13] = 'B';
+
+          Value *v = data_bind_parse(codec, "Tags", buf, sizeof(buf));
+
+          then("codec should parse set data") { check_not_null(v); }
+
+          then("tags should contain both entries") {
+            MockField *f = find_field(v, "tags");
+            check_not_null(f);
+            if (f) {
+              check(f->type == FIELD_SET);
+              check(f->list_val.count == 2);
+              check(strcmp(f->list_val.str_items[0], "A") == 0);
+              check(strcmp(f->list_val.str_items[1], "B") == 0);
+            }
+          }
+
+          if (v) free(v);
+        }
+
+        data_bind_free(codec);
+      }
+
+      remove("test_set.tbe");
+    }
+  }
+
+  section("Map Parsing") {
+    given("a schema with map<string, int32> field") {
+      write_schema("test_map.tbe", "message Attrs { map<string,int32> attrs; }\n");
+
+      DataBind *codec = data_bind_create("test_map.tbe", &test_api);
+      check_not_null(codec);
+
+      if (codec) {
+        when("parsing buffer with two map entries") {
+          uint8_t buf[22];
+          memset(buf, 0, sizeof(buf));
+          *(uint32_t *)(buf + 0) = 2;
+          *(uint32_t *)(buf + 4) = 1;
+          buf[8] = 'x';
+          *(int32_t *)(buf + 9) = 30;
+          *(uint32_t *)(buf + 13) = 1;
+          buf[17] = 'y';
+          *(int32_t *)(buf + 18) = 40;
+
+          Value *v = data_bind_parse(codec, "Attrs", buf, sizeof(buf));
+
+          then("codec should parse map data") { check_not_null(v); }
+
+          then("attrs should contain key-value entries") {
+            MockField *f = find_field(v, "attrs");
+            check_not_null(f);
+            if (f) {
+              check(f->type == FIELD_MAP);
+              check(f->list_val.count == 2);
+              check(strcmp(f->list_val.map_keys[0], "x") == 0);
+              check(strcmp(f->list_val.map_keys[1], "y") == 0);
+              check(f->list_val.int_items[0] == 30);
+              check(f->list_val.int_items[1] == 40);
+            }
+          }
+
+          if (v) free(v);
+        }
+
+        data_bind_free(codec);
+      }
+
+      remove("test_map.tbe");
+    }
+  }
+}

@@ -91,8 +91,6 @@ typedef struct {
   MIR_item_t call_builtin_proto, call_builtin_import;
 } ts_mir_externals_t;
 
-/* Compiled script function table entry */
-#define MAX_COMPILED_FUNCS 64
 typedef struct {
   char *name;
   MIR_item_t mir_func;
@@ -104,6 +102,29 @@ typedef struct {
   char *name;
   MIR_reg_t reg;
 } ts_mir_var_entry_t;
+
+typedef struct {
+  const char *name;
+  MIR_reg_t ptr_reg;
+} ts_mir_vec_ptr_entry_t;
+
+typedef struct {
+  const char *obj_name;
+  const char *key_name;
+  MIR_reg_t ptr_reg;
+} ts_mir_map_ptr_entry_t;
+
+typedef struct {
+  MIR_item_t func;
+  ts_mir_var_entry_t **vars;
+  int var_count;
+  int var_capacity;
+  int tmp_count;
+  int loop_depth;
+  MIR_reg_t ctx_reg;
+  int vec_ptr_count;
+  int map_ptr_count;
+} ts_mir_compile_frame_t;
 
 typedef struct {
   MIR_context_t ctx;
@@ -129,25 +150,19 @@ typedef struct {
   MIR_reg_t ctx_reg;
 
   /*  compiled script functions */
-  ts_compiled_func_t compiled_funcs[MAX_COMPILED_FUNCS];
+  ts_compiled_func_t *compiled_funcs;
   int compiled_func_count;
+  int compiled_func_capacity;
 
-/*  cached vector data pointers for native indexing */
-#define MAX_VEC_PTRS 32
-  struct {
-    const char *name;
-    MIR_reg_t ptr_reg;
-  } vec_ptrs[32];
+  /*  cached vector data pointers for native indexing */
+  ts_mir_vec_ptr_entry_t *vec_ptrs;
   int vec_ptr_count;
+  int vec_ptr_capacity;
 
-/*  cached map field pointers for native access */
-#define MAX_MAP_PTRS 64
-  struct {
-    const char *obj_name;
-    const char *key_name;
-    MIR_reg_t ptr_reg;
-  } map_ptrs[64];
+  /*  cached map field pointers for native access */
+  ts_mir_map_ptr_entry_t *map_ptrs;
   int map_ptr_count;
+  int map_ptr_capacity;
 } ts_mir_compiler_t;
 
 static void ts_mir_fail(ts_mir_compiler_t *c, const char *fmt, ...) {
@@ -206,6 +221,75 @@ static int ts_mir_ensure_var_capacity(ts_mir_compiler_t *c, int needed) {
   return 1;
 }
 
+static int ts_mir_ensure_compiled_func_capacity(ts_mir_compiler_t *c, int needed) {
+  ts_compiled_func_t *new_entries = NULL;
+  int new_capacity = 0;
+
+  if (needed <= c->compiled_func_capacity)
+    return 1;
+
+  new_capacity = c->compiled_func_capacity > 0 ? c->compiled_func_capacity * 2 : 16;
+  if (new_capacity < needed)
+    new_capacity = needed;
+
+  new_entries = (ts_compiled_func_t *)realloc(c->compiled_funcs,
+                                              (size_t)new_capacity * sizeof(*new_entries));
+  if (!new_entries) {
+    ts_mir_fail(c, "JIT compile error: out of memory growing compiled function table");
+    return 0;
+  }
+
+  c->compiled_funcs = new_entries;
+  c->compiled_func_capacity = new_capacity;
+  return 1;
+}
+
+static int ts_mir_ensure_vec_ptr_capacity(ts_mir_compiler_t *c, int needed) {
+  ts_mir_vec_ptr_entry_t *new_entries = NULL;
+  int new_capacity = 0;
+
+  if (needed <= c->vec_ptr_capacity)
+    return 1;
+
+  new_capacity = c->vec_ptr_capacity > 0 ? c->vec_ptr_capacity * 2 : 16;
+  if (new_capacity < needed)
+    new_capacity = needed;
+
+  new_entries =
+      (ts_mir_vec_ptr_entry_t *)realloc(c->vec_ptrs, (size_t)new_capacity * sizeof(*new_entries));
+  if (!new_entries) {
+    ts_mir_fail(c, "JIT compile error: out of memory growing vector pointer cache");
+    return 0;
+  }
+
+  c->vec_ptrs = new_entries;
+  c->vec_ptr_capacity = new_capacity;
+  return 1;
+}
+
+static int ts_mir_ensure_map_ptr_capacity(ts_mir_compiler_t *c, int needed) {
+  ts_mir_map_ptr_entry_t *new_entries = NULL;
+  int new_capacity = 0;
+
+  if (needed <= c->map_ptr_capacity)
+    return 1;
+
+  new_capacity = c->map_ptr_capacity > 0 ? c->map_ptr_capacity * 2 : 16;
+  if (new_capacity < needed)
+    new_capacity = needed;
+
+  new_entries =
+      (ts_mir_map_ptr_entry_t *)realloc(c->map_ptrs, (size_t)new_capacity * sizeof(*new_entries));
+  if (!new_entries) {
+    ts_mir_fail(c, "JIT compile error: out of memory growing map pointer cache");
+    return 0;
+  }
+
+  c->map_ptrs = new_entries;
+  c->map_ptr_capacity = new_capacity;
+  return 1;
+}
+
 static MIR_reg_t get_or_create_reg(ts_mir_compiler_t *c, const char *name) {
   ts_mir_var_entry_t *entry = NULL;
 
@@ -252,6 +336,131 @@ static void ts_mir_destroy_var_pool(ts_mir_compiler_t *c) {
     object_pool_destroy(c->var_pool);
     c->var_pool = NULL;
   }
+}
+
+static void ts_mir_destroy_compiled_funcs(ts_mir_compiler_t *c) {
+  if (!c)
+    return;
+
+  for (int i = 0; i < c->compiled_func_count; ++i) {
+    free(c->compiled_funcs[i].name);
+    c->compiled_funcs[i].name = NULL;
+  }
+
+  free(c->compiled_funcs);
+  c->compiled_funcs = NULL;
+  c->compiled_func_count = 0;
+  c->compiled_func_capacity = 0;
+}
+
+static void ts_mir_destroy_pointer_caches(ts_mir_compiler_t *c) {
+  if (!c)
+    return;
+
+  free(c->vec_ptrs);
+  c->vec_ptrs = NULL;
+  c->vec_ptr_count = 0;
+  c->vec_ptr_capacity = 0;
+
+  free(c->map_ptrs);
+  c->map_ptrs = NULL;
+  c->map_ptr_count = 0;
+  c->map_ptr_capacity = 0;
+}
+
+static void ts_mir_destroy_compiler_storage(ts_mir_compiler_t *c) {
+  if (!c)
+    return;
+
+  ts_mir_destroy_var_pool(c);
+  ts_mir_destroy_compiled_funcs(c);
+  ts_mir_destroy_pointer_caches(c);
+}
+
+static ts_mir_compile_frame_t ts_mir_capture_frame(const ts_mir_compiler_t *c) {
+  ts_mir_compile_frame_t frame = {0};
+
+  if (!c)
+    return frame;
+
+  frame.func = c->func;
+  frame.vars = c->vars;
+  frame.var_count = c->var_count;
+  frame.var_capacity = c->var_capacity;
+  frame.tmp_count = c->tmp_count;
+  frame.loop_depth = c->loop_depth;
+  frame.ctx_reg = c->ctx_reg;
+  frame.vec_ptr_count = c->vec_ptr_count;
+  frame.map_ptr_count = c->map_ptr_count;
+  return frame;
+}
+
+static void ts_mir_begin_isolated_compile(ts_mir_compiler_t *c) {
+  if (!c)
+    return;
+
+  c->vars = NULL;
+  c->var_count = 0;
+  c->var_capacity = 0;
+  c->tmp_count = 0;
+  c->loop_depth = 0;
+  c->ctx_reg = 0;
+  c->vec_ptr_count = 0;
+  c->map_ptr_count = 0;
+}
+
+static void ts_mir_restore_frame(ts_mir_compiler_t *c, const ts_mir_compile_frame_t *frame) {
+  if (!c || !frame)
+    return;
+
+  ts_mir_discard_current_vars(c);
+  c->func = frame->func;
+  c->vars = frame->vars;
+  c->var_count = frame->var_count;
+  c->var_capacity = frame->var_capacity;
+  c->tmp_count = frame->tmp_count;
+  c->loop_depth = frame->loop_depth;
+  c->ctx_reg = frame->ctx_reg;
+  c->vec_ptr_count = frame->vec_ptr_count;
+  c->map_ptr_count = frame->map_ptr_count;
+}
+
+static MIR_reg_t ts_mir_get_or_add_vec_ptr(ts_mir_compiler_t *c, const char *name) {
+  MIR_reg_t ptr_reg = 0;
+
+  for (int i = 0; i < c->vec_ptr_count; i++) {
+    if (strcmp(c->vec_ptrs[i].name, name) == 0)
+      return c->vec_ptrs[i].ptr_reg;
+  }
+
+  if (!ts_mir_ensure_vec_ptr_capacity(c, c->vec_ptr_count + 1))
+    return 0;
+
+  ptr_reg = new_temp_ireg(c);
+  c->vec_ptrs[c->vec_ptr_count].name = name;
+  c->vec_ptrs[c->vec_ptr_count].ptr_reg = ptr_reg;
+  c->vec_ptr_count++;
+  return ptr_reg;
+}
+
+static MIR_reg_t ts_mir_get_or_add_map_ptr(ts_mir_compiler_t *c, const char *obj_name,
+                                           const char *key_name) {
+  MIR_reg_t ptr_reg = 0;
+
+  for (int i = 0; i < c->map_ptr_count; i++) {
+    if (c->map_ptrs[i].obj_name == obj_name && strcmp(c->map_ptrs[i].key_name, key_name) == 0)
+      return c->map_ptrs[i].ptr_reg;
+  }
+
+  if (!ts_mir_ensure_map_ptr_capacity(c, c->map_ptr_count + 1))
+    return 0;
+
+  ptr_reg = new_temp_ireg(c);
+  c->map_ptrs[c->map_ptr_count].obj_name = obj_name;
+  c->map_ptrs[c->map_ptr_count].key_name = key_name;
+  c->map_ptrs[c->map_ptr_count].ptr_reg = ptr_reg;
+  c->map_ptr_count++;
+  return ptr_reg;
 }
 
 static int ts_mir_bind_existing_reg(ts_mir_compiler_t *c, const char *name, MIR_reg_t reg) {
@@ -514,20 +723,7 @@ static MIR_reg_t ts_emit_member_access(ts_mir_compiler_t *c, const char *obj_nam
                                        const char *member) {
   exprtk_value_t obj = exprtk_env_get(&c->ts_ctx->env, obj_name);
   if (obj.type == EXPRTK_VAL_MAP && exprtk_map_has(&obj, member)) {
-    MIR_reg_t ptr_reg = 0;
-    for (int i = 0; i < c->map_ptr_count; i++) {
-      if (c->map_ptrs[i].obj_name == obj_name && strcmp(c->map_ptrs[i].key_name, member) == 0) {
-        ptr_reg = c->map_ptrs[i].ptr_reg;
-        break;
-      }
-    }
-    if (!ptr_reg && c->map_ptr_count < MAX_MAP_PTRS) {
-      ptr_reg = new_temp_ireg(c);
-      c->map_ptrs[c->map_ptr_count].obj_name = obj_name;
-      c->map_ptrs[c->map_ptr_count].key_name = member;
-      c->map_ptrs[c->map_ptr_count].ptr_reg = ptr_reg;
-      c->map_ptr_count++;
-    }
+    MIR_reg_t ptr_reg = ts_mir_get_or_add_map_ptr(c, obj_name, member);
 
     if (ptr_reg) {
       MIR_reg_t res = new_temp_reg(c);
@@ -612,19 +808,7 @@ static MIR_reg_t ts_emit_index_access(ts_mir_compiler_t *c, const char *name,
   exprtk_value_t existing = exprtk_env_get(&c->ts_ctx->env, name);
   int is_prebound = (existing.type == EXPRTK_VAL_VECTOR && existing.data.vector.data != NULL);
   if (is_prebound) {
-    MIR_reg_t ptr_reg = 0;
-    for (int i = 0; i < c->vec_ptr_count; i++) {
-      if (strcmp(c->vec_ptrs[i].name, name) == 0) {
-        ptr_reg = c->vec_ptrs[i].ptr_reg;
-        break;
-      }
-    }
-    if (!ptr_reg && c->vec_ptr_count < MAX_VEC_PTRS) {
-      ptr_reg = new_temp_ireg(c);
-      c->vec_ptrs[c->vec_ptr_count].name = name;
-      c->vec_ptrs[c->vec_ptr_count].ptr_reg = ptr_reg;
-      c->vec_ptr_count++;
-    }
+    MIR_reg_t ptr_reg = ts_mir_get_or_add_vec_ptr(c, name);
 
     if (ptr_reg) {
       MIR_reg_t idx_i = new_temp_ireg(c);
@@ -735,7 +919,8 @@ static int ts_compile_data_access_and_assignment(ts_mir_compiler_t *c, exprtk_no
 
 static ts_compiled_func_t *ts_find_compiled_func(ts_mir_compiler_t *c, const char *name) {
   for (int i = 0; i < c->compiled_func_count; i++) {
-    if (strcmp(c->compiled_funcs[i].name, name) == 0) return &c->compiled_funcs[i];
+    if (c->compiled_funcs[i].name && strcmp(c->compiled_funcs[i].name, name) == 0)
+      return &c->compiled_funcs[i];
   }
   return NULL;
 }
@@ -746,25 +931,13 @@ static ts_compiled_func_t *ts_find_compiled_func(ts_mir_compiler_t *c, const cha
 static void ts_compile_script_func(ts_mir_compiler_t *c, const char *name,
                                    exprtk_node_t **arg_params, size_t arg_count,
                                    exprtk_node_t *body) {
-  if (c->compiled_func_count >= MAX_COMPILED_FUNCS) return;
   if (arg_count > 16) return; /* sanity limit */
+  if (!ts_mir_ensure_compiled_func_capacity(c, c->compiled_func_count + 1)) return;
 
-  /* Save parent compiler state */
-  MIR_item_t saved_func = c->func;
-  int saved_var_count = c->var_count;
-  int saved_var_capacity = c->var_capacity;
-  int saved_tmp_count = c->tmp_count;
-  int saved_loop_depth = c->loop_depth;
-  MIR_reg_t saved_ctx_reg = c->ctx_reg;
-  ts_mir_var_entry_t **saved_vars = c->vars;
+  ts_mir_compile_frame_t frame = ts_mir_capture_frame(c);
 
   /* Reset compiler state for the new function */
-  c->vars = NULL;
-  c->var_count = 0;
-  c->var_capacity = 0;
-  c->tmp_count = 0;
-  c->loop_depth = 0;
-  c->ctx_reg = 0; /* No ctx_ptr in compiled functions — disables var sync in return */
+  ts_mir_begin_isolated_compile(c);
 
   /* Create unique function name */
   char func_name[128];
@@ -810,19 +983,16 @@ static void ts_compile_script_func(ts_mir_compiler_t *c, const char *name,
   /* Register in compiled function table */
   int idx = c->compiled_func_count++;
   c->compiled_funcs[idx].name = strdup(name);
+  if (!c->compiled_funcs[idx].name) {
+    ts_mir_fail(c, "JIT compile error: out of memory duplicating compiled function name '%s'",
+                name ? name : "<unnamed>");
+  }
   c->compiled_funcs[idx].mir_func = new_func;
   c->compiled_funcs[idx].proto = proto;
   c->compiled_funcs[idx].arg_count = arg_count;
 
   /* Restore parent compiler state */
-  free(c->vars);
-  c->func = saved_func;
-  c->vars = saved_vars;
-  c->var_count = saved_var_count;
-  c->var_capacity = saved_var_capacity;
-  c->tmp_count = saved_tmp_count;
-  c->loop_depth = saved_loop_depth;
-  c->ctx_reg = saved_ctx_reg;
+  ts_mir_restore_frame(c, &frame);
 }
 
 /* Pre-scan AST for function definitions and compile them as MIR functions.
@@ -1788,19 +1958,7 @@ static void ts_compile_stmt(ts_mir_compiler_t *c, exprtk_node_t *node) {
         int64_t len = (int64_t)existing.data.vector.size;
 
         /* Reuse Phase 10 vec_data pointer cache */
-        MIR_reg_t ptr_reg = 0;
-        for (int i = 0; i < c->vec_ptr_count; i++) {
-          if (strcmp(c->vec_ptrs[i].name, vec_name) == 0) {
-            ptr_reg = c->vec_ptrs[i].ptr_reg;
-            break;
-          }
-        }
-        if (!ptr_reg && c->vec_ptr_count < MAX_VEC_PTRS) {
-          ptr_reg = new_temp_ireg(c);
-          c->vec_ptrs[c->vec_ptr_count].name = vec_name;
-          c->vec_ptrs[c->vec_ptr_count].ptr_reg = ptr_reg;
-          c->vec_ptr_count++;
-        }
+        MIR_reg_t ptr_reg = ts_mir_get_or_add_vec_ptr(c, vec_name);
 
         if (ptr_reg) {
           MIR_reg_t iter_reg = get_or_create_reg(c, iter_name);
@@ -2252,6 +2410,7 @@ CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *scri
   compiler.var_pool = object_pool_create(&var_pool_config);
   if (!compiler.var_pool) {
     exprtk_free(ast);
+    ts_mir_destroy_compiler_storage(&compiler);
     ctx->error_code = TURBO_SCRIPT_ERROR_OOM;
     snprintf(ctx->error_msg, sizeof(ctx->error_msg),
              "JIT compile error: failed to create variable pool");
@@ -2321,7 +2480,7 @@ CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *scri
 
   if (compiler.failed) {
     exprtk_free(ast);
-    ts_mir_destroy_var_pool(&compiler);
+    ts_mir_destroy_compiler_storage(&compiler);
     if (ctx->error_code == TURBO_SCRIPT_ERROR_NONE)
       ctx->error_code = TURBO_SCRIPT_ERROR_JIT;
     return -1;
@@ -2357,7 +2516,7 @@ CXX_C_API int turbo_script_compile_mir(turbo_script_ctx_t *ctx, const char *scri
     }
   }
 
-  ts_mir_destroy_var_pool(&compiler);
+  ts_mir_destroy_compiler_storage(&compiler);
   return 0;
 }
 

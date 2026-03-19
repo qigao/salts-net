@@ -159,7 +159,13 @@ static int field_supported_in_tbe(const char *field_type,
         return 1;
     }
 
-    return strcmp(field_type, "array") == 0 && is_numeric_literal(length_field);
+    if (strcmp(field_type, "array") == 0) {
+        return is_numeric_literal(length_field);
+    }
+
+    return strcmp(field_type, "list") == 0 ||
+           strcmp(field_type, "set") == 0 ||
+           strcmp(field_type, "map") == 0;
 }
 
 static int validate_field_layout(schema_parse_ctx_t *ctx,
@@ -207,6 +213,7 @@ static void annotate_field(Node *field_map, const char *field_type,
     int is_unsigned = 0;
     const char *host_type = NULL;
     const char *wire_reader = NULL;
+    const char *map_value_type = NULL;
 
     if (is_group_field) {
         map_add(field_map, create_node_string("ctype", "GROUP"));
@@ -290,10 +297,35 @@ static void annotate_field(Node *field_map, const char *field_type,
         add_true(field_map, "is_string");
         add_true(field_map, "is_variable_size");
     } else if (!is_group_field && (is_collection || strcmp(field_type, "array") == 0 ||
-               strcmp(field_type, "list") == 0 || strcmp(field_type, "map") == 0)) {
+               strcmp(field_type, "list") == 0 || strcmp(field_type, "set") == 0 ||
+               strcmp(field_type, "map") == 0)) {
         map_add(field_map, create_node_string("ctype", "COLLECTION"));
         add_true(field_map, "is_collection");
-        if (collection_inner && collection_inner[0]) {
+        map_add(field_map, create_node_string("collection_kind", field_type));
+        if (strcmp(field_type, "list") == 0) {
+            add_true(field_map, "is_list");
+        } else if (strcmp(field_type, "set") == 0) {
+            add_true(field_map, "is_set");
+        } else if (strcmp(field_type, "map") == 0) {
+            add_true(field_map, "is_map");
+        }
+        if (strcmp(field_type, "map") == 0 && collection_inner && collection_inner[0]) {
+            map_value_type = strchr(collection_inner, ',');
+            if (map_value_type != NULL) {
+                size_t key_len = (size_t)(map_value_type - collection_inner);
+                char key_type[128];
+                char value_type[128];
+
+                if (key_len < sizeof(key_type)) {
+                    memcpy(key_type, collection_inner, key_len);
+                    key_type[key_len] = '\0';
+                    map_add(field_map, create_node_string("key_type", key_type));
+                }
+                snprintf(value_type, sizeof(value_type), "%s", map_value_type + 1);
+                map_add(field_map, create_node_string("value_type", value_type));
+                map_add(field_map, create_node_string("inner_type", value_type));
+            }
+        } else if (collection_inner && collection_inner[0]) {
             map_add(field_map, create_node_string("inner_type", collection_inner));
         }
         if (is_numeric_literal(length_field)) {
@@ -644,6 +676,31 @@ field_decl ::= attribute_list(A) IDENT(T) LBRACKET NUMBER(L) RBRACKET IDENT(N) S
     free(type_name);
     free(length_field);
     free(field_name);
+}
+
+field_decl ::= attribute_list(A) IDENT(T) LT IDENT(I) GT IDENT(N) SEMI. {
+    char *type_name = tok_strdup(T);
+    char *inner_type = tok_strdup(I);
+    char *field_name = tok_strdup(N);
+    add_field(ctx, type_name, field_name, 1, inner_type, "", A, 0);
+    free(type_name);
+    free(inner_type);
+    free(field_name);
+}
+
+field_decl ::= attribute_list(A) IDENT(T) LT IDENT(K) COMMA IDENT(V) GT IDENT(N) SEMI. {
+    char *type_name = tok_strdup(T);
+    char *field_name = tok_strdup(N);
+    char *key_type = tok_strdup(K);
+    char *value_type = tok_strdup(V);
+    char map_inner[256];
+
+    snprintf(map_inner, sizeof(map_inner), "%s,%s", key_type, value_type);
+    add_field(ctx, type_name, field_name, 1, map_inner, "", A, 0);
+    free(type_name);
+    free(field_name);
+    free(key_type);
+    free(value_type);
 }
 
 %syntax_error {

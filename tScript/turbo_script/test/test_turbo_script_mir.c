@@ -7,6 +7,33 @@
 
 #define EPS 1e-9
 
+static int count_last_module_functions_with_prefix(turbo_script_ctx_t *ctx, const char *prefix) {
+  int count = 0;
+  size_t prefix_len = strlen(prefix);
+  DLIST(MIR_module_t) *modules = NULL;
+  MIR_module_t last_mod = NULL;
+
+  if (!ctx || !ctx->mir_ctx || !prefix)
+    return 0;
+
+  modules = MIR_get_module_list(ctx->mir_ctx);
+  if (!modules)
+    return 0;
+
+  last_mod = DLIST_TAIL(MIR_module_t, *modules);
+  if (!last_mod)
+    return 0;
+
+  for (MIR_item_t it = DLIST_HEAD(MIR_item_t, last_mod->items); it != NULL;
+       it = DLIST_NEXT(MIR_item_t, it)) {
+    if (it->item_type == MIR_func_item && strncmp(it->u.func->name, prefix, prefix_len) == 0) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
 spec("turbo_script_mir") {
 
   describe("compile_mir") {
@@ -654,6 +681,25 @@ spec("turbo_script_mir") {
       check_int_eq(turbo_script_run_jit(ctx, "func double(x) { return x * 2; } r = double(21);"),
                    0);
       check_double_eq(get_num(ctx, "r"), 42.0, EPS);
+      turbo_script_free(ctx);
+    }
+
+    it("should compile more than 64 script functions into MIR") {
+      turbo_script_ctx_t *ctx = turbo_script_init(TURBO_SCRIPT_INIT_DEFAULT);
+      char script[8192];
+      size_t len = 0;
+
+      memset(script, 0, sizeof(script));
+      for (int i = 0; i < 70; ++i) {
+        len += (size_t)snprintf(script + len, sizeof(script) - len,
+                                "func f%d(x) { return x + %d; } ", i, i);
+      }
+      len += (size_t)snprintf(script + len, sizeof(script) - len, "result = f69(1);");
+
+      check_int_eq(turbo_script_compile_mir(ctx, script), 0);
+      check_int_eq(count_last_module_functions_with_prefix(ctx, "ts_f"), 70);
+      check_int_eq(turbo_script_exec_jit(ctx), 0);
+      check_double_eq(get_num(ctx, "result"), 70.0, EPS);
       turbo_script_free(ctx);
     }
 

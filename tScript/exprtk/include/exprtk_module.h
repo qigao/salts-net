@@ -100,27 +100,44 @@ static inline exprtk_value_t exprtk_val_list_empty(void) {
     val.data.list.items = NULL;
     val.data.list.count = 0;
     val.data.list.capacity = 0;
+    val.data.list.heap_owned = 0;
     return val;
 }
 
-static inline exprtk_value_t exprtk_val_list(exprtk_value_t *items, size_t n) {
+static inline exprtk_value_t exprtk_val_list_ex(exprtk_value_t *items, size_t n, int heap_owned) {
     exprtk_value_t val;
+    memset(&val, 0, sizeof(val));
     val.type = EXPRTK_VAL_LIST;
     val.data.list.items = items;
     val.data.list.count = n;
     val.data.list.capacity = n;
+    val.data.list.heap_owned = heap_owned;
     return val;
+}
+
+static inline exprtk_value_t exprtk_val_list(exprtk_value_t *items, size_t n) {
+    return exprtk_val_list_ex(items, n, 1);
 }
 
 static inline void exprtk_list_push(exprtk_value_t *list, exprtk_value_t item) {
     if (list->type != EXPRTK_VAL_LIST) return;
     if (list->data.list.count >= list->data.list.capacity) {
         size_t new_cap = list->data.list.capacity ? list->data.list.capacity * 2 : 4;
-        exprtk_value_t *new_items = (exprtk_value_t*)realloc(
-            list->data.list.items, new_cap * sizeof(exprtk_value_t));
+        exprtk_value_t *new_items = NULL;
+        if (list->data.list.heap_owned) {
+            new_items = (exprtk_value_t*)realloc(
+                list->data.list.items, new_cap * sizeof(exprtk_value_t));
+        } else {
+            new_items = (exprtk_value_t*)malloc(new_cap * sizeof(exprtk_value_t));
+            if (new_items && list->data.list.items && list->data.list.count > 0) {
+                memcpy(new_items, list->data.list.items,
+                       list->data.list.count * sizeof(exprtk_value_t));
+            }
+        }
         if (!new_items) return;
         list->data.list.items = new_items;
         list->data.list.capacity = new_cap;
+        list->data.list.heap_owned = 1;
     }
     list->data.list.items[list->data.list.count++] = item;
 }

@@ -177,13 +177,13 @@ exprtk_value_t exprtk_value_clone_to_env(exprtk_value_t value, exprtk_env_t *dst
             if (!value.data.list.items || value.data.list.count == 0) return cloned;
 
             exprtk_value_t *items =
-                (exprtk_value_t*)malloc(value.data.list.count * sizeof(exprtk_value_t));
+                (exprtk_value_t*)mem_alloc(&dst_env->arena, value.data.list.count * sizeof(exprtk_value_t));
             if (!items) return cloned;
 
             for (size_t i = 0; i < value.data.list.count; ++i) {
                 items[i] = exprtk_value_clone_to_env(value.data.list.items[i], dst_env);
             }
-            return exprtk_val_list(items, value.data.list.count);
+            return exprtk_val_list_ex(items, value.data.list.count, 0);
         }
         case EXPRTK_VAL_MAP: {
             exprtk_value_t cloned = exprtk_val_map();
@@ -436,10 +436,13 @@ static void exprtk_release_list_value(exprtk_value_t *list, exprtk_release_state
         exprtk_release_value(&list->data.list.items[i], state);
     }
 
-    free(list->data.list.items);
+    if (list->data.list.heap_owned) {
+        free(list->data.list.items);
+    }
     list->data.list.items = NULL;
     list->data.list.count = 0;
     list->data.list.capacity = 0;
+    list->data.list.heap_owned = 0;
 }
 
 static void exprtk_release_value(exprtk_value_t *value, exprtk_release_state_t *state) {
@@ -487,7 +490,6 @@ static void exprtk_env_free_internal(exprtk_env_t *env, exprtk_release_state_t *
         closure = next;
     }
     env->next_closure = NULL;
-    mem_destroy(&env->arena);
     if (env->modules) {
         free((void *)env->modules);
         env->modules = NULL;
@@ -520,6 +522,7 @@ static void exprtk_env_free_internal(exprtk_env_t *env, exprtk_release_state_t *
         fcurr = fnext;
     }
     env->funcs = NULL;
+    mem_destroy(&env->arena);
 }
 
 void exprtk_env_free(exprtk_env_t *env) {
@@ -702,6 +705,7 @@ static exprtk_value_t *mc_prepare_call_args(mc_ctx_t *mc, exprtk_value_t *stack_
 static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
     exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
+    exprtk_env_t *env = mc->env;
 
     if (strcmp(m, "length") == 0 || strcmp(m, "size") == 0)
         return exprtk_val_num((double)mc->obj.data.list.count);
@@ -750,11 +754,13 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
     }
 
     if (strcmp(m, "reverse") == 0) {
-        exprtk_value_t *items = (exprtk_value_t*)malloc(mc->obj.data.list.count * sizeof(exprtk_value_t));
+        exprtk_value_t *items = env
+            ? (exprtk_value_t*)mem_alloc(&env->arena, mc->obj.data.list.count * sizeof(exprtk_value_t))
+            : (exprtk_value_t*)malloc(mc->obj.data.list.count * sizeof(exprtk_value_t));
         if (items) {
             for (size_t i = 0; i < mc->obj.data.list.count; ++i)
                 items[i] = mc->obj.data.list.items[mc->obj.data.list.count - 1 - i];
-            return exprtk_val_list(items, mc->obj.data.list.count);
+            return exprtk_val_list_ex(items, mc->obj.data.list.count, env ? 0 : 1);
         }
     }
 
@@ -770,7 +776,9 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
 
     if (strcmp(m, "keys") == 0) {
         size_t count = exprtk_map_count(&mc->obj);
-        exprtk_value_t *items = (exprtk_value_t*)malloc(count * sizeof(exprtk_value_t));
+        exprtk_value_t *items = mc->env
+            ? (exprtk_value_t*)mem_alloc(&mc->env->arena, count * sizeof(exprtk_value_t))
+            : (exprtk_value_t*)malloc(count * sizeof(exprtk_value_t));
         if (items) {
             exprtk_map_iter_t it = exprtk_map_iter_begin(&mc->obj);
             const char *key; size_t idx = 0;
@@ -778,19 +786,21 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
                 tstr_v sv; sv.data = (char*)key; sv.len = strlen(key);
                 items[idx++] = exprtk_val_str(sv);
             }
-            return exprtk_val_list(items, idx);
+            return exprtk_val_list_ex(items, idx, mc->env ? 0 : 1);
         }
     }
 
     if (strcmp(m, "values") == 0) {
         size_t count = exprtk_map_count(&mc->obj);
-        exprtk_value_t *items = (exprtk_value_t*)malloc(count * sizeof(exprtk_value_t));
+        exprtk_value_t *items = mc->env
+            ? (exprtk_value_t*)mem_alloc(&mc->env->arena, count * sizeof(exprtk_value_t))
+            : (exprtk_value_t*)malloc(count * sizeof(exprtk_value_t));
         if (items) {
             exprtk_map_iter_t it = exprtk_map_iter_begin(&mc->obj);
             exprtk_value_t val; size_t idx = 0;
             while (exprtk_map_iter_next(&it, NULL, &val))
                 items[idx++] = val;
-            return exprtk_val_list(items, idx);
+            return exprtk_val_list_ex(items, idx, mc->env ? 0 : 1);
         }
     }
 

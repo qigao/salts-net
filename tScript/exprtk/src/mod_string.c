@@ -19,13 +19,16 @@
 /* Inline tokenizer / conversion (replaces strtk dependency)                 */
 /* ========================================================================= */
 
-static char **mod_tokenize(const char *input, size_t len, const char *delimiters, bool ignore_empty, size_t *out_count) {
+static void mod_free_tokens(mem_pool_t *arena, char **tokens, size_t count);
+
+static char **mod_tokenize(mem_pool_t *arena, const char *input, size_t len, const char *delimiters,
+                           bool ignore_empty, size_t *out_count) {
     if (!input || !delimiters || !out_count) { if (out_count) *out_count = 0; return NULL; }
     if (len == 0) len = strlen(input);
 
     /* First pass: count tokens */
     size_t cap = 16;
-    char **tokens = (char**)malloc(cap * sizeof(char*));
+    char **tokens = TEMP_ALLOC(arena, char*, cap);
     size_t count = 0;
     size_t start = 0;
 
@@ -35,10 +38,24 @@ static char **mod_tokenize(const char *input, size_t len, const char *delimiters
             size_t tok_len = i - start;
             if (tok_len > 0 || !ignore_empty) {
                 if (count >= cap) {
+                    char **new_tokens = NULL;
                     cap *= 2;
-                    tokens = (char**)realloc(tokens, cap * sizeof(char*));
+                    new_tokens = TEMP_ALLOC(arena, char*, cap);
+                    if (!new_tokens) {
+                        mod_free_tokens(arena, tokens, count);
+                        *out_count = 0;
+                        return NULL;
+                    }
+                    memcpy(new_tokens, tokens, count * sizeof(char*));
+                    TEMP_FREE(arena, tokens);
+                    tokens = new_tokens;
                 }
-                char *tok = (char*)malloc(tok_len + 1);
+                char *tok = TEMP_ALLOC(arena, char, tok_len + 1);
+                if (!tok) {
+                    mod_free_tokens(arena, tokens, count);
+                    *out_count = 0;
+                    return NULL;
+                }
                 memcpy(tok, input + start, tok_len);
                 tok[tok_len] = '\0';
                 tokens[count++] = tok;
@@ -51,10 +68,12 @@ static char **mod_tokenize(const char *input, size_t len, const char *delimiters
     return tokens;
 }
 
-static void mod_free_tokens(char **tokens, size_t count) {
+static void mod_free_tokens(mem_pool_t *arena, char **tokens, size_t count) {
     if (!tokens) return;
-    for (size_t i = 0; i < count; ++i) free(tokens[i]);
-    free(tokens);
+    if (!arena) {
+        for (size_t i = 0; i < count; ++i) free(tokens[i]);
+    }
+    TEMP_FREE(arena, tokens);
 }
 
 static bool mod_to_double(const char *s, double *out) {
@@ -261,7 +280,7 @@ static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_
     size_t index = (size_t)args[2].data.number;
 
     size_t count = 0;
-    char **tokens = mod_tokenize(input, args[0].data.string.len, delim, true, &count);
+    char **tokens = mod_tokenize(arena, input, args[0].data.string.len, delim, true, &count);
 
     exprtk_value_t ret = exprtk_val_num(0);
     if (tokens && index < count) {
@@ -273,7 +292,7 @@ static exprtk_value_t fn_tokenize(size_t argc, exprtk_value_t *args, exprtk_env_
             ret = exprtk_val_str(tstr_v_from_buf(buf, len));
         }
     }
-    if (tokens) mod_free_tokens(tokens, count);
+    if (tokens) mod_free_tokens(arena, tokens, count);
     return ret;
 }
 
@@ -288,7 +307,7 @@ static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *
     char *delim = exprtk_arena_cstr(arena, args[1].data.string);
 
     size_t count = 0;
-    char **tokens = mod_tokenize(input, args[0].data.string.len, delim, true, &count);
+    char **tokens = mod_tokenize(arena, input, args[0].data.string.len, delim, true, &count);
 
     exprtk_value_t ret = exprtk_val_num(0);
     if (tokens && count > 0) {
@@ -299,7 +318,7 @@ static exprtk_value_t fn_split(size_t argc, exprtk_value_t *args, exprtk_env_t *
             ret = exprtk_val_vec(vec, count);
         }
     }
-    if (tokens) mod_free_tokens(tokens, count);
+    if (tokens) mod_free_tokens(arena, tokens, count);
     return ret;
 }
 
@@ -314,8 +333,8 @@ static exprtk_value_t fn_token_count(size_t argc, exprtk_value_t *args, exprtk_e
     char *delim = exprtk_arena_cstr(arena, args[1].data.string);
 
     size_t count = 0;
-    char **tokens = mod_tokenize(input, args[0].data.string.len, delim, true, &count);
-    if (tokens) mod_free_tokens(tokens, count);
+    char **tokens = mod_tokenize(arena, input, args[0].data.string.len, delim, true, &count);
+    if (tokens) mod_free_tokens(arena, tokens, count);
     return exprtk_val_num((double)count);
 }
 

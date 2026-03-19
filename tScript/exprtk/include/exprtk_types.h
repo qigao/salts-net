@@ -211,6 +211,7 @@ typedef struct exprtk_value_s {
       struct exprtk_value_s *items;
       size_t count;
       size_t capacity;
+      int heap_owned;
     } list;
     struct {
       exprtk_node_t **arg_params; // parameter nodes

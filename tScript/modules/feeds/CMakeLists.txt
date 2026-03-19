@@ -6,7 +6,7 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
 
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES}) 
 
-target_link_libraries(${TARGET_NAME} PUBLIC exprtk TurboNet::Parser)
+target_link_libraries(${TARGET_NAME} PUBLIC exprtk TurboNet::Parser http_client)
 
 target_include_directories(${TARGET_NAME}
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

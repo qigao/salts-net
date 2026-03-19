@@ -8,4 +8,6 @@ add_custom_command(
   TARGET test_feeds_module
   POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:feeds_plugin>
+          $<TARGET_FILE_DIR:test_feeds_module>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:http_client>
           $<TARGET_FILE_DIR:test_feeds_module>)

@@ -7,6 +7,7 @@
 
 #include "turbo_buffer.h"
 #include "exprtk.h"
+#include "http_client.h"
 #include "turbo_parser.h"
 
 #include <stdio.h>
@@ -18,6 +19,7 @@
 typedef struct feeds_ctx_s {
   turbo_csv_stream_processor_t *csv_stream_handles[FEEDS_MAX_HANDLES];
   turbo_csv_doc_t *csv_doc_handles[FEEDS_MAX_HANDLES];
+  http_client_t *client;
   char error_msg[256];
 } feeds_ctx_t;
 
@@ -47,6 +49,25 @@ static inline char *feeds_arena_cstr(mem_pool_t *a, tstr_v sv) {
     buf[sv.len] = '\0';
   }
   return buf;
+}
+
+static inline http_client_t *feeds_ctx_ensure_client(feeds_ctx_t *ctx) {
+  if (!ctx)
+    return NULL;
+
+  if (!ctx->client) {
+    ctx->client = http_client_create(NULL);
+    if (ctx->client) {
+      http_client_follow_redirects(ctx->client, 1);
+      http_client_set_max_redirects(ctx->client, 5);
+      http_client_enable_compression(ctx->client, 1);
+      http_client_set_connect_timeout(ctx->client, 5000);
+      http_client_set_timeout(ctx->client, 10000);
+      http_client_set_user_agent(ctx->client, "TurboScript-Feeds/1.0");
+    }
+  }
+
+  return ctx->client;
 }
 
 void *feeds_ctx_create(void);

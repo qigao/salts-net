@@ -368,6 +368,39 @@ suite("tbe_parser") {
       node_free(root);
     }
 
+    it("should parse dynamic list set and map container metadata") {
+      const char *schema = "message Containers { list<uint32> values; set<string> tags; map<string,int32> attrs; }";
+      Node *root = create_node_map("root");
+      int rc = parse_schema(schema, strlen(schema), root, NULL);
+
+      check_int_eq(rc, 0);
+
+      Node *messages = find_child(root, "messages");
+      Node *containers = messages->data.list.items[0];
+      Node *fields = find_child(containers, "fields");
+      Node *values = fields->data.list.items[0];
+      Node *tags = fields->data.list.items[1];
+      Node *attrs = fields->data.list.items[2];
+
+      check_str_eq(find_child(values, "collection_kind")->data.string_val, "list");
+      check_str_eq(find_child(values, "inner_type")->data.string_val, "uint32");
+      check_str_eq(find_child(values, "is_variable_size")->data.string_val, "1");
+
+      check_str_eq(find_child(tags, "collection_kind")->data.string_val, "set");
+      check_str_eq(find_child(tags, "inner_type")->data.string_val, "string");
+      check_str_eq(find_child(tags, "is_set")->data.string_val, "1");
+      check_str_eq(find_child(tags, "is_variable_size")->data.string_val, "1");
+
+      check_str_eq(find_child(attrs, "collection_kind")->data.string_val, "map");
+      check_str_eq(find_child(attrs, "key_type")->data.string_val, "string");
+      check_str_eq(find_child(attrs, "value_type")->data.string_val, "int32");
+      check_str_eq(find_child(attrs, "inner_type")->data.string_val, "int32");
+      check_str_eq(find_child(attrs, "is_map")->data.string_val, "1");
+      check_str_eq(find_child(attrs, "is_variable_size")->data.string_val, "1");
+
+      node_free(root);
+    }
+
     it("should not mutate root on parse failure") {
       const char *schema = "message Bad { int32 missing_semi }";
       Node *root = create_node_map("root");

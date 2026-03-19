@@ -8,6 +8,7 @@
 typedef struct validate_ctx_s {
     exprtk_parse_ctx_t *p_ctx;
     exprtk_env_t *env;
+    mem_pool_t scratch;
     struct scope_s {
         char **vars;
         size_t count;
@@ -17,7 +18,8 @@ typedef struct validate_ctx_s {
 } validate_ctx_t;
 
 static void scope_push(validate_ctx_t *ctx) {
-    struct scope_s *s = (struct scope_s *)malloc(sizeof(struct scope_s));
+    struct scope_s *s = MEM_ALLOC(&ctx->scratch, struct scope_s);
+    if (!s) return;
     s->vars = NULL;
     s->count = 0;
     s->cap = 0;
@@ -29,15 +31,12 @@ static void scope_pop(validate_ctx_t *ctx) {
     if (!ctx->scope) return;
     struct scope_s *s = ctx->scope;
     ctx->scope = s->parent;
-    for (size_t i = 0; i < s->count; ++i) free(s->vars[i]);
-    free(s->vars);
-    free(s);
 }
 
-static char *safe_strdup(const char *s) {
+static char *safe_strdup(validate_ctx_t *ctx, const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s);
-    char *res = (char *)malloc(len + 1);
+    char *res = (char *)mem_alloc(&ctx->scratch, len + 1);
     if (res) memcpy(res, s, len + 1);
     return res;
 }
@@ -50,12 +49,15 @@ static void scope_add(validate_ctx_t *ctx, const char *name) {
     }
     if (s->count >= s->cap) {
         size_t new_cap = s->cap == 0 ? 8 : s->cap * 2;
-        char **new_vars = (char **)realloc(s->vars, new_cap * sizeof(char *));
+        char **new_vars = MEM_ALLOC_ARRAY(&ctx->scratch, char *, new_cap);
         if (!new_vars) return;
+        if (s->vars && s->count > 0) {
+            memcpy(new_vars, s->vars, s->count * sizeof(char *));
+        }
         s->vars = new_vars;
         s->cap = new_cap;
     }
-    s->vars[s->count++] = safe_strdup(name);
+    s->vars[s->count++] = safe_strdup(ctx, name);
 }
 
 static bool scope_has(validate_ctx_t *ctx, const char *name) {
@@ -310,9 +312,16 @@ int exprtk_validate(exprtk_node_t *root, exprtk_env_t *env, char *error_msg, siz
     memset(&p_ctx, 0, sizeof(p_ctx));
     
     validate_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
     ctx.p_ctx = &p_ctx;
     ctx.env = env;
     ctx.scope = NULL;
+    if (mem_init(&ctx.scratch, 4096) != 0) {
+        if (error_msg && msg_len > 0) {
+            snprintf(error_msg, msg_len, "Validation error: out of memory");
+        }
+        return 1;
+    }
     
     scope_push(&ctx);
     validate_node(&ctx, root);
@@ -325,7 +334,9 @@ int exprtk_validate(exprtk_node_t *root, exprtk_env_t *env, char *error_msg, siz
             memcpy(error_msg, p_ctx.error_msg, copy_len);
             error_msg[copy_len] = '\0';
         }
+        mem_destroy(&ctx.scratch);
         return 1;
     }
+    mem_destroy(&ctx.scratch);
     return 0;
 }

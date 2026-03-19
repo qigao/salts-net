@@ -13,39 +13,40 @@
 #include "turbo_script.h"
 
 typedef struct imported_module_s {
-    char *name;
-    exprtk_node_t *expr;
-    struct imported_module_s *next;
+  char *name;
+  exprtk_node_t *expr;
+  struct imported_module_s *next;
 } imported_module_t;
 
 #define TS_MAX_PLUGINS 16
+#define TS_JIT_CACHE_SIZE 64
 
 struct turbo_script_ctx_s {
-    exprtk_env_t env;
-    exprtk_node_t *expr;
-    char *expr_source;
-    imported_module_t *imports;
-    mem_pool_t scratch_arena;
-    char *current_script_dir;
-    char error_msg[256];
-    turbo_script_error_code_t error_code;
+  exprtk_env_t env;
+  exprtk_node_t *expr;
+  char *expr_source;
+  imported_module_t *imports;
+  mem_pool_t scratch_arena;
+  char *current_script_dir;
+  char error_msg[256];
+  turbo_script_error_code_t error_code;
 
-    /* Plugin handles */
-    ts_plugin_handle_t *plugins[TS_MAX_PLUGINS];
-    char               *loaded_names[TS_MAX_PLUGINS];
-    size_t              plugin_count;
+  /* Plugin handles */
+  ts_plugin_handle_t *plugins[TS_MAX_PLUGINS];
+  char *loaded_names[TS_MAX_PLUGINS];
+  size_t plugin_count;
 
-    /* MIR JIT compiler context */
-    MIR_context_t mir_ctx;
-    void *mir_last_fn;       /* Phase 15: cached JIT function pointer */
-    int mir_gen_initialized;  /* Phase 15: gen_init called once */
+  /* MIR JIT compiler context */
+  MIR_context_t mir_ctx;
+  void *mir_last_fn;      /* Phase 15: cached JIT function pointer */
+  int mir_gen_initialized; /* Phase 15: gen_init called once */
 
-    /* Phase 18: compile cache — skip parse/compile for repeated scripts */
-    #define TS_JIT_CACHE_SIZE 64
-    struct {
-        uint64_t hash;
-        void    *fn_ptr;
-    } jit_cache[TS_JIT_CACHE_SIZE];};
+  /* Phase 18: compile cache — skip parse/compile for repeated scripts */
+  struct {
+    uint64_t hash;
+    void *fn_ptr;
+  } jit_cache[TS_JIT_CACHE_SIZE];
+};
 
 struct turbo_script_compiled_s {
     exprtk_node_t *ast;

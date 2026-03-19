@@ -1266,6 +1266,21 @@ suite("exprtk_grammar") {
             exprtk_free(root);
             exprtk_env_free(&env);
         }
+
+        it("should allow mutating a reversed list result") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+            const char *input =
+                "l = list(1, 2, 3); "
+                "rev = l.reverse(); "
+                "rev.push(4); "
+                "rev.length() + rev[0] * 10 + rev[3]";
+            exprtk_node_t *root = exprtk_parse(input, 0);
+            check_not_null(root);
+            check_float_eq(exprtk_eval(root, &env).data.number, 38.0, 0.001);
+            exprtk_free(root);
+            exprtk_env_free(&env);
+        }
     }
 
     group("Error Reporting") {
@@ -1376,6 +1391,21 @@ suite("exprtk_grammar") {
             exprtk_node_t *root = exprtk_parse(input, 0);
             check_not_null(root);
             check_float_eq(exprtk_eval(root, &env).data.number, 30.0, 0.001);
+            exprtk_free(root);
+            exprtk_env_free(&env);
+        }
+
+        it("should allow mutating map keys result") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+            const char *input =
+                "m = map{a: 1, b: 2}; "
+                "k = m.keys(); "
+                "k.push(\"c\"); "
+                "k.length()";
+            exprtk_node_t *root = exprtk_parse(input, 0);
+            check_not_null(root);
+            check_float_eq(exprtk_eval(root, &env).data.number, 3.0, 0.001);
             exprtk_free(root);
             exprtk_env_free(&env);
         }

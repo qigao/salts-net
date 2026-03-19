@@ -39,6 +39,24 @@ typedef struct DataBindValueApi {
     void   (*set_field_double)(Value* obj, const char* name, double val);
     void   (*set_field_string)(Value* obj, const char* name, const char* val);
     void   (*set_field_bytes)(Value* obj, const char* name, const uint8_t* data, size_t len);
+    Value* (*create_list)(void);
+    void   (*add_list_item_int)(Value* list, int32_t val);
+    void   (*add_list_item_int64)(Value* list, int64_t val);
+    void   (*add_list_item_double)(Value* list, double val);
+    void   (*add_list_item_string)(Value* list, const char* val);
+    void   (*add_list_item_object)(Value* list, Value* obj);
+    void   (*set_field_list)(Value* obj, const char* name, Value* list);
+    void   (*set_field_object)(Value* obj, const char* name, Value* child);
+    Value* (*create_set)(void);
+    void   (*add_set_item_int)(Value* set, int32_t val);
+    void   (*add_set_item_double)(Value* set, double val);
+    void   (*add_set_item_string)(Value* set, const char* val);
+    void   (*set_field_set)(Value* obj, const char* name, Value* set);
+    Value* (*create_map)(void);
+    void   (*add_map_entry_string_string)(Value* map, const char* key, const char* val);
+    void   (*add_map_entry_string_int)(Value* map, const char* key, int32_t val);
+    void   (*add_map_entry_string_double)(Value* map, const char* key, double val);
+    void   (*set_field_map)(Value* obj, const char* name, Value* map);
 } DataBindValueApi;
 
 /**

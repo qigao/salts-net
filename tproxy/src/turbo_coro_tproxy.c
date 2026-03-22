@@ -7,17 +7,40 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <uv.h>
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
 #include "tlog.h"
-#include "stats.h"
+#if defined(__has_include)
+#  if __has_include("stats.h")
+#    include "stats.h"
+#  else
+#    define TURBO_STATS_INC(name) ((void)(name))
+#    define TURBO_STATS_ADD(name, value) ((void)(name), (void)(value))
+static void turbo_stats_gauge_add(const char *name, int delta) {
+    (void)name;
+    (void)delta;
+}
+#  endif
+#else
+#  include "stats.h"
+#endif
 #include "turbo_parser.h"
+#include <stdatomic.h>
 
 struct coro_tproxy_s {
     coro_socket_t **servers;
     size_t server_count;
     coro_tproxy_config_t config;
     coro_context_t *ctx;
+    coro_thread_pool_t *thread_pool;
+    int owns_thread_pool;
     coro_rule_engine_t *rule_engine;
+    atomic_int stop_health_checks;
+    atomic_int health_loop_done;
+    atomic_int active_health_checks;
 };
 
 // Base64 helper (simplified decode for HTTP Basic Auth)
@@ -83,6 +106,143 @@ struct socks5_udp_ctx {
     int client_addr_known;
     int *alive_flag;
 };
+
+typedef struct {
+    char scheme[8];
+    char host[256];
+    char path[256];
+    int port;
+} parsed_url_t;
+
+static int parse_url_target(const char *url, parsed_url_t *out) {
+    const char *scheme_sep;
+    const char *host_start;
+    const char *path_start;
+    const char *port_sep;
+    size_t host_len;
+
+    if (!url || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    strcpy(out->scheme, "tcp");
+    strcpy(out->path, "/");
+
+    scheme_sep = strstr(url, "://");
+    host_start = url;
+    if (scheme_sep) {
+        size_t scheme_len = (size_t)(scheme_sep - url);
+        if (scheme_len >= sizeof(out->scheme)) return -1;
+        memcpy(out->scheme, url, scheme_len);
+        out->scheme[scheme_len] = '\0';
+        host_start = scheme_sep + 3;
+    }
+
+    path_start = strchr(host_start, '/');
+    if (path_start) {
+        size_t path_len = strlen(path_start);
+        if (path_len >= sizeof(out->path)) path_len = sizeof(out->path) - 1;
+        memcpy(out->path, path_start, path_len);
+        out->path[path_len] = '\0';
+    }
+
+    if (*host_start == '[') {
+        const char *host_end = strchr(host_start, ']');
+        if (!host_end) return -1;
+        host_len = (size_t)(host_end - host_start - 1);
+        if (host_len >= sizeof(out->host)) return -1;
+        memcpy(out->host, host_start + 1, host_len);
+        out->host[host_len] = '\0';
+        port_sep = (host_end[1] == ':') ? host_end + 1 : NULL;
+    } else {
+        const char *host_end = path_start ? path_start : (host_start + strlen(host_start));
+        const char *last_colon = NULL;
+        for (const char *p = host_start; p < host_end; p++) {
+            if (*p == ':') last_colon = p;
+        }
+        port_sep = last_colon;
+        host_len = (size_t)((port_sep ? port_sep : host_end) - host_start);
+        if (host_len == 0 || host_len >= sizeof(out->host)) return -1;
+        memcpy(out->host, host_start, host_len);
+        out->host[host_len] = '\0';
+    }
+
+    if (port_sep && port_sep[0] == ':') {
+        out->port = atoi(port_sep + 1);
+    } else if (strcmp(out->scheme, "wss") == 0) {
+        out->port = 443;
+    } else if (strcmp(out->scheme, "ws") == 0) {
+        out->port = 80;
+    }
+
+    return (out->host[0] != '\0') ? 0 : -1;
+}
+
+static coro_socket_type_t socket_type_for_url(const char *url) {
+    parsed_url_t parsed;
+    if (parse_url_target(url, &parsed) != 0) {
+        return CORO_SOCKET_TCP_V4;
+    }
+    if (strcmp(parsed.scheme, "udp") == 0) {
+        return CORO_SOCKET_UDP_V4;
+    }
+    return CORO_SOCKET_TCP_V4;
+}
+
+static int connect_socket_to_url(coro_socket_t *socket, const char *url) {
+    parsed_url_t parsed;
+
+    if (!socket || parse_url_target(url, &parsed) != 0) {
+        return TURBO_EINVAL;
+    }
+
+    if (strcmp(parsed.scheme, "ws") == 0 || strcmp(parsed.scheme, "wss") == 0) {
+        return coro_socket_connect_ws(socket, parsed.host, parsed.port, parsed.path,
+                                      strcmp(parsed.scheme, "wss") == 0);
+    }
+
+    return coro_socket_connect(socket, parsed.host, parsed.port);
+}
+
+static int bind_udp_socket_url(coro_socket_t *socket, const char *url) {
+    parsed_url_t parsed;
+    struct sockaddr_in addr4;
+    struct sockaddr_in6 addr6;
+
+    if (!socket || parse_url_target(url, &parsed) != 0) {
+        return TURBO_EINVAL;
+    }
+
+    if (strchr(parsed.host, ':') != NULL) {
+        memset(&addr6, 0, sizeof(addr6));
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port = htons((uint16_t)parsed.port);
+        if (inet_pton(AF_INET6, parsed.host, &addr6.sin6_addr) != 1) return TURBO_EINVAL;
+        return coro_socket_bind(socket, (const struct sockaddr *)&addr6);
+    }
+
+    memset(&addr4, 0, sizeof(addr4));
+    addr4.sin_family = AF_INET;
+    addr4.sin_port = htons((uint16_t)parsed.port);
+    if (inet_pton(AF_INET, parsed.host, &addr4.sin_addr) != 1) return TURBO_EINVAL;
+    return coro_socket_bind(socket, (const struct sockaddr *)&addr4);
+}
+
+static void proxy_wait_aux_work(coro_tproxy_t *proxy) {
+    uint64_t deadline = turbo_hrtime() + 6000000000ULL;
+
+    while (turbo_hrtime() < deadline) {
+        int done = atomic_load_explicit(&proxy->health_loop_done, memory_order_acquire);
+        int active = atomic_load_explicit(&proxy->active_health_checks, memory_order_acquire);
+        if (done && active == 0) {
+            return;
+        }
+
+        if (proxy->thread_pool == NULL) {
+            coro_context_run(proxy->ctx, TURBO_RUN_NOWAIT);
+        } else {
+            turbo_sleep_ms(10);
+        }
+    }
+}
 
 static void udp_associate_pump_coro(coro_t *co, void *arg) {
     (void)co;
@@ -188,22 +348,17 @@ static void get_client_ip(coro_socket_t *client, char *ip_buf, size_t buf_len) {
     if (!client) return;
     
     struct sockaddr_storage addr;
-    int addr_len = sizeof(addr);
-    
-    if (client->transport == TURBO_TCP && client->handle.tcp) {
-        if (uv_tcp_getpeername(&client->handle.tcp->handle, (struct sockaddr*)&addr, &addr_len) == 0) {
-            if (addr.ss_family == AF_INET) {
-                uv_ip4_name((struct sockaddr_in*)&addr, ip_buf, buf_len);
-            } else if (addr.ss_family == AF_INET6) {
-                uv_ip6_name((struct sockaddr_in6*)&addr, ip_buf, buf_len);
-            }
+    if (client->handle.stream &&
+        turbo_stream_get_peer_addr(client->handle.stream, &addr) == 0) {
+        if (addr.ss_family == AF_INET) {
+            inet_ntop(AF_INET, &((struct sockaddr_in *)&addr)->sin_addr, ip_buf, (socklen_t)buf_len);
+        } else if (addr.ss_family == AF_INET6) {
+            inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&addr)->sin6_addr, ip_buf, (socklen_t)buf_len);
         }
-    } else if (client->transport == TURBO_UDP) {
-        if (client->peer_addr.ss_family == AF_INET) {
-            uv_ip4_name((struct sockaddr_in*)&client->peer_addr, ip_buf, buf_len);
-        } else if (client->peer_addr.ss_family == AF_INET6) {
-            uv_ip6_name((struct sockaddr_in6*)&client->peer_addr, ip_buf, buf_len);
-        }
+    } else if (client->peer_addr.ss_family == AF_INET) {
+        inet_ntop(AF_INET, &((struct sockaddr_in *)&client->peer_addr)->sin_addr, ip_buf, (socklen_t)buf_len);
+    } else if (client->peer_addr.ss_family == AF_INET6) {
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&client->peer_addr)->sin6_addr, ip_buf, (socklen_t)buf_len);
     }
 }
 
@@ -280,8 +435,9 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
     // If we have a backend URL (like `udp://remote:9000` or `kcp://`), forward it!
     if (client->transport == TURBO_UDP) {
         if (proxy->config.backend_url) {
-            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-            if (!upstream || coro_socket_connect(upstream, proxy->config.backend_url) != 0) {
+            coro_socket_t *upstream =
+                coro_socket_create(ctx, socket_type_for_url(proxy->config.backend_url));
+            if (!upstream || connect_socket_to_url(upstream, proxy->config.backend_url) != 0) {
                 if (upstream) coro_socket_destroy(upstream);
                 coro_socket_free_recv(data);
                 return;
@@ -328,20 +484,25 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
         } else if (data[1] == 0x03) {
             // UDP ASSOCIATE
             TLOG_INFO("[TProxy] Request: UDP ASSOCIATE");
-            coro_socket_t *udp_relay = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-            if (coro_socket_connect(udp_relay, "udp://0.0.0.0:0") != 0) {
+            coro_socket_t *udp_relay = coro_socket_create(ctx, CORO_SOCKET_UDP_V4);
+            if (!udp_relay || bind_udp_socket_url(udp_relay, "udp://0.0.0.0:0") != 0) {
                 TLOG_ERROR("[TProxy] Failed to bind local UDP relay port");
                 char fail_resp[] = {0x05, 0x01, 0x00, 0x01, 0,0,0,0, 0,0};
                 coro_socket_send(client, fail_resp, 10);
-                coro_socket_destroy(udp_relay);
+                if (udp_relay) coro_socket_destroy(udp_relay);
                 coro_socket_free_recv(data);
                 return;
             }
 
             struct sockaddr_storage bind_addr;
-            int addr_len = sizeof(bind_addr);
-            uv_udp_getsockname(udp_relay->udp.handle, (struct sockaddr*)&bind_addr, &addr_len);
-            int bound_port = ((struct sockaddr_in*)&bind_addr)->sin_port;
+            int bound_port = 0;
+            if (coro_socket_get_local_address(udp_relay, &bind_addr) == 0) {
+                if (bind_addr.ss_family == AF_INET) {
+                    bound_port = ((struct sockaddr_in*)&bind_addr)->sin_port;
+                } else if (bind_addr.ss_family == AF_INET6) {
+                    bound_port = ((struct sockaddr_in6*)&bind_addr)->sin6_port;
+                }
+            }
             
             char success_resp[] = {0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0};
             // Return 0.0.0.0 for IP (many clients use proxy connection IP anyway), but insert correct port
@@ -443,8 +604,8 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             }
 
             // Open Upstream
-            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-        if (!upstream || coro_socket_connect(upstream, target_url) != 0) {
+            coro_socket_t *upstream = coro_socket_create(ctx, socket_type_for_url(target_url));
+        if (!upstream || connect_socket_to_url(upstream, target_url) != 0) {
             if (upstream) coro_socket_destroy(upstream);
             TLOG_INFO("[TProxy] Dropped SOCKS5 connection from {} (protocol error)", peer_ip);
             char fail_resp[] = {0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0};
@@ -542,8 +703,8 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             
         TLOG_INFO("[TProxy] Connecting to -> {}", target_url);
 
-            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-            if (!upstream || coro_socket_connect(upstream, target_url) != 0) {
+            coro_socket_t *upstream = coro_socket_create(ctx, socket_type_for_url(target_url));
+            if (!upstream || connect_socket_to_url(upstream, target_url) != 0) {
                 if (upstream) coro_socket_destroy(upstream);
                 TLOG_ERROR("[TProxy] HTTP CONNECT to {} failed", target_url);
                 char *fail_resp = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
@@ -562,8 +723,9 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
     } else {
         // Did not match SOCKS5 or HTTP CONNECT. If we have a backend tunnel configured, forward raw.
         if (proxy->config.backend_url) {
-            coro_socket_t *upstream = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-            if (!upstream || coro_socket_connect(upstream, proxy->config.backend_url) != 0) {
+            coro_socket_t *upstream =
+                coro_socket_create(ctx, socket_type_for_url(proxy->config.backend_url));
+            if (!upstream || connect_socket_to_url(upstream, proxy->config.backend_url) != 0) {
                 if (upstream) coro_socket_destroy(upstream);
                 free(data);
                 return;
@@ -582,46 +744,70 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
 
 typedef struct {
     char *url;
-    coro_tproxy_t *proxy;
+    coro_rule_engine_t *rule_engine;
+    atomic_int *active_checks;
 } health_check_task_t;
 
 static void health_check_worker_coro(coro_t *co, void *arg) {
     (void)co;
     health_check_task_t *task = (health_check_task_t *)arg;
-    coro_socket_t *client = coro_socket_create(task->proxy->ctx, CORO_SOCKET_TCP_V4);
+    coro_context_t *ctx = coro_context_current();
+    coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
     if (!client) {
-        free(task->url); free(task);
+        atomic_fetch_sub_explicit(task->active_checks, 1, memory_order_acq_rel);
+        free(task->url);
+        free(task);
         return;
     }
 
     TLOG_DEBUG("[TProxy] Health checking: %s", task->url);
-    uint64_t start = uv_hrtime();
+    uint64_t start = turbo_hrtime();
     coro_socket_set_timeout(client, 5000); 
-    int r = coro_socket_connect(client, task->url);
-    uint64_t end = uv_hrtime();
+    int r = connect_socket_to_url(client, task->url);
+    uint64_t end = turbo_hrtime();
 
     bool alive = (r == 0);
     uint64_t latency = (end - start) / 1000000;
 
-    if (task->proxy->rule_engine) {
-        coro_rule_update_health(task->proxy->rule_engine, task->url, alive, latency);
+    if (task->rule_engine) {
+        coro_rule_update_health(task->rule_engine, task->url, alive, latency);
     }
 
     coro_socket_destroy(client);
     free(task->url);
+    atomic_fetch_sub_explicit(task->active_checks, 1, memory_order_acq_rel);
     free(task);
 }
 
 static void on_group_health_check(const char *url, void *user_data) {
     coro_tproxy_t *proxy = (coro_tproxy_t *)user_data;
-    if (!proxy || !proxy->ctx) return;
+    int rc;
+
+    if (!proxy || !proxy->ctx || !proxy->rule_engine) return;
+    if (atomic_load_explicit(&proxy->stop_health_checks, memory_order_acquire)) return;
 
     health_check_task_t *task = calloc(1, sizeof(health_check_task_t));
+    if (!task) return;
     task->url = strdup(url);
-    task->proxy = proxy;
+    task->rule_engine = proxy->rule_engine;
+    task->active_checks = &proxy->active_health_checks;
+    if (!task->url) {
+        free(task);
+        return;
+    }
 
-    coro_t *co = coro_create(health_check_worker_coro, task, NULL);
-    coro_resume(co);
+    atomic_fetch_add_explicit(&proxy->active_health_checks, 1, memory_order_acq_rel);
+    if (proxy->thread_pool) {
+        rc = coro_thread_pool_spawn(proxy->thread_pool, health_check_worker_coro, task);
+    } else {
+        rc = coro_context_spawn(proxy->ctx, health_check_worker_coro, task);
+    }
+
+    if (rc != 0) {
+        atomic_fetch_sub_explicit(&proxy->active_health_checks, 1, memory_order_acq_rel);
+        free(task->url);
+        free(task);
+    }
 }
 
 static void proxy_health_check_coro(coro_t *co, void *arg) {
@@ -633,13 +819,25 @@ static void proxy_health_check_coro(coro_t *co, void *arg) {
         coro_rule_engine_set_health_cb(proxy->rule_engine, on_group_health_check, proxy);
     }
 
-    while (1) {
-        coro_sleep(proxy->ctx, 30000); // Trigger every 30s
+    while (!atomic_load_explicit(&proxy->stop_health_checks, memory_order_acquire)) {
+        for (int i = 0; i < 30; i++) {
+            if (atomic_load_explicit(&proxy->stop_health_checks, memory_order_acquire)) {
+                break;
+            }
+            coro_sleep(coro_context_current(), 1000);
+        }
+
+        if (atomic_load_explicit(&proxy->stop_health_checks, memory_order_acquire)) {
+            break;
+        }
+
         if (proxy->rule_engine) {
             TLOG_INFO("[TProxy] Triggering periodic health checks...");
             coro_rule_engine_trigger_health_checks(proxy->rule_engine);
         }
     }
+
+    atomic_store_explicit(&proxy->health_loop_done, 1, memory_order_release);
 }
 
 coro_tproxy_t* coro_tproxy_start(
@@ -652,6 +850,11 @@ coro_tproxy_t* coro_tproxy_start(
     if (!proxy) return NULL;
     
     proxy->ctx = ctx;
+    proxy->thread_pool = config->thread_pool;
+    proxy->owns_thread_pool = 0;
+    atomic_store_explicit(&proxy->stop_health_checks, 0, memory_order_relaxed);
+    atomic_store_explicit(&proxy->health_loop_done, 1, memory_order_relaxed);
+    atomic_store_explicit(&proxy->active_health_checks, 0, memory_order_relaxed);
     proxy->config = *config;
     if (config->backend_url) proxy->config.backend_url = strdup(config->backend_url);
     if (config->listen_urls) proxy->config.listen_urls = strdup(config->listen_urls);
@@ -663,6 +866,12 @@ coro_tproxy_t* coro_tproxy_start(
     // Initialize Rule Engine
     if (config->rule_count > 0 || config->group_count > 0 || config->geoip_file) {
         proxy->rule_engine = coro_rule_engine_create();
+        if (proxy->thread_pool == NULL) {
+            proxy->thread_pool = coro_thread_pool_create(1);
+            if (proxy->thread_pool != NULL) {
+                proxy->owns_thread_pool = 1;
+            }
+        }
         
         // 1. Load Groups (MUST BE BEFORE RULES if rules reference them)
         for (size_t i = 0; i < config->group_count; i++) {
@@ -775,8 +984,17 @@ coro_tproxy_t* coro_tproxy_start(
 
     // Start background health check loop if we have a rule engine
     if (proxy->rule_engine) {
-        coro_t *hco = coro_create(proxy_health_check_coro, proxy, NULL);
-        coro_resume(hco);
+        int rc;
+        atomic_store_explicit(&proxy->health_loop_done, 0, memory_order_release);
+        if (proxy->thread_pool) {
+            rc = coro_thread_pool_spawn(proxy->thread_pool, proxy_health_check_coro, proxy);
+        } else {
+            rc = coro_context_spawn(ctx, proxy_health_check_coro, proxy);
+        }
+
+        if (rc != 0) {
+            atomic_store_explicit(&proxy->health_loop_done, 1, memory_order_release);
+        }
     }
 
     return proxy;
@@ -784,6 +1002,11 @@ coro_tproxy_t* coro_tproxy_start(
 
 void coro_tproxy_destroy(coro_tproxy_t *proxy) {
     if (!proxy) return;
+    atomic_store_explicit(&proxy->stop_health_checks, 1, memory_order_release);
+    if (proxy->rule_engine) {
+        coro_rule_engine_set_health_cb(proxy->rule_engine, NULL, NULL);
+        proxy_wait_aux_work(proxy);
+    }
     if (proxy->servers) {
         for (size_t i = 0; i < proxy->server_count; i++) {
             if (proxy->servers[i]) coro_socket_destroy(proxy->servers[i]);
@@ -799,6 +1022,9 @@ void coro_tproxy_destroy(coro_tproxy_t *proxy) {
     
     if (proxy->rule_engine) {
         coro_rule_engine_destroy(proxy->rule_engine);
+    }
+    if (proxy->owns_thread_pool && proxy->thread_pool) {
+        coro_thread_pool_destroy(proxy->thread_pool);
     }
 
     if (proxy->config.rules) {

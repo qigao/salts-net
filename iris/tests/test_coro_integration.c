@@ -52,10 +52,7 @@ static void integration_test_coro(coro_t* co, void* arg) {
 
     // Create client and connect
     coro_socket_t* client = coro_socket_create(g_ctx, CORO_SOCKET_TCP_V4);
-    char url[64];
-    snprintf(url, sizeof(url), "tcp://127.0.0.1:%d", port);
-
-    if (coro_socket_connect(client, url) != 0) {
+    if (coro_socket_connect(client, "127.0.0.1", port) != 0) {
         coro_socket_destroy(client);
         *test_result = 0;
         return;

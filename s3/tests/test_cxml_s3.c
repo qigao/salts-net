@@ -122,10 +122,9 @@ static void coro_entry2(coro_t *co, void *a) {
 }
 static void run_in_coro2(coro_context_t *ctx, test_fn_t2 fn, void *arg) {
   coro_wrap2_t w = {.fn = fn, .arg = arg, .ctx = ctx};
-  coro_t *co = coro_create(coro_entry2, &w, NULL);
-  coro_resume(co);
+  int rc = coro_context_spawn(ctx, coro_entry2, &w);
+  check_int_eq(rc, 0);
   coro_context_run(ctx, TURBO_RUN_DEFAULT);
-  coro_destroy(co);
 }
 
 spec("cxml S3 XML Parser Tests") {

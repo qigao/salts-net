@@ -25,7 +25,7 @@ static int on_stress_recv(void *handle, const mem_slice_t *slice, void *addr) {
     return 0;
 }
 
-spec("Datagram IOCP") {
+spec("Datagram") {
     it("should create, bind, and destroy datagram") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);

@@ -99,6 +99,8 @@ CXX_C_API void http_client_clear_auth(http_client_t *client);
  * @param password Password for authentication (NULL if no auth)
  *
  * Note: Connection pool is disabled when proxy is configured.
+ * Note: The HTTP client performs its own proxy tunnel handshake and does not
+ *       depend on TProxy.
  */
 CXX_C_API void http_client_set_proxy(http_client_t *client, const char *host, 
                                      uint16_t port, const char *username, 

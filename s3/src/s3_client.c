@@ -1787,9 +1787,9 @@ static void s3_multipart_part_coro(coro_t* co, void* arg) {
         return;
     }
 
-    /* Seek and read */
-    turbo_fs_seek(task->fd, task->file_offset, SEEK_SET);
-    int nread = turbo_fs_read(task->fd, part_data, task->part_size);
+    /* Read the slice directly.
+     * Shared seek state is not safe under parallel multipart uploads. */
+    int nread = turbo_fs_pread(task->fd, part_data, task->part_size, task->file_offset);
     if (nread < 0) {
         free(part_data);
         task->result.error = s3_error_make(-1, "Failed to read part");

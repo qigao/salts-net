@@ -1,10 +1,10 @@
 # TurboNet CoroNet
 
-High-performance networking core library providing essential network protocols and utilities with a simple, URL-based API.
+High-performance networking core library providing essential network protocols and utilities with direct host/port socket APIs plus URL helpers for server endpoints.
 
 ## Features
 
-- **URL-Based API**: Simple, intuitive connection strings (e.g., `tcp://host:port`, `pipe://name`)
+- **Direct Socket API**: Simple host/port connects plus dedicated helpers for WebSocket and pipes
 - **Coroutine I/O**: Native cross-platform I/O via IOCP (Windows), epoll (Linux), kqueue (macOS)
 - **Core Design**: Synchronous-style code with coro execution via coroutines
 - **Connection Pool**: Coroutine-aware connection pooling for high-concurrency workloads
@@ -28,8 +28,7 @@ void network_task(coro_t *co, void *arg) {
   coro_socket_t *socket = coro_socket_create_tcpv4(ctx);
 
   // Connect (suspends coroutine until done)
-  // Supports tcp://, tls://, ws://, wss://, kcp://, pipe://
-  if (coro_socket_connect(socket, "tcp://example.com:8080") == 0) {
+  if (coro_socket_connect(socket, "example.com", 8080) == 0) {
       // Send and receive (each call suspends until complete)
       coro_socket_send(socket, "Hello", 5);
 

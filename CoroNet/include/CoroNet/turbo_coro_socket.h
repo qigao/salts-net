@@ -26,6 +26,7 @@ typedef struct coro_socket_s coro_socket_t;
 typedef enum {
     CORO_SOCKET_TCP_V4,
     CORO_SOCKET_TCP_V6,
+    CORO_SOCKET_TLS,
     CORO_SOCKET_UDP_V4,
     CORO_SOCKET_UDP_V6,
     CORO_SOCKET_KCP,

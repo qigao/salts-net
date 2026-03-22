@@ -2,9 +2,9 @@
 #include "http_client.h"
 #include "http_client_internal_h.h"
 #include "http_common_internal.h"
+#include "cookie_parser.h"
 #include <json_parser.h>
 #include "turbo_parser.h"
-#include <CoroNet/turbo_socks5.h>
 // clang-format on
 #include "base64_utils.h"
 #include "turbo_str.h"
@@ -25,6 +25,28 @@
 #include <turbo_fs.h>
 #include <zstd.h>
 #include "tlog.h"
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
+
+#define HTTP_SOCKS5_VERSION 0x05
+#define HTTP_SOCKS5_AUTH_NONE 0x00
+#define HTTP_SOCKS5_AUTH_USERPASS 0x02
+#define HTTP_SOCKS5_AUTH_FAILED 0xFF
+#define HTTP_SOCKS5_CMD_CONNECT 0x01
+#define HTTP_SOCKS5_ATYP_IPV4 0x01
+#define HTTP_SOCKS5_ATYP_DOMAIN 0x03
+#define HTTP_SOCKS5_ATYP_IPV6 0x04
+#define HTTP_SOCKS5_REP_SUCCESS 0x00
+
+typedef struct {
+  coro_socket_t *socket;
+  unsigned char buf[512];
+  size_t off;
+  size_t len;
+} http_socks5_reader_t;
 
 /* ── Send helpers ─────────────────────────────────────────────────── */
 
@@ -80,6 +102,219 @@ static void reset_response(http_response_t *r) {
   r->error = NULL;
   r->error_code = HTTP_ERROR_NONE;
   r->status_code = 0;
+}
+
+static int http_proxy_send_all(coro_socket_t *socket, const unsigned char *buf, size_t len) {
+  return coro_socket_send(socket, (const char *)buf, len);
+}
+
+static int http_socks5_reader_fill(http_socks5_reader_t *reader) {
+  char *chunk = NULL;
+  size_t chunk_len = 0;
+  int rc;
+
+  if (reader->off > 0 && reader->off < reader->len) {
+    memmove(reader->buf, reader->buf + reader->off, reader->len - reader->off);
+    reader->len -= reader->off;
+    reader->off = 0;
+  } else if (reader->off >= reader->len) {
+    reader->off = 0;
+    reader->len = 0;
+  }
+
+  rc = coro_socket_recv(reader->socket, &chunk, &chunk_len);
+  if (rc != 0)
+    return rc;
+  if (chunk == NULL || chunk_len == 0)
+    return 0;
+  if (reader->len + chunk_len > sizeof(reader->buf)) {
+    coro_socket_free_recv(chunk);
+    return TURBO_EPROTO;
+  }
+
+  memcpy(reader->buf + reader->len, chunk, chunk_len);
+  reader->len += chunk_len;
+  coro_socket_free_recv(chunk);
+  return 0;
+}
+
+static int http_socks5_read_exact(http_socks5_reader_t *reader, unsigned char *out, size_t want) {
+  while ((reader->len - reader->off) < want) {
+    int rc = http_socks5_reader_fill(reader);
+    if (rc != 0)
+      return rc;
+    if ((reader->len - reader->off) == 0)
+      continue;
+  }
+
+  memcpy(out, reader->buf + reader->off, want);
+  reader->off += want;
+  return 0;
+}
+
+static int http_socks5_send_method_negotiation(coro_socket_t *socket, int auth_required) {
+  unsigned char req[4];
+  size_t req_len = auth_required ? 4 : 3;
+
+  req[0] = HTTP_SOCKS5_VERSION;
+  req[1] = auth_required ? 2 : 1;
+  req[2] = HTTP_SOCKS5_AUTH_NONE;
+  req[3] = HTTP_SOCKS5_AUTH_USERPASS;
+  return http_proxy_send_all(socket, req, req_len);
+}
+
+static int http_socks5_recv_method_reply(http_socks5_reader_t *reader, int auth_required) {
+  unsigned char resp[2];
+  int rc = http_socks5_read_exact(reader, resp, sizeof(resp));
+
+  if (rc != 0)
+    return rc;
+  if (resp[0] != HTTP_SOCKS5_VERSION)
+    return TURBO_EPROTO;
+  if (resp[1] == HTTP_SOCKS5_AUTH_FAILED)
+    return TURBO_EPERM;
+  if (auth_required && resp[1] != HTTP_SOCKS5_AUTH_USERPASS)
+    return TURBO_EPERM;
+  if (!auth_required && resp[1] != HTTP_SOCKS5_AUTH_NONE &&
+      resp[1] != HTTP_SOCKS5_AUTH_USERPASS) {
+    return TURBO_EPERM;
+  }
+  return (int)resp[1];
+}
+
+static int http_socks5_do_userpass_auth(http_socks5_reader_t *reader,
+                                        const http_proxy_config_t *config) {
+  unsigned char req[2 + 255 + 255];
+  unsigned char resp[2];
+  size_t ulen = strnlen(config->username, sizeof(config->username));
+  size_t plen = strnlen(config->password, sizeof(config->password));
+  size_t pos = 0;
+  int rc;
+
+  if (ulen == 0 || plen == 0 || ulen > 255 || plen > 255)
+    return TURBO_EINVAL;
+
+  req[pos++] = 0x01;
+  req[pos++] = (unsigned char)ulen;
+  memcpy(req + pos, config->username, ulen);
+  pos += ulen;
+  req[pos++] = (unsigned char)plen;
+  memcpy(req + pos, config->password, plen);
+  pos += plen;
+
+  rc = http_proxy_send_all(reader->socket, req, pos);
+  if (rc != 0)
+    return rc;
+
+  rc = http_socks5_read_exact(reader, resp, sizeof(resp));
+  if (rc != 0)
+    return rc;
+  if (resp[0] != 0x01 || resp[1] != 0x00)
+    return TURBO_EPERM;
+  return 0;
+}
+
+static int http_socks5_send_connect_request(coro_socket_t *socket, const char *target_host,
+                                            uint16_t target_port) {
+  unsigned char req[4 + 1 + 255 + 2];
+  unsigned char ipbuf[16];
+  size_t host_len = strnlen(target_host, 255);
+  size_t pos = 0;
+
+  req[pos++] = HTTP_SOCKS5_VERSION;
+  req[pos++] = HTTP_SOCKS5_CMD_CONNECT;
+  req[pos++] = 0x00;
+
+  if (inet_pton(AF_INET, target_host, ipbuf) == 1) {
+    req[pos++] = HTTP_SOCKS5_ATYP_IPV4;
+    memcpy(req + pos, ipbuf, 4);
+    pos += 4;
+  } else if (inet_pton(AF_INET6, target_host, ipbuf) == 1) {
+    req[pos++] = HTTP_SOCKS5_ATYP_IPV6;
+    memcpy(req + pos, ipbuf, 16);
+    pos += 16;
+  } else {
+    if (host_len == 0 || host_len > 255)
+      return TURBO_EINVAL;
+    req[pos++] = HTTP_SOCKS5_ATYP_DOMAIN;
+    req[pos++] = (unsigned char)host_len;
+    memcpy(req + pos, target_host, host_len);
+    pos += host_len;
+  }
+
+  req[pos++] = (unsigned char)((target_port >> 8) & 0xFF);
+  req[pos++] = (unsigned char)(target_port & 0xFF);
+  return http_proxy_send_all(socket, req, pos);
+}
+
+static int http_socks5_recv_connect_reply(http_socks5_reader_t *reader) {
+  unsigned char head[4];
+  unsigned char addr[256];
+  size_t addr_len;
+  int rc = http_socks5_read_exact(reader, head, sizeof(head));
+
+  if (rc != 0)
+    return rc;
+  if (head[0] != HTTP_SOCKS5_VERSION)
+    return TURBO_EPROTO;
+  if (head[1] != HTTP_SOCKS5_REP_SUCCESS)
+    return TURBO_ECONNREFUSED;
+  if (head[2] != 0x00)
+    return TURBO_EPROTO;
+
+  switch (head[3]) {
+  case HTTP_SOCKS5_ATYP_IPV4:
+    addr_len = 4;
+    break;
+  case HTTP_SOCKS5_ATYP_IPV6:
+    addr_len = 16;
+    break;
+  case HTTP_SOCKS5_ATYP_DOMAIN:
+    rc = http_socks5_read_exact(reader, addr, 1);
+    if (rc != 0)
+      return rc;
+    addr_len = addr[0];
+    break;
+  default:
+    return TURBO_EPROTO;
+  }
+
+  return http_socks5_read_exact(reader, addr, addr_len + 2);
+}
+
+static int http_proxy_socks5_connect(coro_socket_t *socket, const http_proxy_config_t *config,
+                                     const char *target_host, uint16_t target_port,
+                                     int timeout_ms) {
+  http_socks5_reader_t reader = {0};
+  int selected_method;
+  int rc;
+
+  if (!socket || !config || !target_host || target_host[0] == '\0')
+    return TURBO_EINVAL;
+
+  reader.socket = socket;
+  if (timeout_ms > 0)
+    coro_socket_set_timeout(socket, (uint64_t)timeout_ms);
+
+  rc = http_socks5_send_method_negotiation(socket, config->auth_required);
+  if (rc != 0)
+    return rc;
+
+  selected_method = http_socks5_recv_method_reply(&reader, config->auth_required);
+  if (selected_method < 0)
+    return selected_method;
+
+  if (selected_method == HTTP_SOCKS5_AUTH_USERPASS) {
+    rc = http_socks5_do_userpass_auth(&reader, config);
+    if (rc != 0)
+      return rc;
+  }
+
+  rc = http_socks5_send_connect_request(socket, target_host, target_port);
+  if (rc != 0)
+    return rc;
+
+  return http_socks5_recv_connect_reply(&reader);
 }
 /* ── URL helpers ──────────────────────────────────────────────────── */
 
@@ -205,7 +440,8 @@ void http_client_destroy(http_client_t *c) {
     node = n;
   }
 
-/* Do not destroy cookie_jar because the client doesn't own it */  /* Run one last time if we own the context to flush uv_close endgames */
+  /* Do not destroy cookie_jar because the client doesn't own it.
+   * Give the owned CoroNet context one final non-blocking drain before teardown. */
   if (c->owns_coro_ctx && c->coro_ctx) {
     coro_context_run(c->coro_ctx, TURBO_RUN_ONCE);
     coro_context_destroy(c->coro_ctx);
@@ -390,7 +626,7 @@ void http_client_set_proxy(http_client_t *c, const char *host, uint16_t port,
     return;
   
   if (!c->proxy_config) {
-    c->proxy_config = (turbo_socks5_config_t *)calloc(1, sizeof(turbo_socks5_config_t));
+    c->proxy_config = (http_proxy_config_t *)calloc(1, sizeof(http_proxy_config_t));
     if (!c->proxy_config)
       return;
   }
@@ -547,13 +783,26 @@ static int on_coro_header_field(llhttp_t *p, const char *at, size_t len) {
   return 0;
 }
 
-static void apply_set_cookie(http_client_t *c, const char *value) {
+static void apply_set_cookie(http_client_t *c, const char *value, const char *host, const char *path) {
   if (!c || !c->cookie_jar || !value)
     return;
   http_cookie_t *cookie_list = parse_set_cookie_rfc(value);
   while (cookie_list) {
     http_cookie_t *next = cookie_list->next;
     cookie_list->next = NULL;
+    
+    /* Apply defaults for domain and path if missing */
+    if (!cookie_list->domain && host) {
+      cookie_list->domain = coro_strdup(host);
+    }
+    if (!cookie_list->path && path) {
+      // RFC 6265 default path is usually "/" or the parent path. 
+      // For simplicity we use the provided path or "/"
+      cookie_list->path = coro_strdup(path);
+    } else if (!cookie_list->path) {
+      cookie_list->path = coro_strdup("/");
+    }
+
     http_cookie_jar_add_parsed(c->cookie_jar, cookie_list);
     cookie_list = next;
   }
@@ -570,7 +819,17 @@ static int on_coro_header_value(llhttp_t *p, const char *at, size_t len) {
       if (val) {
         memcpy(val, at, len);
         val[len] = '\0';
-        apply_set_cookie(ctx->client, val);
+        
+        /* Provide request context for default domain/path */
+        uri_t *uri = NULL;
+        if (turbo_parse_uri((const uint8_t *)ctx->request_url, strlen(ctx->request_url), &uri) == 0) {
+          const char *host = turbo_uri_host(uri);
+          const char *path = turbo_uri_path(uri);
+          apply_set_cookie(ctx->client, val, host, path);
+          turbo_free_uri(&uri);
+        } else {
+          apply_set_cookie(ctx->client, val, NULL, NULL);
+        }
         free(val);
       }
     }
@@ -752,6 +1011,32 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
     req = tstr_cat_fmt(req, "%s: %s\r\n", dh->name, dh->value);
     dh = dh->next;
   }
+  
+  if (c->cookie_jar) {
+    /* Reconstruct absolute URL for cookie matching */
+    char url_buf[1024];
+    const char *s = turbo_uri_scheme(uri);
+    const char *h = turbo_uri_host(uri);
+    int p = turbo_uri_port(uri);
+    const char *path_ptr = turbo_uri_path(uri);
+    const char *query_ptr = turbo_uri_query(uri);
+    
+    if (p != 0 && p != (tstr_casecmp(s, "https") == 0 ? 443 : 80))
+      stbsp_snprintf(url_buf, sizeof(url_buf), "%s://%s:%d%s%s%s", s, h, p, 
+                     path_ptr[0] == '/' ? "" : "/", path_ptr, 
+                     (query_ptr && query_ptr[0]) ? "?" : "", (query_ptr && query_ptr[0]) ? query_ptr : "");
+    else
+      stbsp_snprintf(url_buf, sizeof(url_buf), "%s://%s%s%s%s%s", s, h, 
+                     path_ptr[0] == '/' ? "" : "/", path_ptr,
+                     (query_ptr && query_ptr[0]) ? "?" : "", (query_ptr && query_ptr[0]) ? query_ptr : "");
+
+    char *cookie_header = build_cookie_header_rfc(c->cookie_jar, url_buf);
+    if (cookie_header) {
+      req = tstr_cat(req, cookie_header);
+      req = tstr_cat(req, "\r\n");
+      free(cookie_header);
+    }
+  }
 
   for (int i = 0; i < header_count; i++) {
     req = tstr_cat(req, headers[i]);
@@ -771,7 +1056,7 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
 /* ── Recv loop ────────────────────────────────────────────────────── */
 
 static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_response_t *response,
-                               http_method_t method, http_data_cb data_cb, void *data_cb_ud,
+                               http_method_t method, const char *url, http_data_cb data_cb, void *data_cb_ud,
                                http_progress_cb progress_cb, void *progress_user_data) {
   llhttp_t parser;
   llhttp_settings_t settings;
@@ -783,6 +1068,7 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
   ctx.data_cb_user_data = data_cb_ud;
   ctx.progress_cb = progress_cb;
   ctx.progress_user_data = progress_user_data;
+  ctx.request_url = url;
 
   llhttp_settings_init(&settings);
   settings.on_status = on_coro_status;
@@ -806,7 +1092,12 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
 
     if (r == TURBO_EOF) {
       if (!ctx.message_complete) {
-        set_error(response, HTTP_ERROR_RECEIVE_FAILED, "connection closed before full response");
+        enum llhttp_errno finish_err = llhttp_finish(&parser);
+        if (finish_err == HPE_OK) {
+          ctx.message_complete = 1;
+        } else {
+          set_error(response, HTTP_ERROR_RECEIVE_FAILED, "connection closed before full response");
+        }
       }
       break;
     }
@@ -824,6 +1115,10 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
       set_error(response, HTTP_ERROR_PARSE_FAILED, llhttp_errno_name(err));
       break;
     }
+  }
+
+  if (ctx.response && ctx.response->status_code >= 400) {
+    TLOG_ERROR("Received HTTP {}: body={}", ctx.response->status_code, ctx.response->body ? ctx.response->body : "(empty)");
   }
 
   tstr_free(ctx.raw_headers);
@@ -964,9 +1259,10 @@ static int url_matches_base(http_client_t *c, const char *url) {
  * @brief Prepare transport connection (with or without pool)
  * @return 0 on success, negative error code on failure
  */
-static int prepare_transport(http_client_t *c, const char *url, const char *transport_url,
-                            uri_t *uri, coro_socket_t **out_transport, int *out_use_pool) {
+static int prepare_transport(http_client_t *c, const char *url, const char *host, int port,
+                            int is_tls, uri_t *uri, coro_socket_t **out_transport, int *out_use_pool) {
   UNUSED(uri);
+  UNUSED(is_tls);
   coro_context_t *ctx = coro_context_current();
   if (!ctx)
     ctx = c->coro_ctx;
@@ -974,9 +1270,12 @@ static int prepare_transport(http_client_t *c, const char *url, const char *tran
   *out_use_pool = 0;
   *out_transport = NULL;
 
+  coro_socket_type_t socket_type = is_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
+  
   /* Proxy disables connection pool */
   if (c->proxy_config) {
-    *out_transport = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+    socket_type = CORO_SOCKET_TCP_V4;
+    *out_transport = coro_socket_create(ctx, socket_type);
     if (!*out_transport)
       return HTTP_ERROR_MEMORY_ALLOCATION;
     return 0;
@@ -987,10 +1286,10 @@ static int prepare_transport(http_client_t *c, const char *url, const char *tran
   if (c->conn_pool && c->base_url && url_matches_base(c, url) && in_coro) {
     /* Lazy-open pool on first request */
     if (!coro_pool_is_open(c->conn_pool)) {
-      int rc = coro_pool_open(c->conn_pool, transport_url);
+      int rc = coro_pool_open(c->conn_pool, host, port, socket_type);
       if (rc != 0) {
         /* Pool open failed, fallback to direct socket */
-        *out_transport = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+        *out_transport = coro_socket_create(ctx, socket_type);
         if (!*out_transport)
           return HTTP_ERROR_MEMORY_ALLOCATION;
         return 0;
@@ -1006,7 +1305,7 @@ static int prepare_transport(http_client_t *c, const char *url, const char *tran
   }
 
   /* Fallback: create new socket (used in sync mode to avoid pool handle issues) */
-  *out_transport = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+  *out_transport = coro_socket_create(ctx, socket_type);
   if (!*out_transport)
     return HTTP_ERROR_MEMORY_ALLOCATION;
   return 0;
@@ -1016,26 +1315,47 @@ static int prepare_transport(http_client_t *c, const char *url, const char *tran
  * @brief Connect transport (direct or via proxy)
  */
 static int connect_transport(http_client_t *c, coro_socket_t *transport, 
-                            const char *transport_url, uri_t *uri, int use_pool) {
+                            const char *host, int port, int is_tls, uri_t *uri, int use_pool) {
+  int rc;
+
   if (use_pool)
     return 0; /* Already connected */
 
+  UNUSED(uri);
   coro_socket_set_timeout(transport, (uint64_t)c->connect_timeout_ms);
 
-  /* TODO: Proxy support requires lower-level TCP handle access
-   * Current coro_socket API doesn't expose SOCKS5 handshake.
-   * For now, proxy connections will fail.
-   */
   if (c->proxy_config) {
-    return TURBO_EPROTONOSUPPORT; /* Proxy not yet implemented at coro_socket level */
+    if (is_tls) {
+      TLOG_ERROR("HTTPS over SOCKS5 proxy is not implemented in the current HTTP transport path");
+      return TURBO_ENOTSUP;
+    }
+
+    TLOG_INFO("Connecting to SOCKS5 proxy {}:{} for {}:{}", c->proxy_config->host,
+              c->proxy_config->port, host, port);
+    rc = coro_socket_connect(transport, c->proxy_config->host, c->proxy_config->port);
+    if (rc != 0) {
+      TLOG_ERROR("Connection failed to proxy {}:{}: rc={}", c->proxy_config->host,
+                 c->proxy_config->port, rc);
+      return rc;
+    }
+
+    rc = http_proxy_socks5_connect(
+        transport, c->proxy_config, host, (uint16_t)port,
+        c->proxy_config->timeout_ms > 0 ? c->proxy_config->timeout_ms : c->connect_timeout_ms);
+    if (rc != 0) {
+      TLOG_ERROR("SOCKS5 CONNECT failed for {}:{} via {}:{}: rc={}", host, port,
+                 c->proxy_config->host, c->proxy_config->port, rc);
+      return rc;
+    }
+    return 0;
   }
 
-  TLOG_INFO("Connecting to: {}", transport_url);
-  int rc = coro_socket_connect(transport, transport_url);
+  TLOG_INFO("Connecting to: {}:{}", host, port);
+  rc = coro_socket_connect(transport, host, port);
   if (rc == 0) {
-    TLOG_DEBUG("Connected successfully to {}", transport_url);
+    TLOG_DEBUG("Connected successfully to {}:{}", host, port);
   } else {
-    TLOG_ERROR("Connection failed to {}: rc={}", transport_url, rc);
+    TLOG_ERROR("Connection failed to {}:{}: rc={}", host, port, rc);
   }
   return rc;
 }
@@ -1147,22 +1467,23 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
                                    http_data_cb data_cb, void *data_cb_ud,
                                    http_response_t *resp) {
   uri_t *uri = NULL;
-  char transport_url[512];
-  if (build_transport_url(url, transport_url, sizeof(transport_url), &uri) != 0) {
+  char host[256];
+  int port, is_tls;
+  if (build_transport_params(url, host, sizeof(host), &port, &is_tls, &uri) != 0) {
     set_error(resp, HTTP_ERROR_INVALID_URL, "failed to parse URL");
     return -1;
   }
 
   coro_socket_t *transport = NULL;
   int use_pool = 0;
-  int rc = prepare_transport(c, url, transport_url, uri, &transport, &use_pool);
+  int rc = prepare_transport(c, url, host, port, is_tls, uri, &transport, &use_pool);
   if (rc != 0) {
     set_error(resp, HTTP_ERROR_MEMORY_ALLOCATION, "transport create failed");
     turbo_free_uri(&uri);
     return -1;
   }
 
-  rc = connect_transport(c, transport, transport_url, uri, use_pool);
+  rc = connect_transport(c, transport, host, port, is_tls, uri, use_pool);
   if (rc != 0) {
     http_error_code_t ec = (rc == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT : HTTP_ERROR_CONNECTION_FAILED;
     set_error(resp, ec, "connect failed");
@@ -1177,6 +1498,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
   coro_socket_set_timeout(transport, (uint64_t)c->timeout_ms);
 
   tstr_t req_str = build_http_request_str(c, method, uri, headers, header_count, body, body_len, form);
+  TLOG_DEBUG("Sending request:\n---\n{}---", req_str);
   int sr = send_http_request(c, transport, req_str, body, body_len, form, read_cb, read_cb_ud);
   tstr_free(req_str);
 
@@ -1191,7 +1513,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
   }
 
   TLOG_INFO("Executing {} {}", (method == HTTP_GET ? "GET" : "POST"), url);
-  recv_http_response(c, transport, resp, method, data_cb, data_cb_ud, c->progress_callback,
+  recv_http_response(c, transport, resp, method, url, data_cb, data_cb_ud, c->progress_callback,
                      c->progress_user_data);
   TLOG_INFO("Done executing {}, status: {}, err: {}", url, resp->status_code, ENUM_NAME(resp->error_code));
   c->stats.bytes_received += resp->body_len + resp->headers_len;

@@ -261,17 +261,8 @@ static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, co
  * ============================================================================ */
 
 static int create_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *candidate) {
-  coro_socket_t *client = coro_socket_create(agent->ctx, CORO_SOCKET_TCP_V4);
+  coro_socket_t *client = coro_socket_create(agent->ctx, CORO_SOCKET_UDP_V4);
   if (!client) return -1;
-
-  char url[512];
-  stbsp_snprintf(url, sizeof(url), "udp://%s:0", candidate->ip);
-
-  int rc = coro_socket_connect(client, url);
-  if (rc != 0) {
-      coro_socket_destroy(client);
-      return -1;
-  }
 
   candidate->socket = client;
   
@@ -818,10 +809,7 @@ static void send_connectivity_check(turbo_ice_agent_t *agent, ice_candidate_pair
     }
   } else if (pair->local->socket) {
     coro_socket_t *client = (coro_socket_t *)pair->local->socket;
-    char url[512];
-    stbsp_snprintf(url, sizeof(url), "udp://%s:%u", pair->remote->ip, pair->remote->port);
-
-    coro_socket_connect(client, url);
+    coro_socket_connect(client, pair->remote->ip, pair->remote->port);
     rc = coro_socket_send(client, (const char *)stun_buf, len);
   }
 
@@ -892,9 +880,7 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
       turn_client_send((turbo_turn_client_t *)local_cand->turn_client, remote_ip, remote_port, resp_buf, resp_len);
     } else if (local_cand->socket) {
       coro_socket_t *client = (coro_socket_t *)local_cand->socket;
-      char url[512];
-      stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote_ip, remote_port);
-      coro_socket_connect(client, url);
+      coro_socket_connect(client, remote_ip, remote_port);
       coro_socket_send(client, (const char *)resp_buf, resp_len);
     }
   } else {
@@ -1114,7 +1100,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
                 }
               }
             }
-            if (buf) free(buf);
+            if (buf) coro_socket_free_recv(buf);
           }
         } else if (pair->local->socket) {
           coro_socket_t *client = (coro_socket_t *)pair->local->socket;
@@ -1275,9 +1261,7 @@ int ice_agent_send(turbo_ice_agent_t *agent, const void *data, size_t len) {
 
   if (local->type == ICE_CANDIDATE_TYPE_HOST || local->type == ICE_CANDIDATE_TYPE_SRFLX) {
     coro_socket_t *client = (coro_socket_t *)local->socket;
-    char url[512];
-    stbsp_snprintf(url, sizeof(url), "udp://%s:%u", remote->ip, remote->port);
-    coro_socket_connect(client, url);
+    coro_socket_connect(client, remote->ip, remote->port);
     int rc = coro_socket_send(client, (const char *)data, len);
     return rc;
   } else if (local->type == ICE_CANDIDATE_TYPE_RELAY) {

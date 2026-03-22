@@ -88,6 +88,15 @@ CXX_C_API coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn,
 CXX_C_API void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co);
 
 /**
+ * @brief Reclaim pool bookkeeping for a coroutine being force-destroyed.
+ * @param co Coroutine previously acquired from a pool
+ *
+ * Used during scheduler teardown when a coroutine did not finish cleanly and
+ * therefore cannot be returned through the normal DEAD-state release path.
+ */
+CXX_C_API void coro_object_pool_discard_coro(coro_t *co);
+
+/**
  * @brief Drop stale active coroutine accounting after forced scheduler teardown.
  * @param pool Pool handle
  *

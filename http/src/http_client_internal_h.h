@@ -7,7 +7,6 @@
 #include <turbo_str.h>
 #include <CoroNet/turbo_coro_socket.h>
 #include <CoroNet/turbo_connection_pool.h>
-#include <CoroNet/turbo_socks5.h>
 
 /* llhttp defines HTTP methods as enums. We must undefine our macros to avoid collisions. */
 #undef HTTP_DELETE
@@ -50,11 +49,20 @@ typedef struct interceptor_node_s {
   struct interceptor_node_s *next;
 } interceptor_node_t;
 
+typedef struct {
+  char host[256];
+  uint16_t port;
+  char username[128];
+  char password[128];
+  int auth_required;
+  int timeout_ms;
+} http_proxy_config_t;
+
 struct http_client_s {
   coro_context_t *coro_ctx;
   int owns_coro_ctx;
   coro_pool_t *conn_pool;
-  turbo_socks5_config_t *proxy_config;
+  http_proxy_config_t *proxy_config;
   int timeout_ms;
   int connect_timeout_ms;
   char *user_agent;
@@ -111,6 +119,7 @@ typedef struct {
   
   size_t content_length;
   size_t body_received;
+  const char *request_url;
 } coro_parser_ctx_t;
 
 /* ── Internal requests ───────────────────────────────────────────── */

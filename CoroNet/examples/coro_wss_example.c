@@ -16,7 +16,7 @@ static void wss_task(coro_t* co, void* arg) {
     coro_context_t* ctx = (coro_context_t*)arg;
 
     printf("[Coro] Creating WebSocket client (WSS)...\n");
-    coro_socket_t* client = coro_socket_create(ctx, CORO_SOCKET_TLS_V4);
+    coro_socket_t* client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
 
     coro_socket_set_timeout(client, 15000);
 

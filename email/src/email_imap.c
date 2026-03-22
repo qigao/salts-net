@@ -159,15 +159,11 @@ int imap_connect(imap_client_t *client) {
     return -1;
   }
 
-  // Build connection URL - use tcp:// for all connections
-  char url[512];
-  snprintf(url, sizeof(url), "tcp://%s:%d",
-           client->config.host, client->config.port);
-
-  // Connect
-  if (coro_socket_connect(client->socket, url) != 0) {
+  if (coro_socket_connect(client->socket, client->config.host,
+                          client->config.port) != 0) {
     snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to connect to %s", url);
+             "Failed to connect to %s:%d", client->config.host,
+             client->config.port);
     coro_socket_destroy(client->socket);
     client->socket = NULL;
     return -1;

@@ -584,11 +584,7 @@ void turn_client_destroy(turbo_turn_client_t *tc) {
 
 int turn_client_allocate(turbo_turn_client_t *tc, turn_allocation_t *allocation_out) {
     if (!tc || !allocation_out) return -1;
-
-    char url[512];
-    stbsp_snprintf(url, sizeof(url), "udp://%s:%u", tc->server_host, tc->server_port);
-
-    int rc = coro_socket_connect(tc->client, url);
+    int rc = coro_socket_connect(tc->client, tc->server_host, tc->server_port);
     if (rc != 0) return -2;
 
     /* Step 1: unauthenticated allocate */
@@ -610,7 +606,7 @@ int turn_client_allocate(turbo_turn_client_t *tc, turn_allocation_t *allocation_
     char realm[256] = {0}, nonce[256] = {0};
     int result = turn_parse_allocate_response((const uint8_t *)data, data_len,
                                               &alloc, realm, nonce);
-    free(data);
+    if (data) coro_socket_free_recv(data);
 
     /* Step 2: if 401, authenticate and retry */
     if (result == -401) {
@@ -631,7 +627,7 @@ int turn_client_allocate(turbo_turn_client_t *tc, turn_allocation_t *allocation_
 
         result = turn_parse_allocate_response((const uint8_t *)data, data_len,
                                               &alloc, realm, nonce);
-        free(data);
+        if (data) coro_socket_free_recv(data);
     }
 
     if (result != 0) return result;
@@ -658,7 +654,7 @@ int turn_client_refresh(turbo_turn_client_t *tc) {
     char *data = NULL;
     size_t data_len = 0;
     int rc = turn_send_and_recv(tc, buffer, len, &data, &data_len);
-    free(data);
+    if (data) coro_socket_free_recv(data);
     return rc;
 }
 

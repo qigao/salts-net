@@ -11,16 +11,8 @@ foreach(test_source ${EXTRA_SOURCES})
 
   target_link_libraries(${test_name} PRIVATE ${TARGET_NAME} TurboNet::TinyTest)
 
-  # Special case: programs using DNS resolution
-  if(test_name STREQUAL "test_tls_simple")
-    target_link_libraries(${test_name} PRIVATE TurboNet::Utils)
-  endif()
-
   # Special case: programs using Ed25519 certificate generation
-  if(test_name STREQUAL "test_tls_server_ed25519"
-     OR test_name STREQUAL "test_tls_server_simple"
-     OR test_name STREQUAL "test_ed25519_minimal"
-     OR test_name STREQUAL "test_tls_context_only")
+  if(test_name STREQUAL "test_ed25519_minimal")
     target_link_libraries(${test_name} PRIVATE TurboNet::Asn1Parser)
   endif()
 

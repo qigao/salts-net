@@ -1,21 +1,15 @@
 # HTTP Client Examples
 
-# List of example programs
+# Real example programs (files with main()).
 set(HTTP_EXAMPLES
-    test_https
-    chunked_response
-    file_transfer_example
-    file_transfer_stream_example
-    advanced_features_example
-    jwt_auth_example
-    http_client_multithread
+    http_resume_example
     asan_verify
     )
 
 # Build each example
 foreach(example_name ${HTTP_EXAMPLES})
   add_executable(${example_name} ${example_name}.c)
-  target_link_libraries(${example_name} PRIVATE http_client TurboNet::TinyTest)
+  target_link_libraries(${example_name} PRIVATE http_client)
   set_target_properties(${example_name} PROPERTIES FOLDER http/examples)
   add_sanitizers(${example_name})
 # Platform-specific settings

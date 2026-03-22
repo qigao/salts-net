@@ -232,6 +232,10 @@ static int dg_iocp_init(turbo_datagram_t *d, const char *host,
   }
   ring_spsc_init(&st->queue, st->queue_data, 1024 * sizeof(void *));
 
+  /* Allow address reuse (required for multicast/mDNS) */
+  int reuse = 1;
+  setsockopt(st->socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
+
   st->completion_port = CreateIoCompletionPort((HANDLE)st->socket, NULL, 0, 1);
   if (!st->completion_port) {
     closesocket(st->socket);

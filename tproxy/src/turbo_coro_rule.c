@@ -5,7 +5,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <uv.h>
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 typedef struct turbo_rule_entry_s {
     turbo_rule_t rule;
@@ -171,8 +175,8 @@ static bool match_cidr(const char *ip_str, const char *cidr) {
     }
     
     struct in_addr addr, network;
-    if (uv_inet_pton(AF_INET, ip_str, &addr) != 0) return false;
-    if (uv_inet_pton(AF_INET, cidr_ip, &network) != 0) return false;
+    if (inet_pton(AF_INET, ip_str, &addr) != 1) return false;
+    if (inet_pton(AF_INET, cidr_ip, &network) != 1) return false;
     
     uint32_t a = ntohl(addr.s_addr);
     uint32_t n = ntohl(network.s_addr);
@@ -189,9 +193,9 @@ static const char* match_geoip(coro_rule_engine_t *engine, const char *ip_str) {
     bool is_v6 = false;
     uint8_t target[16] = {0};
 
-    if (uv_inet_pton(AF_INET, ip_str, &addr4) == 0) {
+    if (inet_pton(AF_INET, ip_str, &addr4) == 1) {
         memcpy(target, &addr4.s_addr, 4);
-    } else if (uv_inet_pton(AF_INET6, ip_str, &addr6) == 0) {
+    } else if (inet_pton(AF_INET6, ip_str, &addr6) == 1) {
         memcpy(target, addr6.s6_addr, 16);
         is_v6 = true;
     } else {
@@ -586,13 +590,13 @@ int coro_rule_geoip_load(coro_rule_engine_t *engine, const char *path) {
             struct in_addr addr4_s, addr4_e;
             struct in6_addr addr6_s, addr6_e;
             
-            if (uv_inet_pton(AF_INET, start_str, &addr4_s) == 0 && uv_inet_pton(AF_INET, end_str, &addr4_e) == 0) {
+            if (inet_pton(AF_INET, start_str, &addr4_s) == 1 && inet_pton(AF_INET, end_str, &addr4_e) == 1) {
                 memset(range->start, 0, 16);
                 memset(range->end, 0, 16);
                 memcpy(range->start, &addr4_s.s_addr, 4);
                 memcpy(range->end, &addr4_e.s_addr, 4);
                 range->is_ipv6 = false;
-            } else if (uv_inet_pton(AF_INET6, start_str, &addr6_s) == 0 && uv_inet_pton(AF_INET6, end_str, &addr6_e) == 0) {
+            } else if (inet_pton(AF_INET6, start_str, &addr6_s) == 1 && inet_pton(AF_INET6, end_str, &addr6_e) == 1) {
                 memcpy(range->start, addr6_s.s6_addr, 16);
                 memcpy(range->end, addr6_e.s6_addr, 16);
                 range->is_ipv6 = true;

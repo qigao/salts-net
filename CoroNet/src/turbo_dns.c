@@ -16,8 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sds.h"
-#include "turbo_str.h"
 #include "turbo_error.h"
+#include <stdatomic.h>
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -64,6 +64,8 @@ typedef struct {
   } sockets[MAX_SOCKETS];
   int socket_count;
   bool initialized;
+  int processing;    /* Currently inside ares_process_fd */
+  int needs_destroy; /* destroy_ares_context was called while processing */
   turbo_mutex_t mu;   /* guards sockets[] and channel */
 } turbo_ares_t;
 
@@ -72,8 +74,8 @@ typedef struct turbo_dns_query_s {
   char *hostname;
   turbo_dns_cb callback;
   void *user_data;
-  int ref_count;
-  int delivered;
+  atomic_int ref_count;
+  atomic_int delivered;
   int cancelled;
   int status_v4;
   int status_v6;
@@ -111,6 +113,8 @@ static turbo_once_t  g_dns_init_once       = TURBO_ONCE_INIT;
 static turbo_mutex_t g_dns_lock;
 static int           g_dns_lock_initialized = 0;
 static int           g_dns_refcount         = 0;
+
+static void destroy_ares_context(turbo_ares_t *ctx);
 
 // =============================================================================
 // Address helpers (no libuv)
@@ -290,10 +294,19 @@ static int ares_poll_once(turbo_ares_t *ctx, int max_ms) {
     ares_socket_t rfd = FD_ISSET((dns_sock_t)fd, &rfds) ? fd : ARES_SOCKET_BAD;
     ares_socket_t wfd = FD_ISSET((dns_sock_t)fd, &wfds) ? fd : ARES_SOCKET_BAD;
     if (rfd != ARES_SOCKET_BAD || wfd != ARES_SOCKET_BAD) {
+      ctx->processing++;
       turbo_mutex_unlock(&ctx->mu);
       ares_process_fd(ctx->channel, rfd, wfd);
       turbo_mutex_lock(&ctx->mu);
+      ctx->processing--;
     }
+  }
+
+  if (ctx->processing == 0 && ctx->needs_destroy) {
+    ctx->needs_destroy = 0;
+    turbo_mutex_unlock(&ctx->mu);
+    destroy_ares_context(ctx);
+    return 0;
   }
   turbo_mutex_unlock(&ctx->mu);
 
@@ -383,10 +396,20 @@ static int init_ares_context(turbo_ares_t **out_ctx) {
 
 static void destroy_ares_context(turbo_ares_t *ctx) {
   if (!ctx) return;
+
+  turbo_mutex_lock(&ctx->mu);
+  if (ctx->processing > 0) {
+    ctx->needs_destroy = 1;
+    turbo_mutex_unlock(&ctx->mu);
+    return;
+  }
+
   if (ctx->initialized) {
     ares_destroy(ctx->channel);
     ctx->initialized = false;
   }
+  turbo_mutex_unlock(&ctx->mu);
+
   dns_release_ares_library_ref();
   turbo_mutex_destroy(&ctx->mu);
   free(ctx);
@@ -397,14 +420,12 @@ static void destroy_ares_context(turbo_ares_t *ctx) {
 // =============================================================================
 
 static void release_parent_ref(turbo_dns_parent_query_t *parent) {
-  if (--parent->ref_count > 0) return;
+  if (atomic_fetch_sub(&parent->ref_count, 1) > 1) return;
 
-  if (!parent->delivered) {
-    int err = (parent->status_v4 != ARES_SUCCESS && parent->status_v4 != 0)
-                  ? parent->status_v4
-                  : (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0
-                         ? parent->status_v6
-                         : ARES_ENODATA);
+  if (!atomic_load(&parent->delivered)) {
+    int err = (parent->status_v4 != ARES_SUCCESS && parent->status_v4 != 0) ? parent->status_v4 :
+              (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0) ? parent->status_v6 :
+              ARES_ENODATA;
     TLOG_DEBUG("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
     parent->callback(parent->hostname, NULL, err, parent->user_data);
   }
@@ -442,8 +463,9 @@ static void dns_dual_addrinfo_cb(void *arg, int status, int timeouts,
 
     if (ip[0] != '\0') {
       TLOG_DEBUG("DNS: {} -> {}", parent->hostname, ip);
-      parent->callback(parent->hostname, ip, 0, parent->user_data);
-      parent->delivered = 1;
+      if (!atomic_exchange(&parent->delivered, 1)) {
+        parent->callback(parent->hostname, ip, 0, parent->user_data);
+      }
     }
   } else {
     if (family == AF_INET)  parent->status_v4 = status;
@@ -466,7 +488,7 @@ static int dns_start_family_query(turbo_dns_parent_query_t *parent,
 
   child->parent = parent;
   child->family  = family;
-  parent->ref_count++;
+  atomic_fetch_add(&parent->ref_count, 1);
   if (family == AF_INET)  parent->started_v4 = 1;
   else if (family == AF_INET6) parent->started_v6 = 1;
 
@@ -568,7 +590,8 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
   parent->user_data = &state;
   parent->pref      = TURBO_DNS_ANY;
   parent->ares      = ares_ctx;
-  parent->ref_count = 1;
+  atomic_init(&parent->ref_count, 1);
+  atomic_init(&parent->delivered, 0);
 
   if (!parent->hostname) {
     free(parent);
@@ -578,8 +601,12 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
     return TURBO_ENOMEM;
   }
 
+  /* Hold function ref while starting queries */
+  atomic_fetch_add(&parent->ref_count, 1);
   dns_start_family_query(parent, host, AF_INET);
   dns_start_family_query(parent, host, AF_INET6);
+  release_parent_ref(parent); /* release function ref */
+  
   release_parent_ref(parent); /* release initial ref */
 
   /* Drive select loop until done or timeout */
@@ -687,12 +714,22 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
   parent->user_data = user_data;
   parent->pref      = pref;
   parent->ares      = ares_ctx;
-  parent->ref_count = 1; /* initial ref */
+  atomic_init(&parent->ref_count, 1); /* Initial ref */
+  atomic_init(&parent->delivered, 0);
 
   if (!parent->hostname) {
     free(parent);
     destroy_ares_context(ares_ctx);
     return TURBO_ENOMEM;
+  }
+
+  /* Hold a local reference to ensure 'parent' (and thus 'out_query' location) 
+     stays alive even if callbacks are synchronous. */
+  atomic_fetch_add(&parent->ref_count, 1); 
+
+  if (out_query) {
+    atomic_fetch_add(&parent->ref_count, 1); /* cancellation ref */
+    *out_query = parent;
   }
 
   if (pref == TURBO_DNS_IPV4_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6)
@@ -701,16 +738,15 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
   if (pref == TURBO_DNS_IPV6_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6)
     dns_start_family_query(parent, hostname, AF_INET6);
 
-  if (out_query) {
-    parent->ref_count++; /* cancellation ref */
-    *out_query = parent;
-  }
-
   /* Start background driver thread */
   async_driver_t *drv = malloc(sizeof(*drv));
   if (!drv) {
-    release_parent_ref(parent);
-    if (out_query) { release_parent_ref(parent); *out_query = NULL; }
+    if (out_query) {
+      atomic_fetch_sub(&parent->ref_count, 1); /* drop cancellation ref */
+      *out_query = NULL; 
+    }
+    release_parent_ref(parent); /* drop function ref */
+    release_parent_ref(parent); /* drop initial ref */
     return TURBO_ENOMEM;
   }
   drv->ares    = ares_ctx;
@@ -725,7 +761,8 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
   }
   turbo_thread_destroy(&drv->thread); /* detach so it cleans itself up */
 
-  release_parent_ref(parent); /* release the initial ref we held */
+  release_parent_ref(parent); /* release function ref */
+  release_parent_ref(parent); /* release initial ref */
   TLOG_DEBUG("Started async DNS lookup for {}", hostname);
   return 0;
 }

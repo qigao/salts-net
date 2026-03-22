@@ -7,6 +7,7 @@
 #include <turbo_protocol.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #define NET_ONE ((exprtk_value_t){EXPRTK_VAL_NUMBER, .data.number = 1.0})
 
@@ -42,6 +43,60 @@ static exprtk_value_t copy_response_body(http_response_t *resp, exprtk_env_t *en
 static void net_set_error(net_ctx_t *ctx, const char *msg) {
   if (!ctx) return;
   snprintf(ctx->error_msg, sizeof(ctx->error_msg), "%s", msg ? msg : "");
+}
+
+static int net_parse_ws_url(const char *url, const char **host, size_t *host_len,
+                            int *port, const char **path, int *is_tls) {
+  const char *scheme_end;
+  const char *host_start;
+  const char *host_end;
+  const char *path_start;
+
+  if (!url || !host || !host_len || !port || !path || !is_tls) return -1;
+
+  scheme_end = strstr(url, "://");
+  if (!scheme_end) return -1;
+
+  if ((size_t)(scheme_end - url) == 2 && strncmp(url, "ws", 2) == 0) {
+    *is_tls = 0;
+    *port = 80;
+  } else if ((size_t)(scheme_end - url) == 3 && strncmp(url, "wss", 3) == 0) {
+    *is_tls = 1;
+    *port = 443;
+  } else {
+    return -1;
+  }
+
+  host_start = scheme_end + 3;
+  if (*host_start == '\0') return -1;
+
+  path_start = strchr(host_start, '/');
+  host_end = path_start ? path_start : host_start + strlen(host_start);
+  if (host_end == host_start) return -1;
+
+  if (*host_start == '[') {
+    const char *ipv6_end = memchr(host_start, ']', (size_t)(host_end - host_start));
+    if (!ipv6_end || ipv6_end + 1 < host_end && ipv6_end[1] != ':') return -1;
+    *host = host_start + 1;
+    *host_len = (size_t)(ipv6_end - (host_start + 1));
+    if (*host_len == 0) return -1;
+    if (ipv6_end + 1 < host_end) {
+      *port = atoi(ipv6_end + 2);
+      if (*port <= 0) return -1;
+    }
+  } else {
+    const char *colon = memchr(host_start, ':', (size_t)(host_end - host_start));
+    *host = host_start;
+    *host_len = (size_t)((colon ? colon : host_end) - host_start);
+    if (*host_len == 0) return -1;
+    if (colon) {
+      *port = atoi(colon + 1);
+      if (*port <= 0) return -1;
+    }
+  }
+
+  *path = path_start ? path_start : "/";
+  return 0;
 }
 
 static coro_socket_t *net_ctx_recreate_ws_client(net_ctx_t *ctx) {
@@ -114,12 +169,28 @@ static exprtk_value_t fn_ws_connect(size_t argc, exprtk_value_t *args, void *use
     return NET_ZERO;
   }
 
-  /* Note: In CoroNet, WebSocket path is handled automatically by coro_socket_connect 
-     or can be set via URL. The argc==2 path argument from exprtk is currently ignored
-     or should be appended to URL. For now we follow the URL. */
+  const char *host = NULL;
+  const char *path = NULL;
+  size_t host_len = 0;
+  int port = 0;
+  int is_tls = 0;
+  char *host_buf = NULL;
+
+  if (net_parse_ws_url(url, &host, &host_len, &port, &path, &is_tls) != 0) {
+    net_set_error(ud->ctx, "invalid ws url");
+    return NET_ZERO;
+  }
+
+  host_buf = mem_alloc(ud->scratch, host_len + 1);
+  if (!host_buf) {
+    net_set_error(ud->ctx, "host alloc failed");
+    return NET_ZERO;
+  }
+  memcpy(host_buf, host, host_len);
+  host_buf[host_len] = '\0';
 
   coro_socket_set_timeout(client, 10000);
-  int r = coro_socket_connect(client, url);
+  int r = coro_socket_connect_ws(client, host_buf, port, path, is_tls);
   if (r != 0) {
     net_set_error(ud->ctx, "ws connect failed");
     return NET_ZERO;

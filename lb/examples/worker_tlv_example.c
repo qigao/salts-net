@@ -52,7 +52,7 @@ static void worker_loop(coro_t *co, void *arg) {
                 data[0] = (char)(type | 0x80);
             }
             coro_socket_send(c, data, len);
-            free(data);
+            coro_socket_free_recv(data);
             data = NULL;
         }
 
@@ -68,8 +68,11 @@ int main(int argc, char **argv) {
     coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) { fprintf(stderr, "context create failed\n"); return 1; }
 
-    coro_t *co = coro_create(worker_loop, ctx, NULL);
-    coro_resume(co);
+    if (coro_context_spawn(ctx, worker_loop, ctx) != 0) {
+        fprintf(stderr, "Failed to spawn worker loop\n");
+        coro_context_destroy(ctx);
+        return 1;
+    }
 
     printf("TLV worker running, backend=%s:%d\n", g_backend_host, g_backend_port);
     coro_context_run(ctx, TURBO_RUN_DEFAULT);

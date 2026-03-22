@@ -54,14 +54,14 @@ int main(void) {
     if (!ctx) return 1;
 
     printf("Starting TURN Test (coroutine-based)...\n");
-    coro_t *co = coro_create(turn_test_coro, ctx, NULL);
-    if (co) {
-        coro_resume(co);
+    if (coro_context_spawn(ctx, turn_test_coro, ctx) != 0) {
+        fprintf(stderr, "Failed to spawn TURN test coroutine\n");
+        coro_context_destroy(ctx);
+        return 1;
     }
 
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-    if (co) coro_destroy(co);
     coro_context_destroy(ctx);
     return 0;
 }

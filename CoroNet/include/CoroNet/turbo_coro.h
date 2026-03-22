@@ -286,6 +286,12 @@ CXX_C_API void coro_set_waiting_for_io(coro_t *co, int waiting);
  */
 CXX_C_API void coro_set_cleanup(coro_t *co, void (*fn)(coro_t *co, void *arg), void *arg);
 
+/**
+ * @brief Remove coroutine from scheduler without destroying it.
+ * @param co Coroutine to detach
+ */
+CXX_C_API void coro_detach_scheduler(coro_t *co);
+
 #ifdef __cplusplus
 }
 #endif

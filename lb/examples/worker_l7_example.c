@@ -37,7 +37,7 @@ static void echo_handler(coro_socket_t *client) {
             coro_socket_send(client, resp, 2 + glen + len);
             free(resp);
         }
-        free(data);
+        coro_socket_free_recv(data);
         data = NULL;
     }
 }
@@ -89,8 +89,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    coro_t *co = coro_create(worker_loop, ctx, NULL);
-    coro_resume(co);
+    if (coro_context_spawn(ctx, worker_loop, ctx) != 0) {
+        fprintf(stderr, "Failed to spawn worker loop\n");
+        coro_context_destroy(ctx);
+        return 1;
+    }
 
     printf("[%s] Worker running, backend=%s:%d\n", g_group, g_backend_host, g_backend_port);
     coro_context_run(ctx, TURBO_RUN_DEFAULT);

@@ -22,10 +22,8 @@ static void coro_test_entry(coro_t *co, void *arg) {
 static void run_in_coro(void (*fn)(coro_context_t *ctx)) {
     coro_context_t *ctx = coro_context_create(NULL);
     coro_test_ctx_t tctx = {.ctx = ctx, .test_fn = fn};
-    coro_scheduler_t *sched = coro_scheduler_create();
-    coro_spawn(sched, coro_test_entry, &tctx, NULL);
-    coro_scheduler_run(sched);
-    coro_scheduler_destroy(sched);
+    coro_context_spawn(ctx, coro_test_entry, &tctx);
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
     coro_context_destroy(ctx);
 }
 

@@ -22,7 +22,7 @@ endif()
 
 set_target_properties(
   tedis
-  PROPERTIES FOLDER drivers
+  PROPERTIES FOLDER tedis
              OUTPUT_NAME "tedis"
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}

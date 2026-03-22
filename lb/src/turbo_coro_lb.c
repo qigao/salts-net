@@ -270,7 +270,7 @@ static void on_client_session(coro_socket_t *client, void *arg) {
 
   /* Filter on peeked data */
   if (peeked && run_filter(lb, client, peeked, peeked_len) != TURBO_LB_ACCEPT) {
-    free(peeked);
+    coro_socket_free_recv(peeked);
     return;
   }
 
@@ -279,13 +279,13 @@ static void on_client_session(coro_socket_t *client, void *arg) {
     wc = wait_for_worker(lb, group);
   }
   if (!wc) {
-    free(peeked);
+    coro_socket_free_recv(peeked);
     return;
   }
 
   if (peeked) {
     coro_socket_send(wc->client, peeked, peeked_len);
-    free(peeked);
+    coro_socket_free_recv(peeked);
   }
 
   lb->active_conns++;

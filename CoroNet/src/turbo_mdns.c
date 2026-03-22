@@ -14,10 +14,8 @@
 #include "turbo_datagram.h"
 #include "turbo_coro_context.h"
 #include "tlog.h"
-#include "turbo_str_view.h"
-#include "turbo_thread.h"
-#include "turbo_error.h"
-#include <stb_sprintf.h>
+#include "fmt.h"
+#include "turbo_str.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -166,9 +164,9 @@ static size_t build_ptr_response(uint8_t *buf, const mdns_service_t *service) {
   char hostname_fqdn[MDNS_MAX_NAME_LEN];
   size_t rdata_start;
 
-  stbsp_snprintf(service_name,  sizeof(service_name),  "%s.local.",      service->service_type);
-  stbsp_snprintf(instance_name, sizeof(instance_name), "%s.%s.local.",   service->instance, service->service_type);
-  stbsp_snprintf(hostname_fqdn, sizeof(hostname_fqdn), "%s.local.",      service->hostname);
+  fmt(service_name,  sizeof(service_name),  "{}.local",      service->service_type);
+  fmt(instance_name, sizeof(instance_name), "{}.{}.local",   service->instance, service->service_type);
+  fmt(hostname_fqdn, sizeof(hostname_fqdn), "{}.local",      service->hostname);
 
   memset(buf, 0, 12);
   buf[2] = 0x84;
@@ -180,7 +178,7 @@ static size_t build_ptr_response(uint8_t *buf, const mdns_service_t *service) {
   mdns_write_u16(buf, &pos, DNS_TYPE_PTR);
   mdns_write_u16(buf, &pos, DNS_CLASS_IN | DNS_CLASS_FLUSH);
   mdns_write_u32(buf, &pos, service->ttl);
-  rdata_start = pos + 2;  pos += 2;
+  rdata_start = pos;  pos += 2;
   pos += encode_name(buf + pos, instance_name);
   { uint16_t rdlen = htons((uint16_t)(pos - rdata_start - 2));
     memcpy(buf + rdata_start, &rdlen, sizeof(rdlen)); }
@@ -190,7 +188,7 @@ static size_t build_ptr_response(uint8_t *buf, const mdns_service_t *service) {
   mdns_write_u16(buf, &pos, DNS_TYPE_SRV);
   mdns_write_u16(buf, &pos, DNS_CLASS_IN | DNS_CLASS_FLUSH);
   mdns_write_u32(buf, &pos, service->ttl);
-  rdata_start = pos + 2;  pos += 2;
+  rdata_start = pos;  pos += 2;
   mdns_write_u16(buf, &pos, 0);  /* priority */
   mdns_write_u16(buf, &pos, 0);  /* weight */
   mdns_write_u16(buf, &pos, service->port);
@@ -272,7 +270,7 @@ static void mdns_extract_instance_name(char *full_name, const char *service_type
     return;
   }
   full_name[service_pos - 1] = '\0';
-  stbsp_snprintf(instance, instance_size, "%s", full_name);
+  fmt(instance, instance_size, "{}", full_name);
 }
 
 static void mdns_emit_discovery(mdns_ctx_t *ctx, mdns_service_t *service) {
@@ -282,8 +280,8 @@ static void mdns_emit_discovery(mdns_ctx_t *ctx, mdns_service_t *service) {
 
 static void mdns_init_found_service(mdns_ctx_t *ctx, mdns_service_t *service) {
   memset(service, 0, sizeof(*service));
-  stbsp_snprintf(service->service_type, sizeof(service->service_type),
-                 "%s", ctx->target_service);
+  fmt(service->service_type, sizeof(service->service_type),
+                 "{}", ctx->target_service);
 }
 
 static void mdns_handle_ptr_record(mdns_ctx_t *ctx, mdns_service_t *service,
@@ -298,8 +296,8 @@ static void mdns_handle_ptr_record(mdns_ctx_t *ctx, mdns_service_t *service,
                              service->instance, sizeof(service->instance));
   if (service->instance[0] == '\0') return;
 
-  stbsp_snprintf(service->hostname, sizeof(service->hostname), "%s", "unknown");
-  stbsp_snprintf(service->ip,       sizeof(service->ip),       "%s", "0.0.0.0");
+  fmt(service->hostname, sizeof(service->hostname), "{}", "unknown");
+  fmt(service->ip,       sizeof(service->ip),       "{}", "0.0.0.0");
   service->port = 0;
   service->ttl  = 120;
   TLOG_DEBUG("  -> Found service instance: {}", service->instance);
@@ -319,8 +317,8 @@ static void mdns_handle_srv_record(mdns_ctx_t *ctx, mdns_service_t *service,
   if (!mdns_name_contains_service(name, ctx->target_service)) return;
   mdns_extract_instance_name(name, ctx->target_service,
                              service->instance, sizeof(service->instance));
-  stbsp_snprintf(service->hostname, sizeof(service->hostname), "%s", hostname);
-  stbsp_snprintf(service->ip,       sizeof(service->ip),       "%s", "0.0.0.0");
+  fmt(service->hostname, sizeof(service->hostname), "{}", hostname);
+  fmt(service->ip,       sizeof(service->ip),       "{}", "0.0.0.0");
   service->ttl = 120;
   TLOG_DEBUG("  -> Found SRV record for: {}:{}", hostname, service->port);
   mdns_emit_discovery(ctx, service);
@@ -330,7 +328,7 @@ static void mdns_handle_a_record(mdns_ctx_t *ctx, mdns_service_t *service,
                                   const uint8_t *packet, size_t offset,
                                   char *name) {
   char ip_str[16];
-  stbsp_snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
+  fmt(ip_str, sizeof(ip_str), "{}.{}.{}.{}",
                  packet[offset], packet[offset+1],
                  packet[offset+2], packet[offset+3]);
   TLOG_DEBUG("  A record: {} -> {}", name, ip_str);
@@ -339,7 +337,7 @@ static void mdns_handle_a_record(mdns_ctx_t *ctx, mdns_service_t *service,
       !tstr_v_contains(tstr_v_from_cstr(name), tstr_v_from_cstr(service->hostname)))
     return;
 
-  stbsp_snprintf(service->ip, sizeof(service->ip), "%s", ip_str);
+  fmt(service->ip, sizeof(service->ip), "{}", ip_str);
   service->ttl = 120;
   TLOG_DEBUG("  -> Found A record: {}", ip_str);
   mdns_emit_discovery(ctx, service);
@@ -417,7 +415,7 @@ static int on_mdns_recv(void *handle, const mem_slice_t *slice, void *peer) {
       int      should_respond = 0;
       char     our_service[MDNS_MAX_NAME_LEN];
 
-      stbsp_snprintf(our_service, sizeof(our_service), "%s.local.",
+      fmt(our_service, sizeof(our_service), "{}.local",
                      ctx->published_service.service_type);
 
       for (int q = 0; q < (int)questions; q++) {
@@ -595,7 +593,7 @@ int mdns_discover(mdns_ctx_t *ctx, const char *service_type,
   /* Send PTR query */
   uint8_t query[512];
   char    query_name[MDNS_MAX_NAME_LEN];
-  stbsp_snprintf(query_name, sizeof(query_name), "%s.local.", service_type);
+  fmt(query_name, sizeof(query_name), "{}.local", service_type);
   size_t len = build_query(query, query_name, DNS_TYPE_PTR);
   int rc = turbo_datagram_sendto(ctx->datagram,
                                   (const struct sockaddr *)&ctx->mcast_addr,

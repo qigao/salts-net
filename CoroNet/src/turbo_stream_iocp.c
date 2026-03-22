@@ -8,6 +8,7 @@
 
 #include "turbo_stream_internal.h"
 #include "CoroNet/turbo_coro_context.h"
+#include "turbo_coro_internal.h"
 #include "turbo_buffer.h"
 #include "turbo_dns.h"
 #include "ring_buffer_spsc.h"
@@ -55,6 +56,7 @@ typedef struct stream_iocp_base_s {
   SOCKET socket;
   volatile LONG stopping;
   volatile LONG inflight_count;
+  volatile LONG active_ticks;
   ring_spsc_t queue;
   uint8_t *queue_data;
 } stream_iocp_base_t;
@@ -147,6 +149,7 @@ static DWORD WINAPI stream_iocp_worker(LPVOID arg) {
     op->status = ok ? 0 : -(int)GetLastError();
 
     queue_push(st, op);
+    InterlockedIncrement(&st->active_ticks);
     coro_post(st->ctx, stream_iocp_tick, st, NULL);
   }
   return 0;
@@ -170,6 +173,7 @@ static void stream_iocp_tick(void *arg1, void *arg2) {
     InterlockedDecrement(&st->inflight_count);
     chain = next;
   }
+  InterlockedDecrement(&st->active_ticks);
 }
 
 static void stream_iocp_final_cleanup(void *arg1, void *arg2) {
@@ -513,6 +517,7 @@ static int iocp_init_with_socket(turbo_stream_t *s, SOCKET existing) {
     return TURBO_ENOMEM;
   }
 
+  coro_context_acquire_external(st->base.ctx);
   s->backend_data = st;
   return 0;
 }
@@ -619,8 +624,8 @@ static void stream_iocp_shutdown_task(void *arg1, void *arg2) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)arg1;
   turbo_stream_t *s = (turbo_stream_t *)arg2;
 
-  if (InterlockedCompareExchange(&st->base.inflight_count, 0, 0) > 0) {
-    /* Wait for more completions */
+  if (InterlockedCompareExchange(&st->base.inflight_count, 0, 0) > 0 ||
+      InterlockedCompareExchange(&st->base.active_ticks, 0, 0) > 0) {
     coro_post(st->base.ctx, stream_iocp_shutdown_task, st, s);
     return;
   }
@@ -638,6 +643,7 @@ static void stream_iocp_shutdown_task(void *arg1, void *arg2) {
   }
 
   if (st->base.queue_data) free(st->base.queue_data);
+  coro_context_release_external(st->base.ctx);
   free(st);
   s->backend_data = NULL;
   turbo_stream_finalize_close(s);
@@ -652,7 +658,6 @@ static void iocp_close(turbo_stream_t *s) {
     closesocket(st->base.socket);
     st->base.socket = INVALID_SOCKET;
   }
-
   coro_post(st->base.ctx, stream_iocp_shutdown_task, st, s);
 }
 
@@ -743,6 +748,7 @@ static int iocp_listen(turbo_stream_listener_t *l, int backlog) {
   st->base.worker_thread = CreateThread(NULL, 0, stream_iocp_worker, st, 0, NULL);
   if (!st->base.worker_thread) return TURBO_ENOSYS;
 
+  coro_context_acquire_external(st->base.ctx);
   /* Start accepting */
   return stream_iocp_submit_accept(l);
 }
@@ -751,7 +757,8 @@ static void iocp_listener_shutdown_task(void *arg1, void *arg2) {
   stream_iocp_server_state_t *st = (stream_iocp_server_state_t *)arg1;
   turbo_stream_listener_t *l = (turbo_stream_listener_t *)arg2;
 
-  if (InterlockedCompareExchange(&st->base.inflight_count, 0, 0) > 0) {
+  if (InterlockedCompareExchange(&st->base.inflight_count, 0, 0) > 0 ||
+      InterlockedCompareExchange(&st->base.active_ticks, 0, 0) > 0) {
     coro_post(st->base.ctx, iocp_listener_shutdown_task, st, l);
     return;
   }
@@ -778,6 +785,7 @@ static void iocp_listener_shutdown_task(void *arg1, void *arg2) {
   }
 
   if (st->base.queue_data) free(st->base.queue_data);
+  coro_context_release_external(st->base.ctx);
   free(st);
   l->backend_data = NULL;
   turbo_stream_listener_finalize_close(l);
@@ -792,7 +800,6 @@ static void iocp_listener_close(turbo_stream_listener_t *l) {
     closesocket(st->base.socket);
     st->base.socket = INVALID_SOCKET;
   }
-
   coro_post(st->base.ctx, iocp_listener_shutdown_task, st, l);
 }
 

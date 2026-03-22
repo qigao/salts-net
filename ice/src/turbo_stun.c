@@ -198,16 +198,13 @@ int stun_binding_request(coro_context_t *ctx,
   int timeout_ms = config->timeout_ms ? config->timeout_ms : 3000;
   int retries = config->retries ? config->retries : 3;
 
-  coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+  coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_UDP_V4);
   if (!client)
     return -2;
 
   coro_socket_set_timeout(client, timeout_ms);
 
-  char url[512];
-  snprintf(url, sizeof(url), "udp://%s:%u", config->server_host, port);
-
-  int rc = coro_socket_connect(client, url);
+  int rc = coro_socket_connect(client, config->server_host, port);
   if (rc != 0) {
     coro_socket_destroy(client);
     return -3;

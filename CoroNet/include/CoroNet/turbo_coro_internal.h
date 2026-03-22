@@ -9,8 +9,8 @@
  *          Do not include from user code; use coro_client.h instead.
  */
 
-#ifndef coro_INTERNAL_H
-#define coro_INTERNAL_H
+#ifndef CORO_INTERNAL_H
+#define CORO_INTERNAL_H
 
 #include "internal.h"
 #include "turbo_coro.h"
@@ -29,9 +29,7 @@
 #include "turbo_buffer.h"
 #include "turbo_dns.h" 
 #include "turbo_stream.h"
-#include "turbo_datagram.h" 
-#include "turbo_websocket_client.h"
-#include "turbo_websocket_server.h"
+#include "turbo_datagram.h"  
 
 #ifdef __cplusplus
 extern "C" {
@@ -108,6 +106,7 @@ struct coro_context_s {
   atomic_int post_head;    /**< Producer index (write) */
   atomic_int post_tail;    /**< Consumer index (read) */
   atomic_int post_lock;    /**< Producer spinlock for MPSC */
+  atomic_int external_refs; /**< Background transport threads holding ctx alive */
 
   /* Lazy tasks (deferred execution) */
   coro_task_t **tasks; /**< Dynamic array of lazy tasks */
@@ -141,6 +140,9 @@ struct coro_context_s {
   /** Preferred UDP backend for future sockets created by this context */
   turbo_udp_backend_t udp_backend;
 };
+
+void coro_context_acquire_external(coro_context_t *ctx);
+void coro_context_release_external(coro_context_t *ctx);
 typedef struct coro_transport_ops_s coro_transport_ops_t;
 
 /** @brief Virtual dispatch table for transport-agnostic I/O. */
@@ -218,6 +220,8 @@ struct coro_socket_s {
   turbo_timer_t *timer;  /**< Timeout timer handle */
   uint64_t timeout_ms;   /**< Timeout duration (0 = no timeout) */
   int timed_out;         /**< 1 = last op timed out */
+  int timer_active;      /**< 1 = timeout timer is currently running and holds a reference */
+  int close_pending;     /**< 1 = transport close was requested and holds a reference */
 
   /* ── Lifecycle ─────────────────────────────────────────── */
   int ref_count;         /**< Reference count for safe destruction */
@@ -464,4 +468,4 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
 }
 #endif
 
-#endif /* coro_INTERNAL_H */
+#endif /* CORO_INTERNAL_H */

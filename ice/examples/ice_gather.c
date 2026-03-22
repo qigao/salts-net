@@ -65,16 +65,17 @@ int main(void) {
     printf("Local Credentials:\n  ufrag: %s\n  pwd:   %s\n\n", ufrag, pwd);
 
     /* Start gathering in a coroutine */
-    coro_t *co = coro_create(gathering_coro, agent, NULL);
-    if (co) {
-        coro_resume(co);
+    if (coro_context_spawn(ctx, gathering_coro, agent) != 0) {
+        fprintf(stderr, "Failed to spawn ICE gathering coroutine\n");
+        ice_agent_destroy(agent);
+        coro_context_destroy(ctx);
+        return 1;
     }
 
     /* Run loop */
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     /* Cleanup */
-    if (co) coro_destroy(co);
     ice_agent_destroy(agent);
     coro_context_destroy(ctx);
 

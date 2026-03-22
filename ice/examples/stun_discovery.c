@@ -46,9 +46,10 @@ int main(void) {
     }
 
     /* Start the discovery coroutine */
-    coro_t *co = coro_create(discovery_coro, ctx, NULL);
-    if (co) {
-        coro_resume(co);
+    if (coro_context_spawn(ctx, discovery_coro, ctx) != 0) {
+        fprintf(stderr, "Failed to spawn discovery coroutine\n");
+        coro_context_destroy(ctx);
+        return 1;
     }
 
     /* Run the event loop */
@@ -56,7 +57,6 @@ int main(void) {
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     /* Cleanup */
-    if (co) coro_destroy(co);
     coro_context_destroy(ctx);
     
     return 0;

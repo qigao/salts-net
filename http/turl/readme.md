@@ -224,11 +224,13 @@ turl -F "username=john" -F "avatar=@profile.png" https://api.example.com/upload
 
 ```bash
 # Connect and send a message
-turl -v -d "Hello WebSocket" ws://echo.websocket.org
+turl -v -d "Hello WebSocket" ws://127.0.0.1:9001/echo
 
 # Use secure WebSocket
-turl wss://echo.websocket.org
+turl wss://example.com/socket
 ```
+
+Replace the endpoint with a reachable WebSocket server in your environment.
 
 When connecting to a WebSocket, `turl` will:
 

@@ -187,8 +187,9 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
     coro_set_wait(s);
     coro_yield();
     if (s->status != 0) {
+      int status = s->status;
       release_client(s);
-      return s->status;
+      return status;
     }
   }
 
@@ -271,6 +272,7 @@ static void tcp_close(coro_socket_t *s) {
   turbo_stream_t *stream = s->handle.stream;
   if (!stream || !s->owns_handle) return;
   s->handle.stream = NULL;
+  s->close_pending = 1;
   retain_client(s);
   stream->on_close = on_tcp_close;
   turbo_stream_close(stream);

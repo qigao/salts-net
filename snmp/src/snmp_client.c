@@ -9,7 +9,6 @@
 #include "memory_pool.h"
 #include <stdlib.h>
 #include <string.h>
-#include <uv.h>
 #define STB_SPRINTF_IMPLEMENTATION
 #include <stb_sprintf.h>
 #include "tlog.h"
@@ -144,12 +143,8 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
         return NULL;
     }
 
-    /* Connect to target using UDP URL */
-    char url[256];
-    stbsp_snprintf(url, sizeof(url), "udp://%s:%u", client->host, client->port);
-    
-    if (coro_socket_connect(client->sock, url) != 0) {
-        TLOG_ERROR("SNMP failed to connect to {:s}", url);
+    if (coro_socket_connect(client->sock, client->host, client->port) != 0) {
+        TLOG_ERROR("SNMP failed to connect to {:s}:{:d}", client->host, client->port);
         coro_socket_destroy(client->sock);
         free(client->host);
         free(client->community);
@@ -157,8 +152,8 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
         return NULL;
     }
 
-    TLOG_INFO("SNMP client created for {:s} (version: {:d})", 
-              url, (int)client->version);
+    TLOG_INFO("SNMP client created for {:s}:{:d} (version: {:d})",
+              client->host, client->port, (int)client->version);
 
     return client;
 }
@@ -218,7 +213,7 @@ static int send_request_and_wait(
                 client->response_pool = NULL;
                 /* Might be a malformed packet, try next attempt */
             }
-        } else if (res == UV_ETIMEDOUT) {
+        } else if (res == TURBO_ETIMEDOUT) {
             TLOG_DEBUG("SNMP attempt {:d} timed out for {:s}", attempt + 1, client->host);
         } else {
             /* For actual network errors, fail immediately */

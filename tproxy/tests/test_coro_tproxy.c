@@ -6,6 +6,7 @@ spec("coro_tproxy_advanced") {
   describe("proxy lifecycle with features") {
     it("starts proxy with HTTP and Auth") {
       coro_context_t *ctx = coro_context_create(NULL);
+      coro_thread_pool_t *pool = coro_thread_pool_create(1);
       coro_tproxy_config_t config = {0};
       config.listen_urls = "tcp://127.0.0.1:1080";
       config.backend_url = NULL;
@@ -13,6 +14,7 @@ spec("coro_tproxy_advanced") {
       config.enable_http = 1;
       config.auth_user = "admin";
       config.auth_pass = "secret123";
+      config.thread_pool = pool;
       
       coro_tproxy_t *proxy = coro_tproxy_start(ctx, &config);
       check(proxy != NULL);
@@ -25,6 +27,7 @@ spec("coro_tproxy_advanced") {
       }
 
       coro_context_destroy(ctx);
+      coro_thread_pool_destroy(pool);
     }
 
     it("loads config from JSON") {

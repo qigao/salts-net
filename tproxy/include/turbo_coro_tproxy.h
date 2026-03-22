@@ -3,6 +3,7 @@
 
 #include "platform.h"
 #include <CoroNet.h>
+#include <CoroNet/turbo_coro_thread_pool.h>
 
 #include "turbo_coro_rule.h"
 #include <stdbool.h>
@@ -63,6 +64,10 @@ typedef struct coro_tproxy_config_s {
 
   // Transparent Proxy
   int transparent; /**< If 1, use IP_TRANSPARENT/TPROXY (Linux only) */
+
+  // Optional auxiliary coroutine thread pool. If NULL, tproxy may create a
+  // private single-thread pool for background health checks.
+  coro_thread_pool_t *thread_pool;
 } coro_tproxy_config_t;
 
 typedef struct coro_tproxy_s coro_tproxy_t;

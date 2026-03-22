@@ -231,12 +231,18 @@ static void tls_on_tcp_close(void *handle) {
 
   if (st->ssl) {
     SSL_free(st->ssl); 
-    /* SSL_free also frees the associated BIOs */
+    st->ssl = NULL;
   }
 
   turbo_stream_t *outer = st->outer;
+  if (outer) outer->backend_data = NULL;
+  tcp->user_data = NULL;
+  
   free(st);
-  turbo_stream_finalize_close(outer);
+
+  if (outer) {
+    turbo_stream_finalize_close(outer);
+  }
 }
 
 /* ── Backend vtable implementation ───────────────────────── */
@@ -312,20 +318,32 @@ static int tls_send(turbo_stream_t *s, const char *data, size_t len) {
   if (!st || st->state != TLS_ST_OPEN) return TURBO_ENOTCONN;
 
   if (len == 0) return 0;
-  
-  /* Write plaintext data into OpenSSL */
-  int n = SSL_write(st->ssl, data, (int)len);
-  
-  if (n > 0) {
-    /* Flush generated ciphertext to network */
+
+  size_t offset = 0;
+  while (offset < len) {
+    size_t remaining = len - offset;
+    int chunk = (remaining > (size_t)INT_MAX) ? INT_MAX : (int)remaining;
+    int n = SSL_write(st->ssl, data + offset, chunk);
+
+    if (n > 0) {
+      offset += (size_t)n;
+      tls_flush_wbio_to_network(st);
+      continue;
+    }
+
     tls_flush_wbio_to_network(st);
-    /* For true asynchronous behavior, if SSL_write didn't consume everything, 
-       we should buffer it or return partial. Here we assume full consumption 
-       is desired. turbo_stream design abstracts partial writes. */
-    return 0;
+
+    {
+      int err = SSL_get_error(st->ssl, n);
+      if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+        continue;
+      }
+    }
+
+    return TURBO_ECONNABORTED;
   }
-  
-  return TURBO_ECONNABORTED;
+
+  return 0;
 }
 
 static int tls_flush(turbo_stream_t *s) {
@@ -378,6 +396,8 @@ static void tls_close(turbo_stream_t *s) {
       SSL_free(st->ssl);
       st->ssl = NULL;
     }
+    s->backend_data = NULL;
+    free(st);
     turbo_stream_finalize_close(s);
   }
 }

@@ -16,15 +16,15 @@
 #include <string.h>
 #include "turbo_error.h"
 /* ── External transport ops (defined in separate files) ────── */
-/* ── External transport ops (defined in separate files) ────── */
 extern const coro_transport_ops_t transport_ops_tcp;
 extern const coro_transport_ops_t transport_ops_pipe;
 extern const coro_transport_ops_t udp_client_ops;
 extern const coro_transport_ops_t transport_ops_kcp;
+extern const coro_transport_ops_t transport_ops_tls;
 
 const coro_transport_ops_t *transport_ops_table[TURBO_TRANSPORT_MAX] = {
     [TURBO_TCP] = &transport_ops_tcp,
-    [TURBO_TLS] = NULL,
+    [TURBO_TLS] = &transport_ops_tls,
     [TURBO_KCP] = &transport_ops_kcp,
     [TURBO_UDP] = &udp_client_ops,
     [TURBO_PIPE] = &transport_ops_pipe,
@@ -106,8 +106,14 @@ void release_client(coro_socket_t *client) {
 static void on_timer_fired_bounce(void *arg1, void *arg2) {
   (void)arg2;
   coro_socket_t *s = (coro_socket_t *)arg1;
+
+  if (!s->timer_active) {
+    return; /* Already cancelled and released via stop_timeout_timer */
+  }
+
   s->timed_out = 1;
   s->status = TURBO_ETIMEDOUT;
+  s->timer_active = 0; /* Clear flag before resume to avoid race */
   if (s->co_wait) coro_resume_waiter(s);
   release_client(s);
 }
@@ -119,14 +125,16 @@ static void on_timer_fired(turbo_timer_t *timer) {
 
 void start_timeout_timer(coro_socket_t *s) {
   s->timed_out = 0;
-  if (s->timeout_ms > 0 && s->timer) {
+  if (s->timeout_ms > 0 && s->timer && !s->timer_active) {
+    s->timer_active = 1;
     retain_client(s);
     turbo_timer_start(s->timer, on_timer_fired, s->timeout_ms, 0);
   }
 }
 
 void stop_timeout_timer(coro_socket_t *s) {
-  if (s->timeout_ms > 0 && s->timer) {
+  if (s->timer_active) {
+    s->timer_active = 0;
     turbo_timer_stop(s->timer);
     release_client(s);
   }
@@ -158,6 +166,8 @@ void coro_socket_handle_transport_connect(coro_socket_t *s, int status) {
     stop_timeout_timer(s);
     coro_resume_waiter(s);
   }
+  
+  release_client(s); /* Balance retain from tcp_connect */
 }
 
 void coro_socket_handle_transport_close(coro_socket_t *s) {
@@ -180,10 +190,12 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
     s->write_status = TURBO_EOF;
     coro_resume_co(s->ctx, s->co_write_wait);
     s->co_write_wait = NULL;
-    release_client(s);
   }
 
-  release_client(s);
+  if (s->close_pending) {
+    s->close_pending = 0;
+    release_client(s); /* Balance retain from tcp_close */
+  }
 }
 
 void coro_client_wake_eof(coro_socket_t *client) {
@@ -200,22 +212,52 @@ void coro_client_wake_eof(coro_socket_t *client) {
 
 /* ── DNS Resolution ───────────────────────────────────────── */
 
-static void on_dns_resolved(const char *hostname, const char *ip, int status, void *user_data) {
-  coro_socket_t *s = (coro_socket_t *)user_data;
-  UNUSED(hostname);
+typedef struct {
+  coro_socket_t *s;
+  char ip[128];
+  int status;
+} dns_bounce_t;
+
+static void on_dns_resolved_bounce(void *arg1, void *arg2) {
+  dns_bounce_t *b = (dns_bounce_t *)arg1;
+  coro_socket_t *s = b->s;
+  (void)arg2;
 
   if (s->timed_out) {
+    free(b);
     release_client(s);
     return;
   }
 
   stop_timeout_timer(s);
-  s->status = status;
-  if (status == 0 && ip) {
-    strncpy(s->resolved_ip, ip, sizeof(s->resolved_ip) - 1);
+  s->status = b->status;
+  if (b->status == 0) {
+    strncpy(s->resolved_ip, b->ip, sizeof(s->resolved_ip) - 1);
   }
+  
   if (s->co_wait) coro_resume_waiter(s);
+  
+  free(b);
   release_client(s);
+}
+
+static void on_dns_resolved(const char *hostname, const char *ip, int status, void *user_data) {
+  coro_socket_t *s = (coro_socket_t *)user_data;
+  UNUSED(hostname);
+
+  /* This is called from a background thread — MUST use post for thread safety */
+  dns_bounce_t *b = (dns_bounce_t *)calloc(1, sizeof(dns_bounce_t));
+  if (!b) return;
+
+  b->s = s;
+  b->status = status;
+  if (ip) strncpy(b->ip, ip, sizeof(b->ip) - 1);
+
+  if (coro_post(s->ctx, on_dns_resolved_bounce, b, NULL) != 0) {
+    free(b);
+    /* Good taste: if post fails, we leak the reference... 
+       but we are already in big trouble if ring buffer full. */
+  }
 }
 
 /* ── Socket Creation ──────────────────────────────────────── */
@@ -266,6 +308,18 @@ coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type) 
     s->owns_handle = 1;
     break;
 
+  case CORO_SOCKET_TLS:
+    s->transport = TURBO_TLS;
+    s->ops = &transport_ops_tls;
+    s->owns_handle = 1;
+    break;
+
+  case CORO_SOCKET_KCP:
+    s->transport = TURBO_KCP;
+    s->ops = &transport_ops_kcp;
+    s->owns_handle = 1;
+    break;
+
   case CORO_SOCKET_PIPE:
     s->transport = TURBO_PIPE;
     s->ops = &transport_ops_pipe;
@@ -304,6 +358,7 @@ static turbo_transport_t socket_type_to_transport(coro_socket_type_t type) {
   switch (type) {
     case CORO_SOCKET_TCP_V4:
     case CORO_SOCKET_TCP_V6: return TURBO_TCP;
+    case CORO_SOCKET_TLS:    return TURBO_TLS;
     case CORO_SOCKET_UDP_V4:
     case CORO_SOCKET_UDP_V6: return TURBO_UDP;
     case CORO_SOCKET_KCP:    return TURBO_KCP;
@@ -315,9 +370,12 @@ static turbo_transport_t socket_type_to_transport(coro_socket_type_t type) {
 int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
   if (!s || !host) return TURBO_EINVAL;
 
-  turbo_transport_t transport = socket_type_to_transport(
-      /* recover type from transport field if already set, else default TCP */
-      s->transport < TURBO_TRANSPORT_MAX ? s->transport : TURBO_TCP);
+  /* If transport is already set (e.g. by coro_socket_create), use it.
+     Good taste: don't re-resolve what we already know. */
+  turbo_transport_t transport = s->transport;
+  if (transport >= TURBO_TRANSPORT_MAX) {
+    transport = TURBO_TCP;
+  }
 
   if (transport >= TURBO_TRANSPORT_MAX || !transport_ops_table[transport]) {
     return TURBO_EPROTONOSUPPORT;
@@ -367,8 +425,15 @@ int coro_socket_connect_pipe(coro_socket_t *s, const char *path) {
 
 int coro_socket_connect_ws(coro_socket_t *s, const char *host, int port,
                             const char *path, int is_tls) {
-  UNUSED(s); UNUSED(host); UNUSED(port); UNUSED(path); UNUSED(is_tls);
-  return TURBO_ENOTSUP;
+  if (!s) return TURBO_EINVAL;
+  
+  /* Update transport type if TLS is requested */
+  if (is_tls) {
+      s->transport = TURBO_TLS;
+      s->ops = transport_ops_table[TURBO_TLS];
+  }
+  
+  return coro_socket_connect(s, host, port);
 }
 
 /* ── Socket I/O ───────────────────────────────────────────── */
@@ -551,6 +616,12 @@ void coro_socket_destroy(coro_socket_t *s) {
     s->timer = NULL;
   }
 
+  /* Cancel DNS query */
+  if (s->dns_query) {
+    turbo_dns_cancel(s->dns_query);
+    s->dns_query = NULL;
+  }
+
   release_client(s); /* Release creator reference */
 }
 
@@ -575,7 +646,13 @@ void coro_socket_free_recv(void *d) {
   free(hdr); /* Free the whole block (header (magic=0) + data) */
 }
 
-void coro_socket_set_timeout(coro_socket_t *s, uint64_t t) { s->timeout_ms = t; }
+void coro_socket_set_timeout(coro_socket_t *s, uint64_t t) {
+  if (!s) return;
+  s->timeout_ms = t;
+  if (t == 0) {
+    stop_timeout_timer(s);
+  }
+}
 
 coro_context_t *coro_socket_get_context(coro_socket_t *s) { return s->ctx; }
 
@@ -607,10 +684,26 @@ turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *s) {
 }
 
 turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s) {
+  turbo_udp_backend_t preferred;
+
   if (!s || s->transport != TURBO_UDP) {
     return TURBO_UDP_BACKEND_AUTO;
   }
-  return s->ctx ? s->ctx->udp_backend : TURBO_UDP_BACKEND_AUTO;
+
+  preferred = s->ctx ? s->ctx->udp_backend : TURBO_UDP_BACKEND_AUTO;
+  if (preferred != TURBO_UDP_BACKEND_AUTO) {
+    return preferred;
+  }
+
+#ifdef _WIN32
+  return TURBO_UDP_BACKEND_IOCP;
+#elif defined(__linux__) || defined(__ANDROID__)
+  return TURBO_UDP_BACKEND_EPOLL;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  return TURBO_UDP_BACKEND_KQUEUE;
+#else
+  return TURBO_UDP_BACKEND_AUTO;
+#endif
 }
 
 int coro_socket_get_local_address(coro_socket_t *s, struct sockaddr_storage *a) {

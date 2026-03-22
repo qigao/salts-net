@@ -25,7 +25,7 @@ static void on_accept_local(void *server, void *client, void *peer) {
     s_accepted_count++;
 }
 
-spec("Stream IOCP Client") {
+spec("Stream") {
     it("should create and destroy stream") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);

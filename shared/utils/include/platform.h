@@ -34,7 +34,7 @@
     #if defined(SHARED_CXX)
         #define CXX_API CXX_DLL_EXPORT  // Building DLL: export symbols
     #else
-        #define CXX_API                 // Static library or importing: no decoration
+        #define CXX_API                 // Static library or POSIX: no decoration
     #endif
 #endif
 #ifdef __cplusplus

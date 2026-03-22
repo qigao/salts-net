@@ -5,6 +5,7 @@ add_subdirectory(parser)
 
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
      ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
+list(APPEND SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_tls.c)
 
 # Strip out all platform-specific backend files from glob results
 list(REMOVE_ITEM SOURCE_FILES
@@ -15,12 +16,7 @@ list(REMOVE_ITEM SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_tls.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_ws.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_websocket_server.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_websocket_client.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c)
 
 if(WIN32)
   list(APPEND SOURCE_FILES
@@ -33,23 +29,20 @@ elseif(APPLE) # macOS, iOS, tvOS, watchOS
   list(APPEND SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c)
 
 
 elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
   list(APPEND SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c)
 
 
 else()
   # Fallback for other Unix-like OSes
   list(APPEND SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c)
 
 endif()
 
@@ -64,6 +57,7 @@ set_target_properties(${STATIC_TARGET_NAME} PROPERTIES OUTPUT_NAME coronet_stati
 
 # Build SHARED library
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
+target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 add_library(TurboNet::CoroNet ALIAS ${TARGET_NAME})
 set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${TARGET_NAME} EXPORT_NAME CoroNet)
 

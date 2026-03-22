@@ -90,51 +90,65 @@ static void ensure_test_bucket(test_ctx_t* t, __bdd_config_type__ *__bdd_config_
 }
 
 // Complex tests still need a separate function for coroutine execution
+typedef struct {
+    s3_error_t err;
+    s3_error_t stat_err;
+    s3_error_t get_err;
+    size_t stat_size;
+    size_t downloaded_len;
+    char first_byte;
+    char last_byte;
+    int alloc_ok;
+} multipart_test_result_t;
+
 static void test_multipart_impl(void* arg) {
-    typedef struct { test_ctx_t* t; __bdd_config_type__* bdd; } coro_args_t;
+    typedef struct { test_ctx_t* t; multipart_test_result_t* out; } coro_args_t;
     coro_args_t* a = (coro_args_t*)arg;
     test_ctx_t* t = a->t;
-    __bdd_config_type__* __bdd_config__ = a->bdd;
+    multipart_test_result_t* out = a->out;
 
-    ensure_test_bucket(t, __bdd_config__);
     size_t large_len = 10 * 1024 * 1024 + 1;
     char* large_data = malloc(large_len);
-    check_not_null(large_data);
-    if (!large_data) return;
+    memset(out, 0, sizeof(*out));
+    out->alloc_ok = (large_data != NULL);
+    if (!large_data) {
+        out->err = s3_error_make(-1, "Failed to allocate multipart test buffer");
+        return;
+    }
     memset(large_data, 'A', large_len);
     large_data[large_len - 1] = 'Z';
 
     const char* object_name = "test-parallel-multipart.bin";
-    s3_error_t err = s3_put_object(t->client, t->test_bucket, object_name, large_data, large_len, "application/octet-stream");
-    if (!s3_is_ok(err)) {
-        printf("Parallel multipart upload failed: code=%d msg=%s\n", err.code, err.message ? err.message : "(null)");
+    out->err = s3_put_object(t->client, t->test_bucket, object_name, large_data, large_len,
+                             "application/octet-stream");
+    if (!s3_is_ok(out->err)) {
+        printf("Parallel multipart upload failed: code=%d msg=%s\n", out->err.code,
+               out->err.message ? out->err.message : "(null)");
     }
-    check(s3_is_ok(err));
 
-    if (s3_is_ok(err)) {
+    if (s3_is_ok(out->err)) {
         printf("Parallel multipart upload succeeded (10MB+1, 3 parts)\n");
 
         s3_stat_object_response_t st = s3_stat_object(t->client, t->test_bucket, object_name);
-        if (!s3_is_ok(st.error)) {
-            printf("s3_stat_object failed: code=%d msg=%s\n", st.error.code, st.error.message ? st.error.message : "(null)");
+        out->stat_size = st.size;
+        out->stat_err = s3_error_clone(st.error);
+        if (!s3_is_ok(out->stat_err)) {
+            printf("s3_stat_object failed: code=%d msg=%s\n", out->stat_err.code,
+                   out->stat_err.message ? out->stat_err.message : "(null)");
         }
-        check(s3_is_ok(st.error));
-        check_int_eq((int)st.size, (int)large_len);
         s3_stat_object_response_free(&st);
 
         tstr_t content = tstr_new();
-        err = s3_get_object(t->client, t->test_bucket, object_name, test_get_callback, &content);
-        check(s3_is_ok(err));
-        check_int_eq((int)tstr_len(content), (int)large_len);
+        out->get_err = s3_get_object(t->client, t->test_bucket, object_name, test_get_callback, &content);
+        out->downloaded_len = tstr_len(content);
         printf("Downloaded %zu bytes. First byte: %c, last byte: %c\n", tstr_len(content), (int)tstr_len(content) > 0 ? content[0] : '?', (int)tstr_len(content) > 0 ? content[large_len - 1] : '?');
-        check(content[0] == 'A');
-        check(content[large_len - 1] == 'Z');
+        out->first_byte = tstr_len(content) > 0 ? content[0] : '\0';
+        out->last_byte = tstr_len(content) > 0 ? content[large_len - 1] : '\0';
         printf("Parallel multipart content verified\n");
         tstr_free(content);
-        s3_error_free(&err);
 
-        err = s3_remove_object(t->client, t->test_bucket, object_name);
-        s3_error_free(&err);
+        s3_error_t remove_err = s3_remove_object(t->client, t->test_bucket, object_name);
+        s3_error_free(&remove_err);
     }
     free(large_data);
 }
@@ -306,9 +320,22 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should put a large object via parallel multipart upload") {
-        typedef struct { test_ctx_t* t; __bdd_config_type__* bdd; } coro_args_t;
-        coro_args_t args = { &tctx, __bdd_config__ };
+        multipart_test_result_t result = {0};
+        typedef struct { test_ctx_t* t; multipart_test_result_t* out; } coro_args_t;
+        coro_args_t args = { &tctx, &result };
+        ensure_test_bucket(&tctx, __bdd_config__);
         run_in_coro(g_ctx, test_multipart_impl, &args);
+        check(result.alloc_ok);
+        check(s3_is_ok(result.err));
+        check(s3_is_ok(result.stat_err));
+        check_int_eq((int)result.stat_size, (int)(10 * 1024 * 1024 + 1));
+        check(s3_is_ok(result.get_err));
+        check_int_eq((int)result.downloaded_len, (int)(10 * 1024 * 1024 + 1));
+        check(result.first_byte == 'A');
+        check(result.last_byte == 'Z');
+        s3_error_free(&result.err);
+        s3_error_free(&result.stat_err);
+        s3_error_free(&result.get_err);
     }
 
     it("should still put small objects via simple PUT") {

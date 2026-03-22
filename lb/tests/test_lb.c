@@ -12,6 +12,26 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+static void spawn_test_coro(coro_context_t *ctx, coro_fn fn, void *arg) {
+    check(coro_context_spawn(ctx, fn, arg) == 0);
+}
+
+static void run_until_flag(coro_context_t *ctx, int *flag) {
+    uint64_t deadline = turbo_monotonic_ms() + 3000;
+    while (!*flag && turbo_monotonic_ms() < deadline) {
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+        turbo_sleep_ms(1);
+    }
+}
+
+static void drain_after_stop(coro_context_t *ctx) {
+    uint64_t deadline = turbo_monotonic_ms() + 200;
+    while (turbo_monotonic_ms() < deadline) {
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+        turbo_sleep_ms(1);
+    }
+}
+
 /* ── L4 Helpers ───────────────────────────────────────────── */
 
 typedef struct {
@@ -36,7 +56,7 @@ static void echo_worker_coro(coro_t *co, void *arg) {
     size_t len = 0;
     while (coro_socket_recv(c, &data, &len) == 0) {
         coro_socket_send(c, data, len);
-        free(data);
+        coro_socket_free_recv(data);
         data = NULL;
     }
 
@@ -82,7 +102,7 @@ static void test_client_coro(coro_t *co, void *arg) {
         cctx->recv_buf[copy] = '\0';
         cctx->recv_len = copy;
         cctx->success = 1;
-        free(data);
+        coro_socket_free_recv(data);
     }
 
     coro_socket_destroy(c);
@@ -130,7 +150,7 @@ static void l7_echo_worker_coro(coro_t *co, void *arg) {
             coro_socket_send(c, resp, total);
             free(resp);
         }
-        free(data);
+        coro_socket_free_recv(data);
         data = NULL;
     }
 
@@ -180,7 +200,7 @@ static void l7_test_client_coro(coro_t *co, void *arg) {
         memcpy(cctx->recv_buf, data, copy);
         cctx->recv_buf[copy] = '\0';
         cctx->success = 1;
-        free(data);
+        coro_socket_free_recv(data);
     }
 
     coro_socket_destroy(c);
@@ -247,7 +267,7 @@ static void req_echo_worker_coro(coro_t *co, void *arg) {
         if (len >= 1) data[0] = (char)((unsigned char)data[0] | 0x80);
         coro_socket_send(c, data, len);
         wctx->messages_handled++;
-        free(data);
+        coro_socket_free_recv(data);
         data = NULL;
     }
 
@@ -300,7 +320,7 @@ static void tlv_test_client_coro(coro_t *co, void *arg) {
             cctx->recv_payload_len = plen;
         }
         cctx->success = 1;
-        free(data);
+        coro_socket_free_recv(data);
     }
 
     coro_socket_destroy(c);
@@ -399,8 +419,7 @@ spec("coro_lb") {
                 .backend_port = 19190,
                 .sessions_served = 0
             };
-            coro_t *wco = coro_create(echo_worker_coro, &wctx, NULL);
-            coro_resume(wco);
+            spawn_test_coro(ctx, echo_worker_coro, &wctx);
 
             /* Spawn test client */
             client_ctx_t cctx = {
@@ -410,15 +429,15 @@ spec("coro_lb") {
                 .send_data = "hello LB",
                 .success = 0
             };
-            coro_t *cco = coro_create(test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             check(cctx.success == 1);
             check(strcmp(cctx.recv_buf, "hello LB") == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
     }
@@ -445,8 +464,7 @@ spec("coro_lb") {
                 .tag = "[API]",
                 .sessions_served = 0,
             };
-            coro_t *api_co = coro_create(l7_echo_worker_coro, &api_wctx, NULL);
-            coro_resume(api_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &api_wctx);
 
             /* Spawn web worker */
             l7_worker_ctx_t web_wctx = {
@@ -457,8 +475,7 @@ spec("coro_lb") {
                 .tag = "[WEB]",
                 .sessions_served = 0,
             };
-            coro_t *web_co = coro_create(l7_echo_worker_coro, &web_wctx, NULL);
-            coro_resume(web_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &web_wctx);
 
             /* Client sends API: prefix -> routed to api worker */
             l7_client_ctx_t cctx = {
@@ -469,15 +486,15 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(l7_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, l7_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[API]", 5) == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
 
@@ -502,8 +519,7 @@ spec("coro_lb") {
                 .tag = "[API]",
                 .sessions_served = 0,
             };
-            coro_t *api_co = coro_create(l7_echo_worker_coro, &api_wctx, NULL);
-            coro_resume(api_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &api_wctx);
 
             /* Spawn web worker */
             l7_worker_ctx_t web_wctx = {
@@ -514,8 +530,7 @@ spec("coro_lb") {
                 .tag = "[WEB]",
                 .sessions_served = 0,
             };
-            coro_t *web_co = coro_create(l7_echo_worker_coro, &web_wctx, NULL);
-            coro_resume(web_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &web_wctx);
 
             /* Client sends WEB: prefix -> routed to web worker */
             l7_client_ctx_t cctx = {
@@ -526,15 +541,15 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(l7_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, l7_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[WEB]", 5) == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
 
@@ -559,8 +574,7 @@ spec("coro_lb") {
                 .tag = "[WEB]",
                 .sessions_served = 0,
             };
-            coro_t *web_co = coro_create(l7_echo_worker_coro, &web_wctx, NULL);
-            coro_resume(web_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &web_wctx);
 
             /* route_cb returns NULL for unknown prefix -> matches any idle worker */
             l7_client_ctx_t cctx = {
@@ -571,15 +585,15 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(l7_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, l7_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[WEB]", 5) == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
     }
@@ -602,8 +616,7 @@ spec("coro_lb") {
                 .backend_port = 19590,
                 .messages_handled = 0,
             };
-            coro_t *wco = coro_create(req_echo_worker_coro, &wctx, NULL);
-            coro_resume(wco);
+            spawn_test_coro(ctx, req_echo_worker_coro, &wctx);
 
             tlv_client_ctx_t cctx = {
                 .ctx = ctx,
@@ -614,16 +627,16 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(tlv_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, tlv_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             check(cctx.success == 1);
             check(cctx.recv_type == 0x81);  /* 0x01 | 0x80 */
             check(strcmp(cctx.recv_payload, "hello") == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
     }
@@ -647,8 +660,7 @@ spec("coro_lb") {
                 .backend_port = 19690,
                 .messages_handled = 0,
             };
-            coro_t *wco = coro_create(req_echo_worker_coro, &wctx, NULL);
-            coro_resume(wco);
+            spawn_test_coro(ctx, req_echo_worker_coro, &wctx);
 
             /* Send type=0xFF which filter rejects */
             tlv_client_ctx_t cctx = {
@@ -660,10 +672,9 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(tlv_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, tlv_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             /* Client receives the reject TLV, not a worker echo */
             check(cctx.success == 1);
@@ -673,6 +684,7 @@ spec("coro_lb") {
             check(wctx.messages_handled == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
 
@@ -697,8 +709,7 @@ spec("coro_lb") {
                 .tag = "[WEB]",
                 .sessions_served = 0,
             };
-            coro_t *web_co = coro_create(l7_echo_worker_coro, &web_wctx, NULL);
-            coro_resume(web_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &web_wctx);
 
             /* Client sends "BLOCK:..." which filter rejects */
             l7_client_ctx_t cctx = {
@@ -709,16 +720,16 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(l7_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, l7_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             /* Client receives reject response */
             check(cctx.success == 1);
             check(strcmp(cctx.recv_buf, "BLOCKED") == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
 
@@ -743,8 +754,7 @@ spec("coro_lb") {
                 .tag = "[API]",
                 .sessions_served = 0,
             };
-            coro_t *api_co = coro_create(l7_echo_worker_coro, &api_wctx, NULL);
-            coro_resume(api_co);
+            spawn_test_coro(ctx, l7_echo_worker_coro, &api_wctx);
 
             /* Normal data passes filter */
             l7_client_ctx_t cctx = {
@@ -755,15 +765,15 @@ spec("coro_lb") {
                 .success = 0,
                 .stop_after = 1,
             };
-            coro_t *cco = coro_create(l7_test_client_coro, &cctx, NULL);
-            coro_resume(cco);
+            spawn_test_coro(ctx, l7_test_client_coro, &cctx);
 
-            coro_context_run(ctx, TURBO_RUN_DEFAULT);
+            run_until_flag(ctx, &cctx.success);
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[API]", 5) == 0);
 
             coro_lb_destroy(lb);
+            drain_after_stop(ctx);
             coro_context_destroy(ctx);
         }
     }

@@ -4,6 +4,7 @@
 #include <fmt.h>
 #include <string.h>
 #include <stdlib.h>
+#include <http_common.h>
 
 s3_url_t s3_url_parse(const char* input) {
     s3_url_t url = {0};

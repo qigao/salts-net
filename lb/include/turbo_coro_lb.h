@@ -14,6 +14,7 @@
 
 #include "platform.h"
 #include <CoroNet/turbo_coro_context.h>
+#include <CoroNet/turbo_coro_thread_pool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -93,6 +94,7 @@ typedef turbo_lb_filter_result_t (*coro_lb_filter_fn)(
 typedef struct {
     turbo_lb_balance_t balance;
     turbo_lb_mode_t mode;
+    coro_thread_pool_t *thread_pool; /**< Optional auxiliary worker pool. */
 
     /* L7 routing (both modes) */
     coro_lb_route_fn route_cb; /**< NULL = no routing */
@@ -109,7 +111,7 @@ typedef struct {
 } coro_lb_config_t;
 
 #define coro_LB_CONFIG_DEFAULT \
-    { TURBO_LB_ROUND_ROBIN, TURBO_LB_MODE_SESSION, \
+    { TURBO_LB_ROUND_ROBIN, TURBO_LB_MODE_SESSION, NULL, \
       NULL, NULL, 0, NULL, NULL, NULL, NULL }
 
 /* ── API ──────────────────────────────────────────────────── */

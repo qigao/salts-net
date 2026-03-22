@@ -31,12 +31,14 @@ typedef struct {
 
 /* ── Waiter list node ─────────────────────────────────────── */
 
-typedef enum { POOL_WAKE_RETRY = 0, POOL_WAKE_CLOSED } pool_wake_reason_t;
+typedef enum { POOL_WAKE_RETRY = 0, POOL_WAKE_CLOSED, POOL_WAKE_TIMEOUT } pool_wake_reason_t;
 
 typedef struct pool_waiter_s {
+  struct coro_pool_s *pool;
   coro_t *co;                     /**< Suspended coroutine */
   int is_scheduled;               /**< 1 = scheduler-managed */
   pool_wake_reason_t wake_reason; /**< Wake reason set by pool */
+  uint64_t deadline_ms;           /**< 0 = no timeout */
   struct pool_waiter_s *next;
 } pool_waiter_t;
 
@@ -52,6 +54,8 @@ struct coro_pool_s {
   size_t alive_count;
   turbo_timer_t *idle_timer;
   int idle_timer_active;
+  turbo_timer_t *waiter_timer;
+  int waiter_timer_active;
   int destroy_pending;
   int closed;
   coro_socket_type_t socket_type;
@@ -70,6 +74,12 @@ static void destroy_slot(coro_pool_t *pool, size_t idx);
 static void idle_timer_cb(turbo_timer_t *handle);
 static void idle_timer_start(coro_pool_t *pool);
 static void idle_timer_stop(coro_pool_t *pool);
+static void waiter_timer_cb(turbo_timer_t *timer);
+static void waiter_timer_bounce(void *arg1, void *arg2);
+static void waiter_timer_start(coro_pool_t *pool);
+static void waiter_timer_stop(coro_pool_t *pool);
+static void remove_waiter(coro_pool_t *pool, pool_waiter_t *waiter);
+static void finalize_pool_destroy(coro_pool_t *pool);
 static void wake_all_waiters(coro_pool_t *pool);
 static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason);
 
@@ -146,10 +156,11 @@ void coro_pool_close(coro_pool_t *pool) {
   pool->closed = 1;
 
   idle_timer_stop(pool);
+  waiter_timer_stop(pool);
 
-  /* Destroy all slots */
+  /* Destroy only idle slots. Borrowed slots remain valid until returned. */
   for (size_t i = 0; i < pool->config.max_size; i++) {
-    if (pool->slots[i].state != POOL_SLOT_EMPTY) destroy_slot(pool, i);
+    if (pool->slots[i].state == POOL_SLOT_IDLE) destroy_slot(pool, i);
   }
 
   /* Wake ALL blocked borrowers with TURBO_EOF so none hang forever */
@@ -171,7 +182,13 @@ void coro_pool_destroy(coro_pool_t *pool) {
     pool->idle_timer = NULL;
   }
 
-  free(pool);
+  if (pool->waiter_timer) {
+    turbo_timer_destroy(pool->waiter_timer);
+    pool->waiter_timer = NULL;
+  }
+
+  pool->destroy_pending = 1;
+  finalize_pool_destroy(pool);
 }
 
 /* ── Borrow ───────────────────────────────────────────────── */
@@ -242,16 +259,20 @@ retry:
     }
   }
 
-  /* 4. Enqueue ourselves as a waiter using the pool's arena */
-  mem_buffer_t *waiter_buf = mem_get_buffer(pool->arena, sizeof(pool_waiter_t));
-  if (!waiter_buf) return TURBO_ENOMEM;
-  
-  pool_waiter_t *waiter = (pool_waiter_t *)waiter_buf->data;
-  
+  /* 4. Enqueue ourselves as a waiter */
+  pool_waiter_t *waiter = (pool_waiter_t *)calloc(1, sizeof(*waiter));
+  if (!waiter) return TURBO_ENOMEM;
+
+  waiter->pool = pool;
   waiter->co = coro_running();
   waiter->is_scheduled = coro_is_scheduled(waiter->co);
   waiter->wake_reason = POOL_WAKE_RETRY;
+  waiter->deadline_ms = 0;
   waiter->next = NULL;
+
+  if (pool->config.borrow_timeout_ms > 0) {
+    waiter->deadline_ms = start_time + pool->config.borrow_timeout_ms;
+  }
 
   if (pool->waiter_tail) {
     pool->waiter_tail->next = waiter;
@@ -259,6 +280,10 @@ retry:
     pool->waiter_head = waiter;
   }
   pool->waiter_tail = waiter;
+
+  if (waiter->deadline_ms != 0) {
+    waiter_timer_start(pool);
+  }
 
   TLOG_DEBUG("Coro pool borrow blocked (pool full). Waiter queued.");
 
@@ -270,13 +295,18 @@ retry:
   coro_yield();
 
   pool_wake_reason_t wake_reason = waiter->wake_reason;
-  mem_release(waiter_buf);
+  free(waiter);
 
   /* pool_close/pool_destroy wake path: return immediately without touching
      the pool again (pool memory may be reclaimed right after wake). */
   if (wake_reason == POOL_WAKE_CLOSED) {
     TLOG_DEBUG("Coro pool borrow aborted (pool closed while waiting).");
     return TURBO_EOF;
+  }
+
+  if (wake_reason == POOL_WAKE_TIMEOUT) {
+    TLOG_DEBUG("Coro pool borrow timed out while waiting.");
+    return TURBO_ETIMEDOUT;
   }
 
   TLOG_DEBUG("Coro pool borrow retrying after wake...");
@@ -303,6 +333,7 @@ void coro_pool_return(coro_pool_t *pool, coro_socket_t *client) {
         TLOG_DEBUG("Coro pool destroying returned connection in slot {:d} (dead or closed)", i);
         destroy_slot(pool, i);
       }
+      finalize_pool_destroy(pool);
       return;
     }
   }
@@ -347,8 +378,7 @@ static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason) {
   if (!pool->waiter_head) return;
 
   pool_waiter_t *w = pool->waiter_head;
-  pool->waiter_head = w->next;
-  if (!pool->waiter_head) pool->waiter_tail = NULL;
+  remove_waiter(pool, w);
   w->wake_reason = reason;
 
   TLOG_DEBUG("Coro pool waking one waiter (reason {:s})", ENUM_NAME(reason));
@@ -371,6 +401,38 @@ static void wake_all_waiters(coro_pool_t *pool) {
   while (pool->waiter_head) {
     wake_one_waiter(pool, POOL_WAKE_CLOSED);
   }
+}
+
+static void remove_waiter(coro_pool_t *pool, pool_waiter_t *waiter) {
+  pool_waiter_t *prev = NULL;
+  pool_waiter_t *cur = pool ? pool->waiter_head : NULL;
+
+  while (cur) {
+    if (cur == waiter) {
+      if (prev) {
+        prev->next = cur->next;
+      } else {
+        pool->waiter_head = cur->next;
+      }
+      if (pool->waiter_tail == cur) {
+        pool->waiter_tail = prev;
+      }
+      cur->next = NULL;
+      if (!pool->waiter_head) {
+        waiter_timer_stop(pool);
+      }
+      return;
+    }
+    prev = cur;
+    cur = cur->next;
+  }
+}
+
+static void finalize_pool_destroy(coro_pool_t *pool) {
+  if (!pool || !pool->destroy_pending) return;
+  if (pool->waiter_head) return;
+  if (pool->alive_count != 0) return;
+  free(pool);
 }
 
 /* ── Internal: slot management ────────────────────────────── */
@@ -461,4 +523,58 @@ static void idle_timer_stop(coro_pool_t *pool) {
     turbo_timer_stop(pool->idle_timer);
   }
   pool->idle_timer_active = 0;
+}
+
+static void waiter_timer_bounce(void *arg1, void *arg2) {
+  (void)arg2;
+  turbo_timer_t *timer = (turbo_timer_t *)arg1;
+  coro_pool_t *pool = (coro_pool_t *)turbo_timer_get_data(timer);
+  pool_waiter_t *waiter;
+  pool_waiter_t *next;
+  uint64_t now;
+
+  if (!pool || pool->closed) return;
+
+  now = turbo_loop_now(pool->loop);
+  waiter = pool->waiter_head;
+  while (waiter) {
+    next = waiter->next;
+    if (waiter->deadline_ms != 0 && now >= waiter->deadline_ms) {
+      remove_waiter(pool, waiter);
+      waiter->wake_reason = POOL_WAKE_TIMEOUT;
+      if (waiter->is_scheduled) {
+        coro_set_waiting_for_io(waiter->co, 0);
+      } else if (waiter->co && waiter->co != coro_running()) {
+        coro_resume(waiter->co);
+      }
+    }
+    waiter = next;
+  }
+}
+
+static void waiter_timer_cb(turbo_timer_t *timer) {
+  coro_pool_t *pool = (coro_pool_t *)turbo_timer_get_data(timer);
+  if (!pool || pool->closed) return;
+  coro_post(pool->ctx, waiter_timer_bounce, timer, NULL);
+}
+
+static void waiter_timer_start(coro_pool_t *pool) {
+  if (!pool || pool->waiter_timer_active) return;
+
+  if (!pool->waiter_timer) {
+    pool->waiter_timer = turbo_timer_create(NULL);
+    if (!pool->waiter_timer) return;
+    turbo_timer_set_data(pool->waiter_timer, pool);
+  }
+
+  turbo_timer_start(pool->waiter_timer, waiter_timer_cb, 10, 10);
+  pool->waiter_timer_active = 1;
+}
+
+static void waiter_timer_stop(coro_pool_t *pool) {
+  if (!pool || !pool->waiter_timer_active) return;
+  if (pool->waiter_timer) {
+    turbo_timer_stop(pool->waiter_timer);
+  }
+  pool->waiter_timer_active = 0;
 }

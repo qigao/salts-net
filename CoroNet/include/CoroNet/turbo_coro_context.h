@@ -277,7 +277,9 @@ typedef struct coro_task_s coro_task_t;
  * begin execution. This allows conditional execution, cancellation, and
  * composition of multiple tasks.
  *
- * The task is automatically destroyed when it completes or is cancelled.
+ * The task handle remains valid after completion so callers can inspect
+ * completion state or combine it with other tasks. Destroy it explicitly
+ * with coro_task_destroy(), or let coro_context_destroy() reclaim it.
  *
  * @param ctx  Event-loop context
  * @param fn   Coroutine entry function
@@ -303,7 +305,7 @@ CXX_C_API int coro_task_start(coro_task_t *task);
  * @brief Cancel a lazy task.
  *
  * Cancels a task that has not yet been started. Once cancelled, the task
- * cannot be started and will be automatically destroyed.
+ * cannot be started and becomes "done".
  *
  * @param task  Task to cancel
  * @return 0 on success, TURBO_EINVAL if already started
@@ -321,9 +323,10 @@ CXX_C_API int coro_task_is_done(coro_task_t *task);
 /**
  * @brief Manually destroy a task.
  *
- * Normally tasks are auto-destroyed when they complete or are cancelled.
- * Use this only if you need to destroy a task that was created but never
- * started and never cancelled.
+ * Releases the caller's ownership of a task handle. Unstarted tasks are
+ * destroyed immediately; completed tasks are destroyed once no references
+ * remain. Any task still owned by the context is reclaimed on
+ * coro_context_destroy().
  *
  * @param task  Task to destroy (NULL-safe)
  */

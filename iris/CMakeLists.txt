@@ -1,5 +1,4 @@
 set(TARGET_NAME iris)
-find_package(libuv CONFIG REQUIRED)
 # Generate security validators from re2c
 set(SECURITY_VALIDATORS_RE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/security_validators.re)
@@ -49,7 +48,6 @@ set_target_properties(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::CoroNet
-  $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE llhttp::llhttp_static
           kcp::kcp
           c-ares::cares

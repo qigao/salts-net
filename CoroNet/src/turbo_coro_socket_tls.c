@@ -1,150 +1,143 @@
 /**
  * @file turbo_coro_socket_tls.c
- * @brief TLS transport implementation for coroutine sockets.
+ * @brief TLS transport for coroutine sockets — delegates to turbo_stream_t with TLS backend.
  */
 
 #include "CoroNet/turbo_coro_internal.h"
+#include "turbo_stream_internal.h"
+#include "turbo_error.h"
 #include <stdlib.h>
 #include <string.h>
-#include "turbo_error.h"
-/* ── Forward declarations ─────────────────────────────────── */
-static void on_tls_coro_handshake(turbo_tls_client_t *client, int status);
 
-/* ── TLS Callbacks ────────────────────────────────────────── */
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <arpa/inet.h>
+#endif
 
-static int on_tls_coro_recv(void *handle, const mem_slice_t *slice, void *peer) {
+extern const coro_transport_ops_t transport_ops_tls;
+
+/* Pre-declare SNI setter from turbo_stream_tls.c */
+void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
+
+/* ── Client callbacks (Same as TCP as they use turbo_stream_t) ── */
+
+static int on_tls_recv(void *handle, const mem_slice_t *slice, void *peer) {
   UNUSED(peer);
-  turbo_tls_client_t *tls = (turbo_tls_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)tls->user_data;
-  if (!s) return 0;
-  coro_socket_handle_transport_recv(s, slice);
+  turbo_stream_t *stream = (turbo_stream_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  if (s) {
+    coro_socket_handle_transport_recv(s, slice);
+  }
   return 0;
 }
 
-static void on_tls_coro_connect(void *handle, int status, void *extra) {
+static void on_tls_connect(void *handle, int status, void *extra) {
   UNUSED(extra);
-  turbo_tls_client_t *tls = (turbo_tls_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)tls->user_data;
-  if (!s) return;
-  
-  if (status != 0) {
+  turbo_stream_t *stream = (turbo_stream_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  if (s) {
     coro_socket_handle_transport_connect(s, status);
   }
-  
-  /* TCP connected, wait for TLS handshake which will fire on_tls_coro_handshake */
 }
 
-static void on_tls_coro_handshake(turbo_tls_client_t *client, int status) {
-  coro_socket_t *s = (coro_socket_t *)client->user_data;
-  if (!s) return;
-  
-  /* Handshake done, now we can resume the connect coro */
-  coro_socket_handle_transport_connect(s, status);
-}
-
-static void on_tls_coro_close(void *handle) {
-  turbo_tls_client_t *tls = (turbo_tls_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)tls->user_data;
+static void on_tls_close(void *handle) {
+  turbo_stream_t *stream = (turbo_stream_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   if (s) {
-    tls->user_data = NULL;
+    turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
   }
 }
 
-/* ── TLS Connect ──────────────────────────────────────────── */
+/* ── Connect ──────────────────────────────────────────────── */
 
 static int tls_connect(coro_socket_t *s, const char *host, int port) {
-  if (!s->tls) {
-    turbo_tls_context_init(&s->tls_ctx, TURBO_TLS_CONTEXT_LIB_INIT);
-    /* In tests we usually don't verify certs for httpbin */
-    turbo_tls_context_set_verify_flags(&s->tls_ctx, TURBO_TLS_VERIFY_NONE);
-    
-    s->tls = turbo_tls_client_create_on_context(s->ctx, &s->tls_ctx);
-    if (!s->tls) return TURBO_ENOMEM;
-    s->tls->user_data = s;
+  const char *ip = s->resolved_ip[0] ? s->resolved_ip : host;
+
+  struct sockaddr *sa = (struct sockaddr *)&s->peer_addr;
+  memset(sa, 0, sizeof(s->peer_addr));
+
+  if (inet_pton(AF_INET, ip, &((struct sockaddr_in *)sa)->sin_addr) == 1) {
+    ((struct sockaddr_in *)sa)->sin_family = AF_INET;
+    ((struct sockaddr_in *)sa)->sin_port = htons((unsigned short)port);
+  } else if (inet_pton(AF_INET6, ip, &((struct sockaddr_in6 *)sa)->sin6_addr) == 1) {
+    ((struct sockaddr_in6 *)sa)->sin6_family = AF_INET6;
+    ((struct sockaddr_in6 *)sa)->sin6_port = htons((unsigned short)port);
+  } else {
+    return TURBO_EINVAL;
   }
-  
-  /* Crucial: Set hostname for SNI */
-  turbo_tls_client_set_hostname(s->tls, host, strlen(host));
-  
-  /* Set handshake callback to wake up the coroutine when TLS is really ready */
-  s->tls->handshake_done_cb = on_tls_coro_handshake;
-  
+
+  if (!s->handle.stream) {
+    s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
+    if (!s->handle.stream) return TURBO_ENOMEM;
+    
+    /* Important: Set SNI for TLS handshake */
+    turbo_stream_tls_set_sni(s->handle.stream, host);
+    
+    turbo_stream_set_user_data(s->handle.stream, s);
+    s->handle.stream->managed = 1;
+  }
+
   retain_client(s);
-  int r = turbo_tls_client_connect(
-      s->tls, 
-      s->resolved_ip, 
-      (unsigned short)port,
-      on_tls_coro_recv, 
-      on_tls_coro_connect, 
-      on_tls_coro_close
-  );
-  
+  int r = turbo_stream_connect_addr(s->handle.stream, sa,
+                                    on_tls_connect, on_tls_close);
   if (r != 0) {
     release_client(s);
     return r;
   }
-  
+
   coro_set_wait(s);
   coro_yield();
   return s->status;
 }
 
-/* ── TLS Send/Recv ────────────────────────────────────────── */
+/* ── Send/Recv ────────────────────────────────────────────── */
 
 static int tls_send(coro_socket_t *s, const char *data, size_t len) {
-  if (s->status != 0) return s->status;
-  if (!s->tls) return TURBO_ENOTCONN;
-  
-  /* Standard fallback send */
-  return turbo_tls_send(s->tls, data, len);
-}
-
-static mem_buffer_t *tls_get_send_buffer(coro_socket_t *s, size_t min_size) {
-  if (!s->tls) return NULL;
-  return turbo_tls_get_send_buffer(s->tls, min_size);
-}
-
-static int tls_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
-  if (!s->tls) return TURBO_ENOTCONN;
-  return turbo_tls_send_buffer(s->tls, buffer, len);
+    return turbo_stream_send(s->handle.stream, data, len);
 }
 
 static int tls_recv_start(coro_socket_t *s) {
-  if (!s->tls) return TURBO_ENOTCONN;
-  return turbo_tls_read_start(s->tls, NULL, on_tls_coro_recv);
+    return turbo_stream_recv_start(s->handle.stream, on_tls_recv);
 }
 
 static void tls_recv_stop(coro_socket_t *s) {
-  if (s->tls) turbo_tls_read_stop(s->tls);
+    turbo_stream_recv_stop(s->handle.stream);
 }
 
-/* ── TLS Close ────────────────────────────────────────────── */
+static int tls_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
+  if (s->handle.stream)
+    return turbo_stream_get_local_addr(s->handle.stream, addr);
+  return TURBO_ENOTSUP;
+}
+
+static mem_buffer_t *tls_get_send_buffer(coro_socket_t *s, size_t min_size) {
+  return turbo_stream_get_send_buffer(s->handle.stream, min_size);
+}
+
+static int tls_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
+  return turbo_stream_send_buffer(s->handle.stream, buffer, len);
+}
 
 static void tls_close(coro_socket_t *s) {
-  turbo_tls_client_t *tls = s->tls;
-  if (!tls || !s->owns_handle) return;
-  
-  s->tls = NULL;
-  
-  if (!tls->closing) {
-    retain_client(s);
-    tls->on_close = on_tls_coro_close;
-    turbo_tls_client_close(tls);
-  }
+  turbo_stream_t *stream = s->handle.stream;
+  if (!stream || !s->owns_handle) return;
+  s->handle.stream = NULL;
+  retain_client(s);
+  stream->on_close = on_tls_close;
+  turbo_stream_close(stream);
 }
 
-/* ── TLS Transport Ops ────────────────────────────────────── */
+/* ── Ops table (Mirrors TCP but targeting TLS stream) ──────── */
 
 const coro_transport_ops_t transport_ops_tls = {
     .connect = tls_connect,
-    .bind = NULL,
-    .listen = NULL,
-    .accept = NULL,
     .send = tls_send,
     .recv_start = tls_recv_start,
     .recv_stop = tls_recv_stop,
-    .get_local_addr = NULL,
+    .get_local_addr = tls_get_local_addr,
     .close = tls_close,
     .get_send_buffer = tls_get_send_buffer,
     .send_buffer = tls_send_buffer

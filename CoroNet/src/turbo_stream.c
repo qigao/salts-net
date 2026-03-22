@@ -96,13 +96,6 @@ void turbo_stream_finalize_close(turbo_stream_t *s) {
   s->connected = 0;
   s->closing = 0;
 
-  if (s->listener) {
-    s->listener->active_connections--;
-    if (s->listener->on_accept) {
-      /* Listener's close path — nothing extra needed here */
-    }
-  }
-
   if (s->on_close) {
     s->on_close(s);
   }

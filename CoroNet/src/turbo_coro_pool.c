@@ -24,7 +24,9 @@
 /* ── Pool entry wrapper ───────────────────────────────────── */
 
 typedef struct pool_entry_s {
+    struct coro_object_pool_s *owner; /**< Owning pool */
     coro_t *coro;                   /**< Coroutine handle */
+    uint8_t is_free;                /**< 1 when entry is on free-list */
     struct pool_entry_s *next;      /**< Next free entry (intrusive list) */
 } pool_entry_t;
 
@@ -42,6 +44,7 @@ struct coro_object_pool_s {
 /* ── Forward declarations ─────────────────────────────────── */
 
 static pool_entry_t *create_entry(coro_object_pool_t *pool);
+static void push_free_entry(coro_object_pool_t *pool, pool_entry_t *entry);
 
 /* ── Lifecycle ────────────────────────────────────────────── */
 
@@ -70,10 +73,8 @@ coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *con
             coro_object_pool_destroy(pool);
             return NULL;
         }
-        entry->next = pool->free_list;
-        pool->free_list = entry;
-        pool->free_count++;
         pool->total_capacity++;
+        push_free_entry(pool, entry);
     }
 
     return pool;
@@ -107,6 +108,8 @@ coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn, void *arg
         entry = pool->free_list;
         pool->free_list = entry->next;
         pool->free_count--;
+        entry->next = NULL;
+        entry->is_free = 0;
     } else {
         if (pool->config.max_capacity > 0 && pool->total_capacity >= pool->config.max_capacity) {
             return NULL;
@@ -124,17 +127,13 @@ coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn, void *arg
         };
         entry->coro = coro_create(fn, arg, &opts);
         if (!entry->coro) {
-            entry->next = pool->free_list;
-            pool->free_list = entry;
-            pool->free_count++;
+            push_free_entry(pool, entry);
             return NULL;
         }
         coro_set_data(entry->coro, entry);
     } else {
         if (coro_reset(entry->coro, fn, arg) != 0) {
-            entry->next = pool->free_list;
-            pool->free_list = entry;
-            pool->free_count++;
+            push_free_entry(pool, entry);
             return NULL;
         }
     }
@@ -153,19 +152,37 @@ void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co) {
 
     /* Get entry from back-pointer */
     pool_entry_t *entry = (pool_entry_t *)coro_get_data(co);
-    if (!entry) {
+    if (!entry || entry->owner != pool) {
         /* Coroutine not from a pool or no back-pointer, destroy it */
         coro_destroy(co);
         return;
     }
+    if (entry->is_free) return;
 
-    entry->next = pool->free_list;
-    pool->free_list = entry;
-    pool->free_count++;
+    /* Important: Detach from its current scheduler before returning to pool.
+       This prevents leaking counts and hangs in event loop. */
+    coro_detach_scheduler(co);
 
     if (pool->active_count > 0) {
         pool->active_count--;
     }
+    push_free_entry(pool, entry);
+}
+
+void coro_object_pool_discard_coro(coro_t *co) {
+    if (!co) return;
+
+    pool_entry_t *entry = (pool_entry_t *)coro_get_data(co);
+    if (!entry || !entry->owner || entry->is_free) return;
+
+    coro_object_pool_t *pool = entry->owner;
+    coro_detach_scheduler(co);
+    entry->coro = NULL;
+
+    if (pool->active_count > 0) {
+        pool->active_count--;
+    }
+    push_free_entry(pool, entry);
 }
 
 void coro_object_pool_forget_active(coro_object_pool_t *pool) {
@@ -195,7 +212,17 @@ size_t coro_object_pool_capacity(const coro_object_pool_t *pool) {
 static pool_entry_t *create_entry(coro_object_pool_t *pool) {
     pool_entry_t *entry = (pool_entry_t *)mem_alloc(pool->arena, sizeof(pool_entry_t));
     if (!entry) return NULL;
+    entry->owner = pool;
     entry->coro = NULL;
+    entry->is_free = 0;
     entry->next = NULL;
     return entry;
+}
+
+static void push_free_entry(coro_object_pool_t *pool, pool_entry_t *entry) {
+    if (!pool || !entry || entry->is_free) return;
+    entry->is_free = 1;
+    entry->next = pool->free_list;
+    pool->free_list = entry;
+    pool->free_count++;
 }

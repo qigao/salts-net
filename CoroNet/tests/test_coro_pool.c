@@ -8,8 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <uv.h>
-
 #include "CoroNet.h" 
 #include "tinytest.h"
 #include "turbo_coro.h"
@@ -94,11 +92,7 @@ static void robust_context_destroy(coro_context_t *ctx) {
     if (!has_handles && !has_coros) {
       break;
     }
-
-    uv_run(ctx->loop, UV_RUN_NOWAIT);
-    if (ctx->scheduler != NULL) {
-      coro_scheduler_tick(ctx->scheduler);
-    }
+    coro_context_run(ctx, TURBO_RUN_NOWAIT);
   }
 
   coro_context_destroy(ctx);
@@ -430,6 +424,86 @@ done:
   test_cleanup_pool(t, pool);
 }
 
+static void test_borrow_timeout(coro_t *co, void *arg) {
+  (void)co;
+  test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *held = NULL;
+  coro_socket_t *blocked = NULL;
+  int rc;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
+
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != 0) {
+    goto done;
+  }
+
+  cfg.min_size = 1;
+  cfg.max_size = 1;
+  cfg.borrow_timeout_ms = 30;
+
+  pool = coro_pool_create(t->ctx, &cfg);
+  if (pool == NULL) {
+    goto done;
+  }
+  if (coro_pool_open(pool, TEST_HOST, TEST_PORT, CORO_SOCKET_TCP_V4) != 0) {
+    goto done;
+  }
+
+  rc = coro_pool_borrow(pool, &held);
+  if (rc != 0 || held == NULL) {
+    goto done;
+  }
+
+  rc = coro_pool_borrow(pool, &blocked);
+  t->test_result = (rc == TURBO_ETIMEDOUT) ? 1 : 0;
+
+done:
+  if (blocked != NULL && pool != NULL) {
+    coro_pool_return(pool, blocked);
+  }
+  if (held != NULL && pool != NULL) {
+    coro_pool_return(pool, held);
+  }
+  coro_sleep(t->ctx, 50);
+  test_cleanup_pool(t, pool);
+}
+
+static void test_close_keeps_borrowed_alive(coro_t *co, void *arg) {
+  (void)co;
+  test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *client = NULL;
+  int rc;
+
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != 0) {
+    goto done;
+  }
+
+  pool = test_open_pool(t, 1, 1, 0);
+  if (pool == NULL) {
+    goto done;
+  }
+
+  rc = coro_pool_borrow(pool, &client);
+  if (rc != 0 || client == NULL) {
+    goto done;
+  }
+
+  coro_pool_close(pool);
+  t->test_result = client->connected ? 1 : 0;
+  coro_pool_return(pool, client);
+  client = NULL;
+
+done:
+  if (client != NULL && pool != NULL) {
+    coro_pool_return(pool, client);
+  }
+  coro_sleep(t->ctx, 50);
+  test_cleanup_pool(t, pool);
+}
+
 /* ── Test specs ───────────────────────────────────────────── */
 
 spec("coro_pool") {
@@ -454,6 +528,14 @@ spec("coro_pool") {
 
     it("should grow pool on demand up to max_size") {
       check_int_eq(run_pool_test_case(test_borrow_grows), 1);
+    }
+
+    it("should time out blocked borrowers") {
+      check_int_eq(run_pool_test_case(test_borrow_timeout), 1);
+    }
+
+    it("should not destroy borrowed connections on close") {
+      check_int_eq(run_pool_test_case(test_close_keeps_borrowed_alive), 1);
     }
   }
 

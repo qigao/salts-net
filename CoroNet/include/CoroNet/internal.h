@@ -20,7 +20,7 @@ extern "C" {
  *
  * GENERAL RULES:
  * - All server/client instances are NOT thread-safe by default
- * - Each instance should be accessed from a single thread (typically the libuv loop thread)
+ * - Each instance should be accessed from a single thread (typically the event loop thread)
  * - Multiple instances can be used concurrently from different threads
  * - Global pools have internal synchronization (when enabled)
  *
@@ -37,8 +37,7 @@ extern "C" {
  *   - Multiple clients can run on different loops/threads
  *
  * Arena Allocators:
- *   - NOT thread-safe by default
- *   - Thread-safe by default
+ *   - Thread-safe (mutex-protected)
  *   - Each client/server has its own arena (no sharing)
  *
  * Global Pools:
@@ -47,7 +46,7 @@ extern "C" {
  *   - Statistics: thread-safe (atomic operations)
  *
  * BEST PRACTICES:
- * - Use one libuv loop per thread
+ * - Use one event loop per thread
  * - Create separate client/server instances per thread
  * - Don't share arena buffers across threads
  * - Use coro_socket_t with coro_context_t for coroutine-based I/O
@@ -74,22 +73,6 @@ void turbo_tls_sync_lock(void);
 void turbo_tls_sync_unlock(void);
 void turbo_pipe_sync_lock(void);
 void turbo_pipe_sync_unlock(void);
-
-/* ============================================================================
- * Error Codes
- * ============================================================================ */
-
-typedef enum {
-  turbo_OK = 0,
-  turbo_ERROR_INVALID_PARAM = -1,
-  turbo_ERROR_ALLOC_FAILED = -2,
-  turbo_ERROR_OVERFLOW = -3,
-  turbo_ERROR_NOT_READY = -4,
-  turbo_ERROR_SHUTTING_DOWN = -5,
-  turbo_ERROR_IO = -6,
-  turbo_ERROR_TRANSPORT = -7,
-  turbo_ERROR_INTERNAL = -8
-} turbo_errno_t;
 
 /* ============================================================================
  * Verification Flags
@@ -124,72 +107,47 @@ typedef struct turbo_buf_s {
  * ============================================================================
  *
  * These functions prevent integer overflow in size calculations.
- * They return 0 on success, -1 on overflow.
+ * They return 0 on success, negative on error.
  */
 
 /**
  * @brief Safely add two size_t values, checking for overflow.
- *
- * @param a First operand
- * @param b Second operand
- * @param result Pointer to store the result
- * @return 0 on success, turbo_ERROR_OVERFLOW on overflow
+ * @return 0 on success, -1 on overflow
  */
 static inline int turbo_safe_add_size(size_t a, size_t b, size_t *result) {
-  if (a > SIZE_MAX - b) {
-    return turbo_ERROR_OVERFLOW;
-  }
+  if (a > SIZE_MAX - b) return -1;
   *result = a + b;
-  return turbo_OK;
+  return 0;
 }
 
 /**
  * @brief Safely multiply two size_t values, checking for overflow.
- *
- * @param a First operand
- * @param b Second operand
- * @param result Pointer to store the result
- * @return 0 on success, turbo_ERROR_OVERFLOW on overflow
+ * @return 0 on success, -1 on overflow
  */
 static inline int turbo_safe_mul_size(size_t a, size_t b, size_t *result) {
-  if (b != 0 && a > SIZE_MAX / b) {
-    return turbo_ERROR_OVERFLOW;
-  }
+  if (b != 0 && a > SIZE_MAX / b) return -1;
   *result = a * b;
-  return turbo_OK;
+  return 0;
 }
 
 /**
  * @brief Safely align a size to a boundary, checking for overflow.
- *
- * @param size Size to align
- * @param alignment Alignment boundary (must be power of 2)
- * @param result Pointer to store the result
- * @return 0 on success, turbo_ERROR_OVERFLOW on overflow
+ * @return 0 on success, -1 on error
  */
 static inline int turbo_safe_align_size(size_t size, size_t alignment, size_t *result) {
-  if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
-    return turbo_ERROR_INVALID_PARAM;
-  }
-
+  if (alignment == 0 || (alignment & (alignment - 1)) != 0) return -1;
   size_t mask = alignment - 1;
-  if (size > SIZE_MAX - mask) {
-    return turbo_ERROR_OVERFLOW;
-  }
-
+  if (size > SIZE_MAX - mask) return -1;
   *result = (size + mask) & ~mask;
-  return turbo_OK;
+  return 0;
 }
 
 /**
  * @brief Check if a size is within valid bounds.
- *
- * @param size Size to check
- * @param max_size Maximum allowed size
- * @return 0 if valid, turbo_ERROR_OVERFLOW if too large
+ * @return 0 if valid, -1 if too large
  */
 static inline int turbo_check_size_bounds(size_t size, size_t max_size) {
-  return (size <= max_size) ? turbo_OK : turbo_ERROR_OVERFLOW;
+  return (size <= max_size) ? 0 : -1;
 }
 
 #ifdef __cplusplus

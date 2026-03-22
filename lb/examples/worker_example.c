@@ -2,8 +2,8 @@
  * @file worker_example.c
  * @brief Worker example — connects to LB backend and echoes data.
  *
- * Usage: worker_example [lb_backend_url]
- *   Default: tcp://127.0.0.1:9090
+ * Usage: worker_example [lb_backend_host [lb_backend_port]]
+ *   Default: 127.0.0.1 9090
  *
  * The worker handler is identical to a coro_server handler.
  */
@@ -14,7 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static const char *g_backend_url = "tcp://127.0.0.1:9090";
+static const char *g_backend_host = "127.0.0.1";
+static int g_backend_port = 9090;
 
 static void echo_handler(coro_socket_t *client) {
     char *data = NULL;
@@ -37,8 +38,8 @@ static void worker_loop(coro_t *co, void *arg) {
             continue;
         }
 
-        printf("Worker connecting to %s...\n", g_backend_url);
-        if (coro_socket_connect(c, g_backend_url) != 0) {
+        printf("Worker connecting to %s:%d...\n", g_backend_host, g_backend_port);
+        if (coro_socket_connect(c, g_backend_host, g_backend_port) != 0) {
             printf("Worker connect failed, retrying in 1s\n");
             coro_socket_destroy(c);
             coro_sleep(ctx, 1000);
@@ -54,7 +55,8 @@ static void worker_loop(coro_t *co, void *arg) {
 }
 
 int main(int argc, char **argv) {
-    if (argc > 1) g_backend_url = argv[1];
+    if (argc > 1) g_backend_host = argv[1];
+    if (argc > 2) g_backend_port = atoi(argv[2]);
 
     coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) {
@@ -65,7 +67,7 @@ int main(int argc, char **argv) {
     coro_t *co = coro_create(worker_loop, ctx, NULL);
     coro_resume(co);
 
-    printf("Worker running, connecting to %s\n", g_backend_url);
+    printf("Worker running, connecting to %s:%d\n", g_backend_host, g_backend_port);
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     coro_context_destroy(ctx);

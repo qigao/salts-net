@@ -1,0 +1,784 @@
+/**
+ * @file turbo_dns.c
+ * @brief Unified DNS resolution using c-ares driven by native select().
+ *
+ * Drives c-ares entirely with platform-native sockets (select / WSAPoll)
+ * — no libuv dependency.
+ *
+ * - Async: c-ares socket-state callback registers fds; a background thread
+ *   runs select() and calls ares_process_fd().
+ * - Sync:  same loop, but caller blocks on a condition variable.
+ */
+#include "turbo_dns.h"
+#include "turbo_thread.h"
+#include "tlog.h"
+#include <ares.h>
+#include <stdlib.h>
+#include <string.h>
+#include "sds.h"
+#include "turbo_str.h"
+#include "turbo_error.h"
+
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #define SOCK_INVALID INVALID_SOCKET
+  typedef SOCKET dns_sock_t;
+  #define DNS_SELECT(n,r,w,t) select((int)(n),(r),(w),NULL,(t))
+  #define TURBO_DNS_CLOSE_SOCKET(s) closesocket(s)
+#else
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <unistd.h>
+  #include <sys/select.h>
+  #include <sys/time.h>
+  #define SOCK_INVALID (-1)
+  typedef int dns_sock_t;
+  #define DNS_SELECT(n,r,w,t) select((int)(n),(r),(w),NULL,(t))
+  #define TURBO_DNS_CLOSE_SOCKET(s) close(s)
+#endif
+
+// =============================================================================
+// Internal Constants
+// =============================================================================
+
+#define MAX_SOCKETS 64
+#define MAX_DNS_SERVERS 8
+#define DNS_TIMEOUT_MS 5000
+#define DNS_TRIES 2
+#define DNS_TRY_TIMEOUT_MS ((DNS_TIMEOUT_MS - 1000) / DNS_TRIES)
+
+// =============================================================================
+// Internal Types
+// =============================================================================
+
+/**
+ * @brief c-ares integration context — no libuv, pure select() loop.
+ */
+typedef struct {
+  ares_channel channel;
+  struct {
+    ares_socket_t fd;
+    int readable;
+    int writable;
+  } sockets[MAX_SOCKETS];
+  int socket_count;
+  bool initialized;
+  turbo_mutex_t mu;   /* guards sockets[] and channel */
+} turbo_ares_t;
+
+/* Dual-stack query coordination */
+typedef struct turbo_dns_query_s {
+  char *hostname;
+  turbo_dns_cb callback;
+  void *user_data;
+  int ref_count;
+  int delivered;
+  int cancelled;
+  int status_v4;
+  int status_v6;
+  turbo_ares_t *ares;
+  turbo_dns_pref_t pref;
+  int started_v4;
+  int started_v6;
+} turbo_dns_parent_query_t;
+
+typedef struct {
+  turbo_dns_parent_query_t *parent;
+  int family;
+} turbo_dns_child_query_t;
+
+/* Sync resolution state */
+typedef struct {
+  int port;
+  struct sockaddr_storage *result_addr;
+  int *result_len;
+  int error;
+  volatile int done;
+  turbo_mutex_t mu;
+  turbo_cond_t  cond;
+} turbo_dns_sync_state_t;
+
+// =============================================================================
+// Global State
+// =============================================================================
+
+static char g_dns_servers[MAX_DNS_SERVERS][46];
+static int  g_dns_count   = 0;
+static int  g_ares_lib_ref = 0;
+
+static turbo_once_t  g_dns_init_once       = TURBO_ONCE_INIT;
+static turbo_mutex_t g_dns_lock;
+static int           g_dns_lock_initialized = 0;
+static int           g_dns_refcount         = 0;
+
+// =============================================================================
+// Address helpers (no libuv)
+// =============================================================================
+
+static int dns_sockaddr_length(const struct sockaddr_storage *addr) {
+  if (!addr) return TURBO_EINVAL;
+  if (addr->ss_family == AF_INET)  return (int)sizeof(struct sockaddr_in);
+  if (addr->ss_family == AF_INET6) return (int)sizeof(struct sockaddr_in6);
+  return TURBO_EAI_FAMILY;
+}
+
+/* Parse IP string → sockaddr_storage (no libuv). */
+int turbo_dns_parse_address(const char *address, int port,
+                             struct sockaddr_storage *addr) {
+  if (!address || !addr) return TURBO_EINVAL;
+
+  struct sockaddr_in *a4 = (struct sockaddr_in *)addr;
+  memset(a4, 0, sizeof(*a4));
+  if (inet_pton(AF_INET, address, &a4->sin_addr) == 1) {
+    a4->sin_family = AF_INET;
+    a4->sin_port   = htons((unsigned short)port);
+    return 0;
+  }
+
+  struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)addr;
+  memset(a6, 0, sizeof(*a6));
+  if (inet_pton(AF_INET6, address, &a6->sin6_addr) == 1) {
+    a6->sin6_family = AF_INET6;
+    a6->sin6_port   = htons((unsigned short)port);
+    return 0;
+  }
+
+  return TURBO_EAI_NONAME;
+}
+
+static int dns_parse_ip_address(const char *ip, int port,
+                                struct sockaddr_storage *addr, int *addr_len) {
+  int rc = turbo_dns_parse_address(ip, port, addr);
+  if (rc != 0) return rc;
+  int len = dns_sockaddr_length(addr);
+  if (len < 0) return len;
+  if (addr_len) *addr_len = len;
+  return 0;
+}
+
+static int dns_format_ip_address(const struct sockaddr_storage *addr,
+                                 char *buf, size_t buf_sz) {
+  if (!addr || !buf || buf_sz == 0) return TURBO_EINVAL;
+  if (addr->ss_family == AF_INET) {
+    return inet_ntop(AF_INET,
+                     &((const struct sockaddr_in *)addr)->sin_addr,
+                     buf, (socklen_t)buf_sz)
+               ? 0 : TURBO_EAI_FAIL;
+  }
+  if (addr->ss_family == AF_INET6) {
+    return inet_ntop(AF_INET6,
+                     &((const struct sockaddr_in6 *)addr)->sin6_addr,
+                     buf, (socklen_t)buf_sz)
+               ? 0 : TURBO_EAI_FAIL;
+  }
+  return TURBO_EAI_FAMILY;
+}
+
+// =============================================================================
+// c-ares Library Ref
+// =============================================================================
+
+static void dns_release_ares_library_ref(void) {
+  if (!g_dns_lock_initialized) return;
+  turbo_mutex_lock(&g_dns_lock);
+  if (g_ares_lib_ref > 0 && --g_ares_lib_ref == 0)
+    ares_library_cleanup();
+  turbo_mutex_unlock(&g_dns_lock);
+}
+
+// =============================================================================
+// c-ares Socket-State Callback (no libuv — just track fd interest)
+// =============================================================================
+
+static void on_ares_sock_state_cb(void *data, ares_socket_t fd,
+                               int readable, int writable) {
+  turbo_ares_t *ctx = (turbo_ares_t *)data;
+  if (!ctx || !ctx->initialized) return;
+
+  turbo_mutex_lock(&ctx->mu);
+
+  /* Find existing slot */
+  int idx = -1;
+  for (int i = 0; i < MAX_SOCKETS; i++) {
+    if (ctx->sockets[i].fd == fd) { idx = i; break; }
+  }
+
+  if (!readable && !writable) {
+    /* c-ares closed this socket */
+    if (idx >= 0) {
+      ctx->sockets[idx].fd       = ARES_SOCKET_BAD;
+      ctx->sockets[idx].readable = 0;
+      ctx->sockets[idx].writable = 0;
+      ctx->socket_count--;
+    }
+    turbo_mutex_unlock(&ctx->mu);
+    return;
+  }
+
+  if (idx < 0) {
+    /* New socket — find a free slot */
+    for (int i = 0; i < MAX_SOCKETS; i++) {
+      if (ctx->sockets[i].fd == ARES_SOCKET_BAD) { idx = i; break; }
+    }
+    if (idx < 0) { turbo_mutex_unlock(&ctx->mu); return; }
+    ctx->sockets[idx].fd = fd;
+    ctx->socket_count++;
+  }
+
+  ctx->sockets[idx].readable = readable;
+  ctx->sockets[idx].writable = writable;
+
+  turbo_mutex_unlock(&ctx->mu);
+}
+
+// =============================================================================
+// Drive c-ares with select() — called from the caller's loop
+// =============================================================================
+
+/**
+ * @brief Run one poll iteration for this ares context.
+ *
+ * Builds fd_sets from the socket table, calls select() with the timeout
+ * c-ares requests, then calls ares_process_fd() for all ready fds.
+ *
+ * @param ctx    ares context
+ * @param max_ms maximum milliseconds to wait; 0 = nowait
+ * @return 1 if there are still active sockets, 0 if idle
+ */
+static int ares_poll_once(turbo_ares_t *ctx, int max_ms) {
+  fd_set rfds, wfds;
+  FD_ZERO(&rfds);
+  FD_ZERO(&wfds);
+  int nfds = 0;
+
+  turbo_mutex_lock(&ctx->mu);
+  if (ctx->socket_count == 0) {
+    turbo_mutex_unlock(&ctx->mu);
+    return 0;
+  }
+
+  for (int i = 0; i < MAX_SOCKETS; i++) {
+    ares_socket_t fd = ctx->sockets[i].fd;
+    if (fd == ARES_SOCKET_BAD) continue;
+    if (ctx->sockets[i].readable) FD_SET((dns_sock_t)fd, &rfds);
+    if (ctx->sockets[i].writable) FD_SET((dns_sock_t)fd, &wfds);
+    if ((int)fd + 1 > nfds) nfds = (int)fd + 1;
+  }
+  turbo_mutex_unlock(&ctx->mu);
+
+  /* Ask c-ares how long to wait */
+  struct timeval tv_buf, *tvp;
+  {
+    struct timeval mt;
+    mt.tv_sec  = max_ms / 1000;
+    mt.tv_usec = (max_ms % 1000) * 1000;
+    tvp = ares_timeout(ctx->channel, &mt, &tv_buf);
+  }
+
+  int n = DNS_SELECT(nfds, &rfds, &wfds, tvp);
+  if (n <= 0) {
+    /* Timeout — notify c-ares so it can retry or fail */
+    ares_process_fd(ctx->channel, ARES_SOCKET_BAD, ARES_SOCKET_BAD);
+    return (ctx->socket_count > 0) ? 1 : 0;
+  }
+
+  turbo_mutex_lock(&ctx->mu);
+  for (int i = 0; i < MAX_SOCKETS; i++) {
+    ares_socket_t fd = ctx->sockets[i].fd;
+    if (fd == ARES_SOCKET_BAD) continue;
+    ares_socket_t rfd = FD_ISSET((dns_sock_t)fd, &rfds) ? fd : ARES_SOCKET_BAD;
+    ares_socket_t wfd = FD_ISSET((dns_sock_t)fd, &wfds) ? fd : ARES_SOCKET_BAD;
+    if (rfd != ARES_SOCKET_BAD || wfd != ARES_SOCKET_BAD) {
+      turbo_mutex_unlock(&ctx->mu);
+      ares_process_fd(ctx->channel, rfd, wfd);
+      turbo_mutex_lock(&ctx->mu);
+    }
+  }
+  turbo_mutex_unlock(&ctx->mu);
+
+  return (ctx->socket_count > 0) ? 1 : 0;
+}
+
+// =============================================================================
+// ares context init / cleanup
+// =============================================================================
+
+static void dns_copy_custom_servers(struct in_addr *dns_addrs,
+                                    char local_servers[][46],
+                                    int *valid_dns) {
+  *valid_dns = 0;
+  turbo_mutex_lock(&g_dns_lock);
+  for (int i = 0; i < g_dns_count; i++) {
+    strcpy(local_servers[i], g_dns_servers[i]);
+    if (inet_pton(AF_INET, local_servers[i], &dns_addrs[*valid_dns]) == 1)
+      (*valid_dns)++;
+  }
+  turbo_mutex_unlock(&g_dns_lock);
+}
+
+static int init_ares_context(turbo_ares_t **out_ctx) {
+  int status, valid_dns;
+  struct in_addr dns_addrs[MAX_DNS_SERVERS];
+  char local_servers[MAX_DNS_SERVERS][46];
+
+  if (!g_dns_lock_initialized) return TURBO_EBUSY;
+
+  turbo_ares_t *ctx = calloc(1, sizeof(turbo_ares_t));
+  if (!ctx) return TURBO_ENOMEM;
+
+  for (int i = 0; i < MAX_SOCKETS; i++)
+    ctx->sockets[i].fd = ARES_SOCKET_BAD;
+
+  turbo_mutex_init(&ctx->mu);
+  if (!ctx->mu) { free(ctx); return TURBO_ENOMEM; }
+
+  turbo_mutex_lock(&g_dns_lock);
+  if (g_ares_lib_ref == 0) {
+    status = ares_library_init(ARES_LIB_INIT_ALL);
+    if (status != ARES_SUCCESS) {
+      turbo_mutex_unlock(&g_dns_lock);
+      TLOG_DEBUG("ares_library_init failed: {}", ares_strerror(status));
+      turbo_mutex_destroy(&ctx->mu);
+      free(ctx);
+      return TURBO_EAI_FAIL;
+    }
+  }
+  g_ares_lib_ref++;
+  turbo_mutex_unlock(&g_dns_lock);
+
+  dns_copy_custom_servers(dns_addrs, local_servers, &valid_dns);
+
+  struct ares_options options = {0};
+  options.sock_state_cb_data = ctx;
+  options.sock_state_cb      = on_ares_sock_state_cb;
+  options.timeout            = DNS_TRY_TIMEOUT_MS;
+  options.tries              = DNS_TRIES;
+  int init_flags = ARES_OPT_SOCK_STATE_CB | ARES_OPT_TIMEOUTMS | ARES_OPT_TRIES;
+
+  if (valid_dns > 0) {
+    options.servers  = dns_addrs;
+    options.nservers = valid_dns;
+    init_flags |= ARES_OPT_SERVERS;
+    for (int i = 0; i < valid_dns; i++)
+      TLOG_INFO("Using custom DNS server: {}", local_servers[i]);
+  }
+
+  status = ares_init_options(&ctx->channel, &options, init_flags);
+  if (status != ARES_SUCCESS) {
+    TLOG_DEBUG("ares_init_options failed: {}", ares_strerror(status));
+    dns_release_ares_library_ref();
+    turbo_mutex_destroy(&ctx->mu);
+    free(ctx);
+    return TURBO_EAI_FAIL;
+  }
+
+  if (valid_dns == 0)
+    ares_set_servers_csv(ctx->channel, "8.8.8.8,8.8.4.4");
+
+  ctx->initialized = true;
+  *out_ctx = ctx;
+  return 0;
+}
+
+static void destroy_ares_context(turbo_ares_t *ctx) {
+  if (!ctx) return;
+  if (ctx->initialized) {
+    ares_destroy(ctx->channel);
+    ctx->initialized = false;
+  }
+  dns_release_ares_library_ref();
+  turbo_mutex_destroy(&ctx->mu);
+  free(ctx);
+}
+
+// =============================================================================
+// Async query helpers
+// =============================================================================
+
+static void release_parent_ref(turbo_dns_parent_query_t *parent) {
+  if (--parent->ref_count > 0) return;
+
+  if (!parent->delivered) {
+    int err = (parent->status_v4 != ARES_SUCCESS && parent->status_v4 != 0)
+                  ? parent->status_v4
+                  : (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0
+                         ? parent->status_v6
+                         : ARES_ENODATA);
+    TLOG_DEBUG("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
+    parent->callback(parent->hostname, NULL, err, parent->user_data);
+  }
+
+  if (parent->ares && parent->ares->initialized)
+    destroy_ares_context(parent->ares);
+
+  sdsfree(parent->hostname);
+  free(parent);
+}
+
+static void dns_dual_addrinfo_cb(void *arg, int status, int timeouts,
+                                 struct ares_addrinfo *result) {
+  (void)timeouts;
+  turbo_dns_child_query_t *child  = (turbo_dns_child_query_t *)arg;
+  int                      family = child ? child->family : 0;
+  turbo_dns_parent_query_t *parent = child ? child->parent : NULL;
+
+  if (child) free(child);
+  if (!parent) { if (result) ares_freeaddrinfo(result); return; }
+
+  if (!parent->delivered && status == ARES_SUCCESS && result && result->nodes) {
+    char ip[INET6_ADDRSTRLEN] = {0};
+    struct ares_addrinfo_node *node = result->nodes;
+
+    if (node->ai_family == AF_INET) {
+      inet_ntop(AF_INET,
+                &((struct sockaddr_in *)node->ai_addr)->sin_addr,
+                ip, sizeof(ip));
+    } else if (node->ai_family == AF_INET6) {
+      inet_ntop(AF_INET6,
+                &((struct sockaddr_in6 *)node->ai_addr)->sin6_addr,
+                ip, sizeof(ip));
+    }
+
+    if (ip[0] != '\0') {
+      TLOG_DEBUG("DNS: {} -> {}", parent->hostname, ip);
+      parent->callback(parent->hostname, ip, 0, parent->user_data);
+      parent->delivered = 1;
+    }
+  } else {
+    if (family == AF_INET)  parent->status_v4 = status;
+    else if (family == AF_INET6) parent->status_v6 = status;
+  }
+
+  if (result) ares_freeaddrinfo(result);
+  release_parent_ref(parent);
+}
+
+static bool is_ip_address(const char *host) {
+  struct sockaddr_storage tmp;
+  return turbo_dns_parse_address(host, 80, &tmp) == 0;
+}
+
+static int dns_start_family_query(turbo_dns_parent_query_t *parent,
+                                  const char *hostname, int family) {
+  turbo_dns_child_query_t *child = malloc(sizeof(*child));
+  if (!child) return TURBO_ENOMEM;
+
+  child->parent = parent;
+  child->family  = family;
+  parent->ref_count++;
+  if (family == AF_INET)  parent->started_v4 = 1;
+  else if (family == AF_INET6) parent->started_v6 = 1;
+
+  struct ares_addrinfo_hints hints = {0};
+  hints.ai_family   = family;
+  hints.ai_socktype = SOCK_STREAM;
+  ares_getaddrinfo(parent->ares->channel, hostname, NULL,
+                   &hints, dns_dual_addrinfo_cb, child);
+  return 0;
+}
+
+// =============================================================================
+// Once / Init / Cleanup
+// =============================================================================
+
+static void dns_init_once(void) {
+  turbo_mutex_init(&g_dns_lock);
+  if (g_dns_lock != NULL)
+    g_dns_lock_initialized = 1;
+}
+
+int turbo_dns_init(void) {
+  turbo_once(&g_dns_init_once, dns_init_once);
+  if (!g_dns_lock_initialized) return TURBO_EBUSY;
+  turbo_mutex_lock(&g_dns_lock);
+  g_dns_refcount++;
+  turbo_mutex_unlock(&g_dns_lock);
+  return 0;
+}
+
+void turbo_dns_cleanup(void) {
+  if (!g_dns_lock_initialized) return;
+  turbo_mutex_lock(&g_dns_lock);
+  if (g_dns_refcount > 0) g_dns_refcount--;
+  turbo_mutex_unlock(&g_dns_lock);
+}
+
+// =============================================================================
+// Public API: Synchronous Resolution
+// =============================================================================
+
+static void sync_dns_callback(const char *hostname, const char *ip,
+                               int status, void *user_data) {
+  (void)hostname;
+  turbo_dns_sync_state_t *state = (turbo_dns_sync_state_t *)user_data;
+
+  if (status == 0 && ip) {
+    struct sockaddr_storage addr;
+    int addr_len = 0;
+    if (dns_parse_ip_address(ip, state->port, &addr, &addr_len) == 0) {
+      memcpy(state->result_addr, &addr, sizeof(addr));
+      *state->result_len = addr_len;
+      state->error = 0;
+    } else {
+      state->error = TURBO_EAI_FAIL;
+    }
+  } else {
+    state->error = status ? status : TURBO_EAI_FAIL;
+  }
+
+  turbo_mutex_lock(&state->mu);
+  state->done = 1;
+  turbo_cond_signal(&state->cond);
+  turbo_mutex_unlock(&state->mu);
+}
+
+int turbo_dns_resolve(void *loop_unused, const char *host, int port,
+                      struct sockaddr_storage *out, int *out_len) {
+  (void)loop_unused;
+  if (!host || !out || !out_len) return TURBO_EINVAL;
+
+  /* Fast path: already an IP */
+  if (dns_parse_ip_address(host, port, out, out_len) == 0) return 0;
+
+  turbo_once(&g_dns_init_once, dns_init_once);
+
+  turbo_ares_t *ares_ctx = NULL;
+  int err = init_ares_context(&ares_ctx);
+  if (err != 0) return err;
+
+  turbo_dns_sync_state_t state = {0};
+  state.port        = port;
+  state.result_addr = out;
+  state.result_len  = out_len;
+  state.error       = TURBO_EAI_FAIL;
+  turbo_mutex_init(&state.mu);
+  turbo_cond_init(&state.cond);
+
+  turbo_dns_parent_query_t *parent = calloc(1, sizeof(*parent));
+  if (!parent) {
+    destroy_ares_context(ares_ctx);
+    turbo_mutex_destroy(&state.mu);
+    turbo_cond_destroy(&state.cond);
+    return TURBO_ENOMEM;
+  }
+
+  parent->hostname  = tstr_dup(host);
+  parent->callback  = sync_dns_callback;
+  parent->user_data = &state;
+  parent->pref      = TURBO_DNS_ANY;
+  parent->ares      = ares_ctx;
+  parent->ref_count = 1;
+
+  if (!parent->hostname) {
+    free(parent);
+    destroy_ares_context(ares_ctx);
+    turbo_mutex_destroy(&state.mu);
+    turbo_cond_destroy(&state.cond);
+    return TURBO_ENOMEM;
+  }
+
+  dns_start_family_query(parent, host, AF_INET);
+  dns_start_family_query(parent, host, AF_INET6);
+  release_parent_ref(parent); /* release initial ref */
+
+  /* Drive select loop until done or timeout */
+  int64_t deadline_ms = DNS_TIMEOUT_MS;
+  while (deadline_ms > 0) {
+    int poll_ms = (deadline_ms > 100) ? 100 : (int)deadline_ms;
+
+    turbo_mutex_lock(&state.mu);
+    if (state.done) { turbo_mutex_unlock(&state.mu); break; }
+    turbo_mutex_unlock(&state.mu);
+
+    ares_poll_once(ares_ctx, poll_ms);
+    deadline_ms -= poll_ms;
+  }
+
+  if (!state.done) state.error = TURBO_ETIMEDOUT;
+
+  turbo_mutex_destroy(&state.mu);
+  turbo_cond_destroy(&state.cond);
+  /* ares_ctx is freed inside release_parent_ref when last child done */
+  return state.error;
+}
+
+int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer,
+                            size_t buffer_size, int family_pref) {
+  if (!hostname || !ip_buffer || buffer_size == 0) return TURBO_EINVAL;
+  ip_buffer[0] = '\0';
+
+  struct sockaddr_storage result_addr;
+  int rc = dns_parse_ip_address(hostname, 80, &result_addr, NULL);
+  if (rc != TURBO_EAI_FAIL) {
+    if (rc != 0) return rc;
+  } else {
+    int result_len = 0;
+    rc = turbo_dns_resolve(NULL, hostname, 80, &result_addr, &result_len);
+    if (rc != 0) return rc;
+  }
+
+  if (result_addr.ss_family == AF_INET && family_pref == 6) return TURBO_EAI_FAMILY;
+  if (result_addr.ss_family == AF_INET6 && family_pref == 4) return TURBO_EAI_FAMILY;
+  if (result_addr.ss_family != AF_INET && result_addr.ss_family != AF_INET6)
+    return TURBO_EAI_FAMILY;
+
+  return dns_format_ip_address(&result_addr, ip_buffer, buffer_size);
+}
+
+// =============================================================================
+// Public API: Asynchronous Resolution
+// =============================================================================
+
+/**
+ * @brief Async DNS context — bundles ares_ctx + background driver thread.
+ *
+ * The async path runs a tiny background thread that calls ares_poll_once()
+ * in a loop until the query completes.  The caller's callback is invoked
+ * from that thread.
+ */
+typedef struct {
+  turbo_ares_t          *ares;
+  turbo_dns_parent_query_t *parent;
+  turbo_thread_t         thread;
+  volatile int           running;
+} async_driver_t;
+
+static void async_driver_thread(void *arg) {
+  async_driver_t *drv = (async_driver_t *)arg;
+  int64_t deadline = DNS_TIMEOUT_MS;
+
+  while (drv->running && deadline > 0) {
+    if (!drv->ares->initialized) break;
+    int poll_ms = (deadline > 50) ? 50 : (int)deadline;
+    int active  = ares_poll_once(drv->ares, poll_ms);
+    deadline -= poll_ms;
+    if (!active) break;
+  }
+
+  drv->running = 0;
+  free(drv);
+}
+
+int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
+                             turbo_dns_pref_t pref, turbo_dns_cb callback,
+                             void *user_data, turbo_dns_query_t **out_query) {
+  (void)loop_unused;
+  if (out_query) *out_query = NULL;
+  if (!hostname || !callback) return TURBO_EINVAL;
+
+  /* Fast path: already an IP */
+  if (is_ip_address(hostname)) {
+    callback(hostname, hostname, 0, user_data);
+    return 0;
+  }
+
+  turbo_once(&g_dns_init_once, dns_init_once);
+
+  turbo_ares_t *ares_ctx = NULL;
+  int err = init_ares_context(&ares_ctx);
+  if (err != 0) return err;
+
+  turbo_dns_parent_query_t *parent = calloc(1, sizeof(*parent));
+  if (!parent) { destroy_ares_context(ares_ctx); return TURBO_ENOMEM; }
+
+  parent->hostname  = tstr_dup(hostname);
+  parent->callback  = callback;
+  parent->user_data = user_data;
+  parent->pref      = pref;
+  parent->ares      = ares_ctx;
+  parent->ref_count = 1; /* initial ref */
+
+  if (!parent->hostname) {
+    free(parent);
+    destroy_ares_context(ares_ctx);
+    return TURBO_ENOMEM;
+  }
+
+  if (pref == TURBO_DNS_IPV4_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6)
+    dns_start_family_query(parent, hostname, AF_INET);
+
+  if (pref == TURBO_DNS_IPV6_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6)
+    dns_start_family_query(parent, hostname, AF_INET6);
+
+  if (out_query) {
+    parent->ref_count++; /* cancellation ref */
+    *out_query = parent;
+  }
+
+  /* Start background driver thread */
+  async_driver_t *drv = malloc(sizeof(*drv));
+  if (!drv) {
+    release_parent_ref(parent);
+    if (out_query) { release_parent_ref(parent); *out_query = NULL; }
+    return TURBO_ENOMEM;
+  }
+  drv->ares    = ares_ctx;
+  drv->parent  = parent;
+  drv->running = 1;
+
+  if (turbo_thread_create(&drv->thread, async_driver_thread, drv) != 0) {
+    free(drv);
+    release_parent_ref(parent);
+    if (out_query) { release_parent_ref(parent); *out_query = NULL; }
+    return TURBO_EAI_FAIL;
+  }
+  turbo_thread_destroy(&drv->thread); /* detach so it cleans itself up */
+
+  release_parent_ref(parent); /* release the initial ref we held */
+  TLOG_DEBUG("Started async DNS lookup for {}", hostname);
+  return 0;
+}
+
+int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t pref,
+                             turbo_dns_cb callback, void *user_data) {
+  return turbo_dns_resolve_async2(loop, hostname, pref, callback, user_data, NULL);
+}
+
+void turbo_dns_cancel(turbo_dns_query_t *query) {
+  if (!query) return;
+  turbo_dns_parent_query_t *parent = (turbo_dns_parent_query_t *)query;
+  if (!parent->cancelled && parent->ares && parent->ares->initialized) {
+    parent->cancelled = 1;
+    ares_cancel(parent->ares->channel);
+  }
+  release_parent_ref(parent); /* release cancellation ref */
+}
+
+// =============================================================================
+// Public API: DNS Server Configuration
+// =============================================================================
+
+int turbo_dns_set_servers(const char *servers[], int count) {
+  if (!servers || count < 0 || count > MAX_DNS_SERVERS) return TURBO_EINVAL;
+  if (!g_dns_lock_initialized) return TURBO_EBUSY;
+
+  turbo_mutex_lock(&g_dns_lock);
+  g_dns_count = 0;
+  for (int i = 0; i < count; i++) {
+    if (!servers[i]) continue;
+    size_t len = strlen(servers[i]);
+    if (len >= sizeof(g_dns_servers[i])) continue;
+    strcpy(g_dns_servers[g_dns_count], servers[i]);
+    g_dns_count++;
+    TLOG_INFO("Added DNS server[{}]: {}", g_dns_count - 1, servers[i]);
+  }
+  int final_count = g_dns_count;
+  turbo_mutex_unlock(&g_dns_lock);
+
+  TLOG_INFO("Configured {} DNS servers", final_count);
+  return 0;
+}
+
+int turbo_dns_get_servers(char servers[][46], int max_servers, int *count) {
+  if (!servers || !count) return TURBO_EINVAL;
+  if (!g_dns_lock_initialized) return TURBO_EBUSY;
+
+  turbo_mutex_lock(&g_dns_lock);
+  int n = (g_dns_count > max_servers) ? max_servers : g_dns_count;
+  for (int i = 0; i < n; i++)
+    strcpy(servers[i], g_dns_servers[i]);
+  *count = n;
+  turbo_mutex_unlock(&g_dns_lock);
+  return 0;
+}

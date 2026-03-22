@@ -16,13 +16,13 @@ static void wss_task(coro_t* co, void* arg) {
     coro_context_t* ctx = (coro_context_t*)arg;
 
     printf("[Coro] Creating WebSocket client (WSS)...\n");
-    coro_socket_t* client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+    coro_socket_t* client = coro_socket_create(ctx, CORO_SOCKET_TLS_V4);
 
     coro_socket_set_timeout(client, 15000);
 
-    /* Using wss:// scheme implies TLS will be used */
+    /* Socket type is TLS; coro_socket_connect_ws handles the WS upgrade */
     printf("[Coro] Connecting to wss://echo.websocket.org ...\n");
-    int r = coro_socket_connect(client, "wss://echo.websocket.org/");
+    int r = coro_socket_connect_ws(client, "echo.websocket.org", 443, "/", 1);
 
     if (r != 0) {
         printf("[Coro] Connection failed: (code %d) %s\n", r, turbo_strerror(r));

@@ -96,7 +96,7 @@ suite("SOCKS5 UDP") {
 
             const char* data = "test";
             size_t packet_len;
-            uint8_t* packet = socks5_udp_encapsulate(&arena, "192.168.1.1", 1234,
+            uint8_t* packet = socks5_udp_encapsulate(arena, "192.168.1.1", 1234,
                                                      (const uint8_t*)data, 4, &packet_len);
 
             check(packet != NULL);
@@ -117,7 +117,7 @@ suite("SOCKS5 UDP") {
 
             const char* data = "test";
             size_t packet_len;
-            uint8_t* packet = socks5_udp_encapsulate(&arena, "example.com", 80,
+            uint8_t* packet = socks5_udp_encapsulate(arena, "example.com", 80,
                                                      (const uint8_t*)data, 4, &packet_len);
 
             check(packet != NULL);

@@ -380,8 +380,8 @@ coro_lb_t *coro_lb_create(coro_context_t *ctx, const coro_lb_config_t *config) {
   return lb;
 }
 
-int coro_lb_listen(coro_lb_t *lb, const char *url) {
-  if (!lb || !url) return TURBO_EINVAL;
+int coro_lb_listen(coro_lb_t *lb, const char *host, int port) {
+  if (!lb || !host) return TURBO_EINVAL;
 
   lb->frontend = coro_socket_create(lb->ctx, CORO_SOCKET_TCP_V4);
   if (!lb->frontend) return TURBO_ENOMEM;
@@ -389,16 +389,16 @@ int coro_lb_listen(coro_lb_t *lb, const char *url) {
   coro_handler_fn handler =
       (lb->config.mode == TURBO_LB_MODE_REQUEST) ? on_client_request : on_client_session;
 
-  return coro_socket_listen_url(lb->frontend, url, handler, lb);
+  return coro_socket_listen_on(lb->frontend, host, port, handler, lb);
 }
 
-int coro_lb_accept_workers(coro_lb_t *lb, const char *url) {
-  if (!lb || !url) return TURBO_EINVAL;
+int coro_lb_accept_workers(coro_lb_t *lb, const char *host, int port) {
+  if (!lb || !host) return TURBO_EINVAL;
 
   lb->backend = coro_socket_create(lb->ctx, CORO_SOCKET_TCP_V4);
   if (!lb->backend) return TURBO_ENOMEM;
 
-  return coro_socket_listen_url(lb->backend, url, on_worker_connect, lb);
+  return coro_socket_listen_on(lb->backend, host, port, on_worker_connect, lb);
 }
 
 void coro_lb_stop(coro_lb_t *lb) {

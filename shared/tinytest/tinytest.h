@@ -165,8 +165,6 @@ static void __bdd_indent__(FILE *fp, size_t level);
 typedef struct __bdd_config_type__ __bdd_config_type__;
 typedef void (*__bdd_spec_fn__)(__bdd_config_type__ *__bdd_config__);
 
-static int __bdd_bench_header_printed__ = 0;
-static size_t __bdd_bench_header_level__ = 0;
 
 typedef struct __bdd_spec_entry__ {
   const char *name;
@@ -243,41 +241,11 @@ typedef void(__cdecl *__bdd_ctor_fn__)(void);
   #define __BDD_CONSTRUCTOR__(fn) static void fn(void)
 #endif
 
-static inline void __bdd_bench_print_header__(size_t level) {
-#if BDD_BENCH_TABLE
-  if (__bdd_bench_header_printed__ && __bdd_bench_header_level__ == level) return;
-  __bdd_bench_header_printed__ = 1;
-  __bdd_bench_header_level__ = level;
-  __bdd_indent__(stdout, level);
-  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "benchmark", "iters",
-         "avg(us)", "min(us)", "max(us)", "ops/s");
-  __bdd_indent__(stdout, level);
-  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "---------", "-----",
-         "-------", "-------", "-------", "-----");
-#endif
-}
+static inline void __bdd_bench_print_header__(__bdd_config_type__ *config, size_t level);
 
-static inline void __bdd_bench_print__(const char *name, size_t iters, double sum_ms, double min_ms,
-                                       double max_ms, size_t level, bool use_color) {
-  double avg_us = (sum_ms / (double)iters) * 1000.0;
-  double min_us = min_ms * 1000.0;
-  double max_us = max_ms * 1000.0;
-  double ops_s = 0.0;
-  if (sum_ms > 0.0) {
-    ops_s = ((double)iters) / (sum_ms / 1000.0);
-  }
-  __bdd_bench_print_header__(level);
-  __bdd_indent__(stdout, level);
-#if BDD_BENCH_TABLE
-  printf("  %s%-*s%s  %8zu  %11.3f  %11.3f  %11.3f  %11.0f\n",
-         use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
-         use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
-#else
-  printf("%s%-*s%s  %8zu iters  avg %9.3f us  min %9.3f us  max %9.3f us  ops/s %9.0f\n",
-         use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
-         use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
-#endif
-}
+static inline void __bdd_bench_print__(__bdd_config_type__ *config, const char *name, size_t iters,
+                                       double sum_ms, double min_ms, double max_ms, size_t level,
+                                       bool use_color);
 
 static inline void __bdd_bench_reset__(__bdd_config_type__ *config);
 static inline void __bdd_bench_add__(__bdd_config_type__ *config, const char *name, size_t iters,
@@ -644,11 +612,13 @@ typedef struct __bdd_config_type__ {
   __bdd_bench_entry__ *bench_entries;
   size_t bench_count;
   size_t bench_cap;
+  int bench_header_printed;   /* replaces static __bdd_bench_header_printed__ */
+  size_t bench_header_level;  /* replaces static __bdd_bench_header_level__   */
 } __bdd_config_type__;
 
 static inline void __bdd_bench_reset__(__bdd_config_type__ *config) {
   config->bench_count = 0;
-  __bdd_bench_header_printed__ = 0;
+  config->bench_header_printed = 0;
   if (!config->bench_entries) {
     config->bench_cap = BDD_BENCH_MAX;
     config->bench_entries =
@@ -690,7 +660,7 @@ static int __bdd_bench_cmp__(const void *a, const void *b) {
 static inline void __bdd_bench_flush__(__bdd_config_type__ *config, size_t level, bool use_color) {
   if (!config->bench_entries || config->bench_count == 0) return;
   qsort(config->bench_entries, config->bench_count, sizeof(__bdd_bench_entry__), __bdd_bench_cmp__);
-  __bdd_bench_print_header__(level);
+  __bdd_bench_print_header__(config, level);
   for (size_t i = 0; i < config->bench_count; ++i) {
     __bdd_bench_entry__ *e = &config->bench_entries[i];
     char mark = (i == 0) ? '*' : ' ';
@@ -853,6 +823,45 @@ static void __bdd_indent__(FILE *fp, size_t level) {
   for (size_t i = 0; i < level; ++i) {
     fprintf(fp, "  ");
   }
+}
+
+static inline void __bdd_bench_print_header__(__bdd_config_type__ *config, size_t level) {
+#if BDD_BENCH_TABLE
+  if (!config) return;
+  if (config->bench_header_printed &&
+      config->bench_header_level == level) return;
+  config->bench_header_printed = 1;
+  config->bench_header_level = level;
+  __bdd_indent__(stdout, level);
+  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "benchmark", "iters",
+         "avg(us)", "min(us)", "max(us)", "ops/s");
+  __bdd_indent__(stdout, level);
+  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "---------", "-----",
+         "-------", "-------", "-------", "-----");
+#endif
+}
+
+static inline void __bdd_bench_print__(__bdd_config_type__ *config, const char *name, size_t iters,
+                                       double sum_ms, double min_ms, double max_ms, size_t level,
+                                       bool use_color) {
+  double avg_us = (sum_ms / (double)iters) * 1000.0;
+  double min_us = min_ms * 1000.0;
+  double max_us = max_ms * 1000.0;
+  double ops_s = 0.0;
+  if (sum_ms > 0.0) {
+    ops_s = ((double)iters) / (sum_ms / 1000.0);
+  }
+  __bdd_bench_print_header__(config, level);
+  __bdd_indent__(stdout, level);
+#if BDD_BENCH_TABLE
+  printf("  %s%-*s%s  %8zu  %11.3f  %11.3f  %11.3f  %11.0f\n",
+         use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
+         use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
+#else
+  printf("%s%-*s%s  %8zu iters  avg %9.3f us  min %9.3f us  max %9.3f us  ops/s %9.0f\n",
+         use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
+         use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
+#endif
 }
 
 static bool __bdd_enter_node__(__bdd_node_flags__ node_flags, __bdd_config_type__ *config,
@@ -2172,7 +2181,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                 (epsilon), &__bdd_fi__)) {                                         \
       __BDD_CHECK__(0, "array mismatch at [%zu]: expected %f but got %f (+/- %f)", __bdd_fi__,     \
                     ((const double *)(expected))[__bdd_fi__],                                      \
-                   ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon));          \
+                   ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon)));         \
     }                                                                                              \
   } while (0)
 #define check_float_array_eq_warn(actual, expected, n, epsilon)                                    \
@@ -2182,7 +2191,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                 (epsilon), &__bdd_fi__)) {                                         \
       __BDD_WARN__(0, "array mismatch at [%zu]: expected %f but got %f (+/- %f)", __bdd_fi__,      \
                    ((const double *)(expected))[__bdd_fi__],                                       \
-                  ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon));           \
+                  ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon)));          \
     }                                                                                              \
   } while (0)
 

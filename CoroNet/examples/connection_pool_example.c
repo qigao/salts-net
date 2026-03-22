@@ -15,7 +15,8 @@
 #define UNUSED(x) (void)(x)
 #endif
 
-#define POOL_URL "tcp://127.0.0.1:19000"
+#define POOL_HOST "127.0.0.1"
+#define POOL_PORT 19000
 #define NUM_WORKERS 5
 
 /* ── Echo server handler ──────────────────────────────────── */
@@ -95,7 +96,7 @@ static void main_coro(coro_t *co, void *arg) {
   cfg.max_size = 4;
 
   coro_pool_t *pool = coro_pool_create(m->ctx, &cfg);
-  int rc = coro_pool_open(pool, POOL_URL);
+  int rc = coro_pool_open(pool, POOL_HOST, POOL_PORT, CORO_SOCKET_TCP_V4);
   if (rc != 0) {
     printf("[Main] pool open failed: %d\n", rc);
     coro_pool_destroy(pool);
@@ -134,7 +135,7 @@ int main(void) {
   coro_context_t *ctx = coro_context_create(NULL);
   coro_socket_t *server = coro_socket_create_tcpv4(ctx);
 
-  int rc = coro_socket_listen_url(server, POOL_URL, echo_handler, NULL);
+  int rc = coro_socket_listen_on(server, POOL_HOST, POOL_PORT, echo_handler, NULL);
   if (rc != 0) {
     printf("[Main] server listen failed: %d\n", rc);
     coro_socket_destroy(server);

@@ -5,7 +5,7 @@
  * Each client connection runs in its own coroutine, allowing
  * thousands of concurrent connections with minimal overhead.
  *
- * Usage: ./coro_server_example [tcp://0.0.0.0:8080]
+ * Usage: ./coro_server_example [host [port]]
  * Test:  nc 127.0.0.1 8080
  */
 
@@ -46,7 +46,8 @@ static void client_handler(coro_socket_t *client, void *arg) {
 }
 
 int main(int argc, char **argv) {
-  const char *url = (argc > 1) ? argv[1] : "tcp://0.0.0.0:8080";
+  const char *host = (argc > 1) ? argv[1] : "0.0.0.0";
+  int port = (argc > 2) ? atoi(argv[2]) : 8080;
 
   /* Create event loop context */
   coro_context_t *ctx = coro_context_create(NULL);
@@ -64,8 +65,8 @@ int main(int argc, char **argv) {
   }
 
   /* Start listening */
-  printf("Starting server on %s\n", url);
-  int r = coro_socket_listen_url(server, url, client_handler, NULL);
+  printf("Starting server on %s:%d\n", host, port);
+  int r = coro_socket_listen_on(server, host, port, client_handler, NULL);
   if (r != 0) {
     fprintf(stderr, "Failed to start server: %d\n", r);
     coro_socket_destroy(server);

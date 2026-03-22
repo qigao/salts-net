@@ -156,10 +156,7 @@ coro_socket_t* iris_server_start(iris_app_t *app, coro_context_t *ctx, unsigned 
     return NULL;
   }
 
-  char listen_url[64];
-  snprintf(listen_url, sizeof(listen_url), "tcp://0.0.0.0:%d", port);
-
-  int r = coro_socket_listen_url(server, listen_url, server_handler, app);
+  int r = coro_socket_listen_on(server, "0.0.0.0", port, server_handler, app);
   if (r != 0) {
     TLOG_ERROR("Failed to start listening: {}", r);
     coro_socket_destroy(server);

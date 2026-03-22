@@ -3,7 +3,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <uv.h>
 
 #include "platform.h"
 #include "turbo_buffer.h"
@@ -117,7 +116,7 @@ struct turbo_websocket_server_s {
   int is_tls;             /**< 1 if using TLS, 0 for TCP */
 
   /* Event loop */
-  uv_loop_t *loop; /**< libuv event loop */
+  void *loop; /**< Opaque event loop */
 
   /* Configuration */
   turbo_websocket_server_config_t config; /**< Server configuration */
@@ -150,13 +149,13 @@ struct turbo_websocket_server_s {
 /**
  * @brief Creates a new WebSocket server.
  *
- * @param loop libuv event loop
+ * @param loop Native event-loop pointer for the active backend
  * @param use_tls 1 to use TLS (wss://), 0 for plain TCP (ws://)
  * @param config Server configuration
  * @return Pointer to turbo_websocket_server_t or NULL on failure
  */
   turbo_websocket_server_t *
-turbo_websocket_server_create(uv_loop_t *loop, int use_tls,
+turbo_websocket_server_create(void *loop, int use_tls,
                               const turbo_websocket_server_config_t *config);
 
 /**

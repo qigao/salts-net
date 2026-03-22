@@ -13,10 +13,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "platform.h"
-#include "turbo_udp.h"
-#include "turbo_socks5.h"
-#include "turbo_tcp.h"
+#include "platform.h" 
+#include "turbo_socks5.h" 
+#include "turbo_stream.h"
+#include "turbo_datagram.h"
+#include "turbo_coro_context.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,8 +27,8 @@ typedef struct turbo_socks5_udp_s turbo_socks5_udp_t;
 
 /* SOCKS5 UDP relay context */
 struct turbo_socks5_udp_s {
-    turbo_tcp_client_t* control_conn;  /* TCP control connection */
-    turbo_udp_t* udp_socket;           /* UDP socket for data */
+    turbo_stream_t* control_conn;      /* TCP control connection */
+    turbo_datagram_t* udp_socket;      /* UDP socket for data */
     struct sockaddr_storage relay_addr; /* UDP relay server address */
     mem_pool_t* arena;                /* Memory arena */
     void* user_data;
@@ -50,7 +51,7 @@ typedef struct {
  * @param on_connect Callback when UDP relay is ready
  * @return UDP relay context or NULL on failure
  */
-CXX_C_API turbo_socks5_udp_t* turbo_socks5_udp_create(uv_loop_t* loop,
+CXX_C_API turbo_socks5_udp_t* turbo_socks5_udp_create(coro_context_t* ctx,
                                             const turbo_socks5_config_t* proxy,
                                             turbo_connect_cb on_connect);
 

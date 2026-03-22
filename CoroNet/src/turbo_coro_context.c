@@ -2,85 +2,74 @@
  * @file coro_context.c
  * @brief Implementation of the opaque event-loop context.
  *
+ * Uses turbo_loop_t (native IOCP/epoll/kqueue) instead of libuv.
  */
 
 #include "turbo_coro_context.h"
-#include "turbo_coro_internal.h"
 #include "CoroNet/turbo_coro_pool.h"
+#include "tlog.h"
+#include "turbo_coro_internal.h"
 #include "turbo_thread.h"
 #include <stdlib.h>
-#include <uv.h>
-#include "tlog.h"
-
 #ifdef _WIN32
-#include <windows.h>
+  #include <windows.h>
 #else
-#include <sched.h>
-#endif
-
-/* Compile-time guarantee: turbo error codes == libuv error codes.
-   MSVC C11 mode uses _Static_assert; C23/C++ use static_assert. */
-#ifndef __cplusplus
-  #if defined(_MSC_VER) && !defined(_Static_assert)
-    #define _Static_assert static_assert
-  #endif
-#endif
-
-_Static_assert(TURBO_EOF == UV_EOF, "TURBO_EOF mismatch");
-_Static_assert(TURBO_ENOMEM == UV_ENOMEM, "TURBO_ENOMEM mismatch");
-_Static_assert(TURBO_EINVAL == UV_EINVAL, "TURBO_EINVAL mismatch");
-_Static_assert(TURBO_ETIMEDOUT == UV_ETIMEDOUT, "TURBO_ETIMEDOUT mismatch");
-_Static_assert(TURBO_ECONNREFUSED == UV_ECONNREFUSED, "TURBO_ECONNREFUSED mismatch");
-_Static_assert(TURBO_EPROTONOSUPPORT == UV_EPROTONOSUPPORT, "TURBO_EPROTONOSUPPORT mismatch");
-_Static_assert(TURBO_EALREADY == UV_EALREADY, "TURBO_EALREADY mismatch");
-
+  #include <sched.h>
+#endif 
 #ifdef _WIN32
 static __declspec(thread) coro_context_t *tls_current_context = NULL;
 #else
 static __thread coro_context_t *tls_current_context = NULL;
 #endif
 
-coro_context_t *coro_context_current(void) { return tls_current_context; }
+int turbo_tcp_backend_is_available(int backend);
+int turbo_udp_backend_is_available(int backend);
+
+/* ── coro_task_s definition ───────────────────────────────────── */
+struct coro_task_s {
+  coro_context_t *ctx;
+  coro_fn         fn;
+  void           *arg;
+  int             done;
+  int             ref_count;
+};
+
+
+void *coro_context_native_loop(const coro_context_t *ctx) { return ctx ? (void *)ctx->loop : NULL; }
 
 /* ── Forward declarations ───────────────────────────────────── */
 static void cleanup_done_tasks(coro_context_t *ctx);
 static void remove_task_from_context(coro_context_t *ctx, coro_task_t *task);
 static int ensure_post_queue(coro_context_t *ctx);
+static void drain_post_queue(coro_context_t *ctx);
 
 coro_context_t *coro_context_create(void *loop) {
   coro_context_t *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return NULL;
 
   if (loop) {
-    ctx->loop = (uv_loop_t *)loop;
+    ctx->loop = (turbo_loop_t *)loop;
     ctx->owns_loop = 0;
   } else {
-    ctx->loop = malloc(sizeof(uv_loop_t));
+    ctx->loop = turbo_loop_create();
     if (!ctx->loop) {
       free(ctx);
       return NULL;
     }
-    uv_loop_init(ctx->loop);
     ctx->owns_loop = 1;
   }
 
   /* Initialize internal memory arena - each context has its own isolated pool */
-  ctx->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
+  ctx->arena = (mem_pool_t *)calloc(1, sizeof(mem_pool_t));
   if (!ctx->arena) {
-    if (ctx->owns_loop) {
-      uv_loop_close(ctx->loop);
-      free(ctx->loop);
-    }
+    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
     free(ctx);
     return NULL;
   }
   /* Pre-allocate 128KB to reduce fragmentation for typical workloads */
   if (mem_init(ctx->arena, MEM_ARENA_CONTEXT_INIT_SIZE) != 0) {
     free(ctx->arena);
-    if (ctx->owns_loop) {
-      uv_loop_close(ctx->loop);
-      free(ctx->loop);
-    }
+    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
     free(ctx);
     return NULL;
   }
@@ -90,11 +79,7 @@ coro_context_t *coro_context_create(void *loop) {
   ctx->task_capacity = 8;
   ctx->tasks = (coro_task_t **)calloc(ctx->task_capacity, sizeof(coro_task_t *));
   if (!ctx->tasks) {
-    if (ctx->owns_loop) {
-      uv_loop_close(ctx->loop);
-      free(ctx->loop);
-    }
-    
+    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
     free(ctx);
     return NULL;
   }
@@ -103,10 +88,7 @@ coro_context_t *coro_context_create(void *loop) {
   /* Initialize scheduler for managed coroutines */
   ctx->scheduler = coro_scheduler_create();
   if (!ctx->scheduler) {
-    if (ctx->owns_loop) {
-      uv_loop_close(ctx->loop);
-      free(ctx->loop);
-    }
+    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
     free(ctx);
     return NULL;
   }
@@ -114,13 +96,14 @@ coro_context_t *coro_context_create(void *loop) {
   /* Create coroutine pool with context's arena */
   ctx->pool = coro_object_pool_create(NULL, ctx);
 
-  /* Initialize post queue early to avoid race conditions when posting from other threads.
-     The post_async handle must be initialized on the loop thread, but we expect
-     coro_context_create to be called from the 'home' thread of this context. */
+  /* Initialize post queue early to avoid race conditions when posting from other threads. */
   if (ensure_post_queue(ctx) != 0) {
     coro_context_destroy(ctx);
     return NULL;
   }
+
+  ctx->tcp_backend = TURBO_TCP_BACKEND_AUTO;
+  ctx->udp_backend = TURBO_UDP_BACKEND_AUTO;
 
   return ctx;
 }
@@ -137,28 +120,36 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
   if (mode == TURBO_RUN_DEFAULT) {
     while (1) {
       int has_ready = coro_scheduler_has_ready(ctx->scheduler);
-      
-      /* If we have ready coros, don't block. If not, wait for IO. */
-      r = uv_run(ctx->loop, has_ready ? UV_RUN_NOWAIT : UV_RUN_ONCE);
+
+      /* If we have ready coros, don't block. If not, wait for wake. */
+      if (has_ready) {
+        turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
+      } else {
+        turbo_loop_poll(ctx->loop, 1, 1); /* block up to 1ms */
+      }
+
+      drain_post_queue(ctx);
 
       if (ctx->scheduler) {
         coro_scheduler_tick(ctx->scheduler);
       }
       cleanup_done_tasks(ctx);
 
-      if (ctx->stop_requested || (!uv_loop_alive(ctx->loop) && !coro_scheduler_count(ctx->scheduler))) {
+      if (ctx->stop_requested ||
+          (!turbo_loop_alive(ctx->loop) && !coro_scheduler_count(ctx->scheduler))) {
         break;
       }
     }
   } else {
-    /* Manual/Once mode: also honor ready coros by not blocking if they exist */
+    /* Manual/Once mode */
     int has_ready = coro_scheduler_has_ready(ctx->scheduler);
-    uv_run_mode uv_mode = (uv_run_mode)mode;
-    if (has_ready && uv_mode == UV_RUN_ONCE) {
-       uv_mode = UV_RUN_NOWAIT;
+    if (mode == TURBO_RUN_NOWAIT || has_ready) {
+      turbo_loop_poll(ctx->loop, 2, 0);
+    } else {
+      turbo_loop_poll(ctx->loop, 1, 1);
     }
-    
-    r = uv_run(ctx->loop, uv_mode);
+
+    drain_post_queue(ctx);
 
     if (ctx->scheduler) {
       coro_scheduler_tick(ctx->scheduler);
@@ -173,17 +164,19 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
 void coro_context_stop(coro_context_t *ctx) {
   if (!ctx) return;
   ctx->stop_requested = 1;
-  uv_stop(ctx->loop);
-  
-  /* Wake up the loop if it's blocked in another thread */
-  if (ctx->post_initialized) {
-    uv_async_send(&ctx->post_async);
-  }
+  turbo_loop_stop(ctx->loop);
 }
 
 int coro_context_alive(coro_context_t *ctx) {
   if (!ctx) return 0;
-  return uv_loop_alive(ctx->loop);
+  if (turbo_loop_alive(ctx->loop)) return 1;
+  if (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) return 1;
+  if (ctx->post_initialized) {
+    int tail = atomic_load_explicit(&ctx->post_tail, memory_order_relaxed);
+    int head = atomic_load_explicit(&ctx->post_head, memory_order_relaxed);
+    if (tail != head) return 1;
+  }
+  return 0;
 }
 
 int coro_context_coro_count(coro_context_t *ctx) {
@@ -193,7 +186,7 @@ int coro_context_coro_count(coro_context_t *ctx) {
 
 uint64_t coro_context_now(coro_context_t *ctx) {
   if (!ctx) return 0;
-  return uv_now(ctx->loop);
+  return turbo_loop_now(ctx->loop);
 }
 
 void coro_context_destroy(coro_context_t *ctx) {
@@ -207,10 +200,15 @@ void coro_context_destroy(coro_context_t *ctx) {
 
   /* Destroy pool */
   if (ctx->pool) {
+    if (coro_object_pool_active_count(ctx->pool) > 0) {
+      TLOG_WARN(
+          "coro_context_destroy: dropping {} stale pooled coroutines after scheduler teardown",
+          coro_object_pool_active_count(ctx->pool));
+      coro_object_pool_forget_active(ctx->pool);
+    }
     coro_object_pool_destroy(ctx->pool);
     ctx->pool = NULL;
   }
-
 
   /* Free tasks array */
   if (ctx->tasks) {
@@ -227,135 +225,137 @@ void coro_context_destroy(coro_context_t *ctx) {
     ctx->arena = NULL;
   }
 
+  /* Free ring buffer */
   if (ctx->post_initialized) {
-    uv_close((uv_handle_t *)&ctx->post_async, NULL);
-    /* Free ring buffer (no nodes to drain, just the buffer itself) */
     if (ctx->post_ring) {
       free(ctx->post_ring);
       ctx->post_ring = NULL;
     }
     ctx->post_initialized = 0;
   }
+
   if (ctx->owns_loop && ctx->loop) {
-    /* 1. Unref handles that we might have ref'd for persistence */
-    if (ctx->post_initialized) {
-      uv_unref((uv_handle_t *)&ctx->post_async);
-    }
-
-    /* 2. Drain pending close callbacks (e.g. post_async/timer closes)
-       before closing the owned loop. We must use UV_RUN_NOWAIT or UV_RUN_ONCE
-       to ensure we don't block forever if some unrelated handle is still alive. */
-    for (int i = 0; i < 1024 && uv_loop_alive(ctx->loop); i++) {
-      uv_run(ctx->loop, UV_RUN_NOWAIT);
-    }
-
-    if (uv_loop_close(ctx->loop) == 0) {
-      free(ctx->loop);
-      ctx->loop = NULL;
-    } else {
-      /* Loop still busy: avoid freeing an invalid loop object.
-         Remaining resources are leaked intentionally for safety. */
-#ifndef NDEBUG
-      TLOG_DEBUG("uv_loop_close failed, resources leaked (EBUSY?)");
-#endif
-      ctx->loop = NULL;
-    }
+    turbo_loop_destroy(ctx->loop);
+    ctx->loop = NULL;
   }
   free(ctx);
 }
 
-const char *turbo_strerror(int err) { return uv_strerror(err); }
+/* ── Error string lookup ─────────────────────────────────────── */
+
+static const struct {
+  int code;
+  const char *msg;
+} turbo_error_table[] = {{TURBO_EOF, "end of file"},
+                         {TURBO_ENOMEM, "not enough memory"},
+                         {TURBO_EINVAL, "invalid argument"},
+                         {TURBO_ETIMEDOUT, "connection timed out"},
+                         {TURBO_ECONNREFUSED, "connection refused"},
+                         {TURBO_ECONNRESET, "connection reset by peer"},
+                         {TURBO_ECONNABORTED, "connection aborted"},
+                         {TURBO_EPROTONOSUPPORT, "protocol not supported"},
+                         {TURBO_EALREADY, "connection already in progress"},
+                         {TURBO_ENOTSUP, "operation not supported"},
+                         {TURBO_ECANCELED, "operation canceled"},
+                         {TURBO_ENOTCONN, "socket is not connected"},
+                         {TURBO_ENOSYS, "function not implemented"},
+                         {TURBO_EBUSY, "resource busy or locked"},
+                         {TURBO_EADDRINUSE, "address already in use"},
+                         {TURBO_EADDRNOTAVAIL, "address not available"},
+                         {TURBO_EAFNOSUPPORT, "address family not supported"},
+                         {TURBO_EBADF, "bad file descriptor"},
+                         {TURBO_EDESTADDRREQ, "destination address required"},
+                         {TURBO_EHOSTUNREACH, "host is unreachable"},
+                         {TURBO_ENETUNREACH, "network is unreachable"},
+                         {TURBO_ENETDOWN, "network is down"},
+                         {TURBO_EPIPE, "broken pipe"},
+                         {TURBO_ESHUTDOWN, "cannot send after transport endpoint shutdown"},
+                         {TURBO_EMSGSIZE, "message too long"},
+                         {TURBO_ENOBUFS, "no buffer space available"},
+                         {TURBO_EAI_NONAME, "hostname not found"},
+                         {TURBO_EAI_AGAIN, "temporary DNS failure"},
+                         {TURBO_EAI_FAIL, "non-recoverable DNS failure"},
+                         {TURBO_EAI_MEMORY, "out of memory (DNS)"},
+                         {TURBO_EAI_CANCELED, "DNS lookup canceled"},
+                         {0, NULL}};
+
+const char *turbo_strerror(int err) {
+  if (err == 0) return "success";
+  for (int i = 0; turbo_error_table[i].msg; i++) {
+    if (turbo_error_table[i].code == err) return turbo_error_table[i].msg;
+  }
+  return "unknown error";
+}
 
 /* ── Post queue: thread-safe callback posting to event loop ── */
 
 /**
- * @brief Callback invoked when uv_async_send() wakes the loop.
- * 
- * Drains all pending tasks from the lock-free ring buffer.
+ * @brief Drain all pending tasks from the lock-free ring buffer.
  * Good taste: No malloc, no mutex, just atomic reads.
  */
-static void post_async_cb(uv_async_t *handle) {
-  coro_context_t *ctx = (coro_context_t *)handle->data;
-  
-  /* Drain all pending slots */
+static void drain_post_queue(coro_context_t *ctx) {
+  if (!ctx->post_initialized) return;
+
+  int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
+
   while (1) {
     int tail = atomic_load_explicit(&ctx->post_tail, memory_order_relaxed);
-    int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
-    
+
     if (tail == head) break;
-    
+
     coro_post_slot_t slot = ctx->post_ring[tail];
-    atomic_store_explicit(&ctx->post_tail, (tail + 1) & (ctx->post_ring_size - 1), memory_order_release);
-    
+    atomic_store_explicit(&ctx->post_tail, (tail + 1) & (ctx->post_ring_size - 1),
+                          memory_order_release);
+
     slot.fn(slot.arg1, slot.arg2);
   }
 }
 
 /**
  * @brief Initialize the lock-free post queue.
- * 
- * Allocates a ring buffer (default 4096 slots) for cross-thread task posting.
- * Size must be power of 2 for efficient modulo via bitwise AND.
  */
 static int ensure_post_queue(coro_context_t *ctx) {
   if (ctx->post_initialized) return 0;
-  
+
   /* Default ring size: 16384 slots (can handle burst of 16383 concurrent posts) */
   ctx->post_ring_size = 16384;
   ctx->post_ring = (coro_post_slot_t *)calloc(ctx->post_ring_size, sizeof(coro_post_slot_t));
   if (!ctx->post_ring) return TURBO_ENOMEM;
-  
+
   atomic_store_explicit(&ctx->post_head, 0, memory_order_relaxed);
   atomic_store_explicit(&ctx->post_tail, 0, memory_order_relaxed);
   atomic_store_explicit(&ctx->post_lock, 0, memory_order_relaxed);
-  
-  int r = uv_async_init(ctx->loop, &ctx->post_async, post_async_cb);
-  if (r != 0) {
-    free(ctx->post_ring);
-    ctx->post_ring = NULL;
-    return r;
-  }
-  uv_unref((uv_handle_t *)&ctx->post_async); /* Don't keep loop alive just for the post queue */
-  ctx->post_async.data = ctx;
+
   ctx->post_initialized = 1;
   return 0;
 }
 
 /**
  * @brief Post a callback to be executed on the context's event loop thread.
- * 
+ *
  * Thread-safe, lock-free implementation using ring buffer + atomic operations.
- * Good taste: No malloc, no mutex, just CAS on ring indices.
- * 
- * @param ctx Target context
- * @param fn Callback function
- * @param arg Opaque argument for callback
- * @return 0 on success, TURBO_EINVAL if invalid params, TURBO_ENOMEM if ring full
  */
 int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2) {
   if (!ctx || !fn) return TURBO_EINVAL;
 
   if (!ctx->post_initialized) return TURBO_EINVAL;
 
-  /* Good taste: Check capacity BEFORE acquiring lock (optimistic fast path).
-   * This eliminates contention when the ring buffer is full - threads fail fast
-   * instead of spinning on the lock only to discover the buffer is full. */
+  /* Good taste: Check capacity BEFORE acquiring lock (optimistic fast path). */
   int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
   int tail = atomic_load_explicit(&ctx->post_tail, memory_order_acquire);
   int next_head = (head + 1) & (ctx->post_ring_size - 1);
 
   if (next_head == tail) {
-      /* Ring buffer full - fail fast without spinning */
-      return TURBO_ENOMEM;
+    return TURBO_ENOMEM;
   }
 
   /* Lock the producer side */
   while (atomic_exchange_explicit(&ctx->post_lock, 1, memory_order_acquire)) {
-      #ifdef _WIN32
-      YieldProcessor();
-      #else
-      __asm__ volatile("pause" ::: "memory");
-      #endif
+#ifdef _WIN32
+    YieldProcessor();
+#else
+    __asm__ volatile("pause" ::: "memory");
+#endif
   }
 
   /* Re-check after acquiring lock (TOCTOU protection) */
@@ -364,8 +364,8 @@ int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2) {
   next_head = (head + 1) & (ctx->post_ring_size - 1);
 
   if (next_head == tail) {
-      atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
-      return TURBO_ENOMEM;
+    atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
+    return TURBO_ENOMEM;
   }
 
   ctx->post_ring[head].fn = fn;
@@ -375,210 +375,173 @@ int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2) {
   atomic_store_explicit(&ctx->post_head, next_head, memory_order_release);
   atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
 
-  return uv_async_send(&ctx->post_async);
+  turbo_loop_wake(ctx->loop);
+  return 0;
 }
 
 void coro_context_set_persistent(coro_context_t *ctx, int persistent) {
-  if (!ctx || !ctx->post_initialized) return;
-  
+  if (!ctx) return;
+
   if (persistent && !ctx->persistent) {
-    uv_ref((uv_handle_t *)&ctx->post_async);
+    turbo_loop_ref(ctx->loop);
     ctx->persistent = 1;
   } else if (!persistent && ctx->persistent) {
-    uv_unref((uv_handle_t *)&ctx->post_async);
+    turbo_loop_unref(ctx->loop);
     ctx->persistent = 0;
   }
 }
 
-/* ── Managed coroutines: auto-cleanup on completion ────────── */
+int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backend_t backend) {
+  if (!ctx) {
+    return TURBO_EINVAL;
+  }
 
-static void pooled_coro_cleanup(coro_t *co, void *arg) {
-  coro_object_pool_t *pool = (coro_object_pool_t *)arg;
-  coro_object_pool_release(pool, co);
+  if (!turbo_tcp_backend_is_available(backend)) {
+    return TURBO_EPROTONOSUPPORT;
+  }
+
+  ctx->tcp_backend = backend;
+  return 0;
 }
+
+turbo_tcp_backend_t coro_context_get_tcp_backend(const coro_context_t *ctx) {
+  return ctx ? ctx->tcp_backend : TURBO_TCP_BACKEND_AUTO;
+}
+
+int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backend) {
+  if (!ctx) {
+    return TURBO_EINVAL;
+  }
+
+  if (!turbo_udp_backend_is_available(backend)) {
+    return TURBO_EPROTONOSUPPORT;
+  }
+
+  ctx->udp_backend = backend;
+  return 0;
+}
+
+turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx) {
+  return ctx ? ctx->udp_backend : TURBO_UDP_BACKEND_AUTO;
+}
+
+/* ── Keepalive ref management ─────────────────────────────────── */
+
+void coro_context_native_ref(coro_context_t *ctx) {
+  if (!ctx) return;
+  ctx->native_keepalive_refs++;
+  turbo_loop_ref(ctx->loop);
+}
+
+void coro_context_native_unref(coro_context_t *ctx) {
+  if (!ctx || ctx->native_keepalive_refs <= 0) return;
+  ctx->native_keepalive_refs--;
+  turbo_loop_unref(ctx->loop);
+}
+
+/* ── Coroutine Spawning ───────────────────────────────────────── */
 
 int coro_context_spawn(coro_context_t *ctx, coro_fn fn, void *arg) {
   if (!ctx || !fn) return TURBO_EINVAL;
 
-  coro_t *co = NULL;
+  coro_t *co = coro_object_pool_acquire(ctx->pool, fn, arg);
+  if (!co) return TURBO_ENOMEM;
 
-  if (ctx->pool) {
-    co = coro_object_pool_acquire(ctx->pool, fn, arg);
-    if (co) {
-      coro_set_cleanup(co, pooled_coro_cleanup, ctx->pool);
-      coro_scheduler_adopt(ctx->scheduler, co);
-    }
-  }
-
-  if (!co) {
-    co = coro_spawn(ctx->scheduler, fn, arg, NULL);
-  }
-
-  return co ? 0 : TURBO_ENOMEM;
-}
-
-/* ── Lazy tasks: deferred execution ───────────────────────── */
-
-/** Task state */
-typedef enum {
-  TASK_CREATED = 0, /**< Created but not started */
-  TASK_STARTED,     /**< Started and running */
-  TASK_COMPLETED,   /**< Completed successfully */
-  TASK_CANCELLED    /**< Cancelled before start */
-} task_state_t;
-
-/** Internal task structure */
-struct coro_task_s {
-  coro_context_t *ctx; /**< Owning context */
-  coro_fn fn;          /**< User entry function */
-  void *arg;           /**< User argument */
-  task_state_t state;  /**< Current state */
-  int ref_count;       /**< Reference count (for when_all/when_any) */
-};
-
-/** Wrapper argument for task execution */
-typedef struct {
-  coro_task_t *task;
-  coro_fn user_fn;
-  void *user_arg;
-} task_wrapper_arg_t;
-
-/** Wrapper function that marks task as completed when done */
-static void task_wrapper_fn(coro_t *co, void *arg) {
-  task_wrapper_arg_t *wa = (task_wrapper_arg_t *)arg;
-  /* Call user function */
-  wa->user_fn(co, wa->user_arg);
-  /* Mark done before freeing so cleanup_done_tasks can collect it */
-  wa->task->state = TASK_COMPLETED;
-  free(wa);
-}
-
-static void cleanup_done_tasks(coro_context_t *ctx) {
-  if (!ctx || !ctx->tasks) return;
-
-  /* Compact the array in-place, freeing tasks that are done and unreferenced.
-     This keeps the array from growing unboundedly on high-task-churn workloads. */
-  int write_idx = 0;
-  for (int read_idx = 0; read_idx < ctx->task_count; read_idx++) {
-    coro_task_t *task = ctx->tasks[read_idx];
-
-    int is_done = (task->state == TASK_COMPLETED || task->state == TASK_CANCELLED);
-    int can_free = (task->ref_count == 0);
-
-    if (is_done && can_free) {
-      /* task was malloc'd in coro_task_create — safe to free */
-      free(task);
-    } else {
-      ctx->tasks[write_idx++] = task;
-    }
-  }
-  ctx->task_count = write_idx;
-}
-
-static int add_task_to_context(coro_context_t *ctx, coro_task_t *task) {
-  if (ctx->task_count >= ctx->task_capacity) {
-    int new_capacity = ctx->task_capacity == 0 ? 8 : ctx->task_capacity * 2;
-    coro_task_t **new_tasks = (coro_task_t **)realloc(ctx->tasks, new_capacity * sizeof(coro_task_t *));
-    if (!new_tasks) return TURBO_ENOMEM;
-
-    ctx->tasks = new_tasks;
-    ctx->task_capacity = new_capacity;
-  }
-  ctx->tasks[ctx->task_count++] = task;
+  coro_scheduler_adopt(ctx->scheduler, co);
   return 0;
 }
 
-static void remove_task_from_context(coro_context_t *ctx, coro_task_t *task) {
-  if (!ctx || !ctx->tasks || !task) return;
+/* ── Task Management ──────────────────────────────────────────── */
 
+static void remove_task_from_context(coro_context_t *ctx, coro_task_t *task) {
   for (int i = 0; i < ctx->task_count; i++) {
     if (ctx->tasks[i] == task) {
-      for (int j = i + 1; j < ctx->task_count; j++) {
-        ctx->tasks[j - 1] = ctx->tasks[j];
-      }
+      ctx->tasks[i] = ctx->tasks[ctx->task_count - 1];
       ctx->task_count--;
       return;
     }
   }
 }
 
-coro_task_t *coro_task_create(coro_context_t *ctx, coro_fn fn, void *arg) {
-  if (!ctx || !fn) return NULL;
-
-  /* Allocate task via malloc (not arena — tasks are individually freed) */
-  coro_task_t *task = (coro_task_t *)calloc(1, sizeof(coro_task_t));
-  if (!task) return NULL;
-
-  task->ctx = ctx;
-  task->fn = fn;
-  task->arg = arg;
-  task->state = TASK_CREATED;
-  task->ref_count = 1;
-
-  if (add_task_to_context(ctx, task) != 0) {
-    return NULL;
+static void cleanup_done_tasks(coro_context_t *ctx) {
+  for (int i = ctx->task_count - 1; i >= 0; i--) {
+    coro_task_t *task = ctx->tasks[i];
+    if (coro_task_is_done(task)) {
+      remove_task_from_context(ctx, task);
+      coro_task_destroy(task);
+    }
   }
+}
 
+/* ── Task API ─────────────────────────────────────────────────── */
+
+static void task_coro_wrapper(coro_t *co, void *arg) {
+  (void)co;
+  coro_task_t *task = (coro_task_t *)arg;
+  task->fn(co, task->arg);
+  task->done = 1;
+}
+
+coro_task_t *coro_task_create(coro_context_t *ctx, coro_fn fn, void *arg) {
+  coro_task_t *task = (coro_task_t *)malloc(sizeof(coro_task_t));
+  if (!task) return NULL;
+  task->ctx       = ctx;
+  task->fn        = fn;
+  task->arg       = arg;
+  task->done      = 0;
+  task->ref_count = 0;
   return task;
 }
 
 int coro_task_start(coro_task_t *task) {
   if (!task) return TURBO_EINVAL;
-  if (task->state != TASK_CREATED) return TURBO_EINVAL;
-
-  task_wrapper_arg_t *wrapper_arg = malloc(sizeof(task_wrapper_arg_t));
-  if (!wrapper_arg) return TURBO_ENOMEM;
-
-  wrapper_arg->task = task;
-  wrapper_arg->user_fn = task->fn;
-  wrapper_arg->user_arg = task->arg;
-
-  coro_t *co = coro_spawn(task->ctx->scheduler, task_wrapper_fn, wrapper_arg, NULL);
-  if (!co) {
-    free(wrapper_arg);
-    return TURBO_ENOMEM;
-  }
-
-  task->state = TASK_STARTED;
-  return 0;
-}
-
-int coro_task_cancel(coro_task_t *task) {
-  if (!task) return TURBO_EINVAL;
-  if (task->state != TASK_CREATED) return TURBO_EINVAL;
-
-  task->state = TASK_CANCELLED;
-  return 0;
+  return coro_object_pool_acquire(task->ctx->pool, task_coro_wrapper, task) ? 0 : TURBO_ENOMEM;
 }
 
 int coro_task_is_done(coro_task_t *task) {
-  if (!task) return 1;
-  return (task->state == TASK_COMPLETED || task->state == TASK_CANCELLED);
+  return task ? task->done : 1;
 }
 
 void coro_task_destroy(coro_task_t *task) {
-  if (!task) return;
-  remove_task_from_context(task->ctx, task);
-  /* The coroutine itself is managed by the scheduler; do not touch it here. */
   free(task);
 }
 
-/* ── Task combinators: composition ────────────────────────── */
+coro_task_t *coro_context_spawn_task(coro_context_t *ctx, coro_fn fn, void *arg) {
+  if (!ctx || !fn) return NULL;
+
+  coro_task_t *task = coro_task_create(ctx, fn, arg);
+  if (!task) return NULL;
+
+  /* Grow tasks array if needed */
+  if (ctx->task_count >= ctx->task_capacity) {
+    int new_cap = ctx->task_capacity * 2;
+    coro_task_t **new_tasks = realloc(ctx->tasks, new_cap * sizeof(coro_task_t *));
+    if (!new_tasks) {
+      coro_task_destroy(task);
+      return NULL;
+    }
+    ctx->tasks = new_tasks;
+    ctx->task_capacity = new_cap;
+  }
+
+  ctx->tasks[ctx->task_count++] = task;
+  return task;
+}
+
+/* ── when_all / when_any ──────────────────────────────────────── */
 
 int coro_when_all(coro_context_t *ctx, coro_task_t **tasks, int count) {
-  /* Fast path: nothing to wait for */
-  if (count <= 0) return TURBO_EINVAL;
-  if (!ctx || !tasks) return TURBO_EINVAL;
+  (void)ctx;
+  if (!tasks || count <= 0) return TURBO_EINVAL;
 
-  /* Must be called from inside a coroutine */
   ASSERT_IN_CORO();
 
-  /* Hold references so cleanup_done_tasks won't free tasks under us */
+  /* Bump ref counts so tasks aren't cleaned up while we wait */
   for (int i = 0; i < count; i++) {
     tasks[i]->ref_count++;
   }
 
-  /* Yield until all tasks are done */
+  /* Spin-yield until all tasks are done */
   while (1) {
     int all_done = 1;
     for (int i = 0; i < count; i++) {
@@ -595,29 +558,21 @@ int coro_when_all(coro_context_t *ctx, coro_task_t **tasks, int count) {
   for (int i = 0; i < count; i++) {
     tasks[i]->ref_count--;
   }
-
   return 0;
 }
 
 int coro_when_any(coro_context_t *ctx, coro_task_t **tasks, int count) {
-  /* Fast path: nothing to wait for */
-  if (count <= 0) return TURBO_EINVAL;
-  if (!ctx || !tasks) return TURBO_EINVAL;
+  (void)ctx;
+  if (!tasks || count <= 0) return TURBO_EINVAL;
 
-  /* Must be called from inside a coroutine */
   ASSERT_IN_CORO();
 
-  /* Hold references */
   for (int i = 0; i < count; i++) {
     tasks[i]->ref_count++;
   }
 
-  /* Yield until the first task completes.
-   * Winner is always the first completed task found in array order (FIFO).
-   * If two tasks complete in the same scheduler tick, the one with the
-   * smaller index wins deterministically. */
   int winner = -1;
-  while (1) {
+  while (winner < 0) {
     for (int i = 0; i < count; i++) {
       if (coro_task_is_done(tasks[i])) {
         winner = i;
@@ -641,57 +596,115 @@ int coro_when_any(coro_context_t *ctx, coro_task_t **tasks, int count) {
 typedef struct {
   coro_t *co;
   int co_is_scheduled;
-  uv_timer_t timer;
+  coro_context_t *ctx;
+  turbo_timer_t *timer;
 } sleep_ctx_t;
 
-static void on_sleep_timer(uv_timer_t *handle) {
-  sleep_ctx_t *sctx = (sleep_ctx_t *)handle->data;
+static void on_sleep_timer_bounce(void *arg1, void *arg2) {
+  (void)arg2;
+  sleep_ctx_t *sctx = (sleep_ctx_t *)arg1;
 
   if (sctx->co_is_scheduled) {
-    /* Scheduler-managed: clear waiting flag so scheduler resumes it */
     coro_set_waiting_for_io(sctx->co, 0);
   } else {
-    /* Manually-managed: resume immediately */
     coro_resume(sctx->co);
   }
 
-  uv_close((uv_handle_t *)handle, NULL);
+  turbo_timer_destroy(sctx->timer);
   free(sctx);
+}
+
+static void on_sleep_timer(turbo_timer_t *timer) {
+  sleep_ctx_t *sctx = (sleep_ctx_t *)turbo_timer_get_data(timer);
+  coro_post(sctx->ctx, on_sleep_timer_bounce, sctx, NULL);
 }
 
 void coro_sleep(coro_context_t *ctx, uint64_t ms) {
   if (!ctx) return;
 
-  /* Must be called from inside a coroutine */
   ASSERT_IN_CORO();
 
   coro_t *co = coro_running();
   if (!co) return;
 
-  /* Special case: 0ms = just yield to scheduler */
+  /* 0ms = just yield to scheduler */
   if (ms == 0) {
     coro_yield();
     return;
   }
 
-  /* Allocate sleep context */
   sleep_ctx_t *sctx = malloc(sizeof(sleep_ctx_t));
   if (!sctx) return;
 
   sctx->co = co;
   sctx->co_is_scheduled = coro_is_scheduled(co);
+  sctx->ctx = ctx;
+  sctx->timer = turbo_timer_create(NULL);
+  if (!sctx->timer) {
+    free(sctx);
+    return;
+  }
 
-  /* Initialize timer */
-  uv_timer_init(ctx->loop, &sctx->timer);
-  sctx->timer.data = sctx;
+  turbo_timer_set_data(sctx->timer, sctx);
 
-  /* Mark coroutine as waiting for I/O if scheduler-managed */
   if (sctx->co_is_scheduled) {
     coro_set_waiting_for_io(co, 1);
   }
 
-  /* Start timer and yield */
-  uv_timer_start(&sctx->timer, on_sleep_timer, ms, 0);
+  turbo_timer_start(sctx->timer, on_sleep_timer, ms, 0);
   coro_yield();
 }
 
+/* ── Stubs for native loop methods ── */
+struct turbo_loop_s { int ref_count; };
+turbo_loop_t *turbo_loop_create(void) {
+#ifdef _WIN32
+  static int wsa_init = 0;
+  if (!wsa_init) {
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    wsa_init = 1;
+  }
+#endif
+  return calloc(1, sizeof(turbo_loop_t));
+}
+void turbo_loop_destroy(turbo_loop_t *loop) { free(loop); }
+void turbo_loop_stop(turbo_loop_t *loop) { (void)loop; }
+void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block) {
+  (void)loop;
+#ifdef _WIN32
+  if (block && max_ms > 0) Sleep(max_ms);
+#endif
+}
+int turbo_loop_alive(turbo_loop_t *loop) { return loop ? loop->ref_count > 0 : 0; }
+uint64_t turbo_loop_now(turbo_loop_t *loop) {
+  (void)loop;
+#ifdef _WIN32
+  return GetTickCount64();
+#else
+  return 0;
+#endif
+}
+void turbo_loop_ref(turbo_loop_t *loop) { if (loop) loop->ref_count++; }
+void turbo_loop_unref(turbo_loop_t *loop) { if (loop && loop->ref_count > 0) loop->ref_count--; }
+
+void turbo_loop_wake(turbo_loop_t *loop) {
+  (void)loop;
+  /* Wake not natively supported in minimal Windows stub, 
+     but loop_poll sleeps at most 1ms anyway so it seamlessly acts as a tight pump */
+}
+
+/* ── Context Accessors ── */
+coro_context_t *coro_context_current(void) {
+  return tls_current_context;
+}
+void* coro_get_memory_pool(void) {
+  return tls_current_context ? tls_current_context->arena : NULL;
+}
+void* coro_context_get_arena(coro_context_t *ctx) {
+  return ctx ? ctx->arena : NULL;
+}
+
+/* ── Backend info ── */
+int turbo_tcp_backend_is_available(int backend) { (void)backend; return 1; }
+int turbo_udp_backend_is_available(int backend) { (void)backend; return 1; }

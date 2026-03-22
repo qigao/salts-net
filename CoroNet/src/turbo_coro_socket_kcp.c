@@ -4,15 +4,18 @@
  */
 
 #include "CoroNet/turbo_coro_internal.h"
+#include "CoroNet/turbo_kcp.h"
 #include <stdlib.h>
+#include <string.h>
+#include "turbo_error.h"
 
 /* ── KCP Callbacks ────────────────────────────────────────── */
 
 static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
-  turbo_kcp_client_t *client = (turbo_kcp_client_t *)peer;
-  coro_socket_t *s = (coro_socket_t *)client->user_data;
+  UNUSED(peer);
+  turbo_kcp_t *client = (turbo_kcp_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_kcp_get_user_data(client);
   if (s) {
-    if (s->ops->recv_stop) s->ops->recv_stop(s);
     coro_socket_handle_transport_recv(s, slice);
   }
   return 0;
@@ -20,21 +23,27 @@ static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
 
 static void on_kcp_connect(void *handle, int status, void *extra) {
   UNUSED(extra);
-  turbo_kcp_client_t *client = (turbo_kcp_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)client->user_data;
+  turbo_kcp_t *client = (turbo_kcp_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_kcp_get_user_data(client);
   coro_socket_handle_transport_connect(s, status);
 }
 
 /* ── KCP Connect ──────────────────────────────────────────── */
 
 static int kcp_connect(coro_socket_t *s, const char *host, int port) {
-  UNUSED(host);
+  /* Create handle if not existing */
+  if (!s->handle.kcp) {
+    s->handle.kcp = turbo_kcp_create(s->ctx);
+    if (!s->handle.kcp) return TURBO_ENOMEM;
+    turbo_kcp_set_user_data(s->handle.kcp, s);
+    s->owns_handle = 1;
+  }
   
   retain_client(s);
-  int r = turbo_kcp_client_connect(
+  int r = turbo_kcp_connect(
       s->handle.kcp, 
-      s->resolved_ip, 
-      (unsigned short)port,
+      host, 
+      port,
       on_kcp_connect, 
       on_kcp_recv
   );
@@ -52,7 +61,7 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
 /* ── KCP Send/Recv ────────────────────────────────────────── */
 
 static int kcp_send(coro_socket_t *s, const char *data, size_t len) {
-  return turbo_kcp_client_send(s->handle.kcp, data, len);
+  return turbo_kcp_send(s->handle.kcp, data, len);
 }
 
 static int kcp_recv_start(coro_socket_t *s) {
@@ -67,12 +76,8 @@ static void kcp_recv_stop(coro_socket_t *s) {
 /* ── KCP Close ────────────────────────────────────────────── */
 
 static void kcp_close(coro_socket_t *s) {
-  if (s->handle.kcp_server) {
-    turbo_kcp_server_stop(s->handle.kcp_server);
-  } else if (s->handle.kcp) {
-    if (s->handle.kcp->connected || s->handle.kcp->connecting) {
-      turbo_kcp_client_close(s->handle.kcp);
-    }
+  if (s->handle.kcp) {
+    turbo_kcp_close(s->handle.kcp);
   }
 }
 

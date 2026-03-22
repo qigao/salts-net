@@ -87,6 +87,17 @@ CXX_C_API coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn,
  */
 CXX_C_API void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co);
 
+/**
+ * @brief Drop stale active coroutine accounting after forced scheduler teardown.
+ * @param pool Pool handle
+ *
+ * coro_scheduler_destroy() may forcibly destroy still-live coroutines during
+ * context shutdown. At that point the coroutine objects are gone, but the pool's
+ * active_count can still reflect pre-teardown ownership. This helper reconciles
+ * that bookkeeping before pool destruction.
+ */
+CXX_C_API void coro_object_pool_forget_active(coro_object_pool_t *pool);
+
 /* ── Query ────────────────────────────────────────────────── */
 
 /**

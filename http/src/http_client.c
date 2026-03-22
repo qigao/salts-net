@@ -8,7 +8,6 @@
 // clang-format on
 #include "base64_utils.h"
 #include "turbo_str.h"
-#include "turbo_url.h"
 #include "mime_parser.h"
 #include "mime_content_disposition.h"
 #include "mime_encoded_word.h"
@@ -104,7 +103,8 @@ static char *build_coro_full_url(http_client_t *c, const char *url) {
   return full;
 }
 
-static int build_transport_url(const char *http_url, char *buf, size_t buf_size, uri_t **out_uri) {
+static int build_transport_params(const char *http_url, char *host_buf, size_t host_buf_size,
+                                  int *out_port, int *out_is_tls, uri_t **out_uri) {
   if (turbo_parse_uri((const uint8_t *)http_url, strlen(http_url), out_uri) != 0)
     return -1;
 
@@ -112,11 +112,12 @@ static int build_transport_url(const char *http_url, char *buf, size_t buf_size,
   const char *host = turbo_uri_host(*out_uri);
   int port = turbo_uri_port(*out_uri);
 
-  int is_tls = (tstr_casecmp(scheme, "https") == 0);
+  *out_is_tls = (tstr_casecmp(scheme, "https") == 0);
   if (port == 0)
-    port = is_tls ? 443 : 80;
+    port = *out_is_tls ? 443 : 80;
 
-  turbo_url_build(is_tls ? "tls" : "tcp", host, port, NULL, buf, buf_size);
+  *out_port = port;
+  snprintf(host_buf, host_buf_size, "%s", host ? host : "");
   return 0;
 }
 

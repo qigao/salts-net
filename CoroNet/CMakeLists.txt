@@ -1,71 +1,94 @@
 set(TARGET_NAME CoroNet)
 find_package(Stb REQUIRED)
-find_package(libuv CONFIG REQUIRED)
 # Add WebSocket parser subdirectory
 add_subdirectory(parser)
 
 file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
      ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
 
-# Build SHARED library (DLL)
-add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-add_library(TurboNet::CoroNet ALIAS ${TARGET_NAME})
+# Strip out all platform-specific backend files from glob results
+list(REMOVE_ITEM SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_iocp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_win.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_iocp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_tls.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_ws.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_websocket_server.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_websocket_client.c)
 
-# Set target properties
-set_target_properties(
-  ${TARGET_NAME}
-  PROPERTIES VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             OUTPUT_NAME CoroNet)
+if(WIN32)
+  list(APPEND SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_iocp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_win.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_iocp.c)
 
-target_include_directories(
-  ${TARGET_NAME}
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
-         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
-  PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+elseif(APPLE) # macOS, iOS, tvOS, watchOS
+  list(APPEND SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c)
 
-add_sanitizers(${TARGET_NAME})
-# Link libraries
-target_link_libraries(
-  ${TARGET_NAME}
-  PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils
-         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
-         TurboNet::Parser
-  PRIVATE kcp::kcp Threads::Threads llhttp::llhttp_static PkgConfig::STC
-          TurboNet::WebSocketParser)
 
-# Set target properties
-set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${TARGET_NAME}
-                                                EXPORT_NAME CoroNet)
+elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+  list(APPEND SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c)
 
+
+else()
+  # Fallback for other Unix-like OSes
+  list(APPEND SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_socks5_client.c)
+
+endif()
+
+if(WIN32)
+  add_definitions(-D_CRT_SECURE_NO_WARNINGS -D_WINSOCK_DEPRECATED_NO_WARNINGS)
+endif()
 # Build STATIC library for internal use (tests)
 set(STATIC_TARGET_NAME ${TARGET_NAME}_static)
 add_library(${STATIC_TARGET_NAME} STATIC ${SOURCE_FILES})
 add_library(TurboNet::CoroNet_static ALIAS ${STATIC_TARGET_NAME})
+set_target_properties(${STATIC_TARGET_NAME} PROPERTIES OUTPUT_NAME coronet_static FOLDER ${TARGET_NAME})
 
-set_target_properties(${STATIC_TARGET_NAME} PROPERTIES OUTPUT_NAME coronet_static
-                                                        FOLDER ${TARGET_NAME})
+# Build SHARED library
+add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
+add_library(TurboNet::CoroNet ALIAS ${TARGET_NAME})
+set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${TARGET_NAME} EXPORT_NAME CoroNet)
 
-target_include_directories(
-  ${STATIC_TARGET_NAME}
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
-         $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
-  PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS})
+# Apply configuration to both
+foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
+  target_include_directories(
+    ${tgt}
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
+           $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
+    PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
-add_sanitizers(${STATIC_TARGET_NAME})
+  add_sanitizers(${tgt})
 
-target_link_libraries(
-  ${STATIC_TARGET_NAME}
-  PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils
-         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
-         TurboNet::Parser
-  PRIVATE kcp::kcp Threads::Threads llhttp::llhttp_static PkgConfig::STC
-          TurboNet::WebSocketParser)
+  target_link_libraries(
+    ${tgt}
+    PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Parser
+           Threads::Threads c-ares::cares
+    PRIVATE kcp::kcp llhttp::llhttp_static PkgConfig::STC TurboNet::SDS
+            TurboNet::UriParser TurboNet::WebSocketParser)
 
+  if(WIN32)
+    target_link_libraries(${tgt} PRIVATE ws2_32 mswsock)
+  endif()
+endforeach()
 # Install library (for development/internal use)
 install(
   TARGETS ${TARGET_NAME}
@@ -80,15 +103,11 @@ install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet
   DESTINATION include
   FILES_MATCHING
-  PATTERN "*.h")
+  PATTERN "*.h"
+  PATTERN "internal.h" EXCLUDE
+  PATTERN "turbo_coro_internal.h" EXCLUDE
+  PATTERN "turbo_native_*_internal.h" EXCLUDE)
 
-if(BUILD_TESTS)
-  add_subdirectory(tests)
-endif()
+add_subdirectory(tests)
 
-add_subdirectory(stdlibuv)
-
-if(BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-
+add_subdirectory(examples)

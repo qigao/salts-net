@@ -12,10 +12,10 @@
 #include <CoroNet/turbo_coro_context.h>
 #include "CoroNet/turbo_coro_socket.h"
 #include <CoroNet/turbo_coro_internal.h>
+#include <platform.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <uv.h>
 
 typedef struct {
     coro_socket_t *src;
@@ -48,7 +48,7 @@ static void pump_reverse_coro(coro_t *co, void *arg) {
 
         if (ctx->rate_limit_bps > 0) {
             ctx->bytes_transferred += len;
-            uint64_t elapsed_ns = uv_hrtime() - ctx->start_time;
+            uint64_t elapsed_ns = turbo_hrtime() - ctx->start_time;
             uint64_t expected_ns = (ctx->bytes_transferred * 1000000000ULL) /
                                    ctx->rate_limit_bps;
             if (expected_ns > elapsed_ns) {
@@ -80,7 +80,7 @@ void coro_bidi_pump(coro_socket_t *a, coro_socket_t *b,
     rev->dst = a;
     rev->rate_limit_bps = rate;
     rev->bytes_transferred = 0;
-    rev->start_time = uv_hrtime();
+    rev->start_time = turbo_hrtime();
     rev->alive = 1;
     rev->done = 0;
 
@@ -105,7 +105,7 @@ void coro_bidi_pump(coro_socket_t *a, coro_socket_t *b,
 
         if (rate > 0) {
             rev->bytes_transferred += len;
-            uint64_t elapsed_ns = uv_hrtime() - rev->start_time;
+            uint64_t elapsed_ns = turbo_hrtime() - rev->start_time;
             uint64_t expected_ns =
                 (rev->bytes_transferred * 1000000000ULL) / rate;
             if (expected_ns > elapsed_ns) {

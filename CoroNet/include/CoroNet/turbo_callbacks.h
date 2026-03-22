@@ -2,7 +2,6 @@
 #define TURBO_CALLBACKS_H
 
 #include "turbo_buffer.h"
-#include <uv.h>
 
 #ifdef __cplusplus
 extern "C" {

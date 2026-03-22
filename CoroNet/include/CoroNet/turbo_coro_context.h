@@ -10,6 +10,9 @@
 #define coro_CONTEXT_H
 
 #include "platform.h"
+#include "turbo_tcp_backend.h"
+#include "turbo_udp_backend.h"
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,17 +21,43 @@
 extern "C" {
 #endif
 
-/** Opaque event-loop context (wraps libuv loop + thread-safe post queue) */
+/** Opaque event-loop context (wraps the active native event loop plus a thread-safe post queue) */
 typedef struct coro_context_s coro_context_t;
 
 /** Shorter alias for coro_context_t */
 typedef struct coro_context_s coro_context;
 
+/** Opaque native loop handle (replaces uv_loop_t) */
+typedef struct turbo_loop_s turbo_loop_t;
+
+/** Native loop basic lifecycle APIs (called internally by coro_context.c) */
+CXX_C_API turbo_loop_t *turbo_loop_create(void);
+CXX_C_API void turbo_loop_destroy(turbo_loop_t *loop);
+CXX_C_API void turbo_loop_stop(turbo_loop_t *loop);
+CXX_C_API void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block);
+CXX_C_API int turbo_loop_alive(turbo_loop_t *loop);
+CXX_C_API uint64_t turbo_loop_now(turbo_loop_t *loop);
+CXX_C_API void turbo_loop_ref(turbo_loop_t *loop);
+CXX_C_API void turbo_loop_unref(turbo_loop_t *loop);
+CXX_C_API void turbo_loop_wake(turbo_loop_t *loop);
+
+/**
+ * @brief Return the backend loop object wrapped by this context.
+ *
+ * The pointer is intentionally opaque. New code should prefer context-aware
+ * APIs and only use this as a bridge while migrating away from direct loop
+ * access.
+ *
+ * @param ctx Context to query
+ * @return Opaque native/backend loop pointer, or NULL for NULL context
+ */
+CXX_C_API void *coro_context_native_loop(const coro_context_t *ctx);
+
 /**
  * @brief Create an event-loop context.
  *
- * @param loop  Existing uv_loop_t* to wrap (cast to void* for ABI safety),
- *              or NULL to allocate and own a fresh loop.
+ * @param loop  Existing native event-loop pointer to wrap, or NULL to allocate
+ *              and own a fresh loop for the current platform backend.
  *
  * When @p loop is NULL the context allocates its own loop and closes it on
  * coro_context_destroy().  When @p loop is non-NULL the caller retains
@@ -52,8 +81,8 @@ CXX_C_API void coro_context_destroy(coro_context_t *ctx);
 /**
  * @brief Controls how coro_context_run() drives the event loop.
  *
- * Values mirror libuv's uv_run_mode so the implementation can forward
- * them directly; a _Static_assert in coro_context.c guards against drift.
+ * Values remain stable across backends so the implementation can forward
+ * them directly to the active loop driver.
  */
 typedef enum turbo_run_mode_e {
   /** Block until all handles are done or _stop() is called. */
@@ -103,6 +132,46 @@ CXX_C_API void coro_context_stop(coro_context_t *ctx);
  */
 CXX_C_API void coro_context_set_persistent(coro_context_t *ctx, int persistent);
 
+/**
+ * @brief Set the preferred TCP backend for coroutine sockets created by this context.
+ *
+ * Unsupported backends fail loudly. Existing sockets keep their current backend;
+ * only future TCP sockets created through this context use the new preference.
+ *
+ * @param ctx      Context to modify
+ * @param backend  Preferred backend
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backend_t backend);
+
+/**
+ * @brief Get the preferred TCP backend for future coroutine TCP sockets.
+ *
+ * @param ctx Context to query
+ * @return Preferred backend, or AUTO for NULL
+ */
+CXX_C_API turbo_tcp_backend_t coro_context_get_tcp_backend(const coro_context_t *ctx);
+
+/**
+ * @brief Set the preferred UDP backend for coroutine sockets created by this context.
+ *
+ * Unsupported backends fail loudly. Existing sockets keep their current backend;
+ * only future UDP sockets created through this context use the new preference.
+ *
+ * @param ctx      Context to modify
+ * @param backend  Preferred backend
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backend);
+
+/**
+ * @brief Get the preferred UDP backend for future coroutine UDP sockets.
+ *
+ * @param ctx Context to query
+ * @return Preferred backend, or AUTO for NULL
+ */
+CXX_C_API turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx);
+
 // =============================================================================
 // Query
 // =============================================================================
@@ -151,7 +220,7 @@ CXX_C_API int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *
 
 /**
  * @brief Return a human-readable error string for an error code.
- * @param err  Error code (TURBO_* or libuv-compatible)
+ * @param err  Error code (TURBO_* or backend-compatible)
  * @return Static string describing the error
  */
 CXX_C_API const char *turbo_strerror(int err);
@@ -355,30 +424,10 @@ CXX_C_API int coro_when_any(coro_context_t *ctx,
 CXX_C_API void coro_sleep(coro_context_t *ctx, uint64_t ms);
 
 /* ── Error codes ──────────────────────────────────────────────
- * Values match libuv on the target platform so internal code can
- * use UV_* and TURBO_* interchangeably. A _Static_assert in
- * coro_context.c fires at build time if any value drifts.
+ * Defined in turbo_error.h — included here for convenience.
  * ──────────────────────────────────────────────────────────── */
+#include "turbo_error.h"
 #define TURBO_OK 0
-#define TURBO_EOF (-4095)
-
-#ifdef _WIN32
-  #define TURBO_ENOMEM (-4057)
-  #define TURBO_EINVAL (-4071)
-  #define TURBO_ETIMEDOUT (-4039)
-  #define TURBO_ECONNREFUSED (-4078)
-  #define TURBO_EPROTONOSUPPORT (-4045)
-  #define TURBO_EALREADY (-4084)
-#else
-  /* POSIX: libuv negates errno.h values.  Standard Linux values
-   * below; the _Static_assert guards will catch any mismatch. */
-  #define TURBO_ENOMEM (-12)
-  #define TURBO_EINVAL (-22)
-  #define TURBO_ETIMEDOUT (-110)
-  #define TURBO_ECONNREFUSED (-111)
-  #define TURBO_EPROTONOSUPPORT (-93)
-  #define TURBO_EALREADY (-114)
-#endif
 
 // =============================================================================
 // Memory Pool
@@ -395,6 +444,9 @@ CXX_C_API void coro_sleep(coro_context_t *ctx, uint64_t ms);
  * @return Pointer to the global memory pool (never NULL)
  */
 CXX_C_API void* coro_get_memory_pool(void);
+CXX_C_API void* coro_context_get_arena(coro_context_t *ctx);
+CXX_C_API void coro_context_native_ref(coro_context_t *ctx);
+CXX_C_API void coro_context_native_unref(coro_context_t *ctx);
 
 #ifdef __cplusplus
 }

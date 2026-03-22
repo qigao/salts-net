@@ -2,7 +2,6 @@
 #include "http_client_internal_h.h"
 #include "http_common_internal.h"
 #include "turbo_str.h"
-#include "turbo_url.h"
 #include <stb_sprintf.h>
 #include <turbo_coro.h>
 #include <stdlib.h>

@@ -324,3 +324,80 @@ int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *f
   form->part_count++;
   return 0;
 }
+
+/* ── URL codec ───────────────────────────────────────────────────── */
+
+/* 1 = unreserved (RFC 3986), 2 = space → '+', 0 = percent-encode */
+static const uint8_t s_url_encode_tbl[256] = {
+  /*       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F */
+  /* 0 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  /* 1 */  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  /* 2 */  2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, /* sp - . */
+  /* 3 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, /* 0-9 */
+  /* 4 */  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* A-O */
+  /* 5 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, /* P-Z _ */
+  /* 6 */  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* a-o */
+  /* 7 */  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, /* p-z ~ */
+};
+
+static const char s_hex_chars[] = "0123456789ABCDEF";
+
+/* hex nibble decode: 0xFF marks invalid */
+static const uint8_t s_hex_val[256] = {
+  ['0'] = 0, ['1'] = 1, ['2'] = 2, ['3'] = 3, ['4'] = 4,
+  ['5'] = 5, ['6'] = 6, ['7'] = 7, ['8'] = 8, ['9'] = 9,
+  ['A'] = 10, ['B'] = 11, ['C'] = 12, ['D'] = 13, ['E'] = 14, ['F'] = 15,
+  ['a'] = 10, ['b'] = 11, ['c'] = 12, ['d'] = 13, ['e'] = 14, ['f'] = 15,
+};
+static const uint8_t s_hex_valid[256] = {
+  ['0']=1,['1']=1,['2']=1,['3']=1,['4']=1,['5']=1,['6']=1,['7']=1,['8']=1,['9']=1,
+  ['A']=1,['B']=1,['C']=1,['D']=1,['E']=1,['F']=1,
+  ['a']=1,['b']=1,['c']=1,['d']=1,['e']=1,['f']=1,
+};
+
+char *turbo_url_encode(const char *str) {
+  if (!str) return NULL;
+  size_t len = strlen(str);
+  char *out = (char *)malloc(len * 3 + 1 + 8); /* worst case + stb padding */
+  if (!out) return NULL;
+  char *p = out;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)str[i];
+    uint8_t flag = s_url_encode_tbl[c];
+    if (flag == 1) {
+      *p++ = (char)c;
+    } else if (flag == 2) {
+      *p++ = '+';
+    } else {
+      p[0] = '%';
+      p[1] = s_hex_chars[c >> 4];
+      p[2] = s_hex_chars[c & 0x0F];
+      p += 3;
+    }
+  }
+  memset(p, 0, 8);
+  return out;
+}
+
+char *turbo_url_decode(const char *str) {
+  if (!str) return NULL;
+  size_t len = strlen(str);
+  char *out = (char *)malloc(len + 1 + 8);
+  if (!out) return NULL;
+  char *p = out;
+  for (size_t i = 0; i < len; i++) {
+    if (str[i] == '%' && i + 2 < len) {
+      unsigned char hi = (unsigned char)str[i + 1];
+      unsigned char lo = (unsigned char)str[i + 2];
+      if (s_hex_valid[hi] && s_hex_valid[lo]) {
+        *p++ = (char)((s_hex_val[hi] << 4) | s_hex_val[lo]);
+        i += 2;
+        continue;
+      }
+    }
+    *p++ = (str[i] == '+') ? ' ' : str[i];
+  }
+  memset(p, 0, 8);
+  return out;
+}
+

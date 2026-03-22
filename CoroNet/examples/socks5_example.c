@@ -29,11 +29,8 @@ static void socks5_coro(coro_t *co, void *arg) {
     return;
   }
 
-  char proxy_url[64];
-  snprintf(proxy_url, sizeof(proxy_url), "tcp://%s:%d", proxy_config.host, proxy_config.port);
-  
-  TLOG_INFO("Connecting to proxy %s...", proxy_url);
-  if (coro_socket_connect(s, proxy_url) != 0) {
+  TLOG_INFO("Connecting to proxy %s:%d...", proxy_config.host, proxy_config.port);
+  if (coro_socket_connect(s, proxy_config.host, proxy_config.port) != 0) {
     TLOG_ERROR("Failed to connect to proxy");
     coro_socket_destroy(s);
     return;

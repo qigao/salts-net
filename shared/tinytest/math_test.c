@@ -1,71 +1,66 @@
-#define TINYTEST_NO_MAIN
 #include "tinytest.h"
+#include <math.h>
+#include <stdlib.h>
 
-static int add(int a, int b) { return a + b; }
-static int sub(int a, int b) { return a - b; }
-static int mul(int a, int b) { return a * b; }
-static int divide(int a, int b) { return b != 0 ? a / b : 0; }
+/* 使用 suite/spec 註冊測試組 */
+suite("Math Benchmarks") {
+  /* 使用 describe 來分組 */
+  describe("Basic Arithmetic vs Libc Math") {
 
-suite("Math Operations") {
+    /* 使用 bench(...) 標記這是一個性能測試節點 */
+    bench("Square Root Calculation") {
 
-    group("Addition") {
-        it("should add two positive numbers") {
-            check_int_eq(add(2, 3), 5);
-            check_int_eq(add(10, 20), 30);
-        }
+      /* 
+       * benchmark(Name, Iterations)
+       * 會自動重複執行大括號內的代碼 Iterations 次
+       * 並搜集 min, max, avg 和 ops/s
+       */
+      benchmark("x * x (Multiplication)", 5000000) {
+        volatile double x = 123.456;
+        volatile double y = x * x;
+        (void)y;
+      }
 
-        it("should handle negative numbers") {
-            check_int_eq(add(-1, 1), 0);
-            check_int_eq(add(-5, -3), -8);
-        }
-
-        it("should handle zero") {
-            check_int_eq(add(0, 5), 5);
-            check_int_eq(add(5, 0), 5);
-        }
+      benchmark("pow(x, 2.0)", 5000000) {
+        volatile double x = 123.456;
+        volatile double y = pow(x, 2.0);
+        (void)y;
+      }
     }
 
-    group("Subtraction") {
-        it("should subtract two numbers") {
-            check_int_eq(sub(10, 3), 7);
-            check_int_eq(sub(5, 5), 0);
-        }
+    bench("Trigonometry") {
+      benchmark("sin(x)", 5000000) {
+        volatile double x = 1.0;
+        volatile double y = sin(x);
+        (void)y;
+      }
 
-        it("should handle negative results") {
-            check_int_eq(sub(3, 10), -7);
-        }
+      benchmark("cos(x)", 5000000) {
+        volatile double x = 1.0;
+        volatile double y = cos(x);
+        (void)y;
+      }
     }
+  }
 
-    group("Multiplication") {
-        it("should multiply two numbers") {
-            check_int_eq(mul(3, 4), 12);
-            check_int_eq(mul(7, 8), 56);
-        }
+  describe("Memory Operations") {
 
-        it("should handle zero") {
-            check_int_eq(mul(0, 100), 0);
-            check_int_eq(mul(100, 0), 0);
+    bench("Allocation") {
+      
+      benchmark("malloc + free (128 bytes)", 1000000) {
+        void *ptr = malloc(128);
+        if (ptr) {
+          free(ptr);
         }
+      }
 
-        it("should handle negative numbers") {
-            check_int_eq(mul(-2, 3), -6);
-            check_int_eq(mul(-2, -3), 6);
+      benchmark("calloc + free (128 bytes)", 1000000) {
+        void *ptr = calloc(1, 128);
+        if (ptr) {
+          free(ptr);
         }
+      }
+
     }
-
-    group("Division") {
-        it("should divide two numbers") {
-            check_int_eq(divide(10, 2), 5);
-            check_int_eq(divide(15, 3), 5);
-        }
-
-        it("should handle integer division") {
-            check_int_eq(divide(7, 2), 3);
-            check_int_eq(divide(10, 3), 3);
-        }
-
-        it("should handle division by zero") {
-            check_int_eq(divide(10, 0), 0);
-        }
-    }
+  }
 }

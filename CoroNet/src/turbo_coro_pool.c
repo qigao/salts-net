@@ -19,7 +19,6 @@
 #include "turbo_coro_internal.h"
 #include "turbo_buffer.h"
 #include <string.h>
-#include <uv.h>
 #include <stdlib.h>
 
 /* ── Pool entry wrapper ───────────────────────────────────── */
@@ -167,6 +166,14 @@ void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co) {
     if (pool->active_count > 0) {
         pool->active_count--;
     }
+}
+
+void coro_object_pool_forget_active(coro_object_pool_t *pool) {
+    if (!pool) {
+        return;
+    }
+
+    pool->active_count = 0;
 }
 
 /* ── Query ────────────────────────────────────────────────── */

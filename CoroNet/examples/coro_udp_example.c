@@ -1,6 +1,9 @@
 /**
  * @file coro_udp_example.c
- * @brief UDP sendto/recvfrom echo using coroutines.
+ * @brief UDP echo using the platform default backend.
+ *
+ * Backend choice follows the platform-native selector. If the native backend
+ * is unavailable for UDP in the current build, socket creation fails loudly.
  */
 
 #include "CoroNet.h"
@@ -12,7 +15,24 @@
 #define UNUSED(x) (void)(x)
 #endif
 
-#define UDP_SERVER_URL "udp://127.0.0.1:9300"
+#define UDP_SERVER_HOST "127.0.0.1"
+#define UDP_SERVER_PORT 9300
+
+static const char* udp_backend_name(turbo_udp_backend_t backend) {
+    switch (backend) {
+        case TURBO_UDP_BACKEND_IOCP:
+            return "iocp";
+        case TURBO_UDP_BACKEND_EPOLL:
+            return "epoll";
+        case TURBO_UDP_BACKEND_IO_URING:
+            return "io_uring";
+        case TURBO_UDP_BACKEND_KQUEUE:
+            return "kqueue";
+        case TURBO_UDP_BACKEND_AUTO:
+        default:
+            return "auto";
+    }
+}
 
 /* ── Server: echo datagrams back to sender ────────────────── */
 
@@ -20,13 +40,7 @@ static void udp_echo_handler(coro_socket_t* client, void* arg) {
     UNUSED(arg);
     char* data = NULL;
     size_t len = 0;
-    
-    // For UDP server, 'client' is actually a temp socket for this packet
-    // but in my implementation it points back to the server but with peer info
-    // set so that coro_socket_send works as sendto.
-    
-    // We already have the first packet in recv_data when handler starts (for UDP)
-    // Wait, let's check coro_socket_recv logic for UDP
+
     int r = coro_socket_recv(client, &data, &len);
     if (r == 0 && data) {
         printf("[Server] Received %zu bytes, echoing back\n", len);
@@ -45,16 +59,15 @@ static void udp_client_task(coro_t* co, void* arg) {
     if (!client) return;
     coro_socket_set_timeout(client, 2000);
 
-    /* "Connect" just binds locally and sets default peer for UDP */
-    printf("[Client] Connecting to %s...\n", UDP_SERVER_URL);
-    int r = coro_socket_connect(client, UDP_SERVER_URL);
+    printf("[Client] Connecting to %s:%d...\n", UDP_SERVER_HOST, UDP_SERVER_PORT);
+    int r = coro_socket_connect(client, UDP_SERVER_HOST, UDP_SERVER_PORT);
     if (r != 0) {
         printf("[Client] Connect failed: %d\n", r);
         coro_socket_destroy(client);
         return;
     }
+    printf("[Client] UDP backend: %s\n", udp_backend_name(coro_socket_get_udp_backend(client)));
 
-    /* Send via connected send (default peer) */
     const char* msg = "Hello UDP from coroutine!";
     printf("[Client] Sending: %s\n", msg);
     r = coro_socket_send(client, msg, strlen(msg));
@@ -64,7 +77,6 @@ static void udp_client_task(coro_t* co, void* arg) {
         return;
     }
 
-    /* Receive with sender address */
     char* data = NULL;
     size_t len = 0;
     struct sockaddr_storage from;
@@ -90,26 +102,23 @@ static void launcher_task(coro_t* co, void* arg) {
     coro_socket_t* server = coro_socket_create_udpv4(ctx);
     if (!server) return;
     
-    int r = coro_socket_listen_url(server, UDP_SERVER_URL, udp_echo_handler, NULL);
+    int r = coro_socket_listen_on(server, UDP_SERVER_HOST, UDP_SERVER_PORT, udp_echo_handler, NULL);
     if (r != 0) {
         printf("[Launcher] Server listen failed: %d\n", r);
         coro_socket_destroy(server);
         return;
     }
-    printf("[Launcher] UDP server listening on %s\n", UDP_SERVER_URL);
+    printf("[Launcher] UDP server listening on %s:%d\n", UDP_SERVER_HOST, UDP_SERVER_PORT);
+    printf("[Launcher] UDP backend: %s\n", udp_backend_name(coro_socket_get_udp_backend(server)));
 
-    /* Give server a moment */
     coro_sleep(ctx, 100);
 
-    /* Spawn client */
     coro_context_spawn(ctx, udp_client_task, ctx);
 
-    /* Wait then tear down */
     coro_sleep(ctx, 1000);
     printf("[Launcher] Shutting down server\n");
     coro_socket_destroy(server);
-    
-    // Stop the loop after a while
+
     coro_sleep(ctx, 200);
     coro_context_stop(ctx);
 }

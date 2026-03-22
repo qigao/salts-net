@@ -3,8 +3,8 @@
  * @brief L7 Worker example — registers with a group name, then echoes.
  *
  * Usage:
- *   worker_l7_example <group> [lb_backend_url]
- *   Example: worker_l7_example api tcp://127.0.0.1:9090
+ *   worker_l7_example <group> [lb_backend_host [lb_backend_port]]
+ *   Example: worker_l7_example api 127.0.0.1 9090
  *
  * The worker sends its group name as the first message after connecting,
  * then runs a normal echo handler — identical to a coro_server handler.
@@ -17,7 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *g_backend_url = "tcp://127.0.0.1:9090";
+static const char *g_backend_host = "127.0.0.1";
+static int g_backend_port = 9090;
 static const char *g_group = "default";
 
 static void echo_handler(coro_socket_t *client) {
@@ -52,8 +53,8 @@ static void worker_loop(coro_t *co, void *arg) {
             continue;
         }
 
-        printf("[%s] Connecting to %s...\n", g_group, g_backend_url);
-        if (coro_socket_connect(c, g_backend_url) != 0) {
+        printf("[%s] Connecting to %s:%d...\n", g_group, g_backend_host, g_backend_port);
+        if (coro_socket_connect(c, g_backend_host, g_backend_port) != 0) {
             printf("[%s] Connect failed, retrying in 1s\n", g_group);
             coro_socket_destroy(c);
             coro_sleep(ctx, 1000);
@@ -73,13 +74,14 @@ static void worker_loop(coro_t *co, void *arg) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <group> [lb_backend_url]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <group> [lb_backend_host [lb_backend_port]]\n", argv[0]);
         fprintf(stderr, "  group: worker group name (e.g. api, web)\n");
         return 1;
     }
 
     g_group = argv[1];
-    if (argc > 2) g_backend_url = argv[2];
+    if (argc > 2) g_backend_host = argv[2];
+    if (argc > 3) g_backend_port = atoi(argv[3]);
 
     coro_context_t *ctx = coro_context_create(NULL);
     if (!ctx) {
@@ -90,7 +92,7 @@ int main(int argc, char **argv) {
     coro_t *co = coro_create(worker_loop, ctx, NULL);
     coro_resume(co);
 
-    printf("[%s] Worker running, backend=%s\n", g_group, g_backend_url);
+    printf("[%s] Worker running, backend=%s:%d\n", g_group, g_backend_host, g_backend_port);
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
     coro_context_destroy(ctx);

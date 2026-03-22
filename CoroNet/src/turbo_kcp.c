@@ -1,936 +1,238 @@
-/*
- * turbo_kcp.c - KCP reliable UDP transport using ikcp library
- *
- * Uses skywind3000/kcp for ARQ, fast retransmit, and congestion control.
- */
-
-#include <stdint.h>
+#include "CoroNet/turbo_kcp.h"
+#include "CoroNet/turbo_coro_context.h"
+#include "CoroNet/turbo_datagram.h"
+#include "CoroNet/turbo_dns.h"
+#include "ikcp.h"
+#include "platform.h"
+#include "turbo_error.h"
+#include "tlog.h"
 #include <stdlib.h>
 #include <string.h>
 
-
-#include "internal.h"
-#include "turbo_buffer.h"
-#include "turbo_coro_context.h"
-#include "turbo_kcp.h"
-#include "ikcp.h"
-#include "disruptor.h"
-
-/* Forward declarations for global synchronization */
-extern void turbo_kcp_sync_lock(void);
-extern void turbo_kcp_sync_unlock(void);
-
-/* Conversation ID allocation */
-static uv_once_t g_kcp_conv_once = UV_ONCE_INIT;
-static uv_mutex_t g_kcp_conv_lock;
-static int g_kcp_conv_lock_initialized = 0;
-static uint32_t g_kcp_next_conv_id = 0;
-
-static void turbo_kcp_conv_init_once(void) {
-  if (uv_mutex_init(&g_kcp_conv_lock) == 0) {
-    g_kcp_conv_lock_initialized = 1;
-  }
-  g_kcp_next_conv_id = 1000;
-}
-
-static uint32_t turbo_kcp_alloc_conv_id(void) {
-  uv_once(&g_kcp_conv_once, turbo_kcp_conv_init_once);
-  if (g_kcp_conv_lock_initialized) {
-    uv_mutex_lock(&g_kcp_conv_lock);
-  }
-  uint32_t conv_id = g_kcp_next_conv_id++;
-  if (g_kcp_conv_lock_initialized) {
-    uv_mutex_unlock(&g_kcp_conv_lock);
-  }
-  return conv_id;
-}
-
-/* KCP context wrapping ikcpcb */
-struct turbo_kcp_context_s {
-  ikcpcb *kcp;      /* Real KCP control block */
-  uint32_t conv_id; /* Conversation ID */
+struct turbo_kcp_s {
+  coro_context_t* ctx;
+  ikcpcb* ikcp;
+  turbo_datagram_t* udp;
+  turbo_timer_t* update_timer;
+  
+  turbo_connect_cb on_connect;
+  turbo_recv_cb on_recv;
+  turbo_close_cb on_close;
+  void* user_data;
+  
+  struct sockaddr_storage peer_addr;
+  int connected;
+  int connecting;
+  int closing;
 };
 
-/* Send operation for zero-copy */
-typedef struct turbo_kcp_send_op_s {
-  uv_udp_send_t req;
-  mem_slice_t slice;
-  turbo_kcp_server_t *server;
-  struct turbo_kcp_send_op_s *next;
-} turbo_kcp_send_op_t;
+/* ── Internal KCP callbacks ───────────────────────────────── */
 
-/* Client mapping for server */
-typedef struct turbo_kcp_client_mapping_s {
-  uint32_t conv_id;
-  turbo_kcp_client_t *client;
-  struct turbo_kcp_client_mapping_s *next;
-} turbo_kcp_client_mapping_t;
+static void on_timer_tick(turbo_timer_t* timer);
 
-/* Simple hash table for client mapping */
-#define KCP_CLIENT_MAP_SIZE 256
-static turbo_kcp_client_mapping_t *g_client_map[KCP_CLIENT_MAP_SIZE] = {0};
-
-/* ── Send op pool: simple free-list ────────────────────────── */
-#define KCP_SEND_OP_POOL_CAPACITY 512
-
-/* Pre-allocated send op slab */
-static turbo_kcp_send_op_t g_kcp_send_op_slab[KCP_SEND_OP_POOL_CAPACITY];
-
-/* Free-list head */
-static turbo_kcp_send_op_t *g_kcp_send_op_free = NULL;
-static int                  g_kcp_send_op_init = 0;
-
-static void ensure_kcp_send_op_pool(void) {
-    if (g_kcp_send_op_init) return;
-    for (int i = 0; i < KCP_SEND_OP_POOL_CAPACITY; i++) {
-        g_kcp_send_op_slab[i].next = g_kcp_send_op_free;
-        g_kcp_send_op_free = &g_kcp_send_op_slab[i];
-    }
-    g_kcp_send_op_init = 1;
+static void kcp_final_free_task(void* arg1, void* arg2) {
+  UNUSED(arg2);
+  turbo_kcp_t* k = (turbo_kcp_t*)arg1;
+  TLOG_DEBUG("KCP final free: {}", (void*)k);
+  free(k);
 }
 
-/* Connection handshake */
-#define KCP_CONN_REQUEST 0x00000000
-#define KCP_CONN_SYN "KCP_SYN"
-#define KCP_CONN_ACK "KCP_ACK"
-
-/* Hash function for client mapping */
-static uint32_t kcp_hash_conv_id(uint32_t conv_id) {
-  return conv_id % KCP_CLIENT_MAP_SIZE;
+static int kcp_low_level_output(const char* buf, int len, ikcpcb* ikcp, void* user) {
+  UNUSED(ikcp);
+  turbo_kcp_t* k = (turbo_kcp_t*)user;
+  if (!k->udp || k->closing) return -1;
+  return turbo_datagram_sendto(k->udp, (const struct sockaddr*)&k->peer_addr, buf, (size_t)len);
 }
 
-/* Find client by conversation ID */
-static turbo_kcp_client_t *find_client_by_conv_id(uint32_t conv_id) {
-  uint32_t hash = kcp_hash_conv_id(conv_id);
-  turbo_kcp_client_mapping_t *mapping = g_client_map[hash];
-
-  while (mapping) {
-    if (mapping->conv_id == conv_id) {
-      return mapping->client;
-    }
-    mapping = mapping->next;
-  }
-  return NULL;
-}
-
-/* Helper to safely copy sockaddr to sockaddr_storage */
-static void safe_copy_sockaddr(struct sockaddr_storage *dest, const struct sockaddr *src) {
-  if (!dest || !src) return;
-  memset(dest, 0, sizeof(struct sockaddr_storage));
-  if (src->sa_family == AF_INET6) {
-    memcpy(dest, src, sizeof(struct sockaddr_in6));
-  } else {
-    /* Default to IPv4 size for safety if it's AF_INET or other */
-    memcpy(dest, src, sizeof(struct sockaddr_in));
-  }
-}
-
-
-/* Add client mapping */
-static void add_client_mapping(uint32_t conv_id, turbo_kcp_client_t *client) {
-  uint32_t hash = kcp_hash_conv_id(conv_id);
-  turbo_kcp_client_mapping_t *mapping = malloc(sizeof(turbo_kcp_client_mapping_t));
-  if (!mapping) return;
-
-  mapping->conv_id = conv_id;
-  mapping->client = client;
+static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
+  turbo_kcp_t* k = (turbo_kcp_t*)turbo_datagram_get_user_data((turbo_datagram_t*)handle);
+  if (!k || !k->ikcp || k->closing) return 0;
   
-  /* Insert at head of the bucket list */
-  mapping->next = g_client_map[hash];
-  g_client_map[hash] = mapping;
+  /* Update peer addr if we don't have one or if it changed (roaming) */
+  if (peer) {
+    memcpy(&k->peer_addr, peer, sizeof(struct sockaddr_storage));
+  }
   
-  /* Update active connections (simplified for now, ideally track with atomic or context) */
-
-}
-
-/* Remove client mapping */
-static void remove_client_mapping(uint32_t conv_id) {
-  uint32_t hash = kcp_hash_conv_id(conv_id);
-  turbo_kcp_client_mapping_t **mapping = &g_client_map[hash];
-
-  while (*mapping) {
-    if ((*mapping)->conv_id == conv_id) {
-      turbo_kcp_client_mapping_t *to_remove = *mapping;
-      *mapping = (*mapping)->next;
-      free(to_remove);
-      return;
+  /* Feed raw UDP into KCP */
+  ikcp_input(k->ikcp, slice->data, (long)slice->length);
+  
+  /* Check for KCP-level extracted data */
+  char buf[4096];
+  int r;
+  while ((r = ikcp_recv(k->ikcp, buf, sizeof(buf))) > 0) {
+    if (k->on_recv) {
+      mem_slice_t s = { .data = buf, .length = (size_t)r };
+      k->on_recv(k, &s, NULL);
     }
-    mapping = &(*mapping)->next;
   }
-}
-
-/* Get send operation from pool, fallback to malloc */
-static turbo_kcp_send_op_t *get_send_op(turbo_kcp_server_t *server) {
-  ensure_kcp_send_op_pool();
-
-  turbo_kcp_send_op_t *op = g_kcp_send_op_free;
-  if (op) {
-      g_kcp_send_op_free = op->next;
-  } else {
-      op = (turbo_kcp_send_op_t *)malloc(sizeof(turbo_kcp_send_op_t));
-      if (!op) return NULL;
-  }
-
-  memset(op, 0, sizeof(*op));
-  op->server = server;
-  return op;
-}
-
-/* Return send operation to pool */
-static void return_send_op(turbo_kcp_send_op_t *op) {
-  if (!op) return;
-
-  mem_slice_release(&op->slice);
-
-  /* Return to slab if it belongs there, else free */
-  if (op >= &g_kcp_send_op_slab[0] &&
-      op <  &g_kcp_send_op_slab[KCP_SEND_OP_POOL_CAPACITY]) {
-      op->next = g_kcp_send_op_free;
-      g_kcp_send_op_free = op;
-  } else {
-      free(op);
-  }
-}
-
-/* Send completion callback */
-static void on_send_complete(uv_udp_send_t *req, int status) {
-  turbo_kcp_send_op_t *op =
-      (turbo_kcp_send_op_t *)((char *)req - offsetof(turbo_kcp_send_op_t, req));
-
-  if (status == 0) {
-  } else {
-  }
-
-  return_send_op(op);
-}
-
-/* Get current timestamp in milliseconds */
-static IUINT32 kcp_get_timestamp(void) {
-  return (IUINT32)(uv_hrtime() / 1000000);
-}
-
-/* ikcp output callback - sends UDP packets */
-static int ikcp_output_callback(const char *buf, int len, ikcpcb *kcp, void *user) {
-  turbo_kcp_client_t *client = (turbo_kcp_client_t *)user;
-  if (!client || !client->server || !buf || len <= 0) {
-    return -1;
-  }
-
-  turbo_kcp_send_op_t *op = get_send_op(client->server);
-  if (!op) return -1;
-
-  mem_buffer_t *buffer = mem_get_buffer(client->server->arena, len);
-  if (!buffer) {
-    return_send_op(op);
-    return -1;
-  }
-
-  memcpy(buffer->data, buf, len);
-  mem_set_used(buffer, len);
-
-  op->slice = mem_slice(buffer, 0, len);
-  if (!op->slice.data) {
-    mem_unref(buffer);
-    return_send_op(op);
-    return -1;
-  }
-
-  /* TLOG_DEBUG("KCP output: %d bytes", len); */
-  // printf("DEBUG: KCP output: %d bytes\n", len);
-
-  uv_buf_t uv_buf = uv_buf_init(op->slice.data, (unsigned int)op->slice.length);
-  int rc = uv_udp_send(&op->req, client->server->handle, &uv_buf, 1,
-                       (const struct sockaddr *)&client->peer_addr, on_send_complete);
-
-  mem_unref(buffer);
-
-  if (rc != 0) {
-    return_send_op(op);
-    return -1;
-  }
-
   return 0;
 }
 
-/* Create KCP context with real ikcp */
-static turbo_kcp_context_t *kcp_context_create(uint32_t conv_id, void *user) {
-  turbo_kcp_context_t *ctx = malloc(sizeof(turbo_kcp_context_t));
-  if (!ctx) return NULL;
+static void kcp_tick_task(void* arg1, void* arg2) {
+  UNUSED(arg2);
+  turbo_kcp_t* k = (turbo_kcp_t*)arg1;
+  if (!k->ikcp || k->closing) return;
+  
+  uint32_t now = (uint32_t)coro_context_now(k->ctx);
+  ikcp_update(k->ikcp, now);
+  
+  /* Schedule next update */
+  uint32_t next = ikcp_check(k->ikcp, now);
+  uint32_t diff = (next > now) ? (next - now) : 10;
+  if (diff > 100) diff = 100; /* Max 100ms between ticks */
+  
+  turbo_timer_start(k->update_timer, on_timer_tick, diff, 0);
+}
 
-  ctx->conv_id = conv_id;
-  ctx->kcp = ikcp_create(conv_id, user);
-  if (!ctx->kcp) {
-    free(ctx);
+static void on_timer_tick(turbo_timer_t* timer) {
+  turbo_kcp_t* k = (turbo_kcp_t*)turbo_timer_get_data(timer);
+  if (!k || !k->ctx || k->closing) return;
+  coro_post(k->ctx, kcp_tick_task, k, NULL);
+}
+
+/* ── Public API ───────────────────────────────────────────── */
+
+turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
+  turbo_kcp_t* k = calloc(1, sizeof(turbo_kcp_t));
+  if (!k) return NULL;
+  
+  k->ctx = ctx;
+  k->ikcp = ikcp_create(12345, k); /* TODO: conv id management */
+  if (!k->ikcp) {
+    free(k);
     return NULL;
   }
-
-  /* Set output callback */
-  ikcp_setoutput(ctx->kcp, ikcp_output_callback);
-
-  ikcp_setmtu(ctx->kcp, 1400);
-  ikcp_wndsize(ctx->kcp, 128, 128);
-  ikcp_nodelay(ctx->kcp, 1, 10, 2, 1);
-
-  return ctx;
-}
-
-/* Destroy KCP context */
-static void kcp_context_destroy(turbo_kcp_context_t *ctx) {
-  if (!ctx) return;
-  if (ctx->kcp) {
-    ikcp_release(ctx->kcp);
-  }
-  free(ctx);
-}
-
-/* KCP update timer callback */
-static void kcp_update_timer_cb(uv_timer_t *handle) {
-  turbo_kcp_client_t *client = (turbo_kcp_client_t *)handle->data;
-  if (!client || !client->kcp_ctx || !client->kcp_ctx->kcp) return;
-
-  IUINT32 current = kcp_get_timestamp();
-  ikcp_update(client->kcp_ctx->kcp, current);
-
-  /* Schedule next update using ikcp_check for optimal timing */
-  IUINT32 next = ikcp_check(client->kcp_ctx->kcp, current);
-  IUINT32 delay = (next > current) ? (next - current) : 1;
-  if (delay > 100) delay = 100; /* Cap at 100ms */
-
-  uv_timer_start(&client->update_timer, kcp_update_timer_cb, delay, 0);
-}
-
-/* Receive buffer allocation */
-static void alloc_recv_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  (void)suggested_size;
-
-  turbo_kcp_server_t *server = (turbo_kcp_server_t *)handle->data;
-  if (!server) {
-    buf->base = NULL;
-    buf->len = 0;
-    return;
-  }
-
-  /* Use ping-pong buffers */
-  if (server->recv_buffer2 && server->recv_toggle == 0) {
-    buf->base = server->recv_buffer2->data;
-    buf->len = (unsigned int)server->recv_buffer2->capacity;
-    server->recv_toggle = 1;
-  } else if (server->recv_buffer1) {
-    buf->base = server->recv_buffer1->data;
-    buf->len = (unsigned int)server->recv_buffer1->capacity;
-    server->recv_toggle = 0;
-  } else {
-    buf->base = NULL;
-    buf->len = 0;
-  }
-}
-
-/* Send raw UDP packet (for handshake) */
-static int send_raw_packet(turbo_kcp_server_t *server, const struct sockaddr *addr,
-                           const char *data, size_t len) {
-  mem_buffer_t *buffer = mem_get_buffer(server->arena, len);
-  if (!buffer) return -1;
-
-  memcpy(buffer->data, data, len);
-  mem_set_used(buffer, len);
-
-  turbo_kcp_send_op_t *op = get_send_op(server);
-  if (!op) {
-    mem_unref(buffer);
-    return -1;
-  }
-
-  op->slice = mem_slice(buffer, 0, len);
-  if (!op->slice.data) {
-    mem_unref(buffer);
-    return_send_op(op);
-    return -1;
-  }
-
-  uv_buf_t uv_buf = uv_buf_init(op->slice.data, (unsigned int)op->slice.length);
-  int rc = uv_udp_send(&op->req, server->handle, &uv_buf, 1, addr, on_send_complete);
-
-  mem_unref(buffer);
-
-  if (rc != 0) {
-    return_send_op(op);
-    return rc;
-  }
-
-  return 0;
-}
-
-/* Handle connection request (server-side) */
-static void handle_connection_request(turbo_kcp_server_t *server, const struct sockaddr *addr,
-                                      const char *data, size_t len) {
-  if (len < sizeof(uint32_t) + strlen(KCP_CONN_SYN)) return;
-
-  const char *msg = data + sizeof(uint32_t);
-  if (strncmp(msg, KCP_CONN_SYN, strlen(KCP_CONN_SYN)) != 0) return;
-
-  /* Create new client */
-  turbo_kcp_client_t *client = mem_alloc(server->arena, sizeof(turbo_kcp_client_t));
-  if (!client) return;
-
-  memset(client, 0, sizeof(*client));
-  client->server = server;
-  client->conv_id = turbo_kcp_alloc_conv_id();
-  client->is_managed = 1;
-  safe_copy_sockaddr(&client->peer_addr, addr);
-
-  /* Create KCP context with real ikcp */
-  client->kcp_ctx = kcp_context_create(client->conv_id, client);
-  if (!client->kcp_ctx) return;
-
-  /* Add to client mapping */
-  add_client_mapping(client->conv_id, client);
-
-  /* Send connection response */
-  size_t response_size = sizeof(uint32_t) + strlen(KCP_CONN_ACK);
-  char response[32];
-  memcpy(response, &client->conv_id, sizeof(uint32_t));
-  memcpy(response + sizeof(uint32_t), KCP_CONN_ACK, strlen(KCP_CONN_ACK));
-
-  send_raw_packet(server, addr, response, response_size);
-
-  /* Start client update timer */
-  if (!client->timer_active) {
-    uv_timer_init(server->loop, &client->update_timer);
-    client->update_timer.data = client;
-    uv_timer_start(&client->update_timer, kcp_update_timer_cb, 10, 0);
-    client->timer_active = 1;
-  }
-
-  client->connected = 1;
-
-  if (server->on_accept) {
-    server->on_accept(server, client, NULL);
-  }
-}
-
-/* Handle connection ACK (client-side) */
-static int handle_connection_ack(turbo_kcp_server_t *server, const char *data, size_t len) {
-  turbo_kcp_client_t *client = server->connecting_client;
-  if (!client || !client->connecting) return 0;
-
-  if (len < sizeof(uint32_t) + strlen(KCP_CONN_ACK)) return 0;
-
-  uint32_t conv_id;
-  memcpy(&conv_id, data, sizeof(uint32_t));
-
-  const char *msg = data + sizeof(uint32_t);
-  if (strncmp(msg, KCP_CONN_ACK, strlen(KCP_CONN_ACK)) != 0) return 0;
-
-  /* Update client with received conv_id */
-  client->conv_id = conv_id;
-  client->connecting = 0;
-  client->connected = 1;
-  server->connecting_client = NULL;
-
-  /* Recreate KCP context with correct conv_id */
-  if (client->kcp_ctx) {
-    kcp_context_destroy(client->kcp_ctx);
-  }
-  client->kcp_ctx = kcp_context_create(conv_id, client);
-  if (!client->kcp_ctx) {
-    if (client->on_connect) {
-      client->on_connect(client, UV_ENOMEM, NULL);
-    }
-    return 1;
-  }
-
-  /* Start client update timer */
-  if (!client->timer_active) {
-    uv_timer_init(server->loop, &client->update_timer);
-    client->update_timer.data = client;
-    uv_timer_start(&client->update_timer, kcp_update_timer_cb, 10, 0);
-    client->timer_active = 1;
-  }
-
-  if (client->on_connect) {
-    client->on_connect(client, 0, NULL);
+  
+  k->ikcp->output = kcp_low_level_output;
+  
+  /* Configure KCP for best performance */
+  ikcp_nodelay(k->ikcp, 1, 10, 2, 1);
+  ikcp_wndsize(k->ikcp, 128, 128);
+  
+  k->update_timer = turbo_timer_create(NULL);
+  if (k->update_timer) {
+    turbo_timer_set_data(k->update_timer, k);
   }
   
-  /* Register client in global map so on_kcp_recv can find it by conv_id */
-  add_client_mapping(conv_id, client);
+  return k;
+}
+
+void turbo_kcp_destroy(turbo_kcp_t* kcp) {
+  if (!kcp || kcp->closing) return;
+  kcp->closing = 1;
+  kcp->connected = 0;
   
-  return 1;
-}
-
-/* Process received data and deliver to application */
-static void process_kcp_recv(turbo_kcp_server_t *server, turbo_kcp_client_t *client) {
-  if (!client || !client->kcp_ctx || !client->kcp_ctx->kcp) return;
-
-  int peeksize;
-  while ((peeksize = ikcp_peeksize(client->kcp_ctx->kcp)) > 0) {
-    mem_buffer_t *buffer = mem_get_buffer(server->arena, peeksize);
-    if (!buffer) break;
-
-    int recv_len = ikcp_recv(client->kcp_ctx->kcp, buffer->data, peeksize);
-    if (recv_len > 0) {
-      mem_set_used(buffer, recv_len);
-
-      if (server->on_recv) {
-        mem_slice_t slice = mem_slice(buffer, 0, recv_len);
-        server->on_recv(server, &slice, client);
-        mem_slice_release(&slice);
-      }
-    }
-
-    mem_unref(buffer);
-
-    /* Check if client was closed in the callback */
-    if (!client->kcp_ctx) {
-      break;
-    }
+  if (kcp->update_timer) {
+    turbo_timer_stop(kcp->update_timer);
+    turbo_timer_destroy(kcp->update_timer);
+    kcp->update_timer = NULL;
   }
-}
-
-/* Receive callback */
-static void on_kcp_recv(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
-                        const struct sockaddr *addr, unsigned flags) {
-  (void)flags;
-
-  turbo_kcp_server_t *server = (turbo_kcp_server_t *)handle->data;
-  if (!server) return;
-
-  if (nread < 0) {
-    return;
-  }
-
-  if (nread == 0 || !buf || !buf->base || !addr) return;
-
-
-
-  /* Client-mode: check for connection ACK first */
-  if (server->connecting_client && handle_connection_ack(server, buf->base, nread)) {
-    return;
-  }
-
-  /* Check for connection request (conv_id == 0) */
-  if (nread >= (ssize_t)sizeof(uint32_t)) {
-    uint32_t first_word;
-    memcpy(&first_word, buf->base, sizeof(uint32_t));
-
-    if (first_word == KCP_CONN_REQUEST) {
-      handle_connection_request(server, addr, buf->base, nread);
-      return;
-    }
-
-    /* Get conv_id from KCP packet header */
-    IUINT32 conv_id = ikcp_getconv(buf->base);
-
-    /* Find client by conv_id */
-    turbo_kcp_client_t *client = find_client_by_conv_id(conv_id);
-
-    /* Also check client-mode client */
-    if (!client && server->connecting_client &&
-        server->connecting_client->conv_id == conv_id) {
-      client = server->connecting_client;
-    }
-
-    if (client && client->kcp_ctx && client->kcp_ctx->kcp) {
-      /* Feed data to ikcp */
-      int rc = ikcp_input(client->kcp_ctx->kcp, buf->base, (long)nread);
-      if (rc < 0) {
-        return;
-      }
-
-      /* Process received data */
-      process_kcp_recv(server, client);
-    }
-  }
-}
-
-/* Handle close callback */
-static void on_handle_closed(uv_handle_t *handle) {
-  free(handle);
-}
-
-static void on_client_timer_closed(uv_handle_t *handle) {
-  turbo_kcp_client_t *client = (turbo_kcp_client_t *)handle->data;
-  if (client->is_managed) {
-    free(client);
-  }
-}
-
-/* Initialize KCP server */
-int turbo_kcp_server_init(turbo_kcp_server_t *server, uv_loop_t *loop, const char *host,
-                          unsigned short port) {
-  if (!server || !loop) return UV_EINVAL;
-
-  memset(server, 0, sizeof(*server));
-  server->loop = loop;
-
-  /* Initialize arena with pre-allocated size */
-  server->arena = (mem_pool_t*)calloc(1, sizeof(mem_pool_t));
-  if (!server->arena || mem_init(server->arena, MEM_ARENA_SERVER_INIT_SIZE) != 0) {
-    if (server->arena) free(server->arena);
-    return UV_ENOMEM;
-  }
-
-  server->handle = (uv_udp_t *)malloc(sizeof(uv_udp_t));
-  if (!server->handle) {
-    mem_destroy(server->arena);
-    free(server->arena);
-    return UV_ENOMEM;
-  }
-
-  int rc = uv_udp_init(loop, server->handle);
-  if (rc != 0) {
-    free(server->handle);
-    
-    return rc;
-  }
-
-  server->handle->data = server;
-
-  /* Allocate receive buffers */
-  size_t recv_buf_size = TURBO_KCP_DEFAULT_RECV_BUFFER_SIZE;
-  server->recv_buffer1 = mem_get_buffer(server->arena, recv_buf_size);
-  server->recv_buffer2 = mem_get_buffer(server->arena, recv_buf_size);
-
-  if (!server->recv_buffer1) {
-    uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    
-    return UV_ENOMEM;
-  }
-
-  server->recv_toggle = 0;
-
-  /* Bind to address */
-  struct sockaddr_in addr4;
-  const char *bind_host = host ? host : "0.0.0.0";
-  rc = uv_ip4_addr(bind_host, (int)port, &addr4);
-  if (rc != 0) {
-    uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    
-    return rc;
-  }
-
-  rc = uv_udp_bind(server->handle, (const struct sockaddr *)&addr4, 0);
-  if (rc != 0) {
-    uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    
-    return rc;
-  }
-
-
-  return 0;
-}
-
-/* Start KCP server */
-int turbo_kcp_server_start(turbo_kcp_server_t *server, turbo_accept_cb accept_cb,
-                           turbo_recv_cb recv_cb) {
-  if (!server || !server->handle) return UV_EINVAL;
-
-  server->on_accept = accept_cb;
-  server->on_recv = recv_cb;
-  return uv_udp_recv_start(server->handle, alloc_recv_buffer, on_kcp_recv);
-}
-
-/* Stop KCP server */
-void turbo_kcp_server_stop(turbo_kcp_server_t *server) {
-  if (!server) return;
-
-  if (server->handle) {
-    uv_udp_recv_stop(server->handle);
-    if (!uv_is_closing((uv_handle_t *)server->handle)) {
-      uv_close((uv_handle_t *)server->handle, on_handle_closed);
-    }
-    server->handle = NULL;
-  }
-
-  /* Clean up client mappings */
-  for (int i = 0; i < KCP_CLIENT_MAP_SIZE; i++) {
-    turbo_kcp_client_mapping_t *mapping = g_client_map[i];
-    while (mapping) {
-      turbo_kcp_client_mapping_t *next = mapping->next;
-
-      if (mapping->client) {
-        turbo_kcp_client_close(mapping->client);
-      }
-      
-      free(mapping);
-      mapping = next;
-    }
-    g_client_map[i] = NULL;
-  }
-
-  if (server->recv_buffer1) {
-    mem_unref(server->recv_buffer1);
-    server->recv_buffer1 = NULL;
-  }
-  if (server->recv_buffer2) {
-    mem_unref(server->recv_buffer2);
-    server->recv_buffer2 = NULL;
-  }
-
   
-}
-
-/* Set KCP nodelay configuration */
-int turbo_kcp_server_set_nodelay(turbo_kcp_server_t *server, int nodelay, int interval,
-                                 int resend, int nc) {
-  (void)server; (void)nodelay; (void)interval; (void)resend; (void)nc;
-  return 0;
-}
-
-/* Set KCP window size */
-int turbo_kcp_server_set_wndsize(turbo_kcp_server_t *server, int sndwnd, int rcvwnd) {
-  (void)server; (void)sndwnd; (void)rcvwnd;
-  return 0;
-}
-
-/* Set KCP MTU */
-int turbo_kcp_server_set_mtu(turbo_kcp_server_t *server, int mtu) {
-  if (!server || mtu < 50) return UV_EINVAL;
-  return 0;
-}
-
-/* Get zero-copy send buffer */
-mem_buffer_t *turbo_kcp_get_send_buffer(turbo_kcp_server_t *server, size_t min_size) {
-  if (!server) return NULL;
-  return mem_get_buffer(server->arena, min_size);
-}
-
-/* Send with zero-copy buffer */
-int turbo_kcp_send_buffer(turbo_kcp_client_t *client, mem_buffer_t *buffer,
-                          size_t length) {
-  if (!client || !client->kcp_ctx || !client->kcp_ctx->kcp || !buffer) return UV_EINVAL;
-  if (length > buffer->used) return UV_EINVAL;
-
-  int rc = ikcp_send(client->kcp_ctx->kcp, buffer->data, (int)length);
-  if (rc < 0) {
-
-    return UV_EIO;
+  if (kcp->ikcp) {
+    ikcp_release(kcp->ikcp);
+    kcp->ikcp = NULL;
   }
-
-  /* Flush for low latency */
-  ikcp_flush(client->kcp_ctx->kcp);
-
-  return 0;
+  
+  if (kcp->udp) {
+    turbo_datagram_set_user_data(kcp->udp, NULL);
+    turbo_datagram_destroy(kcp->udp);
+    kcp->udp = NULL;
+  }
+  
+  /* Post actual free to happen after any already queued loop tasks */
+  coro_post(kcp->ctx, kcp_final_free_task, kcp, NULL);
 }
 
-/* Send with copy */
-int turbo_kcp_send(turbo_kcp_client_t *client, const char *data, size_t length) {
-  if (!client || !client->kcp_ctx || !client->kcp_ctx->kcp || !data || length == 0)
-    return UV_EINVAL;
-
-  int rc = ikcp_send(client->kcp_ctx->kcp, data, (int)length);
-  if (rc < 0) {
-
-    return UV_EIO;
+int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
+                   turbo_recv_cb on_recv) {
+  if (!kcp || !host) return TURBO_EINVAL;
+  
+  kcp->on_recv = on_recv;
+  
+  struct sockaddr_storage local_addr;
+  int r = turbo_dns_parse_address(host, port, &local_addr);
+  if (r != 0) return r;
+  
+  if (!kcp->udp) {
+    turbo_datagram_kind_t kind = (local_addr.ss_family == AF_INET6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
+    kcp->udp = turbo_datagram_create(kcp->ctx, kind);
+    if (!kcp->udp) return TURBO_ENOMEM;
+    
+    r = turbo_datagram_bind(kcp->udp, host, (unsigned short)port);
+    if (r != 0) return r;
+    
+    turbo_datagram_set_user_data(kcp->udp, kcp);
   }
-
-  /* Flush for low latency */
-  ikcp_flush(client->kcp_ctx->kcp);
+  
+  r = turbo_datagram_recv_start(kcp->udp, on_udp_recv);
+  if (r != 0) return r;
+  
+  turbo_timer_start(kcp->update_timer, on_timer_tick, 10, 0);
+  kcp->connected = 1; /* For bind, we consider it "ready" */
   
   return 0;
 }
 
-/* Initialize KCP client */
-int turbo_kcp_client_init(turbo_kcp_client_t *client, uv_loop_t *loop) {
-  if (!client || !loop) return UV_EINVAL;
-
-  memset(client, 0, sizeof(*client));
-  client->is_managed = 0;
-
-  client->server = malloc(sizeof(turbo_kcp_server_t));
-  if (!client->server) return UV_ENOMEM;
-
-  memset(client->server, 0, sizeof(*client->server));
-  client->server->loop = loop;
-
+int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
+                      turbo_connect_cb on_connect, turbo_recv_cb on_recv) {
+  if (!kcp || !host) return TURBO_EINVAL;
   
-  client->server->handle = (uv_udp_t *)malloc(sizeof(uv_udp_t));
-  if (!client->server->handle) {
+  kcp->on_connect = on_connect;
+  kcp->on_recv = on_recv;
+  kcp->connecting = 1;
+  
+  int r = turbo_dns_parse_address(host, port, &kcp->peer_addr);
+  if (r != 0) return r;
+  
+  /* Create UDP socket if not existing */
+  if (!kcp->udp) {
+    turbo_datagram_kind_t kind = (kcp->peer_addr.ss_family == AF_INET6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
+    kcp->udp = turbo_datagram_create(kcp->ctx, kind);
+    if (!kcp->udp) return TURBO_ENOMEM;
     
-    free(client->server);
-    return UV_ENOMEM;
+    /* Must bind to initialize the backend and get a socket handle.
+       Use INADDR_ANY (0.0.0.0 / ::) to allow OS to choose a port. */
+    const char* bind_addr = (kcp->peer_addr.ss_family == AF_INET6) ? "::" : "0.0.0.0";
+    r = turbo_datagram_bind(kcp->udp, bind_addr, 0);
+    if (r != 0) return r;
+
+    turbo_datagram_set_user_data(kcp->udp, kcp);
   }
 
-  int rc = uv_udp_init(loop, client->server->handle);
-  if (rc != 0) {
-    free(client->server->handle);
-    
-    free(client->server);
-    return rc;
+  /* Start receiving raw UDP */
+  r = turbo_datagram_recv_start(kcp->udp, on_udp_recv);
+  if (r != 0) return r;
+  
+  /* Start update timer */
+  turbo_timer_start(kcp->update_timer, on_timer_tick, 10, 0);
+  
+  /* KCP doesn't have a native "connect" handshake at ikcp level,
+     but we should signal connection established. */
+  kcp->connected = 1;
+  kcp->connecting = 0;
+  
+  if (on_connect) {
+    on_connect(kcp, 0, NULL);
   }
-
-  client->server->handle->data = client->server;
+  
   return 0;
 }
 
-/* Connect KCP client */
-int turbo_kcp_client_connect(turbo_kcp_client_t *client, const char *host, unsigned short port,
-                             turbo_connect_cb connect_cb, turbo_recv_cb recv_cb) {
-  if (!client || !client->server || !host) return UV_EINVAL;
-
-  client->on_connect = connect_cb;
-  client->server->on_recv = recv_cb;
-
-  struct sockaddr_in addr4;
-  int rc = uv_ip4_addr(host, (int)port, &addr4);
-  if (rc != 0) return rc;
-
-  safe_copy_sockaddr(&client->peer_addr, (const struct sockaddr *)&addr4);
-
-  /* Bind client UDP socket */
-  struct sockaddr_in local_addr;
-  rc = uv_ip4_addr("0.0.0.0", 0, &local_addr);
-  if (rc != 0) return rc;
-
-  rc = uv_udp_bind(client->server->handle, (const struct sockaddr *)&local_addr, 0);
-  if (rc != 0) return rc;
-
-  /* Allocate receive buffer */
-  size_t recv_buf_size = TURBO_KCP_DEFAULT_RECV_BUFFER_SIZE;
-  client->server->recv_buffer1 = mem_get_buffer(client->server->arena, recv_buf_size);
-  if (!client->server->recv_buffer1) {
-    return UV_ENOMEM;
-  }
-  client->server->recv_toggle = 0;
-
-  /* Start receiving before sending SYN */
-  rc = uv_udp_recv_start(client->server->handle, alloc_recv_buffer, on_kcp_recv);
-  if (rc != 0) return rc;
-
-  /* Create temporary KCP context (will be recreated with correct conv_id) */
-  client->kcp_ctx = kcp_context_create(0, client);
-  if (!client->kcp_ctx) {
-    return UV_ENOMEM;
-  }
-
-  client->connecting = 1;
-  client->is_client_mode = 1;
-  client->server->connecting_client = client;
-
-  /* Send connection request */
-  size_t request_size = sizeof(uint32_t) + strlen(KCP_CONN_SYN);
-  char request[32];
-  uint32_t req_conv_id = KCP_CONN_REQUEST;
-  memcpy(request, &req_conv_id, sizeof(uint32_t));
-  memcpy(request + sizeof(uint32_t), KCP_CONN_SYN, strlen(KCP_CONN_SYN));
-
-  rc = send_raw_packet(client->server, (const struct sockaddr *)&addr4, request, request_size);
-  if (rc != 0) return rc;
-
-  return 0;
+int turbo_kcp_send(turbo_kcp_t* kcp, const char* data, size_t len) {
+  if (!kcp || !kcp->ikcp || !kcp->connected) return TURBO_EINVAL;
+  return ikcp_send(kcp->ikcp, data, (int)len);
 }
 
-/* Close KCP client */
-void turbo_kcp_client_close(turbo_kcp_client_t *client) {
-  if (!client) return;
-
-  /* Check if we are closing a copy (e.g. from coro_client).
-     If so, find the original client and close IT instead. */
-  if (client->conv_id != 0) {
-    turbo_kcp_client_t *original = find_client_by_conv_id(client->conv_id);
-    if (original && original != client) {
-      turbo_kcp_client_close(original);
-      
-      /* Clear the copy's pointers so we don't double-free later */
-      client->kcp_ctx = NULL;
-      client->server = NULL;
-      client->timer_active = 0;
-      return;
-    }
-  }
-
-  if (client->timer_active) {
-    uv_timer_stop(&client->update_timer);
-    client->update_timer.data = client;
-    uv_close((uv_handle_t *)&client->update_timer, on_client_timer_closed);
-    client->timer_active = 0;
-    /* Memory will be freed in on_client_timer_closed if is_managed is true */
-    if (client->is_managed) return;
-  } else {
-    /* If timer wasn't active, we still need to free the memory 
-       but only if it's a managed malloc'd client. */
-    if (client->is_managed) {
-      free(client);
-    }
-    return;
-  }
-
-  if (client->kcp_ctx) {
-    kcp_context_destroy(client->kcp_ctx);
-    client->kcp_ctx = NULL;
-  }
-
-  if (client->conv_id != 0) {
-    remove_client_mapping(client->conv_id);
-  }
-
-  if (client->server) {
-    /* Only close the server handle and free the server structure if we are a standalone client.
-       Server-side clients share the server structure which is managed by turbo_kcp_server_stop. */
-    if (client->is_client_mode) {
-      if (client->server->handle) {
-        uv_udp_recv_stop(client->server->handle);
-        if (!uv_is_closing((uv_handle_t *)client->server->handle)) {
-          uv_close((uv_handle_t *)client->server->handle, on_handle_closed);
-        }
-      }
-      
-      free(client->server);
-    }
-    client->server = NULL;
-  }
-
-  client->connected = 0;
-  client->user_data = NULL;
+void turbo_kcp_close(turbo_kcp_t* kcp) {
+  if (!kcp) return;
+  kcp->connected = 0;
+  if (kcp->update_timer) turbo_timer_stop(kcp->update_timer);
+  if (kcp->udp) turbo_datagram_recv_stop(kcp->udp);
 }
 
-/* Client send operations */
-int turbo_kcp_client_send(turbo_kcp_client_t *client, const char *data, size_t length) {
-  return turbo_kcp_send(client, data, length);
-}
+void turbo_kcp_set_user_data(turbo_kcp_t* kcp, void* user_data) { kcp->user_data = user_data; }
+void* turbo_kcp_get_user_data(turbo_kcp_t* kcp) { return kcp->user_data; }
 
-int turbo_kcp_client_send_buffer(turbo_kcp_client_t *client, mem_buffer_t *buffer,
-                                 size_t length) {
-  return turbo_kcp_send_buffer(client, buffer, length);
-}
-
-int turbo_kcp_client_sendv(turbo_kcp_client_t *client, const turbo_iovec_t *iov,
-                           size_t iovcnt) {
-  if (!client || !iov || iovcnt == 0) return UV_EINVAL;
-
-  int rc = 0;
-  for (size_t i = 0; i < iovcnt && rc == 0; i++) {
-    if (iov[i].len > 0 && iov[i].data) {
-      rc = turbo_kcp_send(client, iov[i].data, iov[i].len);
-    }
-  }
- 
-
-  return rc;
-}
-
-
-
-/* Trim arena memory */
-void turbo_kcp_trim_memory(turbo_kcp_server_t *server) {
-  if (!server) return;
-  mem_trim(server->arena);
-}
-
-
-/* Cleanup global pools */
-void turbo_kcp_cleanup_pools(void) {
-    g_kcp_send_op_free = NULL;
-    g_kcp_send_op_init = 0;
-
-  for (int i = 0; i < KCP_CLIENT_MAP_SIZE; i++) {
-    turbo_kcp_client_mapping_t *mapping = g_client_map[i];
-    while (mapping) {
-      turbo_kcp_client_mapping_t *next = mapping->next;
-      free(mapping);
-      mapping = next;
-    }
-    g_client_map[i] = NULL;
-  }
-
-
+turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp) {
+  return kcp ? kcp->udp : NULL;
 }

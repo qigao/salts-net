@@ -91,6 +91,31 @@ static inline int ws_is_data(uint8_t opcode) {
     return opcode <= 0x2;
 }
 
+/* ── WebSocket Opcodes ────────────────────────────────────── */
+
+typedef enum {
+    WS_OPCODE_CONTINUATION = 0x0,
+    WS_OPCODE_TEXT         = 0x1,
+    WS_OPCODE_BINARY       = 0x2,
+    WS_OPCODE_CLOSE        = 0x8,
+    WS_OPCODE_PING         = 0x9,
+    WS_OPCODE_PONG         = 0xA
+} websocket_opcode_t;
+
+/**
+ * @brief Build a WebSocket frame header into a buffer.
+ * @param buffer     Buffer to write header into (must be at least 14 bytes)
+ * @param opcode     Frame opcode
+ * @param payload_len Payload length
+ * @param fin        FIN bit (1 for final/only fragment, 0 for first/middle fragment)
+ * @param masked     Whether to mask the frame (MUST be 1 for client-to-server)
+ * @param masking_key 4-byte masking key (ignored if masked=0)
+ * @return Number of bytes written to buffer (header length)
+ */
+size_t ws_frame_build_header(uint8_t buffer[14], uint8_t opcode, uint64_t payload_len,
+                             int fin, int masked, const uint8_t masking_key[4]);
+
+
 #ifdef __cplusplus
 }
 #endif

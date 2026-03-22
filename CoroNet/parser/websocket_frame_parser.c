@@ -164,3 +164,36 @@ size_t ws_frame_header_len(uint64_t payload_len, int masked) {
 
   return len;
 }
+
+size_t ws_frame_build_header(uint8_t buffer[14], uint8_t opcode, uint64_t payload_len,
+                             int fin, int masked, const uint8_t masking_key[4]) {
+  buffer[0] = (fin ? 0x80 : 0x00) | (opcode & 0x0F);
+  size_t header_len = 2;
+
+  if (payload_len <= 125) {
+    buffer[1] = (uint8_t)payload_len;
+  } else if (payload_len <= 0xFFFF) {
+    buffer[1] = 126;
+    buffer[2] = (payload_len >> 8) & 0xFF;
+    buffer[3] = payload_len & 0xFF;
+    header_len = 4;
+  } else {
+    buffer[1] = 127;
+    for (int i = 0; i < 8; i++) {
+      buffer[2 + i] = (payload_len >> (56 - i * 8)) & 0xFF;
+    }
+    header_len = 10;
+  }
+
+  if (masked) {
+    buffer[1] |= 0x80;
+    if (masking_key) {
+      memcpy(buffer + header_len, masking_key, 4);
+    } else {
+      memset(buffer + header_len, 0, 4);
+    }
+    header_len += 4;
+  }
+
+  return header_len;
+}

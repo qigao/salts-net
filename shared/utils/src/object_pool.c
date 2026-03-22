@@ -51,7 +51,7 @@ static bool object_pool_grow(object_pool_t *pool, size_t count) {
   }
 
   chunk->capacity = count;
-  chunk->memory = malloc(pool->object_size * count);
+  chunk->memory = calloc(count, pool->object_size);
   if (!chunk->memory) {
     free(chunk);
     return false;

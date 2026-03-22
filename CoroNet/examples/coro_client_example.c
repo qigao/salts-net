@@ -10,13 +10,14 @@
 
 typedef struct {
     coro_context_t* ctx;
-    const char* url;
+    const char* host;
+    int port;
 } context_t;
 
 static void network_task(coro_t* co, void* arg) {
     UNUSED(co);
     context_t* ctx = (context_t*)arg;
-    printf("[Coro] Starting network task for %s\n", ctx->url);
+    printf("[Coro] Starting network task for %s:%d\n", ctx->host, ctx->port);
 
     coro_socket_t* client = coro_socket_create_tcpv4(ctx->ctx);
     if (!client) {
@@ -26,7 +27,7 @@ static void network_task(coro_t* co, void* arg) {
 
     // 1. Connect (yields until done)
     printf("[Coro] Connecting...\n");
-    int r = coro_socket_connect(client, ctx->url);
+    int r = coro_socket_connect(client, ctx->host, ctx->port);
     if (r != 0) {
         printf("[Coro] Connect failed: %s\n", turbo_strerror(r));
         coro_socket_destroy(client);
@@ -62,12 +63,13 @@ static void network_task(coro_t* co, void* arg) {
 }
 
 int main(int argc, char** argv) {
-    const char* url = (argc > 1) ? argv[1] : "tcp://127.0.0.1:8080";
+    const char* host = (argc > 2) ? argv[1] : "127.0.0.1";
+    int port = (argc > 2) ? atoi(argv[2]) : 8080;
 
     printf("[Main] Initializing context\n");
     coro_context_t* ctx = coro_context_create(NULL);
 
-    context_t app = { .ctx = ctx, .url = url };
+    context_t app = { .ctx = ctx, .host = host, .port = port };
 
     printf("[Main] Spawning coroutine\n");
     coro_context_spawn(ctx, network_task, &app);

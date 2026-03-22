@@ -44,7 +44,7 @@ static void fetch_user_api(coro_t *co, void *arg) {
     coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
     coro_socket_set_timeout(client, 5000);
 
-    int r = coro_socket_connect(client, "tcp://api.example.com:80");
+    int r = coro_socket_connect(client, "api.example.com", 80);
     if (r != 0) {
         printf("[API] Failed to connect: %s\n", turbo_strerror(r));
         coro_socket_destroy(client);
@@ -81,7 +81,7 @@ static void fetch_posts_api(coro_t *co, void *arg) {
     coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
     coro_socket_set_timeout(client, 5000);
 
-    int r = coro_socket_connect(client, "tcp://api.example.com:80");
+    int r = coro_socket_connect(client, "api.example.com", 80);
     if (r != 0) {
         printf("[API] Failed to connect: %s\n", turbo_strerror(r));
         coro_socket_destroy(client);
@@ -119,7 +119,7 @@ static void fetch_comments_api(coro_t *co, void *arg) {
     coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
     coro_socket_set_timeout(client, 5000);
 
-    int r = coro_socket_connect(client, "tcp://api.example.com:80");
+    int r = coro_socket_connect(client, "api.example.com", 80);
     if (r != 0) {
         printf("[API] Failed to connect: %s\n", turbo_strerror(r));
         coro_socket_destroy(client);

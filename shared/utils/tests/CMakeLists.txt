@@ -3,7 +3,6 @@
 # Define list of test files
 set(TEST_FILES 
     test_base64_utils.c
-    test_dns_pref.c
     test_fmt.c
     test_memory_pool.c
     test_mmap.c
@@ -17,9 +16,7 @@ set(TEST_FILES
     test_turbo_str.c
     test_native_timer.c
     test_url_codec.c
-    test_threadpool.c 
-    test_url.c
-    test_url_helpers.c
+    test_threadpool.c  
     test_turbo_ring.c
     test_bucket_priority_queue.c
     test_bucket_priority_queue_spsc.c
@@ -56,13 +53,6 @@ foreach(TEST_FILE ${TEST_FILES})
     target_link_libraries(${TEST_NAME} PRIVATE psapi iphlpapi userenv ws2_32)
   endif()
 
-  # Add specific libraries based on test type
-  if(TEST_NAME MATCHES "dns")
-    target_link_libraries(
-      ${TEST_NAME}
-      PRIVATE $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
-              c-ares::cares)
-  endif()
 
   if(TEST_NAME MATCHES "fmt_re2c|fmt")
     target_link_libraries(${TEST_NAME} PRIVATE fmt_lexer)

@@ -16,7 +16,8 @@
 
 typedef struct {
     coro_context_t *ctx;
-    const char *backend_url;
+    const char *backend_host;
+    int backend_port;
     int sessions_served;
 } worker_ctx_t;
 
@@ -26,7 +27,7 @@ static void echo_worker_coro(coro_t *co, void *arg) {
 
     coro_socket_t *c = coro_socket_create(wctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_socket_connect(c, wctx->backend_url) != 0) {
+    if (coro_socket_connect(c, wctx->backend_host, wctx->backend_port) != 0) {
         coro_socket_destroy(c);
         return;
     }
@@ -45,7 +46,8 @@ static void echo_worker_coro(coro_t *co, void *arg) {
 
 typedef struct {
     coro_context_t *ctx;
-    const char *frontend_url;
+    const char *frontend_host;
+    int frontend_port;
     const char *send_data;
     char recv_buf[256];
     size_t recv_len;
@@ -61,7 +63,7 @@ static void test_client_coro(coro_t *co, void *arg) {
 
     coro_socket_t *c = coro_socket_create(cctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_socket_connect(c, cctx->frontend_url) != 0) {
+    if (coro_socket_connect(c, cctx->frontend_host, cctx->frontend_port) != 0) {
         coro_socket_destroy(c);
         return;
     }
@@ -94,7 +96,8 @@ static void test_client_coro(coro_t *co, void *arg) {
 
 typedef struct {
     coro_context_t *ctx;
-    const char *backend_url;
+    const char *backend_host;
+    int backend_port;
     const char *group;       /* group name to register */
     const char *tag;         /* prefix added to echo response */
     int sessions_served;
@@ -106,7 +109,7 @@ static void l7_echo_worker_coro(coro_t *co, void *arg) {
 
     coro_socket_t *c = coro_socket_create(wctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_socket_connect(c, wctx->backend_url) != 0) {
+    if (coro_socket_connect(c, wctx->backend_host, wctx->backend_port) != 0) {
         coro_socket_destroy(c);
         return;
     }
@@ -146,7 +149,8 @@ static const char *test_route_cb(const char *data, size_t len, void *arg) {
 /* L7 client — sends data, receives tagged response, then stops loop */
 typedef struct {
     coro_context_t *ctx;
-    const char *frontend_url;
+    const char *frontend_host;
+    int frontend_port;
     const char *send_data;
     char recv_buf[256];
     int success;
@@ -161,7 +165,7 @@ static void l7_test_client_coro(coro_t *co, void *arg) {
 
     coro_socket_t *c = coro_socket_create(cctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_socket_connect(c, cctx->frontend_url) != 0) {
+    if (coro_socket_connect(c, cctx->frontend_host, cctx->frontend_port) != 0) {
         coro_socket_destroy(c);
         return;
     }
@@ -220,7 +224,8 @@ static char *make_tlv(uint8_t type, const char *payload, size_t plen,
  * Echoes each TLV back with type incremented by 0x80 (response marker). */
 typedef struct {
     coro_context_t *ctx;
-    const char *backend_url;
+    const char *backend_host;
+    int backend_port;
     int messages_handled;
 } req_worker_ctx_t;
 
@@ -230,7 +235,7 @@ static void req_echo_worker_coro(coro_t *co, void *arg) {
 
     coro_socket_t *c = coro_socket_create(wctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_socket_connect(c, wctx->backend_url) != 0) {
+    if (coro_socket_connect(c, wctx->backend_host, wctx->backend_port) != 0) {
         coro_socket_destroy(c);
         return;
     }
@@ -252,7 +257,8 @@ static void req_echo_worker_coro(coro_t *co, void *arg) {
 /* REQUEST mode client: sends TLV messages, receives responses */
 typedef struct {
     coro_context_t *ctx;
-    const char *frontend_url;
+    const char *frontend_host;
+    int frontend_port;
     uint8_t send_type;
     const char *send_payload;
     uint8_t recv_type;
@@ -270,7 +276,7 @@ static void tlv_test_client_coro(coro_t *co, void *arg) {
 
     coro_socket_t *c = coro_socket_create(cctx->ctx, CORO_SOCKET_TCP_V4);
     if (!c) return;
-    if (coro_socket_connect(c, cctx->frontend_url) != 0) {
+    if (coro_socket_connect(c, cctx->frontend_host, cctx->frontend_port) != 0) {
         coro_socket_destroy(c);
         return;
     }
@@ -366,10 +372,10 @@ spec("coro_lb") {
             coro_lb_config_t config = coro_LB_CONFIG_DEFAULT;
             coro_lb_t *lb = coro_lb_create(ctx, &config);
 
-            int r1 = coro_lb_listen(lb, "tcp://127.0.0.1:18080");
+            int r1 = coro_lb_listen(lb, "127.0.0.1", 18080);
             check(r1 == 0);
 
-            int r2 = coro_lb_accept_workers(lb, "tcp://127.0.0.1:19090");
+            int r2 = coro_lb_accept_workers(lb, "127.0.0.1", 19090);
             check(r2 == 0);
 
             coro_lb_destroy(lb);
@@ -383,13 +389,14 @@ spec("coro_lb") {
             coro_lb_config_t config = coro_LB_CONFIG_DEFAULT;
             coro_lb_t *lb = coro_lb_create(ctx, &config);
 
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18180") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19190") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18180) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19190) == 0);
 
             /* Spawn echo worker */
             worker_ctx_t wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19190",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19190,
                 .sessions_served = 0
             };
             coro_t *wco = coro_create(echo_worker_coro, &wctx, NULL);
@@ -398,7 +405,8 @@ spec("coro_lb") {
             /* Spawn test client */
             client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18180",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18180,
                 .send_data = "hello LB",
                 .success = 0
             };
@@ -425,13 +433,14 @@ spec("coro_lb") {
                 .peek_bytes = 4096,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18280") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19290") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18280) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19290) == 0);
 
             /* Spawn api worker */
             l7_worker_ctx_t api_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19290",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19290,
                 .group = "api",
                 .tag = "[API]",
                 .sessions_served = 0,
@@ -442,7 +451,8 @@ spec("coro_lb") {
             /* Spawn web worker */
             l7_worker_ctx_t web_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19290",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19290,
                 .group = "web",
                 .tag = "[WEB]",
                 .sessions_served = 0,
@@ -453,7 +463,8 @@ spec("coro_lb") {
             /* Client sends API: prefix -> routed to api worker */
             l7_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18280",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18280,
                 .send_data = "API:get_users",
                 .success = 0,
                 .stop_after = 1,
@@ -479,13 +490,14 @@ spec("coro_lb") {
                 .peek_bytes = 4096,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18380") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19390") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18380) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19390) == 0);
 
             /* Spawn api worker */
             l7_worker_ctx_t api_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19390",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19390,
                 .group = "api",
                 .tag = "[API]",
                 .sessions_served = 0,
@@ -496,7 +508,8 @@ spec("coro_lb") {
             /* Spawn web worker */
             l7_worker_ctx_t web_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19390",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19390,
                 .group = "web",
                 .tag = "[WEB]",
                 .sessions_served = 0,
@@ -507,7 +520,8 @@ spec("coro_lb") {
             /* Client sends WEB: prefix -> routed to web worker */
             l7_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18380",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18380,
                 .send_data = "WEB:index.html",
                 .success = 0,
                 .stop_after = 1,
@@ -533,13 +547,14 @@ spec("coro_lb") {
                 .peek_bytes = 4096,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18480") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19490") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18480) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19490) == 0);
 
             /* Only spawn a web worker */
             l7_worker_ctx_t web_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19490",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19490,
                 .group = "web",
                 .tag = "[WEB]",
                 .sessions_served = 0,
@@ -550,7 +565,8 @@ spec("coro_lb") {
             /* route_cb returns NULL for unknown prefix -> matches any idle worker */
             l7_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18480",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18480,
                 .send_data = "UNKNOWN:data",
                 .success = 0,
                 .stop_after = 1,
@@ -577,12 +593,13 @@ spec("coro_lb") {
                 .frame_cb = tlv_frame_cb,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18580") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19590") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18580) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19590) == 0);
 
             req_worker_ctx_t wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19590",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19590,
                 .messages_handled = 0,
             };
             coro_t *wco = coro_create(req_echo_worker_coro, &wctx, NULL);
@@ -590,7 +607,8 @@ spec("coro_lb") {
 
             tlv_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18580",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18580,
                 .send_type = 0x01,
                 .send_payload = "hello",
                 .success = 0,
@@ -620,12 +638,13 @@ spec("coro_lb") {
                 .filter_cb = test_filter_cb,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18680") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19690") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18680) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19690) == 0);
 
             req_worker_ctx_t wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19690",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19690,
                 .messages_handled = 0,
             };
             coro_t *wco = coro_create(req_echo_worker_coro, &wctx, NULL);
@@ -634,7 +653,8 @@ spec("coro_lb") {
             /* Send type=0xFF which filter rejects */
             tlv_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18680",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18680,
                 .send_type = 0xFF,
                 .send_payload = "bad",
                 .success = 0,
@@ -666,12 +686,13 @@ spec("coro_lb") {
                 .filter_cb = session_filter_cb,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18780") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19790") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18780) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19790) == 0);
 
             l7_worker_ctx_t web_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19790",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19790,
                 .group = "web",
                 .tag = "[WEB]",
                 .sessions_served = 0,
@@ -682,7 +703,8 @@ spec("coro_lb") {
             /* Client sends "BLOCK:..." which filter rejects */
             l7_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18780",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18780,
                 .send_data = "BLOCK:malicious",
                 .success = 0,
                 .stop_after = 1,
@@ -710,12 +732,13 @@ spec("coro_lb") {
                 .filter_cb = session_filter_cb,
             };
             coro_lb_t *lb = coro_lb_create(ctx, &config);
-            check(coro_lb_listen(lb, "tcp://127.0.0.1:18880") == 0);
-            check(coro_lb_accept_workers(lb, "tcp://127.0.0.1:19890") == 0);
+            check(coro_lb_listen(lb, "127.0.0.1", 18880) == 0);
+            check(coro_lb_accept_workers(lb, "127.0.0.1", 19890) == 0);
 
             l7_worker_ctx_t api_wctx = {
                 .ctx = ctx,
-                .backend_url = "tcp://127.0.0.1:19890",
+                .backend_host = "127.0.0.1",
+                .backend_port = 19890,
                 .group = "api",
                 .tag = "[API]",
                 .sessions_served = 0,
@@ -726,7 +749,8 @@ spec("coro_lb") {
             /* Normal data passes filter */
             l7_client_ctx_t cctx = {
                 .ctx = ctx,
-                .frontend_url = "tcp://127.0.0.1:18880",
+                .frontend_host = "127.0.0.1",
+                .frontend_port = 18880,
                 .send_data = "API:legit_request",
                 .success = 0,
                 .stop_after = 1,

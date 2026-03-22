@@ -118,10 +118,10 @@ CXX_C_API coro_lb_t *
 coro_lb_create(coro_context_t *ctx,
                      const coro_lb_config_t *config);
 
-CXX_C_API int coro_lb_listen(coro_lb_t *lb, const char *url);
+CXX_C_API int coro_lb_listen(coro_lb_t *lb, const char *host, int port);
 
 CXX_C_API int coro_lb_accept_workers(coro_lb_t *lb,
-                                            const char *url);
+                                            const char *host, int port);
 
 CXX_C_API void coro_lb_stop(coro_lb_t *lb);
 

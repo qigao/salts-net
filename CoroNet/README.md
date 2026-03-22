@@ -5,7 +5,7 @@ High-performance networking core library providing essential network protocols a
 ## Features
 
 - **URL-Based API**: Simple, intuitive connection strings (e.g., `tcp://host:port`, `pipe://name`)
-- **Coroutine I/O**: Built on libuv for cross-platform coro operations
+- **Coroutine I/O**: Native cross-platform I/O via IOCP (Windows), epoll (Linux), kqueue (macOS)
 - **Core Design**: Synchronous-style code with coro execution via coroutines
 - **Connection Pool**: Coroutine-aware connection pooling for high-concurrency workloads
 - **Multiple Protocols**: TCP, UDP, KCP, TLS, Named Pipes, WebSocket
@@ -175,9 +175,7 @@ target_link_libraries(your_target TurboNet::CoroNet)
 
 ## Dependencies
 
-- OpenSSL 1.1+
-- libuv 1.46+
-- c-ares
+- c-ares (DNS resolution)
 - KCP
 - llhttp
 - STC (data structures library)

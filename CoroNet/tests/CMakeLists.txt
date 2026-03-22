@@ -22,7 +22,7 @@ foreach(TEST_FILE ${TEST_FILES})
     ${TEST_NAME}
     PRIVATE TurboNet::TinyTest ${STATIC_TARGET_NAME} TurboNet::Utils
             TurboNet::WebSocketParser
-            $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>)
+            $<IF:$<TARGET_EXISTS:c-ares::cares_static>,c-ares::cares_static,c-ares::cares>)
 
   add_sanitizers(${TEST_NAME})
 

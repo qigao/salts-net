@@ -58,7 +58,7 @@ static void ws_handle_control_frame(turbo_websocket_connection_t *conn, websocke
 // ============================================================================
 
 turbo_websocket_server_t *
-turbo_websocket_server_create(uv_loop_t *loop, int use_tls,
+turbo_websocket_server_create(void *loop, int use_tls,
                               const turbo_websocket_server_config_t *config) {
 
   if (!loop || !config) return NULL;

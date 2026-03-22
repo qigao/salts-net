@@ -19,7 +19,6 @@
 
 #define TEST_PORT 18950
 #define TEST_HOST "127.0.0.1"
-#define POOL_TEST_URL "tcp://127.0.0.1:18950"
 #define POOL_TEST_MESSAGE "pool_test"
 
 /* ── Dummy server handler ─────────────────────────────────── */
@@ -82,6 +81,127 @@ static void setup_logging(void) {
     logger_initialized = 1;
 }
 
+static void robust_context_destroy(coro_context_t *ctx) {
+  int max_drain = 500;
+
+  if (ctx == NULL) {
+    return;
+  }
+
+  while (max_drain-- > 0) {
+    int has_handles = coro_context_alive(ctx);
+    int has_coros = (ctx->scheduler != NULL) ? (coro_scheduler_count(ctx->scheduler) > 0) : 0;
+    if (!has_handles && !has_coros) {
+      break;
+    }
+
+    uv_run(ctx->loop, UV_RUN_NOWAIT);
+    if (ctx->scheduler != NULL) {
+      coro_scheduler_tick(ctx->scheduler);
+    }
+  }
+
+  coro_context_destroy(ctx);
+}
+
+static int test_start_server(test_ctx_t *t,
+                             void (*handler)(coro_socket_t *, void *),
+                             int ready_delay_ms) {
+  int rc;
+
+  if (t == NULL || t->ctx == NULL || handler == NULL) {
+    return -1;
+  }
+
+  t->server = coro_socket_create(t->ctx, CORO_SOCKET_TCP_V4);
+  if (t->server == NULL) {
+    return -1;
+  }
+
+  rc = coro_socket_listen_on(t->server, TEST_HOST, TEST_PORT, handler, NULL);
+  if (rc != 0) {
+    TLOG_DEBUG("test_start_server: listen_url failed rc={:d}", rc);
+    coro_socket_destroy(t->server);
+    t->server = NULL;
+    return -1;
+  }
+
+  coro_yield();
+  if (ready_delay_ms > 0) {
+    coro_sleep(t->ctx, (uint64_t)ready_delay_ms);
+  }
+
+  return 0;
+}
+
+static coro_pool_t *test_open_pool(test_ctx_t *t,
+                                   size_t min_size,
+                                   size_t max_size,
+                                   int connect_delay_ms) {
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
+  coro_pool_t *pool;
+
+  if (t == NULL || t->ctx == NULL) {
+    return NULL;
+  }
+
+  cfg.min_size = min_size;
+  cfg.max_size = max_size;
+
+  pool = coro_pool_create(t->ctx, &cfg);
+  if (pool == NULL) {
+    return NULL;
+  }
+
+  if (coro_pool_open(pool, TEST_HOST, TEST_PORT, CORO_SOCKET_TCP_V4) != 0) {
+    TLOG_DEBUG("test_open_pool: coro_pool_open failed");
+    coro_pool_destroy(pool);
+    return NULL;
+  }
+
+  if (connect_delay_ms > 0) {
+    coro_sleep(t->ctx, (uint64_t)connect_delay_ms);
+  }
+
+  return pool;
+}
+
+static void test_cleanup_pool(test_ctx_t *t, coro_pool_t *pool) {
+  if (pool != NULL) {
+    coro_pool_close(pool);
+    coro_pool_destroy(pool);
+  }
+
+  if (t != NULL && t->server != NULL) {
+    coro_socket_destroy(t->server);
+    t->server = NULL;
+  }
+}
+
+static int run_pool_test_case(coro_fn fn) {
+  test_ctx_t ctx = {0};
+  int result = 0;
+
+  if (fn == NULL) {
+    return 0;
+  }
+
+  ctx.ctx = coro_context_create(NULL);
+  if (ctx.ctx == NULL) {
+    return 0;
+  }
+
+  if (coro_context_spawn(ctx.ctx, fn, &ctx) != 0) {
+    robust_context_destroy(ctx.ctx);
+    return 0;
+  }
+
+  coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
+  result = ctx.test_result;
+  robust_context_destroy(ctx.ctx);
+  return result;
+}
+
 /* ── Test: create and destroy ─────────────────────────────── */
 
 
@@ -103,44 +223,25 @@ static void test_create_destroy(coro_t *co, void *arg) {
 static void test_open_close(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
 
-  /* Create server */
-  t->server = coro_socket_create(t->ctx, CORO_SOCKET_TCP_V4);
-  if (!t->server) {
-    t->test_result = 0;
-    return;
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != 0) {
+    goto done;
   }
 
-  int r = coro_socket_listen_url(t->server, POOL_TEST_URL, dummy_handler, NULL);
-  if (r != 0) {
-    coro_socket_destroy(t->server);
-    t->server = NULL;
-    t->test_result = 0;
-    return;
+  pool = test_open_pool(t, 2, 4, 100);
+  if (pool == NULL) {
+    goto done;
   }
 
-  /* Yield to let accept_loop_task start */
-  coro_yield();
-
-  /* Create and open pool */
-  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
-  cfg.min_size = 2;
-  cfg.max_size = 4;
-  coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
-
-  r = coro_pool_open(pool, POOL_TEST_URL);
-  /* Give handles time to connect */
-  coro_sleep(t->ctx, 100);
-  t->test_result = (r == 0 && coro_pool_size(pool) == 2) ? 1 : 0;
+  t->test_result = (coro_pool_size(pool) == 2) ? 1 : 0;
 
   /* Wait a bit for handlers to complete */
   coro_sleep(t->ctx, 50);
 
-  coro_pool_close(pool);
-  coro_pool_destroy(pool);
-
-  coro_socket_destroy(t->server);
-  t->server = NULL;
+done:
+  test_cleanup_pool(t, pool);
 }
 
 /* ── Test: borrow, use, and return ────────────────────────── */
@@ -148,40 +249,26 @@ static void test_open_close(coro_t *co, void *arg) {
 static void test_borrow_return(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
-
-  /* Create server */
-  t->server = coro_socket_create(t->ctx, CORO_SOCKET_TCP_V4);
-  if (!t->server) {
-    t->test_result = 0;
-    return;
-  }
-
-  int r = coro_socket_listen_url(t->server, POOL_TEST_URL, echo_loop_handler, NULL);
-  if (r != 0) {
-    coro_socket_destroy(t->server);
-    t->server = NULL;
-    t->test_result = 0;
-    return;
-  }
-
-  /* Yield to let accept_loop_task start, then sleep to ensure it's ready */
-  coro_yield();
-  coro_sleep(t->ctx, 50);  /* Give server time to be fully ready */
-
-  /* Create and open pool */
-  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
-  cfg.min_size = 0;  /* No pre-connect: let borrow establish connection on-demand */
-  cfg.max_size = 4;
-  coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
-  coro_pool_open(pool, POOL_TEST_URL);
-
-  /* Borrow connection */
+  coro_pool_t *pool = NULL;
   coro_socket_t *c = NULL;
-  int rc = coro_pool_borrow(pool, &c);
+  char *data = NULL;
+  size_t len = 0;
+  int rc;
+
+  t->test_result = 0;
+  if (test_start_server(t, echo_loop_handler, 50) != 0) {
+    goto done;
+  }
+
+  pool = test_open_pool(t, 0, 4, 0);
+  if (pool == NULL) {
+    goto done;
+  }
+
+  rc = coro_pool_borrow(pool, &c);
   TLOG_DEBUG("After borrow: rc={:d}, c={:p}", rc, (void*)c);
   if (rc != 0 || !c) {
     TLOG_DEBUG("FAIL: borrow failed, rc={:d}", rc);
-    t->test_result = 0;
     goto done;
   }
 
@@ -191,43 +278,46 @@ static void test_borrow_return(coro_t *co, void *arg) {
   TLOG_DEBUG("After send: rc={:d}", rc);
   if (rc != 0) {
     TLOG_DEBUG("FAIL: send failed, rc={:d}", rc);
-    t->test_result = 0;
     goto done;
   }
 
   TLOG_DEBUG("Before recv");
-  char *data = NULL;
-  size_t len = 0;
   rc = coro_socket_recv(c, &data, &len);
   TLOG_DEBUG("After recv: rc={:d}, len={:d}", rc, (int)len);
   if (rc != 0 || len != strlen(POOL_TEST_MESSAGE)) {
     TLOG_DEBUG("FAIL: recv failed or wrong length, rc={:d}, len={:d}, expected={:d}",
                rc, (int)len, (int)strlen(POOL_TEST_MESSAGE));
-    t->test_result = 0;
     coro_socket_free_recv(data);
+    data = NULL;
     goto done;
   }
   if (memcmp(data, POOL_TEST_MESSAGE, len) != 0) {
-    t->test_result = 0;
     coro_socket_free_recv(data);
+    data = NULL;
     goto done;
   }
   coro_socket_free_recv(data);
+  data = NULL;
 
   /* Return and verify counts */
   size_t borrowed_before = coro_pool_borrowed_count(pool);
   coro_pool_return(pool, c);
+  c = NULL;
   size_t idle_after = coro_pool_idle_count(pool);
 
   t->test_result = (borrowed_before == 1 && idle_after == 1) ? 1 : 0;
 
 done:
+  if (data != NULL) {
+    coro_socket_free_recv(data);
+  }
+  if (c != NULL && pool != NULL) {
+    coro_pool_return(pool, c);
+  }
   /* Wait for handlers to complete */
   coro_sleep(t->ctx, 50);
 
-  coro_pool_destroy(pool);
-  coro_socket_destroy(t->server);
-  t->server = NULL;
+  test_cleanup_pool(t, pool);
 }
 
 /* ── Test: pool grows on demand ───────────────────────────── */
@@ -235,53 +325,45 @@ done:
 static void test_borrow_grows(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *c1 = NULL;
+  coro_socket_t *c2 = NULL;
+  coro_socket_t *c3 = NULL;
+  size_t pool_size;
+  size_t borrowed;
+  int r1;
+  int r2;
+  int r3;
 
-  /* Create server */
-  t->server = coro_socket_create(t->ctx, CORO_SOCKET_TCP_V4);
-  if (!t->server) {
-    t->test_result = 0;
-    return;
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != 0) {
+    goto done;
   }
 
-  int r = coro_socket_listen_url(t->server, POOL_TEST_URL, dummy_handler, NULL);
-  if (r != 0) {
-    coro_socket_destroy(t->server);
-    t->server = NULL;
-    t->test_result = 0;
-    return;
+  pool = test_open_pool(t, 1, 3, 0);
+  if (pool == NULL) {
+    goto done;
   }
-
-  /* Yield to let accept_loop_task start */
-  coro_yield();
-
-  /* Create and open pool */
-  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
-  cfg.min_size = 1;
-  cfg.max_size = 3;
-  coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
-  coro_pool_open(pool, POOL_TEST_URL);
 
   /* Borrow 3 connections — pool should grow from 1 to 3 */
-  coro_socket_t *c1 = NULL, *c2 = NULL, *c3 = NULL;
-  int r1 = coro_pool_borrow(pool, &c1);
-  int r2 = coro_pool_borrow(pool, &c2);
-  int r3 = coro_pool_borrow(pool, &c3);
+  r1 = coro_pool_borrow(pool, &c1);
+  r2 = coro_pool_borrow(pool, &c2);
+  r3 = coro_pool_borrow(pool, &c3);
 
-  size_t pool_size = coro_pool_size(pool);
-  size_t borrowed = coro_pool_borrowed_count(pool);
+  pool_size = coro_pool_size(pool);
+  borrowed = coro_pool_borrowed_count(pool);
 
   t->test_result = (r1 == 0 && r2 == 0 && r3 == 0 && pool_size == 3 && borrowed == 3) ? 1 : 0;
 
-  if (c1) coro_pool_return(pool, c1);
-  if (c2) coro_pool_return(pool, c2);
-  if (c3) coro_pool_return(pool, c3);
+done:
+  if (c1 != NULL && pool != NULL) coro_pool_return(pool, c1);
+  if (c2 != NULL && pool != NULL) coro_pool_return(pool, c2);
+  if (c3 != NULL && pool != NULL) coro_pool_return(pool, c3);
 
   /* Wait for handlers to complete */
   coro_sleep(t->ctx, 50);
 
-  coro_pool_destroy(pool);
-  coro_socket_destroy(t->server);
-  t->server = NULL;
+  test_cleanup_pool(t, pool);
 }
 
 /* ── Test: query counts ────────────────────────────────────── */
@@ -289,55 +371,45 @@ static void test_borrow_grows(coro_t *co, void *arg) {
 static void test_query_counts(coro_t *co, void *arg) {
   (void)co;
   test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *c = NULL;
+  size_t idle1;
+  size_t borrowed1;
+  size_t idle2;
+  size_t borrowed2;
+  size_t idle3;
+  size_t borrowed3;
 
-  /* Create server */
-  t->server = coro_socket_create(t->ctx, CORO_SOCKET_TCP_V4);
-  if (!t->server) {
-    t->test_result = 0;
-    return;
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != 0) {
+    goto done;
   }
 
-  int r = coro_socket_listen_url(t->server, POOL_TEST_URL, dummy_handler, NULL);
-  if (r != 0) {
-    coro_socket_destroy(t->server);
-    t->server = NULL;
-    t->test_result = 0;
-    return;
+  pool = test_open_pool(t, 2, 4, 100);
+  if (pool == NULL) {
+    goto done;
   }
-
-  /* Yield to let accept_loop_task start */
-  coro_yield();
-
-  /* Create and open pool */
-  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
-  cfg.min_size = 2;
-  cfg.max_size = 4;
-  coro_pool_t *pool = coro_pool_create(t->ctx, &cfg);
-  coro_pool_open(pool, POOL_TEST_URL);
-  
-  /* Give handles time to connect */
-  coro_sleep(t->ctx, 100);
 
   /* Initial state: 2 idle, 0 borrowed */
-  size_t idle1 = coro_pool_idle_count(pool);
-  size_t borrowed1 = coro_pool_borrowed_count(pool);
+  idle1 = coro_pool_idle_count(pool);
+  borrowed1 = coro_pool_borrowed_count(pool);
   printf("[Test] State 1: idle=%zu, borrowed=%zu\n", idle1, borrowed1);
 
   /* Borrow one */
-  coro_socket_t *c = NULL;
   coro_pool_borrow(pool, &c);
   coro_yield();
 
-  size_t idle2 = coro_pool_idle_count(pool);
-  size_t borrowed2 = coro_pool_borrowed_count(pool);
+  idle2 = coro_pool_idle_count(pool);
+  borrowed2 = coro_pool_borrowed_count(pool);
   printf("[Test] State 2: idle=%zu, borrowed=%zu\n", idle2, borrowed2);
 
   /* Return */
   coro_pool_return(pool, c);
+  c = NULL;
   coro_yield();
 
-  size_t idle3 = coro_pool_idle_count(pool);
-  size_t borrowed3 = coro_pool_borrowed_count(pool);
+  idle3 = coro_pool_idle_count(pool);
+  borrowed3 = coro_pool_borrowed_count(pool);
   printf("[Test] State 3: idle=%zu, borrowed=%zu\n", idle3, borrowed3);
 
   t->test_result =
@@ -348,12 +420,14 @@ static void test_query_counts(coro_t *co, void *arg) {
     printf("[Test] FAIL (Expected 2/0, 1/1, 2/0)\n");
   }
 
+done:
+  if (c != NULL && pool != NULL) {
+    coro_pool_return(pool, c);
+  }
   /* Wait for handlers to complete */
   coro_sleep(t->ctx, 50);
 
-  coro_pool_destroy(pool);
-  coro_socket_destroy(t->server);
-  t->server = NULL;
+  test_cleanup_pool(t, pool);
 }
 
 /* ── Test specs ───────────────────────────────────────────── */
@@ -365,62 +439,27 @@ spec("coro_pool") {
 
   describe("Lifecycle") {
     it("should create and destroy pool") {
-      test_ctx_t ctx = {0};
-      ctx.ctx = coro_context_create(NULL);
-
-      coro_context_spawn(ctx.ctx, test_create_destroy, &ctx);
-      coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
-
-      check_int_eq(ctx.test_result, 1);
-      coro_context_destroy(ctx.ctx);
+      check_int_eq(run_pool_test_case(test_create_destroy), 1);
     }
 
     it("should open with min_size pre-connected") {
-      test_ctx_t ctx = {0};
-      ctx.ctx = coro_context_create(NULL);
-
-      coro_context_spawn(ctx.ctx, test_open_close, &ctx);
-      coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
-
-      check_int_eq(ctx.test_result, 1);
-      coro_context_destroy(ctx.ctx);
+      check_int_eq(run_pool_test_case(test_open_close), 1);
     }
   }
 
   describe("Borrow/Return") {
     it("should borrow, use, and return a connection") {
-      test_ctx_t ctx = {0};
-      ctx.ctx = coro_context_create(NULL);
-
-      coro_context_spawn(ctx.ctx, test_borrow_return, &ctx);
-      coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
-
-      check_int_eq(ctx.test_result, 1);
-      coro_context_destroy(ctx.ctx);
+      check_int_eq(run_pool_test_case(test_borrow_return), 1);
     }
 
     it("should grow pool on demand up to max_size") {
-      test_ctx_t ctx = {0};
-      ctx.ctx = coro_context_create(NULL);
-
-      coro_context_spawn(ctx.ctx, test_borrow_grows, &ctx);
-      coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
-
-      check_int_eq(ctx.test_result, 1);
-      coro_context_destroy(ctx.ctx);
+      check_int_eq(run_pool_test_case(test_borrow_grows), 1);
     }
   }
 
   describe("Query") {
     it("should track idle and borrowed counts") {
-      test_ctx_t ctx = {0};
-      ctx.ctx = coro_context_create(NULL);
-
-      coro_context_spawn(ctx.ctx, test_query_counts, &ctx);
-      coro_context_run(ctx.ctx, TURBO_RUN_DEFAULT);
-
-      check_int_eq(ctx.test_result, 1);
-      coro_context_destroy(ctx.ctx);
+      check_int_eq(run_pool_test_case(test_query_counts), 1);
     }
   }
 }

@@ -1,6 +1,5 @@
 set(TARGET_NAME turbo_utils)
-find_package(Stb REQUIRED)
-find_package(libuv CONFIG REQUIRED)
+find_package(Stb REQUIRED) 
 # Add parser subdirectory first (generates lexer)
 add_subdirectory(parser)
 
@@ -30,7 +29,6 @@ target_link_libraries(
   ${TARGET_NAME}
   PUBLIC c-ares::cares # DNS resolver uses c-ares
          aklomp::base64 # Base64 utilities
-         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   PRIVATE ${FMT_LEXER_LIBRARY} PkgConfig::STC # Thread-safe containers
           TurboNet::SDS # Simple Dynamic Strings
           uri_parser ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer

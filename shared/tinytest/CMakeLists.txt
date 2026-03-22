@@ -25,6 +25,8 @@ install(
 # Examples / self-tests
 set(EXAMPLE_SOURCES example.c math_test.c tinytest.h)
 add_executable(example_test ${EXAMPLE_SOURCES})
+set(EXAMPLE_SOURCES  math_test.c tinytest.h)
+add_executable(math_test ${EXAMPLE_SOURCES})
 
 set(TEST_TREE_SOURCES test-tree.c tinytest.h test-tree.h)
 add_executable(test_tree_test ${TEST_TREE_SOURCES})
@@ -72,6 +74,7 @@ set(TINYTEST_TARGETS
     test_tree_test
     array_test
     dynamic_test
+    math_test
     before_after
     group_suite_example
     junit_to_html

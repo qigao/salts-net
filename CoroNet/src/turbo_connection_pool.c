@@ -18,9 +18,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <uv.h>
 #include "tlog.h"
-
 /* ── Slot states ──────────────────────────────────────────── */
 
 typedef enum { POOL_SLOT_EMPTY, POOL_SLOT_IDLE, POOL_SLOT_BORROWED } pool_slot_state_t;
@@ -46,14 +44,14 @@ typedef struct pool_waiter_s {
 
 struct coro_pool_s {
   coro_context_t *ctx;
-  uv_loop_t *loop;
-  char url[1280];
+  turbo_loop_t *loop;
+  char host[256];
+  int port;
   coro_pool_config_t config;
   pool_slot_t *slots;
   size_t alive_count;
-  uv_timer_t idle_timer;
+  turbo_timer_t *idle_timer;
   int idle_timer_active;
-  int idle_timer_closing;
   int destroy_pending;
   int closed;
   coro_socket_type_t socket_type;
@@ -61,7 +59,7 @@ struct coro_pool_s {
   /* Waiter list — coroutines blocked waiting for a free slot */
   pool_waiter_t *waiter_head;
   pool_waiter_t *waiter_tail;
-  
+
   mem_pool_t* arena;             /**< Arena for slots and waiters */
 };
 
@@ -69,7 +67,7 @@ struct coro_pool_s {
 
 static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial_state);
 static void destroy_slot(coro_pool_t *pool, size_t idx);
-static void idle_timer_cb(uv_timer_t *handle);
+static void idle_timer_cb(turbo_timer_t *handle);
 static void idle_timer_start(coro_pool_t *pool);
 static void idle_timer_stop(coro_pool_t *pool);
 static void wake_all_waiters(coro_pool_t *pool);
@@ -110,25 +108,19 @@ coro_pool_t *coro_pool_create(coro_context_t *ctx, const coro_pool_config_t *con
   return pool;
 }
 
-int coro_pool_open(coro_pool_t *pool, const char *url) {
+int coro_pool_open(coro_pool_t *pool, const char *host, int port,
+                    coro_socket_type_t socket_type) {
   /* Must be called from a coroutine — connect suspends */
   ASSERT_IN_CORO();
 
-  if (!pool || !url) return TURBO_EINVAL;
+  if (!pool || !host) return TURBO_EINVAL;
   if (pool->closed) return TURBO_EOF;
 
-  size_t len = strlen(url);
-  if (len >= sizeof(pool->url)) return TURBO_EINVAL;
-  memcpy(pool->url, url, len + 1);
-
-  /* Determine socket type from URL */
-  turbo_address_t addr;
-  if (parse_transport_url(url, &addr) != 0 || !addr.valid) return TURBO_EINVAL;
-  
-  if (addr.transport == TURBO_PIPE) pool->socket_type = CORO_SOCKET_PIPE;
-  else if (addr.transport == TURBO_UDP) pool->socket_type = CORO_SOCKET_UDP_V4;
-  else if (addr.transport >= TURBO_TCP && addr.transport <= TURBO_TLS) pool->socket_type = CORO_SOCKET_TCP_V4; // covers tcp, tls,ws...
-  else pool->socket_type = CORO_SOCKET_TCP_V4; // fallback
+  size_t len = strlen(host);
+  if (len >= sizeof(pool->host)) return TURBO_EINVAL;
+  memcpy(pool->host, host, len + 1);
+  pool->port = port;
+  pool->socket_type = socket_type;
 
   /* Pre-connect min_size slots */
   for (size_t i = 0; i < pool->config.min_size; i++) {
@@ -145,7 +137,7 @@ int coro_pool_open(coro_pool_t *pool, const char *url) {
   /* Start idle reaper if configured */
   if (pool->config.idle_timeout_ms > 0) idle_timer_start(pool);
 
-  TLOG_DEBUG("Coro pool opened for URL: {:s} (pre-connected: {:d})", url, pool->config.min_size);
+  TLOG_DEBUG("Coro pool opened for {:s}:{:d} (pre-connected: {:d})", host, port, pool->config.min_size);
   return 0;
 }
 
@@ -167,21 +159,18 @@ void coro_pool_close(coro_pool_t *pool) {
 void coro_pool_destroy(coro_pool_t *pool) {
   if (!pool)
     return;
-    
+
   /* Prevent re-entry */
   if (pool->destroy_pending)
     return;
 
   coro_pool_close(pool);
 
-  /* If idle_timer close is still pending (uv_close is async), defer the
-     free to the close callback so libuv doesn't process freed memory. */
-  if (pool->idle_timer_closing) {
-    pool->destroy_pending = 1;
-    return;
+  if (pool->idle_timer) {
+    turbo_timer_destroy(pool->idle_timer);
+    pool->idle_timer = NULL;
   }
 
-  
   free(pool);
 }
 
@@ -200,7 +189,7 @@ int coro_pool_borrow(coro_pool_t *pool, coro_socket_t **out) {
   /* Optional borrow timeout — note start time once */
   uint64_t start_time = 0;
   if (pool->config.borrow_timeout_ms > 0) {
-    start_time = uv_now(pool->loop);
+    start_time = turbo_loop_now(pool->loop);
   }
 
 retry:
@@ -247,7 +236,7 @@ retry:
 
   /* 3. Pool full — check timeout */
   if (pool->config.borrow_timeout_ms > 0) {
-    uint64_t elapsed = uv_now(pool->loop) - start_time;
+    uint64_t elapsed = turbo_loop_now(pool->loop) - start_time;
     if (elapsed >= pool->config.borrow_timeout_ms) {
       return TURBO_ETIMEDOUT;
     }
@@ -306,7 +295,7 @@ void coro_pool_return(coro_pool_t *pool, coro_socket_t *client) {
     if (pool->slots[i].client == client && pool->slots[i].state == POOL_SLOT_BORROWED) {
       if (client->connected && !pool->closed) {
         pool->slots[i].state = POOL_SLOT_IDLE;
-        pool->slots[i].idle_since = uv_now(pool->loop);
+        pool->slots[i].idle_since = turbo_loop_now(pool->loop);
         TLOG_DEBUG("Coro pool returned connection to idle slot {:d}", i);
         /* Wake one waiting borrower so it can claim this slot */
         wake_one_waiter(pool, POOL_WAKE_RETRY);
@@ -342,7 +331,7 @@ size_t coro_pool_size(const coro_pool_t *pool) { return pool ? pool->alive_count
 
 int coro_pool_is_open(const coro_pool_t *pool) {
   if (!pool) return 0;
-  return (pool->url[0] != '\0' && !pool->closed);
+  return (pool->host[0] != '\0' && !pool->closed);
 }
 
 /* ── Internal: waiter management ─────────────────────────── */
@@ -393,7 +382,7 @@ static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial
   if (pool->config.connect_timeout_ms > 0)
     coro_socket_set_timeout(c, pool->config.connect_timeout_ms);
 
-  int rc = coro_socket_connect(c, pool->url);
+  int rc = coro_socket_connect(c, pool->host, pool->port);
   if (rc != 0) {
     coro_socket_destroy(c);
     return rc;
@@ -404,7 +393,7 @@ static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial
 
   pool->slots[idx].client = c;
   pool->slots[idx].state = initial_state;
-  pool->slots[idx].idle_since = (initial_state == POOL_SLOT_IDLE) ? uv_now(pool->loop) : 0;
+  pool->slots[idx].idle_since = (initial_state == POOL_SLOT_IDLE) ? turbo_loop_now(pool->loop) : 0;
   return 0;
 }
 
@@ -419,11 +408,13 @@ static void destroy_slot(coro_pool_t *pool, size_t idx) {
 
 /* ── Internal: idle reaper ────────────────────────────────── */
 
-static void idle_timer_cb(uv_timer_t *handle) {
-  coro_pool_t *pool = (coro_pool_t *)handle->data;
+static void idle_timer_bounce(void *arg1, void *arg2) {
+  (void)arg2;
+  turbo_timer_t *timer = (turbo_timer_t *)arg1;
+  coro_pool_t *pool = (coro_pool_t *)turbo_timer_get_data(timer);
   if (pool->closed) return;
 
-  uint64_t now = uv_now(pool->loop);
+  uint64_t now = turbo_loop_now(pool->loop);
   size_t idle_count = 0;
 
   /* Count current idle connections */
@@ -442,35 +433,32 @@ static void idle_timer_cb(uv_timer_t *handle) {
   }
 }
 
+static void idle_timer_cb(turbo_timer_t *timer) {
+  coro_pool_t *pool = (coro_pool_t *)turbo_timer_get_data(timer);
+  coro_post(pool->ctx, idle_timer_bounce, timer, NULL);
+}
+
 static void idle_timer_start(coro_pool_t *pool) {
   if (pool->idle_timer_active) return;
 
-  uv_timer_init(pool->loop, &pool->idle_timer);
-  pool->idle_timer.data = pool;
+  if (!pool->idle_timer) {
+    pool->idle_timer = turbo_timer_create(NULL);
+    if (!pool->idle_timer) return;
+  }
+  turbo_timer_set_data(pool->idle_timer, pool);
 
   /* Scan interval = idle_timeout / 2, minimum 1 second */
   uint64_t interval = pool->config.idle_timeout_ms / 2;
   if (interval < 1000) interval = 1000;
 
-  uv_timer_start(&pool->idle_timer, idle_timer_cb, interval, interval);
+  turbo_timer_start(pool->idle_timer, idle_timer_cb, interval, interval);
   pool->idle_timer_active = 1;
-}
-
-static void on_idle_timer_close(uv_handle_t *handle) {
-  coro_pool_t *pool = (coro_pool_t *)handle->data;
-  if (pool) {
-    pool->idle_timer_closing = 0;
-    if (pool->destroy_pending) {
-      
-      free(pool);
-    }
-  }
 }
 
 static void idle_timer_stop(coro_pool_t *pool) {
   if (!pool->idle_timer_active) return;
-  uv_timer_stop(&pool->idle_timer);
-  pool->idle_timer_closing = 1;
-  uv_close((uv_handle_t *)&pool->idle_timer, on_idle_timer_close);
+  if (pool->idle_timer) {
+    turbo_timer_stop(pool->idle_timer);
+  }
   pool->idle_timer_active = 0;
 }

@@ -23,11 +23,11 @@ typedef void *turbo_thread_t;
 // One-time initialization guard
 #ifdef _WIN32
 typedef INIT_ONCE turbo_once_t;
-#define TURBO_ONCE_INIT INIT_ONCE_STATIC_INIT
+  #define TURBO_ONCE_INIT INIT_ONCE_STATIC_INIT
 #else
-#include <pthread.h>
+  #include <pthread.h>
 typedef pthread_once_t turbo_once_t;
-#define TURBO_ONCE_INIT PTHREAD_ONCE_INIT
+  #define TURBO_ONCE_INIT PTHREAD_ONCE_INIT
 #endif
 
 // Thread entry point callback type
@@ -64,6 +64,57 @@ CXX_C_API void turbo_mutex_lock(turbo_mutex_t *mutex);
  * @param mutex Mutex to unlock
  */
 CXX_C_API void turbo_mutex_unlock(turbo_mutex_t *mutex);
+
+// =============================================================================
+// Read-Write Lock - multi-reader / single-writer lock
+// =============================================================================
+
+#ifdef _WIN32
+typedef struct turbo_rwlock_s {
+  SRWLOCK lock;
+} turbo_rwlock_t;
+#else
+typedef struct turbo_rwlock_s {
+  pthread_rwlock_t lock;
+} turbo_rwlock_t;
+#endif
+
+/**
+ * @brief Initialize a read-write lock
+ * @param lock Lock to initialize
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_rwlock_init(turbo_rwlock_t *lock);
+
+/**
+ * @brief Destroy a read-write lock
+ * @param lock Lock to destroy
+ */
+CXX_C_API void turbo_rwlock_destroy(turbo_rwlock_t *lock);
+
+/**
+ * @brief Acquire the read lock (shared, multiple readers allowed)
+ * @param lock Lock to acquire
+ */
+CXX_C_API void turbo_rwlock_rdlock(turbo_rwlock_t *lock);
+
+/**
+ * @brief Release the read lock
+ * @param lock Lock to release
+ */
+CXX_C_API void turbo_rwlock_rdunlock(turbo_rwlock_t *lock);
+
+/**
+ * @brief Acquire the write lock (exclusive, blocks all readers and writers)
+ * @param lock Lock to acquire
+ */
+CXX_C_API void turbo_rwlock_wrlock(turbo_rwlock_t *lock);
+
+/**
+ * @brief Release the write lock
+ * @param lock Lock to release
+ */
+CXX_C_API void turbo_rwlock_wrunlock(turbo_rwlock_t *lock);
 
 // =============================================================================
 // Condition Variable
@@ -157,7 +208,7 @@ CXX_C_API void turbo_thread_yield(void);
 // Global Synchronization Policy
 // =============================================================================
 
-/** 
+/**
  * @brief Enable/disable global locking for all shared resources.
  * @param enabled 0 to disable all internal mutexes (optimizes for single-loop processes).
  */
@@ -217,6 +268,12 @@ CXX_C_API int turbo_threadpool_pending(turbo_threadpool_t *pool);
  * @return Number of threads
  */
 CXX_C_API int turbo_threadpool_size(turbo_threadpool_t *pool);
+
+/**
+ * @brief Get the current process ID
+ * @return Process ID
+ */
+CXX_C_API int turbo_getpid(void);
 
 #ifdef __cplusplus
 }

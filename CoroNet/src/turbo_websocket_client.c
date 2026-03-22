@@ -51,7 +51,7 @@ static int ws_extract_header_value(const char *headers, const char *header_name,
 // Client lifecycle
 // ============================================================================
 
-turbo_websocket_client_t *turbo_websocket_client_create(uv_loop_t *loop, int use_tls,
+turbo_websocket_client_t *turbo_websocket_client_create(void *loop, int use_tls,
                                                         const turbo_websocket_config_t *config) {
 
   if (!loop || !config) return NULL;
@@ -825,40 +825,27 @@ static int send_websocket_frame(turbo_websocket_client_t *client, websocket_opco
     header[header_len++] = masking_key[i];
   }
 
-  // Mask payload
-  uint8_t *masked_payload = NULL;
-  if (payload_len > 0) {
-    masked_payload = malloc(payload_len);
-    if (!masked_payload) return -1;
-
-    memcpy(masked_payload, payload, payload_len);
-    ws_frame_unmask(masked_payload, payload_len, masking_key);
-  }
-
-  // Send header + masked payload
-  int result;
+  // Allocate single arena buffer for header + masked payload
   size_t total_len = header_len + payload_len;
-  char *combined = malloc(total_len);
-  if (!combined) {
-    if (masked_payload) free(masked_payload);
-    return -1;
-  }
-  memcpy(combined, header, header_len);
-  if (masked_payload && payload_len > 0) {
-    memcpy(combined + header_len, masked_payload, payload_len);
-  }
+  mem_buffer_t *buf = mem_alloc(client->conn_arena, total_len);
+  if (!buf) return -1;
 
+  char *ptr = buf->data;
+  memcpy(ptr, header, header_len);
+  if (payload_len > 0) {
+    memcpy(ptr + header_len, payload, payload_len);
+    ws_frame_unmask((uint8_t *)(ptr + header_len), payload_len, masking_key);
+  }
+  mem_set_used(buf, total_len);
+
+  int result;
   if (client->is_tls) {
-    result = turbo_tls_send((turbo_tls_client_t *)client->transport, combined, total_len);
+    result = turbo_tls_send((turbo_tls_client_t *)client->transport, ptr, total_len);
   } else {
-    result = turbo_tcp_send((turbo_tcp_client_t *)client->transport, combined, total_len);
+    result = turbo_tcp_send((turbo_tcp_client_t *)client->transport, ptr, total_len);
   }
 
-  free(combined);
-  if (masked_payload) {
-    free(masked_payload);
-  }
-
+  mem_unref(buf);
   return result;
 }
 
@@ -868,12 +855,10 @@ static int send_websocket_frame(turbo_websocket_client_t *client, websocket_opco
  * Combines all iov buffers into a single TEXT frame with proper WebSocket framing
  * and client-side masking.
  */
-int turbo_websocket_client_sendv(turbo_websocket_client_t *client, const void *iov_ptr,
+int turbo_websocket_client_sendv(turbo_websocket_client_t *client, const turbo_iovec_t *iov,
                                  int iovcnt) {
-  if (!client || !iov_ptr || iovcnt <= 0) return -1;
+  if (!client || !iov || iovcnt <= 0) return -1;
   if (client->state != TURBO_WS_STATE_OPEN) return -1;
-
-  const turbo_iovec_t *iov = (const turbo_iovec_t *)iov_ptr;
 
   // Calculate total payload length
   size_t total_len = 0;
@@ -917,40 +902,34 @@ int turbo_websocket_client_sendv(turbo_websocket_client_t *client, const void *i
     header[header_len++] = masking_key[i];
   }
 
-  // Concatenate and mask all payload data
-  uint8_t *masked_payload = malloc(total_len);
-  if (!masked_payload) return -1;
+  // Allocate single arena buffer for header + masked payload
+  size_t combined_len = header_len + total_len;
+  mem_buffer_t *buf = mem_alloc(client->conn_arena, combined_len);
+  if (!buf) return -1;
 
+  char *ptr = buf->data;
+  memcpy(ptr, header, header_len);
+
+  // Copy and mask payload in-place
   size_t offset = 0;
   for (int i = 0; i < iovcnt; i++) {
-    memcpy(masked_payload + offset, iov[i].data, iov[i].len);
+    memcpy(ptr + header_len + offset, iov[i].data, iov[i].len);
     offset += iov[i].len;
   }
-
-  // Apply mask
   for (size_t i = 0; i < total_len; i++) {
-    masked_payload[i] ^= masking_key[i % 4];
+    ptr[header_len + i] ^= masking_key[i % 4];
   }
+  mem_set_used(buf, combined_len);
 
-  // Send header + masked payload
+  // Send via transport
   int result;
-  size_t combined_len = header_len + total_len;
-  char *combined = malloc(combined_len);
-  if (!combined) {
-    free(masked_payload);
-    return -1;
-  }
-  memcpy(combined, header, header_len);
-  memcpy(combined + header_len, masked_payload, total_len);
-
   if (client->is_tls) {
-    result = turbo_tls_send((turbo_tls_client_t *)client->transport, combined, combined_len);
+    result = turbo_tls_send((turbo_tls_client_t *)client->transport, ptr, combined_len);
   } else {
-    result = turbo_tcp_send((turbo_tcp_client_t *)client->transport, combined, combined_len);
+    result = turbo_tcp_send((turbo_tcp_client_t *)client->transport, ptr, combined_len);
   }
 
-  free(combined);
-  free(masked_payload);
+  mem_unref(buf);
   return result;
 }
 

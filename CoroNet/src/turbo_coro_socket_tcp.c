@@ -1,82 +1,132 @@
 /**
  * @file turbo_coro_socket_tcp.c
- * @brief TCP transport implementation for coroutine sockets.
+ * @brief TCP transport for coroutine sockets — delegates to turbo_stream_t.
  *
- * DESIGN:
- * - Implements coro_transport_ops_t for TCP/TLS
- * - TLS is layered on top of TCP (same ops, different handle)
- * - Reference counting ensures safe async cleanup
+ * Mirrors the pipe transport pattern: coro layer owns a turbo_stream_t handle,
+ * bridges callbacks to coro_socket_handle_transport_*, and yields/resumes.
+ * All platform-specific I/O lives in the stream backend (IOCP/epoll/kqueue).
  */
 
 #include "CoroNet/turbo_coro_internal.h"
+#include "turbo_stream_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Forward declarations ─────────────────────────────────── */
-static void on_tcp_handle_closed(uv_handle_t *handle);
-static void on_write_done(turbo_tcp_client_t *client, int status);
+extern const coro_transport_ops_t transport_ops_tcp;
 
-/* ── TCP Connect ──────────────────────────────────────────── */
+/* ── Client callbacks ─────────────────────────────────────── */
 
-static int on_tcp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) {
+static int on_tcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
   UNUSED(peer);
-  turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)tcp->user_data;
+  turbo_stream_t *stream = (turbo_stream_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   coro_socket_handle_transport_recv(s, slice);
   return 0;
 }
 
-static void on_tcp_coro_connect(void *handle, int status, void *extra) {
+static void on_tcp_connect(void *handle, int status, void *extra) {
   UNUSED(extra);
-  turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)tcp->user_data;
+  turbo_stream_t *stream = (turbo_stream_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   coro_socket_handle_transport_connect(s, status);
 }
 
-static void on_tcp_coro_close(void *handle) {
-  turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)handle;
-  coro_socket_t *s = (coro_socket_t *)tcp->user_data;
+static void on_tcp_close(void *handle) {
+  turbo_stream_t *stream = (turbo_stream_t *)handle;
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   if (s) {
-    tcp->user_data = NULL;
+    turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
   }
 }
 
+/* ── Connect ──────────────────────────────────────────────── */
+
 static int tcp_connect(coro_socket_t *s, const char *host, int port) {
-  UNUSED(host); /* Already resolved to s->resolved_ip */
-  
+  const char *ip = s->resolved_ip[0] ? s->resolved_ip : host;
+
+  /* Build sockaddr from resolved IP */
+  struct sockaddr_in addr4;
+  struct sockaddr_in6 addr6;
+  struct sockaddr *sa = NULL;
+
+  memset(&addr4, 0, sizeof(addr4));
+  memset(&addr6, 0, sizeof(addr6));
+
+  if (inet_pton(AF_INET, ip, &addr4.sin_addr) == 1) {
+    addr4.sin_family = AF_INET;
+    addr4.sin_port = htons((unsigned short)port);
+    sa = (struct sockaddr *)&addr4;
+  } else if (inet_pton(AF_INET6, ip, &addr6.sin6_addr) == 1) {
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons((unsigned short)port);
+    sa = (struct sockaddr *)&addr6;
+  }
+
+  if (!sa) return TURBO_EINVAL;
+
+  /* Create stream handle on first connect */
+  if (!s->handle.stream) {
+    turbo_stream_kind_t kind = (sa->sa_family == AF_INET6)
+                                   ? TURBO_STREAM_TCP6
+                                   : TURBO_STREAM_TCP4;
+    s->handle.stream = turbo_stream_create(s->ctx, kind);
+    if (!s->handle.stream) return TURBO_ENOMEM;
+    turbo_stream_set_user_data(s->handle.stream, s);
+    s->handle.stream->managed = 1;
+  }
+
   retain_client(s);
-  int r = turbo_tcp_client_connect(
-      s->handle.tcp, 
-      s->resolved_ip, 
-      (unsigned short)port,
-      on_tcp_coro_recv, 
-      on_tcp_coro_connect, 
-      on_tcp_coro_close
-  );
-  
+  int r = turbo_stream_connect_addr(s->handle.stream, sa,
+                                    on_tcp_connect, on_tcp_close);
   if (r != 0) {
     release_client(s);
     return r;
   }
-  
+
   coro_set_wait(s);
   coro_yield();
   return s->status;
 }
 
-/* ── TCP Bind/Listen/Accept ───────────────────────────────── */
+/* ── Bind/Listen/Accept ───────────────────────────────────── */
 
-static int tcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
-  return uv_tcp_bind(&s->handle.tcp->handle, addr, 0);
-}
+typedef struct tcp_accept_node_s {
+  turbo_stream_t *stream;
+  struct tcp_accept_node_s *next;
+} tcp_accept_node_t;
 
-static void on_tcp_listen(uv_stream_t *stream, int status) {
-  turbo_tcp_client_t *tcp = (turbo_tcp_client_t *)stream->data;
-  coro_socket_t *s = (coro_socket_t *)tcp->user_data;
-  if (!s) return;
-  
-  s->status = status;
+typedef struct tcp_listener_state_s {
+  turbo_stream_listener_t *listener;
+  coro_socket_t *server_coro;
+  tcp_accept_node_t *head;
+  tcp_accept_node_t *tail;
+  int reuse_port;
+} tcp_listener_state_t;
+
+static void on_tcp_accept(void *listener_handle, void *stream_handle,
+                           void *peer) {
+  UNUSED(peer);
+  turbo_stream_listener_t *l = (turbo_stream_listener_t *)listener_handle;
+  tcp_listener_state_t *ls =
+      (tcp_listener_state_t *)turbo_stream_listener_get_user_data(l);
+  if (!ls) return;
+
+  tcp_accept_node_t *node = malloc(sizeof(tcp_accept_node_t));
+  if (!node) {
+    turbo_stream_destroy((turbo_stream_t *)stream_handle);
+    return;
+  }
+  node->stream = (turbo_stream_t *)stream_handle;
+  node->next = NULL;
+
+  if (ls->tail)
+    ls->tail->next = node;
+  else
+    ls->head = node;
+  ls->tail = node;
+
+  coro_socket_t *s = ls->server_coro;
   if (s->co_wait) {
     coro_resume_waiter(s);
   } else {
@@ -84,146 +134,175 @@ static void on_tcp_listen(uv_stream_t *stream, int status) {
   }
 }
 
+static int tcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
+  /* Store bind address for later use in tcp_listen */
+  if (!s || !addr) return TURBO_EINVAL;
+
+  tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
+  if (!ls) {
+    ls = calloc(1, sizeof(tcp_listener_state_t));
+    if (!ls) return TURBO_ENOMEM;
+    ls->server_coro = s;
+    ls->reuse_port = s->reuse_port;
+    s->native_tcp_state = ls;
+  }
+
+  size_t addr_len = (addr->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6)
+                                                   : sizeof(struct sockaddr_in);
+  /* Store address in native_tcp_state for tcp_listen to use.
+     We pack it after the listener_state struct. */
+  void *new_ls = realloc(ls, sizeof(tcp_listener_state_t) + addr_len);
+  if (!new_ls) return TURBO_ENOMEM;
+  ls = (tcp_listener_state_t *)new_ls;
+  s->native_tcp_state = ls;
+  memcpy((char *)ls + sizeof(tcp_listener_state_t), addr, addr_len);
+
+  return 0;
+}
+
 static int tcp_listen(coro_socket_t *s, int backlog) {
-  return uv_listen(
-      (uv_stream_t *)&s->handle.tcp->handle, 
-      backlog, 
-      on_tcp_listen
-  );
+  tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
+  if (!ls) return TURBO_EINVAL;
+
+  const struct sockaddr *addr =
+      (const struct sockaddr *)((char *)ls + sizeof(tcp_listener_state_t));
+
+  turbo_stream_kind_t kind = (addr->sa_family == AF_INET6)
+                                 ? TURBO_STREAM_TCP6
+                                 : TURBO_STREAM_TCP4;
+
+  ls->listener = turbo_stream_listen(s->ctx, kind, addr, backlog, on_tcp_accept);
+  if (!ls->listener) return TURBO_EADDRINUSE;
+
+  turbo_stream_listener_set_user_data(ls->listener, ls);
+  return 0;
 }
 
 static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   retain_client(s);
-  
-  /* Check if accept already fired */
+
   if (s->accept_pending) {
     s->accept_pending = 0;
-    if (s->status != 0) {
-      int r = s->status;
-      release_client(s);
-      return r;
-    }
   } else {
-    /* Wait for connection */
     coro_set_wait(s);
     coro_yield();
     if (s->status != 0) {
-      int r = s->status;
       release_client(s);
-      return r;
+      return s->status;
     }
   }
-  
-  /* Create child socket */
-  coro_socket_t *child = coro_socket_create(s->ctx, CORO_SOCKET_TCP_V4);
+
+  tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
+  if (!ls || !ls->head) {
+    release_client(s);
+    return TURBO_EBUSY;
+  }
+
+  tcp_accept_node_t *node = ls->head;
+  ls->head = node->next;
+  if (!ls->head) ls->tail = NULL;
+
+  turbo_stream_t *stream = node->stream;
+  free(node);
+
+  coro_socket_t *child =
+      coro_socket_create_shell(s->ctx, TURBO_TCP, &transport_ops_tcp);
   if (!child) {
+    turbo_stream_destroy(stream);
     release_client(s);
-    return UV_ENOMEM;
+    return TURBO_ENOMEM;
   }
-  
-  int r = uv_accept(
-      (uv_stream_t *)&s->handle.tcp->handle, 
-      (uv_stream_t *)&child->handle.tcp->handle
-  );
-  
-  if (r != 0) {
-    coro_socket_destroy(child);
-    release_client(s);
-    return r;
-  }
-  
-  /* Configure child */
-  uv_tcp_nodelay(&child->handle.tcp->handle, 1);
-  child->handle.tcp->on_recv = on_tcp_coro_recv;
-  child->handle.tcp->on_connect = s->handle.tcp->on_connect;
-  child->handle.tcp->on_close = on_tcp_coro_close;
-  child->handle.tcp->user_data = child;
+
+  child->handle.stream = stream;
+  child->owns_handle = 1;
+  turbo_stream_set_user_data(stream, child);
+  stream->on_recv = on_tcp_recv;
+  stream->on_connect = on_tcp_connect;
+  stream->on_close = on_tcp_close;
   child->connected = 1;
-  
-  /* Libuv handle holds onto its user_data. 
-     The initial ref_count from coro_socket_create is enough. */
-  
+  retain_client(child);
+
   *accepted = child;
   release_client(s);
   return 0;
 }
 
-/* ── TCP Send/Recv ────────────────────────────────────────── */
-
-static void on_write_done(turbo_tcp_client_t *client, int status) {
-  coro_socket_t *s = (coro_socket_t *)client->user_data;
-  if (!s) return;
-  
-  s->write_status = status;
-  if (s->co_write_wait) {
-    coro_resume_co(s->ctx, s->co_write_wait);
-    s->co_write_wait = NULL;
-    release_client(s); /* Match retain in tcp_send */
-  }
-}
+/* ── Send/Recv ────────────────────────────────────────────── */
 
 static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
-  if (s->status != 0) return s->status;
-  if (!s->handle.tcp) return UV_ENOTCONN;
-  
-  s->handle.tcp->on_write_complete = on_write_done;
-  int r = turbo_tcp_send(s->handle.tcp, data, len);
-  if (r != 0) return r;
-  
-  /* Wait for write completion if queued */
-  if (s->handle.tcp->write_in_progress) {
-    s->co_write_wait = coro_running();
-    retain_client(s); /* Keep alive until on_write_done or close */
-    
-    /* Mark coroutine as waiting for I/O if scheduler-managed */
-    if (coro_is_scheduled(s->co_write_wait)) {
-      coro_set_waiting_for_io(s->co_write_wait, 1);
-    }
-    
-    coro_yield();
-    return s->write_status;
-  }
-  
-  return 0;
+  return turbo_stream_send(s->handle.stream, data, len);
+}
+
+static mem_buffer_t *tcp_get_send_buffer(coro_socket_t *s, size_t min_size) {
+  return turbo_stream_get_send_buffer(s->handle.stream, min_size);
+}
+
+static int tcp_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
+  return turbo_stream_send_buffer(s->handle.stream, buffer, len);
 }
 
 static int tcp_recv_start(coro_socket_t *s) {
-  return turbo_tcp_read_start(s->handle.tcp);
+  return turbo_stream_recv_start(s->handle.stream, on_tcp_recv);
 }
 
 static void tcp_recv_stop(coro_socket_t *s) {
-  turbo_tcp_read_stop(s->handle.tcp);
+  turbo_stream_recv_stop(s->handle.stream);
 }
 
-/* ── TCP Close ────────────────────────────────────────────── */
+/* ── Close ────────────────────────────────────────────────── */
 
 static void tcp_close(coro_socket_t *s) {
-  turbo_tcp_client_t *tcp = s->handle.tcp;
-  if (!tcp || !s->owns_handle) return;
-  
-  s->handle.tcp = NULL; /* Atomic clear to prevent double-close */
-  
-  if (!tcp->closing) {
-    /* Initiate asynchronous close. 
-       Reference counting (retain_client) ensures 's' stays alive until on_tcp_coro_close. */
-    retain_client(s);
-    tcp->on_close = on_tcp_coro_close;
-    turbo_tcp_client_close(tcp);
+  /* Listener close */
+  if (s->native_tcp_state) {
+    tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
+    if (ls->listener) turbo_stream_listener_close(ls->listener);
+    tcp_accept_node_t *n = ls->head;
+    while (n) {
+      tcp_accept_node_t *nx = n->next;
+      turbo_stream_destroy(n->stream);
+      free(n);
+      n = nx;
+    }
+    free(ls);
+    s->native_tcp_state = NULL;
   }
+
+  /* Client stream close */
+  turbo_stream_t *stream = s->handle.stream;
+  if (!stream || !s->owns_handle) return;
+  s->handle.stream = NULL;
+  retain_client(s);
+  stream->on_close = on_tcp_close;
+  turbo_stream_close(stream);
 }
 
-/* ── TCP Get Local Address ────────────────────────────────── */
+/* ── Address query ────────────────────────────────────────── */
 
 static int tcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
-  int len = sizeof(struct sockaddr_storage);
-  return uv_tcp_getsockname(
-      &s->handle.tcp->handle, 
-      (struct sockaddr *)addr, 
-      &len
-  );
+  if (s->handle.stream)
+    return turbo_stream_get_local_addr(s->handle.stream, addr);
+
+  /* Listener case */
+  if (s->native_tcp_state) {
+    tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
+    if (ls->listener) {
+      /* Bind address is stored after the struct */
+      const struct sockaddr *bind_addr =
+          (const struct sockaddr *)((char *)ls +
+                                    sizeof(tcp_listener_state_t));
+      size_t len = (bind_addr->sa_family == AF_INET6)
+                       ? sizeof(struct sockaddr_in6)
+                       : sizeof(struct sockaddr_in);
+      memset(addr, 0, sizeof(*addr));
+      memcpy(addr, bind_addr, len);
+      return 0;
+    }
+  }
+
+  return TURBO_ENOTSUP;
 }
 
-/* ── TCP Transport Ops ────────────────────────────────────── */
+/* ── Ops table ────────────────────────────────────────────── */
 
 const coro_transport_ops_t transport_ops_tcp = {
     .connect = tcp_connect,
@@ -234,5 +313,6 @@ const coro_transport_ops_t transport_ops_tcp = {
     .recv_start = tcp_recv_start,
     .recv_stop = tcp_recv_stop,
     .get_local_addr = tcp_get_local_addr,
-    .close = tcp_close
-};
+    .close = tcp_close,
+    .get_send_buffer = tcp_get_send_buffer,
+    .send_buffer = tcp_send_buffer};

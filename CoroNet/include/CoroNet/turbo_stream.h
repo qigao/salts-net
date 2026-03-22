@@ -1,0 +1,198 @@
+/**
+ * @file turbo_stream.h
+ * @brief Unified stream transport (TCP + Pipe) with backend vtable dispatch.
+ *
+ * turbo_stream_t is the foundational byte-stream layer. It abstracts TCP4,
+ * TCP6, and named pipes behind a single API. TLS, WebSocket, and the coro
+ * layer compose on top of this — they never touch raw sockets.
+ *
+ * Backend selection (IOCP / epoll / kqueue) is resolved once at create time
+ * and stored in the struct. Every subsequent call is a direct function-pointer
+ * dispatch with zero branching overhead.
+ */
+
+#ifndef TURBO_STREAM_H
+#define TURBO_STREAM_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "platform.h"
+#include "turbo_callbacks.h"
+#include "turbo_buffer.h"
+#include "turbo_iovec.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ── Opaque types ─────────────────────────────────────────── */
+
+typedef struct turbo_stream_s turbo_stream_t;
+typedef struct turbo_stream_listener_s turbo_stream_listener_t;
+typedef struct coro_context_s coro_context_t;
+
+/* ── Stream kind ──────────────────────────────────────────── */
+
+typedef enum turbo_stream_kind_e {
+  TURBO_STREAM_TCP4 = 0,
+  TURBO_STREAM_TCP6 = 1,
+  TURBO_STREAM_PIPE = 2,
+  TURBO_STREAM_WS   = 3,  /**< WebSocket over TCP (client, Phase 1) */
+  TURBO_STREAM_WSS  = 4,  /**< WebSocket over TLS (Phase 2) */
+  TURBO_STREAM_TLS  = 5,  /**< Native TLS over TCP */
+} turbo_stream_kind_t;
+
+/* ── Write completion callback ────────────────────────────── */
+
+typedef void (*turbo_stream_write_cb)(turbo_stream_t *s, int status);
+
+/* ── Client lifecycle ─────────────────────────────────────── */
+
+/**
+ * @brief Create a new stream handle.
+ * @param ctx  Event-loop context (owns the loop).
+ * @param kind TCP4, TCP6, or PIPE.
+ * @return Heap-allocated stream, or NULL on failure.
+ */
+CXX_C_API turbo_stream_t *turbo_stream_create(coro_context_t *ctx,
+                                               turbo_stream_kind_t kind);
+
+/**
+ * @brief Destroy a stream and release all resources.
+ *
+ * If the stream is still connected, it is closed first. The caller must not
+ * reference the pointer after this call.
+ */
+CXX_C_API void turbo_stream_destroy(turbo_stream_t *s);
+
+/* ── Connection ───────────────────────────────────────────── */
+
+/**
+ * @brief Connect to a remote host by name (DNS resolved internally).
+ */
+CXX_C_API int turbo_stream_connect(turbo_stream_t *s, const char *host,
+                                    unsigned short port,
+                                    turbo_connect_cb on_connect,
+                                    turbo_close_cb on_close);
+
+/**
+ * @brief Connect to a pre-resolved sockaddr.
+ */
+CXX_C_API int turbo_stream_connect_addr(turbo_stream_t *s,
+                                         const struct sockaddr *addr,
+                                         turbo_connect_cb on_connect,
+                                         turbo_close_cb on_close);
+
+/**
+ * @brief Connect to a named pipe.
+ */
+CXX_C_API int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
+                                         turbo_connect_cb on_connect,
+                                         turbo_close_cb on_close);
+
+/* ── Send ─────────────────────────────────────────────────── */
+
+/**
+ * @brief Copy-based send. Data is copied into an arena buffer and queued.
+ */
+CXX_C_API int turbo_stream_send(turbo_stream_t *s, const char *data,
+                                 size_t len);
+
+/**
+ * @brief Get a zero-copy send buffer from the arena.
+ *
+ * Caller writes directly into buf->data, then calls turbo_stream_send_buffer.
+ */
+CXX_C_API mem_buffer_t *turbo_stream_get_send_buffer(turbo_stream_t *s,
+                                                      size_t min_size);
+
+/**
+ * @brief Enqueue a pre-filled buffer for sending.
+ *
+ * The stream takes a ref; caller should mem_unref after this call.
+ */
+CXX_C_API int turbo_stream_send_buffer(turbo_stream_t *s, mem_buffer_t *buf,
+                                        size_t len);
+
+/**
+ * @brief Flush the send queue to the wire.
+ */
+CXX_C_API int turbo_stream_flush(turbo_stream_t *s);
+
+/* ── Receive ──────────────────────────────────────────────── */
+
+/**
+ * @brief Start receiving data. Callback fires on each chunk.
+ */
+CXX_C_API int turbo_stream_recv_start(turbo_stream_t *s,
+                                       turbo_recv_cb on_recv);
+
+/**
+ * @brief Stop receiving data.
+ */
+CXX_C_API void turbo_stream_recv_stop(turbo_stream_t *s);
+
+/* ── Close ────────────────────────────────────────────────── */
+
+/**
+ * @brief Initiate graceful close. on_close fires when complete.
+ */
+CXX_C_API void turbo_stream_close(turbo_stream_t *s);
+
+/* ── Listener ─────────────────────────────────────────────── */
+
+/**
+ * @brief Create a TCP listener bound to addr.
+ */
+CXX_C_API turbo_stream_listener_t *turbo_stream_listen(
+    coro_context_t *ctx, turbo_stream_kind_t kind,
+    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept);
+
+/**
+ * @brief Create a named-pipe listener.
+ */
+CXX_C_API turbo_stream_listener_t *turbo_stream_listen_pipe(
+    coro_context_t *ctx, const char *name, int backlog,
+    turbo_accept_cb on_accept);
+
+/**
+ * @brief Close a listener and stop accepting.
+ */
+CXX_C_API void turbo_stream_listener_close(turbo_stream_listener_t *l);
+CXX_C_API void turbo_stream_listener_set_user_data(turbo_stream_listener_t *l, void *data);
+CXX_C_API void *turbo_stream_listener_get_user_data(turbo_stream_listener_t *l);
+
+/* ── Query ────────────────────────────────────────────────── */
+
+CXX_C_API int turbo_stream_get_local_addr(turbo_stream_t *s,
+                                           struct sockaddr_storage *addr);
+CXX_C_API int turbo_stream_get_peer_addr(turbo_stream_t *s,
+                                          struct sockaddr_storage *addr);
+CXX_C_API void turbo_stream_set_user_data(turbo_stream_t *s, void *data);
+CXX_C_API void *turbo_stream_get_user_data(turbo_stream_t *s);
+CXX_C_API void turbo_stream_set_write_cb(turbo_stream_t *s,
+                                          turbo_stream_write_cb cb);
+
+/* ── Convenience macros ───────────────────────────────────── */
+
+CXX_C_API void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
+CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host);
+
+#define TURBO_STREAM_ZERO_COPY_SEND(stream, data_size, write_code)             \
+  do {                                                                         \
+    mem_buffer_t *_buf = turbo_stream_get_send_buffer(stream, data_size);      \
+    if (_buf) {                                                                \
+      char *_ptr = _buf->data;                                                 \
+      write_code;                                                              \
+      mem_set_used(_buf, data_size);                                           \
+      turbo_stream_send_buffer(stream, _buf, data_size);                       \
+      mem_unref(_buf);                                                         \
+    }                                                                          \
+  } while (0)
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* TURBO_STREAM_H */

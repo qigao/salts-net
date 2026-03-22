@@ -20,27 +20,35 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
-#include <uv.h>
+#include <string.h> 
 
 // =============================================================================
 // Transport Dependencies
 // =============================================================================
 
 #include "turbo_buffer.h"
-#include "turbo_dns.h"
-#include "turbo_kcp.h"
-#include "turbo_pipe.h"
-#include "turbo_tcp.h"
-#include "turbo_tls.h"
-#include "turbo_udp.h"
-#include "turbo_url.h"
+#include "turbo_dns.h" 
+#include "turbo_stream.h"
+#include "turbo_datagram.h" 
 #include "turbo_websocket_client.h"
 #include "turbo_websocket_server.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ── Transport type enum (was in turbo_url.h, now lives here) ── */
+
+typedef enum turbo_transport_e {
+  TURBO_TCP       = 0,
+  TURBO_TLS       = 1,
+  TURBO_KCP       = 2,
+  TURBO_UDP       = 3,
+  TURBO_PIPE      = 4,
+  TURBO_QUIC      = 5,
+  TURBO_WEBSOCKET = 6,
+  TURBO_TRANSPORT_MAX
+} turbo_transport_t;
 
 /**
  * @def ASSERT_IN_CORO
@@ -69,6 +77,7 @@ extern "C" {
 typedef struct {
   uint32_t magic;
   size_t size;
+  mem_buffer_t *owner;
 } coro_recv_header_t;
 
 /** @brief Handler for receiving data from transport. */
@@ -89,11 +98,10 @@ typedef struct {
 
 /** @brief Internal layout of the opaque event-loop context. */
 struct coro_context_s {
-  uv_loop_t *loop; /**< libuv event loop */
-  int owns_loop;   /**< 1 = we allocated it, 0 = external */
+  turbo_loop_t *loop; /**< Native event loop (IOCP/epoll/kqueue) */
+  int owns_loop;      /**< 1 = we allocated it, 0 = external */
 
   /* Thread-safe post queue */
-  uv_async_t post_async;           /**< Async handle to wake the loop */
   int post_initialized;            /**< 1 = post queue is initialized */
   coro_post_slot_t *post_ring;     /**< Ring buffer for posted tasks */
   int post_ring_size;              /**< Size of ring buffer (power of 2) */
@@ -117,14 +125,21 @@ struct coro_context_s {
   /* Coroutine object pool handle */
   struct coro_object_pool_s *pool;
 
-  /** 1 = loop stays alive even when idle (uv_ref on post_async) */
+  /** 1 = loop stays alive even when idle (turbo_loop_ref) */
   int persistent;
+  int native_keepalive_refs;
 
   /** Internal memory arena for small, frequent allocations */
   mem_pool_t *arena;
   
   /** 1 = we allocated arena, 0 = external (for backward compatibility) */
   int owns_arena;
+
+  /** Preferred TCP backend for future sockets created by this context */
+  turbo_tcp_backend_t tcp_backend;
+
+  /** Preferred UDP backend for future sockets created by this context */
+  turbo_udp_backend_t udp_backend;
 };
 typedef struct coro_transport_ops_s coro_transport_ops_t;
 
@@ -146,9 +161,13 @@ struct coro_transport_ops_s {
 };
 
 /** @brief Internal layout of the opaque coroutine client. */
+typedef struct turbo_tls_context_s turbo_tls_context_t;
+typedef struct turbo_udp_s turbo_udp_t;
+typedef struct turbo_tls_client_s turbo_tls_client_t;
+
 struct coro_socket_s {
   /* ── Core ──────────────────────────────────────────────── */
-  uv_loop_t *loop;                 /**< Borrowed pointer to the event loop */
+  turbo_loop_t *loop;                /**< Borrowed pointer to the event loop */
   coro_context_t *ctx;             /**< Owning context */
   turbo_transport_t transport;     /**< Active transport enum (TCP/TLS/KCP/UDP/WS) */
   const coro_transport_ops_t *ops; /**< Vtable for the active transport */
@@ -156,27 +175,17 @@ struct coro_socket_s {
 
   /* ── Transport handles (only one active at a time) ───── */
   union {
-    turbo_tcp_client_t *tcp;
-    turbo_pipe_client_t *pipe;
-    turbo_kcp_client_t *kcp;
-    turbo_kcp_server_t *kcp_server;
-    turbo_udp_t *udp;
+    turbo_stream_t *stream;        /**< TCP + Pipe (turbo_stream_t) */
+    turbo_datagram_t *datagram;    /**< UDP (turbo_datagram_t) */
+    struct turbo_kcp_s *kcp;       /**< KCP (reliable UDP) */
   } handle;
-  turbo_tls_client_t *tls;     /**< TLS wrapper (heap-allocated) */
-  turbo_tls_context_t tls_ctx; /**< TLS context (certs, etc.) */
-  turbo_udp_t udp;             /**< Inline UDP server instance (used for CORO_SOCKET_UDP) */
-
-  /* ── WebSocket ─────────────────────────────────────────── */
-  turbo_websocket_client_t *ws;          /**< WS client (manages own TCP/TLS) */
-  turbo_websocket_connection_t *ws_conn; /**< Current WS connection */
-  int ws_is_tls;                         /**< 1 = wss://, 0 = ws:// */
-  char ws_path[1024];                    /**< WS path extracted from URL */
+  void *native_tcp_state;         /**< Listener state (tcp_listener_state_t / pipe path) */
 
   /* ── Server fields (for listening sockets) ────────────── */
   coro_socket_t *listener;                           /**< Listening socket (server mode) */
-  turbo_websocket_server_t *ws_server;               /**< WS server handle */
   void (*handler)(coro_socket_t *client, void *arg); /**< Connection handler */
   void *handler_arg;                                 /**< Handler argument */
+  int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
 
   /* ── Connection state ──────────────────────────────────── */
   int connected;      /**< 1 = transport is connected */
@@ -206,14 +215,14 @@ struct coro_socket_s {
   int dns_initialized;          /**< 1 = DNS resolver is ready */
 
   /* ── Timeout ───────────────────────────────────────────── */
-  uv_timer_t timer;    /**< Timeout timer handle */
-  uint64_t timeout_ms; /**< Timeout duration (0 = no timeout) */
-  int timed_out;       /**< 1 = last op timed out */
+  turbo_timer_t *timer;  /**< Timeout timer handle */
+  uint64_t timeout_ms;   /**< Timeout duration (0 = no timeout) */
+  int timed_out;         /**< 1 = last op timed out */
 
   /* ── Lifecycle ─────────────────────────────────────────── */
   int ref_count;         /**< Reference count for safe destruction */
   int owns_handle;       /**< 1 = we allocated the transport handle, 0 = borrowed */
-  int accept_pending;    /**< 1 = uv_listen callback fired but no one was waiting */
+  int accept_pending;    /**< 1 = a native accept event arrived before a waiter */
   coro_t *co_write_wait; /**< Coroutine waiting for write completion */
   int write_status;      /**< Status of the last write operation */
 
@@ -256,7 +265,7 @@ static inline void coro_set_wait(coro_socket_t *client) {
 static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *slice) {
   if (!slice) {
     /* Explicit EOF Case: Always set status to notify consumer after buffer is drained */
-    client->status = UV_EOF;
+    client->status = TURBO_EOF;
     client->connected = 0;
     return;
   }
@@ -274,13 +283,15 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
 
       char *merged_base;
       int is_pooled = 0;
+      mem_buffer_t *owner = NULL;
 
       if (ctx) {
         /* Use pooled buffer for efficient recycling */
         mem_buffer_t *buf = mem_get_buffer(ctx->arena, total_required);
         if (buf) {
-          merged_base = (char *)buf;
+          merged_base = buf->data;
           is_pooled = 1;
+          owner = buf;
         } else {
           merged_base = NULL;
         }
@@ -292,6 +303,7 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
         hdr = (coro_recv_header_t *)merged_base;
         hdr->magic = is_pooled ? CORO_RECV_MAGIC_POOLED : 0;
         hdr->size = total_len;
+        hdr->owner = owner;
 
         char *data_ptr = merged_base + sizeof(coro_recv_header_t);
         memcpy(data_ptr, client->recv_data, old_len);
@@ -304,7 +316,7 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
         client->recv_data = data_ptr;
         client->recv_len = total_len;
       } else {
-        client->status = UV_ENOMEM;
+        client->status = TURBO_ENOMEM;
       }
       return;
     }
@@ -312,12 +324,14 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
     /* Single Case */
     char *base;
     int is_pooled = 0;
+    mem_buffer_t *owner = NULL;
 
     if (ctx) {
       mem_buffer_t *buf = mem_get_buffer(ctx->arena, required);
       if (buf) {
-        base = (char *)buf;
+        base = buf->data;
         is_pooled = 1;
+        owner = buf;
       } else {
         base = NULL;
       }
@@ -329,6 +343,7 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
       hdr = (coro_recv_header_t *)base;
       hdr->magic = is_pooled ? CORO_RECV_MAGIC_POOLED : 0;
       hdr->size = slice->length;
+      hdr->owner = owner;
 
       char *data_ptr = base + sizeof(coro_recv_header_t);
       memcpy(data_ptr, slice->data, slice->length);
@@ -337,7 +352,7 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
       client->recv_len = slice->length;
       client->status = 0;
     } else {
-      client->status = UV_ENOMEM;
+      client->status = TURBO_ENOMEM;
     }
   }
 }
@@ -407,6 +422,12 @@ extern const coro_transport_ops_t *transport_ops_table[];
 extern const coro_transport_ops_t ws_server_ops;
 
 /**
+ * @brief Client-side UDP ops.
+ * @note Defined in turbo_coro_socket_udp.c, used by coro_socket_create/connect.
+ */
+extern const coro_transport_ops_t udp_client_ops;
+
+/**
  * @brief Server-side UDP ops.
  * @note Defined in coro_client.c, used by coro_server.c.
  */
@@ -429,6 +450,15 @@ CXX_C_API void coro_client_wake_eof(coro_socket_t *client);
  */
 void retain_client(coro_socket_t *client);
 void release_client(coro_socket_t *client);
+
+/**
+ * @brief Allocate a bare coroutine socket shell with no transport handle.
+ *
+ * Used for server-side wrappers where the real transport object is supplied by
+ * another subsystem (WebSocket connection, KCP peer, UDP datagram pseudo-client).
+ */
+coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t transport,
+                                        const coro_transport_ops_t *ops);
 
 #ifdef __cplusplus
 }

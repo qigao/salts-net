@@ -88,7 +88,7 @@ static void server_client_task(coro_t *co, void *arg) {
     coro_socket_t *server = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
     if (!server) return;
 
-    int r = coro_socket_listen_url(server, "tcp://127.0.0.1:19999", echo_handler, NULL);
+    int r = coro_socket_listen_on(server, "127.0.0.1", 19999, echo_handler, NULL);
     if (r != 0) {
         coro_socket_destroy(server);
         return;
@@ -105,7 +105,7 @@ static void server_client_task(coro_t *co, void *arg) {
     }
 
     coro_socket_set_timeout(client, 5000);
-    r = coro_socket_connect(client, "tcp://127.0.0.1:19999");
+    r = coro_socket_connect(client, "127.0.0.1", 19999);
     if (r == 0) {
         const char *msg = "hello";
         coro_socket_send(client, msg, 5);

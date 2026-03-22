@@ -51,11 +51,14 @@ CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
  *
  * Must be called from a coroutine (connect suspends).
  *
- * @param pool  Pool handle
- * @param url   Endpoint URL (e.g. "tcp://host:port", "tls://host:port")
+ * @param pool         Pool handle
+ * @param host         Remote host address
+ * @param port         Remote port
+ * @param socket_type  Socket type (CORO_SOCKET_TCP_V4, etc.)
  * @return 0 on success, negative TURBO_* error code on failure
  */
-CXX_C_API int coro_pool_open(coro_pool_t *pool, const char *url);
+CXX_C_API int coro_pool_open(coro_pool_t *pool, const char *host, int port,
+                              coro_socket_type_t socket_type);
 
 /**
  * @brief Close all connections and reject future borrows.

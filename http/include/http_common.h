@@ -154,6 +154,30 @@ CXX_C_API void http_params_add(http_params_t *params, const char *key, const cha
 CXX_C_API char *http_params_encode(http_params_t *params);
 CXX_C_API void http_params_free(http_params_t *params);
 
+/* ── URL codec ───────────────────────────────────────────────────── */
+
+/**
+ * @brief URL-encode a string per RFC 3986.
+ *
+ * Unreserved characters (A-Z a-z 0-9 - _ . ~) pass through unchanged.
+ * Spaces become '+'. All other bytes become %XX hex sequences.
+ *
+ * @param str Input string (NUL-terminated)
+ * @return Newly allocated encoded string — caller must free(). NULL on OOM.
+ */
+CXX_C_API char *turbo_url_encode(const char *str);
+
+/**
+ * @brief URL-decode a string per RFC 3986.
+ *
+ * %XX sequences are decoded to their byte values. '+' becomes space.
+ * Invalid %XX sequences are passed through verbatim.
+ *
+ * @param str Input string (NUL-terminated)
+ * @return Newly allocated decoded string — caller must free(). NULL on OOM.
+ */
+CXX_C_API char *turbo_url_decode(const char *str);
+
 /* ── URL building ────────────────────────────────────────────────── */
 
 CXX_C_API char *http_build_url(const char *base_url, http_params_t *query_params);

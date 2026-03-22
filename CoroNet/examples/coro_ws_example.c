@@ -21,7 +21,7 @@ static void ws_task(coro_t* co, void* arg) {
     coro_socket_set_timeout(client, 15000);
 
     printf("[Coro] Connecting to ws://websockets.chilkat.io ...\n");
-    int r = coro_socket_connect(client, "ws://websockets.chilkat.io/wsChilkatEcho.ashx");
+    int r = coro_socket_connect_ws(client, "websockets.chilkat.io", 80, "/wsChilkatEcho.ashx", 0);
 
     if (r != 0) {
         printf("[Coro] Connection failed: (code %d) %s\n", r, turbo_strerror(r));

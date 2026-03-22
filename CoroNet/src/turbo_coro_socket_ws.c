@@ -48,7 +48,7 @@ static void on_ws_client_close(void *handle) {
   s->connected = 0;
   if (s->co_wait) {
     stop_timeout_timer(s);
-    s->status = (s->status == 0) ? UV_EOF : s->status;
+    s->status = (s->status == 0) ? TURBO_EOF : s->status;
     coro_resume_waiter(s);
   }
 }
@@ -61,7 +61,7 @@ static int ws_client_connect(coro_socket_t *s, const char *host, int port) {
     config.host = host;
     
     s->ws = turbo_websocket_client_create(s->loop, s->ws_is_tls, &config);
-    if (!s->ws) return UV_ENOMEM;
+    if (!s->ws) return TURBO_ENOMEM;
     
     s->ws->user_data = s;
     turbo_websocket_client_set_callbacks(
@@ -87,7 +87,7 @@ static int ws_client_connect(coro_socket_t *s, const char *host, int port) {
 }
 
 static int ws_client_send(coro_socket_t *s, const char *data, size_t len) {
-  if (!s->ws || s->ws->state != TURBO_WS_STATE_OPEN) return UV_ENOTCONN;
+  if (!s->ws || s->ws->state != TURBO_WS_STATE_OPEN) return TURBO_ENOTCONN;
   return turbo_websocket_client_send(s->ws, data, len);
 }
 
@@ -124,7 +124,7 @@ const coro_transport_ops_t transport_ops_ws = {
  * ══════════════════════════════════════════════════════════ */
 
 static int ws_server_send(coro_socket_t *s, const char *data, size_t len) {
-  if (!s->ws_conn) return UV_ENOTCONN;
+  if (!s->ws_conn) return TURBO_ENOTCONN;
   return turbo_websocket_server_send(s->ws_conn, data, len);
 }
 

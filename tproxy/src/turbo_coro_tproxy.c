@@ -3,7 +3,6 @@
 #include <CoroNet.h>
 #include "turbo_coro.h"
 #include "turbo_coro_internal.h"
-#include "turbo_url.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -711,16 +710,18 @@ coro_tproxy_t* coro_tproxy_start(
             char *dash = strchr(token, '-');
             if (dash) {
                 // It's a range like "tcp://0.0.0.0:8000-9000"
-                // We need to parse out the base URL (up to the colon before the port)
-                // and the two ports.
+                // We need to parse out the host and the two ports.
                 *dash = '\0';
                 char *last_colon = strrchr(token, ':');
-                
+
                 if (last_colon) {
                     int start_port = atoi(last_colon + 1);
                     int end_port = atoi(dash + 1);
-                    
+
                     *last_colon = '\0'; // Now `token` is "tcp://0.0.0.0"
+                    // Skip scheme prefix to get host
+                    char *host = strstr(token, "://");
+                    host = host ? host + 3 : token;
 
                     for (int port = start_port; port <= end_port; port++) {
                         if (proxy->server_count >= capacity) {
@@ -728,22 +729,34 @@ coro_tproxy_t* coro_tproxy_start(
                             proxy->servers = (coro_socket_t **)realloc(proxy->servers, capacity * sizeof(coro_socket_t *));
                         }
                         proxy->servers[proxy->server_count] = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-                        char build_url[256];
-                        snprintf(build_url, sizeof(build_url), "%s:%d", token, port);
-                        if (coro_socket_listen_url(proxy->servers[proxy->server_count], build_url, on_proxy_connection, proxy) != 0) {
+                        if (coro_socket_listen_on(proxy->servers[proxy->server_count], host, port, on_proxy_connection, proxy) != 0) {
                             // Stop parsing on failure, allow later cleanup to destroy the ones we successfully created
                         }
                         proxy->server_count++;
                     }
                 }
             } else {
-                // Standard single URL
+                // Standard single "tcp://host:port"
                 if (proxy->server_count >= capacity) {
                     capacity *= 2;
                     proxy->servers = (coro_socket_t **)realloc(proxy->servers, capacity * sizeof(coro_socket_t *));
                 }
+                // Parse host:port from URL
+                char *host = strstr(token, "://");
+                host = host ? host + 3 : token;
+                int port = 0;
+                char *port_sep = strrchr(host, ':');
+                char host_buf[256];
+                if (port_sep) {
+                    port = atoi(port_sep + 1);
+                    size_t hlen = (size_t)(port_sep - host);
+                    if (hlen >= sizeof(host_buf)) hlen = sizeof(host_buf) - 1;
+                    memcpy(host_buf, host, hlen);
+                    host_buf[hlen] = '\0';
+                    host = host_buf;
+                }
                 proxy->servers[proxy->server_count] = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-                if (coro_socket_listen_url(proxy->servers[proxy->server_count], token, on_proxy_connection, proxy) != 0) {
+                if (coro_socket_listen_on(proxy->servers[proxy->server_count], host, port, on_proxy_connection, proxy) != 0) {
                     // Ignore individual bind failures, continue
                 }
                 proxy->server_count++;

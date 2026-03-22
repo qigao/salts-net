@@ -28,12 +28,21 @@ typedef enum {
  */
 typedef enum {
   WEBSOCKET_HANDSHAKE_TOKEN_REQUEST_LINE,
+  WEBSOCKET_HANDSHAKE_TOKEN_RESPONSE_LINE,
   WEBSOCKET_HANDSHAKE_TOKEN_HEADER,
   WEBSOCKET_HANDSHAKE_TOKEN_BODY,
   WEBSOCKET_HANDSHAKE_TOKEN_END,
   WEBSOCKET_HANDSHAKE_TOKEN_ERROR,
   WEBSOCKET_HANDSHAKE_TOKEN_NEED_MORE
 } websocket_handshake_token_type_t;
+
+/**
+ * @brief WebSocket handshake parser modes
+ */
+typedef enum {
+  WEBSOCKET_HANDSHAKE_MODE_REQUEST,
+  WEBSOCKET_HANDSHAKE_MODE_RESPONSE
+} websocket_handshake_mode_t;
 
 /**
  * @brief WebSocket handshake token value union
@@ -47,6 +56,14 @@ typedef union {
     const char *version;
     size_t version_len;
   } request_line;
+
+  struct {
+    int status_code;
+    const char *status_text;
+    size_t status_text_len;
+    const char *version;
+    size_t version_len;
+  } response_line;
 
   struct {
     const char *name;
@@ -71,6 +88,7 @@ typedef struct {
   const char *start;
 
   websocket_handshake_state_t state;
+  websocket_handshake_mode_t mode;
 
   // Parsed data
   const char *method_start;
@@ -79,6 +97,11 @@ typedef struct {
   size_t path_len;
   const char *version_start;
   size_t version_len;
+
+  // Response specific
+  int status_code;
+  const char *status_text_start;
+  size_t status_text_len;
 
   // Current header being parsed
   const char *header_name_start;
@@ -90,6 +113,7 @@ typedef struct {
   char *ws_key;           // Sec-WebSocket-Key
   char *ws_version;       // Sec-WebSocket-Version
   char *ws_protocol;      // Sec-WebSocket-Protocol (optional)
+  char *ws_accept;        // Sec-WebSocket-Accept (for response)
   char *upgrade;          // Upgrade header
   char *connection;       // Connection header
 
@@ -102,10 +126,12 @@ typedef struct {
 /**
  * @brief Initialize WebSocket handshake parser
  * @param parser Parser to initialize
- * @param data Data buffer to parse
- * @param len Length of data buffer
+ * @param mode   Parser mode (Request or Response)
+ * @param data   Data buffer to parse
+ * @param len    Length of data buffer
  */
 void websocket_handshake_parser_init(websocket_handshake_parser_t *parser,
+                                   websocket_handshake_mode_t mode,
                                    const char *data, size_t len);
 
 /**

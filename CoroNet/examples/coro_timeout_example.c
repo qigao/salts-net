@@ -29,7 +29,7 @@ static void timeout_task(coro_t* co, void* arg) {
     printf("[Coro] Setting timeout to 500ms. Target is 10.255.255.1\n");
     coro_socket_set_timeout(client, 500);
 
-    int r = coro_socket_connect(client, "tcp://10.255.255.1:80");
+    int r = coro_socket_connect(client, "10.255.255.1", 80);
 
     if (r == TURBO_ETIMEDOUT) {
         printf("[Coro] SUCCESS: Connection timed out as expected (code: %d)\n", r);
@@ -47,7 +47,7 @@ static void timeout_task(coro_t* co, void* arg) {
     coro_socket_set_timeout(client, 5000);
 
     printf("[Coro] Connecting to localhost:999 (should be refused)...\n");
-    r = coro_socket_connect(client, "tcp://127.0.0.1:999");
+    r = coro_socket_connect(client, "127.0.0.1", 999);
 
     if (r == TURBO_ECONNREFUSED) {
         printf("[Coro] SUCCESS: Connection refused as expected (code: %d)\n", r);

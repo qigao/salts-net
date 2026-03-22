@@ -14,14 +14,14 @@ static void tls_task(coro_t* co, void* arg) {
     coro_context_t* ctx = (coro_context_t*)arg;
 
     printf("[Coro] Creating TLS client...\n");
-    coro_socket_t* client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+    coro_socket_t* client = coro_socket_create(ctx, CORO_SOCKET_TLS_V4);
 
     // Set a 15-second timeout for the whole sequence
     coro_socket_set_timeout(client, 15000);
 
     printf("[Coro] Connecting to www.google.com:443 (TLS + DNS)...\n");
     // Now we can use hostnames!
-    int r = coro_socket_connect(client, "tls://www.google.com:443");
+    int r = coro_socket_connect(client, "www.google.com", 443);
 
     if (r == 0) {
         printf("[Coro] SUCCESS: Connected to google via TLS!\n");

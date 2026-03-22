@@ -4,7 +4,7 @@
 #include <string.h>
 
 #define KCP_PORT 9200
-#define KCP_URL "kcp://127.0.0.1:9200"
+#define KCP_HOST "127.0.0.1"
 
 /* ── Server handler: echo back whatever we receive ────────── */
 
@@ -36,11 +36,11 @@ static void kcp_client_task(coro_t* co, void* arg) {
     (void)co;
     coro_context_t* ctx = (coro_context_t*)arg;
 
-    printf("[Client] Connecting to %s...\n", KCP_URL);
+    printf("[Client] Connecting to %s:%d...\n", KCP_HOST, KCP_PORT);
     coro_socket_t* client = coro_socket_create_kcp(ctx);
     coro_socket_set_timeout(client, 5000);
 
-    int r = coro_socket_connect(client, KCP_URL);
+    int r = coro_socket_connect(client, KCP_HOST, KCP_PORT);
     if (r != 0) {
         printf("[Client] Connect failed: %s\n", turbo_strerror(r));
         coro_socket_destroy(client);
@@ -78,13 +78,13 @@ static void launcher_task(coro_t* co, void* arg) {
 
     /* Start server */
     coro_socket_t* server = coro_socket_create_kcp(ctx);
-    int r = coro_socket_listen_url(server, KCP_URL, kcp_echo_handler, NULL);
+    int r = coro_socket_listen_on(server, KCP_HOST, KCP_PORT, kcp_echo_handler, NULL);
     if (r != 0) {
         printf("[Launcher] Server listen failed: %s\n", turbo_strerror(r));
         coro_socket_destroy(server);
         return;
     }
-    printf("[Launcher] KCP server listening on %s\n", KCP_URL);
+    printf("[Launcher] KCP server listening on %s:%d\n", KCP_HOST, KCP_PORT);
 
     /* Give server a moment to be ready */
     coro_sleep(ctx, 100);

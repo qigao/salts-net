@@ -18,7 +18,8 @@
 #include <sched.h>
 #endif
 
-#define BENCH_URL "tcp://127.0.0.1:18951"
+#define BENCH_HOST "127.0.0.1"
+#define BENCH_PORT 18951
 /* Reduced to 10k to fit in memory with ASan overhead */
 #define TOTAL_TASKS 10000
 
@@ -84,7 +85,7 @@ static void conn_bench_task(coro_t *co, void *arg) {
 
 static void open_pool_task(coro_t *co, void *arg) {
     (void)co;
-    coro_pool_open((coro_pool_t*)arg, BENCH_URL);
+    coro_pool_open((coro_pool_t*)arg, BENCH_HOST, BENCH_PORT, CORO_SOCKET_TCP_V4);
 }
 
 /* ── Benchmarks ─────────────────────────────────────────────── */
@@ -151,7 +152,7 @@ spec("coro_pools_bench") {
         coro_context_t *ctx = coro_context_create(NULL);
         coro_socket_t *server = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
         /* Use a flag to ensure the server is ready before starting the pool */
-        coro_socket_listen_url(server, BENCH_URL, bench_server_handler, NULL);
+        coro_socket_listen_on(server, BENCH_HOST, BENCH_PORT, bench_server_handler, NULL);
         
         coro_pool_config_t pool_cfg = CORO_POOL_CONFIG_DEFAULT;
         pool_cfg.min_size = 16;

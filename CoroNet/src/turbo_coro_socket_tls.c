@@ -6,7 +6,7 @@
 #include "CoroNet/turbo_coro_internal.h"
 #include <stdlib.h>
 #include <string.h>
-
+#include "turbo_error.h"
 /* ── Forward declarations ─────────────────────────────────── */
 static void on_tls_coro_handshake(turbo_tls_client_t *client, int status);
 
@@ -59,8 +59,8 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
     /* In tests we usually don't verify certs for httpbin */
     turbo_tls_context_set_verify_flags(&s->tls_ctx, TURBO_TLS_VERIFY_NONE);
     
-    s->tls = turbo_tls_client_create(s->loop, &s->tls_ctx);
-    if (!s->tls) return UV_ENOMEM;
+    s->tls = turbo_tls_client_create_on_context(s->ctx, &s->tls_ctx);
+    if (!s->tls) return TURBO_ENOMEM;
     s->tls->user_data = s;
   }
   
@@ -94,7 +94,7 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
 
 static int tls_send(coro_socket_t *s, const char *data, size_t len) {
   if (s->status != 0) return s->status;
-  if (!s->tls) return UV_ENOTCONN;
+  if (!s->tls) return TURBO_ENOTCONN;
   
   /* Standard fallback send */
   return turbo_tls_send(s->tls, data, len);
@@ -106,12 +106,12 @@ static mem_buffer_t *tls_get_send_buffer(coro_socket_t *s, size_t min_size) {
 }
 
 static int tls_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
-  if (!s->tls) return UV_ENOTCONN;
+  if (!s->tls) return TURBO_ENOTCONN;
   return turbo_tls_send_buffer(s->tls, buffer, len);
 }
 
 static int tls_recv_start(coro_socket_t *s) {
-  if (!s->tls) return UV_ENOTCONN;
+  if (!s->tls) return TURBO_ENOTCONN;
   return turbo_tls_read_start(s->tls, NULL, on_tls_coro_recv);
 }
 

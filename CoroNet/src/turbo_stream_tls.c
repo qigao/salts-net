@@ -135,7 +135,10 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 /* ── Initialization ───────────────────────────────────────── */
 
 static SSL_CTX *get_default_tls_ctx(void) {
-  if (s_default_ctx) return s_default_ctx;
+  if (s_default_ctx) {
+    configure_ca_from_env();
+    return s_default_ctx;
+  }
   /* Auto-init for older OpenSSL just in case, modern ignores it */
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
   SSL_library_init();

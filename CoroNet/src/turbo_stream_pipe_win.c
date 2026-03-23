@@ -39,6 +39,9 @@ typedef struct pipe_state_s {
   HANDLE completion_port;
   HANDLE worker_thread;
   volatile LONG stopping;
+  volatile LONG close_requested;
+  volatile LONG close_finalized;
+  volatile LONG pending_posts;
   CRITICAL_SECTION queue_lock;
   int queue_lock_initialized;
   pipe_op_t *completed_head;
@@ -73,6 +76,50 @@ static void pipe_tick(void *arg1, void *arg2);
 static int pipe_submit_read(turbo_stream_t *s);
 static int pipe_submit_write(turbo_stream_t *s);
 
+static void pipe_free_chain(pipe_op_t *chain) {
+  while (chain) {
+    pipe_op_t *next = chain->next;
+    if (chain->buffer) mem_unref(chain->buffer);
+    free(chain);
+    chain = next;
+  }
+}
+
+static void pipe_finalize_close(pipe_state_t *st) {
+  turbo_stream_t *s;
+
+  if (!st) return;
+  if (InterlockedCompareExchange(&st->close_finalized, 1, 0) != 0) return;
+
+  s = st->stream;
+  pipe_free_chain(pipe_queue_pop_all(st));
+
+  if (st->queue_lock_initialized) {
+    DeleteCriticalSection(&st->queue_lock);
+    st->queue_lock_initialized = 0;
+  }
+
+  if (s) {
+    s->backend_data = NULL;
+  }
+
+  free(st);
+
+  if (s) {
+    turbo_stream_finalize_close(s);
+  }
+}
+
+static void pipe_maybe_finalize_close(pipe_state_t *st) {
+  if (!st) return;
+  if (!InterlockedCompareExchange(&st->close_requested, 0, 0) &&
+      !InterlockedCompareExchange(&st->stopping, 0, 0)) {
+    return;
+  }
+  if (InterlockedCompareExchange(&st->pending_posts, 0, 0) != 0) return;
+  pipe_finalize_close(st);
+}
+
 static DWORD WINAPI pipe_worker(LPVOID arg) {
   pipe_state_t *st = (pipe_state_t *)arg;
   DWORD bytes;
@@ -90,7 +137,10 @@ static DWORD WINAPI pipe_worker(LPVOID arg) {
     op->bytes_transferred = bytes;
     op->status = ok ? 0 : -(int)GetLastError();
     pipe_queue_push(st, op);
-    coro_post(st->ctx, pipe_tick, st, NULL);
+    InterlockedIncrement(&st->pending_posts);
+    if (coro_post(st->ctx, pipe_tick, st, NULL) != 0) {
+      InterlockedDecrement(&st->pending_posts);
+    }
   }
   return 0;
 }
@@ -160,6 +210,9 @@ static void pipe_tick(void *arg1, void *arg2) {
     }
     chain = next;
   }
+
+  InterlockedDecrement(&st->pending_posts);
+  pipe_maybe_finalize_close(st);
 }
 
 static int pipe_submit_read(turbo_stream_t *s) {
@@ -327,6 +380,7 @@ static void pw_close(turbo_stream_t *s) {
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
   if (st) {
     InterlockedExchange(&st->stopping, 1);
+    InterlockedExchange(&st->close_requested, 1);
     if (st->pipe_handle != INVALID_HANDLE_VALUE) {
       CancelIo(st->pipe_handle);
       CloseHandle(st->pipe_handle);
@@ -341,15 +395,9 @@ static void pw_close(turbo_stream_t *s) {
       CloseHandle(st->completion_port);
       st->completion_port = NULL;
     }
-    if (st->queue_lock_initialized) {
-      DeleteCriticalSection(&st->queue_lock);
-      st->queue_lock_initialized = 0;
-    }
-    free(st);
-    s->backend_data = NULL;
   }
 
-  turbo_stream_finalize_close(s);
+  pipe_maybe_finalize_close(st);
 }
 
 static int pw_get_local(turbo_stream_t *s, struct sockaddr_storage *a) {
@@ -642,4 +690,3 @@ const turbo_stream_backend_ops_t turbo_stream_pipe_win_ops = {
   .listen        = pw_listen,
   .listener_close = pw_listener_close,
 };
-

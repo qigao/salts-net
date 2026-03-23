@@ -50,6 +50,25 @@ suite("Portfolio Optimization") {
 
       mem_destroy(&arena);
     }
+
+    it("should use population covariance normalization") {
+      double returns[] = {
+        1.0, 3.0,
+        2.0, 4.0
+      };
+      double cov[4];
+      mem_pool_t arena;
+      mem_init(&arena, 1024);
+
+      exprtk_pf_cov_matrix(returns, 2, 2, cov, &arena);
+
+      check_float_eq(cov[0], 1.0, EPSILON);
+      check_float_eq(cov[1], 1.0, EPSILON);
+      check_float_eq(cov[2], 1.0, EPSILON);
+      check_float_eq(cov[3], 1.0, EPSILON);
+
+      mem_destroy(&arena);
+    }
   }
 
   group("Minimum Variance Portfolio") {
@@ -141,10 +160,6 @@ suite("Portfolio Optimization") {
       // Sharpe ratio should be positive
       check(sharpe >= 0.0);
 
-      // Weights should be reasonable (not all in one asset)
-      check(weights[0] >= 0.0 && weights[0] <= 1.0);
-      check(weights[1] >= 0.0 && weights[1] <= 1.0);
-
       mem_destroy(&arena);
     }
 
@@ -167,6 +182,43 @@ suite("Portfolio Optimization") {
 
       // Sharpe should be positive
       check(sharpe >= 0.0);
+
+      mem_destroy(&arena);
+    }
+
+    it("should allow negative weights for the unconstrained tangency portfolio") {
+      double mu[] = {0.10, 0.05};
+      double cov[] = {
+        0.04, 0.03,
+        0.03, 0.04
+      };
+      double weights[2];
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
+
+      exprtk_pf_max_sharpe(mu, cov, 2, 0.02, weights, &arena);
+
+      check_float_eq(weights[0] + weights[1], 1.0, EPSILON);
+      check(weights[0] > 1.0);
+      check(weights[1] < 0.0);
+
+      mem_destroy(&arena);
+    }
+
+    it("should fall back to the best excess-return asset when covariance is singular") {
+      double mu[] = {0.05, 0.15};
+      double cov[] = {
+        0.04, 0.04,
+        0.04, 0.04
+      };
+      double weights[2];
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
+
+      exprtk_pf_max_sharpe(mu, cov, 2, 0.0, weights, &arena);
+
+      check_float_eq(weights[0], 0.0, EPSILON);
+      check_float_eq(weights[1], 1.0, EPSILON);
 
       mem_destroy(&arena);
     }
@@ -200,6 +252,25 @@ suite("Portfolio Optimization") {
       mem_destroy(&arena);
     }
 
+    it("should exactly match the target return in the two-asset case") {
+      double mu[] = {0.08, 0.12};
+      double cov[] = {
+        0.04, 0.01,
+        0.01, 0.09
+      };
+      double weights[2];
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
+
+      exprtk_pf_markowitz(mu, cov, 2, 0.10, weights, &arena);
+
+      check_float_eq(weights[0], 0.5, EPSILON);
+      check_float_eq(weights[1], 0.5, EPSILON);
+      check_float_eq(weights[0] * mu[0] + weights[1] * mu[1], 0.10, EPSILON);
+
+      mem_destroy(&arena);
+    }
+
     it("should handle target at boundary") {
       double mu[] = {0.05, 0.10, 0.15};
       double cov[] = {
@@ -220,6 +291,25 @@ suite("Portfolio Optimization") {
       exprtk_pf_markowitz(mu, cov, 3, 0.15, weights, &arena);
       sum = weights[0] + weights[1] + weights[2];
       check_float_eq(sum, 1.0, EPSILON);
+
+      mem_destroy(&arena);
+    }
+
+    it("should still hit the target return when covariance is singular") {
+      double mu[] = {0.05, 0.15};
+      double cov[] = {
+        0.04, 0.04,
+        0.04, 0.04
+      };
+      double weights[2];
+      mem_pool_t arena;
+      mem_init(&arena, 4096);
+
+      exprtk_pf_markowitz(mu, cov, 2, 0.15, weights, &arena);
+
+      check_float_eq(weights[0], 0.0, EPSILON);
+      check_float_eq(weights[1], 1.0, EPSILON);
+      check_float_eq(weights[0] * mu[0] + weights[1] * mu[1], 0.15, EPSILON);
 
       mem_destroy(&arena);
     }

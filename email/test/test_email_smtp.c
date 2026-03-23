@@ -62,18 +62,19 @@ spec("email_smtp") {
   }
 }
 
-// Integration test example (requires real SMTP server)
+// Integration test example (best with local smtp4dev on 127.0.0.1:25)
 /*
 void test_smtp_integration(void) {
   coro_context_t *ctx = coro_context_create();
 
   smtp_config_t config = {0};
-  config.host = "smtp.gmail.com";
-  config.port = 587;
-  config.use_starttls = 1;
-  config.auth_method = SMTP_AUTH_PLAIN;
-  config.username = "your-email@gmail.com";
-  config.password = "your-app-password";
+  config.host = "127.0.0.1";
+  config.port = 25;
+  config.use_tls = 0;
+  config.use_starttls = 0;
+  config.auth_method = SMTP_AUTH_NONE;
+  config.username = NULL;
+  config.password = NULL;
 
   smtp_client_t *client = smtp_client_create(ctx, &config);
   assert(client != NULL);

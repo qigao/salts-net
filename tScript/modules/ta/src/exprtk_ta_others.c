@@ -104,6 +104,24 @@ size_t exprtk_ta_vwap(const double *hi, const double *lo, const double *cl, cons
   return n;
 }
 
+size_t exprtk_ta_vwap_session(const double *hi, const double *lo, const double *cl,
+                              const double *vol, const double *session, size_t n, double *out) {
+  if (n == 0 || !session)
+    return 0;
+
+  double pv_sum = 0, v_sum = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (i == 0 || session[i] != session[i - 1]) {
+      pv_sum = 0;
+      v_sum = 0;
+    }
+    pv_sum += (hi[i] + lo[i] + cl[i]) / 3.0 * vol[i];
+    v_sum += vol[i];
+    out[i] = (v_sum > 1e-15) ? pv_sum / v_sum : 0;
+  }
+  return n;
+}
+
 size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t period,
                           double *upper, double *lower, double *middle, mem_pool_t *arena) {
   if (n < period)
@@ -213,7 +231,7 @@ size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, 
   simd_add(hh_kijun, ll_kijun, kijun, n);
   simd_scale(kijun, kijun, 0.5, n);
 
-  // Compute Senkou A and B (with lag)
+  // Compute Senkou A/B and lagged chikou without exposing future values at index i.
   for (i = 0; i < n; i++) {
     if (i >= kijun_p) {
       senkou_a[i] = (tenkan[i - kijun_p] + kijun[i - kijun_p]) / 2.0;
@@ -222,10 +240,9 @@ size_t exprtk_ta_ichimoku(const double *hi, const double *lo, const double *cl, 
       senkou_a[i] = 0;
       senkou_b[i] = 0;
     }
-    if (i + kijun_p < n)
-      chikou[i] = cl[i + kijun_p];
-    else
-      chikou[i] = 0;
+    chikou[i] = 0;
+    if (i >= kijun_p)
+      chikou[i] = cl[i - kijun_p];
   }
   TEMP_FREE(arena, hh_tenkan);
   TEMP_FREE(arena, ll_tenkan);

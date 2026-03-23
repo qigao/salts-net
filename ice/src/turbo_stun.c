@@ -10,7 +10,6 @@
 #else
 #include <unistd.h>
 #endif
-#include <uv.h>
 #include "ice/turbo_stun.h"
 
 #include <stdio.h>

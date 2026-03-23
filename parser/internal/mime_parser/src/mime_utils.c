@@ -102,24 +102,31 @@ int mime_decode_quoted_printable(mem_pool_t *pool,
 int mime_decode_base64(mem_pool_t *pool,
                        const char *input, size_t input_len,
                        uint8_t **output, size_t *output_len) {
+  char *encoded = NULL;
   if (!pool || !input || !output || !output_len) return -1;
+
+  encoded = mem_alloc(pool, input_len + 1);
+  if (!encoded) return -1;
+  memcpy(encoded, input, input_len);
+  encoded[input_len] = '\0';
 
   // Use base64_utils (allocates with malloc)
   uint8_t *decoded = NULL;
   size_t decoded_len = 0;
 
-  if (tn_base64_decode(input, &decoded, &decoded_len) != 0) {
+  if (tn_base64_decode(encoded, &decoded, &decoded_len) != 0) {
     return -1;
   }
 
   // Copy to pool memory
-  uint8_t *result = mem_alloc(pool, decoded_len);
+  uint8_t *result = mem_alloc(pool, decoded_len + 1);
   if (!result) {
     free(decoded);
     return -1;
   }
 
   memcpy(result, decoded, decoded_len);
+  result[decoded_len] = '\0';
   free(decoded);
 
   *output = result;

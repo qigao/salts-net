@@ -6,7 +6,8 @@
  *   <data_dir>/
  *     assets.csv            — asset registry
  *     adjustments.csv       — (optional) price adjustment events
- *     bars/<TICKER>.csv     — OHLCV per asset
+ *     bars/<TICKER>.csv     — OHLCV per asset, preferred naming
+ *     bars/<ASSET_ID>.csv   — OHLCV per asset, fallback naming
  *
  * assets.csv format (header required):
  *   id,ticker,exchange,type,start_date,end_date,lot_size,tick_size[,margin_req]
@@ -191,6 +192,7 @@ static int csv_load_adjustments(provider_t *self, universe_t *u,
     (void)arena;
     csv_state_t *st = (csv_state_t *)self->user_data;
     char path[640];
+    bool explicit_source = source && source[0];
 
     if (source && (source[0] == '/' || source[1] == ':'))
         snprintf(path, sizeof(path), "%s", source);
@@ -199,7 +201,7 @@ static int csv_load_adjustments(provider_t *self, universe_t *u,
                  source ? source : "adjustments.csv");
 
     FILE *f = fopen(path, "r");
-    if (!f) return 0;  /* adjustments are optional; missing file is OK */
+    if (!f) return explicit_source ? -1 : 0;  /* default file is optional */
 
     char line[512];
     bool first = true;
@@ -245,9 +247,8 @@ static void *csv_open_stream(provider_t *self, uint32_t asset_id,
     /* Look up ticker from universe (we need to build the filename) */
     /* The universe must already be loaded before streaming begins. */
 
-    /* For now, encode asset_id in the filename as a fallback:
-     *   bars/<asset_id>.csv
-     * Callers that want ticker-based files should call by ticker name. */
+/* Fallback path for providers that only have bars/<asset_id>.csv.
+ * Higher-level helpers prefer ticker-based filenames when the universe knows them. */
     char path[640];
     snprintf(path, sizeof(path), "%s/bars/%u.csv", st->data_dir, asset_id);
 
@@ -394,8 +395,10 @@ int provider_load_universe(provider_t *p, universe_t *u,
     int rc = p->load_assets(p, u, assets_source, arena);
     if (rc < 0) return rc;
 
-    if (adj_source && p->load_adjustments)
-        p->load_adjustments(p, u, adj_source, arena);
+    if (adj_source && p->load_adjustments) {
+        rc = p->load_adjustments(p, u, adj_source, arena);
+        if (rc < 0) return rc;
+    }
 
     universe_finalize(u);
     return 0;
@@ -423,14 +426,23 @@ int provider_load_window(provider_t *p, universe_t *u,
 
     if (!stream) return -1;
 
-    double adj = universe_adj_factor(u, asset_id);
     provider_bar_t bar;
+    provider_bar_t prev_bar = {0};
     int count = 0;
 
     while (p->next_bar(p, stream, &bar) == 1) {
+        double prev_adj = universe_adj_factor(u, asset_id);
+        if (u) {
+            universe_advance(u, bar.date);
+            universe_apply_runtime_adjustments(u, asset_id, bar.date, prev_bar.close);
+        }
+        double adj = universe_adj_factor(u, asset_id);
+        if (window && window->count > 0 && prev_adj > 0.0 && adj > 0.0 && prev_adj != adj)
+            bar_window_rescale_prices(window, adj / prev_adj);
         bar_window_push_adjusted(window, bar.date,
                                   bar.open, bar.high, bar.low, bar.close, bar.volume,
                                   adj);
+        prev_bar = bar;
         count++;
     }
     p->close_stream(p, stream);

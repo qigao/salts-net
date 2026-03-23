@@ -61,10 +61,10 @@ strategy_ctx_t *strategy_create(universe_t *universe,
     if (ctx->num_assets > 0) {
         ctx->windows = (bar_window_t **)mem_alloc(
             arena, ctx->num_assets * sizeof(bar_window_t *));
-        if (!ctx->windows) return NULL;
+        if (!ctx->windows) goto fail;
         for (size_t i = 0; i < ctx->num_assets; i++) {
             ctx->windows[i] = bar_window_create(ctx->config.window_capacity, arena);
-            if (!ctx->windows[i]) return NULL;
+            if (!ctx->windows[i]) goto fail;
         }
     }
 
@@ -74,14 +74,14 @@ strategy_ctx_t *strategy_create(universe_t *universe,
         ctx->config.initial_cash,
         ctx->num_assets > 0 ? ctx->num_assets : 256,
         arena);
-    if (!ctx->order_mgr) return NULL;
+    if (!ctx->order_mgr) goto fail;
 
     ctx->order_mgr->slippage_pct = ctx->config.slippage_pct;
     ctx->order_mgr->spread       = ctx->config.spread;
 
     /* Create TurboScript environment */
     ctx->env = (exprtk_env_t *)mem_alloc(arena, sizeof(exprtk_env_t));
-    if (!ctx->env) return NULL;
+    if (!ctx->env) goto fail;
     exprtk_env_init(ctx->env);
 
     /* Mount strategy scripting module (buy/sell/flat/rank/...) */
@@ -100,6 +100,11 @@ strategy_ctx_t *strategy_create(universe_t *universe,
     bind_num(ctx->env, "entry_price", 0.0);
 
     return ctx;
+
+fail:
+    if (ctx->env) exprtk_env_free(ctx->env);
+    if (ctx->order_mgr) order_manager_free(ctx->order_mgr);
+    return NULL;
 }
 
 void strategy_free(strategy_ctx_t *ctx) {
@@ -189,6 +194,9 @@ void strategy_reset(strategy_ctx_t *ctx) {
         if (ctx->windows && ctx->windows[i])
             bar_window_clear(ctx->windows[i]);
     }
+
+    if (ctx->universe)
+        universe_reset(ctx->universe);
 
     ctx->total_bars   = 0;
     ctx->current_date = 0.0;
@@ -358,7 +366,11 @@ void strategy_on_bar(strategy_ctx_t *ctx,
     bar_window_t *w = ctx->windows[idx];
 
     /* 1. Push adjusted bar into window */
+    double prev_adj = universe_adj_factor(ctx->universe, asset_id);
+    universe_apply_runtime_adjustments(ctx->universe, asset_id, bar->date, prev_close);
     double adj = universe_adj_factor(ctx->universe, asset_id);
+    if (w && w->count > 0 && prev_adj > 0.0 && adj > 0.0 && prev_adj != adj)
+        bar_window_rescale_prices(w, adj / prev_adj);
     bar_window_push_adjusted(w, bar->date,
                               bar->open, bar->high, bar->low, bar->close, bar->volume,
                               adj);
@@ -410,6 +422,7 @@ int strategy_run_single(strategy_ctx_t *ctx,
 
     provider_bar_t bar;
     provider_bar_t prev_bar = {0};
+    uint32_t mtm_asset_ids[1] = { asset_id };
     int processed = 0;
 
     order_manager_begin_bar(ctx->order_mgr, start_date);
@@ -439,7 +452,7 @@ int strategy_run_single(strategy_ctx_t *ctx,
 
         /* Mark-to-market using this bar's close */
         double closes[1] = { bar.close * universe_adj_factor(ctx->universe, asset_id) };
-        order_manager_mark_to_market(ctx->order_mgr, closes, 1);
+        order_manager_mark_to_market(ctx->order_mgr, mtm_asset_ids, closes, 1);
         order_manager_record_equity(ctx->order_mgr);
 
         prev_bar = bar;
@@ -471,26 +484,119 @@ int strategy_run_single(strategy_ctx_t *ctx,
 int strategy_run_universe(strategy_ctx_t *ctx,
                             double start_date,
                             double end_date) {
-    /* Multi-asset streaming requires the provider to support it.
-     * Fallback: iterate over each active asset sequentially for all dates.
-     * A proper aligned multi-stream is left for Phase 3 provider extension. */
-
     if (!ctx || !ctx->universe || !ctx->provider) return -1;
+    if (!ctx->provider->open_stream || !ctx->provider->next_bar || !ctx->provider->close_stream)
+        return -1;
 
-    int total = 0;
     size_t na = ctx->universe->num_assets;
+    int total = 0;
+    void **streams = (void **)mem_alloc(ctx->arena, na * sizeof(*streams));
+    provider_bar_t *bars = (provider_bar_t *)mem_alloc(ctx->arena, na * sizeof(*bars));
+    uint8_t *has_bar = (uint8_t *)mem_alloc(ctx->arena, na * sizeof(*has_bar));
+    double *prev_close = (double *)mem_alloc(ctx->arena, na * sizeof(*prev_close));
+    double *mtm_prices = (double *)mem_alloc(ctx->arena, na * sizeof(*mtm_prices));
+    uint32_t *asset_ids = (uint32_t *)mem_alloc(ctx->arena, na * sizeof(*asset_ids));
+    size_t *processed = (size_t *)mem_alloc(ctx->arena, na * sizeof(*processed));
+
+    if (!streams || !bars || !has_bar || !prev_close || !mtm_prices || !asset_ids || !processed)
+        return -1;
+
+    memset(streams, 0, na * sizeof(*streams));
+    memset(has_bar, 0, na * sizeof(*has_bar));
+    memset(prev_close, 0, na * sizeof(*prev_close));
+    memset(mtm_prices, 0, na * sizeof(*mtm_prices));
+    memset(processed, 0, na * sizeof(*processed));
 
     for (size_t i = 0; i < na; i++) {
         const universe_asset_t *a = &ctx->universe->assets[i];
         double s = (start_date > 0) ? start_date : a->start_date;
-        double e = (end_date   > 0) ? end_date   : (a->end_date > 0 ? a->end_date : 1e12);
+        double e = (end_date > 0) ? end_date : (a->end_date > 0 ? a->end_date : 1e12);
 
-        /* Reset per-asset window */
+        asset_ids[i] = a->id;
         if (ctx->windows[i]) bar_window_clear(ctx->windows[i]);
 
-        int rc = strategy_run_single(ctx, a->id, s, e);
-        if (rc > 0) total += rc;
+        streams[i] = ctx->provider->open_stream(ctx->provider, a->id, s, e, ctx->arena);
+        if (!streams[i])
+            continue;
+        if (ctx->provider->next_bar(ctx->provider, streams[i], &bars[i]) == 1) {
+            has_bar[i] = 1;
+        } else {
+            ctx->provider->close_stream(ctx->provider, streams[i]);
+            streams[i] = NULL;
+        }
     }
+
+    if (ctx->has_hooks && ctx->hook_on_init)
+        call_hook(ctx, ctx->hook_on_init);
+
+    size_t prev_num_trades = ctx->order_mgr->num_trades;
+
+    for (;;) {
+        double next_date = 0.0;
+        int found = 0;
+        for (size_t i = 0; i < na; i++) {
+            if (!has_bar[i])
+                continue;
+            if (!found || bars[i].date < next_date) {
+                next_date = bars[i].date;
+                found = 1;
+            }
+        }
+        if (!found)
+            break;
+
+        universe_advance(ctx->universe, next_date);
+        order_manager_begin_bar(ctx->order_mgr, next_date);
+        ctx->current_date = next_date;
+
+        for (size_t i = 0; i < na; i++) {
+            const universe_asset_t *a = &ctx->universe->assets[i];
+            if (!has_bar[i] || bars[i].date != next_date)
+                continue;
+
+            strategy_on_bar(ctx, a->id, &bars[i], prev_close[i], processed[i] < ctx->warmup_bars);
+
+            if (ctx->has_hooks && ctx->hook_on_fill) {
+                size_t cur_trades = ctx->order_mgr->num_trades;
+                for (size_t ti = prev_num_trades; ti < cur_trades; ti++)
+                    call_hook_on_fill(ctx, &ctx->order_mgr->trades[ti]);
+                prev_num_trades = cur_trades;
+            }
+
+            prev_close[i] = bars[i].close;
+            mtm_prices[i] = bars[i].close * universe_adj_factor(ctx->universe, a->id);
+            processed[i]++;
+            total++;
+            ctx->total_bars++;
+
+            if (ctx->provider->next_bar(ctx->provider, streams[i], &bars[i]) != 1) {
+                ctx->provider->close_stream(ctx->provider, streams[i]);
+                streams[i] = NULL;
+                has_bar[i] = 0;
+            }
+        }
+
+        order_manager_mark_to_market(ctx->order_mgr, asset_ids, mtm_prices, na);
+        order_manager_record_equity(ctx->order_mgr);
+    }
+
+    for (size_t i = 0; i < na; i++) {
+        if (streams[i])
+            ctx->provider->close_stream(ctx->provider, streams[i]);
+    }
+
+    for (size_t i = 0; i < na; i++) {
+        const trade_record_t *final_tr;
+        if (mtm_prices[i] <= 0.0)
+            continue;
+        final_tr = order_manager_close(ctx->order_mgr, asset_ids[i], mtm_prices[i], ctx->current_date);
+        if (ctx->has_hooks && ctx->hook_on_fill && final_tr)
+            call_hook_on_fill(ctx, final_tr);
+    }
+
+    if (ctx->has_hooks && ctx->hook_on_stop)
+        call_hook(ctx, ctx->hook_on_stop);
+
     return total;
 }
 

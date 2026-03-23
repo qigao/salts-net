@@ -62,8 +62,8 @@ struct provider_s {
                        mem_pool_t *arena);
 
     /**
-     * Load price-adjustment events (splits, dividends) into the universe.
-     * May be NULL if the data source doesn't supply adjustments.
+     * Load price-adjustment events (for example splits and cash dividends)
+     * into the universe. May be NULL if the data source doesn't supply them.
      */
     int (*load_adjustments)(provider_t *self,
                             universe_t *u,
@@ -140,7 +140,8 @@ struct provider_s {
  *   <data_dir>/
  *     assets.csv            — asset metadata
  *     adjustments.csv       — (optional) split/dividend events
- *     bars/<ticker>.csv     — OHLCV bars, one file per asset
+ *     bars/<ticker>.csv     — OHLCV bars, preferred naming
+ *     bars/<asset_id>.csv   — OHLCV bars, supported fallback naming
  *
  * assets.csv columns:     id,ticker,exchange,type,start_date,end_date,lot_size,tick_size
  * adjustments.csv columns: asset_id,date,type,factor

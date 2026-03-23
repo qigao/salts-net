@@ -15,50 +15,120 @@ struct smtp_client_s {
   char error_msg[512];
   int last_code;
   char read_buffer[4096];
+  char response_buffer[4096];
+  size_t read_buffer_len;
 };
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
+static void smtp_reset_read_state(smtp_client_t *client) {
+  if (!client) return;
+  client->read_buffer_len = 0;
+  client->read_buffer[0] = '\0';
+  client->response_buffer[0] = '\0';
+}
+
+static int smtp_read_line(smtp_client_t *client, char **line) {
+  if (!client || !client->socket) return -1;
+
+  while (1) {
+    for (size_t i = 0; i < client->read_buffer_len; i++) {
+      if (client->read_buffer[i] == '\n') {
+        size_t line_len = i + 1;
+        if (line_len >= sizeof(client->read_buffer)) {
+          line_len = sizeof(client->read_buffer) - 1;
+        }
+
+        memcpy(client->response_buffer, client->read_buffer, line_len);
+        client->response_buffer[line_len] = '\0';
+
+        client->read_buffer_len -= line_len;
+        memmove(client->read_buffer, client->read_buffer + line_len,
+                client->read_buffer_len);
+        client->read_buffer[client->read_buffer_len] = '\0';
+
+        if (line) {
+          *line = client->response_buffer;
+        }
+        return 0;
+      }
+    }
+
+    char *data = NULL;
+    size_t len = 0;
+    int result = coro_socket_recv(client->socket, &data, &len);
+    if (result != 0 || !data || len == 0) {
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "Failed to read SMTP response");
+      if (data) {
+        coro_socket_free_recv(data);
+      }
+      return -1;
+    }
+
+    size_t space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
+    if (len > space) {
+      coro_socket_free_recv(data);
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "SMTP response too large");
+      return -1;
+    }
+
+    memcpy(client->read_buffer + client->read_buffer_len, data, len);
+    client->read_buffer_len += len;
+    client->read_buffer[client->read_buffer_len] = '\0';
+    coro_socket_free_recv(data);
+  }
+}
+
 static int smtp_read_response(smtp_client_t *client, int *code) {
   if (!client || !client->socket) return -1;
 
-  char *data = NULL;
-  size_t len = 0;
-
-  int result = coro_socket_recv(client->socket, &data, &len);
-  if (result != 0 || !data) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to read SMTP response");
+  char *line = NULL;
+  if (smtp_read_line(client, &line) != 0) {
     return -1;
   }
-
-  // Copy to read_buffer
-  size_t copy_len = len < sizeof(client->read_buffer) - 1 ? len : sizeof(client->read_buffer) - 1;
-  memcpy(client->read_buffer, data, copy_len);
-  client->read_buffer[copy_len] = '\0';
-
-  coro_socket_free_recv(data);
 
   // Parse response code (first 3 digits)
-  if (copy_len < 3 || !isdigit(client->read_buffer[0])) {
+  if (!isdigit((unsigned char)line[0]) ||
+      !isdigit((unsigned char)line[1]) ||
+      !isdigit((unsigned char)line[2])) {
     snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid SMTP response: %s", client->read_buffer);
+             "Invalid SMTP response: %s", line);
     return -1;
   }
 
-  int response_code = (client->read_buffer[0] - '0') * 100 +
-                      (client->read_buffer[1] - '0') * 10 +
-                      (client->read_buffer[2] - '0');
+  int response_code = (line[0] - '0') * 100 +
+                      (line[1] - '0') * 10 +
+                      (line[2] - '0');
 
   if (code) *code = response_code;
   client->last_code = response_code;
 
-  // Check for multi-line response (4th char is '-')
-  if (copy_len > 3 && client->read_buffer[3] == '-') {
-    // TODO: Handle multi-line responses
-    // For now, just read until we get a line without '-'
+  while (line[3] != '\0' && line[3] == '-') {
+    if (smtp_read_line(client, &line) != 0) {
+      return -1;
+    }
+
+    if (!isdigit((unsigned char)line[0]) ||
+        !isdigit((unsigned char)line[1]) ||
+        !isdigit((unsigned char)line[2])) {
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "Invalid SMTP response: %s", line);
+      return -1;
+    }
+
+    client->last_code = (line[0] - '0') * 100 +
+                        (line[1] - '0') * 10 +
+                        (line[2] - '0');
+    if (client->last_code != response_code) {
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "Mismatched SMTP multi-line response: %s", line);
+      return -1;
+    }
   }
 
+  snprintf(client->response_buffer, sizeof(client->response_buffer), "%s", line);
   return response_code;
 }
 
@@ -68,10 +138,10 @@ static int smtp_send_command(smtp_client_t *client, const char *cmd) {
   char buffer[1024];
   int len = snprintf(buffer, sizeof(buffer), "%s\r\n", cmd);
 
-  int sent = coro_socket_send(client->socket, buffer, len);
-  if (sent != len) {
+  int rc = coro_socket_send(client->socket, buffer, len);
+  if (rc != 0) {
     snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to send SMTP command: %s", cmd);
+             "Failed to send SMTP command (%d): %s", rc, cmd);
     return -1;
   }
 
@@ -127,10 +197,13 @@ void smtp_client_free(smtp_client_t *client) {
 /* ── Connection ────────────────────────────────────────────────────── */
 
 int smtp_connect(smtp_client_t *client) {
+  int socket_type;
+
   if (!client) return -1;
 
   // Create socket
-  client->socket = coro_socket_create_tcpv4(client->ctx);
+  socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
+  client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
   if (!client->socket) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to create socket");
@@ -147,19 +220,20 @@ int smtp_connect(smtp_client_t *client) {
     return -1;
   }
 
-  // TODO: If use_tls is set, upgrade connection to TLS
-  // coro_socket_upgrade_tls(client->socket);
-
   // Read 220 greeting
   if (smtp_expect_code(client, 220) != 0) {
     smtp_disconnect(client);
     return -1;
   }
 
-  // Send EHLO
-  char ehlo_cmd[256];
-  snprintf(ehlo_cmd, sizeof(ehlo_cmd), "EHLO %s", client->config.host);
-  if (smtp_send_command(client, ehlo_cmd) != 0) {
+  // Plain local SMTP does not need extension negotiation.
+  int needs_extended_smtp =
+      client->config.use_starttls ||
+      (client->config.username != NULL && client->config.password != NULL);
+  char hello_cmd[256];
+  snprintf(hello_cmd, sizeof(hello_cmd), "%s %s",
+           needs_extended_smtp ? "EHLO" : "HELO", client->config.host);
+  if (smtp_send_command(client, hello_cmd) != 0) {
     smtp_disconnect(client);
     return -1;
   }
@@ -181,11 +255,16 @@ int smtp_connect(smtp_client_t *client) {
       return -1;
     }
 
-    // TODO: Upgrade to TLS
-    // coro_socket_upgrade_tls(client->socket);
+    if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "Failed to upgrade SMTP connection to TLS");
+      smtp_disconnect(client);
+      return -1;
+    }
+    smtp_reset_read_state(client);
 
     // Re-send EHLO after STARTTLS
-    if (smtp_send_command(client, ehlo_cmd) != 0) {
+    if (smtp_send_command(client, hello_cmd) != 0) {
       smtp_disconnect(client);
       return -1;
     }
@@ -295,9 +374,21 @@ int smtp_connect(smtp_client_t *client) {
 void smtp_disconnect(smtp_client_t *client) {
   if (!client || !client->socket) return;
 
+  char saved_error[sizeof(client->error_msg)];
+  saved_error[0] = '\0';
+  if (client->error_msg[0] != '\0') {
+    memcpy(saved_error, client->error_msg, sizeof(saved_error));
+    saved_error[sizeof(saved_error) - 1] = '\0';
+  }
+
   // Send QUIT command
   smtp_send_command(client, "QUIT");
   smtp_expect_code(client, 221);
+
+  if (saved_error[0] != '\0') {
+    memcpy(client->error_msg, saved_error, sizeof(client->error_msg));
+    client->error_msg[sizeof(client->error_msg) - 1] = '\0';
+  }
 
   coro_socket_destroy(client->socket);
   client->socket = NULL;
@@ -334,7 +425,7 @@ int smtp_send_raw(smtp_client_t *client,
   if (smtp_expect_code(client, 354) != 0) return -1;
 
   // Send message body
-  if (coro_socket_send(client->socket, raw_message, message_len) != (int)message_len) {
+  if (coro_socket_send(client->socket, raw_message, message_len) != 0) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to send message body");
     return -1;

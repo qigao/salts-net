@@ -43,6 +43,8 @@ size_t exprtk_ta_supertrend(const double *hi, const double *lo, const double *cl
 
 size_t exprtk_ta_vwap(const double *hi, const double *lo, const double *cl, const double *vol,
                       size_t n, double *out);
+size_t exprtk_ta_vwap_session(const double *hi, const double *lo, const double *cl,
+                              const double *vol, const double *session, size_t n, double *out);
 size_t exprtk_ta_donchian(const double *hi, const double *lo, size_t n, size_t period,
                           double *upper, double *lower, double *middle, mem_pool_t *arena);
 size_t exprtk_ta_keltner(const double *hi, const double *lo, const double *cl, size_t n,

@@ -12,9 +12,18 @@ struct imap_client_s {
   char error_msg[512];
   int tag_counter;
   char read_buffer[8192];
+  char line_buffer[8192];
+  size_t read_buffer_len;
 };
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
+
+static void imap_reset_read_state(imap_client_t *client) {
+  if (!client) return;
+  client->read_buffer_len = 0;
+  client->read_buffer[0] = '\0';
+  client->line_buffer[0] = '\0';
+}
 
 static char *imap_generate_tag(imap_client_t *client) {
   static char tag[16];
@@ -25,22 +34,112 @@ static char *imap_generate_tag(imap_client_t *client) {
 static int imap_read_line(imap_client_t *client) {
   if (!client || !client->socket) return -1;
 
-  char *data = NULL;
-  size_t len = 0;
+  while (1) {
+    size_t i;
+    for (i = 0; i < client->read_buffer_len; i++) {
+      if (client->read_buffer[i] == '\n') {
+        size_t line_len = i + 1;
+        if (line_len >= sizeof(client->line_buffer)) {
+          snprintf(client->error_msg, sizeof(client->error_msg),
+                   "IMAP response line too large");
+          return -1;
+        }
 
-  int result = coro_socket_recv(client->socket, &data, &len);
-  if (result != 0 || !data) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to read IMAP response");
-    return -1;
+        memcpy(client->line_buffer, client->read_buffer, line_len);
+        client->line_buffer[line_len] = '\0';
+
+        client->read_buffer_len -= line_len;
+        memmove(client->read_buffer, client->read_buffer + line_len,
+                client->read_buffer_len);
+        client->read_buffer[client->read_buffer_len] = '\0';
+
+        return 0;
+      }
+    }
+
+    {
+      char *data = NULL;
+      size_t len = 0;
+      size_t free_space;
+      int result = coro_socket_recv(client->socket, &data, &len);
+      if (result != 0 || !data || len == 0) {
+        if (data) {
+          coro_socket_free_recv(data);
+        }
+        snprintf(client->error_msg, sizeof(client->error_msg),
+                 "Failed to read IMAP response");
+        return -1;
+      }
+
+      free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
+      if (len > free_space) {
+        coro_socket_free_recv(data);
+        snprintf(client->error_msg, sizeof(client->error_msg),
+                 "IMAP response buffer overflow");
+        return -1;
+      }
+
+      memcpy(client->read_buffer + client->read_buffer_len, data, len);
+      client->read_buffer_len += len;
+      client->read_buffer[client->read_buffer_len] = '\0';
+      coro_socket_free_recv(data);
+    }
+  }
+}
+
+static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
+  size_t total = 0;
+  if (!client || !client->socket || !out) return -1;
+
+  while (total < len) {
+    if (client->read_buffer_len > 0) {
+      size_t take = client->read_buffer_len;
+      if (take > len - total) {
+        take = len - total;
+      }
+      memcpy(out + total, client->read_buffer, take);
+      total += take;
+      client->read_buffer_len -= take;
+      memmove(client->read_buffer, client->read_buffer + take, client->read_buffer_len);
+      client->read_buffer[client->read_buffer_len] = '\0';
+      continue;
+    }
+
+    {
+      char *data = NULL;
+      size_t chunk_len = 0;
+      int result = coro_socket_recv(client->socket, &data, &chunk_len);
+      if (result != 0 || !data || chunk_len == 0) {
+        if (data) {
+          coro_socket_free_recv(data);
+        }
+        snprintf(client->error_msg, sizeof(client->error_msg),
+                 "Failed to read IMAP literal");
+        return -1;
+      }
+
+      if (chunk_len > len - total) {
+        size_t remaining = len - total;
+        size_t extra = chunk_len - remaining;
+        memcpy(out + total, data, remaining);
+        total += remaining;
+        if (extra > sizeof(client->read_buffer) - 1) {
+          coro_socket_free_recv(data);
+          snprintf(client->error_msg, sizeof(client->error_msg),
+                   "IMAP literal overflow");
+          return -1;
+        }
+        memcpy(client->read_buffer, data + remaining, extra);
+        client->read_buffer_len = extra;
+        client->read_buffer[client->read_buffer_len] = '\0';
+      } else {
+        memcpy(out + total, data, chunk_len);
+        total += chunk_len;
+      }
+      coro_socket_free_recv(data);
+    }
   }
 
-  // Copy to read_buffer
-  size_t copy_len = len < sizeof(client->read_buffer) - 1 ? len : sizeof(client->read_buffer) - 1;
-  memcpy(client->read_buffer, data, copy_len);
-  client->read_buffer[copy_len] = '\0';
-
-  coro_socket_free_recv(data);
   return 0;
 }
 
@@ -48,16 +147,16 @@ static int imap_read_response(imap_client_t *client, const char *expected_tag) {
   if (imap_read_line(client) != 0) return -1;
 
   // Parse response: "TAG OK/NO/BAD ..." or "* UNTAGGED ..."
-  if (strlen(client->read_buffer) < 3) {
+  if (strlen(client->line_buffer) < 3) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Invalid IMAP response");
     return -1;
   }
 
   // Check for tagged response
-  if (expected_tag && strncmp(client->read_buffer, expected_tag, strlen(expected_tag)) == 0) {
+  if (expected_tag && strncmp(client->line_buffer, expected_tag, strlen(expected_tag)) == 0) {
     // Tagged response: "A001 OK ..."
-    const char *status = client->read_buffer + strlen(expected_tag) + 1;
+    const char *status = client->line_buffer + strlen(expected_tag) + 1;
     if (strncmp(status, "OK", 2) == 0) {
       return 0; // Success
     } else if (strncmp(status, "NO", 2) == 0) {
@@ -80,8 +179,8 @@ static int imap_send_command(imap_client_t *client, const char *tag, const char 
   char buffer[2048];
   int len = snprintf(buffer, sizeof(buffer), "%s %s\r\n", tag, cmd);
 
-  int sent = coro_socket_send(client->socket, buffer, len);
-  if (sent != len) {
+  int rc = coro_socket_send(client->socket, buffer, len);
+  if (rc != 0) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to send IMAP command: %s", cmd);
     return -1;
@@ -104,7 +203,7 @@ static int imap_command(imap_client_t *client, const char *cmd) {
     }
 
     // Check if this is the tagged response
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
   }
@@ -149,10 +248,13 @@ void imap_client_free(imap_client_t *client) {
 /* ── Connection ────────────────────────────────────────────────────── */
 
 int imap_connect(imap_client_t *client) {
+  int socket_type;
+
   if (!client) return -1;
 
   // Create socket
-  client->socket = coro_socket_create_tcpv4(client->ctx);
+  socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
+  client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
   if (!client->socket) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to create socket");
@@ -169,9 +271,6 @@ int imap_connect(imap_client_t *client) {
     return -1;
   }
 
-  // TODO: If use_tls is set, upgrade connection to TLS
-  // coro_socket_upgrade_tls(client->socket);
-
   // Read greeting: "* OK ..."
   if (imap_read_response(client, NULL) != 0) {
     imap_disconnect(client);
@@ -185,18 +284,25 @@ int imap_connect(imap_client_t *client) {
       return -1;
     }
 
-    // TODO: Upgrade to TLS
-    // coro_socket_upgrade_tls(client->socket);
+    if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "Failed to upgrade IMAP connection to TLS");
+      imap_disconnect(client);
+      return -1;
+    }
+    imap_reset_read_state(client);
   }
 
-  // LOGIN
-  char login_cmd[1024];
-  snprintf(login_cmd, sizeof(login_cmd), "LOGIN %s %s",
-           client->config.username, client->config.password);
+  if (client->config.username && client->config.password) {
+    // LOGIN
+    char login_cmd[1024];
+    snprintf(login_cmd, sizeof(login_cmd), "LOGIN %s %s",
+             client->config.username, client->config.password);
 
-  if (imap_command(client, login_cmd) != 0) {
-    imap_disconnect(client);
-    return -1;
+    if (imap_command(client, login_cmd) != 0) {
+      imap_disconnect(client);
+      return -1;
+    }
   }
 
   return 0;
@@ -243,17 +349,17 @@ char **imap_list_mailboxes(imap_client_t *client,
     }
 
     // Check for tagged response (end)
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
 
     // Parse untagged LIST response: * LIST (...) "delimiter" "name"
-    if (strncmp(client->read_buffer, "* LIST", 6) == 0) {
+    if (strncmp(client->line_buffer, "* LIST", 6) == 0) {
       // Find last quoted string (mailbox name)
-      char *last_quote = strrchr(client->read_buffer, '"');
-      if (last_quote && last_quote > client->read_buffer) {
+      char *last_quote = strrchr(client->line_buffer, '"');
+      if (last_quote && last_quote > client->line_buffer) {
         char *start_quote = last_quote - 1;
-        while (start_quote > client->read_buffer && *start_quote != '"') {
+        while (start_quote > client->line_buffer && *start_quote != '"') {
           start_quote--;
         }
         if (*start_quote == '"') {
@@ -300,33 +406,33 @@ imap_mailbox_t *imap_select_mailbox(imap_client_t *client,
     }
 
     // Check for tagged response (end)
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
 
     // Parse untagged responses
-    if (client->read_buffer[0] == '*') {
+    if (client->line_buffer[0] == '*') {
       // * 123 EXISTS
-      if (strstr(client->read_buffer, "EXISTS")) {
-        sscanf(client->read_buffer, "* %d EXISTS", &info->exists);
+      if (strstr(client->line_buffer, "EXISTS")) {
+        sscanf(client->line_buffer, "* %d EXISTS", &info->exists);
       }
       // * 5 RECENT
-      else if (strstr(client->read_buffer, "RECENT")) {
-        sscanf(client->read_buffer, "* %d RECENT", &info->recent);
+      else if (strstr(client->line_buffer, "RECENT")) {
+        sscanf(client->line_buffer, "* %d RECENT", &info->recent);
       }
       // * OK [UNSEEN 12]
-      else if (strstr(client->read_buffer, "UNSEEN")) {
-        char *unseen_str = strstr(client->read_buffer, "UNSEEN");
+      else if (strstr(client->line_buffer, "UNSEEN")) {
+        char *unseen_str = strstr(client->line_buffer, "UNSEEN");
         sscanf(unseen_str, "UNSEEN %d", &info->unseen);
       }
       // * OK [UIDNEXT 4392]
-      else if (strstr(client->read_buffer, "UIDNEXT")) {
-        char *uidnext_str = strstr(client->read_buffer, "UIDNEXT");
+      else if (strstr(client->line_buffer, "UIDNEXT")) {
+        char *uidnext_str = strstr(client->line_buffer, "UIDNEXT");
         sscanf(uidnext_str, "UIDNEXT %d", &info->uidnext);
       }
       // * OK [UIDVALIDITY 3857529045]
-      else if (strstr(client->read_buffer, "UIDVALIDITY")) {
-        char *uidval_str = strstr(client->read_buffer, "UIDVALIDITY");
+      else if (strstr(client->line_buffer, "UIDVALIDITY")) {
+        char *uidval_str = strstr(client->line_buffer, "UIDVALIDITY");
         sscanf(uidval_str, "UIDVALIDITY %d", &info->uidvalidity);
       }
     }
@@ -379,13 +485,13 @@ int *imap_search(imap_client_t *client, const char *criteria, int *count) {
     }
 
     // Check for tagged response (end)
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
 
     // Parse SEARCH response: * SEARCH 1 2 3 4 5
-    if (strncmp(client->read_buffer, "* SEARCH", 8) == 0) {
-      char *ptr = client->read_buffer + 8;
+    if (strncmp(client->line_buffer, "* SEARCH", 8) == 0) {
+      char *ptr = client->line_buffer + 8;
       while (*ptr) {
         while (*ptr == ' ') ptr++;
         if (isdigit(*ptr)) {
@@ -424,7 +530,7 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
   }
 
   // Parse literal size: BODY[] {1234}
-  char *literal_start = strstr(client->read_buffer, "{");
+  char *literal_start = strstr(client->line_buffer, "{");
   if (!literal_start) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Invalid FETCH response: no literal");
@@ -443,19 +549,12 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
   int total_read = 0;
 
   while (total_read < literal_size) {
-    char *data = NULL;
-    size_t len = 0;
-    if (coro_socket_recv(client->socket, &data, &len) != 0 || !data) {
+    size_t to_read = (size_t)(literal_size - total_read);
+    if (imap_read_exact(client, message_data + total_read, to_read) != 0) {
       free(message_data);
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Failed to read message body");
       return NULL;
     }
-
-    int to_copy = (total_read + len > literal_size) ? (literal_size - total_read) : len;
-    memcpy(message_data + total_read, data, to_copy);
-    total_read += to_copy;
-    coro_socket_free_recv(data);
+    total_read = literal_size;
   }
   message_data[literal_size] = '\0';
 
@@ -479,7 +578,7 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
       mem_destroy(&pool);
       return NULL;
     }
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
   }
@@ -504,7 +603,7 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
   }
 
   // Parse literal size
-  char *literal_start = strstr(client->read_buffer, "{");
+  char *literal_start = strstr(client->line_buffer, "{");
   if (!literal_start) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Invalid FETCH response: no literal");
@@ -523,19 +622,12 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
   int total_read = 0;
 
   while (total_read < literal_size) {
-    char *data = NULL;
-    size_t len = 0;
-    if (coro_socket_recv(client->socket, &data, &len) != 0 || !data) {
+    size_t to_read = (size_t)(literal_size - total_read);
+    if (imap_read_exact(client, message_data + total_read, to_read) != 0) {
       free(message_data);
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Failed to read message body");
       return NULL;
     }
-
-    int to_copy = (total_read + len > literal_size) ? (literal_size - total_read) : len;
-    memcpy(message_data + total_read, data, to_copy);
-    total_read += to_copy;
-    coro_socket_free_recv(data);
+    total_read = literal_size;
   }
   message_data[literal_size] = '\0';
 
@@ -559,7 +651,7 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
       mem_destroy(&pool);
       return NULL;
     }
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
   }
@@ -571,7 +663,8 @@ imap_message_info_t *imap_fetch_info(imap_client_t *client, int seq_num) {
   if (!client) return NULL;
 
   char fetch_cmd[256];
-  snprintf(fetch_cmd, sizeof(fetch_cmd), "FETCH %d (FLAGS RFC822.SIZE ENVELOPE)", seq_num);
+  snprintf(fetch_cmd, sizeof(fetch_cmd),
+           "FETCH %d (UID FLAGS RFC822.SIZE ENVELOPE)", seq_num);
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, fetch_cmd) != 0) {
@@ -591,14 +684,14 @@ imap_message_info_t *imap_fetch_info(imap_client_t *client, int seq_num) {
     }
 
     // Check for tagged response (end)
-    if (strncmp(client->read_buffer, tag, strlen(tag)) == 0) {
+    if (strncmp(client->line_buffer, tag, strlen(tag)) == 0) {
       break;
     }
 
     // Parse FETCH response: * 1 FETCH (FLAGS (\Seen) RFC822.SIZE 1234 ...)
-    if (strstr(client->read_buffer, "FETCH")) {
+    if (strstr(client->line_buffer, "FETCH")) {
       // Extract FLAGS
-      char *flags_start = strstr(client->read_buffer, "FLAGS (");
+      char *flags_start = strstr(client->line_buffer, "FLAGS (");
       if (flags_start) {
         flags_start += 7;
         char *flags_end = strchr(flags_start, ')');
@@ -611,13 +704,13 @@ imap_message_info_t *imap_fetch_info(imap_client_t *client, int seq_num) {
       }
 
       // Extract RFC822.SIZE
-      char *size_str = strstr(client->read_buffer, "RFC822.SIZE");
+      char *size_str = strstr(client->line_buffer, "RFC822.SIZE");
       if (size_str) {
         sscanf(size_str, "RFC822.SIZE %d", &info->size);
       }
 
       // Extract UID if present
-      char *uid_str = strstr(client->read_buffer, "UID");
+      char *uid_str = strstr(client->line_buffer, "UID");
       if (uid_str) {
         sscanf(uid_str, "UID %d", &info->uid);
       }

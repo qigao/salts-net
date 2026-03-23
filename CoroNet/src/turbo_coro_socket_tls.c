@@ -93,6 +93,50 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   return s->status;
 }
 
+int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
+  turbo_stream_t *tcp_stream;
+  turbo_stream_t *tls_stream;
+  int rc;
+
+  if (!s || !s->ctx) {
+    return TURBO_EINVAL;
+  }
+  if (s->transport != TURBO_TCP || !s->handle.stream || !s->connected) {
+    return TURBO_EINVAL;
+  }
+  if (s->co_wait) {
+    return TURBO_EBUSY;
+  }
+
+  tcp_stream = s->handle.stream;
+  tls_stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
+  if (!tls_stream) {
+    return TURBO_ENOMEM;
+  }
+
+  turbo_stream_set_user_data(tls_stream, s);
+  tls_stream->managed = 1;
+
+  retain_client(s);
+  rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname,
+                                    on_tls_connect, on_tls_close);
+  if (rc != 0) {
+    turbo_stream_set_user_data(tls_stream, NULL);
+    turbo_stream_destroy(tls_stream);
+    release_client(s);
+    return rc;
+  }
+
+  s->handle.stream = tls_stream;
+  s->transport = TURBO_TLS;
+  s->ops = &transport_ops_tls;
+  s->connected = 0;
+
+  coro_set_wait(s);
+  coro_yield();
+  return s->status;
+}
+
 /* ── Send/Recv ────────────────────────────────────────────── */
 
 static int tls_send(coro_socket_t *s, const char *data, size_t len) {

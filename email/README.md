@@ -5,9 +5,9 @@ Complete email client library with SMTP, POP3, and IMAP support.
 ## Features
 
 ### Protocols
-- ✅ **SMTP** - Send emails with authentication (PLAIN/LOGIN)
-- ✅ **POP3** - Receive emails with full mailbox management
-- ⚠️ **IMAP** - Basic implementation (needs response parsing)
+- ✅ **SMTP** - Plain SMTP, SMTPS, and STARTTLS
+- ✅ **POP3** - Plain POP3, POP3S, and STLS
+- ✅ **IMAP** - Plain IMAP, IMAPS, and STARTTLS
 
 ### Message Support
 - RFC 2822 compliant message construction
@@ -21,11 +21,15 @@ Complete email client library with SMTP, POP3, and IMAP support.
 - Async I/O via CoroNet coroutines
 - Zero-copy MIME parsing
 - Memory pool allocation
-- TLS/SSL support (SMTPS, POP3S, IMAPS, STARTTLS)
+- TLS/SSL configuration fields
 
 ## Quick Start
 
-### Send Email (SMTP)
+### Send Email (SMTP, recommended local path)
+
+For local development, run a plain SMTP sink such as `smtp4dev` and point the example at it.
+This matches the current SMTP implementation, which supports plain SMTP today while TLS and
+STARTTLS upgrade are available through the same client config.
 
 ```c
 #include "email/email_smtp.h"
@@ -37,12 +41,13 @@ coro_context_t *ctx = coro_context_create(NULL);
 
 // Configure SMTP
 smtp_config_t config = {0};
-config.host = "smtp.gmail.com";
-config.port = 587;
-config.use_starttls = 1;
-config.auth_method = SMTP_AUTH_PLAIN;
-config.username = "your-email@gmail.com";
-config.password = "your-app-password";
+config.host = "127.0.0.1";
+config.port = 25;
+config.use_tls = 0;
+config.use_starttls = 0;
+config.auth_method = SMTP_AUTH_NONE;
+config.username = NULL;
+config.password = NULL;
 
 // Create client and connect
 smtp_client_t *smtp = smtp_client_create(ctx, &config);
@@ -70,7 +75,24 @@ smtp_client_free(smtp);
 coro_context_destroy(ctx);
 ```
 
-### Receive Email (POP3)
+Environment overrides used by `examples/example_email_send.c`:
+
+- `SMTP_HOST` default `127.0.0.1`
+- `SMTP_PORT` default `25`
+- `SMTP_FROM` default `sender@smtp4dev.local`
+- `SMTP_TO` default `recipient@smtp4dev.local`
+- `SMTP_TLS` default `0`
+- `SMTP_STARTTLS` default `0`
+- `TURBONET_TLS_CA_FILE` optional CA bundle loaded before the TLS handshake
+- `TURBONET_TLS_CA_PATH` optional CA directory loaded before the TLS handshake
+
+If you do want Gmail later, first finish the missing TLS/STARTTLS path in `email_smtp.c`.
+
+### Receive Email (POP3, local smtp4dev path)
+
+The current POP3 code path is plain TCP and expects `USER`/`PASS`.
+In this workspace the local `smtp4dev` setup uses the test account `turbo` / `turbo`,
+and the example defaults to those values unless you override them with environment variables.
 
 ```c
 #include "email/email_pop3.h"
@@ -81,11 +103,12 @@ coro_context_t *ctx = coro_context_create(NULL);
 
 // Configure POP3
 pop3_config_t config = {0};
-config.host = "pop.gmail.com";
-config.port = 995;
-config.use_tls = 1;
-config.username = "your-email@gmail.com";
-config.password = "your-app-password";
+config.host = "127.0.0.1";
+config.port = 110;
+config.use_tls = 0;
+config.use_stls = 0;
+config.username = getenv("POP3_USERNAME"); // defaults to "turbo"
+config.password = getenv("POP3_PASSWORD"); // defaults to "turbo"
 
 // Create client and connect
 pop3_client_t *pop3 = pop3_client_create(ctx, &config);
@@ -118,6 +141,43 @@ pop3_disconnect(pop3);
 pop3_client_free(pop3);
 coro_context_destroy(ctx);
 ```
+
+Environment overrides used by `examples/example_email_receive.c`:
+
+- `POP3_HOST` default `127.0.0.1`
+- `POP3_PORT` default `110`
+- `POP3_USERNAME` default `turbo`
+- `POP3_PASSWORD` default `turbo`
+- `POP3_TLS` default `0`
+- `POP3_STLS` default `0`
+- `TURBONET_TLS_CA_FILE` optional CA bundle loaded before the TLS handshake
+- `TURBONET_TLS_CA_PATH` optional CA directory loaded before the TLS handshake
+
+### Access Email (IMAP, local smtp4dev path)
+
+The IMAP path is now good enough for local `smtp4dev` smoke tests and simple TLS smoke tests.
+Like POP3, the bundled local test setup uses `turbo` / `turbo` by default.
+
+```c
+imap_config_t config = {0};
+config.host = "127.0.0.1";
+config.port = 143;
+config.use_tls = 0;
+config.use_starttls = 0;
+config.username = getenv("IMAP_USERNAME"); // defaults to "turbo"
+config.password = getenv("IMAP_PASSWORD"); // defaults to "turbo"
+```
+
+Environment overrides used by `examples/example_email_imap.c`:
+
+- `IMAP_HOST` default `127.0.0.1`
+- `IMAP_PORT` default `143`
+- `IMAP_USERNAME` default `turbo`
+- `IMAP_PASSWORD` default `turbo`
+- `IMAP_TLS` default `0`
+- `IMAP_STARTTLS` default `0`
+- `TURBONET_TLS_CA_FILE` optional CA bundle loaded before the TLS handshake
+- `TURBONET_TLS_CA_PATH` optional CA directory loaded before the TLS handshake
 
 ### Add Attachments
 
@@ -277,10 +337,7 @@ See `examples/` directory:
 
 ## TODO
 
-- [ ] Complete IMAP response parsing
-- [ ] TLS upgrade implementation (`coro_socket_upgrade_tls`)
 - [ ] RFC 2047 encoded-word for non-ASCII subjects
-- [ ] Message parsing (`email_message_parse`)
 - [ ] IMAP FETCH body parsing
 - [ ] Multi-line SMTP/IMAP response handling
 

@@ -10,19 +10,43 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static const char *env_or_default(const char *name, const char *fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return value;
+}
+
+static int env_port_or_default(const char *name, int fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return atoi(value);
+}
+
+static int env_flag_or_default(const char *name, int fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return strcmp(value, "0") != 0;
+}
+
 // SMTP operations must run inside a coroutine
 static void smtp_test_coro(coro_t *co, void *arg) {
   coro_context_t *ctx = (coro_context_t *)arg;
 
-  // Configure SMTP
+  // Configure SMTP for local smtp4dev testing
   smtp_config_t smtp_config = {0};
-  smtp_config.host = "smtp.gmail.com";
-  smtp_config.port = 587;
-  smtp_config.use_tls = 0;
-  smtp_config.use_starttls = 1;
-  smtp_config.auth_method = SMTP_AUTH_PLAIN;
-  smtp_config.username = "your-email@gmail.com";
-  smtp_config.password = "your-app-password";
+  smtp_config.host = (char *)env_or_default("SMTP_HOST", "127.0.0.1");
+  smtp_config.port = env_port_or_default("SMTP_PORT", 25);
+  smtp_config.use_tls = env_flag_or_default("SMTP_TLS", 0);
+  smtp_config.use_starttls = env_flag_or_default("SMTP_STARTTLS", 0);
+  smtp_config.auth_method = SMTP_AUTH_NONE;
+  smtp_config.username = NULL;
+  smtp_config.password = NULL;
   smtp_config.timeout_ms = 30000;
 
   // Create SMTP client
@@ -33,9 +57,10 @@ static void smtp_test_coro(coro_t *co, void *arg) {
   }
 
   // Connect
-  printf("Connecting to SMTP server...\n");
+  printf("Connecting to SMTP server %s:%d...\n", smtp_config.host, smtp_config.port);
   if (smtp_connect(smtp) != 0) {
     fprintf(stderr, "SMTP connect failed: %s\n", smtp_get_error(smtp));
+    fprintf(stderr, "Start smtp4dev locally or override SMTP_HOST/SMTP_PORT.\n");
     smtp_client_free(smtp);
     return;
   }
@@ -55,11 +80,18 @@ static void smtp_test_coro(coro_t *co, void *arg) {
   }
 
   // Set message content
-  email_message_set_from(msg, "Sender Name", "sender@example.com");
-  email_message_add_to(msg, "Recipient Name", "recipient@example.com");
-  email_message_set_subject(msg, "Test Email from TurboNet");
-  email_message_set_text_body(msg, "Hello from TurboNet Email Module!\n\nThis is a test email.");
-  email_message_set_html_body(msg, "<html><body><h1>Hello from TurboNet!</h1><p>This is a test email.</p></body></html>");
+  email_message_set_from(msg, "TurboNet SMTP Demo",
+                         env_or_default("SMTP_FROM", "sender@smtp4dev.local"));
+  email_message_add_to(msg, "Local Test Recipient",
+                       env_or_default("SMTP_TO", "recipient@smtp4dev.local"));
+  email_message_set_subject(msg, "TurboNet smtp4dev smoke test");
+  email_message_set_text_body(msg,
+                              "Hello from TurboNet Email Module!\n\n"
+                              "This message was sent to a local smtp4dev server.");
+  email_message_set_html_body(
+      msg,
+      "<html><body><h1>TurboNet smtp4dev smoke test</h1>"
+      "<p>This message was sent to a local smtp4dev server.</p></body></html>");
 
   // Send message
   printf("Sending email...\n");

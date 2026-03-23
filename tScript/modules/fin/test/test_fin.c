@@ -72,6 +72,16 @@ suite("fin test") {
       check(calmar > 0); // Positive equity growth should give positive Calmar
     }
 
+    it("should annualize Calmar with CAGR instead of linear return") {
+      double equity[] = {100.0, 50.0, 200.0};
+      size_t n = 3;
+      double annual_factor = 2.0;
+
+      double calmar = exprtk_calmar(equity, n, annual_factor);
+
+      check_float_eq(calmar, 2.0, EPSILON);
+    }
+
     it("should calculate profit factor for winning trades") {
       double trades[] = {100, -50, 150, -30, 80, -40};
       size_t n = 6;

@@ -20,6 +20,11 @@
  *
  * Backtests a signal-based strategy with basic position sizing.
  *
+ * Execution semantics are intentionally simple and explicit:
+ *   - signal[i] is filled at open[i]
+ *   - equity[i] is then marked using close[i]
+ * This means callers must pre-lag any signal built from close[i].
+ *
  * @param open Open prices
  * @param close Close prices
  * @param signal Trading signals: +1 (long), -1 (short), 0 (flat)
@@ -27,7 +32,7 @@
  * @param cash0 Initial cash
  * @param commission Commission rate (e.g., 0.001 for 0.1%)
  * @param equity Output equity curve (length n)
- * @param trades Output trade P&L array (length n)
+ * @param trades Output sparse per-bar trade P&L array (length n)
  * @return Number of trades executed
  */
 size_t exprtk_bt_backtest(const double *open, const double *close,
@@ -65,10 +70,15 @@ size_t exprtk_bt_backtest(const double *open, const double *close,
             /* Open new position */
             if (fabs(new_signal) > 0.5) {
                 double size = cash * 0.95; // Use 95% of cash
+                double notional;
                 position = (new_signal > 0 ? 1.0 : -1.0) * size / open[i];
                 entry_price = open[i];
-                cash -= fabs(position * entry_price);
-                cash -= fabs(position * entry_price) * commission;
+                notional = fabs(position * entry_price);
+                if (position > 0.0)
+                    cash -= notional;
+                else
+                    cash += notional;
+                cash -= notional * commission;
             }
         }
 
@@ -113,8 +123,10 @@ size_t exprtk_bt_stats(const double *equity, const double *trades, size_t n,
     out[0] = total_ret;
 
     /* Annualized return */
-    double periods = (double)n;
-    double ann_ret = pow(1.0 + total_ret, annual / periods) - 1.0;
+    double periods = (n > 1) ? (double)(n - 1) : 0.0;
+    double ann_ret = 0.0;
+    if (periods > 0.0 && (1.0 + total_ret) > 0.0)
+        ann_ret = pow(1.0 + total_ret, annual / periods) - 1.0;
     out[1] = ann_ret;
 
     /* Calculate returns for Sharpe */
@@ -206,17 +218,10 @@ size_t exprtk_bt_stats(const double *equity, const double *trades, size_t n,
 double exprtk_bt_slippage(double price, double size, double vol,
                            double avg_vol, double lambda) {
     if (price < 1e-10 || avg_vol < 1e-10) return 0.0;
-
-    /* Participation rate */
-    double participation = fabs(size) / (vol + 1e-10);
+    (void)vol;
 
     /* Market impact: price * lambda * (size/avg_vol)^0.5 */
-    double impact = price * lambda * sqrt(fabs(size) / avg_vol);
-
-    /* Temporary impact (recovers after trade) */
-    double temp_impact = impact * participation;
-
-    return temp_impact;
+    return price * lambda * sqrt(fabs(size) / avg_vol);
 }
 
 /**
@@ -224,10 +229,14 @@ double exprtk_bt_slippage(double price, double size, double vol,
  *
  * Combines commission, tax, and slippage.
  *
+ * This helper is intentionally side-agnostic: tax_pct is charged on notional
+ * for both buys and sells. Use market_commission() when market-specific
+ * one-way duties matter.
+ *
  * @param price Execution price
  * @param size Order size (shares)
  * @param commission_pct Commission rate (e.g., 0.001)
- * @param tax_pct Tax rate (e.g., 0.001 for stamp duty)
+ * @param tax_pct Side-agnostic tax/fee rate on notional
  * @param slippage Slippage per share
  * @return Total cost
  */

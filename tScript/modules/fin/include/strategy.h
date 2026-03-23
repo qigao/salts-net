@@ -203,17 +203,19 @@ int strategy_run_single(strategy_ctx_t *ctx,
 /**
  * @brief Run a backtest across all active assets in the universe.
  *
- * On each trading date, the engine:
- *   1. Calls universe_advance() to update the active mask.
- *   2. Force-closes any delisted positions.
- *   3. For each active asset, calls the on_bar handler.
- *   4. Marks to market and records the equity curve.
+ * The current implementation opens one single-asset stream per asset, then
+ * merges those streams onto a shared date axis inside the strategy runner.
+ * On each merged trading date, the engine:
+ *   1. Calls universe_advance() for that date.
+ *   2. Runs on_bar for every asset that has a bar on that date.
+ *   3. Marks the whole portfolio to market once and records one equity point.
+ *   4. Closes any remaining open positions at the last known marked price.
  *
- * Requires the provider to support multi-asset streaming
- * (provider->open_multi_stream != NULL), or will fall back to
- * sequentially streaming individual assets for each date.
+ * Requires the provider to support the single-asset stream callbacks
+ * (open_stream/next_bar/close_stream). It does not currently use the optional
+ * open_multi_stream/next_date/close_multi_stream provider API.
  *
- * @return Number of date-bars processed, or <0 on error.
+ * @return Number of asset-bars processed, or <0 on error.
  */
 int strategy_run_universe(strategy_ctx_t *ctx,
                             double start_date,

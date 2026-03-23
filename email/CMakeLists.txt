@@ -89,6 +89,24 @@ set_target_properties(test_message PROPERTIES FOLDER "email")
 # ── Add to tests ───────────────────────────────────────────────────────
 add_test(NAME email_message_tests COMMAND test_message)
 
+add_executable(test_email_integration
+  test/test_email_integration.c
+)
+
+target_link_libraries(test_email_integration
+  turbonet_email
+  turbo_utils
+)
+
+target_include_directories(test_email_integration PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/shared/utils/include
+  ${CMAKE_SOURCE_DIR}/shared/tinytest
+)
+
+set_target_properties(test_email_integration PROPERTIES FOLDER "email")
+add_test(NAME email_integration_tests COMMAND test_email_integration)
+
 # ── Examples ───────────────────────────────────────────────────────────
 add_executable(example_email_send
   examples/example_email_send.c

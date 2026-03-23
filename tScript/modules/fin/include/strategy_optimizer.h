@@ -39,9 +39,9 @@ typedef enum {
  * ranges:         flat array [min1, max1, step1, min2, max2, step2, ...]
  *                 length = num_params * 3
  * num_params:     number of parameters to optimize
- * in_sample_bars: length of in-sample training window
- * out_sample_bars:length of out-of-sample validation window
- * step_bars:      how far to slide the window each iteration
+ * in_sample_bars: length of in-sample training window in observed bars
+ * out_sample_bars:length of out-of-sample validation window in observed bars
+ * step_bars:      how far to slide the window each iteration in observed bars
  * metric:         which performance metric to maximize
  */
 typedef struct {
@@ -80,11 +80,14 @@ typedef struct {
 /**
  * @brief Run walk-forward optimization on a single asset.
  *
- * @param ctx        Strategy context (must have compiled script).
- * @param code       Strategy source code (re-compiled each window).
+ * @param ctx        Strategy context (must already have a compiled script).
+ * @param code       Reserved for future use; currently ignored and may be NULL.
  * @param asset_id   Asset to optimize on.
  * @param start_date Start of the full data range (epoch days).
  * @param end_date   End of the full data range (epoch days).
+ *
+ * Windows are built from the asset's actual streamed bars inside [start_date, end_date].
+ * Weekends, holidays, and data gaps do not count as bars.
  * @param cfg        Walk-forward configuration.
  * @param result     Output results (arrays allocated from arena).
  * @param arena      Arena for result allocations.

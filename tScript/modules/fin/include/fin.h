@@ -15,7 +15,19 @@ extern "C" {
 #endif
 
 /* ========================================================================= */
-/* Backtest                                                                  */
+/* Backtest
+ *
+ * exprtk_bt_backtest() is a same-bar-open toy simulator:
+ * signal[i] is executed at open[i], then equity[i] is marked with close[i].
+ * Callers that derive signal from close[i] must lag the signal themselves
+ * to avoid look-ahead bias.
+ *
+ * trades[] is a sparse per-bar P&L array with length n, not a compact trade log.
+ *
+ * exprtk_bt_cost() is a side-agnostic helper:
+ * tax_pct is applied to notional on both buys and sells. Market-specific
+ * one-way taxes such as CN stamp duty belong in market_rules/market_commission().
+ */
 /* ========================================================================= */
 size_t exprtk_bt_backtest(const double *open, const double *close, const double *signal, size_t n, double cash0, double commission, double *equity, double *trades);
 size_t exprtk_bt_stats(const double *equity, const double *trades, size_t n, size_t num_trades, double annual, double *out);
@@ -25,8 +37,12 @@ double exprtk_bt_slippage(double price, double size, double vol, double avg_vol,
 double exprtk_bt_cost(double price, double size, double commission_pct, double tax_pct, double slippage);
 
 /* Portfolio */
+/* exprtk_pf_cov_matrix() returns the population covariance matrix (divide by np),
+ * not the sample covariance (np - 1).
+ */
 void   exprtk_pf_cov_matrix(const double *returns, size_t na, size_t np, double *out, mem_pool_t *arena);
 double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, mem_pool_t *arena);
+/* Unconstrained tangency portfolio: weights sum to 1, but may be negative or >1. */
 double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n, double rf, double *weights, mem_pool_t *arena);
 double exprtk_pf_markowitz(const double *mu, const double *cov, size_t n, double target, double *weights, mem_pool_t *arena);
 double exprtk_pf_risk_parity(const double *cov, size_t n, double *weights, mem_pool_t *arena);
@@ -35,6 +51,7 @@ double exprtk_pf_risk_parity(const double *cov, size_t n, double *weights, mem_p
 /* Note: var_hist, var_param, cvar, kelly, drawdown, drawdown_stats are in ta module */
 double exprtk_fixed_frac(double equity, double risk_pct, double stop_dist);
 double exprtk_optimal_f(const double *trades, size_t n, double *out);
+/* `mu` and `sigma` are annualized, `dt` is the time-step expressed as a year fraction. */
 size_t exprtk_mc_simulate(double s0, double mu, double sigma, double dt, size_t steps, size_t paths, double *out, mem_pool_t *arena);
 
 /* Performance Metrics */

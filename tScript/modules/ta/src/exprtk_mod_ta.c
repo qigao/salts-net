@@ -445,6 +445,18 @@ static exprtk_value_t fn_ta_vwap(size_t argc, exprtk_value_t *a, exprtk_env_t *e
   return exprtk_val_num(0);
 }
 
+static exprtk_value_t fn_ta_vwap_session(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
+                                         mem_pool_t *ar) {
+  (void)e;
+  if (argc == 5 && V(0) && V(1) && V(2) && V(3) && V(4)) {
+    size_t n = a[0].data.vector.size;
+    double *o = ALLOC_DBL(ar, n);
+    if (o && exprtk_ta_vwap_session(D(0), D(1), D(2), D(3), D(4), n, o))
+      return exprtk_val_vec(o, n);
+  }
+  return exprtk_val_num(0);
+}
+
 static exprtk_value_t fn_ta_donchian(size_t argc, exprtk_value_t *a, exprtk_env_t *e,
                                      mem_pool_t *ar) {
   (void)e;
@@ -1377,6 +1389,7 @@ static const exprtk_func_entry_t ta_entries[] = {
     {"vidya", fn_ta_vidya},
     {"volatility_ratio", fn_ta_volatility_ratio},
     {"vwap", fn_ta_vwap},
+    {"vwap_session", fn_ta_vwap_session},
     {"wclprice", fn_ta_wclprice},
     {"willr", fn_ta_willr},
     {"wma", fn_ta_wma},

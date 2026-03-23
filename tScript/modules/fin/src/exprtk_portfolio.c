@@ -17,11 +17,155 @@
 #include <stdlib.h>
 
 /* =========================================================================
+ * Linear Algebra Helpers
+ * ========================================================================= */
+
+static int invert_matrix(const double *matrix, size_t n, double *inv_out, mem_pool_t *arena) {
+    double *aug;
+
+    if (!matrix || !inv_out || !arena || n == 0) return -1;
+
+    aug = MEM_ALLOC_ARRAY(arena, double, n * 2 * n);
+    if (!aug) return -1;
+
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = 0; j < n; j++) {
+            aug[i * 2 * n + j] = matrix[i * n + j];
+            aug[i * 2 * n + n + j] = (i == j) ? 1.0 : 0.0;
+        }
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        size_t pivot_row = i;
+        double pivot_abs = fabs(aug[i * 2 * n + i]);
+
+        for (size_t r = i + 1; r < n; r++) {
+            double cand_abs = fabs(aug[r * 2 * n + i]);
+            if (cand_abs > pivot_abs) {
+                pivot_abs = cand_abs;
+                pivot_row = r;
+            }
+        }
+
+        if (pivot_abs < 1e-10) return -1;
+
+        if (pivot_row != i) {
+            for (size_t j = 0; j < 2 * n; j++) {
+                double tmp = aug[i * 2 * n + j];
+                aug[i * 2 * n + j] = aug[pivot_row * 2 * n + j];
+                aug[pivot_row * 2 * n + j] = tmp;
+            }
+        }
+
+        double pivot = aug[i * 2 * n + i];
+        for (size_t j = 0; j < 2 * n; j++) {
+            aug[i * 2 * n + j] /= pivot;
+        }
+
+        for (size_t r = 0; r < n; r++) {
+            if (r == i) continue;
+            double factor = aug[r * 2 * n + i];
+            for (size_t j = 0; j < 2 * n; j++) {
+                aug[r * 2 * n + j] -= factor * aug[i * 2 * n + j];
+            }
+        }
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = 0; j < n; j++) {
+            inv_out[i * n + j] = aug[i * 2 * n + n + j];
+        }
+    }
+
+    return 0;
+}
+
+static void equal_weights(double *weights, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        weights[i] = 1.0 / (double)n;
+    }
+}
+
+static void single_asset_weight(double *weights, size_t n, size_t idx) {
+    for (size_t i = 0; i < n; i++) {
+        weights[i] = (i == idx) ? 1.0 : 0.0;
+    }
+}
+
+static size_t best_excess_index(const double *excess, size_t n) {
+    size_t best = 0;
+    for (size_t i = 1; i < n; i++) {
+        if (excess[i] > excess[best]) best = i;
+    }
+    return best;
+}
+
+static int inversion_valid(const double *orig, const double *inv, size_t n) {
+    double tol = 1e-6;
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = 0; j < n; j++) {
+            double sum = 0.0;
+            for (size_t k = 0; k < n; k++) {
+                sum += orig[i * n + k] * inv[k * n + j];
+            }
+            double expected = (i == j) ? 1.0 : 0.0;
+            if (fabs(sum - expected) > tol) return 0;
+        }
+    }
+    return 1;
+}
+
+static int rows_identical(const double *cov, size_t n) {
+    if (n < 2) return 0;
+    double tol = 1e-9;
+    for (size_t i = 1; i < n; i++) {
+        for (size_t j = 0; j < n; j++) {
+            if (fabs(cov[i * n + j] - cov[j]) > tol) return 0;
+        }
+    }
+    return 1;
+}
+
+static int cov_entries_uniform(const double *cov, size_t n) {
+    double first = cov[0];
+    double tol = 1e-9;
+    for (size_t i = 0; i < n * n; i++) {
+        if (fabs(cov[i] - first) > tol) return 0;
+    }
+    return 1;
+}
+
+static void target_blend_weights(const double *mu, size_t n, double target, double *weights) {
+    size_t min_idx = 0;
+    size_t max_idx = 0;
+
+    for (size_t i = 1; i < n; i++) {
+        if (mu[i] < mu[min_idx]) min_idx = i;
+        if (mu[i] > mu[max_idx]) max_idx = i;
+    }
+
+    if (fabs(mu[max_idx] - mu[min_idx]) < 1e-10) {
+        single_asset_weight(weights, n, max_idx);
+        return;
+    }
+
+    for (size_t i = 0; i < n; i++) weights[i] = 0.0;
+
+    double w_max = (target - mu[min_idx]) / (mu[max_idx] - mu[min_idx]);
+    if (w_max < 0.0) w_max = 0.0;
+    if (w_max > 1.0) w_max = 1.0;
+    weights[max_idx] = w_max;
+    weights[min_idx] = 1.0 - w_max;
+}
+
+/* =========================================================================
  * Covariance Matrix
  * ========================================================================= */
 
 /**
  * @brief Calculate covariance matrix from returns.
+ *
+ * Uses population covariance normalization (divide by np).
  *
  * @param returns Returns matrix (na assets × np periods, row-major)
  * @param na Number of assets
@@ -89,57 +233,12 @@ double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, mem_
     double *temp = MEM_ALLOC_ARRAY(arena, double, n);
     if (!inv_cov || !ones || !temp) return 0.0;
 
-    /* Copy covariance matrix for inversion */
-    memcpy(inv_cov, cov, n * n * sizeof(double));
-
-    /* Invert covariance matrix using Cholesky decomposition */
-    /* For simplicity, use a basic Gauss-Jordan elimination */
-    /* TODO: Replace with proper Cholesky for better numerical stability */
-
-    /* Create augmented matrix [Σ | I] */
-    double *aug = MEM_ALLOC_ARRAY(arena, double, n * 2 * n);
-    if (!aug) return 0.0;
-
-    for (size_t i = 0; i < n; i++) {
-        for (size_t j = 0; j < n; j++) {
-            aug[i * 2 * n + j] = cov[i * n + j];
-            aug[i * 2 * n + n + j] = (i == j) ? 1.0 : 0.0;
-        }
-    }
-
-    /* Gauss-Jordan elimination */
-    for (size_t i = 0; i < n; i++) {
-        /* Find pivot */
-        double pivot = aug[i * 2 * n + i];
-        if (fabs(pivot) < 1e-10) {
-            /* Singular matrix - use equal weights */
-            for (size_t k = 0; k < n; k++) {
-                weights[k] = 1.0 / n;
-            }
-            return 0.0;
-        }
-
-        /* Scale row */
-        for (size_t j = 0; j < 2 * n; j++) {
-            aug[i * 2 * n + j] /= pivot;
-        }
-
-        /* Eliminate column */
-        for (size_t k = 0; k < n; k++) {
-            if (k != i) {
-                double factor = aug[k * 2 * n + i];
-                for (size_t j = 0; j < 2 * n; j++) {
-                    aug[k * 2 * n + j] -= factor * aug[i * 2 * n + j];
-                }
-            }
-        }
-    }
-
-    /* Extract inverse from augmented matrix */
-    for (size_t i = 0; i < n; i++) {
-        for (size_t j = 0; j < n; j++) {
-            inv_cov[i * n + j] = aug[i * 2 * n + n + j];
-        }
+    if (invert_matrix(cov, n, inv_cov, arena) != 0 ||
+        !inversion_valid(cov, inv_cov, n) ||
+        rows_identical(cov, n) ||
+        cov_entries_uniform(cov, n)) {
+        equal_weights(weights, n);
+        return 0.0;
     }
 
     /* Calculate w = Σ^(-1) * 1 */
@@ -161,10 +260,7 @@ double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, mem_
     }
 
     if (fabs(sum) < 1e-10) {
-        /* Fallback to equal weights */
-        for (size_t i = 0; i < n; i++) {
-            weights[i] = 1.0 / n;
-        }
+        equal_weights(weights, n);
         return 0.0;
     }
 
@@ -194,6 +290,9 @@ double exprtk_pf_min_variance(const double *cov, size_t n, double *weights, mem_
  *
  * Analytical solution: w ∝ Σ^(-1) * (μ - rf*1)
  *
+ * This is the unconstrained tangency portfolio. Weights may be negative or
+ * exceed 1. Long-only callers must clamp/project externally.
+ *
  * @param mu Expected returns (length n)
  * @param cov Covariance matrix (n × n)
  * @param n Number of assets
@@ -217,47 +316,14 @@ double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n,
         excess[i] = mu[i] - rf;
     }
 
-    /* Invert covariance matrix (same as min variance) */
-    memcpy(inv_cov, cov, n * n * sizeof(double));
+    size_t best_idx = best_excess_index(excess, n);
 
-    double *aug = MEM_ALLOC_ARRAY(arena, double, n * 2 * n);
-    if (!aug) return 0.0;
-
-    for (size_t i = 0; i < n; i++) {
-        for (size_t j = 0; j < n; j++) {
-            aug[i * 2 * n + j] = cov[i * n + j];
-            aug[i * 2 * n + n + j] = (i == j) ? 1.0 : 0.0;
-        }
-    }
-
-    /* Gauss-Jordan elimination */
-    for (size_t i = 0; i < n; i++) {
-        double pivot = aug[i * 2 * n + i];
-        if (fabs(pivot) < 1e-10) {
-            for (size_t k = 0; k < n; k++) {
-                weights[k] = 1.0 / n;
-            }
-            return 0.0;
-        }
-
-        for (size_t j = 0; j < 2 * n; j++) {
-            aug[i * 2 * n + j] /= pivot;
-        }
-
-        for (size_t k = 0; k < n; k++) {
-            if (k != i) {
-                double factor = aug[k * 2 * n + i];
-                for (size_t j = 0; j < 2 * n; j++) {
-                    aug[k * 2 * n + j] -= factor * aug[i * 2 * n + j];
-                }
-            }
-        }
-    }
-
-    for (size_t i = 0; i < n; i++) {
-        for (size_t j = 0; j < n; j++) {
-            inv_cov[i * n + j] = aug[i * 2 * n + n + j];
-        }
+    if (invert_matrix(cov, n, inv_cov, arena) != 0 ||
+        !inversion_valid(cov, inv_cov, n) ||
+        rows_identical(cov, n) ||
+        cov_entries_uniform(cov, n)) {
+        single_asset_weight(weights, n, best_idx);
+        return 0.0;
     }
 
     /* Calculate w = Σ^(-1) * (μ - rf*1) */
@@ -275,9 +341,7 @@ double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n,
     }
 
     if (fabs(sum) < 1e-10) {
-        for (size_t i = 0; i < n; i++) {
-            weights[i] = 1.0 / n;
-        }
+        single_asset_weight(weights, n, best_idx);
         return 0.0;
     }
 
@@ -324,64 +388,69 @@ double exprtk_pf_max_sharpe(const double *mu, const double *cov, size_t n,
 double exprtk_pf_markowitz(const double *mu, const double *cov, size_t n,
                             double target, double *weights, mem_pool_t *arena) {
     if (!mu || !cov || !weights || n == 0) return 0.0;
+    if (n == 1) {
+        weights[0] = 1.0;
+        return cov[0];
+    }
 
-    /* For simplicity, use a grid search approach */
-    /* TODO: Implement proper quadratic programming solver */
+    double *inv_cov = MEM_ALLOC_ARRAY(arena, double, n * n);
+    double *inv_ones = MEM_ALLOC_ARRAY(arena, double, n);
+    double *inv_mu = MEM_ALLOC_ARRAY(arena, double, n);
+    if (!inv_cov || !inv_ones || !inv_mu) return 0.0;
 
     /* Find min and max possible returns */
     double min_ret = mu[0], max_ret = mu[0];
+    size_t min_idx = 0, max_idx = 0;
     for (size_t i = 1; i < n; i++) {
         if (mu[i] < min_ret) min_ret = mu[i];
         if (mu[i] > max_ret) max_ret = mu[i];
+        if (mu[i] < mu[min_idx]) min_idx = i;
+        if (mu[i] > mu[max_idx]) max_idx = i;
     }
 
     /* Clamp target to feasible range */
     if (target < min_ret) target = min_ret;
     if (target > max_ret) target = max_ret;
 
-    /* Simple heuristic: weight proportional to (return - min_ret) */
-    double sum = 0.0;
-    for (size_t i = 0; i < n; i++) {
-        double w = (mu[i] - min_ret + 0.01); // Add small constant to avoid zero
-        weights[i] = w;
-        sum += w;
+    if (target <= min_ret + 1e-12) {
+        single_asset_weight(weights, n, min_idx);
+        return 0.0;
     }
 
-    /* Normalize */
-    for (size_t i = 0; i < n; i++) {
-        weights[i] /= sum;
+    if (target >= max_ret - 1e-12) {
+        single_asset_weight(weights, n, max_idx);
+        return 0.0;
     }
 
-    /* Adjust to match target return */
-    double current_ret = 0.0;
-    for (size_t i = 0; i < n; i++) {
-        current_ret += weights[i] * mu[i];
-    }
-
-    /* Scale weights to match target */
-    double scale = 1.0;
-    if (fabs(current_ret - min_ret) > 1e-10 && fabs(max_ret - min_ret) > 1e-10) {
-        scale = (target - min_ret) / (current_ret - min_ret);
+    if (invert_matrix(cov, n, inv_cov, arena) != 0) {
+        target_blend_weights(mu, n, target, weights);
+        return 0.0;
     }
 
     for (size_t i = 0; i < n; i++) {
-        weights[i] *= scale;
-    }
-
-    /* Re-normalize */
-    sum = 0.0;
-    for (size_t i = 0; i < n; i++) {
-        sum += weights[i];
-    }
-
-    if (sum > 1e-10) {
-        for (size_t i = 0; i < n; i++) {
-            weights[i] /= sum;
+        inv_ones[i] = 0.0;
+        inv_mu[i] = 0.0;
+        for (size_t j = 0; j < n; j++) {
+            inv_ones[i] += inv_cov[i * n + j];
+            inv_mu[i] += inv_cov[i * n + j] * mu[j];
         }
+    }
+
+    double A = 0.0, B = 0.0, C = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        A += inv_ones[i];
+        B += inv_mu[i];
+        C += mu[i] * inv_mu[i];
+    }
+
+    double D = A * C - B * B;
+    if (fabs(D) < 1e-10) {
+        target_blend_weights(mu, n, target, weights);
     } else {
-        /* Fallback to equal weights */
+        double lambda = (C - target * B) / D;
+        double gamma = (target * A - B) / D;
         for (size_t i = 0; i < n; i++) {
-            weights[i] = 1.0 / n;
+            weights[i] = lambda * inv_ones[i] + gamma * inv_mu[i];
         }
     }
 

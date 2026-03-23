@@ -97,6 +97,15 @@ void bar_window_push_adjusted(bar_window_t *w,
                                double close, double volume,
                                double adj_factor);
 
+/**
+ * @brief Rescale all stored prices in the window by a constant ratio.
+ *
+ * This is used when the universe adjustment factor changes after earlier bars
+ * have already been pushed, so the whole rolling window stays on one basis.
+ * Volume and dates are left unchanged.
+ */
+void bar_window_rescale_prices(bar_window_t *w, double scale);
+
 /* =========================================================================
  * Accessing Data
  * ========================================================================= */

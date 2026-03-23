@@ -26,6 +26,23 @@
 #  include <arpa/inet.h>
 #endif
 
+static void configure_ca_from_env(void) {
+  if (s_ca_configured) return;
+  const char *file = getenv("TURBONET_TLS_CA_FILE");
+  const char *path = getenv("TURBONET_TLS_CA_PATH");
+  if ((file == NULL || file[0] == '\0') &&
+      (path == NULL || path[0] == '\0')) {
+    return;
+  }
+
+  if (s_default_ctx) {
+    SSL_CTX_load_verify_locations(s_default_ctx,
+                                  (file && file[0]) ? file : NULL,
+                                  (path && path[0]) ? path : NULL);
+    s_ca_configured = 1;
+  }
+}
+
 /* ── State machine ────────────────────────────────────────── */
 
 typedef enum {
@@ -61,10 +78,61 @@ static int  tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *pee
 static void tls_pump(tls_state_t *st);
 static void tls_flush_wbio_to_network(tls_state_t *st);
 
+static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
+                                 const char *hostname,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close) {
+  tls_state_t *st;
+
+  if (!outer || !tcp || tcp->kind == TURBO_STREAM_TLS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)outer->backend_data;
+  if (!st || st->tcp) {
+    return TURBO_EINVAL;
+  }
+
+  if (!tcp->connected) {
+    return TURBO_ENOTCONN;
+  }
+
+  outer->on_connect = on_connect;
+  outer->on_close = on_close;
+
+  if (hostname && hostname[0] != '\0') {
+    strncpy(st->hostname, hostname, sizeof(st->hostname) - 1);
+    st->hostname[sizeof(st->hostname) - 1] = '\0';
+  }
+
+  st->tcp = tcp;
+  st->tcp->user_data = st;
+  st->tcp->managed = 1;
+  st->tcp->on_connect = NULL;
+  st->tcp->on_close = tls_on_tcp_close;
+  turbo_stream_recv_stop(st->tcp);
+
+  if (st->hostname[0] != '\0') {
+    SSL_set_tlsext_host_name(st->ssl, st->hostname);
+  }
+
+  st->state = TLS_ST_HANDSHAKING;
+  outer->connected = 0;
+
+  if (turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb) != 0) {
+    st->state = TLS_ST_CLOSED;
+    return TURBO_EIO;
+  }
+
+  tls_pump(st);
+  return 0;
+}
+
 /* ── Initialization ───────────────────────────────────────── */
 
 /* Global lock internally in modern OpenSSL, but static initialization flag for context. */
 static SSL_CTX *s_default_ctx = NULL;
+static int s_ca_configured = 0;
 
 static SSL_CTX *get_default_tls_ctx(void) {
   if (s_default_ctx) return s_default_ctx;
@@ -77,6 +145,9 @@ static SSL_CTX *get_default_tls_ctx(void) {
   if (s_default_ctx) {
     SSL_CTX_set_mode(s_default_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_mode(s_default_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    SSL_CTX_set_verify(s_default_ctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_default_verify_paths(s_default_ctx);
+    configure_ca_from_env();
   }
   return s_default_ctx;
 }
@@ -291,7 +362,7 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   /* Inform OpenSSL of the hostname for SNI Extension, only if not already set */
   if (st->hostname[0] == '\0') {
-    /* Resolve string for SNI (Host header eqv.) */
+    /* Resolve string for SNI and hostname verification */
     if (addr->sa_family == AF_INET) {
       struct sockaddr_in *a4 = (struct sockaddr_in *)addr;
       inet_ntop(AF_INET, &a4->sin_addr, st->hostname, sizeof(st->hostname));
@@ -300,12 +371,24 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
       inet_ntop(AF_INET6, &a6->sin6_addr, st->hostname, sizeof(st->hostname));
     }
   }
-  SSL_set_tlsext_host_name(st->ssl, st->hostname);
+  if (st->hostname[0] != '\0') {
+    SSL_set_tlsext_host_name(st->ssl, st->hostname);
+    SSL_set1_host(st->ssl, st->hostname);
+  }
 
   st->state = TLS_ST_CONNECTING_TCP;
   return turbo_stream_connect_addr(st->tcp, addr,
                                    tls_on_tcp_connect,
                                    tls_on_tcp_close);
+}
+
+int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
+                                 turbo_stream_t *tcp_stream,
+                                 const char *hostname,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close) {
+  return tls_attach_tcp_stream(tls_stream, tcp_stream, hostname,
+                               on_connect, on_close);
 }
 
 static int tls_connect_pipe(turbo_stream_t *s, const char *name) {

@@ -12,7 +12,7 @@ endif()
 target_include_directories(
   tedis PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 
-target_link_libraries(tedis PUBLIC TurboNet::CoroNet)
+target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboNet::Utils)
 
 # Platform-specific settings
 if(WIN32)

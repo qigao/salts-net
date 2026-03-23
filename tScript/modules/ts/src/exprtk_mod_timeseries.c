@@ -202,8 +202,8 @@ static exprtk_value_t fn_ts_dwt(size_t argc, exprtk_value_t *args, exprtk_env_t 
     double *approx = ALLOC_DBL(arena, n);
     double *detail = ALLOC_DBL(arena, n * levels);
     if (approx && detail) {
-      exprtk_ts_dwt(args[0].data.vector.data, n, levels, approx, detail, arena);
-      return exprtk_val_vec(approx, n);
+      if (exprtk_ts_dwt(args[0].data.vector.data, n, levels, approx, detail, arena))
+        return exprtk_val_vec(approx, n);
     }
   }
   return exprtk_val_num(0);
@@ -217,8 +217,8 @@ static exprtk_value_t fn_ts_emd(size_t argc, exprtk_value_t *args, exprtk_env_t 
     size_t max_imfs = (size_t)args[1].data.number;
     double *imfs = ALLOC_DBL(arena, n * max_imfs);
     if (imfs) {
-      exprtk_ts_emd(args[0].data.vector.data, n, max_imfs, imfs, arena);
-      return exprtk_val_vec(imfs, n * max_imfs);
+      if (exprtk_ts_emd(args[0].data.vector.data, n, max_imfs, imfs, arena))
+        return exprtk_val_vec(imfs, n * max_imfs);
     }
   }
   return exprtk_val_num(0);

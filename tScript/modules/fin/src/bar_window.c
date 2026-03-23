@@ -117,6 +117,26 @@ void bar_window_push_adjusted(bar_window_t *w,
                volume);  /* volume is not price-adjusted */
 }
 
+void bar_window_rescale_prices(bar_window_t *w, double scale) {
+    if (!w || w->count == 0 || scale == 1.0 || scale == 0.0) return;
+
+    for (size_t i = 0; i < w->capacity; i++) {
+        w->r_open[i] *= scale;
+        w->r_high[i] *= scale;
+        w->r_low[i] *= scale;
+        w->r_close[i] *= scale;
+    }
+
+    for (size_t i = 0; i < w->count; i++) {
+        w->open[i] *= scale;
+        w->high[i] *= scale;
+        w->low[i] *= scale;
+        w->close[i] *= scale;
+    }
+
+    w->dirty = true;
+}
+
 /* =========================================================================
  * Accessing Data
  * ========================================================================= */

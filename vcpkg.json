@@ -3,10 +3,6 @@
   "version-semver": "0.1.0",
   "dependencies": [
     {
-      "name": "libuv",
-      "version>=": "1.48.0"
-    },
-    {
       "name": "llhttp",
       "version>=": "9.1.3"
     },

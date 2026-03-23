@@ -3,7 +3,6 @@
 include(CMakeFindDependencyMacro)
 
 # Find dependencies (add more as needed)
-find_dependency(libuv)
 find_dependency(OpenSSL)  
 find_dependency(c-ares)
 find_dependency(base64) 

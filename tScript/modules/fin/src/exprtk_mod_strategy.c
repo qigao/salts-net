@@ -1331,7 +1331,10 @@ exprtk_value_t fn_resample_ohlcv(size_t argc, exprtk_value_t *args, exprtk_env_t
 
 /**
  * walk_forward(param_names_list, ranges_vec, is_bars, oos_bars, step, metric)
- * → Returns a map: {best_params: vec, is_scores: vec, oos_scores: vec, num_windows: num}
+ * Current status: script-side walk-forward is a placeholder.
+ * It validates the argument shapes, then returns a map:
+ *   {error: -1, num_windows: 0}
+ * The real implementation lives in the C API strategy_walk_forward().
  *
  * param_names_list: a list of strings (parameter names)
  * ranges_vec:       flat vector [min1,max1,step1, min2,max2,step2, ...]
@@ -1384,17 +1387,14 @@ exprtk_value_t fn_walk_forward(size_t argc, exprtk_value_t *args, exprtk_env_t *
   cfg.step_bars = (size_t)args[4].data.number;
   cfg.metric = (wfo_metric_t)(int)args[5].data.number;
 
-  /* We need a strategy_ctx_t — retrieve from env user data.
-   * For now, return NAN since walk_forward requires ctx + code + asset_id
-   * which are not available from within a script call.
-   * The proper entry point is the C API strategy_walk_forward(). */
+  /* Script-side walk-forward remains a placeholder because the real engine
+   * needs a strategy context, compiled code, and an asset id from the C API. */
   (void)cfg;
 
-  /* Return a placeholder indicating this must be called via C API */
+  /* Return an explicit placeholder map instead of pretending success. */
   exprtk_value_t m = exprtk_val_map();
   exprtk_map_set(&m, "error", exprtk_val_num(-1.0));
   exprtk_map_set(&m, "num_windows", exprtk_val_num(0.0));
   return m;
 }
-
 

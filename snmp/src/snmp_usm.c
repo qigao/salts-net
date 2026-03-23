@@ -16,8 +16,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
-#include <uv.h>
-
 /* OpenSSL headers */
 #include <openssl/md5.h>
 #include <openssl/sha.h>

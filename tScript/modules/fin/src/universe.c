@@ -68,6 +68,21 @@ static size_t adj_lower_bound(const universe_adj_t *adj, size_t n,
     return lo;
 }
 
+static void universe_reset_runtime(universe_t *u) {
+    size_t n;
+    if (!u) return;
+    n = u->num_assets;
+    if (u->active_mask) memset(u->active_mask, 0, n * sizeof(uint8_t));
+    if (u->cum_adj_cache) simd_fill(u->cum_adj_cache, 1.0, n);
+    if (u->dividend_adj_cache) simd_fill(u->dividend_adj_cache, 1.0, n);
+    if (u->last_dividend_date) {
+        for (size_t i = 0; i < n; i++)
+            u->last_dividend_date[i] = -DBL_MAX;
+    }
+    u->current_date = 0.0;
+    u->num_delisted_today = 0;
+}
+
 /* =========================================================================
  * Lifecycle
  * ========================================================================= */
@@ -162,11 +177,8 @@ void universe_finalize(universe_t *u) {
                  * cum_adj represents "multiply raw by this to get adjusted". */
                 cum /= u->adjustments[j].factor;
             }
-            /* Dividend adjustments affect the price similarly.
-             * If prev_close = P and dividend = D, adj prev_close = P - D.
-             * For vector store, we record relative factor: (P-D)/P.
-             * Since we don't know P here, we mark it for per-bar application.
-             * Dividend events set cum_adj = 0 as a sentinel; handled in advance(). */
+            /* Cash dividends need previous close to become a price ratio.
+             * Keep split-only cumulative factors here; runtime layer applies dividends. */
             u->adjustments[j].cum_adj = cum;
             j++;
         }
@@ -179,12 +191,10 @@ void universe_finalize(universe_t *u) {
 
     u->active_mask    = (uint8_t *)mem_alloc(u->arena, n * sizeof(uint8_t));
     u->cum_adj_cache  = (double  *)mem_alloc(u->arena, n * sizeof(double));
+    u->dividend_adj_cache = (double  *)mem_alloc(u->arena, n * sizeof(double));
+    u->last_dividend_date = (double  *)mem_alloc(u->arena, n * sizeof(double));
     u->delisted_today = (uint32_t *)mem_alloc(u->arena, n * sizeof(uint32_t));
-
-    if (u->active_mask)   memset(u->active_mask,   0, n * sizeof(uint8_t));
-    if (u->cum_adj_cache)  simd_fill(u->cum_adj_cache, 1.0, n);
-
-    u->current_date = 0.0;
+    universe_reset_runtime(u);
 }
 
 /* =========================================================================
@@ -193,6 +203,8 @@ void universe_finalize(universe_t *u) {
 
 void universe_advance(universe_t *u, double date) {
     if (!u || u->num_assets == 0 || !u->active_mask) return;
+    if (date < u->current_date)
+        universe_reset_runtime(u);
 
     u->num_delisted_today = 0;
     double prev_date = u->current_date;
@@ -226,15 +238,64 @@ void universe_advance(universe_t *u, double date) {
                 size_t lo = adj_lower_bound(u->adjustments, u->num_adj, a->id, -DBL_MAX);
                 /* hi-1 is the most recent event for this asset with date <= date */
                 if (hi > lo && u->adjustments[hi - 1].asset_id == a->id) {
-                    u->cum_adj_cache[i] = u->adjustments[hi - 1].cum_adj;
+                    u->cum_adj_cache[i] = u->adjustments[hi - 1].cum_adj * u->dividend_adj_cache[i];
                 } else {
-                    u->cum_adj_cache[i] = 1.0;
+                    u->cum_adj_cache[i] = u->dividend_adj_cache[i];
                 }
             } else {
-                u->cum_adj_cache[i] = 1.0;
+                u->cum_adj_cache[i] = u->dividend_adj_cache[i];
             }
         }
     }
+}
+
+void universe_reset(universe_t *u) {
+    universe_reset_runtime(u);
+}
+
+void universe_apply_runtime_adjustments(universe_t *u,
+                                        uint32_t asset_id,
+                                        double date,
+                                        double prev_close) {
+    size_t idx, lo, hi;
+    double split_adj = 1.0;
+    if (!u || !u->adjustments || u->num_adj == 0) return;
+    if (prev_close <= 0.0) return;
+
+    idx = universe_find_asset(u, asset_id);
+    if (idx == SIZE_MAX || !u->dividend_adj_cache || !u->last_dividend_date)
+        return;
+    if (u->last_dividend_date[idx] == date)
+        return;
+
+    lo = adj_lower_bound(u->adjustments, u->num_adj, asset_id, date);
+    hi = adj_upper_bound(u->adjustments, u->num_adj, asset_id, date);
+    if (hi <= lo) {
+        u->last_dividend_date[idx] = date;
+        return;
+    }
+
+    for (size_t i = lo; i < hi; i++) {
+        const universe_adj_t *adj = &u->adjustments[i];
+        double ratio;
+        if (adj->asset_id != asset_id || adj->date != date || adj->type != UNIVERSE_ADJ_DIVIDEND)
+            continue;
+        ratio = (prev_close - adj->factor) / prev_close;
+        if (ratio > 0.0)
+            u->dividend_adj_cache[idx] *= ratio;
+    }
+
+    if (u->num_adj > 0) {
+        hi = adj_upper_bound(u->adjustments, u->num_adj, asset_id, date);
+        if (hi > 0) {
+            lo = adj_lower_bound(u->adjustments, u->num_adj, asset_id, -DBL_MAX);
+            if (hi > lo && u->adjustments[hi - 1].asset_id == asset_id)
+                split_adj = u->adjustments[hi - 1].cum_adj;
+        }
+    }
+
+    u->cum_adj_cache[idx] = split_adj * u->dividend_adj_cache[idx];
+    u->last_dividend_date[idx] = date;
 }
 
 bool universe_is_active(const universe_t *u, uint32_t asset_id) {

@@ -186,4 +186,130 @@ spec("email_message") {
       mem_destroy(&pool);
     }
   }
+
+  describe("parsing") {
+    it("should parse simple plain text message") {
+      const char *raw =
+          "From: John Doe <john@example.com>\r\n"
+          "To: Alice <alice@example.com>\r\n"
+          "Subject: Hello World\r\n"
+          "Message-ID: <msg-1@example.com>\r\n"
+          "Content-Type: text/plain; charset=utf-8\r\n"
+          "\r\n"
+          "Plain body";
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
+      check(msg != NULL);
+      check(msg->from != NULL);
+      check_str_eq(msg->from->email, "john@example.com");
+      check(msg->to != NULL);
+      check_str_eq(msg->to->email, "alice@example.com");
+      check_str_eq(msg->subject, "Hello World");
+      check_str_eq(msg->message_id, "<msg-1@example.com>");
+      check_str_eq(msg->text_body, "Plain body");
+      check_null(msg->html_body);
+
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should parse multipart alternative message") {
+      const char *raw =
+          "From: Demo <sender@example.com>\r\n"
+          "To: Receiver <receiver@example.com>\r\n"
+          "Subject: Multipart Example\r\n"
+          "Content-Type: multipart/alternative; boundary=\"outer\"\r\n"
+          "\r\n"
+          "--outer\r\n"
+          "Content-Type: text/plain; charset=utf-8\r\n"
+          "\r\n"
+          "Plain section\r\n"
+          "--outer\r\n"
+          "Content-Type: text/html; charset=utf-8\r\n"
+          "\r\n"
+          "<html><body><p>HTML section</p></body></html>\r\n"
+          "--outer--\r\n";
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
+      check(msg != NULL);
+      check_str_eq(msg->subject, "Multipart Example");
+      check_str_eq(msg->text_body, "Plain section");
+      check_str_eq(msg->html_body, "<html><body><p>HTML section</p></body></html>");
+
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should parse nested multipart alternative message") {
+      const char *raw =
+          "From: Demo <sender@example.com>\r\n"
+          "To: Receiver <receiver@example.com>\r\n"
+          "Subject: Nested Multipart Example\r\n"
+          "Content-Type: multipart/alternative; boundary=\"outer\"\r\n"
+          "\r\n"
+          "--outer\r\n"
+          "Content-Type: multipart/alternative; boundary=\"inner\"\r\n"
+          "\r\n"
+          "--inner\r\n"
+          "Content-Type: text/plain; charset=utf-8\r\n"
+          "\r\n"
+          "Nested plain section\r\n"
+          "--inner\r\n"
+          "Content-Type: text/html; charset=utf-8\r\n"
+          "\r\n"
+          "<html><body><p>Nested HTML section</p></body></html>\r\n"
+          "--inner--\r\n"
+          "--outer--\r\n";
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
+      check(msg != NULL);
+      check_str_eq(msg->subject, "Nested Multipart Example");
+      check_str_eq(msg->text_body, "Nested plain section");
+      check_str_eq(msg->html_body,
+                   "<html><body><p>Nested HTML section</p></body></html>");
+
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should parse attachment metadata and payload") {
+      const char *raw =
+          "From: Demo <sender@example.com>\r\n"
+          "To: Receiver <receiver@example.com>\r\n"
+          "Subject: Attachment Example\r\n"
+          "Content-Type: multipart/mixed; boundary=\"mix\"\r\n"
+          "\r\n"
+          "--mix\r\n"
+          "Content-Type: text/plain; charset=utf-8\r\n"
+          "\r\n"
+          "Body text\r\n"
+          "--mix\r\n"
+          "Content-Type: application/octet-stream\r\n"
+          "Content-Disposition: attachment; filename=\"note.txt\"\r\n"
+          "Content-Transfer-Encoding: base64\r\n"
+          "\r\n"
+          "aGVsbG8=\r\n"
+          "--mix--\r\n";
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
+      check(msg != NULL);
+      check_str_eq(msg->text_body, "Body text");
+      check_int_eq(msg->attachment_count, 1);
+      check(msg->attachments != NULL);
+      check_str_eq(msg->attachments->filename, "note.txt");
+      check_str_eq(msg->attachments->content_type, "application/octet-stream");
+      check_str_eq(msg->attachments->data, "hello");
+
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+  }
 }

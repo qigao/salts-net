@@ -7,9 +7,9 @@
 #define TURBO_CORO_SOCKET_H
 
 #include "platform.h"
+#include "turbo_buffer.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
-#include "turbo_buffer.h"
 #include "turbo_tcp_backend.h"
 #include "turbo_udp_backend.h"
 #include <stddef.h>
@@ -24,13 +24,13 @@ typedef struct coro_socket_s coro_socket_t;
 
 /** Socket types */
 typedef enum {
-    CORO_SOCKET_TCP_V4,
-    CORO_SOCKET_TCP_V6,
-    CORO_SOCKET_TLS,
-    CORO_SOCKET_UDP_V4,
-    CORO_SOCKET_UDP_V6,
-    CORO_SOCKET_KCP,
-    CORO_SOCKET_PIPE
+  CORO_SOCKET_TCP_V4,
+  CORO_SOCKET_TCP_V6,
+  CORO_SOCKET_TLS,
+  CORO_SOCKET_UDP_V4,
+  CORO_SOCKET_UDP_V6,
+  CORO_SOCKET_KCP,
+  CORO_SOCKET_PIPE
 } coro_socket_type_t;
 
 /**
@@ -43,22 +43,22 @@ CXX_C_API coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_typ
 
 /** Convenience creation helpers */
 static inline coro_socket_t *coro_socket_create_tcpv4(coro_context_t *ctx) {
-    return coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+  return coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
 }
 static inline coro_socket_t *coro_socket_create_tcpv6(coro_context_t *ctx) {
-    return coro_socket_create(ctx, CORO_SOCKET_TCP_V6);
+  return coro_socket_create(ctx, CORO_SOCKET_TCP_V6);
 }
 static inline coro_socket_t *coro_socket_create_udpv4(coro_context_t *ctx) {
-    return coro_socket_create(ctx, CORO_SOCKET_UDP_V4);
+  return coro_socket_create(ctx, CORO_SOCKET_UDP_V4);
 }
 static inline coro_socket_t *coro_socket_create_udpv6(coro_context_t *ctx) {
-    return coro_socket_create(ctx, CORO_SOCKET_UDP_V6);
+  return coro_socket_create(ctx, CORO_SOCKET_UDP_V6);
 }
 static inline coro_socket_t *coro_socket_create_kcp(coro_context_t *ctx) {
-    return coro_socket_create(ctx, CORO_SOCKET_KCP);
+  return coro_socket_create(ctx, CORO_SOCKET_KCP);
 }
 static inline coro_socket_t *coro_socket_create_pipe(coro_context_t *ctx) {
-    return coro_socket_create(ctx, CORO_SOCKET_PIPE);
+  return coro_socket_create(ctx, CORO_SOCKET_PIPE);
 }
 
 /**
@@ -96,6 +96,19 @@ CXX_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
 CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
 
 /**
+ * @brief Upgrade an already-connected TCP socket to TLS.
+ *
+ * Intended for protocols such as SMTP STARTTLS, POP3 STLS, and IMAP STARTTLS.
+ * The socket must be a connected TCP stream and must not currently have a
+ * pending recv wait.
+ *
+ * @param socket    Connected TCP socket to upgrade in place.
+ * @param hostname  Optional server name for SNI / certificate validation context.
+ * @return 0 on success, negative error code on failure.
+ */
+CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostname);
+
+/**
  * @brief Connect to a named pipe / Unix domain socket.
  */
 CXX_C_API int coro_socket_connect_pipe(coro_socket_t *socket, const char *path);
@@ -108,8 +121,8 @@ CXX_C_API int coro_socket_connect_pipe(coro_socket_t *socket, const char *path);
  * @param path    WebSocket path (e.g. "/chat").
  * @param is_tls  1 for wss://, 0 for ws://.
  */
-CXX_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host,
-                                      int port, const char *path, int is_tls);
+CXX_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host, int port,
+                                     const char *path, int is_tls);
 
 /**
  * @brief Send data through the socket.
@@ -207,12 +220,14 @@ CXX_C_API int coro_socket_get_local_address(coro_socket_t *socket, struct sockad
 /**
  * @brief Send datagram to specific address (UDP).
  */
-CXX_C_API int coro_socket_sendto(coro_socket_t *socket, const char *data, size_t len, const struct sockaddr *addr);
+CXX_C_API int coro_socket_sendto(coro_socket_t *socket, const char *data, size_t len,
+                                 const struct sockaddr *addr);
 
 /**
  * @brief Receive datagram with source address (UDP).
  */
-CXX_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *len, struct sockaddr_storage *addr);
+CXX_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *len,
+                                   struct sockaddr_storage *addr);
 
 /* ── Server Functions ──────────────────────────────────────── */
 
@@ -244,7 +259,7 @@ typedef void (*coro_handler_fn)(coro_socket_t *client, void *arg);
  * @return 0 on success, negative error code on failure.
  */
 CXX_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int port,
-                                     coro_handler_fn handler, void *arg);
+                                    coro_handler_fn handler, void *arg);
 
 /**
  * @brief Start a WebSocket server.
@@ -256,8 +271,8 @@ CXX_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int
  * @param handler  Connection handler.
  * @param arg      User argument passed to handler.
  */
-CXX_C_API int coro_socket_listen_ws(coro_socket_t *socket, const char *host, int port,
-                                     int is_tls, coro_handler_fn handler, void *arg);
+CXX_C_API int coro_socket_listen_ws(coro_socket_t *socket, const char *host, int port, int is_tls,
+                                    coro_handler_fn handler, void *arg);
 
 /**
  * @brief Send datagram from server socket (UDP).

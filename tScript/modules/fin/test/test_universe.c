@@ -5,7 +5,11 @@
  */
 
 #include "universe.h"
+#include "provider.h"
+#include "market_rules.h"
+#include "../src/exprtk_universe.h"
 #include "tinytest.h"
+#include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <float.h>
@@ -75,6 +79,29 @@ suite("Universe Management") {
       check_not_null(u->cum_adj_cache);
 
       universe_free(u);
+      mem_destroy(&arena);
+    }
+
+    it("should fail when explicit adjustments source is missing") {
+      mem_pool_t arena;
+      mem_init(&arena, 16384);
+      const char *assets_path = "test_provider_assets.csv";
+      FILE *f = fopen(assets_path, "w");
+      check_not_null(f);
+      fprintf(f, "id,ticker,exchange,type,start_date,end_date,lot_size,tick_size\n");
+      fprintf(f, "1,AAPL,NYSE,EQUITY,2024-01-01,,1,0.01\n");
+      fclose(f);
+
+      universe_t *u = universe_create(&arena);
+      check_not_null(u);
+
+      provider_t *p = provider_csv_create(&MARKET_US_EQUITY, ".", &arena);
+      check_not_null(p);
+
+      check_int_eq(provider_load_universe(p, u, assets_path, "missing_adjustments.csv", &arena), -1);
+
+      universe_free(u);
+      remove(assets_path);
       mem_destroy(&arena);
     }
   }
@@ -229,6 +256,67 @@ suite("Universe Management") {
       universe_advance(u, 350);
       double factor = universe_adj_factor(u, 0);
       check_float_eq(factor, 1.0 / 6.0, EPSILON);
+
+      universe_free(u);
+      mem_destroy(&arena);
+    }
+
+    it("should apply dividend adjustment factor using previous close") {
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
+      universe_t *u = universe_create(&arena);
+
+      universe_asset_t asset = {
+        .id = 0, .ticker = "DIV", .exchange = "X",
+        .asset_type = UNIVERSE_ASSET_EQUITY,
+        .start_date = 100, .end_date = UNIVERSE_DATE_NONE,
+        .lot_size = 1, .tick_size = 0.01
+      };
+      universe_adj_t adj = {
+        .asset_id = 0, .date = 200, .type = UNIVERSE_ADJ_DIVIDEND, .factor = 10.0
+      };
+
+      check_int_eq(universe_add_asset(u, &asset), 0);
+      check_int_eq(universe_add_adjustment(u, &adj), 0);
+      universe_finalize(u);
+
+      universe_advance(u, 199);
+      check_float_eq(universe_adj_factor(u, 0), 1.0, EPSILON);
+
+      universe_advance(u, 200);
+      universe_apply_runtime_adjustments(u, 0, 200, 100.0);
+      check_float_eq(universe_adj_factor(u, 0), 0.9, EPSILON);
+      check_float_eq(universe_adjust_price(u, 0, 100.0), 90.0, EPSILON);
+
+      universe_free(u);
+      mem_destroy(&arena);
+    }
+
+    it("should reset runtime dividend state when rewinding dates") {
+      mem_pool_t arena;
+      mem_init(&arena, 8192);
+      universe_t *u = universe_create(&arena);
+
+      universe_asset_t asset = {
+        .id = 0, .ticker = "DIV", .exchange = "X",
+        .asset_type = UNIVERSE_ASSET_EQUITY,
+        .start_date = 100, .end_date = UNIVERSE_DATE_NONE,
+        .lot_size = 1, .tick_size = 0.01
+      };
+      universe_adj_t adj = {
+        .asset_id = 0, .date = 200, .type = UNIVERSE_ADJ_DIVIDEND, .factor = 10.0
+      };
+
+      check_int_eq(universe_add_asset(u, &asset), 0);
+      check_int_eq(universe_add_adjustment(u, &adj), 0);
+      universe_finalize(u);
+
+      universe_advance(u, 200);
+      universe_apply_runtime_adjustments(u, 0, 200, 100.0);
+      check_float_eq(universe_adj_factor(u, 0), 0.9, EPSILON);
+
+      universe_advance(u, 150);
+      check_float_eq(universe_adj_factor(u, 0), 1.0, EPSILON);
 
       universe_free(u);
       mem_destroy(&arena);
@@ -643,6 +731,70 @@ suite("Universe Management") {
       check_float_eq(universe_cross_sum(NULL, NULL, 0), 0.0, EPSILON);
 
       universe_free(u);
+      mem_destroy(&arena);
+    }
+  }
+
+  group("Exprtk Universe Wrappers") {
+    it("should return a full mask vector from filter_gt wrapper") {
+      mem_pool_t arena;
+      mem_pool_t scratch;
+      mem_init(&arena, 16384);
+      mem_init(&scratch, 4096);
+      universe_t *u = make_test_universe(&arena);
+      exprtk_env_t env;
+      double values[] = { 50.0, 10.0, 30.0, 40.0, 20.0 };
+      exprtk_value_t args[2];
+      exprtk_value_t out;
+
+      check_not_null(u);
+      universe_advance(u, 120); /* active: AAPL, MSFT, AMZN */
+
+      exprtk_env_init(&env);
+      env.user_data = u;
+      args[0] = exprtk_val_vec(values, 5);
+      args[1] = exprtk_val_num(25.0);
+
+      out = fn_universe_filter_gt(2, args, &env, &scratch);
+      check_int_eq(out.type, EXPRTK_VAL_VECTOR);
+      check_int_eq((int)out.data.vector.size, 5);
+      check_float_eq(out.data.vector.data[0], 1.0, EPSILON);
+      check_float_eq(out.data.vector.data[1], 0.0, EPSILON);
+      check_float_eq(out.data.vector.data[2], 0.0, EPSILON); /* inactive asset stays masked out */
+      check_float_eq(out.data.vector.data[3], 1.0, EPSILON); /* AMZN=40 > 25 */
+      check_float_eq(out.data.vector.data[4], 0.0, EPSILON); /* inactive asset */
+
+      exprtk_env_free(&env);
+      universe_free(u);
+      mem_destroy(&scratch);
+      mem_destroy(&arena);
+    }
+
+    it("should return active-only sum from cross_sum wrapper") {
+      mem_pool_t arena;
+      mem_pool_t scratch;
+      mem_init(&arena, 16384);
+      mem_init(&scratch, 4096);
+      universe_t *u = make_test_universe(&arena);
+      exprtk_env_t env;
+      double values[] = { 30.0, 10.0, 99.0, 20.0, 99.0 };
+      exprtk_value_t args[1];
+      exprtk_value_t out;
+
+      check_not_null(u);
+      universe_advance(u, 120); /* active: AAPL, MSFT, AMZN */
+
+      exprtk_env_init(&env);
+      env.user_data = u;
+      args[0] = exprtk_val_vec(values, 5);
+
+      out = fn_universe_cross_sum(1, args, &env, &scratch);
+      check_int_eq(out.type, EXPRTK_VAL_NUMBER);
+      check_float_eq(out.data.number, 60.0, EPSILON);
+
+      exprtk_env_free(&env);
+      universe_free(u);
+      mem_destroy(&scratch);
       mem_destroy(&arena);
     }
   }

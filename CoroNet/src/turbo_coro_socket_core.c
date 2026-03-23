@@ -75,7 +75,8 @@ void release_client(coro_socket_t *client) {
     }
 
     /* Free transport handles */
-    if ((client->transport == TURBO_TCP || client->transport == TURBO_PIPE) &&
+    if ((client->transport == TURBO_TCP || client->transport == TURBO_TLS ||
+         client->transport == TURBO_PIPE) &&
         client->handle.stream) {
       turbo_stream_destroy(client->handle.stream);
       client->handle.stream = NULL;
@@ -173,7 +174,8 @@ void coro_socket_handle_transport_connect(coro_socket_t *s, int status) {
 void coro_socket_handle_transport_close(coro_socket_t *s) {
   if (!s) return;
 
-  if (s->transport == TURBO_TCP || s->transport == TURBO_PIPE)
+  if (s->transport == TURBO_TCP || s->transport == TURBO_TLS ||
+      s->transport == TURBO_PIPE)
     s->handle.stream = NULL;
   
   if (s->transport == TURBO_UDP)

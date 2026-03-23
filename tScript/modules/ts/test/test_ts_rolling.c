@@ -205,6 +205,8 @@ spec("ts_rolling") {
             check_int_eq(r, 3);
             /* Hedge ratio should be close to 2.0 */
             check(fabs(out[2] - 2.0) < 0.5);
+            /* Approximate p-value must be normalized, not a raw slope. */
+            check(out[1] >= 0.0 && out[1] <= 1.0);
             mem_destroy(&arena);
         }
     }

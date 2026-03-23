@@ -327,10 +327,12 @@ void order_manager_cancel_pending(order_manager_t *mgr, uint32_t asset_id);
  * Must be called at end-of-bar with each asset's closing price so that
  * equity_curve reflects the current account value.
  *
- * @param prices  Array of close prices indexed by asset array position.
- * @param n       Length of prices array.
+ * @param asset_ids  Asset IDs aligned with the prices array.
+ * @param prices     Array of close prices aligned with asset_ids.
+ * @param n          Length of both arrays.
  */
 void order_manager_mark_to_market(order_manager_t *mgr,
+                                   const uint32_t *asset_ids,
                                    const double *prices,
                                    size_t n);
 

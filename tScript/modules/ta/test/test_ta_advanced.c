@@ -41,6 +41,21 @@ spec("ta_advanced") {
             check(kijun[25] > 0);
             mem_destroy(&arena);
         }
+
+        it("should keep chikou lagged instead of reading future closes at the same index") {
+            mem_pool_t arena = {0};
+            mem_init(&arena, 65536);
+            double tenkan[N]={0}, kijun[N]={0}, sa[N]={0}, sb[N]={0}, chikou[N]={0};
+            size_t kijun_period = 26;
+
+            size_t r = exprtk_ta_ichimoku(hi, lo, cl, N, 9, kijun_period, 52,
+                                          tenkan, kijun, sa, sb, chikou, &arena);
+            check(r > 0);
+            check_float_eq(chikou[0], 0.0, EPSILON);
+            check_float_eq(chikou[kijun_period], cl[0], EPSILON);
+            check_float_eq(chikou[kijun_period + 5], cl[5], EPSILON);
+            mem_destroy(&arena);
+        }
     }
 
     describe("Keltner Channels") {

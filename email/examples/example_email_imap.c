@@ -10,34 +10,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static const char *env_or_default(const char *name, const char *fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return value;
+}
+
+static int env_flag_or_default(const char *name, int fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return strcmp(value, "0") != 0;
+}
+
 // IMAP operations must run inside a coroutine
 static void imap_test_coro(coro_t *co, void *arg) {
   coro_context_t *ctx = (coro_context_t *)arg;
 
-  // Configure IMAP
+  // Configure IMAP for local smtp4dev testing
   imap_config_t imap_config = {0};
-
-  // Option 1: Gmail (requires app password)
-  // imap_config.host = "imap.gmail.com";
-  // imap_config.port = 993;
-  // imap_config.use_tls = 1;
-  // imap_config.username = "your-email@gmail.com";
-  // imap_config.password = "your-app-password";
-
-  // Option 2: Outlook/Hotmail
-  // imap_config.host = "outlook.office365.com";
-  // imap_config.port = 993;
-  // imap_config.use_tls = 1;
-  // imap_config.username = "your-email@outlook.com";
-  // imap_config.password = "your-password";
-
-  // Option 3: Test server (update with valid credentials)
-  imap_config.host = "imap.gmail.com";
-  imap_config.port = 993;
-  imap_config.use_tls = 1;
-  imap_config.use_starttls = 0;
-  imap_config.username = "your-email@gmail.com";
-  imap_config.password = "your-app-password";
+  imap_config.host = (char *)env_or_default("IMAP_HOST", "127.0.0.1");
+  imap_config.port = atoi(env_or_default("IMAP_PORT", "143"));
+  imap_config.use_tls = env_flag_or_default("IMAP_TLS", 0);
+  imap_config.use_starttls = env_flag_or_default("IMAP_STARTTLS", 0);
+  imap_config.username = (char *)env_or_default("IMAP_USERNAME", "turbo");
+  imap_config.password = (char *)env_or_default("IMAP_PASSWORD", "turbo");
   imap_config.timeout_ms = 30000;
 
   // Create IMAP client
@@ -48,7 +48,7 @@ static void imap_test_coro(coro_t *co, void *arg) {
   }
 
   // Connect
-  printf("Connecting to IMAP server...\n");
+  printf("Connecting to IMAP server %s:%d...\n", imap_config.host, imap_config.port);
   if (imap_connect(imap) != 0) {
     fprintf(stderr, "IMAP connect failed: %s\n", imap_get_error(imap));
     imap_client_free(imap);

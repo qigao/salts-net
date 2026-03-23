@@ -78,7 +78,7 @@ exprtk_value_t fn_universe_filter_gt(size_t argc, exprtk_value_t *args, exprtk_e
     double threshold = args[1].data.number;
     uint8_t *mask = MEM_ALLOC_ARRAY(arena, uint8_t, n);
     if (!mask) return exprtk_val_num(0.0);
-    size_t count = universe_filter_gt(u, args[0].data.vector.data, n, threshold, mask);
+    universe_filter_gt(u, args[0].data.vector.data, n, threshold, mask);
     double *out = MEM_ALLOC_ARRAY(arena, double, n);
     if (!out) return exprtk_val_num(0.0);
     for (size_t i = 0; i < n; i++) {

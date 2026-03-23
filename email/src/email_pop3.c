@@ -11,47 +11,110 @@ struct pop3_client_s {
   coro_socket_t *socket;
   char error_msg[512];
   char read_buffer[8192];
+  char line_buffer[8192];
+  size_t read_buffer_len;
 };
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
-static int pop3_read_response(pop3_client_t *client) {
+static void pop3_reset_read_state(pop3_client_t *client) {
+  if (!client) return;
+  client->read_buffer_len = 0;
+  client->read_buffer[0] = '\0';
+  client->line_buffer[0] = '\0';
+}
+
+static int pop3_read_line(pop3_client_t *client, char **line) {
   if (!client || !client->socket) return -1;
 
-  char *data = NULL;
-  size_t len = 0;
+  while (1) {
+    size_t i;
+    for (i = 0; i < client->read_buffer_len; i++) {
+      if (client->read_buffer[i] == '\n') {
+        size_t line_len = i + 1;
+        if (line_len >= sizeof(client->line_buffer)) {
+          snprintf(client->error_msg, sizeof(client->error_msg),
+                   "POP3 response line too large");
+          return -1;
+        }
 
-  int result = coro_socket_recv(client->socket, &data, &len);
-  if (result != 0 || !data) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to read POP3 response");
+        memcpy(client->line_buffer, client->read_buffer, line_len);
+        client->line_buffer[line_len] = '\0';
+
+        client->read_buffer_len -= line_len;
+        memmove(client->read_buffer, client->read_buffer + line_len,
+                client->read_buffer_len);
+        client->read_buffer[client->read_buffer_len] = '\0';
+
+        if (line) {
+          *line = client->line_buffer;
+        }
+        return 0;
+      }
+    }
+
+    {
+      char *data = NULL;
+      size_t len = 0;
+      int result = coro_socket_recv(client->socket, &data, &len);
+      size_t free_space;
+
+      if (result != 0 || !data || len == 0) {
+        if (data) {
+          coro_socket_free_recv(data);
+        }
+        snprintf(client->error_msg, sizeof(client->error_msg),
+                 "Failed to read POP3 response");
+        return -1;
+      }
+
+      free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
+      if (len > free_space) {
+        coro_socket_free_recv(data);
+        snprintf(client->error_msg, sizeof(client->error_msg),
+                 "POP3 response buffer overflow");
+        return -1;
+      }
+
+      memcpy(client->read_buffer + client->read_buffer_len, data, len);
+      client->read_buffer_len += len;
+      client->read_buffer[client->read_buffer_len] = '\0';
+      coro_socket_free_recv(data);
+    }
+  }
+}
+
+static int pop3_read_response(pop3_client_t *client) {
+  char *line = NULL;
+  size_t line_len;
+
+  if (pop3_read_line(client, &line) != 0) {
     return -1;
   }
 
-  // Copy to read_buffer
-  size_t copy_len = len < sizeof(client->read_buffer) - 1 ? len : sizeof(client->read_buffer) - 1;
-  memcpy(client->read_buffer, data, copy_len);
-  client->read_buffer[copy_len] = '\0';
-
-  coro_socket_free_recv(data);
+  line_len = strlen(line);
+  while (line_len > 0 &&
+         (line[line_len - 1] == '\r' || line[line_len - 1] == '\n')) {
+    line[--line_len] = '\0';
+  }
 
   // POP3 responses start with +OK or -ERR
-  if (copy_len < 3) {
+  if (line_len < 3) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Invalid POP3 response");
     return -1;
   }
 
-  if (strncmp(client->read_buffer, "+OK", 3) == 0) {
+  if (strncmp(line, "+OK", 3) == 0) {
     return 0; // Success
-  } else if (strncmp(client->read_buffer, "-ERR", 4) == 0) {
+  } else if (strncmp(line, "-ERR", 4) == 0) {
     snprintf(client->error_msg, sizeof(client->error_msg),
-             "POP3 error: %s", client->read_buffer + 5);
+             "POP3 error: %s", line + 5);
     return -1;
   }
 
   snprintf(client->error_msg, sizeof(client->error_msg),
-           "Unknown POP3 response: %s", client->read_buffer);
+           "Unknown POP3 response: %s", line);
   return -1;
 }
 
@@ -61,8 +124,8 @@ static int pop3_send_command(pop3_client_t *client, const char *cmd) {
   char buffer[1024];
   int len = snprintf(buffer, sizeof(buffer), "%s\r\n", cmd);
 
-  int sent = coro_socket_send(client->socket, buffer, len);
-  if (sent != len) {
+  int rc = coro_socket_send(client->socket, buffer, len);
+  if (rc != 0) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to send POP3 command: %s", cmd);
     return -1;
@@ -81,37 +144,51 @@ static char *pop3_read_multiline(pop3_client_t *client, size_t *out_len) {
   if (!result) return NULL;
 
   while (1) {
-    char *data = NULL;
-    size_t len = 0;
+    char *line = NULL;
+    size_t line_len;
+    const char *payload = NULL;
+    size_t payload_len;
 
-    int ret = coro_socket_recv(client->socket, &data, &len);
-    if (ret != 0 || !data) break;
-
-    // Expand buffer if needed
-    if (total + len >= capacity) {
-      capacity *= 2;
-      char *new_result = realloc(result, capacity);
-      if (!new_result) {
-        free(result);
-        coro_socket_free_recv(data);
-        return NULL;
-      }
-      result = new_result;
+    if (pop3_read_line(client, &line) != 0) {
+      free(result);
+      return NULL;
     }
 
-    memcpy(result + total, data, len);
-    total += len;
+    line_len = strlen(line);
+    while (line_len > 0 &&
+           (line[line_len - 1] == '\r' || line[line_len - 1] == '\n')) {
+      line_len--;
+    }
 
-    coro_socket_free_recv(data);
-
-    // Check for terminator ".\r\n"
-    if (total >= 3 &&
-        result[total - 3] == '.' &&
-        result[total - 2] == '\r' &&
-        result[total - 1] == '\n') {
-      total -= 3; // Remove terminator
+    if (line_len == 1 && line[0] == '.') {
       break;
     }
+
+    payload = line;
+    payload_len = line_len;
+    if (payload_len >= 2 && payload[0] == '.' && payload[1] == '.') {
+      payload++;
+      payload_len--;
+    }
+
+    if (total + payload_len + 2 >= capacity) {
+      while (total + payload_len + 2 >= capacity) {
+        capacity *= 2;
+      }
+      {
+        char *new_result = realloc(result, capacity);
+        if (!new_result) {
+          free(result);
+          return NULL;
+        }
+        result = new_result;
+      }
+    }
+
+    memcpy(result + total, payload, payload_len);
+    total += payload_len;
+    result[total++] = '\r';
+    result[total++] = '\n';
   }
 
   result[total] = '\0';
@@ -156,10 +233,13 @@ void pop3_client_free(pop3_client_t *client) {
 /* ── Connection ────────────────────────────────────────────────────── */
 
 int pop3_connect(pop3_client_t *client) {
+  int socket_type;
+
   if (!client) return -1;
 
   // Create socket
-  client->socket = coro_socket_create_tcpv4(client->ctx);
+  socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
+  client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
   if (!client->socket) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to create socket");
@@ -176,9 +256,6 @@ int pop3_connect(pop3_client_t *client) {
     return -1;
   }
 
-  // TODO: If use_tls is set, upgrade connection to TLS
-  // coro_socket_upgrade_tls(client->socket);
-
   // Read greeting
   if (pop3_read_response(client) != 0) {
     pop3_disconnect(client);
@@ -192,24 +269,31 @@ int pop3_connect(pop3_client_t *client) {
       return -1;
     }
 
-    // TODO: Upgrade to TLS
-    // coro_socket_upgrade_tls(client->socket);
+    if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
+      snprintf(client->error_msg, sizeof(client->error_msg),
+               "Failed to upgrade POP3 connection to TLS");
+      pop3_disconnect(client);
+      return -1;
+    }
+    pop3_reset_read_state(client);
   }
 
-  // USER
-  char user_cmd[512];
-  snprintf(user_cmd, sizeof(user_cmd), "USER %s", client->config.username);
-  if (pop3_send_command(client, user_cmd) != 0) {
-    pop3_disconnect(client);
-    return -1;
-  }
+  if (client->config.username && client->config.password) {
+    // USER
+    char user_cmd[512];
+    snprintf(user_cmd, sizeof(user_cmd), "USER %s", client->config.username);
+    if (pop3_send_command(client, user_cmd) != 0) {
+      pop3_disconnect(client);
+      return -1;
+    }
 
-  // PASS
-  char pass_cmd[512];
-  snprintf(pass_cmd, sizeof(pass_cmd), "PASS %s", client->config.password);
-  if (pop3_send_command(client, pass_cmd) != 0) {
-    pop3_disconnect(client);
-    return -1;
+    // PASS
+    char pass_cmd[512];
+    snprintf(pass_cmd, sizeof(pass_cmd), "PASS %s", client->config.password);
+    if (pop3_send_command(client, pass_cmd) != 0) {
+      pop3_disconnect(client);
+      return -1;
+    }
   }
 
   return 0;
@@ -234,7 +318,7 @@ int pop3_stat(pop3_client_t *client, int *total_size) {
 
   // Parse response: "+OK count size"
   int count = 0, size = 0;
-  if (sscanf(client->read_buffer, "+OK %d %d", &count, &size) != 2) {
+  if (sscanf(client->line_buffer, "+OK %d %d", &count, &size) != 2) {
     snprintf(client->error_msg, sizeof(client->error_msg),
              "Failed to parse STAT response");
     return -1;

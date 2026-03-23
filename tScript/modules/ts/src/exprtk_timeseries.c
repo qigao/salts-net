@@ -333,9 +333,13 @@ size_t exprtk_ts_emd(const double *data, size_t n, size_t max_imfs, double *imfs
     return 0; // TODO: Implement empirical mode decomposition
 }
 
+static double ts_normal_cdf(double x) {
+    return 0.5 * erfc(-x / sqrt(2.0));
+}
+
 /* Engle-Granger cointegration test.
    out[0] = ADF test statistic on residuals
-   out[1] = approximate p-value
+   out[1] = approximate lower-tail p-value
    out[2] = hedge ratio (beta) */
 size_t exprtk_ts_coint(const double *x, const double *y, size_t n, double *out, mem_pool_t *arena) {
     if (n < 10) return 0;
@@ -365,7 +369,7 @@ size_t exprtk_ts_coint(const double *x, const double *y, size_t n, double *out, 
     exprtk_ts_adf(resid, n, 1, adf_out, arena);
 
     out[0] = adf_out[0];  /* test statistic */
-    out[1] = adf_out[1];  /* p-value */
+    out[1] = ts_normal_cdf(adf_out[0]);  /* approximate one-sided significance */
     out[2] = beta;         /* hedge ratio */
     return 3;
 }
@@ -391,4 +395,3 @@ size_t exprtk_ts_spread(const double *x, const double *y, size_t n, double *out,
         out[i] = y[i] - beta * x[i];
     return n;
 }
-

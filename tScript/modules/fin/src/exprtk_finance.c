@@ -41,11 +41,13 @@ double exprtk_sortino(const double *returns, size_t n, double rf, double annual_
     return (mean - rf) / down_std * sqrt(annual_factor);
 }
 
-/* Calmar = annual_return / max_drawdown */
+/* Calmar = CAGR / max_drawdown */
 double exprtk_calmar(const double *equity, size_t n, double annual_factor) {
     if (n < 2 || equity[0] < 1e-15) return 0.0;
-    double total_return = equity[n - 1] / equity[0] - 1.0;
-    double annual_return = total_return * annual_factor / (double)n;
+    double growth = equity[n - 1] / equity[0];
+    double periods = (double)(n - 1);
+    if (growth <= 0.0 || periods <= 0.0) return 0.0;
+    double annual_return = pow(growth, annual_factor / periods) - 1.0;
 
     double peak = equity[0], max_dd = 0;
     for (size_t i = 1; i < n; i++) {

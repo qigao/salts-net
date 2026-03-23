@@ -240,6 +240,8 @@ static const char *ts_plugin_dll_name(mem_pool_t *a, const char *name) {
 
 /* Load a plugin by logical name ("io", "fin", ...) */
 static int ts_load_plugin(turbo_script_ctx_t *ctx, const char *name) {
+  char *loaded_name = NULL;
+
   if (ts_plugin_already_loaded(ctx, name))
     return 0;
   if (ctx->plugin_count >= TS_MAX_PLUGINS)
@@ -258,9 +260,16 @@ static int ts_load_plugin(turbo_script_ctx_t *ctx, const char *name) {
     return -1;
   }
 
-  size_t idx = ctx->plugin_count++;
+  loaded_name = strdup(name);
+  if (!loaded_name) {
+    ts_plugin_unload(h);
+    return -1;
+  }
+
+  size_t idx = ctx->plugin_count;
   ctx->plugins[idx] = h;
-  ctx->loaded_names[idx] = strdup(name);
+  ctx->loaded_names[idx] = loaded_name;
+  ctx->plugin_count++;
   return 0;
 }
 

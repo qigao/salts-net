@@ -6,7 +6,7 @@
  * The universe layer ensures:
  *  - Assets only appear after their IPO / first trade date.
  *  - Assets are automatically retired on their delist date.
- *  - Historical prices are adjusted for splits and dividends.
+ *  - Historical prices can be adjusted for splits and cash dividends.
  *  - Cross-sectional operations (rank, top-N, filter) only touch active assets.
  */
 #ifndef UNIVERSE_H
@@ -68,14 +68,16 @@ typedef struct {
  * @brief A single price-adjustment event for an asset.
  *
  * Adjustments are applied backward (i.e., historical prices are scaled)
- * so that the adjusted series is continuous from the perspective of today.
+ * so the adjusted series can be kept continuous. Split factors are
+ * precomputed at finalize time; cash dividends are completed at runtime
+ * when the event-date previous close is known.
  */
 typedef struct {
     uint32_t asset_id;          /**< References universe_asset_t.id           */
     double   date;              /**< Date of the event (epoch days)            */
     uint8_t  type;              /**< UNIVERSE_ADJ_* constant                   */
-    double   factor;            /**< Split ratio or dividend amount            */
-    double   cum_adj;           /**< Cumulative backward adjustment factor     */
+    double   factor;            /**< Split ratio or cash dividend amount       */
+    double   cum_adj;           /**< Split-only cumulative backward factor     */
 } universe_adj_t;
 
 /**
@@ -98,7 +100,9 @@ typedef struct {
 
     /* Per-date runtime state (updated by universe_advance) */
     uint8_t          *active_mask;      /**< [num_assets]: 1 = tradable today  */
-    double           *cum_adj_cache;    /**< [num_assets]: current adj factor  */
+    double           *cum_adj_cache;    /**< [num_assets]: current split*dividend factor */
+    double           *dividend_adj_cache; /**< [num_assets]: runtime dividend factor */
+    double           *last_dividend_date; /**< [num_assets]: last dividend date applied */
     double            current_date;     /**< Last date passed to advance()     */
 
     /* Delistings detected in the most recent advance() call */
@@ -161,6 +165,30 @@ void universe_finalize(universe_t *u);
  * @param date  New simulation date (epoch days).
  */
 void universe_advance(universe_t *u, double date);
+
+/**
+ * @brief Reset per-run universe state to its pristine pre-bar condition.
+ *
+ * Clears active masks, adjustment caches, delisting notifications, and
+ * current_date. Use this before re-running a backtest with the same universe.
+ */
+void universe_reset(universe_t *u);
+
+/**
+ * @brief Apply runtime adjustments that require bar data, chiefly cash dividends.
+ *
+ * Call this once per asset-bar before using universe_adj_factor() for that bar.
+ * The current implementation uses prev_close to convert a cash dividend D into
+ * a backward adjustment ratio (prev_close - D) / prev_close on the event date.
+ *
+ * @param asset_id    Asset whose current bar is being processed.
+ * @param date        Current bar date.
+ * @param prev_close  Previous raw close for that asset.
+ */
+void universe_apply_runtime_adjustments(universe_t *u,
+                                        uint32_t asset_id,
+                                        double date,
+                                        double prev_close);
 
 /**
  * @brief Check if an asset is tradable on the current date.

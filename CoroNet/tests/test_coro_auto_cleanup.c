@@ -19,8 +19,7 @@ static void robust_context_destroy(coro_context_t *ctx) {
         int has_handles = coro_context_alive(ctx);
         int has_coros = ctx->scheduler ? coro_scheduler_count(ctx->scheduler) > 0 : 0;
         if (!has_handles && !has_coros) break;
-        uv_run(ctx->loop, UV_RUN_NOWAIT);
-        if (ctx->scheduler) coro_scheduler_tick(ctx->scheduler);
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
     }
     coro_context_destroy(ctx);
 }

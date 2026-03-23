@@ -52,10 +52,34 @@ spec("ta_indicators") {
             size_t result = exprtk_ta_ema(in, n, period, out);
             check_int_eq(result, n);
 
-            // EMA starts from first value
-            check_float_eq(out[0], 10.0, EPSILON);
-            // Subsequent values should be smoothed
-            check(out[5] > out[0]);
+            // Warmup is undefined until period-1
+            check_float_eq(out[0], 0.0, EPSILON);
+            check_float_eq(out[1], 0.0, EPSILON);
+            // Seed from SMA(10,11,12)=11
+            check_float_eq(out[2], 11.0, EPSILON);
+            check(out[5] > out[2]);
+        }
+    }
+
+    describe("VWAP - Anchored and Session") {
+        it("should reset session VWAP when session id changes") {
+            double hi[] = {11, 13, 21, 23};
+            double lo[] = {9, 11, 19, 21};
+            double cl[] = {10, 12, 20, 22};
+            double vol[] = {100, 100, 100, 100};
+            double session[] = {1, 1, 2, 2};
+            double anchored[4] = {0};
+            double session_vwap[4] = {0};
+
+            check_int_eq(exprtk_ta_vwap(hi, lo, cl, vol, 4, anchored), 4);
+            check_int_eq(exprtk_ta_vwap_session(hi, lo, cl, vol, session, 4, session_vwap), 4);
+
+            check_float_eq(anchored[0], 10.0, EPSILON);
+            check_float_eq(anchored[3], 16.0, EPSILON);
+            check_float_eq(session_vwap[0], 10.0, EPSILON);
+            check_float_eq(session_vwap[1], 11.0, EPSILON);
+            check_float_eq(session_vwap[2], 20.0, EPSILON);
+            check_float_eq(session_vwap[3], 21.0, EPSILON);
         }
     }
 

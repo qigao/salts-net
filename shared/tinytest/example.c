@@ -230,19 +230,19 @@ suite("tinytest C Example") {
     }
 
     group("Line number reporting") {
-        it("should report line 238 for check_not_null failure") {
+        it_should_fail("should report line 235 for check_not_null failure") {
             void* ptr = NULL;
-            check_not_null(ptr);  // Line 238 - should report THIS line
+            check_not_null(ptr);  // Line 235 - should report THIS line
         }
 
-        it_should_fail("should report line 243 for check_int_eq failure") {
+        it_should_fail("should report line 240 for check_int_eq failure") {
             int x = 42;
-            check_int_eq(x, 99);  // Line 243 - should report THIS line
+            check_int_eq(x, 99);  // Line 240 - should report THIS line
         }
 
-        it_should_fail("should report line 248 for check with message failure") {
+        it_should_fail("should report line 245 for check with message failure") {
             int value = 10;
-            check(value == 20, "expected 20 but got %d", value);  // Line 248 - should report THIS line
+            check(value == 20, "expected 20 but got %d", value);  // Line 245 - should report THIS line
         }
     }
 }

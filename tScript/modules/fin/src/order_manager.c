@@ -648,14 +648,25 @@ void order_manager_cancel_pending(order_manager_t *mgr, uint32_t asset_id) {
  * ========================================================================= */
 
 void order_manager_mark_to_market(order_manager_t *mgr,
+                                   const uint32_t *asset_ids,
                                    const double *prices,
                                    size_t n) {
-    if (!mgr) return;
+    if (!mgr || !asset_ids || !prices) return;
     double pos_value = 0.0;
     for (size_t i = 0; i < mgr->capacity && i < n; i++) {
         position_t *p = &mgr->positions[i];
         if (p->position == 0.0 || p->asset_id == 0) continue;
-        double mkt = prices[i] * p->position;
+        double price = 0.0;
+        int found = 0;
+        for (size_t j = 0; j < n; j++) {
+            if (asset_ids[j] == p->asset_id) {
+                price = prices[j];
+                found = 1;
+                break;
+            }
+        }
+        if (!found) continue;
+        double mkt = price * p->position;
         p->unrealized_pnl = mkt - p->avg_entry_price * fabs(p->position);
         pos_value += mkt;
     }

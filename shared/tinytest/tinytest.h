@@ -172,8 +172,8 @@ typedef struct __bdd_spec_entry__ {
   struct __bdd_spec_entry__ *next;
 } __bdd_spec_entry__;
 
-static __bdd_spec_entry__ *__bdd_specs__ = NULL;
-static size_t __bdd_spec_count__ = 0;
+__BDD_SELECTANY __bdd_spec_entry__ *__bdd_specs__ = NULL;
+__BDD_SELECTANY size_t __bdd_spec_count__ = 0;
 
 static void __bdd_register_spec__(const char *name, __bdd_spec_fn__ fn) {
   __bdd_spec_entry__ *e = __BDD_CAST(__bdd_spec_entry__ *, malloc(sizeof(__bdd_spec_entry__)));
@@ -206,6 +206,7 @@ static void __bdd_cleanup_specs__(void) {
   __bdd_specs__ = NULL;
   __bdd_spec_count__ = 0;
 }
+
 
 #if defined(__cplusplus)
   #define __BDD_CONSTRUCTOR__(fn)                                                                  \
@@ -701,6 +702,54 @@ static inline void __bdd_test_step_free__(__bdd_test_step__ *step) {
   }
 }
 
+static char *__bdd_build_full_path__(__bdd_test_step__ **group_stack, int stack_depth,
+                                     const char *test_name) {
+  size_t total_len = 0;
+  char *path;
+  char *dst;
+
+  for (int i = 1; i < stack_depth; ++i) {
+    const char *segment = (group_stack[i] != NULL) ? group_stack[i]->name : NULL;
+    if (!segment || segment[0] == '\0') continue;
+    if (total_len > 0) total_len += 1;
+    total_len += strlen(segment);
+  }
+
+  if (test_name && test_name[0] != '\0') {
+    if (total_len > 0) total_len += 1;
+    total_len += strlen(test_name);
+  }
+
+  if (total_len == 0) return NULL;
+
+  path = __BDD_CAST(char *, malloc(total_len + 1));
+  if (!path) {
+    perror("malloc(full_path)");
+    abort();
+  }
+
+  dst = path;
+  for (int i = 1; i < stack_depth; ++i) {
+    const char *segment = (group_stack[i] != NULL) ? group_stack[i]->name : NULL;
+    size_t len;
+    if (!segment || segment[0] == '\0') continue;
+    if (dst != path) *dst++ = '.';
+    len = strlen(segment);
+    memcpy(dst, segment, len);
+    dst += len;
+  }
+
+  if (test_name && test_name[0] != '\0') {
+    size_t len = strlen(test_name);
+    if (dst != path) *dst++ = '.';
+    memcpy(dst, test_name, len);
+    dst += len;
+  }
+
+  *dst = '\0';
+  return path;
+}
+
 static inline __bdd_node__ *__bdd_node_create__(int id, const char *name, __bdd_node_type__ type,
                                                 __bdd_node_flags__ flags) {
   __bdd_node__ *n = __BDD_CAST(__bdd_node__ *, malloc(sizeof(__bdd_node__)));
@@ -1059,7 +1108,8 @@ static void __bdd_run__(__bdd_config_type__ *config) {
       skipped = true;
     } else if (step->flags & __bdd_node_flags_skip__) {
       skipped = true;
-    } else if (config->filter && !strstr(step->name, config->filter)) {
+    } else if (config->filter && !strstr(step->name, config->filter) &&
+               !(step->full_path && strstr(step->full_path, config->filter))) {
       skipped = true;
     }
     ++config->test_tap_index;
@@ -1400,7 +1450,6 @@ int main(int argc, char **argv) {
     __bdd_array__ *steps = __bdd_array_create__();
     __bdd_node_flatten__(&config, root, steps);
 
-    char path_buffer[1024];
     __bdd_test_step__ *group_stack[32];
     int stack_depth = 0;
 
@@ -1416,14 +1465,7 @@ int main(int argc, char **argv) {
           group_stack[stack_depth++] = step;
         }
       } else if (step->type == __BDD_NODE_TEST__) {
-        path_buffer[0] = '\0';
-        for (int j = 1; j < stack_depth; ++j) {
-          if (j > 1) strcat(path_buffer, ".");
-          strcat(path_buffer, group_stack[j]->name);
-        }
-        if (path_buffer[0] != '\0') {
-          step->full_path = strdup(path_buffer);
-        }
+        step->full_path = __bdd_build_full_path__(group_stack, stack_depth, step->name);
         ++total_test_count;
       }
     }

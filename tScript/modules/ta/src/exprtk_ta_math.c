@@ -22,11 +22,18 @@ void ta_sma_calc(const double *src, size_t len, size_t period, double *dst) {
 }
 
 void ta_ema_calc(const double *src, size_t len, size_t period, double *dst) {
-  if (len == 0 || period == 0)
+  if (len == 0 || period == 0 || period > len)
     return;
+  if (period == 1) {
+    memcpy(dst, src, len * sizeof(double));
+    return;
+  }
+
+  memset(dst, 0, (period - 1) * sizeof(double));
+  double seed = simd_sum(src, period) / (double)period;
   double alpha = 2.0 / (double)(period + 1);
-  dst[0] = src[0];
-  for (size_t i = 1; i < len; ++i)
+  dst[period - 1] = seed;
+  for (size_t i = period; i < len; ++i)
     dst[i] = alpha * src[i] + (1.0 - alpha) * dst[i - 1];
 }
 

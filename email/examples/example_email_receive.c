@@ -10,18 +10,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static const char *env_or_default(const char *name, const char *fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return value;
+}
+
+static int env_flag_or_default(const char *name, int fallback) {
+  const char *value = getenv(name);
+  if (value == NULL || value[0] == '\0') {
+    return fallback;
+  }
+  return strcmp(value, "0") != 0;
+}
+
 // POP3 operations must run inside a coroutine
 static void pop3_test_coro(coro_t *co, void *arg) {
   coro_context_t *ctx = (coro_context_t *)arg;
 
-  // Configure POP3
+  // Configure POP3 for local smtp4dev testing
   pop3_config_t pop3_config = {0};
-  pop3_config.host = "pop.gmail.com";
-  pop3_config.port = 995;
-  pop3_config.use_tls = 1;
-  pop3_config.use_stls = 0;
-  pop3_config.username = "your-email@gmail.com";
-  pop3_config.password = "your-app-password";
+  pop3_config.host = (char *)env_or_default("POP3_HOST", "127.0.0.1");
+  pop3_config.port = atoi(env_or_default("POP3_PORT", "110"));
+  pop3_config.use_tls = env_flag_or_default("POP3_TLS", 0);
+  pop3_config.use_stls = env_flag_or_default("POP3_STLS", 0);
+  pop3_config.username = (char *)env_or_default("POP3_USERNAME", "turbo");
+  pop3_config.password = (char *)env_or_default("POP3_PASSWORD", "turbo");
   pop3_config.timeout_ms = 30000;
 
   // Create POP3 client
@@ -32,7 +48,7 @@ static void pop3_test_coro(coro_t *co, void *arg) {
   }
 
   // Connect
-  printf("Connecting to POP3 server...\n");
+  printf("Connecting to POP3 server %s:%d...\n", pop3_config.host, pop3_config.port);
   if (pop3_connect(pop3) != 0) {
     fprintf(stderr, "POP3 connect failed: %s\n", pop3_get_error(pop3));
     pop3_client_free(pop3);

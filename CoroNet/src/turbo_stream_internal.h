@@ -106,6 +106,12 @@ extern const turbo_stream_backend_ops_t turbo_stream_pipe_unix_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_ws_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_tls_ops;
 
+int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
+                                 turbo_stream_t *tcp_stream,
+                                 const char *hostname,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close);
+
 /* ── Shared helpers ───────────────────────────────────────── */
 
 /**

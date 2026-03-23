@@ -47,6 +47,19 @@ static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t 
   s->status = 0;
 }
 
+static turbo_dns_pref_t socket_type_to_dns_pref(coro_socket_type_t type) {
+  switch (type) {
+  case CORO_SOCKET_TCP_V4:
+  case CORO_SOCKET_UDP_V4:
+    return TURBO_DNS_IPV4_ONLY;
+  case CORO_SOCKET_TCP_V6:
+  case CORO_SOCKET_UDP_V6:
+    return TURBO_DNS_IPV6_ONLY;
+  default:
+    return TURBO_DNS_ANY;
+  }
+}
+
 static void socket_destroy_shell(coro_socket_t *s) {
   if (!s) return;
 
@@ -216,7 +229,8 @@ void coro_client_wake_eof(coro_socket_t *client) {
 
 typedef struct {
   coro_socket_t *s;
-  char ip[128];
+  turbo_dns_result_t results[TURBO_DNS_MAX_RESULTS * 2];
+  size_t count;
   int status;
 } dns_bounce_t;
 
@@ -233,8 +247,18 @@ static void on_dns_resolved_bounce(void *arg1, void *arg2) {
 
   stop_timeout_timer(s);
   s->status = b->status;
+  s->resolved_ip_count = 0;
+  s->resolved_ip[0] = '\0';
   if (b->status == 0) {
-    strncpy(s->resolved_ip, b->ip, sizeof(s->resolved_ip) - 1);
+    for (size_t i = 0; i < b->count && i < TURBO_DNS_MAX_RESULTS; i++) {
+      strncpy(s->resolved_ips[i], b->results[i].ip, sizeof(s->resolved_ips[i]) - 1);
+      s->resolved_ips[i][sizeof(s->resolved_ips[i]) - 1] = '\0';
+      s->resolved_ip_count++;
+    }
+    if (s->resolved_ip_count > 0) {
+      strncpy(s->resolved_ip, s->resolved_ips[0], sizeof(s->resolved_ip) - 1);
+      s->resolved_ip[sizeof(s->resolved_ip) - 1] = '\0';
+    }
   }
   
   if (s->co_wait) coro_resume_waiter(s);
@@ -243,7 +267,8 @@ static void on_dns_resolved_bounce(void *arg1, void *arg2) {
   release_client(s);
 }
 
-static void on_dns_resolved(const char *hostname, const char *ip, int status, void *user_data) {
+static void on_dns_resolved(const char *hostname, const turbo_dns_result_t *results,
+                            size_t count, int status, void *user_data) {
   coro_socket_t *s = (coro_socket_t *)user_data;
   UNUSED(hostname);
 
@@ -253,13 +278,92 @@ static void on_dns_resolved(const char *hostname, const char *ip, int status, vo
 
   b->s = s;
   b->status = status;
-  if (ip) strncpy(b->ip, ip, sizeof(b->ip) - 1);
+  if (results && count > 0) {
+    if (count > TURBO_DNS_MAX_RESULTS * 2) count = TURBO_DNS_MAX_RESULTS * 2;
+    memcpy(b->results, results, count * sizeof(turbo_dns_result_t));
+    b->count = count;
+  }
 
   if (coro_post(s->ctx, on_dns_resolved_bounce, b, NULL) != 0) {
     free(b);
     /* Good taste: if post fails, we leak the reference... 
        but we are already in big trouble if ring buffer full. */
   }
+}
+
+static uint64_t coro_socket_connect_deadline_ms(coro_socket_t *s) {
+  uint64_t now;
+
+  if (!s || !s->loop || s->timeout_ms == 0) return 0;
+  now = turbo_loop_now(s->loop);
+  if (UINT64_MAX - now < s->timeout_ms) return UINT64_MAX;
+  return now + s->timeout_ms;
+}
+
+static uint64_t coro_socket_connect_remaining_ms(coro_socket_t *s, uint64_t deadline_ms) {
+  uint64_t now;
+
+  if (!s || deadline_ms == 0) return 0;
+  now = turbo_loop_now(s->loop);
+  if (now >= deadline_ms) return 0;
+  return deadline_ms - now;
+}
+
+static void coro_socket_reset_retry_state(coro_socket_t *s) {
+  if (!s) return;
+
+  s->connected = 0;
+  s->status = 0;
+  s->timed_out = 0;
+  s->co_wait = NULL;
+
+  if ((s->transport == TURBO_TCP || s->transport == TURBO_TLS ||
+       s->transport == TURBO_PIPE) &&
+      s->handle.stream && !s->handle.stream->closing) {
+    turbo_stream_set_user_data(s->handle.stream, NULL);
+    turbo_stream_destroy(s->handle.stream);
+    s->handle.stream = NULL;
+  }
+}
+
+static int coro_socket_connect_resolved(coro_socket_t *s, const char *host, int port,
+                                        uint64_t deadline_ms) {
+  uint64_t saved_timeout = s ? s->timeout_ms : 0;
+  int last_status = TURBO_EAI_FAIL;
+
+  if (!s) return TURBO_EINVAL;
+
+  if (s->resolved_ip_count == 0) {
+    return s->ops->connect(s, host, port);
+  }
+
+  for (size_t i = 0; i < s->resolved_ip_count; i++) {
+    uint64_t remaining_ms = coro_socket_connect_remaining_ms(s, deadline_ms);
+
+    if (deadline_ms != 0) {
+      if (remaining_ms == 0) {
+        last_status = TURBO_ETIMEDOUT;
+        break;
+      }
+      s->timeout_ms = remaining_ms;
+    }
+
+    strncpy(s->resolved_ip, s->resolved_ips[i], sizeof(s->resolved_ip) - 1);
+    s->resolved_ip[sizeof(s->resolved_ip) - 1] = '\0';
+    last_status = s->ops->connect(s, host, port);
+    s->timeout_ms = saved_timeout;
+
+    if (last_status == 0) {
+      return 0;
+    }
+
+    if (i + 1 < s->resolved_ip_count) {
+      coro_socket_reset_retry_state(s);
+    }
+  }
+
+  s->timeout_ms = saved_timeout;
+  return last_status;
 }
 
 /* ── Socket Creation ──────────────────────────────────────── */
@@ -284,6 +388,7 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
   s->transport = transport;
   s->ops = ops;
   s->owns_handle = 0;
+  s->dns_pref = TURBO_DNS_ANY;
 
   s->timer = turbo_timer_create(NULL);
   if (s->timer) {
@@ -301,6 +406,7 @@ coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type) 
 
   coro_socket_t *s = coro_socket_create_shell(ctx, TURBO_TCP, &transport_ops_tcp);
   if (!s) return NULL;
+  s->dns_pref = socket_type_to_dns_pref(type);
 
   switch (type) {
   case CORO_SOCKET_TCP_V4:
@@ -370,6 +476,8 @@ static turbo_transport_t socket_type_to_transport(coro_socket_type_t type) {
 }
 
 int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
+  uint64_t deadline_ms;
+
   if (!s || !host) return TURBO_EINVAL;
 
   /* If transport is already set (e.g. by coro_socket_create), use it.
@@ -384,12 +492,16 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   coro_socket_configure_transport(s, transport, 0);
+  s->resolved_ip_count = 0;
+  s->resolved_ip[0] = '\0';
+  deadline_ms = coro_socket_connect_deadline_ms(s);
 
   /* DNS resolution for host-based protocols */
   struct sockaddr_storage probe;
   if (turbo_dns_parse_address(host, 0, &probe) == 0) {
     /* Already an IP address */
     strncpy(s->resolved_ip, host, sizeof(s->resolved_ip) - 1);
+    s->resolved_ip[sizeof(s->resolved_ip) - 1] = '\0';
   } else {
     /* Need DNS resolution */
     int r;
@@ -398,8 +510,8 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
     retain_client(s);
     coro_set_wait(s);
 
-    r = turbo_dns_resolve_async2(s->loop, host, TURBO_DNS_ANY, on_dns_resolved, s,
-                                 &s->dns_query);
+    r = turbo_dns_resolve_async_results2(s->loop, host, s->dns_pref, on_dns_resolved, s,
+                                         &s->dns_query);
 
     if (r != 0) {
       s->co_wait = NULL;
@@ -415,7 +527,7 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
     if (s->status != 0) return s->status;
   }
 
-  return s->ops->connect(s, host, port);
+  return coro_socket_connect_resolved(s, host, port, deadline_ms);
 }
 
 int coro_socket_connect_pipe(coro_socket_t *s, const char *path) {

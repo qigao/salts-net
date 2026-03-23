@@ -36,6 +36,10 @@ typedef enum {
  */
 typedef struct turbo_dns_query_s turbo_dns_query_t;
 
+#ifndef TURBO_DNS_MAX_RESULTS
+#define TURBO_DNS_MAX_RESULTS 16
+#endif
+
 /**
  * @brief Callback for asynchronous DNS resolution.
  *
@@ -45,6 +49,33 @@ typedef struct turbo_dns_query_s turbo_dns_query_t;
  * @param user_data User-provided context pointer
  */
 typedef void (*turbo_dns_cb)(const char *hostname, const char *ip, int status, void *user_data);
+
+/**
+ * @brief One resolved DNS result entry.
+ */
+typedef struct {
+  char ip[INET6_ADDRSTRLEN];
+  int family;
+} turbo_dns_result_t;
+
+/**
+ * @brief Callback for asynchronous DNS resolution returning multiple results.
+ *
+ * The callback receives an ordered list of IP strings matching the requested
+ * family preference. The `results` buffer is only valid for the duration of
+ * the callback.
+ *
+ * @param hostname  The original hostname that was resolved
+ * @param results   Ordered resolved IP results (NULL on failure)
+ * @param count     Number of entries in results
+ * @param status    0 on success, error code on failure
+ * @param user_data User-provided context pointer
+ */
+typedef void (*turbo_dns_results_cb)(const char *hostname,
+                                     const turbo_dns_result_t *results,
+                                     size_t count,
+                                     int status,
+                                     void *user_data);
 
 // =============================================================================
 // Lifecycle
@@ -126,12 +157,39 @@ CXX_C_API int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dn
  * @param pref      Address family preference
  * @param callback  Callback invoked on completion
  * @param user_data User context passed to callback
- * @param out_query Output: query handle for cancellation (NULL if not needed)
+ * @param out_query Output: query handle for cancellation (NULL if not needed).
+ *                  The handle is only valid while the query is still pending.
  * @return 0 on success (resolution started), error code on failure
  */
 CXX_C_API int turbo_dns_resolve_async2(void *loop, const char *hostname, turbo_dns_pref_t pref,
                                        turbo_dns_cb callback, void *user_data,
                                        turbo_dns_query_t **out_query);
+
+/**
+ * @brief Start asynchronous DNS resolution returning multiple ordered results.
+ *
+ * @param loop      Event loop for resolution (opaque pointer)
+ * @param hostname  Hostname to resolve
+ * @param pref      Address family preference
+ * @param callback  Callback invoked on completion
+ * @param user_data User context passed to callback
+ * @param out_query Output: query handle for cancellation (NULL if not needed).
+ *                  The handle is only valid while the query is still pending.
+ * @return 0 on success (resolution started), error code on failure
+ */
+CXX_C_API int turbo_dns_resolve_async_results2(void *loop, const char *hostname,
+                                               turbo_dns_pref_t pref,
+                                               turbo_dns_results_cb callback,
+                                               void *user_data,
+                                               turbo_dns_query_t **out_query);
+
+/**
+ * @brief Start asynchronous DNS resolution returning multiple ordered results.
+ */
+CXX_C_API int turbo_dns_resolve_async_results(void *loop, const char *hostname,
+                                              turbo_dns_pref_t pref,
+                                              turbo_dns_results_cb callback,
+                                              void *user_data);
 
 /**
  * @brief Cancel a pending asynchronous DNS query.

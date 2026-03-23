@@ -213,8 +213,11 @@ struct coro_socket_s {
 
   /* ── DNS ───────────────────────────────────────────────── */
   char resolved_ip[64];         /**< Resolved IP address string */
+  char resolved_ips[TURBO_DNS_MAX_RESULTS][INET6_ADDRSTRLEN];
+  size_t resolved_ip_count;     /**< Number of resolved addresses available for retry */
   turbo_dns_query_t *dns_query; /**< In-flight DNS query */
   int dns_initialized;          /**< 1 = DNS resolver is ready */
+  turbo_dns_pref_t dns_pref;    /**< Address-family preference for hostname resolution */
 
   /* ── Timeout ───────────────────────────────────────────── */
   turbo_timer_t *timer;  /**< Timeout timer handle */

@@ -65,6 +65,13 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 
   if (!sa) return TURBO_EINVAL;
 
+  /* Retry path: failed connect attempts must not reuse a dead stream handle. */
+  if (s->handle.stream && !s->connected) {
+    turbo_stream_set_user_data(s->handle.stream, NULL);
+    turbo_stream_destroy(s->handle.stream);
+    s->handle.stream = NULL;
+  }
+
   /* Create stream handle on first connect */
   if (!s->handle.stream) {
     turbo_stream_kind_t kind = (sa->sa_family == AF_INET6)
@@ -77,14 +84,15 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   retain_client(s);
+  coro_set_wait(s);
   int r = turbo_stream_connect_addr(s->handle.stream, sa,
                                     on_tcp_connect, on_tcp_close);
   if (r != 0) {
+    s->co_wait = NULL;
     release_client(s);
     return r;
   }
 
-  coro_set_wait(s);
   coro_yield();
   return s->status;
 }

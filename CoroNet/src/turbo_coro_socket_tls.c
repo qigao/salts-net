@@ -69,6 +69,12 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
     return TURBO_EINVAL;
   }
 
+  if (s->handle.stream && !s->connected) {
+    turbo_stream_set_user_data(s->handle.stream, NULL);
+    turbo_stream_destroy(s->handle.stream);
+    s->handle.stream = NULL;
+  }
+
   if (!s->handle.stream) {
     s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
     if (!s->handle.stream) return TURBO_ENOMEM;
@@ -81,14 +87,15 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   retain_client(s);
+  coro_set_wait(s);
   int r = turbo_stream_connect_addr(s->handle.stream, sa,
                                     on_tls_connect, on_tls_close);
   if (r != 0) {
+    s->co_wait = NULL;
     release_client(s);
     return r;
   }
 
-  coro_set_wait(s);
   coro_yield();
   return s->status;
 }

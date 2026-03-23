@@ -109,6 +109,22 @@ exprtk_value_t exprtk_graph_bellman_ford(size_t argc, exprtk_value_t *args, expr
 exprtk_value_t exprtk_graph_has_negative_cycle(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
 exprtk_value_t exprtk_graph_extract_path(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
 exprtk_value_t exprtk_graph_detect_arbitrage(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_game(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_support_enumeration(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_vertex_enumeration(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_lemke_howson(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_fictitious_play(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_stochastic_fictitious_play(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_discrete_replicator_dynamics(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_imitation_dynamics(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_regret_minimization(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_introspection_dynamics(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_repeated_game(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_moran_process(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_replicator_mutation(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_asymmetric_replicator(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_asymmetric_replicator_derivative(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
+exprtk_value_t exprtk_nash_replicator(size_t argc, exprtk_value_t *args, exprtk_env_t *env, mem_pool_t *arena);
 
 /* ── Event-driven strategy module (buy/sell/flat, rank, risk sizing, ...) ── */
 const exprtk_module_t *exprtk_module_strategy(void);

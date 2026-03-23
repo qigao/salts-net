@@ -165,7 +165,6 @@ static void __bdd_indent__(FILE *fp, size_t level);
 typedef struct __bdd_config_type__ __bdd_config_type__;
 typedef void (*__bdd_spec_fn__)(__bdd_config_type__ *__bdd_config__);
 
-
 typedef struct __bdd_spec_entry__ {
   const char *name;
   __bdd_spec_fn__ fn;
@@ -206,7 +205,6 @@ static void __bdd_cleanup_specs__(void) {
   __bdd_specs__ = NULL;
   __bdd_spec_count__ = 0;
 }
-
 
 #if defined(__cplusplus)
   #define __BDD_CONSTRUCTOR__(fn)                                                                  \
@@ -613,8 +611,8 @@ typedef struct __bdd_config_type__ {
   __bdd_bench_entry__ *bench_entries;
   size_t bench_count;
   size_t bench_cap;
-  int bench_header_printed;   /* replaces static __bdd_bench_header_printed__ */
-  size_t bench_header_level;  /* replaces static __bdd_bench_header_level__   */
+  int bench_header_printed;  /* replaces static __bdd_bench_header_printed__ */
+  size_t bench_header_level; /* replaces static __bdd_bench_header_level__   */
 } __bdd_config_type__;
 
 static inline void __bdd_bench_reset__(__bdd_config_type__ *config) {
@@ -877,8 +875,7 @@ static void __bdd_indent__(FILE *fp, size_t level) {
 static inline void __bdd_bench_print_header__(__bdd_config_type__ *config, size_t level) {
 #if BDD_BENCH_TABLE
   if (!config) return;
-  if (config->bench_header_printed &&
-      config->bench_header_level == level) return;
+  if (config->bench_header_printed && config->bench_header_level == level) return;
   config->bench_header_printed = 1;
   config->bench_header_level = level;
   __bdd_indent__(stdout, level);
@@ -1701,38 +1698,41 @@ int main(int argc, char **argv) {
 static inline int __bdd_eval_bool__(int v) { return v; }
 
 /* Internal implementation that takes file and line */
-#define __BDD_CHECK_IMPL__(condition, file, line, ...)                                                 \
-  do {                                                                                                 \
-    if (!__bdd_eval_bool__(!!(condition))) {                                                         \
-      if (__bdd_active_config__) {                                                                   \
-        ++__bdd_active_config__->assertion_count;                                                    \
-        ++__bdd_active_config__->assertion_failed_count;                                             \
-        if (__bdd_active_config__->run == __BDD_TEST_RUN__ && !__bdd_active_config__->error) {        \
-          char *message = __bdd_format__(__VA_ARGS__);                                               \
-          const char *fmt = __bdd_active_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__; \
-          snprintf(__bdd_active_config__->location_buf, sizeof(__bdd_active_config__->location_buf), \
-                   "at %s:%s", file, line);                                                          \
-          __bdd_active_config__->location = __bdd_active_config__->location_buf;                     \
-          size_t bufflen = strlen(fmt) + strlen(message) + 1;                                        \
-          __bdd_active_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));          \
-          if (__bdd_active_config__->use_color) {                                                    \
-            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, message);             \
-          } else {                                                                                   \
-            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, message);             \
-          }                                                                                          \
-          free(message);                                                                             \
-          longjmp(__bdd_active_config__->jump_buffer, 1);                                            \
-        }                                                                                            \
-      }                                                                                              \
-    } else {                                                                                         \
-      if (__bdd_active_config__) ++__bdd_active_config__->assertion_count;                           \
-    }                                                                                                \
+#define __BDD_CHECK_IMPL__(condition, file, line, ...)                                             \
+  do {                                                                                             \
+    if (!__bdd_eval_bool__(!!(condition))) {                                                       \
+      if (__bdd_active_config__) {                                                                 \
+        ++__bdd_active_config__->assertion_count;                                                  \
+        ++__bdd_active_config__->assertion_failed_count;                                           \
+        if (__bdd_active_config__->run == __BDD_TEST_RUN__ && !__bdd_active_config__->error) {     \
+          char *message = __bdd_format__(__VA_ARGS__);                                             \
+          const char *fmt =                                                                        \
+              __bdd_active_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__;            \
+          snprintf(__bdd_active_config__->location_buf,                                            \
+                   sizeof(__bdd_active_config__->location_buf), "at %s:%s", file, line);           \
+          __bdd_active_config__->location = __bdd_active_config__->location_buf;                   \
+          size_t bufflen = strlen(fmt) + strlen(message) + 1;                                      \
+          __bdd_active_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));        \
+          if (__bdd_active_config__->use_color) {                                                  \
+            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, message);           \
+          } else {                                                                                 \
+            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, message);           \
+          }                                                                                        \
+          free(message);                                                                           \
+          longjmp(__bdd_active_config__->jump_buffer, 1);                                          \
+        }                                                                                          \
+      }                                                                                            \
+    } else {                                                                                       \
+      if (__bdd_active_config__) ++__bdd_active_config__->assertion_count;                         \
+    }                                                                                              \
   } while (0)
 
 /* Wrapper that captures __FILE__ and __LINE__ */
-#define __BDD_CHECK__(condition, ...) __BDD_CHECK_IMPL__(condition, __FILE__, __STRING__LINE__, __VA_ARGS__)
+#define __BDD_CHECK__(condition, ...)                                                              \
+  __BDD_CHECK_IMPL__(condition, __FILE__, __STRING__LINE__, __VA_ARGS__)
 
-#define __BDD_CHECK_ONE__(condition) __BDD_CHECK_IMPL__(condition, __FILE__, __STRING__LINE__, #condition)
+#define __BDD_CHECK_ONE__(condition)                                                               \
+  __BDD_CHECK_IMPL__(condition, __FILE__, __STRING__LINE__, #condition)
 
 #define check(...) __BDD_MACRO__(__BDD_CHECK_, __VA_ARGS__)
 
@@ -2223,7 +2223,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                 (epsilon), &__bdd_fi__)) {                                         \
       __BDD_CHECK__(0, "array mismatch at [%zu]: expected %f but got %f (+/- %f)", __bdd_fi__,     \
                     ((const double *)(expected))[__bdd_fi__],                                      \
-                   ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon)));         \
+                    ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon)));        \
     }                                                                                              \
   } while (0)
 #define check_float_array_eq_warn(actual, expected, n, epsilon)                                    \
@@ -2233,7 +2233,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                 (epsilon), &__bdd_fi__)) {                                         \
       __BDD_WARN__(0, "array mismatch at [%zu]: expected %f but got %f (+/- %f)", __bdd_fi__,      \
                    ((const double *)(expected))[__bdd_fi__],                                       \
-                  ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon)));          \
+                   ((const double *)(actual))[__bdd_fi__], __BDD_CAST(double, (epsilon)));         \
     }                                                                                              \
   } while (0)
 
@@ -2294,12 +2294,12 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 
 /* --- Non-fatal assertion --- */
 /* Internal implementation that takes file and line */
-#define __BDD_WARN_IMPL__(condition, file, line, ...)                                                  \
+#define __BDD_WARN_IMPL__(condition, file, line, ...)                                              \
   if (!__bdd_eval_bool__(!!(condition))) {                                                         \
     ++__bdd_active_config__->assertion_count;                                                      \
     char *message = __bdd_format__(__VA_ARGS__);                                                   \
     ++__bdd_active_config__->warn_count;                                                           \
-    __bdd_indent__(stdout, __bdd_active_config__->current_test                                    \
+    __bdd_indent__(stdout, __bdd_active_config__->current_test                                     \
                                ? __bdd_active_config__->current_test->level + 1                    \
                                : 1);                                                               \
     if (__bdd_active_config__->use_color) {                                                        \
@@ -2314,9 +2314,11 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
   }
 
 /* Wrapper that captures __FILE__ and __LINE__ */
-#define __BDD_WARN__(condition, ...) __BDD_WARN_IMPL__(condition, __FILE__, __STRING__LINE__, __VA_ARGS__)
+#define __BDD_WARN__(condition, ...)                                                               \
+  __BDD_WARN_IMPL__(condition, __FILE__, __STRING__LINE__, __VA_ARGS__)
 
-#define __BDD_WARN_ONE__(condition) __BDD_WARN_IMPL__(condition, __FILE__, __STRING__LINE__, #condition)
+#define __BDD_WARN_ONE__(condition)                                                                \
+  __BDD_WARN_IMPL__(condition, __FILE__, __STRING__LINE__, #condition)
 
 #define check_warn(...) __BDD_MACRO__(__BDD_WARN_, __VA_ARGS__)
 
@@ -2328,12 +2330,12 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
     if (__bdd_active_config__->info_len + __bdd_info_msg_len__ + 2 <                               \
         sizeof(__bdd_active_config__->info_buffer)) {                                              \
       if (__bdd_active_config__->info_len > 0) {                                                   \
-        __bdd_active_config__->info_buffer[__bdd_active_config__->info_len++] = ' ';              \
+        __bdd_active_config__->info_buffer[__bdd_active_config__->info_len++] = ' ';               \
       }                                                                                            \
-      memcpy(__bdd_active_config__->info_buffer + __bdd_active_config__->info_len, __bdd_info_msg__, \
-             __bdd_info_msg_len__);                                                                \
+      memcpy(__bdd_active_config__->info_buffer + __bdd_active_config__->info_len,                 \
+             __bdd_info_msg__, __bdd_info_msg_len__);                                              \
       __bdd_active_config__->info_len += __bdd_info_msg_len__;                                     \
-      __bdd_active_config__->info_buffer[__bdd_active_config__->info_len] = '\0';                 \
+      __bdd_active_config__->info_buffer[__bdd_active_config__->info_len] = '\0';                  \
     }                                                                                              \
     free(__bdd_info_msg__);                                                                        \
   } while (0)
@@ -2350,7 +2352,7 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 
 /* --- Section (TDD SECTION equivalent) --- */
 #define section(...) describe(__VA_ARGS__)
- 
+
 /* --- Benchmarking --- */
 /* Usage: benchmark("name", iterations) { code; }
  * Runs the block `iterations` times and prints avg/min/max timing. */
@@ -2385,13 +2387,13 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
           double __max;                                                                            \
           double __sum;                                                                            \
         } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0};                           \
-        !__bdd_bm__.__done;                                                                        \
-        __bdd_bm__.__done = 1,                                                                     \
-          __bdd_bench_print__(                                                                     \
-              (name), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min, __bdd_bm__.__max,        \
-              __bdd_active_config__->current_test ? __bdd_active_config__->current_test->level + 1 \
-                                                  : 1,                                             \
-              __bdd_active_config__->use_color))                                                   \
+        !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                 \
+          __bdd_bench_print__((name), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min,          \
+                              __bdd_bm__.__max,                                                    \
+                              __bdd_active_config__->current_test                                  \
+                                  ? __bdd_active_config__->current_test->level + 1                 \
+                                  : 1,                                                             \
+                              __bdd_active_config__->use_color))                                   \
       for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
         for (double __bdd_bm_t0__ = __bdd_get_time_ms__(), __bdd_bm_t1__ = 0; __bdd_bm_t1__ == 0;  \
              __bdd_bm_t1__ = __bdd_get_time_ms__() - __bdd_bm_t0__,                                \

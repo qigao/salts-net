@@ -20,6 +20,7 @@
 #include "turbo_coro_lb.h"
 #include <CoroNet/turbo_coro_context.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *route_by_prefix(const char *data, size_t len, void *arg) {
@@ -30,9 +31,31 @@ static const char *route_by_prefix(const char *data, size_t len, void *arg) {
     return NULL;
 }
 
+static int parse_tcp_endpoint(const char *endpoint, char *host, size_t host_cap, int *port) {
+    const char *start = endpoint;
+    const char *colon;
+    size_t host_len;
+
+    if (!endpoint || !host || !port || host_cap == 0) return -1;
+    if (strncmp(start, "tcp://", 6) == 0) start += 6;
+    colon = strrchr(start, ':');
+    if (!colon || colon == start || colon[1] == '\0') return -1;
+
+    host_len = (size_t)(colon - start);
+    if (host_len >= host_cap) return -1;
+    memcpy(host, start, host_len);
+    host[host_len] = '\0';
+    *port = atoi(colon + 1);
+    return (*port > 0) ? 0 : -1;
+}
+
 int main(int argc, char **argv) {
     const char *frontend = "tcp://0.0.0.0:8080";
     const char *backend = "tcp://0.0.0.0:9090";
+    char frontend_host[64];
+    char backend_host[64];
+    int frontend_port;
+    int backend_port;
 
     if (argc > 1) {
         static char fbuf[64];
@@ -65,14 +88,27 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (coro_lb_listen(lb, frontend) != 0) {
+    if (parse_tcp_endpoint(frontend, frontend_host, sizeof(frontend_host), &frontend_port) != 0) {
+        fprintf(stderr, "Invalid frontend endpoint %s\n", frontend);
+        coro_lb_destroy(lb);
+        coro_context_destroy(ctx);
+        return 1;
+    }
+    if (parse_tcp_endpoint(backend, backend_host, sizeof(backend_host), &backend_port) != 0) {
+        fprintf(stderr, "Invalid backend endpoint %s\n", backend);
+        coro_lb_destroy(lb);
+        coro_context_destroy(ctx);
+        return 1;
+    }
+
+    if (coro_lb_listen(lb, frontend_host, frontend_port) != 0) {
         fprintf(stderr, "Failed to listen on %s\n", frontend);
         coro_lb_destroy(lb);
         coro_context_destroy(ctx);
         return 1;
     }
 
-    if (coro_lb_accept_workers(lb, backend) != 0) {
+    if (coro_lb_accept_workers(lb, backend_host, backend_port) != 0) {
         fprintf(stderr, "Failed to accept workers on %s\n", backend);
         coro_lb_destroy(lb);
         coro_context_destroy(ctx);

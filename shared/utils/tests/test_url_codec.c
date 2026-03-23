@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "http_common.h"
 #include "tinytest.h"
 #include <stdlib.h>
 #include <string.h>

@@ -61,6 +61,10 @@ foreach(TEST_FILE ${TEST_FILES})
   if(TEST_NAME MATCHES "turbo_str|str_bench")
     target_link_libraries(${TEST_NAME} PRIVATE TurboNet::SDS)
   endif()
+
+  if(TEST_NAME STREQUAL "test_url_codec")
+    target_link_libraries(${TEST_NAME} PRIVATE TurboNet::HttpClient)
+  endif()
 endforeach()
 
 # Create C++ test executables

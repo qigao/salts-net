@@ -26,6 +26,10 @@
 #  include <arpa/inet.h>
 #endif
 
+/* Global lock internally in modern OpenSSL, but static initialization flag for context. */
+static SSL_CTX *s_default_ctx = NULL;
+static int s_ca_configured = 0;
+
 static void configure_ca_from_env(void) {
   if (s_ca_configured) return;
   const char *file = getenv("TURBONET_TLS_CA_FILE");
@@ -129,10 +133,6 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 }
 
 /* ── Initialization ───────────────────────────────────────── */
-
-/* Global lock internally in modern OpenSSL, but static initialization flag for context. */
-static SSL_CTX *s_default_ctx = NULL;
-static int s_ca_configured = 0;
 
 static SSL_CTX *get_default_tls_ctx(void) {
   if (s_default_ctx) return s_default_ctx;

@@ -77,6 +77,22 @@ set_target_properties(
 
 add_test(NAME ${TEST_GRAPH_NAME} COMMAND ${TEST_GRAPH_NAME})
 
+# Nash replicator tests
+set(TEST_NASH_NAME test_nash)
+
+add_executable(${TEST_NASH_NAME} test_nash.c)
+
+target_link_libraries(${TEST_NASH_NAME} PRIVATE fin TurboNet::TinyTest TurboNet::Utils)
+
+target_include_directories(${TEST_NASH_NAME}
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+
+set_target_properties(
+  ${TEST_NASH_NAME} PROPERTIES FOLDER turbo_script/modules/fin
+                                 RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+add_test(NAME ${TEST_NASH_NAME} COMMAND ${TEST_NASH_NAME})
+
 # Universe management tests
 set(TEST_UNIVERSE_NAME test_universe)
 

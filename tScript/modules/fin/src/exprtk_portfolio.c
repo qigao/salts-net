@@ -135,6 +135,39 @@ static int cov_entries_uniform(const double *cov, size_t n) {
     return 1;
 }
 
+/* =========================================================================
+ * Risk Parity
+ * ========================================================================= */
+
+double exprtk_pf_risk_parity(const double *cov, size_t n, double *weights, mem_pool_t *arena) {
+    if (!cov || !weights || n == 0) return 0.0;
+
+    double sum = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        double sigma = sqrt(fabs(cov[i * n + i]));
+        if (sigma < 1e-12) {
+            weights[i] = 1.0;
+        } else {
+            weights[i] = 1.0 / sigma;
+        }
+        sum += weights[i];
+    }
+
+    if (fabs(sum) < 1e-12) {
+        equal_weights(weights, n);
+    } else {
+        for (size_t i = 0; i < n; i++) weights[i] /= sum;
+    }
+
+    double variance = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = 0; j < n; j++) {
+            variance += weights[i] * cov[i * n + j] * weights[j];
+        }
+    }
+    return variance;
+}
+
 static void target_blend_weights(const double *mu, size_t n, double target, double *weights) {
     size_t min_idx = 0;
     size_t max_idx = 0;

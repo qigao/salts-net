@@ -11,6 +11,7 @@
  *   - C++ templates: check_equal<T>, check_not_equal<T>, check_greater<T>, check_less<T>
  *   - Exception testing: check_throws, check_throws_as, check_nothrow, etc.
  *   - Benchmarking: benchmark("name", N) { code; }
+ *     benchmark_titles("case", "iters", "avg(us)", "min(us)", "max(us)", "rate/s") { ... }
  *   - Output formats: colored console, TAP, JUnit XML
  *   - Test filtering: --filter, --list, focus (fit/it_only), skip (xit)
  *
@@ -566,6 +567,7 @@ typedef struct __bdd_bench_entry__ {
   double min_us;
   double max_us;
   double ops_s;
+  double scale;
 } __bdd_bench_entry__;
 
 typedef struct __bdd_node__ {
@@ -613,7 +615,38 @@ typedef struct __bdd_config_type__ {
   size_t bench_cap;
   int bench_header_printed;  /* replaces static __bdd_bench_header_printed__ */
   size_t bench_header_level; /* replaces static __bdd_bench_header_level__   */
+  const char *bench_title_name;
+  const char *bench_title_iters;
+  const char *bench_title_avg;
+  const char *bench_title_min;
+  const char *bench_title_max;
+  const char *bench_title_ops;
 } __bdd_config_type__;
+
+static inline void __bdd_bench_set_titles__(__bdd_config_type__ *config, const char *name_title,
+                                            const char *iters_title, const char *avg_title,
+                                            const char *min_title, const char *max_title,
+                                            const char *ops_title) {
+  if (!config) return;
+  config->bench_title_name = name_title;
+  config->bench_title_iters = iters_title;
+  config->bench_title_avg = avg_title;
+  config->bench_title_min = min_title;
+  config->bench_title_max = max_title;
+  config->bench_title_ops = ops_title;
+  config->bench_header_printed = 0;
+}
+
+static inline void __bdd_bench_clear_titles__(__bdd_config_type__ *config) {
+  if (!config) return;
+  config->bench_title_name = NULL;
+  config->bench_title_iters = NULL;
+  config->bench_title_avg = NULL;
+  config->bench_title_min = NULL;
+  config->bench_title_max = NULL;
+  config->bench_title_ops = NULL;
+  config->bench_header_printed = 0;
+}
 
 static inline void __bdd_bench_reset__(__bdd_config_type__ *config) {
   config->bench_count = 0;
@@ -625,8 +658,9 @@ static inline void __bdd_bench_reset__(__bdd_config_type__ *config) {
   }
 }
 
-static inline void __bdd_bench_add__(__bdd_config_type__ *config, const char *name, size_t iters,
-                                     double sum_ms, double min_ms, double max_ms) {
+static inline void __bdd_bench_add_scaled__(__bdd_config_type__ *config, const char *name,
+                                            size_t iters, double sum_ms, double min_ms,
+                                            double max_ms, double scale) {
   if (!config->bench_entries) {
     __bdd_bench_reset__(config);
   }
@@ -642,10 +676,16 @@ static inline void __bdd_bench_add__(__bdd_config_type__ *config, const char *na
   __bdd_bench_entry__ *e = &config->bench_entries[config->bench_count++];
   e->name = name;
   e->iters = iters;
-  e->avg_us = (sum_ms / (double)iters) * 1000.0;
-  e->min_us = min_ms * 1000.0;
-  e->max_us = max_ms * 1000.0;
-  e->ops_s = (sum_ms > 0.0) ? ((double)iters) / (sum_ms / 1000.0) : 0.0;
+  e->scale = (scale > 0.0) ? scale : 1.0;
+  e->avg_us = ((sum_ms / (double)iters) * 1000.0) / e->scale;
+  e->min_us = (min_ms * 1000.0) / e->scale;
+  e->max_us = (max_ms * 1000.0) / e->scale;
+  e->ops_s = (sum_ms > 0.0) ? (((double)iters) * e->scale) / (sum_ms / 1000.0) : 0.0;
+}
+
+static inline void __bdd_bench_add__(__bdd_config_type__ *config, const char *name, size_t iters,
+                                     double sum_ms, double min_ms, double max_ms) {
+  __bdd_bench_add_scaled__(config, name, iters, sum_ms, min_ms, max_ms, 1.0);
 }
 
 static int __bdd_bench_cmp__(const void *a, const void *b) {
@@ -874,13 +914,25 @@ static void __bdd_indent__(FILE *fp, size_t level) {
 
 static inline void __bdd_bench_print_header__(__bdd_config_type__ *config, size_t level) {
 #if BDD_BENCH_TABLE
+  const char *name_title = "benchmark";
+  const char *iters_title = "iters";
+  const char *avg_title = "avg(us)";
+  const char *min_title = "min(us)";
+  const char *max_title = "max(us)";
+  const char *ops_title = "rate/s";
   if (!config) return;
+  if (config->bench_title_name) name_title = config->bench_title_name;
+  if (config->bench_title_iters) iters_title = config->bench_title_iters;
+  if (config->bench_title_avg) avg_title = config->bench_title_avg;
+  if (config->bench_title_min) min_title = config->bench_title_min;
+  if (config->bench_title_max) max_title = config->bench_title_max;
+  if (config->bench_title_ops) ops_title = config->bench_title_ops;
   if (config->bench_header_printed && config->bench_header_level == level) return;
   config->bench_header_printed = 1;
   config->bench_header_level = level;
   __bdd_indent__(stdout, level);
-  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "benchmark", "iters",
-         "avg(us)", "min(us)", "max(us)", "ops/s");
+  printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, name_title, iters_title,
+         avg_title, min_title, max_title, ops_title);
   __bdd_indent__(stdout, level);
   printf("  %-*s  %8s  %11s  %11s  %11s  %11s\n", BDD_BENCH_NAME_WIDTH, "---------", "-----",
          "-------", "-------", "-------", "-----");
@@ -893,10 +945,7 @@ static inline void __bdd_bench_print__(__bdd_config_type__ *config, const char *
   double avg_us = (sum_ms / (double)iters) * 1000.0;
   double min_us = min_ms * 1000.0;
   double max_us = max_ms * 1000.0;
-  double ops_s = 0.0;
-  if (sum_ms > 0.0) {
-    ops_s = ((double)iters) / (sum_ms / 1000.0);
-  }
+  double ops_s = (sum_ms > 0.0) ? ((double)iters) / (sum_ms / 1000.0) : 0.0;
   __bdd_bench_print_header__(config, level);
   __bdd_indent__(stdout, level);
 #if BDD_BENCH_TABLE
@@ -904,7 +953,7 @@ static inline void __bdd_bench_print__(__bdd_config_type__ *config, const char *
          use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
          use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
 #else
-  printf("%s%-*s%s  %8zu iters  avg %9.3f us  min %9.3f us  max %9.3f us  ops/s %9.0f\n",
+  printf("%s%-*s%s  %8zu iters  avg %9.3f us  min %9.3f us  max %9.3f us  rate/s %9.0f\n",
          use_color ? __BDD_COLOR_MAGENTA__ : "", BDD_BENCH_NAME_WIDTH, name,
          use_color ? __BDD_COLOR_RESET__ : "", iters, avg_us, min_us, max_us, ops_s);
 #endif
@@ -2356,6 +2405,17 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 /* --- Benchmarking --- */
 /* Usage: benchmark("name", iterations) { code; }
  * Runs the block `iterations` times and prints avg/min/max timing. */
+/* Usage: benchmark_scaled("name", iterations, scale) { code; }
+ * Same as benchmark but scales avg/min/max by `scale` and multiplies rate/s by `scale`. */
+#define benchmark_titles(name_title, iters_title, avg_title, min_title, max_title, ops_title)     \
+  for (struct { int __done; } __bdd_bt__ = {0}; !__bdd_bt__.__done;                                 \
+       __bdd_bt__.__done = 1, __bdd_bench_clear_titles__(__bdd_active_config__))                    \
+    for (int __bdd_bt_once__ = (__bdd_bench_set_titles__(__bdd_active_config__, (name_title),       \
+                                                          (iters_title), (avg_title), (min_title),  \
+                                                          (max_title), (ops_title)),                \
+                               1);                                                                  \
+         __bdd_bt_once__; __bdd_bt_once__ = 0)
+
 #if BDD_BENCH_COLLECT
   #define benchmark(name, iters)                                                                   \
     for (                                                                                          \
@@ -2377,6 +2437,28 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
                                                                         : __bdd_bm__.__min,        \
                     __bdd_bm__.__max = __bdd_bm_t1__ > __bdd_bm__.__max ? __bdd_bm_t1__            \
                                                                         : __bdd_bm__.__max)
+  #define benchmark_scaled(name, iters, scale)                                                     \
+    for (                                                                                          \
+        struct {                                                                                   \
+          int __done;                                                                              \
+          size_t __n;                                                                              \
+          double __min;                                                                            \
+          double __max;                                                                            \
+          double __sum;                                                                            \
+          double __scale;                                                                          \
+        } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0, __BDD_CAST(double, (scale))}; \
+        !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                 \
+          __bdd_bench_add_scaled__(__bdd_active_config__, (name), __bdd_bm__.__n,                  \
+                                   __bdd_bm__.__sum, __bdd_bm__.__min, __bdd_bm__.__max,           \
+                                   __bdd_bm__.__scale))                                            \
+      for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
+        for (double __bdd_bm_t0__ = __bdd_get_time_ms__(), __bdd_bm_t1__ = 0; __bdd_bm_t1__ == 0;  \
+             __bdd_bm_t1__ = __bdd_get_time_ms__() - __bdd_bm_t0__,                                \
+                    __bdd_bm__.__sum += __bdd_bm_t1__,                                             \
+                    __bdd_bm__.__min = __bdd_bm_t1__ < __bdd_bm__.__min ? __bdd_bm_t1__            \
+                                                                        : __bdd_bm__.__min,        \
+                    __bdd_bm__.__max = __bdd_bm_t1__ > __bdd_bm__.__max ? __bdd_bm_t1__            \
+                                                                        : __bdd_bm__.__max)
 #else
   #define benchmark(name, iters)                                                                   \
     for (                                                                                          \
@@ -2390,6 +2472,31 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
         !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                 \
           __bdd_bench_print__((name), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min,          \
                               __bdd_bm__.__max,                                                    \
+                              __bdd_active_config__->current_test                                  \
+                                  ? __bdd_active_config__->current_test->level + 1                 \
+                                  : 1,                                                             \
+                              __bdd_active_config__->use_color))                                   \
+      for (size_t __bdd_bm_i__ = 0; __bdd_bm_i__ < __bdd_bm__.__n; ++__bdd_bm_i__)                 \
+        for (double __bdd_bm_t0__ = __bdd_get_time_ms__(), __bdd_bm_t1__ = 0; __bdd_bm_t1__ == 0;  \
+             __bdd_bm_t1__ = __bdd_get_time_ms__() - __bdd_bm_t0__,                                \
+                    __bdd_bm__.__sum += __bdd_bm_t1__,                                             \
+                    __bdd_bm__.__min = __bdd_bm_t1__ < __bdd_bm__.__min ? __bdd_bm_t1__            \
+                                                                        : __bdd_bm__.__min,        \
+                    __bdd_bm__.__max = __bdd_bm_t1__ > __bdd_bm__.__max ? __bdd_bm_t1__            \
+                                                                        : __bdd_bm__.__max)
+  #define benchmark_scaled(name, iters, scale)                                                     \
+    for (                                                                                          \
+        struct {                                                                                   \
+          int __done;                                                                              \
+          size_t __n;                                                                              \
+          double __min;                                                                            \
+          double __max;                                                                            \
+          double __sum;                                                                            \
+          double __scale;                                                                          \
+        } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0, __BDD_CAST(double, (scale))}; \
+        !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                 \
+          __bdd_bench_print__((name), __bdd_bm__.__n * __bdd_bm__.__scale, __bdd_bm__.__sum,      \
+                              __bdd_bm__.__min, __bdd_bm__.__max,                                  \
                               __bdd_active_config__->current_test                                  \
                                   ? __bdd_active_config__->current_test->level + 1                 \
                                   : 1,                                                             \

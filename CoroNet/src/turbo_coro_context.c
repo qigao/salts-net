@@ -7,6 +7,7 @@
 
 #include "turbo_coro_context.h"
 #include "CoroNet/turbo_coro_pool.h"
+#include "platform.h"
 #include "tlog.h"
 #include "turbo_coro_internal.h"
 #include "turbo_thread.h"
@@ -124,7 +125,6 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
   tls_current_context = ctx;
 
   int r = 0;
-  ctx->stop_requested = 0;
 
   if (mode == TURBO_RUN_DEFAULT) {
     while (1) {
@@ -210,16 +210,36 @@ static int post_queue_empty(const coro_context_t *ctx) {
 }
 
 static void drain_shutdown_callbacks(coro_context_t *ctx) {
-  int spins;
+  int forced_teardown;
   coro_context_t *prev;
+  uint64_t deadline_ms;
 
   if (!ctx || !ctx->loop || !ctx->post_initialized) return;
 
   prev = tls_current_context;
   tls_current_context = ctx;
+  forced_teardown = 1;
+  deadline_ms = turbo_uptime_ms() + 2000;
 
-  for (spins = 0; spins < 10000; spins++) {
-    turbo_loop_poll(ctx->loop, 2, 0);
+  while (turbo_uptime_ms() < deadline_ms) {
+    int waiting_for_shutdown;
+
+    waiting_for_shutdown =
+        atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
+        turbo_loop_alive(ctx->loop) ||
+        (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
+        !post_queue_empty(ctx);
+
+    if (waiting_for_shutdown) {
+#ifdef _WIN32
+      turbo_loop_poll(ctx->loop, 0, 0);
+      turbo_thread_yield();
+#else
+      turbo_loop_poll(ctx->loop, 1, 1);
+#endif
+    } else {
+      turbo_loop_poll(ctx->loop, 2, 0);
+    }
     drain_post_queue(ctx);
 
     if (ctx->scheduler) {
@@ -231,13 +251,14 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
         !turbo_loop_alive(ctx->loop) &&
         (!ctx->scheduler || coro_scheduler_count(ctx->scheduler) == 0) &&
         post_queue_empty(ctx)) {
+      forced_teardown = 0;
       break;
     }
   }
 
   tls_current_context = prev;
 
-  if (spins == 10000 &&
+  if (forced_teardown &&
       (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
        turbo_loop_alive(ctx->loop) ||
        (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
@@ -927,9 +948,12 @@ int turbo_tcp_backend_is_available(int backend) {
 #ifdef _WIN32
     case TURBO_TCP_BACKEND_IOCP:
       return 1;
-#elif defined(__linux__) || defined(__ANDROID__)
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
     case TURBO_TCP_BACKEND_EPOLL:
     case TURBO_TCP_BACKEND_IO_URING:
+      return 1;
+#elif defined(__linux__) || defined(__ANDROID__)
+    case TURBO_TCP_BACKEND_EPOLL:
       return 1;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
     case TURBO_TCP_BACKEND_KQUEUE:
@@ -947,9 +971,12 @@ int turbo_udp_backend_is_available(int backend) {
 #ifdef _WIN32
     case TURBO_UDP_BACKEND_IOCP:
       return 1;
-#elif defined(__linux__) || defined(__ANDROID__)
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
     case TURBO_UDP_BACKEND_EPOLL:
     case TURBO_UDP_BACKEND_IO_URING:
+      return 1;
+#elif defined(__linux__) || defined(__ANDROID__)
+    case TURBO_UDP_BACKEND_EPOLL:
       return 1;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
     case TURBO_UDP_BACKEND_KQUEUE:

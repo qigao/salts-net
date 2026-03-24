@@ -60,11 +60,12 @@ struct turbo_datagram_s {
 /* ── Backend selection ────────────────────────────────────── */
 
 const turbo_datagram_backend_ops_t *turbo_datagram_resolve_backend(
-    turbo_datagram_kind_t kind);
+    coro_context_t *ctx, turbo_datagram_kind_t kind);
 
 /* ── Per-backend entry points ─────────────────────────────── */
 
 extern const turbo_datagram_backend_ops_t turbo_datagram_iocp_ops;
+extern const turbo_datagram_backend_ops_t turbo_datagram_io_uring_ops;
 extern const turbo_datagram_backend_ops_t turbo_datagram_epoll_ops;
 extern const turbo_datagram_backend_ops_t turbo_datagram_kqueue_ops;
 

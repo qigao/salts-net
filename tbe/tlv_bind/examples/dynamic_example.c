@@ -183,26 +183,29 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  /* Example TLV data: Order { order_id=100, symbol="AAPL", price=150.5, quantity=10 } */
+  /* Example custom TLV data:
+   * tag(varint) + payload_length(varint) + payload_bytes
+   * Order { order_id=100, symbol="AAPL", price=150.5, quantity=10 }
+   */
   uint8_t tlv_data[] = {
       /* Field 1: order_id = 100 */
       0x08,                   /* tag = (1 << 3) | 0 = 8 */
-      0x04,                   /* length = 4 */
+      0x04,                   /* payload length = 4 */
       0x64, 0x00, 0x00, 0x00, /* value = 100 (little-endian) */
 
       /* Field 2: symbol = "AAPL" */
       0x12,                   /* tag = (2 << 3) | 2 = 18 */
-      0x04,                   /* length = 4 */
+      0x04,                   /* payload length = 4 */
       0x41, 0x41, 0x50, 0x4C, /* value = "AAPL" */
 
       /* Field 3: price = 150.5 */
       0x19,                                           /* tag = (3 << 3) | 1 = 25 */
-      0x08,                                           /* length = 8 */
+      0x08,                                           /* payload length = 8 */
       0x00, 0x00, 0x00, 0x00, 0x00, 0xD0, 0x62, 0x40, /* value = 150.5 (double) */
 
       /* Field 4: quantity = 10 */
       0x20,                   /* tag = (4 << 3) | 0 = 32 */
-      0x04,                   /* length = 4 */
+      0x04,                   /* payload length = 4 */
       0x0A, 0x00, 0x00, 0x00, /* value = 10 */
   };
 

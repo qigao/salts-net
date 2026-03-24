@@ -55,6 +55,7 @@
   // Since we hid uv.h, we MUST include windows.h now for LONG, etc.
   #include <windows.h>
   #include <winsock2.h>
+  #include <ws2tcpip.h>
 
   // Windows doesn't have ssize_t, define it if not already defined by uv
   #ifndef _SSIZE_T_DEFINED
@@ -63,6 +64,7 @@ typedef intptr_t ssize_t;
   #endif
 #else
   #include <arpa/inet.h>
+  #include <ifaddrs.h>
   #include <netinet/in.h>
   #include <strings.h>
   #include <sys/socket.h>
@@ -73,54 +75,6 @@ typedef intptr_t ssize_t;
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-// =============================================================================
-// Build-selected I/O backend capabilities
-// =============================================================================
-#ifndef TURBO_BUILD_HAS_IOCP
-  #ifdef _WIN32
-    #define TURBO_BUILD_HAS_IOCP 1
-  #else
-    #define TURBO_BUILD_HAS_IOCP 0
-  #endif
-#endif
-
-#ifndef TURBO_BUILD_HAS_EPOLL
-  #define TURBO_BUILD_HAS_EPOLL 0
-#endif
-
-#ifndef TURBO_BUILD_HAS_IO_URING
-  #define TURBO_BUILD_HAS_IO_URING 0
-#endif
-
-#ifndef TURBO_BUILD_HAS_KQUEUE
-  #define TURBO_BUILD_HAS_KQUEUE 0
-#endif
-
-#ifndef TURBO_BUILD_TARGET_IOCP
-  #ifdef _WIN32
-    #define TURBO_BUILD_TARGET_IOCP 1
-  #else
-    #define TURBO_BUILD_TARGET_IOCP 0
-  #endif
-#endif
-
-#ifndef TURBO_BUILD_TARGET_EPOLL
-  #if defined(__linux__) || defined(__ANDROID__)
-    #define TURBO_BUILD_TARGET_EPOLL 1
-  #else
-    #define TURBO_BUILD_TARGET_EPOLL 0
-  #endif
-#endif
-
-#ifndef TURBO_BUILD_TARGET_KQUEUE
-  #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \
-      defined(__DragonFly__)
-    #define TURBO_BUILD_TARGET_KQUEUE 1
-  #else
-    #define TURBO_BUILD_TARGET_KQUEUE 0
-  #endif
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -177,6 +131,107 @@ CXX_C_API uint64_t turbo_hrtime(void);
  * @return Process uptime in milliseconds
  */
 CXX_C_API uint64_t turbo_uptime_ms(void);
+
+/**
+ * @brief Maximum platform info string length including trailing NUL
+ */
+#define TURBO_PLATFORM_INFO_MAX 128
+
+/**
+ * @brief Get normalized operating system name
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_os_name(char *buffer, size_t buffer_size);
+
+/**
+ * @brief Get operating system version string
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_os_version(char *buffer, size_t buffer_size);
+
+/**
+ * @brief Get normalized machine architecture
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_arch(char *buffer, size_t buffer_size);
+
+typedef struct {
+  char model[TURBO_PLATFORM_INFO_MAX];
+  int core_count;
+  double speed_mhz;
+} turbo_platform_cpu_info_t;
+
+typedef struct {
+  uint64_t total_memory;
+  uint64_t free_memory;
+  uint64_t available_memory;
+} turbo_platform_memory_info_t;
+
+typedef struct {
+  double one_minute;
+  double five_minutes;
+  double fifteen_minutes;
+} turbo_platform_load_average_t;
+
+typedef struct {
+  char name[TURBO_PLATFORM_INFO_MAX];
+  char address[TURBO_PLATFORM_INFO_MAX];
+  char netmask[TURBO_PLATFORM_INFO_MAX];
+  int is_internal;
+} turbo_platform_network_interface_t;
+
+/**
+ * @brief Get current username
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_username(char *buffer, size_t buffer_size);
+
+/**
+ * @brief Get current hostname
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_hostname(char *buffer, size_t buffer_size);
+
+/**
+ * @brief Get CPU information
+ * @param info Output structure
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_cpu_info(turbo_platform_cpu_info_t *info);
+
+/**
+ * @brief Get memory information
+ * @param info Output structure
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_memory_info(turbo_platform_memory_info_t *info);
+
+/**
+ * @brief Get system load average
+ * @param info Output structure
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_load_average(turbo_platform_load_average_t *info);
+
+/**
+ * @brief Get network interface information
+ * @param interfaces Output buffer for interfaces
+ * @param max_interfaces Capacity of output buffer
+ * @param count Receives number of interfaces written
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_platform_network_interfaces(turbo_platform_network_interface_t *interfaces,
+                                                size_t max_interfaces, size_t *count);
 
 /**
  * @brief Convert nanoseconds to milliseconds

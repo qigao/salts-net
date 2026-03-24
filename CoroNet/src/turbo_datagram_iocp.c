@@ -7,6 +7,7 @@
  */
 
 #include "turbo_datagram_internal.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "turbo_buffer.h"
 #include "ring_buffer_spsc.h"
@@ -51,6 +52,7 @@ typedef struct dg_iocp_state_s {
   ring_spsc_t queue;
   uint8_t *queue_data;
   int recv_started;
+  int shutdown_polls;
 } dg_iocp_state_t;
 
 /* ── Queue helpers ────────────────────────────────────────── */
@@ -275,8 +277,10 @@ static int dg_iocp_init(turbo_datagram_t *d, const char *host,
     }
   }
 
+  coro_context_acquire_external(st->ctx);
   st->worker_thread = CreateThread(NULL, 0, dg_iocp_worker, st, 0, NULL);
   if (!st->worker_thread) {
+    coro_context_release_external(st->ctx);
     closesocket(st->socket);
     CloseHandle(st->completion_port);
     if (st->queue_data) free(st->queue_data);
@@ -370,10 +374,15 @@ static void dg_iocp_shutdown_task(void *arg1, void *arg2) {
   turbo_datagram_t *d = (turbo_datagram_t *)arg2;
   
   long inflight = InterlockedCompareExchange(&st->inflight_count, 0, 0);
-  if (inflight > 0) {
+  if (inflight > 0 && st->shutdown_polls < 128) {
+    st->shutdown_polls++;
     TLOG_DEBUG("IOCP shutdown: waiting for {} inflight ops", inflight);
     coro_post(st->ctx, dg_iocp_shutdown_task, st, d);
     return;
+  }
+
+  if (inflight > 0) {
+    TLOG_WARN("IOCP shutdown: forcing close with {} inflight ops", inflight);
   }
   
   TLOG_DEBUG("IOCP shutdown: completing");
@@ -391,6 +400,7 @@ static void dg_iocp_shutdown_task(void *arg1, void *arg2) {
   }
 
   if (st->queue_data) free(st->queue_data);
+  coro_context_release_external(st->ctx);
   free(st);
   d->backend_data = NULL;
   turbo_datagram_finalize_close(d);

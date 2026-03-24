@@ -52,8 +52,10 @@ Value* order = tlv_bind_parse(codec, "Order", tlv_data, len);
 ```
 
 - **Tag**: `(field_number << 3) | wire_type`
-- **Length**: Number of bytes in value
-- **Value**: Raw bytes
+- **Length**: Number of bytes in payload
+- **Value**: Raw payload bytes
+- **Important**: Every field is length-prefixed, including scalar `int32`, `int64`, and `double`.
+  The `wire_type` bits are stable type-family markers in the tag, not protobuf-style payload rules.
 
 ## Supported Types
 
@@ -84,7 +86,7 @@ TLV Bind and TLV Parser serve different purposes:
 | Nested messages | ✅ Supported | ❌ Not supported |
 | Performance (small) | 1.8M parses/s | 9.2M parses/s |
 | Performance (large) | 300K parses/s | 117K parses/s |
-| Use case | Flexible protocols (like Protobuf) | High-performance frame parsing |
+| Use case | Flexible schema-driven TLV | High-performance frame parsing |
 
 Choose TLV Bind when:
 - You need dynamic message formats
@@ -113,7 +115,7 @@ parse nested Trade                   50000        3.582      279,204
 ```
 
 Key optimizations:
-- **O(1) field lookup**: Hash table (`field_map[256]`) eliminates linear search
+- **O(1) field lookup**: Index table (`field_map[256]`) eliminates linear search
 - **Zero-copy parsing**: Strings/bytes point directly to input buffer
 - **Dynamic buffer**: Single-pass build with on-demand growth
 - **Efficient varint encoding**: Compact tag and length representation
@@ -137,7 +139,7 @@ Performance characteristics:
 
 | Feature | DataBind | TlvBind |
 |---------|----------|---------|
-| Format | Protobuf-like | TLV |
+| Format | Fixed-layout binary + schema JIT | Custom TLV |
 | Complexity | High | Low |
 | Unknown fields | Needs schema | Auto-skip via Length |
 | Use case | Complex protocols | Simple protocols |

@@ -24,6 +24,8 @@
 
 /* ── IOCP operation types ─────────────────────────────────── */
 
+#define STREAM_IOCP_ACCEPT_DEPTH 8
+
 typedef enum {
   STREAM_IOCP_OP_CONNECT = 1,
   STREAM_IOCP_OP_SEND    = 2,
@@ -74,6 +76,9 @@ typedef struct stream_iocp_server_state_s {
   stream_iocp_base_t base;
   LPFN_ACCEPTEX accept_ex;
   LPFN_GETACCEPTEXSOCKADDRS get_accept_ex_sockaddrs;
+  int accept_family;
+  int accept_depth;
+  volatile LONG accepts_posted;
 } stream_iocp_server_state_t;
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -283,6 +288,8 @@ static void stream_iocp_handle_accept(stream_iocp_op_t *op) {
   int status = op->status;
   SOCKET client_socket = op->client_socket;
 
+  InterlockedDecrement(&st->accepts_posted);
+
   if (status == 0) {
     /* Update client socket context */
     setsockopt(client_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
@@ -316,9 +323,12 @@ static void stream_iocp_handle_accept(stream_iocp_op_t *op) {
     }
   }
 
-  /* Re-arm accept */
-  if (st->base.stopping == 0) {
-    stream_iocp_submit_accept(l);
+  /* Keep a fixed number of accepts outstanding on the single listener. */
+  while (st->base.stopping == 0 &&
+         InterlockedCompareExchange(&st->accepts_posted, 0, 0) < st->accept_depth) {
+    if (stream_iocp_submit_accept(l) != 0) {
+      break;
+    }
   }
 
   free(op);
@@ -419,12 +429,14 @@ static int stream_iocp_submit_accept(turbo_stream_listener_t *l) {
 
   op->kind = STREAM_IOCP_OP_ACCEPT;
   op->owner = l;
-  op->client_socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+  op->client_socket = WSASocketW(st->accept_family, SOCK_STREAM, IPPROTO_TCP, NULL, 0,
+                                 WSA_FLAG_OVERLAPPED);
   if (op->client_socket == INVALID_SOCKET) {
     free(op);
     return -(int)WSAGetLastError();
   }
 
+  InterlockedIncrement(&st->accepts_posted);
   InterlockedIncrement(&st->base.inflight_count);
   BOOL ok = st->accept_ex(st->base.socket, op->client_socket, op->accept_buf, 0,
                            sizeof(struct sockaddr_storage) + 16,
@@ -433,6 +445,7 @@ static int stream_iocp_submit_accept(turbo_stream_listener_t *l) {
   if (!ok) {
     int err = WSAGetLastError();
     if (err != ERROR_IO_PENDING) {
+      InterlockedDecrement(&st->accepts_posted);
       InterlockedDecrement(&st->base.inflight_count);
       closesocket(op->client_socket);
       free(op);
@@ -711,6 +724,8 @@ static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
   st->base.owner = l;
   st->base.ctx = l->ctx;
   st->base.socket = s;
+  st->accept_family = addr->sa_family;
+  st->accept_depth = STREAM_IOCP_ACCEPT_DEPTH;
 
   /* Queue size: 1024 pointers */
   st->base.queue_data = (uint8_t *)calloc(1024, sizeof(void *));
@@ -736,6 +751,7 @@ static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
 
 static int iocp_listen(turbo_stream_listener_t *l, int backlog) {
   stream_iocp_server_state_t *st = (stream_iocp_server_state_t *)l->backend_data;
+  int posted = 0;
   if (!st) return TURBO_EINVAL;
 
   if (listen(st->base.socket, backlog) == SOCKET_ERROR) {
@@ -749,8 +765,15 @@ static int iocp_listen(turbo_stream_listener_t *l, int backlog) {
   if (!st->base.worker_thread) return TURBO_ENOSYS;
 
   coro_context_acquire_external(st->base.ctx);
-  /* Start accepting */
-  return stream_iocp_submit_accept(l);
+  /* Pre-post multiple accepts so a single listener can absorb bursts. */
+  while (posted < st->accept_depth) {
+    int rc = stream_iocp_submit_accept(l);
+    if (rc != 0) {
+      return posted > 0 ? 0 : rc;
+    }
+    posted++;
+  }
+  return 0;
 }
 
 static void iocp_listener_shutdown_task(void *arg1, void *arg2) {

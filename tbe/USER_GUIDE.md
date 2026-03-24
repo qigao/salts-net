@@ -1,4 +1,4 @@
-# TBE Parser & Code Generator - User Guide
+# TBE Parser, Runtime Codec & Code Generator - User Guide
 
 ## Table of Contents
 - [Introduction](#introduction)
@@ -13,7 +13,13 @@
 
 ## Introduction
 
-The TBE (Simple Binary Encoding) Parser is a high-performance schema compiler and code generator for binary message encoding. It generates zero-copy, type-safe code for encoding and decoding binary messages.
+The TBE (Simple Binary Encoding) toolkit has two different paths:
+
+- **Generated code path**: schema -> codegen -> zero-copy view/builder API
+- **Runtime codec path**: schema -> `data_bind` -> dynamic parsed object model
+
+The generated path is the primary path. It is zero-copy and optimized for fixed schemas.
+The runtime path is more flexible, but it is not the same thing and should not be described as if it were generated zero-copy code.
 
 ### Key Features
 
@@ -22,6 +28,7 @@ The TBE (Simple Binary Encoding) Parser is a high-performance schema compiler an
 - **Multi-Language**: Generate C, Python, or Rust code
 - **High Performance**: Inline functions, minimal overhead
 - **Standards Compliant**: Compatible with TBE specification
+- **Runtime Parsing Option**: `data_bind` can parse messages directly from schemas at runtime
 
 ### When to Use TBE
 
@@ -67,6 +74,12 @@ message Greeting {
 ```bash
 tbe_compiler --schema hello.schema --lang c --output hello.h
 ```
+
+### Runtime Parse Instead of Code Generation
+
+If you need schema-driven parsing without generating code, use `data_bind`.
+That path parses the same TBE layout at runtime and builds host objects through callbacks.
+It is more flexible, but it is not a zero-copy view/builder API.
 
 ### Use Generated Code
 

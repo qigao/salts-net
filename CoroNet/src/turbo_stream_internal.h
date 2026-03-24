@@ -64,6 +64,7 @@ struct turbo_stream_s {
   /* State */
   int connected;
   int closing;
+  int finalized;     /**< 1 = finalize_close already ran */
   int managed;       /**< 1 = caller manages lifetime (coro socket wrapper) */
   int destroyed;     /**< 1 = user called turbo_stream_destroy() */
   void *user_data;
@@ -94,11 +95,12 @@ struct turbo_stream_listener_s {
  * @return Backend ops pointer, or NULL if unsupported.
  */
 const turbo_stream_backend_ops_t *turbo_stream_resolve_backend(
-    turbo_stream_kind_t kind);
+    coro_context_t *ctx, turbo_stream_kind_t kind);
 
 /* ── Per-backend entry points ─────────────────────────────── */
 
 extern const turbo_stream_backend_ops_t turbo_stream_iocp_ops;
+extern const turbo_stream_backend_ops_t turbo_stream_io_uring_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_epoll_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_kqueue_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_pipe_win_ops;

@@ -26,6 +26,33 @@ static int on_stress_recv(void *handle, const mem_slice_t *slice, void *addr) {
 }
 
 spec("Datagram") {
+#if defined(__linux__) || defined(__ANDROID__)
+    it("should reject unavailable io_uring udp backend") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+
+        check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING),
+                     TURBO_ENOTSUP);
+
+        coro_context_destroy(ctx);
+    }
+#endif
+
+#if defined(__linux__) && defined(TURBO_HAS_IO_URING)
+    it("should default udp sockets to io_uring on linux") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *sock;
+
+        check(ctx != NULL);
+        sock = coro_socket_create_udpv4(ctx);
+        check(sock != NULL);
+        check_int_eq(coro_socket_get_udp_backend(sock), TURBO_UDP_BACKEND_IO_URING);
+
+        coro_socket_destroy(sock);
+        coro_context_destroy(ctx);
+    }
+#endif
+
     it("should create, bind, and destroy datagram") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);

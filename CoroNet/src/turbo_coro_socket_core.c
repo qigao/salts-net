@@ -35,6 +35,7 @@ const coro_transport_ops_t *transport_ops_table[TURBO_TRANSPORT_MAX] = {
 static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t transport,
                                             int connected);
 static void socket_destroy_shell(coro_socket_t *s);
+static turbo_datagram_t *coro_socket_multicast_datagram(coro_socket_t *s);
 
 static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t transport,
                                             int connected) {
@@ -100,7 +101,7 @@ void release_client(coro_socket_t *client) {
       client->handle.datagram = NULL;
     }
 
-    if (client->transport == TURBO_KCP && client->handle.kcp) {
+    if (client->transport == TURBO_KCP && client->handle.kcp && client->owns_handle) {
       turbo_kcp_destroy(client->handle.kcp);
       client->handle.kcp = NULL;
     }
@@ -113,6 +114,15 @@ void release_client(coro_socket_t *client) {
 
     free(client);
   }
+}
+
+static void release_destroy_wait_handoff(coro_socket_t *s) {
+  if (!s || !s->destroy_wait_handoff) {
+    return;
+  }
+
+  s->destroy_wait_handoff = 0;
+  release_client(s);
 }
 
 /* ── Timeout Management ───────────────────────────────────── */
@@ -185,6 +195,8 @@ void coro_socket_handle_transport_connect(coro_socket_t *s, int status) {
 }
 
 void coro_socket_handle_transport_close(coro_socket_t *s) {
+  int resumed_waiter = 0;
+
   if (!s) return;
 
   if (s->transport == TURBO_TCP || s->transport == TURBO_TLS ||
@@ -199,6 +211,7 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
     stop_timeout_timer(s);
     s->status = (s->status == 0) ? TURBO_EOF : s->status;
     coro_resume_waiter(s);
+    resumed_waiter = 1;
   }
 
   if (s->co_write_wait) {
@@ -210,6 +223,10 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
   if (s->close_pending) {
     s->close_pending = 0;
     release_client(s); /* Balance retain from tcp_close */
+  }
+
+  if (resumed_waiter) {
+    release_client(s); /* Balance retain from recv/connect wait */
   }
 }
 
@@ -523,8 +540,14 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
     coro_yield();
     s->dns_query = NULL;
 
-    if (s->timed_out) return TURBO_ETIMEDOUT;
-    if (s->status != 0) return s->status;
+    {
+      int timed_out = s->timed_out;
+      int status = s->status;
+      release_destroy_wait_handoff(s);
+
+      if (timed_out) return TURBO_ETIMEDOUT;
+      if (status != 0) return status;
+    }
   }
 
   return coro_socket_connect_resolved(s, host, port, deadline_ms);
@@ -592,11 +615,24 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
   start_timeout_timer(s);
   coro_yield();
 
-  *data = s->recv_data;
-  *len = s->recv_len;
-  s->recv_data = NULL;
-  s->recv_len = 0;
-  return s->status;
+  {
+    char *recv_data = s->recv_data;
+    size_t recv_len = s->recv_len;
+    int status = s->status;
+    int timed_out = s->timed_out;
+
+    s->recv_data = NULL;
+    s->recv_len = 0;
+    release_destroy_wait_handoff(s);
+    if (timed_out) {
+      s->timed_out = 0;
+      release_client(s);
+    }
+
+    *data = recv_data;
+    *len = recv_len;
+    return status;
+  }
 }
 
 static void coro_socket_interrupt_wait_cb(void *arg1, void *arg2) {
@@ -643,10 +679,93 @@ int coro_socket_interrupt_wait(coro_socket_t *s, int status) {
 }
 
 int coro_socket_sendto(coro_socket_t *s, const char *d, size_t l, const struct sockaddr *a) {
-  if (s->transport != TURBO_UDP) return TURBO_EINVAL;
-  /* Not yet implemented by new coro_socket wrapper abstraction, 
-     but UDP backend supports it via datagram. */
-  return TURBO_ENOSYS;
+  struct sockaddr_storage addr;
+  turbo_datagram_t *dg;
+
+  if (!s || s->transport != TURBO_UDP || !d || l == 0 || !a) {
+    return TURBO_EINVAL;
+  }
+
+  dg = coro_socket_multicast_datagram(s);
+  if (!dg) {
+    return TURBO_EINVAL;
+  }
+
+  if (turbo_datagram_get_local_addr(dg, &addr) != 0) {
+    int rc = turbo_datagram_bind(dg, NULL, 0);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+
+  return turbo_datagram_sendto(dg, a, d, l);
+}
+
+static turbo_datagram_t *coro_socket_multicast_datagram(coro_socket_t *s) {
+  if (!s || s->transport != TURBO_UDP) {
+    return NULL;
+  }
+
+  if (s->listener && s->listener->transport == TURBO_UDP &&
+      s->listener->handle.datagram) {
+    return s->listener->handle.datagram;
+  }
+
+  if (s->handle.datagram) {
+    return s->handle.datagram;
+  }
+
+  return NULL;
+}
+
+int coro_socket_join_multicast(coro_socket_t *s, const char *group, const char *iface) {
+  turbo_datagram_t *dg = coro_socket_multicast_datagram(s);
+
+  if (!dg || !group) {
+    return TURBO_EINVAL;
+  }
+
+  return turbo_datagram_join_multicast(dg, group, iface);
+}
+
+int coro_socket_leave_multicast(coro_socket_t *s, const char *group, const char *iface) {
+  turbo_datagram_t *dg = coro_socket_multicast_datagram(s);
+
+  if (!dg || !group) {
+    return TURBO_EINVAL;
+  }
+
+  return turbo_datagram_leave_multicast(dg, group, iface);
+}
+
+int coro_socket_set_multicast_loop(coro_socket_t *s, int on) {
+  turbo_datagram_t *dg = coro_socket_multicast_datagram(s);
+
+  if (!dg) {
+    return TURBO_EINVAL;
+  }
+
+  return turbo_datagram_set_multicast_loop(dg, on);
+}
+
+int coro_socket_set_multicast_ttl(coro_socket_t *s, int ttl) {
+  turbo_datagram_t *dg = coro_socket_multicast_datagram(s);
+
+  if (!dg) {
+    return TURBO_EINVAL;
+  }
+
+  return turbo_datagram_set_multicast_ttl(dg, ttl);
+}
+
+int coro_socket_set_broadcast(coro_socket_t *s, int on) {
+  turbo_datagram_t *dg = coro_socket_multicast_datagram(s);
+
+  if (!dg) {
+    return TURBO_EINVAL;
+  }
+
+  return turbo_datagram_set_broadcast(dg, on);
 }
 
 int coro_socket_recvfrom(coro_socket_t *s, char **data, size_t *len,
@@ -699,6 +818,9 @@ void coro_socket_destroy(coro_socket_t *s) {
 
   /* Wake waiting coroutines */
   if (s->co_wait) {
+    stop_timeout_timer(s);
+    s->timed_out = 0;
+    s->destroy_wait_handoff = 1;
     s->status = TURBO_ECANCELED;
     coro_resume_waiter(s);
   }
@@ -788,6 +910,8 @@ turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *s) {
 
 #ifdef _WIN32
   return TURBO_TCP_BACKEND_IOCP;
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING)
+  return TURBO_TCP_BACKEND_IO_URING;
 #elif defined(__linux__)
   return TURBO_TCP_BACKEND_EPOLL;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
@@ -811,6 +935,8 @@ turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s) {
 
 #ifdef _WIN32
   return TURBO_UDP_BACKEND_IOCP;
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING)
+  return TURBO_UDP_BACKEND_IO_URING;
 #elif defined(__linux__) || defined(__ANDROID__)
   return TURBO_UDP_BACKEND_EPOLL;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)

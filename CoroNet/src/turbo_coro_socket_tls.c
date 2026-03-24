@@ -97,7 +97,14 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   coro_yield();
-  return s->status;
+  {
+    int status = s->status;
+    if (s->destroy_wait_handoff) {
+      s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    return status;
+  }
 }
 
 int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {

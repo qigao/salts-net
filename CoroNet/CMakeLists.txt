@@ -7,11 +7,25 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
      ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
 list(APPEND SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_tls.c)
 
+set(TURBO_HAS_IO_URING OFF)
+set(TURBO_IO_URING_LIBRARY "")
+set(TURBO_IO_URING_INCLUDE_DIR "")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  find_path(TURBO_IO_URING_INCLUDE_DIR liburing.h)
+  find_library(TURBO_IO_URING_LIBRARY NAMES uring liburing)
+  if(TURBO_IO_URING_INCLUDE_DIR AND TURBO_IO_URING_LIBRARY)
+    set(TURBO_HAS_IO_URING ON)
+  endif()
+endif()
+
 # Strip out all platform-specific backend files from glob results
 list(REMOVE_ITEM SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_iocp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_win.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_iocp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
@@ -33,10 +47,17 @@ elseif(APPLE) # macOS, iOS, tvOS, watchOS
 
 
 elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
-  list(APPEND SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c)
+  if(TURBO_HAS_IO_URING AND NOT ANDROID)
+    list(APPEND SOURCE_FILES
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c)
+  else()
+    list(APPEND SOURCE_FILES
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c)
+  endif()
 
 
 else()
@@ -68,9 +89,14 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
            $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
-    PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS})
+    PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS}
+            ${TURBO_IO_URING_INCLUDE_DIR})
 
   add_sanitizers(${tgt})
+
+  if(TURBO_HAS_IO_URING)
+    target_compile_definitions(${tgt} PRIVATE TURBO_HAS_IO_URING=1)
+  endif()
 
   target_link_libraries(
     ${tgt}
@@ -81,6 +107,10 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   if(WIN32)
     target_link_libraries(${tgt} PRIVATE ws2_32 mswsock)
+  endif()
+
+  if(TURBO_HAS_IO_URING)
+    target_link_libraries(${tgt} PRIVATE ${TURBO_IO_URING_LIBRARY})
   endif()
 endforeach()
 # Install library (for development/internal use)

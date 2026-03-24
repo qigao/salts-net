@@ -20,11 +20,12 @@ message Trade {
 
 # TLV Encoding Rules:
 # - Tag: varint encoding (field_number << 3 | wire_type)
-# - Length: varint encoding (number of bytes in value)
-# - Value: raw bytes
+# - Length: varint encoding (number of bytes in payload)
+# - Value: raw payload bytes
+# - All fields are length-prefixed, including fixed-width scalar payloads
 #
-# Wire types:
-#   0 = varint (int32, int64)
-#   1 = fixed64 (double)
-#   2 = length-delimited (string, bytes, nested message)
-#   5 = fixed32 (int32 alternative)
+# Tag markers:
+#   0 = scalar int family
+#   1 = scalar 64-bit float family
+#   2 = length-delimited family
+#   5 = reserved fixed32 marker

@@ -229,6 +229,33 @@ CXX_C_API int coro_socket_sendto(coro_socket_t *socket, const char *data, size_t
 CXX_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *len,
                                    struct sockaddr_storage *addr);
 
+/**
+ * @brief Join an IPv4 multicast group on a UDP socket or UDP listener.
+ */
+CXX_C_API int coro_socket_join_multicast(coro_socket_t *socket, const char *group,
+                                         const char *iface);
+
+/**
+ * @brief Leave an IPv4 multicast group on a UDP socket or UDP listener.
+ */
+CXX_C_API int coro_socket_leave_multicast(coro_socket_t *socket, const char *group,
+                                          const char *iface);
+
+/**
+ * @brief Enable or disable multicast loopback on a UDP socket or UDP listener.
+ */
+CXX_C_API int coro_socket_set_multicast_loop(coro_socket_t *socket, int on);
+
+/**
+ * @brief Set multicast TTL on a UDP socket or UDP listener.
+ */
+CXX_C_API int coro_socket_set_multicast_ttl(coro_socket_t *socket, int ttl);
+
+/**
+ * @brief Enable or disable UDP broadcast on a UDP socket or UDP listener.
+ */
+CXX_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
+
 /* ── Server Functions ──────────────────────────────────────── */
 
 /**

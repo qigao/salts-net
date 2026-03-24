@@ -7,6 +7,7 @@
  */
 
 #include "data_bind.h"
+#include "tbe_wire.h"
 #include "tinytest.h"
 #include <errno.h>
 #include <math.h>
@@ -227,6 +228,30 @@ static void write_schema(const char *path, const char *content) {
   fclose(f);
 }
 
+static void write_u16_le(uint8_t *buf, size_t offset, uint16_t value) {
+  tbe_wire_write_u16(buf + offset, 0, value);
+}
+
+static void write_u32_le(uint8_t *buf, size_t offset, uint32_t value) {
+  tbe_wire_write_u32(buf + offset, 0, value);
+}
+
+static void write_i32_le(uint8_t *buf, size_t offset, int32_t value) {
+  tbe_wire_write_i32(buf + offset, 0, value);
+}
+
+static void write_u64_le(uint8_t *buf, size_t offset, uint64_t value) {
+  tbe_wire_write_u64(buf + offset, 0, value);
+}
+
+static void write_f32_le(uint8_t *buf, size_t offset, float value) {
+  tbe_wire_write_f32(buf + offset, 0, value);
+}
+
+static void write_f64_le(uint8_t *buf, size_t offset, double value) {
+  tbe_wire_write_f64(buf + offset, 0, value);
+}
+
 /* ───── Tests ───── */
 
 suite("Data Bind") {
@@ -278,9 +303,9 @@ suite("Data Bind") {
           uint8_t buf[15];
           memset(buf, 0, sizeof(buf));
           buf[0] = 0xAB;                       /* uint8:  a = 0xAB = 171 */
-          *(uint16_t *)(buf + 1) = 0x1234;     /* uint16: b = 0x1234 = 4660 */
-          *(uint32_t *)(buf + 3) = 42;         /* uint32: c = 42 */
-          *(uint64_t *)(buf + 7) = 1000000ULL; /* uint64: d = 1000000 */
+          write_u16_le(buf, 1, 0x1234);        /* uint16: b = 0x1234 = 4660 */
+          write_u32_le(buf, 3, 42);            /* uint32: c = 42 */
+          write_u64_le(buf, 7, 1000000ULL);    /* uint64: d = 1000000 */
 
           Value *v = data_bind_parse(codec, "Primitives", buf, sizeof(buf));
 
@@ -349,9 +374,9 @@ suite("Data Bind") {
         when("parsing binary data") {
           uint8_t buf[10];
           memset(buf, 0, sizeof(buf));
-          *(uint16_t *)(buf + 0) = 3;    /* header.version = 3 */
-          *(uint32_t *)(buf + 2) = 99;   /* header.seq = 99 */
-          *(uint32_t *)(buf + 6) = 7777; /* payload = 7777 */
+          write_u16_le(buf, 0, 3);       /* header.version = 3 */
+          write_u32_le(buf, 2, 99);      /* header.seq = 99 */
+          write_u32_le(buf, 6, 7777);    /* payload = 7777 */
 
           Value *v = data_bind_parse(codec, "Msg", buf, sizeof(buf));
 
@@ -409,9 +434,9 @@ suite("Data Bind") {
         when("parsing with side=Buy(1)") {
           uint8_t buf[9];
           memset(buf, 0, sizeof(buf));
-          *(uint32_t *)(buf + 0) = 100; /* id = 100 */
+          write_u32_le(buf, 0, 100);     /* id = 100 */
           buf[4] = 1;                   /* side = Buy(1) */
-          *(uint32_t *)(buf + 5) = 500; /* qty = 500 */
+          write_u32_le(buf, 5, 500);     /* qty = 500 */
 
           Value *v = data_bind_parse(codec, "Order", buf, sizeof(buf));
 
@@ -461,7 +486,7 @@ suite("Data Bind") {
 
         when("buffer is exactly right size") {
           uint8_t buf[4];
-          *(uint32_t *)buf = 12345;
+          write_u32_le(buf, 0, 12345);
           Value *v = data_bind_parse(codec, "Small", buf, sizeof(buf));
 
           then("should succeed") { check_not_null(v); }
@@ -631,7 +656,7 @@ suite("Data Bind") {
       if (codec) {
         when("parsing buffer with varstr 'Turbo'") {
           uint8_t buf[9];
-          *(uint32_t *)buf = 5; /* length = 5 */
+          write_u32_le(buf, 0, 5); /* length = 5 */
           memcpy(buf + 4, "Turbo", 5);
           Value *v = data_bind_parse(codec, "Msg", buf, sizeof(buf));
 
@@ -655,6 +680,53 @@ suite("Data Bind") {
     }
   }
 
+  section("Variable-length String Offset Regression") {
+    given("a schema with string followed by uint32") {
+      write_schema("test_varstr_tail.tbe", "message Msg {\n"
+                                           "  string name;\n"
+                                           "  uint32 qty;\n"
+                                           "}\n");
+
+      DataBind *codec = data_bind_create("test_varstr_tail.tbe", &test_api);
+      check_not_null(codec);
+
+      if (codec) {
+        when("parsing buffer with 4-byte var-data prefix and trailing field") {
+          uint8_t buf[13];
+          memset(buf, 0, sizeof(buf));
+          write_u32_le(buf, 0, 5);      /* length = 5 */
+          memcpy(buf + 4, "Turbo", 5);  /* name */
+          write_u32_le(buf, 9, 77);     /* qty */
+
+          Value *v = data_bind_parse(codec, "Msg", buf, sizeof(buf));
+
+          then("should succeed") { check_not_null(v); }
+
+          then("name should be Turbo and qty should be 77") {
+            MockField *name = find_field(v, "name");
+            MockField *qty = find_field(v, "qty");
+            check_not_null(name);
+            check_not_null(qty);
+            if (name) {
+              check(name->type == FIELD_STRING);
+              check(strcmp(name->str_val, "Turbo") == 0);
+            }
+            if (qty) {
+              check(qty->type == FIELD_INT);
+              check(qty->int_val == 77);
+            }
+          }
+
+          if (v) free(v);
+        }
+
+        data_bind_free(codec);
+      }
+
+      remove("test_varstr_tail.tbe");
+    }
+  }
+
   section("Fixed Array Parsing") {
     given("a schema with uint32 fixed array") {
       write_schema("test_array.tbe", "message Arr { uint32[3] values; }\n");
@@ -665,9 +737,9 @@ suite("Data Bind") {
       if (codec) {
         when("parsing three values") {
           uint8_t buf[12];
-          *(uint32_t *)(buf + 0) = 11;
-          *(uint32_t *)(buf + 4) = 22;
-          *(uint32_t *)(buf + 8) = 33;
+          write_u32_le(buf, 0, 11);
+          write_u32_le(buf, 4, 22);
+          write_u32_le(buf, 8, 33);
           Value *v = data_bind_parse(codec, "Arr", buf, sizeof(buf));
 
           then("result should be non-null") { check_not_null(v); }
@@ -707,16 +779,16 @@ suite("Data Bind") {
         when("parsing two group entries") {
           uint8_t buf[4 + 4 + 24 + 4 + 4 + 4 + 3];
           memset(buf, 0, sizeof(buf));
-          *(uint32_t *)(buf + 0) = 7;
-          *(uint16_t *)(buf + 4) = 12; /* blockLength */
-          *(uint16_t *)(buf + 6) = 2;  /* numInGroup */
-          *(uint64_t *)(buf + 8) = 100;
-          *(uint32_t *)(buf + 16) = 10;
-          *(uint64_t *)(buf + 20) = 200;
-          *(uint32_t *)(buf + 28) = 20;
-          *(uint32_t *)(buf + 32) = 4;
+          write_u32_le(buf, 0, 7);
+          write_u16_le(buf, 4, 12); /* blockLength */
+          write_u16_le(buf, 6, 2);  /* numInGroup */
+          write_u64_le(buf, 8, 100);
+          write_u32_le(buf, 16, 10);
+          write_u64_le(buf, 20, 200);
+          write_u32_le(buf, 28, 20);
+          write_u32_le(buf, 32, 4);
           memcpy(buf + 36, "ABCD", 4);
-          *(uint32_t *)(buf + 40) = 3;
+          write_u32_le(buf, 40, 3);
           buf[44] = 1;
           buf[45] = 2;
           buf[46] = 3;
@@ -804,9 +876,9 @@ suite("Data Bind") {
           when("parsing buffer with extended types") {
             uint8_t buf[1 + 4 + 8 + 4];
             buf[0] = 1;                           /* bool flag = true */
-            *(float *)(buf + 1) = 3.14f;          /* float f_val */
-            *(double *)(buf + 5) = 2.718281828;   /* double d_val */
-            *(uint32_t *)(buf + 13) = 0x12345678; /* LargeEnum le (uint32) */
+            write_f32_le(buf, 1, 3.14f);          /* float f_val */
+            write_f64_le(buf, 5, 2.718281828);    /* double d_val */
+            write_u32_le(buf, 13, 0x12345678);    /* LargeEnum le (uint32) */
 
             Value *v = data_bind_parse(codec, "Ext", buf, sizeof(buf));
 
@@ -868,10 +940,10 @@ suite("Data Bind") {
         when("parsing buffer with two set items") {
           uint8_t buf[14];
           memset(buf, 0, sizeof(buf));
-          *(uint32_t *)(buf + 0) = 2;
-          *(uint32_t *)(buf + 4) = 1;
+          write_u32_le(buf, 0, 2);
+          write_u32_le(buf, 4, 1);
           buf[8] = 'A';
-          *(uint32_t *)(buf + 9) = 1;
+          write_u32_le(buf, 9, 1);
           buf[13] = 'B';
 
           Value *v = data_bind_parse(codec, "Tags", buf, sizeof(buf));
@@ -910,13 +982,13 @@ suite("Data Bind") {
         when("parsing buffer with two map entries") {
           uint8_t buf[22];
           memset(buf, 0, sizeof(buf));
-          *(uint32_t *)(buf + 0) = 2;
-          *(uint32_t *)(buf + 4) = 1;
+          write_u32_le(buf, 0, 2);
+          write_u32_le(buf, 4, 1);
           buf[8] = 'x';
-          *(int32_t *)(buf + 9) = 30;
-          *(uint32_t *)(buf + 13) = 1;
+          write_i32_le(buf, 9, 30);
+          write_u32_le(buf, 13, 1);
           buf[17] = 'y';
-          *(int32_t *)(buf + 18) = 40;
+          write_i32_le(buf, 18, 40);
 
           Value *v = data_bind_parse(codec, "Attrs", buf, sizeof(buf));
 

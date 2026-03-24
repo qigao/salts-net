@@ -14,11 +14,12 @@ extern "C" {
  * The long-term native-reactor design is tracked separately via
  * turbo_io_backend.h:
  * - Windows target: IOCP
- * - Linux/Android target: epoll baseline, io_uring optional
+ * - Linux target: io_uring when built, otherwise epoll
+ * - Android target: epoll
  * - BSD/macOS target: kqueue
  *
- * Unsupported native backends must fail loudly with TURBO_ENOTSUP rather than
- * silently falling back.
+ * Unsupported or not-yet-implemented native backends must fail loudly with
+ * TURBO_ENOTSUP rather than silently falling back.
  */
 typedef enum turbo_tcp_backend_e {
   TURBO_TCP_BACKEND_AUTO = 0,

@@ -1,4 +1,5 @@
 #include "CoroNet/turbo_kcp.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_datagram.h"
 #include "CoroNet/turbo_dns.h"
@@ -21,10 +22,34 @@ struct turbo_kcp_s {
   void* user_data;
   
   struct sockaddr_storage peer_addr;
+  int has_peer;
   int connected;
   int connecting;
   int closing;
 };
+
+static int sockaddr_storage_equal(const struct sockaddr_storage* a,
+                                  const struct sockaddr_storage* b) {
+  if (!a || !b || a->ss_family != b->ss_family) {
+    return 0;
+  }
+
+  if (a->ss_family == AF_INET) {
+    const struct sockaddr_in* a4 = (const struct sockaddr_in*)a;
+    const struct sockaddr_in* b4 = (const struct sockaddr_in*)b;
+    return a4->sin_port == b4->sin_port &&
+           memcmp(&a4->sin_addr, &b4->sin_addr, sizeof(a4->sin_addr)) == 0;
+  }
+
+  if (a->ss_family == AF_INET6) {
+    const struct sockaddr_in6* a6 = (const struct sockaddr_in6*)a;
+    const struct sockaddr_in6* b6 = (const struct sockaddr_in6*)b;
+    return a6->sin6_port == b6->sin6_port &&
+           memcmp(&a6->sin6_addr, &b6->sin6_addr, sizeof(a6->sin6_addr)) == 0;
+  }
+
+  return 0;
+}
 
 /* ── Internal KCP callbacks ───────────────────────────────── */
 
@@ -33,8 +58,14 @@ static void on_timer_tick(turbo_timer_t* timer);
 static void kcp_final_free_task(void* arg1, void* arg2) {
   UNUSED(arg2);
   turbo_kcp_t* k = (turbo_kcp_t*)arg1;
+  coro_context_t* ctx;
+  if (!k) {
+    return;
+  }
+  ctx = k->ctx;
   TLOG_DEBUG("KCP final free: {}", (void*)k);
   free(k);
+  coro_context_release_external(ctx);
 }
 
 static int kcp_low_level_output(const char* buf, int len, ikcpcb* ikcp, void* user) {
@@ -48,9 +79,15 @@ static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
   turbo_kcp_t* k = (turbo_kcp_t*)turbo_datagram_get_user_data((turbo_datagram_t*)handle);
   if (!k || !k->ikcp || k->closing) return 0;
   
-  /* Update peer addr if we don't have one or if it changed (roaming) */
+  /* KCP context is single-peer. Lock the first peer and ignore foreign packets. */
   if (peer) {
-    memcpy(&k->peer_addr, peer, sizeof(struct sockaddr_storage));
+    const struct sockaddr_storage* incoming = (const struct sockaddr_storage*)peer;
+    if (!k->has_peer) {
+      memcpy(&k->peer_addr, incoming, sizeof(*incoming));
+      k->has_peer = 1;
+    } else if (!sockaddr_storage_equal(&k->peer_addr, incoming)) {
+      return 0;
+    }
   }
   
   /* Feed raw UDP into KCP */
@@ -62,7 +99,7 @@ static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
   while ((r = ikcp_recv(k->ikcp, buf, sizeof(buf))) > 0) {
     if (k->on_recv) {
       mem_slice_t s = { .data = buf, .length = (size_t)r };
-      k->on_recv(k, &s, NULL);
+      k->on_recv(k, &s, peer);
     }
   }
   return 0;
@@ -97,8 +134,14 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   if (!k) return NULL;
   
   k->ctx = ctx;
+  if (ctx) {
+    coro_context_acquire_external(ctx);
+  }
   k->ikcp = ikcp_create(12345, k); /* TODO: conv id management */
   if (!k->ikcp) {
+    if (ctx) {
+      coro_context_release_external(ctx);
+    }
     free(k);
     return NULL;
   }
@@ -112,6 +155,13 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   k->update_timer = turbo_timer_create(NULL);
   if (k->update_timer) {
     turbo_timer_set_data(k->update_timer, k);
+  } else {
+    ikcp_release(k->ikcp);
+    if (ctx) {
+      coro_context_release_external(ctx);
+    }
+    free(k);
+    return NULL;
   }
   
   return k;
@@ -140,7 +190,11 @@ void turbo_kcp_destroy(turbo_kcp_t* kcp) {
   }
   
   /* Post actual free to happen after any already queued loop tasks */
-  coro_post(kcp->ctx, kcp_final_free_task, kcp, NULL);
+  if (kcp->ctx) {
+    coro_post(kcp->ctx, kcp_final_free_task, kcp, NULL);
+  } else {
+    free(kcp);
+  }
 }
 
 int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
@@ -183,6 +237,7 @@ int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
   
   int r = turbo_dns_parse_address(host, port, &kcp->peer_addr);
   if (r != 0) return r;
+  kcp->has_peer = 1;
   
   /* Create UDP socket if not existing */
   if (!kcp->udp) {

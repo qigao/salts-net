@@ -17,11 +17,11 @@
 
 /* ── Backend resolution ───────────────────────────────────── */
 
-const turbo_datagram_backend_ops_t *turbo_datagram_resolve_backend(
-    turbo_datagram_kind_t kind) {
-  (void)kind;
+static const turbo_datagram_backend_ops_t *datagram_platform_default_ops(void) {
 #if defined(_WIN32)
   return &turbo_datagram_iocp_ops;
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+  return &turbo_datagram_io_uring_ops;
 #elif defined(__linux__) || defined(__ANDROID__)
   return &turbo_datagram_epoll_ops;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
@@ -29,6 +29,37 @@ const turbo_datagram_backend_ops_t *turbo_datagram_resolve_backend(
 #else
   return NULL;
 #endif
+}
+
+static const turbo_datagram_backend_ops_t *datagram_udp_backend_ops(
+    turbo_udp_backend_t backend) {
+  switch (backend) {
+  case TURBO_UDP_BACKEND_AUTO:
+    return datagram_platform_default_ops();
+#ifdef _WIN32
+  case TURBO_UDP_BACKEND_IOCP:
+    return &turbo_datagram_iocp_ops;
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+  case TURBO_UDP_BACKEND_IO_URING:
+    return &turbo_datagram_io_uring_ops;
+  case TURBO_UDP_BACKEND_EPOLL:
+    return &turbo_datagram_epoll_ops;
+#elif defined(__linux__) || defined(__ANDROID__)
+  case TURBO_UDP_BACKEND_EPOLL:
+    return &turbo_datagram_epoll_ops;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  case TURBO_UDP_BACKEND_KQUEUE:
+    return &turbo_datagram_kqueue_ops;
+#endif
+  default:
+    return NULL;
+  }
+}
+
+const turbo_datagram_backend_ops_t *turbo_datagram_resolve_backend(
+    coro_context_t *ctx, turbo_datagram_kind_t kind) {
+  (void)kind;
+  return datagram_udp_backend_ops(ctx ? ctx->udp_backend : TURBO_UDP_BACKEND_AUTO);
 }
 
 /* ── Common init / teardown ───────────────────────────────── */
@@ -68,7 +99,7 @@ turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
                                          turbo_datagram_kind_t kind) {
   if (!ctx) return NULL;
 
-  const turbo_datagram_backend_ops_t *ops = turbo_datagram_resolve_backend(kind);
+  const turbo_datagram_backend_ops_t *ops = turbo_datagram_resolve_backend(ctx, kind);
   if (!ops) return NULL;
 
   turbo_datagram_t *d = (turbo_datagram_t *)calloc(1, sizeof(turbo_datagram_t));

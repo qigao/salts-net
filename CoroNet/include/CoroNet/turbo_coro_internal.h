@@ -225,6 +225,7 @@ struct coro_socket_s {
   int timed_out;         /**< 1 = last op timed out */
   int timer_active;      /**< 1 = timeout timer is currently running and holds a reference */
   int close_pending;     /**< 1 = transport close was requested and holds a reference */
+  int destroy_wait_handoff; /**< 1 = destroy resumed a waiter and handed it the wait ref */
 
   /* ── Lifecycle ─────────────────────────────────────────── */
   int ref_count;         /**< Reference count for safe destruction */

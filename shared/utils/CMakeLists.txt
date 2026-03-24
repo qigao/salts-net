@@ -34,6 +34,10 @@ target_link_libraries(
           uri_parser ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
 )
 
+if(WIN32)
+  target_link_libraries(${TARGET_NAME} PRIVATE iphlpapi ws2_32)
+endif()
+
 # Set target properties
 set_target_properties(
   ${TARGET_NAME}

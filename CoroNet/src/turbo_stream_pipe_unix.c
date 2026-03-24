@@ -15,7 +15,9 @@
 #include <string.h>
 #include <errno.h>
 
-#ifdef __linux__
+#if defined(__linux__) && defined(TURBO_HAS_IO_URING)
+#define NATIVE_OPS turbo_stream_io_uring_ops
+#elif defined(__linux__)
 #define NATIVE_OPS turbo_stream_epoll_ops
 #else
 #define NATIVE_OPS turbo_stream_kqueue_ops

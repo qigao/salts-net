@@ -1,4 +1,4 @@
-# TBE Code Generator - Developer Guide
+# TBE Parser, Runtime Codec & Code Generator - Developer Guide
 
 ## Table of Contents
 - [Architecture Overview](#architecture-overview)
@@ -17,37 +17,36 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    tbe_compiler                         │
-│  ┌──────────┐   ┌──────────┐   ┌──────────────────┐   │
-│  │  Schema  │──▶│  Parser  │──▶│  Node Tree (AST) │   │
-│  │   File   │   │ (re2c +  │   │                  │   │
-│  │          │   │  lemon)  │   │  - schema        │   │
-│  └──────────┘   └──────────┘   │  - messages      │   │
-│                                 │  - composites    │   │
-│                                 │  - groups        │   │
-│                                 │  - enums         │   │
-│                                 └────────┬─────────┘   │
-│                                          │             │
-│                                          ▼             │
-│                                 ┌────────────────┐    │
-│                                 │   Annotators   │    │
-│                                 │  - Layouts     │    │
-│                                 │  - Wire info   │    │
-│                                 │  - Cursors     │    │
-│                                 └────────┬───────┘    │
-│                                          │             │
-│                                          ▼             │
-│                                 ┌────────────────┐    │
-│                                 │    Mustache    │    │
-│                                 │    Template    │    │
-│                                 │   (c/py/rust)  │    │
-│                                 └────────┬───────┘    │
-│                                          │             │
-│                                          ▼             │
-│                                 ┌────────────────┐    │
-│                                 │   Generated    │    │
-│                                 │     Code       │    │
-│                                 └────────────────┘    │
+│                      schema input                         │
+│  ┌──────────┐   ┌──────────┐   ┌──────────────────┐     │
+│  │  Schema  │──▶│  Parser  │──▶│  Node Tree (AST) │     │
+│  │   File   │   │ (re2c +  │   │                  │     │
+│  │          │   │  lemon)  │   │  - schema        │     │
+│  └──────────┘   └──────────┘   │  - messages      │     │
+│                                 │  - composites    │     │
+│                                 │  - groups        │     │
+│                                 │  - enums         │     │
+│                                 └────────┬─────────┘     │
+│                                          │               │
+│                                          ▼               │
+│                                 ┌────────────────┐      │
+│                                 │   Annotators   │      │
+│                                 │  - Layouts     │      │
+│                                 │  - Wire info   │      │
+│                                 │  - Cursors     │      │
+│                                 └──────┬────┬────┘      │
+│                                        │    │           │
+│                      codegen path      │    │ runtime   │
+│                                        │    │ codec     │
+│                                        ▼    ▼           │
+│                               ┌──────────┐ ┌──────────┐ │
+│                               │ Mustache │ │DataBind  │ │
+│                               │Template  │ │/TLV Bind │ │
+│                               └────┬─────┘ └────┬─────┘ │
+│                                    │            │       │
+│                                    ▼            ▼       │
+│                               Generated     Runtime     │
+│                                 Code        Parsing     │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -56,8 +55,8 @@
 1. **Lexer** (re2c) - Tokenizes schema text
 2. **Parser** (lemon) - Builds Node tree (AST)
 3. **Annotators** - Add metadata (offsets, sizes, wire info)
-4. **Template Engine** (Mustache) - Generates code
-5. **Output** - Language-specific source files
+4. **Codegen path** (Mustache) - Generates source files
+5. **Runtime path** (`data_bind`, `tlv_bind`) - Parses directly from schema metadata
 
 ---
 
@@ -94,10 +93,26 @@ tbe/
 │   │   └── rust_structs.mustache
 │   ├── example.schema            # Example schema
 │   └── test_sbe_compiler.c       # Integration tests
+├── data_bind/                    # MIR-based runtime parser
+│   ├── data_bind.c               # Runtime parser + JIT/interpretive path
+│   ├── tbe_helpers.c             # Runtime var-data helpers
+│   └── test_data_bind.c          # Runtime parser tests
+├── tlv_bind/                     # Custom TLV runtime codec
+│   ├── tlv_bind.c                # Dynamic TLV parse/build
+│   ├── tlv_schema_parser.c       # .tlvschema parser
+│   └── tests/                    # TLV tests/benchmarks
 ├── README.md                     # Quick start
 ├── USER_GUIDE.md                 # User documentation
 └── DEVELOPER.md                  # This file
 ```
+
+### Two Different Runtime Models
+
+- Generated C views/builders are zero-copy and operate directly on the buffer.
+- `data_bind` is a runtime parser that builds host objects through callbacks.
+- `tlv_bind` is a separate custom TLV runtime codec. It is not the same wire model as generated TBE views.
+
+If you blur these together, you will design the wrong API and write garbage docs.
 
 ---
 

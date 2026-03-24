@@ -22,7 +22,8 @@ typedef enum {
     TLV_TYPE_MESSAGE,
 } TlvFieldType;
 
-/* Wire types */
+/* Tag marker bits carried in the encoded tag. Payload bytes are still
+ * length-prefixed for every field in the current TLV format. */
 typedef enum {
     WIRE_VARINT = 0,
     WIRE_FIXED64 = 1,
@@ -45,7 +46,7 @@ typedef struct TlvMessage {
     TlvField* fields;
     int field_count;
     int field_capacity;
-    TlvField* field_map[256];  /* Fast lookup: field_number -> field (max 256 fields) */
+    int field_map[256];  /* Fast lookup: field_number -> fields index, -1 if absent */
 } TlvMessage;
 
 /* Schema */

@@ -1,6 +1,6 @@
-# TBE Parser & Code Generator
+# TBE Parser, Runtime Codec & Code Generator
 
-A high-performance Simple Binary Encoding (TBE) schema parser and code generator for C/C++.
+A high-performance Simple Binary Encoding (TBE) schema parser, runtime codec, and code generator for C/C++.
 
 ## Features
 
@@ -10,8 +10,14 @@ A high-performance Simple Binary Encoding (TBE) schema parser and code generator
 - **High Performance**: Inline functions, minimal overhead
 - **Memory Safe**: All allocations checked, errors propagated
 - **Detailed Errors**: Line numbers and context for parse errors
+- **Runtime Parsing Option**: `data_bind` can parse schema-driven binary messages without generated code
 
 ## Understanding Zero-Copy
+
+The generated view/builder path is zero-copy. That is the fast path and the primary design target.
+
+`data_bind` is different: it is a runtime schema-driven parser built on MIR. It trades raw speed and strict
+zero-copy semantics for flexibility. Do not mix these two models in your head.
 
 **Key Concept:** There is no "binary" vs "struct" representation. Only binary data exists.
 

@@ -10,6 +10,7 @@ add_library(tlv_bind STATIC
 
 target_include_directories(tlv_bind PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/tbe/tbe/include
 )
 set_target_properties(tlv_bind PROPERTIES FOLDER tbe/tlv)
 

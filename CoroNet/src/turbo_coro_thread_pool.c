@@ -1,5 +1,6 @@
 #include "CoroNet/turbo_coro_thread_pool.h"
 #include "CoroNet/turbo_coro_pool.h"
+#include "platform.h"
 #include "turbo_coro_internal.h"
 #include "turbo_thread.h"
 #include <stdatomic.h>
@@ -43,10 +44,10 @@ static int turbo_detect_cpu_count(void) {
 }
 
 static void worker_thread_refined(void *arg) {
-    worker_ctx_t *wctx = (worker_ctx_t *)arg;
-    coro_thread_pool_t *pool = wctx->pool;
-    coro_context_t *ctx = pool->contexts[wctx->index];
-    free(wctx);
+  worker_ctx_t *wctx = (worker_ctx_t *)arg;
+  coro_thread_pool_t *pool = wctx->pool;
+  coro_context_t *ctx = pool->contexts[wctx->index];
+  free(wctx);
 
     /* Good taste: run until shutdown is requested and the context is drained. */
     for (;;) {
@@ -56,7 +57,8 @@ static void worker_thread_refined(void *arg) {
             continue;
         }
 
-        if (coro_context_coro_count(ctx) == 0 && !coro_context_alive(ctx)) {
+        if (coro_context_coro_count(ctx) == 0 &&
+            (!coro_context_alive(ctx) || ctx->stop_requested)) {
             break;
         }
     }
@@ -186,6 +188,7 @@ void coro_thread_pool_destroy(coro_thread_pool_t *pool) {
     /* 1. Let each context drain naturally after existing coroutines finish. */
     for (int i = 0; i < pool->thread_count; i++) {
         if (pool->contexts[i]) {
+            coro_context_stop(pool->contexts[i]);
             coro_context_set_persistent(pool->contexts[i], 0);
             turbo_loop_wake(pool->contexts[i]->loop);
         }

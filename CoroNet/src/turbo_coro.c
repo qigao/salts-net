@@ -381,6 +381,14 @@ void coro_set_waiting_for_io(coro_t *co, int waiting) {
   co->waiting_for_io = (uint8_t)(waiting ? 1 : 0);
   
   if (!waiting && co->scheduler) {
+    /* If this coroutine is the one currently running, don't enqueue it here.
+     * The scheduler will decide whether to requeue it when control returns
+     * from the current resume. Enqueuing the running coroutine causes stale
+     * ready-queue entries and spurious wakeups on later I/O waits. */
+    if (co == coro_running()) {
+      return;
+    }
+
     /* Push to ready queue if not already there */
     coro_scheduler_t *sched = co->scheduler;
     if (!co->in_ready_queue) {

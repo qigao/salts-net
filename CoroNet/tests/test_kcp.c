@@ -17,6 +17,57 @@ static void on_kcp_connect(void *handle, int status, void *peer) {
     (void)handle; (void)status; (void)peer;
 }
 
+typedef struct {
+    coro_context_t *ctx;
+    volatile int client_done;
+    volatile int server_done;
+    volatile int ok;
+} kcp_socket_echo_state_t;
+
+static void kcp_socket_echo_handler(coro_socket_t *client, void *arg) {
+    kcp_socket_echo_state_t *state = (kcp_socket_echo_state_t *)arg;
+    char *data = NULL;
+    size_t len = 0;
+
+    if (coro_socket_recv(client, &data, &len) == 0 && data && len == 4 &&
+        memcmp(data, "ping", 4) == 0) {
+        if (coro_socket_send(client, "pong", 4) == 0) {
+            state->server_done = 1;
+        }
+    }
+
+    if (data) {
+        coro_socket_free_recv(data);
+    }
+}
+
+static void kcp_socket_echo_client(coro_t *co, void *arg) {
+    (void)co;
+    kcp_socket_echo_state_t *state = (kcp_socket_echo_state_t *)arg;
+    coro_socket_t *client = coro_socket_create_kcp(state->ctx);
+    char *data = NULL;
+    size_t len = 0;
+
+    if (client) {
+        coro_socket_set_timeout(client, 2000);
+        if (coro_socket_connect(client, "127.0.0.1", 28652) == 0 &&
+            coro_socket_send(client, "ping", 4) == 0 &&
+            coro_socket_recv(client, &data, &len) == 0 && data && len == 4 &&
+            memcmp(data, "pong", 4) == 0) {
+            state->ok = 1;
+            state->client_done = 1;
+        }
+    }
+
+    if (data) {
+        coro_socket_free_recv(data);
+    }
+    if (client) {
+        coro_socket_destroy(client);
+    }
+    coro_context_stop(state->ctx);
+}
+
 spec("KCP Transport") {
     it("should create and destroy kcp context") {
         coro_context_t *ctx = coro_context_create(NULL);
@@ -98,6 +149,28 @@ spec("KCP Transport") {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }
         check(!coro_context_alive(ctx));
+        coro_context_destroy(ctx);
+    }
+
+    it("should support KCP server sockets through coro_socket_listen_on") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+
+        coro_socket_t *server = coro_socket_create_kcp(ctx);
+        check_not_null(server);
+
+        kcp_socket_echo_state_t state = {.ctx = ctx};
+
+        check_int_eq(coro_socket_listen_on(server, "127.0.0.1", 28652, kcp_socket_echo_handler, &state), 0);
+        check_int_eq(coro_context_spawn(ctx, kcp_socket_echo_client, &state), 0);
+
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+
+        check_int_eq(state.client_done, 1);
+        check_int_eq(state.server_done, 1);
+        check_int_eq(state.ok, 1);
+
+        coro_socket_destroy(server);
         coro_context_destroy(ctx);
     }
 }

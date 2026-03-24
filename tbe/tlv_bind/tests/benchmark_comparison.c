@@ -2,11 +2,12 @@
  * @file benchmark_comparison.c
  * @brief Performance comparison: TLV Bind vs TLV Parser
  *
- * TLV Bind: Dynamic schema-based TLV codec (tag-length-value)
+ * TLV Bind: Dynamic schema-based custom TLV codec (tag-length-value)
  * TLV Parser: Fixed-format frame parser (binary protocol)
  *
- * Note: These are different protocols, so we benchmark their respective
- * strengths rather than direct comparison.
+ * Note: These are different protocols. TLV Bind uses a custom length-prefixed
+ * field payload format, so we benchmark their respective strengths rather than
+ * pretending they are wire-compatible.
  */
 
 #include "../tlv_bind.h"
@@ -219,7 +220,7 @@ suite("benchmark") {
 
     /* === Parser-only benchmark (no data binding) === */
     benchmark("TLV Parser only: read tags/lengths", 100000) {
-      /* Simulate parsing without API callbacks */
+      /* Simulate parsing custom TLV without API callbacks */
       const uint8_t* p = tlv_buf;
       const uint8_t* end = tlv_buf + tlv_len;
       int field_count = 0;
@@ -227,7 +228,7 @@ suite("benchmark") {
       while (p < end) {
         uint64_t tag, length;
         
-        /* Read tag (simplified varint) */
+        /* Read tag varint */
         const uint8_t* next = p;
         uint8_t byte = *next++;
         if ((byte & 0x80) == 0) {
@@ -238,7 +239,7 @@ suite("benchmark") {
           tag |= (uint64_t)(byte & 0x7F) << 7;
         }
         
-        /* Read length (simplified varint) */
+        /* Read payload length varint */
         byte = *next++;
         if ((byte & 0x80) == 0) {
           length = byte;

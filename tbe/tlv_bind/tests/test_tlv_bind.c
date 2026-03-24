@@ -6,6 +6,7 @@
 #include "../tlv_bind.h"
 #include "../tlv_schema_parser.h"
 #include "tinytest.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,7 +17,10 @@ typedef struct TestValue {
     int32_t i32;
     int64_t i64;
     double d;
-    struct { const char *ptr; size_t len; } str;  /* CHANGED: zero-copy */
+    struct {
+      const char *ptr;
+      size_t len;
+    } str; /* CHANGED: zero-copy */
     struct {
       const uint8_t *data;
       size_t len;
@@ -72,7 +76,7 @@ static void test_set_field_string(Value *obj, const char *name, const char *val,
   TestValue *field = calloc(1, sizeof(TestValue));
   strncpy(field->name, name, sizeof(field->name) - 1);
   field->type = 3;
-  field->data.str.ptr = val;  /* Zero-copy */
+  field->data.str.ptr = val; /* Zero-copy */
   field->data.str.len = len;
   v->fields[v->field_count++] = field;
 }
@@ -82,7 +86,7 @@ static void test_set_field_bytes(Value *obj, const char *name, const uint8_t *da
   TestValue *field = calloc(1, sizeof(TestValue));
   strncpy(field->name, name, sizeof(field->name) - 1);
   field->type = 4;
-  field->data.bytes.data = data;  /* Zero-copy */
+  field->data.bytes.data = data; /* Zero-copy */
   field->data.bytes.len = len;
   v->fields[v->field_count++] = field;
 }
@@ -166,6 +170,14 @@ static int str_eq_zc(const char *zc_str, size_t zc_len, const char *c_str) {
   return (zc_len == c_len) && (memcmp(zc_str, c_str, zc_len) == 0);
 }
 
+static void write_schema_file(const char *path, const char *content) {
+  FILE *f = fopen(path, "wb");
+  check_not_null(f);
+  if (!f) return;
+  fwrite(content, 1, strlen(content), f);
+  fclose(f);
+}
+
 static TlvBindValueApi test_api = {
     .create_object = test_create_object,
     .free_value = test_free_value,
@@ -202,12 +214,12 @@ suite("TLV Bind") {
       check_not_null(order);
 
       check_int_eq(test_get_field_int32(order, "order_id"), 100);
-      
+
       size_t symbol_len = 0;
       const char *symbol = test_get_field_string(order, "symbol", &symbol_len);
       check_int_eq(symbol_len, 4);
       check_mem_eq(symbol, "AAPL", 4);
-      
+
       check_int_eq((int)(test_get_field_double(order, "price") * 10), 1505);
       check_int_eq(test_get_field_int32(order, "quantity"), 10);
 
@@ -437,6 +449,69 @@ suite("TLV Bind") {
       check_null(result);
 
       tlv_bind_free(codec);
+    }
+  }
+
+  group("regressions") {
+    it("parses fields after schema field array grows") {
+      const char *schema_path = "test_many_fields.tlvschema";
+      TlvBind *codec;
+      Value *msg;
+      uint8_t *tlv_buf;
+      size_t tlv_len = 0;
+
+      write_schema_file(schema_path, "message ManyFields {\n"
+                                     "  int32 f1\n"
+                                     "  int32 f2\n"
+                                     "  int32 f3\n"
+                                     "  int32 f4\n"
+                                     "  int32 f5\n"
+                                     "  int32 f6\n"
+                                     "  int32 f7\n"
+                                     "  int32 f8\n"
+                                     "  int32 f9\n"
+                                     "  int32 f10\n"
+                                     "}\n");
+
+      codec = tlv_bind_create(schema_path, &test_api);
+      check_not_null(codec);
+      if (!codec) {
+        remove(schema_path);
+        return;
+      }
+
+      msg = test_create_object();
+      test_set_field_int32(msg, "f1", 1);
+      test_set_field_int32(msg, "f2", 2);
+      test_set_field_int32(msg, "f3", 3);
+      test_set_field_int32(msg, "f4", 4);
+      test_set_field_int32(msg, "f5", 5);
+      test_set_field_int32(msg, "f6", 6);
+      test_set_field_int32(msg, "f7", 7);
+      test_set_field_int32(msg, "f8", 8);
+      test_set_field_int32(msg, "f9", 9);
+      test_set_field_int32(msg, "f10", 10);
+
+      tlv_buf = tlv_bind_build(codec, "ManyFields", msg, &tlv_len);
+      check_not_null(tlv_buf);
+      check_size_gt(tlv_len, 0);
+
+      if (tlv_buf) {
+        Value *parsed = tlv_bind_parse(codec, "ManyFields", tlv_buf, tlv_len);
+        check_not_null(parsed);
+        if (parsed) {
+          check_int_eq(test_get_field_int32(parsed, "f1"), 1);
+          check_int_eq(test_get_field_int32(parsed, "f8"), 8);
+          check_int_eq(test_get_field_int32(parsed, "f9"), 9);
+          check_int_eq(test_get_field_int32(parsed, "f10"), 10);
+          test_free_value(parsed);
+        }
+        free(tlv_buf);
+      }
+
+      test_free_value(msg);
+      tlv_bind_free(codec);
+      remove(schema_path);
     }
   }
 }

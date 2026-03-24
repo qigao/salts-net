@@ -18,8 +18,47 @@
 
 /* ── Backend resolution ───────────────────────────────────── */
 
+static const turbo_stream_backend_ops_t *stream_platform_default_ops(void) {
+#if defined(_WIN32)
+  return &turbo_stream_iocp_ops;
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+  return &turbo_stream_io_uring_ops;
+#elif defined(__linux__) || defined(__ANDROID__)
+  return &turbo_stream_epoll_ops;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  return &turbo_stream_kqueue_ops;
+#else
+  return NULL;
+#endif
+}
+
+static const turbo_stream_backend_ops_t *stream_tcp_backend_ops(
+    turbo_tcp_backend_t backend) {
+  switch (backend) {
+  case TURBO_TCP_BACKEND_AUTO:
+    return stream_platform_default_ops();
+#ifdef _WIN32
+  case TURBO_TCP_BACKEND_IOCP:
+    return &turbo_stream_iocp_ops;
+#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+  case TURBO_TCP_BACKEND_IO_URING:
+    return &turbo_stream_io_uring_ops;
+  case TURBO_TCP_BACKEND_EPOLL:
+    return &turbo_stream_epoll_ops;
+#elif defined(__linux__) || defined(__ANDROID__)
+  case TURBO_TCP_BACKEND_EPOLL:
+    return &turbo_stream_epoll_ops;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  case TURBO_TCP_BACKEND_KQUEUE:
+    return &turbo_stream_kqueue_ops;
+#endif
+  default:
+    return NULL;
+  }
+}
+
 const turbo_stream_backend_ops_t *turbo_stream_resolve_backend(
-    turbo_stream_kind_t kind) {
+    coro_context_t *ctx, turbo_stream_kind_t kind) {
   if (kind == TURBO_STREAM_PIPE) {
 #ifdef _WIN32
     return &turbo_stream_pipe_win_ops;
@@ -33,16 +72,7 @@ const turbo_stream_backend_ops_t *turbo_stream_resolve_backend(
   if (kind == TURBO_STREAM_TLS) {
     return &turbo_stream_tls_ops;
   }
-  /* TCP4 / TCP6 */
-#if defined(_WIN32)
-  return &turbo_stream_iocp_ops;
-#elif defined(__linux__) || defined(__ANDROID__)
-  return &turbo_stream_epoll_ops;
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-  return &turbo_stream_kqueue_ops;
-#else
-  return NULL;
-#endif
+  return stream_tcp_backend_ops(ctx ? ctx->tcp_backend : TURBO_TCP_BACKEND_AUTO);
 }
 
 /* ── Common init / teardown ───────────────────────────────── */
@@ -90,6 +120,11 @@ static void drain_send_queue(turbo_stream_t *s) {
 }
 
 void turbo_stream_finalize_close(turbo_stream_t *s) {
+  if (!s || s->finalized) {
+    return;
+  }
+
+  s->finalized = 1;
   drain_send_queue(s);
   if (s->recv_buf[0]) { mem_unref(s->recv_buf[0]); s->recv_buf[0] = NULL; }
   if (s->recv_buf[1]) { mem_unref(s->recv_buf[1]); s->recv_buf[1] = NULL; }
@@ -121,7 +156,7 @@ turbo_stream_t *turbo_stream_create(coro_context_t *ctx,
                                      turbo_stream_kind_t kind) {
   if (!ctx) return NULL;
 
-  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(kind);
+  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(ctx, kind);
   if (!ops) return NULL;
 
   turbo_stream_t *s = (turbo_stream_t *)calloc(1, sizeof(turbo_stream_t));
@@ -147,18 +182,25 @@ void turbo_stream_destroy(turbo_stream_t *s) {
   if (!s) return;
   s->destroyed = 1;
 
+  if (s->finalized) {
+    if (!s->managed) {
+      free(s);
+    }
+    return;
+  }
+
   if (s->closing) {
     /* Backend is still cleaning up. Let finalize_close() free it. */
     return;
   }
 
-  if (s->connected) {
-    /* Start asynchronous close. finalize_close() will free it. */
+  if (s->backend_data) {
+    /* Backend still owns resources or a worker thread. Close asynchronously. */
     turbo_stream_close(s);
     return;
   }
 
-  /* Not connected and not closing: safe to free now */
+  /* No backend state was ever created: safe to finalize synchronously. */
   drain_send_queue(s);
   turbo_stream_finalize_close(s);
 }
@@ -291,15 +333,17 @@ turbo_stream_listener_t *turbo_stream_listen(
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept) {
   if (!ctx || !addr || !on_accept) return NULL;
 
-  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(kind);
-  if (!ops || !ops->bind || !ops->listen) return NULL;
-
   turbo_stream_listener_t *l =
       (turbo_stream_listener_t *)calloc(1, sizeof(turbo_stream_listener_t));
   if (!l) return NULL;
 
   l->ctx = ctx;
   l->kind = kind;
+  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(ctx, kind);
+  if (!ops || !ops->bind || !ops->listen) {
+    free(l);
+    return NULL;
+  }
   l->ops = ops;
   l->arena = ctx->arena;
   l->on_accept = on_accept;
@@ -319,7 +363,7 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
   if (!ctx || !name || !on_accept) return NULL;
 
   const turbo_stream_backend_ops_t *ops =
-      turbo_stream_resolve_backend(TURBO_STREAM_PIPE);
+      turbo_stream_resolve_backend(ctx, TURBO_STREAM_PIPE);
   if (!ops || !ops->bind_pipe || !ops->listen) return NULL;
 
   turbo_stream_listener_t *l =

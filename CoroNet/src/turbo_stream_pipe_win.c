@@ -514,11 +514,17 @@ static void listener_tick(void *arg1, void *arg2) {
   }
 
   /* Allocate a new stream for the accepted connection */
-  const turbo_stream_backend_ops_t *ops =
-      turbo_stream_resolve_backend(TURBO_STREAM_PIPE);
   turbo_stream_t *client =
       (turbo_stream_t *)calloc(1, sizeof(turbo_stream_t));
   if (!client) { CloseHandle(hdl); return; }
+
+  const turbo_stream_backend_ops_t *ops =
+      turbo_stream_resolve_backend(lst->ctx, TURBO_STREAM_PIPE);
+  if (!ops) {
+    free(client);
+    CloseHandle(hdl);
+    return;
+  }
 
   if (turbo_stream_init_common(client, lst->ctx, TURBO_STREAM_PIPE, ops) != 0) {
     free(client);

@@ -1,38 +1,13 @@
 # CoroNet module tests
 
 # Detect other test files automatically
-file(GLOB ALL_TEST_SOURCES test*.c)
-foreach(src ${ALL_TEST_SOURCES})
-  get_filename_component(name ${src} NAME)
-  list(FIND TEST_FILES ${name} found)
-  if(found EQUAL -1)
-    list(APPEND TEST_FILES ${name})
-  endif()
-endforeach()
+turbonet_collect_files(TEST_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR} PATTERNS "test*.c")
 
 # Create executables and link libraries for each test
-foreach(TEST_FILE ${TEST_FILES})
-  # Get the test name by removing the .c extension
-  get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
-
-  add_executable(${TEST_NAME} ${TEST_FILE})
-
-  # Link common libraries (static build to avoid DLL boundary issues)
-  target_link_libraries(
-    ${TEST_NAME}
-    PRIVATE TurboNet::TinyTest ${STATIC_TARGET_NAME} TurboNet::Utils
-            TurboNet::WebSocketParser
-            $<IF:$<TARGET_EXISTS:c-ares::cares_static>,c-ares::cares_static,c-ares::cares>)
-
-  add_sanitizers(${TEST_NAME})
-
-  # Add include directories for tests
-  target_include_directories(${TEST_NAME}
-                             PRIVATE ${WEBSOCKET_PARSER_INCLUDE_DIRS}
-                                     ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-
-  add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
-
-  # Set folder property
-  set_target_properties(${TEST_NAME} PROPERTIES FOLDER "${TARGET_NAME}/test")
-endforeach()
+turbonet_add_tests(
+  SOURCES ${TEST_SOURCES}
+  FOLDER "${TARGET_NAME}/test"
+  LIBS TurboNet::TinyTest ${STATIC_TARGET_NAME} TurboNet::Utils
+       TurboNet::WebSocketParser
+       $<IF:$<TARGET_EXISTS:c-ares::cares_static>,c-ares::cares_static,c-ares::cares>
+  INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include ${WEBSOCKET_PARSER_INCLUDE_DIRS})

@@ -3,9 +3,9 @@
 #include "connection.h"
 #include "context.h"
 #include "utils.h"
+#include <fmt.h>
 #include <time.h>
 #include "slugify.h"
-#include <stb_sprintf.h>
 
 typedef struct
 {
@@ -237,10 +237,10 @@ static void on_query_post(pg_async_t *pg, PGresult *result, void *data)
     char reading_time_str[32], created_at_str[32], updated_at_str[32];
     char is_hidden_str[8];
 
-    stbsp_snprintf(reading_time_str, sizeof(reading_time_str), "%d", ctx->reading_time);
-    stbsp_snprintf(created_at_str, sizeof(created_at_str), "%d", ctx->created_at);
-    stbsp_snprintf(updated_at_str, sizeof(updated_at_str), "%d", ctx->updated_at);
-    stbsp_snprintf(is_hidden_str, sizeof(is_hidden_str), "%s", ctx->is_hidden ? "true" : "false");
+    fmt(reading_time_str, sizeof(reading_time_str), "{}", ctx->reading_time);
+    fmt(created_at_str, sizeof(created_at_str), "{}", ctx->created_at);
+    fmt(updated_at_str, sizeof(updated_at_str), "{}", ctx->updated_at);
+    fmt(is_hidden_str, sizeof(is_hidden_str), "{}", ctx->is_hidden ? "true" : "false");
 
     const char *insert_params[8] = {
         ctx->header,
@@ -331,7 +331,7 @@ static void on_post_created(pg_async_t *pg, PGresult *result, void *data)
         {
             strcat(batch_sql, ", ");
         }
-        stbsp_snprintf(temp_values, sizeof(temp_values), "(%d, %d)", post_id, ctx->category_ids[i]);
+        fmt(temp_values, sizeof(temp_values), "({}, {})", post_id, ctx->category_ids[i]);
         strcat(batch_sql, temp_values);
     }
     strcat(batch_sql, " ON CONFLICT DO NOTHING;");

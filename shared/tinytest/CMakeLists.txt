@@ -4,15 +4,14 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_library(tinytest INTERFACE)
-add_library(TurboNet::TinyTest ALIAS tinytest)
+turbonet_configure_target(tinytest
+  ALIAS TurboNet::TinyTest
+  FOLDER "shared/tinytest"
+  EXPORT_NAME TinyTest)
+
 target_include_directories(
   tinytest INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                      $<INSTALL_INTERFACE:include>)
-# Set target properties
-set_target_properties(tinytest PROPERTIES FOLDER "shared/tinytest" EXPORT_NAME
-                                                                   TinyTest)
-# Install
-install(TARGETS tinytest EXPORT TurboNetTargets)
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/tinytest.h DESTINATION include)
 

@@ -13,7 +13,6 @@ project(
 # Dependencies
 find_package(OpenSSL REQUIRED)
 find_package(zstd CONFIG REQUIRED)
-find_package(Stb REQUIRED)
 
 # S3 C Library Target
 set(S3_SOURCES
@@ -32,8 +31,7 @@ set(S3_SOURCES
     src/s3_bucket_config.c
     src/s3_lifecycle.c
     src/s3_notification.c
-    src/s3_replication.c
-    src/stb_sprintf.c)
+    src/s3_replication.c)
 
 set(S3_HEADERS
     include/s3/s3_client.h
@@ -62,7 +60,7 @@ add_library(TurboNet::S3 ALIAS s3_client)
 target_include_directories(
   s3_client
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
-  PRIVATE ${Stb_INCLUDE_DIR})
+)
 
 target_link_libraries(
   s3_client

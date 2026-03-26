@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <fmt.h>
 #include "tinytest.h"
 #include <llhttp.h>
 #include <turbo_buffer.h>
@@ -84,14 +85,14 @@ spec("request_parsing") {
         size_t body_len = strlen(body);  /* 24 bytes */
 
         char request[512];
-        snprintf(request, sizeof(request),
-                 "POST /users HTTP/1.1\r\n"
-                 "Host: localhost\r\n"
-                 "Content-Type: application/json\r\n"
-                 "Content-Length: %zu\r\n"
-                 "\r\n"
-                 "%s",
-                 body_len, body);
+        fmt(request, sizeof(request),
+            "POST /users HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: {}\r\n"
+            "\r\n"
+            "{}",
+            body_len, body);
 
         enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
         check_int_eq(err, HPE_OK);
@@ -231,7 +232,7 @@ spec("request_parsing") {
             http_context_init(&ctx, &arena);
 
             char request[256];
-            snprintf(request, sizeof(request), "%s /test HTTP/1.1\r\nHost: localhost\r\n\r\n", methods[i]);
+            fmt(request, sizeof(request), "{} /test HTTP/1.1\r\nHost: localhost\r\n\r\n", methods[i]);
 
             enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
             check_int_eq(err, HPE_OK);
@@ -365,7 +366,7 @@ spec("request_parsing") {
         long_url[sizeof(long_url) - 1] = '\0';
 
         char request[2048];
-        snprintf(request, sizeof(request), "GET /%s HTTP/1.1\r\nHost: localhost\r\n\r\n", long_url);
+        fmt(request, sizeof(request), "GET /{} HTTP/1.1\r\nHost: localhost\r\n\r\n", long_url);
 
         enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
         check_int_eq(err, HPE_OK);
@@ -376,7 +377,7 @@ spec("request_parsing") {
 
         for (int i = 0; i < 50; i++) {
             char header[64];
-            snprintf(header, sizeof(header), "X-Header-%d: value%d\r\n", i, i);
+            fmt(header, sizeof(header), "X-Header-{}: value{}\r\n", i, i);
             strcat(request, header);
         }
         strcat(request, "\r\n");
@@ -392,13 +393,13 @@ spec("request_parsing") {
         body[sizeof(body) - 1] = '\0';
 
         char request[16384];
-        snprintf(request, sizeof(request),
-                 "POST /upload HTTP/1.1\r\n"
-                 "Host: localhost\r\n"
-                 "Content-Length: %zu\r\n"
-                 "\r\n"
-                 "%s",
-                 strlen(body), body);
+        fmt(request, sizeof(request),
+            "POST /upload HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Length: {}\r\n"
+            "\r\n"
+            "{}",
+            strlen(body), body);
 
         enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
         check_int_eq(err, HPE_OK);
@@ -422,12 +423,12 @@ spec("request_parsing") {
         char *request = malloc(request_size);
         check_not_null(request);
         
-        int header_len = snprintf(request, request_size,
-                 "POST /upload HTTP/1.1\r\n"
-                 "Host: localhost\r\n"
-                 "Content-Length: %zu\r\n"
-                 "\r\n",
-                 body_size);
+        int header_len = fmt(request, request_size,
+                             "POST /upload HTTP/1.1\r\n"
+                             "Host: localhost\r\n"
+                             "Content-Length: {}\r\n"
+                             "\r\n",
+                             body_size);
         
         // Copy the body
         memcpy(request + header_len, large_body, body_size);

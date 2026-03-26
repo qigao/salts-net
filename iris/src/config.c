@@ -8,12 +8,13 @@
  */
 
 #include "config.h"
-#include "turbo_buffer.h"
 #include "tlog.h"
+#include "turbo_buffer.h"
 #include "turbo_parser.h"
 #include "turbo_str.h"
 #include <ctype.h>
 #include <errno.h>
+#include <fmt.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -313,18 +314,12 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
   /* Load logging */
   const char *log_level_str = getenv("IRIS_LOG_LEVEL");
   if (log_level_str) {
-    if (tstr_casecmp(log_level_str, "NONE") == 0)
-      config->log_level = IRIS_LOG_LEVEL_NONE;
-    else if (tstr_casecmp(log_level_str, "ERROR") == 0)
-      config->log_level = IRIS_LOG_LEVEL_ERROR;
-    else if (tstr_casecmp(log_level_str, "WARN") == 0)
-      config->log_level = IRIS_LOG_LEVEL_WARN;
-    else if (tstr_casecmp(log_level_str, "INFO") == 0)
-      config->log_level = IRIS_LOG_LEVEL_INFO;
-    else if (tstr_casecmp(log_level_str, "DEBUG") == 0)
-      config->log_level = IRIS_LOG_LEVEL_DEBUG;
-    else if (tstr_casecmp(log_level_str, "TRACE") == 0)
-      config->log_level = IRIS_LOG_LEVEL_TRACE;
+    if (tstr_casecmp(log_level_str, "NONE") == 0) config->log_level = IRIS_LOG_LEVEL_NONE;
+    else if (tstr_casecmp(log_level_str, "ERROR") == 0) config->log_level = IRIS_LOG_LEVEL_ERROR;
+    else if (tstr_casecmp(log_level_str, "WARN") == 0) config->log_level = IRIS_LOG_LEVEL_WARN;
+    else if (tstr_casecmp(log_level_str, "INFO") == 0) config->log_level = IRIS_LOG_LEVEL_INFO;
+    else if (tstr_casecmp(log_level_str, "DEBUG") == 0) config->log_level = IRIS_LOG_LEVEL_DEBUG;
+    else if (tstr_casecmp(log_level_str, "TRACE") == 0) config->log_level = IRIS_LOG_LEVEL_TRACE;
   }
 
   get_env_string("IRIS_LOG_FORMAT", config->log_format, sizeof(config->log_format),
@@ -336,14 +331,10 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
 
   const char *tls_version_str = getenv("IRIS_MIN_TLS_VERSION");
   if (tls_version_str) {
-    if (strcmp(tls_version_str, "1.0") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_0;
-    else if (strcmp(tls_version_str, "1.1") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_1;
-    else if (strcmp(tls_version_str, "1.2") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_2;
-    else if (strcmp(tls_version_str, "1.3") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_3;
+    if (strcmp(tls_version_str, "1.0") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_0;
+    else if (strcmp(tls_version_str, "1.1") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_1;
+    else if (strcmp(tls_version_str, "1.2") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_2;
+    else if (strcmp(tls_version_str, "1.3") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_3;
   }
 
   /* Load server settings */
@@ -396,8 +387,7 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
 
 static void parse_json_security_limits(json_value_t *root, iris_config_t *config) {
   json_value_t *security = turbo_json_object_get(root, "security");
-  if (!security)
-    return;
+  if (!security) return;
 
   config->max_request_size =
       turbo_json_get_int(security, "max_request_size", config->max_request_size);
@@ -410,8 +400,7 @@ static void parse_json_security_limits(json_value_t *root, iris_config_t *config
 
 static void parse_json_rate_limits(json_value_t *root, iris_config_t *config) {
   json_value_t *rate_limits = turbo_json_object_get(root, "rate_limits");
-  if (!rate_limits)
-    return;
+  if (!rate_limits) return;
 
   config->requests_per_second =
       turbo_json_get_int(rate_limits, "requests_per_second", config->requests_per_second);
@@ -421,8 +410,7 @@ static void parse_json_rate_limits(json_value_t *root, iris_config_t *config) {
 
 static void parse_json_timeouts(json_value_t *root, iris_config_t *config) {
   json_value_t *timeouts = turbo_json_object_get(root, "timeouts");
-  if (!timeouts)
-    return;
+  if (!timeouts) return;
 
   config->connection_timeout =
       turbo_json_get_int(timeouts, "connection_timeout", config->connection_timeout);
@@ -434,8 +422,7 @@ static void parse_json_timeouts(json_value_t *root, iris_config_t *config) {
 
 static void parse_json_memory(json_value_t *root, iris_config_t *config) {
   json_value_t *memory = turbo_json_object_get(root, "memory");
-  if (!memory)
-    return;
+  if (!memory) return;
 
   config->arena_initial_size =
       turbo_json_get_int(memory, "arena_initial_size", config->arena_initial_size);
@@ -444,23 +431,16 @@ static void parse_json_memory(json_value_t *root, iris_config_t *config) {
 
 static void parse_json_logging(json_value_t *root, iris_config_t *config) {
   json_value_t *logging = turbo_json_object_get(root, "logging");
-  if (!logging)
-    return;
+  if (!logging) return;
 
   const char *log_level_str = turbo_json_get_string(logging, "log_level");
   if (log_level_str) {
-    if (tstr_casecmp(log_level_str, "NONE") == 0)
-      config->log_level = IRIS_LOG_LEVEL_NONE;
-    else if (tstr_casecmp(log_level_str, "ERROR") == 0)
-      config->log_level = IRIS_LOG_LEVEL_ERROR;
-    else if (tstr_casecmp(log_level_str, "WARN") == 0)
-      config->log_level = IRIS_LOG_LEVEL_WARN;
-    else if (tstr_casecmp(log_level_str, "INFO") == 0)
-      config->log_level = IRIS_LOG_LEVEL_INFO;
-    else if (tstr_casecmp(log_level_str, "DEBUG") == 0)
-      config->log_level = IRIS_LOG_LEVEL_DEBUG;
-    else if (tstr_casecmp(log_level_str, "TRACE") == 0)
-      config->log_level = IRIS_LOG_LEVEL_TRACE;
+    if (tstr_casecmp(log_level_str, "NONE") == 0) config->log_level = IRIS_LOG_LEVEL_NONE;
+    else if (tstr_casecmp(log_level_str, "ERROR") == 0) config->log_level = IRIS_LOG_LEVEL_ERROR;
+    else if (tstr_casecmp(log_level_str, "WARN") == 0) config->log_level = IRIS_LOG_LEVEL_WARN;
+    else if (tstr_casecmp(log_level_str, "INFO") == 0) config->log_level = IRIS_LOG_LEVEL_INFO;
+    else if (tstr_casecmp(log_level_str, "DEBUG") == 0) config->log_level = IRIS_LOG_LEVEL_DEBUG;
+    else if (tstr_casecmp(log_level_str, "TRACE") == 0) config->log_level = IRIS_LOG_LEVEL_TRACE;
   }
 
   const char *log_format = turbo_json_get_string(logging, "log_format");
@@ -472,8 +452,7 @@ static void parse_json_logging(json_value_t *root, iris_config_t *config) {
 
 static void parse_json_tls(json_value_t *root, iris_config_t *config) {
   json_value_t *tls = turbo_json_object_get(root, "tls");
-  if (!tls)
-    return;
+  if (!tls) return;
 
   const char *cipher_suites = turbo_json_get_string(tls, "cipher_suites");
   if (cipher_suites) {
@@ -483,14 +462,10 @@ static void parse_json_tls(json_value_t *root, iris_config_t *config) {
 
   const char *min_tls_version = turbo_json_get_string(tls, "min_tls_version");
   if (min_tls_version) {
-    if (strcmp(min_tls_version, "1.0") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_0;
-    else if (strcmp(min_tls_version, "1.1") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_1;
-    else if (strcmp(min_tls_version, "1.2") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_2;
-    else if (strcmp(min_tls_version, "1.3") == 0)
-      config->min_tls_version = IRIS_TLS_VERSION_1_3;
+    if (strcmp(min_tls_version, "1.0") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_0;
+    else if (strcmp(min_tls_version, "1.1") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_1;
+    else if (strcmp(min_tls_version, "1.2") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_2;
+    else if (strcmp(min_tls_version, "1.3") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_3;
   }
 }
 
@@ -616,36 +591,44 @@ iris_config_result_t iris_config_to_json(const iris_config_t *config, char *json
     break;
   }
 
-  int result = snprintf(
-      json_buffer, buffer_size,
-      "{\n"
-      "  \"security\": {\n"
-      "    \"max_request_size\": %zu,\n"
-      "    \"max_header_size\": %zu,\n"
-      "    \"max_url_length\": %zu,\n"
-      "    \"max_headers_count\": %d\n"
-      "  },\n"
-      "  \"rate_limits\": {\n"
-      "    \"requests_per_second\": %d,\n"
-      "    \"connections_per_ip\": %d\n"
-      "  },\n"
-      "  \"timeouts\": {\n"
-      "    \"connection_timeout\": %d,\n"
-      "    \"request_timeout\": %d,\n"
-      "    \"keepalive_timeout\": %d\n"
-      "  },\n"
-      "  \"memory\": {\n"
-      "    \"arena_initial_size\": %zu,\n"
-      "    \"arena_max_size\": %zu\n"
-      "  },\n"
-      "  \"logging\": {\n"
-      "    \"log_level\": \"%s\",\n"
-      "    \"log_format\": \"%s\"\n"
-      "  },\n"
-      "  \"tls\": {\n"
-      "    \"cipher_suites\": \"%s\",\n"
-      "    \"min_tls_version\": \"%s\"\n"
-      "  },\n"
+  tstr_t json = tstr_new();
+  json =
+      tstr_cat_fmt(json,
+                   "{\n"
+                   "  \"security\": {\n"
+                   "    \"max_request_size\": %zu,\n"
+                   "    \"max_header_size\": %zu,\n"
+                   "    \"max_url_length\": %zu,\n"
+                   "    \"max_headers_count\": %d\n"
+                   "  },\n"
+                   "  \"rate_limits\": {\n"
+                   "    \"requests_per_second\": %d,\n"
+                   "    \"connections_per_ip\": %d\n"
+                   "  },\n"
+                   "  \"timeouts\": {\n"
+                   "    \"connection_timeout\": %d,\n"
+                   "    \"request_timeout\": %d,\n"
+                   "    \"keepalive_timeout\": %d\n"
+                   "  },\n"
+                   "  \"memory\": {\n"
+                   "    \"arena_initial_size\": %zu,\n"
+                   "    \"arena_max_size\": %zu\n"
+                   "  },\n"
+                   "  \"logging\": {\n"
+                   "    \"log_level\": \"%s\",\n"
+                   "    \"log_format\": \"%s\"\n"
+                   "  },\n"
+                   "  \"tls\": {\n"
+                   "    \"cipher_suites\": \"%s\",\n"
+                   "    \"min_tls_version\": \"%s\"\n"
+                   "  },\n",
+                   config->max_request_size, config->max_header_size, config->max_url_length,
+                   config->max_headers_count, config->requests_per_second,
+                   config->connections_per_ip, config->connection_timeout, config->request_timeout,
+                   config->keepalive_timeout, config->arena_initial_size, config->arena_max_size,
+                   log_level_name, config->log_format, config->cipher_suites, tls_version_str);
+  json = tstr_cat_fmt(
+      json,
       "  \"max_concurrent_connections\": %d,\n"
       "  \"worker_threads\": %d,\n"
       "  \"enable_compression\": %s,\n"
@@ -665,14 +648,9 @@ iris_config_result_t iris_config_to_json(const iris_config_t *config, char *json
       "  \"tcp_nodelay\": %d,\n"
       "  \"tcp_keepalive\": %d\n"
       "}",
-      config->max_request_size, config->max_header_size, config->max_url_length,
-      config->max_headers_count, config->requests_per_second, config->connections_per_ip,
-      config->connection_timeout, config->request_timeout, config->keepalive_timeout,
-      config->arena_initial_size, config->arena_max_size, log_level_name, config->log_format,
-      config->cipher_suites, tls_version_str, config->max_concurrent_connections,
-      config->worker_threads, config->enable_compression ? "true" : "false",
-      config->enable_health_check ? "true" : "false", config->health_check_path,
-      config->enable_csrf_protection ? "true" : "false",
+      config->max_concurrent_connections, config->worker_threads,
+      config->enable_compression ? "true" : "false", config->enable_health_check ? "true" : "false",
+      config->health_check_path, config->enable_csrf_protection ? "true" : "false",
       config->enable_xss_protection ? "true" : "false",
       config->enable_content_security_policy ? "true" : "false", config->max_file_upload_size,
       config->allowed_file_extensions, config->enable_cors ? "true" : "false",
@@ -680,10 +658,13 @@ iris_config_result_t iris_config_to_json(const iris_config_t *config, char *json
       config->read_buffer_size, config->write_buffer_size, config->tcp_nodelay,
       config->tcp_keepalive);
 
-  if (result < 0 || (size_t)result >= buffer_size) {
+  if (tstr_len(json) >= buffer_size) {
+    tstr_free(json);
     return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
   }
 
+  memcpy(json_buffer, json, tstr_len(json) + 1);
+  tstr_free(json);
   return IRIS_CONFIG_OK;
 }
 
@@ -998,20 +979,13 @@ iris_config_result_t iris_config_update_runtime(iris_config_t *config, const cha
   }
 
   if (strcmp(parameter_name, "log_level") == 0) {
-    if (tstr_casecmp(value, "NONE") == 0)
-      config->log_level = IRIS_LOG_LEVEL_NONE;
-    else if (tstr_casecmp(value, "ERROR") == 0)
-      config->log_level = IRIS_LOG_LEVEL_ERROR;
-    else if (tstr_casecmp(value, "WARN") == 0)
-      config->log_level = IRIS_LOG_LEVEL_WARN;
-    else if (tstr_casecmp(value, "INFO") == 0)
-      config->log_level = IRIS_LOG_LEVEL_INFO;
-    else if (tstr_casecmp(value, "DEBUG") == 0)
-      config->log_level = IRIS_LOG_LEVEL_DEBUG;
-    else if (tstr_casecmp(value, "TRACE") == 0)
-      config->log_level = IRIS_LOG_LEVEL_TRACE;
-    else
-      return IRIS_CONFIG_ERROR_INVALID_VALUE;
+    if (tstr_casecmp(value, "NONE") == 0) config->log_level = IRIS_LOG_LEVEL_NONE;
+    else if (tstr_casecmp(value, "ERROR") == 0) config->log_level = IRIS_LOG_LEVEL_ERROR;
+    else if (tstr_casecmp(value, "WARN") == 0) config->log_level = IRIS_LOG_LEVEL_WARN;
+    else if (tstr_casecmp(value, "INFO") == 0) config->log_level = IRIS_LOG_LEVEL_INFO;
+    else if (tstr_casecmp(value, "DEBUG") == 0) config->log_level = IRIS_LOG_LEVEL_DEBUG;
+    else if (tstr_casecmp(value, "TRACE") == 0) config->log_level = IRIS_LOG_LEVEL_TRACE;
+    else return IRIS_CONFIG_ERROR_INVALID_VALUE;
   } else if (strcmp(parameter_name, "requests_per_second") == 0) {
     char *endptr;
     long val = strtol(value, &endptr, 10);
@@ -1139,7 +1113,7 @@ void iris_config_print(const iris_config_t *config) {
   TLOG_INFO("    enable_csrf_protection: {}", config->enable_csrf_protection ? "true" : "false");
   TLOG_INFO("    enable_xss_protection: {}", config->enable_xss_protection ? "true" : "false");
   TLOG_INFO("    enable_content_security_policy: {}",
-         config->enable_content_security_policy ? "true" : "false");
+            config->enable_content_security_policy ? "true" : "false");
 
   TLOG_INFO("  File Upload:");
   TLOG_INFO("    max_file_upload_size: {}", config->max_file_upload_size);

@@ -1,14 +1,15 @@
 #include "rpc_client.h"
 #include "rpc_error.h"
 #include "tlog.h"
+#include <fmt.h>
 #include <http_client.h>
 #include <json_parser.h>
 #include <platform.h>
-#include <stb_sprintf.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <turbo_str.h>
 #include <turbo_coro.h>
 #include <CoroNet/turbo_coro_context.h>
 
@@ -21,6 +22,7 @@ struct rpc_client_s {
   rpc_client_config_t config;
   rpc_client_state_t state;
   http_client_t *http_client;
+  int owns_http_client;
   int request_id_counter;
 };
 
@@ -254,8 +256,8 @@ rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
   client->config = *config;
   client->state = RPC_STATE_DISCONNECTED;
   client->request_id_counter = 1;
-
   client->http_client = config->http_client;
+  client->owns_http_client = 0;
 
   /* Set default headers */
   http_client_set_default_header(client->http_client, "Content-Type", "application/json");
@@ -263,9 +265,40 @@ rpc_client_t *rpc_client_create(const rpc_client_config_t *config) {
   return client;
 }
 
+rpc_client_t *rpc_client_create_simple(const char *url) {
+  rpc_client_t *client;
+  http_client_t *http_client;
+  rpc_client_config_t config;
+
+  if (!url) {
+    return NULL;
+  }
+
+  http_client = http_client_create(NULL);
+  if (!http_client) {
+    return NULL;
+  }
+
+  config.url = url;
+  config.http_client = http_client;
+  client = rpc_client_create(&config);
+  if (!client) {
+    http_client_destroy(http_client);
+    return NULL;
+  }
+
+  client->owns_http_client = 1;
+  return client;
+}
+
 void rpc_client_destroy(rpc_client_t *client) {
   if (!client)
     return;
+
+  if (client->owns_http_client && client->http_client) {
+    http_client_destroy(client->http_client);
+    client->http_client = NULL;
+  }
 
   free(client);
 }
@@ -300,7 +333,7 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
 
   /* Generate request ID */
   char id[32];
-  stbsp_snprintf(id, sizeof(id), "%d", client->request_id_counter++);
+  fmt(id, sizeof(id), "{}", client->request_id_counter++);
 
   /* Build JSON-RPC request */
   size_t jsonrpc_len = 0;
@@ -373,22 +406,17 @@ char *rpc_build_params(const char *format, ...) {
   va_list args;
   va_start(args, format);
 
-  va_list args_copy;
-  va_copy(args_copy, args);
-  int size = vsnprintf(NULL, 0, format, args_copy);
-  va_end(args_copy);
+  tstr_t temp = tstr_new();
 
-  if (size < 0) {
+  if (!temp) {
     va_end(args);
     return NULL;
   }
 
-  char *result = (char *)malloc(size + 1);
-  if (result) {
-    vsnprintf(result, size + 1, format, args);
-  }
-
+  temp = tstr_cat_vfmt(temp, format, args);
   va_end(args);
+  char *result = tstr_to_cstr(temp);
+  tstr_free(temp);
   return result;
 }
 
@@ -420,84 +448,6 @@ int rpc_result_get_double(const rpc_call_result_t *result, const char *key, doub
   return json_extract_double(result->result, key, value);
 }
 
-/* Async call — spawn a coroutine that does the request and calls the user callback */
-typedef struct {
-  rpc_client_t *client;
-  char *method;
-  char *params;
-  char *id;
-  rpc_callback_t user_callback;
-  void *user_data;
-} async_coro_args_t;
-
-static void async_call_coro(coro_t *co, void *arg) {
-  UNUSED(co);
-  async_coro_args_t *a = (async_coro_args_t *)arg;
-
-  size_t jsonrpc_len = 0;
-  char *jsonrpc_body = build_jsonrpc_request(a->method, a->params, a->id, &jsonrpc_len);
-
-  if (jsonrpc_body) {
-    const char *url = build_url(a->client);
-    http_response_t *resp =
-        http_request(a->client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
-    json_serialize_free(jsonrpc_body);
-
-    if (resp) {
-      rpc_call_result_t result;
-      process_coro_response(resp, &result);
-      http_response_free(resp);
-
-      if (a->user_callback) {
-        a->user_callback(&result, a->user_data);
-      }
-      rpc_result_free(&result);
-    }
-  }
-
-  free(a->method);
-  free(a->params);
-  free(a->id);
-  free(a);
-}
-
-int rpc_client_call_async(rpc_client_t *client, const char *method, const char *params,
-                          rpc_callback_t callback, void *user_data) {
-  if (!client || !method || !callback)
-    return -1;
-
-  /* Generate request ID */
-  char id[32];
-  stbsp_snprintf(id, sizeof(id), "%d", client->request_id_counter++);
-
-  /* Create args for the coroutine (must be heap-allocated, outlives this call) */
-  async_coro_args_t *args = (async_coro_args_t *)malloc(sizeof(async_coro_args_t));
-  if (!args)
-    return -1;
-
-  args->client = client;
-  args->method = strdup(method);
-  args->params = params ? strdup(params) : NULL;
-  args->id = strdup(id);
-  args->user_callback = callback;
-  args->user_data = user_data;
-
-  /* Use context API for automatic cleanup */
-  coro_context_t *ctx = http_client_get_context(client->http_client);
-  if (!ctx) ctx = coro_context_current();
-
-  if (ctx) {
-      coro_context_spawn(ctx, async_call_coro, args);
-      return 0;
-  }
-
-  free(args->method);
-  free(args->params);
-  free(args->id);
-  free(args);
-  return -1;
-}
-
 int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char **params,
                           size_t count, rpc_call_result_t *results) {
   if (!client || !methods || !results || count == 0)
@@ -521,7 +471,7 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
 
   for (size_t i = 0; i < count; i++) {
     char id_str[32];
-    stbsp_snprintf(id_str, sizeof(id_str), "%d", client->request_id_counter++);
+    fmt(id_str, sizeof(id_str), "{}", client->request_id_counter++);
 
     size_t req_len;
     char *req = build_jsonrpc_request(methods[i], params ? params[i] : NULL, id_str, &req_len);
@@ -599,7 +549,19 @@ typedef struct {
   char *buffer;
   size_t buffer_size;
   size_t buffer_used;
+  int completed;
 } rpc_stream_context_t;
+
+static char *find_sse_event_end(char *buffer) {
+  char *lf_end = strstr(buffer, "\n\n");
+  char *crlf_end = strstr(buffer, "\r\n\r\n");
+
+  if (!lf_end)
+    return crlf_end;
+  if (!crlf_end)
+    return lf_end;
+  return lf_end < crlf_end ? lf_end : crlf_end;
+}
 
 static void process_sse_event(rpc_stream_context_t *ctx, const char *event_data) {
   if (!event_data || event_data[0] == '\0')
@@ -620,7 +582,6 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
   rpc_stream_context_t *ctx = (rpc_stream_context_t *)user_data;
   if (!ctx || !data || len == 0)
     return;
-
   /* Append to buffer */
   size_t new_size = ctx->buffer_used + len + 1;
   if (new_size > ctx->buffer_size) {
@@ -637,10 +598,15 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
   ctx->buffer_used += len;
   ctx->buffer[ctx->buffer_used] = '\0';
 
-  /* Process completed events - look for double newline */
+  /* Process completed events - support LF and CRLF framing. */
   char *p = ctx->buffer;
   char *event_end;
-  while ((event_end = strstr(p, "\n\n")) != NULL) {
+  while (*p == '\r' || *p == '\n') {
+    p++;
+  }
+
+  while ((event_end = find_sse_event_end(p)) != NULL) {
+    size_t terminator_len = (event_end[0] == '\r') ? 4 : 2;
     *event_end = '\0';
 
     /* Parse the event (look for data: lines) */
@@ -679,7 +645,10 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
     process_sse_event(ctx, msg_buf);
     free(msg_buf);
 
-    p = event_end + 2;
+    p = event_end + terminator_len;
+    while (*p == '\r' || *p == '\n') {
+      p++;
+    }
   }
 
   /* Move remaining data to front */
@@ -738,8 +707,11 @@ static void stream_call_coro(coro_t *co, void *arg) {
       result.error_message = strdup("No response");
     }
 
+    ctx->completed = 1;
     ctx->complete_cb(&result, ctx->user_data);
     rpc_result_free(&result);
+  } else {
+    ctx->completed = 1;
   }
 
   if (resp)
@@ -751,12 +723,14 @@ static void stream_call_coro(coro_t *co, void *arg) {
 
 int rpc_client_call_stream(rpc_client_t *client, const char *method, const char *params,
                            rpc_callback_t result_cb, rpc_callback_t complete_cb, void *user_data) {
+  coro_context_t *coro_ctx;
+
   if (!client || !method || !result_cb)
     return -1;
 
   /* Generate request ID */
   char id[32];
-  stbsp_snprintf(id, sizeof(id), "%d", client->request_id_counter++);
+  fmt(id, sizeof(id), "{}", client->request_id_counter++);
 
   /* Build JSON-RPC request */
   size_t jsonrpc_len = 0;
@@ -787,16 +761,26 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   args->stream_ctx = ctx;
 
   /* Use context API */
-  coro_context_t *coro_ctx = http_client_get_context(client->http_client);
-  if (!coro_ctx) coro_ctx = coro_context_current();
+  coro_ctx = http_client_get_context(client->http_client);
+  if (!coro_ctx)
+    coro_ctx = coro_context_current();
 
-  if (coro_ctx) {
-      coro_context_spawn(coro_ctx, stream_call_coro, args);
-      return 0;
+  if (!coro_ctx) {
+    free(ctx);
+    free(args);
+    json_serialize_free(jsonrpc_body);
+    return -1;
   }
 
-  free(ctx);
-  free(args);
-  json_serialize_free(jsonrpc_body);
-  return -1;
+  coro_context_spawn(coro_ctx, stream_call_coro, args);
+
+  if (coro_running()) {
+    return 0;
+  }
+
+  while (!ctx->completed && coro_context_alive(coro_ctx)) {
+    coro_context_run(coro_ctx, TURBO_RUN_ONCE);
+  }
+
+  return 0;
 }

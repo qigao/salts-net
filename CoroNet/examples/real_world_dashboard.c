@@ -4,6 +4,7 @@
  */
 
 #include "CoroNet.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +61,7 @@ static void fetch_user_api(coro_t *co, void *arg) {
     if (r == 0) {
         /* Parse response (simplified) */
         user->id = 123;
-        snprintf(user->name, sizeof(user->name), "John Doe");
+        fmt(user->name, sizeof(user->name), "John Doe");
         user->is_premium = 1;
         printf("[API] User fetched: %s (premium: %d)\n", user->name, user->is_premium);
         coro_socket_free_recv(response);
@@ -97,9 +98,9 @@ static void fetch_posts_api(coro_t *co, void *arg) {
     if (r == 0) {
         /* Parse response (simplified) */
         posts->count = 3;
-        snprintf(posts->titles[0], sizeof(posts->titles[0]), "First Post");
-        snprintf(posts->titles[1], sizeof(posts->titles[1]), "Second Post");
-        snprintf(posts->titles[2], sizeof(posts->titles[2]), "Third Post");
+        fmt(posts->titles[0], sizeof(posts->titles[0]), "First Post");
+        fmt(posts->titles[1], sizeof(posts->titles[1]), "Second Post");
+        fmt(posts->titles[2], sizeof(posts->titles[2]), "Third Post");
         printf("[API] Posts fetched: %d posts\n", posts->count);
         coro_socket_free_recv(response);
     } else {
@@ -135,8 +136,8 @@ static void fetch_comments_api(coro_t *co, void *arg) {
     if (r == 0) {
         /* Parse response (simplified) */
         comments->count = 5;
-        snprintf(comments->texts[0], sizeof(comments->texts[0]), "Great post!");
-        snprintf(comments->texts[1], sizeof(comments->texts[1]), "Thanks for sharing");
+        fmt(comments->texts[0], sizeof(comments->texts[0]), "Great post!");
+        fmt(comments->texts[1], sizeof(comments->texts[1]), "Thanks for sharing");
         printf("[API] Comments fetched: %d comments\n", comments->count);
         coro_socket_free_recv(response);
     } else {

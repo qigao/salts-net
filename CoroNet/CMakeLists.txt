@@ -3,10 +3,6 @@ find_package(Stb REQUIRED)
 # Add WebSocket parser subdirectory
 add_subdirectory(parser)
 
-file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
-     ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
-list(APPEND SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_coro_socket_tls.c)
-
 set(TURBO_HAS_IO_URING OFF)
 set(TURBO_IO_URING_LIBRARY "")
 set(TURBO_IO_URING_INCLUDE_DIR "")
@@ -19,52 +15,49 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
   endif()
 endif()
 
-# Strip out all platform-specific backend files from glob results
-list(REMOVE_ITEM SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_iocp.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_win.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_iocp.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c)
-
-if(WIN32)
-  list(APPEND SOURCE_FILES
+# Platform-specific backend mapping
+set(BACKEND_FILES_IOCP
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_iocp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_win.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_iocp.c)
 
-
-elseif(APPLE) # macOS, iOS, tvOS, watchOS
-  list(APPEND SOURCE_FILES
+set(BACKEND_FILES_KQUEUE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_kqueue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_kqueue.c)
 
+set(BACKEND_FILES_IO_URING
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c)
 
-elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
-  if(TURBO_HAS_IO_URING AND NOT ANDROID)
-    list(APPEND SOURCE_FILES
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c)
-  else()
-    list(APPEND SOURCE_FILES
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c)
-  endif()
+set(BACKEND_FILES_EPOLL
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c)
 
-
-else()
-  # Fallback for other Unix-like OSes
-  list(APPEND SOURCE_FILES
+set(BACKEND_FILES_UNIX_GENERIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c)
 
+# Collect all generic sources, excluding all backend implementations
+turbonet_collect_files(SOURCE_FILES RECURSE
+    EXCLUDES ${BACKEND_FILES_IOCP} ${BACKEND_FILES_KQUEUE} 
+             ${BACKEND_FILES_IO_URING} ${BACKEND_FILES_EPOLL}
+             ${BACKEND_FILES_UNIX_GENERIC})
+
+# Select and add the appropriate backend
+if(WIN32)
+  list(APPEND SOURCE_FILES ${BACKEND_FILES_IOCP})
+elseif(APPLE)
+  list(APPEND SOURCE_FILES ${BACKEND_FILES_KQUEUE})
+elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+  if(TURBO_HAS_IO_URING AND NOT ANDROID)
+    list(APPEND SOURCE_FILES ${BACKEND_FILES_IO_URING})
+  else()
+    list(APPEND SOURCE_FILES ${BACKEND_FILES_EPOLL})
+  endif()
+else()
+  list(APPEND SOURCE_FILES ${BACKEND_FILES_UNIX_GENERIC})
 endif()
 
 if(WIN32)
@@ -73,14 +66,20 @@ endif()
 # Build STATIC library for internal use (tests)
 set(STATIC_TARGET_NAME ${TARGET_NAME}_static)
 add_library(${STATIC_TARGET_NAME} STATIC ${SOURCE_FILES})
-add_library(TurboNet::CoroNet_static ALIAS ${STATIC_TARGET_NAME})
-set_target_properties(${STATIC_TARGET_NAME} PROPERTIES OUTPUT_NAME coronet_static FOLDER ${TARGET_NAME})
-
 # Build SHARED library
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
-add_library(TurboNet::CoroNet ALIAS ${TARGET_NAME})
-set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${TARGET_NAME} EXPORT_NAME CoroNet)
+
+# Configure targets
+turbonet_configure_target(${STATIC_TARGET_NAME}
+  ALIAS TurboNet::CoroNet_static
+  FOLDER ${TARGET_NAME}
+  NO_INSTALL)
+
+turbonet_configure_target(${TARGET_NAME}
+  ALIAS TurboNet::CoroNet
+  FOLDER ${TARGET_NAME}
+  EXPORT_NAME CoroNet)
 
 # Apply configuration to both
 foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
@@ -91,8 +90,6 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
            $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
     PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS}
             ${TURBO_IO_URING_INCLUDE_DIR})
-
-  add_sanitizers(${tgt})
 
   if(TURBO_HAS_IO_URING)
     target_compile_definitions(${tgt} PRIVATE TURBO_HAS_IO_URING=1)
@@ -113,24 +110,12 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     target_link_libraries(${tgt} PRIVATE ${TURBO_IO_URING_LIBRARY})
   endif()
 endforeach()
-# Install library (for development/internal use)
-install(
-  TARGETS ${TARGET_NAME}
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
 
-# Install headers preserving directory structure
+# Install headers
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet.h DESTINATION include)
-install(
+turbonet_install_headers(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.h"
-  PATTERN "internal.h" EXCLUDE
-  PATTERN "turbo_coro_internal.h" EXCLUDE
-  PATTERN "turbo_native_*_internal.h" EXCLUDE)
+  EXCLUDES "internal.h" "turbo_coro_internal.h" "turbo_native_*_internal.h")
 
 add_subdirectory(tests)
 

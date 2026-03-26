@@ -786,23 +786,57 @@ static void annotate_layouts(Node *root) {
 
 static void annotate_schema_metadata(Node *root) {
     Node *schema = map_find_named_child(root, "schema");
+    Node *attributes;
     const char *byte_order;
+    char attrs_buf[512];
+    size_t attrs_len = 0;
+    const char *wire_value = "0";
 
     if (!schema) {
         return;
     }
+
+    attributes = map_find_named_child(schema, "attributes");
+    attrs_buf[0] = '\0';
+    if (attributes && attributes->type == NODE_MAP) {
+        for (size_t i = 0; i < attributes->data.map.count; ++i) {
+            Node *attribute = attributes->data.map.items[i];
+            const char *attr_name;
+            const char *attr_value;
+            int written;
+
+            if (!attribute || attribute->type != NODE_MAP) {
+                continue;
+            }
+
+            attr_name = map_find_string_value(attribute, "name");
+            attr_value = map_find_string_value(attribute, "value");
+            if (!attr_name || !attr_value) {
+                continue;
+            }
+
+            written = snprintf(attrs_buf + attrs_len, sizeof(attrs_buf) - attrs_len,
+                               "[ %s: %s ] ", attr_name, attr_value);
+            if (written < 0 || (size_t)written >= sizeof(attrs_buf) - attrs_len) {
+                break;
+            }
+            attrs_len += (size_t)written;
+        }
+    }
+    map_set_string(schema, "schema_attributes_rendered", attrs_buf);
 
     byte_order = attribute_value(schema, "byte_order");
     if (byte_order && strcmp(byte_order, "big") == 0) {
         map_set_string(schema, "wire_byte_order", "big");
         map_set_true(schema, "is_big_endian");
         map_remove_named_children(schema, "is_little_endian");
-        return;
+        wire_value = "1";
+    } else {
+        map_set_string(schema, "wire_byte_order", "little");
+        map_set_true(schema, "is_little_endian");
+        map_remove_named_children(schema, "is_big_endian");
     }
-
-    map_set_string(schema, "wire_byte_order", "little");
-    map_set_true(schema, "is_little_endian");
-    map_remove_named_children(schema, "is_big_endian");
+    map_set_string(schema, "schema_wire_big_endian_value", wire_value);
 }
 
 static Node *parse_schema_raw(const char *text, size_t len, tbe_error_t *err) {

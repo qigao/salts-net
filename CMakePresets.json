@@ -1,7 +1,8 @@
 {
     "version": 6,
-    "include": [ 
-        "presets/BuildPresets.json"
+    "include": [
+        "presets/BuildPresets.json",
+        "presets/TestPresets.json"
     ],
     "configurePresets": [
         {
@@ -19,15 +20,6 @@
             "displayName": "Release Build (Windows, Base)",
             "inherits": [
                 "release-win-msvc-ninja",
-                "pkg-vcpkg"
-            ]
-        },
-        {
-            "name": "base-win-dev-user-ASan",
-            "hidden": true,
-            "displayName": "Developer Build (Windows, ASAN, Base)",
-            "inherits": [
-                "dev-win-msvc-ninja-asan",
                 "pkg-vcpkg"
             ]
         },

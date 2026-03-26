@@ -32,7 +32,6 @@ target_link_libraries(${turl_name} PRIVATE turl_lib TurboNet::DotEnvParser)
 set_target_properties( turl_lib  PROPERTIES FOLDER http/tools)
 # Standard project setup
 set_target_properties(${turl_name} PROPERTIES FOLDER http/tools)
-add_sanitizers(${turl_name})
 
 # Unit Testing
 if(BUILD_TESTS)

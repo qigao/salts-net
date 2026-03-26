@@ -15,10 +15,10 @@
 #include "rpc_error.h"
 #include "rpc_retry.h"
 #include "rpc_stats.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stb_sprintf.h>
 #include <http_client.h>
 
 static void example_get_block_number(http_client_t *http) {
@@ -190,7 +190,7 @@ static void example_get_balance(http_client_t *http) {
 
   const char *eth_foundation = "0xde0B295669a9FD93d5F28D9Ec85E40f4cb697BAe";
   char params[256];
-  stbsp_snprintf(params, sizeof(params), "[\"%s\", \"latest\"]", eth_foundation);
+  fmt(params, sizeof(params), "[\"{}\", \"latest\"]", eth_foundation);
 
   rpc_call_result_t result;
   int ret = rpc_client_call(client, "eth_getBalance", params, &result);

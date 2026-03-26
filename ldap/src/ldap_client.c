@@ -8,7 +8,7 @@
 #include "ldap_parser.h"
 #include <CoroNet/turbo_coro_context.h>
 #include <CoroNet/turbo_coro_socket.h>
-#include <stb_sprintf.h>
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -261,13 +261,13 @@ static int ldap_client_recv_until_response(ldap_client_t *client) {
 
     if (rc == TURBO_ETIMEDOUT) {
       if (chunk) coro_socket_free_recv(chunk);
-      stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
+      fmt(client->error_msg, sizeof(client->error_msg), "Operation timeout");
       return LDAP_CLIENT_ERROR_TIMEOUT;
     }
     if (rc != 0) {
       if (chunk) coro_socket_free_recv(chunk);
       client->connected = 0;
-      stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Receive failed (%d)", rc);
+      fmt(client->error_msg, sizeof(client->error_msg), "Receive failed ({})", rc);
       return LDAP_CLIENT_ERROR_NETWORK;
     }
 
@@ -275,12 +275,12 @@ static int ldap_client_recv_until_response(ldap_client_t *client) {
       rc = ldap_client_append_recv(client, chunk, chunk_len);
       coro_socket_free_recv(chunk);
       if (rc != LDAP_CLIENT_OK) {
-        stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Receive buffer allocation failed");
+        fmt(client->error_msg, sizeof(client->error_msg), "Receive buffer allocation failed");
         return rc;
       }
       rc = ldap_client_drain_recv_buffer(client);
       if (rc != LDAP_CLIENT_OK) {
-        stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "LDAP parse/protocol failure");
+        fmt(client->error_msg, sizeof(client->error_msg), "LDAP parse/protocol failure");
         return rc;
       }
     } else if (chunk) {
@@ -294,8 +294,9 @@ static int ldap_client_recv_until_response(ldap_client_t *client) {
 static int ldap_client_send_and_wait(ldap_client_t *client, const uint8_t *data, size_t len,
                                      int message_id) {
   if (!client || !client->connected || !client->socket) {
-    stbsp_snprintf(client ? client->error_msg : NULL, client ? sizeof(client->error_msg) : 0,
-                   "Not connected");
+    if (client) {
+      fmt(client->error_msg, sizeof(client->error_msg), "Not connected");
+    }
     return LDAP_CLIENT_ERROR_NETWORK;
   }
 
@@ -310,11 +311,11 @@ static int ldap_client_send_and_wait(ldap_client_t *client, const uint8_t *data,
 
   int rc = coro_socket_send(client->socket, (const char *)data, len);
   if (rc == TURBO_ETIMEDOUT) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
+    fmt(client->error_msg, sizeof(client->error_msg), "Operation timeout");
     return LDAP_CLIENT_ERROR_TIMEOUT;
   }
   if (rc != 0) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Send failed (%d)", rc);
+    fmt(client->error_msg, sizeof(client->error_msg), "Send failed ({})", rc);
     return LDAP_CLIENT_ERROR_NETWORK;
   }
 
@@ -359,7 +360,7 @@ static int ldap_client_connect_coro(ldap_client_t *client, void *arg) {
 
   client->socket = coro_socket_create(client->ctx, CORO_SOCKET_TCP_V4);
   if (!client->socket) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return LDAP_CLIENT_ERROR_MEMORY;
   }
 
@@ -367,13 +368,13 @@ static int ldap_client_connect_coro(ldap_client_t *client, void *arg) {
 
   int rc = coro_socket_connect(client->socket, client->host, client->port);
   if (rc == TURBO_ETIMEDOUT) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
+    fmt(client->error_msg, sizeof(client->error_msg), "Operation timeout");
     coro_socket_destroy(client->socket);
     client->socket = NULL;
     return LDAP_CLIENT_ERROR_TIMEOUT;
   }
   if (rc != 0) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Connect failed (%d)", rc);
+    fmt(client->error_msg, sizeof(client->error_msg), "Connect failed ({})", rc);
     coro_socket_destroy(client->socket);
     client->socket = NULL;
     return LDAP_CLIENT_ERROR_NETWORK;
@@ -419,7 +420,7 @@ static int ldap_client_simple_bind_coro(ldap_client_t *client, void *opaque) {
   message_id = client->next_message_id++;
   rc = ldap_build_bind_request(message_id, 3, args->dn, args->password, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build BindRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build BindRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -452,7 +453,7 @@ static int ldap_client_search_coro(ldap_client_t *client, void *opaque) {
                                  args->params->types_only ? 1 : 0, args->params->filter,
                                  args->params->attrs, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build SearchRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build SearchRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -483,7 +484,7 @@ static int ldap_client_add_coro(ldap_client_t *client, void *opaque) {
   message_id = client->next_message_id++;
   rc = ldap_build_add_request(message_id, args->dn, args->attrs, args->attr_count, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build AddRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build AddRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -513,7 +514,7 @@ static int ldap_client_delete_coro(ldap_client_t *client, void *opaque) {
   message_id = client->next_message_id++;
   rc = ldap_build_delete_request(message_id, args->dn, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build DeleteRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build DeleteRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -543,7 +544,7 @@ static int ldap_client_modify_coro(ldap_client_t *client, void *opaque) {
   message_id = client->next_message_id++;
   rc = ldap_build_modify_request(message_id, args->dn, args->mods, args->mod_count, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -574,7 +575,7 @@ static int ldap_client_rename_coro(ldap_client_t *client, void *opaque) {
   rc = ldap_build_modifydn_request(message_id, args->dn, args->new_rdn, args->delete_old_rdn,
                                    args->new_parent, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyDNRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyDNRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -605,7 +606,7 @@ static int ldap_client_compare_coro(ldap_client_t *client, void *opaque) {
   rc = ldap_build_compare_request(message_id, args->dn, args->attr,
                                   (const uint8_t *)args->value, args->value_len, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build CompareRequest");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to build CompareRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 

@@ -42,4 +42,3 @@ option(BUILD_TESTS "Build test suite" ON)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
-find_package(Threads REQUIRED)

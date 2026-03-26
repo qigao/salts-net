@@ -8,7 +8,6 @@
 #include "session.h"
 #include "request.h"
 #include "compat.h"
-#include <stb_sprintf.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <wincrypt.h>

@@ -1,6 +1,7 @@
 #include "dotenv.h"
 #include "dotenv_lexer.h"
 #include "turbo_str.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -86,7 +87,7 @@ int dotenv_load(const char *path, bool overwrite)
 
     if (!file) {
         // Try appending /.env if path is a directory (or just doesn't exist as is)
-        snprintf(full_path, sizeof(full_path), "%s/.env", path);
+        fmt(full_path, sizeof(full_path), "{}/.env", path);
         file = fopen(full_path, "rb");
     }
 

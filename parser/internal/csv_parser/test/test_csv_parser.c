@@ -5,7 +5,7 @@
 
 #include "csv_parser.h"
 #include "tinytest.h"
-#include <stb_sprintf.h>
+#include <fmt.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -433,7 +433,7 @@ spec("csv_parser") {
       char csv[10000];
       int offset = 0;
       for (int i = 0; i < 100; i++) {
-        offset += stbsp_snprintf(csv + offset, sizeof(csv) - offset, "%d,%d,%d\n", i, i * 2, i * 3);
+        offset += fmt(csv + offset, sizeof(csv) - (size_t)offset, "{},{},{}\n", i, i * 2, i * 3);
       }
 
       csv_doc_t *doc = csv_parse(csv, strlen(csv));

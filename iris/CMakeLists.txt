@@ -1,48 +1,26 @@
 set(TARGET_NAME iris)
 # Generate security validators from re2c
-set(SECURITY_VALIDATORS_RE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/security_validators.re)
-set(SECURITY_VALIDATORS_GEN
-    ${CMAKE_CURRENT_BINARY_DIR}/security_validators_gen.c)
-
-add_custom_command(
-  OUTPUT ${SECURITY_VALIDATORS_GEN}
-  COMMAND ${RE2C_EXECUTABLE} -o ${SECURITY_VALIDATORS_GEN}
-          ${SECURITY_VALIDATORS_RE}
-  DEPENDS ${SECURITY_VALIDATORS_RE}
-  COMMENT "Generating security validators with re2c"
-  VERBATIM)
+turbonet_add_grammar_target(SECURITY
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/security_validators.re)
 
 # Generate route parser from re2c
-set(ROUTE_PARSER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/route_parser.re)
-set(ROUTE_PARSER_GEN ${CMAKE_CURRENT_BINARY_DIR}/route_parser_gen.c)
-
-add_custom_command(
-  OUTPUT ${ROUTE_PARSER_GEN}
-  COMMAND ${RE2C_EXECUTABLE} -o ${ROUTE_PARSER_GEN} ${ROUTE_PARSER_RE}
-  DEPENDS ${ROUTE_PARSER_RE}
-  COMMENT "Generating route parser with re2c"
-  VERBATIM)
+turbonet_add_grammar_target(ROUTE
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/route_parser.re)
 
 # Add generated files to sources
-set(GENERATED_SOURCES ${SECURITY_VALIDATORS_GEN} ${ROUTE_PARSER_GEN})
+set(GENERATED_SOURCES ${SECURITY_LEXER_GEN} ${ROUTE_LEXER_GEN})
 
-file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h
-     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
-
-# Add generated sources
+# Collect sources
+turbonet_collect_files(SOURCE_FILES RECURSE)
 list(APPEND SOURCE_FILES ${GENERATED_SOURCES})
 
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-add_library(TurboNet::Iris ALIAS ${TARGET_NAME})
 
-# Set target properties
-set_target_properties(
-  ${TARGET_NAME}
-  PROPERTIES FOLDER "iris"
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME Iris)
+# Configure target
+turbonet_configure_target(${TARGET_NAME}
+  ALIAS TurboNet::Iris
+  FOLDER "iris"
+  EXPORT_NAME Iris)
 
 # Link libraries first - vcpkg style
 target_link_libraries(
@@ -53,7 +31,6 @@ target_link_libraries(
           c-ares::cares
           TurboNet::Parser
           cjwt
-
           Threads::Threads)
 
 # Include directories
@@ -66,7 +43,6 @@ target_include_directories(
 
 # Platform-specific fixes
 if(WIN32)
-  # Windows-specific compile definitions
   target_compile_definitions(${TARGET_NAME} PUBLIC WIN32_LEAN_AND_MEAN
                                                    _CRT_SECURE_NO_WARNINGS)
   target_link_libraries(${TARGET_NAME} PRIVATE ws2_32 advapi32)
@@ -77,22 +53,9 @@ if(BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
 
-# Tests subdirectory
 if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# Install library
-install(
-  TARGETS ${TARGET_NAME}
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
-
 # Install headers
-install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.h")
+turbonet_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)

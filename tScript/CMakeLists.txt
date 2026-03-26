@@ -11,9 +11,5 @@ set(TURBO_SCRIPT_MODULE_DLL_TARGETS
     sqlite_plugin
     wasm_plugin)
 
-install(
-  TARGETS exprtk turbo_script ${TURBO_SCRIPT_MODULE_DLL_TARGETS}
-  EXPORT TurboNetTargets
-  RUNTIME DESTINATION bin
-  LIBRARY DESTINATION bin
-  ARCHIVE DESTINATION lib)
+# Subdirectories are responsible for their own target configuration and installation
+# using turbonet_configure_target()

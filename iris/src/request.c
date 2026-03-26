@@ -329,6 +329,13 @@ static int on_body_cb(llhttp_t *parser, const char *at, size_t length) {
     return 1;
   }
 
+  if (context->stream_mode) {
+    context->stream_chunk = at;
+    context->stream_chunk_len = length;
+    context->body_length += length;
+    return HPE_PAUSED;
+  }
+
   memcpy(context->body + context->body_length, at, length);
   context->body_length += length;
   context->body[context->body_length] = '\0';
@@ -353,6 +360,36 @@ static int on_version_cb(llhttp_t *parser) {
   }
 
   return 0;
+}
+
+static int on_headers_complete_cb(llhttp_t *parser) {
+  http_context_t *context;
+  int version_result;
+
+  if (!parser || !parser->data) {
+    return HPE_USER;
+  }
+
+  context = (http_context_t *)parser->data;
+  version_result = on_version_cb(parser);
+  if (version_result != 0) {
+    return version_result;
+  }
+
+  context->headers_complete = 1;
+  return HPE_PAUSED;
+}
+
+static int on_message_complete_cb(llhttp_t *parser) {
+  http_context_t *context;
+
+  if (!parser || !parser->data) {
+    return HPE_USER;
+  }
+
+  context = (http_context_t *)parser->data;
+  context->message_complete = 1;
+  return HPE_PAUSED;
 }
 
 // Initialize HTTP context
@@ -380,7 +417,8 @@ void http_context_init(http_context_t *context, mem_pool_t *arena) {
   context->parser_impl->settings.on_header_value = on_header_value_cb;
   context->parser_impl->settings.on_method = on_method_cb;
   context->parser_impl->settings.on_body = on_body_cb;
-  context->parser_impl->settings.on_headers_complete = on_version_cb;
+  context->parser_impl->settings.on_headers_complete = on_headers_complete_cb;
+  context->parser_impl->settings.on_message_complete = on_message_complete_cb;
 
   llhttp_init(&context->parser_impl->parser, HTTP_REQUEST, &context->parser_impl->settings);
 
@@ -424,6 +462,11 @@ void http_context_init(http_context_t *context, mem_pool_t *arena) {
   context->keep_alive = -1; // -1 = not set, will be set by on_version_cb or Connection header
   context->http_major = 1;
   context->http_minor = 0;
+  context->headers_complete = 0;
+  context->message_complete = 0;
+  context->stream_mode = 0;
+  context->stream_chunk = NULL;
+  context->stream_chunk_len = 0;
 }
 
 // Function to clean up HTTP context (arena-aware - just clears pointers)
@@ -451,6 +494,75 @@ void http_context_free(http_context_t *context) {
   context->url_params.capacity = 0;
 
   memset(context, 0, sizeof(http_context_t));
+}
+
+int http_context_execute(http_context_t *context, const char *data, size_t len, size_t *consumed) {
+  enum llhttp_errno err;
+  const char *error_pos;
+
+  if (!context || !context->parser_impl || !consumed) {
+    return -400;
+  }
+
+  if (!data) {
+    data = "";
+    len = 0;
+  }
+
+  context->headers_complete = 0;
+  context->message_complete = 0;
+  context->stream_chunk = NULL;
+  context->stream_chunk_len = 0;
+  err = llhttp_execute(&context->parser_impl->parser, data, len);
+
+  if (err == HPE_OK) {
+    *consumed = len;
+    return context->message_complete ? 1 : 0;
+  }
+
+  if (err == HPE_PAUSED && context->message_complete) {
+    error_pos = llhttp_get_error_pos(&context->parser_impl->parser);
+    if (!error_pos) {
+      return -400;
+    }
+    *consumed = (size_t)(error_pos - data);
+    return 1;
+  }
+
+  if (err == HPE_PAUSED && context->stream_chunk && context->stream_chunk_len > 0) {
+    if (context->stream_chunk < data) {
+      return -400;
+    }
+    *consumed = (size_t)((context->stream_chunk + context->stream_chunk_len) - data);
+    return 3;
+  }
+
+  if (err == HPE_PAUSED && context->headers_complete) {
+    error_pos = llhttp_get_error_pos(&context->parser_impl->parser);
+    if (!error_pos) {
+      return -400;
+    }
+    *consumed = (size_t)(error_pos - data);
+    return 2;
+  }
+
+  if (err == HPE_USER) {
+    error_pos = llhttp_get_error_pos(&context->parser_impl->parser);
+    *consumed = error_pos ? (size_t)(error_pos - data) : 0;
+    return -413;
+  }
+
+  error_pos = llhttp_get_error_pos(&context->parser_impl->parser);
+  *consumed = error_pos ? (size_t)(error_pos - data) : 0;
+  return -400;
+}
+
+void http_context_resume(http_context_t *context) {
+  if (!context || !context->parser_impl) {
+    return;
+  }
+
+  llhttp_resume(&context->parser_impl->parser);
 }
 
 // Query parsing

@@ -6,10 +6,10 @@
 #include "snmp_builder.h"
 #include "snmp_usm.h"
 #include "asn1_types.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <stb_sprintf.h>
 
 /* Helper: Build PDU with NULL values for Get/GetNext */
 static int build_get_pdu(
@@ -283,8 +283,8 @@ int snmp_oid_to_string(const snmp_oid_t *oid, char *buf, size_t buf_len) {
 
     size_t offset = 0;
     for (size_t i = 0; i < oid->count; i++) {
-        int written = stbsp_snprintf(buf + offset, buf_len - offset,
-                              "%s%u", (i > 0) ? "." : "", oid->components[i]);
+        int written = fmt(buf + offset, buf_len - offset,
+                          "{}{}", (i > 0) ? "." : "", oid->components[i]);
         if (written < 0 || (size_t)written >= buf_len - offset) {
             return -1;  /* Buffer too small */
         }

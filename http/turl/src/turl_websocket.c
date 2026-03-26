@@ -6,6 +6,7 @@
 #include "turl_websocket.h"
 #include "turl_common.h"
 #include <CoroNet.h>
+#include <fmt.h>
 #include <turbo_parser.h>
 #include <tlog.h>
 #include <stdio.h>
@@ -62,7 +63,7 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
   }
 
   if (query && query[0] != '\0') {
-    snprintf(path_buf, sizeof(path_buf), "%s?%s", path, query);
+    fmt(path_buf, sizeof(path_buf), "{}?{}", path, query);
     path = path_buf;
   }
 

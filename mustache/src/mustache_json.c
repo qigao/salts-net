@@ -4,6 +4,7 @@
  */
 #include "json_parser.h"
 #include "mustache_json.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,9 +95,9 @@ static int json_dump(void *node, int (*out_fn)(const char *, size_t, void *), vo
 
     /* Check if it's an integer */
     if (num == (long long)num) {
-      len = snprintf(buffer, sizeof(buffer), "%lld", (long long)num);
+      len = fmt(buffer, sizeof(buffer), "{}", (long long)num);
     } else {
-      len = snprintf(buffer, sizeof(buffer), "%.15g", num);
+      len = fmt(buffer, sizeof(buffer), "{:.15g}", num);
     }
 
     if (len > 0 && len < sizeof(buffer)) {

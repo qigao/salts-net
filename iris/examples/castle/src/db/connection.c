@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <stb_sprintf.h>
+#include <fmt.h>
 
 char *build_connection_string(void)
 {
@@ -24,9 +24,9 @@ char *build_connection_string(void)
         db_password = "";
 
     static char conninfo[512];
-    stbsp_snprintf(conninfo, sizeof(conninfo),
-             "host=%s port=%s dbname=%s user=%s password=%s",
-             db_host, db_port, db_name, db_user, db_password);
+    fmt(conninfo, sizeof(conninfo),
+        "host={} port={} dbname={} user={} password={}",
+        db_host, db_port, db_name, db_user, db_password);
 
     return conninfo;
 }

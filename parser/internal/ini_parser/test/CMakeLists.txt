@@ -1,10 +1,8 @@
-file(GLOB TEST_SOURCES test*.c)
-set(folder_name turbo_parser/parser/${TARGET_NAME})
+# Detect other test files automatically
+turbonet_collect_files(TEST_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR} PATTERNS "test*.c")
 
-foreach(test_source ${TEST_SOURCES})
-    get_filename_component(test_name ${test_source} NAME_WE)
-    add_executable(${test_name} ${test_source})
-    target_link_libraries(${test_name} PRIVATE TurboNet::TinyTest ${TARGET_NAME})
-    add_test(NAME ${test_name} COMMAND ${test_name})
-    set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
-endforeach()
+turbonet_add_tests(
+    SOURCES ${TEST_SOURCES}
+    FOLDER "turbo_parser/parser/${TARGET_NAME}/test"
+    LIBS TurboNet::TinyTest ${TARGET_NAME}
+)

@@ -2,7 +2,10 @@
 
 add_library(tedis SHARED redis_client.c redis_pool.c redis_cluster.c)
 
-# Define DLL export macro when building shared library
+turbonet_configure_target(tedis
+  ALIAS TurboNet::Redis
+  FOLDER tedis
+  EXPORT_NAME Redis)
 
 target_compile_definitions(tedis PRIVATE SHARED_CXX)
 if(BUILD_TESTING)
@@ -20,17 +23,5 @@ if(WIN32)
                                            WIN32_LEAN_AND_MEAN)
 endif()
 
-set_target_properties(
-  tedis
-  PROPERTIES FOLDER tedis
-             OUTPUT_NAME "tedis"
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME Redis)
-
-# Create alias using TurboNet namespace
-add_library(TurboNet::Redis ALIAS tedis)
-
 # Tests
-enable_testing()
 add_subdirectory(tests)

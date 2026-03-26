@@ -2,7 +2,7 @@
 # Executable
 # =============================================================================
 
-add_executable(tbe_compiler main.c mustache_helpers.c)
+add_executable(tbe_compiler main.c compiler_core.c mustache_helpers.c)
 target_link_libraries(tbe_compiler PRIVATE TurboNet::SchemaBE
                                            TurboNet::CmdParser mustache)
 target_include_directories(tbe_compiler
@@ -38,7 +38,7 @@ add_custom_target(
 # Tests
 # =============================================================================
 
-add_executable(test_tbe_compiler test_tbe_compiler.c mustache_helpers.c)
+add_executable(test_tbe_compiler test_tbe_compiler.c compiler_core.c mustache_helpers.c)
 target_link_libraries(test_tbe_compiler PRIVATE TurboNet::SchemaBE
                                                 TurboNet::TinyTest mustache)
 target_compile_definitions(

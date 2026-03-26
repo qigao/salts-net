@@ -1,5 +1,6 @@
 #include "s3/s3_client.h"
 #include "s3/s3_credentials.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -150,7 +151,7 @@ int main(int argc, char **argv) {
     s3_batch_item_t items[10];
 
     for (int i = 0; i < file_count; i++) {
-        snprintf(filenames[i], sizeof(filenames[i]), "batch_test_%d.mp4", i + 1);
+        fmt(filenames[i], sizeof(filenames[i]), "batch_test_{}.mp4", i + 1);
         create_large_file(filenames[i], 100);  /* 100MB each */
 
         items[i].bucket = bucket;

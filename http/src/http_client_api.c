@@ -2,7 +2,7 @@
 #include "http_client_internal_h.h"
 #include "http_common_internal.h"
 #include "turbo_str.h"
-#include <stb_sprintf.h>
+#include <fmt.h>
 #include <turbo_coro.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,9 +85,9 @@ http_response_t *http_sse_get(http_client_t *c, const char *url, http_data_cb da
 http_response_t *http_get_range(http_client_t *c, const char *url, size_t start, size_t end) {
   char range_header[128];
   if (end > 0)
-    stbsp_snprintf(range_header, sizeof(range_header), "Range: bytes=%zu-%zu", start, end);
+    fmt(range_header, sizeof(range_header), "Range: bytes={}-{}", start, end);
   else
-    stbsp_snprintf(range_header, sizeof(range_header), "Range: bytes=%zu-", start);
+    fmt(range_header, sizeof(range_header), "Range: bytes={}-", start);
   const char *headers[] = {range_header};
   return http_request(c, HTTP_GET, url, headers, 1, NULL, 0);
 }

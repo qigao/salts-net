@@ -1,56 +1,39 @@
 {
   "version": 6,
   "include": [
-    "ConfigurePresets.json"
+    "ConfigurePresets.json",
+    "Platforms.json"
   ],
   "buildPresets": [
     {
-      "name": "default-windows",
+      "name": "build-default-windows",
       "displayName": "Build (Default, Windows)",
-      "configurePreset": "dev-win-msvc-ninja",
-      "inherits": [
-        "ISWindows"
-      ]
+      "inherits": "ISWindows",
+      "configurePreset": "dev-win-msvc-ninja"
     },
     {
-      "name": "asan-windows",
-      "displayName": "Build with ASan (Windows)",
-      "configurePreset": "dev-win-msvc-ninja-asan",
-      "inherits": [
-        "ISWindows"
-      ]
-    },
-    {
-      "name": "release-windows",
+      "name": "build-release-windows",
       "displayName": "Build (Release, Windows)",
-      "configurePreset": "release-win-msvc-ninja",
-      "inherits": [
-        "ISWindows"
-      ]
+      "inherits": "ISWindows",
+      "configurePreset": "release-win-msvc-ninja"
     },
     {
-      "name": "default-linux",
+      "name": "build-default-linux",
       "displayName": "Build (Default, Linux)",
-      "configurePreset": "release-linux-ninja",
-      "inherits": [
-        "ISLinux"
-      ]
+      "inherits": "ISLinux",
+      "configurePreset": "release-linux-ninja"
     },
     {
-      "name": "debug-linux",
+      "name": "build-debug-linux",
       "displayName": "Build Debug (Linux)",
-      "configurePreset": "dev-linux-ninja",
-      "inherits": [
-        "ISLinux"
-      ]
+      "inherits": "ISLinux",
+      "configurePreset": "dev-linux-ninja"
     },
     {
-      "name": "default-mac",
+      "name": "build-default-mac",
       "displayName": "Build (Default, Mac)",
-      "configurePreset": "release-mac-ninja",
-      "inherits": [
-        "ISMac"
-      ]
+      "inherits": "ISMac",
+      "configurePreset": "release-mac-ninja"
     }
   ]
 }

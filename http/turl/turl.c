@@ -12,6 +12,7 @@
 #include <dotenv.h>
 #include <json_parser.h>
 #include <CoroNet.h>
+#include <fmt.h>
 #include <turbo_coro.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,7 +142,7 @@ int main(int argc, char *argv[]) {
       if (i + 1 < argc) {
         env_name = argv[i + 1];
         char env_path[256];
-        snprintf(env_path, sizeof(env_path), ".env.%s", env_name);
+        fmt(env_path, sizeof(env_path), ".env.{}", env_name);
         dotenv_load(env_path, false);
         break;
       }

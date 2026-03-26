@@ -4,13 +4,16 @@ find_package(Stb REQUIRED)
 add_subdirectory(parser)
 
 # Common/base utilities - contains stats, base64, DNS, mDNS, filesystem, logger,
-# platform, and client utilities Find all files recursively
-file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c*
-     ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h*)
+# platform, and client utilities
+turbonet_collect_files(SOURCE_FILES RECURSE)
 
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-# Public alias
-add_library(TurboNet::Utils ALIAS ${TARGET_NAME})
+# Configure target
+turbonet_configure_target(
+  ${TARGET_NAME}
+  ALIAS TurboNet::Utils
+  FOLDER "shared/utils"
+  EXPORT_NAME Utils)
 
 # Include directories
 target_include_directories(
@@ -38,32 +41,10 @@ if(WIN32)
   target_link_libraries(${TARGET_NAME} PRIVATE iphlpapi ws2_32)
 endif()
 
-# Set target properties
-set_target_properties(
-  ${TARGET_NAME}
-  PROPERTIES FOLDER "shared/utils"
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             EXPORT_NAME Utils)
+# Install headers
+turbonet_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)
 
-add_sanitizers(${TARGET_NAME})
-
-# Install library
-install(
-  TARGETS ${TARGET_NAME}
-  EXPORT TurboNetTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
-
-# Install headers preserving directory structure
-install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-  DESTINATION include
-  FILES_MATCHING
-  PATTERN "*.h")
-
-# Install parser headers (fmt_lexer.h is needed by fmt.h)
+# Install extra parser header
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/parser/fmt_lexer.h
         DESTINATION include)
 

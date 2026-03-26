@@ -7,10 +7,9 @@
 #include "CoroNet.h"
 #include "turbo_buffer.h"
 #include "memory_pool.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
-#define STB_SPRINTF_IMPLEMENTATION
-#include <stb_sprintf.h>
 #include "tlog.h"
 
 /* SNMP Client structure */
@@ -226,8 +225,8 @@ static int send_request_and_wait(
     }
 
     /* All retries exhausted */
-    stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
-                   "Request timeout after %u retries", client->retries);
+    fmt(client->error_msg, sizeof(client->error_msg),
+        "Request timeout after {} retries", client->retries);
     return SNMP_CLIENT_ERROR_TIMEOUT;
 }
 
@@ -268,10 +267,10 @@ int snmp_client_get(
     if (result == SNMP_CLIENT_OK) {
         /* Check for SNMP errors */
         if (response->pdu.error_status != SNMP_ERROR_NOERROR) {
-            stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
-                     "SNMP error: %d (index: %d)",
-                     response->pdu.error_status,
-                     response->pdu.error_index);
+            fmt(client->error_msg, sizeof(client->error_msg),
+                "SNMP error: {} (index: {})",
+                response->pdu.error_status,
+                response->pdu.error_index);
             return SNMP_CLIENT_ERROR_SNMP;
         }
     }
@@ -315,8 +314,8 @@ int snmp_client_get_next(
     if (result == SNMP_CLIENT_OK) {
         /* Check for SNMP errors */
         if (response->pdu.error_status != SNMP_ERROR_NOERROR) {
-            stbsp_snprintf(client->error_msg, sizeof(client->error_msg),
-                     "SNMP error: %d", response->pdu.error_status);
+            fmt(client->error_msg, sizeof(client->error_msg),
+                "SNMP error: {}", response->pdu.error_status);
             return SNMP_CLIENT_ERROR_SNMP;
         }
     }

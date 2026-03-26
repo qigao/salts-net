@@ -9,6 +9,7 @@
 #include "CoroNet/turbo_coro_socket.h"
 #include "object_pool.h"
 #include "turbo_str.h"
+#include <fmt.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -420,7 +421,7 @@ static int pipeline_write_resp_command(char *dest, size_t capacity, const char *
         return -1;
     }
 
-    offset += snprintf(dest + offset, capacity - (size_t)offset, "*%d\r\n", argc);
+    offset += fmt(dest + offset, capacity - (size_t)offset, "*{}\r\n", argc);
     p = copy;
     while (*p) {
         char *start;
@@ -439,7 +440,7 @@ static int pipeline_write_resp_command(char *dest, size_t capacity, const char *
         }
         len = (size_t)(p - start);
 
-        offset += snprintf(dest + offset, capacity - (size_t)offset, "$%zu\r\n", len);
+        offset += fmt(dest + offset, capacity - (size_t)offset, "${}\r\n", len);
         memcpy(dest + offset, start, len);
         offset += (int)len;
         dest[offset++] = '\r';
@@ -539,10 +540,25 @@ static char *pipeline_build_resp_commandv(int argc, const char **argv,
     }
 
     p = cmd;
-    p += sprintf(p, "*%d\r\n", argc);
+    {
+        int written = fmt(p, total, "*{}\r\n", argc);
+        if (written < 0 || (size_t)written >= total) {
+            free(cmd);
+            return NULL;
+        }
+        p += written;
+    }
     for (int i = 0; i < argc; i++) {
         size_t len = argvlen ? argvlen[i] : strlen(argv[i]);
-        p += sprintf(p, "$%zu\r\n", len);
+        {
+            size_t remaining = total - (size_t)(p - cmd);
+            int written = fmt(p, remaining, "${}\r\n", len);
+            if (written < 0 || (size_t)written >= remaining) {
+                free(cmd);
+                return NULL;
+            }
+            p += written;
+        }
         memcpy(p, argv[i], len);
         p += len;
         *p++ = '\r';
@@ -963,7 +979,7 @@ static int build_pool_url(char *buffer, size_t size, const char *host, uint16_t 
     if (!buffer || size == 0 || !host) {
         return -1;
     }
-    return snprintf(buffer, size, "tcp://%s:%u", host, port) > 0 ? 0 : -1;
+    return fmt(buffer, size, "tcp://{}:{}", host, (unsigned int)port) > 0 ? 0 : -1;
 }
 
 static coro_pool_t *create_coro_pool(coro_context_t *ctx, const redis_pool_config_t *config) {
@@ -1079,31 +1095,18 @@ static int pool_release_conn(redis_pool_t *pool, redis_pool_conn_t *conn) {
 }
 
 static char *format_command(const char *format, va_list ap) {
-    va_list ap_copy;
-    int length;
-    char *buffer;
+    tstr_t buffer;
 
     if (!format) {
         return NULL;
     }
 
-    va_copy(ap_copy, ap);
-    length = vsnprintf(NULL, 0, format, ap_copy);
-    va_end(ap_copy);
-    if (length < 0) {
-        return NULL;
-    }
-
-    buffer = malloc((size_t)length + 1);
+    buffer = tstr_new();
     if (!buffer) {
         return NULL;
     }
 
-    if (vsnprintf(buffer, (size_t)length + 1, format, ap) < 0) {
-        free(buffer);
-        return NULL;
-    }
-
+    buffer = tstr_cat_vfmt(buffer, format, ap);
     return buffer;
 }
 

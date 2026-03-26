@@ -108,6 +108,8 @@ void iris_app_reset_default(void) {
 
 void iris_app_route(iris_app_t *app, const char *method, const char *path,
                     MiddlewareArray middleware, RequestHandler handler) {
+    int result;
+
     if (!app || !method || !path || !handler) {
         TLOG_ERROR("iris_app_route: invalid parameters");
         return;
@@ -162,9 +164,74 @@ void iris_app_route(iris_app_t *app, const char *method, const char *path,
         middleware_info->middleware_count = (int)middleware.count;
     }
 
-    int result = route_trie_add(app->route_trie, method, path, handler, middleware_info);
+    result = route_trie_add(app->route_trie, method, path, handler, middleware_info);
     if (result != 0) {
         TLOG_ERROR("iris_app_route: failed to add route {:s} {:s}", method, path);
+        free_middleware_info(middleware_info);
+    }
+}
+
+void iris_app_route_stream(iris_app_t *app, const char *method, const char *path,
+                           MiddlewareArray middleware, RequestHandler handler) {
+    int result;
+
+    if (!app || !method || !path || !handler) {
+        TLOG_ERROR("iris_app_route_stream: invalid parameters");
+        return;
+    }
+
+    if (!app->route_trie) {
+        TLOG_ERROR("iris_app_route_stream: route trie not initialized");
+        return;
+    }
+
+    /* Create middleware info */
+    MiddlewareInfo *middleware_info = NULL;
+    if (app->route_trie) {
+        middleware_info = (MiddlewareInfo *)mem_alloc(&app->route_trie->param_arena,
+                                                             sizeof(MiddlewareInfo));
+        if (middleware_info) {
+            memset(middleware_info, 0, sizeof(MiddlewareInfo));
+            middleware_info->arena_owned = 1;
+        }
+    }
+    if (!middleware_info) {
+        middleware_info = calloc(1, sizeof(MiddlewareInfo));
+    }
+    if (!middleware_info) {
+        TLOG_ERROR("iris_app_route_stream: memory allocation failed");
+        return;
+    }
+
+    middleware_info->handler = handler;
+
+    if (middleware.count > 0 && middleware.handlers) {
+        if (middleware_info->arena_owned) {
+            middleware_info->middleware =
+                (MiddlewareHandler *)mem_alloc(&app->route_trie->param_arena,
+                                                      sizeof(MiddlewareHandler) * middleware.count);
+            if (!middleware_info->middleware) {
+                TLOG_ERROR("iris_app_route_stream: middleware allocation failed");
+                return;
+            }
+        } else if (middleware.count <= IRIS_INLINE_ROUTE_MW_CAPACITY) {
+            middleware_info->middleware = middleware_info->middleware_inline;
+        } else {
+            middleware_info->middleware = malloc(sizeof(MiddlewareHandler) * middleware.count);
+            if (!middleware_info->middleware) {
+                TLOG_ERROR("iris_app_route_stream: middleware allocation failed");
+                free(middleware_info);
+                return;
+            }
+        }
+        memcpy(middleware_info->middleware, middleware.handlers,
+               sizeof(MiddlewareHandler) * middleware.count);
+        middleware_info->middleware_count = (int)middleware.count;
+    }
+
+    result = route_trie_add_stream(app->route_trie, method, path, handler, middleware_info);
+    if (result != 0) {
+        TLOG_ERROR("iris_app_route_stream: failed to add route {:s} {:s}", method, path);
         free_middleware_info(middleware_info);
     }
 }
@@ -273,6 +340,9 @@ void iris_app_set_security_limits(iris_app_t *app, const iris_security_limits_t 
 }
 
 int iris_app_listen(iris_app_t *app, unsigned short port) {
+    if (!app) {
+        app = iris_app_default();
+    }
     if (!app) return -1;
     if (app->shutdown_hook) {
         shutdown_hook(app->shutdown_hook);

@@ -18,6 +18,7 @@
 #include "toonc.h"
 #include "toml.h"
 #include "xml/cxparser.h"
+#include <fmt.h>
 
 /* JSON */
 int turbo_parse_json(const uint8_t *data, size_t len, void *out) {
@@ -1016,11 +1017,11 @@ void turbo_cmd_parse(turbo_cmd_parser_t *parser, int argc, char **argv, bool col
   
   char app_ver[256];
   if (parser->app_name && parser->version) {
-    snprintf(app_ver, sizeof(app_ver), "%s %s", parser->app_name, parser->version);
+    fmt(app_ver, sizeof(app_ver), "{} {}", parser->app_name, parser->version);
   } else if (parser->app_name) {
-    snprintf(app_ver, sizeof(app_ver), "%s", parser->app_name);
+    fmt(app_ver, sizeof(app_ver), "{}", parser->app_name);
   } else {
-    snprintf(app_ver, sizeof(app_ver), "Application");
+    fmt(app_ver, sizeof(app_ver), "Application");
   }
   
   cmd_arger_parse(parser->optional_args, parser->optional_count,
@@ -1033,11 +1034,11 @@ int turbo_cmd_parse_subcommand(turbo_cmd_parser_t *parser, int argc, char **argv
   
   char app_ver[256];
   if (parser->app_name && parser->version) {
-    snprintf(app_ver, sizeof(app_ver), "%s %s", parser->app_name, parser->version);
+    fmt(app_ver, sizeof(app_ver), "{} {}", parser->app_name, parser->version);
   } else if (parser->app_name) {
-    snprintf(app_ver, sizeof(app_ver), "%s", parser->app_name);
+    fmt(app_ver, sizeof(app_ver), "{}", parser->app_name);
   } else {
-    snprintf(app_ver, sizeof(app_ver), "Application");
+    fmt(app_ver, sizeof(app_ver), "Application");
   }
 
   CmdArgerSubCommand *subs = (CmdArgerSubCommand *)calloc(parser->subcommand_count, sizeof(CmdArgerSubCommand));
@@ -1064,11 +1065,11 @@ void turbo_cmd_show_help(turbo_cmd_parser_t *parser, bool colors) {
   
   char app_ver[256];
   if (parser->app_name && parser->version) {
-    snprintf(app_ver, sizeof(app_ver), "%s %s", parser->app_name, parser->version);
+    fmt(app_ver, sizeof(app_ver), "{} {}", parser->app_name, parser->version);
   } else if (parser->app_name) {
-    snprintf(app_ver, sizeof(app_ver), "%s", parser->app_name);
+    fmt(app_ver, sizeof(app_ver), "{}", parser->app_name);
   } else {
-    snprintf(app_ver, sizeof(app_ver), "Application");
+    fmt(app_ver, sizeof(app_ver), "Application");
   }
   
   cmd_arger_show_help_and_exit(parser->optional_args, parser->optional_count,

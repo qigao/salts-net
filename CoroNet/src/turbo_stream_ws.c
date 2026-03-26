@@ -6,6 +6,7 @@
 #include "websocket_frame_parser.h"
 #include "websocket_handshake_parser.h"
 #include "base64_utils.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -148,15 +149,15 @@ static void ws_on_tcp_close(void *handle) {
 
 static int ws_send_handshake(ws_state_t *st) {
   char buf[2048];
-  int  len = snprintf(
+  int  len = fmt(
       buf, sizeof(buf),
-      "GET %s HTTP/1.1\r\n"
-      "Host: %s\r\n"
+      "GET {} HTTP/1.1\r\n"
+      "Host: {}\r\n"
       "Upgrade: websocket\r\n"
       "Connection: Upgrade\r\n"
-      "Sec-WebSocket-Key: %s\r\n"
+      "Sec-WebSocket-Key: {}\r\n"
       "Sec-WebSocket-Version: 13\r\n"
-      "Origin: https://%s\r\n"
+      "Origin: https://{}\r\n"
       "\r\n",
       st->path[0] ? st->path : "/",
       st->host,
@@ -170,7 +171,7 @@ static int ws_send_handshake(ws_state_t *st) {
 
 static int ws_validate_accept_key(const char *client_b64, const char *server_b64) {
   char combined[128];
-  snprintf(combined, sizeof(combined), "%s%s", client_b64, WS_GUID);
+  fmt(combined, sizeof(combined), "{}{}", client_b64, WS_GUID);
 
   sha1_context_t sha;
   uint8_t digest[20];

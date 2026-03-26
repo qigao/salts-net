@@ -4,7 +4,7 @@
 #include <ctype.h>
 #include "cookie.h"
 #include "security.h"
-#include <stb_sprintf.h>
+#include <turbo_str.h>
 #include "tlog.h"
 char *get_cookie(Req *req, const char *name)
 {
@@ -112,93 +112,37 @@ void set_cookie(Res *res, const char *name, const char *value, cookie_options_t 
     if (!path)
         path = "/";
 
-    int needed = stbsp_snprintf(NULL, 0, "%s=%s", name, value);
-
-    if (max_age >= 0)
-    {
-        needed += stbsp_snprintf(NULL, 0, "; Max-Age=%d", max_age);
-    }
-
-    needed += stbsp_snprintf(NULL, 0, "; Path=%s", path);
-
-    if (same_site && strlen(same_site) > 0)
-    {
-        needed += stbsp_snprintf(NULL, 0, "; SameSite=%s", same_site);
-    }
-
-    if (http_only)
-    {
-        needed += (int)strlen("; HttpOnly");
-    }
-
-    if (secure)
-    {
-        needed += (int)strlen("; Secure");
-    }
-
-    if (needed < 0)
-    {
-        TLOG_ERROR("Cookie formatting error");
-        return;
-    }
-
-    char *cookie_val = malloc((size_t)needed + 1);
+    tstr_t cookie_val = tstr_new();
     if (!cookie_val)
     {
         perror("malloc for cookie_val");
         return;
     }
 
-    int written = stbsp_snprintf(cookie_val, (size_t)needed + 1, "%s=%s", name, value);
-    if (written < 0)
-    {
-        TLOG_ERROR("Cookie formatting error");
-        free(cookie_val);
-        return;
-    }
+    cookie_val = tstr_cat_fmt(cookie_val, "%s=%s", name, value);
 
     if (max_age >= 0)
     {
-        int ret = stbsp_snprintf(cookie_val + written, (size_t)needed + 1 - written, "; Max-Age=%d", max_age);
-        if (ret < 0)
-            goto error;
-        written += ret;
+        cookie_val = tstr_cat_fmt(cookie_val, "; Max-Age=%d", max_age);
     }
 
-    int ret = stbsp_snprintf(cookie_val + written, (size_t)needed + 1 - written, "; Path=%s", path);
-    if (ret < 0)
-        goto error;
-    written += ret;
+    cookie_val = tstr_cat_fmt(cookie_val, "; Path=%s", path);
 
     if (same_site && strlen(same_site) > 0)
     {
-        ret = stbsp_snprintf(cookie_val + written, (size_t)needed + 1 - written, "; SameSite=%s", same_site);
-        if (ret < 0)
-            goto error;
-        written += ret;
+        cookie_val = tstr_cat_fmt(cookie_val, "; SameSite=%s", same_site);
     }
 
     if (http_only)
     {
-        ret = stbsp_snprintf(cookie_val + written, (size_t)needed + 1 - written, "; HttpOnly");
-        if (ret < 0)
-            goto error;
-        written += ret;
+        cookie_val = tstr_cat(cookie_val, "; HttpOnly");
     }
 
     if (secure)
     {
-        ret = stbsp_snprintf(cookie_val + written, (size_t)needed + 1 - written, "; Secure");
-        if (ret < 0)
-            goto error;
-        written += ret;
+        cookie_val = tstr_cat(cookie_val, "; Secure");
     }
 
     set_header(res, "Set-Cookie", cookie_val);
-    free(cookie_val);
-    return;
-
-error:
-    TLOG_ERROR("Cookie formatting error during construction");
-    free(cookie_val);
+    tstr_free(cookie_val);
 }

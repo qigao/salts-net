@@ -20,6 +20,7 @@
 #include "turbo_str.h"
 #include "tlog.h"
 #include "turbo_mdns.h"
+#include <fmt.h>
 #include <ctype.h>
 #include <stb_sprintf.h>
 #include <stdio.h>
@@ -95,7 +96,7 @@ static void generate_mdns_hostname(char *buf, size_t buf_len) {
   }
   uuid[36] = '\0';
 
-  stbsp_snprintf(buf, (int)buf_len, "%s.local", uuid);
+  fmt(buf, buf_len, "{}.local", uuid);
 }
 
 static inline uint16_t read_u16_be(const uint8_t *ptr) {
@@ -342,8 +343,7 @@ static int gather_host_candidates_win32(turbo_ice_agent_t *agent) {
         cand->port = 0; /* Will be assigned when socket is created */
         cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
         cand->is_local = 1;
-        stbsp_snprintf(cand->foundation, sizeof(cand->foundation), "%d",
-                       ++agent->foundation_counter);
+        fmt(cand->foundation, sizeof(cand->foundation), "{}", ++agent->foundation_counter);
         generate_candidate_id(cand->id);
 
         /* Generate mDNS hostname for privacy if enabled */
@@ -402,7 +402,7 @@ static int gather_host_candidates_unix(turbo_ice_agent_t *agent) {
       cand->port = 0;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
       cand->is_local = 1;
-      stbsp_snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
+      fmt(cand->foundation, sizeof(cand->foundation), "{}", ++agent->foundation_counter);
       generate_candidate_id(cand->id);
 
       /* Generate mDNS hostname for privacy if enabled */
@@ -482,7 +482,7 @@ static void gather_srflx_candidates(turbo_ice_agent_t *agent) {
       cand->port = mapped.port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX, 65534, 1);
       cand->is_local = 1;
-      stbsp_snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
+      fmt(cand->foundation, sizeof(cand->foundation), "{}", ++agent->foundation_counter);
       generate_candidate_id(cand->id);
 
       if (agent->local_candidate_count > 0) {
@@ -565,7 +565,7 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
       cand->port = alloc.relayed_port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_RELAY, 65533, 1);
       cand->is_local = 1;
-      stbsp_snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
+      fmt(cand->foundation, sizeof(cand->foundation), "{}", ++agent->foundation_counter);
       generate_candidate_id(cand->id);
 
       strncpy(cand->related_ip, alloc.mapped_ip, sizeof(cand->related_ip) - 1);
@@ -843,8 +843,7 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
 
   /* Validate username: should be "local_ufrag:remote_ufrag" */
   char expected_username[256];
-  stbsp_snprintf(expected_username, sizeof(expected_username), "%s:%s", agent->local_ufrag,
-                 agent->remote_ufrag);
+  fmt(expected_username, sizeof(expected_username), "{}:{}", agent->local_ufrag, agent->remote_ufrag);
   if (strcmp(username, expected_username) != 0) {
     return; /* Username mismatch */
   }
@@ -1456,14 +1455,14 @@ int ice_candidate_to_sdp(const ice_candidate_t *candidate, char *buf, size_t buf
   /* Use mDNS hostname for privacy if available (host candidates only) */
   const char *address = (candidate->mdns_name[0] != '\0') ? candidate->mdns_name : candidate->ip;
 
-  int len = stbsp_snprintf(buf, (int)buf_len, "candidate:%s %d %s %u %s %u typ %s",
-                           candidate->foundation, candidate->component_id, transport_str,
-                           candidate->priority, address, candidate->port, type_str);
+  int len = fmt(buf, buf_len, "candidate:{} {} {} {} {} {} typ {}", candidate->foundation,
+                (unsigned int)candidate->component_id, transport_str, candidate->priority, address,
+                (unsigned int)candidate->port, type_str);
 
   /* Add raddr/rport if present */
-  if (candidate->related_ip[0] != '\0') {
-    len += stbsp_snprintf(buf + len, (int)(buf_len - len), " raddr %s rport %u", candidate->related_ip,
-                          candidate->related_port);
+  if (candidate->related_ip[0] != '\0' && (size_t)len < buf_len) {
+    len += fmt(buf + len, buf_len - (size_t)len, " raddr {} rport {}", candidate->related_ip,
+               (unsigned int)candidate->related_port);
   }
 
   return len;

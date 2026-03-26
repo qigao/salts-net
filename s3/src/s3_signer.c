@@ -7,8 +7,9 @@
 
 static void hex_encode(const unsigned char* data, size_t len, char* out) {
     for (size_t i = 0; i < len; i++) {
-        sprintf(out + (i * 2), "%02x", data[i]);
+        fmt(out + (i * 2), 3, "{:02x}", data[i]);
     }
+    out[len * 2] = '\0';
 }
 
 tstr_t s3_signer_sha256_hex(const char* data, size_t len) {

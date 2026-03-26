@@ -39,6 +39,9 @@
         {
             "name": "win-dev-user",
             "displayName": "Developer Build (Windows, User)",
+            "cacheVariables": {
+                "ENABLE_SANITIZER_ADDRESS": "ON"
+            },
             "inherits": [
                 "base-win-dev-user",
                 "win-paths"
@@ -51,22 +54,6 @@
                 "base-win-release-user",
                 "win-paths"
             ]
-        },
-        {
-            "name": "win-dev-user-ASan",
-            "displayName": "Developer Build (Windows, ASAN, User)",
-            "inherits": [
-                "base-win-dev-user-ASan",
-                "win-paths"
-            ]
-        },
-        {
-            "name": "linux-dev-user",
-            "displayName": "Developer Build (Linux, User)",
-            "inherits": [
-                "base-linux-dev-user",
-                "linux-paths"
-            ]
         }
     ],
     "buildPresets": [
@@ -77,10 +64,30 @@
         {
             "name": "win-release-user",
             "configurePreset": "win-release-user"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "win-dev-user",
+            "configurePreset": "win-dev-user",
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": false
+            },
+            "output": {
+                "outputOnFailure": true
+            }
         },
         {
-            "name": "win-dev-user-ASan",
-            "configurePreset": "win-dev-user-ASan"
+            "name": "win-release-user",
+            "configurePreset": "win-release-user",
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": false
+            },
+            "output": {
+                "outputOnFailure": true
+            }
         }
     ]
 }

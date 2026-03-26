@@ -5,6 +5,7 @@
 #include "mime_rfc2231.h"
 #include "mime_content_disposition.h"
 #include "base64_utils.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,15 +22,13 @@
 static char *generate_message_id(const char *domain) {
   char buf[256];
   time_t now = time(NULL);
-  snprintf(buf, sizeof(buf), "<%ld.%d@%s>",
-           (long)now, rand(), domain ? domain : "localhost");
+  fmt(buf, sizeof(buf), "<{}.{}@{}>", (long)now, rand(), domain ? domain : "localhost");
   return strdup(buf);
 }
 
 static char *generate_boundary(void) {
   char buf[128];
-  snprintf(buf, sizeof(buf), "----=_Part_%08x_%08x",
-           (unsigned)time(NULL), (unsigned)rand());
+  fmt(buf, sizeof(buf), "----=_Part_{:08x}_{:08x}", (unsigned)time(NULL), (unsigned)rand());
   return strdup(buf);
 }
 
@@ -367,9 +366,8 @@ static char *format_date_rfc2822(void) {
   const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-  snprintf(buf, sizeof(buf), "%s, %02d %s %04d %02d:%02d:%02d +0000",
-           days[tm->tm_wday], tm->tm_mday, months[tm->tm_mon],
-           tm->tm_year + 1900, tm->tm_hour, tm->tm_min, tm->tm_sec);
+  fmt(buf, sizeof(buf), "{}, {:02d} {} {:04d} {:02d}:{:02d}:{:02d} +0000", days[tm->tm_wday],
+      tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900, tm->tm_hour, tm->tm_min, tm->tm_sec);
 
   return buf;
 }

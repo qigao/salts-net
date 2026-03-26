@@ -1,13 +1,13 @@
 /**
  * @file json_parser.c
- * @brief JSON Parser Implementation with MemoryPool Integration
+ * @brief JSON Parser Implementation with object_pool-backed arenas
  */
 
 #include "json_parser.h"
 #include "json_grammar_gen.h"
 #include "json_lexer.h"
 #include "json_types.h"
-#include <stb_sprintf.h>
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,27 +16,118 @@
 static char g_error[MAX_ERROR_LEN] = {0};
 
 /* ============================================================================
- * Arena Allocator using MemoryPool
+ * Arena Allocator using object pools + blob chunks
  * ============================================================================ */
 
-static json_pool_node_t *json_pool_node_create(size_t size) {
-  json_pool_node_t *node = (json_pool_node_t *)malloc(sizeof(json_pool_node_t));
-  if (!node)
+static json_blob_chunk_t *json_blob_chunk_create(size_t size) {
+  json_blob_chunk_t *chunk = (json_blob_chunk_t *)malloc(sizeof(json_blob_chunk_t));
+  if (!chunk)
     return NULL;
 
-  node->pool = pool_create(size);
-  if (!node->pool) {
-    free(node);
+  chunk->data = (unsigned char *)malloc(size);
+  if (!chunk->data) {
+    free(chunk);
     return NULL;
   }
-  node->next = NULL;
-  return node;
+
+  chunk->capacity = size;
+  chunk->used = 0;
+  chunk->next = NULL;
+  return chunk;
+}
+
+static void json_blob_chunk_destroy(json_blob_chunk_t *chunk) {
+  if (!chunk)
+    return;
+  free(chunk->data);
+  free(chunk);
+}
+
+static object_pool_t *json_object_pool_create(size_t object_size, size_t hint_size) {
+  size_t initial_capacity = hint_size / object_size;
+  if (initial_capacity < 64)
+    initial_capacity = 64;
+  if (initial_capacity > 65536)
+    initial_capacity = 65536;
+
+  object_pool_config_t config = {
+      .object_size = object_size,
+      .initial_capacity = initial_capacity,
+      .max_capacity = 0,
+      .zero_on_alloc = true,
+  };
+  return object_pool_create(&config);
+}
+
+static void json_arena_destroy_self(json_arena_t *arena) {
+  json_blob_chunk_t *chunk = arena->blob_head;
+  while (chunk) {
+    json_blob_chunk_t *next = chunk->next;
+    json_blob_chunk_destroy(chunk);
+    chunk = next;
+  }
+
+  object_pool_destroy(arena->value_pool);
+  object_pool_destroy(arena->pair_pool);
+  object_pool_destroy(arena->element_pool);
+  free(arena);
+}
+
+static void json_arena_adopt(json_arena_t *dst, json_arena_t *src) {
+  if (!dst || !src || dst == src || src->parent == dst)
+    return;
+  if (src->parent)
+    return;
+
+  src->adopted_next = dst->adopted_head;
+  src->parent = dst;
+  dst->adopted_head = src;
+}
+
+static void *json_blob_alloc(json_arena_t *arena, size_t size) {
+  if (!arena || size == 0)
+    return NULL;
+
+  size = (size + 7) & ~((size_t)7);
+
+  if (!arena->blob_current || arena->blob_current->used + size > arena->blob_current->capacity) {
+    size_t new_size = arena->initial_size;
+    if (new_size < size)
+      new_size = size;
+    while (new_size < size && new_size < JSON_POOL_MAX_SIZE / 2) {
+      new_size *= 2;
+    }
+    if (new_size > JSON_POOL_MAX_SIZE)
+      new_size = JSON_POOL_MAX_SIZE;
+    if (new_size < size)
+      new_size = size;
+
+    json_blob_chunk_t *chunk = json_blob_chunk_create(new_size);
+    if (!chunk)
+      return NULL;
+
+    if (arena->blob_current) {
+      arena->blob_current->next = chunk;
+    } else {
+      arena->blob_head = chunk;
+    }
+    arena->blob_current = chunk;
+    arena->initial_size = new_size;
+  }
+
+  void *ptr = arena->blob_current->data + arena->blob_current->used;
+  arena->blob_current->used += size;
+  arena->blob_used += size;
+  if (arena->blob_used > arena->blob_peak) {
+    arena->blob_peak = arena->blob_used;
+  }
+  return ptr;
 }
 
 json_arena_t *json_arena_create(void) { return json_arena_create_sized(JSON_POOL_MIN_SIZE); }
 
 json_arena_t *json_arena_create_sized(size_t hint_size) {
-  json_arena_t *arena = (json_arena_t *)malloc(sizeof(json_arena_t));
+  json_arena_t *arena = (json_arena_t *)calloc(1, sizeof(json_arena_t));
   if (!arena)
     return NULL;
 
@@ -46,38 +137,17 @@ json_arena_t *json_arena_create_sized(size_t hint_size) {
   if (hint_size > JSON_POOL_MAX_SIZE)
     hint_size = JSON_POOL_MAX_SIZE;
 
-  arena->head = json_pool_node_create(hint_size);
-  if (!arena->head) {
-    free(arena);
+  arena->value_pool = json_object_pool_create(sizeof(json_value_t), hint_size);
+  arena->pair_pool = json_object_pool_create(sizeof(json_pair_t), hint_size);
+  arena->element_pool = json_object_pool_create(sizeof(json_element_t), hint_size);
+  arena->blob_head = json_blob_chunk_create(hint_size);
+  if (!arena->value_pool || !arena->pair_pool || !arena->element_pool || !arena->blob_head) {
+    json_arena_destroy_self(arena);
     return NULL;
   }
-  arena->current = arena->head;
+
+  arena->blob_current = arena->blob_head;
   arena->initial_size = hint_size;
-  arena->external = 0;
-  return arena;
-}
-
-json_arena_t *json_arena_create_with_pool(MemoryPool *pool) {
-  if (!pool)
-    return NULL;
-
-  json_arena_t *arena = (json_arena_t *)malloc(sizeof(json_arena_t));
-  if (!arena)
-    return NULL;
-
-  json_pool_node_t *node = (json_pool_node_t *)malloc(sizeof(json_pool_node_t));
-  if (!node) {
-    free(arena);
-    return NULL;
-  }
-
-  node->pool = pool;
-  node->next = NULL;
-
-  arena->head = node;
-  arena->current = node;
-  arena->initial_size = pool->size;
-  arena->external = 1; // Don't destroy external pool
   return arena;
 }
 
@@ -85,30 +155,17 @@ void *json_arena_alloc(json_arena_t *arena, size_t size) {
   if (!arena)
     return NULL;
 
-  // Align to 8 bytes
-  size = (size + 7) & ~7;
+  if (size == sizeof(json_value_t)) {
+    return object_pool_alloc(arena->value_pool);
+  }
+  if (size == sizeof(json_pair_t)) {
+    return object_pool_alloc(arena->pair_pool);
+  }
+  if (size == sizeof(json_element_t)) {
+    return object_pool_alloc(arena->element_pool);
+  }
 
-  // Try current pool
-  void *ptr = pool_alloc(arena->current->pool, size);
-  if (ptr)
-    return ptr;
-
-  // Current pool exhausted - create new pool with growth
-  size_t new_size = arena->initial_size * 2;
-  if (new_size < size)
-    new_size = size + JSON_POOL_MIN_SIZE;
-  if (new_size > JSON_POOL_MAX_SIZE)
-    new_size = JSON_POOL_MAX_SIZE;
-
-  json_pool_node_t *node = json_pool_node_create(new_size);
-  if (!node)
-    return NULL;
-
-  arena->current->next = node;
-  arena->current = node;
-  arena->initial_size = new_size; // Grow for next time
-
-  return pool_alloc(node->pool, size);
+  return json_blob_alloc(arena, size);
 }
 
 char *json_arena_strdup(json_arena_t *arena, const char *str, size_t len) {
@@ -124,24 +181,34 @@ void json_arena_free(json_arena_t *arena) {
   if (!arena)
     return;
 
-  json_pool_node_t *node = arena->head;
-  while (node) {
-    json_pool_node_t *next = node->next;
-    if (!arena->external) {
-      pool_destroy(node->pool);
-    }
-    free(node);
-    node = next;
+  if (arena->parent) {
+    json_arena_free(arena->parent);
+    return;
   }
-  free(arena);
+
+  json_arena_t *child = arena->adopted_head;
+  while (child) {
+    json_arena_t *next = child->adopted_next;
+    child->parent = NULL;
+    child->adopted_next = NULL;
+    json_arena_free(child);
+    child = next;
+  }
+
+  json_arena_destroy_self(arena);
 }
 
 size_t json_arena_used(json_arena_t *arena) {
   if (!arena)
     return 0;
-  size_t total = 0;
-  for (json_pool_node_t *n = arena->head; n; n = n->next) {
-    total += pool_get_used(n->pool);
+
+  size_t total = arena->blob_used;
+  total += object_pool_allocated_count(arena->value_pool) * sizeof(json_value_t);
+  total += object_pool_allocated_count(arena->pair_pool) * sizeof(json_pair_t);
+  total += object_pool_allocated_count(arena->element_pool) * sizeof(json_element_t);
+
+  for (json_arena_t *child = arena->adopted_head; child; child = child->adopted_next) {
+    total += json_arena_used(child);
   }
   return total;
 }
@@ -149,9 +216,14 @@ size_t json_arena_used(json_arena_t *arena) {
 size_t json_arena_peak(json_arena_t *arena) {
   if (!arena)
     return 0;
-  size_t total = 0;
-  for (json_pool_node_t *n = arena->head; n; n = n->next) {
-    total += pool_get_peak(n->pool);
+
+  size_t total = arena->blob_peak;
+  total += object_pool_peak_usage(arena->value_pool) * sizeof(json_value_t);
+  total += object_pool_peak_usage(arena->pair_pool) * sizeof(json_pair_t);
+  total += object_pool_peak_usage(arena->element_pool) * sizeof(json_element_t);
+
+  for (json_arena_t *child = arena->adopted_head; child; child = child->adopted_next) {
+    total += json_arena_peak(child);
   }
   return total;
 }
@@ -272,7 +344,7 @@ void JsonParse(void *parser, int tokenType, json_token_t token, json_parse_ctx_t
 
 json_value_t *json_parse(const char *content, size_t len) {
   if (!content || len == 0) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Empty input");
+    fmt(g_error, sizeof(g_error), "Empty input");
     return NULL;
   }
 
@@ -281,14 +353,14 @@ json_value_t *json_parse(const char *content, size_t len) {
   size_t estimated = len < JSON_POOL_MIN_SIZE ? JSON_POOL_MIN_SIZE : len;
   json_arena_t *arena = json_arena_create_sized(estimated);
   if (!arena) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Failed to create arena");
+    fmt(g_error, sizeof(g_error), "Failed to create arena");
     return NULL;
   }
 
   json_lexer_t lexer;
   char *terminated_content = json_arena_alloc(arena, len + 1);
   if (!terminated_content) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Failed to allocate buffer");
+    fmt(g_error, sizeof(g_error), "Failed to allocate buffer");
     json_arena_free(arena);
     return NULL;
   }
@@ -299,7 +371,7 @@ json_value_t *json_parse(const char *content, size_t len) {
 
   void *parser = JsonParseAlloc(malloc);
   if (!parser) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Failed to allocate parser");
+    fmt(g_error, sizeof(g_error), "Failed to allocate parser");
     json_arena_free(arena);
     return NULL;
   }
@@ -313,7 +385,7 @@ json_value_t *json_parse(const char *content, size_t len) {
   while ((result = json_lexer_next(&lexer, &token)) > 0) {
     JsonParse(parser, token.type, token, &ctx);
     if (ctx.error) {
-      stbsp_snprintf(g_error, sizeof(g_error), "%s", ctx.error_msg);
+      fmt(g_error, sizeof(g_error), "{}", ctx.error_msg);
       JsonParseFree(parser, free);
       json_arena_free(arena);
       return NULL;
@@ -321,7 +393,7 @@ json_value_t *json_parse(const char *content, size_t len) {
   }
 
   if (result < 0) {
-    stbsp_snprintf(g_error, sizeof(g_error), "%s", lexer.error);
+    fmt(g_error, sizeof(g_error), "{}", lexer.error);
     JsonParseFree(parser, free);
     json_arena_free(arena);
     return NULL;
@@ -331,7 +403,7 @@ json_value_t *json_parse(const char *content, size_t len) {
   JsonParseFree(parser, free);
 
   if (ctx.error) {
-    stbsp_snprintf(g_error, sizeof(g_error), "%s", ctx.error_msg);
+    fmt(g_error, sizeof(g_error), "{}", ctx.error_msg);
     json_arena_free(arena);
     return NULL;
   }
@@ -342,13 +414,13 @@ json_value_t *json_parse(const char *content, size_t len) {
 
 json_value_t *json_parse_file(const char *filename) {
   if (!filename) {
-    stbsp_snprintf(g_error, sizeof(g_error), "NULL filename");
+    fmt(g_error, sizeof(g_error), "NULL filename");
     return NULL;
   }
 
   FILE *f = fopen(filename, "rb");
   if (!f) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Cannot open file: %s", filename);
+    fmt(g_error, sizeof(g_error), "Cannot open file: {}", filename);
     return NULL;
   }
 
@@ -358,14 +430,14 @@ json_value_t *json_parse_file(const char *filename) {
 
   if (size <= 0 || size > 100 * 1024 * 1024) {
     fclose(f);
-    stbsp_snprintf(g_error, sizeof(g_error), "Invalid file size: %ld", size);
+    fmt(g_error, sizeof(g_error), "Invalid file size: {}", size);
     return NULL;
   }
 
   char *buf = (char *)malloc((size_t)size + 1);
   if (!buf) {
     fclose(f);
-    stbsp_snprintf(g_error, sizeof(g_error), "Memory allocation failed");
+    fmt(g_error, sizeof(g_error), "Memory allocation failed");
     return NULL;
   }
 
@@ -374,7 +446,7 @@ json_value_t *json_parse_file(const char *filename) {
 
   if (read != (size_t)size) {
     free(buf);
-    stbsp_snprintf(g_error, sizeof(g_error), "Failed to read file");
+    fmt(g_error, sizeof(g_error), "Failed to read file");
     return NULL;
   }
 
@@ -595,7 +667,7 @@ static bool json_serialize_value(const json_value_t *v, json_buffer_t *buf) {
                             : json_buffer_append(buf, "false", 5);
   case JSON_NUMBER: {
     char tmp[64];
-    int len = stbsp_snprintf(tmp, sizeof(tmp), "%g", v->data.num_val);
+    int len = fmt(tmp, sizeof(tmp), "{}", v->data.num_val);
     return json_buffer_append(buf, tmp, len);
   }
   case JSON_STRING: {
@@ -638,7 +710,7 @@ static bool json_serialize_value(const json_value_t *v, json_buffer_t *buf) {
       default:
         if ((unsigned char)c < 32) {
           char tmp[8];
-          int tlen = stbsp_snprintf(tmp, sizeof(tmp), "\\u%04x", (int)c);
+          int tlen = fmt(tmp, sizeof(tmp), "\\u{:04x}", (int)c);
           if (!json_buffer_append(buf, tmp, tlen))
             return false;
         } else {
@@ -725,7 +797,7 @@ static bool json_serialize_pretty_value_ex(const json_value_t *v, json_buffer_t 
                             : json_buffer_append(buf, "false", 5);
   case JSON_NUMBER: {
     char tmp[64];
-    int len = stbsp_snprintf(tmp, sizeof(tmp), "%g", v->data.num_val);
+    int len = fmt(tmp, sizeof(tmp), "{}", v->data.num_val);
     return json_buffer_append(buf, tmp, len);
   }
   case JSON_STRING: {
@@ -874,29 +946,16 @@ json_value_t *json_create_null(void) {
 static void json_transfer_to_arena(json_arena_t *dst, json_value_t *val) {
   if (!dst || !val || val->arena == dst)
     return;
+
+  json_arena_adopt(dst, val->arena);
 }
 
 void json_object_add(json_value_t *obj, const char *key, json_value_t *val) {
   if (!obj || obj->type != JSON_OBJECT || !key || !val)
     return;
 
-  // Transfer value to object's arena if they differ
-  // Since we don't have a full tree-copy yet, we'll just link the pools
   if (val->arena != obj->arena) {
-    json_pool_node_t *node = val->arena->head;
-    while (node) {
-      json_pool_node_t *next = node->next;
-      // Link this pool into our arena
-      node->next = obj->arena->head;
-      obj->arena->head = node;
-      node = next;
-    }
-    // val->arena is now empty of pools but the struct itself remains
-    // This is a bit hacky but works with the current pool system
-    val->arena->head = NULL;
-    val->arena->current = NULL;
-    json_arena_free(val->arena);
-    val->arena = obj->arena;
+    json_transfer_to_arena(obj->arena, val);
   }
 
   json_object_set_arena(obj->arena, obj, key, strlen(key), val);
@@ -907,17 +966,7 @@ void json_array_add(json_value_t *arr, json_value_t *val) {
     return;
 
   if (val->arena != arr->arena) {
-    json_pool_node_t *node = val->arena->head;
-    while (node) {
-      json_pool_node_t *next = node->next;
-      node->next = arr->arena->head;
-      arr->arena->head = node;
-      node = next;
-    }
-    val->arena->head = NULL;
-    val->arena->current = NULL;
-    json_arena_free(val->arena);
-    val->arena = arr->arena;
+    json_transfer_to_arena(arr->arena, val);
   }
 
   json_array_append_arena(arr->arena, arr, val);
@@ -960,7 +1009,6 @@ void json_object_set_null(json_value_t *obj, const char *key) {
  * ============================================================================ */
 
 #include "json_grammar_gen.h"
-#include <stb_sprintf.h>
 
 typedef enum {
   SAX_STATE_VALUE,
@@ -1052,7 +1100,7 @@ static char *sax_unescape(const char *src, size_t len, size_t *out_len, char *bu
 
 int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *handler, void *ctx) {
   if (!content || len == 0 || !handler) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Invalid arguments");
+    fmt(g_error, sizeof(g_error), "Invalid arguments");
     return -1;
   }
 
@@ -1125,7 +1173,7 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
         if (handler->on_object_start && handler->on_object_start(ctx) != 0)
           return -1;
         if (depth >= SAX_MAX_DEPTH - 1) {
-          stbsp_snprintf(g_error, sizeof(g_error), "Max depth exceeded");
+          fmt(g_error, sizeof(g_error), "Max depth exceeded");
           return -1;
         }
         state_stack[depth++] = (state == SAX_STATE_OBJECT_VALUE)  ? SAX_STATE_OBJECT_COMMA
@@ -1138,7 +1186,7 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
         if (handler->on_array_start && handler->on_array_start(ctx) != 0)
           return -1;
         if (depth >= SAX_MAX_DEPTH - 1) {
-          stbsp_snprintf(g_error, sizeof(g_error), "Max depth exceeded");
+          fmt(g_error, sizeof(g_error), "Max depth exceeded");
           return -1;
         }
         state_stack[depth++] = (state == SAX_STATE_OBJECT_VALUE)  ? SAX_STATE_OBJECT_COMMA
@@ -1153,20 +1201,20 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
             return -1;
           state = (depth > 0) ? state_stack[--depth] : SAX_STATE_VALUE;
         } else {
-          stbsp_snprintf(g_error, sizeof(g_error), "Unexpected ]");
+          fmt(g_error, sizeof(g_error), "Unexpected ]");
           return -1;
         }
         break;
 
       case JSON_TOKEN_RBRACE:
         if (state == SAX_STATE_OBJECT_VALUE) {
-          stbsp_snprintf(g_error, sizeof(g_error), "Expected value before }");
+          fmt(g_error, sizeof(g_error), "Expected value before }}");
           return -1;
         }
         break;
 
       default:
-        stbsp_snprintf(g_error, sizeof(g_error), "Unexpected token in value context");
+        fmt(g_error, sizeof(g_error), "Unexpected token in value context");
         return -1;
       }
       break;
@@ -1183,7 +1231,7 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
           return -1;
         state = (depth > 0) ? state_stack[--depth] : SAX_STATE_VALUE;
       } else {
-        stbsp_snprintf(g_error, sizeof(g_error), "Expected string key or }");
+        fmt(g_error, sizeof(g_error), "Expected string key or }}");
         return -1;
       }
       break;
@@ -1192,7 +1240,7 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
       if (token.type == JSON_TOKEN_COLON) {
         state = SAX_STATE_OBJECT_VALUE;
       } else {
-        stbsp_snprintf(g_error, sizeof(g_error), "Expected :");
+        fmt(g_error, sizeof(g_error), "Expected :");
         return -1;
       }
       break;
@@ -1205,7 +1253,7 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
           return -1;
         state = (depth > 0) ? state_stack[--depth] : SAX_STATE_VALUE;
       } else {
-        stbsp_snprintf(g_error, sizeof(g_error), "Expected , or }");
+        fmt(g_error, sizeof(g_error), "Expected , or }}");
         return -1;
       }
       break;
@@ -1218,7 +1266,7 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
           return -1;
         state = (depth > 0) ? state_stack[--depth] : SAX_STATE_VALUE;
       } else {
-        stbsp_snprintf(g_error, sizeof(g_error), "Expected , or ]");
+        fmt(g_error, sizeof(g_error), "Expected , or ]");
         return -1;
       }
       break;
@@ -1226,12 +1274,12 @@ int json_parse_sax(const char *content, size_t len, const json_sax_handler_t *ha
   }
 
   if (result < 0) {
-    stbsp_snprintf(g_error, sizeof(g_error), "%s", lexer.error);
+    fmt(g_error, sizeof(g_error), "{}", lexer.error);
     return -1;
   }
 
   if (depth != 0) {
-    stbsp_snprintf(g_error, sizeof(g_error), "Unclosed object or array");
+    fmt(g_error, sizeof(g_error), "Unclosed object or array");
     return -1;
   }
 

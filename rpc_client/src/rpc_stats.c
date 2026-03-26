@@ -1,10 +1,10 @@
 #include "../include/rpc_stats.h"
+#include <fmt.h>
 #include <platform.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <stb_sprintf.h>
 
 // ============================================================================
 // Helper Functions
@@ -322,11 +322,11 @@ size_t rpc_stats_summary(const rpc_stats_t *stats, char *buffer, size_t buffer_s
   rpc_stats_snapshot_t snapshot;
   rpc_stats_get_snapshot(stats, &snapshot);
 
-  return stbsp_snprintf(buffer, buffer_size,
-                  "RPS: %.1f | Success: %.1f%% | Latency: %.1fms (p95: %.1fms) | Throughput: %.2f "
-                  "MB/s",
-                  snapshot.requests_per_second, snapshot.success_rate * 100.0,
-                  snapshot.avg_latency_ms, snapshot.p95_latency_ms, snapshot.throughput_mbps);
+  return fmt(buffer, buffer_size,
+             "RPS: {:.1f} | Success: {:.1f}% | Latency: {:.1f}ms (p95: {:.1f}ms) | Throughput: "
+             "{:.2f} MB/s",
+             snapshot.requests_per_second, snapshot.success_rate * 100.0, snapshot.avg_latency_ms,
+             snapshot.p95_latency_ms, snapshot.throughput_mbps);
 }
 
 size_t rpc_stats_to_json(const rpc_stats_t *stats, char *buffer, size_t buffer_size) {
@@ -336,24 +336,24 @@ size_t rpc_stats_to_json(const rpc_stats_t *stats, char *buffer, size_t buffer_s
   rpc_stats_snapshot_t snapshot;
   rpc_stats_get_snapshot(stats, &snapshot);
 
-  return stbsp_snprintf(
+  return fmt(
       buffer, buffer_size,
-      "{"
-      "\"total_requests\":%llu,"
-      "\"successful_requests\":%llu,"
-      "\"failed_requests\":%llu,"
-      "\"success_rate\":%.4f,"
-      "\"avg_latency_ms\":%.2f,"
-      "\"p50_latency_ms\":%.2f,"
-      "\"p90_latency_ms\":%.2f,"
-      "\"p95_latency_ms\":%.2f,"
-      "\"p99_latency_ms\":%.2f,"
-      "\"requests_per_second\":%.2f,"
-      "\"throughput_mbps\":%.2f,"
-      "\"bytes_sent\":%llu,"
-      "\"bytes_received\":%llu,"
-      "\"current_connections\":%llu"
-      "}",
+      "{{"
+      "\"total_requests\":{},"
+      "\"successful_requests\":{},"
+      "\"failed_requests\":{},"
+      "\"success_rate\":{:.4f},"
+      "\"avg_latency_ms\":{:.2f},"
+      "\"p50_latency_ms\":{:.2f},"
+      "\"p90_latency_ms\":{:.2f},"
+      "\"p95_latency_ms\":{:.2f},"
+      "\"p99_latency_ms\":{:.2f},"
+      "\"requests_per_second\":{:.2f},"
+      "\"throughput_mbps\":{:.2f},"
+      "\"bytes_sent\":{},"
+      "\"bytes_received\":{},"
+      "\"current_connections\":{}"
+      "}}",
       (unsigned long long)stats->total_requests, (unsigned long long)stats->successful_requests,
       (unsigned long long)stats->failed_requests, snapshot.success_rate, snapshot.avg_latency_ms,
       snapshot.p50_latency_ms, snapshot.p90_latency_ms, snapshot.p95_latency_ms,

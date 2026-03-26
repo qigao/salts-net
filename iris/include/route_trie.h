@@ -37,6 +37,7 @@ typedef struct trie_node
     bool is_end;                      // Marks end of a route
     RequestHandler handlers[8];       // Handlers for different HTTP methods
     void *middleware_ctx[8];          // Middleware context for each method
+    unsigned char stream_body[8];     // 1 when request body should be streamed
 } trie_node_t;
 
 typedef struct
@@ -64,6 +65,7 @@ typedef struct
 {
     RequestHandler handler;
     void *middleware_ctx;
+    int stream_body;
     param_match_t params[32];
     int param_count;
 } route_match_t;
@@ -103,6 +105,8 @@ CXX_C_API bool route_trie_match(route_trie_t *trie,
 CXX_C_API route_trie_t *route_trie_create(void);
 CXX_C_API int route_trie_add(route_trie_t *trie, const char *method, const char *path,
                    RequestHandler handler, void *middleware_ctx);
+CXX_C_API int route_trie_add_stream(route_trie_t *trie, const char *method, const char *path,
+                                    RequestHandler handler, void *middleware_ctx);
 CXX_C_API void route_trie_free(route_trie_t *trie);
 CXX_C_API http_method_t get_method_index(const char *method);
 

@@ -12,6 +12,7 @@
 
 #include "turbo_coro_lb.h"
 #include <CoroNet/turbo_coro_context.h>
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,12 +77,12 @@ int main(int argc, char **argv) {
 
     if (argc > 1) {
         static char fbuf[64];
-        snprintf(fbuf, sizeof(fbuf), "tcp://0.0.0.0:%s", argv[1]);
+        fmt(fbuf, sizeof(fbuf), "tcp://0.0.0.0:{}", argv[1]);
         frontend = fbuf;
     }
     if (argc > 2) {
         static char bbuf[64];
-        snprintf(bbuf, sizeof(bbuf), "tcp://0.0.0.0:%s", argv[2]);
+        fmt(bbuf, sizeof(bbuf), "tcp://0.0.0.0:{}", argv[2]);
         backend = bbuf;
     }
 

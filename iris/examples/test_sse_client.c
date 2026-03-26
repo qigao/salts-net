@@ -25,11 +25,9 @@ static void on_sse_data(const char *data, size_t len, void *user_data) {
     }
 }
 
-static void sse_coro_entry(coro_t *co, void *arg) {
-    (void)co;
-    coro_context_t *ctx = (coro_context_t *)arg;
-
-    http_client_t *client = http_client_create(NULL);    http_client_set_timeout(client, 30000);
+static void run_http_sse_once(void) {
+    http_client_t *client = http_client_create(NULL);
+    http_client_set_timeout(client, 30000);
 
     printf("\n=== HTTP SSE GET Test ===\n");
     printf("Connecting to http://localhost:8080/stream...\n");
@@ -46,12 +44,7 @@ static void sse_coro_entry(coro_t *co, void *arg) {
 }
 
 void run_http_sse_test() {
-    coro_context_t *ctx = coro_context_create(NULL);
-    coro_scheduler_t *sched = coro_scheduler_create();
-    coro_spawn(sched, sse_coro_entry, ctx, NULL);
-    coro_scheduler_run(sched);
-    coro_scheduler_destroy(sched);
-    coro_context_destroy(ctx);
+    run_http_sse_once();
 }
 
 /* --- 2. RPC SSE Client (using rpc_client) --- */
@@ -66,24 +59,22 @@ static void on_rpc_result(rpc_call_result_t *result, void *user_data) {
 }
 
 static void on_rpc_complete(rpc_call_result_t *result, void *user_data) {
-    int *done = (int *)user_data;
+    (void)user_data;
     printf("[RPC SSE] Call complete. Status: %d\n", result->http_status);
-    *done = 1;
 }
 
 void run_rpc_sse_test() {
-    rpc_client_config_t config = RPC_CLIENT_DEFAULT_CONFIG("http://localhost:8080/rpc");
-    rpc_client_t *client = rpc_client_create(&config);
-    int done = 0;
+    rpc_client_t *client = rpc_client_create_simple("http://localhost:8080/rpc");
+
+    if (!client) {
+        printf("[RPC SSE] Failed to create RPC client\n");
+        return;
+    }
 
     printf("\n=== RPC SSE POST Test ===\n");
     printf("Calling math.count(n=5) on http://localhost:8080/rpc...\n");
 
-    rpc_client_call_stream(client, "math.count", "{\"n\":5}", on_rpc_result, on_rpc_complete, &done);
-
-    while (!done) {
-        turbo_sleep_ms(100);
-    }
+    rpc_client_call_stream(client, "math.count", "{\"n\":5}", on_rpc_result, on_rpc_complete, NULL);
 
     rpc_client_destroy(client);
 }

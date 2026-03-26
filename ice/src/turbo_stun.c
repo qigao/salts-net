@@ -12,6 +12,7 @@
 #endif
 #include "ice/turbo_stun.h"
 
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -290,7 +291,7 @@ int stun_build_ice_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
   p += STUN_HEADER_SIZE;
 
   char username[256];
-  int username_len = stbsp_snprintf(username, sizeof(username), "%s:%s", remote_ufrag, local_ufrag);
+  int username_len = fmt(username, sizeof(username), "{}:{}", remote_ufrag, local_ufrag);
   if (username_len < 0 || username_len >= (int)sizeof(username))
     return -2;
 

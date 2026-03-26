@@ -2,6 +2,7 @@
 #include "s3/s3_signer.h"
 #include "s3/s3_time.h"
 #include "s3_http.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -114,23 +115,21 @@ typedef struct {
 static s3_error_t aws_config_fetch(void* ctx, s3_credentials_t* out) {
     aws_config_ctx_t* c = (aws_config_ctx_t*)ctx;
     const char* fname = c->filename;
+    tstr_t path = NULL;
     if (!fname || !fname[0]) {
         const char* home = getenv("HOME");
         if (!home) home = getenv("USERPROFILE");
         if (!home) return s3_error_make(-1, "Cannot determine home directory");
-        tstr_t path = tstr_cat_fmt(tstr_new(), "%s/.aws/credentials", home);
-        // Read the file
-        FILE* fp = fopen(path, "r");
-        tstr_free(path);
-        if (!fp) return s3_error_make(-1, "Cannot open AWS credentials file");
-        fclose(fp);
-        // For simplicity, fall through to ini parsing below
+        path = tstr_cat_fmt(tstr_new(), "%s/.aws/credentials", home);
         fname = path;
     }
 
     const char* profile = (c->profile && c->profile[0]) ? c->profile : "default";
     FILE* fp = fopen(fname, "r");
-    if (!fp) return s3_error_make(-1, "Cannot open AWS credentials file");
+    if (!fp) {
+        tstr_free(path);
+        return s3_error_make(-1, "Cannot open AWS credentials file");
+    }
 
     tstr_t ak = NULL, sk = NULL, st = NULL;
     char line[1024];
@@ -163,6 +162,7 @@ static s3_error_t aws_config_fetch(void* ctx, s3_credentials_t* out) {
         else if (strcmp(key, "aws_session_token") == 0) { tstr_free(st); st = tstr_dup(val); }
     }
     fclose(fp);
+    tstr_free(path);
 
     if (ak && sk) {
         out->access_key = ak;
@@ -266,7 +266,7 @@ static s3_error_t mc_config_fetch(void* ctx, s3_credentials_t* out) {
 
     // Find "alias": { ... "accessKey": "...", "secretKey": "..." }
     char search[256];
-    snprintf(search, sizeof(search), "\"%s\"", alias);
+    fmt(search, sizeof(search), "\"{}\"", alias);
     const char* pos = strstr(buf, search);
     if (pos) {
         const char* block_end = strchr(pos, '}');
@@ -335,8 +335,8 @@ typedef struct {
 
 static tstr_t extract_xml_value(const char* xml, const char* tag) {
     char open[128], close[128];
-    snprintf(open, sizeof(open), "<%s>", tag);
-    snprintf(close, sizeof(close), "</%s>", tag);
+    fmt(open, sizeof(open), "<{}>", tag);
+    fmt(close, sizeof(close), "</{}>", tag);
     const char* s = strstr(xml, open);
     if (!s) return NULL;
     s += strlen(open);

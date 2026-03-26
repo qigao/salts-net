@@ -736,7 +736,6 @@ int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer,
  * from that thread.
  */
 typedef struct {
-  turbo_ares_t          *ares;
   turbo_dns_parent_query_t *parent;
   turbo_thread_t         thread;
   volatile int           running;
@@ -744,17 +743,22 @@ typedef struct {
 
 static void async_driver_thread(void *arg) {
   async_driver_t *drv = (async_driver_t *)arg;
+  turbo_dns_parent_query_t *parent = drv->parent;
+  turbo_ares_t *ares = parent ? parent->ares : NULL;
   int64_t deadline = DNS_TIMEOUT_MS;
 
   while (drv->running && deadline > 0) {
-    if (!drv->ares->initialized) break;
+    if (!ares || !ares->initialized) break;
     int poll_ms = (deadline > 50) ? 50 : (int)deadline;
-    int active  = ares_poll_once(drv->ares, poll_ms);
+    int active  = ares_poll_once(ares, poll_ms);
     deadline -= poll_ms;
     if (!active) break;
   }
 
   drv->running = 0;
+  if (parent) {
+    release_parent_ref(parent);
+  }
   free(drv);
 }
 
@@ -815,11 +819,12 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
     free(parent);
     return TURBO_ENOMEM;
   }
-  drv->ares    = ares_ctx;
   drv->parent  = parent;
   drv->running = 1;
+  atomic_fetch_add(&parent->ref_count, 1); /* driver thread owns parent/ares lifetime */
 
   if (turbo_thread_create(&drv->thread, async_driver_thread, drv) != 0) {
+    release_parent_ref(parent);
     free(drv);
     if (out_query) { *out_query = NULL; }
     destroy_ares_context(ares_ctx);
@@ -904,11 +909,12 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
     free(parent);
     return TURBO_ENOMEM;
   }
-  drv->ares = ares_ctx;
   drv->parent = parent;
   drv->running = 1;
+  atomic_fetch_add(&parent->ref_count, 1); /* driver thread owns parent/ares lifetime */
 
   if (turbo_thread_create(&drv->thread, async_driver_thread, drv) != 0) {
+    release_parent_ref(parent);
     free(drv);
     if (out_query) {
       *out_query = NULL;

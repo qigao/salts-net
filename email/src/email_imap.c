@@ -1,5 +1,6 @@
 #include "email/email_imap.h"
 #include "CoroNet.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,7 @@ static void imap_reset_read_state(imap_client_t *client) {
 
 static char *imap_generate_tag(imap_client_t *client) {
   static char tag[16];
-  snprintf(tag, sizeof(tag), "A%04d", ++client->tag_counter);
+  fmt(tag, sizeof(tag), "A{:04d}", ++client->tag_counter);
   return tag;
 }
 
@@ -40,8 +41,7 @@ static int imap_read_line(imap_client_t *client) {
       if (client->read_buffer[i] == '\n') {
         size_t line_len = i + 1;
         if (line_len >= sizeof(client->line_buffer)) {
-          snprintf(client->error_msg, sizeof(client->error_msg),
-                   "IMAP response line too large");
+          fmt(client->error_msg, sizeof(client->error_msg), "IMAP response line too large");
           return -1;
         }
 
@@ -66,16 +66,14 @@ static int imap_read_line(imap_client_t *client) {
         if (data) {
           coro_socket_free_recv(data);
         }
-        snprintf(client->error_msg, sizeof(client->error_msg),
-                 "Failed to read IMAP response");
+        fmt(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP response");
         return -1;
       }
 
       free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
       if (len > free_space) {
         coro_socket_free_recv(data);
-        snprintf(client->error_msg, sizeof(client->error_msg),
-                 "IMAP response buffer overflow");
+        fmt(client->error_msg, sizeof(client->error_msg), "IMAP response buffer overflow");
         return -1;
       }
 
@@ -113,8 +111,7 @@ static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
         if (data) {
           coro_socket_free_recv(data);
         }
-        snprintf(client->error_msg, sizeof(client->error_msg),
-                 "Failed to read IMAP literal");
+        fmt(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP literal");
         return -1;
       }
 
@@ -125,8 +122,7 @@ static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
         total += remaining;
         if (extra > sizeof(client->read_buffer) - 1) {
           coro_socket_free_recv(data);
-          snprintf(client->error_msg, sizeof(client->error_msg),
-                   "IMAP literal overflow");
+          fmt(client->error_msg, sizeof(client->error_msg), "IMAP literal overflow");
           return -1;
         }
         memcpy(client->read_buffer, data + remaining, extra);
@@ -148,8 +144,7 @@ static int imap_read_response(imap_client_t *client, const char *expected_tag) {
 
   // Parse response: "TAG OK/NO/BAD ..." or "* UNTAGGED ..."
   if (strlen(client->line_buffer) < 3) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid IMAP response");
+    fmt(client->error_msg, sizeof(client->error_msg), "Invalid IMAP response");
     return -1;
   }
 
@@ -160,12 +155,10 @@ static int imap_read_response(imap_client_t *client, const char *expected_tag) {
     if (strncmp(status, "OK", 2) == 0) {
       return 0; // Success
     } else if (strncmp(status, "NO", 2) == 0) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "IMAP NO: %s", status + 3);
+      fmt(client->error_msg, sizeof(client->error_msg), "IMAP NO: {}", status + 3);
       return -1;
     } else if (strncmp(status, "BAD", 3) == 0) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "IMAP BAD: %s", status + 4);
+      fmt(client->error_msg, sizeof(client->error_msg), "IMAP BAD: {}", status + 4);
       return -1;
     }
   }
@@ -177,12 +170,11 @@ static int imap_send_command(imap_client_t *client, const char *tag, const char 
   if (!client || !client->socket || !tag || !cmd) return -1;
 
   char buffer[2048];
-  int len = snprintf(buffer, sizeof(buffer), "%s %s\r\n", tag, cmd);
+  int len = fmt(buffer, sizeof(buffer), "{} {}\r\n", tag, cmd);
 
   int rc = coro_socket_send(client->socket, buffer, len);
   if (rc != 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to send IMAP command: %s", cmd);
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to send IMAP command: {}", cmd);
     return -1;
   }
 
@@ -256,16 +248,14 @@ int imap_connect(imap_client_t *client) {
   socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
   client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
   if (!client->socket) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to create socket");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
   }
 
   if (coro_socket_connect(client->socket, client->config.host,
                           client->config.port) != 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to connect to %s:%d", client->config.host,
-             client->config.port);
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to connect to {}:{}", client->config.host,
+        client->config.port);
     coro_socket_destroy(client->socket);
     client->socket = NULL;
     return -1;
@@ -285,8 +275,7 @@ int imap_connect(imap_client_t *client) {
     }
 
     if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Failed to upgrade IMAP connection to TLS");
+      fmt(client->error_msg, sizeof(client->error_msg), "Failed to upgrade IMAP connection to TLS");
       imap_disconnect(client);
       return -1;
     }
@@ -296,8 +285,7 @@ int imap_connect(imap_client_t *client) {
   if (client->config.username && client->config.password) {
     // LOGIN
     char login_cmd[1024];
-    snprintf(login_cmd, sizeof(login_cmd), "LOGIN %s %s",
-             client->config.username, client->config.password);
+    fmt(login_cmd, sizeof(login_cmd), "LOGIN {} {}", client->config.username, client->config.password);
 
     if (imap_command(client, login_cmd) != 0) {
       imap_disconnect(client);
@@ -327,8 +315,7 @@ char **imap_list_mailboxes(imap_client_t *client,
   if (!client) return NULL;
 
   char list_cmd[512];
-  snprintf(list_cmd, sizeof(list_cmd), "LIST \"%s\" \"%s\"",
-           reference ? reference : "", pattern ? pattern : "*");
+  fmt(list_cmd, sizeof(list_cmd), "LIST \"{}\" \"{}\"", reference ? reference : "", pattern ? pattern : "*");
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, list_cmd) != 0) {
@@ -387,7 +374,7 @@ imap_mailbox_t *imap_select_mailbox(imap_client_t *client,
   if (!client || !mailbox) return NULL;
 
   char select_cmd[512];
-  snprintf(select_cmd, sizeof(select_cmd), "SELECT \"%s\"", mailbox);
+  fmt(select_cmd, sizeof(select_cmd), "SELECT \"{}\"", mailbox);
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, select_cmd) != 0) {
@@ -445,7 +432,7 @@ int imap_create_mailbox(imap_client_t *client, const char *mailbox) {
   if (!client || !mailbox) return -1;
 
   char create_cmd[512];
-  snprintf(create_cmd, sizeof(create_cmd), "CREATE \"%s\"", mailbox);
+  fmt(create_cmd, sizeof(create_cmd), "CREATE \"{}\"", mailbox);
 
   return imap_command(client, create_cmd);
 }
@@ -454,7 +441,7 @@ int imap_delete_mailbox(imap_client_t *client, const char *mailbox) {
   if (!client || !mailbox) return -1;
 
   char delete_cmd[512];
-  snprintf(delete_cmd, sizeof(delete_cmd), "DELETE \"%s\"", mailbox);
+  fmt(delete_cmd, sizeof(delete_cmd), "DELETE \"{}\"", mailbox);
 
   return imap_command(client, delete_cmd);
 }
@@ -465,7 +452,7 @@ int *imap_search(imap_client_t *client, const char *criteria, int *count) {
   if (!client || !criteria) return NULL;
 
   char search_cmd[1024];
-  snprintf(search_cmd, sizeof(search_cmd), "SEARCH %s", criteria);
+  fmt(search_cmd, sizeof(search_cmd), "SEARCH {}", criteria);
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, search_cmd) != 0) {
@@ -517,7 +504,7 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
   if (!client) return NULL;
 
   char fetch_cmd[256];
-  snprintf(fetch_cmd, sizeof(fetch_cmd), "FETCH %d BODY[]", seq_num);
+  fmt(fetch_cmd, sizeof(fetch_cmd), "FETCH {} BODY[]", seq_num);
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, fetch_cmd) != 0) {
@@ -532,15 +519,13 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
   // Parse literal size: BODY[] {1234}
   char *literal_start = strstr(client->line_buffer, "{");
   if (!literal_start) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid FETCH response: no literal");
+    fmt(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
     return NULL;
   }
 
   int literal_size = atoi(literal_start + 1);
   if (literal_size <= 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid literal size: %d", literal_size);
+    fmt(client->error_msg, sizeof(client->error_msg), "Invalid literal size: {}", literal_size);
     return NULL;
   }
 
@@ -566,8 +551,7 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
 
   if (!msg) {
     mem_destroy(&pool);
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to parse message");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to parse message");
     return NULL;
   }
 
@@ -590,7 +574,7 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
   if (!client) return NULL;
 
   char fetch_cmd[256];
-  snprintf(fetch_cmd, sizeof(fetch_cmd), "UID FETCH %d BODY[]", uid);
+  fmt(fetch_cmd, sizeof(fetch_cmd), "UID FETCH {} BODY[]", uid);
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, fetch_cmd) != 0) {
@@ -605,15 +589,13 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
   // Parse literal size
   char *literal_start = strstr(client->line_buffer, "{");
   if (!literal_start) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid FETCH response: no literal");
+    fmt(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
     return NULL;
   }
 
   int literal_size = atoi(literal_start + 1);
   if (literal_size <= 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid literal size: %d", literal_size);
+    fmt(client->error_msg, sizeof(client->error_msg), "Invalid literal size: {}", literal_size);
     return NULL;
   }
 
@@ -639,8 +621,7 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
 
   if (!msg) {
     mem_destroy(&pool);
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to parse message");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to parse message");
     return NULL;
   }
 
@@ -663,8 +644,7 @@ imap_message_info_t *imap_fetch_info(imap_client_t *client, int seq_num) {
   if (!client) return NULL;
 
   char fetch_cmd[256];
-  snprintf(fetch_cmd, sizeof(fetch_cmd),
-           "FETCH %d (UID FLAGS RFC822.SIZE ENVELOPE)", seq_num);
+  fmt(fetch_cmd, sizeof(fetch_cmd), "FETCH {} (UID FLAGS RFC822.SIZE ENVELOPE)", seq_num);
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, fetch_cmd) != 0) {
@@ -724,7 +704,7 @@ int imap_set_flags(imap_client_t *client, int seq_num, const char *flags) {
   if (!client || !flags) return -1;
 
   char store_cmd[512];
-  snprintf(store_cmd, sizeof(store_cmd), "STORE %d FLAGS (%s)", seq_num, flags);
+  fmt(store_cmd, sizeof(store_cmd), "STORE {} FLAGS ({})", seq_num, flags);
 
   return imap_command(client, store_cmd);
 }

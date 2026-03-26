@@ -7,8 +7,8 @@
 #include "CoroNet/turbo_coro_socket.h"
 #include "turbo_str.h"
 #include "tlog.h"
+#include <fmt.h>
 #include <ctype.h>
-#include <stb_sprintf.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,12 +22,22 @@ struct http_parser_impl {
 
 /* Forward declaration of connection context structure from server_refactored.c */
 typedef struct {
+  struct iris_app *app;
   coro_socket_t *client;
-  char buffer[8192]; /* READ_BUF_SIZE */
+  char *buffer;
+  size_t buffer_capacity;
   size_t buffer_used;
+  size_t parsed_offset;
   int keep_alive;
   time_t created_time;
   int request_count;
+  mem_pool_t request_arena;
+  http_context_t *request_ctx;
+  int request_arena_ready;
+  int request_streaming_active;
+  const char *pending_body_chunk;
+  size_t pending_body_chunk_len;
+  size_t pending_body_chunk_offset;
   void *middleware_data;
   void (*middleware_cleanup)(void *data);
 } iris_connection_ctx_t;
@@ -277,6 +287,8 @@ static Req *create_req(mem_pool_t *arena, struct iris_app *app, coro_socket_t *c
   req->path = NULL;
   req->body = NULL;
   req->body_len = 0;
+  req->body_stream = 0;
+  req->body_read_total = 0;
 
   // Initialize request_t structures
   memset(&req->headers, 0, sizeof(request_t));
@@ -535,8 +547,8 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
       return -1;
   }
 
-  // Copy body
-  if (context->body && context->body_length > 0) {
+  // Copy body when this is not a streaming request
+  if (!context->stream_mode && context->body && context->body_length > 0) {
     req->body = mem_alloc(arena, context->body_length + 1);
     if (!req->body)
       return -1;
@@ -548,8 +560,140 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
   req->headers = copy_request_t(arena, &context->headers);
   req->query = copy_request_t(arena, &context->query_params);
   req->params = copy_request_t(arena, &context->url_params);
+  req->body_stream = context->stream_mode ? 1 : 0;
+  req->body_read_total = 0;
 
   return 0;
+}
+
+int req_is_body_stream(const Req *req) {
+  return req ? req->body_stream : 0;
+}
+
+size_t req_read_body(Req *req, char *buffer, size_t capacity) {
+  iris_connection_ctx_t *conn;
+
+  if (!req || !req->client || !buffer || capacity == 0 || !req->body_stream) {
+    return 0;
+  }
+
+  conn = (iris_connection_ctx_t *)coro_socket_get_user_data(req->client);
+  if (!conn || !conn->request_ctx || !conn->request_streaming_active) {
+    return 0;
+  }
+
+  while (1) {
+    size_t to_copy;
+
+    if (conn->pending_body_chunk_len > conn->pending_body_chunk_offset) {
+      to_copy = conn->pending_body_chunk_len - conn->pending_body_chunk_offset;
+      if (to_copy > capacity) {
+        to_copy = capacity;
+      }
+
+      memcpy(buffer, conn->pending_body_chunk + conn->pending_body_chunk_offset, to_copy);
+      conn->pending_body_chunk_offset += to_copy;
+      req->body_read_total += to_copy;
+
+      if (conn->pending_body_chunk_offset >= conn->pending_body_chunk_len) {
+        conn->pending_body_chunk = NULL;
+        conn->pending_body_chunk_len = 0;
+        conn->pending_body_chunk_offset = 0;
+        llhttp_resume(&conn->request_ctx->parser_impl->parser);
+        if (conn->parsed_offset == conn->buffer_used) {
+          size_t flushed = 0;
+          int flush_result = http_context_execute(conn->request_ctx, "", 0, &flushed);
+          (void)flushed;
+          if (flush_result == 1) {
+            conn->request_ctx->message_complete = 1;
+          }
+        }
+      }
+
+      return to_copy;
+    }
+
+    if (conn->request_ctx->message_complete) {
+      return 0;
+    }
+
+    if (conn->parsed_offset < conn->buffer_used) {
+      size_t consumed = 0;
+      int parse_result = http_context_execute(conn->request_ctx, conn->buffer + conn->parsed_offset,
+                                              conn->buffer_used - conn->parsed_offset, &consumed);
+      conn->parsed_offset += consumed;
+
+      if (parse_result < 0) {
+        return 0;
+      }
+
+      if (parse_result == 3) {
+        conn->pending_body_chunk = conn->request_ctx->stream_chunk;
+        conn->pending_body_chunk_len = conn->request_ctx->stream_chunk_len;
+        conn->pending_body_chunk_offset = 0;
+        continue;
+      }
+
+      if (parse_result == 1) {
+        conn->request_ctx->message_complete = 1;
+        return 0;
+      }
+    }
+
+    if (conn->parsed_offset == conn->buffer_used) {
+      size_t flushed = 0;
+      int flush_result = http_context_execute(conn->request_ctx, "", 0, &flushed);
+      (void)flushed;
+      if (flush_result == 1) {
+        conn->request_ctx->message_complete = 1;
+        return 0;
+      }
+    }
+
+    {
+      char *recv_data = NULL;
+      size_t recv_len = 0;
+      int r = coro_socket_recv(req->client, &recv_data, &recv_len);
+
+      if (r != 0 || !recv_data || recv_len == 0) {
+        if (recv_data) {
+          coro_socket_free_recv(recv_data);
+        }
+        return 0;
+      }
+
+      if (conn->parsed_offset == conn->buffer_used) {
+        conn->parsed_offset = 0;
+        conn->buffer_used = 0;
+        if (conn->buffer) {
+          conn->buffer[0] = '\0';
+        }
+      }
+
+      if (conn->buffer_used + recv_len + 1 > conn->buffer_capacity) {
+        size_t new_capacity = conn->buffer_capacity ? conn->buffer_capacity : 8192;
+        char *new_buffer;
+
+        while (new_capacity < conn->buffer_used + recv_len + 1) {
+          new_capacity *= 2;
+        }
+
+        new_buffer = (char *)realloc(conn->buffer, new_capacity);
+        if (!new_buffer) {
+          coro_socket_free_recv(recv_data);
+          return 0;
+        }
+
+        conn->buffer = new_buffer;
+        conn->buffer_capacity = new_capacity;
+      }
+
+      memcpy(conn->buffer + conn->buffer_used, recv_data, recv_len);
+      conn->buffer_used += recv_len;
+      conn->buffer[conn->buffer_used] = '\0';
+      coro_socket_free_recv(recv_data);
+    }
+  }
 }
 
 // Composes and sends the response (headers + body) using CoroNet send
@@ -563,187 +707,68 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   if (!body)
     body_len = 0;
 
-  // Apply output escaping based on content type if body contains user data
-  const void *escaped_body = body;
-  size_t escaped_body_len = body_len;
-  char *escaped_buffer = NULL;
-
-  if (body && body_len > 0) {
-    // Determine if escaping is needed based on content type
-    bool needs_escaping = false;
-    iris_security_result_t (*escape_func)(const char *, char *, size_t) = NULL;
-
-    if (strstr(content_type, "text/html") != NULL) {
-      needs_escaping = true;
-      escape_func = iris_escape_html;
-    } else if (strstr(content_type, "application/json") != NULL) {
-      needs_escaping = true;
-      escape_func = iris_escape_json;
-    } else if (strstr(content_type, "application/javascript") != NULL ||
-               strstr(content_type, "text/javascript") != NULL) {
-      needs_escaping = true;
-      escape_func = iris_escape_javascript;
-    }
-
-    if (needs_escaping && escape_func) {
-      // Allocate buffer for escaped content (estimate 2x original size)
-      size_t escaped_buffer_size = body_len * 2 + 256;
-      escaped_buffer = malloc(escaped_buffer_size);
-
-      if (escaped_buffer) {
-        iris_security_result_t escape_result =
-            escape_func((const char *)body, escaped_buffer, escaped_buffer_size);
-
-        if (escape_result == IRIS_SECURITY_OK) {
-          escaped_body = escaped_buffer;
-          escaped_body_len = strlen(escaped_buffer);
-          // Mark that output has been escaped for security tracking
-          if (res->arena) {
-            // We don't have direct access to req here, but we can add a flag to res if needed
-            // For now, just log that escaping was applied
-            TLOG_ERROR("Security: Output escaped for content type: {}", content_type);
-          }
-        } else if (escape_result == IRIS_SECURITY_ERROR_BUFFER_TOO_SMALL) {
-          // Try with larger buffer
-          free(escaped_buffer);
-          escaped_buffer_size = body_len * 4 + 512;
-          escaped_buffer = malloc(escaped_buffer_size);
-
-          if (escaped_buffer) {
-            escape_result = escape_func((const char *)body, escaped_buffer, escaped_buffer_size);
-            if (escape_result == IRIS_SECURITY_OK) {
-              escaped_body = escaped_buffer;
-              escaped_body_len = strlen(escaped_buffer);
-              // Mark that output has been escaped for security tracking
-              TLOG_ERROR("Security: Output escaped for content type: {} (retry)", content_type);
-            } else {
-              // Escaping failed, log warning and use original content
-              TLOG_ERROR("Warning: Output escaping failed: {}",
-                        iris_security_error_string(escape_result));
-              free(escaped_buffer);
-              escaped_buffer = NULL;
-            }
-          }
-        } else {
-          // Escaping failed, log warning and use original content
-          TLOG_ERROR("Warning: Output escaping failed: {}",
-                    iris_security_error_string(escape_result));
-          free(escaped_buffer);
-          escaped_buffer = NULL;
-        }
-      }
-    }
-  }
-
   // Get current date in HTTP format
   time_t now = time(NULL);
   struct tm *gmt = gmtime(&now);
   char date_str[64];
   strftime(date_str, sizeof(date_str), "%a, %d %b %Y %H:%M:%S GMT", gmt);
 
-  // Calculate total size of custom headers
-  size_t headers_size = 0;
-  for (int i = 0; i < res->header_count; i++) {
-    if (res->headers[i].name && res->headers[i].value) {
-      headers_size += strlen(res->headers[i].name) + 2 + strlen(res->headers[i].value) + 2;
-    }
-  }
-
-  // Allocate and fill entire header string using malloc
-  char *all_headers = malloc(headers_size + 1);
+  tstr_t all_headers = tstr_new();
   if (!all_headers) {
     send_error(res->client, 500);
     return;
   }
-
-  size_t pos = 0;
   for (int i = 0; i < res->header_count; i++) {
     if (res->headers[i].name && res->headers[i].value) {
-      int n = stbsp_snprintf(all_headers + pos, (int)(headers_size - pos + 1), "%s: %s\r\n",
-                             res->headers[i].name, res->headers[i].value);
-      if (n > 0 && (size_t)n <= headers_size - pos) {
-        pos += n;
-      } else {
-        free(all_headers);
+      all_headers = tstr_cat_fmt(all_headers, "%s: %s\r\n", res->headers[i].name,
+                                 res->headers[i].value);
+      if (!all_headers) {
         send_error(res->client, 500);
         return;
       }
     }
   }
-  all_headers[pos] = '\0';
 
-  // Calculate response size
-  int base_header_len = stbsp_snprintf(NULL, 0,
-                                       "HTTP/1.1 %d\r\n"
-                                       "Server: Iris Http Server\r\n"
-                                       "Date: %s\r\n"
-                                       "%s"
-                                       "Content-Type: %s\r\n"
-                                       "Content-Length: %zu\r\n"
-                                       "Connection: %s\r\n"
-                                       "\r\n",
-                                       status, date_str, all_headers, content_type,
-                                       escaped_body_len, res->keep_alive ? "keep-alive" : "close");
-
-  if (base_header_len < 0) {
-    free(all_headers);
-    if (escaped_buffer)
-      free(escaped_buffer);
-    send_error(res->client, 500);
-    return;
-  }
-
-  size_t total_len = (size_t)base_header_len + escaped_body_len;
-
-  // Use malloc for response buffer
-  char *response = malloc(total_len + 1);
+  tstr_t response = tstr_new();
   if (!response) {
-    free(all_headers);
-    if (escaped_buffer)
-      free(escaped_buffer);
+    tstr_free(all_headers);
     send_error(res->client, 500);
     return;
   }
 
-  int written = stbsp_snprintf(response, (size_t)base_header_len + 1,
-                               "HTTP/1.1 %d\r\n"
-                               "Server: Iris Http Server\r\n"
-                               "Date: %s\r\n"
-                               "%s"
-                               "Content-Type: %s\r\n"
-                               "Content-Length: %zu\r\n"
-                               "Connection: %s\r\n"
-                               "\r\n",
-                               status, date_str, all_headers, content_type, escaped_body_len,
-                               res->keep_alive ? "keep-alive" : "close");
-
-  free(all_headers);
-
-  if (written < 0 || (size_t)written > total_len) {
-    free(response);
-    if (escaped_buffer)
-      free(escaped_buffer);
+  response = tstr_cat_fmt(response,
+                          "HTTP/1.1 %d\r\n"
+                          "Server: Iris Http Server\r\n"
+                          "Date: %s\r\n"
+                          "%s"
+                          "Content-Type: %s\r\n"
+                          "Content-Length: %zu\r\n"
+                          "Connection: %s\r\n"
+                          "\r\n",
+                          status, date_str, all_headers, content_type, body_len,
+                          res->keep_alive ? "keep-alive" : "close");
+  tstr_free(all_headers);
+  if (!response) {
     send_error(res->client, 500);
     return;
   }
 
-  if (escaped_body_len > 0 && escaped_body) {
-    memcpy(response + written, escaped_body, escaped_body_len);
+  if (body_len > 0 && body) {
+    response = tstr_cat_len(response, body, body_len);
+    if (!response) {
+      send_error(res->client, 500);
+      return;
+    }
   }
 
   // Send using CoroNet API
-  int result = coro_socket_send(res->client, response, total_len);
+  int result = coro_socket_send(res->client, response, tstr_len(response));
   if (result != 0) {
     TLOG_ERROR("Send error: %d", result);
   }
 
   // Free the response buffer immediately since CoroNet copies the data
-  free(response);
-
-  // Free escaped buffer if allocated
-  if (escaped_buffer) {
-    free(escaped_buffer);
-  }
+  tstr_free(response);
 }
 
 // Streaming (SSE) support implementation
@@ -761,7 +786,7 @@ void reply_stream_start(Res *res, int status) {
   // Headers for SSE
   // Note: We use Transfer-Encoding: chunked to support streaming properly
   char headers[1024];
-  int n = stbsp_snprintf(headers, sizeof(headers),
+  int n = fmt(headers, sizeof(headers),
                          "HTTP/1.1 %d OK\r\n"
                          "Server: Iris Http Server\r\n"
                          "Date: %s\r\n"
@@ -785,19 +810,16 @@ void reply_stream_chunk(Res *res, const char *data) {
   // Format the SSE payload: "data: <content>\n\n"
   // Since we are using chunked transfer encoding, we need to wrap this in a chunk.
   
-  size_t data_len = strlen(data);
-  // Estimate size: "data: " + data + "\n\n"
-  size_t payload_len = data_len + 8; 
-  
-  char *payload = malloc(payload_len + 1);
+  tstr_t payload = tstr_new();
   if (!payload) return;
-  
-  stbsp_snprintf(payload, payload_len + 1, "data: %s\n\n", data);
+  payload = tstr_cat_fmt(payload, "data: %s\n\n", data);
+  if (!payload) return;
+  size_t payload_len = tstr_len(payload);
   
   // Now create the HTTP chunk
   // Format: <hex_len>\r\n<payload>\r\n
   char hex_len[32];
-  stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", payload_len);
+  fmt(hex_len, sizeof(hex_len), "{:x}\r\n", payload_len);
   
   // Send length
   coro_socket_send(res->client, hex_len, strlen(hex_len));
@@ -806,7 +828,7 @@ void reply_stream_chunk(Res *res, const char *data) {
   // Send trailing CRLF
   coro_socket_send(res->client, "\r\n", 2);
   
-  free(payload);
+  tstr_free(payload);
 }
 
 void reply_stream_end(Res *res) {
@@ -831,7 +853,7 @@ static void send_headers_only(Res *res, int status, const char *content_type,
   strftime(date_str, sizeof(date_str), "%a, %d %b %Y %H:%M:%S GMT", gmt);
 
   char headers[2048];
-  int n = stbsp_snprintf(headers, sizeof(headers),
+  int n = fmt(headers, sizeof(headers),
                          "HTTP/1.1 %d OK\r\n"
                          "Server: Iris Http Server\r\n"
                          "Date: %s\r\n"
@@ -926,8 +948,7 @@ int reply_download(Res *res, const char *file_path, const char *download_name) {
   }
 
   char extra[512];
-  stbsp_snprintf(extra, sizeof(extra),
-                 "Content-Disposition: attachment; filename=\"%s\"\r\n", filename);
+  fmt(extra, sizeof(extra), "Content-Disposition: attachment; filename=\"{}\"\r\n", filename);
 
   send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra);
   coro_socket_send(res->client, data, (size_t)file_size);
@@ -945,7 +966,7 @@ void reply_chunked_start(Res *res, int status, const char *content_type) {
   strftime(date_str, sizeof(date_str), "%a, %d %b %Y %H:%M:%S GMT", gmt);
 
   char headers[1024];
-  int n = stbsp_snprintf(headers, sizeof(headers),
+  int n = fmt(headers, sizeof(headers),
                          "HTTP/1.1 %d OK\r\n"
                          "Server: Iris Http Server\r\n"
                          "Date: %s\r\n"
@@ -966,7 +987,7 @@ void reply_chunked_write(Res *res, const void *data, size_t len) {
     return;
 
   char hex_len[32];
-  int n = stbsp_snprintf(hex_len, sizeof(hex_len), "%zx\r\n", len);
+  int n = fmt(hex_len, sizeof(hex_len), "{:x}\r\n", len);
   if (n > 0) {
     coro_socket_send(res->client, hex_len, n);
     coro_socket_send(res->client, data, len);
@@ -1122,24 +1143,8 @@ static iris_security_result_t validate_request_cookies(http_context_t *ctx, cons
   return IRIS_SECURITY_OK;
 }
 
-// Main router function
-int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request_data,
-                     size_t request_len) {
-  if (!app || !client || !request_data || request_len == 0) {
-    if (client)
-      send_error(client, 400);
-    return 1;
-  }
-
-  // Phase IRIS-1: Create request arena (8KB initial - enough for typical HTTP request)
-  mem_pool_t arena;
-  if (mem_init(&arena, 8192) != 0) {
-    send_error(client, 500);
-    return 1; // Close connection on arena init failure
-  }
-
-  // Initialize all resources
-  http_context_t *ctx = NULL;
+int iris_app_execute_parsed(iris_app_t *app, coro_socket_t *client, mem_pool_t *arena,
+                            http_context_t *ctx) {
   Req *req = NULL;
   Res *res = NULL;
   tokenized_path_t tokenized_path = {0};
@@ -1148,26 +1153,18 @@ int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request
   bool send_error_response = false;
   bool send_404_response = false;
 
-  // Create resources
-  ctx = create_http_context(&arena);
-  req = create_req(&arena, app, client);
-  res = create_res(&arena, client);
-
-  if (!ctx || !req || !res) {
-    error_code = 500;
-    send_error_response = true;
-    goto cleanup;
+  if (!app || !client || !arena || !ctx) {
+    if (client) {
+      send_error(client, 400);
+    }
+    return 1;
   }
 
-  // Parse HTTP request
-  enum llhttp_errno err = llhttp_execute(&ctx->parser_impl->parser, request_data, request_len);
-  if (err != HPE_OK) {
-    if (err == HPE_USER) {
-      // HPE_USER indicates payload too large (from on_body_cb)
-      error_code = 413;
-    } else {
-      error_code = 400;
-    }
+  req = create_req(arena, app, client);
+  res = create_res(arena, client);
+
+  if (!req || !res) {
+    error_code = 500;
     send_error_response = true;
     goto cleanup;
   }
@@ -1175,7 +1172,7 @@ int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request
   // Extract path and query
   char *path = NULL;
   char *query = NULL;
-  if (extract_path_and_query(&arena, ctx->url, &path, &query) != 0) {
+  if (extract_path_and_query(arena, ctx->url, &path, &query) != 0) {
     error_code = 500;
     send_error_response = true;
     goto cleanup;
@@ -1223,7 +1220,7 @@ int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request
   req->security->cookies_validated = true;
 
   // Parse query parameters
-  parse_query(&arena, query, &ctx->query_params);
+  parse_query(arena, query, &ctx->query_params);
   res->keep_alive = ctx->keep_alive;
 
   // Handle CORS preflight
@@ -1243,7 +1240,7 @@ int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request
   }
 
   // Tokenize path
-  if (tokenize_path(&arena, path, &tokenized_path) != 0) {
+  if (tokenize_path(arena, path, &tokenized_path) != 0) {
     error_code = 500;
     send_error_response = true;
     goto cleanup;
@@ -1257,7 +1254,7 @@ int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request
     goto cleanup;
   }
 
-  if (extract_url_params(&arena, &match, &ctx->url_params) != 0) {
+  if (extract_url_params(arena, &match, &ctx->url_params) != 0) {
     error_code = 500;
     send_error_response = true;
     goto cleanup;
@@ -1268,6 +1265,8 @@ int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request
     send_error_response = true;
     goto cleanup;
   }
+
+  req->body_stream = match.stream_body ? 1 : req->body_stream;
 
   if (!match.handler) {
     error_code = 500;
@@ -1301,9 +1300,76 @@ cleanup:
     should_close = !res->keep_alive;
   }
 
-  // Phase IRIS-1: Free the entire arena (handles all request/response memory)
-  mem_destroy(&arena);
+  return should_close;
+}
 
+int iris_app_route_uses_stream(iris_app_t *app, mem_pool_t *arena, http_context_t *ctx) {
+  char *url_copy;
+  char *path = NULL;
+  char *query = NULL;
+  tokenized_path_t tokenized_path = {0};
+  route_match_t match;
+
+  if (!app || !arena || !ctx || !ctx->url || !ctx->method || !app->route_trie) {
+    return 0;
+  }
+
+  url_copy = mem_strdup(arena, ctx->url);
+  if (!url_copy) {
+    return 0;
+  }
+
+  if (extract_path_and_query(arena, url_copy, &path, &query) != 0 || !path) {
+    return 0;
+  }
+
+  if (tokenize_path(arena, path, &tokenized_path) != 0) {
+    return 0;
+  }
+
+  if (!route_trie_match(app->route_trie, ctx->method, &tokenized_path, &match)) {
+    return 0;
+  }
+
+  return match.stream_body ? 1 : 0;
+}
+
+// Main router function
+int iris_app_execute(iris_app_t *app, coro_socket_t *client, const char *request_data,
+                     size_t request_len) {
+  mem_pool_t arena;
+  http_context_t *ctx;
+  size_t consumed = 0;
+  int parse_result;
+  int should_close;
+
+  if (!app || !client || !request_data || request_len == 0) {
+    if (client)
+      send_error(client, 400);
+    return 1;
+  }
+
+  if (mem_init(&arena, 8192) != 0) {
+    send_error(client, 500);
+    return 1;
+  }
+
+  ctx = create_http_context(&arena);
+  if (!ctx) {
+    mem_destroy(&arena);
+    send_error(client, 500);
+    return 1;
+  }
+
+  parse_result = http_context_execute(ctx, request_data, request_len, &consumed);
+  if (parse_result <= 0 || consumed != request_len) {
+    mem_destroy(&arena);
+    send_error(client, (parse_result == -413) ? 413 : 400);
+    return 1;
+  }
+
+  should_close = iris_app_execute_parsed(app, client, &arena, ctx);
+  mem_destroy(&arena);
   return should_close;
 }
 
@@ -1430,9 +1496,12 @@ Req *copy_req(const Req *original) {
     return NULL;
 
   // Copy primitive fields
+  copy->app = original->app;
   copy->arena = NULL;
   copy->client = original->client; /* CoroNet migration: use client */
   copy->body_len = original->body_len;
+  copy->body_stream = original->body_stream;
+  copy->body_read_total = original->body_read_total;
 
   // Deep copy method string
   if (original->method) {
@@ -1519,9 +1588,12 @@ Req *arena_copy_req(mem_pool_t *target_arena, const Req *original) {
     return NULL;
 
   // Copy primitive fields
+  copy->app = original->app;
   copy->arena = target_arena;
   copy->client = original->client; /* CoroNet migration: use client */
   copy->body_len = original->body_len;
+  copy->body_stream = original->body_stream;
+  copy->body_read_total = original->body_read_total;
 
   // Deep copy strings using target arena
   if (original->method)

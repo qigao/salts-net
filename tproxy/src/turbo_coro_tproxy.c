@@ -3,6 +3,7 @@
 #include <CoroNet.h>
 #include "turbo_coro.h"
 #include "turbo_coro_internal.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -541,7 +542,8 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             int atyp = data[3];
             int offset = 4;
             if (atyp == 0x01) { // IPv4
-                sprintf(target_host, "%u.%u.%u.%u", (unsigned char)data[4], (unsigned char)data[5], (unsigned char)data[6], (unsigned char)data[7]);
+                fmt(target_host, sizeof(target_host), "{}.{}.{}.{}", (unsigned char)data[4],
+                    (unsigned char)data[5], (unsigned char)data[6], (unsigned char)data[7]);
                 target_port = ((unsigned char)data[8] << 8) | (unsigned char)data[9];
                 offset = 10;
             } else if (atyp == 0x03) { // Domain
@@ -562,7 +564,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
                 offset = 22;
             }
 
-            snprintf(target_url, sizeof(target_url), "tcp://%s:%d", target_host, target_port);
+            fmt(target_url, sizeof(target_url), "tcp://{}:{}", target_host, target_port);
             TLOG_INFO("[TProxy] Request: SOCKS5 TCP CONNECT -> {}", target_url);
 
             const char *routed_backend = NULL;
@@ -647,7 +649,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
         if (proxy->config.backend_url) {
             strncpy(target_url, proxy->config.backend_url, sizeof(target_url)-1);
         } else {
-            snprintf(target_url, sizeof(target_url), "tcp://%s", host_port_str);
+            fmt(target_url, sizeof(target_url), "tcp://{}", host_port_str);
         }
 
         const char *routed_backend = NULL;

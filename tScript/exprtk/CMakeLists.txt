@@ -44,7 +44,11 @@ add_library(
   ${exprtk_GRAMMAR_Y}
   ${exprtk_GRAMMAR_H}
 )
-add_library(TurboNet::ExprTk ALIAS ${TARGET_NAME})
+
+turbonet_configure_target(${TARGET_NAME}
+  ALIAS TurboNet::ExprTk
+  FOLDER turbo_script/${TARGET_NAME}
+  EXPORT_NAME ExprTk)
 
 target_include_directories(
   ${TARGET_NAME}
@@ -84,11 +88,7 @@ target_include_directories(${TARGET_NAME} PRIVATE)
 
 set_target_properties(
   ${TARGET_NAME}
-  PROPERTIES FOLDER turbo_script/${TARGET_NAME}
-  VERSION ${PROJECT_VERSION}
-  SOVERSION ${PROJECT_VERSION_MAJOR}
-  EXPORT_NAME ExprTk
-  WINDOWS_EXPORT_ALL_SYMBOLS ON
+  PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON
   CXX_VISIBILITY_PRESET default
   VISIBILITY_INLINES_HIDDEN OFF)
 

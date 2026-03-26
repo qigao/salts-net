@@ -1,5 +1,6 @@
 #include "s3/s3_client.h"
 #include "s3/s3_credentials.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -62,7 +63,7 @@ int main(int argc, char **argv) {
     const int file_count = 10;
     char filenames[10][64];
     for (int i = 0; i < file_count; i++) {
-        snprintf(filenames[i], sizeof(filenames[i]), "video_%d.mp4", i + 1);
+        fmt(filenames[i], sizeof(filenames[i]), "video_{}.mp4", i + 1);
         create_test_file(filenames[i], 200);  /* 200MB each */
     }
 
@@ -110,7 +111,7 @@ int main(int argc, char **argv) {
     /* Create 3 test files */
     char serial_files[3][64];
     for (int i = 0; i < 3; i++) {
-        snprintf(serial_files[i], sizeof(serial_files[i]), "serial_%d.mp4", i + 1);
+        fmt(serial_files[i], sizeof(serial_files[i]), "serial_{}.mp4", i + 1);
         create_test_file(serial_files[i], 200);
     }
 
@@ -165,7 +166,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 5; i++) {
         download_items[i].bucket = bucket;
         download_items[i].key = filenames[i];
-        snprintf(download_paths[i], sizeof(download_paths[i]), "downloaded_%d.mp4", i + 1);
+        fmt(download_paths[i], sizeof(download_paths[i]), "downloaded_{}.mp4", i + 1);
         download_items[i].file_path = download_paths[i];
         download_items[i].content_type = NULL;
     }

@@ -7,10 +7,10 @@
  */
 
 #include "json_parser.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stb_sprintf.h>
 
 #ifdef _WIN32
   #include <windows.h>
@@ -37,13 +37,13 @@ static char *generate_object_with_keys(size_t num_keys) {
     return NULL;
 
   int pos = 0;
-  pos += sprintf(buf + pos, "{");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "{{");
   for (size_t i = 0; i < num_keys; i++) {
     if (i > 0)
-      pos += sprintf(buf + pos, ",");
-    pos += sprintf(buf + pos, "\"key_%zu\":%zu", i, i);
+      pos += fmt(buf + pos, buf_size - (size_t)pos, ",");
+    pos += fmt(buf + pos, buf_size - (size_t)pos, "\"key_{}\":{}", i, i);
   }
-  pos += sprintf(buf + pos, "}");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "}}");
   return buf;
 }
 
@@ -55,32 +55,32 @@ static char *generate_mqtt_config(size_t listeners, size_t upstreams, size_t fil
     return NULL;
 
   int pos = 0;
-  pos += sprintf(buf + pos, "{\"listeners\":[");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "{{\"listeners\":[");
   for (size_t i = 0; i < listeners; i++) {
     if (i > 0)
-      pos += sprintf(buf + pos, ",");
-    pos +=
-        sprintf(buf + pos, "{\"port\":%zu,\"transport\":\"tcp\",\"host\":\"0.0.0.0\"}", 1883 + i);
+      pos += fmt(buf + pos, buf_size - (size_t)pos, ",");
+    pos += fmt(buf + pos, buf_size - (size_t)pos,
+               "{{\"port\":{},\"transport\":\"tcp\",\"host\":\"0.0.0.0\"}}", 1883 + i);
   }
-  pos += sprintf(buf + pos, "],\"upstreams\":[");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "],\"upstreams\":[");
   for (size_t i = 0; i < upstreams; i++) {
     if (i > 0)
-      pos += sprintf(buf + pos, ",");
-    pos += sprintf(buf + pos, "{\"host\":\"10.0.0.%zu\",\"port\":1883,\"weight\":%zu}", i + 1,
-                   (i % 3) + 1);
+      pos += fmt(buf + pos, buf_size - (size_t)pos, ",");
+    pos += fmt(buf + pos, buf_size - (size_t)pos,
+               "{{\"host\":\"10.0.0.{}\",\"port\":1883,\"weight\":{}}}", i + 1, (i % 3) + 1);
   }
-  pos += sprintf(buf + pos, "],\"filters\":[");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "],\"filters\":[");
   for (size_t i = 0; i < filters; i++) {
     if (i > 0)
-      pos += sprintf(buf + pos, ",");
-    pos += sprintf(buf + pos, "{\"type\":\"topic\",\"action\":\"deny\",\"pattern\":\"$SYS/%zu/#\"}",
-                   i);
+      pos += fmt(buf + pos, buf_size - (size_t)pos, ",");
+    pos += fmt(buf + pos, buf_size - (size_t)pos,
+               "{{\"type\":\"topic\",\"action\":\"deny\",\"pattern\":\"$SYS/{}/#\"}}", i);
   }
-  pos += sprintf(buf + pos, "],\"max_clients\":10000,");
-  pos += sprintf(buf + pos, "\"connect_timeout_ms\":5000,");
-  pos += sprintf(buf + pos, "\"keepalive_sec\":60,");
-  pos += sprintf(buf + pos, "\"max_packet_size\":268435456,");
-  pos += sprintf(buf + pos, "\"hash_replicas\":150}");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "],\"max_clients\":10000,");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "\"connect_timeout_ms\":5000,");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "\"keepalive_sec\":60,");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "\"max_packet_size\":268435456,");
+  pos += fmt(buf + pos, buf_size - (size_t)pos, "\"hash_replicas\":150}}");
 
   return buf;
 }
@@ -100,7 +100,7 @@ static void test_sequential_access(query_test_t *test, int iterations) {
     // Access first 10 keys
     for (size_t k = 0; k < 10 && k < test->num_keys; k++) {
       char key[32];
-      stbsp_snprintf(key, sizeof(key), "key_%zu", k);
+      fmt(key, sizeof(key), "key_{}", k);
       json_value_t *val = json_object_get(test->obj, key);
       (void)val;
       total_queries++;
@@ -128,7 +128,7 @@ static void test_random_access(query_test_t *test, int iterations) {
   for (int i = 0; i < iterations; i++) {
     for (int k = 0; k < 10; k++) {
       char key[32];
-      stbsp_snprintf(key, sizeof(key), "key_%zu", indices[i * 10 + k]);
+      fmt(key, sizeof(key), "key_{}", indices[i * 10 + k]);
       json_value_t *val = json_object_get(test->obj, key);
       (void)val;
       total_queries++;
@@ -148,7 +148,7 @@ static void test_worst_case(query_test_t *test, int iterations) {
   size_t total_queries = 0;
 
   char last_key[32];
-  stbsp_snprintf(last_key, sizeof(last_key), "key_%zu", test->num_keys - 1);
+  fmt(last_key, sizeof(last_key), "key_{}", test->num_keys - 1);
 
   for (int i = 0; i < iterations; i++) {
     for (int k = 0; k < 10; k++) {

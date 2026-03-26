@@ -11,12 +11,12 @@
 #include "mime_parser.h"
 #include "mime_content_disposition.h"
 #include "mime_encoded_word.h"
+#include <fmt.h>
 #include <cjwt/cjwt.h>
 #include <fcntl.h>
 #include <CoroNet/turbo_coro_context.h>
 #include "CoroNet/turbo_coro_socket.h"
 #include "CoroNet/turbo_connection_pool.h"
-#include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,7 +57,7 @@ static inline void send_ok(int *sr, coro_socket_t *t, const void *data, size_t l
 
 static inline void send_chunk(int *sr, coro_socket_t *t, const void *data, size_t len) {
   char hdr[64];
-  stbsp_snprintf(hdr, sizeof(hdr), "%x\r\n", (unsigned)len);
+  fmt(hdr, sizeof(hdr), "{:x}\r\n", (unsigned)len);
   send_ok(sr, t, hdr, strlen(hdr));
   send_ok(sr, t, data, len);
   send_ok(sr, t, "\r\n", 2);
@@ -326,16 +326,15 @@ static char *build_coro_full_url(http_client_t *c, const char *url) {
       tstr_v_starts_with(url_v, tstr_v_from_cstr("https://")))
     return NULL;
 
-  size_t base_len = strlen(c->base_url);
-  size_t full_len = base_len + url_v.len + 2;
-  char *full = (char *)malloc(full_len);
+  tstr_t full = tstr_dup(c->base_url);
   if (!full)
     return NULL;
-  if (url[0] == '/')
-    stbsp_snprintf(full, (int)full_len, "%s%s", c->base_url, url);
-  else
-    stbsp_snprintf(full, (int)full_len, "%s/%s", c->base_url, url);
-  return full;
+  if (url[0] != '/')
+    full = tstr_cat(full, "/");
+  full = tstr_cat(full, url);
+  char *result = tstr_to_cstr(full);
+  tstr_free(full);
+  return result;
 }
 
 static int build_transport_params(const char *http_url, char *host_buf, size_t host_buf_size,
@@ -352,7 +351,7 @@ static int build_transport_params(const char *http_url, char *host_buf, size_t h
     port = *out_is_tls ? 443 : 80;
 
   *out_port = port;
-  snprintf(host_buf, host_buf_size, "%s", host ? host : "");
+  fmt(host_buf, host_buf_size, "{}", host ? host : "");
   return 0;
 }
 
@@ -563,7 +562,7 @@ void http_client_set_basic_auth(http_client_t *c, const char *user, const char *
     return;
   size_t cred_len = strlen(user) + strlen(pass) + 2;
   char *cred = (char *)malloc(cred_len);
-  stbsp_snprintf(cred, (int)cred_len, "%s:%s", user, pass);
+  fmt(cred, cred_len, "{}:{}", user, pass);
 
   char *encoded = NULL;
   if (tn_base64_encode((const uint8_t *)cred, strlen(cred), &encoded) != 0) {
@@ -575,7 +574,7 @@ void http_client_set_basic_auth(http_client_t *c, const char *user, const char *
   size_t hdr_len = strlen("Authorization: Basic ") + strlen(encoded) + 1;
   free(c->auth_header);
   c->auth_header = (char *)malloc(hdr_len);
-  stbsp_snprintf(c->auth_header, (int)hdr_len, "Authorization: Basic %s", encoded);
+  fmt(c->auth_header, hdr_len, "Authorization: Basic {}", encoded);
   free(encoded);
 }
 
@@ -585,7 +584,7 @@ void http_client_set_bearer_token(http_client_t *c, const char *token) {
   size_t len = strlen("Authorization: Bearer ") + strlen(token) + 1;
   free(c->auth_header);
   c->auth_header = (char *)malloc(len);
-  stbsp_snprintf(c->auth_header, (int)len, "Authorization: Bearer %s", token);
+  fmt(c->auth_header, len, "Authorization: Bearer {}", token);
 }
 
 void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *claims_json) {
@@ -861,7 +860,6 @@ static int on_coro_body(llhttp_t *p, const char *at, size_t len) {
   coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
   if (!ctx || !ctx->response)
     return 0;
-
   if (ctx->data_cb) {
     ctx->data_cb(at, len, ctx->data_cb_user_data);
     return 0;
@@ -981,7 +979,7 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
   int default_port = is_tls ? 443 : 80;
   if (port != 0 && port != default_port) {
     char host_buf[300];
-    stbsp_snprintf(host_buf, sizeof(host_buf), "Host: %s:%d\r\n", host, port);
+    fmt(host_buf, sizeof(host_buf), "Host: {}:{}\r\n", host, port);
     req = tstr_cat(req, host_buf);
   } else {
     req = tstr_cat_fmt(req, "Host: %s\r\n", host);
@@ -997,7 +995,7 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
     req = tstr_cat(req, "Transfer-Encoding: chunked\r\n");
   } else if (body_len > 0) {
     char cl[64];
-    stbsp_snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", body_len);
+    fmt(cl, sizeof(cl), "Content-Length: {}\r\n", body_len);
     req = tstr_cat(req, cl);
   }
 
@@ -1022,13 +1020,11 @@ static tstr_t build_http_request_str(http_client_t *c, http_method_t method, uri
     const char *query_ptr = turbo_uri_query(uri);
     
     if (p != 0 && p != (tstr_casecmp(s, "https") == 0 ? 443 : 80))
-      stbsp_snprintf(url_buf, sizeof(url_buf), "%s://%s:%d%s%s%s", s, h, p, 
-                     path_ptr[0] == '/' ? "" : "/", path_ptr, 
-                     (query_ptr && query_ptr[0]) ? "?" : "", (query_ptr && query_ptr[0]) ? query_ptr : "");
+      fmt(url_buf, sizeof(url_buf), "{}://{}:{}{}{}{}{}", s, h, p, path_ptr[0] == '/' ? "" : "/",
+          path_ptr, (query_ptr && query_ptr[0]) ? "?" : "", (query_ptr && query_ptr[0]) ? query_ptr : "");
     else
-      stbsp_snprintf(url_buf, sizeof(url_buf), "%s://%s%s%s%s%s", s, h, 
-                     path_ptr[0] == '/' ? "" : "/", path_ptr,
-                     (query_ptr && query_ptr[0]) ? "?" : "", (query_ptr && query_ptr[0]) ? query_ptr : "");
+      fmt(url_buf, sizeof(url_buf), "{}://{}{}{}{}{}", s, h, path_ptr[0] == '/' ? "" : "/", path_ptr,
+          (query_ptr && query_ptr[0]) ? "?" : "", (query_ptr && query_ptr[0]) ? query_ptr : "");
 
     char *cookie_header = build_cookie_header_rfc(c->cookie_jar, url_buf);
     if (cookie_header) {
@@ -1382,14 +1378,13 @@ static int send_http_request(http_client_t *c, coro_socket_t *transport, tstr_t 
       if (part->is_file) {
         const char *filename = part->filename ? part->filename : "";
         const char *type = part->content_type ? part->content_type : "";
-        stbsp_snprintf(part_header, sizeof(part_header),
-                       "--%s\r\nContent-Disposition: form-data; name=\"%s\"; "
-                       "filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
-                       form->boundary, name, filename, type);
+        fmt(part_header, sizeof(part_header),
+            "--{}\r\nContent-Disposition: form-data; name=\"{}\"; "
+            "filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+            form->boundary, name, filename, type);
       } else {
-        stbsp_snprintf(part_header, sizeof(part_header),
-                       "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n",
-                       form->boundary, name);
+        fmt(part_header, sizeof(part_header),
+            "--{}\r\nContent-Disposition: form-data; name=\"{}\"\r\n\r\n", form->boundary, name);
       }
 
       send_chunk(&sr, transport, part_header, strlen(part_header));
@@ -1415,7 +1410,7 @@ static int send_http_request(http_client_t *c, coro_socket_t *transport, tstr_t 
 
     if (sr == 0) {
       char final_boundary[128];
-      stbsp_snprintf(final_boundary, sizeof(final_boundary), "--%s--\r\n", form->boundary);
+      fmt(final_boundary, sizeof(final_boundary), "--{}--\r\n", form->boundary);
       send_chunk(&sr, transport, final_boundary, strlen(final_boundary));
       send_ok(&sr, transport, "0\r\n\r\n", 5);
     }
@@ -1628,9 +1623,9 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
         int p = turbo_uri_port(cur_uri);
         char buf[1024];
         if (p != 0 && p != (tstr_casecmp(s, "https") == 0 ? 443 : 80))
-          stbsp_snprintf(buf, sizeof(buf), "%s://%s:%d%s%s", s, h, p, location[0] == '/' ? "" : "/", location);
+          fmt(buf, sizeof(buf), "{}://{}:{}{}{}", s, h, p, location[0] == '/' ? "" : "/", location);
         else
-          stbsp_snprintf(buf, sizeof(buf), "%s://%s%s%s", s, h, location[0] == '/' ? "" : "/", location);
+          fmt(buf, sizeof(buf), "{}://{}{}{}", s, h, location[0] == '/' ? "" : "/", location);
         new_url = coro_strdup(buf);
         turbo_free_uri(&cur_uri);
       }
@@ -2248,7 +2243,7 @@ http_response_t *http_download_file_resume(
         int header_count = 0;
 
         if (start_byte > 0) {
-            snprintf(range_header, sizeof(range_header), "Range: bytes=%zu-", start_byte);
+            fmt(range_header, sizeof(range_header), "Range: bytes={}-", start_byte);
             headers[0] = range_header;
             header_count = 1;
         }

@@ -12,8 +12,7 @@ message(STATUS "Building turbo_ice module (ICE/STUN/TURN NAT traversal)")
 # turbo_ice - ICE/STUN/TURN library (respects BUILD_SHARED_LIBS)
 # ============================================================================
 
-add_library(turbo_ice src/turbo_stun.c src/turbo_ice.c src/turbo_turn.c
-                      src/stb_sprintf.c)
+add_library(turbo_ice src/turbo_stun.c src/turbo_ice.c src/turbo_turn.c)
 
 add_library(TurboNet::Ice ALIAS turbo_ice)
 

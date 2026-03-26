@@ -1,4 +1,5 @@
 #include "asn1_types.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -278,8 +279,11 @@ char *asn1_oid_to_string(const asn1_oid_t *oid) {
         if (i > 0) {
             buffer[pos++] = '.';
         }
-        pos += snprintf(buffer + pos, buffer_size - pos, "%u", oid->components[i]);
-        if (pos >= buffer_size - 1) break;
+        int written = fmt(buffer + pos, buffer_size - pos, "{}", oid->components[i]);
+        if (written < 0 || (size_t)written >= buffer_size - pos) {
+            break;
+        }
+        pos += (size_t)written;
     }
     
     return buffer;

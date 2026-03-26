@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fmt.h>
 #include "mib_compiler.h"
 
 void print_usage(const char *program_name) {
@@ -67,11 +68,11 @@ int main(int argc, char *argv[]) {
     // Create output directory if it doesn't exist
 #ifdef _WIN32
     char mkdir_cmd[512];
-    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir \"%s\" 2>nul", output_dir);
+    fmt(mkdir_cmd, sizeof(mkdir_cmd), "mkdir \"{}\" 2>nul", output_dir);
     system(mkdir_cmd);
 #else
     char mkdir_cmd[512];
-    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", output_dir);
+    fmt(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"{}\"", output_dir);
     system(mkdir_cmd);
 #endif
     

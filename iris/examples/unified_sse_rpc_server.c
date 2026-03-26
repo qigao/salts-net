@@ -4,40 +4,82 @@
  */
 
 #include "iris.h"
-#include "iris_app.h"
-#include "server.h"
 #include "rpc.h"
 #include "tlog.h"
-#define STB_SPRINTF_IMPLEMENTATION
-#include "stb_sprintf.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include <fmt.h>
+#include <stdint.h>
 #include <string.h>
+
+#define STREAM_DELAY_MS 200
+#define STREAM_DEFAULT_COUNT 5
+#define STREAM_MAX_COUNT 100
+
+static void send_demo_sse(Res *res) {
+    static const char *events[] = {
+        "Event 1: Connected",
+        "Event 2: Processing",
+        "{\"json\": \"data\", \"id\": 123}",
+        "Event 3: Finished"
+    };
+    size_t i;
+
+    reply_stream_start(res, 200);
+    for (i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
+        reply_stream_chunk(res, events[i]);
+        if (i + 1 < sizeof(events) / sizeof(events[0])) {
+            turbo_sleep_ms(STREAM_DELAY_MS);
+        }
+    }
+    reply_stream_end(res);
+}
+
+static int clamp_stream_count(int64_t n) {
+    if (n <= 0) {
+        return STREAM_DEFAULT_COUNT;
+    }
+    if (n > STREAM_MAX_COUNT) {
+        return STREAM_MAX_COUNT;
+    }
+    return (int)n;
+}
+
+static int register_rpc_method_or_fail(rpc_context_t *ctx, const char *name,
+                                       rpc_method_handler_t handler,
+                                       const char *description) {
+    rpc_method_t method = {0};
+
+    method.name = name;
+    method.handler = handler;
+    method.description = description;
+    return rpc_register_method(ctx, &method);
+}
 
 /* --- 1. HTTP SSE Handler --- */
 
-void handle_stream(Req *req, Res *res) {
+static void handle_stream(Req *req, Res *res) {
     (void)req;
     TLOG_INFO("HTTP SSE connection received at /stream");
-
-    /* 1. Start the stream */
-    reply_stream_start(res, 200);
-
-    /* 2. Send some events */
-    reply_stream_chunk(res, "Event 1: Connected");
-    turbo_sleep_ms(200);
-
-    reply_stream_chunk(res, "Event 2: Processing");
-    turbo_sleep_ms(200);
-
-    reply_stream_chunk(res, "{\"json\": \"data\", \"id\": 123}");
-    turbo_sleep_ms(200);
-
-    reply_stream_chunk(res, "Event 3: Finished");
-
-    /* 3. End the stream */
-    reply_stream_end(res);
+    send_demo_sse(res);
     TLOG_INFO("HTTP SSE stream finished");
+}
+
+static void handle_upload_stream(Req *req, Res *res) {
+    char chunk[4096];
+    size_t total = 0;
+    size_t n;
+    char response[128];
+
+    if (!req_is_body_stream(req)) {
+        send_json(res, 500, "{\"error\":\"stream route misconfigured\"}");
+        return;
+    }
+
+    while ((n = req_read_body(req, chunk, sizeof(chunk))) > 0) {
+        total += n;
+    }
+
+    fmt(response, sizeof(response), "{{\"uploaded_bytes\":{}}}", total);
+    send_json(res, 200, response);
 }
 
 /* --- 2. RPC Streaming Handler --- */
@@ -50,22 +92,21 @@ static int math_count_handler(Req *req, Res *res, rpc_request_t *rpc_req, rpc_re
         return -1;
     }
 
-    if (n <= 0) n = 5;
-    if (n > 100) n = 100;
+    n = clamp_stream_count(n);
 
     TLOG_INFO("RPC Streaming call received: math.count(n=%lld)", (long long)n);
 
-    /* Start SSE stream for RPC */
     rpc_send_stream_start(res, rpc_res);
 
-    for (int i = 1; i <= n; i++) {
+    for (int i = 1; i <= (int)n; i++) {
         char result_json[64];
-        stbsp_snprintf(result_json, sizeof(result_json), "{\"count\":%d}", i);
+        fmt(result_json, sizeof(result_json), "{{\"count\":{}}}", i);
         rpc_set_result(rpc_res, result_json);
         rpc_send_stream_chunk(res, rpc_res);
-        
-        /* Small delay to simulate real-time processing */
-        turbo_sleep_ms(200);
+
+        if (i < (int)n) {
+            turbo_sleep_ms(STREAM_DELAY_MS);
+        }
     }
 
     rpc_send_stream_end(res);
@@ -82,7 +123,8 @@ static int math_add_handler(Req *req, Res *res, rpc_request_t *rpc_req, rpc_resp
         rpc_set_error(rpc_res, RPC_ERROR_INVALID_PARAMS, "Missing parameters 'a' and 'b'");
         return -1;
     }
-    char *result_json = mem_sprintf(rpc_res->arena, "%lld", (long long)(a + b));
+    char result_json[32];
+    fmt(result_json, sizeof(result_json), "{}", (long long)(a + b));
     rpc_set_result(rpc_res, result_json);
     return 0;
 }
@@ -97,6 +139,7 @@ static void home_handler(Req *req, Res *res) {
 /* --- Main --- */
 
 int main(int argc, char *argv[]) {
+    rpc_config_t rpc_config = RPC_DEFAULT_CONFIG();
     (void)argc; (void)argv;
 
     TLOG_INFO("Unified SSE/RPC Server Starting...");
@@ -106,41 +149,40 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Configure RPC */
-    rpc_config_t rpc_config = RPC_DEFAULT_CONFIG();
     rpc_context_t *rpc_ctx = rpc_init(&rpc_config);
     if (!rpc_ctx) {
         TLOG_ERROR("Failed to init RPC context");
         return 1;
     }
 
-    /* Register RPC methods */
-    rpc_method_t m;
-    
-    memset(&m, 0, sizeof(m));
-    m.name = "math.add";
-    m.handler = math_add_handler;
-    m.description = "Add two numbers";
-    rpc_register_method(rpc_ctx, &m);
+    if (register_rpc_method_or_fail(rpc_ctx, "math.add", math_add_handler,
+                                    "Add two numbers") != 0) {
+        TLOG_ERROR("Failed to register RPC method math.add");
+        rpc_destroy(rpc_ctx);
+        return 1;
+    }
 
-    memset(&m, 0, sizeof(m));
-    m.name = "math.count";
-    m.handler = math_count_handler;
-    m.description = "Count to N (streaming)";
-    rpc_register_method(rpc_ctx, &m);
+    if (register_rpc_method_or_fail(rpc_ctx, "math.count", math_count_handler,
+                                    "Count to N (streaming)") != 0) {
+        TLOG_ERROR("Failed to register RPC method math.count");
+        rpc_destroy(rpc_ctx);
+        return 1;
+    }
 
-    /* Setup RPC endpoint (/rpc) */
-    rpc_setup_endpoint(rpc_ctx);
+    if (rpc_setup_endpoint(rpc_ctx) != 0) {
+        TLOG_ERROR("Failed to setup RPC endpoint");
+        rpc_destroy(rpc_ctx);
+        return 1;
+    }
 
-    /* Register standard SSE endpoint (/stream) */
     get("/stream", handle_stream);
-
-    /* Home page */
+    post_stream("/upload", handle_upload_stream);
     get("/", home_handler);
 
     TLOG_INFO("Server listening on http://localhost:8080");
     TLOG_INFO("Standard SSE endpoint: /stream");
     TLOG_INFO("RPC SSE endpoint:      /rpc (method: math.count)");
+    TLOG_INFO("Streaming upload:      /upload");
 
     return iris_app_listen(NULL, 8080);
 }

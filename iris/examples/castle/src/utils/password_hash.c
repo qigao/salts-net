@@ -4,7 +4,7 @@
 #include "base64_utils.h"
 #include <string.h>
 #include <stdio.h>
-#include <stb_sprintf.h>
+#include <fmt.h>
 
 #define SALT_LEN 16
 #define HASH_LEN 32
@@ -46,8 +46,7 @@ int password_hash(char *out, const char *password, size_t password_len) {
     free(hash_encoded);
     
     /* Format: $pbkdf2$iterations$salt$hash */
-    stbsp_snprintf(out, PASSWORD_HASH_STRBYTES, "$pbkdf2$%d$%s$%s", 
-             ITERATIONS, salt_b64, hash_b64);
+    fmt(out, PASSWORD_HASH_STRBYTES, "$pbkdf2${}${}${}", ITERATIONS, salt_b64, hash_b64);
     
     return 0;
 }

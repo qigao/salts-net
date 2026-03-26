@@ -12,8 +12,8 @@
 #include <time.h>
 #include <ctype.h>
 
-// Include generated parser (following JSON parser naming convention)
-#include "cookie_parser_gen.h"
+// Include generated lemon parser
+#include "cookie_grammar_gen.h"
 
 #include "tlog.h"
 

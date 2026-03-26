@@ -37,7 +37,6 @@ foreach(test_name ${HTTP_TESTS})
     target_link_libraries(${test_name} PRIVATE ws2_32 advapi32)
   endif()
 
-  add_sanitizers(${test_name})
   add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
@@ -52,6 +51,5 @@ foreach(test_name ${HTTP_EXAMPLE_SPECS})
     target_link_libraries(${test_name} PRIVATE ws2_32 advapi32)
   endif()
 
-  add_sanitizers(${test_name})
   add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()

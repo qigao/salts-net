@@ -5,6 +5,7 @@
 
 #include "security.h"
 #include "turbo_str.h"
+#include <fmt.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -416,7 +417,7 @@ iris_security_result_t iris_escape_json(const char *input, char *output, size_t 
                     if (out_pos >= output_size - 6) {
                         return IRIS_SECURITY_ERROR_BUFFER_TOO_SMALL;
                     }
-                    snprintf(output + out_pos, output_size - out_pos, "\\u%04x", (unsigned char)c);
+                    fmt(output + out_pos, output_size - out_pos, "\\u{:04x}", (unsigned char)c);
                     out_pos += 6;
                 } else {
                     output[out_pos++] = c;
@@ -473,7 +474,7 @@ iris_security_result_t iris_escape_url(const char *input, char *output, size_t o
             if (out_pos >= output_size - 3) {
                 return IRIS_SECURITY_ERROR_BUFFER_TOO_SMALL;
             }
-            snprintf(output + out_pos, output_size - out_pos, "%%%02X", c);
+            fmt(output + out_pos, output_size - out_pos, "%{:02X}", c);
             out_pos += 3;
         }
     }
@@ -894,7 +895,9 @@ int iris_jwt_middleware(Req *req, Res *res, Chain *chain) {
     if (rv != CJWTE_OK) {
         TLOG_ERROR("JWT Middleware: Token verification failed (error {})", ENUM_NAME(rv));
         char err_msg[256];
-        snprintf(err_msg, sizeof(err_msg), "{\"error\":\"Unauthorized\", \"message\":\"Invalid or expired token (cjwt error code: %d)\"}", (int)rv);
+        fmt(err_msg, sizeof(err_msg),
+            "{{\"error\":\"Unauthorized\", \"message\":\"Invalid or expired token (cjwt error code: {})\"}}",
+            (int)rv);
         send_json(res, 401, err_msg);
         return 1;
     }

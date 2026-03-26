@@ -54,6 +54,11 @@ typedef struct
 
     // Keep-alive tracking
     int keep_alive; // 1 for keep-alive, 0 for close
+    int headers_complete; // 1 when headers are fully parsed
+    int message_complete; // 1 when llhttp reached end of one full message
+    int stream_mode; // 1 when body should be exposed chunk-by-chunk instead of buffered
+    const char *stream_chunk;
+    size_t stream_chunk_len;
 
     // HTTP version
     int http_major; // Major HTTP version
@@ -70,6 +75,17 @@ CXX_C_API void http_context_init(http_context_t *context, mem_pool_t *arena);
 
 // Function to cleanup the http context
 CXX_C_API void http_context_free(http_context_t *context);
+
+// Feed bytes into an initialized HTTP context incrementally.
+// Returns:
+//   0 when more bytes are needed
+//   1 when a full message has been parsed
+//   2 when request headers are complete and parsing paused at the body boundary
+//   3 when stream_mode is enabled and a body chunk is ready in stream_chunk/stream_chunk_len
+// and a negative HTTP status code on parse error.
+CXX_C_API int http_context_execute(http_context_t *context, const char *data, size_t len,
+                                   size_t *consumed);
+CXX_C_API void http_context_resume(http_context_t *context);
 
 // Parse the query string into request_t structure
 /* Phase IRIS-1: Updated to use mem_pool_t */

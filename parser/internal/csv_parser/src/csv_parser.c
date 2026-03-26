@@ -7,12 +7,12 @@
 #include "csv_types.h"
 #include "csv_lexer.h"
 #include "csv_grammar_gen.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
 #include <memory_pool.h>
-#include <stb_sprintf.h>
 #ifdef _MSC_VER
 static __declspec(thread) char g_error_msg[256] = {0};
 #else
@@ -211,20 +211,20 @@ csv_doc_t *csv_parse(const char *content, size_t len) {
 
 csv_doc_t *csv_parse_opts(const char *content, size_t len, const csv_options_t *opts) {
     if (!content || len == 0) {
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "Empty input");
+        fmt(g_error_msg, sizeof(g_error_msg), "Empty input");
         return NULL;
     }
 
     csv_arena_t *arena = csv_arena_create_sized(len < 4096 ? 4096 : len / 4);
     if (!arena) {
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "Failed to allocate arena");
+        fmt(g_error_msg, sizeof(g_error_msg), "Failed to allocate arena");
         return NULL;
     }
 
     csv_doc_t *doc = csv_doc_new_arena(arena);
     if (!doc) {
         csv_arena_free(arena);
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "Failed to allocate document");
+        fmt(g_error_msg, sizeof(g_error_msg), "Failed to allocate document");
         return NULL;
     }
 
@@ -266,7 +266,7 @@ csv_doc_t *csv_parse_opts(const char *content, size_t len, const csv_options_t *
     }
 
     if (ret < 0) {
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "%s", lexer.error);
+        fmt(g_error_msg, sizeof(g_error_msg), "{}", lexer.error);
         csv_arena_free(arena);
         return NULL;
     }
@@ -289,7 +289,7 @@ csv_doc_t *csv_parse_file(const char *filename) {
 csv_doc_t *csv_parse_file_opts(const char *filename, const csv_options_t *opts) {
     FILE *fp = fopen(filename, "rb");
     if (!fp) {
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "Cannot open file: %s", strerror(errno));
+        fmt(g_error_msg, sizeof(g_error_msg), "Cannot open file: {}", strerror(errno));
         return NULL;
     }
 
@@ -299,14 +299,14 @@ csv_doc_t *csv_parse_file_opts(const char *filename, const csv_options_t *opts) 
 
     if (size <= 0) {
         fclose(fp);
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "Empty file");
+        fmt(g_error_msg, sizeof(g_error_msg), "Empty file");
         return NULL;
     }
 
     char *content = (char *)malloc((size_t)size + 1);
     if (!content) {
         fclose(fp);
-        stbsp_snprintf(g_error_msg, sizeof(g_error_msg), "Out of memory");
+        fmt(g_error_msg, sizeof(g_error_msg), "Out of memory");
         return NULL;
     }
 

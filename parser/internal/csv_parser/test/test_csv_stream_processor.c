@@ -5,6 +5,7 @@
 
 #include "csv_stream_processor.h"
 #include "tinytest.h"
+#include <fmt.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -398,7 +399,7 @@ spec("csv_stream_processor") {
 
             char row[64];
             for (int i = 0; i < 10000; i++) {
-                int n = snprintf(row, sizeof(row), "%d,%d\n", i, i * 2);
+                int n = fmt(row, sizeof(row), "{},{}\n", i, i * 2);
                 csv_stream_processor_feed(row, (size_t)n, p);
             }
             csv_stream_processor_finish(p);
@@ -426,7 +427,7 @@ spec("csv_stream_processor") {
 
             char row[64];
             for (int i = 0; i < 10000; i++) {
-                int n = snprintf(row, sizeof(row), "%d\n", i);
+                int n = fmt(row, sizeof(row), "{}\n", i);
                 csv_stream_processor_feed(row, (size_t)n, p);
             }
             csv_stream_processor_finish(p);
@@ -459,11 +460,11 @@ spec("csv_stream_processor") {
 
             for (int i = 0; i < total_rows; i++) {
                 double base = 100.0 + (double)(i % 1000) * 0.01;
-                int n = snprintf(buf + buf_len, sizeof(buf) - buf_len,
-                                 "%d,%.2f,%.2f,%.2f,%.2f,%d\n",
-                                 1700000000 + i,
-                                 base, base + 0.5, base - 0.3, base + 0.1,
-                                 1000 + (i % 5000));
+                int n = fmt(buf + buf_len, sizeof(buf) - buf_len,
+                            "{},{:.2f},{:.2f},{:.2f},{:.2f},{}\n",
+                            1700000000 + i,
+                            base, base + 0.5, base - 0.3, base + 0.1,
+                            1000 + (i % 5000));
 
                 buf_len += (size_t)n;
 
@@ -513,8 +514,8 @@ spec("csv_stream_processor") {
                 int vol = 1000 + (i % 5000);
                 if (vol > 5500) expected_match++;
 
-                int n = snprintf(buf + buf_len, sizeof(buf) - buf_len,
-                                 "%.2f,%d\n", 100.0 + (double)i * 0.001, vol);
+                int n = fmt(buf + buf_len, sizeof(buf) - buf_len,
+                            "{:.2f},{}\n", 100.0 + (double)i * 0.001, vol);
                 buf_len += (size_t)n;
 
                 if (buf_len > sizeof(buf) - 64) {
@@ -551,7 +552,7 @@ spec("csv_stream_processor") {
             size_t buf_len = 0;
 
             for (int i = 0; i < 1000000; i++) {
-                int n = snprintf(buf + buf_len, sizeof(buf) - buf_len, "%d\n", i);
+                int n = fmt(buf + buf_len, sizeof(buf) - buf_len, "{}\n", i);
                 buf_len += (size_t)n;
 
                 if (i < 100) {

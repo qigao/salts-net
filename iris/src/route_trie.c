@@ -199,6 +199,7 @@ bool route_trie_match(route_trie_t *trie,
     // Initialize match result
     match->handler = NULL;
     match->middleware_ctx = NULL;
+    match->stream_body = 0;
     match->param_count = 0;
 
     trie_node_t *matched_node = NULL;
@@ -229,6 +230,7 @@ bool route_trie_match(route_trie_t *trie,
     {
         match->handler = matched_node->handlers[method_idx];
         match->middleware_ctx = matched_node->middleware_ctx[method_idx];
+        match->stream_body = matched_node->stream_body[method_idx] ? 1 : 0;
         turbo_rwlock_rdunlock(&trie->lock);
         return true;
     }
@@ -351,8 +353,8 @@ route_trie_t *route_trie_create(void)
 }
 
 // Add a route to the trie
-int route_trie_add(route_trie_t *trie, const char *method, const char *path,
-                   RequestHandler handler, void *middleware_ctx)
+static int route_trie_add_impl(route_trie_t *trie, const char *method, const char *path,
+                               RequestHandler handler, void *middleware_ctx, int stream_body)
 {
     if (!trie || !method || !path || !handler)
         return -1;
@@ -472,10 +474,23 @@ int route_trie_add(route_trie_t *trie, const char *method, const char *path,
     current->is_end = true;
     current->handlers[method_idx] = handler;
     current->middleware_ctx[method_idx] = middleware_ctx;
+    current->stream_body[method_idx] = stream_body ? 1 : 0;
     trie->route_count++;
 
     turbo_rwlock_wrunlock(&trie->lock);
     return 0;
+}
+
+int route_trie_add(route_trie_t *trie, const char *method, const char *path,
+                   RequestHandler handler, void *middleware_ctx)
+{
+    return route_trie_add_impl(trie, method, path, handler, middleware_ctx, 0);
+}
+
+int route_trie_add_stream(route_trie_t *trie, const char *method, const char *path,
+                          RequestHandler handler, void *middleware_ctx)
+{
+    return route_trie_add_impl(trie, method, path, handler, middleware_ctx, 1);
 }
 
 // Free the route trie

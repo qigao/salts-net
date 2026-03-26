@@ -1,6 +1,7 @@
 #include "email/email_smtp.h"
 #include "CoroNet.h"
 #include "base64_utils.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,8 +59,7 @@ static int smtp_read_line(smtp_client_t *client, char **line) {
     size_t len = 0;
     int result = coro_socket_recv(client->socket, &data, &len);
     if (result != 0 || !data || len == 0) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Failed to read SMTP response");
+      fmt(client->error_msg, sizeof(client->error_msg), "Failed to read SMTP response");
       if (data) {
         coro_socket_free_recv(data);
       }
@@ -69,8 +69,7 @@ static int smtp_read_line(smtp_client_t *client, char **line) {
     size_t space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
     if (len > space) {
       coro_socket_free_recv(data);
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "SMTP response too large");
+      fmt(client->error_msg, sizeof(client->error_msg), "SMTP response too large");
       return -1;
     }
 
@@ -93,8 +92,7 @@ static int smtp_read_response(smtp_client_t *client, int *code) {
   if (!isdigit((unsigned char)line[0]) ||
       !isdigit((unsigned char)line[1]) ||
       !isdigit((unsigned char)line[2])) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Invalid SMTP response: %s", line);
+    fmt(client->error_msg, sizeof(client->error_msg), "Invalid SMTP response: {}", line);
     return -1;
   }
 
@@ -113,8 +111,7 @@ static int smtp_read_response(smtp_client_t *client, int *code) {
     if (!isdigit((unsigned char)line[0]) ||
         !isdigit((unsigned char)line[1]) ||
         !isdigit((unsigned char)line[2])) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Invalid SMTP response: %s", line);
+      fmt(client->error_msg, sizeof(client->error_msg), "Invalid SMTP response: {}", line);
       return -1;
     }
 
@@ -122,13 +119,12 @@ static int smtp_read_response(smtp_client_t *client, int *code) {
                         (line[1] - '0') * 10 +
                         (line[2] - '0');
     if (client->last_code != response_code) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Mismatched SMTP multi-line response: %s", line);
+      fmt(client->error_msg, sizeof(client->error_msg), "Mismatched SMTP multi-line response: {}", line);
       return -1;
     }
   }
 
-  snprintf(client->response_buffer, sizeof(client->response_buffer), "%s", line);
+  fmt(client->response_buffer, sizeof(client->response_buffer), "{}", line);
   return response_code;
 }
 
@@ -136,12 +132,11 @@ static int smtp_send_command(smtp_client_t *client, const char *cmd) {
   if (!client || !client->socket || !cmd) return -1;
 
   char buffer[1024];
-  int len = snprintf(buffer, sizeof(buffer), "%s\r\n", cmd);
+  int len = fmt(buffer, sizeof(buffer), "{}\r\n", cmd);
 
   int rc = coro_socket_send(client->socket, buffer, len);
   if (rc != 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to send SMTP command (%d): %s", rc, cmd);
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to send SMTP command ({}): {}", rc, cmd);
     return -1;
   }
 
@@ -151,8 +146,7 @@ static int smtp_send_command(smtp_client_t *client, const char *cmd) {
 static int smtp_expect_code(smtp_client_t *client, int expected) {
   int code = smtp_read_response(client, NULL);
   if (code != expected) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Expected %d, got %d: %s", expected, code, client->read_buffer);
+    fmt(client->error_msg, sizeof(client->error_msg), "Expected {}, got {}: {}", expected, code, client->read_buffer);
     return -1;
   }
   return 0;
@@ -205,16 +199,14 @@ int smtp_connect(smtp_client_t *client) {
   socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
   client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
   if (!client->socket) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to create socket");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
   }
 
   if (coro_socket_connect(client->socket, client->config.host,
                           client->config.port) != 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to connect to %s:%d", client->config.host,
-             client->config.port);
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to connect to {}:{}", client->config.host,
+        client->config.port);
     coro_socket_destroy(client->socket);
     client->socket = NULL;
     return -1;
@@ -231,8 +223,7 @@ int smtp_connect(smtp_client_t *client) {
       client->config.use_starttls ||
       (client->config.username != NULL && client->config.password != NULL);
   char hello_cmd[256];
-  snprintf(hello_cmd, sizeof(hello_cmd), "%s %s",
-           needs_extended_smtp ? "EHLO" : "HELO", client->config.host);
+  fmt(hello_cmd, sizeof(hello_cmd), "{} {}", needs_extended_smtp ? "EHLO" : "HELO", client->config.host);
   if (smtp_send_command(client, hello_cmd) != 0) {
     smtp_disconnect(client);
     return -1;
@@ -256,8 +247,7 @@ int smtp_connect(smtp_client_t *client) {
     }
 
     if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      snprintf(client->error_msg, sizeof(client->error_msg),
-               "Failed to upgrade SMTP connection to TLS");
+      fmt(client->error_msg, sizeof(client->error_msg), "Failed to upgrade SMTP connection to TLS");
       smtp_disconnect(client);
       return -1;
     }
@@ -302,7 +292,7 @@ int smtp_connect(smtp_client_t *client) {
       }
 
       char auth_cmd[1024];
-      snprintf(auth_cmd, sizeof(auth_cmd), "AUTH PLAIN %s", auth_b64);
+      fmt(auth_cmd, sizeof(auth_cmd), "AUTH PLAIN {}", auth_b64);
       free(auth_b64);
 
       if (smtp_send_command(client, auth_cmd) != 0) {
@@ -408,14 +398,14 @@ int smtp_send_raw(smtp_client_t *client,
 
   // MAIL FROM
   char mail_from[512];
-  snprintf(mail_from, sizeof(mail_from), "MAIL FROM:<%s>", from_email);
+  fmt(mail_from, sizeof(mail_from), "MAIL FROM:<{}>", from_email);
   if (smtp_send_command(client, mail_from) != 0) return -1;
   if (smtp_expect_code(client, 250) != 0) return -1;
 
   // RCPT TO (for each recipient)
   for (int i = 0; i < to_count; i++) {
     char rcpt_to[512];
-    snprintf(rcpt_to, sizeof(rcpt_to), "RCPT TO:<%s>", to_emails[i]);
+    fmt(rcpt_to, sizeof(rcpt_to), "RCPT TO:<{}>", to_emails[i]);
     if (smtp_send_command(client, rcpt_to) != 0) return -1;
     if (smtp_expect_code(client, 250) != 0) return -1;
   }
@@ -426,8 +416,7 @@ int smtp_send_raw(smtp_client_t *client,
 
   // Send message body
   if (coro_socket_send(client->socket, raw_message, message_len) != 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "Failed to send message body");
+    fmt(client->error_msg, sizeof(client->error_msg), "Failed to send message body");
     return -1;
   }
 
@@ -462,8 +451,7 @@ int smtp_send_message(smtp_client_t *client, email_message_t *msg) {
   }
 
   if (to_count == 0) {
-    snprintf(client->error_msg, sizeof(client->error_msg),
-             "No recipients specified");
+    fmt(client->error_msg, sizeof(client->error_msg), "No recipients specified");
     return -1;
   }
 

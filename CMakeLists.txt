@@ -40,7 +40,9 @@ enable_testing()
 
 include(CMakeOptions.cmake)
 include(Sanitizers)
+include(TurboNetUtils)
 
+find_package(Threads REQUIRED)
 
 find_package(kcp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)

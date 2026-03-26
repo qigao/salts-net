@@ -1,5 +1,6 @@
 #include "collection/turl_collection.h"
 #include "turl_common.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +60,7 @@ int turl_run_collection(const char *collection_file, const turl_http_config_t *g
                 const char *val = json_get_string(headers_obj, key);
                 if (key && val) {
                     char buf[1024];
-                    snprintf(buf, sizeof(buf), "%s: %s", key, val);
+                    fmt(buf, sizeof(buf), "{}: {}", key, val);
                     dynamic_headers[dynamic_count++] = strdup(buf);
                 }
             }

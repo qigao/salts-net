@@ -2,13 +2,11 @@
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "turbo_str.h"
+#include <fmt.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define STB_SPRINTF_IMPLEMENTATION
-
-#include <stb_sprintf.h>
 #include "tlog.h"
 
 /* Default configuration */
@@ -359,11 +357,26 @@ static char *build_resp_command(int argc, const char **argv, const size_t *argvl
     return NULL;
 
   char *p = cmd;
-  p += sprintf(p, "*%d\r\n", argc);
+  {
+    int written = fmt(p, total, "*{}\r\n", argc);
+    if (written < 0 || (size_t)written >= total) {
+      free(cmd);
+      return NULL;
+    }
+    p += written;
+  }
 
   for (int i = 0; i < argc; i++) {
     size_t len = argvlen ? argvlen[i] : strlen(argv[i]);
-    p += sprintf(p, "$%zu\r\n", len);
+    {
+      size_t remaining = total - (size_t)(p - cmd);
+      int written = fmt(p, remaining, "${}\r\n", len);
+      if (written < 0 || (size_t)written >= remaining) {
+        free(cmd);
+        return NULL;
+      }
+      p += written;
+    }
     memcpy(p, argv[i], len);
     p += len;
     *p++ = '\r';
@@ -455,7 +468,7 @@ int redis_command(redis_client_t *client, redis_command_cb_t callback, void *use
         argv[argc++] = va_arg(ap, const char *);
       } else if (*p == 'd') {
         int val = va_arg(ap, int);
-        stbsp_snprintf(arg_buf[argc], sizeof(arg_buf[argc]), "%d", val);
+        fmt(arg_buf[argc], sizeof(arg_buf[argc]), "{}", val);
         argv[argc++] = arg_buf[argc - 1];
       }
       p++;
@@ -548,7 +561,7 @@ int redis_exists(redis_client_t *client, const char *key, redis_command_cb_t cal
 int redis_expire(redis_client_t *client, const char *key, int seconds, redis_command_cb_t callback,
                  void *user_data) {
   char seconds_str[32];
-  stbsp_snprintf(seconds_str, sizeof(seconds_str), "%d", seconds);
+  fmt(seconds_str, sizeof(seconds_str), "{}", seconds);
   const char *argv[] = {"EXPIRE", key, seconds_str};
   return redis_commandv(client, 3, argv, NULL, callback, user_data);
 }
@@ -663,8 +676,8 @@ int redis_bf_reserve(redis_client_t *client, const char *key, double error_rate,
                      redis_command_cb_t callback, void *user_data) {
   char error_rate_str[32];
   char capacity_str[32];
-  stbsp_snprintf(error_rate_str, sizeof(error_rate_str), "%.4f", error_rate);
-  stbsp_snprintf(capacity_str, sizeof(capacity_str), "%d", capacity);
+  fmt(error_rate_str, sizeof(error_rate_str), "{:.4f}", error_rate);
+  fmt(capacity_str, sizeof(capacity_str), "{}", capacity);
   
   const char *argv[] = {"BF.RESERVE", key, error_rate_str, capacity_str};
   return redis_commandv(client, 4, argv, NULL, callback, user_data);
@@ -736,7 +749,7 @@ int redis_xadd(redis_client_t *client, const char *key, size_t maxlen,
     argvlen[idx++] = 6;
     argv[idx] = "~";
     argvlen[idx++] = 1;
-    stbsp_snprintf(maxlen_str, sizeof(maxlen_str), "%zu", maxlen);
+    fmt(maxlen_str, sizeof(maxlen_str), "{}", maxlen);
     argv[idx] = maxlen_str;
     argvlen[idx++] = strlen(maxlen_str);
   }
@@ -865,13 +878,13 @@ int redis_xread(redis_client_t *client, size_t count, int block_ms,
 
   if (count > 0) {
     argv[idx++] = "COUNT";
-    stbsp_snprintf(count_str, sizeof(count_str), "%zu", count);
+    fmt(count_str, sizeof(count_str), "{}", count);
     argv[idx++] = count_str;
   }
 
   if (block_ms >= 0) {
     argv[idx++] = "BLOCK";
-    stbsp_snprintf(block_str, sizeof(block_str), "%d", block_ms);
+    fmt(block_str, sizeof(block_str), "{}", block_ms);
     argv[idx++] = block_str;
   }
 
@@ -941,13 +954,13 @@ int redis_xreadgroup(redis_client_t *client, const char *group, const char *cons
 
   if (count > 0) {
     argv[idx++] = "COUNT";
-    stbsp_snprintf(count_str, sizeof(count_str), "%zu", count);
+    fmt(count_str, sizeof(count_str), "{}", count);
     argv[idx++] = count_str;
   }
 
   if (block_ms >= 0) {
     argv[idx++] = "BLOCK";
-    stbsp_snprintf(block_str, sizeof(block_str), "%d", block_ms);
+    fmt(block_str, sizeof(block_str), "{}", block_ms);
     argv[idx++] = block_str;
   }
 
@@ -1029,7 +1042,7 @@ int redis_xlen(redis_client_t *client, const char *key,
 int redis_xtrim(redis_client_t *client, const char *key, size_t maxlen,
                 redis_command_cb_t callback, void *user_data) {
   char maxlen_str[32];
-  stbsp_snprintf(maxlen_str, sizeof(maxlen_str), "%zu", maxlen);
+  fmt(maxlen_str, sizeof(maxlen_str), "{}", maxlen);
   const char *argv[] = {"XTRIM", key, "MAXLEN", "~", maxlen_str};
   return redis_commandv(client, 5, argv, NULL, callback, user_data);
 }

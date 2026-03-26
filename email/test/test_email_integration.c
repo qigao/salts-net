@@ -4,6 +4,7 @@
 #include "email/email_smtp.h"
 #include "tinytest.h"
 #include "CoroNet.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,7 +56,7 @@ static void copy_string(char *dst, size_t dst_size, const char *src) {
     dst[0] = '\0';
     return;
   }
-  snprintf(dst, dst_size, "%s", src);
+  fmt(dst, dst_size, "{}", src);
 }
 
 static void fail_result(smtp4dev_result_t *result, const char *message) {
@@ -97,8 +98,7 @@ static int send_unique_message(coro_context_t *ctx,
   }
 
   if (smtp_connect(smtp) != 0) {
-    snprintf(result->error, sizeof(result->error), "SMTP connect failed: %s",
-             smtp_get_error(smtp));
+    fmt(result->error, sizeof(result->error), "SMTP connect failed: {}", smtp_get_error(smtp));
     goto cleanup;
   }
 
@@ -117,8 +117,7 @@ static int send_unique_message(coro_context_t *ctx,
   email_message_set_html_body(msg, "<html><body><p>smtp4dev integration</p></body></html>");
 
   if (smtp_send_message(smtp, msg) != 0) {
-    snprintf(result->error, sizeof(result->error), "SMTP send failed: %s",
-             smtp_get_error(smtp));
+    fmt(result->error, sizeof(result->error), "SMTP send failed: {}", smtp_get_error(smtp));
     email_message_free(msg);
     mem_destroy(&pool);
     goto cleanup;
@@ -158,8 +157,7 @@ static int wait_for_pop3_message(coro_context_t *ctx,
   }
 
   if (pop3_connect(pop3) != 0) {
-    snprintf(result->error, sizeof(result->error), "POP3 connect failed: %s",
-             pop3_get_error(pop3));
+    fmt(result->error, sizeof(result->error), "POP3 connect failed: {}", pop3_get_error(pop3));
     pop3_client_free(pop3);
     return -1;
   }
@@ -169,8 +167,7 @@ static int wait_for_pop3_message(coro_context_t *ctx,
     int index;
 
     if (msg_count < 0) {
-      snprintf(result->error, sizeof(result->error), "POP3 STAT failed: %s",
-               pop3_get_error(pop3));
+      fmt(result->error, sizeof(result->error), "POP3 STAT failed: {}", pop3_get_error(pop3));
       pop3_disconnect(pop3);
       pop3_client_free(pop3);
       return -1;
@@ -222,8 +219,7 @@ static int wait_for_imap_message(coro_context_t *ctx,
   }
 
   if (imap_connect(imap) != 0) {
-    snprintf(result->error, sizeof(result->error), "IMAP connect failed: %s",
-             imap_get_error(imap));
+    fmt(result->error, sizeof(result->error), "IMAP connect failed: {}", imap_get_error(imap));
     imap_client_free(imap);
     return -1;
   }
@@ -235,8 +231,7 @@ static int wait_for_imap_message(coro_context_t *ctx,
     int index;
 
     if (!mailbox) {
-      snprintf(result->error, sizeof(result->error), "IMAP SELECT failed: %s",
-               imap_get_error(imap));
+      fmt(result->error, sizeof(result->error), "IMAP SELECT failed: {}", imap_get_error(imap));
       imap_disconnect(imap);
       imap_client_free(imap);
       return -1;
@@ -246,8 +241,7 @@ static int wait_for_imap_message(coro_context_t *ctx,
 
     results = imap_search(imap, "ALL", &result_count);
     if (!results) {
-      snprintf(result->error, sizeof(result->error), "IMAP SEARCH failed: %s",
-               imap_get_error(imap));
+      fmt(result->error, sizeof(result->error), "IMAP SEARCH failed: {}", imap_get_error(imap));
       imap_disconnect(imap);
       imap_client_free(imap);
       return -1;
@@ -330,10 +324,8 @@ static void init_test_config(smtp4dev_test_config_t *cfg) {
   copy_string(cfg->imap_pass, sizeof(cfg->imap_pass),
               env_or_default("IMAP_PASSWORD", "turbo"));
 
-  snprintf(cfg->subject, sizeof(cfg->subject),
-           "TurboNet smtp4dev integration %lld", (long long)now);
-  snprintf(cfg->body, sizeof(cfg->body),
-           "smtp4dev integration body %lld", (long long)now);
+  fmt(cfg->subject, sizeof(cfg->subject), "TurboNet smtp4dev integration {}", (long long)now);
+  fmt(cfg->body, sizeof(cfg->body), "smtp4dev integration body {}", (long long)now);
 }
 
 spec("email_integration") {

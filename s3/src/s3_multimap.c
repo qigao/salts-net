@@ -1,7 +1,7 @@
 #include "s3/s3_multimap.h"
 #include "s3_multimap_impl.h"
 #include "s3/s3_url.h"
-#include <stb_sprintf.h>
+#include <fmt.h>
 #include <ctype.h>
 
 
@@ -67,7 +67,7 @@ const char** s3_headers_to_http_array(S3Headers* m, int* count) {
         size_t len = strlen(key) + strlen(val) + 5; // "Key: Value\0"
         char* header_str = malloc(len);
         if (header_str) {
-            stbsp_snprintf(header_str, (int)len, "%s: %s", key, val);
+            fmt(header_str, len, "{}: {}", key, val);
             arr[idx++] = header_str;
         }
     }

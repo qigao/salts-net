@@ -48,18 +48,6 @@
             ]
         },
         {
-            "name": "developer-mode-asan",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "ENABLE_TESTS": true,
-                "ENABLE_SANITIZER_ADDRESS": true
-            },
-            "inherits": [
-                "default-options"
-            ]
-        },
-        {
             "name": "release-mode",
             "hidden": true,
             "cacheVariables": {

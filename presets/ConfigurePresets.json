@@ -6,7 +6,7 @@
     "configurePresets": [
         {
             "name": "dev-win-msvc-ninja",
-            "hidden": false,
+            "hidden": true,
             "displayName": "Developer (Windows, MSVC, Ninja Multi-Config)",
             "inherits": [
                 "base-developer-windows",
@@ -15,18 +15,8 @@
             "generator": "Ninja"
         },
         {
-            "name": "dev-win-msvc-ninja-asan",
-            "hidden": false,
-            "displayName": "Developer with ASan (Windows, MSVC, Ninja)",
-            "inherits": [
-                "base-developer-windows-asan",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
-        },
-        {
             "name": "release-win-msvc-ninja",
-            "hidden": false,
+            "hidden": true,
             "displayName": "Release (Windows, MSVC, Ninja Multi-Config)",
             "inherits": [
                 "base-release-windows",

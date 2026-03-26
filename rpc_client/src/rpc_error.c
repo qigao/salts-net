@@ -1,9 +1,9 @@
 #include "../include/rpc_error.h"
+#include <fmt.h>
 #include <platform.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <stb_sprintf.h>
 
 // ============================================================================
 // Error Name Table
@@ -313,30 +313,27 @@ size_t rpc_error_format(const rpc_error_info_t *error, char *buffer, size_t buff
   size_t written = 0;
 
   // Error code and name
-  written += stbsp_snprintf(buffer + written, buffer_size - written, "[%s] %s",
-                      rpc_error_name(error->code), error->message);
+  written += fmt(buffer + written, buffer_size - written, "[{}] {}", rpc_error_name(error->code),
+                 error->message);
 
   // Details if available
-  if (error->details[0] != '\0') {
-    written += stbsp_snprintf(buffer + written, buffer_size - written, " - %s", error->details);
+  if (error->details[0] != '\0' && written < buffer_size) {
+    written += fmt(buffer + written, buffer_size - written, " - {}", error->details);
   }
 
   // HTTP status if applicable
-  if (error->http_status > 0) {
-    written += stbsp_snprintf(buffer + written, buffer_size - written, " (HTTP %d)",
-                        error->http_status);
+  if (error->http_status > 0 && written < buffer_size) {
+    written += fmt(buffer + written, buffer_size - written, " (HTTP {})", error->http_status);
   }
 
   // Retry count if applicable
-  if (error->retry_count > 0) {
-    written += stbsp_snprintf(buffer + written, buffer_size - written, " [retries: %d]",
-                        error->retry_count);
+  if (error->retry_count > 0 && written < buffer_size) {
+    written += fmt(buffer + written, buffer_size - written, " [retries: {}]", error->retry_count);
   }
 
   // Source location for debugging
-  if (error->file) {
-    written += stbsp_snprintf(buffer + written, buffer_size - written, " at %s:%d", error->file,
-                        error->line);
+  if (error->file && written < buffer_size) {
+    written += fmt(buffer + written, buffer_size - written, " at {}:{}", error->file, error->line);
   }
 
   return written;

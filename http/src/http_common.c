@@ -9,9 +9,9 @@
 // clang-format off
 #include "../include/http_common.h"
 #include "http_common_internal.h"
+#include <fmt.h>
 #include <platform.h>
 #include <turbo_str.h>
-#include <stb_sprintf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -117,7 +117,7 @@ char *http_build_url(const char *base_url, http_params_t *query_params) {
     free(query_string);
     return NULL;
   }
-  stbsp_snprintf(full_url, (int)url_len, "%s%c%s", base_url, separator, query_string);
+  fmt(full_url, url_len, "{}{}{}", base_url, separator, query_string);
   free(query_string);
   return full_url;
 }
@@ -400,4 +400,3 @@ char *turbo_url_decode(const char *str) {
   memset(p, 0, 8);
   return out;
 }
-

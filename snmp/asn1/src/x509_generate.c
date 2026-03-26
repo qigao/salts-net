@@ -8,6 +8,7 @@
 #include <asn1/asn1_der_compat.h>
 #include "sha256.h"
 #include "crypto_random.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -19,8 +20,6 @@
 #include <openssl/pem.h>
 #include <openssl/bio.h>
 #include <openssl/ec.h>
-#define STB_SPRINTF_IMPLEMENTATION
-#include <stb_sprintf.h>
 /* ============================================================================
  * Helper Functions
  * ============================================================================ */
@@ -76,13 +75,13 @@ static asn1_value_t *create_validity(uint32_t valid_days) {
     struct tm *tm_future = gmtime(&future);
 
     char not_before[14], not_after[14];
-    stbsp_snprintf(not_before, sizeof(not_before), "%02d%02d%02d%02d%02d%02dZ",
-             tm_now->tm_year % 100, tm_now->tm_mon + 1, tm_now->tm_mday,
-             tm_now->tm_hour, tm_now->tm_min, tm_now->tm_sec);
+    fmt(not_before, sizeof(not_before), "{:02}{:02}{:02}{:02}{:02}{:02}Z",
+        tm_now->tm_year % 100, tm_now->tm_mon + 1, tm_now->tm_mday,
+        tm_now->tm_hour, tm_now->tm_min, tm_now->tm_sec);
 
-    stbsp_snprintf(not_after, sizeof(not_after), "%02d%02d%02d%02d%02d%02dZ",
-             tm_future->tm_year % 100, tm_future->tm_mon + 1, tm_future->tm_mday,
-             tm_future->tm_hour, tm_future->tm_min, tm_future->tm_sec);
+    fmt(not_after, sizeof(not_after), "{:02}{:02}{:02}{:02}{:02}{:02}Z",
+        tm_future->tm_year % 100, tm_future->tm_mon + 1, tm_future->tm_mday,
+        tm_future->tm_hour, tm_future->tm_min, tm_future->tm_sec);
 
     asn1_value_t *validity = asn1_create_sequence();
     asn1_sequence_add_child(validity, asn1_create_utc_time(not_before));

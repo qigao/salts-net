@@ -3,7 +3,7 @@
 
 # Library (respects BUILD_SHARED_LIBS)
 add_library(rpc_client src/rpc_client.c src/rpc_error.c src/rpc_stats.c
-                       src/rpc_retry.c src/stb_sprintf.c)
+                       src/rpc_retry.c)
 add_library(TurboNet::RPCClient ALIAS rpc_client)
 
 target_include_directories(

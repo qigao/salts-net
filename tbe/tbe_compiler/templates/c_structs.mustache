@@ -8,13 +8,8 @@
 
 #include "tbe_wire.h"
 
-{{#schema}}
-/* Schema {{schema_name}} {{#attributes}}[ {{name}}: {{value}} ] {{/attributes}} */
-enum { {{schema_name}}_WIRE_BIG_ENDIAN = {{#is_big_endian}}1{{/is_big_endian}}{{^is_big_endian}}0{{/is_big_endian}} };
-{{/schema}}
-{{^schema}}
-enum { GeneratedSchema_WIRE_BIG_ENDIAN = 0 };
-{{/schema}}
+/* Schema {{schema.schema_name}} {{schema.schema_attributes_rendered}} */
+enum { {{schema.schema_name}}_WIRE_BIG_ENDIAN = {{schema.schema_wire_big_endian_value}} };
 
 /* ========================================================================= */
 /* Enums                                                                     */

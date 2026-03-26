@@ -5,6 +5,7 @@
 
 #include "turl_batch.h"
 #include "turl_common.h"
+#include <fmt.h>
 #include <http_client.h>
 #include <platform.h>
 #include <stdio.h>
@@ -84,9 +85,9 @@ static void batch_worker(coro_t *co, void *arg) {
       char path[1024];
       if (ctx->output_directory) {
         turl_ensure_directory_exists(ctx->output_directory);
-        snprintf(path, sizeof(path), "%s/%s", ctx->output_directory, safe_name);
+        fmt(path, sizeof(path), "{}/{}", ctx->output_directory, safe_name);
       } else {
-        strncpy(path, safe_name, sizeof(path));
+        fmt(path, sizeof(path), "{}", safe_name);
       }
 
       FILE *f = fopen(path, "wb");

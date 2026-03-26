@@ -6,11 +6,11 @@
 #include "redis_cluster.h"
 #include "redis_pool.h"
 #include "turbo_str.h"
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <stb_sprintf.h>
 
 #ifdef _WIN32
 #define strtok_r strtok_s
@@ -547,12 +547,26 @@ int redis_cluster_command_key(redis_cluster_t *cluster, const char *key,
 
     va_list ap;
     va_start(ap, format);
-    char cmd_buf[1024];
-    vsnprintf(cmd_buf, sizeof(cmd_buf), format, ap);
+    tstr_t cmd_buf = tstr_new();
+    if (!cmd_buf) {
+        va_end(ap);
+        tstr_free((tstr_t)ctx->key);
+        free(ctx);
+        cluster->stats.commands_failed++;
+        return -1;
+    }
+    cmd_buf = tstr_cat_vfmt(cmd_buf, format, ap);
     va_end(ap);
+    if (!cmd_buf) {
+        tstr_free((tstr_t)ctx->key);
+        free(ctx);
+        cluster->stats.commands_failed++;
+        return -1;
+    }
 
     int result = redis_pool_command(node->pool, on_cluster_command_done, ctx,
                                      "%s", cmd_buf);
+    tstr_free(cmd_buf);
     if (result != 0) {
         tstr_free((tstr_t)ctx->key);
         free(ctx);
@@ -570,9 +584,16 @@ int redis_cluster_command(redis_cluster_t *cluster, redis_command_cb_t callback,
     /* Extract first argument as key */
     va_list ap;
     va_start(ap, format);
-    char cmd_buf[1024];
-    vsnprintf(cmd_buf, sizeof(cmd_buf), format, ap);
+    tstr_t cmd_buf = tstr_new();
+    if (!cmd_buf) {
+        va_end(ap);
+        return -1;
+    }
+    cmd_buf = tstr_cat_vfmt(cmd_buf, format, ap);
     va_end(ap);
+    if (!cmd_buf) {
+        return -1;
+    }
 
     /* Parse key from command (second word after command name) */
     char *saveptr;
@@ -582,6 +603,7 @@ int redis_cluster_command(redis_cluster_t *cluster, redis_command_cb_t callback,
     (void)token;
 
     if (!key) {
+        tstr_free(cmd_buf);
         tstr_free((tstr_t)cmd_copy);
         return -1;
     }
@@ -592,6 +614,7 @@ int redis_cluster_command(redis_cluster_t *cluster, redis_command_cb_t callback,
     int result = redis_cluster_command_key(cluster, key_copy, callback,
                                             user_data, "%s", cmd_buf);
     tstr_free((tstr_t)key_copy);
+    tstr_free(cmd_buf);
     return result;
 }
 
@@ -772,14 +795,15 @@ int redis_cluster_mdelete(redis_cluster_t *cluster, int key_count,
     if (!node || !node->pool) return -1;
 
     /* Build DEL command */
-    char cmd_buf[4096] = "DEL";
-    size_t pos = 3;
-
-    for (int i = 0; i < key_count && pos < sizeof(cmd_buf) - 256; i++) {
-        pos += stbsp_snprintf(cmd_buf + pos, sizeof(cmd_buf) - pos, " %s", keys[i]);
+    tstr_t cmd_buf = tstr_dup("DEL");
+    if (!cmd_buf) return -1;
+    for (int i = 0; i < key_count; i++) {
+        cmd_buf = tstr_cat_fmt(cmd_buf, " %s", keys[i]);
+        if (!cmd_buf) return -1;
     }
-
-    return redis_pool_command(node->pool, callback, user_data, "%s", cmd_buf);
+    int result = redis_pool_command(node->pool, callback, user_data, "%s", cmd_buf);
+    tstr_free(cmd_buf);
+    return result;
 }
 
 int redis_cluster_mget(redis_cluster_t *cluster, int key_count,
@@ -797,14 +821,15 @@ int redis_cluster_mget(redis_cluster_t *cluster, int key_count,
     if (!node || !node->pool) return -1;
 
     /* Build MGET command */
-    char cmd_buf[4096] = "MGET";
-    size_t pos = 4;
-
-    for (int i = 0; i < key_count && pos < sizeof(cmd_buf) - 256; i++) {
-        pos += stbsp_snprintf(cmd_buf + pos, sizeof(cmd_buf) - pos, " %s", keys[i]);
+    tstr_t cmd_buf = tstr_dup("MGET");
+    if (!cmd_buf) return -1;
+    for (int i = 0; i < key_count; i++) {
+        cmd_buf = tstr_cat_fmt(cmd_buf, " %s", keys[i]);
+        if (!cmd_buf) return -1;
     }
-
-    return redis_pool_command(node->pool, callback, user_data, "%s", cmd_buf);
+    int result = redis_pool_command(node->pool, callback, user_data, "%s", cmd_buf);
+    tstr_free(cmd_buf);
+    return result;
 }
 
 /* =============================================================================

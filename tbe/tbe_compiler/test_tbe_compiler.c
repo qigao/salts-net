@@ -1,9 +1,11 @@
 #include "mustache.h"
 #include "mustache_helpers.h"
+#include "compiler_core.h"
 #include "node_tree.h"
 #include "tbe_wire.h"
 #include "schema_parser_dsl.h"
 #include "tinytest.h"
+#include <io.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +59,53 @@ cleanup:
   node_free(root);
   free(template_text);
   return output;
+}
+
+static void cleanup_test_file(const char *path) {
+  if (path) {
+    remove(path);
+  }
+}
+
+static int parse_schema_quietly(const char *schema, size_t size, Node *root) {
+  int saved_stdout = -1;
+  int saved_stderr = -1;
+  FILE *null_file = NULL;
+  int result;
+
+  fflush(stdout);
+  fflush(stderr);
+  saved_stdout = _dup(_fileno(stdout));
+  saved_stderr = _dup(_fileno(stderr));
+  if (saved_stdout < 0 || saved_stderr < 0) {
+    if (saved_stdout >= 0) _close(saved_stdout);
+    if (saved_stderr >= 0) _close(saved_stderr);
+    return parse_schema(schema, size, root, NULL);
+  }
+
+  null_file = freopen("NUL", "w", stdout);
+  if (!null_file) {
+    _close(saved_stdout);
+    _close(saved_stderr);
+    return parse_schema(schema, size, root, NULL);
+  }
+
+  null_file = freopen("NUL", "w", stderr);
+  if (!null_file) {
+    _dup2(saved_stdout, _fileno(stdout));
+    _close(saved_stdout);
+    _close(saved_stderr);
+    return parse_schema(schema, size, root, NULL);
+  }
+
+  result = parse_schema(schema, size, root, NULL);
+  fflush(stdout);
+  fflush(stderr);
+  _dup2(saved_stdout, _fileno(stdout));
+  _dup2(saved_stderr, _fileno(stderr));
+  _close(saved_stdout);
+  _close(saved_stderr);
+  return result;
 }
 
 spec("tbe_compiler") {
@@ -216,7 +265,7 @@ spec("tbe_compiler") {
     it("should fail on invalid syntax") {
       Node *root = create_node_map(NULL);
       const char *schema = "message Bad { uint32_t no_semi }";
-      int res = parse_schema(schema, strlen(schema), root, NULL);
+      int res = parse_schema_quietly(schema, strlen(schema), root);
       check_int_eq(res, -1);
       node_free(root);
     }
@@ -224,7 +273,7 @@ spec("tbe_compiler") {
     it("should reject legacy struct declarations") {
       Node *root = create_node_map(NULL);
       const char *schema = "struct Point { uint32_t x; uint32_t y; }";
-      int res = parse_schema(schema, strlen(schema), root, NULL);
+      int res = parse_schema_quietly(schema, strlen(schema), root);
       check_int_eq(res, -1);
       node_free(root);
     }
@@ -277,6 +326,78 @@ spec("tbe_compiler") {
   }
 
   describe("C template rendering") {
+    it("should resolve built-in templates through compiler core") {
+      check_str_eq(tbe_compiler_resolve_template(NULL, 0), "templates/c_structs.mustache");
+      check_str_eq(tbe_compiler_resolve_template(NULL, 1),
+                   "templates/python_dataclass.mustache");
+      check_str_eq(tbe_compiler_resolve_template(NULL, 2), "templates/rust_structs.mustache");
+      check_str_eq(tbe_compiler_resolve_template("custom.mustache", 0), "custom.mustache");
+    }
+
+    it("should parse schema files through compiler core") {
+      Node *root = NULL;
+      char *schema_data = NULL;
+
+      check_int_eq(tbe_compiler_parse_schema_file(SCHEMA_EXAMPLE_FILE, &root, &schema_data), 0);
+      check_not_null(root);
+      check_not_null(schema_data);
+      check(find_child(root, "schema") != NULL);
+      check(find_child(root, "messages") != NULL);
+
+      free(schema_data);
+      node_free(root);
+    }
+
+    it("should render template output through compiler core") {
+      const char *output_path = "test_tbe_compiler_render.out";
+      size_t output_size = 0;
+      Node *root = NULL;
+      char *schema_data = NULL;
+      char *output = NULL;
+
+      cleanup_test_file(output_path);
+      check_int_eq(tbe_compiler_parse_schema_file(SCHEMA_EXAMPLE_FILE, &root, &schema_data), 0);
+      check_int_eq(tbe_compiler_render_file(root, C_STRUCT_TEMPLATE_FILE, output_path), 0);
+
+      output = tt_read_file(output_path, &output_size);
+      check_not_null(output);
+      check(output_size > 0);
+      check_str_contains(output, "typedef struct Header_s {");
+      check_str_contains(output, "typedef struct LoginMessage_s {");
+      check_str_contains(output, "typedef struct Heartbeat_s {");
+
+      free(output);
+      free(schema_data);
+      node_free(root);
+      cleanup_test_file(output_path);
+    }
+
+    it("should run compiler core end-to-end with custom template") {
+      const char *output_path = "test_tbe_compiler_run.out";
+      const char *template_path = C_STRUCT_TEMPLATE_FILE;
+      size_t output_size = 0;
+      char *output = NULL;
+      tbe_compiler_options_t options = {
+          .schema_path = SCHEMA_EXAMPLE_FILE,
+          .template_path = template_path,
+          .output_path = output_path,
+          .dsl_output_path = NULL,
+          .lang_enum = 0,
+      };
+
+      cleanup_test_file(output_path);
+      check_int_eq(tbe_compiler_run(&options), 0);
+
+      output = tt_read_file(output_path, &output_size);
+      check_not_null(output);
+      check(output_size > 0);
+      check_str_contains(output, "Session_WIRE_BIG_ENDIAN");
+      check_str_contains(output, "LoginMessage_builder_bind");
+
+      free(output);
+      cleanup_test_file(output_path);
+    }
+
     it("should render implicit enum values and variable bytes safely") {
       const char *schema = "enum Color { Red; Green = 5; Blue; } "
                            "message Blob { bytes(16) digest; bytes payload; }";

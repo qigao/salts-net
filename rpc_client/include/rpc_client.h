@@ -29,7 +29,7 @@ typedef struct rpc_client_s rpc_client_t;
  */
 typedef struct {
   const char *url;               /**< Full URL (e.g., "http://127.0.0.1:8080/rpc") */
-  http_client_t *http_client;    /**< HTTP client instance (caller retains ownership) */
+  http_client_t *http_client;    /**< Shared HTTP client instance. Required for rpc_client_create(). */
 } rpc_client_config_t;
 
 /**
@@ -68,8 +68,23 @@ typedef enum {
  * 
  * @param config Client configuration
  * @return Client instance or NULL on failure
+ *
+ * The supplied `http_client` is not owned by the RPC client. This allows
+ * multiple RPC clients to share one HTTP client's connection pool.
  */
 rpc_client_t *rpc_client_create(const rpc_client_config_t *config);
+
+/**
+ * @brief Create an RPC client with an internally owned HTTP client.
+ *
+ * Convenience helper for examples and simple programs. For production code,
+ * prefer rpc_client_create() with an injected shared HTTP client so requests
+ * can reuse the same connection pool.
+ *
+ * @param url Full RPC endpoint URL
+ * @return Client instance or NULL on failure
+ */
+rpc_client_t *rpc_client_create_simple(const char *url);
 
 /**
  * @brief Destroy RPC client
@@ -106,13 +121,17 @@ rpc_client_state_t rpc_client_get_state(rpc_client_t *client);
  * ============================================================================ */
 
 /**
- * @brief Make synchronous RPC call
+ * @brief Make a single-result RPC call.
  * 
  * @param client Client instance
  * @param method Method name
  * @param params Parameters (JSON string, can be NULL)
  * @param result Result (output, must be freed with rpc_result_free)
  * @return 0 on success, -1 on failure
+ *
+ * Coroutine-first semantics:
+ * - Inside a coroutine, this suspends the current coroutine until the reply arrives.
+ * - Outside a coroutine, it drives the internal HTTP/coroutine context until completion.
  * 
  * @example
  * rpc_call_result_t result;
@@ -126,20 +145,7 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
                     rpc_call_result_t *result);
 
 /**
- * @brief Make asynchronous RPC call
- * 
- * @param client Client instance
- * @param method Method name
- * @param params Parameters (JSON string, can be NULL)
- * @param callback Callback function
- * @param user_data User data for callback
- * @return 0 on success, -1 on failure
- */
-int rpc_client_call_async(rpc_client_t *client, const char *method, const char *params,
-                          rpc_callback_t callback, void *user_data);
-
-/**
- * @brief Make an RPC call that returns a stream of results (Server-Sent Events)
+ * @brief Make a multi-result streaming RPC call (Server-Sent Events).
  * 
  * @param client Client instance
  * @param method Method name
@@ -148,6 +154,10 @@ int rpc_client_call_async(rpc_client_t *client, const char *method, const char *
  * @param complete_cb Callback called when the stream is closed
  * @param user_data User data passed to both callbacks
  * @return 0 on success, -1 on failure
+ *
+ * Coroutine-first semantics:
+ * - Inside a coroutine, this starts the stream and returns immediately.
+ * - Outside a coroutine, it drives the internal HTTP/coroutine context until the stream completes.
  */
 int rpc_client_call_stream(rpc_client_t *client, const char *method, const char *params,
                            rpc_callback_t result_cb, rpc_callback_t complete_cb,

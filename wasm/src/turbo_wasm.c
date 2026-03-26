@@ -5,6 +5,7 @@
 #include "m3_core.h"
 #include "wasm3.h"
 
+#include <fmt.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +33,7 @@ static void wasm_set_err(turbo_wasm_vm_t *vm, const char *msg) {
     return;
   if (!msg)
     msg = "unknown wasm error";
-  snprintf(vm->last_error, sizeof(vm->last_error), "%s", msg);
+  fmt(vm->last_error, sizeof(vm->last_error), "{}", msg);
 }
 
 static void wasm_clear_err(turbo_wasm_vm_t *vm) {
@@ -540,7 +541,7 @@ int turbo_wasm_vm_link_raw_func(turbo_wasm_vm_t *vm, void *m3_module,
 
   if (r) {
     char err_buf[256];
-    snprintf(err_buf, sizeof(err_buf), "link %s.%s failed: %s", module_name, function_name, r);
+    fmt(err_buf, sizeof(err_buf), "link {}.{} failed: {}", module_name, function_name, r);
     wasm_set_err(vm, err_buf);
     return -1;
   }

@@ -1,11 +1,11 @@
 #include "rpc.h"
 #include "iris.h"
 #include "security.h"
+#include <fmt.h>
 #include <json_parser.h>
 #include <stdlib.h>
 #include <string.h>
 #include "tlog.h"
-#include <stb_sprintf.h>
 
 /* Global RPC context - temporary solution until iris_app_t refactor */
 static rpc_context_t *g_rpc_context = NULL;
@@ -161,18 +161,16 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
   json_value_t *id = json_object_get(root, "id");
   if (id) {
     if (json_type(id) == JSON_STRING) {
-      /* Phase IRIS-1: Replace arena_sprintf with mem_alloc + stbsp_snprintf */
       size_t len = strlen(json_string(id)) + 3; /* quotes + null */
       rpc_req->id = mem_alloc(req->arena, len);
       if (rpc_req->id) {
-        stbsp_snprintf((char *)rpc_req->id, len, "\"%s\"", json_string(id));
+        fmt((char *)rpc_req->id, len, "\"{}\"", json_string(id));
       }
     } else if (json_type(id) == JSON_NUMBER) {
-      /* Phase IRIS-1: Replace arena_sprintf with mem_alloc + stbsp_snprintf */
       size_t len = 32; /* enough for int */
       rpc_req->id = mem_alloc(req->arena, len);
       if (rpc_req->id) {
-        stbsp_snprintf((char *)rpc_req->id, len, "%d", (int)json_number(id));
+        fmt((char *)rpc_req->id, len, "{}", (int)json_number(id));
       }
     } else if (json_is_null(id)) {
       rpc_req->id = mem_strdup(req->arena, "null");
@@ -585,15 +583,21 @@ static int rpc_introspection_handler(Req *req, Res *res, rpc_request_t *rpc_req,
 }
 
 int rpc_setup_endpoint(rpc_context_t *ctx) {
+  iris_app_t *app;
+
   if (!ctx)
     return -1;
 
   /* Store context globally for handler access */
   g_rpc_context = ctx;
+  app = iris_app_default();
+  if (app) {
+    app->rpc_context = ctx;
+  }
 
   /* Register introspection method if enabled */
   if (ctx->config.enable_introspection) {
-    rpc_method_t introspection;
+    rpc_method_t introspection = {0};
     introspection.name = "rpc.listMethods";
     introspection.handler = rpc_introspection_handler;
     introspection.description = "List all available RPC methods";

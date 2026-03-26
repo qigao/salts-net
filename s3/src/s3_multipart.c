@@ -1,6 +1,7 @@
 #include "s3/s3_multipart.h"
 #include "s3_client_internal.h"
 #include "s3_http.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,8 +13,8 @@ static char *extract_xml_tag(const char *xml, const char *tag) {
 
   char open_tag[128];
   char close_tag[128];
-  snprintf(open_tag, sizeof(open_tag), "<%s>", tag);
-  snprintf(close_tag, sizeof(close_tag), "</%s>", tag);
+  fmt(open_tag, sizeof(open_tag), "<{}>", tag);
+  fmt(close_tag, sizeof(close_tag), "</{}>", tag);
 
   const char *start = strstr(xml, open_tag);
   if (!start) return NULL;
@@ -47,7 +48,7 @@ s3_multipart_upload_t *s3_multipart_initiate(
 
   // Build URI: /{bucket}/{key}?uploads
   char uri[2048];
-  snprintf(uri, sizeof(uri), "/%s/%s", bucket, key);
+  fmt(uri, sizeof(uri), "/{}/{}", bucket, key);
 
   S3Headers query = S3Headers_init();
   s3_headers_add(&query, "uploads", "");
@@ -121,11 +122,11 @@ int s3_multipart_upload_part(
 
   // Build URI: /{bucket}/{key}?partNumber={n}&uploadId={id}
   char uri[2048];
-  snprintf(uri, sizeof(uri), "/%s/%s", upload->bucket, upload->key);
+  fmt(uri, sizeof(uri), "/{}/{}", upload->bucket, upload->key);
 
   S3Headers query = S3Headers_init();
   char part_str[16];
-  snprintf(part_str, sizeof(part_str), "%d", part_number);
+  fmt(part_str, sizeof(part_str), "{}", part_number);
   s3_headers_add(&query, "partNumber", part_str);
   s3_headers_add(&query, "uploadId", upload->upload_id);
 
@@ -198,7 +199,7 @@ s3_error_t s3_multipart_complete(
 
   // Build URI: /{bucket}/{key}?uploadId={id}
   char uri[2048];
-  snprintf(uri, sizeof(uri), "/%s/%s", upload->bucket, upload->key);
+  fmt(uri, sizeof(uri), "/{}/{}", upload->bucket, upload->key);
 
   S3Headers query = S3Headers_init();
   s3_headers_add(&query, "uploadId", upload->upload_id);
@@ -230,7 +231,7 @@ s3_error_t s3_multipart_abort(
 
   // Build URI: /{bucket}/{key}?uploadId={id}
   char uri[2048];
-  snprintf(uri, sizeof(uri), "/%s/%s", upload->bucket, upload->key);
+  fmt(uri, sizeof(uri), "/{}/{}", upload->bucket, upload->key);
 
   S3Headers query = S3Headers_init();
   s3_headers_add(&query, "uploadId", upload->upload_id);

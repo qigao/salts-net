@@ -1,6 +1,7 @@
 #include "s3/s3_client.h"
 #include "../src/s3_types_vec.h"
 #include <turbo_str.h>
+#include <fmt.h>
 #include <turbo_coro.h>
 #include <CoroNet/turbo_coro_context.h>
 #include "tinytest.h"
@@ -24,7 +25,7 @@ static const char* get_test_bucket_name() {
         timespec_get(&ts, TIME_UTC);
         unsigned long long nonce = (unsigned long long)ts.tv_sec * 1000000000ull +
                                    (unsigned long long)ts.tv_nsec;
-        snprintf(g_test_bucket, sizeof(g_test_bucket), "turbonet-test-%llx", nonce);
+        fmt(g_test_bucket, sizeof(g_test_bucket), "turbonet-test-{:llx}", nonce);
     }
     return g_test_bucket;
 }

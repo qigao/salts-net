@@ -107,6 +107,8 @@ typedef struct Req {
   char *path;
   char *body;
   size_t body_len;
+  int body_stream;
+  size_t body_read_total;
   request_t headers;
   request_t query;
   request_t params;
@@ -158,6 +160,10 @@ CXX_C_API void execute_middleware_chain(Req *req, Res *res, MiddlewareInfo *midd
 
 // Function declarations
 CXX_C_API int iris_app_execute(struct iris_app *app, coro_socket_t *client, const char *request_data, size_t request_len);
+CXX_C_API int iris_app_execute_parsed(struct iris_app *app, coro_socket_t *client,
+                                      mem_pool_t *arena, http_context_t *ctx);
+CXX_C_API int iris_app_route_uses_stream(struct iris_app *app, mem_pool_t *arena,
+                                         http_context_t *ctx);
 CXX_C_API int router(coro_socket_t *client, const char *request_data, size_t request_len);
 CXX_C_API Req *arena_copy_req(mem_pool_t *target_arena, const Req *original);  /* Phase IRIS-1: Updated param type */
 CXX_C_API Res *arena_copy_res(mem_pool_t *target_arena, const Res *original);  /* Phase IRIS-1: Updated param type */
@@ -168,6 +174,8 @@ CXX_C_API void destroy_res(Res *res);
 
 CXX_C_API void set_header(Res *res, const char *name, const char *value);
 CXX_C_API void reply(Res *res, int status, const char *content_type, const void *body, size_t body_len);
+CXX_C_API int req_is_body_stream(const Req *req);
+CXX_C_API size_t req_read_body(Req *req, char *buffer, size_t capacity);
 
 // Context management functions
 CXX_C_API void set_context(Req *req, void *data, size_t size, void (*cleanup)(void *));

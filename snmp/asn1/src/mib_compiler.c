@@ -1,5 +1,6 @@
 #include "mib_compiler.h"
 #include "ast.h"
+#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,15 +84,15 @@ int mib_compile_string(const char *mib_content, const char *output_dir) {
     char filename[512];
     
     if (ctx->generate_c_code) {
-        snprintf(filename, sizeof(filename), "%s/%s.h", output_dir, ctx->module_name);
+        fmt(filename, sizeof(filename), "{}/{}.h", output_dir, ctx->module_name);
         mib_generate_c_header(ctx, filename);
         
-        snprintf(filename, sizeof(filename), "%s/%s.c", output_dir, ctx->module_name);
+        fmt(filename, sizeof(filename), "{}/{}.c", output_dir, ctx->module_name);
         mib_generate_c_source(ctx, filename);
     }
     
     if (ctx->generate_runtime_tables) {
-        snprintf(filename, sizeof(filename), "%s/%s_runtime.c", output_dir, ctx->module_name);
+        fmt(filename, sizeof(filename), "{}/{}_runtime.c", output_dir, ctx->module_name);
         mib_generate_runtime_table(ctx, filename);
     }
     

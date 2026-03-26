@@ -12,6 +12,7 @@
 #endif
 #include "ice/turbo_turn.h"
 
+#include <fmt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -26,8 +27,6 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include <openssl/md5.h>
-#include <stb_sprintf.h>
-
 /* ============================================================================
  * Internal Helpers
  * ============================================================================ */
@@ -56,7 +55,7 @@ static int calculate_long_term_key(
     const char *username, const char *realm, const char *password, uint8_t *key_out
 ) {
     char concat[768];
-    int len = stbsp_snprintf(concat, sizeof(concat), "%s:%s:%s", username, realm, password);
+    int len = fmt(concat, sizeof(concat), "{}:{}:{}", username, realm, password);
     if (len < 0 || len >= (int)sizeof(concat)) return -1;
     MD5((unsigned char *)concat, len, key_out);
     return 0;

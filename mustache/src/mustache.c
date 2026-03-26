@@ -1,5 +1,6 @@
 #include "mustache.h"
 #include <errno.h>
+#include <fmt.h>
 #include "turbo_buffer.h"
 #include "turbo_str.h"
 #include <stdint.h>
@@ -1272,8 +1273,8 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
           if (!(opener_len == 2 && closer_len == 2 && memcmp(opener, "{{", 2) == 0 &&
                 memcmp(closer, "}}", 2) == 0)) {
             char prefix[128];
-            int n = snprintf(prefix, sizeof(prefix), "{{=%.*s %.*s=}}",
-                             (int)opener_len, opener, (int)closer_len, closer);
+            int n = fmt(prefix, sizeof(prefix), "{{={:.*s} {:.*s}=}}", (int)opener_len, opener,
+                        (int)closer_len, closer);
             if (n > 0) {
               wrapped_len = (size_t)n + lambda_len;
               wrapped = (char *)malloc(wrapped_len + 1);

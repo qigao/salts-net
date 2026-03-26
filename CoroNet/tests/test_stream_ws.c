@@ -6,6 +6,7 @@
 #include "turbo_thread.h"
 #include "websocket_frame_parser.h"
 
+#include <fmt.h>
 #include <openssl/sha.h>
 
 #include <string.h>
@@ -98,7 +99,7 @@ static int wss_test_compute_accept_key(const char *client_key, char *out, size_t
 
   if (!client_key || !out || out_size == 0) return -1;
 
-  if (snprintf(combined, sizeof(combined), "%s%s", client_key, WS_GUID) <= 0) {
+  if (fmt(combined, sizeof(combined), "{}{}", client_key, WS_GUID) <= 0) {
     return -1;
   }
 
@@ -205,12 +206,12 @@ static void wss_test_server_main(void *arg) {
     goto done;
   }
 
-  out_len = snprintf(
+  out_len = fmt(
       resp, sizeof(resp),
       "HTTP/1.1 101 Switching Protocols\r\n"
       "Upgrade: websocket\r\n"
       "Connection: Upgrade\r\n"
-      "Sec-WebSocket-Accept: %s\r\n"
+      "Sec-WebSocket-Accept: {}\r\n"
       "\r\n",
       accept_key);
   if (out_len <= 0 || SSL_write(ssl, resp, out_len) <= 0) {

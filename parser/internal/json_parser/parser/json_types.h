@@ -1,13 +1,13 @@
 /**
  * @file json_types.h
- * @brief JSON Parser Internal Types with MemoryPool Integration
+ * @brief JSON Parser Internal Types with object_pool-backed arenas
  */
 
 #ifndef JSON_TYPES_H
 #define JSON_TYPES_H
 
 #include "json_parser.h"
-#include "memory_pool.h"
+#include "object_pool.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,16 +16,25 @@ extern "C" {
 #define JSON_POOL_MIN_SIZE (4 * 1024)
 #define JSON_POOL_MAX_SIZE (16 * 1024 * 1024)
 
-typedef struct json_pool_node_s {
-    MemoryPool *pool;
-    struct json_pool_node_s *next;
-} json_pool_node_t;
+typedef struct json_blob_chunk_s {
+    unsigned char *data;
+    size_t capacity;
+    size_t used;
+    struct json_blob_chunk_s *next;
+} json_blob_chunk_t;
 
 typedef struct json_arena_s {
-    json_pool_node_t *head;
-    json_pool_node_t *current;
+    object_pool_t *value_pool;
+    object_pool_t *pair_pool;
+    object_pool_t *element_pool;
+    json_blob_chunk_t *blob_head;
+    json_blob_chunk_t *blob_current;
     size_t initial_size;
-    int external;  // If true, don't destroy pools
+    size_t blob_used;
+    size_t blob_peak;
+    struct json_arena_s *adopted_head;
+    struct json_arena_s *adopted_next;
+    struct json_arena_s *parent;
 } json_arena_t;
 
 typedef struct json_pair_s {
@@ -76,7 +85,6 @@ typedef struct {
 
 json_arena_t *json_arena_create(void);
 json_arena_t *json_arena_create_sized(size_t hint_size);
-json_arena_t *json_arena_create_with_pool(MemoryPool *pool);
 void         *json_arena_alloc(json_arena_t *arena, size_t size);
 char         *json_arena_strdup(json_arena_t *arena, const char *str, size_t len);
 void          json_arena_free(json_arena_t *arena);

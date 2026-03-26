@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <fmt.h>
 #include "tinytest.h"
 #include "security.h"
 
@@ -467,7 +468,7 @@ spec("security_properties") {
             while (allowed_extensions[ext_count] != NULL) ext_count++;
             
             const char *ext = allowed_extensions[pbt_rand() % ext_count];
-            snprintf(filename, sizeof(filename), "testfile.%s", ext);
+            fmt(filename, sizeof(filename), "testfile.{}", ext);
             
             iris_security_result_t result = iris_validate_file_extension(filename, allowed_extensions);
             // Allowed file extension should be accepted
@@ -476,7 +477,7 @@ spec("security_properties") {
             /* Test dangerous file extensions should be rejected */
             size_t danger_count = sizeof(dangerous_extensions) / sizeof(dangerous_extensions[0]);
             const char *danger_ext = dangerous_extensions[pbt_rand() % danger_count];
-            snprintf(filename, sizeof(filename), "malicious.%s", danger_ext);
+            fmt(filename, sizeof(filename), "malicious.{}", danger_ext);
             
             result = iris_validate_file_extension(filename, allowed_extensions);
             // Dangerous file extension should be rejected

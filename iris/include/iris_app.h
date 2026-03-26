@@ -86,6 +86,8 @@ CXX_C_API void iris_app_reset_default(void);
 
 CXX_C_API void iris_app_route(iris_app_t *app, const char *method, const char *path,
                     MiddlewareArray middleware, RequestHandler handler);
+CXX_C_API void iris_app_route_stream(iris_app_t *app, const char *method, const char *path,
+                                     MiddlewareArray middleware, RequestHandler handler);
 
 static inline void iris_app_get(iris_app_t *app, const char *path, RequestHandler handler) {
     iris_app_route(app, "GET", path, NO_MW, handler);
@@ -103,6 +105,15 @@ static inline void iris_app_post(iris_app_t *app, const char *path, RequestHandl
 static inline void iris_app_post_mw(iris_app_t *app, const char *path,
                                      MiddlewareArray mw, RequestHandler handler) {
     iris_app_route(app, "POST", path, mw, handler);
+}
+
+static inline void iris_app_post_stream(iris_app_t *app, const char *path, RequestHandler handler) {
+    iris_app_route_stream(app, "POST", path, NO_MW, handler);
+}
+
+static inline void iris_app_post_stream_mw(iris_app_t *app, const char *path,
+                                           MiddlewareArray mw, RequestHandler handler) {
+    iris_app_route_stream(app, "POST", path, mw, handler);
 }
 
 static inline void iris_app_put(iris_app_t *app, const char *path, RequestHandler handler) {

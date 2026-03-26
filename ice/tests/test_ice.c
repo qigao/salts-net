@@ -223,6 +223,26 @@ spec("ice") {
         check_int_eq(ice_candidate_to_sdp(&candidate, NULL, sizeof(buf)), -1);
         check_int_eq(ice_candidate_to_sdp(&candidate, buf, 0), -1);
     }
+
+    it("should truncate safely when output buffer is too small") {
+        ice_candidate_t candidate = {0};
+        candidate.type = ICE_CANDIDATE_TYPE_SRFLX;
+        candidate.transport = ICE_TRANSPORT_UDP;
+        candidate.component_id = 1;
+        candidate.priority = 1694498815;
+        strcpy(candidate.foundation, "2");
+        strcpy(candidate.ip, "203.0.113.1");
+        candidate.port = 12345;
+        strcpy(candidate.related_ip, "192.168.1.100");
+        candidate.related_port = 54321;
+
+        char buf[32];
+        int len = ice_candidate_to_sdp(&candidate, buf, sizeof(buf));
+
+        check_int_eq((int)strlen(buf), (int)sizeof(buf) - 1);
+        check(len == (int)strlen(buf));
+        check(strncmp(buf, "candidate:2 1 UDP", 17) == 0);
+    }
   }
 
   describe("Remote Candidates") {

@@ -69,6 +69,17 @@ static inline void post_with_mw(const char *p, MiddlewareArray mw, RequestHandle
   iris_app_route(iris_app_default(), "POST", p, mw, h);
 }
 
+#define POST_STREAM_CHOOSER(_1, _2, _3, NAME, ...) NAME
+#define post_stream(...) POST_STREAM_CHOOSER(__VA_ARGS__, post_stream_with_mw, post_stream_no_mw)(__VA_ARGS__)
+
+static inline void post_stream_no_mw(const char *p, RequestHandler h) {
+  iris_app_route_stream(iris_app_default(), "POST", p, NO_MW, h);
+}
+
+static inline void post_stream_with_mw(const char *p, MiddlewareArray mw, RequestHandler h) {
+  iris_app_route_stream(iris_app_default(), "POST", p, mw, h);
+}
+
 #define PUT_CHOOSER(_1, _2, _3, NAME, ...) NAME
 #define put(...) PUT_CHOOSER(__VA_ARGS__, put_with_mw, put_no_mw)(__VA_ARGS__)
 

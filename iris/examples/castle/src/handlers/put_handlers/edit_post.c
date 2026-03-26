@@ -3,9 +3,9 @@
 #include "connection.h"
 #include "context.h"
 #include "utils.h"
+#include <fmt.h>
 #include <time.h>
 #include "slugify.h"
-#include <stb_sprintf.h>
 
 typedef struct
 {
@@ -343,9 +343,9 @@ static void update_post(pg_async_t *pg, ctx_t *ctx)
     char reading_time_str[32], updated_at_str[32];
     char is_hidden_str[8];
 
-    stbsp_snprintf(reading_time_str, sizeof(reading_time_str), "%d", ctx->reading_time);
-    stbsp_snprintf(updated_at_str, sizeof(updated_at_str), "%d", ctx->updated_at);
-    stbsp_snprintf(is_hidden_str, sizeof(is_hidden_str), "%s", ctx->is_hidden ? "true" : "false");
+    fmt(reading_time_str, sizeof(reading_time_str), "{}", ctx->reading_time);
+    fmt(updated_at_str, sizeof(updated_at_str), "{}", ctx->updated_at);
+    fmt(is_hidden_str, sizeof(is_hidden_str), "{}", ctx->is_hidden ? "true" : "false");
 
     const char *update_params[7] = {
         ctx->header,
@@ -552,7 +552,7 @@ static void insert_new_categories(pg_async_t *pg, ctx_t *ctx)
             return;
         }
 
-        stbsp_snprintf(category_str, 16, "%d", ctx->category_ids[i]);
+        fmt(category_str, 16, "{}", ctx->category_ids[i]);
 
         batch_params[i * 2] = strdup(ctx->author_id);
         batch_params[i * 2 + 1] = category_str;
@@ -561,7 +561,7 @@ static void insert_new_categories(pg_async_t *pg, ctx_t *ctx)
             strcat(ctx->batch_sql, ", ");
 
         char value_part[32];
-        stbsp_snprintf(value_part, sizeof(value_part), "($%d, $%d)", i * 2 + 1, i * 2 + 2);
+        fmt(value_part, sizeof(value_part), "(${}, ${})", i * 2 + 1, i * 2 + 2);
         strcat(ctx->batch_sql, value_part);
     }
 

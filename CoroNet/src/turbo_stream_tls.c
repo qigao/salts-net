@@ -11,6 +11,7 @@
 
 #include "turbo_stream_internal.h"
 #include "turbo_buffer.h"
+#include "tlog.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,8 @@
 #ifdef _WIN32
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include <windows.h>
+#  include <wincrypt.h>
 #else
 #  include <arpa/inet.h>
 #endif
@@ -29,6 +32,62 @@
 /* Global lock internally in modern OpenSSL, but static initialization flag for context. */
 static SSL_CTX *s_default_ctx = NULL;
 static int s_ca_configured = 0;
+
+#ifdef _WIN32
+static int load_windows_cert_store(SSL_CTX *ctx, const char *store_name) {
+  HCERTSTORE store;
+  PCCERT_CONTEXT cert = NULL;
+  X509_STORE *x509_store;
+
+  if (!ctx || !store_name) {
+    return 0;
+  }
+
+  store = CertOpenSystemStoreA(0, store_name);
+  if (!store) {
+    return 0;
+  }
+
+  x509_store = SSL_CTX_get_cert_store(ctx);
+  if (!x509_store) {
+    CertCloseStore(store, 0);
+    return 0;
+  }
+
+  while ((cert = CertEnumCertificatesInStore(store, cert)) != NULL) {
+    const unsigned char *encoded = cert->pbCertEncoded;
+    X509 *x509 = d2i_X509(NULL, &encoded, cert->cbCertEncoded);
+    if (!x509) {
+      ERR_clear_error();
+      continue;
+    }
+
+    if (X509_STORE_add_cert(x509_store, x509) != 1) {
+      unsigned long err = ERR_peek_last_error();
+      if (ERR_GET_LIB(err) == ERR_LIB_X509 &&
+          ERR_GET_REASON(err) == X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+        ERR_clear_error();
+      }
+    }
+
+    X509_free(x509);
+  }
+
+  CertCloseStore(store, 0);
+  return 1;
+}
+
+static void configure_ca_from_windows_store(void) {
+  if (s_ca_configured || !s_default_ctx) {
+    return;
+  }
+
+  if (load_windows_cert_store(s_default_ctx, "ROOT")) {
+    load_windows_cert_store(s_default_ctx, "CA");
+    s_ca_configured = 1;
+  }
+}
+#endif
 
 static void configure_ca_from_env(void) {
   if (s_ca_configured) return;
@@ -79,8 +138,99 @@ static void tls_on_tcp_close(void *handle);
 /* turbo_recv_cb signature: int(void*, const mem_slice_t*, void*) */
 static int  tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer);
 
+static void tls_detach_tcp(tls_state_t *st) {
+  turbo_stream_t *tcp;
+
+  if (!st || !st->tcp) {
+    return;
+  }
+
+  tcp = st->tcp;
+  st->tcp = NULL;
+  tcp->user_data = NULL;
+  tcp->managed = 0;
+  tcp->on_connect = NULL;
+  tcp->on_close = NULL;
+}
+
+static void tls_drop_inner_tcp(tls_state_t *st) {
+  turbo_stream_t *tcp;
+
+  if (!st || !st->tcp) {
+    return;
+  }
+
+  tcp = st->tcp;
+  tls_detach_tcp(st);
+  turbo_stream_destroy(tcp);
+}
+
+static void tls_free_state(tls_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  if (st->ssl) {
+    SSL_free(st->ssl);
+    st->ssl = NULL;
+  }
+
+  st->rbio = NULL;
+  st->wbio = NULL;
+  free(st);
+}
+
+static int tls_configure_hostname(tls_state_t *st) {
+  if (!st || !st->ssl || st->hostname[0] == '\0') {
+    return 0;
+  }
+
+  if (SSL_set_tlsext_host_name(st->ssl, st->hostname) != 1) {
+    return TURBO_EIO;
+  }
+
+  if (SSL_set1_host(st->ssl, st->hostname) != 1) {
+    return TURBO_EIO;
+  }
+
+  return 0;
+}
+
 static void tls_pump(tls_state_t *st);
 static void tls_flush_wbio_to_network(tls_state_t *st);
+
+static void tls_log_handshake_failure(tls_state_t *st, int ssl_rc) {
+  int ssl_err;
+  long verify_rc;
+  unsigned long openssl_err;
+  char openssl_buf[256];
+  const char *host;
+
+  if (!st || !st->ssl) {
+    return;
+  }
+
+  ssl_err = SSL_get_error(st->ssl, ssl_rc);
+  verify_rc = SSL_get_verify_result(st->ssl);
+  openssl_err = ERR_peek_last_error();
+  host = st->hostname[0] ? st->hostname : "(unset)";
+
+  if (verify_rc != X509_V_OK) {
+    TLOG_ERROR("TLS handshake failed for {}: verify={} ({})",
+               host, verify_rc, X509_verify_cert_error_string(verify_rc));
+    return;
+  }
+
+  if (openssl_err != 0) {
+    ERR_error_string_n(openssl_err, openssl_buf, sizeof(openssl_buf));
+    TLOG_ERROR("TLS handshake failed for {}: ssl_error={} openssl={}",
+               host, ssl_err, openssl_buf);
+    return;
+  }
+
+  TLOG_ERROR("TLS handshake failed for {}: ssl_error={} (no OpenSSL detail)",
+             host, ssl_err);
+}
 
 static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
                                  const char *hostname,
@@ -109,6 +259,13 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
     st->hostname[sizeof(st->hostname) - 1] = '\0';
   }
 
+  {
+    int rc = tls_configure_hostname(st);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+
   st->tcp = tcp;
   st->tcp->user_data = st;
   st->tcp->managed = 1;
@@ -116,16 +273,16 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
   st->tcp->on_close = tls_on_tcp_close;
   turbo_stream_recv_stop(st->tcp);
 
-  if (st->hostname[0] != '\0') {
-    SSL_set_tlsext_host_name(st->ssl, st->hostname);
-  }
-
   st->state = TLS_ST_HANDSHAKING;
   outer->connected = 0;
 
-  if (turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb) != 0) {
-    st->state = TLS_ST_CLOSED;
-    return TURBO_EIO;
+  {
+    int rc = turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb);
+    if (rc != 0) {
+      tls_detach_tcp(st);
+      st->state = TLS_ST_CLOSED;
+      return rc;
+    }
   }
 
   tls_pump(st);
@@ -151,6 +308,9 @@ static SSL_CTX *get_default_tls_ctx(void) {
     SSL_CTX_set_verify(s_default_ctx, SSL_VERIFY_PEER, NULL);
     SSL_CTX_set_default_verify_paths(s_default_ctx);
     configure_ca_from_env();
+#ifdef _WIN32
+    configure_ca_from_windows_store();
+#endif
   }
   return s_default_ctx;
 }
@@ -205,6 +365,7 @@ static void tls_pump(tls_state_t *st) {
         return; /* Wait for more network I/O */
       } else {
         /* Handshake protocol error */
+        tls_log_handshake_failure(st, r);
         st->state = TLS_ST_CLOSING;
         if (st->outer->on_connect) {
           st->outer->on_connect(st->outer, TURBO_ECONNABORTED, NULL);
@@ -292,7 +453,17 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
   st->state = TLS_ST_HANDSHAKING;
   
   /* Start reading incoming TCP data to fuel the handshake */
-  turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb);
+  {
+    int rc = turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb);
+    if (rc != 0) {
+      st->state = TLS_ST_CLOSED;
+      if (st->outer->on_connect) {
+        st->outer->on_connect(st->outer, rc, NULL);
+      }
+      turbo_stream_close(st->tcp);
+      return;
+    }
+  }
   
   /* First pump triggers SSL_connect and sends ClientHello */
   tls_pump(st);
@@ -301,18 +472,13 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
 static void tls_on_tcp_close(void *handle) {
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   tls_state_t    *st  = (tls_state_t *)tcp->user_data;
+  turbo_stream_t *outer;
   if (!st) return;
 
-  if (st->ssl) {
-    SSL_free(st->ssl); 
-    st->ssl = NULL;
-  }
-
-  turbo_stream_t *outer = st->outer;
+  outer = st->outer;
   if (outer) outer->backend_data = NULL;
   tcp->user_data = NULL;
-  
-  free(st);
+  tls_free_state(st);
 
   if (outer) {
     turbo_stream_finalize_close(outer);
@@ -342,6 +508,18 @@ static int tls_init(turbo_stream_t *s) {
   /* Create Memory BIOs: network->SSL (rbio), SSL->network (wbio) */
   st->rbio = BIO_new(BIO_s_mem());
   st->wbio = BIO_new(BIO_s_mem());
+  if (!st->rbio || !st->wbio) {
+    if (st->rbio) {
+      BIO_free(st->rbio);
+      st->rbio = NULL;
+    }
+    if (st->wbio) {
+      BIO_free(st->wbio);
+      st->wbio = NULL;
+    }
+    tls_free_state(st);
+    return TURBO_ENOMEM;
+  }
   
   /* SSL_set_bio takes ownership of the BIOs */
   SSL_set_bio(st->ssl, st->rbio, st->wbio);
@@ -374,15 +552,24 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
       inet_ntop(AF_INET6, &a6->sin6_addr, st->hostname, sizeof(st->hostname));
     }
   }
-  if (st->hostname[0] != '\0') {
-    SSL_set_tlsext_host_name(st->ssl, st->hostname);
-    SSL_set1_host(st->ssl, st->hostname);
+  {
+    int rc = tls_configure_hostname(st);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+      return rc;
+    }
   }
 
   st->state = TLS_ST_CONNECTING_TCP;
-  return turbo_stream_connect_addr(st->tcp, addr,
-                                   tls_on_tcp_connect,
-                                   tls_on_tcp_close);
+  {
+    int rc = turbo_stream_connect_addr(st->tcp, addr,
+                                       tls_on_tcp_connect,
+                                       tls_on_tcp_close);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+    }
+    return rc;
+  }
 }
 
 int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
@@ -477,13 +664,8 @@ static void tls_close(turbo_stream_t *s) {
   if (st->tcp) {
     turbo_stream_close(st->tcp); /* triggers async close -> tls_on_tcp_close */
   } else {
-    /* Cleanup OpenSSL structs early if TCP was never made */
-    if (st->ssl) {
-      SSL_free(st->ssl);
-      st->ssl = NULL;
-    }
     s->backend_data = NULL;
-    free(st);
+    tls_free_state(st);
     turbo_stream_finalize_close(s);
   }
 }

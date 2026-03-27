@@ -91,6 +91,29 @@ static void set_error(http_response_t *r, http_error_code_t code, const char *ms
     r->error = coro_strdup(msg);
 }
 
+static int transport_last_error(coro_context_t *ctx, int fallback) {
+  int err;
+
+  if (!ctx) {
+    return fallback;
+  }
+
+  err = coro_context_get_last_error(ctx);
+  return err != 0 ? err : fallback;
+}
+
+static http_error_code_t map_transport_error(int rc) {
+  if (rc == TURBO_ETIMEDOUT) {
+    return HTTP_ERROR_TIMEOUT;
+  }
+
+  if (rc == TURBO_ENOMEM) {
+    return HTTP_ERROR_MEMORY_ALLOCATION;
+  }
+
+  return HTTP_ERROR_CONNECTION_FAILED;
+}
+
 static void reset_response(http_response_t *r) {
   free(r->headers);
   r->headers = NULL;
@@ -126,7 +149,7 @@ static int http_socks5_reader_fill(http_socks5_reader_t *reader) {
   if (rc != 0)
     return rc;
   if (chunk == NULL || chunk_len == 0)
-    return 0;
+    return TURBO_EOF;
   if (reader->len + chunk_len > sizeof(reader->buf)) {
     coro_socket_free_recv(chunk);
     return TURBO_EPROTO;
@@ -494,8 +517,11 @@ void http_client_set_default_header(http_client_t *c, const char *name, const ch
   default_header_t *h = c->default_headers;
   while (h) {
     if (tstr_casecmp(h->name, name) == 0) {
+      char *new_value = coro_strdup(value);
+      if (!new_value)
+        return;
       free(h->value);
-      h->value = coro_strdup(value);
+      h->value = new_value;
       return;
     }
     h = h->next;
@@ -505,6 +531,12 @@ void http_client_set_default_header(http_client_t *c, const char *name, const ch
     return;
   h->name = coro_strdup(name);
   h->value = coro_strdup(value);
+  if (!h->name || !h->value) {
+    free(h->name);
+    free(h->value);
+    free(h);
+    return;
+  }
   h->next = c->default_headers;
   c->default_headers = h;
   c->default_header_count++;
@@ -562,19 +594,33 @@ void http_client_set_basic_auth(http_client_t *c, const char *user, const char *
     return;
   size_t cred_len = strlen(user) + strlen(pass) + 2;
   char *cred = (char *)malloc(cred_len);
+  if (!cred) {
+    free(c->auth_header);
+    c->auth_header = NULL;
+    return;
+  }
   fmt(cred, cred_len, "{}:{}", user, pass);
 
   char *encoded = NULL;
   if (tn_base64_encode((const uint8_t *)cred, strlen(cred), &encoded) != 0) {
     free(cred);
+    free(c->auth_header);
+    c->auth_header = NULL;
     return;
   }
   free(cred);
 
   size_t hdr_len = strlen("Authorization: Basic ") + strlen(encoded) + 1;
+  char *new_header = (char *)malloc(hdr_len);
+  if (!new_header) {
+    free(encoded);
+    free(c->auth_header);
+    c->auth_header = NULL;
+    return;
+  }
+  fmt(new_header, hdr_len, "Authorization: Basic {}", encoded);
   free(c->auth_header);
-  c->auth_header = (char *)malloc(hdr_len);
-  fmt(c->auth_header, hdr_len, "Authorization: Basic {}", encoded);
+  c->auth_header = new_header;
   free(encoded);
 }
 
@@ -582,9 +628,15 @@ void http_client_set_bearer_token(http_client_t *c, const char *token) {
   if (!c || !token)
     return;
   size_t len = strlen("Authorization: Bearer ") + strlen(token) + 1;
+  char *new_header = (char *)malloc(len);
+  if (!new_header) {
+    free(c->auth_header);
+    c->auth_header = NULL;
+    return;
+  }
+  fmt(new_header, len, "Authorization: Bearer {}", token);
   free(c->auth_header);
-  c->auth_header = (char *)malloc(len);
-  fmt(c->auth_header, len, "Authorization: Bearer {}", token);
+  c->auth_header = new_header;
 }
 
 void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *claims_json) {
@@ -592,8 +644,11 @@ void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *
     return;
 
   json_value_t *private_claims = json_parse(claims_json, strlen(claims_json));
-  if (!private_claims)
+  if (!private_claims) {
+    free(c->auth_header);
+    c->auth_header = NULL;
     return;
+  }
 
   cjwt_t jwt = {0};
   jwt.header.alg = alg_hs256;
@@ -603,8 +658,11 @@ void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *
   cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
   json_free(private_claims);
 
-  if (rv != CJWTE_OK || !token)
+  if (rv != CJWTE_OK || !token) {
+    free(c->auth_header);
+    c->auth_header = NULL;
     return;
+  }
 
   http_client_set_bearer_token(c, token);
   free(token);
@@ -629,13 +687,22 @@ void http_client_set_proxy(http_client_t *c, const char *host, uint16_t port,
     if (!c->proxy_config)
       return;
   }
-  
-  strncpy(c->proxy_config->host, host, sizeof(c->proxy_config->host) - 1);
+
+  if (strlen(host) >= sizeof(c->proxy_config->host) ||
+      (username && strlen(username) >= sizeof(c->proxy_config->username)) ||
+      (password && strlen(password) >= sizeof(c->proxy_config->password))) {
+    TLOG_ERROR("Proxy configuration exceeds fixed storage");
+    memset(c->proxy_config, 0, sizeof(*c->proxy_config));
+    return;
+  }
+
+  memset(c->proxy_config, 0, sizeof(*c->proxy_config));
+  memcpy(c->proxy_config->host, host, strlen(host) + 1);
   c->proxy_config->port = port;
   
   if (username && password) {
-    strncpy(c->proxy_config->username, username, sizeof(c->proxy_config->username) - 1);
-    strncpy(c->proxy_config->password, password, sizeof(c->proxy_config->password) - 1);
+    memcpy(c->proxy_config->username, username, strlen(username) + 1);
+    memcpy(c->proxy_config->password, password, strlen(password) + 1);
     c->proxy_config->auth_required = 1;
   } else {
     c->proxy_config->auth_required = 0;
@@ -1091,7 +1158,7 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
         enum llhttp_errno finish_err = llhttp_finish(&parser);
         if (finish_err == HPE_OK) {
           ctx.message_complete = 1;
-        } else {
+        } else if (response->error_code == HTTP_ERROR_NONE) {
           set_error(response, HTTP_ERROR_RECEIVE_FAILED, "connection closed before full response");
         }
       }
@@ -1100,7 +1167,8 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
     if (r != 0) {
       http_error_code_t ec =
           (r == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT : HTTP_ERROR_RECEIVE_FAILED;
-      set_error(response, ec, "recv failed");
+      if (response->error_code == HTTP_ERROR_NONE)
+        set_error(response, ec, "recv failed");
       break;
     }
 
@@ -1108,7 +1176,8 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
     /* chunk is pool-backed, NO free() here */
 
     if (err != HPE_OK && err != HPE_PAUSED) {
-      set_error(response, HTTP_ERROR_PARSE_FAILED, llhttp_errno_name(err));
+      if (response->error_code == HTTP_ERROR_NONE)
+        set_error(response, HTTP_ERROR_PARSE_FAILED, llhttp_errno_name(err));
       break;
     }
   }
@@ -1273,7 +1342,7 @@ static int prepare_transport(http_client_t *c, const char *url, const char *host
     socket_type = CORO_SOCKET_TCP_V4;
     *out_transport = coro_socket_create(ctx, socket_type);
     if (!*out_transport)
-      return HTTP_ERROR_MEMORY_ALLOCATION;
+      return transport_last_error(ctx, TURBO_ENOMEM);
     return 0;
   }
 
@@ -1284,11 +1353,7 @@ static int prepare_transport(http_client_t *c, const char *url, const char *host
     if (!coro_pool_is_open(c->conn_pool)) {
       int rc = coro_pool_open(c->conn_pool, host, port, socket_type);
       if (rc != 0) {
-        /* Pool open failed, fallback to direct socket */
-        *out_transport = coro_socket_create(ctx, socket_type);
-        if (!*out_transport)
-          return HTTP_ERROR_MEMORY_ALLOCATION;
-        return 0;
+        return rc;
       }
     }
 
@@ -1298,12 +1363,14 @@ static int prepare_transport(http_client_t *c, const char *url, const char *host
       *out_use_pool = 1;
       return 0;
     }
+
+    return rc != 0 ? rc : TURBO_EIO;
   }
 
-  /* Fallback: create new socket (used in sync mode to avoid pool handle issues) */
+  /* Non-pooled path: create a fresh socket. */
   *out_transport = coro_socket_create(ctx, socket_type);
   if (!*out_transport)
-    return HTTP_ERROR_MEMORY_ALLOCATION;
+    return transport_last_error(ctx, TURBO_ENOMEM);
   return 0;
 }
 
@@ -1391,11 +1458,16 @@ static int send_http_request(http_client_t *c, coro_socket_t *transport, tstr_t 
 
       if (part->is_stream && part->stream_ctx) {
         turbo_file_t fd = turbo_fs_open(part->stream_ctx->file_path, TURBO_FS_O_RDONLY, 0);
-        if (fd != TURBO_INVALID_FILE) {
+        if (fd == TURBO_INVALID_FILE) {
+          sr = TURBO_EIO;
+        } else {
           char buf[8192];
-          int nread;
+          int nread = 0;
           while (sr == 0 && (nread = turbo_fs_read(fd, buf, sizeof(buf))) > 0)
             send_chunk(&sr, transport, buf, (size_t)nread);
+          if (nread < 0) {
+            sr = TURBO_EIO;
+          }
           turbo_fs_close(fd);
         }
       } else if (part->data && part->data_len > 0) {
@@ -1473,7 +1545,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
   int use_pool = 0;
   int rc = prepare_transport(c, url, host, port, is_tls, uri, &transport, &use_pool);
   if (rc != 0) {
-    set_error(resp, HTTP_ERROR_MEMORY_ALLOCATION, "transport create failed");
+    set_error(resp, map_transport_error(rc), "transport prepare failed");
     turbo_free_uri(&uri);
     return -1;
   }
@@ -1552,6 +1624,14 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
     ctx = c->coro_ctx;
 
   char *full_url = build_coro_full_url(c, url);
+  if (!full_url && c->base_url &&
+      !tstr_v_starts_with(tstr_v_from_cstr(url), tstr_v_from_cstr("http://")) &&
+      !tstr_v_starts_with(tstr_v_from_cstr(url), tstr_v_from_cstr("https://"))) {
+    set_error(resp, HTTP_ERROR_MEMORY_ALLOCATION, "failed to build full URL");
+    c->stats.total_requests++;
+    c->stats.failed_requests++;
+    return resp;
+  }
   const char *effective_url = full_url ? full_url : url;
 
   rate_limit_acquire(c);
@@ -1700,6 +1780,9 @@ http_response_t *do_request_full(http_client_t *c, http_method_t method, const c
                                  size_t body_len, http_data_cb data_cb, void *data_cb_ud,
                                  http_multipart_form_t *form, http_data_read_cb read_cb,
                                  void *read_cb_ud) {
+  if (!c)
+    return NULL;
+
   if (coro_running()) {
     return do_request_impl(c, method, url, headers, header_count, body, body_len, data_cb,
                            data_cb_ud, form, read_cb, read_cb_ud);
@@ -1720,8 +1803,19 @@ http_response_t *do_request_full(http_client_t *c, http_method_t method, const c
                               .read_cb_ud = read_cb_ud,
                               .result = NULL};
 
-  coro_context_spawn(c->coro_ctx, sync_request_coro, &task);
+  if (coro_context_spawn(c->coro_ctx, sync_request_coro, &task) != 0) {
+    http_response_t *resp = alloc_response();
+    if (resp)
+      set_error(resp, HTTP_ERROR_CANCELLED, "failed to spawn request coroutine");
+    return resp;
+  }
   coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+  if (!task.result) {
+    http_response_t *resp = alloc_response();
+    if (resp)
+      set_error(resp, HTTP_ERROR_CANCELLED, "request coroutine produced no response");
+    return resp;
+  }
   return task.result;
 }
 
@@ -1877,6 +1971,7 @@ typedef struct {
   int count;
   int next_index;
   int worker_count;
+  int rc;
 } http_batch_ctx_t;
 
 static void batch_worker_coro(coro_t *co, void *arg) {
@@ -1892,7 +1987,7 @@ static void batch_worker_coro(coro_t *co, void *arg) {
 
 /* Fan-out `worker_count` lazy tasks and yield until all complete.
  * Must be called from inside a coroutine (uses coro_when_all). */
-static void batch_spawn_and_join(http_batch_ctx_t *ctx) {
+static int batch_spawn_and_join(http_batch_ctx_t *ctx) {
   /* Always use client's context to avoid deadlock when called from external coro */
   coro_context_t *coro_ctx = ctx->client->coro_ctx;
 
@@ -1900,22 +1995,31 @@ static void batch_spawn_and_join(http_batch_ctx_t *ctx) {
 
   coro_task_t **tasks = (coro_task_t **)calloc(n, sizeof(coro_task_t *));
   if (!tasks)
-    return;
+    return -1;
 
   for (int i = 0; i < n; i++) {
     tasks[i] = coro_task_create(coro_ctx, batch_worker_coro, ctx);
-    if (tasks[i])
-      coro_task_start(tasks[i]);
+    if (!tasks[i]) {
+      for (int j = 0; j < i; j++)
+        coro_task_destroy(tasks[j]);
+      free(tasks);
+      return -1;
+    }
+    coro_task_start(tasks[i]);
   }
 
   coro_when_all(coro_ctx, tasks, n);
+  for (int i = 0; i < n; i++)
+    coro_task_destroy(tasks[i]);
   free(tasks);
+  return 0;
 }
 
 /* Wrapper coro used when batch is called from outside a coroutine. */
 static void batch_outer_coro(coro_t *co, void *arg) {
   UNUSED(co);
-  batch_spawn_and_join((http_batch_ctx_t *)arg);
+  http_batch_ctx_t *ctx = (http_batch_ctx_t *)arg;
+  ctx->rc = batch_spawn_and_join(ctx);
 }
 
 http_batch_result_t *http_client_batch(http_client_t *c, const http_batch_request_t *requests,
@@ -1935,15 +2039,26 @@ http_batch_result_t *http_client_batch(http_client_t *c, const http_batch_reques
                           .results = results,
                           .count = count,
                           .next_index = 0,
-                          .worker_count = worker_count};
+                          .worker_count = worker_count,
+                          .rc = 0};
 
   if (coro_running() && coro_context_current() == c->coro_ctx) {
     /* Already in client's coro context: fan out directly and yield via when_all. */
-    batch_spawn_and_join(&ctx);
+    if (batch_spawn_and_join(&ctx) != 0) {
+      free(results);
+      return NULL;
+    }
   } else {
     /* Sync call site or external coro: spawn a driver coro and run the loop to completion. */
-    coro_context_spawn(c->coro_ctx, batch_outer_coro, &ctx);
+    if (coro_context_spawn(c->coro_ctx, batch_outer_coro, &ctx) != 0) {
+      free(results);
+      return NULL;
+    }
     coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+    if (ctx.rc != 0) {
+      free(results);
+      return NULL;
+    }
   }
 
   return results;
@@ -2033,6 +2148,7 @@ typedef struct {
   size_t transferred;
   http_progress_cb progress_cb;
   void *progress_ud;
+  int write_failed;
 } download_stream_ctx_t;
 
 static size_t upload_read_cb(char *buffer, size_t size, void *user_data) {
@@ -2054,8 +2170,14 @@ static size_t upload_read_cb(char *buffer, size_t size, void *user_data) {
 static void download_write_cb(const char *data, size_t len, void *user_data) {
   download_stream_ctx_t *ctx = (download_stream_ctx_t *)user_data;
 
-  if (turbo_fs_write(ctx->fd, data, len) < 0)
+  if (ctx->write_failed) {
     return;
+  }
+
+  if (turbo_fs_write(ctx->fd, data, len) < 0) {
+    ctx->write_failed = 1;
+    return;
+  }
 
   ctx->transferred += len;
 
@@ -2137,6 +2259,9 @@ http_response_t *http_download_file_stream(http_client_t *client, const char *ur
                                           NULL, NULL, NULL);
 
   turbo_fs_close(fd);
+  if (resp && ctx.write_failed && resp->error_code == HTTP_ERROR_NONE) {
+    set_error(resp, HTTP_ERROR_FILE_IO, "Failed to write file");
+  }
   return resp;
 }
 
@@ -2189,13 +2314,27 @@ http_response_t *http_download_file_resume(
 
     /* Parse options */
     const char* resume_file = options ? options->resume_file : NULL;
-    int retry_count = options && options->retry_count > 0 ? options->retry_count : DEFAULT_RETRY_COUNT;
+    int retry_count = options ? options->retry_count : DEFAULT_RETRY_COUNT;
     int retry_delay_ms = options && options->retry_delay_ms > 0 ? options->retry_delay_ms : DEFAULT_RETRY_DELAY_MS;
+    int resume_state_failed = 0;
+
+    if (retry_count < 0) {
+        retry_count = DEFAULT_RETRY_COUNT;
+    }
 
     /* Try to load resume state */
     http_resume_state_t state = {0};
     int resuming = 0;
     size_t start_byte = 0;
+
+    if (resume_file &&
+        (strlen(url) >= sizeof(state.url) || strlen(output_path) >= sizeof(state.output_path))) {
+        http_response_t *r = alloc_response();
+        if (r) {
+            set_error(r, HTTP_ERROR_INVALID_PARAMS, "resume state fields exceed fixed storage");
+        }
+        return r;
+    }
 
     if (resume_file && load_resume_state(resume_file, &state) == 0) {
         /* Validate resume state */
@@ -2211,8 +2350,8 @@ http_response_t *http_download_file_resume(
 
     /* Initialize resume state if not resuming */
     if (!resuming && resume_file) {
-        strncpy(state.url, url, sizeof(state.url) - 1);
-        strncpy(state.output_path, output_path, sizeof(state.output_path) - 1);
+        memcpy(state.url, url, strlen(url) + 1);
+        memcpy(state.output_path, output_path, strlen(output_path) + 1);
         state.downloaded_bytes = 0;
         state.total_bytes = 0;
     }
@@ -2236,7 +2375,7 @@ http_response_t *http_download_file_resume(
     int attempt = 0;
     http_response_t *resp = NULL;
 
-    while (attempt < retry_count) {
+    while (retry_count == 0 || attempt < retry_count) {
         /* Build Range header if resuming */
         const char *headers[1] = {NULL};
         char range_header[256];
@@ -2254,13 +2393,21 @@ http_response_t *http_download_file_resume(
             .total_size = state.total_bytes,
             .transferred = start_byte,
             .progress_cb = progress_cb,
-            .progress_ud = progress_ud
+            .progress_ud = progress_ud,
+            .write_failed = 0
         };
 
         /* Execute request */
         resp = do_request_full(client, HTTP_GET, url, headers, header_count,
                                NULL, 0, download_write_cb, &ctx,
                                NULL, NULL, NULL);
+
+        if (resp && ctx.write_failed) {
+            if (resp->error_code == HTTP_ERROR_NONE) {
+                set_error(resp, HTTP_ERROR_FILE_IO, "Failed to write file");
+            }
+            break;
+        }
 
         /* Check response */
         if (resp && (resp->status_code == 200 || resp->status_code == 206)) {
@@ -2279,10 +2426,14 @@ http_response_t *http_download_file_resume(
 
             /* Delete resume file on success */
             if (resume_file && state.downloaded_bytes >= state.total_bytes) {
-                remove(resume_file);
+                if (remove(resume_file) != 0) {
+                    TLOG_ERROR("Failed to remove resume state: {}", resume_file);
+                }
             } else if (resume_file) {
                 /* Save progress */
-                save_resume_state(resume_file, &state);
+                if (save_resume_state(resume_file, &state) != 0) {
+                    set_error(resp, HTTP_ERROR_FILE_IO, "Failed to save resume state");
+                }
             }
 
             turbo_fs_close(fd);
@@ -2291,11 +2442,18 @@ http_response_t *http_download_file_resume(
 
         /* Failure - retry */
         attempt++;
-        if (attempt < retry_count) {
+        if (retry_count == 0 || attempt < retry_count) {
             /* Save current progress */
             if (resume_file) {
                 state.downloaded_bytes = ctx.transferred;
-                save_resume_state(resume_file, &state);
+                if (save_resume_state(resume_file, &state) != 0) {
+                    if (resp) {
+                        set_error(resp, HTTP_ERROR_FILE_IO, "Failed to save resume state");
+                    } else {
+                        resume_state_failed = 1;
+                    }
+                    break;
+                }
             }
 
             /* Exponential backoff */
@@ -2326,8 +2484,13 @@ http_response_t *http_download_file_resume(
     if (!resp) {
         resp = (http_response_t *)calloc(1, sizeof(http_response_t));
         if (resp) {
-            resp->error_code = HTTP_ERROR_TIMEOUT;
-            resp->error = strdup("Download failed after retries");
+            if (resume_state_failed) {
+                resp->error_code = HTTP_ERROR_FILE_IO;
+                resp->error = strdup("Failed to save resume state");
+            } else {
+                resp->error_code = HTTP_ERROR_TIMEOUT;
+                resp->error = strdup("Download failed after retries");
+            }
         }
     }
 

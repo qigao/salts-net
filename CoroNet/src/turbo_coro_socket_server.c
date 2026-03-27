@@ -43,6 +43,7 @@ static void spawn_handler_coro(coro_socket_t *s, void (*handler)(coro_socket_t *
                                void *arg) {
   coro_task_arg_t *task = malloc(sizeof(coro_task_arg_t));
   if (!task) {
+    TLOG_ERROR("server: failed to allocate handler task");
     coro_socket_destroy(s);
     return;
   }
@@ -51,6 +52,7 @@ static void spawn_handler_coro(coro_socket_t *s, void (*handler)(coro_socket_t *
   task->arg = arg;
   
   if (coro_context_spawn(s->ctx, coro_entry_bridge, task) != 0) {
+    TLOG_ERROR("server: failed to spawn handler coroutine");
     coro_socket_destroy(s);
     free(task);
     return;
@@ -74,6 +76,37 @@ static void accept_loop_task(coro_t *co, void *arg) {
     if (server->listener == NULL) break;
   }
   release_client(server);
+}
+
+static void rollback_listener(coro_socket_t *server) {
+  if (!server || !server->listener) {
+    return;
+  }
+
+  coro_socket_t *listener = server->listener;
+  server->listener = NULL;
+  coro_socket_destroy(listener);
+}
+
+static int spawn_accept_loop(coro_socket_t *server) {
+  int rc;
+
+  if (!server) {
+    return TURBO_EINVAL;
+  }
+
+  retain_client(server);
+  rc = coro_context_spawn(server->ctx, accept_loop_task, server);
+  if (rc != 0) {
+    release_client(server);
+    if (server->listener) {
+      coro_socket_t *listener = server->listener;
+      server->listener = NULL;
+      coro_socket_destroy(listener);
+    }
+  }
+
+  return rc;
 }
 
 /* ── Listen Helpers ───────────────────────────────────────── */
@@ -122,13 +155,18 @@ static int listen_tcp(coro_socket_t *server, const char *host, int port) {
   server->listener->reuse_port = server->reuse_port;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
-  if (r != 0) return r;
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
 
   r = coro_socket_listen(server->listener, 128);
-  if (r != 0) return r;
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
 
-  retain_client(server);
-  return coro_context_spawn(server->ctx, accept_loop_task, server);
+  return spawn_accept_loop(server);
 }
 
 static int listen_pipe(coro_socket_t *server, const char *path) {
@@ -153,13 +191,15 @@ static int listen_pipe(coro_socket_t *server, const char *path) {
 
   int r = coro_socket_listen(server->listener, 128);
   if (r != 0) {
-    free(owned_path);
-    server->listener->native_tcp_state = NULL;
+    if (server->listener->native_tcp_state) {
+      free(server->listener->native_tcp_state);
+      server->listener->native_tcp_state = NULL;
+    }
+    rollback_listener(server);
     return r;
   }
 
-  retain_client(server);
-  return coro_context_spawn(server->ctx, accept_loop_task, server);
+  return spawn_accept_loop(server);
 }
 
 static int listen_udp(coro_socket_t *server, const char *host, int port) {
@@ -172,13 +212,18 @@ static int listen_udp(coro_socket_t *server, const char *host, int port) {
   server->listener->reuse_port = server->reuse_port;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
-  if (r != 0) return r;
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
 
   r = coro_socket_listen(server->listener, 0);
-  if (r != 0) return r;
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
 
-  retain_client(server);
-  return coro_context_spawn(server->ctx, accept_loop_task, server);
+  return spawn_accept_loop(server);
 }
 
 static int listen_kcp(coro_socket_t *server, const char *host, int port) {
@@ -190,13 +235,18 @@ static int listen_kcp(coro_socket_t *server, const char *host, int port) {
   if (!server->listener) return TURBO_ENOMEM;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
-  if (r != 0) return r;
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
 
   r = coro_socket_listen(server->listener, 0);
-  if (r != 0) return r;
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
 
-  retain_client(server);
-  return coro_context_spawn(server->ctx, accept_loop_task, server);
+  return spawn_accept_loop(server);
 }
 
 /* ── Public API ───────────────────────────────────────────── */

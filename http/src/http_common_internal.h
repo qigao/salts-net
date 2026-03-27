@@ -24,6 +24,7 @@ struct http_param_entry {
 struct http_params_s {
   struct http_param_entry *head;
   int count;
+  http_error_code_t error_code;
 };
 
 /* ── Cookie internals ────────────────────────────────────────────── */
@@ -58,6 +59,7 @@ struct http_multipart_form_s {
   http_multipart_part_t *parts;
   char boundary[48];
   int part_count;
+  http_error_code_t error_code;
 };
 
 #endif /* HTTP_COMMON_INTERNAL_H */

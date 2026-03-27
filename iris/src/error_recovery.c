@@ -16,7 +16,7 @@ static iris_error_handler_t g_error_handler = NULL;
 /* Default error handler */
 static iris_recovery_action_t default_error_handler(const iris_error_context_t *ctx) {
     if (!ctx) {
-        return IRIS_RECOVERY_CONTINUE;
+        return IRIS_RECOVERY_REJECT_REQUEST;
     }
 
     /* Log the error */
@@ -46,15 +46,15 @@ static iris_recovery_action_t default_error_handler(const iris_error_context_t *
             
         case IRIS_ERROR_INVALID_CONFIG:
         case IRIS_ERROR_MISSING_CONFIG:
-            return IRIS_RECOVERY_FALLBACK;
+            return IRIS_RECOVERY_GRACEFUL_SHUTDOWN;
             
         case IRIS_ERROR_HANDLER_FAILED:
         case IRIS_ERROR_MIDDLEWARE_FAILED:
         case IRIS_ERROR_RPC_FAILED:
-            return IRIS_RECOVERY_CONTINUE;
+            return IRIS_RECOVERY_REJECT_REQUEST;
             
         default:
-            return IRIS_RECOVERY_CONTINUE;
+            return IRIS_RECOVERY_REJECT_REQUEST;
     }
 }
 
@@ -69,7 +69,7 @@ void iris_error_recovery_cleanup(void) {
 
 iris_recovery_action_t iris_handle_error(const iris_error_context_t *ctx, iris_recovery_action_t recovery_action) {
     if (!ctx) {
-        return IRIS_RECOVERY_CONTINUE;
+        return IRIS_RECOVERY_REJECT_REQUEST;
     }
 
     /* Support multi-instance: check default app's error handler first */

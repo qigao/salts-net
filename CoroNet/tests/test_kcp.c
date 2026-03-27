@@ -1,8 +1,16 @@
 #include "CoroNet.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "CoroNet/turbo_kcp.h"
 #include "tinytest.h"
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#endif
 
 static int s_kcp_recv_count = 0;
 static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
@@ -102,6 +110,23 @@ spec("KCP Transport") {
         coro_context_destroy(ctx);
     }
 
+    it("should propagate invalid udp backend through turbo_kcp_connect") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+        ctx->udp_backend = (turbo_udp_backend_t)-1;
+
+        turbo_kcp_t *client = turbo_kcp_create(ctx);
+        check(client != NULL);
+
+        check_int_eq(turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv),
+                     TURBO_EPROTONOSUPPORT);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
+        turbo_kcp_destroy(client);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
     it("should send and receive data over KCP") {
         coro_context_t *ctx = coro_context_create(NULL);
         
@@ -171,6 +196,28 @@ spec("KCP Transport") {
         check_int_eq(state.ok, 1);
 
         coro_socket_destroy(server);
+        coro_context_destroy(ctx);
+    }
+
+    it("should propagate invalid udp backend through kcp socket bind") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+        ctx->udp_backend = (turbo_udp_backend_t)-1;
+
+        coro_socket_t *server = coro_socket_create_kcp(ctx);
+        check_not_null(server);
+
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(0);
+
+        check_int_eq(coro_socket_bind(server, (struct sockaddr *)&addr), TURBO_EPROTONOSUPPORT);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
+        coro_socket_destroy(server);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
     }
 }

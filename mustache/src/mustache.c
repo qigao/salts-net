@@ -1,13 +1,13 @@
 #include "mustache.h"
-#include <errno.h>
-#include <fmt.h>
 #include "turbo_buffer.h"
 #include "turbo_str.h"
+#include <errno.h>
+#include <fmt.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h> /* for off_t */
-#include <stdio.h>
 #ifdef _MSC_VER
   /* MSVC does not understand "inline" when building as pure C (not C++).
    * However it understands "__inline" */
@@ -48,15 +48,13 @@ static int mustache_buffer_insert(MUSTACHE_BUFFER *buf, off_t off, const void *d
     uint8_t *new_data;
 
     new_data = (uint8_t *)realloc(buf->data, new_alloc);
-    if (new_data == NULL)
-      return -1;
+    if (new_data == NULL) return -1;
 
     buf->data = new_data;
     buf->alloc = new_alloc;
   }
 
-  if (off < buf->n)
-    memmove(buf->data + off + n, buf->data + off, buf->n - off);
+  if (off < buf->n) memmove(buf->data + off + n, buf->data + off, buf->n - off);
 
   memcpy(buf->data + off, data, n);
   buf->n += n;
@@ -75,8 +73,7 @@ static int mustache_buffer_insert_num(MUSTACHE_BUFFER *buf, off_t off, uint64_t 
 
   while (1) {
     num = num >> 7;
-    if (num == 0)
-      break;
+    if (num == 0) break;
     tmp[15 - n++] = 0x80 | (num & 0x7f);
   }
 
@@ -212,8 +209,7 @@ static int mustache_is_std_closer(const char *closer, size_t closer_len) {
   off_t off;
 
   for (off = 0; off < closer_len; off++) {
-    if (closer[off] != '}')
-      return 0;
+    if (closer[off] != '}') return 0;
   }
 
   return 1;
@@ -222,18 +218,14 @@ static int mustache_is_std_closer(const char *closer, size_t closer_len) {
 static int mustache_validate_tagname(const char *tagname, size_t size) {
   off_t off;
 
-  if (size == 1 && tagname[0] == '.')
-    return 0;
+  if (size == 1 && tagname[0] == '.') return 0;
 
   /* Verify there is no whitespace and that '.' is used only as a delimiter
    * of non-empty tokens. */
-  if (tagname[0] == '.' || tagname[size - 1] == '.')
-    return -1;
+  if (tagname[0] == '.' || tagname[size - 1] == '.') return -1;
   for (off = 0; off < size; off++) {
-    if (MUSTACHE_ISWHITESPACE(tagname[off]))
-      return -1;
-    if (tagname[off] == '.' && off + 1 < size && tagname[off + 1] == '.')
-      return -1;
+    if (MUSTACHE_ISWHITESPACE(tagname[off])) return -1;
+    if (tagname[off] == '.' && off + 1 < size && tagname[off + 1] == '.') return -1;
   }
 
   return 0;
@@ -253,8 +245,7 @@ static int mustache_validate_sections(const char *templ_data, MUSTACHE_BUFFER *t
     switch (tags[i].type) {
     case MUSTACHE_TAGTYPE_OPENSECTION:
     case MUSTACHE_TAGTYPE_OPENSECTIONINV:
-      if (mustache_stack_push(&section_stack, (uintptr_t)&tags[i]) != 0)
-        goto err;
+      if (mustache_stack_push(&section_stack, (uintptr_t)&tags[i]) != 0) goto err;
       break;
 
     case MUSTACHE_TAGTYPE_CLOSESECTION:
@@ -300,8 +291,7 @@ static int mustache_validate_sections(const char *templ_data, MUSTACHE_BUFFER *t
     }
   }
 
-  if (n_errors == 0)
-    ret = 0;
+  if (n_errors == 0) ret = 0;
 
 err:
   mustache_stack_free(&section_stack);
@@ -317,34 +307,26 @@ static int mustache_parse_delimiters(const char *delim_spec, size_t size, char *
 
   opener_end = opener_beg;
   while (opener_end < size) {
-    if (MUSTACHE_ISWHITESPACE(delim_spec[opener_end]))
-      break;
-    if (delim_spec[opener_end] == '=')
-      return -1;
+    if (MUSTACHE_ISWHITESPACE(delim_spec[opener_end])) break;
+    if (delim_spec[opener_end] == '=') return -1;
     opener_end++;
   }
-  if (opener_end <= opener_beg || opener_end - opener_beg > MUSTACHE_MAXOPENERLENGTH)
-    return -1;
+  if (opener_end <= opener_beg || opener_end - opener_beg > MUSTACHE_MAXOPENERLENGTH) return -1;
 
   closer_beg = opener_end;
   while (closer_beg < size) {
-    if (!MUSTACHE_ISWHITESPACE(delim_spec[closer_beg]))
-      break;
+    if (!MUSTACHE_ISWHITESPACE(delim_spec[closer_beg])) break;
     closer_beg++;
   }
-  if (closer_beg <= opener_end)
-    return -1;
+  if (closer_beg <= opener_end) return -1;
 
   closer_end = closer_beg;
   while (closer_end < size) {
-    if (MUSTACHE_ISWHITESPACE(delim_spec[closer_end]))
-      return -1;
+    if (MUSTACHE_ISWHITESPACE(delim_spec[closer_end])) return -1;
     closer_end++;
   }
-  if (closer_end <= closer_beg || closer_end - closer_beg > MUSTACHE_MAXCLOSERLENGTH)
-    return -1;
-  if (closer_end != size)
-    return -1;
+  if (closer_end <= closer_beg || closer_end - closer_beg > MUSTACHE_MAXCLOSERLENGTH) return -1;
+  if (closer_end != size) return -1;
 
   memcpy(opener, delim_spec + opener_beg, opener_end - opener_beg);
   *p_opener_len = opener_end - opener_beg;
@@ -361,8 +343,7 @@ static int mustache_find_delimiters(const char *templ_data, size_t templ_size, o
   size_t closer_len = *p_closer_len;
 
   while (off < limit) {
-    if (off + (off_t)opener_len > limit)
-      break;
+    if (off + (off_t)opener_len > limit) break;
     if (memcmp(templ_data + off, opener, opener_len) != 0) {
       off++;
       continue;
@@ -379,8 +360,7 @@ static int mustache_find_delimiters(const char *templ_data, size_t templ_size, o
       off_t spec_beg = tag_off;
       off_t closer_pos = spec_beg;
       while (closer_pos + (off_t)closer_len <= limit) {
-        if (memcmp(templ_data + closer_pos, closer, closer_len) == 0)
-          break;
+        if (memcmp(templ_data + closer_pos, closer, closer_len) == 0) break;
         closer_pos++;
       }
       if (closer_pos + (off_t)closer_len > limit) {
@@ -398,8 +378,8 @@ static int mustache_find_delimiters(const char *templ_data, size_t templ_size, o
       }
 
       if (spec_end > spec_beg) {
-        if (mustache_parse_delimiters(templ_data + spec_beg, (size_t)(spec_end - spec_beg),
-                                      opener, &opener_len, closer, &closer_len) == 0) {
+        if (mustache_parse_delimiters(templ_data + spec_beg, (size_t)(spec_end - spec_beg), opener,
+                                      &opener_len, closer, &closer_len) == 0) {
           *p_opener_len = opener_len;
           *p_closer_len = closer_len;
         }
@@ -435,8 +415,7 @@ static int mustache_parse(const char *templ_data, size_t templ_size, const MUSTA
     current_tag.type = MUSTACHE_TAGTYPE_INDENT;
     current_tag.beg = off;
     current_tag.end = off;
-    if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0)
-      goto err;
+    if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0) goto err;
   }
 
   current_tag.type = MUSTACHE_TAGTYPE_NONE;
@@ -456,10 +435,8 @@ static int mustache_parse(const char *templ_data, size_t templ_size, const MUSTA
        * Consider for example "{{=@ @=}}".
        * Determine the real meaning from current parser state:
        */
-      if (current_tag.type == MUSTACHE_TAGTYPE_NONE)
-        is_closer = 0;
-      else
-        is_opener = 0;
+      if (current_tag.type == MUSTACHE_TAGTYPE_NONE) is_closer = 0;
+      else is_opener = 0;
     }
 
     if (is_opener) {
@@ -599,10 +576,8 @@ static int mustache_parse(const char *templ_data, size_t templ_size, const MUSTA
             current_tag.beg = tmp_off;
             while (end_off < templ_size && MUSTACHE_ISWHITESPACE(templ_data[end_off]))
               end_off++;
-            if (end_off < templ_size && templ_data[end_off] == '\r')
-              end_off++;
-            if (end_off < templ_size && templ_data[end_off] == '\n')
-              end_off++;
+            if (end_off < templ_size && templ_data[end_off] == '\r') end_off++;
+            if (end_off < templ_size && templ_data[end_off] == '\n') end_off++;
             current_tag.end = end_off;
           }
         }
@@ -645,8 +620,7 @@ static int mustache_parse(const char *templ_data, size_t templ_size, const MUSTA
       }
 
       /* Remember the tag info. */
-      if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0)
-        goto err;
+      if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0) goto err;
 
       current_tag.type = MUSTACHE_TAGTYPE_NONE;
     } else if (MUSTACHE_ISNEWLINE(templ_data[off])) {
@@ -662,17 +636,14 @@ static int mustache_parse(const char *templ_data, size_t templ_size, const MUSTA
       }
 
       /* New line may be formed by digraph "\r\n". */
-      if (templ_data[off] == '\r')
-        off++;
-      if (off < templ_size && templ_data[off] == '\n')
-        off++;
+      if (templ_data[off] == '\r') off++;
+      if (off < templ_size && templ_data[off] == '\n') off++;
 
       if (current_tag.type == MUSTACHE_TAGTYPE_NONE && off < templ_size) {
         current_tag.type = MUSTACHE_TAGTYPE_INDENT;
         current_tag.beg = off;
         current_tag.end = off;
-        if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0)
-          goto err;
+        if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0) goto err;
         current_tag.type = MUSTACHE_TAGTYPE_NONE;
       }
 
@@ -685,15 +656,13 @@ static int mustache_parse(const char *templ_data, size_t templ_size, const MUSTA
     }
   }
 
-  if (mustache_validate_sections(templ_data, &tags, parser, parser_data) != 0)
-    goto err;
+  if (mustache_validate_sections(templ_data, &tags, parser, parser_data) != 0) goto err;
 
   /* Add an extra dummy tag marking end of the template. */
   current_tag.type = MUSTACHE_TAGTYPE_NONE;
   current_tag.beg = templ_size;
   current_tag.end = templ_size;
-  if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0)
-    goto err;
+  if (mustache_buffer_append(&tags, &current_tag, sizeof(MUSTACHE_TAGINFO)) != 0) goto err;
 
   /* Success? */
   if (n_errors == 0) {
@@ -812,13 +781,11 @@ static int mustache_compile_tagname(MUSTACHE_BUFFER *insns, const char *name, si
     n_tokens = 0;
   } else {
     for (i = 0; i < size; i++) {
-      if (name[i] == '.')
-        n_tokens++;
+      if (name[i] == '.') n_tokens++;
     }
   }
 
-  if (mustache_buffer_append_num(insns, n_tokens) != 0)
-    return -1;
+  if (mustache_buffer_append_num(insns, n_tokens) != 0) return -1;
 
   tok_beg = 0;
   for (i = 0; i < n_tokens; i++) {
@@ -826,10 +793,8 @@ static int mustache_compile_tagname(MUSTACHE_BUFFER *insns, const char *name, si
     while (tok_end < size && name[tok_end] != '.')
       tok_end++;
 
-    if (mustache_buffer_append_num(insns, tok_end - tok_beg) != 0)
-      return -1;
-    if (mustache_buffer_append(insns, name + tok_beg, tok_end - tok_beg) != 0)
-      return -1;
+    if (mustache_buffer_append_num(insns, tok_end - tok_beg) != 0) return -1;
+    if (mustache_buffer_append(insns, name + tok_beg, tok_end - tok_beg) != 0) return -1;
 
     tok_beg = tok_end + 1;
   }
@@ -854,24 +819,20 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
   size_t indent_len;
   MUSTACHE_LAMBDA_INFO lambda_info = {0};
 
-  if (parser == NULL)
-    parser = &default_parser;
+  if (parser == NULL) parser = &default_parser;
 
   /* Collect all tags from the template using original parser */
-  if (mustache_parse(templ_data, templ_size, parser, parser_data, &tags, &n_tags) != 0)
-    goto err;
+  if (mustache_parse(templ_data, templ_size, parser, parser_data, &tags, &n_tags) != 0) goto err;
 
   /* Build the template */
 #define APPEND(data, n)                                                                            \
   do {                                                                                             \
-    if (mustache_buffer_append(&insns, (data), (n)) != 0)                                          \
-      goto err;                                                                                    \
+    if (mustache_buffer_append(&insns, (data), (n)) != 0) goto err;                                \
   } while (0)
 
 #define APPEND_NUM(num)                                                                            \
   do {                                                                                             \
-    if (mustache_buffer_append_num(&insns, (uint64_t)(num)) != 0)                                  \
-      goto err;                                                                                    \
+    if (mustache_buffer_append_num(&insns, (uint64_t)(num)) != 0) goto err;                        \
   } while (0)
 
 #define APPEND_TAGNAME(tag)                                                                        \
@@ -883,14 +844,12 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
 
 #define INSERT_NUM(pos, num)                                                                       \
   do {                                                                                             \
-    if (mustache_buffer_insert_num(&insns, (pos), (uint64_t)(num)) != 0)                           \
-      goto err;                                                                                    \
+    if (mustache_buffer_insert_num(&insns, (pos), (uint64_t)(num)) != 0) goto err;                 \
   } while (0)
 
 #define PUSH_JMP_POS()                                                                             \
   do {                                                                                             \
-    if (mustache_stack_push(&jmp_pos_stack, insns.n) != 0)                                         \
-      goto err;                                                                                    \
+    if (mustache_stack_push(&jmp_pos_stack, insns.n) != 0) goto err;                               \
   } while (0)
 
 #define POP_JMP_POS() ((off_t)mustache_stack_pop(&jmp_pos_stack))
@@ -930,12 +889,10 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
       PUSH_JMP_POS();
       APPEND_TAGNAME(tag);
       APPEND_NUM(MUSTACHE_OP_LAMBDA);
-      if (mustache_buffer_append_u64(&insns, (uint64_t)tag->end) != 0)
-        goto err;
+      if (mustache_buffer_append_u64(&insns, (uint64_t)tag->end) != 0) goto err;
       lambda_info.len_pos = (off_t)insns.n;
       lambda_info.start_off = tag->end;
-      if (mustache_buffer_append_u64(&insns, 0) != 0)
-        goto err;
+      if (mustache_buffer_append_u64(&insns, 0) != 0) goto err;
       PUSH_LAMBDA_INFO(lambda_info);
       APPEND_NUM(MUSTACHE_OP_ENTER);
       PUSH_JMP_POS();
@@ -950,8 +907,7 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
       INSERT_NUM(jmp_pos, insns.n - jmp_pos);
       {
         size_t insert_size = mustache_num_size((uint64_t)(insns.n - jmp_pos));
-        if (jmp_pos < lambda_info.len_pos)
-          lambda_info.len_pos += (off_t)insert_size;
+        if (jmp_pos < lambda_info.len_pos) lambda_info.len_pos += (off_t)insert_size;
       }
       mustache_buffer_write_u64(&insns, lambda_info.len_pos,
                                 (uint64_t)(tag->beg - lambda_info.start_off));
@@ -962,12 +918,10 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
       PUSH_JMP_POS();
       APPEND_TAGNAME(tag);
       APPEND_NUM(MUSTACHE_OP_LAMBDA);
-      if (mustache_buffer_append_u64(&insns, (uint64_t)tag->end) != 0)
-        goto err;
+      if (mustache_buffer_append_u64(&insns, (uint64_t)tag->end) != 0) goto err;
       lambda_info.len_pos = (off_t)insns.n;
       lambda_info.start_off = tag->end;
-      if (mustache_buffer_append_u64(&insns, 0) != 0)
-        goto err;
+      if (mustache_buffer_append_u64(&insns, 0) != 0) goto err;
       PUSH_LAMBDA_INFO(lambda_info);
       APPEND_NUM(MUSTACHE_OP_ENTERINV);
       break;
@@ -979,8 +933,7 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
       INSERT_NUM(jmp_pos, insns.n - jmp_pos);
       {
         size_t insert_size = mustache_num_size((uint64_t)(insns.n - jmp_pos));
-        if (jmp_pos < lambda_info.len_pos)
-          lambda_info.len_pos += (off_t)insert_size;
+        if (jmp_pos < lambda_info.len_pos) lambda_info.len_pos += (off_t)insert_size;
       }
       mustache_buffer_write_u64(&insns, lambda_info.len_pos,
                                 (uint64_t)(tag->beg - lambda_info.start_off));
@@ -1010,8 +963,7 @@ MUSTACHE_TEMPLATE *mustache_compile(const char *templ_data, size_t templ_size,
       break;
     }
 
-    if (done)
-      break;
+    if (done) break;
 
     off = tag->end;
     tag++;
@@ -1050,8 +1002,7 @@ MUSTACHE_TEMPLATE *mustache_compile_v(tstr_v templ, const MUSTACHE_PARSER *parse
 }
 
 void mustache_release(MUSTACHE_TEMPLATE *t) {
-  if (t == NULL)
-    return;
+  if (t == NULL) return;
 
   free(t);
 }
@@ -1084,8 +1035,7 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
 
 #define PUSH_NODE()                                                                                \
   do {                                                                                             \
-    if (mustache_stack_push(&node_stack, (uintptr_t)reg_node) != 0)                                \
-      goto err;                                                                                    \
+    if (mustache_stack_push(&node_stack, (uintptr_t)reg_node) != 0) goto err;                      \
   } while (0)
 
 #define POP_NODE() ((void *)mustache_stack_pop(&node_stack))
@@ -1094,8 +1044,7 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
 
 #define PUSH_INDEX(index)                                                                          \
   do {                                                                                             \
-    if (mustache_stack_push(&index_stack, (uintptr_t)(index)) != 0)                                \
-      goto err;                                                                                    \
+    if (mustache_stack_push(&index_stack, (uintptr_t)(index)) != 0) goto err;                      \
   } while (0)
 
 #define POP_INDEX() ((unsigned)mustache_stack_pop(&index_stack))
@@ -1109,8 +1058,7 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
     switch (opcode) {
     case MUSTACHE_OP_LITERAL: {
       size_t n = (size_t)mustache_decode_num(insns, reg_pc, &reg_pc);
-      if (renderer->out_verbatim((const char *)(insns + reg_pc), n, renderer_data) != 0)
-        goto err;
+      if (renderer->out_verbatim((const char *)(insns + reg_pc), n, renderer_data) != 0) goto err;
       reg_pc += n;
       break;
     }
@@ -1120,7 +1068,7 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
       reg_jmpaddr = reg_pc + jmp_len;
       /* fallthrough */
     }
-    /* fall through */
+      /* fall through */
 
     case MUSTACHE_OP_RESOLVE: {
       unsigned n_names = (unsigned)mustache_decode_num(insns, reg_pc, &reg_pc);
@@ -1140,13 +1088,12 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
         if (i == 0) {
           uintptr_t *stack_items = (uintptr_t *)node_stack.data;
           size_t count = node_stack.n / sizeof(uintptr_t);
-          
+
           reg_node = NULL;
           while (count > 0) {
             void *candidate = (void *)stack_items[--count];
             reg_node = provider->get_child_by_name(candidate, name, name_len, provider_data);
-            if (reg_node != NULL)
-              break;
+            if (reg_node != NULL) break;
           }
         } else if (reg_node != NULL) {
           reg_node = provider->get_child_by_name(reg_node, name, name_len, provider_data);
@@ -1164,18 +1111,19 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
             provider->is_lambda(reg_node, provider_data)) {
           char *lambda_text = NULL;
           size_t lambda_len = 0;
-          if (provider->call_lambda(reg_node, "", 0, &lambda_text, &lambda_len, provider_data) == 0 &&
+          if (provider->call_lambda(reg_node, "", 0, &lambda_text, &lambda_len, provider_data) ==
+                  0 &&
               lambda_text) {
-            MUSTACHE_TEMPLATE *lambda_t =
-                mustache_compile(lambda_text, lambda_len, NULL, NULL, 0);
+            MUSTACHE_TEMPLATE *lambda_t = mustache_compile(lambda_text, lambda_len, NULL, NULL, 0);
             if (lambda_t) {
               MUSTACHE_STRING_RENDERER tmp_renderer;
               if (mustache_string_renderer_init(&tmp_renderer) == 0) {
-                mustache_process(lambda_t, &tmp_renderer.base, &tmp_renderer, provider, provider_data);
+                mustache_process(lambda_t, &tmp_renderer.base, &tmp_renderer, provider,
+                                 provider_data);
                 char *rendered = mustache_string_renderer_get(&tmp_renderer);
                 if (rendered) {
                   out = (opcode == MUSTACHE_OP_OUTVERBATIM) ? renderer->out_verbatim
-                                                           : renderer->out_escaped;
+                                                            : renderer->out_escaped;
                   (void)out(rendered, strlen(rendered), renderer_data);
                   free(rendered);
                 }
@@ -1189,8 +1137,7 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
         }
 
         out = (opcode == MUSTACHE_OP_OUTVERBATIM) ? renderer->out_verbatim : renderer->out_escaped;
-        if (provider->dump(reg_node, out, renderer_data, provider_data) != 0)
-          goto err;
+        if (provider->dump(reg_node, out, renderer_data, provider_data) != 0) goto err;
       }
       break;
 
@@ -1330,20 +1277,13 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
           partial_source = partial_tpl->source;
           partial_source_len = partial_tpl->source_len;
         }
-        if (mustache_stack_push(&partial_stack, (uintptr_t)insns) != 0)
-          goto err;
-        if (mustache_stack_push(&partial_stack, (uintptr_t)reg_pc) != 0)
-          goto err;
-        if (mustache_stack_push(&partial_stack, (uintptr_t)indent_len) != 0)
-          goto err;
-        if (mustache_stack_push(&partial_stack, (uintptr_t)source) != 0)
-          goto err;
-        if (mustache_stack_push(&partial_stack, (uintptr_t)source_len) != 0)
-          goto err;
-        if (mustache_stack_push(&partial_stack, (uintptr_t)reg_jmpaddr) != 0)
-          goto err;
-        if (mustache_buffer_append(&indent_buffer, indent, indent_len) != 0)
-          goto err;
+        if (mustache_stack_push(&partial_stack, (uintptr_t)insns) != 0) goto err;
+        if (mustache_stack_push(&partial_stack, (uintptr_t)reg_pc) != 0) goto err;
+        if (mustache_stack_push(&partial_stack, (uintptr_t)indent_len) != 0) goto err;
+        if (mustache_stack_push(&partial_stack, (uintptr_t)source) != 0) goto err;
+        if (mustache_stack_push(&partial_stack, (uintptr_t)source_len) != 0) goto err;
+        if (mustache_stack_push(&partial_stack, (uintptr_t)reg_jmpaddr) != 0) goto err;
+        if (mustache_buffer_append(&indent_buffer, indent, indent_len) != 0) goto err;
         reg_pc = 0;
         insns = partial_insns;
         source = partial_source;
@@ -1568,8 +1508,8 @@ void mustache_string_renderer_free(MUSTACHE_STRING_RENDERER *renderer) {
   }
 }
 
-int mustache_string_renderer_init_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer,
-                                        mem_pool_t *arena, size_t min_capacity) {
+int mustache_string_renderer_init_arena(MUSTACHE_STRING_RENDERER_ARENA *renderer, mem_pool_t *arena,
+                                        size_t min_capacity) {
   if (!renderer || !arena) {
     return -1;
   }

@@ -96,6 +96,27 @@ static int stream_uring_submit_send(turbo_stream_t *s);
 static int stream_uring_submit_accept(turbo_stream_listener_t *l);
 static int stream_uring_init_with_socket(turbo_stream_t *s, int existing_fd);
 
+static int stream_uring_post_wait(stream_uring_base_t *base,
+                                  coro_post_fn fn,
+                                  void *arg1,
+                                  void *arg2) {
+  int rc;
+
+  if (!base || !base->ctx || !fn) {
+    return TURBO_EINVAL;
+  }
+
+  for (;;) {
+    rc = coro_post(base->ctx, fn, arg1, arg2);
+    if (rc == 0) {
+      return 0;
+    }
+
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(base->ctx));
+    turbo_thread_yield();
+  }
+}
+
 static int stream_kind_family(turbo_stream_kind_t kind) {
   switch (kind) {
   case TURBO_STREAM_TCP6:
@@ -156,16 +177,23 @@ static int stream_uring_queue_push(stream_uring_base_t *base,
     return TURBO_EINVAL;
   }
 
-  turbo_mutex_lock(&base->cmd_lock);
-  slot = ring_spsc_write_acquire(&base->cmd_queue, sizeof(void *));
-  if (!slot) {
+  for (;;) {
+    turbo_mutex_lock(&base->cmd_lock);
+    slot = ring_spsc_write_acquire(&base->cmd_queue, sizeof(void *));
+    if (slot) {
+      memcpy(slot, &op, sizeof(void *));
+      ring_spsc_write_release(&base->cmd_queue, sizeof(void *));
+      turbo_mutex_unlock(&base->cmd_lock);
+      break;
+    }
     turbo_mutex_unlock(&base->cmd_lock);
-    return TURBO_ENOMEM;
-  }
 
-  memcpy(slot, &op, sizeof(void *));
-  ring_spsc_write_release(&base->cmd_queue, sizeof(void *));
-  turbo_mutex_unlock(&base->cmd_lock);
+    signal_value = 1;
+    written = write(base->wake_fd, &signal_value, sizeof(signal_value));
+    (void)written;
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(base->ctx));
+    turbo_thread_yield();
+  }
 
   signal_value = 1;
   written = write(base->wake_fd, &signal_value, sizeof(signal_value));
@@ -293,7 +321,7 @@ static void stream_uring_drain_commands(stream_uring_base_t *base) {
 
 static void stream_uring_post_completion(stream_uring_base_t *base,
                                          stream_uring_op_t *op) {
-  coro_post(base->ctx, stream_uring_handle_completion, op, NULL);
+  (void)stream_uring_post_wait(base, stream_uring_handle_completion, op, NULL);
 }
 
 static void stream_uring_worker(void *arg) {
@@ -352,9 +380,11 @@ static void stream_uring_worker(void *arg) {
   }
 
   if (base->is_listener) {
-    coro_post(base->ctx, stream_uring_listener_cleanup_task, base, base->owner);
+    (void)stream_uring_post_wait(base, stream_uring_listener_cleanup_task,
+                                 base, base->owner);
   } else {
-    coro_post(base->ctx, stream_uring_stream_cleanup_task, base, base->owner);
+    (void)stream_uring_post_wait(base, stream_uring_stream_cleanup_task,
+                                 base, base->owner);
   }
 }
 
@@ -908,7 +938,17 @@ static void uring_close(turbo_stream_t *s) {
 
   op = (stream_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
-    turbo_stream_finalize_close(s);
+    st->base.stopping = 1;
+    if (st->base.fd >= 0) {
+      close(st->base.fd);
+      st->base.fd = -1;
+    }
+    if (st->base.wake_fd >= 0) {
+      close(st->base.wake_fd);
+      st->base.wake_fd = -1;
+    }
+    (void)stream_uring_post_wait(&st->base, stream_uring_stream_cleanup_task,
+                                 st, s);
     return;
   }
 
@@ -916,7 +956,17 @@ static void uring_close(turbo_stream_t *s) {
   op->owner = s;
   if (stream_uring_queue_push(&st->base, op) != 0) {
     free(op);
-    turbo_stream_finalize_close(s);
+    st->base.stopping = 1;
+    if (st->base.fd >= 0) {
+      close(st->base.fd);
+      st->base.fd = -1;
+    }
+    if (st->base.wake_fd >= 0) {
+      close(st->base.wake_fd);
+      st->base.wake_fd = -1;
+    }
+    (void)stream_uring_post_wait(&st->base, stream_uring_stream_cleanup_task,
+                                 st, s);
   }
 }
 
@@ -1031,17 +1081,30 @@ static int uring_listen(turbo_stream_listener_t *l, int backlog) {
   }
 
   if (listen(st->base.fd, backlog) < 0) {
-    return -errno;
+    rc = -errno;
+    l->backend_data = NULL;
+    stream_uring_destroy_base(&st->base);
+    free(st);
+    return rc;
   }
 
   rc = stream_uring_start_worker(&st->base);
   if (rc != 0) {
+    l->backend_data = NULL;
+    stream_uring_destroy_base(&st->base);
+    free(st);
     return rc;
   }
 
   while (__atomic_load_n(&st->accepts_posted, __ATOMIC_RELAXED) < st->accept_depth) {
     rc = stream_uring_submit_accept(l);
     if (rc != 0) {
+      if (__atomic_load_n(&st->accepts_posted, __ATOMIC_RELAXED) == 0) {
+        st->base.stopping = 1;
+        l->backend_data = NULL;
+        stream_uring_destroy_base(&st->base);
+        free(st);
+      }
       return rc;
     }
   }
@@ -1060,7 +1123,17 @@ static void uring_listener_close(turbo_stream_listener_t *l) {
 
   op = (stream_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
-    turbo_stream_listener_finalize_close(l);
+    st->base.stopping = 1;
+    if (st->base.fd >= 0) {
+      close(st->base.fd);
+      st->base.fd = -1;
+    }
+    if (st->base.wake_fd >= 0) {
+      close(st->base.wake_fd);
+      st->base.wake_fd = -1;
+    }
+    (void)stream_uring_post_wait(&st->base, stream_uring_listener_cleanup_task,
+                                 st, l);
     return;
   }
 
@@ -1068,7 +1141,17 @@ static void uring_listener_close(turbo_stream_listener_t *l) {
   op->owner = l;
   if (stream_uring_queue_push(&st->base, op) != 0) {
     free(op);
-    turbo_stream_listener_finalize_close(l);
+    st->base.stopping = 1;
+    if (st->base.fd >= 0) {
+      close(st->base.fd);
+      st->base.fd = -1;
+    }
+    if (st->base.wake_fd >= 0) {
+      close(st->base.wake_fd);
+      st->base.wake_fd = -1;
+    }
+    (void)stream_uring_post_wait(&st->base, stream_uring_listener_cleanup_task,
+                                 st, l);
   }
 }
 

@@ -1,5 +1,8 @@
 #include "tinytest.h"
 #include "http_client.h"
+#include "../src/http_common_internal.h"
+#include <stdlib.h>
+#include <turbo_str.h>
 #include <string.h>
 
 /* ── Network error check ─────────────────────────────────────────── */
@@ -78,6 +81,23 @@ spec("http stats and forms") {
             free(url);
             http_params_free(params);
         }
+
+        it("should fail loudly on invalid params") {
+            http_params_t *params = http_params_create();
+            char *encoded;
+            char *url;
+
+            check_not_null(params);
+            http_params_add(params, NULL, "1");
+
+            encoded = http_params_encode(params);
+            url = http_build_url("https://example.com/api", params);
+
+            check_null(encoded);
+            check_null(url);
+
+            http_params_free(params);
+        }
     }
 
     describe("form POST") {
@@ -93,6 +113,33 @@ spec("http stats and forms") {
                 check_int_eq(r->status_code, 200);
                 check(r->body && strstr(r->body, "application/x-www-form-urlencoded") != NULL);
             }
+            http_response_free(r);
+            http_params_free(params);
+            http_client_destroy(c);
+        }
+
+        it("should fail loudly when non-empty form encoding fails") {
+            http_client_t *c = http_client_create("http://localhost:8080");
+            http_params_t *params = (http_params_t *)calloc(1, sizeof(*params));
+            struct http_param_entry *entry =
+                (struct http_param_entry *)calloc(1, sizeof(*entry));
+            http_response_t *r;
+
+            check_not_null(c);
+            check_not_null(params);
+            check_not_null(entry);
+
+            entry->key = NULL;
+            entry->value = tstr_dup("value");
+            entry->next = NULL;
+            params->head = entry;
+            params->count = 1;
+
+            r = http_post_form(c, "https://httpbin.org/post", params);
+            check_not_null(r);
+            check_int_eq(r->error_code, HTTP_ERROR_MEMORY_ALLOCATION);
+            check_not_null(r->error);
+
             http_response_free(r);
             http_params_free(params);
             http_client_destroy(c);

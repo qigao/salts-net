@@ -19,6 +19,14 @@ int global_middleware_count = 0;
 int global_middleware_capacity = INITIAL_MW_CAPACITY;
 static int global_middleware_legacy_owned = 0;
 
+static void middleware_fail(Res *res, const char *message)
+{
+  TLOG_ERROR("Middleware chain failed: {:s}", message);
+  if (res && res->client) {
+    send_text(res, INTERNAL_SERVER_ERROR, "Internal Server Error");
+  }
+}
+
 /* Add middleware to global chain (legacy API) */
 void hook(MiddlewareHandler middleware_handler)
 {
@@ -77,9 +85,8 @@ int next(Chain* chain, Req* req, Res* res)
     if (next_middleware) {
       return next_middleware(req, res, chain);
     } else {
-      TLOG_WARN("Warning: NULL middleware handler at position {:d}", chain->current - 1);
-      // Skip this middleware and try the next one
-      return next(chain, req, res);
+      TLOG_ERROR("Error: NULL middleware handler at position {:d}", chain->current - 1);
+      return -1;
     }
   } else {
     // All middleware executed, call the route handler
@@ -136,10 +143,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
   MiddlewareHandler* combined_handlers =
       mem_alloc(req->arena, sizeof(MiddlewareHandler) * total_middleware_count);
   if (!combined_handlers) {
-    TLOG_ERROR("Arena allocation failed for middleware handlers");
-    if (middleware_info->handler) {
-      middleware_info->handler(req, res);
-    }
+    middleware_fail(res, "arena allocation failed for middleware handlers");
     return;
   }
 
@@ -158,10 +162,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
   // Create middleware chain context (allocated in request arena)
   Chain* chain = mem_alloc(req->arena, sizeof(Chain));
   if (!chain) {
-    TLOG_ERROR("Arena allocation failed for middleware chain");
-    if (middleware_info->handler) {
-      middleware_info->handler(req, res);
-    }
+    middleware_fail(res, "arena allocation failed for middleware chain");
     return;
   }
 
@@ -175,10 +176,7 @@ void execute_middleware_chain(Req* req, Res* res, MiddlewareInfo* middleware_inf
 
   // Error handling
   if (result == -1) {
-    TLOG_ERROR("ERROR: Middleware chain failed, calling handler directly as fallback");
-    if (middleware_info->handler) {
-      middleware_info->handler(req, res);
-    }
+    middleware_fail(res, "middleware returned error");
   }
 }
 

@@ -178,6 +178,8 @@ CXX_C_API void turbo_stream_set_write_cb(turbo_stream_t *s,
 
 CXX_C_API void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
 CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host);
+CXX_C_API void turbo_stream_ws_set_path_host_protocol(turbo_stream_t *s, const char *path,
+                                                      const char *host, const char *protocol);
 
 #define TURBO_STREAM_ZERO_COPY_SEND(stream, data_size, write_code)             \
   do {                                                                         \

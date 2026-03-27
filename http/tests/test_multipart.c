@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "http_client.h"
+#include "../src/http_common_internal.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -93,6 +94,27 @@ spec("http multipart") {
             check_int_eq(result, 0);
             http_multipart_form_destroy(form);
             remove("test_multipart.txt");
+        }
+
+        it("should fail loudly when file-path setup fails") {
+            http_client_t *c = http_client_create("http://localhost:8080");
+            http_multipart_form_t *form = http_multipart_form_create();
+            http_response_t *r;
+
+            check_not_null(c);
+            check_not_null(form);
+            check_int_eq(http_multipart_form_add_file_path(form, "file", "missing-file.bin",
+                                                           "application/octet-stream"), -1);
+            check_int_eq(form->error_code, HTTP_ERROR_FILE_IO);
+
+            r = http_post_multipart(c, "https://httpbin.org/post", form);
+            check_not_null(r);
+            check_int_eq(r->error_code, HTTP_ERROR_FILE_IO);
+            check_not_null(r->error);
+
+            http_response_free(r);
+            http_multipart_form_destroy(form);
+            http_client_destroy(c);
         }
     }
 }

@@ -18,7 +18,9 @@ typedef struct {
   test_socket_t listen_socket;
   int status;
   int handshake_ok;
+  int send_invalid_opcode;
   int saw_echo;
+  int saw_close;
 } wss_test_server_t;
 
 static int s_ws_connected = -1;
@@ -220,6 +222,48 @@ static void wss_test_server_main(void *arg) {
   }
   server->handshake_ok = 1;
 
+  if (server->send_invalid_opcode) {
+    static const uint8_t invalid_payload[] = { 'b', 'a', 'd' };
+    out_hdr_len = ws_frame_build_header(out_hdr, 0x3, sizeof(invalid_payload), 1, 0, no_mask);
+    if (out_hdr_len + sizeof(invalid_payload) > sizeof(out_frame)) {
+      server->status = -19;
+      goto done;
+    }
+
+    memcpy(out_frame, out_hdr, out_hdr_len);
+    memcpy(out_frame + out_hdr_len, invalid_payload, sizeof(invalid_payload));
+    if (SSL_write(ssl, out_frame, (int)(out_hdr_len + sizeof(invalid_payload))) <= 0) {
+      server->status = -20;
+      goto done;
+    }
+
+    frame_len = 0;
+    pr = WS_PARSE_NEED_MORE;
+    while (pr == WS_PARSE_NEED_MORE) {
+      int n = SSL_read(ssl, (char *)frame_buf + frame_len, (int)sizeof(frame_buf) - (int)frame_len);
+      if (n <= 0) {
+        server->status = -21;
+        goto done;
+      }
+      frame_len += (size_t)n;
+      pr = ws_frame_parse(frame_buf, frame_len, &frame);
+    }
+
+    if (pr != WS_PARSE_OK) {
+      server->status = -22;
+      goto done;
+    }
+
+    if (frame.opcode != WS_OPCODE_CLOSE) {
+      server->status = -23;
+      goto done;
+    }
+
+    server->saw_close = 1;
+    server->status = 0;
+    goto done;
+  }
+
   hdr_len = (size_t)((strstr(req, "\r\n\r\n") + 4) - req);
   if ((size_t)total > hdr_len) {
     frame_len = (size_t)total - hdr_len;
@@ -366,6 +410,69 @@ spec("Stream WebSocket Client") {
     check_int_eq(server.status, 0);
     check(server.handshake_ok == 1);
     check(server.saw_echo == 1);
+
+    coro_context_destroy(ctx);
+    tls_test_clear_ca_env();
+    tls_test_remove_file(ca_file);
+  }
+
+  it("should close on reserved websocket opcode") {
+    char ca_file[512] = {0};
+    unsigned short port = 0;
+    int limit;
+    coro_context_t *ctx = NULL;
+    turbo_stream_t *s = NULL;
+    wss_test_server_t server;
+    struct sockaddr_in addr;
+
+    memset(&server, 0, sizeof(server));
+    server.listen_socket = TEST_INVALID_SOCKET;
+    server.send_invalid_opcode = 1;
+
+    check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+    check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+
+    ctx = coro_context_create(NULL);
+    check(ctx != NULL);
+
+    s = turbo_stream_create(ctx, TURBO_STREAM_WSS);
+    check(s != NULL);
+    turbo_stream_ws_set_path_host(s, "/chat", "localhost");
+
+    s_ws_connected = -1;
+    s_ws_closed = 0;
+    s_ws_rx_len = 0;
+    memset(s_ws_rx_buf, 0, sizeof(s_ws_rx_buf));
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
+
+    limit = 20000;
+    while (s_ws_connected == -1 && limit-- > 0) {
+      coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+    check_int_eq(s_ws_connected, 0);
+
+    check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
+
+    limit = 20000;
+    while (!s_ws_closed && limit-- > 0) {
+      coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+
+    turbo_thread_join(&server.thread);
+
+    check_int_eq(s_ws_closed, 1);
+    check_int_eq(server.status, 0);
+    check_int_eq(server.handshake_ok, 1);
+    check_int_eq(server.saw_close, 1);
+    check_int_eq(s_ws_rx_len, 0);
 
     coro_context_destroy(ctx);
     tls_test_clear_ca_env();

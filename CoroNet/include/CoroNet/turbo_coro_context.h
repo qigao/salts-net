@@ -172,6 +172,17 @@ CXX_C_API int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backen
  */
 CXX_C_API turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx);
 
+/**
+ * @brief Get the last synchronous API error recorded on this context.
+ *
+ * Stream/listener factory helpers that return NULL store their failure code on
+ * the owning context so callers can inspect the real cause instead of guessing.
+ *
+ * @param ctx Context to query
+ * @return 0 if no error is recorded, or the last negative TURBO/system error
+ */
+CXX_C_API int coro_context_get_last_error(const coro_context_t *ctx);
+
 // =============================================================================
 // Query
 // =============================================================================

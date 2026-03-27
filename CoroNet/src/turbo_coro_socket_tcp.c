@@ -14,6 +14,10 @@
 
 extern const coro_transport_ops_t transport_ops_tcp;
 
+static int socket_ctx_error(coro_socket_t *s, int fallback) {
+  return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
+}
+
 /* ── Client callbacks ─────────────────────────────────────── */
 
 static int on_tcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
@@ -38,6 +42,20 @@ static void on_tcp_close(void *handle) {
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
   }
+}
+
+static void tcp_discard_stream(coro_socket_t *s) {
+  turbo_stream_t *stream;
+
+  if (!s || !s->handle.stream) {
+    return;
+  }
+
+  stream = s->handle.stream;
+  s->handle.stream = NULL;
+  turbo_stream_set_user_data(stream, NULL);
+  stream->managed = 0;
+  turbo_stream_destroy(stream);
 }
 
 /* ── Connect ──────────────────────────────────────────────── */
@@ -67,9 +85,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 
   /* Retry path: failed connect attempts must not reuse a dead stream handle. */
   if (s->handle.stream && !s->connected) {
-    turbo_stream_set_user_data(s->handle.stream, NULL);
-    turbo_stream_destroy(s->handle.stream);
-    s->handle.stream = NULL;
+    tcp_discard_stream(s);
   }
 
   /* Create stream handle on first connect */
@@ -78,7 +94,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
                                    ? TURBO_STREAM_TCP6
                                    : TURBO_STREAM_TCP4;
     s->handle.stream = turbo_stream_create(s->ctx, kind);
-    if (!s->handle.stream) return TURBO_ENOMEM;
+    if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
     turbo_stream_set_user_data(s->handle.stream, s);
     s->handle.stream->managed = 1;
   }
@@ -90,6 +106,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
+    tcp_discard_stream(s);
     return r;
   }
 
@@ -119,8 +136,21 @@ typedef struct tcp_listener_state_s {
   int reuse_port;
 } tcp_listener_state_t;
 
+static void tcp_listener_fail(coro_socket_t *s, int status) {
+  if (!s || status == 0) {
+    return;
+  }
+
+  s->status = status;
+  if (s->co_wait) {
+    coro_resume_waiter(s);
+  } else {
+    s->accept_pending = 1;
+  }
+}
+
 static void on_tcp_accept(void *listener_handle, void *stream_handle,
-                           void *peer) {
+                          void *peer) {
   UNUSED(peer);
   turbo_stream_listener_t *l = (turbo_stream_listener_t *)listener_handle;
   tcp_listener_state_t *ls =
@@ -130,6 +160,7 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle,
   tcp_accept_node_t *node = malloc(sizeof(tcp_accept_node_t));
   if (!node) {
     turbo_stream_destroy((turbo_stream_t *)stream_handle);
+    tcp_listener_fail(ls->server_coro, TURBO_ENOMEM);
     return;
   }
   node->stream = (turbo_stream_t *)stream_handle;
@@ -187,7 +218,10 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
                                  : TURBO_STREAM_TCP4;
 
   ls->listener = turbo_stream_listen(s->ctx, kind, addr, backlog, on_tcp_accept);
-  if (!ls->listener) return TURBO_EADDRINUSE;
+  if (!ls->listener) {
+    int rc = coro_context_get_last_error(s->ctx);
+    return rc != 0 ? rc : TURBO_EIO;
+  }
 
   turbo_stream_listener_set_user_data(ls->listener, ls);
   return 0;
@@ -206,6 +240,12 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
       release_client(s);
       return status;
     }
+  }
+
+  if (s->status != 0) {
+    int status = s->status;
+    release_client(s);
+    return status;
   }
 
   tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;

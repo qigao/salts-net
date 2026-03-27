@@ -530,6 +530,10 @@ turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx) {
   return ctx ? ctx->udp_backend : TURBO_UDP_BACKEND_AUTO;
 }
 
+int coro_context_get_last_error(const coro_context_t *ctx) {
+  return ctx ? ctx->last_error : 0;
+}
+
 /* ── Keepalive ref management ─────────────────────────────────── */
 
 void coro_context_native_ref(coro_context_t *ctx) {
@@ -778,7 +782,16 @@ static void on_sleep_timer_bounce(void *arg1, void *arg2) {
 
 static void on_sleep_timer(turbo_timer_t *timer) {
   sleep_ctx_t *sctx = (sleep_ctx_t *)turbo_timer_get_data(timer);
-  coro_post(sctx->ctx, on_sleep_timer_bounce, sctx, NULL);
+  int rc;
+
+  if (!sctx) {
+    return;
+  }
+
+  rc = coro_post(sctx->ctx, on_sleep_timer_bounce, sctx, NULL);
+  if (rc != 0) {
+    on_sleep_timer_bounce(sctx, NULL);
+  }
 }
 
 void coro_sleep(coro_context_t *ctx, uint64_t ms) {

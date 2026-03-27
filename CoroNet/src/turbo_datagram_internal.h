@@ -51,6 +51,7 @@ struct turbo_datagram_s {
 
   /* State */
   int connected;
+  int status;
   int closing;
   int destroyed;      /**< 1 = user called turbo_datagram_destroy() */
   void *user_data;

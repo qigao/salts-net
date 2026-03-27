@@ -291,6 +291,61 @@ fail:
   THREAD_RETURN(0);
 }
 
+static THREAD_RET THREAD_CALL mock_http_socks5_proxy_drop_thread(void *arg) {
+  mock_proxy_state_t *state = (mock_proxy_state_t *)arg;
+  native_sock_t listener;
+  native_sock_t client;
+  struct sockaddr_in addr;
+  struct sockaddr_in bound_addr;
+#ifdef _WIN32
+  int bound_len;
+#else
+  socklen_t bound_len;
+#endif
+
+  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (listener == (native_sock_t)-1) {
+    state->fail_step = 1;
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons((uint16_t)state->port);
+
+  if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+      listen(listener, 1) != 0) {
+    state->fail_step = 2;
+    CLOSESOCK(listener);
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  bound_len = (int)sizeof(bound_addr);
+  if (getsockname(listener, (struct sockaddr *)&bound_addr, &bound_len) != 0) {
+    state->fail_step = 3;
+    CLOSESOCK(listener);
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  state->port = ntohs(bound_addr.sin_port);
+  state->ready = 1;
+
+  client = accept(listener, NULL, NULL);
+  CLOSESOCK(listener);
+  if (client == (native_sock_t)-1) {
+    state->fail_step = 4;
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  CLOSESOCK(client);
+  THREAD_RETURN(0);
+}
+
 static void run_proxy_case(int auth_required) {
   mock_proxy_state_t state = {0};
   native_thread_t thread;
@@ -336,10 +391,45 @@ static void run_proxy_case(int auth_required) {
   check_int_eq(state.saw_http_request, 1);
 }
 
+static void run_proxy_drop_case(void) {
+  mock_proxy_state_t state = {0};
+  native_thread_t thread;
+  http_client_t *client;
+  http_response_t *resp;
+  int rc;
+
+  ensure_native_sockets_ready();
+  state.port = 0;
+  rc = native_thread_create(&thread, mock_http_socks5_proxy_drop_thread, &state);
+  check_int_eq(rc, 0);
+
+  while (!state.ready && !state.failed) {
+    native_sleep_ms(10);
+  }
+  check_int_eq(state.failed, 0);
+
+  client = http_client_create(NULL);
+  check_not_null(client);
+  http_client_set_connect_timeout(client, 2000);
+  http_client_set_timeout(client, 2000);
+  http_client_set_proxy(client, "127.0.0.1", (uint16_t)state.port, NULL, NULL);
+
+  resp = http_get(client, "http://example.com:8088/proxy-test");
+  check_not_null(resp);
+  check_int_ne(resp->error_code, HTTP_ERROR_NONE);
+  check_int_eq(resp->status_code, 0);
+
+  http_response_free(resp);
+  http_client_destroy(client);
+  native_thread_join(&thread);
+}
+
 spec("http proxy") {
   describe("SOCKS5 proxy") {
     it("should fetch through SOCKS5 proxy without auth") { run_proxy_case(0); }
 
     it("should fetch through SOCKS5 proxy with username password auth") { run_proxy_case(1); }
+
+    it("should fail when proxy closes during handshake") { run_proxy_drop_case(); }
   }
 }

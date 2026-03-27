@@ -1,7 +1,15 @@
 #include "CoroNet.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "turbo_datagram.h"
 #include "tinytest.h"
 #include <stdio.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#endif
 
 static int s_received = 0;
 static int on_datagram_recv(void *handle, const mem_slice_t *slice, void *addr) {
@@ -66,6 +74,34 @@ spec("Datagram") {
         turbo_datagram_destroy(dg);
 
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should record datagram creation errors on the context") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+
+        check(turbo_datagram_create(ctx, (turbo_datagram_kind_t)-1) == NULL);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
+        turbo_datagram_t *dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
+        check(dg != NULL);
+        check_int_eq(coro_context_get_last_error(ctx), 0);
+
+        turbo_datagram_destroy(dg);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should fail udp socket creation when the datagram backend is invalid") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+        ctx->udp_backend = (turbo_udp_backend_t)-1;
+
+        coro_socket_t *sock = coro_socket_create_udpv4(ctx);
+        check(sock == NULL);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
         coro_context_destroy(ctx);
     }
 

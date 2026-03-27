@@ -52,8 +52,12 @@ static void send_simple_error(coro_socket_t *client, int status, const char *rea
                 "Connection: close\r\n"
                 "\r\n",
                 status, reason);
-  if (written > 0) {
-    coro_socket_send(client, response, (size_t)written);
+  if (written <= 0 || (size_t)written >= sizeof(response)) {
+    TLOG_ERROR("Failed to format simple error response");
+    return;
+  }
+  if (coro_socket_send(client, response, (size_t)written) != 0) {
+    TLOG_ERROR("Failed to send simple error response");
   }
 }
 
@@ -437,7 +441,14 @@ static void server_handler(coro_socket_t *client, void *arg) {
         }
 
         if (parse_result == 2) {
-          if (iris_app_route_uses_stream(app, &ctx->request_arena, ctx->request_ctx)) {
+          {
+            int stream_mode = iris_app_route_uses_stream(app, &ctx->request_arena, ctx->request_ctx);
+            if (stream_mode < 0) {
+              send_simple_error(client, 500, "Internal Server Error");
+              should_close = 1;
+              break;
+            }
+            if (stream_mode) {
             int drain_result;
 
             ctx->request_ctx->stream_mode = 1;
@@ -456,6 +467,7 @@ static void server_handler(coro_socket_t *client, void *arg) {
               break;
             }
             continue;
+          }
           }
 
           http_context_resume(ctx->request_ctx);
@@ -557,7 +569,14 @@ int iris_app_run(iris_app_t *app, unsigned short port) {
   }
 
   /* Initialize thread pool for iris_await() */
-  iris_async_init(0);
+  if (iris_async_init(0) != 0) {
+    coro_socket_destroy(g_server);
+    g_server = NULL;
+    coro_context_destroy(g_coro_ctx);
+    g_coro_ctx = NULL;
+    iris_error_recovery_cleanup();
+    return -1;
+  }
 
   TLOG_INFO("Server is running on http://localhost:{}", port);
 

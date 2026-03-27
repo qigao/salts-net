@@ -157,6 +157,25 @@ spec("config") {
         iris_config_destroy(config);
     }
 
+    it("should fail on oversized JSON string fields") {
+        iris_config_t *config = iris_config_create_default();
+        char json_buffer[512];
+        char long_value[300];
+
+        check_not_null(config);
+        memset(long_value, 'a', sizeof(long_value) - 1);
+        long_value[sizeof(long_value) - 1] = '\0';
+
+        snprintf(json_buffer, sizeof(json_buffer),
+                 "{ \"health_check_path\": \"%s\" }",
+                 long_value);
+
+        check_int_eq(iris_config_parse_json(json_buffer, config),
+                     IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL);
+
+        iris_config_destroy(config);
+    }
+
     it("should convert config to JSON") {
         iris_config_t *config = iris_config_create_default();
         check_not_null(config);
@@ -249,6 +268,30 @@ spec("config") {
         // Test with NULL
         iris_config_print(NULL);
         
+        iris_config_destroy(config);
+    }
+
+    it("should reject oversized config strings") {
+        iris_config_t *config = iris_config_create_default();
+        char buffer[8];
+        char long_log_format[128];
+        char long_cipher_suites[512];
+
+        check_not_null(config);
+        memset(long_log_format, 'x', sizeof(long_log_format) - 1);
+        long_log_format[sizeof(long_log_format) - 1] = '\0';
+        memset(long_cipher_suites, 'A', sizeof(long_cipher_suites) - 1);
+        long_cipher_suites[sizeof(long_cipher_suites) - 1] = '\0';
+
+        check_int_eq(iris_config_set_logging(config, IRIS_LOG_LEVEL_INFO, long_log_format),
+                     IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL);
+        check_int_eq(iris_config_set_parameter_string(config, "log_format", long_log_format),
+                     IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL);
+        check_int_eq(iris_config_set_parameter_string(config, "cipher_suites", long_cipher_suites),
+                     IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL);
+        check_int_eq(iris_config_get_parameter_string(config, "log_format", buffer, sizeof(buffer)),
+                     IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL);
+
         iris_config_destroy(config);
     }
 }

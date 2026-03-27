@@ -78,6 +78,7 @@ typedef struct turbo_dns_query_s {
   atomic_int ref_count;
   atomic_int delivered;
   int cancelled;
+  int timed_out;
   int status_v4;
   int status_v6;
   turbo_ares_t *ares;
@@ -481,6 +482,10 @@ static void dns_dual_addrinfo_cb(void *arg, int status, int timeouts,
   if (child) free(child);
   if (!parent) { if (result) ares_freeaddrinfo(result); return; }
 
+  if (status == ARES_ECANCELLED && parent->timed_out) {
+    status = TURBO_ETIMEDOUT;
+  }
+
   if (parent->results_callback) {
     if (status == ARES_SUCCESS && result && result->nodes) {
       struct ares_addrinfo_node *node;
@@ -552,22 +557,70 @@ static bool is_ip_address(const char *host) {
   return turbo_dns_parse_address(host, 80, &tmp) == 0;
 }
 
-static int dns_start_family_query(turbo_dns_parent_query_t *parent,
-                                  const char *hostname, int family) {
-  turbo_dns_child_query_t *child = malloc(sizeof(*child));
-  if (!child) return TURBO_ENOMEM;
+static int dns_pref_wants_ipv4(turbo_dns_pref_t pref) {
+  return pref == TURBO_DNS_IPV4_ONLY || pref == TURBO_DNS_ANY ||
+         pref == TURBO_DNS_PREFER_IPV6;
+}
 
+static int dns_pref_wants_ipv6(turbo_dns_pref_t pref) {
+  return pref == TURBO_DNS_IPV6_ONLY || pref == TURBO_DNS_ANY ||
+         pref == TURBO_DNS_PREFER_IPV6;
+}
+
+static turbo_dns_child_query_t *dns_alloc_child_query(turbo_dns_parent_query_t *parent,
+                                                      int family) {
+  turbo_dns_child_query_t *child = malloc(sizeof(*child));
+  if (!child) return NULL;
   child->parent = parent;
-  child->family  = family;
+  child->family = family;
+  return child;
+}
+
+static void dns_submit_child_query(turbo_dns_parent_query_t *parent,
+                                   const char *hostname,
+                                   turbo_dns_child_query_t *child) {
+  int family = child->family;
   atomic_fetch_add(&parent->ref_count, 1);
-  if (family == AF_INET)  parent->started_v4 = 1;
+  if (family == AF_INET) parent->started_v4 = 1;
   else if (family == AF_INET6) parent->started_v6 = 1;
 
   struct ares_addrinfo_hints hints = {0};
-  hints.ai_family   = family;
+  hints.ai_family = family;
   hints.ai_socktype = SOCK_STREAM;
   ares_getaddrinfo(parent->ares->channel, hostname, NULL,
                    &hints, dns_dual_addrinfo_cb, child);
+}
+
+static int dns_start_queries(turbo_dns_parent_query_t *parent,
+                             const char *hostname) {
+  turbo_dns_child_query_t *child_v4 = NULL;
+  turbo_dns_child_query_t *child_v6 = NULL;
+
+  if (dns_pref_wants_ipv4(parent->pref)) {
+    child_v4 = dns_alloc_child_query(parent, AF_INET);
+    if (!child_v4) {
+      return TURBO_ENOMEM;
+    }
+  }
+
+  if (dns_pref_wants_ipv6(parent->pref)) {
+    child_v6 = dns_alloc_child_query(parent, AF_INET6);
+    if (!child_v6) {
+      free(child_v4);
+      return TURBO_ENOMEM;
+    }
+  }
+
+  if (!child_v4 && !child_v6) {
+    return TURBO_EINVAL;
+  }
+
+  if (child_v4) {
+    dns_submit_child_query(parent, hostname, child_v4);
+  }
+  if (child_v6) {
+    dns_submit_child_query(parent, hostname, child_v6);
+  }
   return 0;
 }
 
@@ -606,23 +659,25 @@ static void sync_dns_callback(const char *hostname, const char *ip,
   (void)hostname;
   turbo_dns_sync_state_t *state = (turbo_dns_sync_state_t *)user_data;
 
-  if (status == 0 && ip) {
-    struct sockaddr_storage addr;
-    int addr_len = 0;
-    if (dns_parse_ip_address(ip, state->port, &addr, &addr_len) == 0) {
-      memcpy(state->result_addr, &addr, sizeof(addr));
-      *state->result_len = addr_len;
-      state->error = 0;
-    } else {
-      state->error = TURBO_EAI_FAIL;
-    }
-  } else {
-    state->error = status ? status : TURBO_EAI_FAIL;
-  }
-
   turbo_mutex_lock(&state->mu);
-  state->done = 1;
-  turbo_cond_signal(&state->cond);
+  if (!state->done) {
+    if (status == 0 && ip) {
+      struct sockaddr_storage addr;
+      int addr_len = 0;
+      if (dns_parse_ip_address(ip, state->port, &addr, &addr_len) == 0) {
+        memcpy(state->result_addr, &addr, sizeof(addr));
+        *state->result_len = addr_len;
+        state->error = 0;
+      } else {
+        state->error = TURBO_EAI_FAIL;
+      }
+    } else {
+      state->error = status ? status : TURBO_EAI_FAIL;
+    }
+
+    state->done = 1;
+    turbo_cond_signal(&state->cond);
+  }
   turbo_mutex_unlock(&state->mu);
 }
 
@@ -672,12 +727,14 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
     return TURBO_ENOMEM;
   }
 
-  /* Hold function ref while starting queries */
-  atomic_fetch_add(&parent->ref_count, 1);
-  dns_start_family_query(parent, host, AF_INET);
-  dns_start_family_query(parent, host, AF_INET6);
-  release_parent_ref(parent); /* release function ref */
-  
+  err = dns_start_queries(parent, host);
+  if (err != 0) {
+    release_parent_ref(parent);
+    turbo_mutex_destroy(&state.mu);
+    turbo_cond_destroy(&state.cond);
+    return err;
+  }
+
   release_parent_ref(parent); /* release initial ref */
 
   /* Drive select loop until done or timeout */
@@ -693,7 +750,17 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
     deadline_ms -= poll_ms;
   }
 
-  if (!state.done) state.error = TURBO_ETIMEDOUT;
+  if (!state.done) {
+    turbo_mutex_lock(&state.mu);
+    state.done = 1;
+    state.error = TURBO_ETIMEDOUT;
+    turbo_mutex_unlock(&state.mu);
+    parent->timed_out = 1;
+    parent->cancelled = 1;
+    if (ares_ctx && ares_ctx->initialized) {
+      ares_cancel(ares_ctx->channel);
+    }
+  }
 
   turbo_mutex_destroy(&state.mu);
   turbo_cond_destroy(&state.cond);
@@ -755,6 +822,12 @@ static void async_driver_thread(void *arg) {
     if (!active) break;
   }
 
+  if (drv->running && deadline <= 0 && parent && ares && ares->initialized) {
+    parent->timed_out = 1;
+    parent->cancelled = 1;
+    ares_cancel(ares->channel);
+  }
+
   drv->running = 0;
   if (parent) {
     release_parent_ref(parent);
@@ -802,11 +875,14 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
     *out_query = parent;
   }
 
-  if (pref == TURBO_DNS_IPV4_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6)
-    dns_start_family_query(parent, hostname, AF_INET);
-
-  if (pref == TURBO_DNS_IPV6_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6)
-    dns_start_family_query(parent, hostname, AF_INET6);
+  err = dns_start_queries(parent, hostname);
+  if (err != 0) {
+    if (out_query) {
+      *out_query = NULL;
+    }
+    release_parent_ref(parent);
+    return err;
+  }
 
   /* Start background driver thread */
   async_driver_t *drv = malloc(sizeof(*drv));
@@ -891,12 +967,13 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
     *out_query = parent;
   }
 
-  if (pref == TURBO_DNS_IPV4_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6) {
-    dns_start_family_query(parent, hostname, AF_INET);
-  }
-
-  if (pref == TURBO_DNS_IPV6_ONLY || pref == TURBO_DNS_ANY || pref == TURBO_DNS_PREFER_IPV6) {
-    dns_start_family_query(parent, hostname, AF_INET6);
+  err = dns_start_queries(parent, hostname);
+  if (err != 0) {
+    if (out_query) {
+      *out_query = NULL;
+    }
+    release_parent_ref(parent);
+    return err;
   }
 
   async_driver_t *drv = malloc(sizeof(*drv));

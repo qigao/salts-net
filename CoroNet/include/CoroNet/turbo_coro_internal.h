@@ -139,6 +139,9 @@ struct coro_context_s {
 
   /** Preferred UDP backend for future sockets created by this context */
   turbo_udp_backend_t udp_backend;
+
+  /** Last synchronous API error recorded on this context */
+  int last_error;
 };
 
 void coro_context_acquire_external(coro_context_t *ctx);
@@ -272,8 +275,10 @@ static inline void coro_set_wait(coro_socket_t *client) {
  */
 static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *slice) {
   if (!slice) {
-    /* Explicit EOF Case: Always set status to notify consumer after buffer is drained */
-    client->status = TURBO_EOF;
+    /* Preserve transport error if one was set before EOF-style delivery. */
+    if (client->status == 0) {
+      client->status = TURBO_EOF;
+    }
     client->connected = 0;
     return;
   }

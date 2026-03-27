@@ -10,6 +10,7 @@
 #include "CoroNet/turbo_coro_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "turbo_buffer.h"
+#include "turbo_thread.h"
 #include "ring_buffer_spsc.h"
 #include "tlog.h"
 #include <winsock2.h>
@@ -49,23 +50,30 @@ typedef struct dg_iocp_state_s {
   HANDLE worker_thread;
   SOCKET socket;
   volatile LONG inflight_count;
+  volatile LONG active_ticks;
+  volatile LONG shutdown_posted;
+  volatile LONG shutdown_started;
+  volatile LONG close_finalized;
   ring_spsc_t queue;
   uint8_t *queue_data;
   int recv_started;
-  int shutdown_polls;
 } dg_iocp_state_t;
 
 /* ── Queue helpers ────────────────────────────────────────── */
 
 static void dg_queue_push(dg_iocp_state_t *st, dg_iocp_op_t *op) {
-  uint8_t *slot = ring_spsc_write_acquire(&st->queue, sizeof(void *));
-  if (slot) {
-    memcpy(slot, &op, sizeof(void *));
-    ring_spsc_write_release(&st->queue, sizeof(void *));
-  } else {
-    /* Ring full - avoid leaking op */
-    if (op->buffer) mem_unref(op->buffer);
-    free(op);
+  uint8_t *slot;
+
+  for (;;) {
+    slot = ring_spsc_write_acquire(&st->queue, sizeof(void *));
+    if (slot) {
+      memcpy(slot, &op, sizeof(void *));
+      ring_spsc_write_release(&st->queue, sizeof(void *));
+      return;
+    }
+
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
+    turbo_thread_yield();
   }
 }
 
@@ -97,6 +105,79 @@ static dg_iocp_op_t *dg_queue_pop_all(dg_iocp_state_t *st) {
 
 static void dg_iocp_tick(void *arg1, void *arg2);
 static int dg_iocp_submit_recv(turbo_datagram_t *d);
+static void dg_iocp_shutdown_task(void *arg1, void *arg2);
+static void dg_iocp_finish_close(dg_iocp_state_t *st, turbo_datagram_t *d);
+
+static int dg_iocp_has_pending(dg_iocp_state_t *st) {
+  if (!st) {
+    return 0;
+  }
+
+  return InterlockedCompareExchange(&st->inflight_count, 0, 0) > 0 ||
+         InterlockedCompareExchange(&st->active_ticks, 0, 0) > 0;
+}
+
+static int dg_iocp_schedule_shutdown(dg_iocp_state_t *st, turbo_datagram_t *d) {
+  int rc;
+
+  if (!st || !d) {
+    return TURBO_EINVAL;
+  }
+
+  if (InterlockedExchange(&st->shutdown_posted, 1) != 0) {
+    return 0;
+  }
+
+  rc = coro_post(st->ctx, dg_iocp_shutdown_task, st, d);
+  if (rc != 0) {
+    InterlockedExchange(&st->shutdown_posted, 0);
+  }
+
+  return rc;
+}
+
+static void dg_iocp_shutdown_now(dg_iocp_state_t *st, turbo_datagram_t *d) {
+  if (!st || !d) {
+    return;
+  }
+
+  if (InterlockedCompareExchange(&st->shutdown_started, 1, 0) != 0) {
+    return;
+  }
+
+  TLOG_DEBUG("IOCP shutdown: completing");
+  if (st->worker_thread) {
+    PostQueuedCompletionStatus(st->completion_port, 0, 0, NULL);
+    WaitForSingleObject(st->worker_thread, 1000);
+    CloseHandle(st->worker_thread);
+    st->worker_thread = NULL;
+  }
+
+  if (st->completion_port) {
+    CloseHandle(st->completion_port);
+    st->completion_port = NULL;
+  }
+
+  coro_context_release_external(st->ctx);
+  dg_iocp_finish_close(st, d);
+}
+
+static void dg_iocp_maybe_shutdown(dg_iocp_state_t *st, turbo_datagram_t *d) {
+  if (!st || !d || InterlockedCompareExchange(&st->stopping, 0, 0) == 0) {
+    return;
+  }
+
+  if (dg_iocp_has_pending(st)) {
+    (void)dg_iocp_schedule_shutdown(st, d);
+    return;
+  }
+
+  if (InterlockedCompareExchange(&st->shutdown_posted, 0, 0) != 0) {
+    return;
+  }
+
+  dg_iocp_shutdown_now(st, d);
+}
 
 /* ── IOCP worker thread ──────────────────────────────────── */
 
@@ -105,6 +186,7 @@ static DWORD WINAPI dg_iocp_worker(LPVOID arg) {
   DWORD bytes;
   ULONG_PTR key;
   OVERLAPPED *ov;
+  int rc;
 
   while (1) {
     BOOL ok = GetQueuedCompletionStatus(st->completion_port, &bytes, &key,
@@ -116,7 +198,15 @@ static DWORD WINAPI dg_iocp_worker(LPVOID arg) {
     op->bytes_transferred = bytes;
     op->status = ok ? 0 : -(int)GetLastError();
     dg_queue_push(st, op);
-    coro_post(st->ctx, dg_iocp_tick, st, NULL);
+    InterlockedIncrement(&st->active_ticks);
+    for (;;) {
+      rc = coro_post(st->ctx, dg_iocp_tick, st, NULL);
+      if (rc == 0) {
+        break;
+      }
+      turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
+      turbo_thread_yield();
+    }
   }
   return 0;
 }
@@ -136,6 +226,7 @@ static void dg_iocp_tick(void *arg1, void *arg2) {
       if (chain->status == 0 && chain->bytes_transferred > 0) {
         mem_buffer_t *buf = d->recv_buf[d->recv_toggle];
         mem_slice_t slice;
+        d->status = 0;
         slice.data = buf->data;
         slice.length = chain->bytes_transferred;
         slice.buffer = buf;
@@ -154,6 +245,7 @@ static void dg_iocp_tick(void *arg1, void *arg2) {
           dg_iocp_submit_recv(d);
         }
       } else {
+        d->status = (chain->status != 0) ? chain->status : TURBO_EOF;
         if (d->on_recv) d->on_recv(d, NULL, NULL);
       }
     } else if (chain->kind == DG_IOCP_OP_SEND) {
@@ -163,15 +255,17 @@ static void dg_iocp_tick(void *arg1, void *arg2) {
     free(chain);
     chain = next;
   }
+  InterlockedDecrement(&st->active_ticks);
+  dg_iocp_maybe_shutdown(st, st->dg);
 }
 
-static void dg_iocp_final_cleanup(void *arg1, void *arg2) {
-  dg_iocp_state_t *st = (dg_iocp_state_t *)arg1;
-  turbo_datagram_t *d = (turbo_datagram_t *)arg2;
+static void dg_iocp_finish_close(dg_iocp_state_t *st, turbo_datagram_t *d) {
+  if (!st || !d) return;
+  if (InterlockedCompareExchange(&st->close_finalized, 1, 0) != 0) return;
 
+  d->backend_data = NULL;
   if (st->queue_data) free(st->queue_data);
   free(st);
-  d->backend_data = NULL;
   turbo_datagram_finalize_close(d);
 }
 
@@ -372,38 +466,10 @@ static void dg_iocp_recv_stop(turbo_datagram_t *d) {
 static void dg_iocp_shutdown_task(void *arg1, void *arg2) {
   dg_iocp_state_t *st = (dg_iocp_state_t *)arg1;
   turbo_datagram_t *d = (turbo_datagram_t *)arg2;
-  
-  long inflight = InterlockedCompareExchange(&st->inflight_count, 0, 0);
-  if (inflight > 0 && st->shutdown_polls < 128) {
-    st->shutdown_polls++;
-    TLOG_DEBUG("IOCP shutdown: waiting for {} inflight ops", inflight);
-    coro_post(st->ctx, dg_iocp_shutdown_task, st, d);
-    return;
-  }
 
-  if (inflight > 0) {
-    TLOG_WARN("IOCP shutdown: forcing close with {} inflight ops", inflight);
-  }
-  
-  TLOG_DEBUG("IOCP shutdown: completing");
-
-  if (st->worker_thread) {
-    PostQueuedCompletionStatus(st->completion_port, 0, 0, NULL);
-    WaitForSingleObject(st->worker_thread, 1000);
-    CloseHandle(st->worker_thread);
-    st->worker_thread = NULL;
-  }
-
-  if (st->completion_port) {
-    CloseHandle(st->completion_port);
-    st->completion_port = NULL;
-  }
-
-  if (st->queue_data) free(st->queue_data);
-  coro_context_release_external(st->ctx);
-  free(st);
-  d->backend_data = NULL;
-  turbo_datagram_finalize_close(d);
+  if (!st || !d) return;
+  InterlockedExchange(&st->shutdown_posted, 0);
+  dg_iocp_maybe_shutdown(st, d);
 }
 
 static void dg_iocp_close(turbo_datagram_t *d) {
@@ -416,8 +482,7 @@ static void dg_iocp_close(turbo_datagram_t *d) {
     closesocket(st->socket);
     st->socket = INVALID_SOCKET;
   }
-
-  coro_post(st->ctx, dg_iocp_shutdown_task, st, d);
+  dg_iocp_maybe_shutdown(st, d);
 }
 
 static int dg_iocp_get_local_addr(turbo_datagram_t *d,

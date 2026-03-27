@@ -7,6 +7,7 @@
 
 #include "tinytest.h"
 #include "http_client.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include <json_parser.h>
 #include <string.h>
 #include <turbo_coro.h>
@@ -478,6 +479,23 @@ spec("coro http client") {
   /* ── Live: Error handling ───────────────────────────────────────── */
 
   describe("live error handling") {
+    it("should fail loudly when pooled transport preparation fails") {
+      http_client_t *c = http_client_create("http://localhost:8080");
+      check_not_null(c);
+
+      coro_context_t *ctx = http_client_get_context(c);
+      check_not_null(ctx);
+      ctx->tcp_backend = (turbo_tcp_backend_t)-1;
+
+      http_response_t *r = http_get(c, "/");
+      check_not_null(r);
+      check_int_eq(r->error_code, HTTP_ERROR_CONNECTION_FAILED);
+      check_not_null(r->error);
+
+      http_response_free(r);
+      http_client_destroy(c);
+    }
+
     it("should error on invalid URL") {
       http_client_t *c = http_client_create("http://localhost:8080");
       http_response_t *r = http_get(c, "not-a-valid-url");

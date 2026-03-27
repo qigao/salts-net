@@ -15,6 +15,44 @@
 static mem_pool_t arena;
 static http_context_t ctx;
 
+static int execute_request_len(const char *request, size_t request_len) {
+    size_t offset = 0;
+    int flushed = 0;
+
+    while (1) {
+        size_t consumed = 0;
+        const char *chunk = offset < request_len ? request + offset : "";
+        size_t chunk_len = offset < request_len ? request_len - offset : 0;
+        int rc = http_context_execute(&ctx, chunk, chunk_len, &consumed);
+
+        if (chunk_len > 0) {
+            offset += consumed;
+        }
+
+        if (rc == 2) {
+            http_context_resume(&ctx);
+            continue;
+        }
+
+        if (rc == 0) {
+            if (offset < request_len) {
+                continue;
+            }
+            if (flushed) {
+                return rc;
+            }
+            flushed = 1;
+            continue;
+        }
+
+        return rc;
+    }
+}
+
+static int execute_request(const char *request) {
+    return execute_request_len(request, strlen(request));
+}
+
 /* Internal definition from request.c to allow white-box testing */
 struct http_parser_impl
 {
@@ -64,8 +102,8 @@ spec("request_parsing") {
                               "Host: localhost\r\n"
                               "\r\n";
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_str_eq(ctx.method, "GET");
         check_str_eq(ctx.url, "/users");
     }
@@ -75,8 +113,8 @@ spec("request_parsing") {
                               "Host: localhost\r\n"
                               "\r\n";
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_str_eq(ctx.url, "/users?page=1&limit=10");
     }
 
@@ -94,8 +132,8 @@ spec("request_parsing") {
             "{}",
             body_len, body);
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_str_eq(ctx.method, "POST");
         check_int_eq(ctx.body_length, body_len);
         check_not_null(ctx.body);
@@ -108,8 +146,8 @@ spec("request_parsing") {
                               "Authorization: Bearer token123\r\n"
                               "\r\n";
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_int_eq(ctx.headers.count, 3);
 
         const char *host = get_req(&ctx.headers, "Host");
@@ -129,8 +167,8 @@ spec("request_parsing") {
                               "Invalid Header Name: value\r\n"
                               "\r\n";
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_ne(err, HPE_OK);
+        int rc = execute_request(request);
+        check_true(rc < 0);
     }
 
     it("should handle invalid header value crlf injection") {
@@ -145,8 +183,8 @@ spec("request_parsing") {
                               "X-Test: normal-value\r\n"
                               "\r\n";
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         
         /* Verify that our security validation would catch CRLF injection in values */
         iris_security_result_t result = iris_validate_http_header_value("value\r\ninjection", 256);
@@ -160,8 +198,8 @@ spec("request_parsing") {
                               "Authorization: \r\n"
                               "\r\n";
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_int_eq(ctx.headers.count, 3);
     }
 
@@ -170,7 +208,7 @@ spec("request_parsing") {
                               "Host: localhost\r\n"
                               "\r\n";
 
-        llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
+        check_int_eq(execute_request(request), 1);
         /* HTTP/1.1 defaults to keep-alive */
         check_int_eq(ctx.keep_alive, 1);
     }
@@ -181,7 +219,7 @@ spec("request_parsing") {
                               "Connection: close\r\n"
                               "\r\n";
 
-        llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
+        check_int_eq(execute_request(request), 1);
         /* Connection: close should override HTTP/1.1 default */
         check_int_eq(ctx.keep_alive, 0);
     }
@@ -192,7 +230,7 @@ spec("request_parsing") {
                               "Connection: keep-alive\r\n"
                               "\r\n";
 
-        llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
+        check_int_eq(execute_request(request), 1);
         check_int_eq(ctx.keep_alive, 1);
     }
 
@@ -201,7 +239,7 @@ spec("request_parsing") {
                               "Host: localhost\r\n"
                               "\r\n";
 
-        llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
+        check_int_eq(execute_request(request), 1);
         /* HTTP/1.0 defaults to close */
         check_int_eq(ctx.keep_alive, 0);
     }
@@ -217,7 +255,7 @@ spec("request_parsing") {
                               "Connection: keep-alive\r\n"
                               "\r\n";
 
-        llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
+        check_int_eq(execute_request(request), 1);
         /* Connection: keep-alive should override HTTP/1.0 default */
         check_int_eq(ctx.keep_alive, 1);
     }
@@ -234,8 +272,8 @@ spec("request_parsing") {
             char request[256];
             fmt(request, sizeof(request), "{} /test HTTP/1.1\r\nHost: localhost\r\n\r\n", methods[i]);
 
-            enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-            check_int_eq(err, HPE_OK);
+            int rc = execute_request(request);
+            check_int_eq(rc, 1);
             check_str_eq(ctx.method, methods[i]);
         }
     }
@@ -292,6 +330,12 @@ spec("request_parsing") {
         parse_query(&arena, NULL, &query);
 
         check_int_eq(query.count, 0);
+    }
+
+    it("should fail route stream detection on invalid arguments") {
+        check_int_eq(iris_app_route_uses_stream(NULL, &arena, &ctx), -1);
+        check_int_eq(iris_app_route_uses_stream(iris_app_default(), NULL, &ctx), -1);
+        check_int_eq(iris_app_route_uses_stream(iris_app_default(), &arena, NULL), -1);
     }
 
     it("should parse query with special chars") {
@@ -368,8 +412,8 @@ spec("request_parsing") {
         char request[2048];
         fmt(request, sizeof(request), "GET /{} HTTP/1.1\r\nHost: localhost\r\n\r\n", long_url);
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
     }
 
     it("should parse many headers") {
@@ -382,8 +426,8 @@ spec("request_parsing") {
         }
         strcat(request, "\r\n");
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_true(ctx.headers.count >= 50);
     }
 
@@ -401,8 +445,8 @@ spec("request_parsing") {
             "{}",
             strlen(body), body);
 
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, strlen(request));
-        check_int_eq(err, HPE_OK);
+        int rc = execute_request(request);
+        check_int_eq(rc, 1);
         check_int_eq(ctx.body_length, strlen(body));
     }
 
@@ -433,9 +477,8 @@ spec("request_parsing") {
         // Copy the body
         memcpy(request + header_len, large_body, body_size);
 
-        // Parse should fail with HPE_USER (payload too large)
-        enum llhttp_errno err = llhttp_execute(&ctx.parser_impl->parser, request, header_len + body_size);
-        check_int_eq(err, HPE_USER);
+        // Public parser API should surface payload-too-large explicitly.
+        check_int_eq(execute_request_len(request, header_len + body_size), -413);
 
         free(large_body);
         free(request);

@@ -101,6 +101,21 @@ static void send_error(coro_socket_t *client, int error_code) {
   }
 }
 
+static int send_res_data(Res *res, const void *data, size_t len, const char *what) {
+  if (!res || !res->client || !data || len == 0) {
+    return -1;
+  }
+
+  int rc = coro_socket_send(res->client, data, len);
+  if (rc != 0) {
+    TLOG_ERROR("Failed to send {}: {}", what ? what : "response data", rc);
+    res->keep_alive = 0;
+    return -1;
+  }
+
+  return 0;
+}
+
 // Separates URL into path and query string components
 // Example: /users/123?active=true -> path="/users/123", query="active=true"
 /* Phase IRIS-1: Updated to use mem_pool_t */
@@ -762,10 +777,7 @@ void reply(Res *res, int status, const char *content_type, const void *body, siz
   }
 
   // Send using CoroNet API
-  int result = coro_socket_send(res->client, response, tstr_len(response));
-  if (result != 0) {
-    TLOG_ERROR("Send error: %d", result);
-  }
+  (void)send_res_data(res, response, tstr_len(response), "response");
 
   // Free the response buffer immediately since CoroNet copies the data
   tstr_free(response);
@@ -798,8 +810,15 @@ void reply_stream_start(Res *res, int status) {
                          "\r\n", 
                          status, date_str);
 
-  if (n > 0) {
-    coro_socket_send(res->client, headers, n);
+  if (n <= 0 || (size_t)n >= sizeof(headers)) {
+    TLOG_ERROR("Failed to format stream start headers");
+    res->keep_alive = 0;
+    return;
+  }
+
+  if (coro_socket_send(res->client, headers, n) != 0) {
+    TLOG_ERROR("Failed to send stream start headers");
+    res->keep_alive = 0;
   }
 }
 
@@ -811,22 +830,37 @@ void reply_stream_chunk(Res *res, const char *data) {
   // Since we are using chunked transfer encoding, we need to wrap this in a chunk.
   
   tstr_t payload = tstr_new();
-  if (!payload) return;
+  if (!payload) {
+    TLOG_ERROR("Failed to allocate stream payload buffer");
+    res->keep_alive = 0;
+    return;
+  }
   payload = tstr_cat_fmt(payload, "data: %s\n\n", data);
-  if (!payload) return;
+  if (!payload) {
+    TLOG_ERROR("Failed to format stream payload");
+    res->keep_alive = 0;
+    return;
+  }
   size_t payload_len = tstr_len(payload);
   
   // Now create the HTTP chunk
   // Format: <hex_len>\r\n<payload>\r\n
   char hex_len[32];
-  fmt(hex_len, sizeof(hex_len), "{:x}\r\n", payload_len);
+  int hex_len_size = fmt(hex_len, sizeof(hex_len), "{:x}\r\n", payload_len);
+  if (hex_len_size <= 0 || (size_t)hex_len_size >= sizeof(hex_len)) {
+    TLOG_ERROR("Failed to format stream chunk size");
+    res->keep_alive = 0;
+    tstr_free(payload);
+    return;
+  }
   
   // Send length
-  coro_socket_send(res->client, hex_len, strlen(hex_len));
-  // Send payload
-  coro_socket_send(res->client, payload, payload_len);
-  // Send trailing CRLF
-  coro_socket_send(res->client, "\r\n", 2);
+  if (coro_socket_send(res->client, hex_len, (size_t)hex_len_size) != 0 ||
+      coro_socket_send(res->client, payload, payload_len) != 0 ||
+      coro_socket_send(res->client, "\r\n", 2) != 0) {
+    TLOG_ERROR("Failed to send stream chunk");
+    res->keep_alive = 0;
+  }
   
   tstr_free(payload);
 }
@@ -838,15 +872,18 @@ void reply_stream_end(Res *res) {
   // Send the zero-length chunk to signal end of stream
   // Format: 0\r\n\r\n
   const char *end_chunk = "0\r\n\r\n";
-  coro_socket_send(res->client, end_chunk, strlen(end_chunk));
+  if (coro_socket_send(res->client, end_chunk, strlen(end_chunk)) != 0) {
+    TLOG_ERROR("Failed to send stream end chunk");
+    res->keep_alive = 0;
+  }
 }
 
 // =============================================================================
 // File Download Implementation
 // =============================================================================
 
-static void send_headers_only(Res *res, int status, const char *content_type,
-                              size_t content_length, const char *extra_headers) {
+static int send_headers_only(Res *res, int status, const char *content_type,
+                             size_t content_length, const char *extra_headers) {
   time_t now = time(NULL);
   struct tm *gmt = gmtime(&now);
   char date_str[64];
@@ -866,9 +903,13 @@ static void send_headers_only(Res *res, int status, const char *content_type,
                          extra_headers ? extra_headers : "",
                          res->keep_alive ? "keep-alive" : "close");
 
-  if (n > 0) {
-    coro_socket_send(res->client, headers, n);
+  if (n <= 0 || (size_t)n >= sizeof(headers)) {
+    TLOG_ERROR("Failed to format response headers");
+    res->keep_alive = 0;
+    return -1;
   }
+
+  return send_res_data(res, headers, (size_t)n, "response headers");
 }
 
 int reply_file(Res *res, int status, const char *content_type, const char *file_path) {
@@ -902,8 +943,11 @@ int reply_file(Res *res, int status, const char *content_type, const char *file_
     return -1;
   }
 
-  send_headers_only(res, status, content_type, (size_t)file_size, NULL);
-  coro_socket_send(res->client, data, (size_t)file_size);
+  if (send_headers_only(res, status, content_type, (size_t)file_size, NULL) != 0 ||
+      send_res_data(res, data, (size_t)file_size, "file response body") != 0) {
+    free(data);
+    return -1;
+  }
   free(data);
   return 0;
 }
@@ -950,15 +994,18 @@ int reply_download(Res *res, const char *file_path, const char *download_name) {
   char extra[512];
   fmt(extra, sizeof(extra), "Content-Disposition: attachment; filename=\"{}\"\r\n", filename);
 
-  send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra);
-  coro_socket_send(res->client, data, (size_t)file_size);
+  if (send_headers_only(res, 200, "application/octet-stream", (size_t)file_size, extra) != 0 ||
+      send_res_data(res, data, (size_t)file_size, "attachment response body") != 0) {
+    free(data);
+    return -1;
+  }
   free(data);
   return 0;
 }
 
-void reply_chunked_start(Res *res, int status, const char *content_type) {
+static int reply_chunked_start_impl(Res *res, int status, const char *content_type) {
   if (!res || !res->client)
-    return;
+    return -1;
 
   time_t now = time(NULL);
   struct tm *gmt = gmtime(&now);
@@ -977,29 +1024,53 @@ void reply_chunked_start(Res *res, int status, const char *content_type) {
                          status, date_str, content_type,
                          res->keep_alive ? "keep-alive" : "close");
 
-  if (n > 0) {
-    coro_socket_send(res->client, headers, n);
+  if (n <= 0 || (size_t)n >= sizeof(headers)) {
+    TLOG_ERROR("Failed to format chunked response headers");
+    res->keep_alive = 0;
+    return -1;
   }
+
+  return send_res_data(res, headers, (size_t)n, "chunked response headers");
 }
 
-void reply_chunked_write(Res *res, const void *data, size_t len) {
+void reply_chunked_start(Res *res, int status, const char *content_type) {
+  (void)reply_chunked_start_impl(res, status, content_type);
+}
+
+static int reply_chunked_write_impl(Res *res, const void *data, size_t len) {
   if (!res || !res->client || !data || len == 0)
-    return;
+    return -1;
 
   char hex_len[32];
   int n = fmt(hex_len, sizeof(hex_len), "{:x}\r\n", len);
-  if (n > 0) {
-    coro_socket_send(res->client, hex_len, n);
-    coro_socket_send(res->client, data, len);
-    coro_socket_send(res->client, "\r\n", 2);
+  if (n <= 0 || (size_t)n >= sizeof(hex_len)) {
+    TLOG_ERROR("Failed to format chunked response size");
+    res->keep_alive = 0;
+    return -1;
   }
+
+  if (send_res_data(res, hex_len, (size_t)n, "chunked size") != 0 ||
+      send_res_data(res, data, len, "chunked body") != 0 ||
+      send_res_data(res, "\r\n", 2, "chunked terminator") != 0) {
+    return -1;
+  }
+
+  return 0;
+}
+
+void reply_chunked_write(Res *res, const void *data, size_t len) {
+  (void)reply_chunked_write_impl(res, data, len);
+}
+
+static int reply_chunked_end_impl(Res *res) {
+  if (!res || !res->client)
+    return -1;
+
+  return send_res_data(res, "0\r\n\r\n", 5, "chunked end");
 }
 
 void reply_chunked_end(Res *res) {
-  if (!res || !res->client)
-    return;
-
-  coro_socket_send(res->client, "0\r\n\r\n", 5);
+  (void)reply_chunked_end_impl(res);
 }
 
 #define DEFAULT_CHUNK_SIZE (64 * 1024)
@@ -1022,14 +1093,32 @@ int reply_file_chunked(Res *res, int status, const char *content_type,
     return -1;
   }
 
-  reply_chunked_start(res, status, content_type);
+  if (reply_chunked_start_impl(res, status, content_type) != 0) {
+    free(buffer);
+    fclose(fp);
+    return -1;
+  }
 
   size_t bytes_read;
   while ((bytes_read = fread(buffer, 1, chunk_size, fp)) > 0) {
-    reply_chunked_write(res, buffer, bytes_read);
+    if (reply_chunked_write_impl(res, buffer, bytes_read) != 0) {
+      free(buffer);
+      fclose(fp);
+      return -1;
+    }
   }
 
-  reply_chunked_end(res);
+  if (ferror(fp)) {
+    free(buffer);
+    fclose(fp);
+    return -1;
+  }
+
+  if (reply_chunked_end_impl(res) != 0) {
+    free(buffer);
+    fclose(fp);
+    return -1;
+  }
 
   free(buffer);
   fclose(fp);
@@ -1311,20 +1400,20 @@ int iris_app_route_uses_stream(iris_app_t *app, mem_pool_t *arena, http_context_
   route_match_t match;
 
   if (!app || !arena || !ctx || !ctx->url || !ctx->method || !app->route_trie) {
-    return 0;
+    return -1;
   }
 
   url_copy = mem_strdup(arena, ctx->url);
   if (!url_copy) {
-    return 0;
+    return -1;
   }
 
   if (extract_path_and_query(arena, url_copy, &path, &query) != 0 || !path) {
-    return 0;
+    return -1;
   }
 
   if (tokenize_path(arena, path, &tokenized_path) != 0) {
-    return 0;
+    return -1;
   }
 
   if (!route_trie_match(app->route_trie, ctx->method, &tokenized_path, &match)) {

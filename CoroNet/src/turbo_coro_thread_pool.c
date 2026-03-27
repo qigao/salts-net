@@ -219,7 +219,9 @@ void coro_thread_pool_destroy(coro_thread_pool_t *pool) {
 static void spawn_proxy(void *arg1, void *arg2) {
     coro_fn fn = (coro_fn)arg1;
     void *arg = arg2;
-    coro_context_spawn(coro_context_current(), fn, arg);
+    if (coro_context_spawn(coro_context_current(), fn, arg) != 0) {
+        abort();
+    }
 }
 
 int coro_thread_pool_spawn(coro_thread_pool_t *pool, coro_fn fn, void *arg) {

@@ -3,9 +3,21 @@
 #include "http_common_internal.h"
 #include "turbo_str.h"
 #include <fmt.h>
-#include <turbo_coro.h>
 #include <stdlib.h>
 #include <string.h>
+#include <turbo_coro.h>
+
+static http_response_t *http_client_api_error(http_error_code_t code, const char *msg) {
+  http_response_t *r = (http_response_t *)calloc(1, sizeof(http_response_t));
+
+  if (!r) {
+    return NULL;
+  }
+
+  r->error_code = code;
+  r->error = tstr_dup(msg);
+  return r;
+}
 
 /* Forward declare internal heavy lifter */
 http_response_t *do_request_full(http_client_t *c, http_method_t method, const char *url,
@@ -17,7 +29,8 @@ http_response_t *do_request_full(http_client_t *c, http_method_t method, const c
 http_response_t *http_request(http_client_t *c, http_method_t method, const char *url,
                               const char **headers, int header_count, const char *body,
                               size_t body_len) {
-  return do_request_full(c, method, url, headers, header_count, body, body_len, NULL, NULL, NULL, NULL, NULL);
+  return do_request_full(c, method, url, headers, header_count, body, body_len, NULL, NULL, NULL,
+                         NULL, NULL);
 }
 
 http_response_t *http_get(http_client_t *c, const char *url) {
@@ -46,22 +59,37 @@ http_response_t *http_patch(http_client_t *c, const char *url, const char *body,
 
 http_response_t *http_post_json(http_client_t *c, const char *url, const char *json_string) {
   const char *hdrs[] = {"Content-Type: application/json"};
-  return http_request(c, HTTP_POST, url, hdrs, 1, json_string, json_string ? strlen(json_string) : 0);
+  return http_request(c, HTTP_POST, url, hdrs, 1, json_string,
+                      json_string ? strlen(json_string) : 0);
 }
 
 http_response_t *http_post_form(http_client_t *c, const char *url, http_params_t *params) {
   char *encoded = http_params_encode(params);
   const char *hdrs[] = {"Content-Type: application/x-www-form-urlencoded"};
-  http_response_t *r = http_request(c, HTTP_POST, url, hdrs, 1, encoded, encoded ? strlen(encoded) : 0);
+
+  if (params && params->head && !encoded) {
+    return http_client_api_error(HTTP_ERROR_MEMORY_ALLOCATION, "form encode failed");
+  }
+
+  http_response_t *r =
+      http_request(c, HTTP_POST, url, hdrs, 1, encoded, encoded ? strlen(encoded) : 0);
   free(encoded);
   return r;
 }
 
-http_response_t *http_post_multipart(http_client_t *c, const char *url, http_multipart_form_t *form) {
+http_response_t *http_post_multipart(http_client_t *c, const char *url,
+                                     http_multipart_form_t *form) {
+  if (form && form->error_code != HTTP_ERROR_NONE) {
+    const char *msg = (form->error_code == HTTP_ERROR_FILE_IO) ? "multipart form file setup failed"
+                                                               : "multipart form build failed";
+    return http_client_api_error(form->error_code, msg);
+  }
+
   return do_request_full(c, HTTP_POST, url, NULL, 0, NULL, 0, NULL, NULL, form, NULL, NULL);
 }
 
-http_response_t *http_receive_stream_get(http_client_t *c, const char *url, http_data_cb data_cb, void *ud) {
+http_response_t *http_receive_stream_get(http_client_t *c, const char *url, http_data_cb data_cb,
+                                         void *ud) {
   return do_request_full(c, HTTP_GET, url, NULL, 0, NULL, 0, data_cb, ud, NULL, NULL, NULL);
 }
 
@@ -84,10 +112,8 @@ http_response_t *http_sse_get(http_client_t *c, const char *url, http_data_cb da
 
 http_response_t *http_get_range(http_client_t *c, const char *url, size_t start, size_t end) {
   char range_header[128];
-  if (end > 0)
-    fmt(range_header, sizeof(range_header), "Range: bytes={}-{}", start, end);
-  else
-    fmt(range_header, sizeof(range_header), "Range: bytes={}-", start);
+  if (end > 0) fmt(range_header, sizeof(range_header), "Range: bytes={}-{}", start, end);
+  else fmt(range_header, sizeof(range_header), "Range: bytes={}-", start);
   const char *headers[] = {range_header};
   return http_request(c, HTTP_GET, url, headers, 1, NULL, 0);
 }

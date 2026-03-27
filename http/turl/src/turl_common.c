@@ -48,25 +48,29 @@ void turl_ensure_directory_exists(const char *path) {
 }
 
 char *turl_render_template(const char *template_str, json_value_t *context) {
-  if (!template_str || !context) {
-    return template_str ? strdup(template_str) : NULL;
-  }
+  if (!template_str)
+    return NULL;
+  if (!context)
+    return strdup(template_str);
 
   MUSTACHE_TEMPLATE *template = mustache_compile(template_str, strlen(template_str), NULL, NULL, 0);
   if (!template) {
-    return strdup(template_str);
+    TLOG_ERROR("Failed to compile mustache template");
+    return NULL;
   }
 
   MUSTACHE_STRING_RENDERER renderer;
   if (mustache_string_renderer_init(&renderer) != 0) {
     mustache_release(template);
-    return strdup(template_str);
+    TLOG_ERROR("Failed to initialize mustache renderer");
+    return NULL;
   }
 
   if (mustache_render_json(template, context, &renderer.base, &renderer, NULL, NULL) != 0) {
     mustache_string_renderer_free(&renderer);
     mustache_release(template);
-    return strdup(template_str);
+    TLOG_ERROR("Failed to render mustache template");
+    return NULL;
   }
 
   char *result = mustache_string_renderer_get(&renderer);

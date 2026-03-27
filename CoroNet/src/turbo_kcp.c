@@ -6,6 +6,7 @@
 #include "ikcp.h"
 #include "platform.h"
 #include "turbo_error.h"
+#include "turbo_thread.h"
 #include "tlog.h"
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,16 @@ struct turbo_kcp_s {
   int connecting;
   int closing;
 };
+
+static void kcp_record_error(coro_context_t *ctx, int err) {
+  if (ctx) {
+    ctx->last_error = err;
+  }
+}
+
+static int kcp_last_error_or(coro_context_t *ctx, int fallback) {
+  return (ctx && ctx->last_error != 0) ? ctx->last_error : fallback;
+}
 
 static int sockaddr_storage_equal(const struct sockaddr_storage* a,
                                   const struct sockaddr_storage* b) {
@@ -55,6 +66,24 @@ static int sockaddr_storage_equal(const struct sockaddr_storage* a,
 
 static void on_timer_tick(turbo_timer_t* timer);
 
+static int kcp_post_wait(coro_context_t* ctx, coro_post_fn fn, void* arg1, void* arg2) {
+  int rc;
+
+  if (!ctx || !fn) {
+    return TURBO_EINVAL;
+  }
+
+  for (;;) {
+    rc = coro_post(ctx, fn, arg1, arg2);
+    if (rc == 0) {
+      return 0;
+    }
+
+    turbo_loop_wake((turbo_loop_t*)coro_context_native_loop(ctx));
+    turbo_thread_yield();
+  }
+}
+
 static void kcp_final_free_task(void* arg1, void* arg2) {
   UNUSED(arg2);
   turbo_kcp_t* k = (turbo_kcp_t*)arg1;
@@ -78,6 +107,14 @@ static int kcp_low_level_output(const char* buf, int len, ikcpcb* ikcp, void* us
 static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
   turbo_kcp_t* k = (turbo_kcp_t*)turbo_datagram_get_user_data((turbo_datagram_t*)handle);
   if (!k || !k->ikcp || k->closing) return 0;
+
+  if (!slice || !slice->data || slice->length == 0) {
+    k->connected = 0;
+    if (k->on_recv) {
+      k->on_recv(k, NULL, NULL);
+    }
+    return 0;
+  }
   
   /* KCP context is single-peer. Lock the first peer and ignore foreign packets. */
   if (peer) {
@@ -124,14 +161,17 @@ static void kcp_tick_task(void* arg1, void* arg2) {
 static void on_timer_tick(turbo_timer_t* timer) {
   turbo_kcp_t* k = (turbo_kcp_t*)turbo_timer_get_data(timer);
   if (!k || !k->ctx || k->closing) return;
-  coro_post(k->ctx, kcp_tick_task, k, NULL);
+  (void)kcp_post_wait(k->ctx, kcp_tick_task, k, NULL);
 }
 
 /* ── Public API ───────────────────────────────────────────── */
 
 turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   turbo_kcp_t* k = calloc(1, sizeof(turbo_kcp_t));
-  if (!k) return NULL;
+  if (!k) {
+    kcp_record_error(ctx, TURBO_ENOMEM);
+    return NULL;
+  }
   
   k->ctx = ctx;
   if (ctx) {
@@ -139,6 +179,7 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   }
   k->ikcp = ikcp_create(12345, k); /* TODO: conv id management */
   if (!k->ikcp) {
+    kcp_record_error(ctx, TURBO_ENOMEM);
     if (ctx) {
       coro_context_release_external(ctx);
     }
@@ -156,6 +197,7 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   if (k->update_timer) {
     turbo_timer_set_data(k->update_timer, k);
   } else {
+    kcp_record_error(ctx, TURBO_ENOMEM);
     ikcp_release(k->ikcp);
     if (ctx) {
       coro_context_release_external(ctx);
@@ -164,6 +206,7 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
     return NULL;
   }
   
+  kcp_record_error(ctx, 0);
   return k;
 }
 
@@ -191,7 +234,7 @@ void turbo_kcp_destroy(turbo_kcp_t* kcp) {
   
   /* Post actual free to happen after any already queued loop tasks */
   if (kcp->ctx) {
-    coro_post(kcp->ctx, kcp_final_free_task, kcp, NULL);
+    (void)kcp_post_wait(kcp->ctx, kcp_final_free_task, kcp, NULL);
   } else {
     free(kcp);
   }
@@ -210,7 +253,7 @@ int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
   if (!kcp->udp) {
     turbo_datagram_kind_t kind = (local_addr.ss_family == AF_INET6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
     kcp->udp = turbo_datagram_create(kcp->ctx, kind);
-    if (!kcp->udp) return TURBO_ENOMEM;
+    if (!kcp->udp) return kcp_last_error_or(kcp->ctx, TURBO_EIO);
     
     r = turbo_datagram_bind(kcp->udp, host, (unsigned short)port);
     if (r != 0) return r;
@@ -243,7 +286,7 @@ int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
   if (!kcp->udp) {
     turbo_datagram_kind_t kind = (kcp->peer_addr.ss_family == AF_INET6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
     kcp->udp = turbo_datagram_create(kcp->ctx, kind);
-    if (!kcp->udp) return TURBO_ENOMEM;
+    if (!kcp->udp) return kcp_last_error_or(kcp->ctx, TURBO_EIO);
     
     /* Must bind to initialize the backend and get a socket handle.
        Use INADDR_ANY (0.0.0.0 / ::) to allow OS to choose a port. */

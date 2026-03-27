@@ -72,11 +72,11 @@ struct coro_pool_s {
 static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial_state);
 static void destroy_slot(coro_pool_t *pool, size_t idx);
 static void idle_timer_cb(turbo_timer_t *handle);
-static void idle_timer_start(coro_pool_t *pool);
+static int idle_timer_start(coro_pool_t *pool);
 static void idle_timer_stop(coro_pool_t *pool);
 static void waiter_timer_cb(turbo_timer_t *timer);
 static void waiter_timer_bounce(void *arg1, void *arg2);
-static void waiter_timer_start(coro_pool_t *pool);
+static int waiter_timer_start(coro_pool_t *pool);
 static void waiter_timer_stop(coro_pool_t *pool);
 static void remove_waiter(coro_pool_t *pool, pool_waiter_t *waiter);
 static void finalize_pool_destroy(coro_pool_t *pool);
@@ -145,7 +145,12 @@ int coro_pool_open(coro_pool_t *pool, const char *host, int port,
   }
 
   /* Start idle reaper if configured */
-  if (pool->config.idle_timeout_ms > 0) idle_timer_start(pool);
+  if (pool->config.idle_timeout_ms > 0) {
+    int rc = idle_timer_start(pool);
+    if (rc != 0) {
+      return rc;
+    }
+  }
 
   TLOG_DEBUG("Coro pool opened for {:s}:{:d} (pre-connected: {:d})", host, port, pool->config.min_size);
   return 0;
@@ -282,7 +287,12 @@ retry:
   pool->waiter_tail = waiter;
 
   if (waiter->deadline_ms != 0) {
-    waiter_timer_start(pool);
+    int rc = waiter_timer_start(pool);
+    if (rc != 0) {
+      remove_waiter(pool, waiter);
+      free(waiter);
+      return rc;
+    }
   }
 
   TLOG_DEBUG("Coro pool borrow blocked (pool full). Waiter queued.");
@@ -497,15 +507,20 @@ static void idle_timer_bounce(void *arg1, void *arg2) {
 
 static void idle_timer_cb(turbo_timer_t *timer) {
   coro_pool_t *pool = (coro_pool_t *)turbo_timer_get_data(timer);
-  coro_post(pool->ctx, idle_timer_bounce, timer, NULL);
+  if (!pool) return;
+  if (coro_post(pool->ctx, idle_timer_bounce, timer, NULL) != 0) {
+    idle_timer_bounce(timer, NULL);
+  }
 }
 
-static void idle_timer_start(coro_pool_t *pool) {
-  if (pool->idle_timer_active) return;
+static int idle_timer_start(coro_pool_t *pool) {
+  int rc;
+
+  if (pool->idle_timer_active) return 0;
 
   if (!pool->idle_timer) {
     pool->idle_timer = turbo_timer_create(NULL);
-    if (!pool->idle_timer) return;
+    if (!pool->idle_timer) return TURBO_ENOMEM;
   }
   turbo_timer_set_data(pool->idle_timer, pool);
 
@@ -513,8 +528,12 @@ static void idle_timer_start(coro_pool_t *pool) {
   uint64_t interval = pool->config.idle_timeout_ms / 2;
   if (interval < 1000) interval = 1000;
 
-  turbo_timer_start(pool->idle_timer, idle_timer_cb, interval, interval);
+  rc = turbo_timer_start(pool->idle_timer, idle_timer_cb, interval, interval);
+  if (rc != 0) {
+    return rc;
+  }
   pool->idle_timer_active = 1;
+  return 0;
 }
 
 static void idle_timer_stop(coro_pool_t *pool) {
@@ -555,20 +574,29 @@ static void waiter_timer_bounce(void *arg1, void *arg2) {
 static void waiter_timer_cb(turbo_timer_t *timer) {
   coro_pool_t *pool = (coro_pool_t *)turbo_timer_get_data(timer);
   if (!pool || pool->closed) return;
-  coro_post(pool->ctx, waiter_timer_bounce, timer, NULL);
+  if (coro_post(pool->ctx, waiter_timer_bounce, timer, NULL) != 0) {
+    waiter_timer_bounce(timer, NULL);
+  }
 }
 
-static void waiter_timer_start(coro_pool_t *pool) {
-  if (!pool || pool->waiter_timer_active) return;
+static int waiter_timer_start(coro_pool_t *pool) {
+  int rc;
+
+  if (!pool) return TURBO_EINVAL;
+  if (pool->waiter_timer_active) return 0;
 
   if (!pool->waiter_timer) {
     pool->waiter_timer = turbo_timer_create(NULL);
-    if (!pool->waiter_timer) return;
+    if (!pool->waiter_timer) return TURBO_ENOMEM;
     turbo_timer_set_data(pool->waiter_timer, pool);
   }
 
-  turbo_timer_start(pool->waiter_timer, waiter_timer_cb, 10, 10);
+  rc = turbo_timer_start(pool->waiter_timer, waiter_timer_cb, 10, 10);
+  if (rc != 0) {
+    return rc;
+  }
   pool->waiter_timer_active = 1;
+  return 0;
 }
 
 static void waiter_timer_stop(coro_pool_t *pool) {

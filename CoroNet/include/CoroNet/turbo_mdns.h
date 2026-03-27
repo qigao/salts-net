@@ -12,6 +12,7 @@ extern "C" {
 
 #define MDNS_MAX_NAME_LEN 256
 #define MDNS_MAX_TXT_LEN 1024
+#define MDNS_MAX_SERVICES 8
 #define MDNS_MCAST_ADDR "224.0.0.251"
 #define MDNS_PORT 5353
 
@@ -53,6 +54,17 @@ CXX_C_API void mdns_destroy(mdns_ctx_t *ctx);
  */
 CXX_C_API int mdns_publish(mdns_ctx_t *ctx, const mdns_service_t *service);
 /**
+ * @brief Publishes multiple mDNS services on the same context.
+ *
+ * Existing matching entries are updated in place; new entries are appended.
+ *
+ * @param ctx A pointer to the `mdns_ctx_t` instance.
+ * @param services Array of services to publish.
+ * @param count Number of services in @p services.
+ * @return 0 on success, or a non-zero error code on failure.
+ */
+CXX_C_API int mdns_publish_many(mdns_ctx_t *ctx, const mdns_service_t *services, size_t count);
+/**
  * @brief Unpublishes an mDNS service.
  *
  * @param ctx A pointer to the `mdns_ctx_t` instance.
@@ -61,6 +73,13 @@ CXX_C_API int mdns_publish(mdns_ctx_t *ctx, const mdns_service_t *service);
  * @return 0 on success, or a non-zero error code on failure.
  */
 CXX_C_API int mdns_unpublish(mdns_ctx_t *ctx, const char *instance, const char *service_type);
+/**
+ * @brief Unpublishes all services currently published by this context.
+ *
+ * @param ctx A pointer to the `mdns_ctx_t` instance.
+ * @return 0 on success, or a non-zero error code on failure.
+ */
+CXX_C_API int mdns_unpublish_all(mdns_ctx_t *ctx);
 
 /**
  * @brief Initiates mDNS service discovery for a specified service type.
@@ -75,6 +94,19 @@ CXX_C_API int mdns_unpublish(mdns_ctx_t *ctx, const char *instance, const char *
  */
 CXX_C_API int mdns_discover(mdns_ctx_t *ctx, const char *service_type, mdns_discover_cb callback,
                             void *userdata, uint32_t timeout_ms);
+/**
+ * @brief Initiates discovery for multiple service types at once.
+ *
+ * @param ctx A pointer to the `mdns_ctx_t` instance.
+ * @param service_types Array of service type strings such as "_http._tcp".
+ * @param count Number of entries in @p service_types.
+ * @param callback The callback function to be invoked when a service is discovered.
+ * @param userdata User-defined data to be passed to the callback.
+ * @param timeout_ms The duration in milliseconds to perform discovery. 0 for continuous discovery.
+ * @return 0 on success, or a non-zero error code on failure.
+ */
+CXX_C_API int mdns_discover_many(mdns_ctx_t *ctx, const char *const *service_types, size_t count,
+                                 mdns_discover_cb callback, void *userdata, uint32_t timeout_ms);
 
 /**
  * @brief Retrieves the local hostname.

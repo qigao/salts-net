@@ -46,6 +46,7 @@ typedef struct ws_state_s {
   char            key_b64[32];  /* Sec-WebSocket-Key (base64, always 24+1 chars) */
   char            path[256];    /* URI path, e.g. "/" */
   char            host[256];    /* Host header value */
+  char            protocol[128];/* Optional Sec-WebSocket-Protocol value */
 
   /* Handshake accumulation buffer (on heap) */
   uint8_t        *hs_buf;
@@ -79,6 +80,52 @@ static int  ws_send_frame(ws_state_t *st, uint8_t opcode,
                           const uint8_t *payload, size_t len);
 static int  ws_send_handshake(ws_state_t *st);
 
+static int ws_fail(ws_state_t *st, int err);
+static int ws_protocol_error(ws_state_t *st);
+
+static void ws_drop_inner_tcp(ws_state_t *st) {
+  turbo_stream_t *tcp;
+
+  if (!st || !st->tcp) {
+    return;
+  }
+
+  tcp = st->tcp;
+  st->tcp = NULL;
+  tcp->user_data = NULL;
+  tcp->managed = 0;
+  turbo_stream_destroy(tcp);
+}
+
+static void ws_free_state(ws_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  if (st->hs_buf) free(st->hs_buf);
+  if (st->rx_buf) free(st->rx_buf);
+  if (st->frag_buf) free(st->frag_buf);
+  free(st);
+}
+
+static int ws_fail(ws_state_t *st, int err) {
+  if (st && st->outer && !st->outer->closing) {
+    turbo_stream_close(st->outer);
+  }
+  return err;
+}
+
+static int ws_protocol_error(ws_state_t *st) {
+  uint8_t close_payload[2] = { 0x03, 0xEA }; /* 1002 Protocol Error */
+
+  if (st && st->state == WS_ST_OPEN) {
+    st->state = WS_ST_CLOSING;
+    ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
+  }
+
+  return ws_fail(st, TURBO_EPROTONOSUPPORT);
+}
+
 /* ── TCP callbacks (called on coro event-loop thread) ─────── */
 
 static int ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer) {
@@ -102,15 +149,14 @@ static int ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer)
     size_t ncap = st->rx_cap * 2;
     while (ncap < needed) ncap *= 2;
     uint8_t *nb = (uint8_t *)realloc(st->rx_buf, ncap);
-    if (!nb) return 0;
+    if (!nb) return ws_fail(st, TURBO_ENOMEM);
     st->rx_buf = nb;
     st->rx_cap = ncap;
   }
   memcpy(st->rx_buf + st->rx_len, slice->data, slice->length);
   st->rx_len += slice->length;
 
-  ws_process_rx(st);
-  return 0;
+  return ws_process_rx(st);
 }
 
 static void ws_on_tcp_connect(void *handle, int status, void *peer) {
@@ -127,8 +173,29 @@ static void ws_on_tcp_connect(void *handle, int status, void *peer) {
   }
 
   st->state = WS_ST_HANDSHAKING;
-  turbo_stream_recv_start(st->tcp, ws_on_tcp_recv_cb);
-  ws_send_handshake(st);
+  {
+    int rc = turbo_stream_recv_start(st->tcp, ws_on_tcp_recv_cb);
+    if (rc != 0) {
+      st->state = WS_ST_CLOSED;
+      if (st->outer->on_connect) {
+        st->outer->on_connect(st->outer, rc, NULL);
+      }
+      turbo_stream_close(st->tcp);
+      return;
+    }
+  }
+
+  {
+    int rc = ws_send_handshake(st);
+    if (rc != 0) {
+      st->state = WS_ST_CLOSED;
+      if (st->outer->on_connect) {
+        st->outer->on_connect(st->outer, rc, NULL);
+      }
+      turbo_stream_close(st->tcp);
+      return;
+    }
+  }
 }
 
 static void ws_on_tcp_close(void *handle) {
@@ -136,33 +203,56 @@ static void ws_on_tcp_close(void *handle) {
   ws_state_t     *st  = (ws_state_t *)tcp->user_data;
   if (!st) return;
 
-  if (st->hs_buf) free(st->hs_buf);
-  if (st->rx_buf) free(st->rx_buf);
-  if (st->frag_buf) free(st->frag_buf);
-
   turbo_stream_t *outer = st->outer;
-  free(st);
-  turbo_stream_finalize_close(outer);
+  if (outer) {
+    outer->backend_data = NULL;
+  }
+  tcp->user_data = NULL;
+  ws_free_state(st);
+  if (outer) {
+    turbo_stream_finalize_close(outer);
+  }
 }
 
 /* ── Handshake send ───────────────────────────────────────── */
 
 static int ws_send_handshake(ws_state_t *st) {
   char buf[2048];
-  int  len = fmt(
-      buf, sizeof(buf),
-      "GET {} HTTP/1.1\r\n"
-      "Host: {}\r\n"
-      "Upgrade: websocket\r\n"
-      "Connection: Upgrade\r\n"
-      "Sec-WebSocket-Key: {}\r\n"
-      "Sec-WebSocket-Version: 13\r\n"
-      "Origin: https://{}\r\n"
-      "\r\n",
-      st->path[0] ? st->path : "/",
-      st->host,
-      st->key_b64,
-      st->host);
+  int  len;
+
+  if (st->protocol[0] != '\0') {
+    len = fmt(
+        buf, sizeof(buf),
+        "GET {} HTTP/1.1\r\n"
+        "Host: {}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: {}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: {}\r\n"
+        "Origin: https://{}\r\n"
+        "\r\n",
+        st->path[0] ? st->path : "/",
+        st->host,
+        st->key_b64,
+        st->protocol,
+        st->host);
+  } else {
+    len = fmt(
+        buf, sizeof(buf),
+        "GET {} HTTP/1.1\r\n"
+        "Host: {}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: {}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Origin: https://{}\r\n"
+        "\r\n",
+        st->path[0] ? st->path : "/",
+        st->host,
+        st->key_b64,
+        st->host);
+  }
   if (len <= 0) return TURBO_EINVAL;
   return turbo_stream_send(st->tcp, buf, (size_t)len);
 }
@@ -267,9 +357,7 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
 
     if (pr != WS_PARSE_OK) {
       /* Protocol error — close */
-      ws_send_frame(st, WS_OPCODE_CLOSE, NULL, 0);
-      turbo_stream_close(st->outer);
-      return -1;
+      return ws_protocol_error(st);
     }
 
     size_t frame_total = frame.header_len + (size_t)frame.payload_len;
@@ -309,7 +397,7 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
           size_t need = (size_t)frame.payload_len;
           if (need > st->frag_cap) {
             uint8_t *nb = (uint8_t *)realloc(st->frag_buf, need * 2);
-            if (!nb) { st->rx_len = 0; return TURBO_ENOMEM; }
+            if (!nb) { st->rx_len = 0; return ws_fail(st, TURBO_ENOMEM); }
             st->frag_buf = nb;
             st->frag_cap = need * 2;
           }
@@ -320,15 +408,14 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
 
       case WS_OPCODE_CONTINUATION:
         if (!st->expecting_cont) {
-          turbo_stream_close(st->outer);
           st->rx_len = 0;
-          return -1;
+          return ws_protocol_error(st);
         }
         {
           size_t need = st->frag_len + (size_t)frame.payload_len;
           if (need > st->frag_cap) {
             uint8_t *nb = (uint8_t *)realloc(st->frag_buf, need * 2);
-            if (!nb) { st->rx_len = 0; return TURBO_ENOMEM; }
+            if (!nb) { st->rx_len = 0; return ws_fail(st, TURBO_ENOMEM); }
             st->frag_buf = nb;
             st->frag_cap = need * 2;
           }
@@ -345,7 +432,8 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
         break;
 
       default:
-        break; /* future opcodes: ignore */
+        st->rx_len = 0;
+        return ws_protocol_error(st);
     }
 
     consumed += frame_total;
@@ -364,14 +452,15 @@ static int ws_process_rx(ws_state_t *st) {
     size_t need = st->hs_len + st->rx_len;
     if (!st->hs_buf) {
       st->hs_buf = (uint8_t *)malloc(WS_HS_BUF_CAP);
-      if (!st->hs_buf) return TURBO_ENOMEM;
+      if (!st->hs_buf) return ws_fail(st, TURBO_ENOMEM);
     }
-    if (need < WS_HS_BUF_CAP) {
-      memcpy(st->hs_buf + st->hs_len, st->rx_buf, st->rx_len);
-      st->hs_len += st->rx_len;
-      st->rx_len  = 0;
-      st->hs_buf[st->hs_len] = '\0';
+    if (need >= WS_HS_BUF_CAP) {
+      return ws_protocol_error(st);
     }
+    memcpy(st->hs_buf + st->hs_len, st->rx_buf, st->rx_len);
+    st->hs_len += st->rx_len;
+    st->rx_len  = 0;
+    st->hs_buf[st->hs_len] = '\0';
     return ws_process_handshake(st);
   }
 
@@ -478,18 +567,34 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   /* Generate Sec-WebSocket-Key */
   uint8_t raw[16];
-  if (secure_random(raw, 16) != 0) return TURBO_EINVAL;
+  if (secure_random(raw, 16) != 0) {
+    ws_drop_inner_tcp(st);
+    return TURBO_EINVAL;
+  }
   char *b64 = NULL;
-  if (tn_base64_encode(raw, 16, &b64) != 0) return TURBO_EINVAL;
+  if (tn_base64_encode(raw, 16, &b64) != 0) {
+    ws_drop_inner_tcp(st);
+    return TURBO_EINVAL;
+  }
   size_t klen = strlen(b64);
-  if (klen >= sizeof(st->key_b64)) { free(b64); return TURBO_EINVAL; }
+  if (klen >= sizeof(st->key_b64)) {
+    free(b64);
+    ws_drop_inner_tcp(st);
+    return TURBO_EINVAL;
+  }
   memcpy(st->key_b64, b64, klen + 1);
   free(b64);
 
   st->state = WS_ST_CONNECTING;
-  return turbo_stream_connect_addr(st->tcp, addr,
-                                   ws_on_tcp_connect,
-                                   ws_on_tcp_close);
+  {
+    int rc = turbo_stream_connect_addr(st->tcp, addr,
+                                       ws_on_tcp_connect,
+                                       ws_on_tcp_close);
+    if (rc != 0) {
+      ws_drop_inner_tcp(st);
+    }
+    return rc;
+  }
 }
 
 static int ws_connect_pipe(turbo_stream_t *s, const char *name) {
@@ -535,6 +640,8 @@ static void ws_close(turbo_stream_t *s) {
   if (st->tcp) {
     turbo_stream_close(st->tcp);   /* triggers ws_on_tcp_close async */
   } else {
+    s->backend_data = NULL;
+    ws_free_state(st);
     turbo_stream_finalize_close(s);
   }
 }
@@ -585,6 +692,11 @@ const turbo_stream_backend_ops_t turbo_stream_ws_ops = {
 };
 
 CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host) {
+  turbo_stream_ws_set_path_host_protocol(s, path, host, NULL);
+}
+
+CXX_C_API void turbo_stream_ws_set_path_host_protocol(turbo_stream_t *s, const char *path,
+                                                      const char *host, const char *protocol) {
   if (!s || (s->kind != TURBO_STREAM_WS && s->kind != TURBO_STREAM_WSS)) return;
   ws_state_t *st = (ws_state_t *)s->backend_data;
   if (!st) return;
@@ -595,5 +707,11 @@ CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path
     if (s->kind == TURBO_STREAM_WSS && st->tcp) {
       turbo_stream_tls_set_sni(st->tcp, host);
     }
+  }
+  if (protocol) {
+    strncpy(st->protocol, protocol, sizeof(st->protocol) - 1);
+    st->protocol[sizeof(st->protocol) - 1] = '\0';
+  } else {
+    st->protocol[0] = '\0';
   }
 }

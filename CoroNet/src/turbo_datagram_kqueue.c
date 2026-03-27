@@ -1,8 +1,6 @@
 /**
  * @file turbo_datagram_kqueue.c
- * @brief High-performance macOS/BSD kqueue backend for turbo_datagram_t.
- *
- * Uses SPSC rings for event notifications to avoid heap churn.
+ * @brief BSD/macOS kqueue backend for turbo_datagram_t.
  */
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
@@ -10,129 +8,534 @@
 #include "turbo_datagram_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "ring_buffer_spsc.h"
+#include "turbo_error.h"
+#include "turbo_thread.h"
 
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/event.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <string.h>
 
 typedef struct {
-    mem_slice_t slice;
-    struct sockaddr_storage peer;
+  mem_slice_t slice;
+  struct sockaddr_storage peer;
 } dg_event_t;
 
 typedef struct {
-    turbo_datagram_t *owner;
-    void *ctx;
-    int kq_fd;
-    int fd;
-    turbo_thread_t worker_thread;
-    volatile int stopping;
-    
-    ring_spsc_t event_ring;
-    uint8_t *event_buf;
+  turbo_datagram_t *owner;
+  void *ctx;
+  int kq_fd;
+  int fd;
+  turbo_thread_t worker_thread;
+  volatile int stopping;
+  int recv_started;
+
+  ring_spsc_t event_ring;
+  uint8_t *event_buf;
 } dg_kqueue_state_t;
 
 static void on_dg_bounce(void *arg1, void *arg2);
+static void on_dg_error(void *arg1, void *arg2);
 
-static void* dg_kqueue_worker(void* arg) {
-    dg_kqueue_state_t *st = (dg_kqueue_state_t *)arg;
-    struct kevent events[1];
-    uint8_t buf[65536];
-    
-    while (!st->stopping) {
-        int r = kevent(st->kq_fd, NULL, 0, events, 1, NULL);
-        if (st->stopping) break;
-        if (r > 0 && (events[0].filter == EVFILT_READ)) {
-            struct sockaddr_storage peer;
-            socklen_t addr_len = sizeof(peer);
-            ssize_t n = recvfrom(st->fd, buf, sizeof(buf), 0, (struct sockaddr *)&peer, &addr_len);
-            if (n > 0) {
-                uint8_t *ptr = ring_spsc_write_acquire(&st->event_ring, sizeof(dg_event_t) + (size_t)n);
-                if (ptr) {
-                    dg_event_t *ev = (dg_event_t *)ptr;
-                    memcpy(&ev->peer, &peer, sizeof(peer));
-                    ev->slice.data = (char *)(ptr + sizeof(dg_event_t));
-                    ev->slice.length = (size_t)n;
-                    memcpy(ev->slice.data, buf, (size_t)n);
-                    ring_spsc_write_release(&st->event_ring, sizeof(dg_event_t) + (size_t)n);
-                    coro_post((coro_context_t *)st->ctx, on_dg_bounce, st, NULL);
-                }
-            }
-        }
+static void dg_kqueue_post_wait(dg_kqueue_state_t *st, coro_post_fn fn) {
+  if (!st || !fn) {
+    return;
+  }
+
+  while (coro_post((coro_context_t *)st->ctx, fn, st, NULL) != 0) {
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop((coro_context_t *)st->ctx));
+    turbo_thread_yield();
+  }
+}
+
+static int dg_kind_family(turbo_datagram_kind_t kind) {
+  return (kind == TURBO_DATAGRAM_UDP6) ? AF_INET6 : AF_INET;
+}
+
+static int dg_parse_addr(int family, const char *host, unsigned short port,
+                         struct sockaddr_storage *out, socklen_t *out_len) {
+  if (!out || !out_len) {
+    return TURBO_EINVAL;
+  }
+
+  memset(out, 0, sizeof(*out));
+  if (family == AF_INET6) {
+    struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)out;
+    addr6->sin6_family = AF_INET6;
+    addr6->sin6_port = htons(port);
+    if (!host || !host[0]) {
+      addr6->sin6_addr = in6addr_any;
+    } else if (inet_pton(AF_INET6, host, &addr6->sin6_addr) != 1) {
+      return TURBO_EINVAL;
     }
-    return NULL;
+    *out_len = (socklen_t)sizeof(*addr6);
+    return 0;
+  }
+
+  {
+    struct sockaddr_in *addr4 = (struct sockaddr_in *)out;
+    addr4->sin_family = AF_INET;
+    addr4->sin_port = htons(port);
+    if (!host || !host[0]) {
+      addr4->sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if (inet_pton(AF_INET, host, &addr4->sin_addr) != 1) {
+      return TURBO_EINVAL;
+    }
+    *out_len = (socklen_t)sizeof(*addr4);
+  }
+  return 0;
+}
+
+static void dg_set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags >= 0) {
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  }
+}
+
+static void dg_kqueue_report_error(dg_kqueue_state_t *st, int status) {
+  if (!st || !st->owner || status == 0) {
+    return;
+  }
+
+  st->owner->status = status;
+  dg_kqueue_post_wait(st, on_dg_error);
+}
+
+static void *dg_kqueue_worker(void *arg) {
+  dg_kqueue_state_t *st = (dg_kqueue_state_t *)arg;
+  struct kevent events[1];
+  struct timespec timeout;
+  uint8_t buf[65536];
+
+  timeout.tv_sec = 0;
+  timeout.tv_nsec = 100000000;
+
+  while (!st->stopping) {
+    int r = kevent(st->kq_fd, NULL, 0, events, 1, &timeout);
+    if (st->stopping) {
+      break;
+    }
+    if (r < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      dg_kqueue_report_error(st, -errno);
+      continue;
+    }
+    if (r == 0 || events[0].filter != EVFILT_READ) {
+      continue;
+    }
+
+    for (;;) {
+      struct sockaddr_storage peer;
+      socklen_t addr_len = (socklen_t)sizeof(peer);
+      ssize_t n = recvfrom(st->fd, buf, sizeof(buf), 0,
+                           (struct sockaddr *)&peer, &addr_len);
+      if (n >= 0) {
+        size_t event_size = sizeof(dg_event_t) + (size_t)n;
+        uint8_t *ptr;
+
+        for (;;) {
+          ptr = ring_spsc_write_acquire(&st->event_ring, event_size);
+          if (ptr) {
+            break;
+          }
+
+          turbo_loop_wake((turbo_loop_t *)coro_context_native_loop((coro_context_t *)st->ctx));
+          turbo_thread_yield();
+        }
+
+        {
+          dg_event_t *ev = (dg_event_t *)ptr;
+          memcpy(&ev->peer, &peer, sizeof(peer));
+          ev->slice.data = (char *)(ptr + sizeof(dg_event_t));
+          ev->slice.length = (size_t)n;
+          ev->slice.buffer = NULL;
+          if (n > 0) {
+            memcpy(ev->slice.data, buf, (size_t)n);
+          }
+        }
+
+        ring_spsc_write_release(&st->event_ring, event_size);
+        dg_kqueue_post_wait(st, on_dg_bounce);
+        continue;
+      }
+
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break;
+      }
+
+      dg_kqueue_report_error(st, -errno);
+      break;
+    }
+  }
+
+  return NULL;
 }
 
 static void on_dg_bounce(void *arg1, void *arg2) {
-    UNUSED(arg2);
-    dg_kqueue_state_t *st = (dg_kqueue_state_t *)arg1;
-    size_t avail = 0;
-    while ((avail = ring_spsc_read_available(&st->event_ring)) >= sizeof(dg_event_t)) {
-        size_t chunk = 0;
-        uint8_t *ptr = ring_spsc_read_acquire(&st->event_ring, &chunk);
-        if (!ptr) break;
-        dg_event_t *ev = (dg_event_t *)ptr;
-        if (st->owner->on_recv) {
-            st->owner->on_recv(st->owner, &ev->slice, &ev->peer);
-        }
-        ring_spsc_read_release(&st->event_ring, sizeof(dg_event_t) + ev->slice.length);
+  dg_kqueue_state_t *st;
+  size_t avail;
+
+  UNUSED(arg2);
+  st = (dg_kqueue_state_t *)arg1;
+  if (!st || !st->owner) {
+    return;
+  }
+
+  while ((avail = ring_spsc_read_available(&st->event_ring)) >= sizeof(dg_event_t)) {
+    size_t chunk = 0;
+    uint8_t *ptr = ring_spsc_read_acquire(&st->event_ring, &chunk);
+    dg_event_t *ev;
+    if (!ptr) {
+      break;
     }
+
+    ev = (dg_event_t *)ptr;
+    st->owner->status = 0;
+    if (st->owner->on_recv) {
+      st->owner->on_recv(st->owner, &ev->slice, &ev->peer);
+    }
+    ring_spsc_read_release(&st->event_ring, sizeof(dg_event_t) + ev->slice.length);
+  }
 }
 
-static int kqueue_dg_init(turbo_datagram_t *d) {
-    dg_kqueue_state_t *st = calloc(1, sizeof(dg_kqueue_state_t));
-    if (!st) return TURBO_ENOMEM;
-    st->owner = d;
-    st->ctx = d->ctx;
-    st->kq_fd = kqueue();
-    
-    size_t ring_bytes = 128 * 1024;
-    st->event_buf = malloc(ring_bytes);
-    ring_spsc_init(&st->event_ring, st->event_buf, ring_bytes);
-    
-    d->backend_data = st;
-    return 0;
+static void on_dg_error(void *arg1, void *arg2) {
+  dg_kqueue_state_t *st;
+
+  UNUSED(arg2);
+  st = (dg_kqueue_state_t *)arg1;
+  if (!st || !st->owner || !st->owner->on_recv) {
+    return;
+  }
+
+  st->owner->on_recv(st->owner, NULL, NULL);
 }
 
-static int kqueue_dg_open(turbo_datagram_t *d, int family) {
-    dg_kqueue_state_t *st = (dg_kqueue_state_t *)d->backend_data;
-    st->fd = socket(family, SOCK_DGRAM, 0);
-    if (st->fd < 0) return -errno;
-    int flags = fcntl(st->fd, F_GETFL, 0);
-    fcntl(st->fd, F_SETFL, flags | O_NONBLOCK);
-    struct kevent ev; EV_SET(&ev, st->fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
-    kevent(st->kq_fd, &ev, 1, NULL, 0, NULL);
-    return 0;
+static void dg_kqueue_stop_worker(dg_kqueue_state_t *st) {
+  if (!st || !st->recv_started) {
+    return;
+  }
+
+  st->stopping = 1;
+  if (st->worker_thread) {
+    turbo_thread_join(&st->worker_thread);
+  }
+  st->recv_started = 0;
+  st->stopping = 0;
 }
 
-static int kqueue_dg_recv_start(turbo_datagram_t *d, turbo_datagram_recv_cb cb) {
-    dg_kqueue_state_t *st = (dg_kqueue_state_t *)d->backend_data;
-    d->on_recv = cb;
-    return turbo_thread_create(&st->worker_thread, (turbo_thread_cb)dg_kqueue_worker, st);
-}
+static int dg_kqueue_init(turbo_datagram_t *d, const char *host, unsigned short port) {
+  dg_kqueue_state_t *st;
+  struct sockaddr_storage addr;
+  socklen_t addr_len;
+  size_t ring_bytes;
+  int rc;
+  int reuse;
 
-static void kqueue_dg_close(turbo_datagram_t *d) {
-    dg_kqueue_state_t *st = (dg_kqueue_state_t *)d->backend_data;
-    if (!st) return;
-    st->stopping = 1;
-    /* Wake up kqueue */
-    struct kevent ev; EV_SET(&ev, st->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    kevent(st->kq_fd, &ev, 1, NULL, 0, NULL);
-    if (st->worker_thread) turbo_thread_join(&st->worker_thread);
-    if (st->kq_fd >= 0) close(st->kq_fd);
-    if (st->fd >= 0) close(st->fd);
-    free(st->event_buf);
+  if (!d) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)calloc(1, sizeof(*st));
+  if (!st) {
+    return TURBO_ENOMEM;
+  }
+
+  st->owner = d;
+  st->ctx = d->ctx;
+  st->kq_fd = -1;
+  st->fd = -1;
+
+  st->kq_fd = kqueue();
+  if (st->kq_fd < 0) {
     free(st);
-    d->backend_data = NULL;
+    return -errno;
+  }
+
+  ring_bytes = 128 * 1024;
+  st->event_buf = (uint8_t *)malloc(ring_bytes);
+  if (!st->event_buf) {
+    close(st->kq_fd);
+    free(st);
+    return TURBO_ENOMEM;
+  }
+  ring_spsc_init(&st->event_ring, st->event_buf, ring_bytes);
+
+  st->fd = socket(dg_kind_family(d->kind), SOCK_DGRAM, 0);
+  if (st->fd < 0) {
+    rc = -errno;
+    goto fail;
+  }
+
+  dg_set_nonblocking(st->fd);
+  reuse = 1;
+  setsockopt(st->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+  rc = dg_parse_addr(dg_kind_family(d->kind), host, port, &addr, &addr_len);
+  if (rc != 0) {
+    goto fail;
+  }
+  if (bind(st->fd, (struct sockaddr *)&addr, addr_len) < 0) {
+    rc = -errno;
+    goto fail;
+  }
+
+  {
+    struct kevent ev;
+    EV_SET(&ev, st->fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (kevent(st->kq_fd, &ev, 1, NULL, 0, NULL) < 0) {
+      rc = -errno;
+      goto fail;
+    }
+  }
+
+  d->backend_data = st;
+  return 0;
+
+fail:
+  if (st->fd >= 0) {
+    close(st->fd);
+  }
+  if (st->kq_fd >= 0) {
+    close(st->kq_fd);
+  }
+  free(st->event_buf);
+  free(st);
+  return rc;
+}
+
+static int dg_kqueue_connect(turbo_datagram_t *d, const char *host, unsigned short port) {
+  dg_kqueue_state_t *st;
+  struct sockaddr_storage addr;
+  socklen_t addr_len;
+  int rc;
+
+  if (!d || !d->backend_data) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  rc = dg_parse_addr(dg_kind_family(d->kind), host, port, &addr, &addr_len);
+  if (rc != 0) {
+    return rc;
+  }
+  if (connect(st->fd, (struct sockaddr *)&addr, addr_len) < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_send_buffer(turbo_datagram_t *d, const struct sockaddr *dest,
+                                 mem_buffer_t *buf, size_t len) {
+  dg_kqueue_state_t *st;
+  ssize_t sent;
+
+  if (!d || !d->backend_data || !buf) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  if (dest) {
+    socklen_t addr_len = (dest->sa_family == AF_INET6)
+                             ? (socklen_t)sizeof(struct sockaddr_in6)
+                             : (socklen_t)sizeof(struct sockaddr_in);
+    sent = sendto(st->fd, buf->data, len, 0, dest, addr_len);
+  } else {
+    sent = send(st->fd, buf->data, len, 0);
+  }
+
+  if (sent < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_recv_start(turbo_datagram_t *d) {
+  dg_kqueue_state_t *st;
+  int rc;
+
+  if (!d || !d->backend_data) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  if (st->recv_started) {
+    return TURBO_EALREADY;
+  }
+
+  st->stopping = 0;
+  rc = turbo_thread_create(&st->worker_thread, (turbo_thread_cb)dg_kqueue_worker, st);
+  if (rc == 0) {
+    st->recv_started = 1;
+  }
+  return rc;
+}
+
+static void dg_kqueue_recv_stop(turbo_datagram_t *d) {
+  dg_kqueue_state_t *st;
+
+  if (!d || !d->backend_data) {
+    return;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  dg_kqueue_stop_worker(st);
+}
+
+static void dg_kqueue_close(turbo_datagram_t *d) {
+  dg_kqueue_state_t *st;
+
+  if (!d) {
+    return;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  if (!st) {
+    turbo_datagram_finalize_close(d);
+    return;
+  }
+
+  dg_kqueue_stop_worker(st);
+  if (st->fd >= 0) {
+    struct kevent ev;
+    EV_SET(&ev, st->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    kevent(st->kq_fd, &ev, 1, NULL, 0, NULL);
+  }
+  if (st->kq_fd >= 0) {
+    close(st->kq_fd);
+  }
+  if (st->fd >= 0) {
+    close(st->fd);
+  }
+  free(st->event_buf);
+  free(st);
+  d->backend_data = NULL;
+  turbo_datagram_finalize_close(d);
+}
+
+static int dg_kqueue_get_local_addr(turbo_datagram_t *d, struct sockaddr_storage *addr) {
+  dg_kqueue_state_t *st;
+  socklen_t len;
+
+  if (!d || !d->backend_data || !addr) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  len = (socklen_t)sizeof(*addr);
+  if (getsockname(st->fd, (struct sockaddr *)addr, &len) < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_join_multicast(turbo_datagram_t *d, const char *group, const char *iface) {
+  dg_kqueue_state_t *st;
+  struct ip_mreq mreq;
+
+  if (!d || !d->backend_data || !group) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  memset(&mreq, 0, sizeof(mreq));
+  mreq.imr_multiaddr.s_addr = inet_addr(group);
+  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
+  if (setsockopt(st->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_leave_multicast(turbo_datagram_t *d, const char *group, const char *iface) {
+  dg_kqueue_state_t *st;
+  struct ip_mreq mreq;
+
+  if (!d || !d->backend_data || !group) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  memset(&mreq, 0, sizeof(mreq));
+  mreq.imr_multiaddr.s_addr = inet_addr(group);
+  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
+  if (setsockopt(st->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_set_multicast_loop(turbo_datagram_t *d, int on) {
+  dg_kqueue_state_t *st;
+  unsigned char value;
+
+  if (!d || !d->backend_data) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  value = on ? 1U : 0U;
+  if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value)) < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_set_multicast_ttl(turbo_datagram_t *d, int ttl) {
+  dg_kqueue_state_t *st;
+  unsigned char value;
+
+  if (!d || !d->backend_data) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  value = (unsigned char)ttl;
+  if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value)) < 0) {
+    return -errno;
+  }
+  return 0;
+}
+
+static int dg_kqueue_set_broadcast(turbo_datagram_t *d, int on) {
+  dg_kqueue_state_t *st;
+  int value;
+
+  if (!d || !d->backend_data) {
+    return TURBO_EINVAL;
+  }
+
+  st = (dg_kqueue_state_t *)d->backend_data;
+  value = on ? 1 : 0;
+  if (setsockopt(st->fd, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value)) < 0) {
+    return -errno;
+  }
+  return 0;
 }
 
 const turbo_datagram_backend_ops_t turbo_datagram_kqueue_ops = {
-    .init = kqueue_dg_init, .open = kqueue_dg_open, 
-    .recv_start = kqueue_dg_recv_start, .close = kqueue_dg_close
+  .init = dg_kqueue_init,
+  .connect = dg_kqueue_connect,
+  .send_buffer = dg_kqueue_send_buffer,
+  .recv_start = dg_kqueue_recv_start,
+  .recv_stop = dg_kqueue_recv_stop,
+  .close = dg_kqueue_close,
+  .get_local_addr = dg_kqueue_get_local_addr,
+  .join_multicast = dg_kqueue_join_multicast,
+  .leave_multicast = dg_kqueue_leave_multicast,
+  .set_multicast_loop = dg_kqueue_set_multicast_loop,
+  .set_multicast_ttl = dg_kqueue_set_multicast_ttl,
+  .set_broadcast = dg_kqueue_set_broadcast,
 };
 
 #endif

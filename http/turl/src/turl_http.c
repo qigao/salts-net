@@ -17,8 +17,164 @@
 
 // Forward declarations
 static void decode_and_print_jwt(const char *jwt_str, const char *label);
+static int turl_apply_auth(http_client_t *client, const turl_http_config_t *config);
+static int turl_build_form(const turl_http_config_t *config, http_multipart_form_t *form);
+
+static void turl_free_jwt_fields(cjwt_t *jwt) {
+    if (!jwt)
+        return;
+    free(jwt->iss);
+    free(jwt->sub);
+    free(jwt->exp);
+}
+
+static int turl_add_private_claim(json_value_t *private_claims, const char *key, json_value_t *val) {
+    size_t vlen = 0;
+    char *vs = json_serialize(val, &vlen);
+    if (!vs)
+        return -1;
+
+    json_value_t *copy = json_parse(vs, vlen);
+    json_serialize_free(vs);
+    if (!copy)
+        return -1;
+
+    json_object_add(private_claims, key, copy);
+    return 0;
+}
+
+static int turl_apply_auth(http_client_t *client, const turl_http_config_t *config) {
+    if (config->user_pass) {
+        const char *colon = strchr(config->user_pass, ':');
+        if (!colon)
+            return -1;
+
+        size_t user_len = (size_t)(colon - config->user_pass);
+        char *user = (char *)malloc(user_len + 1);
+        if (!user)
+            return -1;
+
+        memcpy(user, config->user_pass, user_len);
+        user[user_len] = '\0';
+        http_client_set_basic_auth(client, user, colon + 1);
+        free(user);
+    }
+
+    if (config->bearer_token) {
+        http_client_set_bearer_token(client, config->bearer_token);
+        return 0;
+    }
+
+    if (!config->jwt_secret || !config->jwt_claims)
+        return 0;
+
+    char *rendered_claims = turl_render_template(config->jwt_claims, config->mustache_context);
+    json_value_t *claims_json = NULL;
+    json_value_t *private_claims = NULL;
+    cjwt_t jwt = {0};
+    char *token = NULL;
+    int rc = -1;
+
+    if (!rendered_claims)
+        goto cleanup;
+
+    claims_json = json_parse(rendered_claims, strlen(rendered_claims));
+    if (!claims_json || json_type(claims_json) != JSON_OBJECT)
+        goto cleanup;
+
+    jwt.header.alg = alg_hs256;
+
+    json_value_t *iss = json_object_get(claims_json, "iss");
+    if (iss && json_type(iss) == JSON_STRING) {
+        jwt.iss = strdup(json_string(iss));
+        if (!jwt.iss)
+            goto cleanup;
+    }
+
+    json_value_t *sub = json_object_get(claims_json, "sub");
+    if (sub && json_type(sub) == JSON_STRING) {
+        jwt.sub = strdup(json_string(sub));
+        if (!jwt.sub)
+            goto cleanup;
+    }
+
+    json_value_t *exp = json_object_get(claims_json, "exp");
+    if (exp && json_type(exp) == JSON_NUMBER) {
+        jwt.exp = malloc(sizeof(int64_t));
+        if (!jwt.exp)
+            goto cleanup;
+        *jwt.exp = (int64_t)json_number(exp);
+    }
+
+    private_claims = json_create_object();
+    if (!private_claims)
+        goto cleanup;
+
+    size_t obj_size = json_object_size(claims_json);
+    for (size_t ci = 0; ci < obj_size; ci++) {
+        const char *key = json_object_key(claims_json, ci);
+        if (strcmp(key, "iss") == 0 || strcmp(key, "sub") == 0 || strcmp(key, "exp") == 0)
+            continue;
+        if (turl_add_private_claim(private_claims, key, json_object_value(claims_json, ci)) != 0)
+            goto cleanup;
+    }
+    jwt.private_claims = private_claims;
+
+    if (cjwt_encode(&jwt, (const uint8_t *)config->jwt_secret, strlen(config->jwt_secret), &token) != CJWTE_OK)
+        goto cleanup;
+
+    http_client_set_bearer_token(client, token);
+    if (config->verbose) {
+        TLOG_INFO("Generated JWT Bearer token: {}...", token);
+    }
+    rc = 0;
+
+cleanup:
+    free(token);
+    turl_free_jwt_fields(&jwt);
+    if (private_claims)
+        json_free(private_claims);
+    if (claims_json)
+        json_free(claims_json);
+    free(rendered_claims);
+    return rc;
+}
+
+static int turl_build_form(const turl_http_config_t *config, http_multipart_form_t *form) {
+    for (uint32_t i = 0; i < config->form_count; i++) {
+        char *rendered_form = turl_render_template(config->forms[i], config->mustache_context);
+        if (!rendered_form)
+            return -1;
+
+        char *equal = strchr(rendered_form, '=');
+        if (!equal) {
+            free(rendered_form);
+            return -1;
+        }
+
+        *equal = '\0';
+        const char *name = rendered_form;
+        const char *value = equal + 1;
+
+        if (value[0] == '@') {
+            if (http_multipart_form_add_file_path(form, name, value + 1, NULL) != 0) {
+                free(rendered_form);
+                return -1;
+            }
+        } else {
+            http_multipart_form_add_field(form, name, value);
+        }
+
+        free(rendered_form);
+    }
+
+    return 0;
+}
 
 int turl_execute_http_request(const turl_http_config_t *config) {
+    if (!config || !config->url || !config->method_str)
+        return 1;
+
     // Render templates
     char *rendered_url = turl_render_template(config->url, config->mustache_context);
     char *rendered_body = NULL;
@@ -28,18 +184,32 @@ int turl_execute_http_request(const turl_http_config_t *config) {
     http_response_t *resp = NULL;
     int ret = 0;
 
+    if (!rendered_url) {
+        TLOG_ERROR("Failed to render request URL");
+        ret = 1;
+        goto cleanup;
+    }
+
     if (config->body) {
         if (config->body_len > 0) {
             // Binary data - skip templating entirely
             body_len = config->body_len;
             rendered_body = malloc(body_len);
-            if (rendered_body) {
-                memcpy(rendered_body, config->body, body_len);
+            if (!rendered_body) {
+                TLOG_ERROR("Failed to allocate request body");
+                ret = 1;
+                goto cleanup;
             }
+            memcpy(rendered_body, config->body, body_len);
         } else {
             // Standard string data - allow mustache templating
             rendered_body = turl_render_template(config->body, config->mustache_context);
-            body_len = rendered_body ? strlen(rendered_body) : 0;
+            if (!rendered_body) {
+                TLOG_ERROR("Failed to render request body");
+                ret = 1;
+                goto cleanup;
+            }
+            body_len = strlen(rendered_body);
         }
     }
 
@@ -52,6 +222,11 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         }
         for (uint32_t i = 0; i < config->header_count; i++) {
             rendered_headers[i] = turl_render_template(config->headers[i], config->mustache_context);
+            if (!rendered_headers[i]) {
+                TLOG_ERROR("Failed to render request header");
+                ret = 1;
+                goto cleanup;
+            }
         }
     }
 
@@ -76,83 +251,10 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         http_client_follow_redirects(client, 1);
     }
 
-    if (config->user_pass) {
-        const char *colon = strchr(config->user_pass, ':');
-        if (colon) {
-            size_t user_len = colon - config->user_pass;
-            char *user = (char *)malloc(user_len + 1);
-            if (user) {
-                memcpy(user, config->user_pass, user_len);
-                user[user_len] = '\0';
-                http_client_set_basic_auth(client, user, colon + 1);
-                free(user);
-            }
-        }
-    }
-
-    if (config->bearer_token) {
-        http_client_set_bearer_token(client, config->bearer_token);
-    } else if (config->jwt_secret && config->jwt_claims) {
-        // Generate JWT from secret and claims
-        char *rendered_claims = turl_render_template(config->jwt_claims, config->mustache_context);
-        json_value_t *claims_json = json_parse(rendered_claims, strlen(rendered_claims));
-        if (claims_json) {
-            cjwt_t jwt = {0};
-            jwt.header.alg = alg_hs256; // Default to HS256 for simple secret-based generation
-
-            // Populate standard claims if they exist
-            json_value_t *iss = json_object_get(claims_json, "iss");
-            if (iss && json_type(iss) == JSON_STRING) jwt.iss = strdup(json_string(iss));
-
-            json_value_t *sub = json_object_get(claims_json, "sub");
-            if (sub && json_type(sub) == JSON_STRING) jwt.sub = strdup(json_string(sub));
-
-            json_value_t *exp = json_object_get(claims_json, "exp");
-            if (exp && json_type(exp) == JSON_NUMBER) {
-                jwt.exp = malloc(sizeof(int64_t));
-                if (jwt.exp) *jwt.exp = (int64_t)json_number(exp);
-            }
-
-            // Build private claims without standard fields
-            json_value_t *private_claims = json_create_object();
-            size_t obj_size = json_object_size(claims_json);
-            for (size_t ci = 0; ci < obj_size; ci++) {
-                const char *key = json_object_key(claims_json, ci);
-                if (strcmp(key, "iss") == 0 || strcmp(key, "sub") == 0 || strcmp(key, "exp") == 0)
-                    continue;
-                json_value_t *val = json_object_value(claims_json, ci);
-                // Re-serialize and re-parse to create an independent copy
-                size_t vlen = 0;
-                char *vs = json_serialize(val, &vlen);
-                if (vs) {
-                    json_value_t *copy = json_parse(vs, vlen);
-                    if (copy) json_object_add(private_claims, key, copy);
-                    json_serialize_free(vs);
-                }
-            }
-            jwt.private_claims = private_claims;
-
-            char *token = NULL;
-            if (cjwt_encode(&jwt, (const uint8_t *)config->jwt_secret, strlen(config->jwt_secret), &token) == CJWTE_OK) {
-                http_client_set_bearer_token(client, token);
-                if (config->verbose) {
-                    TLOG_INFO("Generated JWT Bearer token: {}...", token);
-                }
-                free(token);
-            } else {
-                TLOG_ERROR("Failed to encode JWT");
-            }
-
-            // Cleanup
-            if (jwt.iss) free(jwt.iss);
-            if (jwt.sub) free(jwt.sub);
-            if (jwt.exp) free(jwt.exp);
-            json_free(private_claims);
-            json_free(claims_json);
-        } else {
-            TLOG_ERROR("Failed to parse JWT claims as JSON: {}", rendered_claims);
-        }
-        free(rendered_claims);
+    if (turl_apply_auth(client, config) != 0) {
+        TLOG_ERROR("Failed to configure request authentication");
+        ret = 1;
+        goto cleanup;
     }
 
     // Prepare method
@@ -188,28 +290,31 @@ int turl_execute_http_request(const turl_http_config_t *config) {
 
     if (config->form_count > 0) {
         http_multipart_form_t *form = http_multipart_form_create();
-        for (uint32_t i = 0; i < config->form_count; i++) {
-            char *rendered_form = turl_render_template(config->forms[i], config->mustache_context);
-            char *equal = strchr(rendered_form, '=');
-            if (equal) {
-                *equal = '\0';
-                const char *name = rendered_form;
-                const char *value = equal + 1;
-
-                if (value[0] == '@') {
-                    http_multipart_form_add_file_path(form, name, value + 1, NULL);
-                } else {
-                    http_multipart_form_add_field(form, name, value);
-                }
-            }
-            free(rendered_form);
+        if (!form) {
+            TLOG_ERROR("Failed to create multipart form");
+            ret = 1;
+            goto cleanup;
         }
+
+        if (turl_build_form(config, form) != 0) {
+            TLOG_ERROR("Failed to build multipart form");
+            http_multipart_form_destroy(form);
+            ret = 1;
+            goto cleanup;
+        }
+
         resp = http_post_multipart(client, rendered_url, form);
         http_multipart_form_destroy(form);
     } else {
         resp = http_request(client, method, rendered_url,
                                  config->header_count > 0 ? (const char **)rendered_headers : NULL,
                                  config->header_count, rendered_body, body_len);
+    }
+
+    if (!resp) {
+        TLOG_ERROR("HTTP request returned no response");
+        ret = 1;
+        goto cleanup;
     }
 
     if (config->decode_jwt) {
@@ -251,9 +356,12 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         if (config->output_path) {
             FILE *f = fopen(config->output_path, "wb");
             if (f) {
-                fwrite(resp->body, 1, resp->body_len, f);
+                size_t written = fwrite(resp->body, 1, resp->body_len, f);
                 fclose(f);
-                if (config->verbose) {
+                if (written != resp->body_len) {
+                    TLOG_ERROR("Failed to write full response body to {}", config->output_path);
+                    ret = 1;
+                } else if (config->verbose) {
                     TLOG_INFO("Content written to {}", config->output_path);
                 }
             } else {
@@ -265,9 +373,12 @@ int turl_execute_http_request(const turl_http_config_t *config) {
         }
 
         // Log to history
-        turl_history_log(config, rendered_url, rendered_headers, config->header_count,
-                         resp->status_code, resp->body, resp->body_len,
-                         resp->headers);
+        if (turl_history_log(config, rendered_url, rendered_headers, config->header_count,
+                             resp->status_code, resp->body, resp->body_len,
+                             resp->headers) != 0) {
+            TLOG_ERROR("Failed to record request history");
+            ret = 1;
+        }
     }
 
     uint64_t end_time = turbo_hrtime();

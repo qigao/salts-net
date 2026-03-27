@@ -1482,6 +1482,45 @@ suite("exprtk_grammar") {
             exprtk_free(root);
             exprtk_env_free(&env);
         }
+
+        it("should throw on undefined function calls") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+            const char *input = "try { no_such_fn(1) } catch (e) { e }";
+            exprtk_node_t *root = exprtk_parse(input, 0);
+            check_not_null(root);
+            exprtk_value_t res = exprtk_eval(root, &env);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
+            check_int_eq(strstr(res.data.string.data, "Undefined function 'no_such_fn'") != NULL, 1);
+            exprtk_free(root);
+            exprtk_env_free(&env);
+        }
+
+        it("should throw on unknown vector methods") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+            const char *input = "try { v = [1, 2]; v.nope() } catch (e) { e }";
+            exprtk_node_t *root = exprtk_parse(input, 0);
+            check_not_null(root);
+            exprtk_value_t res = exprtk_eval(root, &env);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
+            check_int_eq(strstr(res.data.string.data, "Unknown vector method 'nope'") != NULL, 1);
+            exprtk_free(root);
+            exprtk_env_free(&env);
+        }
+
+        it("should throw on invalid member access") {
+            exprtk_env_t env;
+            exprtk_env_init(&env);
+            const char *input = "try { x = 1; x.length } catch (e) { e }";
+            exprtk_node_t *root = exprtk_parse(input, 0);
+            check_not_null(root);
+            exprtk_value_t res = exprtk_eval(root, &env);
+            check_int_eq(res.type, EXPRTK_VAL_STRING);
+            check_int_eq(strstr(res.data.string.data, "Member access 'length' is invalid for number") != NULL, 1);
+            exprtk_free(root);
+            exprtk_env_free(&env);
+        }
     }
 
     group("Optional Chaining (?.)") {

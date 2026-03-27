@@ -136,6 +136,10 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
   json_value_t *jsonrpc = json_object_get(root, "jsonrpc");
   if (jsonrpc && json_type(jsonrpc) == JSON_STRING) {
     rpc_req->jsonrpc = mem_strdup(req->arena, json_string(jsonrpc));
+    if (!rpc_req->jsonrpc) {
+      json_free(root);
+      return RPC_ERROR_INTERNAL;
+    }
   }
 
   /* Extract method (required) */
@@ -145,6 +149,10 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
     return RPC_ERROR_INVALID_REQUEST;
   }
   rpc_req->method = mem_strdup(req->arena, json_string(method));
+  if (!rpc_req->method) {
+    json_free(root);
+    return RPC_ERROR_INTERNAL;
+  }
 
   /* Extract params (optional) */
   json_value_t *params = json_object_get(root, "params");
@@ -154,26 +162,36 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
     if (params_str) {
       rpc_req->params = mem_strdup(req->arena, params_str);
       json_serialize_free(params_str);
+      if (!rpc_req->params) {
+        json_free(root);
+        return RPC_ERROR_INTERNAL;
+      }
+    } else {
+      json_free(root);
+      return RPC_ERROR_INTERNAL;
     }
   }
 
   /* Extract id (optional for notifications) */
   json_value_t *id = json_object_get(root, "id");
   if (id) {
-    if (json_type(id) == JSON_STRING) {
-      size_t len = strlen(json_string(id)) + 3; /* quotes + null */
-      rpc_req->id = mem_alloc(req->arena, len);
-      if (rpc_req->id) {
-        fmt((char *)rpc_req->id, len, "\"{}\"", json_string(id));
-      }
-    } else if (json_type(id) == JSON_NUMBER) {
-      size_t len = 32; /* enough for int */
-      rpc_req->id = mem_alloc(req->arena, len);
-      if (rpc_req->id) {
-        fmt((char *)rpc_req->id, len, "{}", (int)json_number(id));
-      }
-    } else if (json_is_null(id)) {
-      rpc_req->id = mem_strdup(req->arena, "null");
+    if (json_type(id) != JSON_STRING && json_type(id) != JSON_NUMBER && !json_is_null(id)) {
+      json_free(root);
+      return RPC_ERROR_INVALID_REQUEST;
+    }
+
+    size_t id_len = 0;
+    char *id_str = json_serialize(id, &id_len);
+    if (!id_str) {
+      json_free(root);
+      return RPC_ERROR_INTERNAL;
+    }
+
+    rpc_req->id = mem_strdup(req->arena, id_str);
+    json_serialize_free(id_str);
+    if (!rpc_req->id) {
+      json_free(root);
+      return RPC_ERROR_INTERNAL;
     }
   }
 
@@ -184,6 +202,9 @@ int rpc_parse_request(Req *req, rpc_request_t *rpc_req) {
 int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_len) {
   if (!rpc_res || !output || !output_len)
     return -1;
+
+  *output = NULL;
+  *output_len = 0;
 
   /* Phase IRIS-1: Updated to use mem_pool_t */
   mem_pool_t *arena = rpc_res->arena;
@@ -200,24 +221,14 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
   if (rpc_res->error_code != 0) {
     /* Error response */
     json_value_t *error = json_create_object();
+    if (!error) {
+      json_free(root);
+      return -1;
+    }
     json_object_set_number(error, "code", rpc_res->error_code);
 
-    // Escape error message to prevent injection
     if (rpc_res->error_message) {
-      char *escaped_message = malloc(strlen(rpc_res->error_message) * 2 + 256);
-      if (escaped_message) {
-        iris_security_result_t escape_result = iris_escape_json(rpc_res->error_message, escaped_message, strlen(rpc_res->error_message) * 2 + 256);
-        if (escape_result == IRIS_SECURITY_OK) {
-          json_object_set_string(error, "message", escaped_message);
-        } else {
-          // Fallback to original message if escaping fails
-          TLOG_WARN("Failed to escape RPC error message: {:s}", iris_security_error_string(escape_result));
-          json_object_set_string(error, "message", rpc_res->error_message);
-        }
-        free(escaped_message);
-      } else {
-        json_object_set_string(error, "message", rpc_res->error_message);
-      }
+      json_object_set_string(error, "message", rpc_res->error_message);
     } else {
       json_object_set_string(error, "message", "Unknown error");
     }
@@ -230,21 +241,8 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
       if (result) {
         json_object_add(root, "result", result);
       } else {
-        // If result is not valid JSON, escape it as a string
-        char *escaped_result = malloc(strlen(rpc_res->result) * 2 + 256);
-        if (escaped_result) {
-          iris_security_result_t escape_result = iris_escape_json(rpc_res->result, escaped_result, strlen(rpc_res->result) * 2 + 256);
-          if (escape_result == IRIS_SECURITY_OK) {
-            json_object_set_string(root, "result", escaped_result);
-          } else {
-            // Fallback to original result if escaping fails
-            TLOG_WARN("Failed to escape RPC result: {:s}", iris_security_error_string(escape_result));
-            json_object_set_string(root, "result", rpc_res->result);
-          }
-          free(escaped_result);
-        } else {
-          json_object_set_string(root, "result", rpc_res->result);
-        }
+        json_free(root);
+        return -1;
       }
     } else {
       json_object_set_null(root, "result");
@@ -257,7 +255,8 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
     if (id) {
       json_object_add(root, "id", id);
     } else {
-      json_object_set_string(root, "id", rpc_res->id);
+      json_free(root);
+      return -1;
     }
   } else {
     json_object_set_null(root, "id");
@@ -271,6 +270,10 @@ int rpc_build_response(rpc_response_t *rpc_res, char **output, size_t *output_le
     return -1;
 
   *output = mem_strdup(arena, json_str);
+  if (!*output) {
+    json_serialize_free(json_str);
+    return -1;
+  }
   *output_len = json_len;
   json_serialize_free(json_str);
 
@@ -304,6 +307,9 @@ void rpc_send_stream_chunk(Res *res, rpc_response_t *rpc_res) {
     size_t output_len = 0;
     if (rpc_build_response(rpc_res, &output, &output_len) == 0 && output) {
         reply_stream_chunk(res, output);
+    } else {
+        TLOG_ERROR("Failed to build RPC stream chunk");
+        reply_stream_end(res);
     }
 }
 
@@ -326,24 +332,17 @@ void rpc_send_error(Res *res, int error_code, const char *error_message, const c
   json_object_set_string(root, "jsonrpc", "2.0");
 
   json_value_t *error = json_create_object();
+  if (!error) {
+    json_free(root);
+    send_json(res, 500,
+              "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal "
+              "error\"},\"id\":null}");
+    return;
+  }
   json_object_set_number(error, "code", error_code);
 
-  // Escape error message to prevent injection
   if (error_message) {
-    char *escaped_message = malloc(strlen(error_message) * 2 + 256);
-    if (escaped_message) {
-      iris_security_result_t escape_result = iris_escape_json(error_message, escaped_message, strlen(error_message) * 2 + 256);
-      if (escape_result == IRIS_SECURITY_OK) {
-        json_object_set_string(error, "message", escaped_message);
-      } else {
-        // Fallback to original message if escaping fails
-        TLOG_WARN("Failed to escape RPC error message: {:s}", iris_security_error_string(escape_result));
-        json_object_set_string(error, "message", error_message);
-      }
-      free(escaped_message);
-    } else {
-      json_object_set_string(error, "message", error_message);
-    }
+    json_object_set_string(error, "message", error_message);
   } else {
     json_object_set_string(error, "message", "Unknown error");
   }
@@ -355,7 +354,11 @@ void rpc_send_error(Res *res, int error_code, const char *error_message, const c
     if (id_obj) {
       json_object_add(root, "id", id_obj);
     } else {
-      json_object_set_string(root, "id", id);
+      json_free(root);
+      send_json(res, 500,
+                "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"Internal "
+                "error\"},\"id\":null}");
+      return;
     }
   } else {
     json_object_set_null(root, "id");
@@ -380,6 +383,11 @@ void rpc_set_result(rpc_response_t *rpc_res, const char *result) {
     return;
 
   rpc_res->result = mem_strdup(rpc_res->arena, result);
+  if (!rpc_res->result) {
+    rpc_res->error_code = RPC_ERROR_INTERNAL;
+    rpc_res->error_message = "Out of memory";
+    return;
+  }
   rpc_res->error_code = 0;
   rpc_res->error_message = NULL;
 }
@@ -389,7 +397,15 @@ void rpc_set_error(rpc_response_t *rpc_res, int error_code, const char *error_me
     return;
 
   rpc_res->error_code = error_code;
-  rpc_res->error_message = mem_strdup(rpc_res->arena, error_message);
+  if (error_message) {
+    rpc_res->error_message = mem_strdup(rpc_res->arena, error_message);
+    if (!rpc_res->error_message) {
+      rpc_res->error_code = RPC_ERROR_INTERNAL;
+      rpc_res->error_message = "Out of memory";
+    }
+  } else {
+    rpc_res->error_message = "Unknown error";
+  }
   rpc_res->result = NULL;
 }
 
@@ -602,7 +618,9 @@ int rpc_setup_endpoint(rpc_context_t *ctx) {
     introspection.handler = rpc_introspection_handler;
     introspection.description = "List all available RPC methods";
     introspection.requires_auth = 0;
-    rpc_register_method(ctx, &introspection);
+    if (rpc_register_method(ctx, &introspection) != 0) {
+      return -1;
+    }
   }
 
   /* Register HTTP endpoint */

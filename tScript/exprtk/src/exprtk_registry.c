@@ -15,6 +15,20 @@ static size_t g_registry_count = 0;
 static size_t g_registry_cap = 0;
 static int g_registry_ready = 0;
 
+static exprtk_value_t exprtk_call_undefined(exprtk_env_t *env, const char *name) {
+    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
+
+    if (!env) return zero;
+
+    snprintf(env->error_msg, sizeof(env->error_msg), "Undefined function '%s'",
+             name ? name : "<null>");
+    env->error_line = env->last_line;
+    env->error_column = env->last_column;
+    env->flow = exprtk_FLOW_THROW;
+    env->error_value = exprtk_val_str(tstr_v_from_cstr(env->error_msg));
+    return zero;
+}
+
 static int entry_cmp(const void *a, const void *b) {
     return strcmp(((const exprtk_func_entry_t *)a)->name,
                   ((const exprtk_func_entry_t *)b)->name);
@@ -209,9 +223,6 @@ static exprtk_value_t call_script_func(
 exprtk_value_t exprtk_call_internal(const char *name, size_t argc,
                                     exprtk_value_t *args, exprtk_env_t *env,
                                     mem_pool_t *arena) {
-    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
-    exprtk_value_t result = zero;
-
     /* 1. Check native/script functions in environment */
     if (env) {
         exprtk_env_t *curr_env_iter = env;
@@ -271,5 +282,5 @@ exprtk_value_t exprtk_call_internal(const char *name, size_t argc,
         if (mod_fn) return mod_fn(argc, args, env, arena);
     }
 
-    return result;
+    return exprtk_call_undefined(env, name);
 }

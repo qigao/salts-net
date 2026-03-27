@@ -11,6 +11,10 @@
 
 extern const coro_transport_ops_t transport_ops_kcp;
 
+static int socket_ctx_error(coro_socket_t *s, int fallback) {
+  return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
+}
+
 typedef struct kcp_accept_node_s {
   coro_socket_t *socket;
   struct kcp_accept_node_s *next;
@@ -26,6 +30,19 @@ typedef struct kcp_listener_state_s {
 static int kcp_listen(coro_socket_t *s, int backlog);
 static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted);
 static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr);
+
+static void kcp_listener_fail(coro_socket_t *s, int status) {
+  if (!s || status == 0) {
+    return;
+  }
+
+  s->status = status;
+  if (s->co_wait) {
+    coro_resume_waiter(s);
+  } else {
+    s->accept_pending = 1;
+  }
+}
 
 static int kcp_build_host_port(const struct sockaddr *addr, char *host, size_t host_len,
                                unsigned short *port) {
@@ -48,21 +65,25 @@ static int kcp_build_host_port(const struct sockaddr *addr, char *host, size_t h
   return TURBO_ENOTSUP;
 }
 
-static void kcp_queue_accept(kcp_listener_state_t *ls, coro_socket_t *child) {
+static int kcp_queue_accept(kcp_listener_state_t *ls, coro_socket_t *child) {
   kcp_accept_node_t *node;
   coro_socket_t *listener;
 
   if (!ls || !child) {
-    return;
+    return TURBO_EINVAL;
   }
 
   node = (kcp_accept_node_t *)malloc(sizeof(*node));
   if (!node) {
+    if (ls->listener_coro && ls->listener_coro->ctx) {
+      ls->listener_coro->ctx->last_error = TURBO_ENOMEM;
+    }
     child->handle.kcp = NULL;
     child->native_tcp_state = NULL;
     coro_socket_destroy(child);
     ls->active_child = NULL;
-    return;
+    kcp_listener_fail(ls->listener_coro, TURBO_ENOMEM);
+    return TURBO_ENOMEM;
   }
 
   node->socket = child;
@@ -81,6 +102,8 @@ static void kcp_queue_accept(kcp_listener_state_t *ls, coro_socket_t *child) {
   } else {
     listener->accept_pending = 1;
   }
+
+  return 0;
 }
 
 static coro_socket_t *kcp_listener_child(kcp_listener_state_t *ls) {
@@ -92,6 +115,9 @@ static coro_socket_t *kcp_listener_child(kcp_listener_state_t *ls) {
 
   child = coro_socket_create_shell(ls->listener_coro->ctx, TURBO_KCP, &transport_ops_kcp);
   if (!child) {
+    if (ls->listener_coro && ls->listener_coro->ctx) {
+      ls->listener_coro->ctx->last_error = TURBO_ENOMEM;
+    }
     return NULL;
   }
 
@@ -119,10 +145,13 @@ static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
     if (!child || !child->connected || child->handle.kcp == NULL) {
       child = kcp_listener_child(ls);
       if (!child) {
+        kcp_listener_fail(s, socket_ctx_error(s, TURBO_ENOMEM));
         return 0;
       }
       ls->active_child = child;
-      kcp_queue_accept(ls, child);
+      if (kcp_queue_accept(ls, child) != 0) {
+        return 0;
+      }
     }
 
     coro_socket_handle_transport_recv(child, slice);
@@ -146,7 +175,7 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
   /* Create handle if not existing */
   if (!s->handle.kcp) {
     s->handle.kcp = turbo_kcp_create(s->ctx);
-    if (!s->handle.kcp) return TURBO_ENOMEM;
+    if (!s->handle.kcp) return socket_ctx_error(s, TURBO_EIO);
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
   }
@@ -193,8 +222,9 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     return TURBO_EINVAL;
   }
 
-  if (kcp_build_host_port(addr, host, sizeof(host), &port) != 0) {
-    return TURBO_EINVAL;
+  r = kcp_build_host_port(addr, host, sizeof(host), &port);
+  if (r != 0) {
+    return r;
   }
 
   if (!s->native_tcp_state) {
@@ -209,7 +239,7 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
   if (!s->handle.kcp) {
     s->handle.kcp = turbo_kcp_create(s->ctx);
     if (!s->handle.kcp) {
-      return TURBO_ENOMEM;
+      return socket_ctx_error(s, TURBO_EIO);
     }
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
@@ -248,6 +278,12 @@ static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
       release_client(s);
       return status;
     }
+  }
+
+  if (s->status != 0) {
+    int status = s->status;
+    release_client(s);
+    return status;
   }
 
   ls = (kcp_listener_state_t *)s->native_tcp_state;
@@ -344,7 +380,7 @@ static int kcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
 
   dg = turbo_kcp_get_datagram(s->handle.kcp);
   if (!dg) {
-    return TURBO_ENOTSUP;
+    return socket_ctx_error(s, TURBO_ENOTSUP);
   }
 
   return turbo_datagram_get_local_addr(dg, addr);

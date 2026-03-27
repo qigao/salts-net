@@ -4,6 +4,7 @@
  */
 
 #include "CoroNet/turbo_coro_internal.h"
+#include "turbo_datagram_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,7 +30,24 @@ typedef struct udp_listener_state_s {
   int recv_ref_held;
 } udp_listener_state_t;
 
+static int socket_ctx_error(coro_socket_t *s, int fallback) {
+  return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
+}
+
 static int udp_client_recv_start(coro_socket_t *s);
+
+static void udp_listener_fail(coro_socket_t *s, int status) {
+  if (!s || status == 0) {
+    return;
+  }
+
+  s->status = status;
+  if (s->co_wait) {
+    coro_resume_waiter(s);
+  } else {
+    s->accept_pending = 1;
+  }
+}
 
 static int udp_client_ensure_bound(coro_socket_t *s) {
   struct sockaddr_storage addr;
@@ -59,20 +77,34 @@ static int on_udp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) 
     return 0;
   }
 
+  if (!slice) {
+    int status = (dg->status != 0) ? dg->status : TURBO_EOF;
+    if (s->native_tcp_state) {
+      udp_listener_fail(s, status);
+      return 0;
+    }
+    s->status = status;
+    coro_socket_handle_transport_recv(s, NULL);
+    return 0;
+  }
+
   /* Server case: dispatch to accept loop */
   if (s->native_tcp_state) {
     udp_listener_state_t *ls = (udp_listener_state_t *)s->native_tcp_state;
     
     /* Create a pseudo-client socket for this packet */
     coro_socket_t *child = coro_socket_create_shell(s->ctx, TURBO_UDP, &udp_server_ops);
-    if (!child) return 0;
+    if (!child) {
+      udp_listener_fail(s, TURBO_ENOMEM);
+      return 0;
+    }
     child->listener = s;
     retain_client(s);
     
     /* Pre-load data and peer addr */
     coro_deliver_recv(child, slice);
     if (peer) {
-      memcpy(&child->peer_addr, peer, (slice->length > 0) ? sizeof(struct sockaddr_storage) : 0);
+      memcpy(&child->peer_addr, peer, sizeof(struct sockaddr_storage));
     }
     child->connected = 1;
     child->owns_handle = 0; // It's a pseudo-socket, it "borrows" the listener's handle but we don't actually use it for recv
@@ -81,6 +113,7 @@ static int on_udp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) 
     udp_accept_node_t *node = malloc(sizeof(udp_accept_node_t));
     if (!node) {
       coro_socket_destroy(child);
+      udp_listener_fail(s, TURBO_ENOMEM);
       return 0;
     }
     node->socket = child;
@@ -186,7 +219,7 @@ static int udp_client_bind(coro_socket_t *s, const struct sockaddr *addr) {
         free(ls);
         s->native_tcp_state = NULL;
       }
-      return TURBO_ENOMEM;
+      return socket_ctx_error(s, TURBO_EIO);
     }
     s->owns_handle = 1;
   }
@@ -230,6 +263,13 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
       release_client(s);
       return s->status;
     }
+  }
+
+  if (s->status != 0) {
+    int status = s->status;
+    s->status = 0;
+    release_client(s);
+    return status;
   }
 
   udp_listener_state_t *ls = (udp_listener_state_t *)s->native_tcp_state;

@@ -702,8 +702,14 @@ static exprtk_value_t *mc_prepare_call_args(mc_ctx_t *mc, exprtk_value_t *stack_
     return call_args;
 }
 
+static exprtk_value_t unknown_method_error(mc_ctx_t *mc, const char *type_name_str) {
+    return throw_error(mc ? mc->env : NULL, mc ? mc->obj_node : NULL,
+                       "Unknown %s method '%s'",
+                       type_name_str ? type_name_str : "object",
+                       (mc && mc->method) ? mc->method : "<null>");
+}
+
 static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
-    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
     exprtk_env_t *env = mc->env;
 
@@ -750,7 +756,7 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
             if (item.type == EXPRTK_VAL_STRING && tstr_v_eq(item.data.string, mc->args[0].data.string))
                 return exprtk_val_num(1);
         }
-        return zero;
+        return exprtk_val_num(0.0);
     }
 
     if (strcmp(m, "reverse") == 0) {
@@ -764,11 +770,10 @@ static exprtk_value_t eval_list_method(mc_ctx_t *mc) {
         }
     }
 
-    return zero;
+    return unknown_method_error(mc, "list");
 }
 
 static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
-    exprtk_value_t zero = { EXPRTK_VAL_NUMBER, {0.0} };
     const char *m = mc->method;
 
     if (strcmp(m, "size") == 0 || strcmp(m, "length") == 0)
@@ -825,7 +830,7 @@ static exprtk_value_t eval_map_method(mc_ctx_t *mc) {
         }
     }
 
-    return zero;
+    return unknown_method_error(mc, "map");
 }
 
 static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
@@ -847,8 +852,10 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
     if (!fn) fn = exprtk_registry_find(m);
 
     exprtk_value_t result = zero;
+    int handled = 0;
     if (fn) {
         result = fn(call_argc, call_args, mc->env, mc->arena);
+        handled = 1;
     } else {
         /* Inline fallbacks for essential methods when registry is empty */
         if (strcmp(m, "indexOf") == 0 && mc->argc > 0 && mc->args[0].type == EXPRTK_VAL_STRING) {
@@ -860,6 +867,7 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
                     }
                 }
             }
+            handled = 1;
         } else if (strcmp(m, "substr") == 0 && mc->argc >= 1) {
             int start = (int)mc->args[0].data.number;
             int len = (mc->argc >= 2) ? (int)mc->args[1].data.number : (int)(mc->obj.data.string.len - start);
@@ -872,6 +880,7 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
             buf[len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = len;
             result = exprtk_val_str(sv);
+            handled = 1;
         } else if (strcmp(m, "toUpper") == 0) {
             char *buf = (char*)mem_alloc(mc->arena, mc->obj.data.string.len + 1);
             for (size_t i = 0; i < mc->obj.data.string.len; ++i)
@@ -879,6 +888,7 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
             buf[mc->obj.data.string.len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = mc->obj.data.string.len;
             result = exprtk_val_str(sv);
+            handled = 1;
         } else if (strcmp(m, "toLower") == 0) {
             char *buf = (char*)mem_alloc(mc->arena, mc->obj.data.string.len + 1);
             for (size_t i = 0; i < mc->obj.data.string.len; ++i)
@@ -886,9 +896,11 @@ static exprtk_value_t eval_string_method(mc_ctx_t *mc) {
             buf[mc->obj.data.string.len] = '\0';
             tstr_v sv; sv.data = buf; sv.len = mc->obj.data.string.len;
             result = exprtk_val_str(sv);
+            handled = 1;
         }
     }
     if (call_args != stack_args) free(call_args);
+    if (!handled) return unknown_method_error(mc, "string");
     return result;
 }
 
@@ -956,33 +968,42 @@ static exprtk_value_t eval_vector_method(mc_ctx_t *mc) {
     if (!fn) fn = exprtk_find_builtin(m, mc->env);
 
     exprtk_value_t result = zero;
+    int handled = 0;
     if (fn) {
         result = fn(call_argc, call_args, mc->env, mc->arena);
+        handled = 1;
     } else {
         /* Inline fallbacks for basic vector ops */
         if (strcmp(m, "sum") == 0) {
             double sum = 0;
             for (size_t i = 0; i < mc->obj.data.vector.size; ++i) sum += mc->obj.data.vector.data[i];
             result = exprtk_val_num(sum);
+            handled = 1;
         } else if (strcmp(m, "avg") == 0 || strcmp(m, "mean") == 0) {
             if (mc->obj.data.vector.size > 0) {
                 double sum = 0;
                 for (size_t i = 0; i < mc->obj.data.vector.size; ++i) sum += mc->obj.data.vector.data[i];
                 result = exprtk_val_num(sum / (double)mc->obj.data.vector.size);
+            } else {
+                result = exprtk_val_num(0.0);
             }
+            handled = 1;
         } else if (strcmp(m, "min") == 0 && mc->obj.data.vector.size > 0) {
             double v = mc->obj.data.vector.data[0];
             for (size_t i = 1; i < mc->obj.data.vector.size; ++i)
                 if (mc->obj.data.vector.data[i] < v) v = mc->obj.data.vector.data[i];
             result = exprtk_val_num(v);
+            handled = 1;
         } else if (strcmp(m, "max") == 0 && mc->obj.data.vector.size > 0) {
             double v = mc->obj.data.vector.data[0];
             for (size_t i = 1; i < mc->obj.data.vector.size; ++i)
                 if (mc->obj.data.vector.data[i] > v) v = mc->obj.data.vector.data[i];
             result = exprtk_val_num(v);
+            handled = 1;
         }
     }
     if (call_args != stack_args) free(call_args);
+    if (!handled) return unknown_method_error(mc, "vector");
     return result;
 }
 
@@ -1380,7 +1401,9 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                                  mc.obj_node->data.variable.name, mc.method);
                         mc_result = exprtk_call_internal(full_name, mc_argc, mc_args, env, &env->arena);
                     } else {
-                        mc_result = zero;
+                        mc_result = throw_error(env, node, "Method call '%s' is invalid for %s",
+                                                mc.method ? mc.method : "<null>",
+                                                type_name(mc.obj.type));
                     }
                     break;
             }
@@ -1461,15 +1484,19 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             exprtk_value_t arr = exprtk_eval(node->data.slice.array, env);
             exprtk_value_t start_val = exprtk_eval(node->data.slice.start, env);
             exprtk_value_t end_val = exprtk_eval(node->data.slice.end, env);
-            if (arr.type != EXPRTK_VAL_VECTOR || start_val.type != EXPRTK_VAL_NUMBER || end_val.type != EXPRTK_VAL_NUMBER) return zero;
+            if (arr.type != EXPRTK_VAL_VECTOR || start_val.type != EXPRTK_VAL_NUMBER || end_val.type != EXPRTK_VAL_NUMBER) {
+                return throw_error(env, node,
+                                   "Invalid slice: expected vector[number:number], got %s[%s:%s]",
+                                   type_name(arr.type), type_name(start_val.type), type_name(end_val.type));
+            }
             int start = (int)start_val.data.number;
             int end = (int)end_val.data.number;
             if (start < 0) start = 0;
             if (end > (int)arr.data.vector.size) end = (int)arr.data.vector.size;
-            if (start > end) return zero;
+            if (start > end) return throw_error(env, node, "Invalid slice range [%d:%d]", start, end);
             size_t count = (size_t)(end - start);
             double *data = (double*)mem_alloc(node->arena, count * sizeof(double));
-            if (!data) return zero;
+            if (!data) return throw_error(env, node, "Out of memory creating slice");
             for (size_t i = 0; i < count; ++i) {
                 data[i] = arr.data.vector.data[start + i];
             }
@@ -1511,7 +1538,8 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
             if (obj.type == EXPRTK_VAL_VECTOR) {
                 if (strcmp(member, "length") == 0) return exprtk_val_num((double)obj.data.vector.size);
             }
-            return zero;
+            return throw_error(env, node, "Member access '%s' is invalid for %s",
+                               member ? member : "<null>", type_name(obj.type));
         }
         case EXPRTK_NODE_MEMBER_SET: {
             /* Evaluate the new value first */
@@ -1529,7 +1557,8 @@ exprtk_value_t exprtk_eval(const exprtk_node_t *node, exprtk_env_t *env) {
                     return val;
                 }
             }
-            return zero;
+            return throw_error(env, node, "Member assignment '%s' requires a map variable",
+                               node->data.member_set.member ? node->data.member_set.member : "<null>");
         }
         case EXPRTK_NODE_NULL: {
             exprtk_value_t null_val;

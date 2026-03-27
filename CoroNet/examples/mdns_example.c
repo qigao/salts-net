@@ -21,11 +21,93 @@
 
 static mdns_ctx_t* g_mdns = NULL;
 static coro_context_t* g_ctx = NULL;
+static coro_socket_t* g_tcp_server = NULL;
+static coro_socket_t* g_udp_server = NULL;
 
 void signal_handler(int sig) {
     (void)sig;
     printf("\nShutting down...\n");
     if (g_ctx) coro_context_stop(g_ctx);
+}
+
+static void tcp_message_handler(coro_socket_t* client, void* userdata) {
+    UNUSED(userdata);
+
+    for (;;) {
+        char* data = NULL;
+        size_t len = 0;
+        int r = coro_socket_recv(client, &data, &len);
+        if (r != 0 || !data || len == 0) {
+            if (data) {
+                coro_socket_free_recv(data);
+            }
+            break;
+        }
+
+        printf("[TCP] Received %zu bytes: %.*s\n", len, (int)len, data);
+        coro_socket_free_recv(data);
+    }
+}
+
+static void udp_message_handler(coro_socket_t* client, void* userdata) {
+    UNUSED(userdata);
+
+    char* data = NULL;
+    size_t len = 0;
+    int r = coro_socket_recv(client, &data, &len);
+    if (r != 0 || !data) {
+        if (data) {
+            coro_socket_free_recv(data);
+        }
+        return;
+    }
+
+    printf("[UDP] Received %zu bytes: %.*s\n", len, (int)len, data);
+    coro_socket_free_recv(data);
+}
+
+static void stop_demo_servers(void) {
+    if (g_udp_server) {
+        coro_socket_destroy(g_udp_server);
+        g_udp_server = NULL;
+    }
+    if (g_tcp_server) {
+        coro_socket_destroy(g_tcp_server);
+        g_tcp_server = NULL;
+    }
+}
+
+static int start_demo_servers(int port) {
+    int r;
+
+    g_tcp_server = coro_socket_create_tcpv4(g_ctx);
+    if (!g_tcp_server) {
+        printf("Failed to create TCP server\n");
+        return -1;
+    }
+
+    r = coro_socket_listen_on(g_tcp_server, "0.0.0.0", port, tcp_message_handler, NULL);
+    if (r != 0) {
+        printf("Failed to listen on TCP %d: %d\n", port, r);
+        stop_demo_servers();
+        return r;
+    }
+
+    g_udp_server = coro_socket_create_udpv4(g_ctx);
+    if (!g_udp_server) {
+        printf("Failed to create UDP server\n");
+        stop_demo_servers();
+        return -1;
+    }
+
+    r = coro_socket_listen_on(g_udp_server, "0.0.0.0", port, udp_message_handler, NULL);
+    if (r != 0) {
+        printf("Failed to listen on UDP %d: %d\n", port, r);
+        stop_demo_servers();
+        return r;
+    }
+
+    return 0;
 }
 
 void on_service_discovered(const mdns_service_t* service, void* userdata) {
@@ -38,39 +120,51 @@ void on_service_discovered(const mdns_service_t* service, void* userdata) {
     printf("Port: %u\n", service->port);
     printf("TTL: %u\n", service->ttl);
     printf("====================\n");
-    
-    /* Stop after first discovery in this example */
-    if (g_ctx) coro_context_stop(g_ctx);
 }
 
 void publish_mode(void) {
-    mdns_service_t service = {0};
-    strncpy(service.instance, "My Test Service", sizeof(service.instance) - 1);
-    strncpy(service.service_type, "_test._tcp", sizeof(service.service_type) - 1);
-    service.port = 8080;
-    service.ttl = 120;
+    mdns_service_t services[2] = {{0}};
+    strncpy(services[0].instance, "My Test Service", sizeof(services[0].instance) - 1);
+    strncpy(services[0].service_type, "_test._tcp", sizeof(services[0].service_type) - 1);
+    services[0].port = 8080;
+    services[0].ttl = 120;
+
+    strncpy(services[1].instance, "My Test Service", sizeof(services[1].instance) - 1);
+    strncpy(services[1].service_type, "_test._udp", sizeof(services[1].service_type) - 1);
+    services[1].port = 8080;
+    services[1].ttl = 120;
     
-    printf("Publishing service: %s._test._tcp on port %d\n", 
-           service.instance, service.port);
+    printf("Publishing services: %s._test._tcp and %s._test._udp on port %d\n",
+           services[0].instance, services[1].instance, services[0].port);
     printf("Local hostname: %s\n", mdns_get_local_hostname());
     printf("Local IP: %s\n", mdns_get_local_ip());
-    
-    if (mdns_publish(g_mdns, &service) != 0) {
-        printf("Failed to publish service\n");
+
+    if (start_demo_servers(services[0].port) != 0) {
         return;
     }
     
-    printf("Service published. Press Ctrl+C to stop.\n");
+    if (mdns_publish_many(g_mdns, services, 2) != 0) {
+        printf("Failed to publish services\n");
+        stop_demo_servers();
+        return;
+    }
+    
+    printf("Service published.\n");
+    printf("Listening for TCP and UDP messages on port %d.\n", services[0].port);
+    printf("Press Ctrl+C to stop.\n");
     coro_context_run(g_ctx, TURBO_RUN_DEFAULT);
     
     printf("Unpublishing service...\n");
-    mdns_unpublish(g_mdns, service.instance, service.service_type);
+    mdns_unpublish_all(g_mdns);
+    stop_demo_servers();
 }
 
 void discover_mode(void) {
-    printf("Discovering _test._tcp services for 10 seconds...\n");
+    const char* service_types[] = {"_test._tcp", "_test._udp"};
+
+    printf("Discovering _test._tcp and _test._udp services. Press Ctrl+C to stop.\n");
     
-    if (mdns_discover(g_mdns, "_test._tcp", on_service_discovered, NULL, 10000) != 0) {
+    if (mdns_discover_many(g_mdns, service_types, 2, on_service_discovered, NULL, 0) != 0) {
         printf("Failed to start discovery\n");
         return;
     }

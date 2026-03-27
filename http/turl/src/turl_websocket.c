@@ -63,7 +63,12 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
   }
 
   if (query && query[0] != '\0') {
-    fmt(path_buf, sizeof(path_buf), "{}?{}", path, query);
+    int path_len = fmt(path_buf, sizeof(path_buf), "{}?{}", path, query);
+    if (path_len <= 0 || (size_t)path_len >= sizeof(path_buf)) {
+      TLOG_ERROR("WebSocket path too long: {}", url);
+      turbo_free_uri(&uri);
+      return -1;
+    }
     path = path_buf;
   }
 
@@ -93,7 +98,12 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
   if (body && body_len > 0) {
     if (verbose)
       TLOG_INFO("> Sending {} bytes...", body_len);
-    coro_socket_send(s, body, body_len);
+    if (coro_socket_send(s, body, body_len) != 0) {
+      TLOG_ERROR("WebSocket send failed");
+      coro_socket_destroy(s);
+      turbo_free_uri(&uri);
+      return 1;
+    }
   }
 
   if (send_ping) {
@@ -104,7 +114,8 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
   // Receive loop
   char *response = NULL;
   size_t len = 0;
-  while (coro_socket_recv(s, &response, &len) == 0) {
+  int recv_rc = 0;
+  while ((recv_rc = coro_socket_recv(s, &response, &len)) == 0) {
     if (len > 0) {
       if (verbose)
         TLOG_INFO("< Received {} bytes:", len);
@@ -116,6 +127,13 @@ int turl_handle_websocket(const char *url, const char *body, size_t body_len,
       /* Empty message or closure check */
       break;
     }
+  }
+
+  if (recv_rc != 0) {
+    TLOG_ERROR("WebSocket receive failed with error: {}", recv_rc);
+    coro_socket_destroy(s);
+    turbo_free_uri(&uri);
+    return 1;
   }
 
   if (verbose)

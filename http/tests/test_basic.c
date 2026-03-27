@@ -1,6 +1,7 @@
 #include <platform.h>
 #include "tinytest.h"
 #include "http_client.h"
+#include "../src/http_client_internal_h.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -90,9 +91,32 @@ spec("http client basic") {
             check(1);
         }
 
+        it("should clear stale auth on invalid jwt config") {
+            http_client_set_bearer_token(client, "token123");
+            check_not_null(client->auth_header);
+
+            http_client_set_jwt_auth(client, "secret", "{\"sub\":");
+
+            check_null(client->auth_header);
+        }
+
         it("should set cookie jar") {
             http_client_set_cookie_jar(client, NULL);
             check(http_client_get_cookie_jar(client) == NULL);
+        }
+
+        it("should reject oversized proxy config without truncation") {
+            char host[300];
+
+            memset(host, 'a', sizeof(host) - 1);
+            host[sizeof(host) - 1] = '\0';
+
+            http_client_set_proxy(client, host, 1080, NULL, NULL);
+
+            check_not_null(client->proxy_config);
+            check_str_eq(client->proxy_config->host, "");
+            check_int_eq(client->proxy_config->port, 0);
+            check_int_eq(client->proxy_config->auth_required, 0);
         }
     }
 

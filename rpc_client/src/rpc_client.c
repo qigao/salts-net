@@ -33,6 +33,19 @@ struct rpc_client_s {
 /* Build full URL from config */
 static const char *build_url(rpc_client_t *client) { return client->config.url; }
 
+static void rpc_result_set_message(rpc_call_result_t *result, int error_code, int http_status,
+                                   const char *message) {
+  if (!result)
+    return;
+
+  memset(result, 0, sizeof(rpc_call_result_t));
+  result->success = 0;
+  result->error_code = error_code;
+  result->http_status = http_status;
+  if (message)
+    result->error_message = strdup(message);
+}
+
 /* Build JSON-RPC request using json_parser */
 static char *build_jsonrpc_request(const char *method, const char *params, const char *id,
                                    size_t *request_len) {
@@ -49,9 +62,11 @@ static char *build_jsonrpc_request(const char *method, const char *params, const
   /* Add params if provided */
   if (params && params[0] != '\0') {
     json_value_t *params_obj = json_parse(params, strlen(params));
-    if (params_obj) {
-      json_object_add(root, "params", params_obj);
+    if (!params_obj) {
+      json_free(root);
+      return NULL;
     }
+    json_object_add(root, "params", params_obj);
   }
 
   /* Add ID if provided (regular request), otherwise it's a notification */
@@ -213,6 +228,11 @@ static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
     json_value_t *result_item = json_object_get(root, "result");
     if (result_item) {
       result->result = json_serialize(result_item, NULL);
+      if (!result->result) {
+        result->success = 0;
+        result->error_code = RPC_ERROR_INTERNAL;
+        result->error_message = strdup("Failed to serialize JSON-RPC result");
+      }
     }
   }
 
@@ -232,8 +252,11 @@ static void process_coro_response(http_response_t *resp, rpc_call_result_t *resu
       result->error_message = strdup(resp->error);
     }
   } else if (resp->body && resp->body_len > 0) {
-    parse_jsonrpc_response(resp->body, result);
-    result->http_status = resp->status_code;
+    if (parse_jsonrpc_response(resp->body, result) != 0) {
+      result->success = 0;
+      result->error_code = RPC_ERROR_PARSE;
+      result->error_message = strdup("Invalid JSON-RPC response");
+    }
   } else {
     result->success = 0;
     result->error_code = RPC_ERROR_INTERNAL;
@@ -352,10 +375,16 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
   if (!resp)
     return -1;
 
+  int call_rc = 0;
+  if (resp->error_code != HTTP_ERROR_NONE || !resp->body || resp->body_len == 0)
+    call_rc = -1;
+
   process_coro_response(resp, result);
+  if (!result->success && result->error_code == RPC_ERROR_PARSE)
+    call_rc = -1;
   http_response_free(resp);
 
-  return 0;
+  return call_rc;
 }
 
 int rpc_client_notify(rpc_client_t *client, const char *method, const char *params) {
@@ -376,8 +405,15 @@ int rpc_client_notify(rpc_client_t *client, const char *method, const char *para
       http_request(client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
   json_serialize_free(jsonrpc_body);
 
-  if (resp)
+  if (!resp)
+    return -1;
+
+  if (resp->error_code != HTTP_ERROR_NONE || resp->status_code >= 400) {
     http_response_free(resp);
+    return -1;
+  }
+
+  http_response_free(resp);
 
   return 0;
 }
@@ -453,6 +489,10 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   if (!client || !methods || !results || count == 0)
     return -1;
 
+  char **request_ids = (char **)calloc(count, sizeof(char *));
+  if (!request_ids)
+    return -1;
+
   /* Build batch request JSON (manual formatting for safety and efficiency) */
   size_t batch_size = 2; /* "[]" */
   for (size_t i = 0; i < count; i++) {
@@ -463,8 +503,10 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   }
 
   char *batch_json = (char *)malloc(batch_size);
-  if (!batch_json)
+  if (!batch_json) {
+    free(request_ids);
     return -1;
+  }
 
   size_t pos = 0;
   batch_json[pos++] = '[';
@@ -472,10 +514,21 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   for (size_t i = 0; i < count; i++) {
     char id_str[32];
     fmt(id_str, sizeof(id_str), "{}", client->request_id_counter++);
+    request_ids[i] = strdup(id_str);
+    if (!request_ids[i]) {
+      for (size_t j = 0; j < i; j++)
+        free(request_ids[j]);
+      free(request_ids);
+      free(batch_json);
+      return -1;
+    }
 
     size_t req_len;
     char *req = build_jsonrpc_request(methods[i], params ? params[i] : NULL, id_str, &req_len);
     if (!req) {
+      for (size_t j = 0; j <= i; j++)
+        free(request_ids[j]);
+      free(request_ids);
       free(batch_json);
       return -1;
     }
@@ -486,6 +539,9 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
 
     if (pos + req_len + 2 >= batch_size) {
       json_serialize_free(req);
+      for (size_t j = 0; j <= i; j++)
+        free(request_ids[j]);
+      free(request_ids);
       free(batch_json);
       return -1;
     }
@@ -507,32 +563,107 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   free(batch_json);
 
   if (!resp)
-    return -1;
+    goto batch_fail;
 
   if (resp->error_code != HTTP_ERROR_NONE || !resp->body) {
     /* Mark all as failed */
     for (size_t i = 0; i < count; i++) {
-      memset(&results[i], 0, sizeof(rpc_call_result_t));
-      results[i].success = 0;
-      results[i].error_code = RPC_ERROR_INTERNAL;
-      results[i].http_status = resp->status_code;
-      if (resp->error) {
-        results[i].error_message = strdup(resp->error);
+      rpc_result_set_message(&results[i], RPC_ERROR_INTERNAL, resp->status_code, resp->error);
+    }
+    http_response_free(resp);
+    for (size_t i = 0; i < count; i++)
+      free(request_ids[i]);
+    free(request_ids);
+    return -1;
+  }
+
+  json_value_t *root = json_parse(resp->body, resp->body_len);
+  if (!root || json_type(root) != JSON_ARRAY)
+    goto batch_parse_fail;
+
+  for (size_t i = 0; i < count; i++)
+    memset(&results[i], 0, sizeof(rpc_call_result_t));
+
+  size_t response_count = json_array_size(root);
+  int parse_ok = (response_count == count);
+  int *matched = (int *)calloc(count, sizeof(int));
+  if (!matched) {
+    json_free(root);
+    goto batch_fail;
+  }
+
+  for (size_t i = 0; i < response_count; i++) {
+    json_value_t *item = json_array_get(root, i);
+    size_t item_len = 0;
+    char *item_json = json_serialize(item, &item_len);
+    rpc_call_result_t parsed = {0};
+    int matched_idx = -1;
+
+    if (!item_json || parse_jsonrpc_response(item_json, &parsed) != 0 || !parsed.id) {
+      parse_ok = 0;
+      if (item_json)
+        json_serialize_free(item_json);
+      rpc_result_free(&parsed);
+      continue;
+    }
+
+    json_serialize_free(item_json);
+
+    for (size_t j = 0; j < count; j++) {
+      if (strcmp(request_ids[j], parsed.id) == 0) {
+        matched_idx = (int)j;
+        break;
       }
     }
-  } else {
-    /* Simple batch parsing - expects JSON array response */
-    /* Implementation omitted for brevity, usually involves iterating response array */
-    for (size_t i = 0; i < count; i++) {
-      memset(&results[i], 0, sizeof(rpc_call_result_t));
-      results[i].success = 1;
-      results[i].result = strdup("{}");
-      results[i].http_status = resp->status_code;
+
+    if (matched_idx < 0 || matched[matched_idx]) {
+      parse_ok = 0;
+      rpc_result_free(&parsed);
+      continue;
+    }
+
+    matched[matched_idx] = 1;
+    parsed.http_status = resp->status_code;
+    results[matched_idx] = parsed;
+  }
+
+  for (size_t i = 0; i < count; i++) {
+    if (!matched[i]) {
+      parse_ok = 0;
+      rpc_result_free(&results[i]);
+      rpc_result_set_message(&results[i], RPC_ERROR_PARSE, resp->status_code,
+                             "Missing batch response item");
     }
   }
 
+  free(matched);
+  json_free(root);
   http_response_free(resp);
-  return 0;
+  for (size_t i = 0; i < count; i++)
+    free(request_ids[i]);
+  free(request_ids);
+
+  return parse_ok ? 0 : -1;
+
+batch_parse_fail:
+  if (root)
+    json_free(root);
+  for (size_t i = 0; i < count; i++)
+    rpc_result_set_message(&results[i], RPC_ERROR_PARSE, resp->status_code,
+                           "Invalid JSON-RPC batch response");
+  http_response_free(resp);
+  for (size_t i = 0; i < count; i++)
+    free(request_ids[i]);
+  free(request_ids);
+  return -1;
+
+batch_fail:
+  if (resp)
+    http_response_free(resp);
+  for (size_t i = 0; i < count; i++)
+    free(request_ids[i]);
+  free(request_ids);
+  return -1;
 }
 
 const char *rpc_client_version(void) { return RPC_CLIENT_VERSION; }
@@ -550,7 +681,21 @@ typedef struct {
   size_t buffer_size;
   size_t buffer_used;
   int completed;
+  int failed;
+  int error_code;
+  int keep_until_caller;
+  char *error_message;
 } rpc_stream_context_t;
+
+static void rpc_stream_fail(rpc_stream_context_t *ctx, int error_code, const char *message) {
+  if (!ctx || ctx->failed)
+    return;
+
+  ctx->failed = 1;
+  ctx->error_code = error_code;
+  if (message)
+    ctx->error_message = strdup(message);
+}
 
 static char *find_sse_event_end(char *buffer) {
   char *lf_end = strstr(buffer, "\n\n");
@@ -570,17 +715,21 @@ static void process_sse_event(rpc_stream_context_t *ctx, const char *event_data)
   rpc_call_result_t result;
   memset(&result, 0, sizeof(result));
 
-  if (parse_jsonrpc_response(event_data, &result) == 0) {
-    if (ctx->result_cb) {
-      ctx->result_cb(&result, ctx->user_data);
-    }
+  if (parse_jsonrpc_response(event_data, &result) != 0) {
+    result.success = 0;
+    result.error_code = RPC_ERROR_PARSE;
+    result.error_message = strdup("Invalid JSON-RPC response");
+  }
+
+  if (ctx->result_cb) {
+    ctx->result_cb(&result, ctx->user_data);
   }
   rpc_result_free(&result);
 }
 
 static void rpc_stream_data_callback(const char *data, size_t len, void *user_data) {
   rpc_stream_context_t *ctx = (rpc_stream_context_t *)user_data;
-  if (!ctx || !data || len == 0)
+  if (!ctx || !data || len == 0 || ctx->failed)
     return;
   /* Append to buffer */
   size_t new_size = ctx->buffer_used + len + 1;
@@ -589,8 +738,10 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
     while (alloc_size < new_size)
       alloc_size *= 2;
     char *new_buf = realloc(ctx->buffer, alloc_size);
-    if (!new_buf)
+    if (!new_buf) {
+      rpc_stream_fail(ctx, RPC_ERROR_OUT_OF_MEMORY, "SSE buffer allocation failed");
       return;
+    }
     ctx->buffer = new_buf;
     ctx->buffer_size = alloc_size;
   }
@@ -616,8 +767,10 @@ static void rpc_stream_data_callback(const char *data, size_t len, void *user_da
 
     /* Allocate message buffer - at most as large as the event itself */
     char *msg_buf = (char *)malloc(strlen(event_ptr) + 1);
-    if (!msg_buf)
+    if (!msg_buf) {
+      rpc_stream_fail(ctx, RPC_ERROR_OUT_OF_MEMORY, "SSE event allocation failed");
       break;
+    }
     size_t msg_pos = 0;
 
     char *line = event_ptr;
@@ -685,6 +838,22 @@ static void stream_call_coro(coro_t *co, void *arg) {
 
   json_serialize_free(a->jsonrpc_body);
 
+  if (!ctx->failed) {
+    if (!resp) {
+      ctx->failed = 1;
+      ctx->error_code = RPC_ERROR_INTERNAL;
+      if (!ctx->error_message) {
+        ctx->error_message = strdup("No response");
+      }
+    } else if (resp->error_code != HTTP_ERROR_NONE) {
+      ctx->failed = 1;
+      ctx->error_code = RPC_ERROR_INTERNAL;
+      if (!ctx->error_message && resp->error) {
+        ctx->error_message = strdup(resp->error);
+      }
+    }
+  }
+
   /* Stream finished call complete callback */
   if (ctx->complete_cb) {
     rpc_call_result_t result;
@@ -692,11 +861,11 @@ static void stream_call_coro(coro_t *co, void *arg) {
 
     if (resp) {
       result.http_status = resp->status_code;
-      if (resp->error_code != HTTP_ERROR_NONE) {
+      if (ctx->failed) {
         result.success = 0;
-        result.error_code = RPC_ERROR_INTERNAL;
-        if (resp->error) {
-          result.error_message = strdup(resp->error);
+        result.error_code = ctx->error_code ? ctx->error_code : RPC_ERROR_INTERNAL;
+        if (ctx->error_message) {
+          result.error_message = strdup(ctx->error_message);
         }
       } else {
         result.success = 1;
@@ -716,14 +885,24 @@ static void stream_call_coro(coro_t *co, void *arg) {
 
   if (resp)
     http_response_free(resp);
-  free(ctx->buffer);
-  free(ctx);
+
+  if (ctx->keep_until_caller) {
+    free(ctx->error_message);
+    ctx->error_message = NULL;
+    free(ctx->buffer);
+    ctx->buffer = NULL;
+  } else {
+    free(ctx->error_message);
+    free(ctx->buffer);
+    free(ctx);
+  }
   free(a);
 }
 
 int rpc_client_call_stream(rpc_client_t *client, const char *method, const char *params,
                            rpc_callback_t result_cb, rpc_callback_t complete_cb, void *user_data) {
   coro_context_t *coro_ctx;
+  int in_coro;
 
   if (!client || !method || !result_cb)
     return -1;
@@ -747,6 +926,8 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   ctx->result_cb = result_cb;
   ctx->complete_cb = complete_cb;
   ctx->user_data = user_data;
+  in_coro = coro_running();
+  ctx->keep_until_caller = !in_coro;
 
   /* Create coroutine args */
   stream_coro_args_t *args = (stream_coro_args_t *)malloc(sizeof(stream_coro_args_t));
@@ -772,9 +953,14 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
     return -1;
   }
 
-  coro_context_spawn(coro_ctx, stream_call_coro, args);
+  if (coro_context_spawn(coro_ctx, stream_call_coro, args) != 0) {
+    free(ctx);
+    free(args);
+    json_serialize_free(jsonrpc_body);
+    return -1;
+  }
 
-  if (coro_running()) {
+  if (in_coro) {
     return 0;
   }
 
@@ -782,5 +968,9 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
     coro_context_run(coro_ctx, TURBO_RUN_ONCE);
   }
 
-  return 0;
+  int rc = (ctx->completed && !ctx->failed) ? 0 : -1;
+  free(ctx->error_message);
+  free(ctx->buffer);
+  free(ctx);
+  return rc;
 }

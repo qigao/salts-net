@@ -103,7 +103,7 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
             TurboNet::UriParser TurboNet::WebSocketParser)
 
   if(WIN32)
-    target_link_libraries(${tgt} PRIVATE ws2_32 mswsock)
+    target_link_libraries(${tgt} PRIVATE ws2_32 mswsock crypt32)
   endif()
 
   if(TURBO_HAS_IO_URING)

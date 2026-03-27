@@ -7,20 +7,17 @@
  */
 
 #include "turbo_stream_internal.h"
-
-#include <winsock2.h>
+#include "turbo_thread.h"
+#include <tlog.h>
 #include <windows.h>
+#include <winsock2.h>
 
 #include <stdlib.h>
 #include <string.h>
 
 /* ── Pipe IOCP state ──────────────────────────────────────── */
 
-typedef enum {
-  PIPE_OP_CONNECT = 1,
-  PIPE_OP_WRITE   = 2,
-  PIPE_OP_READ    = 3
-} pipe_op_kind_t;
+typedef enum { PIPE_OP_CONNECT = 1, PIPE_OP_WRITE = 2, PIPE_OP_READ = 3 } pipe_op_kind_t;
 
 typedef struct pipe_op_s {
   OVERLAPPED overlapped;
@@ -76,6 +73,24 @@ static void pipe_tick(void *arg1, void *arg2);
 static int pipe_submit_read(turbo_stream_t *s);
 static int pipe_submit_write(turbo_stream_t *s);
 
+static int pipe_post_wait(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2,
+                          volatile LONG *stopping) {
+  int rc;
+
+  for (;;) {
+    rc = coro_post(ctx, fn, arg1, arg2);
+    if (rc == 0) {
+      return 0;
+    }
+    if (stopping && InterlockedCompareExchange(stopping, 0, 0) != 0) {
+      return TURBO_ECANCELED;
+    }
+
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(ctx));
+    turbo_thread_yield();
+  }
+}
+
 static void pipe_free_chain(pipe_op_t *chain) {
   while (chain) {
     pipe_op_t *next = chain->next;
@@ -127,8 +142,7 @@ static DWORD WINAPI pipe_worker(LPVOID arg) {
   OVERLAPPED *ov;
 
   while (!InterlockedCompareExchange(&st->stopping, 0, 0)) {
-    BOOL ok = GetQueuedCompletionStatus(st->completion_port, &bytes, &key,
-                                         &ov, 500);
+    BOOL ok = GetQueuedCompletionStatus(st->completion_port, &bytes, &key, &ov, 500);
     if (!ov) {
       if (!ok && GetLastError() == WAIT_TIMEOUT) continue;
       break;
@@ -138,7 +152,7 @@ static DWORD WINAPI pipe_worker(LPVOID arg) {
     op->status = ok ? 0 : -(int)GetLastError();
     pipe_queue_push(st, op);
     InterlockedIncrement(&st->pending_posts);
-    if (coro_post(st->ctx, pipe_tick, st, NULL) != 0) {
+    if (pipe_post_wait(st->ctx, pipe_tick, st, NULL, &st->stopping) != 0) {
       InterlockedDecrement(&st->pending_posts);
     }
   }
@@ -189,7 +203,10 @@ static void pipe_handle_read(pipe_op_t *op) {
   if (s->on_recv) {
     int close_req = s->on_recv(s, &slice, NULL);
     mem_slice_release(&slice);
-    if (close_req) { turbo_stream_close(s); return; }
+    if (close_req) {
+      turbo_stream_close(s);
+      return;
+    }
   } else {
     mem_slice_release(&slice);
   }
@@ -204,9 +221,15 @@ static void pipe_tick(void *arg1, void *arg2) {
   while (chain) {
     pipe_op_t *next = chain->next;
     switch (chain->kind) {
-      case PIPE_OP_CONNECT: pipe_handle_connect(chain); break;
-      case PIPE_OP_WRITE:   pipe_handle_write(chain); break;
-      case PIPE_OP_READ:    pipe_handle_read(chain); break;
+    case PIPE_OP_CONNECT:
+      pipe_handle_connect(chain);
+      break;
+    case PIPE_OP_WRITE:
+      pipe_handle_write(chain);
+      break;
+    case PIPE_OP_READ:
+      pipe_handle_read(chain);
+      break;
     }
     chain = next;
   }
@@ -228,8 +251,7 @@ static int pipe_submit_read(turbo_stream_t *s) {
   mem_buffer_t *buf = s->recv_buf[s->recv_toggle];
   st->recv_inflight = 1;
 
-  BOOL ok = ReadFile(st->pipe_handle, buf->data, (DWORD)buf->capacity,
-                      NULL, &op->overlapped);
+  BOOL ok = ReadFile(st->pipe_handle, buf->data, (DWORD)buf->capacity, NULL, &op->overlapped);
   if (!ok) {
     DWORD err = GetLastError();
     if (err != ERROR_IO_PENDING) {
@@ -266,8 +288,7 @@ static int pipe_submit_write(turbo_stream_t *s) {
 
   st->send_inflight = 1;
 
-  BOOL ok = WriteFile(st->pipe_handle, buf->data, (DWORD)buf->used,
-                       NULL, &op->overlapped);
+  BOOL ok = WriteFile(st->pipe_handle, buf->data, (DWORD)buf->used, NULL, &op->overlapped);
   if (!ok) {
     DWORD err = GetLastError();
     if (err != ERROR_IO_PENDING) {
@@ -321,8 +342,8 @@ static int pw_connect_pipe(turbo_stream_t *s, const char *name) {
   if (!st) return TURBO_EINVAL;
 
   /* Open the named pipe */
-  st->pipe_handle = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                                 OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+  st->pipe_handle = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                                FILE_FLAG_OVERLAPPED, NULL);
   if (st->pipe_handle == INVALID_HANDLE_VALUE) {
     int err = -(int)GetLastError();
     if (s->on_connect) s->on_connect(s, err, NULL);
@@ -344,7 +365,8 @@ static int pw_connect_pipe(turbo_stream_t *s, const char *name) {
 }
 
 static int pw_connect(turbo_stream_t *s, const struct sockaddr *a) {
-  UNUSED(s); UNUSED(a);
+  UNUSED(s);
+  UNUSED(a);
   return TURBO_EINVAL; /* Pipe doesn't do TCP connect */
 }
 
@@ -359,9 +381,7 @@ static int pw_send(turbo_stream_t *s, const char *data, size_t len) {
   return pipe_submit_write(s);
 }
 
-static int pw_flush(turbo_stream_t *s) {
-  return pipe_submit_write(s);
-}
+static int pw_flush(turbo_stream_t *s) { return pipe_submit_write(s); }
 
 static int pw_recv_start(turbo_stream_t *s) {
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
@@ -401,12 +421,14 @@ static void pw_close(turbo_stream_t *s) {
 }
 
 static int pw_get_local(turbo_stream_t *s, struct sockaddr_storage *a) {
-  UNUSED(s); UNUSED(a);
+  UNUSED(s);
+  UNUSED(a);
   return TURBO_ENOTSUP; /* Pipes don't have sockaddr */
 }
 
 static int pw_get_peer(turbo_stream_t *s, struct sockaddr_storage *a) {
-  UNUSED(s); UNUSED(a);
+  UNUSED(s);
+  UNUSED(a);
   return TURBO_ENOTSUP;
 }
 
@@ -414,19 +436,62 @@ static int pw_get_peer(turbo_stream_t *s, struct sockaddr_storage *a) {
 
 typedef struct pipe_listener_state_s {
   turbo_stream_listener_t *listener;
-  coro_context_t          *ctx;
-  char                    *pipe_name;
-  HANDLE                   cancel_event; /* signalled on shutdown to unblock */
-  HANDLE                   worker_thread;
-  volatile LONG            stopping;
+  coro_context_t *ctx;
+  char *pipe_name;
+  HANDLE cancel_event; /* signalled on shutdown to unblock */
+  HANDLE worker_thread;
+  volatile LONG stopping;
 } pipe_listener_state_t;
 
 typedef struct pipe_accept_notify_s {
   pipe_listener_state_t *lst;
-  HANDLE                 pipe_handle; /* connected, NOT yet IOCP-associated */
+  HANDLE pipe_handle; /* connected, NOT yet IOCP-associated */
 } pipe_accept_notify_t;
 
 static void listener_tick(void *arg1, void *arg2);
+static void listener_fail_tick(void *arg1, void *arg2);
+
+static void pipe_listener_discard_client(HANDLE hdl, turbo_stream_t *client, pipe_state_t *st) {
+  if (st) {
+    if (st->completion_port) {
+      CloseHandle(st->completion_port);
+      st->completion_port = NULL;
+    }
+    if (st->queue_lock_initialized) {
+      DeleteCriticalSection(&st->queue_lock);
+      st->queue_lock_initialized = 0;
+    }
+    free(st);
+  }
+
+  if (client) {
+    if (client->recv_buf[0]) mem_unref(client->recv_buf[0]);
+    if (client->recv_buf[1]) mem_unref(client->recv_buf[1]);
+    free(client);
+  }
+
+  if (hdl && hdl != INVALID_HANDLE_VALUE) {
+    CloseHandle(hdl);
+  }
+}
+
+static void listener_fail_tick(void *arg1, void *arg2) {
+  pipe_listener_state_t *lst = (pipe_listener_state_t *)arg1;
+  const char *reason = (const char *)arg2;
+  turbo_stream_listener_t *listener;
+
+  if (!lst || !lst->listener) {
+    return;
+  }
+
+  listener = lst->listener;
+  if (listener->backend_data != lst) {
+    return;
+  }
+
+  TLOG_ERROR("pipe listener accept failed: {}", reason ? reason : "unknown error");
+  turbo_stream_listener_close(listener);
+}
 
 /**
  * @brief Accept loop: overlapped ConnectNamedPipe with a cancel event.
@@ -440,11 +505,9 @@ static DWORD WINAPI listener_worker(LPVOID arg) {
   while (!InterlockedCompareExchange(&lst->stopping, 0, 0)) {
     /* FILE_FLAG_OVERLAPPED required for later async IO on accepted handle.
        Do NOT associate with any IOCP here. */
-    HANDLE pipe_hdl = CreateNamedPipeA(
-        lst->pipe_name,
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, NULL);
+    HANDLE pipe_hdl = CreateNamedPipeA(lst->pipe_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                       PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, NULL);
     if (pipe_hdl == INVALID_HANDLE_VALUE) break;
 
     /* Overlapped ConnectNamedPipe with hEvent = cancel_event so we can
@@ -452,46 +515,62 @@ static DWORD WINAPI listener_worker(LPVOID arg) {
     OVERLAPPED ov = {0};
     ov.hEvent = lst->cancel_event;
 
-    BOOL ok  = ConnectNamedPipe(pipe_hdl, &ov);
+    BOOL ok = ConnectNamedPipe(pipe_hdl, &ov);
     DWORD err = GetLastError();
 
     if (!ok) {
       if (err == ERROR_IO_PENDING) {
         DWORD w = WaitForSingleObject(lst->cancel_event, INFINITE);
         if (w != WAIT_OBJECT_0) {
-          CancelIo(pipe_hdl); CloseHandle(pipe_hdl); break;
+          CancelIo(pipe_hdl);
+          CloseHandle(pipe_hdl);
+          break;
         }
         DWORD bytes = 0;
         BOOL got = GetOverlappedResult(pipe_hdl, &ov, &bytes, FALSE);
         if (!got || InterlockedCompareExchange(&lst->stopping, 0, 0)) {
-          CancelIo(pipe_hdl); CloseHandle(pipe_hdl); break;
+          CancelIo(pipe_hdl);
+          CloseHandle(pipe_hdl);
+          break;
         }
         ResetEvent(lst->cancel_event);
       } else if (err == ERROR_PIPE_CONNECTED) {
         /* client arrived before ConnectNamedPipe — ok */
       } else {
-        CloseHandle(pipe_hdl); continue;
+        CloseHandle(pipe_hdl);
+        continue;
       }
     }
 
     if (InterlockedCompareExchange(&lst->stopping, 0, 0)) {
-      CloseHandle(pipe_hdl); break;
+      CloseHandle(pipe_hdl);
+      break;
     }
 
-    pipe_accept_notify_t *note =
-        (pipe_accept_notify_t *)malloc(sizeof(pipe_accept_notify_t));
+    pipe_accept_notify_t *note = (pipe_accept_notify_t *)malloc(sizeof(pipe_accept_notify_t));
     if (note) {
-      note->lst         = lst;
+      note->lst = lst;
       note->pipe_handle = pipe_hdl;
-      coro_post(lst->ctx, listener_tick, note, NULL);
+      if (pipe_post_wait(lst->ctx, listener_tick, note, NULL, &lst->stopping) != 0) {
+        CloseHandle(pipe_hdl);
+        free(note);
+        if (!InterlockedCompareExchange(&lst->stopping, 0, 0)) {
+          (void)pipe_post_wait(lst->ctx, listener_fail_tick, lst,
+                               "failed to post named-pipe accept", &lst->stopping);
+        }
+        break;
+      }
     } else {
       CloseHandle(pipe_hdl);
+      if (!InterlockedCompareExchange(&lst->stopping, 0, 0)) {
+        (void)pipe_post_wait(lst->ctx, listener_fail_tick, lst,
+                             "failed to allocate named-pipe accept note", &lst->stopping);
+      }
+      break;
     }
   }
   return 0;
 }
-
-
 
 /**
  * @brief Called on the coro event-loop thread when a client connected.
@@ -501,9 +580,9 @@ static DWORD WINAPI listener_worker(LPVOID arg) {
  */
 static void listener_tick(void *arg1, void *arg2) {
   (void)arg2;
-  pipe_accept_notify_t  *note = (pipe_accept_notify_t *)arg1;
-  pipe_listener_state_t *lst  = note->lst;
-  HANDLE                 hdl  = note->pipe_handle;
+  pipe_accept_notify_t *note = (pipe_accept_notify_t *)arg1;
+  pipe_listener_state_t *lst = note->lst;
+  HANDLE hdl = note->pipe_handle;
   free(note);
 
   turbo_stream_listener_t *listener = lst->listener;
@@ -514,36 +593,36 @@ static void listener_tick(void *arg1, void *arg2) {
   }
 
   /* Allocate a new stream for the accepted connection */
-  turbo_stream_t *client =
-      (turbo_stream_t *)calloc(1, sizeof(turbo_stream_t));
-  if (!client) { CloseHandle(hdl); return; }
+  turbo_stream_t *client = (turbo_stream_t *)calloc(1, sizeof(turbo_stream_t));
+  if (!client) {
+    pipe_listener_discard_client(hdl, NULL, NULL);
+    listener_fail_tick(lst, "failed to allocate accepted named-pipe stream");
+    return;
+  }
 
-  const turbo_stream_backend_ops_t *ops =
-      turbo_stream_resolve_backend(lst->ctx, TURBO_STREAM_PIPE);
+  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(lst->ctx, TURBO_STREAM_PIPE);
   if (!ops) {
-    free(client);
-    CloseHandle(hdl);
+    pipe_listener_discard_client(hdl, client, NULL);
+    listener_fail_tick(lst, "failed to resolve named-pipe backend");
     return;
   }
 
   if (turbo_stream_init_common(client, lst->ctx, TURBO_STREAM_PIPE, ops) != 0) {
-    free(client);
-    CloseHandle(hdl);
+    pipe_listener_discard_client(hdl, client, NULL);
+    listener_fail_tick(lst, "failed to initialize accepted named-pipe stream");
     return;
   }
 
   /* Manually init backend state (like pw_init) but skip creating new thread/IOCP */
   pipe_state_t *st = (pipe_state_t *)calloc(1, sizeof(pipe_state_t));
   if (!st) {
-    mem_unref(client->recv_buf[0]);
-    mem_unref(client->recv_buf[1]);
-    free(client);
-    CloseHandle(hdl);
+    pipe_listener_discard_client(hdl, client, NULL);
+    listener_fail_tick(lst, "failed to allocate accepted named-pipe state");
     return;
   }
 
   st->stream = client;
-  st->ctx    = lst->ctx;
+  st->ctx = lst->ctx;
   st->pipe_handle = hdl;
 
   InitializeCriticalSection(&st->queue_lock);
@@ -551,42 +630,28 @@ static void listener_tick(void *arg1, void *arg2) {
 
   st->completion_port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
   if (!st->completion_port) {
-    DeleteCriticalSection(&st->queue_lock);
-    free(st);
-    mem_unref(client->recv_buf[0]);
-    mem_unref(client->recv_buf[1]);
-    free(client);
-    CloseHandle(hdl);
+    pipe_listener_discard_client(hdl, client, st);
+    listener_fail_tick(lst, "failed to create named-pipe completion port");
     return;
   }
 
   /* Associate the connected handle with the stream's IOCP */
   if (!CreateIoCompletionPort(hdl, st->completion_port, 0, 0)) {
-    CloseHandle(st->completion_port);
-    DeleteCriticalSection(&st->queue_lock);
-    free(st);
-    mem_unref(client->recv_buf[0]);
-    mem_unref(client->recv_buf[1]);
-    free(client);
-    CloseHandle(hdl);
+    pipe_listener_discard_client(hdl, client, st);
+    listener_fail_tick(lst, "failed to attach accepted named pipe to IOCP");
     return;
   }
 
   st->worker_thread = CreateThread(NULL, 0, pipe_worker, st, 0, NULL);
   if (!st->worker_thread) {
-    CloseHandle(st->completion_port);
-    DeleteCriticalSection(&st->queue_lock);
-    free(st);
-    mem_unref(client->recv_buf[0]);
-    mem_unref(client->recv_buf[1]);
-    free(client);
-    CloseHandle(hdl);
+    pipe_listener_discard_client(hdl, client, st);
+    listener_fail_tick(lst, "failed to start accepted named-pipe worker");
     return;
   }
 
   client->backend_data = st;
-  client->connected    = 1;
-  client->listener     = listener;
+  client->connected = 1;
+  client->listener = listener;
   listener->active_connections++;
 
   if (listener->on_accept) {
@@ -595,7 +660,8 @@ static void listener_tick(void *arg1, void *arg2) {
 }
 
 static int pw_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
-  UNUSED(l); UNUSED(a);
+  UNUSED(l);
+  UNUSED(a);
   return TURBO_EINVAL;
 }
 
@@ -611,32 +677,44 @@ static int pw_bind_pipe(turbo_stream_listener_t *l, const char *name) {
 
 static int pw_listen(turbo_stream_listener_t *l, int backlog) {
   UNUSED(backlog);
+  char *stored_name;
   if (!l || !l->backend_data) return TURBO_EINVAL;
 
-  const char *pipe_name = (const char *)l->backend_data;
+  stored_name = (char *)l->backend_data;
+  const char *pipe_name = stored_name;
 
-  pipe_listener_state_t *lst =
-      (pipe_listener_state_t *)calloc(1, sizeof(pipe_listener_state_t));
-  if (!lst) return TURBO_ENOMEM;
+  pipe_listener_state_t *lst = (pipe_listener_state_t *)calloc(1, sizeof(pipe_listener_state_t));
+  if (!lst) {
+    free(stored_name);
+    l->backend_data = NULL;
+    return TURBO_ENOMEM;
+  }
 
   size_t len = strlen(pipe_name);
   lst->pipe_name = (char *)calloc(1, len + 1);
-  if (!lst->pipe_name) { free(lst); return TURBO_ENOMEM; }
+  if (!lst->pipe_name) {
+    free(lst);
+    free(stored_name);
+    l->backend_data = NULL;
+    return TURBO_ENOMEM;
+  }
   memcpy(lst->pipe_name, pipe_name, len);
 
   lst->listener = l;
-  lst->ctx      = l->ctx;
+  lst->ctx = l->ctx;
 
   /* cancel_event: auto-reset, initially non-signalled */
   lst->cancel_event = CreateEventA(NULL, FALSE, FALSE, NULL);
   if (!lst->cancel_event) {
     free(lst->pipe_name);
     free(lst);
+    free(stored_name);
+    l->backend_data = NULL;
     return TURBO_ENOMEM;
   }
 
   /* Replace the plain name pointer stored by bind_pipe with our full state */
-  free(l->backend_data);
+  free(stored_name);
   l->backend_data = lst;
 
   lst->worker_thread = CreateThread(NULL, 0, listener_worker, lst, 0, NULL);
@@ -681,18 +759,18 @@ static void pw_listener_close(turbo_stream_listener_t *l) {
 }
 
 const turbo_stream_backend_ops_t turbo_stream_pipe_win_ops = {
-  .init         = pw_init,
-  .connect      = pw_connect,
-  .connect_pipe = pw_connect_pipe,
-  .send         = pw_send,
-  .flush        = pw_flush,
-  .recv_start   = pw_recv_start,
-  .recv_stop    = pw_recv_stop,
-  .close        = pw_close,
-  .get_local_addr = pw_get_local,
-  .get_peer_addr  = pw_get_peer,
-  .bind          = pw_bind,
-  .bind_pipe     = pw_bind_pipe,
-  .listen        = pw_listen,
-  .listener_close = pw_listener_close,
+    .init = pw_init,
+    .connect = pw_connect,
+    .connect_pipe = pw_connect_pipe,
+    .send = pw_send,
+    .flush = pw_flush,
+    .recv_start = pw_recv_start,
+    .recv_stop = pw_recv_stop,
+    .close = pw_close,
+    .get_local_addr = pw_get_local,
+    .get_peer_addr = pw_get_peer,
+    .bind = pw_bind,
+    .bind_pipe = pw_bind_pipe,
+    .listen = pw_listen,
+    .listener_close = pw_listener_close,
 };

@@ -12,6 +12,7 @@
  */
 #include "turbo_mdns.h"
 #include "turbo_datagram.h"
+#include "turbo_datagram_internal.h"
 #include "turbo_coro_context.h"
 #include "tlog.h"
 #include "fmt.h"
@@ -44,9 +45,15 @@
 #define DNS_CLASS_IN    1
 #define DNS_CLASS_FLUSH 0x8000
 
+static int mdns_name_contains_service(const char *name, const char *service_type);
+static void mdns_extract_instance_name(char *full_name, const char *service_type,
+                                       char *instance, size_t instance_size);
+
 // =============================================================================
 // Context definition
 // =============================================================================
+
+typedef struct timeout_post_s timeout_post_t;
 
 struct mdns_ctx {
   coro_context_t   *ctx;         /* owning event-loop context */
@@ -54,19 +61,22 @@ struct mdns_ctx {
   struct sockaddr_in mcast_addr; /* 224.0.0.251:5353 */
   char hostname[MDNS_MAX_NAME_LEN];
   char local_ip[16];
-  char target_service[128];
+  char target_services[MDNS_MAX_SERVICES][MDNS_MAX_NAME_LEN];
+  size_t target_service_count;
 
   /* Discovery */
   mdns_discover_cb discover_callback;
   void            *discover_userdata;
-  /* Timer thread for discover timeout */
-  turbo_thread_t   timer_thread;
-  int              timer_thread_active;
+  turbo_thread_t   discover_thread;
+  int              discover_thread_active;
+  volatile int     discover_cancelled;
+  volatile int     discover_post_pending;
+  timeout_post_t      *discover_timeout_post;
   uint32_t         timer_ms;
 
   /* Publishing */
-  mdns_service_t   published_service;
-  int              is_publishing;
+  mdns_service_t   published_services[MDNS_MAX_SERVICES];
+  size_t           published_count;
 };
 
 // =============================================================================
@@ -210,6 +220,85 @@ static size_t build_ptr_response(uint8_t *buf, const mdns_service_t *service) {
   return pos;
 }
 
+static void mdns_normalize_service(mdns_ctx_t *ctx, mdns_service_t *dst,
+                                   const mdns_service_t *src) {
+  *dst = *src;
+  if (dst->ttl == 0) {
+    dst->ttl = 120;
+  }
+  if (dst->hostname[0] == '\0') {
+    strcpy(dst->hostname, ctx->hostname);
+  }
+  if (dst->ip[0] == '\0') {
+    strcpy(dst->ip, ctx->local_ip);
+  }
+}
+
+static int mdns_find_published_service(const mdns_ctx_t *ctx, const char *instance,
+                                       const char *service_type) {
+  size_t i;
+  if (!ctx || !instance || !service_type) return -1;
+
+  for (i = 0; i < ctx->published_count; i++) {
+    const mdns_service_t *service = &ctx->published_services[i];
+    if (strcmp(service->instance, instance) == 0 &&
+        strcmp(service->service_type, service_type) == 0) {
+      return (int)i;
+    }
+  }
+
+  return -1;
+}
+
+static int mdns_find_target_service(const mdns_ctx_t *ctx, const char *name) {
+  size_t i;
+  if (!ctx || !name) return -1;
+
+  for (i = 0; i < ctx->target_service_count; i++) {
+    if (mdns_name_contains_service(name, ctx->target_services[i])) {
+      return (int)i;
+    }
+  }
+
+  return -1;
+}
+
+static int mdns_send_service_packet(mdns_ctx_t *ctx, const mdns_service_t *service,
+                                    uint32_t ttl_override) {
+  uint8_t pkt[1024];
+  mdns_service_t outbound;
+  size_t len;
+
+  if (!ctx || !ctx->datagram || !service) return TURBO_EINVAL;
+
+  outbound = *service;
+  outbound.ttl = ttl_override;
+  len = build_ptr_response(pkt, &outbound);
+  return turbo_datagram_sendto(ctx->datagram,
+                               (const struct sockaddr *)&ctx->mcast_addr,
+                               (const char *)pkt, len);
+}
+
+static int mdns_service_matches_query(const mdns_service_t *service,
+                                      const char *query_name, uint16_t qtype) {
+  char our_service[MDNS_MAX_NAME_LEN];
+
+  if (!service || !query_name || qtype != DNS_TYPE_PTR) return 0;
+
+  fmt(our_service, sizeof(our_service), "{}.local", service->service_type);
+  return strcmp(query_name, our_service) == 0;
+}
+
+static void mdns_clear_discovery_targets(mdns_ctx_t *ctx) {
+  size_t i;
+  if (!ctx) return;
+
+  for (i = 0; i < MDNS_MAX_SERVICES; i++) {
+    ctx->target_services[i][0] = '\0';
+  }
+  ctx->target_service_count = 0;
+}
+
 // =============================================================================
 // Platform: primary IPv4 + hostname (no libuv)
 // =============================================================================
@@ -278,69 +367,106 @@ static void mdns_emit_discovery(mdns_ctx_t *ctx, mdns_service_t *service) {
     ctx->discover_callback(service, ctx->discover_userdata);
 }
 
-static void mdns_init_found_service(mdns_ctx_t *ctx, mdns_service_t *service) {
-  memset(service, 0, sizeof(*service));
-  fmt(service->service_type, sizeof(service->service_type),
-                 "{}", ctx->target_service);
+static mdns_service_t *mdns_get_found_service(mdns_service_t *services, size_t *count,
+                                              const char *instance,
+                                              const char *service_type) {
+  size_t i;
+  if (!services || !count || !instance || !service_type ||
+      instance[0] == '\0' || service_type[0] == '\0') {
+    return NULL;
+  }
+
+  for (i = 0; i < *count; i++) {
+    if (strcmp(services[i].instance, instance) == 0 &&
+        strcmp(services[i].service_type, service_type) == 0) {
+      return &services[i];
+    }
+  }
+
+  if (*count >= MDNS_MAX_SERVICES) {
+    return NULL;
+  }
+
+  memset(&services[*count], 0, sizeof(services[*count]));
+  strcpy(services[*count].instance, instance);
+  strcpy(services[*count].service_type, service_type);
+  strcpy(services[*count].hostname, "unknown");
+  strcpy(services[*count].ip, "0.0.0.0");
+  services[*count].ttl = 120;
+  return &services[(*count)++];
 }
 
-static void mdns_handle_ptr_record(mdns_ctx_t *ctx, mdns_service_t *service,
-                                   const uint8_t *packet, size_t len,
-                                   size_t offset, char *name) {
+static void mdns_handle_ptr_record(mdns_ctx_t *ctx, mdns_service_t *services,
+                                   size_t *service_count, const uint8_t *packet,
+                                   size_t len, size_t offset, char *name) {
   char ptr_target[MDNS_MAX_NAME_LEN];
+  char instance[MDNS_MAX_NAME_LEN];
+  mdns_service_t *service;
+  int target_index;
   decode_name(packet, len, offset, ptr_target, sizeof(ptr_target));
   TLOG_DEBUG("  PTR points to: {}", ptr_target);
 
-  if (!mdns_name_contains_service(name, ctx->target_service)) return;
-  mdns_extract_instance_name(ptr_target, ctx->target_service,
-                             service->instance, sizeof(service->instance));
-  if (service->instance[0] == '\0') return;
+  target_index = mdns_find_target_service(ctx, name);
+  if (target_index < 0) return;
 
-  fmt(service->hostname, sizeof(service->hostname), "{}", "unknown");
-  fmt(service->ip,       sizeof(service->ip),       "{}", "0.0.0.0");
-  service->port = 0;
-  service->ttl  = 120;
+  mdns_extract_instance_name(ptr_target, ctx->target_services[target_index],
+                             instance, sizeof(instance));
+  if (instance[0] == '\0') return;
+
+  service = mdns_get_found_service(services, service_count, instance,
+                                   ctx->target_services[target_index]);
+  if (!service) return;
   TLOG_DEBUG("  -> Found service instance: {}", service->instance);
-  mdns_emit_discovery(ctx, service);
 }
 
-static void mdns_handle_srv_record(mdns_ctx_t *ctx, mdns_service_t *service,
-                                   const uint8_t *packet, size_t len,
-                                   size_t offset, char *name) {
+static void mdns_handle_srv_record(mdns_ctx_t *ctx, mdns_service_t *services,
+                                   size_t *service_count, const uint8_t *packet,
+                                   size_t len, size_t offset, char *name) {
   char hostname[MDNS_MAX_NAME_LEN];
+  char instance[MDNS_MAX_NAME_LEN];
+  mdns_service_t *service;
+  int target_index;
   if (offset + 6 > len) return;
 
   decode_name(packet, len, offset + 6, hostname, sizeof(hostname));
-  service->port = mdns_read_u16(packet + offset + 4);
-  TLOG_DEBUG("  SRV: Port={}, Target={}", service->port, hostname);
+  TLOG_DEBUG("  SRV: Port={}, Target={}", mdns_read_u16(packet + offset + 4), hostname);
 
-  if (!mdns_name_contains_service(name, ctx->target_service)) return;
-  mdns_extract_instance_name(name, ctx->target_service,
-                             service->instance, sizeof(service->instance));
+  target_index = mdns_find_target_service(ctx, name);
+  if (target_index < 0) return;
+
+  mdns_extract_instance_name(name, ctx->target_services[target_index],
+                             instance, sizeof(instance));
+  if (instance[0] == '\0') return;
+
+  service = mdns_get_found_service(services, service_count, instance,
+                                   ctx->target_services[target_index]);
+  if (!service) return;
+
+  service->port = mdns_read_u16(packet + offset + 4);
   fmt(service->hostname, sizeof(service->hostname), "{}", hostname);
-  fmt(service->ip,       sizeof(service->ip),       "{}", "0.0.0.0");
   service->ttl = 120;
   TLOG_DEBUG("  -> Found SRV record for: {}:{}", hostname, service->port);
-  mdns_emit_discovery(ctx, service);
 }
 
-static void mdns_handle_a_record(mdns_ctx_t *ctx, mdns_service_t *service,
-                                  const uint8_t *packet, size_t offset,
-                                  char *name) {
+static void mdns_handle_a_record(mdns_ctx_t *ctx, mdns_service_t *services,
+                                 size_t service_count, const uint8_t *packet,
+                                 size_t offset, char *name) {
   char ip_str[16];
+  size_t i;
+  (void)ctx;
   fmt(ip_str, sizeof(ip_str), "{}.{}.{}.{}",
                  packet[offset], packet[offset+1],
                  packet[offset+2], packet[offset+3]);
   TLOG_DEBUG("  A record: {} -> {}", name, ip_str);
 
-  if (service->hostname[0] == '\0' ||
-      !tstr_v_contains(tstr_v_from_cstr(name), tstr_v_from_cstr(service->hostname)))
-    return;
-
-  fmt(service->ip, sizeof(service->ip), "{}", ip_str);
-  service->ttl = 120;
-  TLOG_DEBUG("  -> Found A record: {}", ip_str);
-  mdns_emit_discovery(ctx, service);
+  for (i = 0; i < service_count; i++) {
+    if (services[i].hostname[0] != '\0' &&
+        tstr_v_contains(tstr_v_from_cstr(name), tstr_v_from_cstr(services[i].hostname))) {
+      fmt(services[i].ip, sizeof(services[i].ip), "{}", ip_str);
+      services[i].ttl = 120;
+      TLOG_DEBUG("  -> Found A record for {}: {}", services[i].instance, ip_str);
+    }
+  }
 }
 
 static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
@@ -363,8 +489,9 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
     offset += 4;
   }
 
-  mdns_service_t found_service;
-  mdns_init_found_service(ctx, &found_service);
+  mdns_service_t found_services[MDNS_MAX_SERVICES];
+  size_t found_count = 0;
+  memset(found_services, 0, sizeof(found_services));
 
   for (int i = 0; i < (int)(answers + authority + additional); i++) {
     if (offset >= len) break;
@@ -380,13 +507,17 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
     if (offset + rdlen > len) break;
 
     if (type == DNS_TYPE_PTR)
-      mdns_handle_ptr_record(ctx, &found_service, packet, len, offset, name);
+      mdns_handle_ptr_record(ctx, found_services, &found_count, packet, len, offset, name);
     else if (type == DNS_TYPE_SRV)
-      mdns_handle_srv_record(ctx, &found_service, packet, len, offset, name);
+      mdns_handle_srv_record(ctx, found_services, &found_count, packet, len, offset, name);
     else if (type == DNS_TYPE_A && rdlen == 4)
-      mdns_handle_a_record(ctx, &found_service, packet, offset, name);
+      mdns_handle_a_record(ctx, found_services, found_count, packet, offset, name);
 
     offset += rdlen;
+  }
+
+  for (size_t i = 0; i < found_count; i++) {
+    mdns_emit_discovery(ctx, &found_services[i]);
   }
 }
 
@@ -395,50 +526,62 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
 // =============================================================================
 
 static int on_mdns_recv(void *handle, const mem_slice_t *slice, void *peer) {
-  (void)handle;
   (void)peer;
-  mdns_ctx_t *ctx = (mdns_ctx_t *)turbo_datagram_get_user_data((turbo_datagram_t *)handle);
-  if (!ctx || !slice || slice->length == 0) return 0;
+  turbo_datagram_t *dg = (turbo_datagram_t *)handle;
+  mdns_ctx_t *ctx = (mdns_ctx_t *)turbo_datagram_get_user_data(dg);
+  if (!ctx) return 0;
+  if (!slice) {
+    int status = (dg->status != 0) ? dg->status : TURBO_EOF;
+    TLOG_ERROR("mdns: recv failed: {:s}", turbo_strerror(status));
+    ctx->discover_callback = NULL;
+    ctx->discover_userdata = NULL;
+    mdns_clear_discovery_targets(ctx);
+    ctx->published_count = 0;
+    if (ctx->discover_thread_active) {
+      ctx->discover_cancelled = 1;
+    }
+    turbo_datagram_recv_stop(ctx->datagram);
+    return 0;
+  }
+  if (slice->length == 0) return 0;
 
   TLOG_DEBUG("Received {} bytes from network", slice->length);
 
-  if (ctx->discover_callback)
+  if (ctx->discover_callback && ctx->target_service_count > 0)
     parse_response(ctx, (const uint8_t *)slice->data, slice->length);
 
   /* Handle queries when publishing */
-  if (ctx->is_publishing && slice->length >= 12) {
+  if (ctx->published_count > 0 && slice->length >= 12) {
     const uint8_t *pkt = (const uint8_t *)slice->data;
     uint16_t flags_field = mdns_read_u16(pkt + 2);
     if ((flags_field & 0x8000) == 0) {
       uint16_t questions   = mdns_read_u16(pkt + 4);
       size_t   query_offset = 12;
-      int      should_respond = 0;
-      char     our_service[MDNS_MAX_NAME_LEN];
-
-      fmt(our_service, sizeof(our_service), "{}.local",
-                     ctx->published_service.service_type);
+      int should_respond[MDNS_MAX_SERVICES] = {0};
 
       for (int q = 0; q < (int)questions; q++) {
         char query_name[MDNS_MAX_NAME_LEN];
+        size_t i;
         query_offset = decode_name(pkt, slice->length, query_offset,
                                    query_name, sizeof(query_name));
         if (query_offset == 0 || query_offset + 4 > slice->length) break;
 
         uint16_t qtype = mdns_read_u16(pkt + query_offset);
         TLOG_DEBUG("Query for: {} (type {})", query_name, qtype);
-        if (qtype == DNS_TYPE_PTR && strcmp(query_name, our_service) == 0) {
-          should_respond = 1;
-          TLOG_DEBUG("  -> Matches our service type!");
+        for (i = 0; i < ctx->published_count; i++) {
+          if (mdns_service_matches_query(&ctx->published_services[i], query_name, qtype)) {
+            should_respond[i] = 1;
+            TLOG_DEBUG("  -> Matches our service type!");
+          }
         }
         query_offset += 4;
       }
 
-      if (should_respond) {
-        uint8_t pkt_buf[1024];
-        size_t  pkt_len = build_ptr_response(pkt_buf, &ctx->published_service);
-        turbo_datagram_sendto(ctx->datagram,
-                              (const struct sockaddr *)&ctx->mcast_addr,
-                              (const char *)pkt_buf, pkt_len);
+      for (size_t i = 0; i < ctx->published_count; i++) {
+        if (should_respond[i]) {
+          mdns_send_service_packet(ctx, &ctx->published_services[i],
+                                   ctx->published_services[i].ttl);
+        }
       }
     }
   }
@@ -451,20 +594,67 @@ static int on_mdns_recv(void *handle, const mem_slice_t *slice, void *peer) {
 // =============================================================================
 
 typedef struct { mdns_ctx_t *ctx; uint32_t ms; } timer_arg_t;
+struct timeout_post_s { mdns_ctx_t *ctx; };
 
 static void timer_expire_post(void *arg1, void *arg2) {
   (void)arg2;
-  mdns_ctx_t *ctx = (mdns_ctx_t *)arg1;
+  timeout_post_t *post = (timeout_post_t *)arg1;
+  mdns_ctx_t *ctx;
+  if (!post) return;
+
+  ctx = post->ctx;
+  if (!ctx) {
+    free(post);
+    return;
+  }
+
   ctx->discover_callback = NULL;
   ctx->discover_userdata = NULL;
+  ctx->discover_cancelled = 0;
+  ctx->discover_post_pending = 0;
+  ctx->discover_timeout_post = NULL;
+  mdns_clear_discovery_targets(ctx);
+  free(post);
 }
 
 static void discover_timer_thread(void *arg) {
   timer_arg_t *ta = (timer_arg_t *)arg;
-  turbo_sleep_ms(ta->ms);
-  if (ta->ctx->discover_callback && ta->ctx->ctx)
-    coro_post(ta->ctx->ctx, timer_expire_post, ta->ctx, NULL);
-  ta->ctx->timer_thread_active = 0;
+  uint32_t waited = 0;
+  uint32_t step = 10;
+
+  while (waited < ta->ms && !ta->ctx->discover_cancelled) {
+    uint32_t sleep_ms = step;
+    if (sleep_ms > ta->ms - waited) {
+      sleep_ms = ta->ms - waited;
+    }
+    turbo_sleep_ms(sleep_ms);
+    waited += sleep_ms;
+  }
+
+  if (!ta->ctx->discover_cancelled && ta->ctx->discover_callback && ta->ctx->ctx) {
+    timeout_post_t *post = (timeout_post_t *)calloc(1, sizeof(*post));
+    if (!post) {
+      TLOG_ERROR("mdns: discover timeout alloc failed");
+      ta->ctx->discover_callback = NULL;
+      ta->ctx->discover_userdata = NULL;
+      ta->ctx->discover_cancelled = 0;
+      mdns_clear_discovery_targets(ta->ctx);
+    } else {
+      ta->ctx->discover_post_pending = 1;
+      ta->ctx->discover_timeout_post = post;
+      post->ctx = ta->ctx;
+      int rc = coro_post(ta->ctx->ctx, timer_expire_post, post, NULL);
+      if (rc != 0) {
+        ta->ctx->discover_post_pending = 0;
+        ta->ctx->discover_timeout_post = NULL;
+        TLOG_ERROR("mdns: discover timeout post failed");
+        timer_expire_post(post, NULL);
+      }
+    }
+  }
+
+  ta->ctx->discover_thread_active = 0;
+  ta->ctx->discover_cancelled = 0;
   free(ta);
 }
 
@@ -526,93 +716,199 @@ mdns_ctx_t *mdns_create(void *loop) {
 }
 
 void mdns_destroy(mdns_ctx_t *ctx) {
+  size_t i;
   if (!ctx) return;
 
-  /* Send goodbye packet */
-  if (ctx->is_publishing) {
-    uint8_t pkt[1024];
-    mdns_service_t goodbye = ctx->published_service;
-    goodbye.ttl = 0;
-    size_t len = build_ptr_response(pkt, &goodbye);
-    turbo_datagram_sendto(ctx->datagram,
-                          (const struct sockaddr *)&ctx->mcast_addr,
-                          (const char *)pkt, len);
+  ctx->discover_callback = NULL;
+  ctx->discover_userdata = NULL;
+  mdns_clear_discovery_targets(ctx);
+
+  if (ctx->discover_thread_active) {
+    ctx->discover_cancelled = 1;
+    turbo_thread_join(&ctx->discover_thread);
+    ctx->discover_thread_active = 0;
+    ctx->discover_cancelled = 0;
   }
 
+  if (ctx->discover_timeout_post) {
+    ctx->discover_timeout_post->ctx = NULL;
+    ctx->discover_timeout_post = NULL;
+    ctx->discover_post_pending = 0;
+  }
+
+  if (!ctx->datagram) {
+    free(ctx);
+    return;
+  }
+
+  /* Send goodbye packet */
+  for (i = 0; i < ctx->published_count; i++) {
+    (void)mdns_send_service_packet(ctx, &ctx->published_services[i], 0);
+  }
+  ctx->published_count = 0;
+
+  turbo_datagram_set_user_data(ctx->datagram, NULL);
   turbo_datagram_recv_stop(ctx->datagram);
   turbo_datagram_leave_multicast(ctx->datagram, MDNS_MCAST_ADDR, NULL);
-  turbo_datagram_close(ctx->datagram);
-  /* datagram is heap-allocated by turbo_datagram_create; destroy frees it */
+  turbo_datagram_destroy(ctx->datagram);
+  ctx->datagram = NULL;
   free(ctx);
 }
 
 int mdns_publish(mdns_ctx_t *ctx, const mdns_service_t *service) {
-  if (!ctx || !service) return TURBO_EINVAL;
+  return mdns_publish_many(ctx, service, service ? 1 : 0);
+}
 
-  ctx->published_service = *service;
-  if (ctx->published_service.ttl == 0)
-    ctx->published_service.ttl = 120;
-  if (strlen(ctx->published_service.hostname) == 0)
-    strcpy(ctx->published_service.hostname, ctx->hostname);
-  if (strlen(ctx->published_service.ip) == 0)
-    strcpy(ctx->published_service.ip, ctx->local_ip);
+int mdns_publish_many(mdns_ctx_t *ctx, const mdns_service_t *services, size_t count) {
+  size_t i;
+  int rc;
+  if (!ctx) return TURBO_EINVAL;
+  if (!services || count == 0) return TURBO_EINVAL;
 
-  ctx->is_publishing = 1;
+  for (i = 0; i < count; i++) {
+    mdns_service_t normalized;
+    int index;
 
-  uint8_t pkt[1024];
-  size_t  len = build_ptr_response(pkt, &ctx->published_service);
-  return turbo_datagram_sendto(ctx->datagram,
-                               (const struct sockaddr *)&ctx->mcast_addr,
-                               (const char *)pkt, len);
+    if (services[i].instance[0] == '\0' || services[i].service_type[0] == '\0') {
+      return TURBO_EINVAL;
+    }
+
+    index = mdns_find_published_service(ctx, services[i].instance, services[i].service_type);
+    if (index < 0) {
+      if (ctx->published_count >= MDNS_MAX_SERVICES) {
+        return TURBO_ENOBUFS;
+      }
+      index = (int)ctx->published_count++;
+    }
+
+    mdns_normalize_service(ctx, &normalized, &services[i]);
+    ctx->published_services[index] = normalized;
+
+    rc = mdns_send_service_packet(ctx, &ctx->published_services[index],
+                                  ctx->published_services[index].ttl);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+
+  return 0;
 }
 
 int mdns_unpublish(mdns_ctx_t *ctx, const char *instance, const char *service_type) {
-  (void)instance;
-  (void)service_type;
-  if (!ctx || !ctx->is_publishing) return TURBO_EINVAL;
+  size_t index;
+  if (!ctx || !instance || !service_type || ctx->published_count == 0) return TURBO_EINVAL;
 
-  ctx->is_publishing = 0;
-  mdns_service_t goodbye = ctx->published_service;
-  goodbye.ttl = 0;
-  uint8_t pkt[1024];
-  size_t  len = build_ptr_response(pkt, &goodbye);
-  return turbo_datagram_sendto(ctx->datagram,
-                               (const struct sockaddr *)&ctx->mcast_addr,
-                               (const char *)pkt, len);
+  index = (size_t)mdns_find_published_service(ctx, instance, service_type);
+  if (index >= ctx->published_count) return TURBO_ENOENT;
+
+  (void)mdns_send_service_packet(ctx, &ctx->published_services[index], 0);
+  if (index + 1 < ctx->published_count) {
+    memmove(&ctx->published_services[index], &ctx->published_services[index + 1],
+            (ctx->published_count - index - 1) * sizeof(ctx->published_services[0]));
+  }
+  ctx->published_count--;
+  return 0;
+}
+
+int mdns_unpublish_all(mdns_ctx_t *ctx) {
+  size_t i;
+  if (!ctx) return TURBO_EINVAL;
+
+  for (i = 0; i < ctx->published_count; i++) {
+    (void)mdns_send_service_packet(ctx, &ctx->published_services[i], 0);
+  }
+  ctx->published_count = 0;
+  return 0;
 }
 
 int mdns_discover(mdns_ctx_t *ctx, const char *service_type,
                   mdns_discover_cb callback, void *userdata,
                   uint32_t timeout_ms) {
-  if (!ctx || !service_type || !callback) return TURBO_EINVAL;
+  const char *services[1];
+  if (!service_type) return TURBO_EINVAL;
+  services[0] = service_type;
+  return mdns_discover_many(ctx, services, 1, callback, userdata, timeout_ms);
+}
 
-  strcpy(ctx->target_service, service_type);
+int mdns_discover_many(mdns_ctx_t *ctx, const char *const *service_types,
+                       size_t count, mdns_discover_cb callback, void *userdata,
+                       uint32_t timeout_ms) {
+  int rc;
+  size_t i;
+
+  if (!ctx || !service_types || count == 0 || !callback) return TURBO_EINVAL;
+
+  if (timeout_ms > 0) {
+    if (ctx->discover_thread_active) {
+      ctx->discover_cancelled = 1;
+      turbo_thread_join(&ctx->discover_thread);
+      ctx->discover_thread_active = 0;
+    }
+    ctx->discover_cancelled = 0;
+  } else if (ctx->discover_thread_active) {
+    ctx->discover_cancelled = 1;
+    turbo_thread_join(&ctx->discover_thread);
+    ctx->discover_thread_active = 0;
+    ctx->discover_cancelled = 0;
+  }
+
+  if (ctx->discover_timeout_post) {
+    ctx->discover_timeout_post->ctx = NULL;
+    ctx->discover_timeout_post = NULL;
+    ctx->discover_post_pending = 0;
+  }
+
+  mdns_clear_discovery_targets(ctx);
+  if (count > MDNS_MAX_SERVICES) return TURBO_ENOBUFS;
+  for (i = 0; i < count; i++) {
+    if (!service_types[i] || service_types[i][0] == '\0' ||
+        strlen(service_types[i]) >= MDNS_MAX_NAME_LEN) {
+      mdns_clear_discovery_targets(ctx);
+      return TURBO_EINVAL;
+    }
+    strcpy(ctx->target_services[i], service_types[i]);
+  }
+  ctx->target_service_count = count;
   ctx->discover_callback = callback;
   ctx->discover_userdata = userdata;
+  ctx->timer_ms = timeout_ms;
 
   /* Send PTR query */
-  uint8_t query[512];
-  char    query_name[MDNS_MAX_NAME_LEN];
-  fmt(query_name, sizeof(query_name), "{}.local", service_type);
-  size_t len = build_query(query, query_name, DNS_TYPE_PTR);
-  int rc = turbo_datagram_sendto(ctx->datagram,
-                                  (const struct sockaddr *)&ctx->mcast_addr,
-                                  (const char *)query, len);
-  if (rc != 0) return rc;
+  for (i = 0; i < count; i++) {
+    uint8_t query[512];
+    char    query_name[MDNS_MAX_NAME_LEN];
+    size_t len;
 
-  /* Start timeout in a tiny background thread */
-  if (timeout_ms > 0 && ctx->ctx) {
-    timer_arg_t *ta = malloc(sizeof(*ta));
-    if (ta) {
-      ta->ctx = ctx;
-      ta->ms  = timeout_ms;
-      ctx->timer_thread_active = 1;
-      if (turbo_thread_create(&ctx->timer_thread, discover_timer_thread, ta) != 0) {
-        free(ta);
-        ctx->timer_thread_active = 0;
-      } else {
-        turbo_thread_destroy(&ctx->timer_thread);
-      }
+    fmt(query_name, sizeof(query_name), "{}.local", service_types[i]);
+    len = build_query(query, query_name, DNS_TYPE_PTR);
+    rc = turbo_datagram_sendto(ctx->datagram,
+                               (const struct sockaddr *)&ctx->mcast_addr,
+                               (const char *)query, len);
+    if (rc != 0) {
+      ctx->discover_callback = NULL;
+      ctx->discover_userdata = NULL;
+      mdns_clear_discovery_targets(ctx);
+      return rc;
+    }
+  }
+
+  if (timeout_ms > 0) {
+    timer_arg_t *ta = (timer_arg_t *)malloc(sizeof(*ta));
+    if (!ta) {
+      ctx->discover_callback = NULL;
+      ctx->discover_userdata = NULL;
+      return TURBO_ENOMEM;
+    }
+    ta->ctx = ctx;
+    ta->ms = timeout_ms;
+    ctx->discover_thread_active = 1;
+    rc = turbo_thread_create(&ctx->discover_thread, discover_timer_thread, ta);
+    if (rc != 0) {
+      ctx->discover_thread_active = 0;
+      ctx->discover_callback = NULL;
+      ctx->discover_userdata = NULL;
+      free(ta);
+      return rc;
     }
   }
 

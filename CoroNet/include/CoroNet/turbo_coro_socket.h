@@ -125,6 +125,19 @@ CXX_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host, in
                                      const char *path, int is_tls);
 
 /**
+ * @brief Connect a WebSocket with an optional subprotocol.
+ * @param socket       Socket created with CORO_SOCKET_TCP_V4 or CORO_SOCKET_TCP_V6.
+ * @param host         Remote host.
+ * @param port         Remote port.
+ * @param path         WebSocket path (e.g. "/chat").
+ * @param is_tls       1 for wss://, 0 for ws://.
+ * @param subprotocol  Optional Sec-WebSocket-Protocol value, or NULL.
+ */
+CXX_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host, int port,
+                                        const char *path, int is_tls,
+                                        const char *subprotocol);
+
+/**
  * @brief Send data through the socket.
  */
 CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);

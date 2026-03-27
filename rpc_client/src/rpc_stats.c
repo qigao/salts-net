@@ -336,28 +336,38 @@ size_t rpc_stats_to_json(const rpc_stats_t *stats, char *buffer, size_t buffer_s
   rpc_stats_snapshot_t snapshot;
   rpc_stats_get_snapshot(stats, &snapshot);
 
-  return fmt(
-      buffer, buffer_size,
-      "{{"
-      "\"total_requests\":{},"
-      "\"successful_requests\":{},"
-      "\"failed_requests\":{},"
-      "\"success_rate\":{:.4f},"
-      "\"avg_latency_ms\":{:.2f},"
-      "\"p50_latency_ms\":{:.2f},"
-      "\"p90_latency_ms\":{:.2f},"
-      "\"p95_latency_ms\":{:.2f},"
-      "\"p99_latency_ms\":{:.2f},"
-      "\"requests_per_second\":{:.2f},"
-      "\"throughput_mbps\":{:.2f},"
-      "\"bytes_sent\":{},"
-      "\"bytes_received\":{},"
-      "\"current_connections\":{}"
-      "}}",
-      (unsigned long long)stats->total_requests, (unsigned long long)stats->successful_requests,
-      (unsigned long long)stats->failed_requests, snapshot.success_rate, snapshot.avg_latency_ms,
-      snapshot.p50_latency_ms, snapshot.p90_latency_ms, snapshot.p95_latency_ms,
-      snapshot.p99_latency_ms, snapshot.requests_per_second, snapshot.throughput_mbps,
-      (unsigned long long)stats->bytes_sent, (unsigned long long)stats->bytes_received,
-      (unsigned long long)stats->current_connections);
+  int written = fmt(buffer, buffer_size,
+                    "{{"
+                    "\"total_requests\":{},"
+                    "\"successful_requests\":{},"
+                    "\"failed_requests\":{},"
+                    "\"success_rate\":{:.4f},"
+                    "\"avg_latency_ms\":{:.2f},"
+                    "\"p50_latency_ms\":{:.2f},"
+                    "\"p90_latency_ms\":{:.2f},"
+                    "\"p95_latency_ms\":{:.2f},",
+                    (unsigned long long)stats->total_requests,
+                    (unsigned long long)stats->successful_requests,
+                    (unsigned long long)stats->failed_requests, snapshot.success_rate,
+                    snapshot.avg_latency_ms, snapshot.p50_latency_ms, snapshot.p90_latency_ms,
+                    snapshot.p95_latency_ms);
+  if (written <= 0 || (size_t)written >= buffer_size)
+    return 0;
+
+  written += fmt(buffer + written, buffer_size - (size_t)written,
+                 "\"p99_latency_ms\":{:.2f},"
+                 "\"requests_per_second\":{:.2f},"
+                 "\"throughput_mbps\":{:.2f},"
+                 "\"bytes_sent\":{},"
+                 "\"bytes_received\":{},"
+                 "\"current_connections\":{}"
+                 "}}",
+                 snapshot.p99_latency_ms, snapshot.requests_per_second, snapshot.throughput_mbps,
+                 (unsigned long long)stats->bytes_sent, (unsigned long long)stats->bytes_received,
+                 (unsigned long long)stats->current_connections);
+
+  if (written <= 0 || (size_t)written >= buffer_size)
+    return 0;
+
+  return (size_t)written;
 }

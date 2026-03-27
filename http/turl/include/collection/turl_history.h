@@ -14,9 +14,9 @@
  * @param response_len Length of response body
  * @param response_headers The raw response headers
  */
-void turl_history_log(const turl_http_config_t *config, const char *rendered_url,
-                      char **rendered_headers, uint32_t rendered_header_count,
-                      int status_code, const char *response_body, size_t response_len,
-                      const char *response_headers);
+int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
+                     char **rendered_headers, uint32_t rendered_header_count,
+                     int status_code, const char *response_body, size_t response_len,
+                     const char *response_headers);
 
 #endif // TURL_HISTORY_H

@@ -274,15 +274,30 @@ static bool get_env_bool(const char *name, bool default_value) {
   return default_value;
 }
 
-static void get_env_string(const char *name, char *dest, size_t dest_size,
-                           const char *default_value) {
+static iris_config_result_t copy_config_string(char *dest, size_t dest_size, const char *src) {
+  size_t len;
+
+  if (!dest || !src || dest_size == 0) {
+    return IRIS_CONFIG_ERROR_NULL_POINTER;
+  }
+
+  len = strlen(src);
+  if (len >= dest_size) {
+    return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
+  }
+
+  memcpy(dest, src, len + 1);
+  return IRIS_CONFIG_OK;
+}
+
+static iris_config_result_t get_env_string(const char *name, char *dest, size_t dest_size,
+                                           const char *default_value) {
   const char *value = getenv(name);
   if (!value) {
     value = default_value;
   }
 
-  strncpy(dest, value, dest_size - 1);
-  dest[dest_size - 1] = '\0';
+  return copy_config_string(dest, dest_size, value);
 }
 
 iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
@@ -322,12 +337,24 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
     else if (tstr_casecmp(log_level_str, "TRACE") == 0) config->log_level = IRIS_LOG_LEVEL_TRACE;
   }
 
-  get_env_string("IRIS_LOG_FORMAT", config->log_format, sizeof(config->log_format),
-                 config->log_format);
+  {
+    iris_config_result_t rc =
+        get_env_string("IRIS_LOG_FORMAT", config->log_format, sizeof(config->log_format),
+                       config->log_format);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+  }
 
   /* Load TLS settings */
-  get_env_string("IRIS_CIPHER_SUITES", config->cipher_suites, sizeof(config->cipher_suites),
-                 config->cipher_suites);
+  {
+    iris_config_result_t rc =
+        get_env_string("IRIS_CIPHER_SUITES", config->cipher_suites,
+                       sizeof(config->cipher_suites), config->cipher_suites);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+  }
 
   const char *tls_version_str = getenv("IRIS_MIN_TLS_VERSION");
   if (tls_version_str) {
@@ -346,8 +373,14 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
   /* Load health check settings */
   config->enable_health_check =
       get_env_bool("IRIS_ENABLE_HEALTH_CHECK", config->enable_health_check);
-  get_env_string("IRIS_HEALTH_CHECK_PATH", config->health_check_path,
-                 sizeof(config->health_check_path), config->health_check_path);
+  {
+    iris_config_result_t rc =
+        get_env_string("IRIS_HEALTH_CHECK_PATH", config->health_check_path,
+                       sizeof(config->health_check_path), config->health_check_path);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+  }
 
   /* Load security features */
   config->enable_csrf_protection =
@@ -360,17 +393,36 @@ iris_config_result_t iris_config_load_from_env(iris_config_t *config) {
   /* Load file upload settings */
   config->max_file_upload_size =
       get_env_size_t("IRIS_MAX_FILE_UPLOAD_SIZE", config->max_file_upload_size);
-  get_env_string("IRIS_ALLOWED_FILE_EXTENSIONS", config->allowed_file_extensions,
-                 sizeof(config->allowed_file_extensions), config->allowed_file_extensions);
+  {
+    iris_config_result_t rc =
+        get_env_string("IRIS_ALLOWED_FILE_EXTENSIONS", config->allowed_file_extensions,
+                       sizeof(config->allowed_file_extensions),
+                       config->allowed_file_extensions);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+  }
 
   /* Load CORS settings */
   config->enable_cors = get_env_bool("IRIS_ENABLE_CORS", config->enable_cors);
-  get_env_string("IRIS_CORS_ALLOWED_ORIGINS", config->cors_allowed_origins,
-                 sizeof(config->cors_allowed_origins), config->cors_allowed_origins);
-  get_env_string("IRIS_CORS_ALLOWED_METHODS", config->cors_allowed_methods,
-                 sizeof(config->cors_allowed_methods), config->cors_allowed_methods);
-  get_env_string("IRIS_CORS_ALLOWED_HEADERS", config->cors_allowed_headers,
-                 sizeof(config->cors_allowed_headers), config->cors_allowed_headers);
+  {
+    iris_config_result_t rc =
+        get_env_string("IRIS_CORS_ALLOWED_ORIGINS", config->cors_allowed_origins,
+                       sizeof(config->cors_allowed_origins), config->cors_allowed_origins);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+    rc = get_env_string("IRIS_CORS_ALLOWED_METHODS", config->cors_allowed_methods,
+                        sizeof(config->cors_allowed_methods), config->cors_allowed_methods);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+    rc = get_env_string("IRIS_CORS_ALLOWED_HEADERS", config->cors_allowed_headers,
+                        sizeof(config->cors_allowed_headers), config->cors_allowed_headers);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
+  }
 
   /* Load performance tuning */
   config->read_buffer_size = get_env_size_t("IRIS_READ_BUFFER_SIZE", config->read_buffer_size);
@@ -429,9 +481,9 @@ static void parse_json_memory(json_value_t *root, iris_config_t *config) {
   config->arena_max_size = turbo_json_get_int(memory, "arena_max_size", config->arena_max_size);
 }
 
-static void parse_json_logging(json_value_t *root, iris_config_t *config) {
+static iris_config_result_t parse_json_logging(json_value_t *root, iris_config_t *config) {
   json_value_t *logging = turbo_json_object_get(root, "logging");
-  if (!logging) return;
+  if (!logging) return IRIS_CONFIG_OK;
 
   const char *log_level_str = turbo_json_get_string(logging, "log_level");
   if (log_level_str) {
@@ -445,19 +497,22 @@ static void parse_json_logging(json_value_t *root, iris_config_t *config) {
 
   const char *log_format = turbo_json_get_string(logging, "log_format");
   if (log_format) {
-    strncpy(config->log_format, log_format, sizeof(config->log_format) - 1);
-    config->log_format[sizeof(config->log_format) - 1] = '\0';
+    return copy_config_string(config->log_format, sizeof(config->log_format), log_format);
   }
+  return IRIS_CONFIG_OK;
 }
 
-static void parse_json_tls(json_value_t *root, iris_config_t *config) {
+static iris_config_result_t parse_json_tls(json_value_t *root, iris_config_t *config) {
   json_value_t *tls = turbo_json_object_get(root, "tls");
-  if (!tls) return;
+  if (!tls) return IRIS_CONFIG_OK;
 
   const char *cipher_suites = turbo_json_get_string(tls, "cipher_suites");
   if (cipher_suites) {
-    strncpy(config->cipher_suites, cipher_suites, sizeof(config->cipher_suites) - 1);
-    config->cipher_suites[sizeof(config->cipher_suites) - 1] = '\0';
+    iris_config_result_t rc =
+        copy_config_string(config->cipher_suites, sizeof(config->cipher_suites), cipher_suites);
+    if (rc != IRIS_CONFIG_OK) {
+      return rc;
+    }
   }
 
   const char *min_tls_version = turbo_json_get_string(tls, "min_tls_version");
@@ -467,6 +522,7 @@ static void parse_json_tls(json_value_t *root, iris_config_t *config) {
     else if (strcmp(min_tls_version, "1.2") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_2;
     else if (strcmp(min_tls_version, "1.3") == 0) config->min_tls_version = IRIS_TLS_VERSION_1_3;
   }
+  return IRIS_CONFIG_OK;
 }
 
 iris_config_result_t iris_config_parse_json(const char *json_string, iris_config_t *config) {
@@ -490,8 +546,18 @@ iris_config_result_t iris_config_parse_json(const char *json_string, iris_config
   parse_json_rate_limits(root, config);
   parse_json_timeouts(root, config);
   parse_json_memory(root, config);
-  parse_json_logging(root, config);
-  parse_json_tls(root, config);
+  {
+    iris_config_result_t rc = parse_json_logging(root, config);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
+    rc = parse_json_tls(root, config);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
+  }
 
   /* Parse server settings */
   config->max_concurrent_connections =
@@ -505,8 +571,13 @@ iris_config_result_t iris_config_parse_json(const char *json_string, iris_config
       turbo_json_get_bool(root, "enable_health_check", config->enable_health_check);
   const char *health_check_path = turbo_json_get_string(root, "health_check_path");
   if (health_check_path) {
-    strncpy(config->health_check_path, health_check_path, sizeof(config->health_check_path) - 1);
-    config->health_check_path[sizeof(config->health_check_path) - 1] = '\0';
+    iris_config_result_t rc =
+        copy_config_string(config->health_check_path, sizeof(config->health_check_path),
+                           health_check_path);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
   }
 
   /* Parse security features */
@@ -522,32 +593,48 @@ iris_config_result_t iris_config_parse_json(const char *json_string, iris_config
       turbo_json_get_int(root, "max_file_upload_size", config->max_file_upload_size);
   const char *allowed_file_extensions = turbo_json_get_string(root, "allowed_file_extensions");
   if (allowed_file_extensions) {
-    strncpy(config->allowed_file_extensions, allowed_file_extensions,
-            sizeof(config->allowed_file_extensions) - 1);
-    config->allowed_file_extensions[sizeof(config->allowed_file_extensions) - 1] = '\0';
+    iris_config_result_t rc =
+        copy_config_string(config->allowed_file_extensions,
+                           sizeof(config->allowed_file_extensions), allowed_file_extensions);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
   }
 
   /* Parse CORS settings */
   config->enable_cors = turbo_json_get_bool(root, "enable_cors", config->enable_cors);
   const char *cors_allowed_origins = turbo_json_get_string(root, "cors_allowed_origins");
   if (cors_allowed_origins) {
-    strncpy(config->cors_allowed_origins, cors_allowed_origins,
-            sizeof(config->cors_allowed_origins) - 1);
-    config->cors_allowed_origins[sizeof(config->cors_allowed_origins) - 1] = '\0';
+    iris_config_result_t rc =
+        copy_config_string(config->cors_allowed_origins,
+                           sizeof(config->cors_allowed_origins), cors_allowed_origins);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
   }
 
   const char *cors_allowed_methods = turbo_json_get_string(root, "cors_allowed_methods");
   if (cors_allowed_methods) {
-    strncpy(config->cors_allowed_methods, cors_allowed_methods,
-            sizeof(config->cors_allowed_methods) - 1);
-    config->cors_allowed_methods[sizeof(config->cors_allowed_methods) - 1] = '\0';
+    iris_config_result_t rc =
+        copy_config_string(config->cors_allowed_methods,
+                           sizeof(config->cors_allowed_methods), cors_allowed_methods);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
   }
 
   const char *cors_allowed_headers = turbo_json_get_string(root, "cors_allowed_headers");
   if (cors_allowed_headers) {
-    strncpy(config->cors_allowed_headers, cors_allowed_headers,
-            sizeof(config->cors_allowed_headers) - 1);
-    config->cors_allowed_headers[sizeof(config->cors_allowed_headers) - 1] = '\0';
+    iris_config_result_t rc =
+        copy_config_string(config->cors_allowed_headers,
+                           sizeof(config->cors_allowed_headers), cors_allowed_headers);
+    if (rc != IRIS_CONFIG_OK) {
+      turbo_free_json(&root);
+      return rc;
+    }
   }
 
   /* Parse performance tuning */
@@ -908,14 +995,21 @@ iris_config_result_t iris_config_set_logging(iris_config_t *config, iris_log_lev
     return IRIS_CONFIG_ERROR_OUT_OF_RANGE;
   }
 
+  if (strlen(log_format) >= sizeof(config->log_format)) {
+    return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
+  }
+
   iris_config_result_t result = iris_config_validate_log_format(log_format);
   if (result != IRIS_CONFIG_OK) {
     return result;
   }
 
+  result = copy_config_string(config->log_format, sizeof(config->log_format), log_format);
+  if (result != IRIS_CONFIG_OK) {
+    return result;
+  }
+
   config->log_level = log_level;
-  strncpy(config->log_format, log_format, sizeof(config->log_format) - 1);
-  config->log_format[sizeof(config->log_format) - 1] = '\0';
 
   return IRIS_CONFIG_OK;
 }
@@ -935,8 +1029,10 @@ iris_config_result_t iris_config_set_tls(iris_config_t *config, const char *ciph
     return IRIS_CONFIG_ERROR_OUT_OF_RANGE;
   }
 
-  strncpy(config->cipher_suites, cipher_suites, sizeof(config->cipher_suites) - 1);
-  config->cipher_suites[sizeof(config->cipher_suites) - 1] = '\0';
+  result = copy_config_string(config->cipher_suites, sizeof(config->cipher_suites), cipher_suites);
+  if (result != IRIS_CONFIG_OK) {
+    return result;
+  }
   config->min_tls_version = min_tls_version;
 
   return IRIS_CONFIG_OK;
@@ -1140,31 +1236,22 @@ iris_config_result_t iris_config_get_parameter_string(const iris_config_t *confi
   }
 
   if (strcmp(parameter_name, "log_format") == 0) {
-    strncpy(buffer, config->log_format, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->log_format);
   } else if (strcmp(parameter_name, "cipher_suites") == 0) {
-    strncpy(buffer, config->cipher_suites, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->cipher_suites);
   } else if (strcmp(parameter_name, "health_check_path") == 0) {
-    strncpy(buffer, config->health_check_path, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->health_check_path);
   } else if (strcmp(parameter_name, "allowed_file_extensions") == 0) {
-    strncpy(buffer, config->allowed_file_extensions, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->allowed_file_extensions);
   } else if (strcmp(parameter_name, "cors_allowed_origins") == 0) {
-    strncpy(buffer, config->cors_allowed_origins, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->cors_allowed_origins);
   } else if (strcmp(parameter_name, "cors_allowed_methods") == 0) {
-    strncpy(buffer, config->cors_allowed_methods, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->cors_allowed_methods);
   } else if (strcmp(parameter_name, "cors_allowed_headers") == 0) {
-    strncpy(buffer, config->cors_allowed_headers, buffer_size - 1);
-    buffer[buffer_size - 1] = '\0';
+    return copy_config_string(buffer, buffer_size, config->cors_allowed_headers);
   } else {
     return IRIS_CONFIG_ERROR_INVALID_VALUE;
   }
-
-  return IRIS_CONFIG_OK;
 }
 
 iris_config_result_t iris_config_set_parameter_string(iris_config_t *config,
@@ -1175,52 +1262,35 @@ iris_config_result_t iris_config_set_parameter_string(iris_config_t *config,
   }
 
   if (strcmp(parameter_name, "log_format") == 0) {
+    if (strlen(value) >= sizeof(config->log_format)) {
+      return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
+    }
     iris_config_result_t result = iris_config_validate_log_format(value);
     if (result != IRIS_CONFIG_OK) {
       return result;
     }
-    strncpy(config->log_format, value, sizeof(config->log_format) - 1);
-    config->log_format[sizeof(config->log_format) - 1] = '\0';
+    return copy_config_string(config->log_format, sizeof(config->log_format), value);
   } else if (strcmp(parameter_name, "cipher_suites") == 0) {
     iris_config_result_t result = iris_config_validate_cipher_suites(value);
     if (result != IRIS_CONFIG_OK) {
       return result;
     }
-    strncpy(config->cipher_suites, value, sizeof(config->cipher_suites) - 1);
-    config->cipher_suites[sizeof(config->cipher_suites) - 1] = '\0';
+    return copy_config_string(config->cipher_suites, sizeof(config->cipher_suites), value);
   } else if (strcmp(parameter_name, "health_check_path") == 0) {
-    if (strlen(value) >= sizeof(config->health_check_path)) {
-      return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
-    }
-    strncpy(config->health_check_path, value, sizeof(config->health_check_path) - 1);
-    config->health_check_path[sizeof(config->health_check_path) - 1] = '\0';
+    return copy_config_string(config->health_check_path, sizeof(config->health_check_path), value);
   } else if (strcmp(parameter_name, "allowed_file_extensions") == 0) {
-    if (strlen(value) >= sizeof(config->allowed_file_extensions)) {
-      return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
-    }
-    strncpy(config->allowed_file_extensions, value, sizeof(config->allowed_file_extensions) - 1);
-    config->allowed_file_extensions[sizeof(config->allowed_file_extensions) - 1] = '\0';
+    return copy_config_string(config->allowed_file_extensions,
+                              sizeof(config->allowed_file_extensions), value);
   } else if (strcmp(parameter_name, "cors_allowed_origins") == 0) {
-    if (strlen(value) >= sizeof(config->cors_allowed_origins)) {
-      return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
-    }
-    strncpy(config->cors_allowed_origins, value, sizeof(config->cors_allowed_origins) - 1);
-    config->cors_allowed_origins[sizeof(config->cors_allowed_origins) - 1] = '\0';
+    return copy_config_string(config->cors_allowed_origins,
+                              sizeof(config->cors_allowed_origins), value);
   } else if (strcmp(parameter_name, "cors_allowed_methods") == 0) {
-    if (strlen(value) >= sizeof(config->cors_allowed_methods)) {
-      return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
-    }
-    strncpy(config->cors_allowed_methods, value, sizeof(config->cors_allowed_methods) - 1);
-    config->cors_allowed_methods[sizeof(config->cors_allowed_methods) - 1] = '\0';
+    return copy_config_string(config->cors_allowed_methods,
+                              sizeof(config->cors_allowed_methods), value);
   } else if (strcmp(parameter_name, "cors_allowed_headers") == 0) {
-    if (strlen(value) >= sizeof(config->cors_allowed_headers)) {
-      return IRIS_CONFIG_ERROR_BUFFER_TOO_SMALL;
-    }
-    strncpy(config->cors_allowed_headers, value, sizeof(config->cors_allowed_headers) - 1);
-    config->cors_allowed_headers[sizeof(config->cors_allowed_headers) - 1] = '\0';
+    return copy_config_string(config->cors_allowed_headers,
+                              sizeof(config->cors_allowed_headers), value);
   } else {
     return IRIS_CONFIG_ERROR_INVALID_VALUE;
   }
-
-  return IRIS_CONFIG_OK;
 }

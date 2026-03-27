@@ -67,6 +67,20 @@ spec("error_recovery") {
         check_int_eq(action, IRIS_RECOVERY_REJECT_REQUEST);
     }
 
+    it("should shut down on invalid configuration") {
+        iris_error_context_t ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_INVALID_CONFIG, -1, "Bad config");
+        iris_recovery_action_t action = iris_handle_error(&ctx, IRIS_RECOVERY_FALLBACK);
+
+        check_int_eq(action, IRIS_RECOVERY_GRACEFUL_SHUTDOWN);
+    }
+
+    it("should reject request on handler failure") {
+        iris_error_context_t ctx = IRIS_ERROR_CONTEXT(IRIS_ERROR_HANDLER_FAILED, -1, "Handler exploded");
+        iris_recovery_action_t action = iris_handle_error(&ctx, IRIS_RECOVERY_CONTINUE);
+
+        check_int_eq(action, IRIS_RECOVERY_REJECT_REQUEST);
+    }
+
     it("should use custom error handler") {
         iris_set_error_handler(test_error_handler);
         

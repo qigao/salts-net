@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "turl_common.h"
+#include "turl_http.h"
 #include "collection/turl_history.h"
 #include "collection/turl_collection.h"
 
@@ -66,6 +67,16 @@ spec("turl_unit") {
         json_free(ctx);
     }
 
+    it("should fail request when JWT claims are invalid JSON") {
+        turl_http_config_t config = {0};
+        config.url = "http://127.0.0.1:1";
+        config.method_str = "GET";
+        config.jwt_secret = "secret";
+        config.jwt_claims = "{\"sub\": ";
+
+        check_int_eq(turl_execute_http_request(&config), 1);
+    }
+
     it("should log collection with multiple headers correctly") {
         turl_http_config_t config = {0};
         config.method_str = "PUT";
@@ -80,7 +91,9 @@ spec("turl_unit") {
         // since history_log usually happens AFTER execution where rendering occurred.
         // Actually, turl_history_log uses config->headers directly.
         
-        turl_history_log(&config, "http://example.com/put", headers, 2, 201, "{\"ok\":true}", 11, "Server: TurboNet\r\n");
+        check_int_eq(turl_history_log(&config, "http://example.com/put", headers, 2, 201,
+                                      "{\"ok\":true}", 11, "Server: TurboNet\r\n"),
+                     0);
         
         free(h1);
         free(h2);
@@ -127,5 +140,50 @@ spec("turl_unit") {
         check_int_eq(json_array_size(reqs), 2);
         
         json_free(coll);
+    }
+
+    it("should fail collection when a request is missing url") {
+        const char *collection_json =
+            "{\"name\": \"bad_coll\", \"requests\": ["
+            "  {\"name\": \"broken\"}"
+            "]}";
+
+        FILE *f = fopen("test_collection.json", "w");
+        check_not_null(f);
+        fputs(collection_json, f);
+        fclose(f);
+
+        turl_http_config_t config = {0};
+        check_int_eq(turl_run_collection("test_collection.json", &config), 1);
+    }
+
+    it("should fail history logging on malformed rendered header") {
+        turl_http_config_t config = {0};
+        config.method_str = "GET";
+        char *headers[] = {"BrokenHeader"};
+
+        check_int_eq(turl_history_log(&config, "http://example.com", headers, 1, 200,
+                                      "ok", 2, "Server: TurboNet\r\n"),
+                     -1);
+
+        FILE *f = fopen(".turl_history.json", "r");
+        check_null(f);
+    }
+
+    it("should fail collection on oversized header") {
+        char long_value[1100];
+        memset(long_value, 'x', sizeof(long_value) - 1);
+        long_value[sizeof(long_value) - 1] = '\0';
+
+        FILE *f = fopen("test_collection.json", "w");
+        check_not_null(f);
+        fprintf(f,
+                "{\"name\":\"bad_headers\",\"requests\":[{\"url\":\"http://example.com\","
+                "\"headers\":{\"X-Long\":\"%s\"}}]}",
+                long_value);
+        fclose(f);
+
+        turl_http_config_t config = {0};
+        check_int_eq(turl_run_collection("test_collection.json", &config), 1);
     }
 }

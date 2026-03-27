@@ -32,9 +32,12 @@ int turl_run_collection(const char *collection_file, const turl_http_config_t *g
         const char *url = json_get_string(item, "url");
         const char *method = json_get_string(item, "method");
         const char *body = json_get_string(item, "body");
+        char **dynamic_headers = NULL;
+        uint32_t dynamic_count = 0;
 
         if (!url) {
-            TLOG_WARN("Request {} skipped: missing 'url'", i);
+            TLOG_ERROR("Request {} invalid: missing 'url'", i);
+            failures++;
             continue;
         }
 
@@ -50,22 +53,48 @@ int turl_run_collection(const char *collection_file, const turl_http_config_t *g
 
         // Handle headers from item
         json_value_t *headers_obj = json_object_get(item, "headers");
-        char *dynamic_headers[100];
-        uint32_t dynamic_count = 0;
-        
+        int header_error = 0;
+
         if (headers_obj && json_type(headers_obj) == JSON_OBJECT) {
             size_t h_size = json_object_size(headers_obj);
-            for (size_t j = 0; j < h_size && dynamic_count < 100; j++) {
+            dynamic_headers = (char **)calloc(h_size, sizeof(char *));
+            if (!dynamic_headers) {
+                TLOG_ERROR("Failed to allocate collection headers");
+                failures++;
+                continue;
+            }
+
+            for (size_t j = 0; j < h_size; j++) {
                 const char *key = json_object_key(headers_obj, j);
                 const char *val = json_get_string(headers_obj, key);
                 if (key && val) {
                     char buf[1024];
-                    fmt(buf, sizeof(buf), "{}: {}", key, val);
-                    dynamic_headers[dynamic_count++] = strdup(buf);
+                    int header_len = fmt(buf, sizeof(buf), "{}: {}", key, val);
+                    if (header_len <= 0 || (size_t)header_len >= sizeof(buf)) {
+                        TLOG_ERROR("Collection header too long: {}", key);
+                        header_error = 1;
+                        break;
+                    }
+                    dynamic_headers[dynamic_count] = strdup(buf);
+                    if (!dynamic_headers[dynamic_count]) {
+                        TLOG_ERROR("Failed to allocate collection header");
+                        header_error = 1;
+                        break;
+                    }
+                    dynamic_count++;
                 }
             }
-            local_cfg.headers = dynamic_headers;
-            local_cfg.header_count = dynamic_count;
+            if (!header_error) {
+                local_cfg.headers = dynamic_headers;
+                local_cfg.header_count = dynamic_count;
+            }
+        }
+
+        if (header_error) {
+            failures++;
+            for (uint32_t j = 0; j < dynamic_count; j++) free(dynamic_headers[j]);
+            free(dynamic_headers);
+            continue;
         }
 
         if (turl_execute_http_request(&local_cfg) != 0) {
@@ -74,6 +103,7 @@ int turl_run_collection(const char *collection_file, const turl_http_config_t *g
 
         // Cleanup local headers
         for (uint32_t j = 0; j < dynamic_count; j++) free(dynamic_headers[j]);
+        free(dynamic_headers);
     }
 
     TLOG_INFO("==================================================");

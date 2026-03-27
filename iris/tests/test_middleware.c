@@ -66,6 +66,14 @@ static int middleware_set_header(Req *req, Res *res, Chain *chain) {
     return next(chain, req, res);
 }
 
+static int middleware_error(Req *req, Res *res, Chain *chain) {
+    (void)req;
+    (void)res;
+    (void)chain;
+    middleware_call_order[middleware_call_count++] = -1;
+    return -1;
+}
+
 /* Test handler */
 static void test_handler(Req *req, Res *res) {
     (void)req;
@@ -160,6 +168,29 @@ spec("middleware") {
         check_int_eq(middleware_call_order[0], 1);
         check_int_eq(middleware_call_order[1], 99);
         check_int_eq(handler_called, 0); /* Handler not called */
+
+        free(info.middleware);
+    }
+
+    it("should not call handler when middleware returns error") {
+        Req req = {0};
+        req.arena = &arena;
+        Res res = {0};
+        res.arena = &arena;
+
+        MiddlewareInfo info = {0};
+        info.handler = test_handler;
+        info.middleware = malloc(sizeof(MiddlewareHandler) * 2);
+        info.middleware[0] = middleware_a;
+        info.middleware[1] = middleware_error;
+        info.middleware_count = 2;
+
+        execute_middleware_chain(&req, &res, &info);
+
+        check_int_eq(middleware_call_count, 2);
+        check_int_eq(middleware_call_order[0], 1);
+        check_int_eq(middleware_call_order[1], -1);
+        check_int_eq(handler_called, 0);
 
         free(info.middleware);
     }
@@ -301,6 +332,26 @@ spec("middleware") {
 
         check_int_eq(result, 1);
         check_int_eq(handler_called, 1);
+    }
+
+    it("should fail on NULL middleware in next") {
+        Req req = {0};
+        req.arena = &arena;
+        Res res = {0};
+        res.arena = &arena;
+        MiddlewareHandler handlers[2] = {middleware_a, NULL};
+
+        Chain chain = {0};
+        chain.handlers = handlers;
+        chain.count = 2;
+        chain.current = 0;
+        chain.route_handler = test_handler;
+
+        int result = next(&chain, &req, &res);
+
+        check_int_eq(result, -1);
+        check_int_eq(middleware_call_count, 1);
+        check_int_eq(handler_called, 0);
     }
 
     /* ============================================================================

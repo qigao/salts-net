@@ -57,10 +57,11 @@ static void task_worker(void *arg) {
     }
 }
 
-static void ensure_pool(void) {
-    if (!g_pool_initialized) {
-        iris_async_init(0);
+static int ensure_pool(void) {
+    if (g_pool_initialized) {
+        return 0;
     }
+    return iris_async_init(0);
 }
 
 // =============================================================================
@@ -124,7 +125,7 @@ void iris_async_fail(iris_async_task_t *task, const char *error) {
 
 int iris_async_submit(void *context, iris_async_work_fn work_fn, iris_async_done_fn done_fn) {
     if (!work_fn) return -1;
-    ensure_pool();
+    if (ensure_pool() != 0 || !g_pool) return -1;
 
     iris_async_task_t *task = calloc(1, sizeof(iris_async_task_t));
     if (!task) return -1;
@@ -143,7 +144,9 @@ int iris_async_submit(void *context, iris_async_work_fn work_fn, iris_async_done
 void iris_async_then(void *context, int success, const char *error,
                      iris_async_work_fn next_work_fn, iris_async_done_fn done_fn) {
     if (success) {
-        iris_async_submit(context, next_work_fn, done_fn);
+        if (iris_async_submit(context, next_work_fn, done_fn) != 0 && done_fn) {
+            done_fn(context, 0, "submit failed");
+        }
     } else if (done_fn) {
         done_fn(context, 0, error);
     }
@@ -159,7 +162,10 @@ iris_await_result_t iris_await(coro_context_t *ctx,
     coro_t *co = coro_running();
     if (!co || !work_fn || !ctx) return fail;
 
-    ensure_pool();
+    if (ensure_pool() != 0 || !g_pool) {
+        fail.error = "async init failed";
+        return fail;
+    }
 
     iris_async_task_t *task = calloc(1, sizeof(iris_async_task_t));
     if (!task) {

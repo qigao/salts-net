@@ -1,4 +1,5 @@
 #include "CoroNet.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "turbo_stream.h"
 #include "tinytest.h"
 #include <stdio.h>
@@ -163,6 +164,62 @@ spec("Stream") {
 
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
+    }
+
+    it("should record listener creation errors on the context") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+
+        check(turbo_stream_listen(ctx, TURBO_STREAM_TCP4, NULL, 128, on_accept_local) == NULL);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EINVAL);
+
+        check(turbo_stream_create(ctx, (turbo_stream_kind_t)-1) == NULL);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
+        check(coro_socket_create(ctx, (coro_socket_type_t)-1) == NULL);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(0);
+
+        turbo_stream_listener_t *listener =
+            turbo_stream_listen(ctx, TURBO_STREAM_TCP4, (struct sockaddr *)&addr, 128, on_accept_local);
+        check(listener != NULL);
+        check_int_eq(coro_context_get_last_error(ctx), 0);
+
+        turbo_stream_listener_close(listener);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should propagate stream factory errors through tcp socket connect") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+        ctx->tcp_backend = (turbo_tcp_backend_t)-1;
+
+        coro_socket_t *sock = coro_socket_create_tcpv4(ctx);
+        check(sock != NULL);
+
+        check_int_eq(coro_socket_connect(sock, "127.0.0.1", 49200), TURBO_EPROTONOSUPPORT);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+
+        coro_socket_destroy(sock);
+        coro_context_destroy(ctx);
+    }
+
+    it("should reject invalid socket helper arguments without crashing") {
+        check_int_eq(coro_socket_connect_pipe(NULL, "\\\\.\\pipe\\missing"), TURBO_EINVAL);
+        check_int_eq(coro_socket_connect_ws(NULL, "127.0.0.1", 80, "/", 0), TURBO_EINVAL);
+        check_int_eq(coro_socket_send(NULL, "x", 1), TURBO_EINVAL);
+        check(coro_socket_get_send_buffer(NULL, 16) == NULL);
+        check_int_eq(coro_socket_send_buffer(NULL, NULL, 0), TURBO_EINVAL);
+        check_int_eq(coro_socket_recv(NULL, NULL, NULL), TURBO_EINVAL);
+        check_int_eq(coro_socket_bind(NULL, NULL), TURBO_EINVAL);
+        check_int_eq(coro_socket_listen(NULL, 1), TURBO_EINVAL);
+        check_int_eq(coro_socket_accept(NULL, NULL), TURBO_EINVAL);
     }
 
     it("should listen and accept ipv6 connections") {

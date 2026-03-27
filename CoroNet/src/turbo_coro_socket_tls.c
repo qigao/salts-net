@@ -18,6 +18,10 @@
 
 extern const coro_transport_ops_t transport_ops_tls;
 
+static int socket_ctx_error(coro_socket_t *s, int fallback) {
+  return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
+}
+
 /* Pre-declare SNI setter from turbo_stream_tls.c */
 void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
 
@@ -51,6 +55,20 @@ static void on_tls_close(void *handle) {
   }
 }
 
+static void tls_discard_stream(coro_socket_t *s) {
+  turbo_stream_t *stream;
+
+  if (!s || !s->handle.stream) {
+    return;
+  }
+
+  stream = s->handle.stream;
+  s->handle.stream = NULL;
+  turbo_stream_set_user_data(stream, NULL);
+  stream->managed = 0;
+  turbo_stream_destroy(stream);
+}
+
 /* ── Connect ──────────────────────────────────────────────── */
 
 static int tls_connect(coro_socket_t *s, const char *host, int port) {
@@ -70,14 +88,12 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   if (s->handle.stream && !s->connected) {
-    turbo_stream_set_user_data(s->handle.stream, NULL);
-    turbo_stream_destroy(s->handle.stream);
-    s->handle.stream = NULL;
+    tls_discard_stream(s);
   }
 
   if (!s->handle.stream) {
     s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
-    if (!s->handle.stream) return TURBO_ENOMEM;
+    if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
     
     /* Important: Set SNI for TLS handshake */
     turbo_stream_tls_set_sni(s->handle.stream, host);
@@ -93,6 +109,7 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
+    tls_discard_stream(s);
     return r;
   }
 
@@ -125,7 +142,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   tcp_stream = s->handle.stream;
   tls_stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
   if (!tls_stream) {
-    return TURBO_ENOMEM;
+    return socket_ctx_error(s, TURBO_EIO);
   }
 
   turbo_stream_set_user_data(tls_stream, s);
@@ -136,6 +153,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
                                     on_tls_connect, on_tls_close);
   if (rc != 0) {
     turbo_stream_set_user_data(tls_stream, NULL);
+    tls_stream->managed = 0;
     turbo_stream_destroy(tls_stream);
     release_client(s);
     return rc;
@@ -148,7 +166,14 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
 
   coro_set_wait(s);
   coro_yield();
-  return s->status;
+  {
+    int status = s->status;
+    if (s->destroy_wait_handoff) {
+      s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    return status;
+  }
 }
 
 /* ── Send/Recv ────────────────────────────────────────────── */

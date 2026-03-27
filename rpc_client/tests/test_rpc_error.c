@@ -4,7 +4,10 @@
  */
 
 #include "../include/rpc_error.h"
+#include "../include/rpc_client.h"
 #include "tinytest.h"
+#include <http_client.h>
+#include <stdlib.h>
 #include <string.h>
 
 spec("rpc_error") {
@@ -102,6 +105,98 @@ spec("rpc_error") {
       check_int_eq(rpc_error_from_http_status(503), RPC_ERROR_HTTP_503);
       check_int_eq(rpc_error_from_http_status(418), RPC_ERROR_HTTP_OTHER); // I'm a teapot
       check_int_eq(rpc_error_from_http_status(200), RPC_OK);
+    }
+  }
+
+  describe("Client Validation") {
+    it("should reject invalid params for calls before sending") {
+      http_client_t *http = http_client_create(NULL);
+      check_not_null(http);
+
+      rpc_client_config_t config = {.url = "http://127.0.0.1:1/rpc", .http_client = http};
+      rpc_client_t *client = rpc_client_create(&config);
+      check_not_null(client);
+
+      rpc_call_result_t result;
+      memset(&result, 0, sizeof(result));
+      check_int_eq(rpc_client_call(client, "math.add", "{", &result), -1);
+      rpc_result_free(&result);
+
+      rpc_client_destroy(client);
+      http_client_destroy(http);
+    }
+
+    it("should reject invalid params for notifications before sending") {
+      http_client_t *http = http_client_create(NULL);
+      check_not_null(http);
+
+      rpc_client_config_t config = {.url = "http://127.0.0.1:1/rpc", .http_client = http};
+      rpc_client_t *client = rpc_client_create(&config);
+      check_not_null(client);
+
+      check_int_eq(rpc_client_notify(client, "math.add", "{"), -1);
+
+      rpc_client_destroy(client);
+      http_client_destroy(http);
+    }
+
+    it("should reject invalid params for batch calls before sending") {
+      http_client_t *http = http_client_create(NULL);
+      check_not_null(http);
+
+      rpc_client_config_t config = {.url = "http://127.0.0.1:1/rpc", .http_client = http};
+      rpc_client_t *client = rpc_client_create(&config);
+      check_not_null(client);
+
+      const char *methods[] = {"math.add"};
+      const char *params[] = {"{"};
+      rpc_call_result_t results[1];
+      memset(results, 0, sizeof(results));
+
+      check_int_eq(rpc_client_batch_call(client, methods, params, 1, results), -1);
+      rpc_result_free(&results[0]);
+
+      rpc_client_destroy(client);
+      http_client_destroy(http);
+    }
+
+    it("should return failure for transport errors on calls") {
+      http_client_t *http = http_client_create(NULL);
+      check_not_null(http);
+
+      rpc_client_config_t config = {.url = "http://127.0.0.1:1/rpc", .http_client = http};
+      rpc_client_t *client = rpc_client_create(&config);
+      check_not_null(client);
+
+      rpc_call_result_t result;
+      memset(&result, 0, sizeof(result));
+      check_int_eq(rpc_client_call(client, "math.add", "{\"a\":1}", &result), -1);
+      check(!result.success);
+      rpc_result_free(&result);
+
+      rpc_client_destroy(client);
+      http_client_destroy(http);
+    }
+
+    it("should return failure for transport errors on batch calls") {
+      http_client_t *http = http_client_create(NULL);
+      check_not_null(http);
+
+      rpc_client_config_t config = {.url = "http://127.0.0.1:1/rpc", .http_client = http};
+      rpc_client_t *client = rpc_client_create(&config);
+      check_not_null(client);
+
+      const char *methods[] = {"math.add"};
+      const char *params[] = {"{\"a\":1}"};
+      rpc_call_result_t results[1];
+      memset(results, 0, sizeof(results));
+
+      check_int_eq(rpc_client_batch_call(client, methods, params, 1, results), -1);
+      check(!results[0].success);
+      rpc_result_free(&results[0]);
+
+      rpc_client_destroy(client);
+      http_client_destroy(http);
     }
   }
 }

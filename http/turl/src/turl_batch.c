@@ -24,6 +24,8 @@ typedef struct {
   int url_count;
   int current_index;
   int completed;
+  int failed;
+  int stop;
   int verbose;
   int follow_redirects;
   const char **headers;
@@ -44,6 +46,9 @@ static void batch_worker(coro_t *co, void *arg) {
   http_client_follow_redirects(client, ctx->follow_redirects);
 
   while (ctx->current_index < ctx->url_count) {
+    if (ctx->stop)
+      break;
+
     int idx = ctx->current_index++;
     char *raw_url = ctx->urls[idx];
 
@@ -52,13 +57,28 @@ static void batch_worker(coro_t *co, void *arg) {
     }
 
     char *rendered_url = turl_render_template(raw_url, ctx->context);
+    if (!rendered_url) {
+      TLOG_ERROR("Failed to render batch URL template");
+      ctx->failed = 1;
+      ctx->stop = 1;
+      break;
+    }
 
     http_response_t *resp =
         http_request(client, HTTP_GET, rendered_url, ctx->headers, ctx->header_count, NULL, 0);
+    if (!resp) {
+      TLOG_ERROR("Batch request returned no response");
+      free(rendered_url);
+      ctx->failed = 1;
+      ctx->stop = 1;
+      break;
+    }
 
     if (resp->error) {
       TLOG_ERROR("Download failed [{}]: {} (code: {})", rendered_url, resp->error,
                  ENUM_NAME(resp->error_code));
+      ctx->failed = 1;
+      ctx->stop = 1;
     } else {
       if (ctx->verbose) {
         TLOG_INFO("Download finished [{}]: {} OK ({} bytes)", rendered_url, resp->status_code,
@@ -77,27 +97,50 @@ static void batch_worker(coro_t *co, void *arg) {
       char *q = strchr(filename, '?');
       size_t name_len = q ? (size_t)(q - filename) : strlen(filename);
       char safe_name[256];
-      if (name_len >= sizeof(safe_name))
-        name_len = sizeof(safe_name) - 1;
+      if (name_len >= sizeof(safe_name)) {
+        TLOG_ERROR("Output filename too long for batch download: {}", rendered_url);
+        ctx->failed = 1;
+        ctx->stop = 1;
+        http_response_free(resp);
+        free(rendered_url);
+        break;
+      }
       strncpy(safe_name, filename, name_len);
       safe_name[name_len] = '\0';
 
       char path[1024];
+      int path_len;
       if (ctx->output_directory) {
         turl_ensure_directory_exists(ctx->output_directory);
-        fmt(path, sizeof(path), "{}/{}", ctx->output_directory, safe_name);
+        path_len = fmt(path, sizeof(path), "{}/{}", ctx->output_directory, safe_name);
       } else {
-        fmt(path, sizeof(path), "{}", safe_name);
+        path_len = fmt(path, sizeof(path), "{}", safe_name);
+      }
+
+      if (path_len <= 0 || (size_t)path_len >= sizeof(path)) {
+        TLOG_ERROR("Output path too long for batch download: {}", rendered_url);
+        ctx->failed = 1;
+        ctx->stop = 1;
+        http_response_free(resp);
+        free(rendered_url);
+        break;
       }
 
       FILE *f = fopen(path, "wb");
       if (f) {
-        fwrite(resp->body, 1, resp->body_len, f);
+        size_t written = fwrite(resp->body, 1, resp->body_len, f);
         fclose(f);
-        if (ctx->verbose)
+        if (written != resp->body_len) {
+          TLOG_ERROR("Failed to write full batch response body to {}", path);
+          ctx->failed = 1;
+          ctx->stop = 1;
+        } else if (ctx->verbose) {
           TLOG_INFO("* Written to {}", path);
+        }
       } else {
         TLOG_ERROR("Failed to open output file: {}", path);
+        ctx->failed = 1;
+        ctx->stop = 1;
       }
     }
 
@@ -128,8 +171,26 @@ int turl_batch_download(const char *input_file, int64_t concurrency, char **head
       line[--len] = '\0';
     }
     if (len > 0) {
-      urls = realloc(urls, sizeof(char *) * (url_count + 1));
-      urls[url_count++] = strdup(line);
+      char **new_urls = realloc(urls, sizeof(char *) * (url_count + 1));
+      if (!new_urls) {
+        TLOG_ERROR("Failed to grow batch URL list");
+        for (int i = 0; i < url_count; i++)
+          free(urls[i]);
+        free(urls);
+        fclose(f);
+        return 1;
+      }
+      urls = new_urls;
+      urls[url_count] = strdup(line);
+      if (!urls[url_count]) {
+        TLOG_ERROR("Failed to copy batch URL");
+        for (int i = 0; i < url_count; i++)
+          free(urls[i]);
+        free(urls);
+        fclose(f);
+        return 1;
+      }
+      url_count++;
     }
   }
   fclose(f);
@@ -141,9 +202,29 @@ int turl_batch_download(const char *input_file, int64_t concurrency, char **head
   }
 
   // Render templates for headers
-  char *rendered_headers[100];
+  char **rendered_headers = NULL;
+  if (header_count > 0) {
+    rendered_headers = calloc(header_count, sizeof(char *));
+    if (!rendered_headers) {
+      TLOG_ERROR("Failed to allocate rendered batch headers");
+      for (int j = 0; j < url_count; j++)
+        free(urls[j]);
+      free(urls);
+      return 1;
+    }
+  }
   for (uint32_t i = 0; i < header_count; i++) {
     rendered_headers[i] = turl_render_template(headers[i], mustache_context);
+    if (!rendered_headers[i]) {
+      for (int j = 0; j < url_count; j++)
+        free(urls[j]);
+      free(urls);
+      for (uint32_t j = 0; j < i; j++)
+        free(rendered_headers[j]);
+      free(rendered_headers);
+      TLOG_ERROR("Failed to render batch header template");
+      return 1;
+    }
   }
 
   batch_download_ctx_t batch_ctx = {
@@ -162,11 +243,43 @@ int turl_batch_download(const char *input_file, int64_t concurrency, char **head
   // Spawn worker tasks using the context API
   int worker_count = (int)(concurrency < url_count ? concurrency : url_count);
   coro_context_t *ctx = coro_context_current();
+  if (!ctx || worker_count <= 0) {
+    TLOG_ERROR("Batch download requires a running coroutine context and positive concurrency");
+    for (int i = 0; i < url_count; i++)
+      free(urls[i]);
+    free(urls);
+    for (uint32_t i = 0; i < header_count; i++)
+      free(rendered_headers[i]);
+    free(rendered_headers);
+    return 1;
+  }
   coro_task_t **tasks = calloc(worker_count, sizeof(coro_task_t *));
+  if (!tasks) {
+    TLOG_ERROR("Failed to allocate batch worker tasks");
+    for (int i = 0; i < url_count; i++)
+      free(urls[i]);
+    free(urls);
+    for (uint32_t i = 0; i < header_count; i++)
+      free(rendered_headers[i]);
+    free(rendered_headers);
+    return 1;
+  }
 
   for (int i = 0; i < worker_count; i++) {
     tasks[i] = coro_task_create(ctx, batch_worker, &batch_ctx);
-    coro_task_start(tasks[i]);
+    if (!tasks[i] || coro_task_start(tasks[i]) != 0) {
+      TLOG_ERROR("Failed to start batch worker task");
+      for (int j = 0; j <= i; j++)
+        coro_task_destroy(tasks[j]);
+      free(tasks);
+      for (int j = 0; j < url_count; j++)
+        free(urls[j]);
+      free(urls);
+      for (uint32_t j = 0; j < header_count; j++)
+        free(rendered_headers[j]);
+      free(rendered_headers);
+      return 1;
+    }
   }
 
   // Wait for all workers to finish (fan-in)
@@ -182,9 +295,10 @@ int turl_batch_download(const char *input_file, int64_t concurrency, char **head
   free(urls);
   for (uint32_t i = 0; i < header_count; i++)
     free(rendered_headers[i]);
+  free(rendered_headers);
 
   if (verbose)
     TLOG_INFO("Batch download complete. {} files processed.", batch_ctx.completed);
 
-  return 0;
+  return batch_ctx.failed ? 1 : 0;
 }

@@ -71,6 +71,27 @@ static void dg_uring_cleanup_task(void *arg1, void *arg2);
 static void dg_uring_handle_completion(void *arg1, void *arg2);
 static int dg_uring_submit_recv(turbo_datagram_t *d);
 
+static int dg_uring_post_wait(dg_uring_state_t *st,
+                              coro_post_fn fn,
+                              void *arg1,
+                              void *arg2) {
+  int rc;
+
+  if (!st || !st->ctx || !fn) {
+    return TURBO_EINVAL;
+  }
+
+  for (;;) {
+    rc = coro_post(st->ctx, fn, arg1, arg2);
+    if (rc == 0) {
+      return 0;
+    }
+
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
+    turbo_thread_yield();
+  }
+}
+
 static int dg_kind_family(turbo_datagram_kind_t kind) {
   return (kind == TURBO_DATAGRAM_UDP6) ? AF_INET6 : AF_INET;
 }
@@ -114,16 +135,26 @@ static int dg_queue_push(dg_uring_state_t *st, dg_uring_op_t *op) {
   uint8_t *slot;
   uint64_t signal_value;
 
-  turbo_mutex_lock(&st->cmd_lock);
-  slot = ring_spsc_write_acquire(&st->cmd_queue, sizeof(void *));
-  if (!slot) {
-    turbo_mutex_unlock(&st->cmd_lock);
-    return TURBO_ENOMEM;
+  if (!st || !op) {
+    return TURBO_EINVAL;
   }
 
-  memcpy(slot, &op, sizeof(void *));
-  ring_spsc_write_release(&st->cmd_queue, sizeof(void *));
-  turbo_mutex_unlock(&st->cmd_lock);
+  for (;;) {
+    turbo_mutex_lock(&st->cmd_lock);
+    slot = ring_spsc_write_acquire(&st->cmd_queue, sizeof(void *));
+    if (slot) {
+      memcpy(slot, &op, sizeof(void *));
+      ring_spsc_write_release(&st->cmd_queue, sizeof(void *));
+      turbo_mutex_unlock(&st->cmd_lock);
+      break;
+    }
+
+    turbo_mutex_unlock(&st->cmd_lock);
+    signal_value = 1;
+    write(st->wake_fd, &signal_value, sizeof(signal_value));
+    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
+    turbo_thread_yield();
+  }
 
   signal_value = 1;
   write(st->wake_fd, &signal_value, sizeof(signal_value));
@@ -294,10 +325,10 @@ static void dg_uring_worker(void *arg) {
     }
 
     __atomic_sub_fetch(&st->inflight_count, 1, __ATOMIC_RELAXED);
-    coro_post(st->ctx, dg_uring_handle_completion, op, NULL);
+    (void)dg_uring_post_wait(st, dg_uring_handle_completion, op, NULL);
   }
 
-  coro_post(st->ctx, dg_uring_cleanup_task, st, st->dg);
+  (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, st->dg);
 }
 
 static int dg_start_worker(dg_uring_state_t *st) {
@@ -424,6 +455,7 @@ static int dg_iouring_send_buffer(turbo_datagram_t *d, const struct sockaddr *de
                                   mem_buffer_t *buf, size_t len) {
   dg_uring_state_t *st;
   dg_uring_op_t *op;
+  int rc;
 
   st = (dg_uring_state_t *)d->backend_data;
   if (!st || !buf) {
@@ -449,10 +481,11 @@ static int dg_iouring_send_buffer(turbo_datagram_t *d, const struct sockaddr *de
     memcpy(&op->addr, dest, op->addr_len);
   }
 
-  if (dg_queue_push(st, op) != 0) {
+  rc = dg_queue_push(st, op);
+  if (rc != 0) {
     mem_unref(buf);
     free(op);
-    return TURBO_ENOMEM;
+    return rc;
   }
   return 0;
 }
@@ -460,6 +493,7 @@ static int dg_iouring_send_buffer(turbo_datagram_t *d, const struct sockaddr *de
 static int dg_uring_submit_recv(turbo_datagram_t *d) {
   dg_uring_state_t *st;
   dg_uring_op_t *op;
+  int rc;
 
   st = (dg_uring_state_t *)d->backend_data;
   if (!st || st->recv_inflight || st->stopping) {
@@ -476,10 +510,11 @@ static int dg_uring_submit_recv(turbo_datagram_t *d) {
   op->buffer = d->recv_buf[d->recv_toggle];
   st->recv_inflight = 1;
 
-  if (dg_queue_push(st, op) != 0) {
+  rc = dg_queue_push(st, op);
+  if (rc != 0) {
     st->recv_inflight = 0;
     free(op);
-    return TURBO_ENOMEM;
+    return rc;
   }
   return 0;
 }
@@ -517,7 +552,16 @@ static void dg_iouring_close(turbo_datagram_t *d) {
 
   op = (dg_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
-    turbo_datagram_finalize_close(d);
+    st->stopping = 1;
+    if (st->fd >= 0) {
+      close(st->fd);
+      st->fd = -1;
+    }
+    if (st->wake_fd >= 0) {
+      close(st->wake_fd);
+      st->wake_fd = -1;
+    }
+    (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, d);
     return;
   }
 
@@ -525,7 +569,7 @@ static void dg_iouring_close(turbo_datagram_t *d) {
   op->dg = d;
   if (dg_queue_push(st, op) != 0) {
     free(op);
-    turbo_datagram_finalize_close(d);
+    (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, d);
   }
 }
 
@@ -655,6 +699,7 @@ static void dg_uring_handle_recv(dg_uring_op_t *op) {
 
   st->recv_inflight = 0;
   if (!buf || result <= 0) {
+    d->status = (result < 0) ? (int)result : TURBO_EOF;
     if (d->on_recv) {
       d->on_recv(d, NULL, NULL);
     }
@@ -664,6 +709,7 @@ static void dg_uring_handle_recv(dg_uring_op_t *op) {
   slice.data = buf->data;
   slice.length = (size_t)result;
   slice.buffer = buf;
+  d->status = 0;
   mem_ref(buf);
   d->recv_toggle ^= 1;
 

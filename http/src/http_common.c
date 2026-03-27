@@ -23,26 +23,53 @@ http_params_t *http_params_create(void) {
 }
 
 void http_params_add(http_params_t *params, const char *key, const char *value) {
-  if (!params || !key || !value) return;
+  if (!params) return;
+  if (params->error_code != HTTP_ERROR_NONE) return;
+  if (!key || !value) {
+    params->error_code = HTTP_ERROR_INVALID_PARAMS;
+    return;
+  }
   struct http_param_entry *entry =
       (struct http_param_entry *)malloc(sizeof(struct http_param_entry));
-  if (!entry) return;
+  if (!entry) {
+    params->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
+    return;
+  }
   entry->key = tstr_dup(key);
   entry->value = tstr_dup(value);
+  if (!entry->key || !entry->value) {
+    tstr_free(entry->key);
+    tstr_free(entry->value);
+    free(entry);
+    params->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
+    return;
+  }
   entry->next = params->head;
   params->head = entry;
   params->count++;
 }
 
 char *http_params_encode(http_params_t *params) {
+  if (!params) return NULL;
+  if (params->error_code != HTTP_ERROR_NONE) return NULL;
   if (!params || !params->head) return NULL;
 
   size_t size = 0;
   struct http_param_entry *entry = params->head;
   while (entry) {
+    if (!entry->key || !entry->value) {
+      params->error_code = HTTP_ERROR_INVALID_PARAMS;
+      return NULL;
+    }
     char *key_enc = turbo_url_encode(entry->key);
     char *val_enc = turbo_url_encode(entry->value);
-    if (key_enc && val_enc) size += strlen(key_enc) + strlen(val_enc) + 2;
+    if (!key_enc || !val_enc) {
+      free(key_enc);
+      free(val_enc);
+      params->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
+      return NULL;
+    }
+    size += strlen(key_enc) + strlen(val_enc) + 2;
     free(key_enc);
     free(val_enc);
     entry = entry->next;
@@ -56,17 +83,27 @@ char *http_params_encode(http_params_t *params) {
   entry = params->head;
   int first = 1;
   while (entry) {
+    if (!entry->key || !entry->value) {
+      free(result);
+      params->error_code = HTTP_ERROR_INVALID_PARAMS;
+      return NULL;
+    }
     char *key_enc = turbo_url_encode(entry->key);
     char *val_enc = turbo_url_encode(entry->value);
-    if (key_enc && val_enc) {
-      if (!first) *p++ = '&';
-      strcpy(p, key_enc);
-      p += strlen(key_enc);
-      *p++ = '=';
-      strcpy(p, val_enc);
-      p += strlen(val_enc);
-      first = 0;
+    if (!key_enc || !val_enc) {
+      free(key_enc);
+      free(val_enc);
+      free(result);
+      params->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
+      return NULL;
     }
+    if (!first) *p++ = '&';
+    strcpy(p, key_enc);
+    p += strlen(key_enc);
+    *p++ = '=';
+    strcpy(p, val_enc);
+    p += strlen(val_enc);
+    first = 0;
     free(key_enc);
     free(val_enc);
     entry = entry->next;
@@ -92,6 +129,7 @@ void http_params_free(http_params_t *params) {
 
 char *http_build_url(const char *base_url, http_params_t *query_params) {
   if (!base_url) return NULL;
+  if (query_params && query_params->error_code != HTTP_ERROR_NONE) return NULL;
   if (!query_params || !query_params->head) {
     char *copy = (char *)malloc(strlen(base_url) + 1);
     if (copy) {
@@ -101,13 +139,7 @@ char *http_build_url(const char *base_url, http_params_t *query_params) {
   }
 
   char *query_string = http_params_encode(query_params);
-  if (!query_string) {
-    char *copy = (char *)malloc(strlen(base_url) + 1);
-    if (copy) {
-      strcpy(copy, base_url);
-    }
-    return copy;
-  }
+  if (!query_string) return NULL;
 
   const char *has_query = strchr(base_url, '?');
   char separator = has_query ? '&' : '?';
@@ -225,6 +257,34 @@ static void generate_boundary(char *boundary, size_t len) {
   boundary[len - 1] = '\0';
 }
 
+static void multipart_set_error(http_multipart_form_t *form, http_error_code_t code) {
+  if (!form || form->error_code != HTTP_ERROR_NONE) {
+    return;
+  }
+
+  form->error_code = code;
+}
+
+static void multipart_free_part(http_multipart_part_t *part) {
+  if (!part) {
+    return;
+  }
+
+  tstr_free(part->name);
+  tstr_free(part->filename);
+  tstr_free(part->content_type);
+  tstr_free(part->value);
+  free(part->data);
+  if (part->stream_ctx) {
+    if (part->stream_ctx->fd != TURBO_INVALID_FILE) {
+      turbo_fs_close(part->stream_ctx->fd);
+    }
+    tstr_free(part->stream_ctx->file_path);
+    free(part->stream_ctx);
+  }
+  free(part);
+}
+
 http_multipart_form_t *http_multipart_form_create(void) {
   http_multipart_form_t *form = (http_multipart_form_t *)calloc(1, sizeof(http_multipart_form_t));
   if (!form) return NULL;
@@ -257,9 +317,17 @@ void http_multipart_form_add_field(http_multipart_form_t *form, const char *name
                                    const char *value) {
   if (!form || !name || !value) return;
   http_multipart_part_t *part = (http_multipart_part_t *)calloc(1, sizeof(http_multipart_part_t));
-  if (!part) return;
+  if (!part) {
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
+    return;
+  }
   part->name = tstr_dup(name);
   part->value = tstr_dup(value);
+  if (!part->name || !part->value) {
+    multipart_free_part(part);
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
+    return;
+  }
   part->next = form->parts;
   form->parts = part;
   form->part_count++;
@@ -270,15 +338,23 @@ void http_multipart_form_add_file(http_multipart_form_t *form, const char *field
                                   size_t data_len) {
   if (!form || !field_name || !filename || !data) return;
   http_multipart_part_t *part = (http_multipart_part_t *)calloc(1, sizeof(http_multipart_part_t));
-  if (!part) return;
+  if (!part) {
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
+    return;
+  }
   part->name = tstr_dup(field_name);
   part->filename = tstr_dup(filename);
   part->content_type = content_type ? tstr_dup(content_type) : tstr_dup("application/octet-stream");
   part->data = malloc(data_len);
-  if (part->data) {
-    memcpy(part->data, data, data_len);
-    part->data_len = data_len;
+  if (!part->name || !part->filename || !part->content_type || (data_len > 0 && !part->data)) {
+    multipart_free_part(part);
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
+    return;
   }
+  if (part->data && data_len > 0) {
+    memcpy(part->data, data, data_len);
+  }
+  part->data_len = data_len;
   part->is_file = 1;
   part->next = form->parts;
   form->parts = part;
@@ -290,11 +366,20 @@ int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *f
   if (!form || !field_name || !file_path) return -1;
 
   turbo_fs_stat_t st;
-  if (turbo_fs_stat(file_path, &st) != 0) return -1;
-  if (st.is_directory) return -1;
+  if (turbo_fs_stat(file_path, &st) != 0) {
+    multipart_set_error(form, HTTP_ERROR_FILE_IO);
+    return -1;
+  }
+  if (st.is_directory) {
+    multipart_set_error(form, HTTP_ERROR_FILE_IO);
+    return -1;
+  }
 
   http_multipart_part_t *part = (http_multipart_part_t *)calloc(1, sizeof(http_multipart_part_t));
-  if (!part) return -1;
+  if (!part) {
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
+    return -1;
+  }
 
   part->name = tstr_dup(field_name);
   char basename[256];
@@ -309,13 +394,16 @@ int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *f
   part->stream_ctx =
       (http_multipart_file_stream_t *)calloc(1, sizeof(http_multipart_file_stream_t));
   if (!part->stream_ctx) {
-    tstr_free(part->name);
-    tstr_free(part->filename);
-    tstr_free(part->content_type);
-    free(part);
+    multipart_free_part(part);
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
     return -1;
   }
   part->stream_ctx->file_path = tstr_dup(file_path);
+  if (!part->name || !part->filename || !part->content_type || !part->stream_ctx->file_path) {
+    multipart_free_part(part);
+    multipart_set_error(form, HTTP_ERROR_MEMORY_ALLOCATION);
+    return -1;
+  }
   part->stream_ctx->file_size = st.size;
   part->stream_ctx->fd = TURBO_INVALID_FILE;
 

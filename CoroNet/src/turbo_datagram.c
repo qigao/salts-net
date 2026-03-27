@@ -17,6 +17,22 @@
 
 /* ── Backend resolution ───────────────────────────────────── */
 
+static void datagram_record_error(coro_context_t *ctx, int err) {
+  if (ctx) {
+    ctx->last_error = err;
+  }
+}
+
+static int datagram_kind_is_valid(turbo_datagram_kind_t kind) {
+  switch (kind) {
+  case TURBO_DATAGRAM_UDP4:
+  case TURBO_DATAGRAM_UDP6:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 static const turbo_datagram_backend_ops_t *datagram_platform_default_ops(void) {
 #if defined(_WIN32)
   return &turbo_datagram_iocp_ops;
@@ -58,7 +74,9 @@ static const turbo_datagram_backend_ops_t *datagram_udp_backend_ops(
 
 const turbo_datagram_backend_ops_t *turbo_datagram_resolve_backend(
     coro_context_t *ctx, turbo_datagram_kind_t kind) {
-  (void)kind;
+  if (!datagram_kind_is_valid(kind)) {
+    return NULL;
+  }
   return datagram_udp_backend_ops(ctx ? ctx->udp_backend : TURBO_UDP_BACKEND_AUTO);
 }
 
@@ -73,6 +91,7 @@ int turbo_datagram_init_common(turbo_datagram_t *d, coro_context_t *ctx,
   d->ops = ops;
   d->arena = (mem_pool_t *)coro_context_get_arena(ctx);
   if (!d->arena) return TURBO_ENOMEM;
+  d->status = 0;
 
   d->recv_buf[0] = mem_get_buffer(d->arena, 65536);
   d->recv_buf[1] = mem_get_buffer(d->arena, 65536);
@@ -86,6 +105,7 @@ void turbo_datagram_finalize_close(turbo_datagram_t *d) {
   if (d->recv_buf[0]) { mem_unref(d->recv_buf[0]); d->recv_buf[0] = NULL; }
   if (d->recv_buf[1]) { mem_unref(d->recv_buf[1]); d->recv_buf[1] = NULL; }
   d->connected = 0;
+  d->status = 0;
   d->closing = 0;
   coro_context_native_unref(d->ctx);
   if (d->destroyed) {
@@ -100,14 +120,25 @@ turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
   if (!ctx) return NULL;
 
   const turbo_datagram_backend_ops_t *ops = turbo_datagram_resolve_backend(ctx, kind);
-  if (!ops) return NULL;
+  if (!ops) {
+    datagram_record_error(ctx, TURBO_EPROTONOSUPPORT);
+    return NULL;
+  }
 
   turbo_datagram_t *d = (turbo_datagram_t *)calloc(1, sizeof(turbo_datagram_t));
-  if (!d) return NULL;
+  if (!d) {
+    datagram_record_error(ctx, TURBO_ENOMEM);
+    return NULL;
+  }
 
   int rc = turbo_datagram_init_common(d, ctx, kind, ops);
-  if (rc != 0) { free(d); return NULL; }
+  if (rc != 0) {
+    datagram_record_error(ctx, rc);
+    free(d);
+    return NULL;
+  }
 
+  datagram_record_error(ctx, 0);
   return d;
 }
 
@@ -205,13 +236,16 @@ int turbo_datagram_sendv(turbo_datagram_t *d, const turbo_iovec_t *iov,
 /* ── Public API: Receive ──────────────────────────────────── */
 
 int turbo_datagram_recv_start(turbo_datagram_t *d, turbo_recv_cb on_recv) {
-  if (!d) return TURBO_EINVAL;
+  if (!d || !on_recv) return TURBO_EINVAL;
   d->on_recv = on_recv;
+  d->status = 0;
+  if (!d->ops->recv_start) return 0;
   return d->ops->recv_start(d);
 }
 
 void turbo_datagram_recv_stop(turbo_datagram_t *d) {
   if (!d) return;
+  if (!d->ops->recv_stop) return;
   d->ops->recv_stop(d);
 }
 

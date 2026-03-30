@@ -1,7 +1,0 @@
-add_subdirectory(feeds)
-add_subdirectory(net)
-add_subdirectory(ta)
-add_subdirectory(fin)
-add_subdirectory(ts)
-add_subdirectory(sqlite)
-add_subdirectory(wasm)

@@ -59,15 +59,15 @@ include(FindTools)
 add_subdirectory(vendor)
 add_subdirectory(shared)
 add_subdirectory(parser)
-add_subdirectory(tScript)
+
 add_subdirectory(CoroNet)
 add_subdirectory(redis)
 add_subdirectory(http)
-add_subdirectory(wasm)
+
 add_subdirectory(iris)
 add_subdirectory(rpc_client)
 add_subdirectory(s3)
-add_subdirectory(tbe)
+
 
 add_subdirectory(snmp)
 add_subdirectory(ldap)

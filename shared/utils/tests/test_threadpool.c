@@ -6,6 +6,7 @@
 #include "turbo_thread.h"
 #include "tinytest.h"
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #define UNUSED(x) (void)(x)
@@ -13,6 +14,7 @@
 
 static turbo_mutex_t counter_mutex;
 static volatile int counter = 0;
+static atomic_int gate_open;
 
 static void increment_task(void *arg) {
     UNUSED(arg);
@@ -34,10 +36,18 @@ static void sum_task(void *arg) {
     turbo_mutex_unlock(&counter_mutex);
 }
 
+static void gated_task(void *arg) {
+    UNUSED(arg);
+    while (!atomic_load(&gate_open)) {
+        turbo_sleep_ms(1);
+    }
+}
+
 spec("Thread Pool Tests") {
     before_each() {
         turbo_mutex_init(&counter_mutex);
         counter = 0;
+        atomic_store(&gate_open, 0);
     }
 
     after_each() {
@@ -142,10 +152,72 @@ spec("Thread Pool Tests") {
 
     it("should reject tasks after shutdown") {
         turbo_threadpool_t *pool = turbo_threadpool_create(2);
+        turbo_threadpool_shutdown(pool);
+        check_int_eq(turbo_threadpool_is_accepting(pool), 0);
+        check_int_eq(turbo_threadpool_submit(pool, increment_task, NULL), -1);
         turbo_threadpool_destroy(pool);
 
-        // Can't test submit after destroy since pool is freed
-        // Just verify clean shutdown works
-        check(1);  // If we got here, shutdown was clean
+        check(1);
+    }
+
+    it("should honor configured queue capacity for try_submit") {
+        turbo_threadpool_config_t config = {
+            .num_threads = 1,
+            .queue_capacity = 2,
+        };
+        turbo_threadpool_t *pool = turbo_threadpool_create_with_config(&config);
+        turbo_threadpool_stats_t stats = {0};
+        int accepted = 0;
+        int rejected = 0;
+        int attempts = 0;
+
+        check(pool != NULL);
+        check_int_eq((int)turbo_threadpool_capacity(pool), 2);
+
+        while (accepted < 1 && attempts < 200) {
+            if (turbo_threadpool_try_submit(pool, gated_task, NULL) == 0) {
+                accepted++;
+                break;
+            }
+            turbo_sleep_ms(1);
+            attempts++;
+        }
+        check_int_eq(accepted, 1);
+
+        attempts = 0;
+        do {
+            turbo_threadpool_get_stats(pool, &stats);
+            if (stats.active_tasks >= 1) {
+                break;
+            }
+            turbo_sleep_ms(1);
+            attempts++;
+        } while (attempts < 200);
+        check_int_eq((int)stats.active_tasks, 1);
+
+        attempts = 0;
+        while ((accepted < 3 || rejected < 1) && attempts < 400) {
+            if (turbo_threadpool_try_submit(pool, gated_task, NULL) == 0) {
+                accepted++;
+            } else {
+                rejected++;
+            }
+            turbo_sleep_ms(1);
+            attempts++;
+        }
+
+        turbo_threadpool_get_stats(pool, &stats);
+        check_int_eq(accepted, 3);
+        check(rejected >= 1);
+        check_int_eq((int)stats.rejected_tasks, 1);
+        check_int_eq((int)stats.active_tasks, 1);
+        check_int_eq((int)stats.queued_tasks, 2);
+        check_int_eq((int)stats.pending_tasks, 3);
+
+        atomic_store(&gate_open, 1);
+        turbo_threadpool_wait(pool);
+        turbo_threadpool_get_stats(pool, &stats);
+        check_int_eq((int)stats.pending_tasks, 0);
+        turbo_threadpool_destroy(pool);
     }
 }

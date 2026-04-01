@@ -227,12 +227,38 @@ typedef struct turbo_threadpool_s turbo_threadpool_t;
 /** Task callback */
 typedef void (*turbo_task_fn)(void *arg);
 
+typedef struct {
+  int num_threads;
+  size_t queue_capacity;
+} turbo_threadpool_config_t;
+
+typedef struct {
+  int num_threads;
+  size_t queue_capacity;
+  int accepting;
+  int64_t submitted_tasks;
+  int64_t started_tasks;
+  int64_t completed_tasks;
+  int64_t rejected_tasks;
+  int64_t queued_tasks;
+  int64_t active_tasks;
+  int64_t pending_tasks;
+} turbo_threadpool_stats_t;
+
 /**
  * @brief Create a thread pool
  * @param num_threads Number of worker threads (0 = auto-detect CPU cores)
  * @return Thread pool or NULL on failure
  */
 CXX_C_API turbo_threadpool_t *turbo_threadpool_create(int num_threads);
+
+/**
+ * @brief Create a thread pool with explicit configuration
+ * @param config Pool configuration
+ * @return Thread pool or NULL on failure
+ */
+CXX_C_API turbo_threadpool_t *
+turbo_threadpool_create_with_config(const turbo_threadpool_config_t *config);
 
 /**
  * @brief Destroy thread pool (waits for pending tasks)
@@ -250,10 +276,26 @@ CXX_C_API void turbo_threadpool_destroy(turbo_threadpool_t *pool);
 CXX_C_API int turbo_threadpool_submit(turbo_threadpool_t *pool, turbo_task_fn task, void *arg);
 
 /**
+ * @brief Submit a task only if queue space is immediately available
+ * @param pool Thread pool
+ * @param task Task function
+ * @param arg Argument passed to task
+ * @return 0 on success, -1 if queue full/shutdown/error
+ */
+CXX_C_API int turbo_threadpool_try_submit(turbo_threadpool_t *pool, turbo_task_fn task,
+                                          void *arg);
+
+/**
  * @brief Wait for all submitted tasks to complete
  * @param pool Thread pool
  */
 CXX_C_API void turbo_threadpool_wait(turbo_threadpool_t *pool);
+
+/**
+ * @brief Stop accepting new tasks and signal workers to drain and exit
+ * @param pool Thread pool
+ */
+CXX_C_API void turbo_threadpool_shutdown(turbo_threadpool_t *pool);
 
 /**
  * @brief Get number of pending tasks
@@ -268,6 +310,28 @@ CXX_C_API int turbo_threadpool_pending(turbo_threadpool_t *pool);
  * @return Number of threads
  */
 CXX_C_API int turbo_threadpool_size(turbo_threadpool_t *pool);
+
+/**
+ * @brief Get configured queue capacity
+ * @param pool Thread pool
+ * @return Queue capacity
+ */
+CXX_C_API size_t turbo_threadpool_capacity(turbo_threadpool_t *pool);
+
+/**
+ * @brief Check whether the pool still accepts new tasks
+ * @param pool Thread pool
+ * @return 1 if accepting, 0 otherwise
+ */
+CXX_C_API int turbo_threadpool_is_accepting(turbo_threadpool_t *pool);
+
+/**
+ * @brief Get thread pool statistics
+ * @param pool Thread pool
+ * @param stats Output statistics
+ */
+CXX_C_API void turbo_threadpool_get_stats(turbo_threadpool_t *pool,
+                                          turbo_threadpool_stats_t *stats);
 
 /**
  * @brief Get the current process ID

@@ -8,7 +8,7 @@
 #include "tinytest.h"
 #include "http_client.h"
 #include "CoroNet/turbo_coro_internal.h"
-#include <json_parser.h>
+#include <turbo_parser.h>
 #include <string.h>
 #include <turbo_coro.h>
 #include "tlog.h"
@@ -365,7 +365,7 @@ spec("coro http client") {
       resp.body_len = strlen(body);
       json_value_t *json = http_response_parse_json(&resp);
       check_not_null(json);
-      json_free(json);
+      turbo_free_json(&json);
     }
 
     it("should return NULL for empty body") {

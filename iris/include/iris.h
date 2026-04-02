@@ -4,6 +4,7 @@
 #include "iris_app.h"
 #include "router.h"
 #include "server.h"
+#include "wasm.h"
 #include <turbo_coro.h>
 #include <CoroNet.h>
 

@@ -1,5 +1,6 @@
 #include "iris.h"
 #include "tlog.h"
+#include <turbo_parser.h>
 #include <cjwt/cjwt.h>
 #include <fmt.h>
 #include <stdio.h>
@@ -57,10 +58,10 @@ static int acl_middleware(Req *req, Res *res, Chain *chain) {
     }
 
     cjwt_t *jwt = (cjwt_t *)claims_ptr;
-    json_value_t *role_claim = json_object_get(jwt->private_claims, "role");
+    json_value_t *role_claim = turbo_json_object_get(jwt->private_claims, "role");
 
-    if (!role_claim || json_type(role_claim) != JSON_STRING ||
-        strcmp(json_string(role_claim), "admin") != 0) {
+    if (!role_claim || turbo_json_type(role_claim) != TURBO_JSON_STRING ||
+        strcmp(turbo_json_string(role_claim), "admin") != 0) {
         send_json(res, 403, "{\"error\":\"Forbidden\", \"message\":\"Admin access required\"}");
         return 1;
     }

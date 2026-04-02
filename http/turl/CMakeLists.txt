@@ -13,10 +13,9 @@ target_link_libraries(
   turl_lib
   PUBLIC 
          TurboNet::CoroNet
-         TurboNet::Mustache
-         TurboNet::JsonParser
-         TurboNet::CmdParser
-         TurboNet::Utils
+         TurboUtils::Mustache
+         TurboUtils::Parser
+         TurboUtils::Utils
          http_client
   PRIVATE 
          cjwt 
@@ -28,7 +27,7 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_SOURCE_DIR}/parser/internal/dotenv_parser/include)
 
-target_link_libraries(${turl_name} PRIVATE turl_lib TurboNet::DotEnvParser)
+target_link_libraries(${turl_name} PRIVATE turl_lib)
 set_target_properties( turl_lib  PROPERTIES FOLDER http/tools)
 # Standard project setup
 set_target_properties(${turl_name} PROPERTIES FOLDER http/tools)
@@ -36,13 +35,13 @@ set_target_properties(${turl_name} PROPERTIES FOLDER http/tools)
 # Unit Testing
 if(BUILD_TESTS)
   add_executable(test_turl test/test_turl.c)
-  target_link_libraries(test_turl PRIVATE turl_lib TurboNet::TinyTest)
+  target_link_libraries(test_turl PRIVATE turl_lib TurboUtils::TinyTest)
   target_include_directories(test_turl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   set_target_properties(test_turl PROPERTIES FOLDER http/tools/test)
   add_test(NAME test_turl COMMAND test_turl)
 
   add_executable(test_turl_integration test/test_turl_integration.c)
-  target_link_libraries(test_turl_integration PRIVATE turl_lib TurboNet::TinyTest)
+  target_link_libraries(test_turl_integration PRIVATE turl_lib TurboUtils::TinyTest)
   target_include_directories(test_turl_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   set_target_properties(test_turl_integration PROPERTIES FOLDER http/tools/test)
   # Do not add to 'add_test' by default as it requires internet

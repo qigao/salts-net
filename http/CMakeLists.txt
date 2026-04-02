@@ -1,5 +1,6 @@
 find_package(zstd CONFIG REQUIRED)
-
+add_subdirectory(uri_parser)
+add_subdirectory(mime_parser)
 # Generated files
 turbonet_add_grammar_target(
   cookie LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie_lexer.re GRAMMAR_Y
@@ -42,8 +43,8 @@ target_include_directories(
 
 target_link_libraries(
   http_client
-  PUBLIC TurboNet::Utils TurboNet::CoroNet zstd::libzstd
-  PRIVATE llhttp::llhttp_static cjwt sds mime_parser)
+  PUBLIC TurboUtils::Utils TurboNet::CoroNet zstd::libzstd
+  PRIVATE TurboUtils::Parser llhttp::llhttp_static cjwt sds mime_parser)
 
 # Tests & Examples
 add_subdirectory(examples)

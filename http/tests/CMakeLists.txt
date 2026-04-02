@@ -28,7 +28,7 @@ set(HTTP_EXAMPLE_SPECS
 
 foreach(test_name ${HTTP_TESTS})
   add_executable(${test_name} ${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::TinyTest TurboNet::JsonParser)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboUtils::TinyTest TurboUtils::Parser)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
 
   if(WIN32)
@@ -42,7 +42,7 @@ endforeach()
 
 foreach(test_name ${HTTP_EXAMPLE_SPECS})
   add_executable(${test_name} ../examples/${test_name}.c)
-  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboNet::TinyTest TurboNet::JsonParser)
+  target_link_libraries(${test_name} PRIVATE TurboNet::HttpClient TurboUtils::TinyTest TurboUtils::Parser)
   set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
 
   if(WIN32)

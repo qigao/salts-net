@@ -97,10 +97,10 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   target_link_libraries(
     ${tgt}
-    PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Parser
+    PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboUtils::Utils TurboUtils::Parser
            Threads::Threads c-ares::cares
     PRIVATE kcp::kcp llhttp::llhttp_static PkgConfig::STC TurboNet::SDS
-            TurboNet::UriParser TurboNet::WebSocketParser)
+            TurboNet::WebSocketParser)
 
   if(WIN32)
     target_link_libraries(${tgt} PRIVATE ws2_32 mswsock crypt32)

@@ -15,6 +15,7 @@
 #include "middleware.h"
 #include "router.h"
 #include "tlog.h"
+#include <turbo_parser.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -911,8 +912,8 @@ int iris_jwt_middleware(Req *req, Res *res, Chain *chain) {
 char *iris_jwt_encode(const char *secret, const char *claims_json) {
     if (!secret || !claims_json) return NULL;
 
-    json_value_t *private_claims = json_parse(claims_json, strlen(claims_json));
-    if (!private_claims) {
+    json_value_t *private_claims = NULL;
+    if (turbo_parse_json((const uint8_t *)claims_json, strlen(claims_json), &private_claims) != 0) {
         TLOG_ERROR("JWT Encode: Failed to parse claims JSON");
         return NULL;
     }
@@ -923,7 +924,7 @@ char *iris_jwt_encode(const char *secret, const char *claims_json) {
 
     char *token = NULL;
     cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, (int)strlen(secret), &token);
-    json_free(private_claims);
+    turbo_free_json(&private_claims);
 
     if (rv != CJWTE_OK) {
         TLOG_ERROR("JWT Encode: Failed to encode token (error {})", ENUM_NAME(rv));

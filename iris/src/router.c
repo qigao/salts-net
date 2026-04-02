@@ -101,6 +101,28 @@ static void send_error(coro_socket_t *client, int error_code) {
   }
 }
 
+static int req_body_fully_read(const Req *req) {
+  const char *content_length;
+  char *end = NULL;
+  unsigned long long expected = 0;
+
+  if (!req) {
+    return 1;
+  }
+
+  content_length = get_req(&req->headers, "Content-Length");
+  if (!content_length || content_length[0] == '\0') {
+    return 0;
+  }
+
+  expected = strtoull(content_length, &end, 10);
+  if (end == content_length || (end && *end != '\0')) {
+    return 0;
+  }
+
+  return req->body_read_total >= (size_t)expected;
+}
+
 static int send_res_data(Res *res, const void *data, size_t len, const char *what) {
   if (!res || !res->client || !data || len == 0) {
     return -1;
@@ -562,8 +584,9 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
       return -1;
   }
 
-  // Copy body when this is not a streaming request
-  if (!context->stream_mode && context->body && context->body_length > 0) {
+  // A streaming route may still have a prefetched body prefix captured before
+  // the router decided to switch into stream mode.
+  if (context->body && context->body_length > 0) {
     req->body = mem_alloc(arena, context->body_length + 1);
     if (!req->body)
       return -1;
@@ -587,9 +610,20 @@ int req_is_body_stream(const Req *req) {
 
 size_t req_read_body(Req *req, char *buffer, size_t capacity) {
   iris_connection_ctx_t *conn;
+  size_t prefetched_available;
 
   if (!req || !req->client || !buffer || capacity == 0 || !req->body_stream) {
     return 0;
+  }
+
+  if (req->body && req->body_len > req->body_read_total) {
+    prefetched_available = req->body_len - req->body_read_total;
+    if (prefetched_available > capacity) {
+      prefetched_available = capacity;
+    }
+    memcpy(buffer, req->body + req->body_read_total, prefetched_available);
+    req->body_read_total += prefetched_available;
+    return prefetched_available;
   }
 
   conn = (iris_connection_ctx_t *)coro_socket_get_user_data(req->client);
@@ -615,20 +649,17 @@ size_t req_read_body(Req *req, char *buffer, size_t capacity) {
         conn->pending_body_chunk_len = 0;
         conn->pending_body_chunk_offset = 0;
         llhttp_resume(&conn->request_ctx->parser_impl->parser);
-        if (conn->parsed_offset == conn->buffer_used) {
-          size_t flushed = 0;
-          int flush_result = http_context_execute(conn->request_ctx, "", 0, &flushed);
-          (void)flushed;
-          if (flush_result == 1) {
-            conn->request_ctx->message_complete = 1;
-          }
-        }
       }
 
       return to_copy;
     }
 
     if (conn->request_ctx->message_complete) {
+      return 0;
+    }
+
+    if (conn->parsed_offset == conn->buffer_used && req_body_fully_read(req)) {
+      conn->request_ctx->message_complete = 1;
       return 0;
     }
 
@@ -650,16 +681,6 @@ size_t req_read_body(Req *req, char *buffer, size_t capacity) {
       }
 
       if (parse_result == 1) {
-        conn->request_ctx->message_complete = 1;
-        return 0;
-      }
-    }
-
-    if (conn->parsed_offset == conn->buffer_used) {
-      size_t flushed = 0;
-      int flush_result = http_context_execute(conn->request_ctx, "", 0, &flushed);
-      (void)flushed;
-      if (flush_result == 1) {
         conn->request_ctx->message_complete = 1;
         return 0;
       }

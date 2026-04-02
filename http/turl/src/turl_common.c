@@ -4,12 +4,12 @@
  */
 
 #include "turl_common.h"
-#include <json_parser.h>
 #include <mustache_json.h>
 #include <stdio.h>
 #include <string.h>
 #include <tlog.h>
 #include <turbo_fs.h>
+#include <turbo_parser.h>
 
 
 // Global logger for turl
@@ -87,16 +87,16 @@ void turl_print_body(const char *body, size_t len, const char *content_type) {
   int is_json = (content_type && strstr(content_type, "application/json"));
 
   if (is_json) {
-    json_value_t *json = json_parse(body, len);
-    if (json) {
-      char *pretty = json_serialize_pretty(json, NULL);
+    json_value_t *json = NULL;
+    if (turbo_parse_json((const uint8_t *)body, len, &json) == 0 && json) {
+      char *pretty = turbo_json_serialize_pretty(json, NULL);
       if (pretty) {
         printf("%s\n", pretty);
-        json_serialize_free(pretty);
-        json_free(json);
+        turbo_json_serialize_free(pretty);
+        turbo_free_json(&json);
         return;
       }
-      json_free(json);
+      turbo_free_json(&json);
     }
   }
 

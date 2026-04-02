@@ -3,12 +3,12 @@
 #include "tlog.h"
 #include <fmt.h>
 #include <http_client.h>
-#include <json_parser.h>
 #include <platform.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <turbo_parser.h>
 #include <turbo_str.h>
 #include <turbo_coro.h>
 #include <CoroNet/turbo_coro_context.h>
@@ -46,36 +46,47 @@ static void rpc_result_set_message(rpc_call_result_t *result, int error_code, in
     result->error_message = strdup(message);
 }
 
+static json_value_t *rpc_parse_json(const char *json, size_t len) {
+  json_value_t *root = NULL;
+  if (!json) {
+    return NULL;
+  }
+  if (turbo_parse_json((const uint8_t *)json, len, &root) != 0) {
+    return NULL;
+  }
+  return root;
+}
+
 /* Build JSON-RPC request using json_parser */
 static char *build_jsonrpc_request(const char *method, const char *params, const char *id,
                                    size_t *request_len) {
   if (!method || !request_len)
     return NULL;
 
-  json_value_t *root = json_create_object();
+  json_value_t *root = turbo_json_create_object();
   if (!root)
     return NULL;
 
-  json_object_set_string(root, "jsonrpc", "2.0");
-  json_object_set_string(root, "method", method);
+  turbo_json_object_set_string(root, "jsonrpc", "2.0");
+  turbo_json_object_set_string(root, "method", method);
 
   /* Add params if provided */
   if (params && params[0] != '\0') {
-    json_value_t *params_obj = json_parse(params, strlen(params));
+    json_value_t *params_obj = rpc_parse_json(params, strlen(params));
     if (!params_obj) {
-      json_free(root);
+      turbo_free_json(&root);
       return NULL;
     }
-    json_object_add(root, "params", params_obj);
+    turbo_json_object_add(root, "params", params_obj);
   }
 
   /* Add ID if provided (regular request), otherwise it's a notification */
   if (id) {
-    json_object_set_string(root, "id", id);
+    turbo_json_object_set_string(root, "id", id);
   }
 
-  char *request = json_serialize(root, request_len);
-  json_free(root);
+  char *request = turbo_json_serialize(root, request_len);
+  turbo_free_json(&root);
 
   return request;
 }
@@ -85,25 +96,25 @@ static char *json_extract_string(const char *json, const char *key) {
   if (!json)
     return NULL;
 
-  json_value_t *root = json_parse(json, strlen(json));
+  json_value_t *root = rpc_parse_json(json, strlen(json));
   if (!root)
     return NULL;
 
   char *result = NULL;
 
   if (key) {
-    json_value_t *item = json_object_get(root, key);
-    if (item && json_type(item) == JSON_STRING) {
-      result = strdup(json_string(item));
+    json_value_t *item = turbo_json_object_get(root, key);
+    if (item && turbo_json_type(item) == TURBO_JSON_STRING) {
+      result = strdup(turbo_json_string(item));
     }
   } else {
     /* Root value */
-    if (json_type(root) == JSON_STRING) {
-      result = strdup(json_string(root));
+    if (turbo_json_type(root) == TURBO_JSON_STRING) {
+      result = strdup(turbo_json_string(root));
     }
   }
 
-  json_free(root);
+  turbo_free_json(&root);
   return result;
 }
 
@@ -111,26 +122,26 @@ static int json_extract_int(const char *json, const char *key, int64_t *value) {
   if (!json || !value)
     return -1;
 
-  json_value_t *root = json_parse(json, strlen(json));
+  json_value_t *root = rpc_parse_json(json, strlen(json));
   if (!root)
     return -1;
 
   int ret = -1;
 
   if (key) {
-    json_value_t *item = json_object_get(root, key);
-    if (item && json_type(item) == JSON_NUMBER) {
-      *value = (int64_t)json_number(item);
+    json_value_t *item = turbo_json_object_get(root, key);
+    if (item && turbo_json_type(item) == TURBO_JSON_NUMBER) {
+      *value = (int64_t)turbo_json_number(item);
       ret = 0;
     }
   } else {
-    if (json_type(root) == JSON_NUMBER) {
-      *value = (int64_t)json_number(root);
+    if (turbo_json_type(root) == TURBO_JSON_NUMBER) {
+      *value = (int64_t)turbo_json_number(root);
       ret = 0;
     }
   }
 
-  json_free(root);
+  turbo_free_json(&root);
   return ret;
 }
 
@@ -138,26 +149,26 @@ static int json_extract_bool(const char *json, const char *key, int *value) {
   if (!json || !value)
     return -1;
 
-  json_value_t *root = json_parse(json, strlen(json));
+  json_value_t *root = rpc_parse_json(json, strlen(json));
   if (!root)
     return -1;
 
   int ret = -1;
 
   if (key) {
-    json_value_t *item = json_object_get(root, key);
-    if (item && json_type(item) == JSON_BOOL) {
-      *value = json_bool(item) ? 1 : 0;
+    json_value_t *item = turbo_json_object_get(root, key);
+    if (item && turbo_json_type(item) == TURBO_JSON_BOOL) {
+      *value = turbo_json_bool(item) ? 1 : 0;
       ret = 0;
     }
   } else {
-    if (json_type(root) == JSON_BOOL) {
-      *value = json_bool(root) ? 1 : 0;
+    if (turbo_json_type(root) == TURBO_JSON_BOOL) {
+      *value = turbo_json_bool(root) ? 1 : 0;
       ret = 0;
     }
   }
 
-  json_free(root);
+  turbo_free_json(&root);
   return ret;
 }
 
@@ -165,26 +176,26 @@ static int json_extract_double(const char *json, const char *key, double *value)
   if (!json || !value)
     return -1;
 
-  json_value_t *root = json_parse(json, strlen(json));
+  json_value_t *root = rpc_parse_json(json, strlen(json));
   if (!root)
     return -1;
 
   int ret = -1;
 
   if (key) {
-    json_value_t *item = json_object_get(root, key);
-    if (item && json_type(item) == JSON_NUMBER) {
-      *value = json_number(item);
+    json_value_t *item = turbo_json_object_get(root, key);
+    if (item && turbo_json_type(item) == TURBO_JSON_NUMBER) {
+      *value = turbo_json_number(item);
       ret = 0;
     }
   } else {
-    if (json_type(root) == JSON_NUMBER) {
-      *value = json_number(root);
+    if (turbo_json_type(root) == TURBO_JSON_NUMBER) {
+      *value = turbo_json_number(root);
       ret = 0;
     }
   }
 
-  json_free(root);
+  turbo_free_json(&root);
   return ret;
 }
 
@@ -195,39 +206,39 @@ static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
 
   /* Note: caller should memset result before calling this function */
 
-  json_value_t *root = json_parse(body, strlen(body));
+  json_value_t *root = rpc_parse_json(body, strlen(body));
   if (!root)
     return -1;
 
   /* Extract ID */
-  json_value_t *id_item = json_object_get(root, "id");
-  if (id_item && json_type(id_item) == JSON_STRING) {
-    result->id = strdup(json_string(id_item));
+  json_value_t *id_item = turbo_json_object_get(root, "id");
+  if (id_item && turbo_json_type(id_item) == TURBO_JSON_STRING) {
+    result->id = strdup(turbo_json_string(id_item));
   }
 
   /* Check for error */
-  json_value_t *error = json_object_get(root, "error");
-  if (error && json_type(error) == JSON_OBJECT) {
+  json_value_t *error = turbo_json_object_get(root, "error");
+  if (error && turbo_json_type(error) == TURBO_JSON_OBJECT) {
     result->success = 0;
 
     /* Extract error code */
-    json_value_t *code = json_object_get(error, "code");
-    if (code && json_type(code) == JSON_NUMBER) {
-      result->error_code = (int)json_number(code);
+    json_value_t *code = turbo_json_object_get(error, "code");
+    if (code && turbo_json_type(code) == TURBO_JSON_NUMBER) {
+      result->error_code = (int)turbo_json_number(code);
     }
 
     /* Extract error message */
-    json_value_t *message = json_object_get(error, "message");
-    if (message && json_type(message) == JSON_STRING) {
-      result->error_message = strdup(json_string(message));
+    json_value_t *message = turbo_json_object_get(error, "message");
+    if (message && turbo_json_type(message) == TURBO_JSON_STRING) {
+      result->error_message = strdup(turbo_json_string(message));
     }
   } else {
     result->success = 1;
 
     /* Extract result */
-    json_value_t *result_item = json_object_get(root, "result");
+    json_value_t *result_item = turbo_json_object_get(root, "result");
     if (result_item) {
-      result->result = json_serialize(result_item, NULL);
+      result->result = turbo_json_serialize(result_item, NULL);
       if (!result->result) {
         result->success = 0;
         result->error_code = RPC_ERROR_INTERNAL;
@@ -236,7 +247,7 @@ static int parse_jsonrpc_response(const char *body, rpc_call_result_t *result) {
     }
   }
 
-  json_free(root);
+  turbo_free_json(&root);
   return 0;
 }
 
@@ -370,7 +381,7 @@ int rpc_client_call(rpc_client_t *client, const char *method, const char *params
   /* Direct coroutine call — blocks this coroutine, not the thread */
   http_response_t *resp =
       http_request(client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
-  json_serialize_free(jsonrpc_body);
+  turbo_json_serialize_free(jsonrpc_body);
 
   if (!resp)
     return -1;
@@ -403,7 +414,7 @@ int rpc_client_notify(rpc_client_t *client, const char *method, const char *para
   /* Fire and forget — send request, ignore response */
   http_response_t *resp =
       http_request(client->http_client, HTTP_POST, url, NULL, 0, jsonrpc_body, jsonrpc_len);
-  json_serialize_free(jsonrpc_body);
+  turbo_json_serialize_free(jsonrpc_body);
 
   if (!resp)
     return -1;
@@ -538,7 +549,7 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
     }
 
     if (pos + req_len + 2 >= batch_size) {
-      json_serialize_free(req);
+      turbo_json_serialize_free(req);
       for (size_t j = 0; j <= i; j++)
         free(request_ids[j]);
       free(request_ids);
@@ -548,7 +559,7 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
 
     memcpy(batch_json + pos, req, req_len);
     pos += req_len;
-    json_serialize_free(req);
+    turbo_json_serialize_free(req);
   }
 
   batch_json[pos++] = ']';
@@ -577,37 +588,37 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
     return -1;
   }
 
-  json_value_t *root = json_parse(resp->body, resp->body_len);
-  if (!root || json_type(root) != JSON_ARRAY)
+  json_value_t *root = rpc_parse_json(resp->body, resp->body_len);
+  if (!root || turbo_json_type(root) != TURBO_JSON_ARRAY)
     goto batch_parse_fail;
 
   for (size_t i = 0; i < count; i++)
     memset(&results[i], 0, sizeof(rpc_call_result_t));
 
-  size_t response_count = json_array_size(root);
+  size_t response_count = turbo_json_array_size(root);
   int parse_ok = (response_count == count);
   int *matched = (int *)calloc(count, sizeof(int));
   if (!matched) {
-    json_free(root);
+    turbo_free_json(&root);
     goto batch_fail;
   }
 
   for (size_t i = 0; i < response_count; i++) {
-    json_value_t *item = json_array_get(root, i);
+    json_value_t *item = turbo_json_array_get(root, i);
     size_t item_len = 0;
-    char *item_json = json_serialize(item, &item_len);
+    char *item_json = turbo_json_serialize(item, &item_len);
     rpc_call_result_t parsed = {0};
     int matched_idx = -1;
 
     if (!item_json || parse_jsonrpc_response(item_json, &parsed) != 0 || !parsed.id) {
       parse_ok = 0;
       if (item_json)
-        json_serialize_free(item_json);
+        turbo_json_serialize_free(item_json);
       rpc_result_free(&parsed);
       continue;
     }
 
-    json_serialize_free(item_json);
+    turbo_json_serialize_free(item_json);
 
     for (size_t j = 0; j < count; j++) {
       if (strcmp(request_ids[j], parsed.id) == 0) {
@@ -637,7 +648,7 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
   }
 
   free(matched);
-  json_free(root);
+  turbo_free_json(&root);
   http_response_free(resp);
   for (size_t i = 0; i < count; i++)
     free(request_ids[i]);
@@ -647,7 +658,7 @@ int rpc_client_batch_call(rpc_client_t *client, const char **methods, const char
 
 batch_parse_fail:
   if (root)
-    json_free(root);
+    turbo_free_json(&root);
   for (size_t i = 0; i < count; i++)
     rpc_result_set_message(&results[i], RPC_ERROR_PARSE, resp->status_code,
                            "Invalid JSON-RPC batch response");
@@ -836,7 +847,7 @@ static void stream_call_coro(coro_t *co, void *arg) {
   http_response_t *resp = http_receive_stream_post(a->client->http_client, url, a->jsonrpc_body,
                                                    a->jsonrpc_len, rpc_stream_data_callback, ctx);
 
-  json_serialize_free(a->jsonrpc_body);
+  turbo_json_serialize_free(a->jsonrpc_body);
 
   if (!ctx->failed) {
     if (!resp) {
@@ -920,7 +931,7 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   /* Create stream context */
   rpc_stream_context_t *ctx = (rpc_stream_context_t *)calloc(1, sizeof(rpc_stream_context_t));
   if (!ctx) {
-    json_serialize_free(jsonrpc_body);
+    turbo_json_serialize_free(jsonrpc_body);
     return -1;
   }
   ctx->result_cb = result_cb;
@@ -933,7 +944,7 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   stream_coro_args_t *args = (stream_coro_args_t *)malloc(sizeof(stream_coro_args_t));
   if (!args) {
     free(ctx);
-    json_serialize_free(jsonrpc_body);
+    turbo_json_serialize_free(jsonrpc_body);
     return -1;
   }
   args->client = client;
@@ -949,14 +960,14 @@ int rpc_client_call_stream(rpc_client_t *client, const char *method, const char 
   if (!coro_ctx) {
     free(ctx);
     free(args);
-    json_serialize_free(jsonrpc_body);
+    turbo_json_serialize_free(jsonrpc_body);
     return -1;
   }
 
   if (coro_context_spawn(coro_ctx, stream_call_coro, args) != 0) {
     free(ctx);
     free(args);
-    json_serialize_free(jsonrpc_body);
+    turbo_json_serialize_free(jsonrpc_body);
     return -1;
   }
 

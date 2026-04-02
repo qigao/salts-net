@@ -7,7 +7,7 @@
 #define TURL_HTTP_H
 
 #include <http_client.h>
-#include <json_parser.h>
+#include <turbo_parser.h>
 #include <stddef.h>
 #include <stdint.h>
 

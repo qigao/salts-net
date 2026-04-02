@@ -9,7 +9,7 @@ foreach(test_source ${EXTRA_SOURCES})
     add_executable(${test_name} ${test_source})
   endif()
 
-  target_link_libraries(${test_name} PRIVATE ${TARGET_NAME} TurboNet::TinyTest)
+  target_link_libraries(${test_name} PRIVATE ${TARGET_NAME} TurboUtils::TinyTest)
 
   # Certificate-generation examples need ASN.1/X.509 helpers.
   if(test_name STREQUAL "test_ed25519_minimal"

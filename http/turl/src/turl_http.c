@@ -12,13 +12,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cjwt/cjwt.h>
-#include <json_parser.h>
+#include <turbo_parser.h>
 #include "collection/turl_history.h"
 
 // Forward declarations
 static void decode_and_print_jwt(const char *jwt_str, const char *label);
 static int turl_apply_auth(http_client_t *client, const turl_http_config_t *config);
 static int turl_build_form(const turl_http_config_t *config, http_multipart_form_t *form);
+
+static json_value_t *turl_parse_json_text(const char *text, size_t len) {
+    json_value_t *root = NULL;
+    if (!text) {
+        return NULL;
+    }
+    if (turbo_parse_json((const uint8_t *)text, len, &root) != 0) {
+        return NULL;
+    }
+    return root;
+}
 
 static void turl_free_jwt_fields(cjwt_t *jwt) {
     if (!jwt)
@@ -30,16 +41,16 @@ static void turl_free_jwt_fields(cjwt_t *jwt) {
 
 static int turl_add_private_claim(json_value_t *private_claims, const char *key, json_value_t *val) {
     size_t vlen = 0;
-    char *vs = json_serialize(val, &vlen);
+    char *vs = turbo_json_serialize(val, &vlen);
     if (!vs)
         return -1;
 
-    json_value_t *copy = json_parse(vs, vlen);
-    json_serialize_free(vs);
+    json_value_t *copy = turl_parse_json_text(vs, vlen);
+    turbo_json_serialize_free(vs);
     if (!copy)
         return -1;
 
-    json_object_add(private_claims, key, copy);
+    turbo_json_object_add(private_claims, key, copy);
     return 0;
 }
 
@@ -78,44 +89,44 @@ static int turl_apply_auth(http_client_t *client, const turl_http_config_t *conf
     if (!rendered_claims)
         goto cleanup;
 
-    claims_json = json_parse(rendered_claims, strlen(rendered_claims));
-    if (!claims_json || json_type(claims_json) != JSON_OBJECT)
+    claims_json = turl_parse_json_text(rendered_claims, strlen(rendered_claims));
+    if (!claims_json || turbo_json_type(claims_json) != TURBO_JSON_OBJECT)
         goto cleanup;
 
     jwt.header.alg = alg_hs256;
 
-    json_value_t *iss = json_object_get(claims_json, "iss");
-    if (iss && json_type(iss) == JSON_STRING) {
-        jwt.iss = strdup(json_string(iss));
+    json_value_t *iss = turbo_json_object_get(claims_json, "iss");
+    if (iss && turbo_json_type(iss) == TURBO_JSON_STRING) {
+        jwt.iss = strdup(turbo_json_string(iss));
         if (!jwt.iss)
             goto cleanup;
     }
 
-    json_value_t *sub = json_object_get(claims_json, "sub");
-    if (sub && json_type(sub) == JSON_STRING) {
-        jwt.sub = strdup(json_string(sub));
+    json_value_t *sub = turbo_json_object_get(claims_json, "sub");
+    if (sub && turbo_json_type(sub) == TURBO_JSON_STRING) {
+        jwt.sub = strdup(turbo_json_string(sub));
         if (!jwt.sub)
             goto cleanup;
     }
 
-    json_value_t *exp = json_object_get(claims_json, "exp");
-    if (exp && json_type(exp) == JSON_NUMBER) {
+    json_value_t *exp = turbo_json_object_get(claims_json, "exp");
+    if (exp && turbo_json_type(exp) == TURBO_JSON_NUMBER) {
         jwt.exp = malloc(sizeof(int64_t));
         if (!jwt.exp)
             goto cleanup;
-        *jwt.exp = (int64_t)json_number(exp);
+        *jwt.exp = (int64_t)turbo_json_number(exp);
     }
 
-    private_claims = json_create_object();
+    private_claims = turbo_json_create_object();
     if (!private_claims)
         goto cleanup;
 
-    size_t obj_size = json_object_size(claims_json);
+    size_t obj_size = turbo_json_object_size(claims_json);
     for (size_t ci = 0; ci < obj_size; ci++) {
-        const char *key = json_object_key(claims_json, ci);
+        const char *key = turbo_json_object_key(claims_json, ci);
         if (strcmp(key, "iss") == 0 || strcmp(key, "sub") == 0 || strcmp(key, "exp") == 0)
             continue;
-        if (turl_add_private_claim(private_claims, key, json_object_value(claims_json, ci)) != 0)
+        if (turl_add_private_claim(private_claims, key, turbo_json_object_value(claims_json, ci)) != 0)
             goto cleanup;
     }
     jwt.private_claims = private_claims;
@@ -133,9 +144,9 @@ cleanup:
     free(token);
     turl_free_jwt_fields(&jwt);
     if (private_claims)
-        json_free(private_claims);
+        turbo_free_json(&private_claims);
     if (claims_json)
-        json_free(claims_json);
+        turbo_free_json(&claims_json);
     free(rendered_claims);
     return rc;
 }
@@ -438,12 +449,12 @@ static void decode_and_print_jwt(const char *jwt_str, const char *label) {
         memcpy(json_str, decoded, decoded_len);
         json_str[decoded_len] = '\0';
 
-        json_value_t *json = json_parse(json_str, decoded_len);
+        json_value_t *json = turl_parse_json_text(json_str, decoded_len);
         if (json) {
-            char *pretty = json_serialize_pretty(json, NULL);
+            char *pretty = turbo_json_serialize_pretty(json, NULL);
             TLOG_INFO("{}", pretty);
-            json_serialize_free(pretty);
-            json_free(json);
+            turbo_json_serialize_free(pretty);
+            turbo_free_json(&json);
         } else {
             TLOG_INFO("{}", json_str);
         }

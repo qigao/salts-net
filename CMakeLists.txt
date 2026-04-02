@@ -52,15 +52,14 @@ find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(llhttp CONFIG REQUIRED)
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
+find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS}")
 
 # Additional components
 add_subdirectory(tools)
-include(FindTools)
+include(FindTools) 
 add_subdirectory(vendor)
-add_subdirectory(shared)
-add_subdirectory(parser)
-
 add_subdirectory(CoroNet)
+add_subdirectory(wasm3)
 add_subdirectory(redis)
 add_subdirectory(http)
 
@@ -72,7 +71,6 @@ add_subdirectory(s3)
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 
-add_subdirectory(mustache)
 add_subdirectory(ice)
 add_subdirectory(lb)
 add_subdirectory(tproxy)

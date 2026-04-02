@@ -158,6 +158,28 @@ static void finish_current_request(iris_connection_ctx_t *ctx) {
   reset_request_parser(ctx);
 }
 
+static int request_body_fully_received(const http_context_t *ctx) {
+  const char *content_length;
+  char *end = NULL;
+  unsigned long long expected = 0;
+
+  if (!ctx) {
+    return 1;
+  }
+
+  content_length = get_req(&ctx->headers, "Content-Length");
+  if (!content_length || content_length[0] == '\0') {
+    return 0;
+  }
+
+  expected = strtoull(content_length, &end, 10);
+  if (end == content_length || (end && *end != '\0')) {
+    return 0;
+  }
+
+  return ctx->body_length >= (size_t)expected;
+}
+
 static int drain_streaming_request_body(iris_connection_ctx_t *ctx) {
   while (ctx && ctx->request_ctx && !ctx->request_ctx->message_complete) {
     if (ctx->pending_body_chunk_len > ctx->pending_body_chunk_offset) {
@@ -165,14 +187,6 @@ static int drain_streaming_request_body(iris_connection_ctx_t *ctx) {
       ctx->pending_body_chunk_len = 0;
       ctx->pending_body_chunk_offset = 0;
       http_context_resume(ctx->request_ctx);
-      if (ctx->parsed_offset == ctx->buffer_used) {
-        size_t flushed = 0;
-        int flush_result = http_context_execute(ctx->request_ctx, "", 0, &flushed);
-        (void)flushed;
-        if (flush_result == 1) {
-          return 1;
-        }
-      }
       continue;
     }
 
@@ -200,6 +214,12 @@ static int drain_streaming_request_body(iris_connection_ctx_t *ctx) {
       if (parse_result == 0) {
         continue;
       }
+    }
+
+    if (ctx->parsed_offset == ctx->buffer_used &&
+        request_body_fully_received(ctx->request_ctx)) {
+      ctx->request_ctx->message_complete = 1;
+      return 1;
     }
 
     {

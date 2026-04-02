@@ -5,7 +5,7 @@
 #include <string.h>
 #include <time.h>
 #include <platform.h>
-#include <json_parser.h>
+#include <turbo_parser.h>
 
 #define HISTORY_FILE ".turl_history.json"
 
@@ -13,7 +13,7 @@ static int turl_history_add(json_value_t *obj, const char *key, json_value_t *va
     if (!obj || !key || !value) {
         return -1;
     }
-    json_object_add(obj, key, value);
+    turbo_json_object_add(obj, key, value);
     return 0;
 }
 
@@ -36,9 +36,9 @@ int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
         return -1;
     }
 
-    entry = json_create_object();
-    req = json_create_object();
-    resp = json_create_object();
+    entry = turbo_json_create_object();
+    req = turbo_json_create_object();
+    resp = turbo_json_create_object();
     if (!entry || !req || !resp) {
         goto cleanup;
     }
@@ -52,16 +52,16 @@ int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
         goto cleanup;
     }
 
-    if (turl_history_add(entry, "timestamp", json_create_string(timestamp)) != 0 ||
+    if (turl_history_add(entry, "timestamp", turbo_json_create_string(timestamp)) != 0 ||
         turl_history_add(req, "method",
-                         json_create_string(config->method_str ? config->method_str : "GET")) != 0 ||
-        turl_history_add(req, "url", json_create_string(rendered_url)) != 0 ||
-        turl_history_add(resp, "status", json_create_number(status_code)) != 0) {
+                         turbo_json_create_string(config->method_str ? config->method_str : "GET")) != 0 ||
+        turl_history_add(req, "url", turbo_json_create_string(rendered_url)) != 0 ||
+        turl_history_add(resp, "status", turbo_json_create_number(status_code)) != 0) {
         goto cleanup;
     }
 
     if (rendered_header_count > 0 && rendered_headers) {
-        req_headers = json_create_object();
+        req_headers = turbo_json_create_object();
         if (!req_headers) {
             goto cleanup;
         }
@@ -86,7 +86,7 @@ int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
                 val++;
             }
 
-            if (turl_history_add(req_headers, h, json_create_string(val)) != 0) {
+            if (turl_history_add(req_headers, h, turbo_json_create_string(val)) != 0) {
                 *colon = ':';
                 goto cleanup;
             }
@@ -100,21 +100,24 @@ int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
     }
 
     if (config->body && config->body_len == 0) {
-        if (turl_history_add(req, "body", json_create_string(config->body)) != 0) {
+        if (turl_history_add(req, "body", turbo_json_create_string(config->body)) != 0) {
             goto cleanup;
         }
     }
 
     if (response_headers) {
-        if (turl_history_add(resp, "headers", json_create_string(response_headers)) != 0) {
+        if (turl_history_add(resp, "headers", turbo_json_create_string(response_headers)) != 0) {
             goto cleanup;
         }
     }
 
     if (response_body && response_len > 0) {
-        json_value_t *body_json = json_parse(response_body, response_len);
+        json_value_t *body_json = NULL;
+        if (turbo_parse_json((const uint8_t *)response_body, response_len, &body_json) != 0) {
+            body_json = NULL;
+        }
         if (!body_json) {
-            body_json = json_create_string(response_body);
+            body_json = turbo_json_create_string(response_body);
         }
         if (turl_history_add(resp, "body", body_json) != 0) {
             goto cleanup;
@@ -133,7 +136,7 @@ int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
         goto cleanup;
     }
 
-    json_str = json_serialize(entry, NULL);
+    json_str = turbo_json_serialize(entry, NULL);
     if (!json_str) {
         goto cleanup;
     }
@@ -146,22 +149,22 @@ int turl_history_log(const turl_http_config_t *config, const char *rendered_url,
 
 cleanup:
     if (json_str) {
-        json_serialize_free(json_str);
+        turbo_json_serialize_free(json_str);
     }
     if (f) {
         fclose(f);
     }
     if (req_headers) {
-        json_free(req_headers);
+        turbo_free_json(&req_headers);
     }
     if (req) {
-        json_free(req);
+        turbo_free_json(&req);
     }
     if (resp) {
-        json_free(resp);
+        turbo_free_json(&resp);
     }
     if (entry) {
-        json_free(entry);
+        turbo_free_json(&entry);
     }
     return rc;
 }

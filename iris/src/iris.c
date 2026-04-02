@@ -2,6 +2,7 @@
 #include "iris_app.h"
 #include "middleware.h"
 #include "error_recovery.h"
+#include "wasm.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -29,4 +30,5 @@ void reset_router(void) {
 
     /* Also reset legacy global middleware */
     reset_middleware();
+    iris_wasm_reset();
 }

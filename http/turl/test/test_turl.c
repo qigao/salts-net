@@ -1,5 +1,5 @@
 #include <tinytest.h>
-#include <json_parser.h>
+#include <turbo_parser.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +7,47 @@
 #include "turl_http.h"
 #include "collection/turl_history.h"
 #include "collection/turl_collection.h"
+
+static json_value_t *turl_test_parse_json_file(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    long size;
+    size_t read_size;
+    char *buffer;
+    json_value_t *root = NULL;
+
+    if (!fp) {
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    size = ftell(fp);
+    if (size < 0 || fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+
+    buffer = (char *)malloc((size_t)size + 1);
+    if (!buffer) {
+        fclose(fp);
+        return NULL;
+    }
+
+    read_size = fread(buffer, 1, (size_t)size, fp);
+    fclose(fp);
+    if (read_size != (size_t)size) {
+        free(buffer);
+        return NULL;
+    }
+
+    buffer[size] = '\0';
+    if (turbo_parse_json((const uint8_t *)buffer, (size_t)size, &root) != 0) {
+        root = NULL;
+    }
+    free(buffer);
+    return root;
+}
 
 spec("turl_unit") {
     before_each() {
@@ -21,23 +62,23 @@ spec("turl_unit") {
     }
 
     it("should render template correctly") {
-        json_value_t *ctx = json_create_object();
-        json_object_set_string(ctx, "name", "turl");
-        json_object_set_string(ctx, "version", "1.0");
+        json_value_t *ctx = turbo_json_create_object();
+        turbo_json_object_set_string(ctx, "name", "turl");
+        turbo_json_object_set_string(ctx, "version", "1.0");
 
         char *res = turl_render_template("Hello {{name}} v{{version}}", ctx);
         check_not_null(res);
         check_str_eq(res, "Hello turl v1.0");
         free(res);
 
-        json_free(ctx);
+        turbo_free_json(&ctx);
     }
 
     it("should render complex headers and URLs") {
-        json_value_t *ctx = json_create_object();
-        json_object_set_string(ctx, "base_url", "http://api.example.com");
-        json_object_set_string(ctx, "token", "super-secret-token");
-        json_object_set_string(ctx, "user_id", "42");
+        json_value_t *ctx = turbo_json_create_object();
+        turbo_json_object_set_string(ctx, "base_url", "http://api.example.com");
+        turbo_json_object_set_string(ctx, "token", "super-secret-token");
+        turbo_json_object_set_string(ctx, "user_id", "42");
 
         char *url = turl_render_template("{{base_url}}/users/{{user_id}}", ctx);
         check_str_eq(url, "http://api.example.com/users/42");
@@ -47,13 +88,13 @@ spec("turl_unit") {
         check_str_eq(auth_header, "Authorization: Bearer super-secret-token");
         free(auth_header);
 
-        json_free(ctx);
+        turbo_free_json(&ctx);
     }
 
     it("should render JWT claims correctly") {
-        json_value_t *ctx = json_create_object();
-        json_object_set_string(ctx, "sub", "user_123");
-        json_object_set_string(ctx, "role", "admin");
+        json_value_t *ctx = turbo_json_create_object();
+        turbo_json_object_set_string(ctx, "sub", "user_123");
+        turbo_json_object_set_string(ctx, "role", "admin");
         
         const char *claims_tmpl = "{\"sub\": \"{{sub}}\", \"role\": \"{{role}}\", \"iat\": 1600000000}";
         char *rendered = turl_render_template(claims_tmpl, ctx);
@@ -64,7 +105,7 @@ spec("turl_unit") {
         check_str_eq(rendered, "{\"sub\": \"user_123\", \"role\": \"admin\", \"iat\": 1600000000}");
         
         free(rendered);
-        json_free(ctx);
+        turbo_free_json(&ctx);
     }
 
     it("should fail request when JWT claims are invalid JSON") {
@@ -104,18 +145,19 @@ spec("turl_unit") {
         check_not_null(fgets(line, sizeof(line), f));
         fclose(f);
         
-        json_value_t *history = json_parse(line, strlen(line));
+        json_value_t *history = NULL;
+        check_int_eq(turbo_parse_json((const uint8_t *)line, strlen(line), &history), 0);
         check_not_null(history);
         
-        json_value_t *req = json_object_get(history, "request");
-        json_value_t *req_headers = json_object_get(req, "headers");
+        json_value_t *req = turbo_json_object_get(history, "request");
+        json_value_t *req_headers = turbo_json_object_get(req, "headers");
         check_not_null(req_headers);
         
         // Check both headers exist in history
-        check_not_null(json_object_get(req_headers, "Content-Type"));
-        check_not_null(json_object_get(req_headers, "X-Custom-Header"));
+        check_not_null(turbo_json_object_get(req_headers, "Content-Type"));
+        check_not_null(turbo_json_object_get(req_headers, "X-Custom-Header"));
         
-        json_free(history);
+        turbo_free_json(&history);
     }
 
     it("should parse collection correctly") {
@@ -131,15 +173,15 @@ spec("turl_unit") {
             fclose(f);
         }
         
-        json_value_t *coll = json_parse_file("test_collection.json");
+        json_value_t *coll = turl_test_parse_json_file("test_collection.json");
         check_not_null(coll);
-        check_str_eq(json_get_string(coll, "name"), "test_coll");
+        check_str_eq(turbo_json_get_string(coll, "name"), "test_coll");
         
-        json_value_t *reqs = json_object_get(coll, "requests");
+        json_value_t *reqs = turbo_json_object_get(coll, "requests");
         check_not_null(reqs);
-        check_int_eq(json_array_size(reqs), 2);
+        check_int_eq(turbo_json_array_size(reqs), 2);
         
-        json_free(coll);
+        turbo_free_json(&coll);
     }
 
     it("should fail collection when a request is missing url") {

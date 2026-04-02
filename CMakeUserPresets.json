@@ -8,7 +8,7 @@
             "name": "win-paths",
             "hidden": true,
             "cacheVariables": {
-                "EXTERNAL_ROOT": "c:/projects/cpp/external/pkgs",
+                "TURBO_UTILS": "c:/projects/cpp/external/pkgs/turbo-utils/",
                 "CMAKE_MAKE_PROGRAM": "C:/Users/lockg/scoop/shims/ninja.exe",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
                 "VCPKG_MANIFEST_MODE": "ON"

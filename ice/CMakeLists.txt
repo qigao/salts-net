@@ -21,7 +21,7 @@ target_include_directories(
                    $<INSTALL_INTERFACE:include>)
 
 target_link_libraries(turbo_ice PUBLIC TurboNet::CoroNet OpenSSL::SSL
-                                       OpenSSL::Crypto TurboNet::Utils)
+                                       OpenSSL::Crypto TurboUtils::Utils)
 
 if(WIN32)
   target_link_libraries(turbo_ice PUBLIC ws2_32 iphlpapi psapi)
@@ -57,12 +57,12 @@ install(
 
 if(BUILD_TESTS)
   add_executable(test_stun tests/test_stun.c)
-  target_link_libraries(test_stun PRIVATE turbo_ice TurboNet::TinyTest)
+  target_link_libraries(test_stun PRIVATE turbo_ice TurboUtils::TinyTest)
   add_test(NAME stun COMMAND test_stun)
   set_target_properties(test_stun PROPERTIES FOLDER ice/tests)
 
   add_executable(test_ice tests/test_ice.c)
-  target_link_libraries(test_ice PRIVATE turbo_ice TurboNet::TinyTest)
+  target_link_libraries(test_ice PRIVATE turbo_ice TurboUtils::TinyTest)
   add_test(NAME ice COMMAND test_ice)
   set_target_properties(test_ice PROPERTIES FOLDER ice/tests)
 endif()

@@ -25,11 +25,12 @@ turbonet_configure_target(${TARGET_NAME}
 # Link libraries first - vcpkg style
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::CoroNet
+  PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboUtils::Utils TurboNet::CoroNet
+          TurboNet::Wasm3
   PRIVATE llhttp::llhttp_static
           kcp::kcp
           c-ares::cares
-          TurboNet::Parser
+          TurboUtils::Parser
           cjwt
           Threads::Threads)
 

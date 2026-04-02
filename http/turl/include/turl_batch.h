@@ -6,7 +6,7 @@
 #ifndef TURL_BATCH_H
 #define TURL_BATCH_H
 
-#include <json_parser.h>
+#include <turbo_parser.h>
 #include <stddef.h>
 #include <stdint.h>
 

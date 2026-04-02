@@ -3,7 +3,6 @@
 #include "http_client_internal_h.h"
 #include "http_common_internal.h"
 #include "cookie_parser.h"
-#include <json_parser.h>
 #include "turbo_parser.h"
 // clang-format on
 #include "base64_utils.h"
@@ -643,7 +642,10 @@ void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *
   if (!c || !secret || !claims_json)
     return;
 
-  json_value_t *private_claims = json_parse(claims_json, strlen(claims_json));
+  json_value_t *private_claims = NULL;
+  if (turbo_parse_json((const uint8_t *)claims_json, strlen(claims_json), &private_claims) != 0) {
+    private_claims = NULL;
+  }
   if (!private_claims) {
     free(c->auth_header);
     c->auth_header = NULL;
@@ -656,7 +658,7 @@ void http_client_set_jwt_auth(http_client_t *c, const char *secret, const char *
 
   char *token = NULL;
   cjwt_code_t rv = cjwt_encode(&jwt, (const uint8_t *)secret, strlen(secret), &token);
-  json_free(private_claims);
+  turbo_free_json(&private_claims);
 
   if (rv != CJWTE_OK || !token) {
     free(c->auth_header);
@@ -1894,9 +1896,13 @@ int http_response_is_json(http_response_t *r) {
 }
 
 json_value_t *http_response_parse_json(http_response_t *r) {
+  json_value_t *json = NULL;
   if (!r || !r->body || r->body_len == 0)
     return NULL;
-  return json_parse(r->body, r->body_len);
+  if (turbo_parse_json((const uint8_t *)r->body, r->body_len, &json) != 0) {
+    return NULL;
+  }
+  return json;
 }
 
 /* ── Content helpers ──────────────────────────────────────────────── */

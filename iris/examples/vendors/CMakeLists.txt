@@ -10,7 +10,7 @@ target_include_directories(iris_vendors PUBLIC
 
 target_link_libraries(iris_vendors 
     PUBLIC 
-        TurboNet::DotEnvParser
+        TurboUtils::Parser
     PRIVATE 
         iris
 )

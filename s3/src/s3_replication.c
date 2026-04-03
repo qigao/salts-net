@@ -4,7 +4,6 @@
 #include "s3_http.h"
 #include "s3_client_internal.h"
 #include "s3_xml_helpers.h"
-#include <cxml/cxml.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,47 +34,47 @@ s3_replication_config_t s3_get_bucket_replication(s3_client_t* client, const cha
     s3_error_t e = S3_OK;
     if (!s3_is_ok(hres.error)) { e = hres.error; hres.error = S3_OK; }
     else if (hres.status_code == 200) {
-        void* doc = cxml_load_string(hres.body);
-        if (doc) {
-            cxml_elem_node* root = cxml_get_root_element(doc);
-            res.role = mxml_child_text_dup(root, "Role");
+        s3_xml_doc_t* doc = NULL;
+        if (s3_xml_parse(hres.body, &doc) == 0) {
+            s3_xml_node_t* root = s3_xml_root(doc);
+            res.role = s3_xml_child_text_dup(root, "Role");
 
-            cxml_list items;
-            cxml_list_init(&items);
-            cxml_find_all(root, "<Rule>/", &items);
+            s3_xml_list_t items;
+            s3_xml_list_init(&items);
+            s3_xml_find_all(root, "<Rule>/", &items);
             int count = 0;
-            cxml_for(n1, &items) { (void)n1; count++; }
+            s3_xml_for(n1, &items) { (void)n1; count++; }
 
             if (count > 0) {
                 res.rules = calloc((size_t)count, sizeof(s3_replication_rule_t));
                 res.count = count;
                 int idx = 0;
-                cxml_for(n2, &items) {
-                    cxml_elem_node* rnode = (cxml_elem_node*)n2;
+                s3_xml_for(n2, &items) {
+                    s3_xml_node_t* rnode = (s3_xml_node_t*)n2;
                     s3_replication_rule_t* r = &res.rules[idx];
-                    r->id = mxml_child_text_dup(rnode, "ID");
-                    r->prefix = mxml_child_text_dup(rnode, "Prefix");
-                    tstr_t status = mxml_child_text_dup(rnode, "Status");
+                    r->id = s3_xml_child_text_dup(rnode, "ID");
+                    r->prefix = s3_xml_child_text_dup(rnode, "Prefix");
+                    tstr_t status = s3_xml_child_text_dup(rnode, "Status");
                     r->enabled = (status && strcmp(status, "Enabled") == 0);
                     tstr_free(status);
 
-                    cxml_elem_node* dest = cxml_find(rnode, "<Destination>/");
+                    s3_xml_node_t* dest = s3_xml_find(rnode, "<Destination>/");
                     if (dest) {
-                        r->destination_bucket_arn = mxml_child_text_dup(dest, "Bucket");
-                        r->destination_storage_class = mxml_child_text_dup(dest, "StorageClass");
+                        r->destination_bucket_arn = s3_xml_child_text_dup(dest, "Bucket");
+                        r->destination_storage_class = s3_xml_child_text_dup(dest, "StorageClass");
                     }
 
-                    cxml_elem_node* dmc = cxml_find(rnode, "<DeleteMarkerReplication>/");
+                    s3_xml_node_t* dmc = s3_xml_find(rnode, "<DeleteMarkerReplication>/");
                     if (dmc) {
-                        tstr_t s = mxml_child_text_dup(dmc, "Status");
+                        tstr_t s = s3_xml_child_text_dup(dmc, "Status");
                         r->replicate_delete_markers = (s && strcmp(s, "Enabled") == 0);
                         tstr_free(s);
                     }
                     idx++;
                 }
             }
-            cxml_list_free(&items);
-            cxml_delete_document(doc);
+            s3_xml_list_free(&items);
+            s3_xml_free(&doc);
         } else {
             e = s3_error_make(-1, "Failed to parse replication XML");
         }

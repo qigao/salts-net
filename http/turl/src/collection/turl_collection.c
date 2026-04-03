@@ -110,9 +110,15 @@ int turl_run_collection(const char *collection_file, const turl_http_config_t *g
                 const char *val = turbo_json_get_string(headers_obj, key);
                 if (key && val) {
                     char buf[1024];
-                    int header_len = fmt(buf, sizeof(buf), "{}: {}", key, val);
-                    if (header_len <= 0 || (size_t)header_len >= sizeof(buf)) {
+                    size_t required_len = strlen(key) + strlen(val) + 2;
+                    if (required_len >= sizeof(buf)) {
                         TLOG_ERROR("Collection header too long: {}", key);
+                        header_error = 1;
+                        break;
+                    }
+                    int header_len = fmt(buf, sizeof(buf), "{}: {}", key, val);
+                    if (header_len <= 0) {
+                        TLOG_ERROR("Failed to format collection header: {}", key);
                         header_error = 1;
                         break;
                     }

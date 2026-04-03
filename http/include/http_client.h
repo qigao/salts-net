@@ -291,8 +291,8 @@ CXX_C_API json_value_t *http_response_parse_json(http_response_t *response);
 
 /**
  * @brief Gets the content type of the response.
- * @return A newly allocated string containing the content type. The caller must free it. NULL if
- * not found.
+ * @return A newly allocated C string containing the content type. The caller must free() it. NULL
+ * if not found.
  */
 CXX_C_API char *http_response_content_type(http_response_t *response);
 CXX_C_API size_t http_response_content_length(http_response_t *response);

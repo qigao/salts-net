@@ -7,10 +7,6 @@ find_package(OpenSSL REQUIRED)
 # ── Include directories ────────────────────────────────────────────────
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
-  ${CMAKE_SOURCE_DIR}/shared/tinytest
-  ${CMAKE_SOURCE_DIR}/parser/internal/mime_parser/include
-  ${CMAKE_SOURCE_DIR}/CoroNet/include
 )
 
 # ── Source files ───────────────────────────────────────────────────────
@@ -35,9 +31,9 @@ add_library(turbonet_email STATIC ${EMAIL_SOURCES} ${EMAIL_HEADERS})
 
 target_link_libraries(turbonet_email
   PUBLIC
-    turbo_utils
+    TurboUtils::Utils
     mime_parser
-    CoroNet
+    TurboNet::CoroNet
     OpenSSL::SSL
     OpenSSL::Crypto
 )
@@ -59,13 +55,11 @@ add_executable(test_email
 
 target_link_libraries(test_email
   turbonet_email
-  turbo_utils
+  TurboUtils::Utils
 )
 
 target_include_directories(test_email PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
-  ${CMAKE_SOURCE_DIR}/shared/tinytest
 )
 set_target_properties(test_email PROPERTIES FOLDER "email")
 # ── Add to tests ───────────────────────────────────────────────────────
@@ -77,13 +71,11 @@ add_executable(test_message
 
 target_link_libraries(test_message
   turbonet_email
-  turbo_utils
+  TurboUtils::Utils
 )
 
 target_include_directories(test_message PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
-  ${CMAKE_SOURCE_DIR}/shared/tinytest
 )
 set_target_properties(test_message PROPERTIES FOLDER "email")
 # ── Add to tests ───────────────────────────────────────────────────────
@@ -95,13 +87,11 @@ add_executable(test_email_integration
 
 target_link_libraries(test_email_integration
   turbonet_email
-  turbo_utils
+  TurboUtils::Utils
 )
 
 target_include_directories(test_email_integration PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
-  ${CMAKE_SOURCE_DIR}/shared/tinytest
 )
 
 set_target_properties(test_email_integration PROPERTIES FOLDER "email")
@@ -114,12 +104,11 @@ add_executable(example_email_send
 
 target_link_libraries(example_email_send
   turbonet_email
-  turbo_utils
+  TurboUtils::Utils
 )
 
 target_include_directories(example_email_send PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
 )
 
 set_target_properties(example_email_send PROPERTIES FOLDER "email/examples")
@@ -130,12 +119,11 @@ add_executable(example_email_receive
 
 target_link_libraries(example_email_receive
   turbonet_email
-  turbo_utils
+  TurboUtils::Utils
 )
 
 target_include_directories(example_email_receive PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
 )
 
 set_target_properties(example_email_receive PROPERTIES FOLDER "email/examples")
@@ -146,12 +134,11 @@ add_executable(example_email_imap
 
 target_link_libraries(example_email_imap
   turbonet_email
-  turbo_utils
+  TurboUtils::Utils
 )
 
 target_include_directories(example_email_imap PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/shared/utils/include
 )
 
 set_target_properties(example_email_imap PROPERTIES FOLDER "email/examples")

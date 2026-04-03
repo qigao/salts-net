@@ -6,8 +6,10 @@
 #include <stc/cstr.h>
 
 static void hex_encode(const unsigned char* data, size_t len, char* out) {
+    static const char hex[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
-        fmt(out + (i * 2), 3, "{:02x}", data[i]);
+        out[i * 2] = hex[(data[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = hex[data[i] & 0x0f];
     }
     out[len * 2] = '\0';
 }

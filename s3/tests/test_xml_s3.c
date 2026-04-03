@@ -127,7 +127,7 @@ static void run_in_coro2(coro_context_t *ctx, test_fn_t2 fn, void *arg) {
   coro_context_run(ctx, TURBO_RUN_DEFAULT);
 }
 
-spec("cxml S3 XML Parser Tests") {
+spec("S3 XML Parser Tests") {
 
   it("should parse 1 bucket") {
     tstr_t xml = generate_list_buckets_xml(1);
@@ -237,6 +237,12 @@ spec("cxml S3 XML Parser Tests") {
   }
 
   it("should parse real play.min.io ListBuckets response") {
+    const char *run_network = getenv("S3_RUN_NETWORK_TESTS");
+    if (!run_network || strcmp(run_network, "1") != 0) {
+      printf("  skipping network test; set S3_RUN_NETWORK_TESTS=1 to enable\n");
+      return;
+    }
+
     coro_context_t *ctx = coro_context_create(NULL);
     void *args[2] = {__bdd_config__, ctx};
     run_in_coro2(ctx, test_real_list_buckets, args);

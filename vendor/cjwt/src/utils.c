@@ -33,6 +33,11 @@
 /*----------------------------------------------------------------------------*/
 int split(const char *full, size_t len, struct split_jwt *split)
 {
+    /* Trim trailing whitespace from the full input to avoid it being included in the last section */
+    while (len > 0 && (full[len - 1] == '\r' || full[len - 1] == '\n' || full[len - 1] == ' ' || full[len - 1] == '\t')) {
+        len--;
+    }
+
     size_t dots[6] = { 0, len, len, len, len, len };
 
     memset(split, 0, sizeof(struct split_jwt));
@@ -97,19 +102,25 @@ void *b64url_decode_with_alloc(const uint8_t *src, size_t len, size_t *out_len)
     char *norm = (char *)malloc(norm_len + 1);
     if (!norm) return NULL;
 
+    size_t actual_len = 0;
     for (size_t i = 0; i < len; i++) {
-        if (src[i] == '-') norm[i] = '+';
-        else if (src[i] == '_') norm[i] = '/';
-        else norm[i] = (char)src[i];
+        if (src[i] == '-' ) norm[actual_len++] = '+';
+        else if (src[i] == '_') norm[actual_len++] = '/';
+        else if (src[i] == '\r' || src[i] == '\n' || src[i] == ' ' || src[i] == '\t') continue;
+        else norm[actual_len++] = (char)src[i];
     }
+    
+    // Normalize len to the padding boundary
+    size_t norm_len_padded = (actual_len + 3) & ~3;
+    
     // Add padding if missing
-    for (size_t i = len; i < norm_len; i++) {
+    for (size_t i = actual_len; i < norm_len_padded; i++) {
         norm[i] = '=';
     }
-    norm[norm_len] = '\0';
+    norm[norm_len_padded] = '\0';
 
     // Output buffer: max 3/4 of input size
-    size_t out_max = (norm_len / 4) * 3;
+    size_t out_max = (norm_len_padded / 4) * 3;
     uint8_t *out = (uint8_t *)malloc(out_max + 1);
     if (!out) {
         free(norm);
@@ -117,7 +128,7 @@ void *b64url_decode_with_alloc(const uint8_t *src, size_t len, size_t *out_len)
     }
 
     size_t decoded_len = 0;
-    if (base64_decode(norm, norm_len, (char *)out, &decoded_len, 0) != 1) {
+    if (base64_decode(norm, norm_len_padded, (char *)out, &decoded_len, 0) != 1) {
         free(norm);
         free(out);
         return NULL;

@@ -1,15 +1,15 @@
 # turbo_wasm3
 
-`turbo_wasm3` is the TurboUtils integration layer for `wasm3`.
+`turbo_wasm3` is the TurboNet integration layer for `wasm3`.
 
 For host-function design and implementation, see
-[HOST_FUNCTION_GUIDE.md](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/HOST_FUNCTION_GUIDE.md).
+[HOST_FUNCTION_GUIDE.md](C:/projects/cpp/TurboNet/TurboNet/wasm3/HOST_FUNCTION_GUIDE.md).
 For copy-paste scaffolding, see
-[HOST_FUNCTION_TEMPLATE.md](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/HOST_FUNCTION_TEMPLATE.md).
+[HOST_FUNCTION_TEMPLATE.md](C:/projects/cpp/TurboNet/TurboNet/wasm3/HOST_FUNCTION_TEMPLATE.md).
 
 ## Layout
 
-- `wasm3`: interpreter core plus the TurboUtils integration layer
+- `wasm3`: interpreter core plus the TurboNet integration layer
 - `shared/utils`: filesystem, path, and clock primitives used by the simple WASI host
 - `CoroNet`: coroutine socket implementation
 - `wasm3/source/turbo_wasm3.c`: the bridge that maps CoroNet sockets onto WASI socket calls
@@ -22,7 +22,7 @@ That would turn a vendor library into a project-specific fork. The bridge keeps 
 
 - `m3` stays reusable
 - `CoroNet` stays unaware of vendor layout
-- TurboUtils owns the integration policy in one place
+- TurboNet owns the integration policy in one place
 
 ## Minimal use
 
@@ -49,9 +49,9 @@ WASI is not enough for every host feature. `turbo_wasm3` now exposes a thin host
 
 - add host linkers with `turbo_wasm3_vm_add_host_linker()`
 - attach opaque host state with `turbo_wasm3_vm_set_host_user_data()`
-- enable the built-in `TurboUtils` imports with `turbo_wasm3_vm_enable_turboutils_host()`
+- enable the built-in `TurboNet` imports with `turbo_wasm3_vm_enable_host()`
 
-The built-in `TurboUtils` module is intentionally small:
+The built-in `TurboNet` module is intentionally small:
 
 - `abi_version() -> i32`
 - `clock_time_ms() -> i64`
@@ -78,7 +78,7 @@ The built-in `TurboUtils` module is intentionally small:
 - `db_reset(stmt) -> i32`
 - `db_finalize(stmt) -> i32`
 
-An optional HTTP linker extends the same `TurboUtils` module with:
+An optional HTTP linker extends the same `TurboNet` module with:
 
 - `http_client_open(ptr, len, out_client) -> i32`
 - `http_client_close(client) -> i32`
@@ -93,19 +93,34 @@ An optional HTTP linker extends the same `TurboUtils` module with:
 - `http_response_error(resp, ptr, len, out_written) -> i32`
 - `http_response_close(resp) -> i32`
 
-This keeps guest code stable while leaving backend policy in TurboUtils:
+An optional Redis linker extends the same `TurboNet` module with:
+
+- `redis_client_open(host_ptr, host_len, port, out_client) -> i32`
+- `redis_client_close(client) -> i32`
+- `redis_client_error(client, ptr, len, out_written) -> i32`
+- `redis_command(client, argc, argv_ptr, argv_len_ptr, out_reply) -> i32`
+- `redis_reply_close(reply) -> i32`
+- `redis_reply_type(reply, out_type) -> i32`
+- `redis_reply_i64(reply, out_value) -> i32`
+- `redis_reply_text(reply, ptr, len, out_written) -> i32`
+- `redis_reply_array_len(reply, out_len) -> i32`
+- `redis_reply_array_at(reply, index, out_child_reply) -> i32`
+
+This keeps guest code stable while leaving backend policy in TurboNet:
 
 - filesystem and clocks still come from `shared/utils`
 - socket transport still comes from `CoroNet`
 - database handles now go through a shared DB registry; the built-in adapter uses `sqlite3`
+- Redis commands now go through a shared reply registry backed by `tedis`
 - future non-sqlite databases can still plug in through `turbo_wasm3_db_ops_t`
 
 ## Example and test
 
 - `turbo_wasm3_example` runs `wasm3/test/wasi/simple/test.wasm` through the VM wrapper
-- `turbo_wasm3_db_example` runs a standalone wasm guest that uses only `TurboUtils.db_*` imports, including `double/blob/null` bindings and statement error reporting
+- `turbo_wasm3_db_example` runs a standalone wasm guest that uses only `TurboNet.db_*` imports, including `double/blob/null` bindings and statement error reporting
 - `turbo_wasm3_db_crud_example` runs a standalone wasm guest that performs create, read, update, and delete through the same host ABI
 - `turbo_wasm3_http_example` runs a standalone wasm guest that exercises the optional HTTP host linker without needing external network success
+- `test_turbo_wasm3` also verifies the optional Redis host linker against a local RESP mock server
 - `test_turbo_wasm3` verifies exported calls plus per-VM WASI preopen isolation
 - `test_turbo_wasm3` also verifies the shared SQLite-backed DB registry, the HTTP host registry, guest-side DB imports, guest-side HTTP imports, and end-to-end CRUD flow
 
@@ -125,3 +140,4 @@ build/Ninja/Msvc/bin/turbo_wasm3_db_example
 - registered sockets are borrowed and must outlive the registry entry
 - the built-in DB adapter supports `int64`, `double`, `text`, `blob`, and `null`, but still does not expose column names or streaming blob I/O
 - the HTTP host layer now accepts newline-separated per-request headers and single-header lookup by name, but streaming callbacks, multipart, and response-header iteration are not bridged yet
+- the Redis host layer currently exposes a small raw-command ABI; pub/sub and streams are not bridged yet

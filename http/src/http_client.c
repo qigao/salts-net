@@ -67,15 +67,7 @@ static inline void send_chunk(int *sr, coro_socket_t *t, const void *data, size_
 /* ── Small helpers ────────────────────────────────────────────────── */
 
 static char *coro_strdup(const char *s) {
-  if (!s)
-    return NULL;
-  size_t len = strlen(s);
-  char *d = (char *)malloc(len + 1);
-  if (d) {
-    memcpy(d, s, len);
-    d[len] = '\0';
-  }
-  return d;
+  return tstr_dup(s);
 }
 
 static double coro_time_sec(void) { return (double)turbo_monotonic_ms() / 1000.0; }
@@ -114,13 +106,13 @@ static http_error_code_t map_transport_error(int rc) {
 }
 
 static void reset_response(http_response_t *r) {
-  free(r->headers);
+  tstr_free(r->headers);
   r->headers = NULL;
   r->headers_len = 0;
   free(r->body);
   r->body = NULL;
   r->body_len = 0;
-  free(r->error);
+  tstr_free(r->error);
   r->error = NULL;
   r->error_code = HTTP_ERROR_NONE;
   r->status_code = 0;
@@ -340,7 +332,7 @@ static int http_proxy_socks5_connect(coro_socket_t *socket, const http_proxy_con
 }
 /* ── URL helpers ──────────────────────────────────────────────────── */
 
-static char *build_coro_full_url(http_client_t *c, const char *url) {
+static tstr_t build_coro_full_url_t(http_client_t *c, const char *url) {
   if (!url)
     return NULL;
   tstr_v url_v = tstr_v_from_cstr(url);
@@ -354,9 +346,7 @@ static char *build_coro_full_url(http_client_t *c, const char *url) {
   if (url[0] != '/')
     full = tstr_cat(full, "/");
   full = tstr_cat(full, url);
-  char *result = tstr_to_cstr(full);
-  tstr_free(full);
-  return result;
+  return full;
 }
 
 static int build_transport_params(const char *http_url, char *host_buf, size_t host_buf_size,
@@ -411,7 +401,7 @@ http_client_t *http_client_create(const char *base_url) {
   pool_cfg.idle_timeout_ms = 0; /* Disable idle reaper to avoid blocking sync calls */
   c->conn_pool = coro_pool_create(c->coro_ctx, &pool_cfg);
   if (!c->conn_pool) {
-    free(c->base_url);
+    tstr_free(c->base_url);
     coro_context_destroy(c->coro_ctx);
     free(c);
     return NULL;
@@ -431,19 +421,36 @@ void http_client_destroy(http_client_t *c) {
   if (!c)
     return;
 
+  if (c->owns_coro_ctx && c->coro_ctx) {
+    for (int i = 0; i < 1024; i++) {
+      coro_context_run(c->coro_ctx, TURBO_RUN_NOWAIT);
+    }
+  }
+
   if (c->conn_pool)
     coro_pool_destroy(c->conn_pool);
 
+  if (c->owns_coro_ctx && c->coro_ctx) {
+    for (int i = 0; i < 1024; i++) {
+      coro_context_run(c->coro_ctx, TURBO_RUN_NOWAIT);
+    }
+  }
+
+  /* Do not destroy cookie_jar because the client doesn't own it. */
+  if (c->owns_coro_ctx && c->coro_ctx) {
+    coro_context_destroy(c->coro_ctx);
+  }
+
   free(c->proxy_config);
-  free(c->user_agent);
-  free(c->base_url);
+  tstr_free(c->user_agent);
+  tstr_free(c->base_url);
   free(c->auth_header);
 
   default_header_t *h = c->default_headers;
   while (h) {
     default_header_t *n = h->next;
-    free(h->name);
-    free(h->value);
+    tstr_free(h->name);
+    tstr_free(h->value);
     free(h);
     h = n;
   }
@@ -459,13 +466,6 @@ void http_client_destroy(http_client_t *c) {
     interceptor_node_t *n = node->next;
     free(node);
     node = n;
-  }
-
-  /* Do not destroy cookie_jar because the client doesn't own it.
-   * Give the owned CoroNet context one final non-blocking drain before teardown. */
-  if (c->owns_coro_ctx && c->coro_ctx) {
-    coro_context_run(c->coro_ctx, TURBO_RUN_ONCE);
-    coro_context_destroy(c->coro_ctx);
   }
 
   free(c);
@@ -492,7 +492,7 @@ void http_client_set_read_timeout(http_client_t *c, int ms) {
 void http_client_set_user_agent(http_client_t *c, const char *ua) {
   if (!c)
     return;
-  free(c->user_agent);
+  tstr_free(c->user_agent);
   c->user_agent = coro_strdup(ua);
 }
 
@@ -519,7 +519,7 @@ void http_client_set_default_header(http_client_t *c, const char *name, const ch
       char *new_value = coro_strdup(value);
       if (!new_value)
         return;
-      free(h->value);
+      tstr_free(h->value);
       h->value = new_value;
       return;
     }
@@ -531,8 +531,8 @@ void http_client_set_default_header(http_client_t *c, const char *name, const ch
   h->name = coro_strdup(name);
   h->value = coro_strdup(value);
   if (!h->name || !h->value) {
-    free(h->name);
-    free(h->value);
+    tstr_free(h->name);
+    tstr_free(h->value);
     free(h);
     return;
   }
@@ -547,8 +547,8 @@ void http_client_clear_default_headers(http_client_t *c) {
   default_header_t *h = c->default_headers;
   while (h) {
     default_header_t *n = h->next;
-    free(h->name);
-    free(h->value);
+    tstr_free(h->name);
+    tstr_free(h->value);
     free(h);
     h = n;
   }
@@ -563,8 +563,8 @@ void http_client_remove_default_header(http_client_t *c, const char *name) {
   while (*p) {
     if (tstr_casecmp((*p)->name, name) == 0) {
       default_header_t *n = (*p)->next;
-      free((*p)->name);
-      free((*p)->value);
+      tstr_free((*p)->name);
+      tstr_free((*p)->value);
       free(*p);
       *p = n;
       c->default_header_count--;
@@ -861,14 +861,14 @@ static void apply_set_cookie(http_client_t *c, const char *value, const char *ho
     
     /* Apply defaults for domain and path if missing */
     if (!cookie_list->domain && host) {
-      cookie_list->domain = coro_strdup(host);
+      cookie_list->domain = strdup(host);
     }
     if (!cookie_list->path && path) {
       // RFC 6265 default path is usually "/" or the parent path. 
       // For simplicity we use the provided path or "/"
-      cookie_list->path = coro_strdup(path);
+      cookie_list->path = strdup(path);
     } else if (!cookie_list->path) {
-      cookie_list->path = coro_strdup("/");
+      cookie_list->path = strdup("/");
     }
 
     http_cookie_jar_add_parsed(c->cookie_jar, cookie_list);
@@ -1581,7 +1581,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
     return -1;
   }
 
-  TLOG_INFO("Executing {} {}", (method == HTTP_GET ? "GET" : "POST"), url);
+  TLOG_INFO("Executing {} {}", llhttp_method_name((llhttp_method_t)method), url);
   recv_http_response(c, transport, resp, method, url, data_cb, data_cb_ud, c->progress_callback,
                      c->progress_user_data);
   TLOG_INFO("Done executing {}, status: {}, err: {}", url, resp->status_code, ENUM_NAME(resp->error_code));
@@ -1625,7 +1625,7 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
   if (!ctx)
     ctx = c->coro_ctx;
 
-  char *full_url = build_coro_full_url(c, url);
+  tstr_t full_url = build_coro_full_url_t(c, url);
   if (!full_url && c->base_url &&
       !tstr_v_starts_with(tstr_v_from_cstr(url), tstr_v_from_cstr("http://")) &&
       !tstr_v_starts_with(tstr_v_from_cstr(url), tstr_v_from_cstr("https://"))) {
@@ -1641,7 +1641,7 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
   if (c->request_interceptors) {
     if (run_request_interceptors(c, method, effective_url, headers, header_count, body, body_len) != 0) {
       set_error(resp, HTTP_ERROR_CANCELLED, "request interceptor aborted");
-      free(full_url);
+      tstr_free(full_url);
       c->stats.total_requests++;
       c->stats.failed_requests++;
       return resp;
@@ -1650,9 +1650,9 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
 
   int max_retries = c->has_retry_policy ? c->retry_policy.max_retries : 0;
   int redirect_count = 0;
-  char *current_url = coro_strdup(effective_url);
+  tstr_t current_url = coro_strdup(effective_url);
   http_method_t current_method = method;
-  free(full_url);
+  tstr_free(full_url);
 
   /* Retry + Redirect loop */
   for (;;) {
@@ -1716,7 +1716,7 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
     if (!new_url)
       break;
 
-    free(current_url);
+    tstr_free(current_url);
     current_url = new_url;
 
     if (resp->status_code == 303) {
@@ -1737,7 +1737,7 @@ static http_response_t *do_request_impl(http_client_t *c, http_method_t method, 
   else
     c->stats.failed_requests++;
 
-  free(current_url);
+  tstr_free(current_url);
   return resp;
 }
 
@@ -1830,9 +1830,9 @@ http_response_t *do_request_full(http_client_t *c, http_method_t method, const c
 void http_response_free(http_response_t *r) {
   if (!r)
     return;
-  free(r->headers);
+  tstr_free(r->headers);
   free(r->body);
-  free(r->error);
+  tstr_free(r->error);
   free(r);
 }
 
@@ -1864,11 +1864,11 @@ char *http_response_get_header(http_response_t *r, const char *name) {
         while (val < eol && *val == ' ')
           val++;
         size_t vlen = (size_t)(eol - val);
-        char *result = (char *)malloc(vlen + 1);
-        if (result) {
-          memcpy(result, val, vlen);
-          result[vlen] = '\0';
-        }
+        tstr_t header_value = tstr_dup_len(val, vlen);
+        if (!header_value)
+          return NULL;
+        char *result = tstr_to_cstr(header_value);
+        tstr_free(header_value);
         return result;
       }
     }
@@ -2372,7 +2372,7 @@ http_response_t *http_download_file_resume(
         http_response_t *r = (http_response_t *)calloc(1, sizeof(http_response_t));
         if (r) {
             r->error_code = HTTP_ERROR_FILE_IO;
-            r->error = strdup("Failed to open output file");
+            r->error = tstr_dup("Failed to open output file");
         }
         return r;
     }

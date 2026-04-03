@@ -30,8 +30,8 @@ int main(void) {
     rc = 1;
     goto done;
   }
-  if (turbo_wasm3_vm_enable_turboutils_host(vm) != 0) {
-    fputs("failed to enable TurboUtils host imports\n", stderr);
+  if (turbo_wasm3_vm_enable_host(vm) != 0) {
+    fputs("failed to enable TurboNet host imports\n", stderr);
     rc = 1;
     goto done;
   }

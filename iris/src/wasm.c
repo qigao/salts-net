@@ -787,7 +787,7 @@ static void iris_wasm_execute_mount(const iris_wasm_mount_t *mount, Req *req,
     goto done;
   }
   if (mount->enable_turbonet_host &&
-      turbo_wasm3_vm_enable_turbonet_host(vm) != 0) {
+      turbo_wasm3_vm_enable_host(vm) != 0) {
     send_text(res, 500, "failed to enable wasm host");
     goto done;
   }

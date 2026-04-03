@@ -1,74 +1,74 @@
 #include <stdint.h>
 
-__attribute__((import_module("TurboUtils"), import_name("db_open")))
-extern int32_t turboutils_db_open(const char *target, uint32_t target_len,
+__attribute__((import_module("TurboNet"), import_name("db_open")))
+extern int32_t turbonet_db_open(const char *target, uint32_t target_len,
                                 uint32_t *out_handle);
 
-__attribute__((import_module("TurboUtils"), import_name("db_close")))
-extern int32_t turboutils_db_close(uint32_t handle);
+__attribute__((import_module("TurboNet"), import_name("db_close")))
+extern int32_t turbonet_db_close(uint32_t handle);
 
-__attribute__((import_module("TurboUtils"), import_name("db_exec")))
-extern int32_t turboutils_db_exec(uint32_t handle, const char *sql, uint32_t sql_len,
+__attribute__((import_module("TurboNet"), import_name("db_exec")))
+extern int32_t turbonet_db_exec(uint32_t handle, const char *sql, uint32_t sql_len,
                                 uint64_t *out_changes);
 
-__attribute__((import_module("TurboUtils"), import_name("db_stmt_error")))
-extern int32_t turboutils_db_stmt_error(uint32_t stmt_handle, char *buffer,
+__attribute__((import_module("TurboNet"), import_name("db_stmt_error")))
+extern int32_t turbonet_db_stmt_error(uint32_t stmt_handle, char *buffer,
                                       uint32_t buffer_size,
                                       uint32_t *out_written);
 
-__attribute__((import_module("TurboUtils"), import_name("db_prepare")))
-extern int32_t turboutils_db_prepare(uint32_t db_handle, const char *sql,
+__attribute__((import_module("TurboNet"), import_name("db_prepare")))
+extern int32_t turbonet_db_prepare(uint32_t db_handle, const char *sql,
                                    uint32_t sql_len, uint32_t *out_stmt);
 
-__attribute__((import_module("TurboUtils"), import_name("db_bind_i64")))
-extern int32_t turboutils_db_bind_i64(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_bind_i64")))
+extern int32_t turbonet_db_bind_i64(uint32_t stmt_handle, uint32_t index,
                                     int64_t value);
 
-__attribute__((import_module("TurboUtils"), import_name("db_bind_f64")))
-extern int32_t turboutils_db_bind_f64(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_bind_f64")))
+extern int32_t turbonet_db_bind_f64(uint32_t stmt_handle, uint32_t index,
                                     double value);
 
-__attribute__((import_module("TurboUtils"), import_name("db_bind_null")))
-extern int32_t turboutils_db_bind_null(uint32_t stmt_handle, uint32_t index);
+__attribute__((import_module("TurboNet"), import_name("db_bind_null")))
+extern int32_t turbonet_db_bind_null(uint32_t stmt_handle, uint32_t index);
 
-__attribute__((import_module("TurboUtils"), import_name("db_bind_blob")))
-extern int32_t turboutils_db_bind_blob(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_bind_blob")))
+extern int32_t turbonet_db_bind_blob(uint32_t stmt_handle, uint32_t index,
                                      const void *blob, uint32_t blob_len);
 
-__attribute__((import_module("TurboUtils"), import_name("db_bind_text")))
-extern int32_t turboutils_db_bind_text(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_bind_text")))
+extern int32_t turbonet_db_bind_text(uint32_t stmt_handle, uint32_t index,
                                      const char *text, uint32_t text_len);
 
-__attribute__((import_module("TurboUtils"), import_name("db_step")))
-extern int32_t turboutils_db_step(uint32_t stmt_handle, int32_t *out_state);
+__attribute__((import_module("TurboNet"), import_name("db_step")))
+extern int32_t turbonet_db_step(uint32_t stmt_handle, int32_t *out_state);
 
-__attribute__((import_module("TurboUtils"), import_name("db_column_type")))
-extern int32_t turboutils_db_column_type(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_column_type")))
+extern int32_t turbonet_db_column_type(uint32_t stmt_handle, uint32_t index,
                                        int32_t *out_type);
 
-__attribute__((import_module("TurboUtils"), import_name("db_column_i64")))
-extern int32_t turboutils_db_column_i64(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_column_i64")))
+extern int32_t turbonet_db_column_i64(uint32_t stmt_handle, uint32_t index,
                                       int64_t *out_value);
 
-__attribute__((import_module("TurboUtils"), import_name("db_column_f64")))
-extern int32_t turboutils_db_column_f64(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_column_f64")))
+extern int32_t turbonet_db_column_f64(uint32_t stmt_handle, uint32_t index,
                                       double *out_value);
 
-__attribute__((import_module("TurboUtils"), import_name("db_column_blob")))
-extern int32_t turboutils_db_column_blob(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_column_blob")))
+extern int32_t turbonet_db_column_blob(uint32_t stmt_handle, uint32_t index,
                                        void *buffer, uint32_t buffer_size,
                                        uint32_t *out_written);
 
-__attribute__((import_module("TurboUtils"), import_name("db_column_text")))
-extern int32_t turboutils_db_column_text(uint32_t stmt_handle, uint32_t index,
+__attribute__((import_module("TurboNet"), import_name("db_column_text")))
+extern int32_t turbonet_db_column_text(uint32_t stmt_handle, uint32_t index,
                                        char *buffer, uint32_t buffer_size,
                                        uint32_t *out_written);
 
-__attribute__((import_module("TurboUtils"), import_name("db_reset")))
-extern int32_t turboutils_db_reset(uint32_t stmt_handle);
+__attribute__((import_module("TurboNet"), import_name("db_reset")))
+extern int32_t turbonet_db_reset(uint32_t stmt_handle);
 
-__attribute__((import_module("TurboUtils"), import_name("db_finalize")))
-extern int32_t turboutils_db_finalize(uint32_t stmt_handle);
+__attribute__((import_module("TurboNet"), import_name("db_finalize")))
+extern int32_t turbonet_db_finalize(uint32_t stmt_handle);
 
 enum {
   TURBO_WASM3_DB_STEP_DONE = 0,
@@ -136,150 +136,150 @@ int32_t run_db_demo(void) {
   char err_buf[96];
   int32_t rc = 0;
 
-  rc = turboutils_db_open(target, cstrlen(target), &db);
+  rc = turbonet_db_open(target, cstrlen(target), &db);
   if (rc != 0) {
     return 10 + rc;
   }
 
-  rc = turboutils_db_exec(db, create_sql, cstrlen(create_sql), &changes);
+  rc = turbonet_db_exec(db, create_sql, cstrlen(create_sql), &changes);
   if (rc != 0) {
     return 20 + rc;
   }
 
-  rc = turboutils_db_prepare(db, insert_sql, cstrlen(insert_sql), &stmt);
+  rc = turbonet_db_prepare(db, insert_sql, cstrlen(insert_sql), &stmt);
   if (rc != 0) {
     return 30 + rc;
   }
 
-  rc = turboutils_db_bind_i64(stmt, 1, 7);
+  rc = turbonet_db_bind_i64(stmt, 1, 7);
   if (rc != 0) {
     return 40 + rc;
   }
 
-  rc = turboutils_db_bind_text(stmt, 2, expected, cstrlen(expected));
+  rc = turbonet_db_bind_text(stmt, 2, expected, cstrlen(expected));
   if (rc != 0) {
     return 50 + rc;
   }
 
-  rc = turboutils_db_bind_f64(stmt, 3, 4.25);
+  rc = turbonet_db_bind_f64(stmt, 3, 4.25);
   if (rc != 0) {
     return 60 + rc;
   }
 
-  rc = turboutils_db_bind_blob(stmt, 4, payload, sizeof(payload));
+  rc = turbonet_db_bind_blob(stmt, 4, payload, sizeof(payload));
   if (rc != 0) {
     return 70 + rc;
   }
 
-  rc = turboutils_db_bind_null(stmt, 5);
+  rc = turbonet_db_bind_null(stmt, 5);
   if (rc != 0) {
     return 80 + rc;
   }
 
-  rc = turboutils_db_step(stmt, &step_state);
+  rc = turbonet_db_step(stmt, &step_state);
   if (rc != 0 || step_state != TURBO_WASM3_DB_STEP_DONE) {
     return 90 + rc;
   }
 
-  rc = turboutils_db_finalize(stmt);
+  rc = turbonet_db_finalize(stmt);
   if (rc != 0) {
     return 100 + rc;
   }
   stmt = 0;
 
-  rc = turboutils_db_prepare(db, select_sql, cstrlen(select_sql), &stmt);
+  rc = turbonet_db_prepare(db, select_sql, cstrlen(select_sql), &stmt);
   if (rc != 0) {
     return 110 + rc;
   }
 
-  rc = turboutils_db_bind_i64(stmt, 1, 7);
+  rc = turbonet_db_bind_i64(stmt, 1, 7);
   if (rc != 0) {
     return 120 + rc;
   }
 
-  rc = turboutils_db_step(stmt, &step_state);
+  rc = turbonet_db_step(stmt, &step_state);
   if (rc != 0 || step_state != TURBO_WASM3_DB_STEP_ROW) {
     return 130 + rc;
   }
 
-  rc = turboutils_db_column_i64(stmt, 0, &id_value);
+  rc = turbonet_db_column_i64(stmt, 0, &id_value);
   if (rc != 0 || id_value != 7) {
     return 140 + rc;
   }
 
-  rc = turboutils_db_column_text(stmt, 1, name_buf, sizeof(name_buf), &text_len);
+  rc = turbonet_db_column_text(stmt, 1, name_buf, sizeof(name_buf), &text_len);
   if (rc != 0 || text_len != cstrlen(expected) || !cstreq(name_buf, expected)) {
     return 150 + rc;
   }
 
-  rc = turboutils_db_column_type(stmt, 2, &column_type);
+  rc = turbonet_db_column_type(stmt, 2, &column_type);
   if (rc != 0 || column_type != TURBO_WASM3_DB_TYPE_DOUBLE) {
     return 160 + rc;
   }
 
-  rc = turboutils_db_column_f64(stmt, 2, &score_value);
+  rc = turbonet_db_column_f64(stmt, 2, &score_value);
   if (rc != 0 || score_value < 4.24 || score_value > 4.26) {
     return 170 + rc;
   }
 
-  rc = turboutils_db_column_type(stmt, 3, &column_type);
+  rc = turbonet_db_column_type(stmt, 3, &column_type);
   if (rc != 0 || column_type != TURBO_WASM3_DB_TYPE_BLOB) {
     return 180 + rc;
   }
 
-  rc = turboutils_db_column_blob(stmt, 3, payload_buf, sizeof(payload_buf), &blob_len);
+  rc = turbonet_db_column_blob(stmt, 3, payload_buf, sizeof(payload_buf), &blob_len);
   if (rc != 0 || blob_len != sizeof(payload) ||
       !cbytes_eq(payload_buf, payload, (uint32_t)sizeof(payload))) {
     return 190 + rc;
   }
 
-  rc = turboutils_db_column_type(stmt, 4, &column_type);
+  rc = turbonet_db_column_type(stmt, 4, &column_type);
   if (rc != 0 || column_type != TURBO_WASM3_DB_TYPE_NULL) {
     return 200 + rc;
   }
 
-  rc = turboutils_db_reset(stmt);
+  rc = turbonet_db_reset(stmt);
   if (rc != 0) {
     return 210 + rc;
   }
 
-  rc = turboutils_db_bind_i64(stmt, 1, 7);
+  rc = turbonet_db_bind_i64(stmt, 1, 7);
   if (rc != 0) {
     return 220 + rc;
   }
 
-  rc = turboutils_db_step(stmt, &step_state);
+  rc = turbonet_db_step(stmt, &step_state);
   if (rc != 0 || step_state != TURBO_WASM3_DB_STEP_ROW) {
     return 230 + rc;
   }
 
-  rc = turboutils_db_finalize(stmt);
+  rc = turbonet_db_finalize(stmt);
   if (rc != 0) {
     return 240 + rc;
   }
   stmt = 0;
 
-  rc = turboutils_db_prepare(db, insert_sql, cstrlen(insert_sql), &stmt);
+  rc = turbonet_db_prepare(db, insert_sql, cstrlen(insert_sql), &stmt);
   if (rc != 0) {
     return 250 + rc;
   }
 
-  rc = turboutils_db_bind_i64(stmt, 6, 7);
+  rc = turbonet_db_bind_i64(stmt, 6, 7);
   if (rc == 0) {
     return 260;
   }
 
-  rc = turboutils_db_stmt_error(stmt, err_buf, sizeof(err_buf), &err_len);
+  rc = turbonet_db_stmt_error(stmt, err_buf, sizeof(err_buf), &err_len);
   if (rc != 0 || err_len == 0 || err_buf[0] == '\0') {
     return 270 + rc;
   }
 
-  rc = turboutils_db_finalize(stmt);
+  rc = turbonet_db_finalize(stmt);
   if (rc != 0) {
     return 280 + rc;
   }
 
-  rc = turboutils_db_close(db);
+  rc = turbonet_db_close(db);
   if (rc != 0) {
     return 290 + rc;
   }

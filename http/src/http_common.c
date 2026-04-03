@@ -50,41 +50,14 @@ void http_params_add(http_params_t *params, const char *key, const char *value) 
 }
 
 char *http_params_encode(http_params_t *params) {
-  if (!params) return NULL;
-  if (params->error_code != HTTP_ERROR_NONE) return NULL;
-  if (!params || !params->head) return NULL;
+  if (!params || params->error_code != HTTP_ERROR_NONE || !params->head) return NULL;
 
-  size_t size = 0;
+  tstr_t res = tstr_new();
   struct http_param_entry *entry = params->head;
-  while (entry) {
-    if (!entry->key || !entry->value) {
-      params->error_code = HTTP_ERROR_INVALID_PARAMS;
-      return NULL;
-    }
-    char *key_enc = turbo_url_encode(entry->key);
-    char *val_enc = turbo_url_encode(entry->value);
-    if (!key_enc || !val_enc) {
-      free(key_enc);
-      free(val_enc);
-      params->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
-      return NULL;
-    }
-    size += strlen(key_enc) + strlen(val_enc) + 2;
-    free(key_enc);
-    free(val_enc);
-    entry = entry->next;
-  }
-  if (size == 0) return NULL;
-
-  char *result = (char *)malloc(size + 1);
-  if (!result) return NULL;
-
-  char *p = result;
-  entry = params->head;
   int first = 1;
   while (entry) {
     if (!entry->key || !entry->value) {
-      free(result);
+      tstr_free(res);
       params->error_code = HTTP_ERROR_INVALID_PARAMS;
       return NULL;
     }
@@ -93,22 +66,21 @@ char *http_params_encode(http_params_t *params) {
     if (!key_enc || !val_enc) {
       free(key_enc);
       free(val_enc);
-      free(result);
+      tstr_free(res);
       params->error_code = HTTP_ERROR_MEMORY_ALLOCATION;
       return NULL;
     }
-    if (!first) *p++ = '&';
-    strcpy(p, key_enc);
-    p += strlen(key_enc);
-    *p++ = '=';
-    strcpy(p, val_enc);
-    p += strlen(val_enc);
+    if (!first) res = tstr_cat(res, "&");
+    res = tstr_cat_v(res, tstr_v_from_cstr(key_enc));
+    res = tstr_cat(res, "=");
+    res = tstr_cat_v(res, tstr_v_from_cstr(val_enc));
     first = 0;
     free(key_enc);
     free(val_enc);
     entry = entry->next;
   }
-  *p = '\0';
+  char *result = tstr_to_cstr(res);
+  tstr_free(res);
   return result;
 }
 
@@ -131,27 +103,22 @@ char *http_build_url(const char *base_url, http_params_t *query_params) {
   if (!base_url) return NULL;
   if (query_params && query_params->error_code != HTTP_ERROR_NONE) return NULL;
   if (!query_params || !query_params->head) {
-    char *copy = (char *)malloc(strlen(base_url) + 1);
-    if (copy) {
-      strcpy(copy, base_url);
-    }
-    return copy;
+    return strdup(base_url);
   }
 
   char *query_string = http_params_encode(query_params);
-  if (!query_string) return NULL;
+  if (!query_string) return strdup(base_url);
 
   const char *has_query = strchr(base_url, '?');
   char separator = has_query ? '&' : '?';
-  size_t url_len = strlen(base_url) + strlen(query_string) + 2;
-  char *full_url = (char *)malloc(url_len);
-  if (!full_url) {
-    free(query_string);
-    return NULL;
-  }
-  fmt(full_url, url_len, "{}{}{}", base_url, separator, query_string);
+
+  tstr_t full = tstr_dup(base_url);
+  full = tstr_cat_len(full, &separator, 1);
+  full = tstr_cat_v(full, tstr_v_from_cstr(query_string));
+  char *result = tstr_to_cstr(full);
+  tstr_free(full);
   free(query_string);
-  return full_url;
+  return result;
 }
 
 /* ── Cookie jar ──────────────────────────────────────────────────── */

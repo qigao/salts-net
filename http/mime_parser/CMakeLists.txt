@@ -36,11 +36,10 @@ add_library(mime_parser STATIC ${MIME_PARSER_SOURCES} ${MIME_PARSER_HEADERS})
 find_package(OpenSSL REQUIRED)
 
 target_link_libraries(mime_parser
-  turbo_utils
+  TurboUtils::Utils
   uri_parser
   OpenSSL::SSL
   OpenSSL::Crypto
-  TurboUtils::TinyTest
 )
 target_include_directories(mime_parser
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

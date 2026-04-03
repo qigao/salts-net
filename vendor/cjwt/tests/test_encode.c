@@ -48,7 +48,7 @@ suite("cjwt encode") {
                        (const uint8_t *)key, strlen(key), 0, 0, &decoded);
       check_int_eq(CJWTE_OK, rv);
       check_str_eq("hs_issuer", decoded->iss);
-      check_int_eq(123456789, *decoded->iat);
+      check_int_eq(123456789LL, *decoded->iat);
 
       cjwt_destroy(decoded);
       free(output);

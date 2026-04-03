@@ -10,8 +10,10 @@
 
 #include "extra/wasi_core.h"
 #include "http_client.h"
+#include "redis_client.h"
 #include "turbo_error.h"
 #include "turbo_fs.h"
+#include "turbo_str.h"
 #include "sqlite3.h"
 
 #include <limits.h>
@@ -59,6 +61,19 @@ typedef struct turbo_wasm3_http_response_entry_s {
   int is_sse;
 } turbo_wasm3_http_response_entry_t;
 
+typedef struct turbo_wasm3_redis_client_entry_s {
+  uint32_t handle;
+  coro_context_t *ctx;
+  redis_client_t *client;
+  char *last_error;
+} turbo_wasm3_redis_client_entry_t;
+
+typedef struct turbo_wasm3_redis_reply_entry_s {
+  uint32_t handle;
+  uint32_t client_handle;
+  redis_reply_t *reply;
+} turbo_wasm3_redis_reply_entry_t;
+
 typedef struct turbo_wasm3_host_linker_entry_s {
   turbo_wasm3_host_linker_fn linker;
   void *user_data;
@@ -101,6 +116,17 @@ struct turbo_wasm3_http_registry_s {
   turbo_wasm3_http_response_entry_t *responses;
 };
 
+struct turbo_wasm3_redis_registry_s {
+  uint32_t next_client_handle;
+  uint32_t next_reply_handle;
+  size_t client_capacity;
+  size_t client_count;
+  turbo_wasm3_redis_client_entry_t *clients;
+  size_t reply_capacity;
+  size_t reply_count;
+  turbo_wasm3_redis_reply_entry_t *replies;
+};
+
 struct turbo_wasm3_parser_registry_s {
   uint32_t next_handle;
   size_t capacity;
@@ -115,6 +141,7 @@ struct turbo_wasm3_vm_s {
   turbo_wasm3_socket_registry_t *socket_registry;
   turbo_wasm3_db_registry_t *db_registry;
   turbo_wasm3_http_registry_t *http_registry;
+  turbo_wasm3_redis_registry_t *redis_registry;
   turbo_wasm3_parser_registry_t *parser_registry;
   void *host_user_data;
   char **wasi_argv;
@@ -126,6 +153,28 @@ struct turbo_wasm3_vm_s {
   size_t host_linker_count;
   size_t host_linker_capacity;
 };
+
+typedef struct turbo_wasm3_redis_command_capture_s {
+  redis_reply_t *reply;
+} turbo_wasm3_redis_command_capture_t;
+
+typedef struct turbo_wasm3_redis_open_task_state_s {
+  const char *host;
+  uint16_t port;
+  coro_socket_t *socket;
+  int rc;
+  int done;
+} turbo_wasm3_redis_open_task_state_t;
+
+typedef struct turbo_wasm3_redis_command_task_state_s {
+  turbo_wasm3_redis_client_entry_t *entry;
+  uint32_t argc;
+  const char *const *argv;
+  const uint32_t *argv_lens;
+  redis_reply_t *reply;
+  int rc;
+  int done;
+} turbo_wasm3_redis_command_task_state_t;
 
 static char *turbo_wasm3_strdup(const char *value) {
   size_t len;
@@ -247,6 +296,42 @@ turbo_wasm3_db_registry_find_stmt_entry(turbo_wasm3_db_registry_t *registry,
   return NULL;
 }
 
+static turbo_wasm3_redis_client_entry_t *
+turbo_wasm3_redis_registry_find_client(turbo_wasm3_redis_registry_t *registry,
+                                       uint32_t client_handle) {
+  size_t i;
+
+  if (!registry) {
+    return NULL;
+  }
+
+  for (i = 0; i < registry->client_count; ++i) {
+    if (registry->clients[i].handle == client_handle) {
+      return &registry->clients[i];
+    }
+  }
+
+  return NULL;
+}
+
+static turbo_wasm3_redis_reply_entry_t *
+turbo_wasm3_redis_registry_find_reply(turbo_wasm3_redis_registry_t *registry,
+                                      uint32_t reply_handle) {
+  size_t i;
+
+  if (!registry) {
+    return NULL;
+  }
+
+  for (i = 0; i < registry->reply_count; ++i) {
+    if (registry->replies[i].handle == reply_handle) {
+      return &registry->replies[i];
+    }
+  }
+
+  return NULL;
+}
+
 static int
 turbo_wasm3_socket_registry_reserve(turbo_wasm3_socket_registry_t *registry,
                                     size_t required) {
@@ -330,6 +415,62 @@ turbo_wasm3_db_registry_reserve_statements(turbo_wasm3_db_registry_t *registry,
 
   registry->stmt_entries = entries;
   registry->stmt_capacity = new_capacity;
+  return 0;
+}
+
+static int turbo_wasm3_redis_registry_reserve_clients(
+    turbo_wasm3_redis_registry_t *registry, size_t required) {
+  turbo_wasm3_redis_client_entry_t *entries;
+  size_t new_capacity;
+
+  if (!registry) {
+    return TURBO_EINVAL;
+  }
+  if (required <= registry->client_capacity) {
+    return 0;
+  }
+
+  new_capacity = registry->client_capacity ? registry->client_capacity : 4;
+  while (new_capacity < required) {
+    new_capacity *= 2;
+  }
+
+  entries = (turbo_wasm3_redis_client_entry_t *)realloc(
+      registry->clients, new_capacity * sizeof(*entries));
+  if (!entries) {
+    return TURBO_ENOMEM;
+  }
+
+  registry->clients = entries;
+  registry->client_capacity = new_capacity;
+  return 0;
+}
+
+static int turbo_wasm3_redis_registry_reserve_replies(
+    turbo_wasm3_redis_registry_t *registry, size_t required) {
+  turbo_wasm3_redis_reply_entry_t *entries;
+  size_t new_capacity;
+
+  if (!registry) {
+    return TURBO_EINVAL;
+  }
+  if (required <= registry->reply_capacity) {
+    return 0;
+  }
+
+  new_capacity = registry->reply_capacity ? registry->reply_capacity : 4;
+  while (new_capacity < required) {
+    new_capacity *= 2;
+  }
+
+  entries = (turbo_wasm3_redis_reply_entry_t *)realloc(
+      registry->replies, new_capacity * sizeof(*entries));
+  if (!entries) {
+    return TURBO_ENOMEM;
+  }
+
+  registry->replies = entries;
+  registry->reply_capacity = new_capacity;
   return 0;
 }
 
@@ -429,7 +570,7 @@ static M3Result turbo_wasm3_vm_bind_wasi(turbo_wasm3_vm_t *vm) {
     int rc = turbo_wasm3_socket_registry_bind_wasi(vm->socket_registry,
                                                    vm->wasi_context);
     if (rc != 0) {
-      return "failed to bind TurboUtils socket registry";
+      return "failed to bind TurboNet socket registry";
     }
   }
 
@@ -461,10 +602,16 @@ m3ApiRawFunction(turbo_wasm3_host_csv_find_column);
 m3ApiRawFunction(turbo_wasm3_host_xml_root_name);
 m3ApiRawFunction(turbo_wasm3_host_xml_get_text);
 m3ApiRawFunction(turbo_wasm3_host_xml_count);
+m3ApiRawFunction(turbo_wasm3_host_ini_get_string);
+m3ApiRawFunction(turbo_wasm3_host_ini_get_int);
+m3ApiRawFunction(turbo_wasm3_host_ini_get_bool);
+m3ApiRawFunction(turbo_wasm3_host_ini_get_double);
 
 /* Parser registry forward declarations */
 turbo_wasm3_parser_registry_t *turbo_wasm3_parser_registry_create(size_t initial_capacity);
 void turbo_wasm3_parser_registry_destroy(turbo_wasm3_parser_registry_t *registry);
+turbo_wasm3_redis_registry_t *turbo_wasm3_redis_registry_create(size_t initial_capacity);
+void turbo_wasm3_redis_registry_destroy(turbo_wasm3_redis_registry_t *registry);
 
 static char *turbo_wasm3_copy_guest_bytes(const uint8_t *data, uint32_t len) {
   char *copy;
@@ -706,6 +853,207 @@ static int turbo_wasm3_http_copy_buffer(const void *src, size_t src_len, void *b
 
   memcpy(buffer, src, src_len);
   *out_len = (uint32_t)src_len;
+  return 0;
+}
+
+static void turbo_wasm3_redis_client_entry_clear_error(
+    turbo_wasm3_redis_client_entry_t *entry) {
+  if (!entry) {
+    return;
+  }
+
+  turbo_wasm3_error_slot_clear(&entry->last_error);
+}
+
+static int turbo_wasm3_redis_client_entry_set_error(
+    turbo_wasm3_redis_client_entry_t *entry, const char *message,
+    uint32_t message_len) {
+  if (!entry) {
+    return TURBO_EINVAL;
+  }
+
+  return turbo_wasm3_error_slot_set(&entry->last_error, message, message_len);
+}
+
+static redis_reply_t *turbo_wasm3_redis_reply_clone(const redis_reply_t *reply) {
+  redis_reply_t *copy;
+  size_t i;
+
+  if (!reply) {
+    return NULL;
+  }
+
+  copy = (redis_reply_t *)calloc(1, sizeof(*copy));
+  if (!copy) {
+    return NULL;
+  }
+
+  copy->type = reply->type;
+  copy->integer = reply->integer;
+  copy->len = reply->len;
+  copy->element_count = reply->element_count;
+
+  if (reply->str && reply->len != 0) {
+    copy->str = tstr_dup_len(reply->str, reply->len);
+    if (!copy->str) {
+      free(copy);
+      return NULL;
+    }
+  } else if (reply->str) {
+    copy->str = tstr_dup("");
+    if (!copy->str) {
+      free(copy);
+      return NULL;
+    }
+  }
+
+  if (reply->element_count != 0) {
+    copy->elements = (redis_reply_t **)calloc(reply->element_count,
+                                              sizeof(*copy->elements));
+    if (!copy->elements) {
+      redis_reply_free(copy);
+      return NULL;
+    }
+
+    for (i = 0; i < reply->element_count; ++i) {
+      copy->elements[i] = turbo_wasm3_redis_reply_clone(reply->elements[i]);
+      if (!copy->elements[i]) {
+        redis_reply_free(copy);
+        return NULL;
+      }
+    }
+  }
+
+  return copy;
+}
+
+static void turbo_wasm3_redis_reply_entry_reset(
+    turbo_wasm3_redis_reply_entry_t *entry) {
+  if (!entry) {
+    return;
+  }
+
+  if (entry->reply) {
+    redis_reply_free(entry->reply);
+  }
+  memset(entry, 0, sizeof(*entry));
+}
+
+static void turbo_wasm3_redis_capture_reply_cb(redis_client_t *client,
+                                               redis_reply_t *reply,
+                                               void *user_data) {
+  turbo_wasm3_redis_command_capture_t *capture =
+      (turbo_wasm3_redis_command_capture_t *)user_data;
+
+  (void)client;
+  if (!capture || capture->reply || !reply) {
+    return;
+  }
+
+  capture->reply = turbo_wasm3_redis_reply_clone(reply);
+}
+
+static void turbo_wasm3_redis_open_task(coro_t *co, void *arg) {
+  turbo_wasm3_redis_open_task_state_t *state =
+      (turbo_wasm3_redis_open_task_state_t *)arg;
+  coro_context_t *ctx = coro_context_current();
+
+  (void)co;
+  state->rc = TURBO_EIO;
+  state->socket = NULL;
+  if (!ctx || !state || !state->host || state->port == 0) {
+    state->done = 1;
+    return;
+  }
+
+  state->socket = coro_socket_create_tcpv4(ctx);
+  if (!state->socket) {
+    state->rc = TURBO_ENOMEM;
+    state->done = 1;
+    return;
+  }
+
+  coro_socket_set_timeout(state->socket, 5000);
+  state->rc = coro_socket_connect(state->socket, state->host, (int)state->port);
+  if (state->rc != 0) {
+    coro_socket_destroy(state->socket);
+    state->socket = NULL;
+  }
+  state->done = 1;
+}
+
+static void turbo_wasm3_redis_command_task(coro_t *co, void *arg) {
+  turbo_wasm3_redis_command_task_state_t *state =
+      (turbo_wasm3_redis_command_task_state_t *)arg;
+  size_t *arg_lens = NULL;
+  turbo_wasm3_redis_command_capture_t capture = {0};
+  uint32_t i;
+
+  (void)co;
+  state->rc = TURBO_EIO;
+  if (!state || !state->entry || !state->entry->client || state->argc == 0 ||
+      !state->argv || !state->argv_lens) {
+    state->done = 1;
+    return;
+  }
+
+  arg_lens = (size_t *)calloc(state->argc, sizeof(*arg_lens));
+  if (!arg_lens) {
+    state->rc = TURBO_ENOMEM;
+    state->done = 1;
+    return;
+  }
+
+  for (i = 0; i < state->argc; ++i) {
+    arg_lens[i] = (size_t)state->argv_lens[i];
+  }
+
+  state->rc = redis_commandv(state->entry->client, (int)state->argc, state->argv,
+                             arg_lens, turbo_wasm3_redis_capture_reply_cb,
+                             &capture);
+  free(arg_lens);
+  if (state->rc == 0) {
+    state->reply = capture.reply;
+  }
+  state->done = 1;
+}
+
+static int turbo_wasm3_redis_run_until_done(coro_context_t *ctx, int *done) {
+  int limit = 2000;
+
+  if (!ctx || !done) {
+    return TURBO_EINVAL;
+  }
+
+  while (!*done && limit-- > 0) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+  }
+
+  return *done ? 0 : TURBO_ETIMEDOUT;
+}
+
+static int turbo_wasm3_redis_registry_store_reply(
+    turbo_wasm3_redis_registry_t *registry, uint32_t client_handle,
+    redis_reply_t *reply, uint32_t *out_reply_handle) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+  int rc;
+
+  if (!registry || !reply || !out_reply_handle) {
+    return TURBO_EINVAL;
+  }
+
+  rc = turbo_wasm3_redis_registry_reserve_replies(registry,
+                                                  registry->reply_count + 1);
+  if (rc != 0) {
+    return rc;
+  }
+
+  entry = &registry->replies[registry->reply_count];
+  entry->handle = registry->next_reply_handle++;
+  entry->client_handle = client_handle;
+  entry->reply = reply;
+  *out_reply_handle = entry->handle;
+  registry->reply_count++;
   return 0;
 }
 
@@ -3001,6 +3349,302 @@ m3ApiRawFunction(turbo_wasm3_host_http_response_close) {
       turbo_wasm3_http_registry_close_response(vm->http_registry, response_handle));
 }
 
+m3ApiRawFunction(turbo_wasm3_host_redis_client_open) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  char *host = NULL;
+  uint32_t client_handle = 0;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArgMem(const uint8_t *, host_data)
+  m3ApiGetArg(uint32_t, host_len)
+  m3ApiGetArg(uint32_t, port)
+  m3ApiGetArgMem(uint32_t *, out_client_handle)
+
+  if (!vm || !vm->redis_registry || !out_client_handle || host_len == 0 ||
+      port == 0 || port > 65535U) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_client_handle, sizeof(uint32_t));
+  m3ApiCheckMem(host_data, host_len);
+  m3ApiWriteMem32(out_client_handle, 0);
+
+  host = turbo_wasm3_copy_guest_bytes(host_data, host_len);
+  if (!host) {
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+
+  rc = turbo_wasm3_redis_registry_open_client(vm->redis_registry, host,
+                                              (uint16_t)port, &client_handle);
+  free(host);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_client_handle, client_handle);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_client_close) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, client_handle)
+
+  if (!vm || !vm->redis_registry) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiReturn(
+      turbo_wasm3_redis_registry_close_client(vm->redis_registry, client_handle));
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_client_error) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  uint32_t written = 0;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, client_handle)
+  m3ApiGetArgMem(char *, buffer)
+  m3ApiGetArg(uint32_t, buffer_size)
+  m3ApiGetArgMem(uint32_t *, out_written)
+
+  if (!vm || !vm->redis_registry || !out_written) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_written, sizeof(uint32_t));
+  if (buffer_size != 0) {
+    m3ApiCheckMem(buffer, buffer_size);
+  }
+  m3ApiWriteMem32(out_written, 0);
+
+  rc = turbo_wasm3_redis_registry_client_error(vm->redis_registry, client_handle,
+                                               buffer, (size_t)buffer_size,
+                                               &written);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_written, written);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_command) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  const uint32_t *argv_offsets = NULL;
+  const uint32_t *argv_lens_mem = NULL;
+  const char **argv = NULL;
+  uint32_t *argv_lens = NULL;
+  uint32_t reply_handle = 0;
+  uint32_t i;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, client_handle)
+  m3ApiGetArg(uint32_t, argc)
+  m3ApiGetArgMem(const uint32_t *, argv_offsets_arg)
+  m3ApiGetArgMem(const uint32_t *, argv_lens_arg)
+  m3ApiGetArgMem(uint32_t *, out_reply_handle)
+
+  if (!vm || !vm->redis_registry || !out_reply_handle || argc == 0) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_reply_handle, sizeof(uint32_t));
+  m3ApiCheckMem(argv_offsets_arg, (size_t)argc * sizeof(uint32_t));
+  m3ApiCheckMem(argv_lens_arg, (size_t)argc * sizeof(uint32_t));
+  m3ApiWriteMem32(out_reply_handle, 0);
+
+  argv_offsets = argv_offsets_arg;
+  argv_lens_mem = argv_lens_arg;
+  argv = (const char **)calloc(argc, sizeof(*argv));
+  argv_lens = (uint32_t *)calloc(argc, sizeof(*argv_lens));
+  if (!argv || !argv_lens) {
+    free(argv_lens);
+    free(argv);
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+
+  for (i = 0; i < argc; ++i) {
+    uint32_t arg_len = m3ApiReadMem32(&argv_lens_mem[i]);
+    uint32_t arg_offset = m3ApiReadMem32(&argv_offsets[i]);
+
+    argv_lens[i] = arg_len;
+    if (arg_len == 0) {
+      argv[i] = "";
+      continue;
+    }
+
+    argv[i] = (const char *)m3ApiOffsetToPtr(arg_offset);
+    m3ApiCheckMem(argv[i], arg_len);
+  }
+
+  rc = turbo_wasm3_redis_registry_command(vm->redis_registry, client_handle, argc,
+                                          argv, argv_lens, &reply_handle);
+  free(argv_lens);
+  free(argv);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_reply_handle, reply_handle);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_reply_close) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, reply_handle)
+
+  if (!vm || !vm->redis_registry) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiReturn(
+      turbo_wasm3_redis_registry_close_reply(vm->redis_registry, reply_handle));
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_reply_type) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  int32_t type = TURBO_WASM3_REDIS_REPLY_NULL;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, reply_handle)
+  m3ApiGetArgMem(int32_t *, out_type)
+
+  if (!vm || !vm->redis_registry || !out_type) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_type, sizeof(int32_t));
+  m3ApiWriteMem32(out_type, (uint32_t)TURBO_WASM3_REDIS_REPLY_NULL);
+
+  rc = turbo_wasm3_redis_registry_reply_type(vm->redis_registry, reply_handle,
+                                             &type);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_type, (uint32_t)type);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_reply_i64) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  int64_t value = 0;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, reply_handle)
+  m3ApiGetArgMem(int64_t *, out_value)
+
+  if (!vm || !vm->redis_registry || !out_value) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_value, sizeof(int64_t));
+  m3ApiWriteMem64(out_value, 0);
+
+  rc = turbo_wasm3_redis_registry_reply_int64(vm->redis_registry, reply_handle,
+                                              &value);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem64(out_value, (uint64_t)value);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_reply_text) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  uint32_t written = 0;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, reply_handle)
+  m3ApiGetArgMem(char *, buffer)
+  m3ApiGetArg(uint32_t, buffer_size)
+  m3ApiGetArgMem(uint32_t *, out_written)
+
+  if (!vm || !vm->redis_registry || !out_written) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_written, sizeof(uint32_t));
+  if (buffer_size != 0) {
+    m3ApiCheckMem(buffer, buffer_size);
+  }
+  m3ApiWriteMem32(out_written, 0);
+
+  rc = turbo_wasm3_redis_registry_reply_text(vm->redis_registry, reply_handle,
+                                             buffer, (size_t)buffer_size,
+                                             &written);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_written, written);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_reply_array_len) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  uint32_t array_len = 0;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, reply_handle)
+  m3ApiGetArgMem(uint32_t *, out_len)
+
+  if (!vm || !vm->redis_registry || !out_len) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_len, sizeof(uint32_t));
+  m3ApiWriteMem32(out_len, 0);
+
+  rc = turbo_wasm3_redis_registry_reply_array_len(vm->redis_registry,
+                                                  reply_handle, &array_len);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_len, array_len);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_redis_reply_array_at) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  uint32_t child_handle = 0;
+  int rc;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, reply_handle)
+  m3ApiGetArg(uint32_t, index)
+  m3ApiGetArgMem(uint32_t *, out_child_reply_handle)
+
+  if (!vm || !vm->redis_registry || !out_child_reply_handle) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_child_reply_handle, sizeof(uint32_t));
+  m3ApiWriteMem32(out_child_reply_handle, 0);
+
+  rc = turbo_wasm3_redis_registry_reply_array_at(
+      vm->redis_registry, reply_handle, index, &child_handle);
+  if (rc != 0) {
+    m3ApiReturn(rc);
+  }
+
+  m3ApiWriteMem32(out_child_reply_handle, child_handle);
+  m3ApiReturn(0);
+}
+
 static M3Result turbo_wasm3_vm_link_http_host_cb(turbo_wasm3_vm_t *vm,
                                                  IM3Module module,
                                                  void *user_data) {
@@ -3008,11 +3652,18 @@ static M3Result turbo_wasm3_vm_link_http_host_cb(turbo_wasm3_vm_t *vm,
   return turbo_wasm3_vm_link_http_host(vm, module);
 }
 
-static M3Result turbo_wasm3_vm_link_turboutils_host_cb(turbo_wasm3_vm_t *vm,
-                                                     IM3Module module,
-                                                     void *user_data) {
+static M3Result turbo_wasm3_vm_link_redis_host_cb(turbo_wasm3_vm_t *vm,
+                                                  IM3Module module,
+                                                  void *user_data) {
   (void)user_data;
-  return turbo_wasm3_vm_link_turboutils_host(vm, module);
+  return turbo_wasm3_vm_link_redis_host(vm, module);
+}
+
+static M3Result turbo_wasm3_vm_link_host_cb(turbo_wasm3_vm_t *vm,
+                                            IM3Module module,
+                                            void *user_data) {
+  (void)user_data;
+  return turbo_wasm3_vm_link_host(vm, module);
 }
 
 turbo_wasm3_vm_t *
@@ -3057,6 +3708,12 @@ turbo_wasm3_vm_create(uint32_t stack_size, void *runtime_user_data,
     return NULL;
   }
 
+  vm->redis_registry = turbo_wasm3_redis_registry_create(4);
+  if (!vm->redis_registry) {
+    turbo_wasm3_vm_destroy(vm);
+    return NULL;
+  }
+
   vm->parser_registry = turbo_wasm3_parser_registry_create(8);
   if (!vm->parser_registry) {
     turbo_wasm3_vm_destroy(vm);
@@ -3091,6 +3748,8 @@ void turbo_wasm3_vm_destroy(turbo_wasm3_vm_t *vm) {
   turbo_wasm3_vm_clear_host_linkers(vm);
   turbo_wasm3_http_registry_destroy(vm->http_registry);
   vm->http_registry = NULL;
+  turbo_wasm3_redis_registry_destroy(vm->redis_registry);
+  vm->redis_registry = NULL;
   turbo_wasm3_db_registry_destroy(vm->db_registry);
   vm->db_registry = NULL;
   turbo_wasm3_parser_registry_destroy(vm->parser_registry);
@@ -3132,6 +3791,10 @@ turbo_wasm3_db_registry_t *turbo_wasm3_vm_get_db_registry(turbo_wasm3_vm_t *vm) 
 
 turbo_wasm3_http_registry_t *turbo_wasm3_vm_get_http_registry(turbo_wasm3_vm_t *vm) {
   return vm ? vm->http_registry : NULL;
+}
+
+turbo_wasm3_redis_registry_t *turbo_wasm3_vm_get_redis_registry(turbo_wasm3_vm_t *vm) {
+  return vm ? vm->redis_registry : NULL;
 }
 
 turbo_wasm3_parser_registry_t *turbo_wasm3_vm_get_parser_registry(turbo_wasm3_vm_t *vm) {
@@ -3209,18 +3872,21 @@ M3Result turbo_wasm3_vm_link_host_modules(turbo_wasm3_vm_t *vm,
   return m3Err_none;
 }
 
-int turbo_wasm3_vm_enable_turboutils_host(turbo_wasm3_vm_t *vm) {
-  return turbo_wasm3_vm_add_host_linker(vm, turbo_wasm3_vm_link_turboutils_host_cb,
-                                        NULL);
+int turbo_wasm3_vm_enable_host(turbo_wasm3_vm_t *vm) {
+  return turbo_wasm3_vm_add_host_linker(vm, turbo_wasm3_vm_link_host_cb, NULL);
 }
 
 int turbo_wasm3_vm_enable_http_host(turbo_wasm3_vm_t *vm) {
   return turbo_wasm3_vm_add_host_linker(vm, turbo_wasm3_vm_link_http_host_cb, NULL);
 }
 
-M3Result turbo_wasm3_vm_link_turboutils_host(turbo_wasm3_vm_t *vm,
-                                           IM3Module module) {
-  const char *mod = "TurboUtils";
+int turbo_wasm3_vm_enable_redis_host(turbo_wasm3_vm_t *vm) {
+  return turbo_wasm3_vm_add_host_linker(vm, turbo_wasm3_vm_link_redis_host_cb,
+                                        NULL);
+}
+
+M3Result turbo_wasm3_vm_link_host(turbo_wasm3_vm_t *vm, IM3Module module) {
+  const char *mod = "TurboNet";
   M3Result result = m3Err_none;
 
   if (!vm || !module) {
@@ -3480,11 +4146,39 @@ M3Result turbo_wasm3_vm_link_turboutils_host(turbo_wasm3_vm_t *vm,
     return result;
   }
 
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "ini_get_string", "i(i*i*i*i*)",
+      &turbo_wasm3_host_ini_get_string, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "ini_get_int", "i(i*i*i*)", &turbo_wasm3_host_ini_get_int,
+      vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "ini_get_bool", "i(i*i*i*)", &turbo_wasm3_host_ini_get_bool,
+      vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "ini_get_double", "i(i*i*i*)",
+      &turbo_wasm3_host_ini_get_double, vm));
+  if (result) {
+    return result;
+  }
+
   return m3Err_none;
 }
 
 M3Result turbo_wasm3_vm_link_http_host(turbo_wasm3_vm_t *vm, IM3Module module) {
-  const char *mod = "TurboUtils";
+  const char *mod = "TurboNet";
   M3Result result = m3Err_none;
 
   if (!vm || !module) {
@@ -3662,6 +4356,87 @@ M3Result turbo_wasm3_vm_link_http_host(turbo_wasm3_vm_t *vm, IM3Module module) {
   result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
       module, mod, "http_response_close", "i(i)",
       &turbo_wasm3_host_http_response_close, vm));
+  if (result) {
+    return result;
+  }
+
+  return m3Err_none;
+}
+
+M3Result turbo_wasm3_vm_link_redis_host(turbo_wasm3_vm_t *vm, IM3Module module) {
+  const char *mod = "TurboNet";
+  M3Result result = m3Err_none;
+
+  if (!vm || !module) {
+    return m3Err_wasmMalformed;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_client_open", "i(*ii*)",
+      &turbo_wasm3_host_redis_client_open, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_client_close", "i(i)",
+      &turbo_wasm3_host_redis_client_close, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_client_error", "i(i*i*)",
+      &turbo_wasm3_host_redis_client_error, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_command", "i(ii***)", &turbo_wasm3_host_redis_command,
+      vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_reply_close", "i(i)",
+      &turbo_wasm3_host_redis_reply_close, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_reply_type", "i(i*)",
+      &turbo_wasm3_host_redis_reply_type, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_reply_i64", "i(i*)",
+      &turbo_wasm3_host_redis_reply_i64, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_reply_text", "i(i*i*)",
+      &turbo_wasm3_host_redis_reply_text, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_reply_array_len", "i(i*)",
+      &turbo_wasm3_host_redis_reply_array_len, vm));
+  if (result) {
+    return result;
+  }
+
+  result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
+      module, mod, "redis_reply_array_at", "i(ii*)",
+      &turbo_wasm3_host_redis_reply_array_at, vm));
   if (result) {
     return result;
   }
@@ -4608,6 +5383,283 @@ m3ApiRawFunction(turbo_wasm3_host_xml_count) {
   }
 
   m3ApiWriteMem32(out_count, (uint32_t)count);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_ini_get_string) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  char *section = NULL;
+  char *key = NULL;
+  int idx;
+  turbo_wasm3_parser_entry_t *entry;
+  const char *value;
+  size_t value_len;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, handle)
+  m3ApiGetArgMem(const uint8_t *, section_ptr)
+  m3ApiGetArg(uint32_t, section_len)
+  m3ApiGetArgMem(const uint8_t *, key_ptr)
+  m3ApiGetArg(uint32_t, key_len)
+  m3ApiGetArgMem(char *, buffer)
+  m3ApiGetArg(uint32_t, buffer_size)
+  m3ApiGetArgMem(uint32_t *, out_written)
+
+  if (!vm || !vm->parser_registry || !out_written) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_written, sizeof(uint32_t));
+  if (section_len != 0) {
+    m3ApiCheckMem(section_ptr, section_len);
+  }
+  if (key_len != 0) {
+    m3ApiCheckMem(key_ptr, key_len);
+  }
+  if (buffer_size != 0) {
+    m3ApiCheckMem(buffer, buffer_size);
+  }
+  m3ApiWriteMem32(out_written, 0);
+
+  idx = turbo_wasm3_parser_registry_find(vm->parser_registry, handle);
+  if (idx < 0) {
+    m3ApiReturn(TURBO_EBADF);
+  }
+
+  entry = &vm->parser_registry->entries[idx];
+  if (entry->type != TURBO_WASM3_PARSER_TYPE_INI) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+  if (section_len == 0 || key_len == 0) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  section = turbo_wasm3_copy_guest_bytes(section_ptr, section_len);
+  if (!section) {
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+  key = turbo_wasm3_copy_guest_bytes(key_ptr, key_len);
+  if (!key) {
+    free(section);
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+
+  value = turbo_ini_get((const turbo_ini_t *)entry->doc, section, key);
+  free(key);
+  free(section);
+  if (!value) {
+    m3ApiReturn(TURBO_ENOENT);
+  }
+
+  value_len = strlen(value);
+  if (buffer_size > 0) {
+    size_t copy_len = value_len < buffer_size - 1 ? value_len : buffer_size - 1;
+    memcpy(buffer, value, copy_len);
+    buffer[copy_len] = '\0';
+    m3ApiWriteMem32(out_written, (uint32_t)copy_len);
+  } else {
+    m3ApiWriteMem32(out_written, (uint32_t)value_len);
+  }
+
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_ini_get_int) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  char *section = NULL;
+  char *key = NULL;
+  int idx;
+  turbo_wasm3_parser_entry_t *entry;
+  const char *value;
+  int32_t parsed = 0;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, handle)
+  m3ApiGetArgMem(const uint8_t *, section_ptr)
+  m3ApiGetArg(uint32_t, section_len)
+  m3ApiGetArgMem(const uint8_t *, key_ptr)
+  m3ApiGetArg(uint32_t, key_len)
+  m3ApiGetArgMem(int32_t *, out_value)
+
+  if (!vm || !vm->parser_registry || !out_value) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_value, sizeof(int32_t));
+  if (section_len != 0) {
+    m3ApiCheckMem(section_ptr, section_len);
+  }
+  if (key_len != 0) {
+    m3ApiCheckMem(key_ptr, key_len);
+  }
+  m3ApiWriteMem32(out_value, 0);
+
+  idx = turbo_wasm3_parser_registry_find(vm->parser_registry, handle);
+  if (idx < 0) {
+    m3ApiReturn(TURBO_EBADF);
+  }
+
+  entry = &vm->parser_registry->entries[idx];
+  if (entry->type != TURBO_WASM3_PARSER_TYPE_INI) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+  if (section_len == 0 || key_len == 0) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  section = turbo_wasm3_copy_guest_bytes(section_ptr, section_len);
+  if (!section) {
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+  key = turbo_wasm3_copy_guest_bytes(key_ptr, key_len);
+  if (!key) {
+    free(section);
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+
+  value = turbo_ini_get((const turbo_ini_t *)entry->doc, section, key);
+  parsed = (int32_t)turbo_ini_get_int((const turbo_ini_t *)entry->doc, section,
+                                      key, 0);
+  free(key);
+  free(section);
+  if (!value) {
+    m3ApiReturn(TURBO_ENOENT);
+  }
+
+  m3ApiWriteMem32(out_value, (uint32_t)parsed);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_ini_get_bool) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  char *section = NULL;
+  char *key = NULL;
+  int idx;
+  turbo_wasm3_parser_entry_t *entry;
+  const char *value;
+  int32_t parsed = 0;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, handle)
+  m3ApiGetArgMem(const uint8_t *, section_ptr)
+  m3ApiGetArg(uint32_t, section_len)
+  m3ApiGetArgMem(const uint8_t *, key_ptr)
+  m3ApiGetArg(uint32_t, key_len)
+  m3ApiGetArgMem(int32_t *, out_value)
+
+  if (!vm || !vm->parser_registry || !out_value) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_value, sizeof(int32_t));
+  if (section_len != 0) {
+    m3ApiCheckMem(section_ptr, section_len);
+  }
+  if (key_len != 0) {
+    m3ApiCheckMem(key_ptr, key_len);
+  }
+  m3ApiWriteMem32(out_value, 0);
+
+  idx = turbo_wasm3_parser_registry_find(vm->parser_registry, handle);
+  if (idx < 0) {
+    m3ApiReturn(TURBO_EBADF);
+  }
+
+  entry = &vm->parser_registry->entries[idx];
+  if (entry->type != TURBO_WASM3_PARSER_TYPE_INI) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+  if (section_len == 0 || key_len == 0) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  section = turbo_wasm3_copy_guest_bytes(section_ptr, section_len);
+  if (!section) {
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+  key = turbo_wasm3_copy_guest_bytes(key_ptr, key_len);
+  if (!key) {
+    free(section);
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+
+  value = turbo_ini_get((const turbo_ini_t *)entry->doc, section, key);
+  parsed = turbo_ini_get_bool((const turbo_ini_t *)entry->doc, section, key, false)
+               ? 1
+               : 0;
+  free(key);
+  free(section);
+  if (!value) {
+    m3ApiReturn(TURBO_ENOENT);
+  }
+
+  m3ApiWriteMem32(out_value, (uint32_t)parsed);
+  m3ApiReturn(0);
+}
+
+m3ApiRawFunction(turbo_wasm3_host_ini_get_double) {
+  turbo_wasm3_vm_t *vm = turbo_wasm3_import_vm(_ctx);
+  char *section = NULL;
+  char *key = NULL;
+  int idx;
+  turbo_wasm3_parser_entry_t *entry;
+  const char *value;
+  double parsed = 0.0;
+
+  m3ApiReturnType(int32_t)
+  m3ApiGetArg(uint32_t, handle)
+  m3ApiGetArgMem(const uint8_t *, section_ptr)
+  m3ApiGetArg(uint32_t, section_len)
+  m3ApiGetArgMem(const uint8_t *, key_ptr)
+  m3ApiGetArg(uint32_t, key_len)
+  m3ApiGetArgMem(double *, out_value)
+
+  if (!vm || !vm->parser_registry || !out_value) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  m3ApiCheckMem(out_value, sizeof(double));
+  if (section_len != 0) {
+    m3ApiCheckMem(section_ptr, section_len);
+  }
+  if (key_len != 0) {
+    m3ApiCheckMem(key_ptr, key_len);
+  }
+  memset(out_value, 0, sizeof(double));
+
+  idx = turbo_wasm3_parser_registry_find(vm->parser_registry, handle);
+  if (idx < 0) {
+    m3ApiReturn(TURBO_EBADF);
+  }
+
+  entry = &vm->parser_registry->entries[idx];
+  if (entry->type != TURBO_WASM3_PARSER_TYPE_INI) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+  if (section_len == 0 || key_len == 0) {
+    m3ApiReturn(TURBO_EINVAL);
+  }
+
+  section = turbo_wasm3_copy_guest_bytes(section_ptr, section_len);
+  if (!section) {
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+  key = turbo_wasm3_copy_guest_bytes(key_ptr, key_len);
+  if (!key) {
+    free(section);
+    m3ApiReturn(TURBO_ENOMEM);
+  }
+
+  value = turbo_ini_get((const turbo_ini_t *)entry->doc, section, key);
+  parsed =
+      turbo_ini_get_double((const turbo_ini_t *)entry->doc, section, key, 0.0);
+  free(key);
+  free(section);
+  if (!value) {
+    m3ApiReturn(TURBO_ENOENT);
+  }
+
+  memcpy(out_value, &parsed, sizeof(parsed));
   m3ApiReturn(0);
 }
 
@@ -6068,4 +7120,360 @@ int turbo_wasm3_http_registry_close_response(turbo_wasm3_http_registry_t *regist
   registry->responses[index] = registry->responses[registry->response_count - 1];
   registry->response_count--;
   return 0;
+}
+
+turbo_wasm3_redis_registry_t *
+turbo_wasm3_redis_registry_create(size_t initial_capacity) {
+  turbo_wasm3_redis_registry_t *registry;
+  int rc;
+
+  registry = (turbo_wasm3_redis_registry_t *)calloc(1, sizeof(*registry));
+  if (!registry) {
+    return NULL;
+  }
+
+  registry->next_client_handle = 0x3000u;
+  registry->next_reply_handle = 0x4000u;
+
+  rc = turbo_wasm3_redis_registry_reserve_clients(
+      registry, initial_capacity ? initial_capacity : 4);
+  if (rc != 0) {
+    free(registry);
+    return NULL;
+  }
+
+  rc = turbo_wasm3_redis_registry_reserve_replies(registry, 4);
+  if (rc != 0) {
+    free(registry->clients);
+    free(registry);
+    return NULL;
+  }
+
+  return registry;
+}
+
+void turbo_wasm3_redis_registry_destroy(turbo_wasm3_redis_registry_t *registry) {
+  size_t i;
+
+  if (!registry) {
+    return;
+  }
+
+  for (i = 0; i < registry->reply_count; ++i) {
+    turbo_wasm3_redis_reply_entry_reset(&registry->replies[i]);
+  }
+  for (i = 0; i < registry->client_count; ++i) {
+    turbo_wasm3_redis_client_entry_clear_error(&registry->clients[i]);
+    redis_client_destroy(registry->clients[i].client);
+    coro_context_destroy(registry->clients[i].ctx);
+  }
+
+  free(registry->replies);
+  free(registry->clients);
+  free(registry);
+}
+
+int turbo_wasm3_redis_registry_open_client(turbo_wasm3_redis_registry_t *registry,
+                                           const char *host, uint16_t port,
+                                           uint32_t *client_handle) {
+  coro_context_t *ctx = NULL;
+  redis_client_t *client;
+  turbo_wasm3_redis_open_task_state_t task_state;
+  int rc = 0;
+
+  if (!registry || !host || port == 0 || !client_handle) {
+    return TURBO_EINVAL;
+  }
+
+  rc = turbo_wasm3_redis_registry_reserve_clients(registry,
+                                                  registry->client_count + 1);
+  if (rc != 0) {
+    return rc;
+  }
+
+  client = redis_client_create(host, port);
+  if (!client) {
+    return TURBO_ENOMEM;
+  }
+
+  ctx = coro_context_create(NULL);
+  if (!ctx) {
+    redis_client_destroy(client);
+    return TURBO_ENOMEM;
+  }
+
+  memset(&task_state, 0, sizeof(task_state));
+  task_state.host = host;
+  task_state.port = port;
+  rc = coro_context_spawn(ctx, turbo_wasm3_redis_open_task, &task_state);
+  if (rc != 0) {
+    coro_context_destroy(ctx);
+    redis_client_destroy(client);
+    return rc;
+  }
+  rc = turbo_wasm3_redis_run_until_done(ctx, &task_state.done);
+  if (rc != 0 || task_state.rc != 0 || !task_state.socket) {
+    coro_context_destroy(ctx);
+    redis_client_destroy(client);
+    return task_state.rc != 0 ? task_state.rc : rc;
+  }
+
+  if (redis_client_attach_socket(client, ctx, task_state.socket, 1) != 0) {
+    coro_socket_destroy(task_state.socket);
+    coro_context_destroy(ctx);
+    redis_client_destroy(client);
+    return TURBO_EIO;
+  }
+
+  registry->clients[registry->client_count].handle = registry->next_client_handle++;
+  registry->clients[registry->client_count].ctx = ctx;
+  registry->clients[registry->client_count].client = client;
+  registry->clients[registry->client_count].last_error = NULL;
+  *client_handle = registry->clients[registry->client_count].handle;
+  registry->client_count++;
+  return 0;
+}
+
+int turbo_wasm3_redis_registry_close_client(turbo_wasm3_redis_registry_t *registry,
+                                            uint32_t client_handle) {
+  turbo_wasm3_redis_client_entry_t *entry;
+  size_t i;
+  size_t index;
+
+  if (!registry) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_client(registry, client_handle);
+  if (!entry) {
+    return TURBO_EBADF;
+  }
+
+  for (i = 0; i < registry->reply_count;) {
+    if (registry->replies[i].client_handle == client_handle) {
+      turbo_wasm3_redis_reply_entry_reset(&registry->replies[i]);
+      registry->replies[i] = registry->replies[registry->reply_count - 1];
+      registry->reply_count--;
+      continue;
+    }
+    ++i;
+  }
+
+  index = (size_t)(entry - registry->clients);
+  turbo_wasm3_redis_client_entry_clear_error(entry);
+  redis_client_destroy(entry->client);
+  coro_context_destroy(entry->ctx);
+  registry->clients[index] = registry->clients[registry->client_count - 1];
+  registry->client_count--;
+  return 0;
+}
+
+int turbo_wasm3_redis_registry_client_error(
+    turbo_wasm3_redis_registry_t *registry, uint32_t client_handle, char *buffer,
+    size_t buffer_size, uint32_t *out_len) {
+  turbo_wasm3_redis_client_entry_t *entry;
+
+  if (!registry || !buffer || buffer_size == 0 || !out_len) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_client(registry, client_handle);
+  if (!entry) {
+    return TURBO_EBADF;
+  }
+
+  return turbo_wasm3_error_buffer_write(entry->last_error, buffer, buffer_size,
+                                        out_len);
+}
+
+int turbo_wasm3_redis_registry_command(turbo_wasm3_redis_registry_t *registry,
+                                       uint32_t client_handle, uint32_t argc,
+                                       const char *const *argv,
+                                       const uint32_t *argv_lens,
+                                       uint32_t *reply_handle) {
+  turbo_wasm3_redis_client_entry_t *entry;
+  turbo_wasm3_redis_command_task_state_t task_state;
+  int rc;
+
+  if (!registry || !reply_handle || argc == 0 || !argv || !argv_lens) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_client(registry, client_handle);
+  if (!entry) {
+    return TURBO_EBADF;
+  }
+
+  turbo_wasm3_redis_client_entry_clear_error(entry);
+  memset(&task_state, 0, sizeof(task_state));
+  task_state.entry = entry;
+  task_state.argc = argc;
+  task_state.argv = argv;
+  task_state.argv_lens = argv_lens;
+  rc = coro_context_spawn(entry->ctx, turbo_wasm3_redis_command_task, &task_state);
+  if (rc != 0) {
+    turbo_wasm3_redis_client_entry_set_error(entry, "redis command failed", 20);
+    return rc;
+  }
+  rc = turbo_wasm3_redis_run_until_done(entry->ctx, &task_state.done);
+  if (rc != 0 || task_state.rc != 0) {
+    turbo_wasm3_redis_client_entry_set_error(entry, "redis command failed", 20);
+    return task_state.rc != 0 ? task_state.rc : rc;
+  }
+  if (!task_state.reply) {
+    turbo_wasm3_redis_client_entry_set_error(entry, "redis reply missing", 19);
+    return TURBO_EIO;
+  }
+
+  return turbo_wasm3_redis_registry_store_reply(registry, client_handle,
+                                                task_state.reply, reply_handle);
+}
+
+int turbo_wasm3_redis_registry_close_reply(turbo_wasm3_redis_registry_t *registry,
+                                           uint32_t reply_handle) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+  size_t index;
+
+  if (!registry) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_reply(registry, reply_handle);
+  if (!entry) {
+    return TURBO_EBADF;
+  }
+
+  index = (size_t)(entry - registry->replies);
+  turbo_wasm3_redis_reply_entry_reset(entry);
+  registry->replies[index] = registry->replies[registry->reply_count - 1];
+  registry->reply_count--;
+  return 0;
+}
+
+int turbo_wasm3_redis_registry_reply_type(turbo_wasm3_redis_registry_t *registry,
+                                          uint32_t reply_handle,
+                                          int32_t *out_type) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+
+  if (!registry || !out_type) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_reply(registry, reply_handle);
+  if (!entry || !entry->reply) {
+    return TURBO_EBADF;
+  }
+
+  *out_type = (int32_t)entry->reply->type;
+  return 0;
+}
+
+int turbo_wasm3_redis_registry_reply_int64(turbo_wasm3_redis_registry_t *registry,
+                                           uint32_t reply_handle,
+                                           int64_t *out_value) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+
+  if (!registry || !out_value) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_reply(registry, reply_handle);
+  if (!entry || !entry->reply) {
+    return TURBO_EBADF;
+  }
+  if (entry->reply->type != REDIS_REPLY_INTEGER) {
+    return TURBO_EINVAL;
+  }
+
+  *out_value = entry->reply->integer;
+  return 0;
+}
+
+int turbo_wasm3_redis_registry_reply_text(turbo_wasm3_redis_registry_t *registry,
+                                          uint32_t reply_handle, char *buffer,
+                                          size_t buffer_size,
+                                          uint32_t *out_len) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+
+  if (!registry || !buffer || buffer_size == 0 || !out_len) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_reply(registry, reply_handle);
+  if (!entry || !entry->reply) {
+    return TURBO_EBADF;
+  }
+
+  switch (entry->reply->type) {
+  case REDIS_REPLY_STRING:
+  case REDIS_REPLY_ERROR:
+  case REDIS_REPLY_BULK_STRING:
+    return turbo_wasm3_http_copy_buffer(entry->reply->str, entry->reply->len,
+                                        buffer, buffer_size, out_len);
+  case REDIS_REPLY_NULL:
+    buffer[0] = '\0';
+    *out_len = 0;
+    return 0;
+  default:
+    return TURBO_EINVAL;
+  }
+}
+
+int turbo_wasm3_redis_registry_reply_array_len(
+    turbo_wasm3_redis_registry_t *registry, uint32_t reply_handle,
+    uint32_t *out_len) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+
+  if (!registry || !out_len) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_reply(registry, reply_handle);
+  if (!entry || !entry->reply) {
+    return TURBO_EBADF;
+  }
+  if (entry->reply->type != REDIS_REPLY_ARRAY) {
+    return TURBO_EINVAL;
+  }
+
+  *out_len = (uint32_t)entry->reply->element_count;
+  return 0;
+}
+
+int turbo_wasm3_redis_registry_reply_array_at(
+    turbo_wasm3_redis_registry_t *registry, uint32_t reply_handle, uint32_t index,
+    uint32_t *out_child_reply_handle) {
+  turbo_wasm3_redis_reply_entry_t *entry;
+  const redis_reply_t *child_reply;
+  uint32_t client_handle;
+  redis_reply_t *copy;
+
+  if (!registry || !out_child_reply_handle) {
+    return TURBO_EINVAL;
+  }
+
+  entry = turbo_wasm3_redis_registry_find_reply(registry, reply_handle);
+  if (!entry || !entry->reply) {
+    return TURBO_EBADF;
+  }
+  if (entry->reply->type != REDIS_REPLY_ARRAY ||
+      index >= entry->reply->element_count) {
+    return TURBO_EINVAL;
+  }
+
+  child_reply = entry->reply->elements[index];
+  client_handle = entry->client_handle;
+  copy = turbo_wasm3_redis_reply_clone(child_reply);
+  if (!copy) {
+    return TURBO_ENOMEM;
+  }
+
+  {
+    int rc = turbo_wasm3_redis_registry_store_reply(
+        registry, client_handle, copy, out_child_reply_handle);
+    if (rc != 0) {
+      redis_reply_free(copy);
+    }
+    return rc;
+  }
 }

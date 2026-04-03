@@ -44,7 +44,7 @@ extern int32_t academy_kv_close(uint32_t handle);
 
 ## 2. 公开头模板
 
-若此模块要正式对外，往 [turbo_wasm3.h](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/include/turbo_wasm3.h) 加：
+若此模块要正式对外，往 [turbo_wasm3.h](C:/projects/cpp/TurboNet/TurboNet/wasm3/include/turbo_wasm3.h) 加：
 
 ```c
 typedef struct academy_kv_registry_s academy_kv_registry_t;
@@ -81,7 +81,7 @@ academy_kv_linker(turbo_wasm3_vm_t *vm, IM3Module module, void *user_data);
 
 ## 3. registry 数据结构模板
 
-放在 [turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/source/turbo_wasm3.c) 或独立源文件皆可。
+放在 [turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/source/turbo_wasm3.c) 或独立源文件皆可。
 
 ```c
 typedef struct academy_kv_entry_s {
@@ -516,7 +516,7 @@ __attribute__((export_name("run_kv_demo")))
 int32_t run_kv_demo(void) {
   static const char target[] = "memory";
   static const char key[] = "name";
-  static const char value[] = "TurboUtils";
+  static const char value[] = "TurboNet";
   uint32_t handle = 0;
   uint32_t written = 0;
   char buffer[32];
@@ -580,9 +580,9 @@ int main(void) {
 - 旧模块不受影响
 
 现成参考：
-- [guest_db_demo.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/guest_db_demo.c)
-- [guest_db_crud_demo.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/guest_db_crud_demo.c)
-- [test_turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/tests/test_turbo_wasm3.c)
+- [guest_db_demo.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/guest_db_demo.c)
+- [guest_db_crud_demo.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/guest_db_crud_demo.c)
+- [test_turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/tests/test_turbo_wasm3.c)
 
 ## 10. 最后一句
 

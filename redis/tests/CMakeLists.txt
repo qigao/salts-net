@@ -8,7 +8,7 @@ target_link_libraries(test_redis_client PRIVATE tedis
 
 target_include_directories(
   test_redis_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
-                            ${CMAKE_SOURCE_DIR}/shared/tinytest)
+                            ${CMAKE_SOURCE_DIR}/shared/TurboUtils::TinyTest)
 
 set_target_properties(test_redis_client PROPERTIES FOLDER "tedis/tests")
 
@@ -22,7 +22,7 @@ target_link_libraries(test_redis_pool PRIVATE tedis TurboUtils::TinyTest)
 
 target_include_directories(
   test_redis_pool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
-                          ${CMAKE_SOURCE_DIR}/shared/tinytest)
+                          ${CMAKE_SOURCE_DIR}/shared/TurboUtils::TinyTest)
 
 set_target_properties(test_redis_pool PROPERTIES FOLDER "tedis/tests")
 
@@ -36,7 +36,7 @@ target_link_libraries(test_redis_cluster PRIVATE tedis
 
 target_include_directories(
   test_redis_cluster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
-                             ${CMAKE_SOURCE_DIR}/shared/tinytest)
+                             ${CMAKE_SOURCE_DIR}/shared/TurboUtils::TinyTest)
 
 set_target_properties(test_redis_cluster PROPERTIES FOLDER "tedis/tests")
 

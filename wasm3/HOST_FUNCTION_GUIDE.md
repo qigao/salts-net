@@ -19,7 +19,7 @@
 
 一句话：
 - `WASI` 管通用沙箱能力
-- host function 管 TurboUtils 自有能力
+- host function 管 TurboNet 自有能力
 
 ## 数据结构先行
 
@@ -73,8 +73,8 @@ host function 签名要薄，要傻，要稳。
 
 例：
 ```c
-import "TurboUtils" "kv_get" : i32 (handle, key_ptr, key_len, val_ptr, val_len, out_written)
-import "TurboUtils" "kv_set" : i32 (handle, key_ptr, key_len, val_ptr, val_len)
+import "TurboNet" "kv_get" : i32 (handle, key_ptr, key_len, val_ptr, val_len, out_written)
+import "TurboNet" "kv_set" : i32 (handle, key_ptr, key_len, val_ptr, val_len)
 ```
 
 问自己三件事：
@@ -84,7 +84,7 @@ import "TurboUtils" "kv_set" : i32 (handle, key_ptr, key_len, val_ptr, val_len)
 
 ### 2. 在公开头中声明 ABI
 
-改 [turbo_wasm3.h](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/include/turbo_wasm3.h)：
+改 [turbo_wasm3.h](C:/projects/cpp/TurboNet/TurboNet/wasm3/include/turbo_wasm3.h)：
 - 更新 host ABI 注释
 - 若有新 registry / adapter，对外声明其 API
 - 若 ABI 有破坏性变化，递增 `TURBO_WASM3_HOST_ABI_VERSION`
@@ -95,7 +95,7 @@ import "TurboUtils" "kv_set" : i32 (handle, key_ptr, key_len, val_ptr, val_len)
 
 ### 3. 在 `turbo_wasm3.c` 写 raw host wrapper
 
-文件在 [turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/source/turbo_wasm3.c)。
+文件在 [turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/source/turbo_wasm3.c)。
 
 典型结构：
 ```c
@@ -151,18 +151,18 @@ m3ApiRawFunction(turbo_wasm3_host_kv_get) {
 
 ### 4. 把 raw wrapper 接到 host linker
 
-仍在 [turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/source/turbo_wasm3.c)：
-- 找 `turbo_wasm3_vm_link_turboutils_host()`
+仍在 [turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/source/turbo_wasm3.c)：
+- 找 `turbo_wasm3_vm_link_host()`
 - 用 `m3_LinkRawFunctionEx()` 接入
 
 例：
 ```c
 result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
-    module, "TurboUtils", "kv_get", "i(i*i*i*)", &turbo_wasm3_host_kv_get, vm));
+    module, "TurboNet", "kv_get", "i(i*i*i*)", &turbo_wasm3_host_kv_get, vm));
 ```
 
 规则：
-- 模块名保持稳定，现用 `TurboUtils`
+- 模块名保持稳定，现用 `TurboNet`
 - 签名字串与 raw function 参数必须一致
 - `userdata` 传 `vm`，不要偷全局
 
@@ -183,11 +183,11 @@ result = turbo_wasm3_suppress_lookup_failure(m3_LinkRawFunctionEx(
 
 ### 6. 补 guest 示例
 
-最少要有一只 standalone guest wasm 示例，放在 [examples](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples)。
+最少要有一只 standalone guest wasm 示例，放在 [examples](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples)。
 
 现有可学者：
-- [guest_db_demo.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/guest_db_demo.c)
-- [guest_db_crud_demo.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/guest_db_crud_demo.c)
+- [guest_db_demo.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/guest_db_demo.c)
+- [guest_db_crud_demo.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/guest_db_crud_demo.c)
 
 guest 示例应：
 - 只依赖 imports
@@ -204,8 +204,8 @@ guest 示例应：
 - 检查结果
 
 现有可学者：
-- [turbo_wasm3_db_example.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/turbo_wasm3_db_example.c)
-- [turbo_wasm3_db_crud_example.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/turbo_wasm3_db_crud_example.c)
+- [turbo_wasm3_db_example.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/turbo_wasm3_db_example.c)
+- [turbo_wasm3_db_crud_example.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/turbo_wasm3_db_crud_example.c)
 
 ### 8. 最后补测试
 
@@ -218,7 +218,7 @@ guest 示例应：
 - 旧 ABI 未受影响
 
 现有主测文件：
-- [test_turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/tests/test_turbo_wasm3.c)
+- [test_turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/tests/test_turbo_wasm3.c)
 
 ## 错误处理准则
 
@@ -233,7 +233,7 @@ guest 示例应：
 - 给它 `stmt_error`
 - 不要把一切都塞回 `db_error`
 
-这正是 [db_stmt_error](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/include/turbo_wasm3.h) 存在之理由。
+这正是 [db_stmt_error](C:/projects/cpp/TurboNet/TurboNet/wasm3/include/turbo_wasm3.h) 存在之理由。
 
 ## 内存与生命周期
 
@@ -276,7 +276,7 @@ guest 示例应：
 
 ## 一只最小自定义 host module 例
 
-若你不想改内建 `TurboUtils` 模块，可自己加 linker：
+若你不想改内建 `TurboNet` 模块，可自己加 linker：
 
 ```c
 static
@@ -307,9 +307,9 @@ extern int32_t academy_add_one(int32_t value);
 此适合：
 - 试验新能力
 - 学术用途
-- 暂不想把 ABI 并入 `TurboUtils` 主模块
+- 暂不想把 ABI 并入 `TurboNet` 主模块
 
-## 何时并入内建 `TurboUtils` 模块
+## 何时并入内建 `TurboNet` 模块
 
 满足三条再并：
 - 能力已稳定
@@ -340,11 +340,11 @@ extern int32_t academy_add_one(int32_t value);
 
 ## 现有参考文件
 
-- 公开 API：[turbo_wasm3.h](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/include/turbo_wasm3.h)
-- 实现入口：[turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/source/turbo_wasm3.c)
-- 最小 db 示例：[guest_db_demo.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/guest_db_demo.c)
-- CRUD db 示例：[guest_db_crud_demo.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/examples/guest_db_crud_demo.c)
-- 集成测试：[test_turbo_wasm3.c](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/tests/test_turbo_wasm3.c)
+- 公开 API：[turbo_wasm3.h](C:/projects/cpp/TurboNet/TurboNet/wasm3/include/turbo_wasm3.h)
+- 实现入口：[turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/source/turbo_wasm3.c)
+- 最小 db 示例：[guest_db_demo.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/guest_db_demo.c)
+- CRUD db 示例：[guest_db_crud_demo.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/examples/guest_db_crud_demo.c)
+- 集成测试：[test_turbo_wasm3.c](C:/projects/cpp/TurboNet/TurboNet/wasm3/tests/test_turbo_wasm3.c)
 
 一句收尾：
 - 先设计 handle 与 ABI
@@ -355,4 +355,4 @@ extern int32_t academy_add_one(int32_t value);
 次序若反了，后面多半是一地垃圾。
 
 若你只要可抄之骨架，不想先读长文，直去
-[HOST_FUNCTION_TEMPLATE.md](C:/projects/cpp/TurboUtils/TurboUtils/wasm3/HOST_FUNCTION_TEMPLATE.md)。
+[HOST_FUNCTION_TEMPLATE.md](C:/projects/cpp/TurboNet/TurboNet/wasm3/HOST_FUNCTION_TEMPLATE.md)。

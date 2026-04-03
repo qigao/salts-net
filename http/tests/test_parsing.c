@@ -28,7 +28,7 @@ spec("http response parsing") {
         it("should hold headers") {
             http_response_t *response = calloc(1, sizeof(http_response_t));
             const char *headers = "Content-Type: text/html\r\nContent-Length: 100\r\n";
-            response->headers = strdup(headers);
+            response->headers = tstr_dup(headers);
             response->headers_len = strlen(headers);
             check_not_null(response->headers);
             check_int_gt((int)response->headers_len, 0);
@@ -48,7 +48,7 @@ spec("http response parsing") {
 
         it("should hold error") {
             http_response_t *response = calloc(1, sizeof(http_response_t));
-            response->error = strdup("Connection failed");
+            response->error = tstr_dup("Connection failed");
             check_not_null(response->error);
             check_str_eq(response->error, "Connection failed");
             http_response_free(response);
@@ -57,7 +57,7 @@ spec("http response parsing") {
         it("should hold complete response") {
             http_response_t *response = calloc(1, sizeof(http_response_t));
             response->status_code = 200;
-            response->headers = strdup("Content-Type: application/json\r\n");
+            response->headers = tstr_dup("Content-Type: application/json\r\n");
             response->headers_len = strlen(response->headers);
             response->body = strdup("{\"status\":\"ok\"}");
             response->body_len = strlen(response->body);

@@ -437,5 +437,10 @@ void coro_lb_stop(coro_lb_t *lb) {
 void coro_lb_destroy(coro_lb_t *lb) {
   if (!lb) return;
   coro_lb_stop(lb);
+  if (lb->ctx) {
+    for (int i = 0; i < 1024 && lb->active_conns > 0; i++) {
+      coro_context_run(lb->ctx, TURBO_RUN_NOWAIT);
+    }
+  }
   free(lb);
 }

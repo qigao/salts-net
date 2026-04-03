@@ -37,10 +37,10 @@ int main(void) {
     return 1;
   }
 
-  /* Enable TurboUtils host linker - this provides parser functions */
-  rc = turbo_wasm3_vm_enable_turboutils_host(vm);
+  /* Enable TurboNet host linker - this provides parser functions */
+  rc = turbo_wasm3_vm_enable_host(vm);
   if (rc != 0) {
-    fprintf(stderr, "failed to enable TurboUtils host: %d\n", rc);
+    fprintf(stderr, "failed to enable TurboNet host: %d\n", rc);
     rc = 1;
     goto done;
   }

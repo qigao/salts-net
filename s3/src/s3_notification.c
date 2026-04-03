@@ -4,7 +4,6 @@
 #include "s3_http.h"
 #include "s3_client_internal.h"
 #include "s3_xml_helpers.h"
-#include <cxml/cxml.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,65 +28,65 @@ void s3_notification_config_free(s3_notification_config_t* config) {
     memset(config, 0, sizeof(s3_notification_config_t));
 }
 
-static int parse_notification_rules(cxml_elem_node* root, const char* config_tag, const char* arn_tag,
+static int parse_notification_rules(s3_xml_node_t* root, const char* config_tag, const char* arn_tag,
                                      s3_notification_rule_t** out_rules) {
-    cxml_list items;
-    cxml_list_init(&items);
-    cxml_find_all(root, config_tag, &items);
+    s3_xml_list_t items;
+    s3_xml_list_init(&items);
+    s3_xml_find_all(root, config_tag, &items);
 
     int count = 0;
-    cxml_for(n1, &items) { (void)n1; count++; }
-    if (count == 0) { cxml_list_free(&items); return 0; }
+    s3_xml_for(n1, &items) { (void)n1; count++; }
+    if (count == 0) { s3_xml_list_free(&items); return 0; }
 
     *out_rules = calloc((size_t)count, sizeof(s3_notification_rule_t));
     int idx = 0;
-    cxml_for(n2, &items) {
-        cxml_elem_node* rnode = (cxml_elem_node*)n2;
+    s3_xml_for(n2, &items) {
+        s3_xml_node_t* rnode = (s3_xml_node_t*)n2;
         s3_notification_rule_t* r = &(*out_rules)[idx];
-        r->id = mxml_child_text_dup(rnode, "Id");
-        r->arn = mxml_child_text_dup(rnode, arn_tag);
+        r->id = s3_xml_child_text_dup(rnode, "Id");
+        r->arn = s3_xml_child_text_dup(rnode, arn_tag);
 
         // Events
-        cxml_list evts;
-        cxml_list_init(&evts);
-        cxml_find_all(rnode, "<Event>/", &evts);
+        s3_xml_list_t evts;
+        s3_xml_list_init(&evts);
+        s3_xml_find_all(rnode, "<Event>/", &evts);
         int ec = 0;
-        cxml_for(e1, &evts) { (void)e1; ec++; }
+        s3_xml_for(e1, &evts) { (void)e1; ec++; }
         if (ec > 0) {
             r->events = calloc((size_t)ec, sizeof(tstr_t));
             r->event_count = ec;
             int ei = 0;
-            cxml_for(e2, &evts) {
-                char* t = cxml_text((cxml_elem_node*)e2, NULL);
+            s3_xml_for(e2, &evts) {
+                char* t = s3_xml_text_dup((s3_xml_node_t*)e2);
                 r->events[ei++] = t ? tstr_dup(t) : tstr_new();
                 if (t) free(t);
             }
         }
-        cxml_list_free(&evts);
+        s3_xml_list_free(&evts);
 
         // Filter
-        cxml_elem_node* filter = cxml_find(rnode, "<Filter>/");
+        s3_xml_node_t* filter = s3_xml_find(rnode, "<Filter>/");
         if (filter) {
-            cxml_elem_node* s3key = cxml_find(filter, "<S3Key>/");
+            s3_xml_node_t* s3key = s3_xml_find(filter, "<S3Key>/");
             if (s3key) {
-                cxml_list frules;
-                cxml_list_init(&frules);
-                cxml_find_all(s3key, "<FilterRule>/", &frules);
-                cxml_for(fn, &frules) {
-                    cxml_elem_node* fnode = (cxml_elem_node*)fn;
-                    tstr_t name = mxml_child_text_dup(fnode, "Name");
-                    tstr_t value = mxml_child_text_dup(fnode, "Value");
+                s3_xml_list_t frules;
+                s3_xml_list_init(&frules);
+                s3_xml_find_all(s3key, "<FilterRule>/", &frules);
+                s3_xml_for(fn, &frules) {
+                    s3_xml_node_t* fnode = (s3_xml_node_t*)fn;
+                    tstr_t name = s3_xml_child_text_dup(fnode, "Name");
+                    tstr_t value = s3_xml_child_text_dup(fnode, "Value");
                     if (name && strcmp(name, "prefix") == 0) { tstr_free(r->prefix_filter); r->prefix_filter = value; value = NULL; }
                     else if (name && strcmp(name, "suffix") == 0) { tstr_free(r->suffix_filter); r->suffix_filter = value; value = NULL; }
                     tstr_free(name);
                     tstr_free(value);
                 }
-                cxml_list_free(&frules);
+                s3_xml_list_free(&frules);
             }
         }
         idx++;
     }
-    cxml_list_free(&items);
+    s3_xml_list_free(&items);
     return count;
 }
 
@@ -137,13 +136,13 @@ s3_notification_config_t s3_get_bucket_notification(s3_client_t* client, const c
     s3_error_t e = S3_OK;
     if (!s3_is_ok(hres.error)) { e = hres.error; hres.error = S3_OK; }
     else if (hres.status_code == 200) {
-        void* doc = cxml_load_string(hres.body);
-        if (doc) {
-            cxml_elem_node* root = cxml_get_root_element(doc);
+        s3_xml_doc_t* doc = NULL;
+        if (s3_xml_parse(hres.body, &doc) == 0) {
+            s3_xml_node_t* root = s3_xml_root(doc);
             res.queue_count = parse_notification_rules(root, "<QueueConfiguration>/", "Queue", &res.queue_configs);
             res.topic_count = parse_notification_rules(root, "<TopicConfiguration>/", "Topic", &res.topic_configs);
             res.cloud_func_count = parse_notification_rules(root, "<CloudFunctionConfiguration>/", "CloudFunction", &res.cloud_func_configs);
-            cxml_delete_document(doc);
+            s3_xml_free(&doc);
         } else {
             e = s3_error_make(-1, "Failed to parse notification XML");
         }

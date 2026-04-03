@@ -19,6 +19,7 @@ struct m3_wasi_context_t;
 typedef struct turbo_wasm3_socket_registry_s turbo_wasm3_socket_registry_t;
 typedef struct turbo_wasm3_db_registry_s turbo_wasm3_db_registry_t;
 typedef struct turbo_wasm3_http_registry_s turbo_wasm3_http_registry_t;
+typedef struct turbo_wasm3_redis_registry_s turbo_wasm3_redis_registry_t;
 typedef struct turbo_wasm3_parser_registry_s turbo_wasm3_parser_registry_t;
 typedef struct turbo_wasm3_vm_s turbo_wasm3_vm_t;
 typedef M3Result (*turbo_wasm3_host_linker_fn)(turbo_wasm3_vm_t *vm,
@@ -68,9 +69,15 @@ typedef struct turbo_wasm3_db_ops_s {
 #define TURBO_WASM3_HTTP_METHOD_PUT 4
 #define TURBO_WASM3_HTTP_METHOD_OPTIONS 6
 #define TURBO_WASM3_HTTP_METHOD_PATCH 28
+#define TURBO_WASM3_REDIS_REPLY_STRING 0
+#define TURBO_WASM3_REDIS_REPLY_ERROR 1
+#define TURBO_WASM3_REDIS_REPLY_INTEGER 2
+#define TURBO_WASM3_REDIS_REPLY_BULK_STRING 3
+#define TURBO_WASM3_REDIS_REPLY_ARRAY 4
+#define TURBO_WASM3_REDIS_REPLY_NULL 5
 
 /*
- * Create a TurboUtils-managed wasm3 VM.
+ * Create a TurboNet-managed wasm3 VM.
  * The VM owns its environment, runtime, copied wasm bytes, and socket registry.
  */
 CXX_C_API turbo_wasm3_vm_t *
@@ -91,6 +98,9 @@ turbo_wasm3_vm_get_db_registry(turbo_wasm3_vm_t *vm);
 
 CXX_C_API turbo_wasm3_http_registry_t *
 turbo_wasm3_vm_get_http_registry(turbo_wasm3_vm_t *vm);
+
+CXX_C_API turbo_wasm3_redis_registry_t *
+turbo_wasm3_vm_get_redis_registry(turbo_wasm3_vm_t *vm);
 
 CXX_C_API turbo_wasm3_parser_registry_t *
 turbo_wasm3_vm_get_parser_registry(turbo_wasm3_vm_t *vm);
@@ -119,7 +129,7 @@ turbo_wasm3_vm_load_module_file(turbo_wasm3_vm_t *vm, const char *path,
                                 const char *module_name, IM3Module *out_module);
 
 /*
- * Host linkers let TurboUtils bind stable host imports without coupling guests to
+ * Host linkers let TurboNet bind stable host imports without coupling guests to
  * backend libraries directly. Add them before loading a module.
  */
 CXX_C_API void
@@ -140,71 +150,90 @@ CXX_C_API M3Result
 turbo_wasm3_vm_link_host_modules(turbo_wasm3_vm_t *vm, IM3Module module);
 
 /*
- * Built-in TurboUtils host module:
- *   import "TurboUtils" "abi_version"    : i32 () -> ABI version
- *   import "TurboUtils" "clock_time_ms"  : i64 () -> monotonic-ish host time in ms
- *   import "TurboUtils" "socket_send"    : i32 (fd, ptr, len, out_sent)
- *   import "TurboUtils" "socket_recv"    : i32 (fd, ptr, len, out_recv)
- *   import "TurboUtils" "socket_release" : i32 (fd)
- *   import "TurboUtils" "db_open"        : i32 (ptr, len, out_handle)
- *   import "TurboUtils" "db_close"       : i32 (handle)
- *   import "TurboUtils" "db_exec"        : i32 (handle, ptr, len, out_changes)
- *   import "TurboUtils" "db_error"       : i32 (handle, ptr, len, out_written)
- *   import "TurboUtils" "db_stmt_error"  : i32 (stmt, ptr, len, out_written)
- *   import "TurboUtils" "db_prepare"     : i32 (db, ptr, len, out_stmt)
- *   import "TurboUtils" "db_bind_i64"    : i32 (stmt, index, value)
- *   import "TurboUtils" "db_bind_f64"    : i32 (stmt, index, value)
- *   import "TurboUtils" "db_bind_null"   : i32 (stmt, index)
- *   import "TurboUtils" "db_bind_blob"   : i32 (stmt, index, ptr, len)
- *   import "TurboUtils" "db_bind_text"   : i32 (stmt, index, ptr, len)
- *   import "TurboUtils" "db_step"        : i32 (stmt, out_state)
- *   import "TurboUtils" "db_column_type" : i32 (stmt, index, out_type)
- *   import "TurboUtils" "db_column_i64"  : i32 (stmt, index, out_value)
- *   import "TurboUtils" "db_column_f64"  : i32 (stmt, index, out_value)
- *   import "TurboUtils" "db_column_blob" : i32 (stmt, index, ptr, len, out_written)
- *   import "TurboUtils" "db_column_text" : i32 (stmt, index, ptr, len, out_written)
- *   import "TurboUtils" "db_reset"       : i32 (stmt)
- *   import "TurboUtils" "db_finalize"    : i32 (stmt)
+ * Built-in TurboNet host module:
+ *   import "TurboNet" "abi_version"    : i32 () -> ABI version
+ *   import "TurboNet" "clock_time_ms"  : i64 () -> monotonic-ish host time in ms
+ *   import "TurboNet" "socket_send"    : i32 (fd, ptr, len, out_sent)
+ *   import "TurboNet" "socket_recv"    : i32 (fd, ptr, len, out_recv)
+ *   import "TurboNet" "socket_release" : i32 (fd)
+ *   import "TurboNet" "db_open"        : i32 (ptr, len, out_handle)
+ *   import "TurboNet" "db_close"       : i32 (handle)
+ *   import "TurboNet" "db_exec"        : i32 (handle, ptr, len, out_changes)
+ *   import "TurboNet" "db_error"       : i32 (handle, ptr, len, out_written)
+ *   import "TurboNet" "db_stmt_error"  : i32 (stmt, ptr, len, out_written)
+ *   import "TurboNet" "db_prepare"     : i32 (db, ptr, len, out_stmt)
+ *   import "TurboNet" "db_bind_i64"    : i32 (stmt, index, value)
+ *   import "TurboNet" "db_bind_f64"    : i32 (stmt, index, value)
+ *   import "TurboNet" "db_bind_null"   : i32 (stmt, index)
+ *   import "TurboNet" "db_bind_blob"   : i32 (stmt, index, ptr, len)
+ *   import "TurboNet" "db_bind_text"   : i32 (stmt, index, ptr, len)
+ *   import "TurboNet" "db_step"        : i32 (stmt, out_state)
+ *   import "TurboNet" "db_column_type" : i32 (stmt, index, out_type)
+ *   import "TurboNet" "db_column_i64"  : i32 (stmt, index, out_value)
+ *   import "TurboNet" "db_column_f64"  : i32 (stmt, index, out_value)
+ *   import "TurboNet" "db_column_blob" : i32 (stmt, index, ptr, len, out_written)
+ *   import "TurboNet" "db_column_text" : i32 (stmt, index, ptr, len, out_written)
+ *   import "TurboNet" "db_reset"       : i32 (stmt)
+ *   import "TurboNet" "db_finalize"    : i32 (stmt)
  */
 CXX_C_API int
-turbo_wasm3_vm_enable_turboutils_host(turbo_wasm3_vm_t *vm);
+turbo_wasm3_vm_enable_host(turbo_wasm3_vm_t *vm);
 
 CXX_C_API M3Result
-turbo_wasm3_vm_link_turboutils_host(turbo_wasm3_vm_t *vm, IM3Module module);
+turbo_wasm3_vm_link_host(turbo_wasm3_vm_t *vm, IM3Module module);
 
 /*
- * Optional TurboUtils HTTP host module, also linked under "TurboUtils":
- *   import "TurboUtils" "http_client_open"       : i32 (ptr, len, out_client)
- *   import "TurboUtils" "http_client_close"      : i32 (client)
- *   import "TurboUtils" "http_client_set_timeout": i32 (client, timeout_ms)
- *   import "TurboUtils" "http_client_set_default_header": i32 (client, name_ptr, name_len, value_ptr, value_len)
- *   import "TurboUtils" "http_client_remove_default_header": i32 (client, name_ptr, name_len)
- *   import "TurboUtils" "http_client_clear_default_headers": i32 (client)
- *   import "TurboUtils" "http_client_set_basic_auth": i32 (client, user_ptr, user_len, pass_ptr, pass_len)
- *   import "TurboUtils" "http_client_set_bearer_token": i32 (client, token_ptr, token_len)
- *   import "TurboUtils" "http_client_clear_auth": i32 (client)
- *   import "TurboUtils" "http_client_set_proxy": i32 (client, host_ptr, host_len, port, user_ptr, user_len, pass_ptr, pass_len)
- *   import "TurboUtils" "http_client_clear_proxy": i32 (client)
- *   import "TurboUtils" "http_request"           : i32 (client, method, url_ptr, url_len, body_ptr, body_len, out_resp)
- *   import "TurboUtils" "http_request_with_headers": i32 (client, method, url_ptr, url_len, headers_ptr, headers_len, body_ptr, body_len, out_resp)
- *   import "TurboUtils" "http_stream_get"        : i32 (client, url_ptr, url_len, out_resp)
- *   import "TurboUtils" "http_sse_get"           : i32 (client, url_ptr, url_len, out_resp)
- *   import "TurboUtils" "http_response_status"   : i32 (resp, out_status)
- *   import "TurboUtils" "http_response_error_code": i32 (resp, out_code)
- *   import "TurboUtils" "http_response_is_sse"   : i32 (resp, out_flag)
- *   import "TurboUtils" "http_response_chunk_count": i32 (resp, out_count)
- *   import "TurboUtils" "http_response_chunk"    : i32 (resp, index, ptr, len, out_written)
- *   import "TurboUtils" "http_response_header"   : i32 (resp, name_ptr, name_len, ptr, len, out_written)
- *   import "TurboUtils" "http_response_headers"  : i32 (resp, ptr, len, out_written)
- *   import "TurboUtils" "http_response_body"     : i32 (resp, ptr, len, out_written)
- *   import "TurboUtils" "http_response_error"    : i32 (resp, ptr, len, out_written)
- *   import "TurboUtils" "http_response_close"    : i32 (resp)
+ * Optional TurboNet HTTP host module, also linked under "TurboNet":
+ *   import "TurboNet" "http_client_open"       : i32 (ptr, len, out_client)
+ *   import "TurboNet" "http_client_close"      : i32 (client)
+ *   import "TurboNet" "http_client_set_timeout": i32 (client, timeout_ms)
+ *   import "TurboNet" "http_client_set_default_header": i32 (client, name_ptr, name_len, value_ptr, value_len)
+ *   import "TurboNet" "http_client_remove_default_header": i32 (client, name_ptr, name_len)
+ *   import "TurboNet" "http_client_clear_default_headers": i32 (client)
+ *   import "TurboNet" "http_client_set_basic_auth": i32 (client, user_ptr, user_len, pass_ptr, pass_len)
+ *   import "TurboNet" "http_client_set_bearer_token": i32 (client, token_ptr, token_len)
+ *   import "TurboNet" "http_client_clear_auth": i32 (client)
+ *   import "TurboNet" "http_client_set_proxy": i32 (client, host_ptr, host_len, port, user_ptr, user_len, pass_ptr, pass_len)
+ *   import "TurboNet" "http_client_clear_proxy": i32 (client)
+ *   import "TurboNet" "http_request"           : i32 (client, method, url_ptr, url_len, body_ptr, body_len, out_resp)
+ *   import "TurboNet" "http_request_with_headers": i32 (client, method, url_ptr, url_len, headers_ptr, headers_len, body_ptr, body_len, out_resp)
+ *   import "TurboNet" "http_stream_get"        : i32 (client, url_ptr, url_len, out_resp)
+ *   import "TurboNet" "http_sse_get"           : i32 (client, url_ptr, url_len, out_resp)
+ *   import "TurboNet" "http_response_status"   : i32 (resp, out_status)
+ *   import "TurboNet" "http_response_error_code": i32 (resp, out_code)
+ *   import "TurboNet" "http_response_is_sse"   : i32 (resp, out_flag)
+ *   import "TurboNet" "http_response_chunk_count": i32 (resp, out_count)
+ *   import "TurboNet" "http_response_chunk"    : i32 (resp, index, ptr, len, out_written)
+ *   import "TurboNet" "http_response_header"   : i32 (resp, name_ptr, name_len, ptr, len, out_written)
+ *   import "TurboNet" "http_response_headers"  : i32 (resp, ptr, len, out_written)
+ *   import "TurboNet" "http_response_body"     : i32 (resp, ptr, len, out_written)
+ *   import "TurboNet" "http_response_error"    : i32 (resp, ptr, len, out_written)
+ *   import "TurboNet" "http_response_close"    : i32 (resp)
  */
 CXX_C_API int
 turbo_wasm3_vm_enable_http_host(turbo_wasm3_vm_t *vm);
 
 CXX_C_API M3Result
 turbo_wasm3_vm_link_http_host(turbo_wasm3_vm_t *vm, IM3Module module);
+
+/*
+ * Optional TurboNet Redis host module, also linked under "TurboNet":
+ *   import "TurboNet" "redis_client_open"  : i32 (host_ptr, host_len, port, out_client)
+ *   import "TurboNet" "redis_client_close" : i32 (client)
+ *   import "TurboNet" "redis_client_error" : i32 (client, ptr, len, out_written)
+ *   import "TurboNet" "redis_command"      : i32 (client, argc, argv_ptr, argv_len_ptr, out_reply)
+ *   import "TurboNet" "redis_reply_close"  : i32 (reply)
+ *   import "TurboNet" "redis_reply_type"   : i32 (reply, out_type)
+ *   import "TurboNet" "redis_reply_i64"    : i32 (reply, out_value)
+ *   import "TurboNet" "redis_reply_text"   : i32 (reply, ptr, len, out_written)
+ *   import "TurboNet" "redis_reply_array_len": i32 (reply, out_len)
+ *   import "TurboNet" "redis_reply_array_at": i32 (reply, index, out_child_reply)
+ */
+CXX_C_API int
+turbo_wasm3_vm_enable_redis_host(turbo_wasm3_vm_t *vm);
+
+CXX_C_API M3Result
+turbo_wasm3_vm_link_redis_host(turbo_wasm3_vm_t *vm, IM3Module module);
 
 /*
  * Registered sockets are borrowed, not owned.
@@ -476,6 +505,61 @@ CXX_C_API int
 turbo_wasm3_http_registry_close_response(turbo_wasm3_http_registry_t *registry,
                                          uint32_t response_handle);
 
+CXX_C_API turbo_wasm3_redis_registry_t *
+turbo_wasm3_redis_registry_create(size_t initial_capacity);
+
+CXX_C_API void
+turbo_wasm3_redis_registry_destroy(turbo_wasm3_redis_registry_t *registry);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_open_client(turbo_wasm3_redis_registry_t *registry,
+                                       const char *host, uint16_t port,
+                                       uint32_t *client_handle);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_close_client(turbo_wasm3_redis_registry_t *registry,
+                                        uint32_t client_handle);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_client_error(
+    turbo_wasm3_redis_registry_t *registry, uint32_t client_handle, char *buffer,
+    size_t buffer_size, uint32_t *out_len);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_command(turbo_wasm3_redis_registry_t *registry,
+                                   uint32_t client_handle, uint32_t argc,
+                                   const char *const *argv,
+                                   const uint32_t *argv_lens,
+                                   uint32_t *reply_handle);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_close_reply(turbo_wasm3_redis_registry_t *registry,
+                                       uint32_t reply_handle);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_reply_type(turbo_wasm3_redis_registry_t *registry,
+                                      uint32_t reply_handle, int32_t *out_type);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_reply_int64(turbo_wasm3_redis_registry_t *registry,
+                                       uint32_t reply_handle,
+                                       int64_t *out_value);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_reply_text(turbo_wasm3_redis_registry_t *registry,
+                                      uint32_t reply_handle, char *buffer,
+                                      size_t buffer_size, uint32_t *out_len);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_reply_array_len(
+    turbo_wasm3_redis_registry_t *registry, uint32_t reply_handle,
+    uint32_t *out_len);
+
+CXX_C_API int
+turbo_wasm3_redis_registry_reply_array_at(
+    turbo_wasm3_redis_registry_t *registry, uint32_t reply_handle,
+    uint32_t index, uint32_t *out_child_reply_handle);
+
 /*
  * Parser Registry - Unified handle-based parser for JSON/CSV/XML/INI/etc.
  * Gast sees only handles and ptr+len buffers.
@@ -494,10 +578,10 @@ turbo_wasm3_vm_get_parser_vm(turbo_wasm3_vm_t *vm);
 
 /*
  * Parse functions - each returns a handle to parsed document.
- * import "TurboUtils" "parser_json_parse" : i32 (ptr, len, out_handle)
- * import "TurboUtils" "parser_csv_parse"  : i32 (ptr, len, out_handle)
- * import "TurboUtils" "parser_xml_parse"  : i32 (ptr, len, out_handle)
- * import "TurboUtils" "parser_ini_parse"  : i32 (ptr, len, out_handle)
+ * import "TurboNet" "parser_json_parse" : i32 (ptr, len, out_handle)
+ * import "TurboNet" "parser_csv_parse"  : i32 (ptr, len, out_handle)
+ * import "TurboNet" "parser_xml_parse"  : i32 (ptr, len, out_handle)
+ * import "TurboNet" "parser_ini_parse"  : i32 (ptr, len, out_handle)
  */
 CXX_C_API int
 turbo_wasm3_parser_parse_json(turbo_wasm3_vm_t *vm, const uint8_t *data, size_t len, uint32_t *out_handle);
@@ -513,20 +597,20 @@ turbo_wasm3_parser_parse_ini(turbo_wasm3_vm_t *vm, const uint8_t *data, size_t l
 
 /*
  * Free parsed document.
- * import "TurboUtils" "parser_free" : i32 (handle)
+ * import "TurboNet" "parser_free" : i32 (handle)
  */
 CXX_C_API int
 turbo_wasm3_parser_free(turbo_wasm3_vm_t *vm, uint32_t handle);
 
 /*
  * JSON accessors.
- * import "TurboUtils" "json_get_type"     : i32 (handle, path_ptr, path_len, out_type)
- * import "TurboUtils" "json_get_string"   : i32 (handle, path_ptr, path_len, buf, buf_len, out_written)
- * import "TurboUtils" "json_get_int"      : i32 (handle, path_ptr, path_len, out_value)
- * import "TurboUtils" "json_get_bool"     : i32 (handle, path_ptr, path_len, out_value)
- * import "TurboUtils" "json_get_double"   : i32 (handle, path_ptr, path_len, out_value)
- * import "TurboUtils" "json_array_size"   : i32 (handle, path_ptr, path_len, out_size)
- * import "TurboUtils" "json_object_keys"  : i32 (handle, path_ptr, path_len, buf, buf_len, out_written)
+ * import "TurboNet" "json_get_type"     : i32 (handle, path_ptr, path_len, out_type)
+ * import "TurboNet" "json_get_string"   : i32 (handle, path_ptr, path_len, buf, buf_len, out_written)
+ * import "TurboNet" "json_get_int"      : i32 (handle, path_ptr, path_len, out_value)
+ * import "TurboNet" "json_get_bool"     : i32 (handle, path_ptr, path_len, out_value)
+ * import "TurboNet" "json_get_double"   : i32 (handle, path_ptr, path_len, out_value)
+ * import "TurboNet" "json_array_size"   : i32 (handle, path_ptr, path_len, out_size)
+ * import "TurboNet" "json_object_keys"  : i32 (handle, path_ptr, path_len, buf, buf_len, out_written)
  */
 CXX_C_API int
 turbo_wasm3_json_get_type(turbo_wasm3_vm_t *vm, uint32_t handle, const char *path, size_t path_len, int32_t *out_type);
@@ -553,10 +637,10 @@ turbo_wasm3_json_object_keys(turbo_wasm3_vm_t *vm, uint32_t handle, const char *
 
 /*
  * CSV accessors.
- * import "TurboUtils" "csv_row_count"   : i32 (handle, out_count)
- * import "TurboUtils" "csv_column_count": i32 (handle, out_count)
- * import "TurboUtils" "csv_get_cell"    : i32 (handle, row, col, buf, buf_len, out_written)
- * import "TurboUtils" "csv_find_column" : i32 (handle, name_ptr, name_len, out_col)
+ * import "TurboNet" "csv_row_count"   : i32 (handle, out_count)
+ * import "TurboNet" "csv_column_count": i32 (handle, out_count)
+ * import "TurboNet" "csv_get_cell"    : i32 (handle, row, col, buf, buf_len, out_written)
+ * import "TurboNet" "csv_find_column" : i32 (handle, name_ptr, name_len, out_col)
  */
 CXX_C_API int
 turbo_wasm3_csv_row_count(turbo_wasm3_vm_t *vm, uint32_t handle, uint32_t *out_count);
@@ -573,9 +657,9 @@ turbo_wasm3_csv_find_column(turbo_wasm3_vm_t *vm, uint32_t handle, const char *n
 
 /*
  * XML accessors.
- * import "TurboUtils" "xml_root_name"   : i32 (handle, buf, buf_len, out_written)
- * import "TurboUtils" "xml_get_text"    : i32 (handle, xpath_ptr, xpath_len, buf, buf_len, out_written)
- * import "TurboUtils" "xml_count"       : i32 (handle, xpath_ptr, xpath_len, out_count)
+ * import "TurboNet" "xml_root_name"   : i32 (handle, buf, buf_len, out_written)
+ * import "TurboNet" "xml_get_text"    : i32 (handle, xpath_ptr, xpath_len, buf, buf_len, out_written)
+ * import "TurboNet" "xml_count"       : i32 (handle, xpath_ptr, xpath_len, out_count)
  */
 CXX_C_API int
 turbo_wasm3_xml_root_name(turbo_wasm3_vm_t *vm, uint32_t handle, char *buffer, size_t buffer_size, uint32_t *out_written);
@@ -586,6 +670,30 @@ turbo_wasm3_xml_get_text(turbo_wasm3_vm_t *vm, uint32_t handle, const char *xpat
 
 CXX_C_API int
 turbo_wasm3_xml_count(turbo_wasm3_vm_t *vm, uint32_t handle, const char *xpath, size_t xpath_len, uint32_t *out_count);
+
+/*
+ * INI accessors.
+ * import "TurboNet" "ini_get_string" : i32 (handle, section_ptr, section_len, key_ptr, key_len, buf, buf_len, out_written)
+ * import "TurboNet" "ini_get_int"    : i32 (handle, section_ptr, section_len, key_ptr, key_len, out_value)
+ * import "TurboNet" "ini_get_bool"   : i32 (handle, section_ptr, section_len, key_ptr, key_len, out_value)
+ * import "TurboNet" "ini_get_double" : i32 (handle, section_ptr, section_len, key_ptr, key_len, out_value)
+ */
+CXX_C_API int
+turbo_wasm3_ini_get_string(turbo_wasm3_vm_t *vm, uint32_t handle, const char *section, size_t section_len,
+                           const char *key, size_t key_len, char *buffer, size_t buffer_size,
+                           uint32_t *out_written);
+
+CXX_C_API int
+turbo_wasm3_ini_get_int(turbo_wasm3_vm_t *vm, uint32_t handle, const char *section, size_t section_len,
+                        const char *key, size_t key_len, int32_t *out_value);
+
+CXX_C_API int
+turbo_wasm3_ini_get_bool(turbo_wasm3_vm_t *vm, uint32_t handle, const char *section, size_t section_len,
+                         const char *key, size_t key_len, int32_t *out_value);
+
+CXX_C_API int
+turbo_wasm3_ini_get_double(turbo_wasm3_vm_t *vm, uint32_t handle, const char *section, size_t section_len,
+                           const char *key, size_t key_len, double *out_value);
 
 #ifdef __cplusplus
 }

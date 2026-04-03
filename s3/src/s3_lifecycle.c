@@ -4,7 +4,6 @@
 #include "s3_http.h"
 #include "s3_client_internal.h"
 #include "s3_xml_helpers.h"
-#include <cxml/cxml.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -77,80 +76,80 @@ s3_lifecycle_config_t s3_lifecycle_config_from_xml(const char* xml, s3_error_t* 
     s3_lifecycle_config_t res = {0};
     if (!xml) { if (err) *err = s3_error_make(-1, "No XML data"); return res; }
 
-    void* doc = cxml_load_string(xml);
-    if (!doc) { if (err) *err = s3_error_make(-1, "Failed to parse XML"); return res; }
+    s3_xml_doc_t* doc = NULL;
+    if (s3_xml_parse(xml, &doc) != 0) { if (err) *err = s3_error_make(-1, "Failed to parse XML"); return res; }
 
-    cxml_elem_node* root = cxml_get_root_element(doc);
-    cxml_list items;
-    cxml_list_init(&items);
-    cxml_find_all(root, "<Rule>/", &items);
+    s3_xml_node_t* root = s3_xml_root(doc);
+    s3_xml_list_t items;
+    s3_xml_list_init(&items);
+    s3_xml_find_all(root, "<Rule>/", &items);
 
     int count = 0;
-    cxml_for(n1, &items) { (void)n1; count++; }
+    s3_xml_for(n1, &items) { (void)n1; count++; }
 
     if (count > 0) {
         res.rules = calloc((size_t)count, sizeof(s3_lifecycle_rule_t));
         res.count = count;
         int idx = 0;
-        cxml_for(n2, &items) {
-            cxml_elem_node* rnode = (cxml_elem_node*)n2;
+        s3_xml_for(n2, &items) {
+            s3_xml_node_t* rnode = (s3_xml_node_t*)n2;
             s3_lifecycle_rule_t* r = &res.rules[idx];
-            r->id = mxml_child_text_dup(rnode, "ID");
-            tstr_t status = mxml_child_text_dup(rnode, "Status");
+            r->id = s3_xml_child_text_dup(rnode, "ID");
+            tstr_t status = s3_xml_child_text_dup(rnode, "Status");
             r->enabled = (status && strcmp(status, "Enabled") == 0);
             tstr_free(status);
 
             // Filter/Prefix
-            cxml_elem_node* filter = cxml_find(rnode, "<Filter>/");
-            if (filter) r->prefix = mxml_child_text_dup(filter, "Prefix");
-            else r->prefix = mxml_child_text_dup(rnode, "Prefix");
+            s3_xml_node_t* filter = s3_xml_find(rnode, "<Filter>/");
+            if (filter) r->prefix = s3_xml_child_text_dup(filter, "Prefix");
+            else r->prefix = s3_xml_child_text_dup(rnode, "Prefix");
 
             // Expiration
-            cxml_elem_node* exp = cxml_find(rnode, "<Expiration>/");
+            s3_xml_node_t* exp = s3_xml_find(rnode, "<Expiration>/");
             if (exp) {
-                tstr_t days = mxml_child_text_dup(exp, "Days");
+                tstr_t days = s3_xml_child_text_dup(exp, "Days");
                 if (tstr_len(days) > 0) r->expiration_days = atoi(days);
                 tstr_free(days);
             }
 
             // Transition
-            cxml_elem_node* trans = cxml_find(rnode, "<Transition>/");
+            s3_xml_node_t* trans = s3_xml_find(rnode, "<Transition>/");
             if (trans) {
-                tstr_t days = mxml_child_text_dup(trans, "Days");
+                tstr_t days = s3_xml_child_text_dup(trans, "Days");
                 if (tstr_len(days) > 0) r->transition_days = atoi(days);
                 tstr_free(days);
-                r->transition_storage_class = mxml_child_text_dup(trans, "StorageClass");
+                r->transition_storage_class = s3_xml_child_text_dup(trans, "StorageClass");
             }
 
             // NoncurrentVersionExpiration
-            cxml_elem_node* nve = cxml_find(rnode, "<NoncurrentVersionExpiration>/");
+            s3_xml_node_t* nve = s3_xml_find(rnode, "<NoncurrentVersionExpiration>/");
             if (nve) {
-                tstr_t days = mxml_child_text_dup(nve, "NoncurrentDays");
+                tstr_t days = s3_xml_child_text_dup(nve, "NoncurrentDays");
                 if (tstr_len(days) > 0) r->noncurrent_expiration_days = atoi(days);
                 tstr_free(days);
             }
 
             // NoncurrentVersionTransition
-            cxml_elem_node* nvt = cxml_find(rnode, "<NoncurrentVersionTransition>/");
+            s3_xml_node_t* nvt = s3_xml_find(rnode, "<NoncurrentVersionTransition>/");
             if (nvt) {
-                tstr_t days = mxml_child_text_dup(nvt, "NoncurrentDays");
+                tstr_t days = s3_xml_child_text_dup(nvt, "NoncurrentDays");
                 if (tstr_len(days) > 0) r->noncurrent_transition_days = atoi(days);
                 tstr_free(days);
-                r->noncurrent_transition_storage_class = mxml_child_text_dup(nvt, "StorageClass");
+                r->noncurrent_transition_storage_class = s3_xml_child_text_dup(nvt, "StorageClass");
             }
 
             // AbortIncompleteMultipartUpload
-            cxml_elem_node* aimu = cxml_find(rnode, "<AbortIncompleteMultipartUpload>/");
+            s3_xml_node_t* aimu = s3_xml_find(rnode, "<AbortIncompleteMultipartUpload>/");
             if (aimu) {
-                tstr_t days = mxml_child_text_dup(aimu, "DaysAfterInitiation");
+                tstr_t days = s3_xml_child_text_dup(aimu, "DaysAfterInitiation");
                 if (tstr_len(days) > 0) r->abort_incomplete_days = atoi(days);
                 tstr_free(days);
             }
             idx++;
         }
     }
-    cxml_list_free(&items);
-    cxml_delete_document(doc);
+    s3_xml_list_free(&items);
+    s3_xml_free(&doc);
     if (err) *err = S3_OK;
     return res;
 }

@@ -1430,7 +1430,7 @@ static int pool_vcommand(redis_pool_t *pool, int read_only, redis_command_cb_t c
     }
 
     result = redis_command(conn->client, on_pool_command_done, ctx, "%s", command);
-    free(command);
+    tstr_free(command);
     return finish_cmd_submit(pool, conn, ctx, result);
 }
 
@@ -1683,7 +1683,7 @@ int redis_pipeline_add(redis_pipeline_t *pipeline, redis_command_cb_t callback,
         int argc = pipeline_count_args(command_text);
 
         if (argc <= 0) {
-            free(command_text);
+            tstr_free(command_text);
             return -1;
         }
 
@@ -1710,18 +1710,18 @@ int redis_pipeline_add(redis_pipeline_t *pipeline, redis_command_cb_t callback,
 
         command = malloc(command_len);
         if (!command) {
-            free(command_text);
+            tstr_free(command_text);
             return -1;
         }
 
         if (pipeline_write_resp_command(command, command_len, command_text, &command_len) != 0) {
-            free(command_text);
+            tstr_free(command_text);
             free(command);
             return -1;
         }
     }
 
-    free(command_text);
+    tstr_free(command_text);
     return pipeline_append_encoded_command(pipeline, command, command_len, callback, user_data);
 }
 

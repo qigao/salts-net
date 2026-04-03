@@ -14,13 +14,13 @@ foreach(TEST_NAME IN LISTS MIME_TESTS)
 
   target_link_libraries(${TEST_NAME}
     mime_parser
-    turbo_utils
+    TurboUtils::Utils
   )
 
   target_include_directories(${TEST_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/shared/utils/include
-    ${CMAKE_SOURCE_DIR}/shared/tinytest
+    ${CMAKE_SOURCE_DIR}/shared/TurboUtils::TinyTest
   )
 
   set_target_properties(${TEST_NAME} PROPERTIES FOLDER "parser/mime_parser/test")

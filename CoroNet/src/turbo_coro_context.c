@@ -124,6 +124,11 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
   coro_context_t *prev = tls_current_context;
   tls_current_context = ctx;
 
+  /* stop_requested is a one-shot signal for the current run() call.
+   * If we keep it sticky, the next sync API invocation can return
+   * immediately without actually draining its work. */
+  ctx->stop_requested = 0;
+
   int r = 0;
 
   if (mode == TURBO_RUN_DEFAULT) {

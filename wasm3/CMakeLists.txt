@@ -236,7 +236,7 @@ target_compile_definitions(turbo_wasm3 PRIVATE SHARED_CXX)
 target_link_libraries(
   turbo_wasm3
   PUBLIC m3 TurboNet::CoroNet TurboUtils::Utils
-  PRIVATE unofficial::sqlite3::sqlite3 TurboNet::HttpClient)
+  PRIVATE unofficial::sqlite3::sqlite3 TurboNet::HttpClient TurboNet::Redis)
 
 turbonet_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include
                          DESTINATION include/wasm3)

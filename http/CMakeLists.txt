@@ -43,8 +43,8 @@ target_include_directories(
 
 target_link_libraries(
   http_client
-  PUBLIC TurboUtils::Utils TurboNet::CoroNet zstd::libzstd
-  PRIVATE TurboUtils::Parser llhttp::llhttp_static cjwt sds mime_parser)
+  PUBLIC TurboUtils::Utils TurboNet::CoroNet zstd::libzstd TurboUtils::Parser
+  PRIVATE  llhttp::llhttp_static cjwt sds mime_parser)
 
 # Tests & Examples
 add_subdirectory(examples)

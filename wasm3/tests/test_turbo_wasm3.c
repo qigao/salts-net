@@ -59,6 +59,10 @@ typedef void *(*native_thread_entry_t)(void *);
 #define WASM3_PARSER_GUEST_AVAILABLE 1
 #endif
 
+#ifdef WASM3_REDIS_TEST_WASM_PATH
+#define WASM3_REDIS_GUEST_AVAILABLE 1
+#endif
+
 static char g_fixture_a[TURBO_FS_MAX_PATH];
 static char g_fixture_b[TURBO_FS_MAX_PATH];
 static unsigned long g_fixture_counter = 0;
@@ -116,6 +120,15 @@ typedef struct wasm3_proxy_mock_state_s {
   int response_sse;
   char request[4096];
 } wasm3_proxy_mock_state_t;
+
+typedef struct wasm3_redis_mock_state_s {
+  int ready;
+  int failed;
+  int fail_step;
+  int fail_code;
+  int port;
+  char requests[4][128];
+} wasm3_redis_mock_state_t;
 
 static void ensure_native_sockets_ready(void) {
 #ifdef _WIN32
@@ -205,6 +218,83 @@ static int recv_http_headers(native_sock_t sock, char *buf, size_t cap) {
   }
 
   return -1;
+}
+
+static int recv_line_sock(native_sock_t sock, char *buf, size_t cap,
+                          size_t *out_len) {
+  size_t len = 0;
+
+  if (!buf || cap < 3 || !out_len) {
+    return -1;
+  }
+
+  while (len + 1 < cap) {
+    int n = recv(sock, buf + len, 1, 0);
+    if (n <= 0) {
+      return -1;
+    }
+    len += (size_t)n;
+    if (len >= 2 && buf[len - 2] == '\r' && buf[len - 1] == '\n') {
+      buf[len] = '\0';
+      *out_len = len;
+      return 0;
+    }
+  }
+
+  return -1;
+}
+
+static int recv_redis_command(native_sock_t sock, char *buf, size_t cap) {
+  char line[64];
+  size_t line_len = 0;
+  size_t total = 0;
+  long argc = 0;
+  long arg_len = 0;
+  int i;
+
+  if (!buf || cap < 8) {
+    return -1;
+  }
+
+  if (recv_line_sock(sock, line, sizeof(line), &line_len) != 0 || line[0] != '*') {
+    return -1;
+  }
+  argc = strtol(line + 1, NULL, 10);
+  if (argc <= 0) {
+    return -1;
+  }
+
+  if (total + line_len >= cap) {
+    return -1;
+  }
+  memcpy(buf + total, line, line_len);
+  total += line_len;
+
+  for (i = 0; i < argc; ++i) {
+    if (recv_line_sock(sock, line, sizeof(line), &line_len) != 0 ||
+        line[0] != '$') {
+      return -1;
+    }
+    arg_len = strtol(line + 1, NULL, 10);
+    if (arg_len < 0) {
+      return -1;
+    }
+
+    if (total + line_len + (size_t)arg_len + 2 >= cap) {
+      return -1;
+    }
+    memcpy(buf + total, line, line_len);
+    total += line_len;
+
+    if (recv_exact_sock(sock, (unsigned char *)(buf + total),
+                        (size_t)arg_len + 2) != 0) {
+      return -1;
+    }
+    total += (size_t)arg_len + 2;
+  }
+
+  buf[total] = '\0';
+  return 0;
 }
 
 static THREAD_RET THREAD_CALL wasm3_http_mock_thread(void *arg) {
@@ -362,6 +452,96 @@ static THREAD_RET THREAD_CALL wasm3_http_mock_thread(void *arg) {
   if (rc != 0) {
     state->fail_step = 9;
     state->failed = 1;
+  }
+
+  CLOSESOCK(client);
+  THREAD_RETURN(0);
+}
+
+static THREAD_RET THREAD_CALL wasm3_redis_mock_thread(void *arg) {
+  static const char *expected_requests[] = {
+      "*1\r\n$4\r\nPING\r\n",
+      "*2\r\n$4\r\nINCR\r\n$7\r\ncounter\r\n",
+      "*4\r\n$6\r\nLRANGE\r\n$7\r\nletters\r\n$1\r\n0\r\n$2\r\n-1\r\n",
+      "*2\r\n$3\r\nGET\r\n$7\r\nmissing\r\n",
+  };
+  static const char *responses[] = {
+      "+PONG\r\n",
+      ":41\r\n",
+      "*2\r\n$1\r\na\r\n$2\r\nbb\r\n",
+      "$-1\r\n",
+  };
+  wasm3_redis_mock_state_t *state = (wasm3_redis_mock_state_t *)arg;
+  native_sock_t listener;
+  native_sock_t client;
+  struct sockaddr_in addr;
+  struct sockaddr_in bound_addr;
+#ifdef _WIN32
+  int bound_len;
+#else
+  socklen_t bound_len;
+#endif
+  int i;
+
+  listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (listener == (native_sock_t)-1) {
+    state->fail_step = 1;
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons((uint16_t)state->port);
+
+  if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+      listen(listener, 1) != 0) {
+    state->fail_step = 2;
+    CLOSESOCK(listener);
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  bound_len = (int)sizeof(bound_addr);
+  if (getsockname(listener, (struct sockaddr *)&bound_addr, &bound_len) != 0) {
+    state->fail_step = 3;
+    CLOSESOCK(listener);
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  state->port = ntohs(bound_addr.sin_port);
+  state->ready = 1;
+  client = accept(listener, NULL, NULL);
+  CLOSESOCK(listener);
+  if (client == (native_sock_t)-1) {
+    state->fail_step = 4;
+    state->failed = 1;
+    THREAD_RETURN(0);
+  }
+
+  for (i = 0; i < 4; ++i) {
+    if (recv_redis_command(client, state->requests[i],
+                           sizeof(state->requests[i])) != 0) {
+      state->fail_step = 5 + i;
+      state->failed = 1;
+      CLOSESOCK(client);
+      THREAD_RETURN(0);
+    }
+    if (strcmp(state->requests[i], expected_requests[i]) != 0) {
+      state->fail_step = 10 + i;
+      state->failed = 1;
+      CLOSESOCK(client);
+      THREAD_RETURN(0);
+    }
+    if (send_all_sock(client, (const unsigned char *)responses[i],
+                      strlen(responses[i])) != 0) {
+      state->fail_step = 15 + i;
+      state->failed = 1;
+      CLOSESOCK(client);
+      THREAD_RETURN(0);
+    }
   }
 
   CLOSESOCK(client);
@@ -951,8 +1131,8 @@ spec("Turbo wasm3 integration") {
       check_not_null(vm);
       turbo_wasm3_vm_set_host_user_data(vm, &marker);
       check_ptr_eq(turbo_wasm3_vm_get_host_user_data(vm), &marker);
-      check_int_eq(turbo_wasm3_vm_enable_turboutils_host(vm), 0);
-      check_int_eq(turbo_wasm3_vm_enable_turboutils_host(vm), 0);
+      check_int_eq(turbo_wasm3_vm_enable_host(vm), 0);
+      check_int_eq(turbo_wasm3_vm_enable_host(vm), 0);
       check_null(turbo_wasm3_vm_load_module_file(vm, WASM3_TEST_WASM_PATH, "simple",
                                                  &module));
       check_not_null(module);
@@ -992,7 +1172,7 @@ spec("Turbo wasm3 integration") {
       db = turbo_wasm3_vm_get_db_registry(vm);
       check_not_null(db);
       check_int_eq(turbo_wasm3_vm_enable_sqlite_db(vm), 0);
-      check_int_eq(turbo_wasm3_vm_enable_turboutils_host(vm), 0);
+      check_int_eq(turbo_wasm3_vm_enable_host(vm), 0);
       check_int_eq(turbo_wasm3_db_registry_open(db, db_path, &handle), 0);
       check_int_ne((int)handle, 0);
       check_int_eq(
@@ -1006,7 +1186,7 @@ spec("Turbo wasm3 integration") {
       check_int_eq(
           turbo_wasm3_db_registry_exec(
               db, handle,
-              "insert into items(name, score, payload, note) values('TurboUtils', 1.5, "
+              "insert into items(name, score, payload, note) values('TurboNet', 1.5, "
               "X'0102', null);",
               &changes),
           0);
@@ -1089,7 +1269,7 @@ spec("Turbo wasm3 integration") {
           turbo_wasm3_db_registry_column_text(db, select_stmt, 1, name_buf,
                                               sizeof(name_buf), &text_len),
           0);
-      check_str_eq(name_buf, "TurboUtils");
+      check_str_eq(name_buf, "TurboNet");
       check_int_eq(
           turbo_wasm3_db_registry_finalize(db, select_stmt), 0);
       select_stmt = 0;
@@ -1263,7 +1443,7 @@ spec("Turbo wasm3 integration") {
                        NULL, NULL),
                    0);
       check_int_eq(turbo_wasm3_http_registry_set_default_header(
-                       http, client_handle, "X-TurboUtils", "enabled"),
+                       http, client_handle, "X-TurboNet", "enabled"),
                    0);
       check_int_eq(turbo_wasm3_http_registry_set_bearer_token(
                        http, client_handle, "token-123"),
@@ -1297,7 +1477,7 @@ spec("Turbo wasm3 integration") {
       check_int_eq(
           turbo_wasm3_http_registry_clear_auth(http, client_handle), 0);
       check_int_eq(turbo_wasm3_http_registry_remove_default_header(
-                       http, client_handle, "X-TurboUtils"),
+                       http, client_handle, "X-TurboNet"),
                    0);
       check_int_eq(
           turbo_wasm3_http_registry_clear_default_headers(http, client_handle), 0);
@@ -1490,9 +1670,186 @@ spec("Turbo wasm3 integration") {
     }
   }
 
+  describe("redis registry") {
+    it("executes RESP commands through the shared redis host layer") {
+      wasm3_redis_mock_state_t state = {0};
+      native_thread_t thread;
+      turbo_wasm3_vm_t *vm = NULL;
+      turbo_wasm3_redis_registry_t *redis = NULL;
+      static const char *const ping_argv[] = {"PING"};
+      static const uint32_t ping_lens[] = {4};
+      static const char *const incr_argv[] = {"INCR", "counter"};
+      static const uint32_t incr_lens[] = {4, 7};
+      static const char *const lrange_argv[] = {"LRANGE", "letters", "0", "-1"};
+      static const uint32_t lrange_lens[] = {6, 7, 1, 2};
+      static const char *const get_argv[] = {"GET", "missing"};
+      static const uint32_t get_lens[] = {3, 7};
+      uint32_t client_handle = 0;
+      uint32_t reply_handle = 0;
+      uint32_t child_handle = 0;
+      uint32_t text_len = 0;
+      uint32_t array_len = 0;
+      int32_t type = -1;
+      int64_t int_value = 0;
+      char text[16];
+
+      ensure_native_sockets_ready();
+      check_int_eq(native_thread_create(&thread, wasm3_redis_mock_thread, &state), 0);
+      wait_mock_ready(&state.ready, &state.failed);
+      check_int_eq(state.failed, 0);
+      check_int_ne(state.port, 0);
+
+      vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
+      check_not_null(vm);
+      redis = turbo_wasm3_vm_get_redis_registry(vm);
+      check_not_null(redis);
+      check_int_eq(turbo_wasm3_vm_enable_redis_host(vm), 0);
+
+      check_int_eq(turbo_wasm3_redis_registry_open_client(
+                       redis, "127.0.0.1", (uint16_t)state.port, &client_handle),
+                   0);
+      check_int_ne((int)client_handle, 0);
+
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 1, ping_argv, ping_lens, &reply_handle),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_reply_type(redis, reply_handle, &type),
+                   0);
+      check_int_eq((int)type, TURBO_WASM3_REDIS_REPLY_STRING);
+      check_int_eq(turbo_wasm3_redis_registry_reply_text(
+                       redis, reply_handle, text, sizeof(text), &text_len),
+                   0);
+      text[text_len] = '\0';
+      check_str_eq(text, "PONG");
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handle), 0);
+      reply_handle = 0;
+
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 2, incr_argv, incr_lens, &reply_handle),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_reply_int64(redis, reply_handle,
+                                                          &int_value),
+                   0);
+      check_int_eq((int)int_value, 41);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handle), 0);
+      reply_handle = 0;
+
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 4, lrange_argv, lrange_lens,
+                       &reply_handle),
+                   0);
+      check_int_eq(
+          turbo_wasm3_redis_registry_reply_array_len(redis, reply_handle, &array_len),
+          0);
+      check_int_eq((int)array_len, 2);
+      check_int_eq(turbo_wasm3_redis_registry_reply_array_at(
+                       redis, reply_handle, 1, &child_handle),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_reply_text(
+                       redis, child_handle, text, sizeof(text), &text_len),
+                   0);
+      text[text_len] = '\0';
+      check_str_eq(text, "bb");
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, child_handle), 0);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handle), 0);
+      child_handle = 0;
+      reply_handle = 0;
+
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 2, get_argv, get_lens, &reply_handle),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_reply_type(redis, reply_handle, &type),
+                   0);
+      check_int_eq((int)type, TURBO_WASM3_REDIS_REPLY_NULL);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handle), 0);
+      check_int_eq(turbo_wasm3_redis_registry_close_client(redis, client_handle), 0);
+
+      turbo_wasm3_vm_destroy(vm);
+      native_thread_join(&thread);
+      check_int_eq(state.failed, 0);
+    }
+
+    it("keeps array reply access valid across reply table growth") {
+      wasm3_redis_mock_state_t state = {0};
+      native_thread_t thread;
+      turbo_wasm3_vm_t *vm = NULL;
+      turbo_wasm3_redis_registry_t *redis = NULL;
+      static const char *const ping_argv[] = {"PING"};
+      static const uint32_t ping_lens[] = {4};
+      static const char *const incr_argv[] = {"INCR", "counter"};
+      static const uint32_t incr_lens[] = {4, 7};
+      static const char *const lrange_argv[] = {"LRANGE", "letters", "0", "-1"};
+      static const uint32_t lrange_lens[] = {6, 7, 1, 2};
+      static const char *const get_argv[] = {"GET", "missing"};
+      static const uint32_t get_lens[] = {3, 7};
+      uint32_t client_handle = 0;
+      uint32_t reply_handles[4] = {0};
+      uint32_t child_handle = 0;
+      uint32_t text_len = 0;
+      char text[16];
+
+      ensure_native_sockets_ready();
+      check_int_eq(native_thread_create(&thread, wasm3_redis_mock_thread, &state), 0);
+      wait_mock_ready(&state.ready, &state.failed);
+      check_int_eq(state.failed, 0);
+      check_int_ne(state.port, 0);
+
+      vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
+      check_not_null(vm);
+      redis = turbo_wasm3_vm_get_redis_registry(vm);
+      check_not_null(redis);
+
+      check_int_eq(turbo_wasm3_redis_registry_open_client(
+                       redis, "127.0.0.1", (uint16_t)state.port, &client_handle),
+                   0);
+      check_int_ne((int)client_handle, 0);
+
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 1, ping_argv, ping_lens,
+                       &reply_handles[0]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 2, incr_argv, incr_lens,
+                       &reply_handles[1]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 4, lrange_argv, lrange_lens,
+                       &reply_handles[2]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_command(
+                       redis, client_handle, 2, get_argv, get_lens,
+                       &reply_handles[3]),
+                   0);
+
+      check_int_eq(turbo_wasm3_redis_registry_reply_array_at(
+                       redis, reply_handles[2], 1, &child_handle),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_reply_text(
+                       redis, child_handle, text, sizeof(text), &text_len),
+                   0);
+      text[text_len] = '\0';
+      check_str_eq(text, "bb");
+
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, child_handle), 0);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handles[0]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handles[1]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handles[2]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_close_reply(redis, reply_handles[3]),
+                   0);
+      check_int_eq(turbo_wasm3_redis_registry_close_client(redis, client_handle), 0);
+
+      turbo_wasm3_vm_destroy(vm);
+      native_thread_join(&thread);
+      check_int_eq(state.failed, 0);
+    }
+  }
+
 #ifdef WASM3_DB_GUEST_AVAILABLE
   describe("guest database module") {
-    it("runs sqlite imports from a wasm guest through the TurboUtils host abi") {
+    it("runs sqlite imports from a wasm guest through the TurboNet host abi") {
       turbo_wasm3_vm_t *vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
       IM3Module module = NULL;
       IM3Function run = NULL;
@@ -1500,7 +1857,7 @@ spec("Turbo wasm3 integration") {
 
       check_not_null(vm);
       check_int_eq(turbo_wasm3_vm_enable_sqlite_db(vm), 0);
-      check_int_eq(turbo_wasm3_vm_enable_turboutils_host(vm), 0);
+      check_int_eq(turbo_wasm3_vm_enable_host(vm), 0);
       check_null(
           turbo_wasm3_vm_load_module_file(vm, WASM3_DB_TEST_WASM_PATH, "db_demo",
                                           &module));
@@ -1514,7 +1871,7 @@ spec("Turbo wasm3 integration") {
       turbo_wasm3_vm_destroy(vm);
     }
 
-    it("runs CRUD sqlite imports from a wasm guest through the TurboUtils host abi") {
+    it("runs CRUD sqlite imports from a wasm guest through the TurboNet host abi") {
       turbo_wasm3_vm_t *vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
       IM3Module module = NULL;
       IM3Function run = NULL;
@@ -1522,7 +1879,7 @@ spec("Turbo wasm3 integration") {
 
       check_not_null(vm);
       check_int_eq(turbo_wasm3_vm_enable_sqlite_db(vm), 0);
-      check_int_eq(turbo_wasm3_vm_enable_turboutils_host(vm), 0);
+      check_int_eq(turbo_wasm3_vm_enable_host(vm), 0);
       check_null(
           turbo_wasm3_vm_load_module_file(vm, WASM3_DB_CRUD_TEST_WASM_PATH,
                                           "db_crud_demo", &module));
@@ -1539,9 +1896,46 @@ spec("Turbo wasm3 integration") {
   }
 #endif
 
+#ifdef WASM3_REDIS_GUEST_AVAILABLE
+  describe("guest redis module") {
+    it("runs redis imports from a wasm guest through the TurboNet host abi") {
+      wasm3_redis_mock_state_t state = {0};
+      native_thread_t thread;
+      turbo_wasm3_vm_t *vm = NULL;
+      IM3Module module = NULL;
+      IM3Function run = NULL;
+      int32_t result_value = 0;
+
+      ensure_native_sockets_ready();
+      check_int_eq(native_thread_create(&thread, wasm3_redis_mock_thread, &state), 0);
+      wait_mock_ready(&state.ready, &state.failed);
+      check_int_eq(state.failed, 0);
+      check_int_ne(state.port, 0);
+
+      vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
+      check_not_null(vm);
+      check_int_eq(turbo_wasm3_vm_enable_redis_host(vm), 0);
+      check_null(
+          turbo_wasm3_vm_load_module_file(vm, WASM3_REDIS_TEST_WASM_PATH,
+                                          "redis_demo", &module));
+      check_not_null(module);
+      check_null(
+          m3_FindFunction(&run, turbo_wasm3_vm_get_runtime(vm), "run_redis_demo"));
+      check_not_null(run);
+      check_null(m3_CallV(run, (int32_t)state.port));
+      check_null(m3_GetResultsV(run, &result_value));
+      check_int_eq((int)result_value, 23);
+
+      turbo_wasm3_vm_destroy(vm);
+      native_thread_join(&thread);
+      check_int_eq(state.failed, 0);
+    }
+  }
+#endif
+
 #ifdef WASM3_HTTP_TEST_WASM_PATH
   describe("guest http module") {
-    it("runs http imports from a wasm guest through the TurboUtils host abi") {
+    it("runs http imports from a wasm guest through the TurboNet host abi") {
       turbo_wasm3_vm_t *vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
       IM3Module module = NULL;
       IM3Function run = NULL;
@@ -1566,16 +1960,17 @@ spec("Turbo wasm3 integration") {
 
 #ifdef WASM3_PARSER_GUEST_AVAILABLE
   describe("guest parser module") {
-    it("runs parser imports from a wasm guest through the TurboUtils host abi") {
+    it("runs parser imports from a wasm guest through the TurboNet host abi") {
       turbo_wasm3_vm_t *vm = turbo_wasm3_vm_create(64U * 1024U, NULL, 16);
       IM3Module module = NULL;
       IM3Function json_run = NULL;
       IM3Function csv_run = NULL;
       IM3Function xml_run = NULL;
+      IM3Function ini_run = NULL;
       int32_t result_value = 0;
 
       check_not_null(vm);
-      check_int_eq(turbo_wasm3_vm_enable_turboutils_host(vm), 0);
+      check_int_eq(turbo_wasm3_vm_enable_host(vm), 0);
       check_null(
           turbo_wasm3_vm_load_module_file(vm, WASM3_PARSER_TEST_WASM_PATH,
                                           "parser_demo", &module));
@@ -1600,6 +1995,13 @@ spec("Turbo wasm3 integration") {
       check_not_null(xml_run);
       check_null(m3_CallV(xml_run));
       check_null(m3_GetResultsV(xml_run, &result_value));
+      check_int_eq((int)result_value, 7);
+
+      check_null(
+          m3_FindFunction(&ini_run, turbo_wasm3_vm_get_runtime(vm), "run_ini_demo"));
+      check_not_null(ini_run);
+      check_null(m3_CallV(ini_run));
+      check_null(m3_GetResultsV(ini_run, &result_value));
       check_int_eq((int)result_value, 7);
 
       turbo_wasm3_vm_destroy(vm);

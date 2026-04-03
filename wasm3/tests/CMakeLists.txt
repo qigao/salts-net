@@ -13,6 +13,10 @@ set(WASM3_HTTP_GUEST_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../examples/guest_http_demo.c")
 set(WASM3_HTTP_TEST_WASM
     "${CMAKE_CURRENT_BINARY_DIR}/guest_http_demo_test.wasm")
+set(WASM3_REDIS_GUEST_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../examples/guest_redis_demo.c")
+set(WASM3_REDIS_TEST_WASM
+    "${CMAKE_CURRENT_BINARY_DIR}/guest_redis_demo_test.wasm")
 set(WASM3_PARSER_GUEST_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../examples/guest_parser_demo.c")
 set(WASM3_PARSER_TEST_WASM
@@ -76,6 +80,24 @@ if(WASM3_TEST_CLANG)
     VERBATIM)
 
   add_custom_command(
+    OUTPUT ${WASM3_REDIS_TEST_WASM}
+    COMMAND
+      ${WASM3_TEST_CLANG}
+      --target=wasm32-unknown-unknown
+      -O2
+      -nostdlib
+      -Wl,--no-entry
+      -Wl,--export=run_redis_demo
+      -Wl,--export-memory
+      -Wl,--initial-memory=131072
+      -Wl,--max-memory=131072
+      -Wl,--allow-undefined
+      -o ${WASM3_REDIS_TEST_WASM}
+      ${WASM3_REDIS_GUEST_SOURCE}
+    DEPENDS ${WASM3_REDIS_GUEST_SOURCE}
+    VERBATIM)
+
+  add_custom_command(
     OUTPUT ${WASM3_PARSER_TEST_WASM}
     COMMAND
       ${WASM3_TEST_CLANG}
@@ -86,6 +108,7 @@ if(WASM3_TEST_CLANG)
       -Wl,--export=run_json_demo
       -Wl,--export=run_csv_demo
       -Wl,--export=run_xml_demo
+      -Wl,--export=run_ini_demo
       -Wl,--export-memory
       -Wl,--initial-memory=131072
       -Wl,--max-memory=131072
@@ -120,6 +143,12 @@ if(TARGET test_turbo_wasm3)
                           PROPERTIES FOLDER "wasm3/tests")
     add_dependencies(test_turbo_wasm3 turbo_wasm3_guest_http_test)
 
+    add_custom_target(turbo_wasm3_guest_redis_test
+                      DEPENDS ${WASM3_REDIS_TEST_WASM})
+    set_target_properties(turbo_wasm3_guest_redis_test
+                          PROPERTIES FOLDER "wasm3/tests")
+    add_dependencies(test_turbo_wasm3 turbo_wasm3_guest_redis_test)
+
     add_custom_target(turbo_wasm3_guest_parser_test
                       DEPENDS ${WASM3_PARSER_TEST_WASM})
     set_target_properties(turbo_wasm3_guest_parser_test
@@ -136,6 +165,7 @@ if(TARGET test_turbo_wasm3)
       WASM3_DB_TEST_WASM_PATH=\"${WASM3_DB_TEST_WASM}\"
       WASM3_DB_CRUD_TEST_WASM_PATH=\"${WASM3_DB_CRUD_TEST_WASM}\"
       WASM3_HTTP_TEST_WASM_PATH=\"${WASM3_HTTP_TEST_WASM}\"
+      WASM3_REDIS_TEST_WASM_PATH=\"${WASM3_REDIS_TEST_WASM}\"
       WASM3_PARSER_TEST_WASM_PATH=\"${WASM3_PARSER_TEST_WASM}\")
   endif()
 endif()

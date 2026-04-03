@@ -212,11 +212,13 @@ CXX_C_API int http_multipart_form_add_file_path(http_multipart_form_t *form, con
 
 CXX_C_API http_retry_policy_t http_retry_policy_default(void);
 
+#include <turbo_str.h>
+
 /* ── Response helpers (common) ───────────────────────────────────── */
 
 /**
  * @brief Get a specific header value from raw response headers.
- * @return Newly allocated string, caller must free(). NULL if not found.
+ * @return Newly allocated C string, caller must free(). NULL if not found.
  */
 CXX_C_API char *http_response_get_header(http_response_t *response, const char *name);
 CXX_C_API int   http_response_has_header(http_response_t *response, const char *name);

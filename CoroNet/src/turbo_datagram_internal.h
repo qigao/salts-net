@@ -11,6 +11,7 @@
 #include "CoroNet/turbo_datagram.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "turbo_buffer.h"
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,7 +33,10 @@ typedef struct turbo_datagram_backend_ops_s {
   int  (*set_multicast_loop)(turbo_datagram_t *d, int on);
   int  (*set_multicast_ttl)(turbo_datagram_t *d, int ttl);
   int  (*set_broadcast)(turbo_datagram_t *d, int on);
+  void (*destroy_backend)(turbo_datagram_t *d);
 } turbo_datagram_backend_ops_t;
+
+typedef void (*turbo_datagram_close_cb)(void *arg);
 
 /* ── Datagram struct ──────────────────────────────────────── */
 
@@ -50,11 +54,15 @@ struct turbo_datagram_s {
   turbo_recv_cb on_recv;
 
   /* State */
+  atomic_int ref_count;
   int connected;
   int status;
   int closing;
+  int closed;
   int destroyed;      /**< 1 = user called turbo_datagram_destroy() */
   void *user_data;
+  turbo_datagram_close_cb close_cb;
+  void *close_cb_arg;
   void *backend_data; /**< Backend-private state */
 };
 
@@ -77,6 +85,8 @@ int turbo_datagram_init_common(turbo_datagram_t *d, coro_context_t *ctx,
                                 const turbo_datagram_backend_ops_t *ops);
 
 void turbo_datagram_finalize_close(turbo_datagram_t *d);
+void turbo_datagram_retain(turbo_datagram_t *d);
+void turbo_datagram_release(turbo_datagram_t *d);
 
 #ifdef __cplusplus
 }

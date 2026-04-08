@@ -111,9 +111,18 @@ static void socket_destroy_shell(coro_socket_t *s) {
 
 /* ── Reference Counting ───────────────────────────────────── */
 
-void retain_client(coro_socket_t *client) { client->ref_count++; }
+void retain_client(coro_socket_t *client) {
+  if (!client) {
+    return;
+  }
+  client->ref_count++;
+}
 
 void release_client(coro_socket_t *client) {
+  if (!client) {
+    return;
+  }
+
   if (--client->ref_count == 0) {
     /* Clean up TLS context (TODO: migrate) */
 
@@ -132,7 +141,7 @@ void release_client(coro_socket_t *client) {
       client->handle.stream = NULL;
     }
 
-    if (client->transport == TURBO_UDP && client->handle.datagram) {
+    if (client->transport == TURBO_UDP && client->handle.datagram && client->owns_handle) {
       turbo_datagram_destroy(client->handle.datagram);
       client->handle.datagram = NULL;
     }
@@ -588,6 +597,10 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
   s->resolved_ip_count = 0;
   s->resolved_ip[0] = '\0';
   deadline_ms = coro_socket_connect_deadline_ms(s);
+
+  if (transport == TURBO_PIPE) {
+    return s->ops->connect(s, host, port);
+  }
 
   /* DNS resolution for host-based protocols */
   struct sockaddr_storage probe;

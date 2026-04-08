@@ -24,8 +24,4 @@ target_include_directories(
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
 
 add_subdirectory(test)
-
-# # Install targets install(TARGETS ${TARGET_NAME} EXPORT TurboUtilsTargets
-# LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
-
-# install(FILES include/json_parser.h DESTINATION include/json_parser)
+ 

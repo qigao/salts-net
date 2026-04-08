@@ -22,6 +22,7 @@
 extern const coro_transport_ops_t transport_ops_tcp;
 extern const coro_transport_ops_t transport_ops_pipe;
 extern const coro_transport_ops_t *transport_ops_table[];
+int coro_socket_wrap_accepted_tls_server(coro_socket_t *s);
 
 /* ── Handler Spawning ─────────────────────────────────────── */
 
@@ -69,6 +70,16 @@ static void accept_loop_task(coro_t *co, void *arg) {
     coro_socket_t *client = NULL;
     int r = coro_socket_accept(server->listener, &client);
     if (r == 0 && client) {
+      TLOG_INFO("server: accepted client on transport={}", (int)server->transport);
+      if (server->transport == TURBO_TLS) {
+        r = coro_socket_wrap_accepted_tls_server(client);
+        if (r != 0) {
+          TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
+          coro_socket_destroy(client);
+          continue;
+        }
+        TLOG_INFO("server: accepted client wrapped as TLS");
+      }
       spawn_handler_coro(client, server->handler, server->handler_arg);
     } else if (r != TURBO_EALREADY && r != TURBO_ECANCELED && r != TURBO_EBUSY && 
                r != TURBO_EINTR && r != 0) {

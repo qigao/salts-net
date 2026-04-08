@@ -13,7 +13,7 @@ spec("base64_utils") {
     int rc = tn_base64_encode(input, sizeof(input) - 1, &encoded);
     check_int_eq(rc, 0);
     check_not_null(encoded);
-    check_str_eq(encoded, "VHVyYm9OZXQ=");
+    check_str_eq(encoded, "VHVyYm9VdGlscw==");
 
     free(encoded);
   }

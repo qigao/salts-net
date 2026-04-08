@@ -1219,17 +1219,22 @@ int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDERER *render
 
           if (!(opener_len == 2 && closer_len == 2 && memcmp(opener, "{{", 2) == 0 &&
                 memcmp(closer, "}}", 2) == 0)) {
-            char prefix[128];
-            int n = fmt(prefix, sizeof(prefix), "{{={:.*s} {:.*s}=}}", (int)opener_len, opener,
-                        (int)closer_len, closer);
-            if (n > 0) {
-              wrapped_len = (size_t)n + lambda_len;
-              wrapped = (char *)malloc(wrapped_len + 1);
-              if (wrapped) {
-                memcpy(wrapped, prefix, (size_t)n);
-                memcpy(wrapped + n, lambda_text, lambda_len);
-                wrapped[wrapped_len] = '\0';
-              }
+            size_t prefix_len = 3 + opener_len + 1 + closer_len + 3;
+            wrapped_len = prefix_len + lambda_len;
+            wrapped = (char *)malloc(wrapped_len + 1);
+            if (wrapped) {
+              char *dst = wrapped;
+              memcpy(dst, "{{=", 3);
+              dst += 3;
+              memcpy(dst, opener, opener_len);
+              dst += opener_len;
+              *dst++ = ' ';
+              memcpy(dst, closer, closer_len);
+              dst += closer_len;
+              memcpy(dst, "=}}", 3);
+              dst += 3;
+              memcpy(dst, lambda_text, lambda_len);
+              wrapped[wrapped_len] = '\0';
             }
           }
 

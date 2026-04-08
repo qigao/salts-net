@@ -2071,6 +2071,9 @@ spec("Turbo wasm3 integration") {
 
       while (!state.finished && limit-- > 0) {
         coro_context_run(ctx, TURBO_RUN_ONCE);
+#ifdef _WIN32
+        native_sleep_ms(1);
+#endif
       }
 
       check_int_eq(state.finished, 1);

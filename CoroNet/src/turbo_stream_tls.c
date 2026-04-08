@@ -6,7 +6,8 @@
  * Uses OpenSSL Memory BIOs (BIO_s_mem) to intercept and encrypt/decrypt data
  * asynchronously completely isolated from the event loop type.
  *
- * Client-only for now (Phase 1).
+ * Client support is complete; accepted TCP streams can now be wrapped for
+ * server-side TLS handshakes as well.
  */
 
 #include "turbo_stream_internal.h"
@@ -31,7 +32,9 @@
 
 /* Global lock internally in modern OpenSSL, but static initialization flag for context. */
 static SSL_CTX *s_default_ctx = NULL;
+static SSL_CTX *s_server_ctx = NULL;
 static int s_ca_configured = 0;
+static int s_server_configured = 0;
 
 #ifdef _WIN32
 static int load_windows_cert_store(SSL_CTX *ctx, const char *store_name) {
@@ -106,6 +109,53 @@ static void configure_ca_from_env(void) {
   }
 }
 
+static int configure_server_ctx_from_env(void) {
+  const char *cert_file;
+  const char *key_file;
+
+  if (s_server_configured) {
+    return s_server_ctx ? 0 : TURBO_EINVAL;
+  }
+
+  if (!s_server_ctx) {
+    return TURBO_EINVAL;
+  }
+
+  cert_file = getenv("TURBONET_TLS_CERT_FILE");
+  key_file = getenv("TURBONET_TLS_KEY_FILE");
+
+  if (!cert_file || cert_file[0] == '\0' || !key_file || key_file[0] == '\0') {
+    return TURBO_EINVAL;
+  }
+
+  if (SSL_CTX_use_certificate_file(s_server_ctx, cert_file, SSL_FILETYPE_PEM) != 1) {
+    return TURBO_EIO;
+  }
+
+  if (SSL_CTX_use_PrivateKey_file(s_server_ctx, key_file, SSL_FILETYPE_PEM) != 1) {
+    return TURBO_EIO;
+  }
+
+  if (SSL_CTX_check_private_key(s_server_ctx) != 1) {
+    return TURBO_EIO;
+  }
+
+  if (SSL_CTX_set_cipher_list(s_server_ctx, "DEFAULT") != 1) {
+    return TURBO_EIO;
+  }
+
+#ifdef TLS1_3_VERSION
+  if (SSL_CTX_set_ciphersuites(
+          s_server_ctx,
+          "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256") != 1) {
+    return TURBO_EIO;
+  }
+#endif
+
+  s_server_configured = 1;
+  return 0;
+}
+
 /* ── State machine ────────────────────────────────────────── */
 
 typedef enum {
@@ -122,6 +172,7 @@ typedef struct tls_state_s {
   turbo_stream_t *tcp;    /* owned inner TCP stream */
 
   tls_state_e     state;
+  int             server_mode;
   char            hostname[256]; /* Used for SNI */
 
   SSL_CTX        *ctx;    /* OpenSSL context */
@@ -233,7 +284,7 @@ static void tls_log_handshake_failure(tls_state_t *st, int ssl_rc) {
 }
 
 static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
-                                 const char *hostname,
+                                 const char *hostname, int server_mode,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close) {
   tls_state_t *st;
@@ -259,11 +310,20 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
     st->hostname[sizeof(st->hostname) - 1] = '\0';
   }
 
-  {
+  st->server_mode = server_mode ? 1 : 0;
+
+  if (server_mode) {
+    int rc = configure_server_ctx_from_env();
+    if (rc != 0) {
+      return rc;
+    }
+    SSL_set_accept_state(st->ssl);
+  } else {
     int rc = tls_configure_hostname(st);
     if (rc != 0) {
       return rc;
     }
+    SSL_set_connect_state(st->ssl);
   }
 
   st->tcp = tcp;
@@ -275,7 +335,6 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 
   st->state = TLS_ST_HANDSHAKING;
   outer->connected = 0;
-
   {
     int rc = turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb);
     if (rc != 0) {
@@ -315,6 +374,22 @@ static SSL_CTX *get_default_tls_ctx(void) {
   return s_default_ctx;
 }
 
+static SSL_CTX *get_default_tls_server_ctx(void) {
+  if (s_server_ctx) {
+    return s_server_ctx;
+  }
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+  SSL_library_init();
+  SSL_load_error_strings();
+#endif
+  s_server_ctx = SSL_CTX_new(TLS_server_method());
+  if (s_server_ctx) {
+    SSL_CTX_set_mode(s_server_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    SSL_CTX_set_mode(s_server_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+  }
+  return s_server_ctx;
+}
+
 /* ── Pump Logic (where the magic happens) ─────────────────── */
 
 /**
@@ -348,7 +423,7 @@ static void tls_pump(tls_state_t *st) {
 
   /* 1. Drive Handshake */
   if (st->state == TLS_ST_HANDSHAKING) {
-    int r = SSL_connect(st->ssl);
+    int r = st->server_mode ? SSL_accept(st->ssl) : SSL_connect(st->ssl);
     tls_flush_wbio_to_network(st);
 
     if (r == 1) {
@@ -577,8 +652,66 @@ int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  const char *hostname,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close) {
-  return tls_attach_tcp_stream(tls_stream, tcp_stream, hostname,
+  return tls_attach_tcp_stream(tls_stream, tcp_stream, hostname, 0,
                                on_connect, on_close);
+}
+
+int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
+                                 turbo_stream_t *tcp_stream,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close) {
+  tls_state_t *st;
+  int rc;
+
+  if (!tls_stream || !tcp_stream) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)tls_stream->backend_data;
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+
+  st->ctx = get_default_tls_server_ctx();
+  if (!st->ctx) {
+    return TURBO_ENOMEM;
+  }
+
+  rc = configure_server_ctx_from_env();
+  if (rc != 0) {
+    return rc;
+  }
+
+  if (st->ssl) {
+    SSL_free(st->ssl);
+    st->ssl = NULL;
+    st->rbio = NULL;
+    st->wbio = NULL;
+  }
+
+  st->ssl = SSL_new(st->ctx);
+  if (!st->ssl) {
+    return TURBO_ENOMEM;
+  }
+
+  st->rbio = BIO_new(BIO_s_mem());
+  st->wbio = BIO_new(BIO_s_mem());
+  if (!st->rbio || !st->wbio) {
+    if (st->rbio) {
+      BIO_free(st->rbio);
+      st->rbio = NULL;
+    }
+    if (st->wbio) {
+      BIO_free(st->wbio);
+      st->wbio = NULL;
+    }
+    SSL_free(st->ssl);
+    st->ssl = NULL;
+    return TURBO_ENOMEM;
+  }
+
+  SSL_set_bio(st->ssl, st->rbio, st->wbio);
+  return tls_attach_tcp_stream(tls_stream, tcp_stream, NULL, 1, on_connect, on_close);
 }
 
 static int tls_connect_pipe(turbo_stream_t *s, const char *name) {

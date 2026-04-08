@@ -225,6 +225,75 @@ static void tls_test_clear_ca_env(void) {
 }
 
 /**
+ * @brief Persist the embedded server certificate and key to temporary files.
+ */
+static int tls_test_write_server_files(char *cert_path, size_t cert_path_len,
+                                       char *key_path, size_t key_path_len) {
+  FILE *fp;
+
+  if (!cert_path || cert_path_len == 0 || !key_path || key_path_len == 0) return -1;
+  if (tls_test_write_ca_file(cert_path, cert_path_len) != 0) return -1;
+
+#ifdef _WIN32
+  {
+    char temp_dir[MAX_PATH];
+    DWORD dir_len = GetTempPathA((DWORD)sizeof(temp_dir), temp_dir);
+    if (dir_len == 0 || dir_len >= sizeof(temp_dir)) return -1;
+    if (GetTempFileNameA(temp_dir, "tk", 0, key_path) == 0) return -1;
+  }
+#else
+  {
+    char tmpl[] = "/tmp/turbonet_tls_key_XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return -1;
+    test_close_socket(fd);
+    strncpy(key_path, tmpl, key_path_len - 1);
+    key_path[key_path_len - 1] = '\0';
+  }
+#endif
+
+  fp = fopen(key_path, "wb");
+  if (!fp) return -1;
+  if (fwrite(s_test_key_pem, 1, strlen(s_test_key_pem), fp) != strlen(s_test_key_pem)) {
+    fclose(fp);
+    return -1;
+  }
+
+  fclose(fp);
+  return 0;
+}
+
+/**
+ * @brief Point CoroNet's TLS server wrapper at the temporary keypair.
+ */
+static int tls_test_set_server_env(const char *cert_path, const char *key_path) {
+  if (!cert_path || !key_path) return -1;
+
+#ifdef _WIN32
+  if (_putenv_s("TURBONET_TLS_CERT_FILE", cert_path) != 0) return -1;
+  if (_putenv_s("TURBONET_TLS_KEY_FILE", key_path) != 0) return -1;
+#else
+  if (setenv("TURBONET_TLS_CERT_FILE", cert_path, 1) != 0) return -1;
+  if (setenv("TURBONET_TLS_KEY_FILE", key_path, 1) != 0) return -1;
+#endif
+
+  return 0;
+}
+
+/**
+ * @brief Clear server-side TLS environment variables used by CoroNet.
+ */
+static void tls_test_clear_server_env(void) {
+#ifdef _WIN32
+  _putenv_s("TURBONET_TLS_CERT_FILE", "");
+  _putenv_s("TURBONET_TLS_KEY_FILE", "");
+#else
+  unsetenv("TURBONET_TLS_CERT_FILE");
+  unsetenv("TURBONET_TLS_KEY_FILE");
+#endif
+}
+
+/**
  * @brief Build a server-side TLS context from the embedded PEM blobs.
  */
 static SSL_CTX *tls_test_create_server_ctx(void) {

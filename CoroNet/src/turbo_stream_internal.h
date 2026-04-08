@@ -113,6 +113,10 @@ int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  const char *hostname,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close);
+int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
+                                 turbo_stream_t *tcp_stream,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close);
 
 /* ── Shared helpers ───────────────────────────────────────── */
 

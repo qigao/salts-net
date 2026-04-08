@@ -36,6 +36,20 @@ static int socket_ctx_error(coro_socket_t *s, int fallback) {
 
 static int udp_client_recv_start(coro_socket_t *s);
 
+static int udp_status_is_transient(int status) {
+  return status == TURBO_ETIMEDOUT || status == TURBO_ECANCELED;
+}
+
+static void udp_on_datagram_closed(void *arg) {
+  coro_socket_t *s = (coro_socket_t *)arg;
+  if (!s || !s->close_pending) {
+    return;
+  }
+
+  s->close_pending = 0;
+  release_client(s);
+}
+
 static void udp_listener_fail(coro_socket_t *s, int status) {
   if (!s || status == 0) {
     return;
@@ -98,7 +112,8 @@ static int on_udp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) 
       udp_listener_fail(s, TURBO_ENOMEM);
       return 0;
     }
-    child->listener = s;
+    child->listener = NULL;
+    child->user_data = s;
     retain_client(s);
     
     /* Pre-load data and peer addr */
@@ -107,7 +122,8 @@ static int on_udp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) 
       memcpy(&child->peer_addr, peer, sizeof(struct sockaddr_storage));
     }
     child->connected = 1;
-    child->owns_handle = 0; // It's a pseudo-socket, it "borrows" the listener's handle but we don't actually use it for recv
+    child->handle.datagram = s->handle.datagram;
+    child->owns_handle = 0; // Pseudo-socket borrows the listener datagram handle.
     
     /* Queue for accept */
     udp_accept_node_t *node = malloc(sizeof(udp_accept_node_t));
@@ -171,6 +187,10 @@ static int udp_client_send(coro_socket_t *s, const char *data, size_t len) {
 
   if (!s || !data || len == 0 || !s->handle.datagram) {
     return TURBO_EINVAL;
+  }
+
+  if (udp_status_is_transient(s->status)) {
+    s->status = 0;
   }
 
   if (s->status != 0 && s->status != TURBO_EOF) {
@@ -336,8 +356,15 @@ static void udp_client_recv_stop(coro_socket_t *s) {
 }
 
 static void udp_close(coro_socket_t *s) {
+  if (s && !s->owns_handle && s->user_data) {
+    coro_socket_t *parent = (coro_socket_t *)s->user_data;
+    s->user_data = NULL;
+    release_client(parent);
+  }
+
   if (s->native_tcp_state) {
     udp_listener_state_t *ls = (udp_listener_state_t *)s->native_tcp_state;
+    s->native_tcp_state = NULL;
     if (s->handle.datagram) {
       turbo_datagram_set_user_data(s->handle.datagram, NULL);
     }
@@ -353,22 +380,35 @@ static void udp_close(coro_socket_t *s) {
       release_client(s);
     }
     free(ls);
-    s->native_tcp_state = NULL;
   }
 
   if (!s || !s->owns_handle || !s->handle.datagram) {
     return;
   }
 
-  /* Clear user_data BEFORE closing: turbo_datagram_close() triggers a cancel-
-   * completion that fires on_udp_coro_recv via the IOCP queue. Without this,
-   * the callback would dereference an already-freed coro_socket_t. */
-  turbo_datagram_set_user_data(s->handle.datagram, NULL);
-  turbo_datagram_close(s->handle.datagram);
+  turbo_datagram_t *dg = s->handle.datagram;
   s->handle.datagram = NULL;
+
+  /* Keep the coroutine socket alive until the asynchronous datagram close
+   * really finishes on the backend worker. */
+  if (!s->close_pending) {
+    s->close_pending = 1;
+    retain_client(s);
+  }
+
+  /* Clear recv user data before destroy: close completion can still drain
+   * backend work, and recv callbacks must not touch a half-destroyed socket. */
+  turbo_datagram_set_user_data(dg, NULL);
+  dg->close_cb = udp_on_datagram_closed;
+  dg->close_cb_arg = s;
+  turbo_datagram_destroy(dg);
 }
 
 static mem_buffer_t *udp_get_send_buffer(coro_socket_t *s, size_t min_size) {
+  if (s && udp_status_is_transient(s->status)) {
+    s->status = 0;
+  }
+
   if (udp_client_ensure_bound(s) != 0) {
     return NULL;
   }
@@ -385,6 +425,10 @@ static int udp_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
 
   if (!s || !buffer || !s->handle.datagram) {
     return TURBO_EINVAL;
+  }
+
+  if (udp_status_is_transient(s->status)) {
+    s->status = 0;
   }
 
   if (!s->connected) {
@@ -410,12 +454,12 @@ static int udp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
 /* ── UDP Server Send ──────────────────────────────────────── */
 
 static int udp_server_send(coro_socket_t *s, const char *data, size_t len) {
-  /* Server send uses the listener's datagram handle with target address */
-  if (!s || !s->listener || !s->listener->handle.datagram) {
+  /* Server send uses the borrowed listener datagram handle plus peer_addr. */
+  if (!s || !s->handle.datagram) {
     return TURBO_EINVAL;
   }
 
-  return turbo_datagram_sendto(s->listener->handle.datagram, 
+  return turbo_datagram_sendto(s->handle.datagram,
                                 (const struct sockaddr *)&s->peer_addr, 
                                 data, len);
 }

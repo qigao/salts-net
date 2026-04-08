@@ -114,7 +114,7 @@ else()
   message(STATUS "Building as a static lib")
   add_library(cxml STATIC ${CXML_SOURCES})
 endif()
-add_library(TurboUtils::cxml ALIAS cxml)
+
 
 
 if(MSVC)

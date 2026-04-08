@@ -85,14 +85,15 @@ static int pipe_connect(coro_socket_t *s, const char *path, int port) {
   }
 
   retain_client(s);
-  int r = turbo_stream_connect_pipe(s->handle.stream, path,
-                                    on_pipe_connect, on_pipe_close);
+  coro_set_wait(s);
+  int r = turbo_stream_connect_pipe(s->handle.stream, path, on_pipe_connect, on_pipe_close);
   if (r != 0) {
+    s->co_wait = NULL;
     release_client(s);
     pipe_discard_stream(s);
     return r;
   }
-  coro_set_wait(s);
+
   coro_yield();
   {
     int status = s->status;

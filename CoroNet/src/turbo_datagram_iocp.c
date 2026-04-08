@@ -21,6 +21,7 @@ typedef struct dg_iocp_state_s {
   volatile LONG inflight_count;
   int recv_started;
   int closing;
+  volatile LONG shutdown_complete;
 } dg_iocp_state_t;
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -33,12 +34,13 @@ static void dg_maybe_shutdown(turbo_datagram_t *d) {
   dg_iocp_state_t *st = (dg_iocp_state_t *)d->backend_data;
   if (!st || !st->closing) return;
   if (InterlockedCompareExchange(&st->inflight_count, 0, 0) == 0) {
+    if (InterlockedCompareExchange(&st->shutdown_complete, 1, 0) != 0) {
+      return;
+    }
     if (st->socket != INVALID_SOCKET) {
       closesocket(st->socket);
       st->socket = INVALID_SOCKET;
     }
-    free(st);
-    d->backend_data = NULL;
     turbo_datagram_finalize_close(d);
   }
 }
@@ -57,6 +59,7 @@ void datagram_iocp_handle_recv_op(iocp_op_t *op) {
   if (st->closing) {
     free(op);
     dg_maybe_shutdown(d);
+    turbo_datagram_release(d);
     return;
   }
 
@@ -85,6 +88,7 @@ void datagram_iocp_handle_recv_op(iocp_op_t *op) {
     if (d->on_recv) d->on_recv(d, NULL, NULL);
   }
   free(op);
+  turbo_datagram_release(d);
 }
 
 void datagram_iocp_handle_send_op(iocp_op_t *op) {
@@ -102,6 +106,7 @@ void datagram_iocp_handle_send_op(iocp_op_t *op) {
   if (st->closing) {
     dg_maybe_shutdown(d);
   }
+  turbo_datagram_release(d);
 }
 
 /* ── Submit Helpers ───────────────────────────────────────── */
@@ -114,6 +119,7 @@ static int dg_iocp_submit_recv(turbo_datagram_t *d) {
 
   op->kind = IOCP_OP_DG_RECV;
   op->owner = d;
+  turbo_datagram_retain(d);
 
   mem_buffer_t *buf = d->recv_buf[d->recv_toggle];
   op->wsabuf.buf = buf->data;
@@ -133,6 +139,7 @@ static int dg_iocp_submit_recv(turbo_datagram_t *d) {
       InterlockedDecrement(&st->inflight_count);
       iocp_pool_inflight_dec(d->ctx->iocp_pool);
       free(op);
+      turbo_datagram_release(d);
       return -(int)err;
     }
   }
@@ -236,6 +243,7 @@ static int dg_iocp_send_buffer(turbo_datagram_t *d, const struct sockaddr *dest,
 
   op->kind = IOCP_OP_DG_SEND;
   op->owner = d;
+  turbo_datagram_retain(d);
   op->buffer = buf;
   op->length = len;
   op->owns_buffer = 1;
@@ -263,6 +271,7 @@ static int dg_iocp_send_buffer(turbo_datagram_t *d, const struct sockaddr *dest,
       iocp_pool_inflight_dec(d->ctx->iocp_pool);
       mem_unref(buf);
       free(op);
+      turbo_datagram_release(d);
       return -(int)err;
     }
   }
@@ -292,6 +301,18 @@ static void dg_iocp_close(turbo_datagram_t *d) {
     st->socket = INVALID_SOCKET;
   }
   dg_maybe_shutdown(d);
+}
+
+static void dg_iocp_destroy_backend(turbo_datagram_t *d) {
+  dg_iocp_state_t *st;
+
+  if (!d) return;
+
+  st = (dg_iocp_state_t *)d->backend_data;
+  d->backend_data = NULL;
+  if (st) {
+    free(st);
+  }
 }
 
 static int dg_iocp_get_local_addr(turbo_datagram_t *d, struct sockaddr_storage *addr) {
@@ -372,6 +393,7 @@ const turbo_datagram_backend_ops_t turbo_datagram_iocp_ops = {
   .set_multicast_loop = dg_iocp_set_multicast_loop,
   .set_multicast_ttl  = dg_iocp_set_multicast_ttl,
   .set_broadcast   = dg_iocp_set_broadcast,
+  .destroy_backend = dg_iocp_destroy_backend,
 };
 
 #endif /* _WIN32 */

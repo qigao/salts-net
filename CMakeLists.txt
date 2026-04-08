@@ -52,7 +52,6 @@ find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(llhttp CONFIG REQUIRED)
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
-find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS}")
 
 # Additional components
 add_subdirectory(tools)

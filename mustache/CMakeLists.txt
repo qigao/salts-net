@@ -9,7 +9,6 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 add_library(mustache SHARED ${HEADER_FILES} ${SOURCE_FILES})
 add_library(TurboNet::Mustache ALIAS mustache)
 
-# DLL export macro - matches pattern from other TurboUtils libraries
 target_compile_definitions(mustache PRIVATE SHARED_CXX)
 
 target_include_directories(
@@ -50,7 +49,7 @@ add_subdirectory(test)
 # Install targets
 install(
   TARGETS mustache
-  EXPORT TurboUtilsTargets
+  EXPORT TurboNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)

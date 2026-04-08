@@ -4,16 +4,16 @@
  */
 
 #include "CoroNet/turbo_coro_internal.h"
-#include "turbo_stream_internal.h"
+#include "tlog.h"
 #include "turbo_error.h"
+#include "turbo_stream_internal.h"
 #include <stdlib.h>
 #include <string.h>
-
 #ifdef _WIN32
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
 #else
-#  include <arpa/inet.h>
+  #include <arpa/inet.h>
 #endif
 
 extern const coro_transport_ops_t transport_ops_tls;
@@ -24,6 +24,9 @@ static int socket_ctx_error(coro_socket_t *s, int fallback) {
 
 /* Pre-declare SNI setter from turbo_stream_tls.c */
 void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
+int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close);
 
 /* ── Client callbacks (Same as TCP as they use turbo_stream_t) ── */
 
@@ -94,18 +97,17 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   if (!s->handle.stream) {
     s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
     if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
-    
+
     /* Important: Set SNI for TLS handshake */
     turbo_stream_tls_set_sni(s->handle.stream, host);
-    
+
     turbo_stream_set_user_data(s->handle.stream, s);
     s->handle.stream->managed = 1;
   }
 
   retain_client(s);
   coro_set_wait(s);
-  int r = turbo_stream_connect_addr(s->handle.stream, sa,
-                                    on_tls_connect, on_tls_close);
+  int r = turbo_stream_connect_addr(s->handle.stream, sa, on_tls_connect, on_tls_close);
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
@@ -149,8 +151,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   tls_stream->managed = 1;
 
   retain_client(s);
-  rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname,
-                                    on_tls_connect, on_tls_close);
+  rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname, on_tls_connect, on_tls_close);
   if (rc != 0) {
     turbo_stream_set_user_data(tls_stream, NULL);
     tls_stream->managed = 0;
@@ -176,23 +177,68 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   }
 }
 
+int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
+  turbo_stream_t *tcp_stream;
+  turbo_stream_t *tls_stream;
+  int rc;
+
+  if (!s || !s->ctx || s->transport != TURBO_TCP || !s->handle.stream || !s->connected) {
+    return TURBO_EINVAL;
+  }
+
+  tcp_stream = s->handle.stream;
+  tls_stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
+  if (!tls_stream) {
+    return socket_ctx_error(s, TURBO_EIO);
+  }
+
+  turbo_stream_set_user_data(tls_stream, s);
+  tls_stream->managed = 1;
+
+  retain_client(s);
+  coro_set_wait(s);
+  rc = turbo_stream_tls_wrap_server(tls_stream, tcp_stream, on_tls_connect, on_tls_close);
+  if (rc != 0) {
+    s->co_wait = NULL;
+    release_client(s);
+    TLOG_ERROR("tls server wrap failed rc={}", rc);
+    turbo_stream_set_user_data(tls_stream, NULL);
+    tls_stream->managed = 0;
+    turbo_stream_destroy(tls_stream);
+    return rc;
+  }
+
+  s->handle.stream = tls_stream;
+  s->transport = TURBO_TLS;
+  s->ops = &transport_ops_tls;
+  s->connected = 0;
+  TLOG_INFO("tls server wrap installed on accepted socket");
+
+  coro_yield();
+  {
+    int status = s->status;
+    if (s->destroy_wait_handoff) {
+      s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    return status;
+  }
+}
+
 /* ── Send/Recv ────────────────────────────────────────────── */
 
 static int tls_send(coro_socket_t *s, const char *data, size_t len) {
-    return turbo_stream_send(s->handle.stream, data, len);
+  return turbo_stream_send(s->handle.stream, data, len);
 }
 
 static int tls_recv_start(coro_socket_t *s) {
-    return turbo_stream_recv_start(s->handle.stream, on_tls_recv);
+  return turbo_stream_recv_start(s->handle.stream, on_tls_recv);
 }
 
-static void tls_recv_stop(coro_socket_t *s) {
-    turbo_stream_recv_stop(s->handle.stream);
-}
+static void tls_recv_stop(coro_socket_t *s) { turbo_stream_recv_stop(s->handle.stream); }
 
 static int tls_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
-  if (s->handle.stream)
-    return turbo_stream_get_local_addr(s->handle.stream, addr);
+  if (s->handle.stream) return turbo_stream_get_local_addr(s->handle.stream, addr);
   return TURBO_ENOTSUP;
 }
 
@@ -215,13 +261,11 @@ static void tls_close(coro_socket_t *s) {
 
 /* ── Ops table (Mirrors TCP but targeting TLS stream) ──────── */
 
-const coro_transport_ops_t transport_ops_tls = {
-    .connect = tls_connect,
-    .send = tls_send,
-    .recv_start = tls_recv_start,
-    .recv_stop = tls_recv_stop,
-    .get_local_addr = tls_get_local_addr,
-    .close = tls_close,
-    .get_send_buffer = tls_get_send_buffer,
-    .send_buffer = tls_send_buffer
-};
+const coro_transport_ops_t transport_ops_tls = {.connect = tls_connect,
+                                                .send = tls_send,
+                                                .recv_start = tls_recv_start,
+                                                .recv_stop = tls_recv_stop,
+                                                .get_local_addr = tls_get_local_addr,
+                                                .close = tls_close,
+                                                .get_send_buffer = tls_get_send_buffer,
+                                                .send_buffer = tls_send_buffer};

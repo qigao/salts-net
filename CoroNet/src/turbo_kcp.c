@@ -92,6 +92,12 @@ static void kcp_final_free_task(void* arg1, void* arg2) {
     return;
   }
   ctx = k->ctx;
+  if (k->update_timer) {
+    turbo_timer_set_data(k->update_timer, NULL);
+    turbo_timer_stop(k->update_timer);
+    turbo_timer_destroy(k->update_timer);
+    k->update_timer = NULL;
+  }
   TLOG_DEBUG("KCP final free: {}", (void*)k);
   free(k);
   coro_context_release_external(ctx);
@@ -248,8 +254,7 @@ void turbo_kcp_destroy(turbo_kcp_t* kcp) {
   
   if (kcp->update_timer) {
     turbo_timer_stop(kcp->update_timer);
-    turbo_timer_destroy(kcp->update_timer);
-    kcp->update_timer = NULL;
+    turbo_timer_set_data(kcp->update_timer, NULL);
   }
   
   if (kcp->ikcp) {

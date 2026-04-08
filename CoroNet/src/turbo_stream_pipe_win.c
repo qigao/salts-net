@@ -35,6 +35,7 @@ typedef struct pipe_state_s {
   HANDLE pipe_handle;
   HANDLE completion_port;
   HANDLE worker_thread;
+  HANDLE connect_thread;
   volatile LONG stopping;
   volatile LONG close_requested;
   volatile LONG close_finalized;
@@ -73,6 +74,14 @@ static void pipe_tick(void *arg1, void *arg2);
 static int pipe_submit_read(turbo_stream_t *s);
 static int pipe_submit_write(turbo_stream_t *s);
 
+#define PIPE_CONNECT_WAIT_SLICE_MS 100
+
+typedef struct pipe_connect_task_s {
+  pipe_state_t *state;
+  turbo_stream_t *stream;
+  char *name;
+} pipe_connect_task_t;
+
 static int pipe_post_wait(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2,
                           volatile LONG *stopping) {
   int rc;
@@ -80,6 +89,7 @@ static int pipe_post_wait(coro_context_t *ctx, coro_post_fn fn, void *arg1, void
   for (;;) {
     rc = coro_post(ctx, fn, arg1, arg2);
     if (rc == 0) {
+      turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(ctx));
       return 0;
     }
     if (stopping && InterlockedCompareExchange(stopping, 0, 0) != 0) {
@@ -155,7 +165,124 @@ static void pipe_maybe_finalize_close(pipe_state_t *st) {
     st->worker_thread = NULL;
   }
 
+  if (st->connect_thread) {
+    if (WaitForSingleObject(st->connect_thread, 0) == WAIT_TIMEOUT) {
+      InterlockedIncrement(&st->pending_posts);
+      if (coro_post(st->ctx, pipe_tick, st, NULL) == 0) {
+        void *loop = coro_context_native_loop(st->ctx);
+        if (loop) turbo_loop_wake((turbo_loop_t *)loop);
+      } else {
+        InterlockedDecrement(&st->pending_posts);
+      }
+      return;
+    }
+    CloseHandle(st->connect_thread);
+    st->connect_thread = NULL;
+  }
+
   pipe_finalize_close(st);
+}
+
+static int pipe_publish_connect_result(pipe_connect_task_t *task, HANDLE pipe_handle, int status) {
+  pipe_state_t *st;
+  pipe_op_t *op;
+
+  if (!task) return TURBO_EINVAL;
+
+  st = task->state;
+  if (!st) return TURBO_EINVAL;
+
+  op = (pipe_op_t *)calloc(1, sizeof(pipe_op_t));
+  if (!op) {
+    if (pipe_handle != INVALID_HANDLE_VALUE) {
+      CloseHandle(pipe_handle);
+    }
+    return TURBO_ENOMEM;
+  }
+
+  op->kind = PIPE_OP_CONNECT;
+  op->stream = task->stream;
+  op->status = status;
+
+  if (status == 0) {
+    st->pipe_handle = pipe_handle;
+  }
+
+  pipe_queue_push(st, op);
+  InterlockedIncrement(&st->pending_posts);
+  if (pipe_post_wait(st->ctx, pipe_tick, st, NULL, &st->stopping) != 0) {
+    InterlockedDecrement(&st->pending_posts);
+    if (status == 0 && pipe_handle != INVALID_HANDLE_VALUE) {
+      st->pipe_handle = INVALID_HANDLE_VALUE;
+      CloseHandle(pipe_handle);
+    }
+    free(op);
+    return TURBO_ECANCELED;
+  }
+
+  return 0;
+}
+
+static DWORD WINAPI pipe_connect_worker(LPVOID arg) {
+  pipe_connect_task_t *task = (pipe_connect_task_t *)arg;
+  pipe_state_t *st;
+  HANDLE pipe_handle = INVALID_HANDLE_VALUE;
+  DWORD last_error = ERROR_FILE_NOT_FOUND;
+  int status = 0;
+
+  if (!task) {
+    return 0;
+  }
+
+  st = task->state;
+
+  while (!InterlockedCompareExchange(&st->stopping, 0, 0)) {
+    pipe_handle = CreateFileA(task->name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                              FILE_FLAG_OVERLAPPED, NULL);
+    if (pipe_handle != INVALID_HANDLE_VALUE) {
+      break;
+    }
+
+    last_error = GetLastError();
+    if (last_error != ERROR_FILE_NOT_FOUND && last_error != ERROR_PIPE_BUSY) {
+      status = -(int)last_error;
+      break;
+    }
+
+    if (!WaitNamedPipeA(task->name, PIPE_CONNECT_WAIT_SLICE_MS)) {
+      last_error = GetLastError();
+      if (last_error != ERROR_FILE_NOT_FOUND &&
+          last_error != ERROR_PIPE_BUSY &&
+          last_error != ERROR_SEM_TIMEOUT) {
+        status = -(int)last_error;
+        break;
+      }
+    }
+  }
+
+  if (status == 0 && InterlockedCompareExchange(&st->stopping, 0, 0) != 0) {
+    status = TURBO_ECANCELED;
+  }
+
+  if (status == 0 && pipe_handle == INVALID_HANDLE_VALUE) {
+    status = -(int)last_error;
+  }
+
+  if (status == 0 &&
+      !CreateIoCompletionPort(pipe_handle, st->completion_port, 0, 0)) {
+    status = -(int)GetLastError();
+  }
+
+  if (status != 0 && pipe_handle != INVALID_HANDLE_VALUE) {
+    CloseHandle(pipe_handle);
+    pipe_handle = INVALID_HANDLE_VALUE;
+  }
+
+  pipe_publish_connect_result(task, pipe_handle, status);
+
+  free(task->name);
+  free(task);
+  return 0;
 }
 
 static DWORD WINAPI pipe_worker(LPVOID arg) {
@@ -362,39 +489,42 @@ static int pw_init(turbo_stream_t *s) {
 
 static int pw_connect_pipe(turbo_stream_t *s, const char *name) {
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
+  pipe_connect_task_t *task;
+  size_t name_len;
   if (!st) return TURBO_EINVAL;
 
-  /* Open the named pipe */
-  st->pipe_handle = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
-                                FILE_FLAG_OVERLAPPED, NULL);
-  if (st->pipe_handle == INVALID_HANDLE_VALUE) {
-    return -(int)GetLastError();
+  if (st->connect_thread) {
+    if (WaitForSingleObject(st->connect_thread, 0) == WAIT_TIMEOUT) {
+      return TURBO_EALREADY;
+    }
+    CloseHandle(st->connect_thread);
+    st->connect_thread = NULL;
   }
 
-  /* Associate with IOCP */
-  if (!CreateIoCompletionPort(st->pipe_handle, st->completion_port, 0, 0)) {
-    int err = -(int)GetLastError();
-    CloseHandle(st->pipe_handle);
-    st->pipe_handle = INVALID_HANDLE_VALUE;
-    return err;
+  if (st->pipe_handle != INVALID_HANDLE_VALUE) {
+    return TURBO_EALREADY;
   }
 
-  pipe_op_t *op = (pipe_op_t *)calloc(1, sizeof(pipe_op_t));
-  if (!op) {
-    CloseHandle(st->pipe_handle);
-    st->pipe_handle = INVALID_HANDLE_VALUE;
+  task = (pipe_connect_task_t *)calloc(1, sizeof(pipe_connect_task_t));
+  if (!task) {
     return TURBO_ENOMEM;
   }
 
-  op->kind = PIPE_OP_CONNECT;
-  op->stream = s;
-  op->status = 0;
+  name_len = strlen(name) + 1;
+  task->name = (char *)malloc(name_len);
+  if (!task->name) {
+    free(task);
+    return TURBO_ENOMEM;
+  }
+  memcpy(task->name, name, name_len);
+  task->state = st;
+  task->stream = s;
 
-  pipe_queue_push(st, op);
-  InterlockedIncrement(&st->pending_posts);
-  if (pipe_post_wait(st->ctx, pipe_tick, st, NULL, &st->stopping) != 0) {
-    InterlockedDecrement(&st->pending_posts);
-    return TURBO_EIO;
+  st->connect_thread = CreateThread(NULL, 0, pipe_connect_worker, task, 0, NULL);
+  if (!st->connect_thread) {
+    free(task->name);
+    free(task);
+    return TURBO_ENOMEM;
   }
 
   return 0;

@@ -33,6 +33,19 @@ static int datagram_kind_is_valid(turbo_datagram_kind_t kind) {
   }
 }
 
+static void datagram_maybe_free(turbo_datagram_t *d) {
+  if (!d || !d->closed) {
+    return;
+  }
+
+  if (atomic_load_explicit(&d->ref_count, memory_order_acquire) == 0) {
+    if (d->ops && d->ops->destroy_backend) {
+      d->ops->destroy_backend(d);
+    }
+    free(d);
+  }
+}
+
 static const turbo_datagram_backend_ops_t *datagram_platform_default_ops(void) {
 #if defined(_WIN32)
   return &turbo_datagram_iocp_ops;
@@ -91,6 +104,7 @@ int turbo_datagram_init_common(turbo_datagram_t *d, coro_context_t *ctx,
   d->ops = ops;
   d->arena = (mem_pool_t *)coro_context_get_arena(ctx);
   if (!d->arena) return TURBO_ENOMEM;
+  atomic_init(&d->ref_count, 1);
   d->status = 0;
 
   d->recv_buf[0] = mem_get_buffer(d->arena, 65536);
@@ -102,14 +116,37 @@ int turbo_datagram_init_common(turbo_datagram_t *d, coro_context_t *ctx,
 }
 
 void turbo_datagram_finalize_close(turbo_datagram_t *d) {
+  turbo_datagram_close_cb close_cb;
+  void *close_cb_arg;
+
   if (d->recv_buf[0]) { mem_unref(d->recv_buf[0]); d->recv_buf[0] = NULL; }
   if (d->recv_buf[1]) { mem_unref(d->recv_buf[1]); d->recv_buf[1] = NULL; }
   d->connected = 0;
   d->status = 0;
   d->closing = 0;
+  d->closed = 1;
+
+  close_cb = d->close_cb;
+  close_cb_arg = d->close_cb_arg;
+  d->close_cb = NULL;
+  d->close_cb_arg = NULL;
+  if (close_cb) {
+    close_cb(close_cb_arg);
+  }
+
   coro_context_native_unref(d->ctx);
-  if (d->destroyed) {
-    free(d);
+  datagram_maybe_free(d);
+}
+
+void turbo_datagram_retain(turbo_datagram_t *d) {
+  if (!d) return;
+  atomic_fetch_add_explicit(&d->ref_count, 1, memory_order_relaxed);
+}
+
+void turbo_datagram_release(turbo_datagram_t *d) {
+  if (!d) return;
+  if (atomic_fetch_sub_explicit(&d->ref_count, 1, memory_order_acq_rel) == 1) {
+    datagram_maybe_free(d);
   }
 }
 
@@ -144,10 +181,12 @@ turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
 
 void turbo_datagram_destroy(turbo_datagram_t *d) {
   if (!d) return;
+  if (d->destroyed) return;
   d->destroyed = 1;
 
   if (d->closing) {
     /* Backend is still cleaning up. Let finalize_close() free it. */
+    turbo_datagram_release(d);
     return;
   }
 
@@ -156,6 +195,7 @@ void turbo_datagram_destroy(turbo_datagram_t *d) {
    * (IOCP worker, handles) are cleaned up. finalize_close() will free d.
    */
   turbo_datagram_close(d);
+  turbo_datagram_release(d);
 }
 
 /* ── Public API: Bind + Connect ───────────────────────────── */
@@ -252,7 +292,7 @@ void turbo_datagram_recv_stop(turbo_datagram_t *d) {
 /* ── Public API: Close ────────────────────────────────────── */
 
 void turbo_datagram_close(turbo_datagram_t *d) {
-  if (!d || d->closing) return;
+  if (!d || d->closing || d->closed) return;
   d->closing = 1;
   d->ops->close(d);
 }

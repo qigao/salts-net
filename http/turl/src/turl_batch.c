@@ -80,12 +80,7 @@ static void batch_worker(coro_t *co, void *arg) {
       ctx->failed = 1;
       ctx->stop = 1;
     } else {
-      if (ctx->verbose) {
-        TLOG_INFO("Download finished [{}]: {} OK ({} bytes)", rendered_url, resp->status_code,
-                  resp->body_len);
-      }
-
-      const char *filename = strrchr(rendered_url, '/');
+       const char *filename = strrchr(rendered_url, '/');
       if (filename)
         filename++;
       else

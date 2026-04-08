@@ -60,6 +60,42 @@ int main(void) {
 > The low-level `coro_create()`/`coro_resume()`/`coro_destroy()` API
 > is available for advanced use cases but requires manual lifecycle management.
 
+### High-Frequency Scheduler Workloads
+
+```c
+#include "turbo_coro.h"
+#include "turbo_coro_pool.h"
+
+static void worker(coro_t *co, void *arg) {
+  int *counter = (int *)arg;
+  UNUSED(co);
+  (*counter)++;
+}
+
+int main(void) {
+  coro_context_t *ctx = coro_context_create(NULL);
+  coro_scheduler_t *sched = coro_scheduler_create();
+  coro_object_pool_config_t cfg = CORO_OBJECT_POOL_CONFIG_DEFAULT;
+  coro_object_pool_t *pool = coro_object_pool_create(&cfg, ctx);
+  int counter = 0;
+
+  for (int i = 0; i < 1000; ++i) {
+    coro_spawn_pooled(sched, pool, worker, &counter);
+  }
+
+  coro_scheduler_run(sched);
+
+  coro_object_pool_destroy(pool);
+  coro_scheduler_destroy(sched);
+  coro_context_destroy(ctx);
+  return 0;
+}
+```
+
+Use `coro_spawn_pooled()` when you already own a long-lived scheduler and need
+to launch many short-lived coroutines. It keeps scheduler semantics but avoids
+the full `coro_create()` / `coro_destroy()` cost on every task.
+
 ### Coroutine Server
 
 ```c

@@ -2,7 +2,7 @@
 
 add_library(tedis SHARED redis_client.c redis_pool.c redis_cluster.c)
 
-turbonet_configure_target(tedis
+cmake_config_target(tedis
   ALIAS TurboNet::Redis
   FOLDER tedis
   EXPORT_NAME Redis)
@@ -15,7 +15,7 @@ endif()
 target_include_directories(
   tedis PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 
-target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboUtils::Utils)
+target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboNet::Utils)
 
 # Platform-specific settings
 if(WIN32)

@@ -220,7 +220,7 @@ add_library(turbo_wasm3 SHARED
             ${CMAKE_CURRENT_SOURCE_DIR}/source/turbo_wasm3.c
             ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_wasm3.h)
 
-turbonet_configure_target(
+cmake_config_target(
   turbo_wasm3
   ALIAS TurboNet::Wasm3
   FOLDER "wasm3"
@@ -235,10 +235,10 @@ target_compile_definitions(turbo_wasm3 PRIVATE SHARED_CXX)
 
 target_link_libraries(
   turbo_wasm3
-  PUBLIC m3 TurboNet::CoroNet TurboUtils::Utils
+  PUBLIC m3 TurboNet::CoroNet TurboNet::Utils
   PRIVATE unofficial::sqlite3::sqlite3 TurboNet::HttpClient TurboNet::Redis)
 
-turbonet_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include
+cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include
                          DESTINATION include/wasm3)
 
 message("Flags:         ${CMAKE_C_FLAGS}")

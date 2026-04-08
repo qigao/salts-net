@@ -260,8 +260,9 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
     coro_set_wait(s);
     coro_yield();
     if (s->status != 0) {
+      int status = s->status;  /* save before release_client may free 's' */
       release_client(s);
-      return s->status;
+      return status;
     }
   }
 
@@ -359,6 +360,10 @@ static void udp_close(coro_socket_t *s) {
     return;
   }
 
+  /* Clear user_data BEFORE closing: turbo_datagram_close() triggers a cancel-
+   * completion that fires on_udp_coro_recv via the IOCP queue. Without this,
+   * the callback would dereference an already-freed coro_socket_t. */
+  turbo_datagram_set_user_data(s->handle.datagram, NULL);
   turbo_datagram_close(s->handle.datagram);
   s->handle.datagram = NULL;
 }

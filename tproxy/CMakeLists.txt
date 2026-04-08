@@ -28,7 +28,7 @@ target_include_directories(
 # Link libraries
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboNet::CoroNet TurboUtils::Parser TurboNet::LB
+  PUBLIC TurboNet::CoroNet TurboNet::Parser TurboNet::LB
      OpenSSL::SSL OpenSSL::Crypto)
 
  

@@ -13,6 +13,9 @@
 #include "turbo_thread.h"
 #include <stdlib.h>
 #ifdef _WIN32
+#include "turbo_iocp_pool.h"
+#endif
+#ifdef _WIN32
   #include <windows.h>
 #else
   #include <sched.h>
@@ -155,12 +158,17 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
       }
     }
   } else {
-    /* Manual/Once mode */
+    /* Manual/Once mode.
+     * On Windows turbo_loop_poll(block=1) is Sleep(N), which adds N ms of
+     * latency per yield point even when IOCP completions are already queued
+     * in the post_queue (they arrive via coro_post from worker threads, not
+     * from the poll iteration itself).  Only sleep when there is genuinely
+     * nothing pending. */
     int has_ready = coro_scheduler_has_ready(ctx->scheduler);
-    if (mode == TURBO_RUN_NOWAIT || has_ready) {
-      turbo_loop_poll(ctx->loop, 2, 0);
+    if (mode == TURBO_RUN_NOWAIT || has_ready || !post_queue_empty(ctx)) {
+      turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
     } else {
-      turbo_loop_poll(ctx->loop, 1, 1);
+      turbo_loop_poll(ctx->loop, 0, 1); /* yield to OS, no fixed sleep */
     }
 
     drain_post_queue(ctx);
@@ -291,6 +299,15 @@ void coro_context_destroy(coro_context_t *ctx) {
    * freed memory.
    */
   drain_shutdown_callbacks(ctx);
+
+#ifdef _WIN32
+  /* Destroy shared IOCP pool before scheduler teardown so worker threads
+   * exit cleanly before coroutine state is freed. */
+  if (ctx->iocp_pool) {
+    iocp_pool_destroy(ctx->iocp_pool);
+    ctx->iocp_pool = NULL;
+  }
+#endif
 
   if (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0) {
     TLOG_WARN("coro_context_destroy: abandoning context teardown while external refs remain");
@@ -847,7 +864,9 @@ void coro_sleep(coro_context_t *ctx, uint64_t ms) {
 /* ── Stubs for native loop methods ── */
 struct turbo_loop_s {
   int ref_count;
-#ifndef _WIN32
+#ifdef _WIN32
+  HANDLE wake_event;
+#else
   int wake_fds[2]; /* [0]=read, [1]=write (pipe) or wake_fds[0]=eventfd */
 #endif
 };
@@ -865,7 +884,9 @@ turbo_loop_t *turbo_loop_create(void) {
   turbo_loop_t *loop = (turbo_loop_t *)calloc(1, sizeof(turbo_loop_t));
   if (!loop) return NULL;
 
-#ifndef _WIN32
+#ifdef _WIN32
+  loop->wake_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+#else
 #ifdef __linux__
   loop->wake_fds[0] = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
   loop->wake_fds[1] = -1;
@@ -884,7 +905,9 @@ turbo_loop_t *turbo_loop_create(void) {
 
 void turbo_loop_destroy(turbo_loop_t *loop) {
   if (!loop) return;
-#ifndef _WIN32
+#ifdef _WIN32
+  if (loop->wake_event) CloseHandle(loop->wake_event);
+#else
   if (loop->wake_fds[0] >= 0) close(loop->wake_fds[0]);
   if (loop->wake_fds[1] >= 0) close(loop->wake_fds[1]);
 #endif
@@ -896,7 +919,12 @@ void turbo_loop_stop(turbo_loop_t *loop) { (void)loop; }
 void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block) {
   if (!loop) return;
 #ifdef _WIN32
-  if (block && max_ms > 0) Sleep(max_ms);
+  if (block && max_ms != 0) {
+    WaitForSingleObject(loop->wake_event, (max_ms < 0) ? INFINITE : (DWORD)max_ms);
+  } else {
+    /* Non-blocking: just check if signaled, don't wait. */
+    WaitForSingleObject(loop->wake_event, 0);
+  }
 #else
   struct pollfd pfd;
   pfd.fd = loop->wake_fds[0];
@@ -936,7 +964,7 @@ void turbo_loop_unref(turbo_loop_t *loop) { if (loop && loop->ref_count > 0) loo
 void turbo_loop_wake(turbo_loop_t *loop) {
   if (!loop) return;
 #ifdef _WIN32
-  /* Wake not natively supported in minimal Windows stub */
+  if (loop->wake_event) SetEvent(loop->wake_event);
 #else
   uint64_t val = 1;
 #ifdef __linux__

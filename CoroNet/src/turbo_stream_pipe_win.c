@@ -118,6 +118,11 @@ static void pipe_finalize_close(pipe_state_t *st) {
     s->backend_data = NULL;
   }
 
+  if (st->completion_port) {
+    CloseHandle(st->completion_port);
+    st->completion_port = NULL;
+  }
+
   free(st);
 
   if (s) {
@@ -132,6 +137,24 @@ static void pipe_maybe_finalize_close(pipe_state_t *st) {
     return;
   }
   if (InterlockedCompareExchange(&st->pending_posts, 0, 0) != 0) return;
+
+  if (st->worker_thread) {
+    if (WaitForSingleObject(st->worker_thread, 0) == WAIT_TIMEOUT) {
+      /* Thread still exiting, check again next tick */
+      InterlockedIncrement(&st->pending_posts);
+      if (coro_post(st->ctx, pipe_tick, st, NULL) == 0) {
+        /* PROACTIVE WAKE: Ensure the main loop isn't sleeping and processes this tick */
+        void *loop = coro_context_native_loop(st->ctx);
+        if (loop) turbo_loop_wake((turbo_loop_t *)loop);
+      } else {
+        InterlockedDecrement(&st->pending_posts);
+      }
+      return;
+    }
+    CloseHandle(st->worker_thread);
+    st->worker_thread = NULL;
+  }
+
   pipe_finalize_close(st);
 }
 
@@ -142,7 +165,7 @@ static DWORD WINAPI pipe_worker(LPVOID arg) {
   OVERLAPPED *ov;
 
   while (!InterlockedCompareExchange(&st->stopping, 0, 0)) {
-    BOOL ok = GetQueuedCompletionStatus(st->completion_port, &bytes, &key, &ov, 500);
+    BOOL ok = GetQueuedCompletionStatus(st->completion_port, &bytes, &key, &ov, 1);
     if (!ov) {
       if (!ok && GetLastError() == WAIT_TIMEOUT) continue;
       break;
@@ -345,9 +368,7 @@ static int pw_connect_pipe(turbo_stream_t *s, const char *name) {
   st->pipe_handle = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
                                 FILE_FLAG_OVERLAPPED, NULL);
   if (st->pipe_handle == INVALID_HANDLE_VALUE) {
-    int err = -(int)GetLastError();
-    if (s->on_connect) s->on_connect(s, err, NULL);
-    return err;
+    return -(int)GetLastError();
   }
 
   /* Associate with IOCP */
@@ -355,12 +376,27 @@ static int pw_connect_pipe(turbo_stream_t *s, const char *name) {
     int err = -(int)GetLastError();
     CloseHandle(st->pipe_handle);
     st->pipe_handle = INVALID_HANDLE_VALUE;
-    if (s->on_connect) s->on_connect(s, err, NULL);
     return err;
   }
 
-  s->connected = 1;
-  if (s->on_connect) s->on_connect(s, 0, NULL);
+  pipe_op_t *op = (pipe_op_t *)calloc(1, sizeof(pipe_op_t));
+  if (!op) {
+    CloseHandle(st->pipe_handle);
+    st->pipe_handle = INVALID_HANDLE_VALUE;
+    return TURBO_ENOMEM;
+  }
+
+  op->kind = PIPE_OP_CONNECT;
+  op->stream = s;
+  op->status = 0;
+
+  pipe_queue_push(st, op);
+  InterlockedIncrement(&st->pending_posts);
+  if (pipe_post_wait(st->ctx, pipe_tick, st, NULL, &st->stopping) != 0) {
+    InterlockedDecrement(&st->pending_posts);
+    return TURBO_EIO;
+  }
+
   return 0;
 }
 
@@ -392,7 +428,6 @@ static int pw_recv_start(turbo_stream_t *s) {
 
 static void pw_recv_stop(turbo_stream_t *s) {
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
-  if (st) st->recv_started = 0;
 }
 
 static void pw_close(turbo_stream_t *s) {
@@ -407,14 +442,12 @@ static void pw_close(turbo_stream_t *s) {
       st->pipe_handle = INVALID_HANDLE_VALUE;
     }
     if (st->worker_thread) {
-      WaitForSingleObject(st->worker_thread, 2000);
-      CloseHandle(st->worker_thread);
-      st->worker_thread = NULL;
+      /* Wake up the worker thread immediately so it doesn't wait */
+      PostQueuedCompletionStatus(st->completion_port, 0, 0, NULL);
     }
-    if (st->completion_port) {
-      CloseHandle(st->completion_port);
-      st->completion_port = NULL;
-    }
+    /* Wake the main loop to process this close immediately */
+    void *loop = coro_context_native_loop(st->ctx);
+    if (loop) turbo_loop_wake((turbo_loop_t *)loop);
   }
 
   pipe_maybe_finalize_close(st);

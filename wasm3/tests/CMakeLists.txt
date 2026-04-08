@@ -119,10 +119,10 @@ if(WASM3_TEST_CLANG)
     VERBATIM)
 endif()
 
-turbonet_add_tests(
+cmake_add_test(
   SOURCES ${TEST_SOURCES}
   FOLDER "wasm3/tests"
-  LIBS TurboUtils::TinyTest TurboNet::Wasm3)
+  LIBS TurboNet::TinyTest TurboNet::Wasm3)
 
 if(TARGET test_turbo_wasm3)
   if(WASM3_TEST_CLANG)

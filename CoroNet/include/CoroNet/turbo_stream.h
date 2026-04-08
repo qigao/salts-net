@@ -86,6 +86,8 @@ CXX_C_API int turbo_stream_connect_addr(turbo_stream_t *s,
 
 /**
  * @brief Connect to a named pipe.
+ *
+ * Accepts native platform endpoints and the unified `pipe://name` form.
  */
 CXX_C_API int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
                                          turbo_connect_cb on_connect,
@@ -151,6 +153,8 @@ CXX_C_API turbo_stream_listener_t *turbo_stream_listen(
 
 /**
  * @brief Create a named-pipe listener.
+ *
+ * Accepts native platform endpoints and the unified `pipe://name` form.
  */
 CXX_C_API turbo_stream_listener_t *turbo_stream_listen_pipe(
     coro_context_t *ctx, const char *name, int backlog,

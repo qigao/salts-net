@@ -19,7 +19,7 @@ add_library(m3 STATIC ${sources})
 target_include_directories(
   m3 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
             $<INSTALL_INTERFACE:include/wasm3>)
-target_link_libraries(m3 PUBLIC TurboUtils::Utils)
+target_link_libraries(m3 PUBLIC TurboNet::Utils)
 set_target_properties(
   m3
   PROPERTIES FOLDER "wasm3"
@@ -27,7 +27,7 @@ set_target_properties(
              C_STANDARD_REQUIRED YES
              C_EXTENSIONS NO)
 
-turbonet_configure_target(
+cmake_config_target(
   m3
   ALIAS TurboNet::Wasm3Core
   FOLDER "wasm3"
@@ -68,5 +68,5 @@ elseif(BUILD_WASI MATCHES "metawasi")
   target_compile_definitions(m3 PUBLIC d_m3HasMetaWASI)
 endif()
 
-turbonet_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                          DESTINATION include/wasm3)

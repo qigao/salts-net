@@ -142,6 +142,11 @@ struct coro_context_s {
 
   /** Last synchronous API error recorded on this context */
   int last_error;
+
+#ifdef _WIN32
+  /** Shared IOCP pool for all stream/datagram sockets on this context */
+  struct iocp_pool_s *iocp_pool;
+#endif
 };
 
 void coro_context_acquire_external(coro_context_t *ctx);

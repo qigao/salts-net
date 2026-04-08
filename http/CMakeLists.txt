@@ -1,8 +1,7 @@
-find_package(zstd CONFIG REQUIRED)
-add_subdirectory(uri_parser)
-add_subdirectory(mime_parser)
-# Generated files
-turbonet_add_grammar_target(
+find_package(zstd CONFIG REQUIRED) 
+
+# Generated files_parser)
+cmake_add_grammar(
   cookie LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie_lexer.re GRAMMAR_Y
   ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie_parser.y)
 
@@ -21,7 +20,7 @@ set(HTTP_HEADERS
 
 add_library(http_client SHARED ${HTTP_SOURCES} ${HTTP_HEADERS})
 
-turbonet_configure_target(
+cmake_config_target(
   http_client
   ALIAS
   TurboNet::HttpClient
@@ -43,7 +42,7 @@ target_include_directories(
 
 target_link_libraries(
   http_client
-  PUBLIC TurboUtils::Utils TurboNet::CoroNet zstd::libzstd TurboUtils::Parser
+  PUBLIC TurboNet::Utils TurboNet::CoroNet zstd::libzstd TurboNet::Parser
   PRIVATE  llhttp::llhttp_static cjwt sds mime_parser)
 
 # Tests & Examples

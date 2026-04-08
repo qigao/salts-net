@@ -70,7 +70,8 @@ static void accept_loop_task(coro_t *co, void *arg) {
     int r = coro_socket_accept(server->listener, &client);
     if (r == 0 && client) {
       spawn_handler_coro(client, server->handler, server->handler_arg);
-    } else if (r != TURBO_EALREADY && r != TURBO_ECANCELED && r != 0) {
+    } else if (r != TURBO_EALREADY && r != TURBO_ECANCELED && r != TURBO_EBUSY && 
+               r != TURBO_EINTR && r != 0) {
       break;
     }
     if (server->listener == NULL) break;

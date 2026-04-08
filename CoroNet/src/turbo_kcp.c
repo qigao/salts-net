@@ -120,6 +120,23 @@ static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
   if (peer) {
     const struct sockaddr_storage* incoming = (const struct sockaddr_storage*)peer;
     if (!k->has_peer) {
+      /* New client connecting.  Reset ikcp so stale seq/ack state from the
+       * previous session doesn't cause the new client's sn=0 ping to be
+       * dropped as a "duplicate".  This is safe here because done=1 on the
+       * previous client can only be reached after its "pong" was received,
+       * i.e. the old session's ikcp output was already flushed and ACK'd. */
+      if (k->ikcp) {
+        IUINT32 conv = k->ikcp->conv;
+        ikcp_release(k->ikcp);
+        k->ikcp = ikcp_create(conv, k);
+        if (k->ikcp) {
+          k->ikcp->output = kcp_low_level_output;
+          ikcp_nodelay(k->ikcp, 1, 10, 2, 1);
+          ikcp_wndsize(k->ikcp, 128, 128);
+          /* Seed the clock */
+          ikcp_update(k->ikcp, (uint32_t)coro_context_now(k->ctx));
+        }
+      }
       memcpy(&k->peer_addr, incoming, sizeof(*incoming));
       k->has_peer = 1;
     } else if (!sockaddr_storage_equal(&k->peer_addr, incoming)) {
@@ -129,7 +146,13 @@ static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
   
   /* Feed raw UDP into KCP */
   ikcp_input(k->ikcp, slice->data, (long)slice->length);
-  
+
+  /* Flush ACKs (and any pending sends) immediately via ikcp_flush().
+   * ikcp_update() would be a no-op here: it guards on ts_flush which is
+   * always 10ms in the future after the first flush, so slap < 0 → skip.
+   * ikcp_flush() has no such guard and sends unconditionally. */
+  ikcp_flush(k->ikcp);
+
   /* Check for KCP-level extracted data */
   char buf[4096];
   int r;
@@ -153,7 +176,7 @@ static void kcp_tick_task(void* arg1, void* arg2) {
   /* Schedule next update */
   uint32_t next = ikcp_check(k->ikcp, now);
   uint32_t diff = (next > now) ? (next - now) : 10;
-  if (diff > 100) diff = 100; /* Max 100ms between ticks */
+  if (diff > 10) diff = 10; /* Cap at 10ms to match ikcp_nodelay interval */
   
   turbo_timer_start(k->update_timer, on_timer_tick, diff, 0);
 }
@@ -192,6 +215,14 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   /* Configure KCP for best performance */
   ikcp_nodelay(k->ikcp, 1, 10, 2, 1);
   ikcp_wndsize(k->ikcp, 128, 128);
+  /* Seed ikcp internal clock so ikcp_flush() is not a no-op.
+   * ikcp_flush() guards on (updated == 0); ikcp_update() sets updated=1
+   * on first call and initialises ts_flush. Without this, every ikcp_flush()
+   * on the hot path (after ikcp_send / ikcp_input) silently returns early. */
+  if (ctx) {
+    uint32_t now = (uint32_t)coro_context_now(ctx);
+    ikcp_update(k->ikcp, now);
+  }
   
   k->update_timer = turbo_timer_create(NULL);
   if (k->update_timer) {
@@ -318,7 +349,14 @@ int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
 
 int turbo_kcp_send(turbo_kcp_t* kcp, const char* data, size_t len) {
   if (!kcp || !kcp->ikcp || !kcp->connected) return TURBO_EINVAL;
-  return ikcp_send(kcp->ikcp, data, (int)len);
+  int r = ikcp_send(kcp->ikcp, data, (int)len);
+  if (r >= 0) {
+    /* ikcp_flush() bypasses the ts_flush guard that ikcp_update() imposes.
+     * Without this, the send would sit in snd_queue for up to 10ms waiting
+     * for the background timer to call ikcp_update(). */
+    ikcp_flush(kcp->ikcp);
+  }
+  return r;
 }
 
 void turbo_kcp_close(turbo_kcp_t* kcp) {
@@ -333,4 +371,19 @@ void* turbo_kcp_get_user_data(turbo_kcp_t* kcp) { return kcp->user_data; }
 
 turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp) {
   return kcp ? kcp->udp : NULL;
+}
+
+void turbo_kcp_reset_peer(turbo_kcp_t* kcp) {
+  if (!kcp) return;
+  /* Only clear the lock flag; do NOT zero peer_addr.
+   *
+   * ikcp_send() is non-blocking: it queues data for the next ikcp_update()
+   * tick (10ms timer) which calls kcp_low_level_output() → sendto(peer_addr).
+   * If we zero peer_addr now, the queued response goes to 0.0.0.0:0.
+   *
+   * With has_peer=0 and peer_addr still holding the previous client's address:
+   *   - Pending flush fires correctly when the timer ticks.
+   *   - When the next client's first packet arrives, on_udp_recv() takes the
+   *     !has_peer branch (line ~122) and overwrites peer_addr atomically. */
+  kcp->has_peer = 0;
 }

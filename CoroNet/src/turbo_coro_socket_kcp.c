@@ -142,7 +142,14 @@ static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
     kcp_listener_state_t *ls = (kcp_listener_state_t *)s->native_tcp_state;
     coro_socket_t *child = ls->active_child;
 
-    if (!child || !child->connected || child->handle.kcp == NULL) {
+    /* If we have an active child, only deliver if it's still alive.
+     * If it's dead, clear it so we can accept the next one. */
+    if (child && (!child->connected || child->handle.kcp == NULL)) {
+      ls->active_child = NULL;
+      child = NULL;
+    }
+
+    if (!child) {
       child = kcp_listener_child(ls);
       if (!child) {
         kcp_listener_fail(s, socket_ctx_error(s, TURBO_ENOMEM));
@@ -150,6 +157,10 @@ static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
       }
       ls->active_child = child;
       if (kcp_queue_accept(ls, child) != 0) {
+        /* Failed to enqueue: cleanup and abort */
+        ls->active_child = NULL;
+        child->handle.kcp = NULL; /* Don't close the shared listener handle */
+        coro_socket_destroy(child);
         return 0;
       }
     }
@@ -266,30 +277,24 @@ static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
     return TURBO_EINVAL;
   }
 
+  ls = (kcp_listener_state_t *)s->native_tcp_state;
+  if (!ls) return TURBO_EBADF;
+
   retain_client(s);
 
-  if (s->accept_pending) {
-    s->accept_pending = 0;
-  } else {
-    coro_set_wait(s);
-    coro_yield();
-    if (s->status != 0) {
-      int status = s->status;
-      release_client(s);
-      return status;
+  /* Loop to handle spurious wakeups */
+  while (!ls->head) {
+    if (s->accept_pending) {
+      s->accept_pending = 0;
+    } else {
+      coro_set_wait(s);
+      coro_yield();
+      if (s->status != 0) {
+        int status = s->status;
+        release_client(s);
+        return status;
+      }
     }
-  }
-
-  if (s->status != 0) {
-    int status = s->status;
-    release_client(s);
-    return status;
-  }
-
-  ls = (kcp_listener_state_t *)s->native_tcp_state;
-  if (!ls || !ls->head) {
-    release_client(s);
-    return TURBO_EBUSY;
   }
 
   node = ls->head;
@@ -360,8 +365,13 @@ static void kcp_close(coro_socket_t *s) {
     s->native_tcp_state = NULL;
   } else if (s->native_tcp_state && !s->owns_handle) {
     kcp_listener_state_t *ls = (kcp_listener_state_t *)s->native_tcp_state;
-    if (ls && ls->active_child == s) {
-      ls->active_child = NULL;
+    if (ls) {
+      if (ls->active_child == s) ls->active_child = NULL;
+      /* Good taste: Ensure the listener's peer lock is reset so the next 
+       * ephemeral port is accepted immediately after this handler ends. */
+      if (ls->listener_coro && ls->listener_coro->handle.kcp) {
+        turbo_kcp_reset_peer(ls->listener_coro->handle.kcp);
+      }
     }
     s->native_tcp_state = NULL;
   }

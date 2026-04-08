@@ -17,6 +17,7 @@ endif()
 
 # Platform-specific backend mapping
 set(BACKEND_FILES_IOCP
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_iocp_pool.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_iocp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_win.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_iocp.c)
@@ -40,10 +41,15 @@ set(BACKEND_FILES_UNIX_GENERIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c)
 
 # Collect all generic sources, excluding all backend implementations
-turbonet_collect_files(SOURCE_FILES RECURSE
-    EXCLUDES ${BACKEND_FILES_IOCP} ${BACKEND_FILES_KQUEUE} 
-             ${BACKEND_FILES_IO_URING} ${BACKEND_FILES_EPOLL}
-             ${BACKEND_FILES_UNIX_GENERIC})
+cmake_add_source(
+  SOURCE_FILES
+  RECURSE
+  EXCLUDES
+  ${BACKEND_FILES_IOCP}
+  ${BACKEND_FILES_KQUEUE}
+  ${BACKEND_FILES_IO_URING}
+  ${BACKEND_FILES_EPOLL}
+  ${BACKEND_FILES_UNIX_GENERIC})
 
 # Select and add the appropriate backend
 if(WIN32)
@@ -71,16 +77,23 @@ add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 
 # Configure targets
-turbonet_configure_target(${STATIC_TARGET_NAME}
-  ALIAS TurboNet::CoroNet_static
-  FOLDER ${TARGET_NAME}
-  NO_INSTALL)
+cmake_config_target(${STATIC_TARGET_NAME} ALIAS TurboNet::CoroNet_static
+                          FOLDER ${TARGET_NAME} NO_INSTALL)
 
-turbonet_configure_target(${TARGET_NAME}
-  ALIAS TurboNet::CoroNet
-  FOLDER ${TARGET_NAME}
-  EXPORT_NAME CoroNet)
-
+cmake_config_target(
+  ${TARGET_NAME}
+  ALIAS
+  TurboNet::CoroNet
+  FOLDER
+  ${TARGET_NAME}
+  EXPORT_NAME
+  CoroNet)
+if(WIN32)
+  target_compile_definitions(${STATIC_TARGET_NAME}
+                             PUBLIC WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(${TARGET_NAME}
+                             PUBLIC WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()
 # Apply configuration to both
 foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
   target_include_directories(
@@ -97,7 +110,7 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   target_link_libraries(
     ${tgt}
-    PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboUtils::Utils TurboUtils::Parser
+    PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Parser
            Threads::Threads c-ares::cares
     PRIVATE kcp::kcp llhttp::llhttp_static PkgConfig::STC TurboNet::SDS
             TurboNet::WebSocketParser)
@@ -113,9 +126,9 @@ endforeach()
 
 # Install headers
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet.h DESTINATION include)
-turbonet_install_headers(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet
-  EXCLUDES "internal.h" "turbo_coro_internal.h" "turbo_native_*_internal.h")
+cmake_install_headers(
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet EXCLUDES "internal.h"
+  "turbo_coro_internal.h" "turbo_native_*_internal.h")
 
 add_subdirectory(tests)
 

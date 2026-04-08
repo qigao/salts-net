@@ -31,7 +31,7 @@ add_library(turbonet_email STATIC ${EMAIL_SOURCES} ${EMAIL_HEADERS})
 
 target_link_libraries(turbonet_email
   PUBLIC
-    TurboUtils::Utils
+    TurboNet::TinyTest
     mime_parser
     TurboNet::CoroNet
     OpenSSL::SSL
@@ -55,7 +55,7 @@ add_executable(test_email
 
 target_link_libraries(test_email
   turbonet_email
-  TurboUtils::Utils
+  TurboNet::TinyTest
 )
 
 target_include_directories(test_email PRIVATE
@@ -71,7 +71,7 @@ add_executable(test_message
 
 target_link_libraries(test_message
   turbonet_email
-  TurboUtils::Utils
+  TurboNet::TinyTest
 )
 
 target_include_directories(test_message PRIVATE
@@ -87,7 +87,7 @@ add_executable(test_email_integration
 
 target_link_libraries(test_email_integration
   turbonet_email
-  TurboUtils::Utils
+  TurboNet::TinyTest
 )
 
 target_include_directories(test_email_integration PRIVATE
@@ -104,7 +104,7 @@ add_executable(example_email_send
 
 target_link_libraries(example_email_send
   turbonet_email
-  TurboUtils::Utils
+  TurboNet::TinyTest
 )
 
 target_include_directories(example_email_send PRIVATE
@@ -119,7 +119,7 @@ add_executable(example_email_receive
 
 target_link_libraries(example_email_receive
   turbonet_email
-  TurboUtils::Utils
+  TurboNet::TinyTest
 )
 
 target_include_directories(example_email_receive PRIVATE
@@ -134,7 +134,7 @@ add_executable(example_email_imap
 
 target_link_libraries(example_email_imap
   turbonet_email
-  TurboUtils::Utils
+  TurboNet::TinyTest
 )
 
 target_include_directories(example_email_imap PRIVATE

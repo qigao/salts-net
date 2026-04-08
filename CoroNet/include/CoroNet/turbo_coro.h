@@ -183,6 +183,7 @@ CXX_C_API size_t coro_bytes_stored(coro_t *co);
 
 /** Scheduler handle (opaque) */
 typedef struct coro_scheduler_s coro_scheduler_t;
+typedef struct coro_object_pool_s coro_object_pool_t;
 
 /**
  * @brief Create a coroutine scheduler
@@ -209,7 +210,9 @@ CXX_C_API void coro_scheduler_destroy(coro_scheduler_t *sched);
  *
  * Most users should prefer coro_context_spawn() which hooks into
  * the event-loop context, or coro_task_create() + coro_task_start()
- * for explicit control.
+ * for explicit control. For high-frequency steady-state scheduler
+ * workloads, prefer coro_spawn_pooled() to avoid paying the full
+ * create/destroy lifecycle cost on every task.
  *
  * @param sched Scheduler
  * @param fn    Entry function
@@ -218,6 +221,26 @@ CXX_C_API void coro_scheduler_destroy(coro_scheduler_t *sched);
  * @return Coroutine handle or NULL on failure
  */
 CXX_C_API coro_t *coro_spawn(coro_scheduler_t *sched, coro_fn fn, void *arg, const coro_opts_t *opts);
+
+/**
+ * @brief Spawn a coroutine into a scheduler using an object pool.
+ *
+ * This is the steady-state fast path for high-frequency scheduler workloads:
+ * it borrows a coroutine shell from @p pool, arranges automatic return on
+ * completion, and adopts it into @p sched.
+ *
+ * The pool must outlive all coroutines spawned through this API.
+ *
+ * @param sched Scheduler
+ * @param pool  Coroutine object pool
+ * @param fn    Entry function
+ * @param arg   Argument passed to entry function
+ * @return Coroutine handle or NULL on failure
+ */
+CXX_C_API coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
+                                           coro_object_pool_t *pool,
+                                           coro_fn fn,
+                                           void *arg);
 
 /**
  * @brief Adopt an existing coroutine into the scheduler.

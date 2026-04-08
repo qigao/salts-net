@@ -83,6 +83,17 @@ void* turbo_kcp_get_user_data(turbo_kcp_t* kcp);
  */
 turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
 
+/**
+ * @brief Reset the locked peer address on a server-side KCP socket.
+ *
+ * A server-side turbo_kcp_t locks onto the first UDP peer that sends data.
+ * Call this after the previous client session ends so the next client from
+ * a different ephemeral port is accepted rather than silently dropped.
+ *
+ * @param kcp The KCP context (must be server-side / bound, not connected).
+ */
+void turbo_kcp_reset_peer(turbo_kcp_t* kcp);
+
 #ifdef __cplusplus
 }
 #endif

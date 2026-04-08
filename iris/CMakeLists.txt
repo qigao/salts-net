@@ -1,23 +1,23 @@
 set(TARGET_NAME iris)
 # Generate security validators from re2c
-turbonet_add_grammar_target(SECURITY
+cmake_add_grammar(SECURITY
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/security_validators.re)
 
 # Generate route parser from re2c
-turbonet_add_grammar_target(ROUTE
+cmake_add_grammar(ROUTE
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/src/route_parser.re)
 
 # Add generated files to sources
 set(GENERATED_SOURCES ${SECURITY_LEXER_GEN} ${ROUTE_LEXER_GEN})
 
 # Collect sources
-turbonet_collect_files(SOURCE_FILES RECURSE)
+cmake_add_source(SOURCE_FILES RECURSE)
 list(APPEND SOURCE_FILES ${GENERATED_SOURCES})
 
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 
 # Configure target
-turbonet_configure_target(${TARGET_NAME}
+cmake_config_target(${TARGET_NAME}
   ALIAS TurboNet::Iris
   FOLDER "iris"
   EXPORT_NAME Iris)
@@ -25,12 +25,12 @@ turbonet_configure_target(${TARGET_NAME}
 # Link libraries first - vcpkg style
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboUtils::Utils TurboNet::CoroNet
+  PUBLIC  OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::CoroNet
           TurboNet::Wasm3
   PRIVATE llhttp::llhttp_static
           kcp::kcp
           c-ares::cares
-          TurboUtils::Parser
+          TurboNet::Parser
           cjwt
           Threads::Threads)
 
@@ -59,4 +59,4 @@ if(BUILD_TESTS)
 endif()
 
 # Install headers
-turbonet_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)

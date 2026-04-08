@@ -18,6 +18,109 @@
 
 /* ── Backend resolution ───────────────────────────────────── */
 
+static int stream_has_prefix(const char *value, const char *prefix) {
+  size_t prefix_len;
+
+  if (!value || !prefix) {
+    return 0;
+  }
+
+  prefix_len = strlen(prefix);
+  return strncmp(value, prefix, prefix_len) == 0;
+}
+
+static char *stream_dup_cstr(const char *value) {
+  size_t len;
+  char *copy;
+
+  if (!value) {
+    return NULL;
+  }
+
+  len = strlen(value) + 1;
+  copy = (char *)malloc(len);
+  if (!copy) {
+    return NULL;
+  }
+
+  memcpy(copy, value, len);
+  return copy;
+}
+
+static char *stream_build_pipe_path(const char *prefix, const char *name, const char *suffix) {
+  size_t prefix_len;
+  size_t name_len;
+  size_t suffix_len;
+  char *path;
+
+  if (!prefix || !name || !suffix || name[0] == '\0') {
+    return NULL;
+  }
+
+  prefix_len = strlen(prefix);
+  name_len = strlen(name);
+  suffix_len = strlen(suffix);
+  path = (char *)malloc(prefix_len + name_len + suffix_len + 1);
+  if (!path) {
+    return NULL;
+  }
+
+  memcpy(path, prefix, prefix_len);
+  memcpy(path + prefix_len, name, name_len);
+  memcpy(path + prefix_len + name_len, suffix, suffix_len);
+  path[prefix_len + name_len + suffix_len] = '\0';
+  return path;
+}
+
+static char *stream_normalize_pipe_name(const char *name) {
+  const char *value;
+
+  if (!name || name[0] == '\0') {
+    return NULL;
+  }
+
+#ifdef _WIN32
+  if (stream_has_prefix(name, "\\\\.\\pipe\\")) {
+    return stream_dup_cstr(name);
+  }
+
+  value = name;
+  if (stream_has_prefix(name, "pipe://")) {
+    value = name + strlen("pipe://");
+    while (*value == '/') {
+      value++;
+    }
+  }
+
+  if (value[0] == '\0') {
+    return NULL;
+  }
+
+  return stream_build_pipe_path("\\\\.\\pipe\\", value, "");
+#else
+  if (stream_has_prefix(name, "ipc://")) {
+    value = name + strlen("ipc://");
+    if (value[0] == '\0') {
+      return NULL;
+    }
+    return stream_dup_cstr(value);
+  }
+
+  if (stream_has_prefix(name, "pipe://")) {
+    value = name + strlen("pipe://");
+    if (value[0] == '\0') {
+      return NULL;
+    }
+    if (value[0] == '/') {
+      return stream_dup_cstr(value);
+    }
+    return stream_build_pipe_path("/tmp/", value, ".sock");
+  }
+
+  return stream_dup_cstr(name);
+#endif
+}
+
 static void stream_record_error(coro_context_t *ctx, int err) {
   if (ctx) {
     ctx->last_error = err;
@@ -292,12 +395,23 @@ int turbo_stream_connect_addr(turbo_stream_t *s, const struct sockaddr *addr,
 int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
                                turbo_connect_cb on_connect,
                                turbo_close_cb on_close) {
+  char *native_name;
+  int rc;
+
   if (!s || !name) return TURBO_EINVAL;
   if (s->kind != TURBO_STREAM_PIPE) return TURBO_EINVAL;
   s->on_connect = on_connect;
   s->on_close = on_close;
   if (!s->ops->connect_pipe) return TURBO_ENOTSUP;
-  return s->ops->connect_pipe(s, name);
+
+  native_name = stream_normalize_pipe_name(name);
+  if (!native_name) {
+    return TURBO_EINVAL;
+  }
+
+  rc = s->ops->connect_pipe(s, native_name);
+  free(native_name);
+  return rc;
 }
 
 /* ── Public API: Send ─────────────────────────────────────── */
@@ -429,6 +543,9 @@ turbo_stream_listener_t *turbo_stream_listen(
 turbo_stream_listener_t *turbo_stream_listen_pipe(
     coro_context_t *ctx, const char *name, int backlog,
     turbo_accept_cb on_accept) {
+  char *native_name;
+  int rc;
+
   if (!ctx || !name || !on_accept) {
     stream_record_error(ctx, TURBO_EINVAL);
     return NULL;
@@ -454,7 +571,15 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
   l->arena = ctx->arena;
   l->on_accept = on_accept;
 
-  int rc = ops->bind_pipe(l, name);
+  native_name = stream_normalize_pipe_name(name);
+  if (!native_name) {
+    stream_record_error(ctx, TURBO_EINVAL);
+    free(l);
+    return NULL;
+  }
+
+  rc = ops->bind_pipe(l, native_name);
+  free(native_name);
   if (rc != 0) {
     stream_record_error(ctx, rc);
     free(l);

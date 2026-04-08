@@ -110,6 +110,8 @@ CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostnam
 
 /**
  * @brief Connect to a named pipe / Unix domain socket.
+ *
+ * Accepts native platform endpoints and the unified `pipe://name` form.
  */
 CXX_C_API int coro_socket_connect_pipe(coro_socket_t *socket, const char *path);
 

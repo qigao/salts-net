@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 // =============================================================================
 // Coroutine
@@ -18,6 +19,7 @@
 // Internal coroutine structure
 struct coro_s {
   mco_coro *mco;               // minicoro handle
+  void *mco_allocation;        // owning allocation for coro shell + minicoro object
   coro_fn fn;                  // user entry function
   void *arg;                   // user argument
   void *user_data;             // user data
@@ -58,14 +60,50 @@ static void coro_entry_wrapper(mco_coro *mco) {
   }
 }
 
+static void pooled_scheduler_cleanup(coro_t *co, void *arg) {
+  coro_object_pool_release((coro_object_pool_t *)arg, co);
+}
+
+static void coro_scheduler_link_ready(coro_scheduler_t *sched, coro_t *co) {
+  co->scheduler = sched;
+  co->next = NULL;
+  co->prev = sched->tail;
+
+  if (sched->tail) {
+    sched->tail->next = co;
+  } else {
+    sched->head = co;
+  }
+  sched->tail = co;
+  sched->count++;
+
+  co->waiting_for_io = 0;
+  co->in_ready_queue = 1;
+  co->ready_next = NULL;
+  co->ready_prev = sched->ready_tail;
+  if (sched->ready_tail) {
+    sched->ready_tail->ready_next = co;
+  } else {
+    sched->ready_head = co;
+  }
+  sched->ready_tail = co;
+  sched->ready_count++;
+}
+
+static void *coro_alloc_combined_block(size_t coro_size) {
+  const size_t align = sizeof(void *) > 16 ? sizeof(void *) : 16;
+  const size_t total = sizeof(coro_t) + align - 1 + coro_size;
+  return calloc(1, total);
+}
+
+static mco_coro *coro_block_to_mco(void *block) {
+  const uintptr_t base = (uintptr_t)block + sizeof(coro_t);
+  const uintptr_t aligned = (base + 15u) & ~(uintptr_t)15u;
+  return (mco_coro *)aligned;
+}
+
 coro_t *coro_create(coro_fn fn, void *arg, const coro_opts_t *opts) {
   if (!fn) return NULL;
-
-  coro_t *co = calloc(1, sizeof(coro_t));
-  if (!co) return NULL;
-
-  co->fn = fn;
-  co->arg = arg;
 
   // Setup minicoro descriptor
   mco_desc desc =
@@ -75,6 +113,14 @@ coro_t *coro_create(coro_fn fn, void *arg, const coro_opts_t *opts) {
     desc.storage_size = opts->storage_size;
   }
 
+  void *block = coro_alloc_combined_block(desc.coro_size);
+  if (!block) return NULL;
+
+  coro_t *co = (coro_t *)block;
+  co->mco_allocation = block;
+  co->mco = coro_block_to_mco(block);
+  co->fn = fn;
+  co->arg = arg;
   desc.user_data = co;
 
   if (opts) {
@@ -83,10 +129,10 @@ coro_t *coro_create(coro_fn fn, void *arg, const coro_opts_t *opts) {
     co->storage_size = opts->storage_size;
   }
 
-  // Create minicoro
-  mco_result res = mco_create(&co->mco, &desc);
+  // Initialize minicoro in the combined allocation
+  mco_result res = mco_init(co->mco, &desc);
   if (res != MCO_SUCCESS) {
-    free(co);
+    free(block);
     return NULL;
   }
 
@@ -127,9 +173,9 @@ void coro_destroy(coro_t *co) {
   coro_detach_scheduler(co);
 
   if (co->mco) {
-    mco_destroy(co->mco);
+    mco_uninit(co->mco);
   }
-  free(co);
+  free(co->mco_allocation ? co->mco_allocation : co);
 }
 
 int coro_resume(coro_t *co) {
@@ -248,31 +294,7 @@ coro_t *coro_spawn(coro_scheduler_t *sched, coro_fn fn, void *arg, const coro_op
   coro_t *co = coro_create(fn, arg, opts);
   if (!co) return NULL;
 
-  co->scheduler = sched;
-  co->next = NULL;
-  co->prev = sched->tail;
-
-  // Add to tail
-  if (sched->tail) {
-    sched->tail->next = co;
-  } else {
-    sched->head = co;
-  }
-  sched->tail = co;
-  sched->count++;
-
-  // New coros are ready by default
-  co->waiting_for_io = 0;
-  co->in_ready_queue = 1;
-  co->ready_next = NULL;
-  co->ready_prev = sched->ready_tail;
-  if (sched->ready_tail) {
-    sched->ready_tail->ready_next = co;
-  } else {
-    sched->ready_head = co;
-  }
-  sched->ready_tail = co;
-  sched->ready_count++;
+  coro_scheduler_link_ready(sched, co);
 
   return co;
 }
@@ -280,31 +302,25 @@ coro_t *coro_spawn(coro_scheduler_t *sched, coro_fn fn, void *arg, const coro_op
 void coro_scheduler_adopt(coro_scheduler_t *sched, coro_t *co) {
   if (!sched || !co) return;
 
-  co->scheduler = sched;
-  co->next = NULL;
-  co->prev = sched->tail;
+  coro_scheduler_link_ready(sched, co);
+}
 
-  // Add to tail
-  if (sched->tail) {
-    sched->tail->next = co;
-  } else {
-    sched->head = co;
+coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
+                          coro_object_pool_t *pool,
+                          coro_fn fn,
+                          void *arg) {
+  if (!sched || !pool || !fn) {
+    return NULL;
   }
-  sched->tail = co;
-  sched->count++;
 
-  // Adopted coros are usually ready to resume
-  co->waiting_for_io = 0;
-  co->in_ready_queue = 1;
-  co->ready_next = NULL;
-  co->ready_prev = sched->ready_tail;
-  if (sched->ready_tail) {
-    sched->ready_tail->ready_next = co;
-  } else {
-    sched->ready_head = co;
+  coro_t *co = coro_object_pool_acquire(pool, fn, arg);
+  if (!co) {
+    return NULL;
   }
-  sched->ready_tail = co;
-  sched->ready_count++;
+
+  coro_set_cleanup(co, pooled_scheduler_cleanup, pool);
+  coro_scheduler_link_ready(sched, co);
+  return co;
 }
 
 int coro_scheduler_tick(coro_scheduler_t *sched) {

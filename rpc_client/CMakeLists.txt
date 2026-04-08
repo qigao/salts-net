@@ -11,7 +11,7 @@ target_include_directories(
                     $<INSTALL_INTERFACE:include>)
 
 # Link with dependencies http_client and parser are required dependencies
-target_link_libraries(rpc_client PUBLIC http_client TurboUtils::Parser TurboNet::CoroNet)
+target_link_libraries(rpc_client PUBLIC http_client TurboNet::Parser TurboNet::CoroNet)
 
 # Set folder for IDE organization
 set_target_properties(

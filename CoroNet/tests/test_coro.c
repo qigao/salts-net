@@ -343,6 +343,35 @@ spec("Scheduler Tests") {
         coro_scheduler_destroy(sched);
     }
 
+    it("should spawn pooled coroutines and return them to pool") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_scheduler_t *sched = coro_scheduler_create();
+        coro_object_pool_config_t config = {.initial_capacity = 2, .max_capacity = 2, .stack_size = 0};
+        coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
+        int c1 = 0, c2 = 0;
+
+        check_not_null(ctx);
+        check_not_null(sched);
+        check_not_null(pool);
+
+        check_not_null(coro_spawn_pooled(sched, pool, sched_worker, &c1));
+        check_not_null(coro_spawn_pooled(sched, pool, sched_worker, &c2));
+        check_int_eq(coro_object_pool_active_count(pool), 2);
+        check_int_eq(coro_object_pool_free_count(pool), 0);
+
+        coro_scheduler_run(sched);
+
+        check_int_eq(c1, 3);
+        check_int_eq(c2, 3);
+        check_int_eq(coro_scheduler_count(sched), 0);
+        check_int_eq(coro_object_pool_active_count(pool), 0);
+        check_int_eq(coro_object_pool_free_count(pool), 2);
+
+        coro_object_pool_destroy(pool);
+        coro_scheduler_destroy(sched);
+        coro_context_destroy(ctx);
+    }
+
     it("should tick one round at a time") {
         coro_scheduler_t *sched = coro_scheduler_create();
         int c1 = 0, c2 = 0;

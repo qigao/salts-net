@@ -40,7 +40,7 @@ enable_testing()
 
 include(CMakeOptions.cmake)
 include(Sanitizers)
-include(TurboNetUtils)
+include(CmakeUtils)
 
 find_package(Threads REQUIRED)
 
@@ -58,6 +58,14 @@ find_package(TurboUtils CONFIG REQUIRED PATHS "${TURBO_UTILS}")
 add_subdirectory(tools)
 include(FindTools) 
 add_subdirectory(vendor)
+add_subdirectory(parser) 
+add_subdirectory(turbo_parser)
+
+add_subdirectory(mustache)
+add_subdirectory(tinytest)
+add_subdirectory(utils)
+add_subdirectory(uuid)
+
 add_subdirectory(CoroNet)
 add_subdirectory(wasm3)
 add_subdirectory(redis)

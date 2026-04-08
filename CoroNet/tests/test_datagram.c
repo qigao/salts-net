@@ -162,6 +162,12 @@ spec("Datagram") {
         const int total = 100;
         for (int i = 0; i < total; i++) {
             turbo_datagram_sendto(client, (struct sockaddr*)&server_addr, "p", 1);
+#ifdef _WIN32
+            /* Pace sends on Windows to avoid UDP loopback buffer overflow drops */
+            if ((i + 1) % 10 == 0) {
+                for(int pump=0; pump<5; pump++) coro_context_run(ctx, TURBO_RUN_NOWAIT);
+            }
+#endif
         }
 
         /* Run loop until all received or timeout */

@@ -8,7 +8,6 @@
             "name": "win-paths",
             "hidden": true,
             "cacheVariables": {
-                "TURBO_UTILS": "c:/projects/cpp/external/pkgs/turbo-utils/",
                 "CMAKE_MAKE_PROGRAM": "C:/Users/lockg/scoop/shims/ninja.exe",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
                 "VCPKG_MANIFEST_MODE": "ON"
@@ -33,7 +32,7 @@
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja"
             },
             "environment": {
-                "VCPKG_ROOT": "/vcpkg"
+                "VCPKG_ROOT": "/opt/vcpkg"
             }
         },
         {
@@ -54,6 +53,25 @@
                 "base-win-release-user",
                 "win-paths"
             ]
+        },
+        {
+            "name": "linux-dev-user",
+            "displayName": "Developer Build (Linux, User)",
+            "cacheVariables": {
+                "ENABLE_SANITIZER_ADDRESS": "ON"
+            },
+            "inherits": [
+                "base-linux-dev-user",
+                "linux-paths"
+            ]
+        },
+        {
+            "name": "linux-release-user",
+            "displayName": "Release Build (Linux, User)",
+            "inherits": [
+                "release-linux-ninja",
+                "linux-paths"
+            ]
         }
     ],
     "buildPresets": [
@@ -64,6 +82,14 @@
         {
             "name": "win-release-user",
             "configurePreset": "win-release-user"
+        },
+        {
+            "name": "linux-dev-user",
+            "configurePreset": "linux-dev-user"
+        },
+        {
+            "name": "linux-release-user",
+            "configurePreset": "linux-release-user"
         }
     ],
     "testPresets": [
@@ -81,6 +107,28 @@
         {
             "name": "win-release-user",
             "configurePreset": "win-release-user",
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": false
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-dev-user",
+            "configurePreset": "linux-dev-user",
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": false
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-release-user",
+            "configurePreset": "linux-release-user",
             "execution": {
                 "noTestsAction": "error",
                 "stopOnFailure": false

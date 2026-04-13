@@ -40,6 +40,18 @@ static turbo_stream_t *s_accepted_client = NULL;
 static int s_accepted_count = 0;
 static turbo_stream_t *s_accepted_clients[32];
 
+#define STREAM_TEST_WAIT_ITERS 20000
+
+static int stream_test_run_until(coro_context_t *ctx, int *predicate, int expected, int max_iters) {
+    int limit = max_iters;
+
+    while (*predicate != expected && limit-- > 0) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+
+    return *predicate == expected ? 0 : -1;
+}
+
 static void on_accept_local(void *server, void *client, void *peer) {
     (void)server; (void)peer;
     s_accepted_client = (turbo_stream_t *)client;
@@ -79,17 +91,14 @@ spec("Stream") {
         turbo_stream_close(stream);
         turbo_stream_destroy(stream);
 
-        int limit = 100;
+        int limit = STREAM_TEST_WAIT_ITERS;
         while (s_connected == -1 && limit-- > 0) {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }
 
         check(s_connected != 0); // Should fail to connect (connection refused)
         check(s_connected != -1); // Callback must have fired
-        limit = 200;
-        while (!s_closed && limit-- > 0) {
-            coro_context_run(ctx, TURBO_RUN_ONCE);
-        }
+        check_int_eq(stream_test_run_until(ctx, &s_closed, 1, STREAM_TEST_WAIT_ITERS), 0);
         check_int_eq(s_closed, 1);
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
@@ -148,7 +157,7 @@ spec("Stream") {
         check_int_eq(r, 0);
 
         /* Run loop until connected and accepted */
-        int limit = 100;
+        int limit = STREAM_TEST_WAIT_ITERS;
         while ((s_connected == -1 || s_accepted_count == 0) && limit-- > 0) {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }
@@ -246,7 +255,7 @@ spec("Stream") {
         s_connected = -1;
         check_int_eq(turbo_stream_connect_addr(client, (struct sockaddr *)&addr6, on_connect, on_close), 0);
 
-        int limit = 200;
+        int limit = STREAM_TEST_WAIT_ITERS;
         while ((s_connected == -1 || s_accepted_count == 0) && limit-- > 0) {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }

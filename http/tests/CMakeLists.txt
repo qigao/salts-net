@@ -15,7 +15,8 @@ set(HTTP_TESTS
     test_streaming_multipart
     test_retry 
     test_coro_http
-    test_batch)
+    test_batch
+    test_http_enum)
 
 set(HTTP_EXAMPLE_SPECS
     test_https

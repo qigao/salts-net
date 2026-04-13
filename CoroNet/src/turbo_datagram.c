@@ -7,6 +7,7 @@
  */
 
 #include "turbo_datagram_internal.h"
+#include "turbo_build_config_internal.h"
 #include "turbo_buffer.h"
 #include "internal.h"
 #include "CoroNet/turbo_coro_context.h"
@@ -49,7 +50,7 @@ static void datagram_maybe_free(turbo_datagram_t *d) {
 static const turbo_datagram_backend_ops_t *datagram_platform_default_ops(void) {
 #if defined(_WIN32)
   return &turbo_datagram_iocp_ops;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
   return &turbo_datagram_io_uring_ops;
 #elif defined(__linux__) || defined(__ANDROID__)
   return &turbo_datagram_epoll_ops;
@@ -68,11 +69,9 @@ static const turbo_datagram_backend_ops_t *datagram_udp_backend_ops(
 #ifdef _WIN32
   case TURBO_UDP_BACKEND_IOCP:
     return &turbo_datagram_iocp_ops;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
   case TURBO_UDP_BACKEND_IO_URING:
     return &turbo_datagram_io_uring_ops;
-  case TURBO_UDP_BACKEND_EPOLL:
-    return &turbo_datagram_epoll_ops;
 #elif defined(__linux__) || defined(__ANDROID__)
   case TURBO_UDP_BACKEND_EPOLL:
     return &turbo_datagram_epoll_ops;
@@ -115,6 +114,24 @@ int turbo_datagram_init_common(turbo_datagram_t *d, coro_context_t *ctx,
   return 0;
 }
 
+static void turbo_datagram_cleanup_create_failure(turbo_datagram_t *d, int native_ref_held) {
+  if (!d) {
+    return;
+  }
+
+  if (d->recv_buf[0]) {
+    mem_unref(d->recv_buf[0]);
+    d->recv_buf[0] = NULL;
+  }
+  if (d->recv_buf[1]) {
+    mem_unref(d->recv_buf[1]);
+    d->recv_buf[1] = NULL;
+  }
+  if (native_ref_held && d->ctx) {
+    coro_context_native_unref(d->ctx);
+  }
+}
+
 void turbo_datagram_finalize_close(turbo_datagram_t *d) {
   turbo_datagram_close_cb close_cb;
   void *close_cb_arg;
@@ -154,6 +171,8 @@ void turbo_datagram_release(turbo_datagram_t *d) {
 
 turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
                                          turbo_datagram_kind_t kind) {
+  int init_common_ok;
+
   if (!ctx) return NULL;
 
   const turbo_datagram_backend_ops_t *ops = turbo_datagram_resolve_backend(ctx, kind);
@@ -168,12 +187,15 @@ turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
     return NULL;
   }
 
+  init_common_ok = 0;
   int rc = turbo_datagram_init_common(d, ctx, kind, ops);
   if (rc != 0) {
     datagram_record_error(ctx, rc);
+    turbo_datagram_cleanup_create_failure(d, init_common_ok);
     free(d);
     return NULL;
   }
+  init_common_ok = 1;
 
   datagram_record_error(ctx, 0);
   return d;

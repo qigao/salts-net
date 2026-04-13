@@ -336,7 +336,7 @@ int turl_execute_http_request(const turl_http_config_t *config) {
     }
 
     if (resp->error) {
-        TLOG_ERROR("Error: {} (code: {})", resp->error, ENUM_NAME(resp->error_code));
+        TLOG_ERROR("Error: {} (code: {})", resp->error, http_error_to_str(resp->error_code));
         ret = 1;
     } else {
         if (config->verbose) {

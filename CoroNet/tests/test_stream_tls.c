@@ -18,6 +18,21 @@ static int s_tls_closed = 0;
 static char s_tls_rx_buf[4096];
 static size_t s_tls_rx_len = 0;
 
+static void run_ctx_until_not(coro_context_t *ctx, volatile int *flag, int pending,
+                              int limit) {
+  while (*flag == pending && limit-- > 0) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+    turbo_thread_yield();
+  }
+}
+
+static void run_ctx_until_body(coro_context_t *ctx, const char *needle, int limit) {
+  while (strstr(s_tls_rx_buf, needle) == NULL && limit-- > 0) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+    turbo_thread_yield();
+  }
+}
+
 /**
  * @brief Handle client connect completion.
  */
@@ -188,9 +203,7 @@ spec("Stream TLS Client") {
     check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_tls_connect, on_tls_close), 0);
 
     limit = 20000;
-    while (s_tls_connected == -1 && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    run_ctx_until_not(ctx, &s_tls_connected, -1, limit);
     check_int_eq(s_tls_connected, 0);
 
     check_int_eq(turbo_stream_recv_start(s, on_tls_recv), 0);
@@ -198,9 +211,7 @@ spec("Stream TLS Client") {
     check_int_eq(turbo_stream_flush(s), 0);
 
     limit = 20000;
-    while (strstr(s_tls_rx_buf, "\r\n\r\nhello") == NULL && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    run_ctx_until_body(ctx, "\r\n\r\nhello", limit);
 
     check_int_eq(s_tls_connected, 0);
     check(s_tls_rx_len > 0);
@@ -210,9 +221,7 @@ spec("Stream TLS Client") {
     turbo_stream_close(s);
 
     limit = 200;
-    while (!s_tls_closed && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    run_ctx_until_not(ctx, &s_tls_closed, 0, limit);
 
     turbo_thread_join(&server.thread);
 

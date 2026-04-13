@@ -456,13 +456,15 @@ spec("mustache bench") {
   const size_t templ_rich_len = strlen(templ_rich);
 
   bench("compile/process") {
-    benchmark("compile", BENCH_ITERS_COMPILE) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("compile", BENCH_ITERS_COMPILE, 1) {
       MUSTACHE_TEMPLATE *t = mustache_compile(templ, templ_len, NULL, NULL, 0);
       if (t)
         mustache_release(t);
     }
 
-    benchmark("compile_v", BENCH_ITERS_COMPILE) {
+    benchmark("compile_v", BENCH_ITERS_COMPILE, 1) {
       tstr_v v = tstr_v_from_buf(templ, templ_len);
       MUSTACHE_TEMPLATE *t = mustache_compile_v(v, NULL, NULL, 0);
       if (t)
@@ -472,7 +474,7 @@ spec("mustache bench") {
     BENCH_PROVIDER p = {.name = "World"};
     BENCH_BUFFER buf = {0};
 
-    benchmark("compile+process", BENCH_ITERS_COMPILE_PROCESS) {
+    benchmark("compile+process", BENCH_ITERS_COMPILE_PROCESS, 1) {
       MUSTACHE_TEMPLATE *t = mustache_compile(templ, templ_len, NULL, NULL, 0);
       if (t) {
         buf.n = 0;
@@ -485,7 +487,7 @@ spec("mustache bench") {
     MUSTACHE_TEMPLATE *compiled = mustache_compile(templ, templ_len, NULL, NULL, 0);
     check_not_null(compiled);
 
-    benchmark("process", BENCH_ITERS_PROCESS) {
+    benchmark("process", BENCH_ITERS_PROCESS, 1) {
       buf.n = 0;
       mustache_process(compiled, &renderer, &buf, &provider, &p);
       sink_size += buf.n;
@@ -500,7 +502,7 @@ spec("mustache bench") {
     // Data with HTML special chars to measure escape overhead
     BENCH_PROVIDER p_escape = {.name = "<script>alert(\"XSS\")&</script>"};
 
-    benchmark("process(escape)", BENCH_ITERS_PROCESS_ESCAPE) {
+    benchmark("process(escape)", BENCH_ITERS_PROCESS_ESCAPE, 1) {
       buf.n = 0;
       mustache_process(compiled_escape, &renderer, &buf, &provider, &p_escape);
       sink_size += buf.n;
@@ -511,7 +513,7 @@ spec("mustache bench") {
     MUSTACHE_TEMPLATE *compiled_long = mustache_compile(templ_long, templ_long_len, NULL, NULL, 0);
     check_not_null(compiled_long);
 
-    benchmark("process(long)", BENCH_ITERS_PROCESS_LONG) {
+    benchmark("process(long)", BENCH_ITERS_PROCESS_LONG, 1) {
       buf.n = 0;
       mustache_process(compiled_long, &renderer, &buf, &provider, &p);
       sink_size += buf.n;
@@ -523,7 +525,7 @@ spec("mustache bench") {
         mustache_compile(templ_nested, templ_nested_len, NULL, NULL, 0);
     check_not_null(compiled_nested);
 
-    benchmark("process(nested)", BENCH_ITERS_PROCESS_NESTED) {
+    benchmark("process(nested)", BENCH_ITERS_PROCESS_NESTED, 1) {
       buf.n = 0;
       mustache_process(compiled_nested, &renderer, &buf, &provider, &p);
       sink_size += buf.n;
@@ -549,13 +551,13 @@ spec("mustache bench") {
         mustache_compile(templ_rich, templ_rich_len, NULL, NULL, 0);
     check_not_null(compiled_rich);
 
-    benchmark("process(rich)", BENCH_ITERS_PROCESS_LONG) {
+    benchmark("process(rich)", BENCH_ITERS_PROCESS_LONG, 1) {
       buf.n = 0;
       mustache_process(compiled_rich, &renderer, &buf, &provider_rich, nodes);
       sink_size += buf.n;
     }
 
-    benchmark("process(rich,count)", BENCH_ITERS_PROCESS_LONG) {
+    benchmark("process(rich,count)", BENCH_ITERS_PROCESS_LONG, 1) {
       mustache_process(compiled_rich, &renderer_count, NULL, &provider_rich, nodes);
     }
 
@@ -564,7 +566,7 @@ spec("mustache bench") {
     // Large template benchmarks (dashboard.html ~2KB condensed)
     const size_t dashboard_len = sizeof(DASHBOARD_TEMPLATE) - 1;
 
-    benchmark("compile(large)", BENCH_ITERS_COMPILE_LARGE) {
+    benchmark("compile(large)", BENCH_ITERS_COMPILE_LARGE, 1) {
       MUSTACHE_TEMPLATE *t = mustache_compile(DASHBOARD_TEMPLATE, dashboard_len, NULL, NULL, 0);
       if (t)
         mustache_release(t);
@@ -594,13 +596,13 @@ spec("mustache bench") {
         mustache_compile(DASHBOARD_TEMPLATE, dashboard_len, NULL, NULL, 0);
     check_not_null(compiled_dash);
 
-    benchmark("process(large)", BENCH_ITERS_PROCESS_LARGE) {
+    benchmark("process(large)", BENCH_ITERS_PROCESS_LARGE, 1) {
       buf.n = 0;
       mustache_process(compiled_dash, &renderer, &buf, &provider_dash, dash_nodes);
       sink_size += buf.n;
     }
 
-    benchmark("compile+process(large)", BENCH_ITERS_COMPILE_LARGE) {
+    benchmark("compile+process(large)", BENCH_ITERS_COMPILE_LARGE, 1) {
       MUSTACHE_TEMPLATE *t = mustache_compile(DASHBOARD_TEMPLATE, dashboard_len, NULL, NULL, 0);
       if (t) {
         buf.n = 0;
@@ -614,20 +616,22 @@ spec("mustache bench") {
   }
 
   bench("view vs ptr") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     const char *test_str = "hello world test string";
     size_t test_len = 23;
     tstr_v test_view = tstr_v_from_buf(test_str, test_len);
     tstr_t test_tstr = tstr_from_v(test_view);
 
-    benchmark("call(ptr,len)", BENCH_ITERS_VIEW_VS_PTR) {
+    benchmark("call(ptr,len)", BENCH_ITERS_VIEW_VS_PTR, 1) {
       sink_size += call_with_ptr(test_str, test_len);
     }
 
-    benchmark("call(view)", BENCH_ITERS_VIEW_VS_PTR) {
+    benchmark("call(view)", BENCH_ITERS_VIEW_VS_PTR, 1) {
       sink_size += call_with_view(test_view);
     }
 
-    benchmark("call(tstr)", BENCH_ITERS_VIEW_VS_PTR) {
+    benchmark("call(tstr)", BENCH_ITERS_VIEW_VS_PTR, 1) {
       sink_size += call_with_tstr(test_tstr);
     }
 

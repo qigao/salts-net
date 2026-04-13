@@ -370,7 +370,9 @@ suite("ObjectPool") {
     }
 
     bench("Performance") {
-        benchmark("alloc/free 10k objects", 1) {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+        benchmark("alloc/free 10k objects", 1, 1) {
             object_pool_config_t config = {
                 .object_size = sizeof(test_object_t),
                 .initial_capacity = 10000,
@@ -388,7 +390,7 @@ suite("ObjectPool") {
             object_pool_destroy(pool);
         }
 
-        benchmark("alloc 10k then free all", 1) {
+        benchmark("alloc 10k then free all", 1, 1) {
             object_pool_config_t config = {
                 .object_size = sizeof(test_object_t),
                 .initial_capacity = 10000,
@@ -410,7 +412,7 @@ suite("ObjectPool") {
             object_pool_destroy(pool);
         }
 
-        benchmark("with zero_on_alloc", 1) {
+        benchmark("with zero_on_alloc", 1, 1) {
             object_pool_config_t config = {
                 .object_size = sizeof(test_object_t),
                 .initial_capacity = 10000,

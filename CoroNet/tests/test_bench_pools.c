@@ -93,9 +93,11 @@ static void open_pool_task(coro_t *co, void *arg) {
 spec("coro_pools_bench") {
 
     bench("coro_thread_pool") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         coro_thread_pool_t *pool = coro_thread_pool_create(4);
         
-        benchmark("spawn_throughput_10k", 20) {
+        benchmark("spawn_throughput_10k", 20, 1) {
             sync_counter_t sc;
             atomic_store(&sc.count, 0);
             sc.expected = TOTAL_TASKS;
@@ -128,13 +130,15 @@ spec("coro_pools_bench") {
     }
 
     bench("coro_object_pool") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         coro_context_t *ctx = coro_context_create(NULL);
         coro_object_pool_config_t cfg = CORO_OBJECT_POOL_CONFIG_DEFAULT;
         cfg.initial_capacity = 1024; /* Be realistic with ASan */
         coro_object_pool_t *pool = coro_object_pool_create(&cfg, ctx);
         coro_t *cos[100];
         
-        benchmark("acquire_release_10k", 100) {
+        benchmark("acquire_release_10k", 100, 1) {
             for (int i = 0; i < 100; i++) {
                 for(int j=0; j<100; j++) cos[j] = coro_object_pool_acquire(pool, nop_coro, NULL);
                 for(int j=0; j<100; j++) {
@@ -149,6 +153,8 @@ spec("coro_pools_bench") {
     }
 
     bench("coro_connection_pool") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         coro_context_t *ctx = coro_context_create(NULL);
         coro_socket_t *server = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
         /* Use a flag to ensure the server is ready before starting the pool */
@@ -163,7 +169,7 @@ spec("coro_pools_bench") {
         coro_task_start(open_task);
         while(!coro_task_is_done(open_task)) coro_context_run(ctx, TURBO_RUN_ONCE);
 
-        benchmark("borrow_return_1k", 50) {
+        benchmark("borrow_return_1k", 50, 1) {
             _Atomic int done = 0;
             conn_bench_state_t s = { pool, &done };
             coro_context_spawn(ctx, conn_bench_task, &s);

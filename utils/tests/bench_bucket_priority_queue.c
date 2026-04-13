@@ -77,13 +77,15 @@ spec("Bucket Priority Queue Benchmarks") {
   }
 
   bench("Core Operations") {
-    benchmark("Push+Pop (same priority)", BENCH_ITERS) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("Push+Pop (same priority)", BENCH_ITERS, 1) {
       bucket_priority_value_t out = 0;
       (void)bucket_priority_queue_push(&g_queue, BUCKET_PRIORITY_HIGH, 42);
       (void)bucket_priority_queue_pop(&g_queue, &out);
     }
 
-    benchmark("Push4+Pop4 (priority aware)", BENCH_ITERS) {
+    benchmark("Push4+Pop4 (priority aware)", BENCH_ITERS, 1) {
       bucket_priority_value_t out = 0;
       (void)bucket_priority_queue_push(&g_queue, BUCKET_PRIORITY_LOW, 1);
       (void)bucket_priority_queue_push(&g_queue, BUCKET_PRIORITY_NORMAL, 2);
@@ -95,7 +97,7 @@ spec("Bucket Priority Queue Benchmarks") {
       (void)bucket_priority_queue_pop(&g_queue, &out);
     }
 
-    benchmark("Push64+PopBatch64", BENCH_ITERS_SMALL) {
+    benchmark("Push64+PopBatch64", BENCH_ITERS_SMALL, 1) {
       size_t i = 0;
       for (i = 0; i < BATCH_SIZE; ++i) {
         (void)bucket_priority_queue_push(&g_queue, (bucket_priority_t)(i & 0x3u), i);
@@ -105,7 +107,9 @@ spec("Bucket Priority Queue Benchmarks") {
   }
 
   bench("Mixed Workload") {
-    benchmark("70% push / 30% pop (1024 ops)", BENCH_ITERS_MIXED) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("70% push / 30% pop (1024 ops)", BENCH_ITERS_MIXED, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
 
@@ -123,7 +127,9 @@ spec("Bucket Priority Queue Benchmarks") {
   }
 
   bench("No-Reserve Growth") {
-    benchmark("Cold growth 0->4096 + drain", BENCH_ITERS_GROWTH) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("Cold growth 0->4096 + drain", BENCH_ITERS_GROWTH, 1) {
       bucket_priority_queue_t cold_queue = {0};
       bucket_priority_value_t out = 0;
 
@@ -137,7 +143,9 @@ spec("Bucket Priority Queue Benchmarks") {
   }
 
   bench("Priority Distribution Matrix (Fixed Depth=4096)") {
-    benchmark("Uniform distribution", BENCH_ITERS_DIST) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("Uniform distribution", BENCH_ITERS_DIST, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
 
@@ -149,7 +157,7 @@ spec("Bucket Priority Queue Benchmarks") {
       }
     }
 
-    benchmark("High-heavy (90% HIGH-ish)", BENCH_ITERS_DIST) {
+    benchmark("High-heavy (90% HIGH-ish)", BENCH_ITERS_DIST, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
 
@@ -161,7 +169,7 @@ spec("Bucket Priority Queue Benchmarks") {
       }
     }
 
-    benchmark("Critical burst pattern", BENCH_ITERS_DIST) {
+    benchmark("Critical burst pattern", BENCH_ITERS_DIST, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
 
@@ -175,6 +183,8 @@ spec("Bucket Priority Queue Benchmarks") {
   }
 
   bench("Priority Distribution Steady-State (No Refill)") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     bucket_priority_queue_t q_uniform = {0};
     bucket_priority_queue_t q_high_heavy = {0};
     bucket_priority_queue_t q_critical_burst = {0};
@@ -190,7 +200,7 @@ spec("Bucket Priority Queue Benchmarks") {
     bench_fill_depth(&q_high_heavy, DIST_FIXED_DEPTH, DIST_HIGH_HEAVY);
     bench_fill_depth(&q_critical_burst, DIST_FIXED_DEPTH, DIST_CRITICAL_BURST);
 
-    benchmark("Uniform steady-state", BENCH_ITERS_DIST) {
+    benchmark("Uniform steady-state", BENCH_ITERS_DIST, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
       for (i = 0; i < DIST_STEADY_STEPS_PER_ITER; ++i) {
@@ -201,7 +211,7 @@ spec("Bucket Priority Queue Benchmarks") {
       }
     }
 
-    benchmark("High-heavy steady-state", BENCH_ITERS_DIST) {
+    benchmark("High-heavy steady-state", BENCH_ITERS_DIST, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
       for (i = 0; i < DIST_STEADY_STEPS_PER_ITER; ++i) {
@@ -213,7 +223,7 @@ spec("Bucket Priority Queue Benchmarks") {
       }
     }
 
-    benchmark("Critical burst steady-state", BENCH_ITERS_DIST) {
+    benchmark("Critical burst steady-state", BENCH_ITERS_DIST, 1) {
       size_t i = 0;
       bucket_priority_value_t out = 0;
       for (i = 0; i < DIST_STEADY_STEPS_PER_ITER; ++i) {

@@ -1,7 +1,6 @@
 #include "../include/rpc_stats.h"
 #include <fmt.h>
 #include <platform.h>
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -208,8 +207,8 @@ double rpc_stats_get_percentile_ms(const rpc_stats_t *stats, int percentile) {
   for (int i = 0; i < 32; i++) {
     cumulative += stats->latency.buckets[i];
     if (cumulative >= target) {
-      // Return upper bound of bucket in milliseconds
-      return pow(2.0, i);
+      // Return upper bound of bucket in milliseconds without libm linkage.
+      return (double)(1ULL << i);
     }
   }
 

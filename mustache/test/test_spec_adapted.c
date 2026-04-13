@@ -223,6 +223,7 @@ static void
 run_case(__bdd_config_type__ *__bdd_config__, const char* desc, const char* templ, const char* data, const char* partials, const char* expected)
 {
     json_value_t* json_root;
+    json_value_t* json_partials = NULL;
     MUSTACHE_TEMPLATE* t;
     BUFFER buf = { 0 };
 
@@ -240,8 +241,6 @@ run_case(__bdd_config_type__ *__bdd_config__, const char* desc, const char* temp
         provider_data.root = json_root;
 
         if(partials != NULL) {
-            json_value_t* json_partials;
-
             json_partials = json_parse(partials, strlen(partials));
             check_not_null(json_partials);
             
@@ -274,8 +273,9 @@ run_case(__bdd_config_type__ *__bdd_config__, const char* desc, const char* temp
     buf.data[buf.n] = '\0';
     check_str_eq(buf.data, expected);
 
-    json_free(json_root);
-    mustache_release(t);
+    if (json_partials) json_free(json_partials);
+    if (t) mustache_release(t);
+    if (json_root) json_free(json_root);
 }
 
 spec("mustache spec adapted") {

@@ -10,6 +10,7 @@ cmake_add_source(SOURCE_FILES DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${INI_LEXER_GEN}
                                   ${INI_GRAMMAR_GEN})
+add_dependencies(${TARGET_NAME} ${INI_LEXER_TARGET} ${INI_GRAMMAR_TARGET})
 
 cmake_config_target(${TARGET_NAME}
   ALIAS TurboNet::IniParser

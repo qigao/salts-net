@@ -30,9 +30,11 @@ spec("Ring Buffer - Single Threaded") {
     }
 
     bench("Single Threaded Operations") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         printf("\n=== Single-Threaded (ring_buffer.c) ===\n");
 
-        benchmark("Write+Read (64 bytes)", BENCH_ITERS) {
+        benchmark("Write+Read (64 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&st_ring, 64);
             if (p) {
                 ring_write_release(&st_ring, 64);
@@ -44,7 +46,7 @@ spec("Ring Buffer - Single Threaded") {
             }
         }
 
-        benchmark("Write+Read (256 bytes)", BENCH_ITERS) {
+        benchmark("Write+Read (256 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&st_ring, 256);
             if (p) {
                 ring_write_release(&st_ring, 256);
@@ -56,7 +58,7 @@ spec("Ring Buffer - Single Threaded") {
             }
         }
 
-        benchmark("Write+Read (1KB)", BENCH_ITERS) {
+        benchmark("Write+Read (1KB)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&st_ring, 1024);
             if (p) {
                 ring_write_release(&st_ring, 1024);
@@ -170,13 +172,15 @@ static void run_spsc_bench(__bdd_config_type__ *__bdd_config__,
     double avg_ns = (dur_ms * 1000000.0) / (double)count;
 
     printf("  %s: %.2f MB/s, %.2f ns/op\n", name, throughput_mb, avg_ns);
-    __bdd_bench_add__(__bdd_config__, name, count, dur_ms, avg_ns / 1000000.0, avg_ns / 1000000.0);
+    __bdd_bench_add__(__bdd_config__, name, count, dur_ms, avg_ns / 1000000.0,
+                      avg_ns / 1000000.0, 1.0);
 
     free(data);
 }
 
 spec("Ring Buffer SPSC - Multithreaded") {
     bench("SPSC Thread-Safe Benchmarks") {
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         printf("\n=== SPSC (Single-Producer Single-Consumer) ===\n");
         run_spsc_bench(__bdd_config__, "SPSC Batch 64B", BENCH_ITERS, 64, false);
         run_spsc_bench(__bdd_config__, "SPSC Batch 256B", BENCH_ITERS, 256, false);

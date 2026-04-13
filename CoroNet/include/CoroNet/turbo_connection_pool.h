@@ -4,7 +4,8 @@
  *
  * Manages a pool of coro_socket_t connections to a single endpoint.
  * Single-threaded cooperative model — no locks needed.
- * Protocol auto-detected from URL scheme (tcp://, tls://, ws://, etc.).
+ * Raw TCP/TLS endpoints use coro_pool_open(); WebSocket endpoints use
+ * coro_pool_open_ws_host_ex().
  */
 
 #ifndef TURBO_CONNECTION_POOL_H
@@ -59,6 +60,27 @@ CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
  */
 CXX_C_API int coro_pool_open(coro_pool_t *pool, const char *host, int port,
                               coro_socket_type_t socket_type);
+
+/**
+ * @brief Open a WebSocket connection pool and pre-connect min_size connections.
+ *
+ * Must be called from a coroutine (connect suspends).
+ *
+ * @param pool          Pool handle
+ * @param connect_host  Remote address/hostname used for the TCP connect
+ * @param port          Remote port
+ * @param socket_type   Socket type controlling address family preference
+ *                      (typically CORO_SOCKET_TCP_V4 or CORO_SOCKET_TCP_V6)
+ * @param request_host  Host header / TLS SNI name; NULL falls back to connect_host
+ * @param path          WebSocket path; NULL/empty becomes "/"
+ * @param is_tls        1 for wss://, 0 for ws://
+ * @param subprotocol   Optional Sec-WebSocket-Protocol value, or NULL
+ * @return 0 on success, negative TURBO_* error code on failure
+ */
+CXX_C_API int coro_pool_open_ws_host_ex(coro_pool_t *pool, const char *connect_host, int port,
+                                        coro_socket_type_t socket_type,
+                                        const char *request_host, const char *path, int is_tls,
+                                        const char *subprotocol);
 
 /**
  * @brief Close all connections and reject future borrows.

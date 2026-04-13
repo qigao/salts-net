@@ -10,6 +10,7 @@
  */
 
 #include "CoroNet/turbo_coro_internal.h"
+#include "turbo_build_config_internal.h"
 #include "CoroNet/turbo_kcp.h"
 #include "tlog.h"
 #include "turbo_error.h"
@@ -99,6 +100,20 @@ static turbo_dns_pref_t socket_type_to_dns_pref(coro_socket_type_t type) {
 
 static void socket_destroy_shell(coro_socket_t *s) {
   if (!s) return;
+
+  if (s->timer) {
+    turbo_timer_stop(s->timer);
+    turbo_timer_destroy(s->timer);
+    s->timer = NULL;
+  }
+
+  free(s);
+}
+
+static void coro_socket_cleanup_create_failure(coro_socket_t *s) {
+  if (!s) {
+    return;
+  }
 
   if (s->timer) {
     turbo_timer_stop(s->timer);
@@ -231,8 +246,10 @@ void coro_socket_handle_transport_recv(coro_socket_t *s, const mem_slice_t *slic
 
   stop_timeout_timer(s);
   coro_deliver_recv(s, slice);
-  coro_resume_waiter(s);
-  release_client(s);
+  coro_resume_waiter_with_handoff(s);
+  if (!s->destroy_wait_handoff) {
+    release_client(s);
+  }
 }
 
 void coro_socket_handle_transport_connect(coro_socket_t *s, int status) {
@@ -243,10 +260,12 @@ void coro_socket_handle_transport_connect(coro_socket_t *s, int status) {
 
   if (s->co_wait && !s->timed_out) {
     stop_timeout_timer(s);
-    coro_resume_waiter(s);
+    coro_resume_waiter_with_handoff(s);
   }
 
-  release_client(s); /* Balance retain from tcp_connect */
+  if (!s->destroy_wait_handoff) {
+    release_client(s); /* Balance retain from tcp_connect */
+  }
 }
 
 void coro_socket_handle_transport_close(coro_socket_t *s) {
@@ -264,7 +283,7 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
   if (s->co_wait) {
     stop_timeout_timer(s);
     s->status = (s->status == 0) ? TURBO_EOF : s->status;
-    coro_resume_waiter(s);
+    coro_resume_waiter_with_handoff(s);
     resumed_waiter = 1;
   }
 
@@ -280,7 +299,9 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
   }
 
   if (resumed_waiter) {
-    release_client(s); /* Balance retain from recv/connect wait */
+    if (!s->destroy_wait_handoff) {
+      release_client(s); /* Balance retain from recv/connect wait */
+    }
   }
 }
 
@@ -332,10 +353,14 @@ static void on_dns_resolved_bounce(void *arg1, void *arg2) {
     }
   }
 
-  if (s->co_wait) coro_resume_waiter(s);
+  if (s->co_wait) {
+    coro_resume_waiter_with_handoff(s);
+  }
 
   free(b);
-  release_client(s);
+  if (!s->destroy_wait_handoff) {
+    release_client(s);
+  }
 }
 
 static void on_dns_resolved(const char *hostname, const turbo_dns_result_t *results, size_t count,
@@ -431,8 +456,10 @@ static int coro_socket_connect_resolved(coro_socket_t *s, const char *host, int 
 
     strncpy(s->resolved_ip, s->resolved_ips[i], sizeof(s->resolved_ip) - 1);
     s->resolved_ip[sizeof(s->resolved_ip) - 1] = '\0';
+    retain_client(s);
     last_status = s->ops->connect(s, host, port);
     s->timeout_ms = saved_timeout;
+    release_client(s);
 
     if (last_status == 0) {
       return 0;
@@ -472,9 +499,11 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
   s->dns_pref = TURBO_DNS_ANY;
 
   s->timer = turbo_timer_create(NULL);
-  if (s->timer) {
-    turbo_timer_set_data(s->timer, s);
+  if (!s->timer) {
+    coro_socket_cleanup_create_failure(s);
+    return NULL;
   }
+  turbo_timer_set_data(s->timer, s);
   return s;
 }
 
@@ -662,6 +691,24 @@ int coro_socket_send(coro_socket_t *s, const char *d, size_t l) {
   return s->ops->send(s, d, l);
 }
 
+int coro_socket_send_owned_recv(coro_socket_t *s, char *d, size_t l) {
+  int rc;
+
+  if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
+  if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
+
+  if (s->ops->send_owned_recv) {
+    rc = s->ops->send_owned_recv(s, d, l);
+    if (rc != TURBO_ENOTSUP) {
+      return socket_return_error(s, rc);
+    }
+  }
+
+  rc = s->ops->send(s, d, l);
+  coro_socket_free_recv(d);
+  return socket_return_error(s, rc);
+}
+
 mem_buffer_t *coro_socket_get_send_buffer(coro_socket_t *s, size_t min_size) {
   if (!s) return NULL;
   if (!s->ops || !s->ops->get_send_buffer) {
@@ -745,10 +792,12 @@ static void coro_socket_interrupt_wait_cb(void *arg1, void *arg2) {
     s->status = status;
   }
 
-  coro_resume_waiter(s);
+  coro_resume_waiter_with_handoff(s);
 
-  /* Drop the pending recv reference and the post callback reference. */
-  release_client(s);
+  /* Drop the pending recv reference unless it was handed to the waiter. */
+  if (!s->destroy_wait_handoff) {
+    release_client(s);
+  }
   release_client(s);
 }
 
@@ -951,22 +1000,25 @@ void coro_socket_destroy(coro_socket_t *s) {
 /* ── Utility Functions ────────────────────────────────────── */
 
 void coro_socket_free_recv(void *d) {
+  char *base;
+  coro_recv_header_t hdr;
+
   if (!d) return;
 
-  /* Good taste: Check header to see if this came from an arena or pool */
-  coro_recv_header_t *hdr = (coro_recv_header_t *)((char *)d - sizeof(coro_recv_header_t));
-  if (hdr->magic == CORO_RECV_MAGIC_POOLED) {
-    mem_unref(hdr->owner);
+  base = (char *)d - sizeof(coro_recv_header_t);
+  coro_recv_header_load_from_data(d, &hdr);
+  if (hdr.magic == CORO_RECV_MAGIC_POOLED) {
+    mem_unref(hdr.owner);
     return;
   }
 
-  if (hdr->magic == CORO_RECV_MAGIC) {
+  if (hdr.magic == CORO_RECV_MAGIC) {
     /* Memory is from context arena (raw alloc), do NOT free.
        It will be reclaimed when context is destroyed. */
     return;
   }
 
-  free(hdr); /* Free the whole block (header (magic=0) + data) */
+  free(base); /* Free the whole block (header (magic=0) + data) */
 }
 
 void coro_socket_set_timeout(coro_socket_t *s, uint64_t t) {
@@ -997,7 +1049,7 @@ turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *s) {
 
 #ifdef _WIN32
   return TURBO_TCP_BACKEND_IOCP;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING)
+#elif defined(__linux__) && TURBO_HAS_IO_URING
   return TURBO_TCP_BACKEND_IO_URING;
 #elif defined(__linux__)
   return TURBO_TCP_BACKEND_EPOLL;
@@ -1022,7 +1074,7 @@ turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s) {
 
 #ifdef _WIN32
   return TURBO_UDP_BACKEND_IOCP;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING)
+#elif defined(__linux__) && TURBO_HAS_IO_URING
   return TURBO_UDP_BACKEND_IO_URING;
 #elif defined(__linux__) || defined(__ANDROID__)
   return TURBO_UDP_BACKEND_EPOLL;

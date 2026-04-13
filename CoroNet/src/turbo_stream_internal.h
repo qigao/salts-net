@@ -117,6 +117,7 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close);
+int turbo_stream_ws_send_owned_recv(turbo_stream_t *ws_stream, char *data, size_t len);
 
 /* ── Shared helpers ───────────────────────────────────────── */
 

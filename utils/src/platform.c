@@ -138,6 +138,7 @@ uint64_t turbo_realtime_ms(void) {
 }
 
 int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz) {
+  UNUSED(tz);
   if (tv) {
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
@@ -166,6 +167,7 @@ uint64_t turbo_realtime_ms(void) {
 }
 
 int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz) {
+  UNUSED(tz);
   struct timeval system_tv;
   int result = gettimeofday(&system_tv, NULL);
   if (result == 0 && tv) {
@@ -578,7 +580,6 @@ turbo_timer_t *turbo_timer_create(void *loop) {
   }
 
   memset(timer, 0, sizeof(*timer));
-  TLOG_DEBUG("Timer created (Native Windows)");
   return timer;
 }
 
@@ -594,7 +595,6 @@ void turbo_timer_destroy(turbo_timer_t *timer) {
   } else {
     free(timer);
   }
-  TLOG_DEBUG("Timer destroyed");
 }
 
 int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout, uint64_t repeat) {
@@ -625,8 +625,6 @@ int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout,
   }
 
   timer->active = 1;
-  TLOG_DEBUG("Timer started: timeout={} ms, repeat={} ms", (unsigned long long)timeout,
-             (unsigned long long)repeat);
   return 0;
 }
 
@@ -654,8 +652,6 @@ int turbo_timer_stop(turbo_timer_t *timer) {
       }
     }
   }
-
-  TLOG_DEBUG("Timer stopped");
   return 0;
 }
 
@@ -704,7 +700,6 @@ turbo_timer_t *turbo_timer_create(void *loop) {
     return NULL;
   }
 
-  TLOG_DEBUG("Timer created (Native POSIX)");
   return timer;
 }
 
@@ -716,7 +711,6 @@ void turbo_timer_destroy(turbo_timer_t *timer) {
   turbo_timer_stop(timer);
   timer_delete(timer->timerid);
   free(timer);
-  TLOG_DEBUG("Timer destroyed");
 }
 
 int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout, uint64_t repeat) {
@@ -740,13 +734,10 @@ int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout,
   its.it_interval.tv_nsec = (repeat % 1000) * 1000000;
 
   if (timer_settime(timer->timerid, 0, &its, NULL) == -1) {
-    TLOG_ERROR("timer_settime failed: {}", strerror(errno));
     return -1;
   }
 
   timer->active = 1;
-  TLOG_DEBUG("Timer started: timeout={} ms, repeat={} ms", (unsigned long long)timeout,
-             (unsigned long long)repeat);
   return 0;
 }
 
@@ -761,8 +752,7 @@ int turbo_timer_stop(turbo_timer_t *timer) {
 
   timer_settime(timer->timerid, 0, &its, NULL);
   timer->active = 0;
-
-  TLOG_DEBUG("Timer stopped");
+ 
   return 0;
 }
 

@@ -24,9 +24,38 @@ static int socket_ctx_error(coro_socket_t *s, int fallback) {
 
 /* Pre-declare SNI setter from turbo_stream_tls.c */
 void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
+void turbo_stream_tls_note_resume_wait(turbo_stream_t *s, uint64_t value_ns);
+void turbo_stream_tls_note_wrap_client_time(uint64_t value_ns);
+void turbo_stream_tls_note_waiter_signal(turbo_stream_t *s, uint64_t value_ns);
 int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close);
+
+static void tls_note_wait_resume(coro_socket_t *s) {
+  uint64_t resume_wait_ns;
+
+  if (!s || !s->wait_metric_tls_handshake || !s->wait_metric_stream ||
+      s->wait_resume_signal_ns == 0) {
+    return;
+  }
+
+  resume_wait_ns = turbo_hrtime() - s->wait_resume_signal_ns;
+  s->wait_resume_signal_ns = 0;
+  turbo_stream_tls_note_resume_wait(s->wait_metric_stream, resume_wait_ns);
+  s->wait_metric_tls_handshake = 0;
+  s->wait_metric_stream = NULL;
+  s->wait_handler_entry_ns = 0;
+}
+
+static void tls_clear_wait_metric(coro_socket_t *s) {
+  if (!s) {
+    return;
+  }
+  s->wait_metric_tls_handshake = 0;
+  s->wait_metric_stream = NULL;
+  s->wait_handler_entry_ns = 0;
+  s->wait_resume_signal_ns = 0;
+}
 
 /* ── Client callbacks (Same as TCP as they use turbo_stream_t) ── */
 
@@ -35,6 +64,9 @@ static int on_tls_recv(void *handle, const mem_slice_t *slice, void *peer) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   if (s) {
+    if (s->wait_metric_tls_handshake) {
+      s->wait_handler_entry_ns = turbo_hrtime();
+    }
     coro_socket_handle_transport_recv(s, slice);
   }
   return 0;
@@ -45,6 +77,9 @@ static void on_tls_connect(void *handle, int status, void *extra) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   if (s) {
+    if (s->wait_metric_tls_handshake) {
+      s->wait_handler_entry_ns = turbo_hrtime();
+    }
     coro_socket_handle_transport_connect(s, status);
   }
 }
@@ -106,22 +141,33 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   retain_client(s);
+  s->wait_metric_tls_handshake = 1;
+  s->wait_metric_stream = s->handle.stream;
   coro_set_wait(s);
   int r = turbo_stream_connect_addr(s->handle.stream, sa, on_tls_connect, on_tls_close);
   if (r != 0) {
     s->co_wait = NULL;
+    s->wait_metric_tls_handshake = 0;
+    s->wait_metric_stream = NULL;
     release_client(s);
     tls_discard_stream(s);
     return r;
   }
 
+  start_timeout_timer(s);
   coro_yield();
   {
+    tls_note_wait_resume(s);
     int status = s->status;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
       release_client(s);
     }
+    if (status != 0) {
+      s->connected = 0;
+      tls_discard_stream(s);
+    }
+    tls_clear_wait_metric(s);
     return status;
   }
 }
@@ -151,11 +197,19 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   tls_stream->managed = 1;
 
   retain_client(s);
+  {
+    uint64_t wrap_start_ns = turbo_hrtime();
   rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname, on_tls_connect, on_tls_close);
+    if (rc == 0) {
+      turbo_stream_tls_note_wrap_client_time(turbo_hrtime() - wrap_start_ns);
+    }
+  }
   if (rc != 0) {
     turbo_stream_set_user_data(tls_stream, NULL);
     tls_stream->managed = 0;
     turbo_stream_destroy(tls_stream);
+    s->wait_metric_tls_handshake = 0;
+    s->wait_metric_stream = NULL;
     release_client(s);
     return rc;
   }
@@ -165,14 +219,19 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   s->ops = &transport_ops_tls;
   s->connected = 0;
 
+  s->wait_metric_tls_handshake = 1;
+  s->wait_metric_stream = tls_stream;
   coro_set_wait(s);
+  start_timeout_timer(s);
   coro_yield();
   {
+    tls_note_wait_resume(s);
     int status = s->status;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
       release_client(s);
     }
+    tls_clear_wait_metric(s);
     return status;
   }
 }
@@ -212,8 +271,8 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
   s->transport = TURBO_TLS;
   s->ops = &transport_ops_tls;
   s->connected = 0;
-  TLOG_INFO("tls server wrap installed on accepted socket");
 
+  start_timeout_timer(s);
   coro_yield();
   {
     int status = s->status;
@@ -221,6 +280,7 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
       s->destroy_wait_handoff = 0;
       release_client(s);
     }
+    tls_clear_wait_metric(s);
     return status;
   }
 }

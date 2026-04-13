@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "http_client.h"
+#include <errno.h>
 #include <string.h>
 
 #ifdef _WIN32

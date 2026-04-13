@@ -1,0 +1,432 @@
+#include "CoroNet.h"
+#include "platform.h"
+#include "turbo_coro.h"
+#include "tinytest.h"
+#include "tls_test_support.h"
+
+#include <string.h>
+
+typedef struct ws_server_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int secure;
+  int roundtrips;
+  const char *protocol;
+  const uint8_t *request_data;
+  size_t request_len;
+  const uint8_t *reply_data;
+  size_t reply_len;
+} ws_server_state_t;
+
+static int g_ws_server_handler_rc = TURBO_EBUSY;
+static int g_ws_server_client_rc = TURBO_EBUSY;
+static int g_ws_server_handler_hits = 0;
+static int g_ws_server_handler_roundtrips = 0;
+static int g_ws_server_client_roundtrips = 0;
+static int g_ws_server_handler_sends = 0;
+static int g_ws_server_client_sends = 0;
+static uint8_t g_ws_server_handler_buf[128];
+static size_t g_ws_server_handler_len = 0;
+static uint8_t g_ws_server_client_buf[128];
+static size_t g_ws_server_client_len = 0;
+
+static const uint8_t g_ws_server_request[] = "hello-websocket";
+static const uint8_t g_ws_server_reply[] = "server-ready";
+static const uint8_t g_ws_server_binary_request[] = {
+    0x10, 0x0D, 0x00, 0x04, 'M', 'Q', 'T', 'T',
+    0x04, 0x02, 0x00, 0x3C, 0x00, 0x01, 'a'
+};
+static const uint8_t g_ws_server_binary_reply[] = {0x20, 0x02, 0x00, 0x00};
+
+static int ws_server_case_done(void *arg) {
+  (void)arg;
+  return g_ws_server_client_rc != TURBO_EBUSY &&
+         g_ws_server_handler_rc != TURBO_EBUSY;
+}
+
+static void ws_server_run_case_with_payload(int secure, const char *protocol,
+                                            const uint8_t *request_data, size_t request_len,
+                                            const uint8_t *reply_data, size_t reply_len);
+
+static void ws_server_run_until(coro_context_t *ctx, uint64_t timeout_ms,
+                                int (*done)(void *), void *arg) {
+  uint64_t deadline;
+
+  if (!ctx || !done) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (!done(arg) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+  }
+}
+
+static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
+  const ws_server_state_t *state = (const ws_server_state_t *)arg;
+  int rc;
+  int roundtrips = (state && state->roundtrips > 0) ? state->roundtrips : 1;
+
+  g_ws_server_handler_hits++;
+  coro_socket_set_timeout(client, 5000);
+
+  rc = 0;
+  for (int i = 0; i < roundtrips; ++i) {
+    char *data = NULL;
+    size_t len = 0;
+
+    rc = coro_socket_recv(client, &data, &len);
+    if (rc == 0 && data != NULL && len <= sizeof(g_ws_server_handler_buf)) {
+      memcpy(g_ws_server_handler_buf, data, len);
+      g_ws_server_handler_len = len;
+    }
+
+    if (rc == 0) {
+      rc = coro_socket_send(client,
+                            (const char *)state->reply_data,
+                            state->reply_len);
+      if (rc == 0) {
+        g_ws_server_handler_sends++;
+      }
+    }
+
+    if (data != NULL) {
+      coro_socket_free_recv(data);
+    }
+
+    if (rc != 0) {
+      break;
+    }
+
+    g_ws_server_handler_roundtrips++;
+  }
+
+  g_ws_server_handler_rc = rc;
+}
+
+static void ws_server_client_task(coro_t *co, void *arg) {
+  ws_server_state_t *state = (ws_server_state_t *)arg;
+  coro_socket_t *client;
+  const char *host;
+  char *data = NULL;
+  size_t len = 0;
+  int rc;
+
+  (void)co;
+
+  host = state->secure ? "localhost" : "127.0.0.1";
+  client = coro_socket_create(state->ctx, state->secure ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4);
+  if (!client) {
+    g_ws_server_client_rc = TURBO_ENOMEM;
+    return;
+  }
+
+  coro_socket_set_timeout(client, 5000);
+  if (state->protocol != NULL && state->protocol[0] != '\0') {
+    rc = coro_socket_connect_ws_ex(client, host, state->port, "/chat", state->secure,
+                                   state->protocol);
+  } else {
+    rc = coro_socket_connect_ws(client, host, state->port, "/chat", state->secure);
+  }
+  if (rc == 0) {
+    for (int i = 0; i < state->roundtrips; ++i) {
+      rc = coro_socket_send(client,
+                            (const char *)state->request_data,
+                            state->request_len);
+      if (rc != 0) {
+        break;
+      }
+      g_ws_server_client_sends++;
+      rc = coro_socket_recv(client, &data, &len);
+      if (rc != 0) {
+        break;
+      }
+
+      if (data != NULL && len <= sizeof(g_ws_server_client_buf)) {
+        memcpy(g_ws_server_client_buf, data, len);
+        g_ws_server_client_len = len;
+      }
+
+      if (data != NULL) {
+        coro_socket_free_recv(data);
+        data = NULL;
+      }
+
+      g_ws_server_client_roundtrips++;
+    }
+  }
+
+  if (data != NULL) {
+    coro_socket_free_recv(data);
+  }
+
+  g_ws_server_client_rc = rc;
+  coro_socket_destroy(client);
+}
+
+static void ws_server_run_case(int secure, const char *protocol) {
+  ws_server_run_case_with_payload(secure,
+                                  protocol,
+                                  g_ws_server_request,
+                                  sizeof(g_ws_server_request) - 1,
+                                  g_ws_server_reply,
+                                  sizeof(g_ws_server_reply) - 1);
+}
+
+static void ws_server_run_case_with_payload(int secure, const char *protocol,
+                                            const uint8_t *request_data, size_t request_len,
+                                            const uint8_t *reply_data, size_t reply_len) {
+  char ca_file[512] = {0};
+  char cert_file[512] = {0};
+  char key_file[512] = {0};
+  ws_server_state_t state;
+  test_socket_t probe = TEST_INVALID_SOCKET;
+  uint64_t deadline;
+
+  memset(&state, 0, sizeof(state));
+  state.secure = secure ? 1 : 0;
+  state.roundtrips = 1;
+  state.protocol = protocol;
+  state.request_data = request_data;
+  state.request_len = request_len;
+  state.reply_data = reply_data;
+  state.reply_len = reply_len;
+
+  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  test_close_socket(probe);
+
+  if (state.secure) {
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+                                             key_file, sizeof(key_file)), 0);
+    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+  }
+
+  state.ctx = coro_context_create(NULL);
+  state.server = NULL;
+  check(state.ctx != NULL);
+
+  g_ws_server_handler_rc = TURBO_EBUSY;
+  g_ws_server_client_rc = TURBO_EBUSY;
+  g_ws_server_handler_hits = 0;
+  g_ws_server_handler_roundtrips = 0;
+  g_ws_server_client_roundtrips = 0;
+  g_ws_server_handler_sends = 0;
+  g_ws_server_client_sends = 0;
+  memset(g_ws_server_handler_buf, 0, sizeof(g_ws_server_handler_buf));
+  g_ws_server_handler_len = 0;
+  memset(g_ws_server_client_buf, 0, sizeof(g_ws_server_client_buf));
+  g_ws_server_client_len = 0;
+
+  state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
+  check(state.server != NULL);
+  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+                                     state.secure, ws_server_echo_handler, &state),
+               0);
+  check_int_eq(coro_context_spawn(state.ctx, ws_server_client_task, &state), 0);
+
+  ws_server_run_until(state.ctx, 3000, ws_server_case_done, NULL);
+
+  check_int_eq(g_ws_server_handler_hits, 1);
+  check_int_eq(g_ws_server_handler_rc, 0);
+  check_int_eq(g_ws_server_client_rc, 0);
+  check_int_eq(g_ws_server_handler_roundtrips, state.roundtrips);
+  check_int_eq(g_ws_server_client_roundtrips, state.roundtrips);
+  check_int_eq(g_ws_server_handler_sends, state.roundtrips);
+  check_int_eq(g_ws_server_client_sends, state.roundtrips);
+  check_int_eq((int)g_ws_server_handler_len, (int)request_len);
+  check_int_eq(memcmp(g_ws_server_handler_buf, request_data, request_len), 0);
+  check_int_eq((int)g_ws_server_client_len, (int)reply_len);
+  check_int_eq(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
+
+  coro_socket_destroy(state.server);
+
+  deadline = turbo_monotonic_ms() + 1000;
+  while (coro_context_alive(state.ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+  }
+
+  coro_context_destroy(state.ctx);
+
+  if (state.secure) {
+    tls_test_clear_server_env();
+    tls_test_clear_ca_env();
+    tls_test_remove_file(ca_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(key_file);
+  }
+}
+
+spec("Coro WebSocket Server") {
+  it("should hand handlers a fully-open WebSocket socket") {
+    ws_server_run_case(0, NULL);
+  }
+
+  it("should hand handlers a fully-open Secure WebSocket socket") {
+    ws_server_run_case(1, NULL);
+  }
+
+  it("should hand handlers a WebSocket socket negotiated with a subprotocol") {
+    ws_server_run_case(0, "mqtt");
+  }
+
+  it("should hand handlers a Secure WebSocket socket negotiated with a subprotocol") {
+    ws_server_run_case(1, "mqtt");
+  }
+
+  it("should carry binary payloads with NUL bytes over Secure WebSocket with a subprotocol") {
+    ws_server_run_case_with_payload(1,
+                                    "mqtt",
+                                    g_ws_server_binary_request,
+                                    sizeof(g_ws_server_binary_request),
+                                    g_ws_server_binary_reply,
+                                    sizeof(g_ws_server_binary_reply));
+  }
+
+  it("should support multiple echo roundtrips over WebSocket") {
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    ws_server_state_t state;
+    test_socket_t probe = TEST_INVALID_SOCKET;
+    uint64_t deadline;
+
+    memset(&state, 0, sizeof(state));
+    state.secure = 0;
+    state.roundtrips = 10;
+    state.request_data = g_ws_server_request;
+    state.request_len = sizeof(g_ws_server_request) - 1;
+    state.reply_data = g_ws_server_reply;
+    state.reply_len = sizeof(g_ws_server_reply) - 1;
+
+    check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+    test_close_socket(probe);
+
+    state.ctx = coro_context_create(NULL);
+    state.server = NULL;
+    check(state.ctx != NULL);
+
+    g_ws_server_handler_rc = TURBO_EBUSY;
+    g_ws_server_client_rc = TURBO_EBUSY;
+    g_ws_server_handler_hits = 0;
+    g_ws_server_handler_roundtrips = 0;
+    g_ws_server_client_roundtrips = 0;
+    g_ws_server_handler_sends = 0;
+    g_ws_server_client_sends = 0;
+    memset(g_ws_server_handler_buf, 0, sizeof(g_ws_server_handler_buf));
+    g_ws_server_handler_len = 0;
+    memset(g_ws_server_client_buf, 0, sizeof(g_ws_server_client_buf));
+    g_ws_server_client_len = 0;
+
+    state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
+    check(state.server != NULL);
+    check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+                                       state.secure, ws_server_echo_handler, &state),
+                 0);
+    check_int_eq(coro_context_spawn(state.ctx, ws_server_client_task, &state), 0);
+
+    ws_server_run_until(state.ctx, 3000, ws_server_case_done, NULL);
+
+    check_int_eq(g_ws_server_handler_hits, 1);
+    check_int_eq(g_ws_server_handler_rc, 0);
+    check_int_eq(g_ws_server_client_rc, 0);
+    check_int_eq(g_ws_server_handler_roundtrips, state.roundtrips);
+    check_int_eq(g_ws_server_client_roundtrips, state.roundtrips);
+    check_int_eq(g_ws_server_handler_sends, state.roundtrips);
+    check_int_eq(g_ws_server_client_sends, state.roundtrips);
+    check_int_eq((int)g_ws_server_handler_len, (int)state.request_len);
+    check_int_eq(memcmp(g_ws_server_handler_buf, state.request_data, state.request_len), 0);
+    check_int_eq((int)g_ws_server_client_len, (int)state.reply_len);
+    check_int_eq(memcmp(g_ws_server_client_buf, state.reply_data, state.reply_len), 0);
+
+    coro_socket_destroy(state.server);
+
+    deadline = turbo_monotonic_ms() + 1000;
+    while (coro_context_alive(state.ctx) && turbo_monotonic_ms() < deadline) {
+      coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+    }
+
+    coro_context_destroy(state.ctx);
+    (void)ca_file;
+    (void)cert_file;
+    (void)key_file;
+  }
+
+  it("should support multiple echo roundtrips over Secure WebSocket") {
+    char ca_file[512] = {0};
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    ws_server_state_t state;
+    test_socket_t probe = TEST_INVALID_SOCKET;
+    uint64_t deadline;
+
+    memset(&state, 0, sizeof(state));
+    state.secure = 1;
+    state.roundtrips = 10;
+    state.request_data = g_ws_server_request;
+    state.request_len = sizeof(g_ws_server_request) - 1;
+    state.reply_data = g_ws_server_reply;
+    state.reply_len = sizeof(g_ws_server_reply) - 1;
+
+    check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+    test_close_socket(probe);
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+                                             key_file, sizeof(key_file)), 0);
+    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+
+    state.ctx = coro_context_create(NULL);
+    state.server = NULL;
+    check(state.ctx != NULL);
+
+    g_ws_server_handler_rc = TURBO_EBUSY;
+    g_ws_server_client_rc = TURBO_EBUSY;
+    g_ws_server_handler_hits = 0;
+    g_ws_server_handler_roundtrips = 0;
+    g_ws_server_client_roundtrips = 0;
+    g_ws_server_handler_sends = 0;
+    g_ws_server_client_sends = 0;
+    memset(g_ws_server_handler_buf, 0, sizeof(g_ws_server_handler_buf));
+    g_ws_server_handler_len = 0;
+    memset(g_ws_server_client_buf, 0, sizeof(g_ws_server_client_buf));
+    g_ws_server_client_len = 0;
+
+    state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
+    check(state.server != NULL);
+    check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+                                       state.secure, ws_server_echo_handler, &state),
+                 0);
+    check_int_eq(coro_context_spawn(state.ctx, ws_server_client_task, &state), 0);
+
+    ws_server_run_until(state.ctx, 5000, ws_server_case_done, NULL);
+
+    check_int_eq(g_ws_server_handler_hits, 1);
+    check_int_eq(g_ws_server_client_sends, state.roundtrips);
+    check_int_eq(g_ws_server_client_roundtrips, state.roundtrips);
+    check_int_eq(g_ws_server_handler_sends, state.roundtrips);
+    check_int_eq(g_ws_server_handler_roundtrips, state.roundtrips);
+    check_int_eq(g_ws_server_client_rc, 0);
+    check_int_eq(g_ws_server_handler_rc, 0);
+    check_int_eq((int)g_ws_server_handler_len, (int)state.request_len);
+    check_int_eq(memcmp(g_ws_server_handler_buf, state.request_data, state.request_len), 0);
+    check_int_eq((int)g_ws_server_client_len, (int)state.reply_len);
+    check_int_eq(memcmp(g_ws_server_client_buf, state.reply_data, state.reply_len), 0);
+
+    coro_socket_destroy(state.server);
+
+    deadline = turbo_monotonic_ms() + 1000;
+    while (coro_context_alive(state.ctx) && turbo_monotonic_ms() < deadline) {
+      coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+    }
+
+    coro_context_destroy(state.ctx);
+    tls_test_clear_server_env();
+    tls_test_clear_ca_env();
+    tls_test_remove_file(ca_file);
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(key_file);
+  }
+}

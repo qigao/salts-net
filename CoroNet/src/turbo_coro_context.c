@@ -6,6 +6,7 @@
  */
 
 #include "turbo_coro_context.h"
+#include "turbo_build_config_internal.h"
 #include "CoroNet/turbo_coro_pool.h"
 #include "platform.h"
 #include "tlog.h"
@@ -56,6 +57,46 @@ static void drain_shutdown_callbacks(coro_context_t *ctx);
 void coro_context_acquire_external(coro_context_t *ctx);
 void coro_context_release_external(coro_context_t *ctx);
 
+static void coro_context_cleanup_create_failure(coro_context_t *ctx) {
+  if (!ctx) {
+    return;
+  }
+
+  if (ctx->scheduler) {
+    coro_scheduler_destroy(ctx->scheduler);
+    ctx->scheduler = NULL;
+  }
+
+  if (ctx->pool) {
+    coro_object_pool_destroy(ctx->pool);
+    ctx->pool = NULL;
+  }
+
+  if (ctx->tasks) {
+    free(ctx->tasks);
+    ctx->tasks = NULL;
+  }
+
+  if (ctx->post_initialized && ctx->post_ring) {
+    free(ctx->post_ring);
+    ctx->post_ring = NULL;
+    ctx->post_initialized = 0;
+  }
+
+  if (ctx->arena && ctx->owns_arena) {
+    mem_destroy(ctx->arena);
+    free(ctx->arena);
+    ctx->arena = NULL;
+  }
+
+  if (ctx->owns_loop && ctx->loop) {
+    turbo_loop_destroy(ctx->loop);
+    ctx->loop = NULL;
+  }
+
+  free(ctx);
+}
+
 coro_context_t *coro_context_create(void *loop) {
   coro_context_t *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return NULL;
@@ -75,15 +116,12 @@ coro_context_t *coro_context_create(void *loop) {
   /* Initialize internal memory arena - each context has its own isolated pool */
   ctx->arena = (mem_pool_t *)calloc(1, sizeof(mem_pool_t));
   if (!ctx->arena) {
-    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
-    free(ctx);
+    coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
   /* Pre-allocate 128KB to reduce fragmentation for typical workloads */
   if (mem_init(ctx->arena, MEM_ARENA_CONTEXT_INIT_SIZE) != 0) {
-    free(ctx->arena);
-    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
-    free(ctx);
+    coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
   ctx->owns_arena = 1;
@@ -92,8 +130,7 @@ coro_context_t *coro_context_create(void *loop) {
   ctx->task_capacity = 8;
   ctx->tasks = (coro_task_t **)calloc(ctx->task_capacity, sizeof(coro_task_t *));
   if (!ctx->tasks) {
-    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
-    free(ctx);
+    coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
   ctx->task_count = 0;
@@ -101,17 +138,20 @@ coro_context_t *coro_context_create(void *loop) {
   /* Initialize scheduler for managed coroutines */
   ctx->scheduler = coro_scheduler_create();
   if (!ctx->scheduler) {
-    if (ctx->owns_loop) turbo_loop_destroy(ctx->loop);
-    free(ctx);
+    coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
 
   /* Create coroutine pool with context's arena */
   ctx->pool = coro_object_pool_create(NULL, ctx);
+  if (!ctx->pool) {
+    coro_context_cleanup_create_failure(ctx);
+    return NULL;
+  }
 
   /* Initialize post queue early to avoid race conditions when posting from other threads. */
   if (ensure_post_queue(ctx) != 0) {
-    coro_context_destroy(ctx);
+    coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
 
@@ -994,8 +1034,7 @@ int turbo_tcp_backend_is_available(int backend) {
 #ifdef _WIN32
     case TURBO_TCP_BACKEND_IOCP:
       return 1;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
-    case TURBO_TCP_BACKEND_EPOLL:
+#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
     case TURBO_TCP_BACKEND_IO_URING:
       return 1;
 #elif defined(__linux__) || defined(__ANDROID__)
@@ -1017,8 +1056,7 @@ int turbo_udp_backend_is_available(int backend) {
 #ifdef _WIN32
     case TURBO_UDP_BACKEND_IOCP:
       return 1;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
-    case TURBO_UDP_BACKEND_EPOLL:
+#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
     case TURBO_UDP_BACKEND_IO_URING:
       return 1;
 #elif defined(__linux__) || defined(__ANDROID__)

@@ -49,6 +49,7 @@ struct mem_pool_s {
   void *slabs[9];
   ATOMIC_SIZE_T total_allocated;
   ATOMIC_SIZE_T total_used;
+  void *oversize_head;
   mem_buffer_t *recycle_head;
   ATOMIC_SIZE_T recycle_count;
   size_t recycle_limit;

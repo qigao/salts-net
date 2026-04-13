@@ -76,7 +76,7 @@ static void batch_worker(coro_t *co, void *arg) {
 
     if (resp->error) {
       TLOG_ERROR("Download failed [{}]: {} (code: {})", rendered_url, resp->error,
-                 ENUM_NAME(resp->error_code));
+                 http_error_to_str(resp->error_code));
       ctx->failed = 1;
       ctx->stop = 1;
     } else {

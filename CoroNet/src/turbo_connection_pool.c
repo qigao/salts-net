@@ -22,6 +22,7 @@
 /* ── Slot states ──────────────────────────────────────────── */
 
 typedef enum { POOL_SLOT_EMPTY, POOL_SLOT_IDLE, POOL_SLOT_BORROWED } pool_slot_state_t;
+typedef enum { POOL_ENDPOINT_RAW, POOL_ENDPOINT_WS } pool_endpoint_kind_t;
 
 typedef struct {
   coro_socket_t *client;
@@ -48,6 +49,9 @@ struct coro_pool_s {
   coro_context_t *ctx;
   turbo_loop_t *loop;
   char host[256];
+  char request_host[256];
+  char path[256];
+  char subprotocol[128];
   int port;
   coro_pool_config_t config;
   pool_slot_t *slots;
@@ -59,6 +63,8 @@ struct coro_pool_s {
   int destroy_pending;
   int closed;
   coro_socket_type_t socket_type;
+  pool_endpoint_kind_t endpoint_kind;
+  int ws_is_tls;
 
   /* Waiter list — coroutines blocked waiting for a free slot */
   pool_waiter_t *waiter_head;
@@ -82,6 +88,89 @@ static void remove_waiter(coro_pool_t *pool, pool_waiter_t *waiter);
 static void finalize_pool_destroy(coro_pool_t *pool);
 static void wake_all_waiters(coro_pool_t *pool);
 static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason);
+static int pool_open_configure_raw(coro_pool_t *pool, const char *host, int port,
+                                   coro_socket_type_t socket_type);
+static int pool_open_configure_ws(coro_pool_t *pool, const char *connect_host, int port,
+                                  coro_socket_type_t socket_type, const char *request_host,
+                                  const char *path, int is_tls, const char *subprotocol);
+
+static const char *pool_slot_state_name(pool_slot_state_t state) {
+  switch (state) {
+  case POOL_SLOT_EMPTY:
+    return "empty";
+  case POOL_SLOT_IDLE:
+    return "idle";
+  case POOL_SLOT_BORROWED:
+    return "borrowed";
+  default:
+    return "unknown";
+  }
+}
+
+static const char *pool_wake_reason_name(pool_wake_reason_t reason) {
+  switch (reason) {
+  case POOL_WAKE_RETRY:   return "retry";
+  case POOL_WAKE_CLOSED:  return "closed";
+  case POOL_WAKE_TIMEOUT: return "timeout";
+  default:                return "unknown";
+  }
+}
+
+static void pool_log_state(const coro_pool_t *pool, const char *stage) {
+  size_t i;
+  size_t idle_count;
+  size_t borrowed_count;
+  size_t waiter_count;
+  pool_waiter_t *waiter;
+  const pool_slot_t *slot;
+  int alive_i;
+  int idle_i;
+  int borrowed_i;
+  int waiters_i;
+
+  if (!pool) {
+    return;
+  }
+
+  idle_count = 0;
+  borrowed_count = 0;
+  waiter_count = 0;
+
+  for (i = 0; i < pool->config.max_size; i++) {
+    if (pool->slots[i].state == POOL_SLOT_IDLE) {
+      idle_count++;
+    } else if (pool->slots[i].state == POOL_SLOT_BORROWED) {
+      borrowed_count++;
+    }
+  }
+
+  for (waiter = pool->waiter_head; waiter; waiter = waiter->next) {
+    waiter_count++;
+  }
+
+  alive_i = (int)pool->alive_count;
+  idle_i = (int)idle_count;
+  borrowed_i = (int)borrowed_count;
+  waiters_i = (int)waiter_count;
+
+  TLOG_DEBUG("pool[{:p}] {:s}: host={:s} port={:d} closed={:d} destroy_pending={:d}",
+             (const void *)pool, stage ? stage : "state", pool->host, pool->port,
+             pool->closed, pool->destroy_pending);
+  TLOG_DEBUG("pool[{:p}] counts: alive={:d} idle={:d} borrowed={:d} waiters={:d}",
+             (const void *)pool, alive_i, idle_i, borrowed_i, waiters_i);
+
+  for (i = 0; i < pool->config.max_size; i++) {
+    slot = &pool->slots[i];
+    if (slot->state == POOL_SLOT_EMPTY && slot->client == NULL) {
+      continue;
+    }
+    TLOG_DEBUG("pool[{:p}] slot[{:#}] state={:s} client={:p} connected={:d} idle_since={:llu}",
+               (const void *)pool, i, pool_slot_state_name(slot->state),
+               (void *)slot->client,
+               (slot->client != NULL) ? slot->client->connected : -1,
+               (unsigned long long)slot->idle_since);
+  }
+}
 
 /* ── Lifecycle ────────────────────────────────────────────── */
 
@@ -114,6 +203,7 @@ coro_pool_t *coro_pool_create(coro_context_t *ctx, const coro_pool_config_t *con
   if (pool->config.min_size > pool->config.max_size) pool->config.min_size = pool->config.max_size;
 
   TLOG_DEBUG("Coro pool created (min_size={:d}, max_size={:d})", pool->config.min_size, pool->config.max_size);
+  pool_log_state(pool, "create");
 
   return pool;
 }
@@ -123,25 +213,25 @@ int coro_pool_open(coro_pool_t *pool, const char *host, int port,
   /* Must be called from a coroutine — connect suspends */
   ASSERT_IN_CORO();
 
-  if (!pool || !host) return TURBO_EINVAL;
+  if (!pool) return TURBO_EINVAL;
   if (pool->closed) return TURBO_EOF;
-
-  size_t len = strlen(host);
-  if (len >= sizeof(pool->host)) return TURBO_EINVAL;
-  memcpy(pool->host, host, len + 1);
-  pool->port = port;
-  pool->socket_type = socket_type;
+  if (pool_open_configure_raw(pool, host, port, socket_type) != 0) {
+    return TURBO_EINVAL;
+  }
 
   /* Pre-connect min_size slots */
   for (size_t i = 0; i < pool->config.min_size; i++) {
+    TLOG_DEBUG("pool[{:p}] open: preconnecting slot {:d}", (void *)pool, (int)i);
     pool->alive_count++;
     int rc = connect_slot(pool, i, POOL_SLOT_IDLE);
     if (rc != 0) {
+      TLOG_DEBUG("pool[{:p}] open: slot {:d} connect failed rc={:d}", (void *)pool, (int)i, rc);
       pool->alive_count--;
       return rc;
     }
     /* Yield to let server process the connection */
     coro_yield();
+    pool_log_state(pool, "open-preconnect-step");
   }
 
   /* Start idle reaper if configured */
@@ -153,11 +243,54 @@ int coro_pool_open(coro_pool_t *pool, const char *host, int port,
   }
 
   TLOG_DEBUG("Coro pool opened for {:s}:{:d} (pre-connected: {:d})", host, port, pool->config.min_size);
+  pool_log_state(pool, "open-complete");
+  return 0;
+}
+
+int coro_pool_open_ws_host_ex(coro_pool_t *pool, const char *connect_host, int port,
+                              coro_socket_type_t socket_type, const char *request_host,
+                              const char *path, int is_tls, const char *subprotocol) {
+  ASSERT_IN_CORO();
+
+  if (!pool) return TURBO_EINVAL;
+  if (pool->closed) return TURBO_EOF;
+  if (pool_open_configure_ws(pool, connect_host, port, socket_type, request_host, path, is_tls,
+                             subprotocol) != 0) {
+    return TURBO_EINVAL;
+  }
+
+  for (size_t i = 0; i < pool->config.min_size; i++) {
+    TLOG_DEBUG("pool[{:p}] open-ws: preconnecting slot {:d}", (void *)pool, (int)i);
+    pool->alive_count++;
+    {
+      int rc = connect_slot(pool, i, POOL_SLOT_IDLE);
+      if (rc != 0) {
+        TLOG_DEBUG("pool[{:p}] open-ws: slot {:d} connect failed rc={:d}", (void *)pool,
+                   (int)i, rc);
+        pool->alive_count--;
+        return rc;
+      }
+    }
+    coro_yield();
+    pool_log_state(pool, "open-ws-preconnect-step");
+  }
+
+  if (pool->config.idle_timeout_ms > 0) {
+    int rc = idle_timer_start(pool);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+
+  TLOG_DEBUG("Coro pool opened for {:s}:{:d}{:s} (pre-connected: {:d})",
+             connect_host, port, is_tls ? " [wss]" : " [ws]", pool->config.min_size);
+  pool_log_state(pool, "open-ws-complete");
   return 0;
 }
 
 void coro_pool_close(coro_pool_t *pool) {
   if (!pool || pool->closed) return;
+  pool_log_state(pool, "close-begin");
   pool->closed = 1;
 
   idle_timer_stop(pool);
@@ -170,6 +303,7 @@ void coro_pool_close(coro_pool_t *pool) {
 
   /* Wake ALL blocked borrowers with TURBO_EOF so none hang forever */
   wake_all_waiters(pool);
+  pool_log_state(pool, "close-end");
 }
 
 void coro_pool_destroy(coro_pool_t *pool) {
@@ -193,6 +327,7 @@ void coro_pool_destroy(coro_pool_t *pool) {
   }
 
   pool->destroy_pending = 1;
+  pool_log_state(pool, "destroy-pending");
   finalize_pool_destroy(pool);
 }
 
@@ -215,6 +350,7 @@ int coro_pool_borrow(coro_pool_t *pool, coro_socket_t **out) {
   }
 
 retry:
+  pool_log_state(pool, "borrow-retry");
   if (pool->closed) return TURBO_EOF;
 
   /* 1. Find an IDLE slot with a live connection */
@@ -224,6 +360,7 @@ retry:
         pool->slots[i].state = POOL_SLOT_BORROWED;
         *out = pool->slots[i].client;
         TLOG_DEBUG("Coro pool borrow successful: reused idle slot {:d}", i);
+        pool_log_state(pool, "borrow-reused-idle");
         return 0;
       }
       /* Stale idle connection — destroy it and try next */
@@ -251,6 +388,7 @@ retry:
         
         *out = pool->slots[i].client;
         TLOG_DEBUG("Coro pool borrow successful: new slot {:d} connected and claimed", i);
+        pool_log_state(pool, "borrow-connected-new");
         return 0;
       }
     }
@@ -296,6 +434,7 @@ retry:
   }
 
   TLOG_DEBUG("Coro pool borrow blocked (pool full). Waiter queued.");
+  pool_log_state(pool, "borrow-wait-queued");
 
   /* Mark as waiting-for-I/O so scheduler skips us */
   if (waiter->is_scheduled) {
@@ -339,9 +478,11 @@ void coro_pool_return(coro_pool_t *pool, coro_socket_t *client) {
         TLOG_DEBUG("Coro pool returned connection to idle slot {:d}", i);
         /* Wake one waiting borrower so it can claim this slot */
         wake_one_waiter(pool, POOL_WAKE_RETRY);
+        pool_log_state(pool, "return-idle");
       } else {
         TLOG_DEBUG("Coro pool destroying returned connection in slot {:d} (dead or closed)", i);
         destroy_slot(pool, i);
+        pool_log_state(pool, "return-destroyed");
       }
       finalize_pool_destroy(pool);
       return;
@@ -391,7 +532,8 @@ static void wake_one_waiter(coro_pool_t *pool, pool_wake_reason_t reason) {
   remove_waiter(pool, w);
   w->wake_reason = reason;
 
-  TLOG_DEBUG("Coro pool waking one waiter (reason {:s})", ENUM_NAME(reason));
+  TLOG_DEBUG("Coro pool waking one waiter (reason {:s})", pool_wake_reason_name(reason));
+  pool_log_state(pool, "wake-one-waiter");
   if (w->is_scheduled) {
     coro_set_waiting_for_io(w->co, 0);
   } else {
@@ -442,20 +584,114 @@ static void finalize_pool_destroy(coro_pool_t *pool) {
   if (!pool || !pool->destroy_pending) return;
   if (pool->waiter_head) return;
   if (pool->alive_count != 0) return;
+  TLOG_DEBUG("pool[{:p}] finalize-destroy: freeing pool", (void *)pool);
   free(pool);
 }
 
 /* ── Internal: slot management ────────────────────────────── */
 
+static int pool_store_string(char *dst, size_t dst_size, const char *src) {
+  size_t len;
+
+  if (!dst || dst_size == 0) {
+    return TURBO_EINVAL;
+  }
+
+  if (!src) {
+    dst[0] = '\0';
+    return 0;
+  }
+
+  len = strlen(src);
+  if (len >= dst_size) {
+    return TURBO_EINVAL;
+  }
+
+  memcpy(dst, src, len + 1);
+  return 0;
+}
+
+static int pool_open_configure_raw(coro_pool_t *pool, const char *host, int port,
+                                   coro_socket_type_t socket_type) {
+  if (!pool || !host) {
+    return TURBO_EINVAL;
+  }
+
+  if (pool_store_string(pool->host, sizeof(pool->host), host) != 0) {
+    return TURBO_EINVAL;
+  }
+
+  pool->request_host[0] = '\0';
+  pool->path[0] = '\0';
+  pool->subprotocol[0] = '\0';
+  pool->port = port;
+  pool->socket_type = socket_type;
+  pool->endpoint_kind = POOL_ENDPOINT_RAW;
+  pool->ws_is_tls = 0;
+  return 0;
+}
+
+static int pool_open_configure_ws(coro_pool_t *pool, const char *connect_host, int port,
+                                  coro_socket_type_t socket_type, const char *request_host,
+                                  const char *path, int is_tls, const char *subprotocol) {
+  const char *actual_request_host;
+  const char *actual_path;
+
+  if (!pool || !connect_host) {
+    return TURBO_EINVAL;
+  }
+
+  switch (socket_type) {
+  case CORO_SOCKET_TCP_V4:
+  case CORO_SOCKET_TCP_V6:
+  case CORO_SOCKET_TLS:
+    break;
+  default:
+    return TURBO_EINVAL;
+  }
+
+  actual_request_host = (request_host && request_host[0] != '\0') ? request_host : connect_host;
+  actual_path = (path && path[0] != '\0') ? path : "/";
+
+  if (pool_store_string(pool->host, sizeof(pool->host), connect_host) != 0 ||
+      pool_store_string(pool->request_host, sizeof(pool->request_host), actual_request_host) != 0 ||
+      pool_store_string(pool->path, sizeof(pool->path), actual_path) != 0 ||
+      pool_store_string(pool->subprotocol, sizeof(pool->subprotocol), subprotocol) != 0) {
+    return TURBO_EINVAL;
+  }
+
+  pool->port = port;
+  pool->socket_type = socket_type;
+  pool->endpoint_kind = POOL_ENDPOINT_WS;
+  pool->ws_is_tls = is_tls ? 1 : 0;
+  return 0;
+}
+
 static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial_state) {
   coro_socket_t *c = coro_socket_create(pool->ctx, pool->socket_type);
   if (!c) return TURBO_ENOMEM;
 
+  TLOG_DEBUG("pool[{:p}] connect_slot: idx={:d} target_state={:s} endpoint_kind={:d} host={:s} port={:d}",
+             (void *)pool, (int)idx, pool_slot_state_name(initial_state),
+             (int)pool->endpoint_kind, pool->host, pool->port);
+
   if (pool->config.connect_timeout_ms > 0)
     coro_socket_set_timeout(c, pool->config.connect_timeout_ms);
 
-  int rc = coro_socket_connect(c, pool->host, pool->port);
+  int rc;
+  if (pool->endpoint_kind == POOL_ENDPOINT_WS) {
+    rc = coro_socket_connect_ws_host_ex(
+        c, pool->host, pool->port,
+        pool->request_host[0] ? pool->request_host : pool->host,
+        pool->path[0] ? pool->path : "/",
+        pool->ws_is_tls,
+        pool->subprotocol[0] ? pool->subprotocol : NULL);
+  } else {
+    rc = coro_socket_connect(c, pool->host, pool->port);
+  }
   if (rc != 0) {
+    TLOG_DEBUG("pool[{:p}] connect_slot: idx={:d} connect failed rc={:d}", (void *)pool,
+               (int)idx, rc);
     coro_socket_destroy(c);
     return rc;
   }
@@ -466,11 +702,17 @@ static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial
   pool->slots[idx].client = c;
   pool->slots[idx].state = initial_state;
   pool->slots[idx].idle_since = (initial_state == POOL_SLOT_IDLE) ? turbo_loop_now(pool->loop) : 0;
+  TLOG_DEBUG("pool[{:p}] connect_slot: idx={:d} connected client={:p} backend={:d}",
+             (void *)pool, (int)idx, (void *)c, (int)coro_socket_get_tcp_backend(c));
   return 0;
 }
 
 static void destroy_slot(coro_pool_t *pool, size_t idx) {
   if (pool->slots[idx].client) {
+    TLOG_DEBUG("pool[{:p}] destroy_slot: idx={:d} client={:p} connected={:d} state={:s}",
+               (void *)pool, (int)idx, (void *)pool->slots[idx].client,
+               pool->slots[idx].client->connected,
+               pool_slot_state_name(pool->slots[idx].state));
     coro_socket_destroy(pool->slots[idx].client);
     pool->slots[idx].client = NULL;
   }

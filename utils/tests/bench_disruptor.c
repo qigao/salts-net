@@ -165,7 +165,7 @@ static void run_bench(__bdd_config_type__ *__bdd_config__, const char *name, siz
     double dur_ms = (double)(end_time - start_time) / 1000000.0;
     double avg_ms = dur_ms / (double)total_messages;
     
-    __bdd_bench_add__(__bdd_config__, name, total_messages, dur_ms, avg_ms, avg_ms);
+    __bdd_bench_add__(__bdd_config__, name, total_messages, dur_ms, avg_ms, avg_ms, 1.0);
     
     for (size_t i = 0; i < num_cons; ++i) {
         disruptor_consumer_unregister(disruptor, &c_ctx[i].consumer);
@@ -194,12 +194,14 @@ spec("Turbo Disruptor Benchmarks") {
     }
 
     bench("Single Threaded Operations") {
-        benchmark("ReadAcquire (Empty)", BENCH_ITERS) {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+        benchmark("ReadAcquire (Empty)", BENCH_ITERS, 1) {
             disruptor_cursor_t rc = { .sequence = global_seq };
             (void)disruptor_consumer_wait_for_nonblocking(bench_disruptor, &rc);
         }
 
-        benchmark("Write+Read (64 bytes)", BENCH_ITERS) {
+        benchmark("Write+Read (64 bytes)", BENCH_ITERS, 1) {
             disruptor_cursor_t wc;
             if (disruptor_publisher_try_claim(bench_disruptor, &wc)) {
                 disruptor_publisher_publish(bench_disruptor, &wc);
@@ -215,6 +217,8 @@ spec("Turbo Disruptor Benchmarks") {
     }
 
     bench("SPSC Multithreaded Detailed Benchmarks") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         run_bench(__bdd_config__, "SPSC (Batch 64)", BENCH_ITERS, 64, 64, false, 1, 1);
         run_bench(__bdd_config__, "SPSC No Batching (Batch 1)", 100000, 1, 64, false, 1, 1);
         run_bench(__bdd_config__, "SPSC High Cont (Batch 128)", BENCH_ITERS_LARGE, 128, 64, false, 1, 1);
@@ -224,6 +228,8 @@ spec("Turbo Disruptor Benchmarks") {
     }
 
     bench("MPMC Multithreaded Detailed Benchmarks") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         run_bench(__bdd_config__, "MPSC 2P 1C (Batch 64)", BENCH_ITERS, 64, 64, false, 2, 1);
         run_bench(__bdd_config__, "MPSC 4P 1C (Batch 64)", BENCH_ITERS, 64, 64, false, 4, 1);
         

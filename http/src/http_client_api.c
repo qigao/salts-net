@@ -63,6 +63,13 @@ http_response_t *http_post_json(http_client_t *c, const char *url, const char *j
                       json_string ? strlen(json_string) : 0);
 }
 
+http_response_t *http_sse_post_json(http_client_t *c, const char *url, const char *json_string,
+                                    http_data_cb data_cb, void *ud) {
+  const char *hdrs[] = {"Content-Type: application/json", "Accept: text/event-stream"};
+  return do_request_full(c, HTTP_POST, url, hdrs, 2, json_string,
+                         json_string ? strlen(json_string) : 0, data_cb, ud, NULL, NULL, NULL);
+}
+
 http_response_t *http_post_form(http_client_t *c, const char *url, http_params_t *params) {
   char *encoded = http_params_encode(params);
   const char *hdrs[] = {"Content-Type: application/x-www-form-urlencoded"};

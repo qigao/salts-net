@@ -23,6 +23,12 @@ extern const coro_transport_ops_t transport_ops_tcp;
 extern const coro_transport_ops_t transport_ops_pipe;
 extern const coro_transport_ops_t *transport_ops_table[];
 int coro_socket_wrap_accepted_tls_server(coro_socket_t *s);
+int coro_socket_wrap_accepted_ws_server(coro_socket_t *s);
+extern const coro_transport_ops_t ws_server_ops;
+
+typedef struct ws_server_listener_state_s {
+  int is_tls;
+} ws_server_listener_state_t;
 
 /* ── Handler Spawning ─────────────────────────────────────── */
 
@@ -70,7 +76,6 @@ static void accept_loop_task(coro_t *co, void *arg) {
     coro_socket_t *client = NULL;
     int r = coro_socket_accept(server->listener, &client);
     if (r == 0 && client) {
-      TLOG_INFO("server: accepted client on transport={}", (int)server->transport);
       if (server->transport == TURBO_TLS) {
         r = coro_socket_wrap_accepted_tls_server(client);
         if (r != 0) {
@@ -78,7 +83,28 @@ static void accept_loop_task(coro_t *co, void *arg) {
           coro_socket_destroy(client);
           continue;
         }
-        TLOG_INFO("server: accepted client wrapped as TLS");
+        TLOG_DEBUG("server: accepted client wrapped as TLS");
+      } else if (server->transport == TURBO_WEBSOCKET) {
+        ws_server_listener_state_t *ws_state =
+            (ws_server_listener_state_t *)server->native_tcp_state;
+        if (ws_state && ws_state->is_tls) {
+          r = coro_socket_wrap_accepted_tls_server(client);
+          if (r != 0) {
+            TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
+            coro_socket_destroy(client);
+            continue;
+          }
+        }
+        r = coro_socket_wrap_accepted_ws_server(client);
+        if (r != 0) {
+          if (r == TURBO_EOF) {
+            TLOG_DEBUG("server: accepted client closed before WebSocket handoff completed");
+          } else {
+            TLOG_ERROR("server: failed to wrap accepted client as WebSocket rc={}", r);
+          }
+          coro_socket_destroy(client);
+          continue;
+        }
       }
       spawn_handler_coro(client, server->handler, server->handler_arg);
     } else if (r != TURBO_EALREADY && r != TURBO_ECANCELED && r != TURBO_EBUSY && 
@@ -261,6 +287,56 @@ static int listen_kcp(coro_socket_t *server, const char *host, int port) {
   return spawn_accept_loop(server);
 }
 
+static int listen_ws_internal(coro_socket_t *server, const char *host, int port, int is_tls) {
+  struct sockaddr_storage saddr;
+  coro_socket_type_t listener_type;
+  ws_server_listener_state_t *state;
+  int r;
+
+  if (!server || !host) {
+    return TURBO_EINVAL;
+  }
+
+  r = parse_bind_address(host, port, &saddr);
+  if (r != 0) {
+    return r;
+  }
+
+  listener_type = server_tcp_listener_type(&saddr);
+  server->listener = coro_socket_create(server->ctx, listener_type);
+  if (!server->listener) {
+    return TURBO_ENOMEM;
+  }
+  server->listener->reuse_port = server->reuse_port;
+
+  r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
+
+  r = coro_socket_listen(server->listener, 128);
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
+
+  state = (ws_server_listener_state_t *)calloc(1, sizeof(*state));
+  if (!state) {
+    rollback_listener(server);
+    return TURBO_ENOMEM;
+  }
+  state->is_tls = is_tls ? 1 : 0;
+  if (server->native_tcp_state) {
+    free(server->native_tcp_state);
+  }
+  server->native_tcp_state = state;
+  server->transport = TURBO_WEBSOCKET;
+  server->ops = &ws_server_ops;
+
+  return spawn_accept_loop(server);
+}
+
 /* ── Public API ───────────────────────────────────────────── */
 
 int coro_socket_listen_on(coro_socket_t *server, const char *host, int port,
@@ -286,8 +362,13 @@ int coro_socket_listen_on(coro_socket_t *server, const char *host, int port,
 
 int coro_socket_listen_ws(coro_socket_t *server, const char *host, int port,
                            int is_tls, void (*handler)(coro_socket_t *, void *), void *arg) {
-  UNUSED(server); UNUSED(host); UNUSED(port); UNUSED(is_tls); UNUSED(handler); UNUSED(arg);
-  return TURBO_ENOTSUP;
+  if (!server || !host) {
+    return TURBO_EINVAL;
+  }
+
+  server->handler = handler;
+  server->handler_arg = arg;
+  return listen_ws_internal(server, host, port, is_tls);
 }
 
 int coro_socket_server_sendto(coro_socket_t *server, const char *data, size_t len,

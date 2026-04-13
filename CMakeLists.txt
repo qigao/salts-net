@@ -64,6 +64,7 @@ add_subdirectory(mustache)
 add_subdirectory(tinytest)
 add_subdirectory(utils)
 add_subdirectory(uuid)
+add_subdirectory(cron)
 
 add_subdirectory(CoroNet)
 add_subdirectory(wasm3)
@@ -82,7 +83,7 @@ add_subdirectory(ice)
 add_subdirectory(lb)
 add_subdirectory(tproxy)
 add_subdirectory(email)
-
+add_subdirectory(langchain) 
 # Package Configuration
 include(CMakePackageConfigHelpers)
 

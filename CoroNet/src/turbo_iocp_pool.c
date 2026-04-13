@@ -18,6 +18,7 @@
 #include "turbo_iocp_pool.h"
 #include "CoroNet/turbo_coro_internal.h"
 #include "disruptor.h"
+#include "platform.h"
 #include "turbo_thread.h"
 #include "tlog.h"
 #include <stdlib.h>
@@ -47,6 +48,7 @@ struct iocp_pool_s {
 
   /* Tick coalescing — avoids flooding coro_post */
   volatile LONG   tick_posted;
+  volatile LONG64 tick_post_request_ns;
 
   /* Global inflight tracking across all registered sockets */
   volatile LONG   inflight_count;
@@ -197,6 +199,8 @@ static void iocp_pool_schedule_tick(iocp_pool_t *pool) {
     return; /* tick already scheduled */
   }
 
+  InterlockedExchange64(&pool->tick_post_request_ns, (LONGLONG)turbo_hrtime());
+
   for (;;) {
     rc = coro_post(pool->ctx, iocp_pool_tick, pool, NULL);
     if (rc == 0) return;
@@ -223,6 +227,7 @@ static DWORD WINAPI iocp_pool_worker(LPVOID arg) {
     iocp_op_t *op = CONTAINING_RECORD(ov, iocp_op_t, overlapped);
     op->bytes_transferred = bytes;
     op->status = ok ? 0 : -(int)GetLastError();
+    op->completed_ns = turbo_hrtime();
 
     /* Publish to disruptor (blocking claim — will spin until slot available) */
     {
@@ -246,9 +251,11 @@ static DWORD WINAPI iocp_pool_worker(LPVOID arg) {
 int iocp_pool_drain(iocp_pool_t *pool) {
   int processed = 0;
   disruptor_cursor_t cursor;
+  uint64_t tick_post_request_ns;
 
   if (!pool || !pool->queue) return 0;
 
+  tick_post_request_ns = (uint64_t)InterlockedExchangeAdd64(&pool->tick_post_request_ns, 0);
   cursor.sequence = pool->consumer_seq;
 
   while (disruptor_consumer_wait_for_nonblocking(pool->queue, &cursor)) {
@@ -262,6 +269,7 @@ int iocp_pool_drain(iocp_pool_t *pool) {
       entry_cursor.sequence = seq;
       entry_ptr = (iocp_op_t **)disruptor_acquire_entry(pool->queue, &entry_cursor);
       op = *entry_ptr;
+      op->tick_post_request_ns = tick_post_request_ns;
 
       /* Dispatch to the registered handler */
       iocp_pool_dispatch_op(op);

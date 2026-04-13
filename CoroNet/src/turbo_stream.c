@@ -7,6 +7,7 @@
  */
 
 #include "turbo_stream_internal.h"
+#include "turbo_build_config_internal.h"
 #include "turbo_coro_internal.h"
 #include "turbo_buffer.h"
 #include "internal.h"
@@ -127,6 +128,19 @@ static void stream_record_error(coro_context_t *ctx, int err) {
   }
 }
 
+static void turbo_stream_listener_cleanup_create_failure(turbo_stream_listener_t *l) {
+  if (!l) {
+    return;
+  }
+
+  if (l->backend_data && l->ops && l->ops->listener_close) {
+    l->ops->listener_close(l);
+    return;
+  }
+
+  free(l);
+}
+
 static int stream_kind_is_valid(turbo_stream_kind_t kind) {
   switch (kind) {
   case TURBO_STREAM_TCP4:
@@ -144,7 +158,7 @@ static int stream_kind_is_valid(turbo_stream_kind_t kind) {
 static const turbo_stream_backend_ops_t *stream_platform_default_ops(void) {
 #if defined(_WIN32)
   return &turbo_stream_iocp_ops;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
   return &turbo_stream_io_uring_ops;
 #elif defined(__linux__) || defined(__ANDROID__)
   return &turbo_stream_epoll_ops;
@@ -163,11 +177,9 @@ static const turbo_stream_backend_ops_t *stream_tcp_backend_ops(
 #ifdef _WIN32
   case TURBO_TCP_BACKEND_IOCP:
     return &turbo_stream_iocp_ops;
-#elif defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
   case TURBO_TCP_BACKEND_IO_URING:
     return &turbo_stream_io_uring_ops;
-  case TURBO_TCP_BACKEND_EPOLL:
-    return &turbo_stream_epoll_ops;
 #elif defined(__linux__) || defined(__ANDROID__)
   case TURBO_TCP_BACKEND_EPOLL:
     return &turbo_stream_epoll_ops;
@@ -219,6 +231,24 @@ int turbo_stream_init_common(turbo_stream_t *s, coro_context_t *ctx,
 
   coro_context_native_ref(ctx);
   return 0;
+}
+
+static void turbo_stream_cleanup_create_failure(turbo_stream_t *s, int native_ref_held) {
+  if (!s) {
+    return;
+  }
+
+  if (s->recv_buf[0]) {
+    mem_unref(s->recv_buf[0]);
+    s->recv_buf[0] = NULL;
+  }
+  if (s->recv_buf[1]) {
+    mem_unref(s->recv_buf[1]);
+    s->recv_buf[1] = NULL;
+  }
+  if (native_ref_held && s->ctx) {
+    coro_context_native_unref(s->ctx);
+  }
 }
 
 void turbo_stream_enqueue_buffer(turbo_stream_t *s, mem_buffer_t *buf) {
@@ -280,40 +310,47 @@ void turbo_stream_listener_finalize_close(turbo_stream_listener_t *l) {
 
 turbo_stream_t *turbo_stream_create(coro_context_t *ctx,
                                      turbo_stream_kind_t kind) {
+  const turbo_stream_backend_ops_t *ops;
+  turbo_stream_t *s;
+  int rc;
+  int native_ref_held;
+
   if (!ctx) return NULL;
 
-  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(ctx, kind);
+  ops = turbo_stream_resolve_backend(ctx, kind);
   if (!ops) {
     stream_record_error(ctx, TURBO_EPROTONOSUPPORT);
     return NULL;
   }
 
-  turbo_stream_t *s = (turbo_stream_t *)calloc(1, sizeof(turbo_stream_t));
+  s = (turbo_stream_t *)calloc(1, sizeof(turbo_stream_t));
   if (!s) {
     stream_record_error(ctx, TURBO_ENOMEM);
     return NULL;
   }
 
-  int rc = turbo_stream_init_common(s, ctx, kind, ops);
+  native_ref_held = 0;
+  rc = turbo_stream_init_common(s, ctx, kind, ops);
   if (rc != 0) {
-    stream_record_error(ctx, rc);
-    free(s);
-    return NULL;
+    goto fail;
   }
+  native_ref_held = 1;
 
   if (ops->init) {
     rc = ops->init(s);
     if (rc != 0) {
-      if (s->recv_buf[0]) mem_unref(s->recv_buf[0]);
-      if (s->recv_buf[1]) mem_unref(s->recv_buf[1]);
-      stream_record_error(ctx, rc);
-      free(s);
-      return NULL;
+      goto fail;
     }
   }
 
   stream_record_error(ctx, 0);
   return s;
+
+fail:
+  stream_record_error(ctx, rc);
+  turbo_stream_cleanup_create_failure(s, native_ref_held);
+  free(s);
+  return NULL;
 }
 
 void turbo_stream_destroy(turbo_stream_t *s) {
@@ -498,13 +535,16 @@ void turbo_stream_close(turbo_stream_t *s) {
 turbo_stream_listener_t *turbo_stream_listen(
     coro_context_t *ctx, turbo_stream_kind_t kind,
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept) {
+  turbo_stream_listener_t *l;
+  const turbo_stream_backend_ops_t *ops;
+  int rc;
+
   if (!ctx || !addr || !on_accept) {
     stream_record_error(ctx, TURBO_EINVAL);
     return NULL;
   }
 
-  turbo_stream_listener_t *l =
-      (turbo_stream_listener_t *)calloc(1, sizeof(turbo_stream_listener_t));
+  l = (turbo_stream_listener_t *)calloc(1, sizeof(turbo_stream_listener_t));
   if (!l) {
     stream_record_error(ctx, TURBO_ENOMEM);
     return NULL;
@@ -512,27 +552,27 @@ turbo_stream_listener_t *turbo_stream_listen(
 
   l->ctx = ctx;
   l->kind = kind;
-  const turbo_stream_backend_ops_t *ops = turbo_stream_resolve_backend(ctx, kind);
+  ops = turbo_stream_resolve_backend(ctx, kind);
   if (!ops || !ops->bind || !ops->listen) {
     stream_record_error(ctx, TURBO_EPROTONOSUPPORT);
-    free(l);
+    turbo_stream_listener_cleanup_create_failure(l);
     return NULL;
   }
   l->ops = ops;
   l->arena = ctx->arena;
   l->on_accept = on_accept;
 
-  int rc = ops->bind(l, addr);
+  rc = ops->bind(l, addr);
   if (rc != 0) {
     stream_record_error(ctx, rc);
-    free(l);
+    turbo_stream_listener_cleanup_create_failure(l);
     return NULL;
   }
 
   rc = ops->listen(l, backlog);
   if (rc != 0) {
     stream_record_error(ctx, rc);
-    free(l);
+    turbo_stream_listener_cleanup_create_failure(l);
     return NULL;
   }
 
@@ -543,6 +583,8 @@ turbo_stream_listener_t *turbo_stream_listen(
 turbo_stream_listener_t *turbo_stream_listen_pipe(
     coro_context_t *ctx, const char *name, int backlog,
     turbo_accept_cb on_accept) {
+  const turbo_stream_backend_ops_t *ops;
+  turbo_stream_listener_t *l;
   char *native_name;
   int rc;
 
@@ -551,15 +593,13 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
     return NULL;
   }
 
-  const turbo_stream_backend_ops_t *ops =
-      turbo_stream_resolve_backend(ctx, TURBO_STREAM_PIPE);
+  ops = turbo_stream_resolve_backend(ctx, TURBO_STREAM_PIPE);
   if (!ops || !ops->bind_pipe || !ops->listen) {
     stream_record_error(ctx, TURBO_EPROTONOSUPPORT);
     return NULL;
   }
 
-  turbo_stream_listener_t *l =
-      (turbo_stream_listener_t *)calloc(1, sizeof(turbo_stream_listener_t));
+  l = (turbo_stream_listener_t *)calloc(1, sizeof(turbo_stream_listener_t));
   if (!l) {
     stream_record_error(ctx, TURBO_ENOMEM);
     return NULL;
@@ -574,7 +614,7 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
   native_name = stream_normalize_pipe_name(name);
   if (!native_name) {
     stream_record_error(ctx, TURBO_EINVAL);
-    free(l);
+    turbo_stream_listener_cleanup_create_failure(l);
     return NULL;
   }
 
@@ -582,14 +622,14 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
   free(native_name);
   if (rc != 0) {
     stream_record_error(ctx, rc);
-    free(l);
+    turbo_stream_listener_cleanup_create_failure(l);
     return NULL;
   }
 
   rc = ops->listen(l, backlog);
   if (rc != 0) {
     stream_record_error(ctx, rc);
-    free(l);
+    turbo_stream_listener_cleanup_create_failure(l);
     return NULL;
   }
 

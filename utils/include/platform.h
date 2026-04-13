@@ -6,8 +6,20 @@
  * Only what we actually use - pure POSIX / Win32, no third-party dependencies.
  */
 
-#ifndef turboutils_PLATFORM_H
-#define turboutils_PLATFORM_H
+#ifndef PLATFORM_H
+#define PLATFORM_H
+
+#ifndef _WIN32
+  #ifndef _DEFAULT_SOURCE
+    #define _DEFAULT_SOURCE 1
+  #endif
+  #ifndef _POSIX_C_SOURCE
+    #define _POSIX_C_SOURCE 200809L
+  #endif
+  #ifndef _XOPEN_SOURCE
+    #define _XOPEN_SOURCE 700
+  #endif
+#endif
 
 // =============================================================================
 // DLL Export/Import macros for cross-platform shared library builds
@@ -328,4 +340,4 @@ CXX_C_API uint64_t turbo_timer_get_repeat(turbo_timer_t *timer);
 }
 #endif
 
-#endif // turboutils_PLATFORM_H
+#endif // PLATFORM_H

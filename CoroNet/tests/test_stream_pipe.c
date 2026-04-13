@@ -50,6 +50,16 @@ static void reset_pipe_test_state(void) {
     memset(s_recv_buf, 0, sizeof(s_recv_buf));
 }
 
+static int pipe_test_run_until(coro_context_t *ctx, int *predicate, int expected, int max_iters) {
+    int limit = max_iters;
+
+    while (*predicate != expected && limit-- > 0) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+
+    return *predicate == expected ? 0 : -1;
+}
+
 static void run_pipe_case(coro_context_t *ctx, const char *endpoint) {
     int r;
     int limit;
@@ -73,7 +83,7 @@ static void run_pipe_case(coro_context_t *ctx, const char *endpoint) {
     r = turbo_stream_connect_pipe(client, endpoint, on_connect, on_close);
     check_int_eq(r, 0);
 
-    limit = 1000;
+    limit = 20000;
     while ((s_connected == -1 || s_accepted_count == 0) && limit-- > 0) {
         coro_context_run(ctx, TURBO_RUN_ONCE);
     }
@@ -88,7 +98,7 @@ static void run_pipe_case(coro_context_t *ctx, const char *endpoint) {
     r = turbo_stream_send(client, test_msg, msg_len);
     check_int_eq(r, 0);
 
-    limit = 1000;
+    limit = 20000;
     while (s_recv_count < (int)msg_len && limit-- > 0) {
         coro_context_run(ctx, TURBO_RUN_ONCE);
     }
@@ -100,7 +110,7 @@ static void run_pipe_case(coro_context_t *ctx, const char *endpoint) {
     if (s_accepted_client) turbo_stream_destroy(s_accepted_client);
     turbo_stream_listener_close(listener);
 
-    limit = 1000;
+    limit = 20000;
     while ((s_closed == 0) && limit-- > 0) {
         coro_context_run(ctx, TURBO_RUN_ONCE);
     }

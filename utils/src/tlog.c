@@ -892,6 +892,8 @@ void tlog_destroy(tlog_t *logger) {
   if (!logger)
     return;
 
+  tlog_flush(logger);
+ 
   logger_stop_async(logger);
   disruptor_destroy(logger->disruptor);
   mem_destroy(&logger->async_pool);
@@ -953,10 +955,22 @@ void tlog_remove_sink(tlog_t *logger, turbo_log_sink_t *sink) {
 void tlog_flush(tlog_t *logger) {
   if (!logger)
     return;
-
+ 
   // Wait for all currently published logs to be written.
-  int64_t published = atomic_load(&logger->logs_published);
+  uint64_t published = atomic_load(&logger->logs_published);
+  uint64_t last_written = UINT64_MAX;
+  unsigned idle_spins = 0;
   while (atomic_load(&logger->logs_written) < published) {
+    uint64_t written = atomic_load(&logger->logs_written);
+    if (written == last_written) {
+      idle_spins++;
+    } else {
+      idle_spins = 0;
+      last_written = written;
+    }
+    if (idle_spins > 1000) {
+      break;
+    }
     turbo_sleep_ms(1);
   }
 

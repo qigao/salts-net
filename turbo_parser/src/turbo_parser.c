@@ -269,6 +269,60 @@ char *turbo_json_serialize_pretty_crlf(const json_value_t *value, size_t *out_le
 
 void turbo_json_serialize_free(char *str) { json_serialize_free(str); }
 
+static json_value_t *turbo_json_clone_internal(const json_value_t *value) {
+  json_value_t *clone = NULL;
+  size_t i;
+
+  if (!value) {
+    return NULL;
+  }
+
+  switch (turbo_json_type(value)) {
+  case TURBO_JSON_NULL:
+    return turbo_json_create_null();
+  case TURBO_JSON_BOOL:
+    return turbo_json_create_bool(turbo_json_bool(value));
+  case TURBO_JSON_NUMBER:
+    return turbo_json_create_number(turbo_json_number(value));
+  case TURBO_JSON_STRING:
+    return turbo_json_create_string(turbo_json_string(value));
+  case TURBO_JSON_ARRAY:
+    clone = turbo_json_create_array();
+    if (!clone) {
+      return NULL;
+    }
+    for (i = 0; i < turbo_json_array_size(value); ++i) {
+      json_value_t *item_clone = turbo_json_clone_internal(turbo_json_array_get(value, i));
+      if (!item_clone) {
+        turbo_free_json(&clone);
+        return NULL;
+      }
+      turbo_json_array_add(clone, item_clone);
+    }
+    return clone;
+  case TURBO_JSON_OBJECT:
+    clone = turbo_json_create_object();
+    if (!clone) {
+      return NULL;
+    }
+    for (i = 0; i < turbo_json_object_size(value); ++i) {
+      const char *key = turbo_json_object_key(value, i);
+      json_value_t *item_clone = turbo_json_clone_internal(turbo_json_object_value(value, i));
+      if (!key || !item_clone) {
+        turbo_free_json(&item_clone);
+        turbo_free_json(&clone);
+        return NULL;
+      }
+      turbo_json_object_add(clone, key, item_clone);
+    }
+    return clone;
+  default:
+    return NULL;
+  }
+}
+
+json_value_t *turbo_json_clone(const json_value_t *value) { return turbo_json_clone_internal(value); }
+
 /* JSON Builder/Modifier */
 json_value_t *turbo_json_create_object(void) { return json_create_object(); }
 json_value_t *turbo_json_create_array(void) { return json_create_array(); }

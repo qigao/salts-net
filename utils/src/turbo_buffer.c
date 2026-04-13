@@ -34,6 +34,10 @@ static const size_t SIZE_CLASSES[POOL_SIZE_CLASSES] = {
   #define MEM_RECYCLE_LIMIT 1024
 #endif
 
+#ifndef MEM_EXTERNAL_WRAPPER_RECYCLE_LIMIT
+  #define MEM_EXTERNAL_WRAPPER_RECYCLE_LIMIT 1024
+#endif
+
 /**
  * @brief Tag embedded at the start of every slab block.
  *        Points back to owning slab for O(1) deallocation.
@@ -58,14 +62,52 @@ typedef struct mem_slab_s {
 /**
  * @brief Header for oversized allocations (> max size class)
  */
-typedef struct {
+typedef struct oversize_header_s {
+    uint64_t magic;
     size_t total_size;   /* includes this header */
+    struct oversize_header_s* next;
+    struct oversize_header_s* prev;
 } oversize_header_t;
+
+#define OVERSIZE_MAGIC UINT64_C(0x545552424f4f5652)
 
 /* ── helpers ──────────────────────────────────────────────── */
 
 static inline size_t align_size(size_t size, size_t alignment) {
     return (size + alignment - 1) & ~(alignment - 1);
+}
+
+static void oversize_link_nolock(mem_pool_t* pool, oversize_header_t* hdr) {
+    hdr->prev = NULL;
+    hdr->next = (oversize_header_t*)pool->oversize_head;
+    if (hdr->next) {
+        hdr->next->prev = hdr;
+    }
+    pool->oversize_head = hdr;
+}
+
+static void oversize_unlink_nolock(mem_pool_t* pool, oversize_header_t* hdr) {
+    if (hdr->prev) {
+        hdr->prev->next = hdr->next;
+    } else {
+        pool->oversize_head = hdr->next;
+    }
+    if (hdr->next) {
+        hdr->next->prev = hdr->prev;
+    }
+    hdr->next = NULL;
+    hdr->prev = NULL;
+}
+
+static void oversize_free_all_nolock(mem_pool_t* pool) {
+    oversize_header_t* hdr = (oversize_header_t*)pool->oversize_head;
+    while (hdr) {
+        oversize_header_t* next = hdr->next;
+        hdr->magic = 0;
+        free(hdr);
+        hdr = next;
+    }
+    pool->oversize_head = NULL;
 }
 
 /**
@@ -217,9 +259,55 @@ static void slab_free_nolock(mem_pool_t* pool, void* user_ptr, int class_idx) {
 
 static mem_pool_t g_global_pool;
 static turbo_once_t g_global_once = TURBO_ONCE_INIT;
+static mem_buffer_t *g_external_wrapper_free_list;
+static size_t g_external_wrapper_free_count;
+static turbo_mutex_t g_external_wrapper_lock;
+static turbo_once_t g_external_wrapper_once = TURBO_ONCE_INIT;
 
 static void global_pool_init_cb(void) {
     mem_init(&g_global_pool, 0);
+}
+
+static void external_wrapper_pool_init_cb(void) {
+    turbo_mutex_init(&g_external_wrapper_lock);
+}
+
+static mem_buffer_t *external_wrapper_acquire(void) {
+    mem_buffer_t *buffer = NULL;
+
+    turbo_once(&g_external_wrapper_once, external_wrapper_pool_init_cb);
+    turbo_mutex_lock(&g_external_wrapper_lock);
+    if (g_external_wrapper_free_list) {
+        buffer = g_external_wrapper_free_list;
+        g_external_wrapper_free_list = buffer->next;
+        buffer->next = NULL;
+        g_external_wrapper_free_count--;
+    }
+    turbo_mutex_unlock(&g_external_wrapper_lock);
+
+    if (buffer) {
+        memset(buffer, 0, sizeof(*buffer));
+        return buffer;
+    }
+    return (mem_buffer_t *)calloc(1, sizeof(mem_buffer_t));
+}
+
+static void external_wrapper_release(mem_buffer_t *buffer) {
+    if (!buffer) return;
+
+    turbo_once(&g_external_wrapper_once, external_wrapper_pool_init_cb);
+    turbo_mutex_lock(&g_external_wrapper_lock);
+    if (g_external_wrapper_free_count < MEM_EXTERNAL_WRAPPER_RECYCLE_LIMIT) {
+        buffer->next = g_external_wrapper_free_list;
+        g_external_wrapper_free_list = buffer;
+        g_external_wrapper_free_count++;
+        buffer = NULL;
+    }
+    turbo_mutex_unlock(&g_external_wrapper_lock);
+
+    if (buffer) {
+        free(buffer);
+    }
 }
 
 mem_pool_t* mem_global(void) {
@@ -249,6 +337,14 @@ void mem_destroy(mem_pool_t* pool) {
 
     turbo_mutex_t lock_to_destroy = pool->lock;
 
+    if (lock_to_destroy != NULL) {
+        turbo_mutex_lock(&pool->lock);
+        oversize_free_all_nolock(pool);
+        turbo_mutex_unlock(&pool->lock);
+    } else {
+        oversize_free_all_nolock(pool);
+    }
+
     for (int i = 0; i < POOL_SIZE_CLASSES; i++) {
         mem_slab_t* slab = (mem_slab_t*)pool->slabs[i];
         while (slab) {
@@ -260,6 +356,7 @@ void mem_destroy(mem_pool_t* pool) {
     }
 
     pool->recycle_head = NULL;
+    pool->oversize_head = NULL;
     pool->recycle_count = 0;
     pool->lock = NULL;
 
@@ -275,6 +372,8 @@ void mem_reset(mem_pool_t* pool) {
     if (!pool) return;
 
     turbo_mutex_lock(&pool->lock);
+
+    oversize_free_all_nolock(pool);
 
     /* Reset all slabs' free lists and re-stamp tags */
     for (int i = 0; i < POOL_SIZE_CLASSES; i++) {
@@ -351,7 +450,11 @@ void* mem_alloc(mem_pool_t* pool, size_t size) {
         size_t alloc_size = sizeof(oversize_header_t) + size;
         oversize_header_t* hdr = (oversize_header_t*)malloc(alloc_size);
         if (!hdr) return NULL;
+        hdr->magic = OVERSIZE_MAGIC;
         hdr->total_size = alloc_size;
+        turbo_mutex_lock(&pool->lock);
+        oversize_link_nolock(pool, hdr);
+        turbo_mutex_unlock(&pool->lock);
         atomic_fetch_add(&pool->total_used, alloc_size);
         return (char*)hdr + sizeof(oversize_header_t);
     }
@@ -364,11 +467,16 @@ void* mem_alloc(mem_pool_t* pool, size_t size) {
 }
 
 void mem_free(mem_pool_t* pool, void* ptr) {
-    /* NOT IMPLEMENTED: This pool uses arena-style management.
-     * Use mem_reset() or mem_destroy() for bulk deallocation.
-     * Individual frees are not supported. */
-    (void)pool;
-    (void)ptr;
+    if (!pool || !ptr) return;
+    oversize_header_t* hdr = (oversize_header_t*)((char*)ptr - sizeof(oversize_header_t));
+    if (hdr->magic == OVERSIZE_MAGIC) {
+        turbo_mutex_lock(&pool->lock);
+        oversize_unlink_nolock(pool, hdr);
+        turbo_mutex_unlock(&pool->lock);
+        atomic_fetch_sub(&pool->total_used, hdr->total_size);
+        hdr->magic = 0;
+        free(hdr);
+    }
 }
 
 char* mem_strdup(mem_pool_t* pool, const char* str) {
@@ -519,7 +627,15 @@ static void release_external_buffer(mem_buffer_t* buffer) {
     if (buffer->free_cb) {
         buffer->free_cb(buffer->data, buffer->free_user_data);
     }
-    free(buffer);
+    buffer->data = NULL;
+    buffer->capacity = 0;
+    buffer->used = 0;
+    buffer->pool = NULL;
+    buffer->free_cb = NULL;
+    buffer->free_user_data = NULL;
+    buffer->is_external = 0;
+    buffer->is_oversized = 0;
+    external_wrapper_release(buffer);
 }
 
 static void release_internal_buffer(mem_buffer_t* buffer) {
@@ -588,7 +704,7 @@ mem_buffer_t* mem_wrap_external(void* data, size_t size,
                                 void* user_data) {
     if (!data || size == 0) return NULL;
 
-    mem_buffer_t* buffer = (mem_buffer_t*)calloc(1, sizeof(mem_buffer_t));
+    mem_buffer_t* buffer = external_wrapper_acquire();
     if (!buffer) return NULL;
 
     buffer->data = (char*)data;

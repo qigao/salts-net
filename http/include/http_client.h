@@ -139,6 +139,10 @@ CXX_C_API http_response_t *http_patch(http_client_t *client, const char *url, co
 CXX_C_API http_response_t *http_post_json(http_client_t *client, const char *url,
                                           const char *json_string);
 
+CXX_C_API http_response_t *http_sse_post_json(http_client_t *client, const char *url,
+                                              const char *json_string, http_data_cb data_cb,
+                                              void *user_data);
+
 CXX_C_API http_response_t *http_post_json_object(http_client_t *client, const char *url,
                                                  json_value_t *json_obj);
 

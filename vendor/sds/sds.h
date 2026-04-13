@@ -34,7 +34,8 @@
 #define __SDS_H
 
 #define SDS_MAX_PREALLOC (1024*1024)
-extern const char *SDS_NOINIT;
+/* Sentinel for sdsnewlen(): leave payload uninitialized. */
+#define SDS_NOINIT ((const void *)-1)
 
 #include <sys/types.h>
 #include <stdarg.h>

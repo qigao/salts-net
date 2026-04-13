@@ -39,7 +39,7 @@ target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/CoroNet/include>
-         $<INSTALL_INTERFACE:include>
+         $<INSTALL_INTERFACE:include/iris>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/vendors)
 
 # Platform-specific fixes
@@ -59,4 +59,5 @@ if(BUILD_TESTS)
 endif()
 
 # Install headers
-cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION include/iris)
+

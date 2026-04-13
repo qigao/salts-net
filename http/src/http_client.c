@@ -1584,7 +1584,8 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
   TLOG_INFO("Executing {} {}", llhttp_method_name((llhttp_method_t)method), url);
   recv_http_response(c, transport, resp, method, url, data_cb, data_cb_ud, c->progress_callback,
                      c->progress_user_data);
-  TLOG_INFO("Done executing {}, status: {}, err: {}", url, resp->status_code, ENUM_NAME(resp->error_code));
+  TLOG_INFO("Done executing {}, status: {}, err: {} ({})", url, resp->status_code, 
+            http_error_to_str(resp->error_code), (int)resp->error_code);
   c->stats.bytes_received += resp->body_len + resp->headers_len;
 
   if (!data_cb && c->compression_enabled && resp->body && resp->body_len > 0) {

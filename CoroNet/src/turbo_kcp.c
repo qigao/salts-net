@@ -193,10 +193,35 @@ static void on_timer_tick(turbo_timer_t* timer) {
   (void)kcp_post_wait(k->ctx, kcp_tick_task, k, NULL);
 }
 
+static void turbo_kcp_cleanup_create_failure(turbo_kcp_t *k, int external_ref_held) {
+  if (!k) {
+    return;
+  }
+
+  if (k->update_timer) {
+    turbo_timer_stop(k->update_timer);
+    turbo_timer_set_data(k->update_timer, NULL);
+    turbo_timer_destroy(k->update_timer);
+    k->update_timer = NULL;
+  }
+
+  if (k->ikcp) {
+    ikcp_release(k->ikcp);
+    k->ikcp = NULL;
+  }
+
+  if (external_ref_held && k->ctx) {
+    coro_context_release_external(k->ctx);
+  }
+
+  free(k);
+}
+
 /* ── Public API ───────────────────────────────────────────── */
 
 turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   turbo_kcp_t* k = calloc(1, sizeof(turbo_kcp_t));
+  int external_ref_held = 0;
   if (!k) {
     kcp_record_error(ctx, TURBO_ENOMEM);
     return NULL;
@@ -205,14 +230,12 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   k->ctx = ctx;
   if (ctx) {
     coro_context_acquire_external(ctx);
+    external_ref_held = 1;
   }
   k->ikcp = ikcp_create(12345, k); /* TODO: conv id management */
   if (!k->ikcp) {
     kcp_record_error(ctx, TURBO_ENOMEM);
-    if (ctx) {
-      coro_context_release_external(ctx);
-    }
-    free(k);
+    turbo_kcp_cleanup_create_failure(k, external_ref_held);
     return NULL;
   }
   
@@ -235,11 +258,7 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
     turbo_timer_set_data(k->update_timer, k);
   } else {
     kcp_record_error(ctx, TURBO_ENOMEM);
-    ikcp_release(k->ikcp);
-    if (ctx) {
-      coro_context_release_external(ctx);
-    }
-    free(k);
+    turbo_kcp_cleanup_create_failure(k, external_ref_held);
     return NULL;
   }
   

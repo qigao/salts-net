@@ -12,6 +12,7 @@
 #ifndef CORO_INTERNAL_H
 #define CORO_INTERNAL_H
 
+#include "turbo_build_config_internal.h"
 #include "internal.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
@@ -78,6 +79,53 @@ typedef struct {
   mem_buffer_t *owner;
 } coro_recv_header_t;
 
+static inline void coro_recv_header_store_before_data(void *data, uint32_t magic,
+                                                      size_t size, mem_buffer_t *owner) {
+  coro_recv_header_t hdr;
+
+  hdr.magic = magic;
+  hdr.size = size;
+  hdr.owner = owner;
+  memcpy((char *)data - sizeof(coro_recv_header_t), &hdr, sizeof(hdr));
+}
+
+static inline int coro_recv_header_load_from_data(const void *data, coro_recv_header_t *out) {
+  if (!data || !out) {
+    return 0;
+  }
+
+  memcpy(out, (const char *)data - sizeof(coro_recv_header_t), sizeof(*out));
+  return 1;
+}
+
+static inline int coro_recv_slice_is_pooled_view(const mem_slice_t *slice, coro_recv_header_t *out) {
+  size_t offset;
+  coro_recv_header_t hdr;
+
+  if (!slice || !slice->buffer || !slice->data) {
+    return 0;
+  }
+
+  offset = (size_t)(slice->data - slice->buffer->data);
+  if (offset < sizeof(coro_recv_header_t)) {
+    return 0;
+  }
+  if (offset + slice->length > slice->buffer->used) {
+    return 0;
+  }
+  if (!coro_recv_header_load_from_data(slice->data, &hdr)) {
+    return 0;
+  }
+  if (hdr.magic != CORO_RECV_MAGIC_POOLED || hdr.owner != slice->buffer) {
+    return 0;
+  }
+
+  if (out) {
+    *out = hdr;
+  }
+  return 1;
+}
+
 /** @brief Handler for receiving data from transport. */
 void coro_socket_handle_transport_recv(coro_socket_t *s, const mem_slice_t *slice);
 
@@ -86,6 +134,9 @@ void coro_socket_handle_transport_connect(coro_socket_t *s, int status);
 
 /** @brief Handler for transport closure. */
 void coro_socket_handle_transport_close(coro_socket_t *s);
+
+/** @brief TLS handshake instrumentation hooks implemented in turbo_stream_tls.c. */
+void turbo_stream_tls_note_waiter_signal(turbo_stream_t *s, uint64_t value_ns);
 
 /** @brief Slot in the lock-free ring buffer for post queue. */
 typedef struct {
@@ -160,6 +211,7 @@ struct coro_transport_ops_s {
   int (*listen)(coro_socket_t *s, int backlog);
   int (*accept)(coro_socket_t *s, coro_socket_t **accepted_socket);
   int (*send)(coro_socket_t *s, const char *data, size_t len);
+  int (*send_owned_recv)(coro_socket_t *s, char *data, size_t len);
   int (*recv_start)(coro_socket_t *s);
   void (*recv_stop)(coro_socket_t *s);
   int (*get_local_addr)(coro_socket_t *s, struct sockaddr_storage *addr);
@@ -233,7 +285,11 @@ struct coro_socket_s {
   int timed_out;         /**< 1 = last op timed out */
   int timer_active;      /**< 1 = timeout timer is currently running and holds a reference */
   int close_pending;     /**< 1 = transport close was requested and holds a reference */
-  int destroy_wait_handoff; /**< 1 = destroy resumed a waiter and handed it the wait ref */
+  int destroy_wait_handoff; /**< 1 = a resumed waiter still owns the pending wait reference */
+  int wait_metric_tls_handshake; /**< 1 = current wait should feed TLS handshake timing */
+  turbo_stream_t *wait_metric_stream; /**< TLS stream associated with the current wait metric */
+  uint64_t wait_handler_entry_ns; /**< Handler entry timestamp for current wait */
+  uint64_t wait_resume_signal_ns; /**< Scheduler wake timestamp for current wait */
 
   /* ── Lifecycle ─────────────────────────────────────────── */
   int ref_count;         /**< Reference count for safe destruction */
@@ -263,6 +319,8 @@ struct coro_socket_s {
 static inline void coro_set_wait(coro_socket_t *client) {
   client->co_wait = coro_running();
   client->co_is_scheduled = coro_is_scheduled(client->co_wait);
+  client->wait_handler_entry_ns = 0;
+  client->wait_resume_signal_ns = 0;
   if (client->co_is_scheduled) {
     coro_set_waiting_for_io(client->co_wait, 1);
   }
@@ -340,6 +398,16 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
     }
 
     /* Single Case */
+    if (coro_recv_slice_is_pooled_view(slice, NULL)) {
+      mem_ref(slice->buffer);
+      coro_recv_header_store_before_data(slice->data, CORO_RECV_MAGIC_POOLED,
+                                         slice->length, slice->buffer);
+      client->recv_data = slice->data;
+      client->recv_len = slice->length;
+      client->status = 0;
+      return;
+    }
+
     char *base;
     int is_pooled = 0;
     mem_buffer_t *owner = NULL;
@@ -397,7 +465,7 @@ static inline void coro_resume_waiter(coro_socket_t *client) {
 
   if (client->co_is_scheduled) {
     // Scheduler-managed: clear waiting_for_io flag so scheduler will resume
-    // it on next tick. Do NOT resume here to avoid use-after-free.
+    // it on a later tick. Do not resume here.
     coro_set_waiting_for_io(co, 0);
     return;
   }
@@ -406,6 +474,25 @@ static inline void coro_resume_waiter(coro_socket_t *client) {
   if (co != coro_running()) {
     coro_resume(co);
   }
+}
+
+static inline void coro_resume_waiter_with_handoff(coro_socket_t *client) {
+  if (!client || !client->co_wait) {
+    return;
+  }
+
+  if (client->co_is_scheduled) {
+    if (client->wait_metric_tls_handshake && client->wait_handler_entry_ns != 0 &&
+        client->wait_metric_stream) {
+      turbo_stream_tls_note_waiter_signal(client->wait_metric_stream,
+                                          turbo_hrtime() - client->wait_handler_entry_ns);
+      client->wait_handler_entry_ns = 0;
+    }
+    client->destroy_wait_handoff = 1;
+    client->wait_resume_signal_ns = turbo_hrtime();
+  }
+
+  coro_resume_waiter(client);
 }
 
 /**

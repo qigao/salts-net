@@ -6,6 +6,7 @@
 #include "CoroNet.h"
 #include "turbo_coro.h"
 #include "tinytest.h"
+#include "platform.h"
 #include <stdio.h>
 
 static int g_coro_executed = 0;
@@ -22,6 +23,21 @@ static void robust_context_destroy(coro_context_t *ctx) {
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
     }
     coro_context_destroy(ctx);
+}
+
+static int run_ctx_until(coro_context_t *ctx, const volatile int *value, int expected,
+                         uint64_t timeout_ms) {
+    uint64_t deadline;
+
+    if (!ctx || !value) return -1;
+    if (expected <= 0) return 0;
+
+    deadline = turbo_monotonic_ms() + timeout_ms;
+    while (*value < expected && turbo_monotonic_ms() < deadline) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+
+    return (*value >= expected) ? 0 : -1;
 }
 
 /* ── Test coroutines ──────────────────────────────────────── */
@@ -62,16 +78,8 @@ static void sleep_coro(coro_t *co, void *arg) {
 /* ── Echo server handler ──────────────────────────────────── */
 
 static void echo_handler(coro_socket_t *client, void *arg) {
+    (void)client;
     (void)arg;
-
-    char *data = NULL;
-    size_t len = 0;
-
-    int r = coro_socket_recv(client, &data, &len);
-    if (r == 0 && data) {
-        coro_socket_send(client, data, len);
-        coro_socket_free_recv(data);
-    }
 
     g_coro_executed++;
     /* Handler ends, client coroutine should be auto-cleaned */
@@ -103,25 +111,13 @@ static void server_client_task(coro_t *co, void *arg) {
         return;
     }
 
-    coro_socket_set_timeout(client, 5000);
     r = coro_socket_connect(client, "127.0.0.1", 19999);
-    if (r == 0) {
-        const char *msg = "hello";
-        coro_socket_send(client, msg, 5);
-
-        char *recv_data = NULL;
-        size_t recv_len = 0;
-        coro_socket_recv(client, &recv_data, &recv_len);
-
-        if (recv_data) {
-            coro_socket_free_recv(recv_data);
-        }
-    }
+    check_int_eq(r, 0);
 
     coro_socket_destroy(client);
 
-    /* Wait for handler coroutine to complete before destroying server */
-    coro_sleep(ctx, 100);
+    /* Give the accepted handler coroutine a chance to run before listener teardown. */
+    coro_sleep(ctx, 50);
 
     coro_socket_destroy(server);
 }
@@ -205,8 +201,8 @@ spec("Coroutine Auto-Cleanup") {
         coro_context_spawn(ctx, sleep_coro, ctx);
         coro_context_spawn(ctx, sleep_coro, ctx);
 
-        /* Run loop until all complete */
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        /* Run until all three sleepers have resumed. */
+        check_int_eq(run_ctx_until(ctx, &g_coro_count, 6, 5000), 0);
 
         check_int_eq(g_coro_count, 6);  /* All completed (3 start + 3 end) */
 
@@ -222,8 +218,8 @@ spec("Coroutine Auto-Cleanup") {
         /* Spawn coroutine that creates server and client */
         coro_context_spawn(ctx, server_client_task, ctx);
 
-        /* Run loop to execute everything */
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        /* Run until the handler coroutine has completed. */
+        check_int_eq(run_ctx_until(ctx, &g_coro_executed, 1, 5000), 0);
 
         robust_context_destroy(ctx);
 

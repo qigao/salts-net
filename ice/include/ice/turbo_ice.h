@@ -69,6 +69,11 @@ typedef enum {
 } ice_candidate_type_t;
 
 /**
+ * @brief Convert ice_candidate_type_t to string.
+ */
+CXX_C_API const char *ice_candidate_type_name(ice_candidate_type_t type);
+
+/**
  * ICE candidate transport protocol
  */
 typedef enum {
@@ -99,6 +104,11 @@ typedef enum {
 } ice_state_t;
 
 /**
+ * @brief Convert ice_state_t to string.
+ */
+CXX_C_API const char *ice_state_name(ice_state_t state);
+
+/**
  * ICE gathering state
  */
 typedef enum {
@@ -106,6 +116,11 @@ typedef enum {
     ICE_GATHERING_GATHERING,
     ICE_GATHERING_COMPLETE
 } ice_gathering_state_t;
+
+/**
+ * @brief Convert ice_gathering_state_t to string.
+ */
+CXX_C_API const char *ice_gathering_state_name(ice_gathering_state_t state);
 
 /**
  * ICE candidate pair state

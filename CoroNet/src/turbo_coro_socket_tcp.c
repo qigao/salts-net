@@ -110,12 +110,17 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
     return r;
   }
 
+  start_timeout_timer(s);
   coro_yield();
   {
     int status = s->status;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
       release_client(s);
+    }
+    if (status != 0) {
+      s->connected = 0;
+      tcp_discard_stream(s);
     }
     return status;
   }
@@ -312,6 +317,11 @@ static void tcp_close(coro_socket_t *s) {
   if (s->native_tcp_state) {
     tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
     if (ls->listener) turbo_stream_listener_close(ls->listener);
+    if (s->co_wait) {
+      s->accept_pending = 0;
+      s->status = (s->status == 0) ? TURBO_ECANCELED : s->status;
+      coro_resume_waiter(s);
+    }
     tcp_accept_node_t *n = ls->head;
     while (n) {
       tcp_accept_node_t *nx = n->next;

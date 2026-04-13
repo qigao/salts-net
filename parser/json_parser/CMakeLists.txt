@@ -10,6 +10,7 @@ cmake_add_source(SOURCE_FILES DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${JSON_LEXER_GEN}
                                   ${JSON_GRAMMAR_GEN})
+add_dependencies(${TARGET_NAME} ${JSON_LEXER_TARGET} ${JSON_GRAMMAR_TARGET})
 
 cmake_config_target(${TARGET_NAME}
   ALIAS TurboNet::JsonParser

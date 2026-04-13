@@ -13,6 +13,7 @@
 #include "CoroNet/turbo_coro_context.h"
 #include "turbo_buffer.h"
 #include "turbo_thread.h"
+#include "tlog.h"
 #include "ring_buffer_spsc.h"
 
 #include <sys/event.h>
@@ -26,8 +27,8 @@
 
 /* ── Constants ───────────────────────────────────────────── */
 
-#define EVENT_RING_SIZE 256
-#define DATA_RING_SIZE  (64 * 1024)
+#define EVENT_RING_BYTES (64 * 1024)
+#define DATA_RING_SIZE   (64 * 1024)
 
 typedef enum {
     SEP_OP_NONE,
@@ -43,6 +44,8 @@ typedef struct {
     int kind;
     int status;
     void *extra;
+    struct sockaddr_storage peer_addr;
+    socklen_t peer_addr_len;
 } stream_kqueue_event_t;
 
 typedef struct {
@@ -74,7 +77,9 @@ static void set_nonblocking(int fd) {
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-static void post_event(stream_kqueue_state_t *st, ep_op_kind_t kind, int status, void *extra);
+static void post_event(stream_kqueue_state_t *st, ep_op_kind_t kind, int status,
+                       void *extra, const struct sockaddr *peer_addr,
+                       socklen_t peer_addr_len);
 static void on_kqueue_event_bounce(void *arg1, void *arg2);
 static void handle_read_event(stream_kqueue_state_t *st, stream_kqueue_event_t *ev);
 static void handle_write_event(stream_kqueue_state_t *st, stream_kqueue_event_t *ev);
@@ -95,7 +100,9 @@ static uint8_t *wait_ring_write(stream_kqueue_state_t *st, ring_spsc_t *ring, si
     }
 }
 
-static void post_event(stream_kqueue_state_t *st, ep_op_kind_t kind, int status, void *extra) {
+static void post_event(stream_kqueue_state_t *st, ep_op_kind_t kind, int status,
+                       void *extra, const struct sockaddr *peer_addr,
+                       socklen_t peer_addr_len) {
     uint8_t *ptr;
 
     for (;;) {
@@ -105,6 +112,15 @@ static void post_event(stream_kqueue_state_t *st, ep_op_kind_t kind, int status,
             ev->kind = kind;
             ev->status = status;
             ev->extra = extra;
+            memset(&ev->peer_addr, 0, sizeof(ev->peer_addr));
+            ev->peer_addr_len = 0;
+            if (peer_addr && peer_addr_len > 0) {
+                if (peer_addr_len > (socklen_t)sizeof(ev->peer_addr)) {
+                    peer_addr_len = (socklen_t)sizeof(ev->peer_addr);
+                }
+                memcpy(&ev->peer_addr, peer_addr, (size_t)peer_addr_len);
+                ev->peer_addr_len = peer_addr_len;
+            }
             ring_spsc_write_release(&st->event_ring, sizeof(stream_kqueue_event_t));
             break;
         }
@@ -168,12 +184,12 @@ static void flush_write_ring(stream_kqueue_state_t *st) {
             break;
         }
 
-        post_event(st, SEP_OP_WRITE, (sent < 0) ? -errno : TURBO_EOF, NULL);
+        post_event(st, SEP_OP_WRITE, (sent < 0) ? -errno : TURBO_EOF, NULL, NULL, 0);
         return;
     }
 
     if (wrote) {
-        post_event(st, SEP_OP_WRITE, 0, NULL);
+        post_event(st, SEP_OP_WRITE, 0, NULL, NULL, 0);
     }
 }
 
@@ -195,7 +211,9 @@ static void on_kqueue_event_bounce(void *arg1, void *arg2) {
                 case SEP_OP_ACCEPT: {
                     turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
                     turbo_stream_t *child = (turbo_stream_t *)ev->extra;
-                    if (l->on_accept) l->on_accept(l, child);
+                    void *peer = (ev->peer_addr_len > 0) ? (void *)&ev->peer_addr : NULL;
+                    l->active_connections++;
+                    if (l->on_accept) l->on_accept(l, child, peer);
                     break;
                 }
                 case SEP_OP_CONNECT: {
@@ -260,17 +278,18 @@ static void* stream_kqueue_worker(void* arg) {
                             if (kqueue_init_with_socket(child, client_fd) == 0) {
                                 child->connected = 1;
                                 child->listener = l;
-                                post_event(st, SEP_OP_ACCEPT, 0, child);
+                                post_event(st, SEP_OP_ACCEPT, 0, child,
+                                           (const struct sockaddr *)&addr, addr_len);
                             } else {
                                 turbo_stream_destroy(child);
                                 st->stopping = 1;
-                                post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL);
+                                post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL, NULL, 0);
                                 break;
                             }
                         } else {
                             close(client_fd);
                             st->stopping = 1;
-                            post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL);
+                            post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL, NULL, 0);
                             break;
                         }
                     }
@@ -281,7 +300,7 @@ static void* stream_kqueue_worker(void* arg) {
                         int err = 0; socklen_t len = sizeof(err);
                         getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len);
                         st->connected = 1;
-                        post_event(st, SEP_OP_CONNECT, (err == 0) ? 0 : -err, NULL);
+                        post_event(st, SEP_OP_CONNECT, (err == 0) ? 0 : -err, NULL, NULL, 0);
                     }
                     size_t avail = 0;
                     (void)avail;
@@ -293,9 +312,9 @@ static void* stream_kqueue_worker(void* arg) {
                         uint8_t *dest = wait_ring_write(st, &st->read_ring, (size_t)n);
                         memcpy(dest, io_buf, (size_t)n);
                         ring_spsc_write_release(&st->read_ring, (size_t)n);
-                        post_event(st, SEP_OP_READ, 0, NULL);
+                        post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
                     } else if (n == 0) {
-                        post_event(st, SEP_OP_READ, TURBO_EOF, NULL);
+                        post_event(st, SEP_OP_READ, TURBO_EOF, NULL, NULL, 0);
                     }
                 }
             }
@@ -307,35 +326,60 @@ static void* stream_kqueue_worker(void* arg) {
 /* ── Backend Ops ─────────────────────────────────────────── */
 
 static int kqueue_init_state(stream_kqueue_state_t **out, void *owner, coro_context_t *ctx, int is_listener) {
-    stream_kqueue_state_t *st = (stream_kqueue_state_t *)calloc(1, sizeof(stream_kqueue_state_t));
-    if (!st) return TURBO_ENOMEM;
-    st->owner = owner; st->ctx = ctx; st->fd = -1; st->is_listener = is_listener;
-    st->kq_fd = kqueue();
-    if (st->kq_fd < 0) { free(st); return -errno; }
+    stream_kqueue_state_t *st = NULL;
+    int rc = 0;
 
-    st->event_buf = (uint8_t *)malloc(EVENT_RING_SIZE * sizeof(stream_kqueue_event_t));
-    if (!st->event_buf) {
-        kqueue_cleanup_state(st);
-        return TURBO_ENOMEM;
+    st = (stream_kqueue_state_t *)calloc(1, sizeof(stream_kqueue_state_t));
+    if (!st) return TURBO_ENOMEM;
+
+    st->owner = owner;
+    st->ctx = ctx;
+    st->fd = -1;
+    st->kq_fd = -1;
+    st->is_listener = is_listener;
+    st->kq_fd = kqueue();
+    if (st->kq_fd < 0) {
+        rc = -errno;
+        goto fail;
     }
-    ring_spsc_init(&st->event_ring, st->event_buf, EVENT_RING_SIZE * sizeof(stream_kqueue_event_t));
+
+    st->event_buf = (uint8_t *)malloc(EVENT_RING_BYTES);
+    if (!st->event_buf) {
+        rc = TURBO_ENOMEM;
+        goto fail;
+    }
+    if (!ring_spsc_init(&st->event_ring, st->event_buf, EVENT_RING_BYTES)) {
+        rc = TURBO_EINVAL;
+        goto fail;
+    }
 
     if (!is_listener) {
         st->read_buf = (uint8_t *)malloc(DATA_RING_SIZE);
         if (!st->read_buf) {
-            kqueue_cleanup_state(st);
-            return TURBO_ENOMEM;
+            rc = TURBO_ENOMEM;
+            goto fail;
         }
-        ring_spsc_init(&st->read_ring, st->read_buf, DATA_RING_SIZE);
+        if (!ring_spsc_init(&st->read_ring, st->read_buf, DATA_RING_SIZE)) {
+            rc = TURBO_EINVAL;
+            goto fail;
+        }
         st->write_buf = (uint8_t *)malloc(DATA_RING_SIZE);
         if (!st->write_buf) {
-            kqueue_cleanup_state(st);
-            return TURBO_ENOMEM;
+            rc = TURBO_ENOMEM;
+            goto fail;
         }
-        ring_spsc_init(&st->write_ring, st->write_buf, DATA_RING_SIZE);
+        if (!ring_spsc_init(&st->write_ring, st->write_buf, DATA_RING_SIZE)) {
+            rc = TURBO_EINVAL;
+            goto fail;
+        }
     }
+
     *out = st;
     return 0;
+
+fail:
+    kqueue_cleanup_state(st);
+    return rc;
 }
 
 static void kqueue_cleanup_state(stream_kqueue_state_t *st) {
@@ -369,14 +413,17 @@ int kqueue_init_with_socket(turbo_stream_t *s, int existing) {
     st->connected = 1;
     r = turbo_thread_create(&st->worker_thread, (turbo_thread_cb)stream_kqueue_worker, st);
     if (r != 0) {
-        close(st->fd);
-        st->fd = -1;
+        s->backend_data = NULL;
+        kqueue_cleanup_state(st);
+        return r;
     }
     return r;
 }
 
 static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a) {
     stream_kqueue_state_t *st = (stream_kqueue_state_t *)s->backend_data;
+    int rc;
+
     st->fd = socket(a->sa_family, SOCK_STREAM, 0);
     if (st->fd < 0) return -errno;
     set_nonblocking(st->fd);
@@ -393,7 +440,13 @@ static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a) {
         st->fd = -1;
         return err;
     }
-    return turbo_thread_create(&st->worker_thread, (turbo_thread_cb)stream_kqueue_worker, st);
+    rc = turbo_thread_create(&st->worker_thread, (turbo_thread_cb)stream_kqueue_worker, st);
+    if (rc != 0) {
+        close(st->fd);
+        st->fd = -1;
+        return rc;
+    }
+    return 0;
 }
 
 static int kqueue_connect_pipe(turbo_stream_t *s, const char *n) {

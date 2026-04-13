@@ -326,29 +326,26 @@ static int sax_stop_on_first_key(void *ctx, const char *key, size_t len) {
 }
 
 #define JSON_DOM_BENCH(IDX)                                                                        \
-  benchmark_bytes(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations,                       \
-                  g_benchmarks[(IDX)].json_len) {                                                  \
+  benchmark(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations, 1) {                                                        \
     json_value_t *v = json_parse(g_benchmarks[(IDX)].json, g_benchmarks[(IDX)].json_len);         \
     check_not_null(v);                                                                             \
     json_free(v);                                                                                  \
   }
 
 #define JSON_SAX_BENCH(IDX)                                                                        \
-  benchmark_bytes(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations,                       \
-                  g_benchmarks[(IDX)].json_len) {                                                  \
+  benchmark(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations, 1) {                                                        \
     check_int_eq(json_parse_sax(g_benchmarks[(IDX)].json, g_benchmarks[(IDX)].json_len,           \
                                 &null_handler, NULL),                                              \
                  0);                                                                               \
   }
 
 #define JSON_DOM_QUERY_BENCH(IDX)                                                                  \
-  benchmark_bytes(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations,                       \
-                  g_benchmarks[(IDX)].json_len) {                                                  \
+  benchmark(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations, 1) {                                                        \
     benchmark_dom_query_workload(&g_benchmarks[(IDX)]);                                           \
   }
 
 #define JSON_SAX_EARLY_STOP_BENCH(IDX)                                                             \
-  benchmark(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations) {                           \
+  benchmark(g_benchmarks[(IDX)].name, g_benchmarks[(IDX)].iterations, 1) {  \
     sax_early_stop_ctx_t early_ctx = {0};                                                          \
     check_int_eq(json_parse_sax(g_benchmarks[(IDX)].json, g_benchmarks[(IDX)].json_len,           \
                                 &early_stop_handler, &early_ctx),                                  \
@@ -374,8 +371,8 @@ suite("json_parser benchmark") {
   after() { free_benchmarks(); }
 
   bench("DOM mode") {
-    benchmark_titles_full("test", "size", "iters", "avg(us)", "ns/op", "min(us)", "max(us)",
-                          "ops/s", "MB/s") {
+    benchmark_titles("test", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s",
+                     "size", "MB/s") {
       JSON_DOM_BENCH(BENCH_TINY_OBJECT);
       JSON_DOM_BENCH(BENCH_SMALL_OBJECT);
       JSON_DOM_BENCH(BENCH_ARRAY_100_NUMBERS);
@@ -395,8 +392,8 @@ suite("json_parser benchmark") {
   }
 
   bench("SAX mode") {
-    benchmark_titles_full("test", "size", "iters", "avg(us)", "ns/op", "min(us)", "max(us)",
-                          "ops/s", "MB/s") {
+    benchmark_titles("test", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s",
+                     "size", "MB/s") {
       JSON_SAX_BENCH(BENCH_TINY_OBJECT);
       JSON_SAX_BENCH(BENCH_SMALL_OBJECT);
       JSON_SAX_BENCH(BENCH_ARRAY_100_NUMBERS);
@@ -416,8 +413,8 @@ suite("json_parser benchmark") {
   }
 
   bench("DOM parse+query") {
-    benchmark_titles_full("test", "size", "iters", "avg(us)", "ns/op", "min(us)", "max(us)",
-                          "ops/s", "MB/s") {
+    benchmark_titles("test", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s",
+                     "size", "MB/s") {
       JSON_DOM_QUERY_BENCH(BENCH_SMALL_OBJECT);
       JSON_DOM_QUERY_BENCH(BENCH_ARRAY_100_OBJECTS);
       JSON_DOM_QUERY_BENCH(BENCH_STRINGS_100_X_1000);
@@ -426,7 +423,8 @@ suite("json_parser benchmark") {
   }
 
   bench("SAX early-stop") {
-    benchmark_titles("test", "iters", "avg(us)", "min(us)", "max(us)", "ops/s") {
+    benchmark_titles("test", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s",
+                     NULL, NULL) {
       JSON_SAX_EARLY_STOP_BENCH(BENCH_SMALL_OBJECT);
       JSON_SAX_EARLY_STOP_BENCH(BENCH_ARRAY_100_OBJECTS);
       JSON_SAX_EARLY_STOP_BENCH(BENCH_STRINGS_100_X_1000);

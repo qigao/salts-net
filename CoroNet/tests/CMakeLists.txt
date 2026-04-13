@@ -2,7 +2,6 @@
 
 # Detect other test files automatically
 cmake_add_source(TEST_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR} PATTERNS "test*.c")
-
 # Create executables and link libraries for each test
 cmake_add_test(
   SOURCES ${TEST_SOURCES}

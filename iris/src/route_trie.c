@@ -8,7 +8,7 @@
 #include "turbo_buffer.h"
 
 // Forward declarations for re2c functions
-extern http_method_t parse_http_method_re2c(const char *method, size_t len);
+extern route_method_index_t parse_http_method_re2c(const char *method, size_t len);
 extern int tokenize_path_re2c(mem_pool_t *arena, const char *path, tokenized_path_t *result);
 
 #define TRIE_NODE_BLOCK_CAPACITY 256
@@ -190,7 +190,7 @@ bool route_trie_match(route_trie_t *trie,
     if (!trie || !method || !tokenized_path || !match)
         return false;
 
-    http_method_t method_idx = get_method_index(method);
+    route_method_index_t method_idx = get_method_index(method);
     if (method_idx == METHOD_UNKNOWN)
         return false;
 
@@ -300,7 +300,7 @@ static void trie_node_free(trie_node_t *node)
 }
 
 // Get HTTP method index from string
-http_method_t get_method_index(const char *method)
+route_method_index_t get_method_index(const char *method)
 {
     if (!method)
         return METHOD_UNKNOWN;
@@ -359,7 +359,7 @@ static int route_trie_add_impl(route_trie_t *trie, const char *method, const cha
     if (!trie || !method || !path || !handler)
         return -1;
 
-    http_method_t method_idx = get_method_index(method);
+    route_method_index_t method_idx = get_method_index(method);
     if (method_idx == METHOD_UNKNOWN)
         return -1;
 
@@ -509,3 +509,5 @@ void route_trie_free(route_trie_t *trie)
     trie_node_pool_free((trie_node_pool_t *)trie->node_pool);
     free(trie);
 }
+
+

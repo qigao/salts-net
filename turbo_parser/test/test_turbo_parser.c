@@ -45,6 +45,46 @@ spec("turbo_parser") {
       turbo_free_json(&root);
       check_null(root);
     }
+
+    it("should deep clone nested JSON values") {
+      json_value_t *root = turbo_json_create_object();
+      json_value_t *items = turbo_json_create_array();
+      json_value_t *meta = turbo_json_create_object();
+      json_value_t *clone;
+      char *original_json;
+      char *clone_json;
+
+      check_not_null(root);
+      check_not_null(items);
+      check_not_null(meta);
+
+      turbo_json_array_add(items, turbo_json_create_number(1));
+      turbo_json_object_set_string(meta, "status", "ok");
+      turbo_json_object_add(root, "items", items);
+      turbo_json_object_add(root, "meta", meta);
+
+      clone = turbo_json_clone(root);
+      check_not_null(clone);
+
+      turbo_json_array_add(items, turbo_json_create_number(2));
+      turbo_json_object_set_string(meta, "owner", "root");
+
+      original_json = turbo_json_serialize(root, NULL);
+      clone_json = turbo_json_serialize(clone, NULL);
+      check_not_null(original_json);
+      check_not_null(clone_json);
+      check(strstr(original_json, "\"items\":[1,2]") != NULL);
+      check(strstr(original_json, "\"owner\":\"root\"") != NULL);
+      check(strstr(clone_json, "\"items\":[1]") != NULL);
+      check(strstr(clone_json, "\"owner\":\"root\"") == NULL);
+      check(strstr(clone_json, "\"status\":\"ok\"") != NULL);
+
+      turbo_json_serialize_free(clone_json);
+      turbo_json_serialize_free(original_json);
+      turbo_free_json(&clone);
+      turbo_free_json(&root);
+    }
+
   }
 
   describe("INI") {

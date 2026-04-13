@@ -28,6 +28,21 @@ typedef struct
     int capacity;
 } tokenized_path_t;
 
+typedef int route_method_index_t;
+
+enum
+{
+    METHOD_GET = 0,
+    METHOD_POST = 1,
+    METHOD_PUT = 2,
+    METHOD_DELETE = 3,
+    METHOD_PATCH = 4,
+    METHOD_HEAD = 5,
+    METHOD_OPTIONS = 6,
+    METHOD_UNKNOWN = 7,
+    ROUTE_METHOD_COUNT = 8
+};
+
 typedef struct trie_node
 {
     struct trie_node *children[128];  // ASCII characters
@@ -35,9 +50,9 @@ typedef struct trie_node
     struct trie_node *wildcard_child; // For * wildcard
     char *param_name;                 // Name of parameter if this is a param node
     bool is_end;                      // Marks end of a route
-    RequestHandler handlers[8];       // Handlers for different HTTP methods
-    void *middleware_ctx[8];          // Middleware context for each method
-    unsigned char stream_body[8];     // 1 when request body should be streamed
+    RequestHandler handlers[ROUTE_METHOD_COUNT];       // Handlers for different HTTP methods
+    void *middleware_ctx[ROUTE_METHOD_COUNT];          // Middleware context for each method
+    unsigned char stream_body[ROUTE_METHOD_COUNT];     // 1 when request body should be streamed
 } trie_node_t;
 
 typedef struct
@@ -70,24 +85,12 @@ typedef struct
     int param_count;
 } route_match_t;
 
-typedef enum
-{
-    METHOD_GET = 0,
-    METHOD_POST = 1,
-    METHOD_PUT = 2,
-    METHOD_DELETE = 3,
-    METHOD_PATCH = 4,
-    METHOD_HEAD = 5,
-    METHOD_OPTIONS = 6,
-    METHOD_UNKNOWN = 7
-} http_method_t;
-
 // Path tokenization functions
 /* Phase IRIS-1: Updated to use mem_pool_t */
 CXX_C_API int tokenize_path(mem_pool_t *arena, const char *path, tokenized_path_t *result);
 
 // re2c-based route parsing functions
-CXX_C_API http_method_t parse_http_method_re2c(const char *method, size_t len);
+CXX_C_API route_method_index_t parse_http_method_re2c(const char *method, size_t len);
 CXX_C_API int tokenize_path_re2c(mem_pool_t *arena, const char *path, tokenized_path_t *result);
 CXX_C_API int count_path_segments_re2c(const char *path, size_t len);
 CXX_C_API bool extract_path_segment_re2c(const char **cursor, const char *limit, path_segment_t *segment);
@@ -108,10 +111,13 @@ CXX_C_API int route_trie_add(route_trie_t *trie, const char *method, const char 
 CXX_C_API int route_trie_add_stream(route_trie_t *trie, const char *method, const char *path,
                                     RequestHandler handler, void *middleware_ctx);
 CXX_C_API void route_trie_free(route_trie_t *trie);
-CXX_C_API http_method_t get_method_index(const char *method);
+CXX_C_API route_method_index_t get_method_index(const char *method);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif
+
+
+

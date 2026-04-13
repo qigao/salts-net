@@ -191,6 +191,13 @@ CXX_C_API char *turbo_json_serialize_pretty_crlf(const json_value_t *value, size
  */
 CXX_C_API void turbo_json_serialize_free(char *str);
 
+/**
+ * @brief Deep-clone a JSON value tree.
+ * @param value Source JSON value.
+ * @return Newly allocated clone, or NULL on failure.
+ */
+CXX_C_API json_value_t *turbo_json_clone(const json_value_t *value);
+
 /* JSON Builder/Modifier */
 /**
  * @brief Create an empty JSON object.

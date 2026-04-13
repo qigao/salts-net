@@ -4,11 +4,12 @@
 #include <stdio.h>
 
 #ifdef _WIN32
-#include <windows.h>
-#include <wincrypt.h>
+#  include <windows.h>
+#  include <bcrypt.h>
+#  pragma comment(lib, "bcrypt.lib")
 #else
-#include <fcntl.h>
-#include <unistd.h>
+#  include <fcntl.h>
+#  include <unistd.h>
 #endif
 
 /* ============================================================================
@@ -164,18 +165,17 @@ void sha1_final(sha1_context_t* ctx, uint8_t digest[20]) {
  * Cryptographically Secure Random
  * ========================================================================= */
 
+/**
+ * @brief Generate cryptographically secure random bytes.
+ *
+ * Windows: BCryptGenRandom (CNG, stateless — no CSP acquire/release per call).
+ * POSIX:   /dev/urandom.
+ */
 int secure_random(uint8_t* buffer, size_t length) {
 #ifdef _WIN32
-    HCRYPTPROV hProvider = 0;
-    if (!CryptAcquireContext(&hProvider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
-        return -1;
-    }
-    if (!CryptGenRandom(hProvider, (DWORD)length, buffer)) {
-        CryptReleaseContext(hProvider, 0);
-        return -1;
-    }
-    CryptReleaseContext(hProvider, 0);
-    return 0;
+    NTSTATUS st = BCryptGenRandom(NULL, buffer, (ULONG)length,
+                                  BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    return BCRYPT_SUCCESS(st) ? 0 : -1;
 #else
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) {

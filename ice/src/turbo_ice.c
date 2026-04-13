@@ -192,7 +192,7 @@ static void set_state(turbo_ice_agent_t *agent, ice_state_t new_state) {
     agent->state = new_state;
 
     if (agent->callbacks.on_state_change) {
-      TLOG_INFO("State change: {} -> {}", ENUM_NAME(old_state), ENUM_NAME(new_state));
+      TLOG_INFO("State change: {} -> {}", ice_state_name(old_state), ice_state_name(new_state));
       agent->callbacks.on_state_change(agent, old_state, new_state, agent->callbacks.user_data);
     }
   }
@@ -1466,4 +1466,37 @@ int ice_candidate_to_sdp(const ice_candidate_t *candidate, char *buf, size_t buf
   }
 
   return len;
+}
+
+const char *ice_state_name(ice_state_t state) {
+  switch (state) {
+    case ICE_STATE_NEW:          return "NEW";
+    case ICE_STATE_GATHERING:    return "GATHERING";
+    case ICE_STATE_CONNECTING:   return "CONNECTING";
+    case ICE_STATE_CONNECTED:    return "CONNECTED";
+    case ICE_STATE_COMPLETED:    return "COMPLETED";
+    case ICE_STATE_FAILED:       return "FAILED";
+    case ICE_STATE_DISCONNECTED: return "DISCONNECTED";
+    case ICE_STATE_CLOSED:       return "CLOSED";
+    default:                     return "UNKNOWN";
+  }
+}
+
+const char *ice_gathering_state_name(ice_gathering_state_t state) {
+  switch (state) {
+    case ICE_GATHERING_NEW:       return "NEW";
+    case ICE_GATHERING_GATHERING: return "GATHERING";
+    case ICE_GATHERING_COMPLETE:  return "COMPLETE";
+    default:                      return "UNKNOWN";
+  }
+}
+
+const char *ice_candidate_type_name(ice_candidate_type_t type) {
+  switch (type) {
+    case ICE_CANDIDATE_TYPE_HOST:  return "host";
+    case ICE_CANDIDATE_TYPE_SRFLX: return "srflx";
+    case ICE_CANDIDATE_TYPE_PRFLX: return "prflx";
+    case ICE_CANDIDATE_TYPE_RELAY: return "relay";
+    default:                       return "unknown";
+  }
 }

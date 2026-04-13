@@ -14,6 +14,11 @@ extern "C" {
  * Returns 0 on success, -1 on error. */
 CXX_C_API int tn_base64_encode(const uint8_t *data, size_t len, char **output);
 
+/* Encode binary data to Base64 into a caller-supplied buffer (no malloc).
+ * out_cap must be >= 4*ceil(len/3)+1.  Returns 0 on success, -1 on error. */
+CXX_C_API int tn_base64_encode_buf(const uint8_t *data, size_t len,
+                                   char *out, size_t out_cap);
+
 /* Decode a Base64 string into a newly allocated buffer.
  * The binary output length is returned via *output_len.
  * Returns 0 on success, -1 on error. */

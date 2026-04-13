@@ -44,8 +44,6 @@
 #include "sds.h"
 #include "sdsalloc.h"
 
-const char *SDS_NOINIT = "SDS_NOINIT";
-
 static inline int sdsHdrSize(char type) {
   switch (type & SDS_TYPE_MASK) {
   case SDS_TYPE_5:

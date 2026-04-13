@@ -26,13 +26,15 @@ spec("String Bench") {
       "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.";
 
   bench("tstr (owned)") {
-    benchmark("dup", BENCH_ITERS) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("dup", BENCH_ITERS, 1) {
       tstr_t s = tstr_dup(sample);
       sink_size += tstr_len(s);
       tstr_free(s);
     }
 
-    benchmark("cat", BENCH_ITERS) {
+    benchmark("cat", BENCH_ITERS, 1) {
       tstr_t s = tstr_new();
       s = tstr_cat(s, "hello");
       s = tstr_cat(s, " world");
@@ -40,14 +42,14 @@ spec("String Bench") {
       tstr_free(s);
     }
 
-    benchmark("cat_fmt", BENCH_ITERS_LONG) {
+    benchmark("cat_fmt", BENCH_ITERS_LONG, 1) {
       tstr_t s = tstr_new();
       s = tstr_cat_fmt(s, "num=%d str=%s", 12345, "test");
       sink_size += tstr_len(s);
       tstr_free(s);
     }
 
-    benchmark("cmp", BENCH_ITERS) {
+    benchmark("cmp", BENCH_ITERS, 1) {
       tstr_t a = tstr_dup(sample);
       tstr_t b = tstr_dup(sample);
       sink_int += tstr_cmp(a, b);
@@ -55,30 +57,30 @@ spec("String Bench") {
       tstr_free(b);
     }
 
-    benchmark("casecmp", BENCH_ITERS) {
+    benchmark("casecmp", BENCH_ITERS, 1) {
       sink_int += tstr_casecmp(sample, sample_upper);
     }
 
-    benchmark("starts_with", BENCH_ITERS) {
+    benchmark("starts_with", BENCH_ITERS, 1) {
       sink_int += tstr_starts_with(sample, "The quick");
     }
 
-    benchmark("ends_with", BENCH_ITERS) {
+    benchmark("ends_with", BENCH_ITERS, 1) {
       sink_int += tstr_ends_with(sample, "lazy dog");
     }
 
-    benchmark("contains", BENCH_ITERS) {
+    benchmark("contains", BENCH_ITERS, 1) {
       sink_int += tstr_contains(sample, "brown fox");
     }
 
-    benchmark("trim", BENCH_ITERS) {
+    benchmark("trim", BENCH_ITERS, 1) {
       tstr_t s = tstr_dup("   hello world   ");
       s = tstr_trim(s, " ");
       sink_size += tstr_len(s);
       tstr_free(s);
     }
 
-    benchmark("split", BENCH_ITERS_LONG) {
+    benchmark("split", BENCH_ITERS_LONG, 1) {
       tstr_t s = tstr_dup("alpha,beta,gamma,delta,epsilon,zeta");
       int count = 0;
       tstr_t *parts = tstr_split(s, ",", &count);
@@ -89,59 +91,61 @@ spec("String Bench") {
   }
 
   bench("tstr_v (view)") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     tstr_v sv = tstr_v_from_cstr(sample);
     tstr_v sv_long = tstr_v_from_cstr(sample_long);
     tstr_v needle = tstr_v_from_cstr("brown fox");
     tstr_v needle_long = tstr_v_from_cstr("exercitation");
 
-    benchmark("eq", BENCH_ITERS) {
+    benchmark("eq", BENCH_ITERS, 1) {
       sink_int += tstr_v_eq(sv, sv);
     }
 
-    benchmark("ieq", BENCH_ITERS) {
+    benchmark("ieq", BENCH_ITERS, 1) {
       tstr_v upper = tstr_v_from_cstr(sample_upper);
       sink_int += tstr_v_ieq(sv, upper);
     }
 
-    benchmark("find(short)", BENCH_ITERS) {
+    benchmark("find(short)", BENCH_ITERS, 1) {
       sink_size += tstr_v_find(sv, needle);
     }
 
-    benchmark("find(long)", BENCH_ITERS) {
+    benchmark("find(long)", BENCH_ITERS, 1) {
       sink_size += tstr_v_find(sv_long, needle_long);
     }
 
-    benchmark("find_char", BENCH_ITERS) {
+    benchmark("find_char", BENCH_ITERS, 1) {
       sink_size += tstr_v_find_char(sv_long, 'x');
     }
 
-    benchmark("rfind", BENCH_ITERS) {
+    benchmark("rfind", BENCH_ITERS, 1) {
       sink_size += tstr_v_rfind(sv_long, needle_long);
     }
 
-    benchmark("rfind_char", BENCH_ITERS) {
+    benchmark("rfind_char", BENCH_ITERS, 1) {
       sink_size += tstr_v_rfind_char(sv_long, 'e');
     }
 
-    benchmark("contains", BENCH_ITERS) {
+    benchmark("contains", BENCH_ITERS, 1) {
       sink_int += tstr_v_contains(sv, needle);
     }
 
-    benchmark("starts_with", BENCH_ITERS) {
+    benchmark("starts_with", BENCH_ITERS, 1) {
       sink_int += tstr_v_starts_with(sv, tstr_v_from_cstr("The quick"));
     }
 
-    benchmark("ends_with", BENCH_ITERS) {
+    benchmark("ends_with", BENCH_ITERS, 1) {
       sink_int += tstr_v_ends_with(sv, tstr_v_from_cstr("lazy dog"));
     }
 
-    benchmark("trim", BENCH_ITERS) {
+    benchmark("trim", BENCH_ITERS, 1) {
       tstr_v padded = tstr_v_from_cstr("   hello world   ");
       tstr_v trimmed = tstr_v_trim(padded, " ");
       sink_size += trimmed.len;
     }
 
-    benchmark("split", BENCH_ITERS_LONG) {
+    benchmark("split", BENCH_ITERS_LONG, 1) {
       tstr_v csv = tstr_v_from_cstr("alpha,beta,gamma,delta,epsilon,zeta");
       tstr_v delim = tstr_v_from_cstr(",");
       tstr_v part;
@@ -155,31 +159,33 @@ spec("String Bench") {
   }
 
   bench("tstr vs tstr_v") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     tstr_t ts = tstr_dup(sample_long);
     tstr_v sv_long = tstr_v_from_cstr(sample_long);
     tstr_v needle_v = tstr_v_from_cstr("exercitation");
 
-    benchmark("tstr:contains", BENCH_ITERS) {
+    benchmark("tstr:contains", BENCH_ITERS, 1) {
       sink_int += tstr_contains(sample_long, "exercitation");
     }
 
-    benchmark("tstr:contains_v", BENCH_ITERS) {
+    benchmark("tstr:contains_v", BENCH_ITERS, 1) {
       sink_int += tstr_contains_v(ts, needle_v);
     }
 
-    benchmark("view:contains", BENCH_ITERS) {
+    benchmark("view:contains", BENCH_ITERS, 1) {
       sink_int += tstr_v_contains(sv_long, needle_v);
     }
 
-    benchmark("tstr:find_v", BENCH_ITERS) {
+    benchmark("tstr:find_v", BENCH_ITERS, 1) {
       sink_size += tstr_find_v(ts, needle_v);
     }
 
-    benchmark("view:find", BENCH_ITERS) {
+    benchmark("view:find", BENCH_ITERS, 1) {
       sink_size += tstr_v_find(sv_long, needle_v);
     }
 
-    benchmark("tstr:split", BENCH_ITERS_LONG) {
+    benchmark("tstr:split", BENCH_ITERS_LONG, 1) {
       tstr_t s = tstr_dup("alpha,beta,gamma,delta,epsilon,zeta");
       int count = 0;
       tstr_t *parts = tstr_split(s, ",", &count);
@@ -188,7 +194,7 @@ spec("String Bench") {
       tstr_free(s);
     }
 
-    benchmark("view:split", BENCH_ITERS_LONG) {
+    benchmark("view:split", BENCH_ITERS_LONG, 1) {
       tstr_v csv = tstr_v_from_cstr("alpha,beta,gamma,delta,epsilon,zeta");
       tstr_v delim = tstr_v_from_cstr(",");
       tstr_v part;

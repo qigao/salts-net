@@ -20,6 +20,9 @@
 
 #define STREAM_IOCP_ACCEPT_DEPTH 8
 
+void turbo_stream_tls_note_iocp_timing(turbo_stream_t *s, uint64_t iocp_post_ns,
+                                       uint64_t post_drain_ns);
+
 /* ── Per-stream IOCP state ────────────────────────────────── */
 
 typedef struct stream_iocp_state_s {
@@ -31,6 +34,14 @@ typedef struct stream_iocp_state_s {
   int closing;
   int connect_pending;
   int connect_reported;
+
+  /* Dedicated ops for zero-alloc datapaths */
+  iocp_op_t recv_op;
+
+  iocp_op_t send_op;
+  int send_inflight;
+  WSABUF send_wsabuf;
+  struct mem_buffer_s *send_buffer;
 } stream_iocp_state_t;
 
 typedef struct stream_iocp_server_state_s {
@@ -50,6 +61,66 @@ static int stream_iocp_submit_recv(turbo_stream_t *s);
 static int stream_iocp_submit_send(turbo_stream_t *s);
 static int stream_iocp_submit_accept(turbo_stream_listener_t *l);
 static int iocp_init_with_socket(turbo_stream_t *s, SOCKET existing);
+
+static unsigned short iocp_socket_port(const struct sockaddr_storage *addr) {
+  if (!addr) return 0;
+  if (addr->ss_family == AF_INET) {
+    return ntohs(((const struct sockaddr_in *)addr)->sin_port);
+  }
+  if (addr->ss_family == AF_INET6) {
+    return ntohs(((const struct sockaddr_in6 *)addr)->sin6_port);
+  }
+  return 0;
+}
+
+static void iocp_log_socket_endpoints(const char *label, SOCKET socket, void *stream_ptr) {
+  struct sockaddr_storage local_addr;
+  struct sockaddr_storage peer_addr;
+  int local_len = (int)sizeof(local_addr);
+  int peer_len = (int)sizeof(peer_addr);
+  unsigned short local_port = 0;
+  unsigned short peer_port = 0;
+
+  memset(&local_addr, 0, sizeof(local_addr));
+  memset(&peer_addr, 0, sizeof(peer_addr));
+
+  if (getsockname(socket, (struct sockaddr *)&local_addr, &local_len) == 0) {
+    local_port = iocp_socket_port(&local_addr);
+  }
+  if (getpeername(socket, (struct sockaddr *)&peer_addr, &peer_len) == 0) {
+    peer_port = iocp_socket_port(&peer_addr);
+  }
+
+  TLOG_INFO("{}: stream={:p} socket={} local_port={} peer_port={}",
+            label,
+            stream_ptr,
+            (unsigned long long)socket,
+            (unsigned)local_port,
+            (unsigned)peer_port);
+}
+
+static int stream_iocp_send_sync_buffer(turbo_stream_t *s,
+                                        stream_iocp_state_t *st,
+                                        mem_buffer_t *buf) {
+  size_t total = 0;
+
+  while (total < buf->used) {
+    int rc = send(st->socket, buf->data + total, (int)(buf->used - total), 0);
+    if (rc == SOCKET_ERROR) {
+      return -(int)WSAGetLastError();
+    }
+    if (rc == 0) {
+      return TURBO_EOF;
+    }
+    total += (size_t)rc;
+  }
+
+  TLOG_INFO("iocp_send_sync: stream={:p} socket={} len={}",
+            (void *)s,
+            (unsigned long long)st->socket,
+            (unsigned long)buf->used);
+  return 0;
+}
 
 /* ── Helpers ──────────────────────────────────────────────── */
 
@@ -97,6 +168,21 @@ void stream_iocp_handle_connect_op(iocp_op_t *op) {
   turbo_stream_t *s = (turbo_stream_t *)op->owner;
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   int status = op->status;
+  uint64_t handler_entry_ns = turbo_hrtime();
+
+  if (op->completed_ns != 0) {
+    uint64_t iocp_post_ns = 0;
+    uint64_t post_drain_ns;
+
+    if (op->tick_post_request_ns != 0 && op->tick_post_request_ns >= op->completed_ns) {
+      iocp_post_ns = op->tick_post_request_ns - op->completed_ns;
+      post_drain_ns = handler_entry_ns - op->tick_post_request_ns;
+    } else {
+      post_drain_ns = handler_entry_ns - op->completed_ns;
+    }
+
+    turbo_stream_tls_note_iocp_timing(s, iocp_post_ns, post_drain_ns);
+  }
 
   InterlockedDecrement(&st->inflight_count);
   iocp_pool_inflight_dec(s->ctx->iocp_pool); /* context-level */
@@ -123,13 +209,24 @@ void stream_iocp_handle_send_op(iocp_op_t *op) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   int status = op->status;
 
-  if (op->buffer && op->owns_buffer) {
-    mem_unref(op->buffer);
+  TLOG_INFO("iocp_send_complete: stream={:p} socket={} status={} bytes={} queued={} inflight={}",
+            (void *)s,
+            (unsigned long long)st->socket,
+            status,
+            (unsigned long)op->bytes_transferred,
+            s->send_queued,
+            st->send_inflight);
+
+  /* Clear the state tracking the active send buffer */
+  if (st->send_buffer) {
+    mem_unref(st->send_buffer);
+    st->send_buffer = NULL;
   }
+  st->send_inflight = 0;
 
   InterlockedDecrement(&st->inflight_count);
   iocp_pool_inflight_dec(s->ctx->iocp_pool);
-  free(op);
+  /* no free(op), it is &st->send_op */
 
   if (st->closing) {
     stream_maybe_shutdown(s);
@@ -150,10 +247,25 @@ void stream_iocp_handle_recv_op(iocp_op_t *op) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   int status = op->status;
   DWORD bytes = op->bytes_transferred;
+  uint64_t handler_entry_ns = turbo_hrtime();
+
+  if (op->completed_ns != 0) {
+    uint64_t iocp_post_ns = 0;
+    uint64_t post_drain_ns;
+
+    if (op->tick_post_request_ns != 0 && op->tick_post_request_ns >= op->completed_ns) {
+      iocp_post_ns = op->tick_post_request_ns - op->completed_ns;
+      post_drain_ns = handler_entry_ns - op->tick_post_request_ns;
+    } else {
+      post_drain_ns = handler_entry_ns - op->completed_ns;
+    }
+
+    turbo_stream_tls_note_iocp_timing(s, iocp_post_ns, post_drain_ns);
+  }
 
   InterlockedDecrement(&st->inflight_count);
   iocp_pool_inflight_dec(s->ctx->iocp_pool);
-  free(op);
+  /* no free(op), it is &st->recv_op */
 
   if (st->closing) {
     stream_maybe_shutdown(s);
@@ -188,7 +300,9 @@ void stream_iocp_handle_recv_op(iocp_op_t *op) {
     mem_slice_release(&slice);
   }
 
-  if (st->recv_started && !s->closing && !st->closing) {
+  /* on_recv may synchronously close the stream and release backend_data. */
+  st = (stream_iocp_state_t *)s->backend_data;
+  if (st != NULL && st->recv_started && !s->closing && !st->closing) {
     stream_iocp_submit_recv(s);
   }
 }
@@ -228,6 +342,7 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
         s->connected = 1;
         s->listener = l;
         l->active_connections++;
+        iocp_log_socket_endpoints("iocp_accept", client_socket, (void *)s);
         if (l->on_accept) {
           l->on_accept(l, s, p_remote);
         }
@@ -252,9 +367,8 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
 static int stream_iocp_submit_recv(turbo_stream_t *s) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
 
-  iocp_op_t *op = (iocp_op_t *)calloc(1, sizeof(iocp_op_t));
-  if (!op) return TURBO_ENOMEM;
-
+  iocp_op_t *op = &st->recv_op;
+  memset(&op->overlapped, 0, sizeof(OVERLAPPED));
   op->kind = IOCP_OP_STREAM_RECV;
   op->owner = s;
 
@@ -271,7 +385,6 @@ static int stream_iocp_submit_recv(turbo_stream_t *s) {
     if (err != WSA_IO_PENDING) {
       InterlockedDecrement(&st->inflight_count);
       iocp_pool_inflight_dec(s->ctx->iocp_pool);
-      free(op);
       return -(int)err;
     }
   }
@@ -281,6 +394,14 @@ static int stream_iocp_submit_recv(turbo_stream_t *s) {
 static int stream_iocp_submit_send(turbo_stream_t *s) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   if (!s->send_head) return 0;
+  if (st->send_inflight) {
+    TLOG_INFO("iocp_send_submit: deferred stream={:p} socket={} queued={} inflight=1 next_len={}",
+              (void *)s,
+              (unsigned long long)st->socket,
+              s->send_queued,
+              (unsigned long)s->send_head->used);
+    return 0;
+  }
 
   mem_buffer_t *buf = s->send_head;
   s->send_head = buf->next;
@@ -288,39 +409,80 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
   s->send_queued -= buf->used;
   buf->next = NULL;
 
-  iocp_op_t *op = (iocp_op_t *)calloc(1, sizeof(iocp_op_t));
-  if (!op) {
-    buf->next = s->send_head;
-    s->send_head = buf;
-    if (!s->send_tail) s->send_tail = buf;
-    s->send_queued += buf->used;
-    return TURBO_ENOMEM;
-  }
+  st->send_buffer = buf;
+  st->send_wsabuf.buf = buf->data;
+  st->send_wsabuf.len = (ULONG)buf->used;
 
-  op->kind = IOCP_OP_STREAM_SEND;
-  op->owner = s;
-  op->buffer = buf;
-  op->owns_buffer = 1;
-  op->length = buf->used;
-
-  op->wsabuf.buf = buf->data;
-  op->wsabuf.len = (ULONG)buf->used;
-
-  InterlockedIncrement(&st->inflight_count);
-  iocp_pool_inflight_inc(s->ctx->iocp_pool);
-  
-  if (WSASend(st->socket, &op->wsabuf, 1, NULL, 0, &op->overlapped, NULL) == SOCKET_ERROR) {
-    int err = WSAGetLastError();
-    if (err != WSA_IO_PENDING) {
-      InterlockedDecrement(&st->inflight_count);
-      iocp_pool_inflight_dec(s->ctx->iocp_pool);
-      free(op);
+  if (s->listener != NULL && st->send_wsabuf.len <= 64U) {
+    int sync_rc = stream_iocp_send_sync_buffer(s, st, buf);
+    st->send_buffer = NULL;
+    if (sync_rc != 0) {
       buf->next = s->send_head;
       s->send_head = buf;
       if (!s->send_tail) s->send_tail = buf;
       s->send_queued += buf->used;
+      return sync_rc;
+    }
+    mem_unref(buf);
+    if (s->on_write_complete) {
+      s->on_write_complete(s, 0);
+    }
+    if (s->send_head && !s->closing) {
+      return stream_iocp_submit_send(s);
+    }
+    return 0;
+  }
+
+  iocp_op_t *op = &st->send_op;
+  memset(&op->overlapped, 0, sizeof(OVERLAPPED));
+  op->kind = IOCP_OP_STREAM_SEND;
+  op->owner = s;
+  op->buffer = NULL;
+  op->owns_buffer = 0;
+  op->length = 0;
+
+  st->send_inflight = 1;
+  InterlockedIncrement(&st->inflight_count);
+  iocp_pool_inflight_inc(s->ctx->iocp_pool);
+
+  TLOG_INFO("iocp_send_submit: post stream={:p} socket={} len={} queued_after_pop={}",
+            (void *)s,
+            (unsigned long long)st->socket,
+            (unsigned long)st->send_wsabuf.len,
+            s->send_queued);
+  iocp_log_socket_endpoints("iocp_send_submit_endpoints", st->socket, (void *)s);
+  
+  if (WSASend(st->socket, &st->send_wsabuf, 1, NULL, 0, &op->overlapped, NULL) == SOCKET_ERROR) {
+    int err = WSAGetLastError();
+    if (err != WSA_IO_PENDING) {
+      TLOG_WARN("iocp_send_submit: failed stream={:p} socket={} len={} err={}",
+                (void *)s,
+                (unsigned long long)st->socket,
+                (unsigned long)st->send_wsabuf.len,
+                err);
+      InterlockedDecrement(&st->inflight_count);
+      iocp_pool_inflight_dec(s->ctx->iocp_pool);
+      st->send_inflight = 0;
+
+      /* Prepend the buffer back to the send queue */
+      st->send_buffer->next = s->send_head;
+      s->send_head = st->send_buffer;
+      if (!s->send_tail) s->send_tail = st->send_buffer;
+      s->send_queued += st->send_buffer->used;
+      st->send_buffer = NULL;
+      
       return -(int)err;
     }
+    TLOG_INFO("iocp_send_submit: pending stream={:p} socket={} len={}",
+              (void *)s,
+              (unsigned long long)st->socket,
+              (unsigned long)st->send_wsabuf.len);
+  }
+  else {
+    TLOG_INFO("iocp_send_submit: immediate stream={:p} socket={} len={}",
+              (void *)s,
+              (unsigned long long)st->socket,
+              (unsigned long)st->send_wsabuf.len);
   }
   return 0;
 }
@@ -503,6 +665,10 @@ static int iocp_send(turbo_stream_t *s, const char *data, size_t len) {
   memcpy(buf->data, data, len);
   mem_set_used(buf, len);
   turbo_stream_enqueue_buffer(s, buf);
+  TLOG_INFO("iocp_send_enqueue: stream={:p} len={} queued={}",
+            (void *)s,
+            (unsigned long)len,
+            s->send_queued);
   mem_unref(buf);
   return stream_iocp_submit_send(s);
 }
@@ -536,7 +702,8 @@ static void iocp_close(turbo_stream_t *s) {
   /* If WSARecv is pending, closesocket cancels it, invoking completion with error.
      The completion will notice closing=1 and call stream_maybe_shutdown. */
   if (st->socket != INVALID_SOCKET) {
-    /* CancelIoEx(st->socket, NULL); */ /* optional */
+    /* Make pending ConnectEx/WSARecv completions arrive promptly on the IOCP. */
+    (void)CancelIoEx((HANDLE)st->socket, NULL);
     closesocket(st->socket);
     st->socket = INVALID_SOCKET;
   }

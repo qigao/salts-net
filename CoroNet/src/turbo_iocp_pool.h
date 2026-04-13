@@ -66,6 +66,8 @@ typedef struct iocp_op_s {
   int status;
   DWORD flags;
   WSABUF wsabuf;
+  uint64_t completed_ns;
+  uint64_t tick_post_request_ns;
 
   /* Accept-specific */
   SOCKET client_socket;

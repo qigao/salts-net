@@ -3,23 +3,38 @@
  * @brief TLS backend for turbo_stream_t.
  *
  * Implements TURBO_STREAM_TLS on top of a TCP turbo_stream_t via composition.
- * Uses OpenSSL Memory BIOs (BIO_s_mem) to intercept and encrypt/decrypt data
- * asynchronously completely isolated from the event loop type.
+ * Uses OpenSSL custom BIOs to splice ciphertext into and out of the TLS state
+ * machine without an extra memory BIO staging queue.
  *
  * Client support is complete; accepted TCP streams can now be wrapped for
  * server-side TLS handshakes as well.
  */
 
 #include "turbo_stream_internal.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "turbo_buffer.h"
 #include "tlog.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+#ifndef SSL3_RT_HANDSHAKE
+#define SSL3_RT_HANDSHAKE 22
+#endif
+#ifndef SSL3_MT_CLIENT_HELLO
+#define SSL3_MT_CLIENT_HELLO 1
+#endif
+#ifndef SSL3_MT_SERVER_HELLO
+#define SSL3_MT_SERVER_HELLO 2
+#endif
+#ifndef SSL3_MT_FINISHED
+#define SSL3_MT_FINISHED 20
+#endif
 
 #ifdef _WIN32
 #  include <winsock2.h>
@@ -35,6 +50,119 @@ static SSL_CTX *s_default_ctx = NULL;
 static SSL_CTX *s_server_ctx = NULL;
 static int s_ca_configured = 0;
 static int s_server_configured = 0;
+static SSL_SESSION *s_cached_client_session = NULL;
+static char s_cached_client_session_host[256] = {0};
+static turbo_tls_protocol_mode_t s_tls_protocol_mode = TURBO_TLS_PROTOCOL_DEFAULT;
+static struct {
+  atomic_ullong client_handshakes_started;
+  atomic_ullong client_handshakes_completed;
+  atomic_ullong client_session_cache_attempts;
+  atomic_ullong client_session_reused;
+  atomic_ullong client_session_stores;
+  atomic_ullong client_handshake_total_ns;
+  atomic_ullong client_handshake_bio_write_ns;
+  atomic_ullong client_handshake_bio_write_calls;
+  atomic_ullong client_handshake_bio_write_bytes;
+  atomic_ullong client_handshake_crypto_ns;
+  atomic_ullong client_handshake_flush_ns;
+  atomic_ullong client_handshake_pump_total_ns;
+  atomic_ullong client_handshake_recv_cb_ns;
+  atomic_ullong client_handshake_connect_cb_ns;
+  atomic_ullong client_handshake_iocp_post_ns;
+  atomic_ullong client_handshake_post_drain_ns;
+  atomic_ullong client_handshake_waiter_signal_ns;
+  atomic_ullong client_handshake_resume_wait_ns;
+  atomic_ullong client_handshake_wrap_client_ns;
+  atomic_ullong client_handshake_clienthello_to_serverhello_ns;
+  atomic_ullong client_handshake_serverhello_to_finished_write_ns;
+  atomic_ullong client_handshake_finished_write_to_done_ns;
+  atomic_ullong client_handshake_serverhello_to_done_ns;
+  atomic_ullong client_handshake_pumps;
+  atomic_ullong client_handshakes_tls13;
+  atomic_ullong server_handshakes_completed;
+  atomic_ullong server_handshake_total_ns;
+  atomic_ullong server_handshake_crypto_ns;
+  atomic_ullong server_handshake_flush_ns;
+  atomic_ullong server_handshake_pump_total_ns;
+  atomic_ullong server_handshake_recv_cb_ns;
+  atomic_ullong server_handshake_clienthello_to_serverhello_ns;
+  atomic_ullong server_handshake_clientfinished_to_done_ns;
+  atomic_ullong server_handshake_pumps;
+} s_tls_metrics;
+
+typedef struct tls_state_s tls_state_t;
+
+#define TLS_PLAINTEXT_READ_CHUNK_SIZE 16384U
+
+static void tls_metric_inc(atomic_ullong *counter) {
+  atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+}
+
+static void tls_metric_add(atomic_ullong *counter, uint64_t value) {
+  atomic_fetch_add_explicit(counter, (unsigned long long)value, memory_order_relaxed);
+}
+
+static unsigned long long tls_metric_load(const atomic_ullong *counter) {
+  return atomic_load_explicit(counter, memory_order_relaxed);
+}
+
+static void tls_reset_client_session_cache_internal(void) {
+  if (s_cached_client_session) {
+    SSL_SESSION_free(s_cached_client_session);
+    s_cached_client_session = NULL;
+  }
+  s_cached_client_session_host[0] = '\0';
+}
+
+static void tls_store_client_session_for_host(const char *hostname, SSL_SESSION *session,
+                                              int retain_session) {
+  if (!hostname || hostname[0] == '\0' || !session) {
+    return;
+  }
+
+  if (retain_session) {
+    SSL_SESSION_up_ref(session);
+  }
+
+  if (session == s_cached_client_session &&
+      strcmp(hostname, s_cached_client_session_host) == 0) {
+    SSL_SESSION_free(session);
+    return;
+  }
+
+  tls_reset_client_session_cache_internal();
+  s_cached_client_session = session;
+  strncpy(s_cached_client_session_host, hostname, sizeof(s_cached_client_session_host) - 1);
+  s_cached_client_session_host[sizeof(s_cached_client_session_host) - 1] = '\0';
+  tls_metric_inc(&s_tls_metrics.client_session_stores);
+}
+
+static const char *tls_get_env_value(const char *name, char *buffer, size_t buffer_size) {
+  const char *value;
+
+  if (!name) {
+    return NULL;
+  }
+
+  value = getenv(name);
+  if (value && value[0] != '\0') {
+    return value;
+  }
+
+#ifdef _WIN32
+  if (buffer && buffer_size > 0) {
+    DWORD len = GetEnvironmentVariableA(name, buffer, (DWORD)buffer_size);
+    if (len > 0 && len < buffer_size) {
+      return buffer;
+    }
+  }
+#else
+  UNUSED(buffer);
+  UNUSED(buffer_size);
+#endif
+
+  return NULL;
+}
 
 #ifdef _WIN32
 static int load_windows_cert_store(SSL_CTX *ctx, const char *store_name) {
@@ -93,9 +221,11 @@ static void configure_ca_from_windows_store(void) {
 #endif
 
 static void configure_ca_from_env(void) {
+  char file_buf[1024];
+  char path_buf[1024];
   if (s_ca_configured) return;
-  const char *file = getenv("TURBONET_TLS_CA_FILE");
-  const char *path = getenv("TURBONET_TLS_CA_PATH");
+  const char *file = tls_get_env_value("TURBONET_TLS_CA_FILE", file_buf, sizeof(file_buf));
+  const char *path = tls_get_env_value("TURBONET_TLS_CA_PATH", path_buf, sizeof(path_buf));
   if ((file == NULL || file[0] == '\0') &&
       (path == NULL || path[0] == '\0')) {
     return;
@@ -110,6 +240,8 @@ static void configure_ca_from_env(void) {
 }
 
 static int configure_server_ctx_from_env(void) {
+  char cert_file_buf[1024];
+  char key_file_buf[1024];
   const char *cert_file;
   const char *key_file;
 
@@ -121,8 +253,12 @@ static int configure_server_ctx_from_env(void) {
     return TURBO_EINVAL;
   }
 
-  cert_file = getenv("TURBONET_TLS_CERT_FILE");
-  key_file = getenv("TURBONET_TLS_KEY_FILE");
+  cert_file = tls_get_env_value("TURBONET_TLS_CERT_FILE",
+                                cert_file_buf,
+                                sizeof(cert_file_buf));
+  key_file = tls_get_env_value("TURBONET_TLS_KEY_FILE",
+                               key_file_buf,
+                               sizeof(key_file_buf));
 
   if (!cert_file || cert_file[0] == '\0' || !key_file || key_file[0] == '\0') {
     return TURBO_EINVAL;
@@ -156,6 +292,38 @@ static int configure_server_ctx_from_env(void) {
   return 0;
 }
 
+static int tls_apply_protocol_mode_to_ctx(SSL_CTX *ctx) {
+  if (!ctx) {
+    return TURBO_EINVAL;
+  }
+
+  switch (s_tls_protocol_mode) {
+    case TURBO_TLS_PROTOCOL_DEFAULT:
+      if (SSL_CTX_set_min_proto_version(ctx, 0) != 1) {
+        return TURBO_EIO;
+      }
+      if (SSL_CTX_set_max_proto_version(ctx, 0) != 1) {
+        return TURBO_EIO;
+      }
+      return 0;
+
+    case TURBO_TLS_PROTOCOL_TLS13_ONLY:
+#ifdef TLS1_3_VERSION
+      if (SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION) != 1) {
+        return TURBO_EIO;
+      }
+      if (SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION) != 1) {
+        return TURBO_EIO;
+      }
+      return 0;
+#else
+      return TURBO_ENOTSUP;
+#endif
+  }
+
+  return TURBO_EINVAL;
+}
+
 /* ── State machine ────────────────────────────────────────── */
 
 typedef enum {
@@ -179,6 +347,17 @@ typedef struct tls_state_s {
   SSL            *ssl;    /* OpenSSL connection object */
   BIO            *rbio;   /* Network -> OpenSSL read BIO */
   BIO            *wbio;   /* OpenSSL -> Network write BIO */
+  mem_buffer_t   *pending_plaintext;
+  uint64_t        client_handshake_started_ns;
+  uint64_t        server_handshake_started_ns;
+  uint64_t        client_hello_write_ns;
+  uint64_t        client_server_hello_read_ns;
+  uint64_t        client_finished_write_ns;
+  uint64_t        server_client_hello_read_ns;
+  uint64_t        server_server_hello_write_ns;
+  uint64_t        server_client_finished_read_ns;
+  int             pumping;
+  int             close_deferred;
 
 } tls_state_t;
 
@@ -188,6 +367,157 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer);
 static void tls_on_tcp_close(void *handle);
 /* turbo_recv_cb signature: int(void*, const mem_slice_t*, void*) */
 static int  tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer);
+static int  tls_deliver_or_queue_plaintext(tls_state_t *st, const char *data, size_t len);
+static int  tls_flush_pending_plaintext(tls_state_t *st);
+static int  tls_reserve_pending_plaintext(tls_state_t *st, size_t needed);
+static mem_buffer_t *tls_alloc_plaintext_chunk(tls_state_t *st, size_t *payload_capacity);
+static int  tls_deliver_or_queue_plaintext_chunk(tls_state_t *st, mem_buffer_t *chunk, size_t len);
+
+static void tls_reset_flight_markers(tls_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  st->client_hello_write_ns = 0;
+  st->client_server_hello_read_ns = 0;
+  st->client_finished_write_ns = 0;
+  st->server_client_hello_read_ns = 0;
+  st->server_server_hello_write_ns = 0;
+  st->server_client_finished_read_ns = 0;
+}
+
+static void tls_on_handshake_msg(int write_p, int version, int content_type,
+                                 const void *buf, size_t len, SSL *ssl, void *arg) {
+  const unsigned char *bytes = (const unsigned char *)buf;
+  tls_state_t *st = (tls_state_t *)arg;
+  uint64_t now;
+  int hs_type;
+
+  UNUSED(version);
+  UNUSED(ssl);
+
+  if (!st || content_type != SSL3_RT_HANDSHAKE || !bytes || len == 0) {
+    return;
+  }
+
+  hs_type = (int)bytes[0];
+  now = turbo_hrtime();
+
+  if (!st->server_mode) {
+    if (write_p) {
+      if (hs_type == SSL3_MT_CLIENT_HELLO && st->client_hello_write_ns == 0) {
+        st->client_hello_write_ns = now;
+      } else if (hs_type == SSL3_MT_FINISHED &&
+                 st->client_finished_write_ns == 0) {
+        st->client_finished_write_ns = now;
+      }
+    } else if (hs_type == SSL3_MT_SERVER_HELLO &&
+               st->client_server_hello_read_ns == 0) {
+      st->client_server_hello_read_ns = now;
+    }
+    return;
+  }
+
+  if (!write_p) {
+    if (hs_type == SSL3_MT_CLIENT_HELLO && st->server_client_hello_read_ns == 0) {
+      st->server_client_hello_read_ns = now;
+    } else if (hs_type == SSL3_MT_FINISHED &&
+               st->server_client_finished_read_ns == 0) {
+      st->server_client_finished_read_ns = now;
+    }
+    return;
+  }
+
+  if (hs_type == SSL3_MT_SERVER_HELLO && st->server_server_hello_write_ns == 0) {
+    st->server_server_hello_write_ns = now;
+  }
+}
+
+static void tls_install_msg_callback(tls_state_t *st) {
+  if (!st || !st->ssl) {
+    return;
+  }
+
+  SSL_set_app_data(st->ssl, st);
+  SSL_set_msg_callback(st->ssl, tls_on_handshake_msg);
+  SSL_set_msg_callback_arg(st->ssl, st);
+}
+
+static void tls_remove_msg_callback(tls_state_t *st) {
+  if (!st || !st->ssl) {
+    return;
+  }
+
+  SSL_set_msg_callback(st->ssl, NULL);
+  SSL_set_msg_callback_arg(st->ssl, NULL);
+}
+
+static tls_state_t *tls_handshake_client_state_for_stream(turbo_stream_t *s) {
+  tls_state_t *st;
+
+  if (!s) {
+    return NULL;
+  }
+
+  if (s->kind == TURBO_STREAM_TLS) {
+    st = (tls_state_t *)s->backend_data;
+    if (!st) {
+      return NULL;
+    }
+    if (st->server_mode || st->client_handshake_started_ns == 0) {
+      return NULL;
+    }
+    return st;
+  }
+
+  if (s->on_connect != tls_on_tcp_connect || s->on_close != tls_on_tcp_close) {
+    return NULL;
+  }
+
+  st = (tls_state_t *)s->user_data;
+  if (!st || st->tcp != s) {
+    return NULL;
+  }
+  if (st->server_mode || st->state != TLS_ST_HANDSHAKING ||
+      st->client_handshake_started_ns == 0) {
+    return NULL;
+  }
+  return st;
+}
+
+void turbo_stream_tls_note_resume_wait(turbo_stream_t *s, uint64_t value_ns) {
+  if (!s || value_ns == 0) {
+    return;
+  }
+  tls_metric_add(&s_tls_metrics.client_handshake_resume_wait_ns, value_ns);
+}
+
+void turbo_stream_tls_note_wrap_client_time(uint64_t value_ns) {
+  if (value_ns == 0) {
+    return;
+  }
+  tls_metric_add(&s_tls_metrics.client_handshake_wrap_client_ns, value_ns);
+}
+
+void turbo_stream_tls_note_iocp_timing(turbo_stream_t *s, uint64_t iocp_post_ns,
+                                       uint64_t post_drain_ns) {
+  if (!tls_handshake_client_state_for_stream(s)) {
+    return;
+  }
+  if (iocp_post_ns != 0) {
+    tls_metric_add(&s_tls_metrics.client_handshake_iocp_post_ns, iocp_post_ns);
+  }
+  if (post_drain_ns != 0) {
+    tls_metric_add(&s_tls_metrics.client_handshake_post_drain_ns, post_drain_ns);
+  }
+}
+
+void turbo_stream_tls_note_waiter_signal(turbo_stream_t *s, uint64_t value_ns) {
+  if (!s || value_ns == 0) {
+    return;
+  }
+  tls_metric_add(&s_tls_metrics.client_handshake_waiter_signal_ns, value_ns);
+}
 
 static void tls_detach_tcp(tls_state_t *st) {
   turbo_stream_t *tcp;
@@ -228,7 +558,168 @@ static void tls_free_state(tls_state_t *st) {
 
   st->rbio = NULL;
   st->wbio = NULL;
+  if (st->pending_plaintext) {
+    mem_unref(st->pending_plaintext);
+  }
+  st->pending_plaintext = NULL;
   free(st);
+}
+
+static int tls_reserve_pending_plaintext(tls_state_t *st, size_t needed) {
+  mem_buffer_t *new_buf;
+  size_t current_cap;
+  size_t new_cap;
+  size_t used;
+
+  if (!st || !st->outer || !st->outer->arena) {
+    return TURBO_EINVAL;
+  }
+  if (needed == 0) {
+    return 0;
+  }
+
+  current_cap = st->pending_plaintext ? st->pending_plaintext->capacity : 0;
+  if (current_cap >= needed) {
+    return 0;
+  }
+
+  new_cap = current_cap ? current_cap : MEM_HANDSHAKE_BUFFER_SIZE;
+  while (new_cap < needed) {
+    new_cap *= 2U;
+  }
+
+  new_buf = mem_get_buffer(st->outer->arena, new_cap);
+  if (!new_buf) {
+    return TURBO_ENOMEM;
+  }
+
+  used = st->pending_plaintext ? st->pending_plaintext->used : 0;
+  if (used > 0) {
+    memcpy(new_buf->data, st->pending_plaintext->data, used);
+    mem_set_used(new_buf, used);
+  }
+
+  if (st->pending_plaintext) {
+    mem_unref(st->pending_plaintext);
+  }
+  st->pending_plaintext = new_buf;
+  return 0;
+}
+
+static int tls_deliver_or_queue_plaintext(tls_state_t *st, const char *data, size_t len) {
+  size_t queued;
+
+  if (!st || !data || len == 0) {
+    return 0;
+  }
+
+  if (st->outer->on_recv) {
+    mem_slice_t sl = { .data = (char *)data, .length = len, .buffer = NULL };
+    return st->outer->on_recv(st->outer, &sl, NULL);
+  }
+
+  queued = st->pending_plaintext ? st->pending_plaintext->used : 0;
+  if (tls_reserve_pending_plaintext(st, queued + len) != 0) {
+    return TURBO_ENOMEM;
+  }
+
+  memcpy(st->pending_plaintext->data + queued, data, len);
+  mem_set_used(st->pending_plaintext, queued + len);
+  return 0;
+}
+
+static mem_buffer_t *tls_alloc_plaintext_chunk(tls_state_t *st, size_t *payload_capacity) {
+  mem_buffer_t *chunk;
+  coro_recv_header_t *hdr;
+  size_t total_size;
+
+  if (!st || !st->outer || !st->outer->arena) {
+    return NULL;
+  }
+
+  total_size = sizeof(coro_recv_header_t) + TLS_PLAINTEXT_READ_CHUNK_SIZE;
+  chunk = mem_get_buffer(st->outer->arena, total_size);
+  if (!chunk) {
+    return NULL;
+  }
+
+  hdr = (coro_recv_header_t *)chunk->data;
+  hdr->magic = CORO_RECV_MAGIC_POOLED;
+  hdr->size = 0;
+  hdr->owner = chunk;
+  mem_set_used(chunk, sizeof(coro_recv_header_t));
+
+  if (payload_capacity) {
+    *payload_capacity = TLS_PLAINTEXT_READ_CHUNK_SIZE;
+  }
+  return chunk;
+  return NULL;
+}
+
+static int tls_deliver_or_queue_plaintext_chunk(tls_state_t *st, mem_buffer_t *chunk, size_t len) {
+  coro_recv_header_t *hdr;
+  mem_slice_t sl;
+
+  if (!st || !chunk || len == 0) {
+    return 0;
+  }
+
+  hdr = (coro_recv_header_t *)chunk->data;
+  hdr->size = len;
+  mem_set_used(chunk, sizeof(coro_recv_header_t) + len);
+
+  if (st->outer->on_recv) {
+    sl.data = chunk->data + sizeof(coro_recv_header_t);
+    sl.length = len;
+    sl.buffer = chunk;
+    return st->outer->on_recv(st->outer, &sl, NULL);
+  }
+
+  return tls_deliver_or_queue_plaintext(st,
+                                        chunk->data + sizeof(coro_recv_header_t),
+                                        len);
+}
+
+static int tls_is_closed_or_deferred(const tls_state_t *st) {
+  return !st || st->close_deferred || st->state == TLS_ST_CLOSED;
+}
+
+static void tls_pump_leave(tls_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  if (st->pumping > 0) {
+    st->pumping--;
+  }
+
+  if (st->pumping == 0 && st->close_deferred) {
+    tls_free_state(st);
+  }
+}
+
+static int tls_flush_pending_plaintext(tls_state_t *st) {
+  int close_req;
+  mem_slice_t sl;
+
+  if (!st || !st->outer->on_recv || !st->pending_plaintext ||
+      st->pending_plaintext->used == 0) {
+    return 0;
+  }
+
+  sl.data = st->pending_plaintext->data;
+  sl.length = st->pending_plaintext->used;
+  sl.buffer = NULL;
+
+  close_req = st->outer->on_recv(st->outer, &sl, NULL);
+  mem_set_used(st->pending_plaintext, 0);
+
+  if (close_req) {
+    turbo_stream_close(st->outer);
+    return TURBO_ECONNABORTED;
+  }
+
+  return 0;
 }
 
 static int tls_configure_hostname(tls_state_t *st) {
@@ -249,6 +740,71 @@ static int tls_configure_hostname(tls_state_t *st) {
 
 static void tls_pump(tls_state_t *st);
 static void tls_flush_wbio_to_network(tls_state_t *st);
+static int tls_write_plaintext(tls_state_t *st, const char *data, size_t len,
+                               int flush_network);
+
+static void tls_apply_cached_client_session(tls_state_t *st) {
+  int rc;
+
+  if (!st || st->server_mode || !st->ssl) {
+    return;
+  }
+  if (!s_cached_client_session || st->hostname[0] == '\0') {
+    return;
+  }
+  if (strcmp(st->hostname, s_cached_client_session_host) != 0) {
+    return;
+  }
+  tls_metric_inc(&s_tls_metrics.client_session_cache_attempts);
+  rc = SSL_set_session(st->ssl, s_cached_client_session);
+  if (rc != 1) {
+    ERR_clear_error();
+  }
+}
+
+static void tls_cache_client_session(tls_state_t *st) {
+  SSL_SESSION *session;
+
+  if (!st || st->server_mode || !st->ssl || st->hostname[0] == '\0') {
+    return;
+  }
+
+  session = SSL_get1_session(st->ssl);
+  if (!session) {
+    return;
+  }
+
+  tls_store_client_session_for_host(st->hostname, session, 0);
+}
+
+static void tls_mark_client_handshake_start(tls_state_t *st) {
+  if (!st || st->server_mode) {
+    return;
+  }
+
+  tls_reset_flight_markers(st);
+  st->client_handshake_started_ns = turbo_hrtime();
+}
+
+static void tls_mark_server_handshake_start(tls_state_t *st) {
+  if (!st || !st->server_mode) {
+    return;
+  }
+
+  tls_reset_flight_markers(st);
+  st->server_handshake_started_ns = turbo_hrtime();
+}
+
+static int tls_on_new_client_session(SSL *ssl, SSL_SESSION *session) {
+  tls_state_t *st = (tls_state_t *)SSL_get_app_data(ssl);
+
+  if (!st || st->server_mode || !session || st->hostname[0] == '\0') {
+    return 1;
+  }
+
+  tls_store_client_session_for_host(st->hostname, session, 1);
+  return 1;
+}
 
 static void tls_log_handshake_failure(tls_state_t *st, int ssl_rc) {
   int ssl_err;
@@ -323,7 +879,9 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
     if (rc != 0) {
       return rc;
     }
+    tls_apply_cached_client_session(st);
     SSL_set_connect_state(st->ssl);
+    tls_metric_inc(&s_tls_metrics.client_handshakes_started);
   }
 
   st->tcp = tcp;
@@ -334,6 +892,11 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
   turbo_stream_recv_stop(st->tcp);
 
   st->state = TLS_ST_HANDSHAKING;
+  if (!st->server_mode) {
+    tls_mark_client_handshake_start(st);
+  } else {
+    tls_mark_server_handshake_start(st);
+  }
   outer->connected = 0;
   {
     int rc = turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb);
@@ -352,6 +915,9 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 
 static SSL_CTX *get_default_tls_ctx(void) {
   if (s_default_ctx) {
+    if (tls_apply_protocol_mode_to_ctx(s_default_ctx) != 0) {
+      return NULL;
+    }
     configure_ca_from_env();
     return s_default_ctx;
   }
@@ -364,8 +930,15 @@ static SSL_CTX *get_default_tls_ctx(void) {
   if (s_default_ctx) {
     SSL_CTX_set_mode(s_default_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_mode(s_default_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    SSL_CTX_set_session_cache_mode(s_default_ctx, SSL_SESS_CACHE_CLIENT);
+    SSL_CTX_sess_set_new_cb(s_default_ctx, tls_on_new_client_session);
     SSL_CTX_set_verify(s_default_ctx, SSL_VERIFY_PEER, NULL);
     SSL_CTX_set_default_verify_paths(s_default_ctx);
+    if (tls_apply_protocol_mode_to_ctx(s_default_ctx) != 0) {
+      SSL_CTX_free(s_default_ctx);
+      s_default_ctx = NULL;
+      return NULL;
+    }
     configure_ca_from_env();
 #ifdef _WIN32
     configure_ca_from_windows_store();
@@ -376,6 +949,9 @@ static SSL_CTX *get_default_tls_ctx(void) {
 
 static SSL_CTX *get_default_tls_server_ctx(void) {
   if (s_server_ctx) {
+    if (tls_apply_protocol_mode_to_ctx(s_server_ctx) != 0) {
+      return NULL;
+    }
     return s_server_ctx;
   }
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
@@ -386,6 +962,12 @@ static SSL_CTX *get_default_tls_server_ctx(void) {
   if (s_server_ctx) {
     SSL_CTX_set_mode(s_server_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_mode(s_server_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    SSL_CTX_set_session_cache_mode(s_server_ctx, SSL_SESS_CACHE_SERVER);
+    if (tls_apply_protocol_mode_to_ctx(s_server_ctx) != 0) {
+      SSL_CTX_free(s_server_ctx);
+      s_server_ctx = NULL;
+      return NULL;
+    }
   }
   return s_server_ctx;
 }
@@ -398,14 +980,30 @@ static SSL_CTX *get_default_tls_server_ctx(void) {
 static void tls_flush_wbio_to_network(tls_state_t *st) {
   if (!st->wbio || !st->tcp) return;
 
-  char buf[4096];
+  char buf[MEM_SEND_BUFFER_SIZE];
   int pending;
   while ((pending = BIO_pending(st->wbio)) > 0) {
-    int n = BIO_read(st->wbio, buf, sizeof(buf));
-    if (n > 0) {
-      turbo_stream_send(st->tcp, buf, (size_t)n);
-    } else {
+    size_t chunk_size = ((size_t)pending > sizeof(buf)) ? sizeof(buf) : (size_t)pending;
+    mem_buffer_t *send_buf = turbo_stream_get_send_buffer(st->tcp, chunk_size);
+    if (send_buf) {
+      int n = BIO_read(st->wbio, send_buf->data, (int)chunk_size);
+      if (n > 0) {
+        mem_set_used(send_buf, (size_t)n);
+        (void)turbo_stream_send_buffer(st->tcp, send_buf, (size_t)n);
+        mem_unref(send_buf);
+        continue;
+      }
+      mem_unref(send_buf);
       break;
+    }
+
+    {
+      int n = BIO_read(st->wbio, buf, (int)chunk_size);
+      if (n > 0) {
+        (void)turbo_stream_send(st->tcp, buf, (size_t)n);
+      } else {
+        break;
+      }
     }
   }
 }
@@ -417,35 +1015,159 @@ static void tls_flush_wbio_to_network(tls_state_t *st) {
  * layer sends data.
  */
 static void tls_pump(tls_state_t *st) {
-  if (!st || !st->ssl || st->state == TLS_ST_INIT || st->state == TLS_ST_CONNECTING_TCP || st->state == TLS_ST_CLOSED) {
+  if (!st || !st->ssl || st->state == TLS_ST_INIT || st->state == TLS_ST_CONNECTING_TCP ||
+      st->state == TLS_ST_CLOSED) {
     return;
   }
 
+  st->pumping++;
+
   /* 1. Drive Handshake */
   if (st->state == TLS_ST_HANDSHAKING) {
-    int r = st->server_mode ? SSL_accept(st->ssl) : SSL_connect(st->ssl);
-    tls_flush_wbio_to_network(st);
+    uint64_t pump_start_ns = 0;
+    uint64_t crypto_start_ns = 0;
+    uint64_t flush_start_ns = 0;
+    int r;
+    if (!st->server_mode) {
+      pump_start_ns = turbo_hrtime();
+      tls_metric_inc(&s_tls_metrics.client_handshake_pumps);
+      crypto_start_ns = turbo_hrtime();
+      r = SSL_connect(st->ssl);
+      tls_metric_add(&s_tls_metrics.client_handshake_crypto_ns,
+                     turbo_hrtime() - crypto_start_ns);
+      flush_start_ns = turbo_hrtime();
+      tls_flush_wbio_to_network(st);
+      tls_metric_add(&s_tls_metrics.client_handshake_flush_ns,
+                     turbo_hrtime() - flush_start_ns);
+    } else {
+      pump_start_ns = turbo_hrtime();
+      tls_metric_inc(&s_tls_metrics.server_handshake_pumps);
+      crypto_start_ns = turbo_hrtime();
+      r = SSL_accept(st->ssl);
+      tls_metric_add(&s_tls_metrics.server_handshake_crypto_ns,
+                     turbo_hrtime() - crypto_start_ns);
+      flush_start_ns = turbo_hrtime();
+      tls_flush_wbio_to_network(st);
+      tls_metric_add(&s_tls_metrics.server_handshake_flush_ns,
+                     turbo_hrtime() - flush_start_ns);
+    }
 
     if (r == 1) {
       /* Handshake complete! */
       st->state = TLS_ST_OPEN;
       st->outer->connected = 1;
+      if (!st->server_mode) {
+        tls_metric_inc(&s_tls_metrics.client_handshakes_completed);
+        if (st->client_handshake_started_ns != 0) {
+          tls_metric_add(&s_tls_metrics.client_handshake_total_ns,
+                         turbo_hrtime() - st->client_handshake_started_ns);
+          st->client_handshake_started_ns = 0;
+        }
+        if (st->client_hello_write_ns != 0 && st->client_server_hello_read_ns != 0 &&
+            st->client_server_hello_read_ns >= st->client_hello_write_ns) {
+          tls_metric_add(&s_tls_metrics.client_handshake_clienthello_to_serverhello_ns,
+                         st->client_server_hello_read_ns - st->client_hello_write_ns);
+          if (st->client_finished_write_ns != 0 &&
+              st->client_finished_write_ns >= st->client_server_hello_read_ns) {
+            tls_metric_add(
+                &s_tls_metrics.client_handshake_serverhello_to_finished_write_ns,
+                st->client_finished_write_ns - st->client_server_hello_read_ns);
+            tls_metric_add(&s_tls_metrics.client_handshake_finished_write_to_done_ns,
+                           turbo_hrtime() - st->client_finished_write_ns);
+          }
+          tls_metric_add(&s_tls_metrics.client_handshake_serverhello_to_done_ns,
+                         turbo_hrtime() - st->client_server_hello_read_ns);
+        }
+        if (SSL_session_reused(st->ssl) == 1) {
+          tls_metric_inc(&s_tls_metrics.client_session_reused);
+        }
+#ifdef TLS1_3_VERSION
+        if (SSL_version(st->ssl) == TLS1_3_VERSION) {
+          tls_metric_inc(&s_tls_metrics.client_handshakes_tls13);
+        }
+#endif
+      } else {
+        tls_metric_inc(&s_tls_metrics.server_handshakes_completed);
+        if (st->server_handshake_started_ns != 0) {
+          tls_metric_add(&s_tls_metrics.server_handshake_total_ns,
+                         turbo_hrtime() - st->server_handshake_started_ns);
+          st->server_handshake_started_ns = 0;
+        }
+        if (st->server_client_hello_read_ns != 0 &&
+            st->server_server_hello_write_ns != 0 &&
+            st->server_server_hello_write_ns >= st->server_client_hello_read_ns) {
+          tls_metric_add(&s_tls_metrics.server_handshake_clienthello_to_serverhello_ns,
+                         st->server_server_hello_write_ns - st->server_client_hello_read_ns);
+        }
+        if (st->server_client_finished_read_ns != 0 &&
+            turbo_hrtime() >= st->server_client_finished_read_ns) {
+          tls_metric_add(&s_tls_metrics.server_handshake_clientfinished_to_done_ns,
+                         turbo_hrtime() - st->server_client_finished_read_ns);
+        }
+      }
+      tls_remove_msg_callback(st);
+      tls_cache_client_session(st);
       if (st->outer->on_connect) {
         st->outer->on_connect(st->outer, 0, NULL);
+      }
+      if (tls_is_closed_or_deferred(st)) {
+        if (pump_start_ns != 0) {
+          if (!st->server_mode) {
+            tls_metric_add(&s_tls_metrics.client_handshake_pump_total_ns,
+                           turbo_hrtime() - pump_start_ns);
+          } else {
+            tls_metric_add(&s_tls_metrics.server_handshake_pump_total_ns,
+                           turbo_hrtime() - pump_start_ns);
+          }
+        }
+        tls_pump_leave(st);
+        return;
+      }
+      if (pump_start_ns != 0) {
+        if (!st->server_mode) {
+          tls_metric_add(&s_tls_metrics.client_handshake_pump_total_ns,
+                         turbo_hrtime() - pump_start_ns);
+        } else {
+          tls_metric_add(&s_tls_metrics.server_handshake_pump_total_ns,
+                         turbo_hrtime() - pump_start_ns);
+        }
       }
       /* Fall through to process any early application data */
     } else {
       int err = SSL_get_error(st->ssl, r);
       if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+        if (pump_start_ns != 0) {
+          if (!st->server_mode) {
+            tls_metric_add(&s_tls_metrics.client_handshake_pump_total_ns,
+                           turbo_hrtime() - pump_start_ns);
+          } else {
+            tls_metric_add(&s_tls_metrics.server_handshake_pump_total_ns,
+                           turbo_hrtime() - pump_start_ns);
+          }
+        }
+        tls_pump_leave(st);
         return; /* Wait for more network I/O */
       } else {
         /* Handshake protocol error */
+        st->client_handshake_started_ns = 0;
+        st->server_handshake_started_ns = 0;
+        tls_remove_msg_callback(st);
         tls_log_handshake_failure(st, r);
         st->state = TLS_ST_CLOSING;
         if (st->outer->on_connect) {
           st->outer->on_connect(st->outer, TURBO_ECONNABORTED, NULL);
         }
         turbo_stream_close(st->outer);
+        if (pump_start_ns != 0) {
+          if (!st->server_mode) {
+            tls_metric_add(&s_tls_metrics.client_handshake_pump_total_ns,
+                           turbo_hrtime() - pump_start_ns);
+          } else {
+            tls_metric_add(&s_tls_metrics.server_handshake_pump_total_ns,
+                           turbo_hrtime() - pump_start_ns);
+          }
+        }
+        tls_pump_leave(st);
         return;
       }
     }
@@ -453,28 +1175,68 @@ static void tls_pump(tls_state_t *st) {
 
   /* 2. Drive Open (Read Decrypted Data) */
   if (st->state == TLS_ST_OPEN) {
-    char buf[4096];
     int n;
-    while ((n = SSL_read(st->ssl, buf, sizeof(buf))) > 0) {
-      /* Deliver to upper layer */
-      if (st->outer->on_recv) {
-        mem_slice_t sl = { .data = buf, .length = (size_t)n, .buffer = NULL };
-        int close_req = st->outer->on_recv(st->outer, &sl, NULL);
-        if (close_req) {
-          turbo_stream_close(st->outer);
-          return;
-        }
+    if (tls_flush_pending_plaintext(st) != 0) {
+      tls_pump_leave(st);
+      return;
+    }
+    if (tls_is_closed_or_deferred(st)) {
+      tls_pump_leave(st);
+      return;
+    }
+    for (;;) {
+      int close_req;
+      mem_buffer_t *chunk;
+      size_t payload_capacity = 0;
+
+      chunk = tls_alloc_plaintext_chunk(st, &payload_capacity);
+      if (!chunk) {
+        turbo_stream_close(st->outer);
+        tls_pump_leave(st);
+        return;
+      }
+
+      n = SSL_read(st->ssl,
+                   chunk->data + sizeof(coro_recv_header_t),
+                   (int)payload_capacity);
+      if (n <= 0) {
+        mem_unref(chunk);
+        break;
+      }
+
+      close_req = tls_deliver_or_queue_plaintext_chunk(st, chunk, (size_t)n);
+      mem_unref(chunk);
+      if (tls_is_closed_or_deferred(st)) {
+        tls_pump_leave(st);
+        return;
+      }
+      if (close_req == TURBO_ENOMEM) {
+        turbo_stream_close(st->outer);
+        tls_pump_leave(st);
+        return;
+      }
+      if (close_req != 0) {
+        turbo_stream_close(st->outer);
+        tls_pump_leave(st);
+        return;
       }
     }
-    
+
+    if (tls_is_closed_or_deferred(st)) {
+      tls_pump_leave(st);
+      return;
+    }
+
     int err = SSL_get_error(st->ssl, n);
     if (err == SSL_ERROR_ZERO_RETURN) {
       /* Clean shutdown from peer (close_notify) */
       turbo_stream_close(st->outer);
+      tls_pump_leave(st);
       return;
     } else if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
       /* Protocol error / abrupt disconnect */
       turbo_stream_close(st->outer);
+      tls_pump_leave(st);
       return;
     }
 
@@ -490,6 +1252,8 @@ static void tls_pump(tls_state_t *st) {
       /* TCP close will follow shortly */
     }
   }
+
+  tls_pump_leave(st);
 }
 
 /* ── TCP Callbacks ────────────────────────────────────────── */
@@ -498,17 +1262,42 @@ static int tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   tls_state_t    *st  = (tls_state_t *)tcp->user_data;
+  uint64_t cb_start_ns = 0;
+  uint64_t bio_start_ns = 0;
   if (!st || !st->rbio || !slice || !slice->data || slice->length == 0) return 0;
 
   /* Push encrypted network bytes into rbio */
-  int written = BIO_write(st->rbio, slice->data, (int)slice->length);
-  if (written <= 0) {
-    /* Shouldn't happen with memory BIOs unless OOM */
-    return -1;
+  if (st->state == TLS_ST_HANDSHAKING) {
+    cb_start_ns = turbo_hrtime();
+    if (!st->server_mode) {
+      bio_start_ns = turbo_hrtime();
+    }
+  }
+  {
+    int written = BIO_write(st->rbio, slice->data, (int)slice->length);
+    if (written <= 0) {
+      /* Shouldn't happen with memory BIOs unless OOM */
+      return -1;
+    }
+  }
+  if (bio_start_ns != 0) {
+    tls_metric_add(&s_tls_metrics.client_handshake_bio_write_ns,
+                   turbo_hrtime() - bio_start_ns);
+    tls_metric_inc(&s_tls_metrics.client_handshake_bio_write_calls);
+    tls_metric_add(&s_tls_metrics.client_handshake_bio_write_bytes, (uint64_t)slice->length);
   }
 
   /* Drive TLS state machine to consume the data */
   tls_pump(st);
+  if (cb_start_ns != 0) {
+    if (!st->server_mode) {
+      tls_metric_add(&s_tls_metrics.client_handshake_recv_cb_ns,
+                     turbo_hrtime() - cb_start_ns);
+    } else {
+      tls_metric_add(&s_tls_metrics.server_handshake_recv_cb_ns,
+                     turbo_hrtime() - cb_start_ns);
+    }
+  }
   return 0;
 }
 
@@ -516,6 +1305,7 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   tls_state_t    *st  = (tls_state_t *)tcp->user_data;
+  uint64_t cb_start_ns = 0;
   if (!st) return;
 
   if (status != 0) {
@@ -526,6 +1316,10 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
   }
 
   st->state = TLS_ST_HANDSHAKING;
+  tls_mark_client_handshake_start(st);
+  if (!st->server_mode) {
+    cb_start_ns = turbo_hrtime();
+  }
   
   /* Start reading incoming TCP data to fuel the handshake */
   {
@@ -542,6 +1336,10 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
   
   /* First pump triggers SSL_connect and sends ClientHello */
   tls_pump(st);
+  if (cb_start_ns != 0) {
+    tls_metric_add(&s_tls_metrics.client_handshake_connect_cb_ns,
+                   turbo_hrtime() - cb_start_ns);
+  }
 }
 
 static void tls_on_tcp_close(void *handle) {
@@ -553,6 +1351,19 @@ static void tls_on_tcp_close(void *handle) {
   outer = st->outer;
   if (outer) outer->backend_data = NULL;
   tcp->user_data = NULL;
+  st->tcp = NULL;
+  st->state = TLS_ST_CLOSED;
+
+  if (st->pumping > 0) {
+    st->close_deferred = 1;
+    st->outer = NULL;
+    if (outer) {
+      turbo_stream_finalize_close(outer);
+    }
+    return;
+  }
+
+  st->outer = NULL;
   tls_free_state(st);
 
   if (outer) {
@@ -563,22 +1374,26 @@ static void tls_on_tcp_close(void *handle) {
 /* ── Backend vtable implementation ───────────────────────── */
 
 static int tls_init(turbo_stream_t *s) {
-  tls_state_t *st = (tls_state_t *)calloc(1, sizeof(tls_state_t));
+  tls_state_t *st = NULL;
+  int rc = 0;
+
+  st = (tls_state_t *)calloc(1, sizeof(tls_state_t));
   if (!st) return TURBO_ENOMEM;
 
   st->outer = s;
   st->state = TLS_ST_INIT;
   st->ctx   = get_default_tls_ctx();
   if (!st->ctx) {
-    free(st);
-    return TURBO_ENOMEM;
+    rc = TURBO_ENOMEM;
+    goto fail;
   }
 
   st->ssl = SSL_new(st->ctx);
   if (!st->ssl) {
-    free(st);
-    return TURBO_ENOMEM;
+    rc = TURBO_ENOMEM;
+    goto fail;
   }
+  tls_install_msg_callback(st);
 
   /* Create Memory BIOs: network->SSL (rbio), SSL->network (wbio) */
   st->rbio = BIO_new(BIO_s_mem());
@@ -592,8 +1407,8 @@ static int tls_init(turbo_stream_t *s) {
       BIO_free(st->wbio);
       st->wbio = NULL;
     }
-    tls_free_state(st);
-    return TURBO_ENOMEM;
+    rc = TURBO_ENOMEM;
+    goto fail;
   }
   
   /* SSL_set_bio takes ownership of the BIOs */
@@ -601,6 +1416,10 @@ static int tls_init(turbo_stream_t *s) {
 
   s->backend_data = st;
   return 0;
+
+fail:
+  tls_free_state(st);
+  return rc;
 }
 
 static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
@@ -634,6 +1453,8 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
       return rc;
     }
   }
+  tls_apply_cached_client_session(st);
+  tls_metric_inc(&s_tls_metrics.client_handshakes_started);
 
   st->state = TLS_ST_CONNECTING_TCP;
   {
@@ -693,6 +1514,7 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
   if (!st->ssl) {
     return TURBO_ENOMEM;
   }
+  tls_install_msg_callback(st);
 
   st->rbio = BIO_new(BIO_s_mem());
   st->wbio = BIO_new(BIO_s_mem());
@@ -705,13 +1527,17 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
       BIO_free(st->wbio);
       st->wbio = NULL;
     }
-    SSL_free(st->ssl);
-    st->ssl = NULL;
-    return TURBO_ENOMEM;
+    rc = TURBO_ENOMEM;
+    goto fail;
   }
 
   SSL_set_bio(st->ssl, st->rbio, st->wbio);
   return tls_attach_tcp_stream(tls_stream, tcp_stream, NULL, 1, on_connect, on_close);
+
+fail:
+  tls_free_state(st);
+  tls_stream->backend_data = NULL;
+  return rc;
 }
 
 static int tls_connect_pipe(turbo_stream_t *s, const char *name) {
@@ -722,10 +1548,20 @@ static int tls_connect_pipe(turbo_stream_t *s, const char *name) {
 static int tls_send(turbo_stream_t *s, const char *data, size_t len) {
   tls_state_t *st = (tls_state_t *)s->backend_data;
   if (!st || st->state != TLS_ST_OPEN) return TURBO_ENOTCONN;
+  return tls_write_plaintext(st, data, len, 1);
+}
 
-  if (len == 0) return 0;
-
+static int tls_write_plaintext(tls_state_t *st, const char *data, size_t len,
+                               int flush_network) {
   size_t offset = 0;
+
+  if (!st || !data) {
+    return TURBO_EINVAL;
+  }
+  if (len == 0) {
+    return 0;
+  }
+
   while (offset < len) {
     size_t remaining = len - offset;
     int chunk = (remaining > (size_t)INT_MAX) ? INT_MAX : (int)remaining;
@@ -733,7 +1569,9 @@ static int tls_send(turbo_stream_t *s, const char *data, size_t len) {
 
     if (n > 0) {
       offset += (size_t)n;
-      tls_flush_wbio_to_network(st);
+      if (flush_network) {
+        tls_flush_wbio_to_network(st);
+      }
       continue;
     }
 
@@ -754,17 +1592,23 @@ static int tls_send(turbo_stream_t *s, const char *data, size_t len) {
 
 static int tls_flush(turbo_stream_t *s) {
   tls_state_t *st = (tls_state_t *)s->backend_data;
+  mem_buffer_t *buf;
+  int rc;
+
   if (!st || !st->tcp) return 0;
 
-  /* Drain any pending plaintext from the arena queue into OpenSSL */
-  while (s->send_head) {
-    mem_buffer_t *buf = s->send_head;
+  /* Drain queued plaintext through tls_send() so partial writes and
+   * WANT_READ/WANT_WRITE are handled consistently. */
+  while ((buf = s->send_head) != NULL) {
+    rc = tls_write_plaintext(st, buf->data, buf->used, 0);
+    if (rc != 0) {
+      return rc;
+    }
+
     s->send_head = buf->next;
     if (!s->send_head) s->send_tail = NULL;
     s->send_queued -= buf->used;
     buf->next = NULL;
-
-    SSL_write(st->ssl, buf->data, (int)buf->used);
     mem_unref(buf);
   }
 
@@ -775,7 +1619,10 @@ static int tls_flush(turbo_stream_t *s) {
 static int tls_recv_start(turbo_stream_t *s) {
   /* on_recv is cached in s->on_recv; underlying TCP read was started 
      during handshake. Nothing more to do. */
-  (void)s;
+  tls_state_t *st = (tls_state_t *)s->backend_data;
+  if (st) {
+    return tls_flush_pending_plaintext(st);
+  }
   return 0;
 }
 
@@ -865,4 +1712,157 @@ CXX_C_API void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname)
   if (!st || !hostname) return;
   strncpy(st->hostname, hostname, sizeof(st->hostname) - 1);
   st->hostname[sizeof(st->hostname) - 1] = '\0';
+}
+
+CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode) {
+  int rc;
+
+  if (mode != TURBO_TLS_PROTOCOL_DEFAULT && mode != TURBO_TLS_PROTOCOL_TLS13_ONLY) {
+    return TURBO_EINVAL;
+  }
+
+  s_tls_protocol_mode = mode;
+  tls_reset_client_session_cache_internal();
+
+  if (s_default_ctx) {
+    rc = tls_apply_protocol_mode_to_ctx(s_default_ctx);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+  if (s_server_ctx) {
+    rc = tls_apply_protocol_mode_to_ctx(s_server_ctx);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+
+  return 0;
+}
+
+CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void) {
+  return s_tls_protocol_mode;
+}
+
+CXX_C_API void turbo_stream_tls_reset_client_session_cache(void) {
+  tls_reset_client_session_cache_internal();
+}
+
+CXX_C_API void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics) {
+  if (!metrics) {
+    return;
+  }
+
+  metrics->client_handshakes_started =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshakes_started);
+  metrics->client_handshakes_completed =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshakes_completed);
+  metrics->client_session_cache_attempts =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_session_cache_attempts);
+  metrics->client_session_reused =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_session_reused);
+  metrics->client_session_stores =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_session_stores);
+  metrics->client_handshake_total_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_total_ns);
+  metrics->client_handshake_bio_write_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_bio_write_ns);
+  metrics->client_handshake_bio_write_calls =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_bio_write_calls);
+  metrics->client_handshake_bio_write_bytes =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_bio_write_bytes);
+  metrics->client_handshake_crypto_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_crypto_ns);
+  metrics->client_handshake_flush_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_flush_ns);
+  metrics->client_handshake_pump_total_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_pump_total_ns);
+  metrics->client_handshake_recv_cb_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_recv_cb_ns);
+  metrics->client_handshake_connect_cb_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_connect_cb_ns);
+  metrics->client_handshake_iocp_post_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_iocp_post_ns);
+  metrics->client_handshake_post_drain_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_post_drain_ns);
+  metrics->client_handshake_waiter_signal_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_waiter_signal_ns);
+  metrics->client_handshake_resume_wait_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_resume_wait_ns);
+  metrics->client_handshake_wrap_client_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_wrap_client_ns);
+  metrics->client_handshake_clienthello_to_serverhello_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_clienthello_to_serverhello_ns);
+  metrics->client_handshake_serverhello_to_finished_write_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_serverhello_to_finished_write_ns);
+  metrics->client_handshake_finished_write_to_done_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_finished_write_to_done_ns);
+  metrics->client_handshake_serverhello_to_done_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_serverhello_to_done_ns);
+  metrics->client_handshake_pumps =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshake_pumps);
+  metrics->client_handshakes_tls13 =
+      (uint64_t)tls_metric_load(&s_tls_metrics.client_handshakes_tls13);
+  metrics->server_handshakes_completed =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshakes_completed);
+  metrics->server_handshake_total_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_total_ns);
+  metrics->server_handshake_crypto_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_crypto_ns);
+  metrics->server_handshake_flush_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_flush_ns);
+  metrics->server_handshake_pump_total_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_pump_total_ns);
+  metrics->server_handshake_recv_cb_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_recv_cb_ns);
+  metrics->server_handshake_clienthello_to_serverhello_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_clienthello_to_serverhello_ns);
+  metrics->server_handshake_clientfinished_to_done_ns =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_clientfinished_to_done_ns);
+  metrics->server_handshake_pumps =
+      (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_pumps);
+}
+
+CXX_C_API void turbo_stream_tls_reset_metrics(void) {
+  atomic_store_explicit(&s_tls_metrics.client_handshakes_started, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshakes_completed, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_session_cache_attempts, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_session_reused, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_session_stores, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_total_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_bio_write_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_bio_write_calls, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_bio_write_bytes, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_crypto_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_flush_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_pump_total_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_recv_cb_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_connect_cb_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_iocp_post_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_post_drain_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_waiter_signal_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_resume_wait_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_wrap_client_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_clienthello_to_serverhello_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_serverhello_to_finished_write_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_finished_write_to_done_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_serverhello_to_done_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshake_pumps, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.client_handshakes_tls13, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshakes_completed, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_total_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_crypto_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_flush_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_pump_total_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_recv_cb_ns, 0, memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_clienthello_to_serverhello_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_clientfinished_to_done_ns, 0,
+                        memory_order_relaxed);
+  atomic_store_explicit(&s_tls_metrics.server_handshake_pumps, 0, memory_order_relaxed);
 }

@@ -685,7 +685,9 @@ mdns_ctx_t *mdns_create(void *loop) {
   /* Bind to 0.0.0.0:5353 with SO_REUSEADDR */
   if (turbo_datagram_bind(ctx->datagram, "0.0.0.0", MDNS_PORT) != 0) {
     TLOG_ERROR("mdns: bind failed");
+    turbo_datagram_set_user_data(ctx->datagram, NULL);
     turbo_datagram_destroy(ctx->datagram);
+    ctx->datagram = NULL;
     free(ctx);
     return NULL;
   }
@@ -693,7 +695,9 @@ mdns_ctx_t *mdns_create(void *loop) {
   /* Join multicast group */
   if (turbo_datagram_join_multicast(ctx->datagram, MDNS_MCAST_ADDR, NULL) != 0) {
     TLOG_ERROR("mdns: join_multicast failed");
+    turbo_datagram_set_user_data(ctx->datagram, NULL);
     turbo_datagram_destroy(ctx->datagram);
+    ctx->datagram = NULL;
     free(ctx);
     return NULL;
   }
@@ -702,7 +706,9 @@ mdns_ctx_t *mdns_create(void *loop) {
   if (turbo_datagram_recv_start(ctx->datagram, on_mdns_recv) != 0) {
     TLOG_ERROR("mdns: recv_start failed");
     turbo_datagram_leave_multicast(ctx->datagram, MDNS_MCAST_ADDR, NULL);
+    turbo_datagram_set_user_data(ctx->datagram, NULL);
     turbo_datagram_destroy(ctx->datagram);
+    ctx->datagram = NULL;
     free(ctx);
     return NULL;
   }

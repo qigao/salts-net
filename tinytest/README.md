@@ -204,8 +204,8 @@ Variables shared between setup and tests must be `static`.
 
 ```c
 spec("performance") {
-    it("should be fast") {
-        benchmark("parse_json", 10000) {
+    bench("parser") {
+        benchmark("parse_json", 10000, 1) {
             parse_json(input, len);
         }
     }

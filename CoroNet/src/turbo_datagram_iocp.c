@@ -22,6 +22,7 @@ typedef struct dg_iocp_state_s {
   int recv_started;
   int closing;
   volatile LONG shutdown_complete;
+  iocp_op_t recv_op;
 } dg_iocp_state_t;
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -57,7 +58,7 @@ void datagram_iocp_handle_recv_op(iocp_op_t *op) {
   iocp_pool_inflight_dec(d->ctx->iocp_pool);
 
   if (st->closing) {
-    free(op);
+    /* no free(op), uses st->recv_op */
     dg_maybe_shutdown(d);
     turbo_datagram_release(d);
     return;
@@ -87,7 +88,7 @@ void datagram_iocp_handle_recv_op(iocp_op_t *op) {
     d->status = (status != 0) ? status : TURBO_EOF;
     if (d->on_recv) d->on_recv(d, NULL, NULL);
   }
-  free(op);
+  /* no free(op), uses st->recv_op */
   turbo_datagram_release(d);
 }
 
@@ -114,8 +115,8 @@ void datagram_iocp_handle_send_op(iocp_op_t *op) {
 static int dg_iocp_submit_recv(turbo_datagram_t *d) {
   dg_iocp_state_t *st = (dg_iocp_state_t *)d->backend_data;
 
-  iocp_op_t *op = (iocp_op_t *)calloc(1, sizeof(iocp_op_t));
-  if (!op) return TURBO_ENOMEM;
+  iocp_op_t *op = &st->recv_op;
+  memset(&op->overlapped, 0, sizeof(OVERLAPPED));
 
   op->kind = IOCP_OP_DG_RECV;
   op->owner = d;
@@ -138,7 +139,6 @@ static int dg_iocp_submit_recv(turbo_datagram_t *d) {
     if (err != WSA_IO_PENDING) {
       InterlockedDecrement(&st->inflight_count);
       iocp_pool_inflight_dec(d->ctx->iocp_pool);
-      free(op);
       turbo_datagram_release(d);
       return -(int)err;
     }

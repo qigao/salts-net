@@ -1,6 +1,7 @@
 #include "CoroNet.h"
 #include "CoroNet/turbo_stream.h"
 #include "base64_utils.h"
+#include "platform.h"
 #include "tinytest.h"
 #include "tls_test_support.h"
 #include "turbo_thread.h"
@@ -27,6 +28,35 @@ static int s_ws_connected = -1;
 static int s_ws_closed = 0;
 static char s_ws_rx_buf[4096];
 static size_t s_ws_rx_len = 0;
+
+static void ws_test_run_until(coro_context_t *ctx, uint64_t timeout_ms,
+                              int (*done)(void *), void *arg) {
+  uint64_t deadline;
+
+  if (!ctx || !done) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (!done(arg) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+  }
+}
+
+static int ws_test_connected_ready(void *arg) {
+  int expected = arg ? *(int *)arg : 0;
+  return s_ws_connected == expected;
+}
+
+static int ws_test_closed_ready(void *arg) {
+  (void)arg;
+  return s_ws_closed != 0;
+}
+
+static int ws_test_rx_contains(void *arg) {
+  const char *needle = (const char *)arg;
+  return needle && strstr(s_ws_rx_buf, needle) != NULL;
+}
 
 /**
  * @brief Record WSS connect completion.
@@ -344,7 +374,7 @@ spec("Stream WebSocket Client") {
   it("should connect via WSS, perform handshake and echo data") {
     char ca_file[512] = {0};
     unsigned short port = 0;
-    int limit;
+    int connected = 0;
     coro_context_t *ctx = NULL;
     turbo_stream_t *s = NULL;
     wss_test_server_t server;
@@ -379,20 +409,14 @@ spec("Stream WebSocket Client") {
 
     check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
 
-    limit = 20000;
-    while (s_ws_connected == -1 && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    ws_test_run_until(ctx, 3000, ws_test_connected_ready, &connected);
     check_int_eq(s_ws_connected, 0);
 
     check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
     check_int_eq(turbo_stream_send(s, msg, strlen(msg)), 0);
     check_int_eq(turbo_stream_flush(s), 0);
 
-    limit = 20000;
-    while (strstr(s_ws_rx_buf, msg) == NULL && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    ws_test_run_until(ctx, 3000, ws_test_rx_contains, (void *)msg);
 
     check_int_eq(s_ws_connected, 0);
     check(s_ws_rx_len > 0);
@@ -400,10 +424,7 @@ spec("Stream WebSocket Client") {
 
     turbo_stream_close(s);
 
-    limit = 200;
-    while (!s_ws_closed && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
 
     turbo_thread_join(&server.thread);
 
@@ -419,7 +440,7 @@ spec("Stream WebSocket Client") {
   it("should close on reserved websocket opcode") {
     char ca_file[512] = {0};
     unsigned short port = 0;
-    int limit;
+    int connected = 0;
     coro_context_t *ctx = NULL;
     turbo_stream_t *s = NULL;
     wss_test_server_t server;
@@ -453,18 +474,12 @@ spec("Stream WebSocket Client") {
 
     check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
 
-    limit = 20000;
-    while (s_ws_connected == -1 && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    ws_test_run_until(ctx, 3000, ws_test_connected_ready, &connected);
     check_int_eq(s_ws_connected, 0);
 
     check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
 
-    limit = 20000;
-    while (!s_ws_closed && limit-- > 0) {
-      coro_context_run(ctx, TURBO_RUN_ONCE);
-    }
+    ws_test_run_until(ctx, 3000, ws_test_closed_ready, NULL);
 
     turbo_thread_join(&server.thread);
 

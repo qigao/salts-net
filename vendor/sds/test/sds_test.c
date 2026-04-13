@@ -222,7 +222,9 @@ spec("SDS library tests") {
         const size_t long_total = long_chunk_len * (size_t)loops_long;
 
         bench("concatenation performance") {
-            benchmark("sdscat 100 loops", iters) {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+            benchmark("sdscat 100 loops", iters, 1) {
                 sds s = sdsempty();
                 for (int i = 0; i < loops; i++) {
                     s = sdscatlen(s, to_append, append_len);
@@ -230,7 +232,7 @@ spec("SDS library tests") {
                 sdsfree(s);
             }
 
-            benchmark("strcat 100 loops", iters) {
+            benchmark("strcat 100 loops", iters, 1) {
                 char buf[1024];
                 buf[0] = '\0';
                 for (int i = 0; i < loops; i++) {
@@ -240,7 +242,9 @@ spec("SDS library tests") {
         }
 
         bench("concatenation performance (prealloc)") {
-            benchmark("sdscat 100 loops (prealloc)", iters) {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+            benchmark("sdscat 100 loops (prealloc)", iters, 1) {
                 sds s = sdsempty();
                 s = sdsMakeRoomFor(s, small_total);
                 for (int i = 0; i < loops; i++) {
@@ -250,7 +254,7 @@ spec("SDS library tests") {
             }
 
 
-            benchmark("strcat 100 loops (prealloc)", iters) {
+            benchmark("strcat 100 loops (prealloc)", iters, 1) {
                 size_t cap = small_total + 1;
                 char *buf = (char *)malloc(cap);
                 if (buf) {
@@ -264,12 +268,14 @@ spec("SDS library tests") {
         }
 
         bench("concatenation performance (long chunks)") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             char *chunk = (char *)malloc(long_chunk_len + 1);
             check_not_null(chunk);
             memset(chunk, 'x', long_chunk_len);
             chunk[long_chunk_len] = '\0';
 
-            benchmark("sdscatlen 50x256", iters_long) {
+            benchmark("sdscatlen 50x256", iters_long, 1) {
                 sds s = sdsempty();
                 for (int i = 0; i < loops_long; i++) {
                     s = sdscatlen(s, chunk, long_chunk_len);
@@ -277,7 +283,7 @@ spec("SDS library tests") {
                 sdsfree(s);
             }
 
-            benchmark("strcat 50x256", iters_long) {
+            benchmark("strcat 50x256", iters_long, 1) {
                 size_t cap = long_chunk_len * (size_t)loops_long + 1;
                 char *buf = (char *)malloc(cap);
                 if (buf) {
@@ -293,12 +299,14 @@ spec("SDS library tests") {
         }
 
         bench("concatenation performance (long chunks, prealloc)") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             char *chunk = (char *)malloc(long_chunk_len + 1);
             check_not_null(chunk);
             memset(chunk, 'x', long_chunk_len);
             chunk[long_chunk_len] = '\0';
 
-            benchmark("sdscatlen 50x256 (prealloc)", iters_long) {
+            benchmark("sdscatlen 50x256 (prealloc)", iters_long, 1) {
                 sds s = sdsempty();
                 s = sdsMakeRoomFor(s, long_total);
                 for (int i = 0; i < loops_long; i++) {
@@ -307,7 +315,7 @@ spec("SDS library tests") {
                 sdsfree(s);
             }
 
-            benchmark("strcat 50x256 (prealloc)", iters_long) {
+            benchmark("strcat 50x256 (prealloc)", iters_long, 1) {
                 size_t cap = long_total + 1;
                 char *buf = (char *)malloc(cap);
                 if (buf) {
@@ -323,16 +331,18 @@ spec("SDS library tests") {
         }
 
         bench("length performance") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             const char *cstr = "a long string just to test length operation frequently items";
             sds s;
             SDS_NEW_LITERAL(s, cstr);
  
-            benchmark("sdslen", iters * 10) {
+            benchmark("sdslen", iters * 10, 1) {
                 size_t l = sdslen(s);
                 (void)l;
             }
 
-            benchmark("strlen", iters * 10) {
+            benchmark("strlen", iters * 10, 1) {
                 size_t l = strlen(cstr);
                 (void)l;
             }
@@ -340,6 +350,8 @@ spec("SDS library tests") {
          }
 
         bench("length performance (long)") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             char *cstr = (char *)malloc(long_len + 1);
             check_not_null(cstr);
             memset(cstr, 'a', long_len);
@@ -348,12 +360,12 @@ spec("SDS library tests") {
             sds s = sdsnewlen(cstr, long_len);
             check_not_null(s); 
 
-            benchmark("sdslen 8K", iters_long * 5) {
+            benchmark("sdslen 8K", iters_long * 5, 1) {
                 size_t l = sdslen(s);
                 (void)l;
             }
 
-            benchmark("strlen 8K", iters_long * 5) {
+            benchmark("strlen 8K", iters_long * 5, 1) {
                 size_t l = strlen(cstr);
                 (void)l;
             }
@@ -363,15 +375,17 @@ spec("SDS library tests") {
         }
 
         bench("copy performance") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             const char *src = "copy this string content";
             sds s = sdsnewlen(NULL, 100);
             check_not_null(s);
 
-            benchmark("sdscpy", iters) {
+            benchmark("sdscpy", iters, 1) {
                 s = sdscpy(s, src);
             }
 
-            benchmark("strcpy", iters) {
+            benchmark("strcpy", iters, 1) {
                 char dst[100];
                 strcpy(dst, src);
             }
@@ -379,6 +393,8 @@ spec("SDS library tests") {
         }
 
         bench("compare performance") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             sds s1;
             sds s2;
             sds s3;
@@ -389,27 +405,27 @@ spec("SDS library tests") {
             const char *c2 = "string two";
             const char *c3 = "string onz";
 
-            benchmark("sdscmp (full)", iters) {
+            benchmark("sdscmp (full)", iters, 1) {
                 int res = sdscmp(s1, s2);
                 (void)res;
             }
 
-            benchmark("strcmp (full)", iters) {
+            benchmark("strcmp (full)", iters, 1) {
                 int res = strcmp(c1, c2);
                 (void)res;
             }
 
-            benchmark("sdscmp (prefix)", iters) {
+            benchmark("sdscmp (prefix)", iters, 1) {
                 int res = sdscmp(s1, s3);
                 (void)res;
             }
 
-            benchmark("strncmp (9 chars)", iters) {
+            benchmark("strncmp (9 chars)", iters, 1) {
                 int res = strncmp(c1, c3, 9);
                 (void)res;
             }
 
-            benchmark("sdscasecmp (tolower+cmp)", iters) {
+            benchmark("sdscasecmp (tolower+cmp)", iters, 1) {
                 sds sc1 = sdsdup(s1);
                 sdstolower(sc1);
                 int res = sdscmp(sc1, s2);
@@ -417,7 +433,7 @@ spec("SDS library tests") {
                 sdsfree(sc1);
             }
 
-            benchmark("stricmp/strcasecmp", iters) {
+            benchmark("stricmp/strcasecmp", iters, 1) {
                 int res = STRICMP(c1, c2);
                 (void)res;
             }
@@ -426,6 +442,8 @@ spec("SDS library tests") {
         }
 
         bench("compare performance (long)") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             char *a = (char *)malloc(long_len + 1);
             char *b = (char *)malloc(long_len + 1);
             check_not_null(a);
@@ -441,12 +459,12 @@ spec("SDS library tests") {
             check_not_null(sa);
             check_not_null(sb);
 
-            benchmark("sdscmp 8K (diff end)", iters_long * 5) {
+            benchmark("sdscmp 8K (diff end)", iters_long * 5, 1) {
                 int res = sdscmp(sa, sb);
                 (void)res;
             }
 
-            benchmark("strcmp 8K (diff end)", iters_long * 5) {
+            benchmark("strcmp 8K (diff end)", iters_long * 5, 1) {
                 int res = strcmp(a, b);
                 (void)res;
             }
@@ -457,70 +475,76 @@ spec("SDS library tests") {
         }
 
         bench("case-insensitive compare performance") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             const char *c1 = "Hello World Test String";
             const char *c2 = "hello world test string";
             const char *c3 = "HELLO WORLD TEST STRING";
 
-            benchmark("sdscasecmp (equal)", iters) {
+            benchmark("sdscasecmp (equal)", iters, 1) {
                 int res = sdscasecmp(c1, c2);
                 (void)res;
             }
 
-            benchmark("STRICMP (equal)", iters) {
+            benchmark("STRICMP (equal)", iters, 1) {
                 int res = STRICMP(c1, c2);
                 (void)res;
             }
 
-            benchmark("sdsncasecmp (10 chars)", iters) {
+            benchmark("sdsncasecmp (10 chars)", iters, 1) {
                 int res = sdsncasecmp(c1, c3, 10);
                 (void)res;
             }
         }
 
         bench("startswith/endswith/contains performance") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             const char *s = "The quick brown fox jumps over the lazy dog";
             const char *prefix = "The quick";
             const char *suffix = "lazy dog";
             const char *substr = "brown fox";
 
-            benchmark("sdsstartswith", iters) {
+            benchmark("sdsstartswith", iters, 1) {
                 int res = sdsstartswith(s, prefix);
                 (void)res;
             }
 
-            benchmark("sdsistartswith", iters) {
+            benchmark("sdsistartswith", iters, 1) {
                 int res = sdsistartswith(s, "THE QUICK");
                 (void)res;
             }
 
-            benchmark("sdsendswith", iters) {
+            benchmark("sdsendswith", iters, 1) {
                 int res = sdsendswith(s, suffix);
                 (void)res;
             }
 
-            benchmark("sdscontains", iters) {
+            benchmark("sdscontains", iters, 1) {
                 int res = sdscontains(s, substr);
                 (void)res;
             }
 
-            benchmark("strstr (contains)", iters) {
+            benchmark("strstr (contains)", iters, 1) {
                 int res = strstr(s, substr) != NULL;
                 (void)res;
             }
         }
 
         bench("case conversion performance") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             sds s;
             SDS_NEW_LITERAL(s, "A Long String With Mixed Case To Be Converted Many Times In A Loop");
             char *cstr = strdup("A Long String With Mixed Case To Be Converted Many Times In A Loop");
             check_not_null(cstr);
             size_t len = strlen(cstr);
 
-            benchmark("sdstolower", iters) {
+            benchmark("sdstolower", iters, 1) {
                 sdstolower(s);
             }
 
-            benchmark("manual tolower (loop)", iters) {
+            benchmark("manual tolower (loop)", iters, 1) {
                 for (size_t i = 0; i < len; i++) {
                     cstr[i] = (char)tolower((unsigned char)cstr[i]);
                 }
@@ -530,14 +554,16 @@ spec("SDS library tests") {
         }
 
         bench("memory management (new/free)") {
+
+            benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
             const char *src = "some content to initialize strings";
 
-            benchmark("sdsnew/sdsfree", iters) {
+            benchmark("sdsnew/sdsfree", iters, 1) {
                 sds s = sdsnew(src);
                 sdsfree(s);
             }
 
-            benchmark("malloc/strcpy/free", iters) {
+            benchmark("malloc/strcpy/free", iters, 1) {
                 char *s = (char *)malloc(strlen(src) + 1);
                 if (s) {
                     strcpy(s, src);

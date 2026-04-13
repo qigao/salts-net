@@ -20,39 +20,39 @@ extern "C" {
 /* ── HTTP methods — values match llhttp_method ────────────────────── */
 
 #ifndef HTTP_DELETE
-#define HTTP_DELETE  0
+  #define HTTP_DELETE 0
 #endif
 
 #ifndef HTTP_GET
-#define HTTP_GET     1
+  #define HTTP_GET 1
 #endif
 
 #ifndef HTTP_HEAD
-#define HTTP_HEAD    2
+  #define HTTP_HEAD 2
 #endif
 
 #ifndef HTTP_POST
-#define HTTP_POST    3
+  #define HTTP_POST 3
 #endif
 
 #ifndef HTTP_PUT
-#define HTTP_PUT     4
+  #define HTTP_PUT 4
 #endif
 
 #ifndef HTTP_CONNECT
-#define HTTP_CONNECT 5
+  #define HTTP_CONNECT 5
 #endif
 
 #ifndef HTTP_OPTIONS
-#define HTTP_OPTIONS 6
+  #define HTTP_OPTIONS 6
 #endif
 
 #ifndef HTTP_TRACE
-#define HTTP_TRACE   7
+  #define HTTP_TRACE 7
 #endif
 
 #ifndef HTTP_PATCH
-#define HTTP_PATCH   28
+  #define HTTP_PATCH 28
 #endif
 
 typedef int http_method_t;
@@ -75,6 +75,29 @@ typedef enum {
   HTTP_ERROR_CANCELLED,
   HTTP_ERROR_FILE_IO
 } http_error_code_t;
+
+/**
+ * @brief Convert HTTP error code to human-readable string.
+ */
+static inline const char *http_error_to_str(http_error_code_t code) {
+  switch (code) {
+    case HTTP_ERROR_NONE:               return "OK";
+    case HTTP_ERROR_INVALID_URL:        return "Invalid URL";
+    case HTTP_ERROR_INVALID_PARAMS:     return "Invalid parameters";
+    case HTTP_ERROR_DNS_FAILED:         return "DNS resolution failed";
+    case HTTP_ERROR_CONNECTION_FAILED:  return "Connection failed";
+    case HTTP_ERROR_TIMEOUT:            return "Request timeout";
+    case HTTP_ERROR_TLS_HANDSHAKE_FAILED:return "TLS handshake failed";
+    case HTTP_ERROR_SEND_FAILED:        return "Send failed";
+    case HTTP_ERROR_RECEIVE_FAILED:     return "Receive failed";
+    case HTTP_ERROR_PARSE_FAILED:       return "Parse failed";
+    case HTTP_ERROR_TOO_MANY_REDIRECTS: return "Too many redirects";
+    case HTTP_ERROR_MEMORY_ALLOCATION:  return "Memory allocation failed";
+    case HTTP_ERROR_CANCELLED:          return "Operation cancelled";
+    case HTTP_ERROR_FILE_IO:            return "File I/O error";
+    default:                            return "Unknown error";
+  }
+}
 
 /* ── Response ────────────────────────────────────────────────────── */
 
@@ -201,12 +224,12 @@ typedef struct http_multipart_form_s http_multipart_form_t;
 CXX_C_API http_multipart_form_t *http_multipart_form_create(void);
 CXX_C_API void http_multipart_form_destroy(http_multipart_form_t *form);
 CXX_C_API void http_multipart_form_add_field(http_multipart_form_t *form, const char *name,
-                                              const char *value);
+                                             const char *value);
 CXX_C_API void http_multipart_form_add_file(http_multipart_form_t *form, const char *field_name,
-                                             const char *filename, const char *content_type,
-                                             const void *data, size_t data_len);
+                                            const char *filename, const char *content_type,
+                                            const void *data, size_t data_len);
 CXX_C_API int http_multipart_form_add_file_path(http_multipart_form_t *form, const char *field_name,
-                                                  const char *file_path, const char *content_type);
+                                                const char *file_path, const char *content_type);
 
 /* ── Retry policy default ────────────────────────────────────────── */
 
@@ -221,7 +244,7 @@ CXX_C_API http_retry_policy_t http_retry_policy_default(void);
  * @return Newly allocated C string, caller must free(). NULL if not found.
  */
 CXX_C_API char *http_response_get_header(http_response_t *response, const char *name);
-CXX_C_API int   http_response_has_header(http_response_t *response, const char *name);
+CXX_C_API int http_response_has_header(http_response_t *response, const char *name);
 
 #ifdef __cplusplus
 }

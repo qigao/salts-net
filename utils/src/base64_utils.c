@@ -22,6 +22,29 @@ int tn_base64_encode(const uint8_t *data, size_t len, char **output) {
   return 0;
 }
 
+/**
+ * @brief Encode binary data to Base64 into a caller-supplied buffer.
+ *
+ * No heap allocation.  Returns 0 on success, -1 if @p out_cap is too small
+ * (need 4*ceil(len/3) + 1 bytes, i.e. ceil_div(len,3)*4 + 1).
+ */
+int tn_base64_encode_buf(const uint8_t *data, size_t len,
+                         char *out, size_t out_cap) {
+  size_t needed;
+
+  if (!data || !out || out_cap == 0)
+    return -1;
+
+  needed = 4 * ((len + 2) / 3) + 1; /* +1 for NUL */
+  if (out_cap < needed)
+    return -1;
+
+  size_t written = 0;
+  base64_encode((const char *)data, len, out, &written, 0);
+  out[written] = '\0';
+  return 0;
+}
+
 int tn_base64_decode(const char *input, uint8_t **output, size_t *output_len) {
   if (!input || !output || !output_len)
     return -1;

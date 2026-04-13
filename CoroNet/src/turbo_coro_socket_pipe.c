@@ -248,6 +248,11 @@ static void pipe_close(coro_socket_t *s) {
   if (s->native_tcp_state) {
     pipe_listener_state_t *ls = (pipe_listener_state_t *)s->native_tcp_state;
     if (ls->listener) turbo_stream_listener_close(ls->listener);
+    if (s->co_wait) {
+      s->accept_pending = 0;
+      s->status = (s->status == 0) ? TURBO_ECANCELED : s->status;
+      coro_resume_waiter(s);
+    }
     pipe_accept_node_t *n = ls->head;
     while (n) {
       pipe_accept_node_t *nx = n->next;

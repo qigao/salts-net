@@ -43,6 +43,48 @@ typedef enum turbo_stream_kind_e {
   TURBO_STREAM_TLS  = 5,  /**< Native TLS over TCP */
 } turbo_stream_kind_t;
 
+typedef enum turbo_tls_protocol_mode_e {
+  TURBO_TLS_PROTOCOL_DEFAULT = 0,
+  TURBO_TLS_PROTOCOL_TLS13_ONLY = 1,
+} turbo_tls_protocol_mode_t;
+
+typedef struct turbo_tls_metrics_s {
+  uint64_t client_handshakes_started;
+  uint64_t client_handshakes_completed;
+  uint64_t client_session_cache_attempts;
+  uint64_t client_session_reused;
+  uint64_t client_session_stores;
+  uint64_t client_handshake_total_ns;
+  uint64_t client_handshake_bio_write_ns;
+  uint64_t client_handshake_bio_write_calls;
+  uint64_t client_handshake_bio_write_bytes;
+  uint64_t client_handshake_crypto_ns;
+  uint64_t client_handshake_flush_ns;
+  uint64_t client_handshake_pump_total_ns;
+  uint64_t client_handshake_recv_cb_ns;
+  uint64_t client_handshake_connect_cb_ns;
+  uint64_t client_handshake_iocp_post_ns;
+  uint64_t client_handshake_post_drain_ns;
+  uint64_t client_handshake_waiter_signal_ns;
+  uint64_t client_handshake_resume_wait_ns;
+  uint64_t client_handshake_wrap_client_ns;
+  uint64_t client_handshake_clienthello_to_serverhello_ns;
+  uint64_t client_handshake_serverhello_to_finished_write_ns;
+  uint64_t client_handshake_finished_write_to_done_ns;
+  uint64_t client_handshake_serverhello_to_done_ns;
+  uint64_t client_handshake_pumps;
+  uint64_t client_handshakes_tls13;
+  uint64_t server_handshakes_completed;
+  uint64_t server_handshake_total_ns;
+  uint64_t server_handshake_crypto_ns;
+  uint64_t server_handshake_flush_ns;
+  uint64_t server_handshake_pump_total_ns;
+  uint64_t server_handshake_recv_cb_ns;
+  uint64_t server_handshake_clienthello_to_serverhello_ns;
+  uint64_t server_handshake_clientfinished_to_done_ns;
+  uint64_t server_handshake_pumps;
+} turbo_tls_metrics_t;
+
 /* ── Write completion callback ────────────────────────────── */
 
 typedef void (*turbo_stream_write_cb)(turbo_stream_t *s, int status);
@@ -177,6 +219,11 @@ CXX_C_API void turbo_stream_set_user_data(turbo_stream_t *s, void *data);
 CXX_C_API void *turbo_stream_get_user_data(turbo_stream_t *s);
 CXX_C_API void turbo_stream_set_write_cb(turbo_stream_t *s,
                                           turbo_stream_write_cb cb);
+CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode);
+CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void);
+CXX_C_API void turbo_stream_tls_reset_client_session_cache(void);
+CXX_C_API void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics);
+CXX_C_API void turbo_stream_tls_reset_metrics(void);
 
 /* ── Convenience macros ───────────────────────────────────── */
 

@@ -28,6 +28,8 @@ spec("Priority Queue Comparison - Single Thread") {
   }
 
   bench("Single-threaded: Push+Pop") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     // Init outside benchmark loop to isolate queue operations
     bucket_priority_queue_t st_queue;
     bucket_priority_queue_spsc_t spsc_queue;
@@ -37,19 +39,19 @@ spec("Priority Queue Comparison - Single Thread") {
     bucket_priority_queue_spsc_init(&spsc_queue, 1024);
     bucket_priority_queue_mpmc_init(&mpmc_queue, 1024, 1);
 
-    benchmark("ST (ring_buffer)", BENCH_ITERS) {
+    benchmark("ST (ring_buffer)", BENCH_ITERS, 1) {
       bucket_priority_value_t out = 0;
       bucket_priority_queue_push(&st_queue, BUCKET_PRIORITY_HIGH, 42);
       bucket_priority_queue_pop(&st_queue, &out);
     }
 
-    benchmark("SPSC (ring_buffer_spsc)", BENCH_ITERS) {
+    benchmark("SPSC (ring_buffer_spsc)", BENCH_ITERS, 1) {
       bucket_priority_spsc_value_t out = 0;
       bucket_priority_queue_spsc_push(&spsc_queue, BUCKET_PRIORITY_SPSC_HIGH, 42);
       bucket_priority_queue_spsc_pop(&spsc_queue, &out);
     }
 
-    benchmark("MPMC (disruptor)", BENCH_ITERS) {
+    benchmark("MPMC (disruptor)", BENCH_ITERS, 1) {
       bucket_priority_mpmc_value_t out = 0;
       bucket_priority_queue_mpmc_try_push(&mpmc_queue, BUCKET_PRIORITY_MPMC_HIGH, 42);
       bucket_priority_queue_mpmc_try_pop(&mpmc_queue, &out);
@@ -61,6 +63,8 @@ spec("Priority Queue Comparison - Single Thread") {
   }
 
   bench("Single-threaded: Push4+Pop4 (priority aware)") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     // Init outside benchmark loop
     bucket_priority_queue_t st_queue;
     bucket_priority_queue_spsc_t spsc_queue;
@@ -70,7 +74,7 @@ spec("Priority Queue Comparison - Single Thread") {
     bucket_priority_queue_spsc_init(&spsc_queue, 1024);
     bucket_priority_queue_mpmc_init(&mpmc_queue, 1024, 1);
 
-    benchmark("ST (ring_buffer)", BENCH_ITERS) {
+    benchmark("ST (ring_buffer)", BENCH_ITERS, 1) {
       bucket_priority_value_t out = 0;
       bucket_priority_queue_push(&st_queue, BUCKET_PRIORITY_LOW, 1);
       bucket_priority_queue_push(&st_queue, BUCKET_PRIORITY_NORMAL, 2);
@@ -82,7 +86,7 @@ spec("Priority Queue Comparison - Single Thread") {
       bucket_priority_queue_pop(&st_queue, &out);
     }
 
-    benchmark("SPSC (ring_buffer_spsc)", BENCH_ITERS) {
+    benchmark("SPSC (ring_buffer_spsc)", BENCH_ITERS, 1) {
       bucket_priority_spsc_value_t out = 0;
       bucket_priority_queue_spsc_push(&spsc_queue, BUCKET_PRIORITY_SPSC_LOW, 1);
       bucket_priority_queue_spsc_push(&spsc_queue, BUCKET_PRIORITY_SPSC_NORMAL, 2);
@@ -94,7 +98,7 @@ spec("Priority Queue Comparison - Single Thread") {
       bucket_priority_queue_spsc_pop(&spsc_queue, &out);
     }
 
-    benchmark("MPMC (disruptor)", BENCH_ITERS) {
+    benchmark("MPMC (disruptor)", BENCH_ITERS, 1) {
       bucket_priority_mpmc_value_t out = 0;
       bucket_priority_queue_mpmc_try_push(&mpmc_queue, BUCKET_PRIORITY_MPMC_LOW, 1);
       bucket_priority_queue_mpmc_try_push(&mpmc_queue, BUCKET_PRIORITY_MPMC_NORMAL, 2);
@@ -112,6 +116,8 @@ spec("Priority Queue Comparison - Single Thread") {
   }
 
   bench("Single-threaded: Random priority distribution") {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
     // Init outside benchmark loop to isolate queue operations
     bucket_priority_queue_t st_queue;
     bucket_priority_queue_spsc_t spsc_queue;
@@ -121,7 +127,7 @@ spec("Priority Queue Comparison - Single Thread") {
     bucket_priority_queue_spsc_init(&spsc_queue, 1024);
     bucket_priority_queue_mpmc_init(&mpmc_queue, 1024, 1);
 
-    benchmark("ST (ring_buffer)", BENCH_ITERS) {
+    benchmark("ST (ring_buffer)", BENCH_ITERS, 1) {
       bucket_priority_value_t out = 0;
 
       g_rng_state = 1u;
@@ -133,7 +139,7 @@ spec("Priority Queue Comparison - Single Thread") {
       }
     }
 
-    benchmark("SPSC (ring_buffer_spsc)", BENCH_ITERS) {
+    benchmark("SPSC (ring_buffer_spsc)", BENCH_ITERS, 1) {
       bucket_priority_spsc_value_t out = 0;
 
       g_rng_state = 1u;
@@ -145,7 +151,7 @@ spec("Priority Queue Comparison - Single Thread") {
       }
     }
 
-    benchmark("MPMC (disruptor)", BENCH_ITERS) {
+    benchmark("MPMC (disruptor)", BENCH_ITERS, 1) {
       bucket_priority_mpmc_value_t out = 0;
 
       g_rng_state = 1u;
@@ -235,7 +241,9 @@ spec("Priority Queue Comparison - Multi-threaded") {
   }
 
   bench("SPSC: 1 Producer + 1 Consumer") {
-    benchmark("SPSC throughput", BENCH_ITERS_MT) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("SPSC throughput", BENCH_ITERS_MT, 1) {
       bucket_priority_queue_spsc_t queue;
       bucket_priority_queue_spsc_init(&queue, 4096);
 
@@ -261,7 +269,9 @@ spec("Priority Queue Comparison - Multi-threaded") {
   }
 
   bench("MPMC: 1 Producer + 1 Consumer") {
-    benchmark("MPMC throughput", BENCH_ITERS_MT) {
+
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+    benchmark("MPMC throughput", BENCH_ITERS_MT, 1) {
       bucket_priority_queue_mpmc_t queue;
       bucket_priority_queue_mpmc_init(&queue, 4096, 1);
 

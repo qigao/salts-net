@@ -46,19 +46,21 @@ spec("Ring Buffer - Single Threaded Only") {
     }
 
     bench("Basic Operations") {
-        benchmark("Write Acquire (64 bytes)", BENCH_ITERS) {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+        benchmark("Write Acquire (64 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 64);
             if (p) {
                 ring_write_release(&bench_ring, 64);
             }
         }
 
-        benchmark("Read Acquire (Empty)", BENCH_ITERS) {
+        benchmark("Read Acquire (Empty)", BENCH_ITERS, 1) {
             size_t avail = 0;
             (void)ring_read_acquire(&bench_ring, &avail);
         }
 
-        benchmark("Write+Read (64 bytes)", BENCH_ITERS) {
+        benchmark("Write+Read (64 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 64);
             if (p) {
                 ring_write_release(&bench_ring, 64);
@@ -72,7 +74,9 @@ spec("Ring Buffer - Single Threaded Only") {
     }
 
     bench("Different Sizes") {
-        benchmark("Write+Read (16 bytes)", BENCH_ITERS) {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+        benchmark("Write+Read (16 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 16);
             if (p) {
                 ring_write_release(&bench_ring, 16);
@@ -84,7 +88,7 @@ spec("Ring Buffer - Single Threaded Only") {
             }
         }
 
-        benchmark("Write+Read (256 bytes)", BENCH_ITERS) {
+        benchmark("Write+Read (256 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 256);
             if (p) {
                 ring_write_release(&bench_ring, 256);
@@ -96,7 +100,7 @@ spec("Ring Buffer - Single Threaded Only") {
             }
         }
 
-        benchmark("Write+Read (1KB)", BENCH_ITERS) {
+        benchmark("Write+Read (1KB)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 1024);
             if (p) {
                 ring_write_release(&bench_ring, 1024);
@@ -108,7 +112,7 @@ spec("Ring Buffer - Single Threaded Only") {
             }
         }
 
-        benchmark("Write+Read (4KB)", BENCH_ITERS) {
+        benchmark("Write+Read (4KB)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 4096);
             if (p) {
                 ring_write_release(&bench_ring, 4096);
@@ -122,10 +126,12 @@ spec("Ring Buffer - Single Threaded Only") {
     }
 
     bench("With Memory Operations") {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
         uint8_t local_buf[4096];
         memset(local_buf, 0xAA, sizeof(local_buf));
 
-        benchmark("Write+Memcpy+Read (256 bytes)", BENCH_ITERS) {
+        benchmark("Write+Memcpy+Read (256 bytes)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 256);
             if (p) {
                 memcpy(p, local_buf, 256);
@@ -139,7 +145,7 @@ spec("Ring Buffer - Single Threaded Only") {
             }
         }
 
-        benchmark("Write+Memcpy+Read (1KB)", BENCH_ITERS) {
+        benchmark("Write+Memcpy+Read (1KB)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 1024);
             if (p) {
                 memcpy(p, local_buf, 1024);
@@ -153,7 +159,7 @@ spec("Ring Buffer - Single Threaded Only") {
             }
         }
 
-        benchmark("Write+Memcpy+Read (4KB)", BENCH_ITERS) {
+        benchmark("Write+Memcpy+Read (4KB)", BENCH_ITERS, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 4096);
             if (p) {
                 memcpy(p, local_buf, 4096);
@@ -169,7 +175,9 @@ spec("Ring Buffer - Single Threaded Only") {
     }
 
     bench("High Throughput") {
-        benchmark("Sustained Write+Read (64B)", BENCH_ITERS_LARGE) {
+
+        benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
+        benchmark("Sustained Write+Read (64B)", BENCH_ITERS_LARGE, 1) {
             uint8_t *p = ring_write_acquire(&bench_ring, 64);
             if (p) {
                 ring_write_release(&bench_ring, 64);

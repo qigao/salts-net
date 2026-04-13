@@ -81,30 +81,38 @@ function(cmake_add_grammar TARGET_NAME)
   set(oneValueArgs LEXER_RE GRAMMAR_Y)
   set(multiValueArgs)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  string(TOLOWER "${TARGET_NAME}" target_name_lower)
 
   if(ARG_LEXER_RE)
-    set(LEXER_GEN "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}_lexer_gen.c")
+    set(LEXER_GEN "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_lexer_gen.c")
     add_custom_command(
       OUTPUT ${LEXER_GEN}
       COMMAND ${RE2C_EXECUTABLE} -o ${LEXER_GEN} ${ARG_LEXER_RE}
       DEPENDS ${ARG_LEXER_RE}
       COMMENT "Generating ${TARGET_NAME} lexer with re2c"
       VERBATIM)
+    set(LEXER_TARGET "${TARGET_NAME}_lexer_codegen")
+    add_custom_target(${LEXER_TARGET} DEPENDS ${LEXER_GEN})
     set(${TARGET_NAME}_LEXER_GEN ${LEXER_GEN} PARENT_SCOPE)
+    set(${TARGET_NAME}_LEXER_TARGET ${LEXER_TARGET} PARENT_SCOPE)
   endif()
 
   if(ARG_GRAMMAR_Y)
-    set(GRAMMAR_GEN "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}_grammar_gen.c")
-    set(GRAMMAR_H "${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}_grammar_gen.h")
+    set(GRAMMAR_GEN "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.c")
+    set(GRAMMAR_H "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.h")
+    set(GRAMMAR_Y_GEN "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.y")
     add_custom_command(
       OUTPUT ${GRAMMAR_GEN} ${GRAMMAR_H}
-      COMMAND ${CMAKE_COMMAND} -E copy ${ARG_GRAMMAR_Y} ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}_grammar_gen.y
-      COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR} ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}_grammar_gen.y
+      COMMAND ${CMAKE_COMMAND} -E copy ${ARG_GRAMMAR_Y} ${GRAMMAR_Y_GEN}
+      COMMAND ${LEMON_EXECUTABLE} -T${LEMPAR} ${GRAMMAR_Y_GEN}
       DEPENDS ${ARG_GRAMMAR_Y} ${LEMON_DEPENDS}
       COMMENT "Generating ${TARGET_NAME} parser with lemon"
       VERBATIM)
+    set(GRAMMAR_TARGET "${TARGET_NAME}_grammar_codegen")
+    add_custom_target(${GRAMMAR_TARGET} DEPENDS ${GRAMMAR_GEN} ${GRAMMAR_H})
     set(${TARGET_NAME}_GRAMMAR_GEN ${GRAMMAR_GEN} PARENT_SCOPE)
     set(${TARGET_NAME}_GRAMMAR_H ${GRAMMAR_H} PARENT_SCOPE)
+    set(${TARGET_NAME}_GRAMMAR_TARGET ${GRAMMAR_TARGET} PARENT_SCOPE)
   endif()
 endfunction()
 

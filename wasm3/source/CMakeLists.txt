@@ -20,6 +20,9 @@ target_include_directories(
   m3 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
             $<INSTALL_INTERFACE:include/wasm3>)
 target_link_libraries(m3 PUBLIC TurboNet::Utils)
+if(NOT WIN32)
+  target_link_libraries(m3 PUBLIC m)
+endif()
 set_target_properties(
   m3
   PROPERTIES FOLDER "wasm3"

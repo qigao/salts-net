@@ -47,6 +47,8 @@ typedef struct pipe_state_s {
   int recv_started;
   int recv_inflight;
   int send_inflight;
+  pipe_op_t recv_op;
+  pipe_op_t send_op;
 } pipe_state_t;
 
 static void pipe_queue_push(pipe_state_t *st, pipe_op_t *op) {
@@ -322,7 +324,7 @@ static void pipe_handle_write(pipe_op_t *op) {
   turbo_stream_t *s = op->stream;
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
   if (op->buffer) mem_unref(op->buffer);
-  free(op);
+  /* no free(op), uses st->send_op */
   st->send_inflight = 0;
   if (s->on_write_complete) s->on_write_complete(s, 0);
   if (s->send_head && !s->closing) pipe_submit_write(s);
@@ -333,7 +335,7 @@ static void pipe_handle_read(pipe_op_t *op) {
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
   int status = op->status;
   DWORD bytes = op->bytes_transferred;
-  free(op);
+  /* no free(op), uses st->recv_op */
   st->recv_inflight = 0;
 
   if (status != 0 || bytes == 0) {
@@ -392,8 +394,8 @@ static int pipe_submit_read(turbo_stream_t *s) {
   pipe_state_t *st = (pipe_state_t *)s->backend_data;
   if (st->recv_inflight) return 0;
 
-  pipe_op_t *op = (pipe_op_t *)calloc(1, sizeof(pipe_op_t));
-  if (!op) return TURBO_ENOMEM;
+  pipe_op_t *op = &st->recv_op;
+  memset(&op->overlapped, 0, sizeof(OVERLAPPED));
 
   op->kind = PIPE_OP_READ;
   op->stream = s;
@@ -406,7 +408,6 @@ static int pipe_submit_read(turbo_stream_t *s) {
     DWORD err = GetLastError();
     if (err != ERROR_IO_PENDING) {
       st->recv_inflight = 0;
-      free(op);
       return -(int)err;
     }
   }
@@ -423,14 +424,8 @@ static int pipe_submit_write(turbo_stream_t *s) {
   s->send_queued -= buf->used;
   buf->next = NULL;
 
-  pipe_op_t *op = (pipe_op_t *)calloc(1, sizeof(pipe_op_t));
-  if (!op) {
-    buf->next = s->send_head;
-    s->send_head = buf;
-    if (!s->send_tail) s->send_tail = buf;
-    s->send_queued += buf->used;
-    return TURBO_ENOMEM;
-  }
+  pipe_op_t *op = &st->send_op;
+  memset(&op->overlapped, 0, sizeof(OVERLAPPED));
 
   op->kind = PIPE_OP_WRITE;
   op->stream = s;
@@ -444,7 +439,6 @@ static int pipe_submit_write(turbo_stream_t *s) {
     if (err != ERROR_IO_PENDING) {
       st->send_inflight = 0;
       op->buffer = NULL;
-      free(op);
       buf->next = s->send_head;
       s->send_head = buf;
       if (!s->send_tail) s->send_tail = buf;

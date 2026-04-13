@@ -15,21 +15,29 @@
 #include "tlog.h"
 
 
-#define TEST_PORT 18950
+#define TEST_PORT_BASE 18950
 #define TEST_HOST "127.0.0.1"
 #define POOL_TEST_MESSAGE "pool_test"
 
 /* ── Dummy server handler ─────────────────────────────────── */
 
-/* Minimal handler that does nothing.
- * The connection pool tests only need the server to accept connections,
- * not to process them. Handler exits immediately. */
+/* Minimal handler that keeps the connection alive until the client closes it.
+ * This lets pool tests observe a stable open connection without arbitrary
+ * sleeps that delay teardown. */
 static void dummy_handler(coro_socket_t *client, void *arg) {
+  char *data = NULL;
+  size_t len = 0;
+
   (void)arg;
-  /* Keep connection open long enough for pool tests to run. 
-     The server destruction in teardown will clean this up. */
-  coro_sleep(client->ctx, 5000);
-  (void)client;
+  while (coro_socket_recv(client, &data, &len) == 0) {
+    if (data != NULL) {
+      coro_socket_free_recv(data);
+      data = NULL;
+    }
+  }
+  if (data != NULL) {
+    coro_socket_free_recv(data);
+  }
 }
 
 /* ── Echo handler for borrow/return test ──────────────────── */
@@ -65,8 +73,11 @@ static void echo_loop_handler(coro_socket_t *client, void *arg) {
 typedef struct {
   coro_context_t *ctx;
   coro_socket_t *server;
+  int port;
   int test_result;
 } test_ctx_t;
+
+static int next_test_port = TEST_PORT_BASE;
 
 static int logger_initialized = 0;
 static void setup_logging(void) {
@@ -112,9 +123,36 @@ static int test_start_server(test_ctx_t *t,
     return -1;
   }
 
-  rc = coro_socket_listen_on(t->server, TEST_HOST, TEST_PORT, handler, NULL);
+  rc = coro_socket_listen_on(t->server, TEST_HOST, t->port, handler, NULL);
   if (rc != 0) {
     TLOG_DEBUG("test_start_server: listen_url failed rc={:d}", rc);
+    coro_socket_destroy(t->server);
+    t->server = NULL;
+    return -1;
+  }
+
+  coro_yield();
+  if (ready_delay_ms > 0) {
+    coro_sleep(t->ctx, (uint64_t)ready_delay_ms);
+  }
+
+  return 0;
+}
+
+static int test_start_ws_server(test_ctx_t *t, int ready_delay_ms) {
+  int rc;
+
+  if (t == NULL || t->ctx == NULL) {
+    return -1;
+  }
+
+  t->server = coro_socket_create(t->ctx, CORO_SOCKET_TCP_V4);
+  if (t->server == NULL) {
+    return -1;
+  }
+
+  rc = coro_socket_listen_ws(t->server, TEST_HOST, t->port, 0, echo_loop_handler, NULL);
+  if (rc != 0) {
     coro_socket_destroy(t->server);
     t->server = NULL;
     return -1;
@@ -147,8 +185,41 @@ static coro_pool_t *test_open_pool(test_ctx_t *t,
     return NULL;
   }
 
-  if (coro_pool_open(pool, TEST_HOST, TEST_PORT, CORO_SOCKET_TCP_V4) != 0) {
+  if (coro_pool_open(pool, TEST_HOST, t->port, CORO_SOCKET_TCP_V4) != 0) {
     TLOG_DEBUG("test_open_pool: coro_pool_open failed");
+    coro_pool_destroy(pool);
+    return NULL;
+  }
+
+  if (connect_delay_ms > 0) {
+    coro_sleep(t->ctx, (uint64_t)connect_delay_ms);
+  }
+
+  return pool;
+}
+
+static coro_pool_t *test_open_ws_pool(test_ctx_t *t,
+                                      size_t min_size,
+                                      size_t max_size,
+                                      int connect_delay_ms) {
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
+  coro_pool_t *pool;
+
+  if (t == NULL || t->ctx == NULL) {
+    return NULL;
+  }
+
+  cfg.min_size = min_size;
+  cfg.max_size = max_size;
+
+  pool = coro_pool_create(t->ctx, &cfg);
+  if (pool == NULL) {
+    return NULL;
+  }
+
+  if (coro_pool_open_ws_host_ex(pool, TEST_HOST, t->port, CORO_SOCKET_TCP_V4, TEST_HOST,
+                                "/chat", 0, NULL) != 0) {
+    TLOG_DEBUG("test_open_ws_pool: coro_pool_open_ws_host_ex failed");
     coro_pool_destroy(pool);
     return NULL;
   }
@@ -184,6 +255,7 @@ static int run_pool_test_case(coro_fn fn) {
   if (ctx.ctx == NULL) {
     return 0;
   }
+  ctx.port = next_test_port++;
 
   if (coro_context_spawn(ctx.ctx, fn, &ctx) != 0) {
     robust_context_destroy(ctx.ctx);
@@ -311,6 +383,68 @@ done:
   /* Wait for handlers to complete */
   coro_sleep(t->ctx, 50);
 
+  test_cleanup_pool(t, pool);
+}
+
+static void test_ws_borrow_return(coro_t *co, void *arg) {
+  (void)co;
+  test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *c = NULL;
+  char *data = NULL;
+  size_t len = 0;
+  int rc;
+
+  t->test_result = 0;
+  if (test_start_ws_server(t, 50) != 0) {
+    goto done;
+  }
+
+  pool = test_open_ws_pool(t, 1, 2, 0);
+  if (pool == NULL) {
+    goto done;
+  }
+
+  rc = coro_pool_borrow(pool, &c);
+  if (rc != 0 || !c) {
+    goto done;
+  }
+
+  rc = coro_socket_send(c, POOL_TEST_MESSAGE, strlen(POOL_TEST_MESSAGE));
+  if (rc != 0) {
+    goto done;
+  }
+
+  rc = coro_socket_recv(c, &data, &len);
+  if (rc != 0 || len != strlen(POOL_TEST_MESSAGE)) {
+    if (data != NULL) {
+      coro_socket_free_recv(data);
+      data = NULL;
+    }
+    goto done;
+  }
+
+  if (memcmp(data, POOL_TEST_MESSAGE, len) != 0) {
+    coro_socket_free_recv(data);
+    data = NULL;
+    goto done;
+  }
+
+  coro_socket_free_recv(data);
+  data = NULL;
+  coro_pool_return(pool, c);
+  c = NULL;
+
+  t->test_result = (coro_pool_idle_count(pool) == 1 && coro_pool_borrowed_count(pool) == 0) ? 1 : 0;
+
+done:
+  if (data != NULL) {
+    coro_socket_free_recv(data);
+  }
+  if (c != NULL && pool != NULL) {
+    coro_pool_return(pool, c);
+  }
+  coro_sleep(t->ctx, 50);
   test_cleanup_pool(t, pool);
 }
 
@@ -446,7 +580,7 @@ static void test_borrow_timeout(coro_t *co, void *arg) {
   if (pool == NULL) {
     goto done;
   }
-  if (coro_pool_open(pool, TEST_HOST, TEST_PORT, CORO_SOCKET_TCP_V4) != 0) {
+  if (coro_pool_open(pool, TEST_HOST, t->port, CORO_SOCKET_TCP_V4) != 0) {
     goto done;
   }
 
@@ -524,6 +658,10 @@ spec("coro_pool") {
   describe("Borrow/Return") {
     it("should borrow, use, and return a connection") {
       check_int_eq(run_pool_test_case(test_borrow_return), 1);
+    }
+
+    it("should borrow, use, and return a websocket connection") {
+      check_int_eq(run_pool_test_case(test_ws_borrow_return), 1);
     }
 
     it("should grow pool on demand up to max_size") {

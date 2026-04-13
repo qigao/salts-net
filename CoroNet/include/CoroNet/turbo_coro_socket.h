@@ -109,6 +109,22 @@ CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int p
 CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostname);
 
 /**
+ * @brief Upgrade an already-connected TCP or TLS socket to WebSocket.
+ *
+ * The socket must already be connected. For TLS sockets, the TLS handshake must
+ * already have completed before this call.
+ *
+ * @param socket        Connected TCP/TLS socket to upgrade in place.
+ * @param request_host  Host header value used by the WebSocket handshake.
+ *                      NULL falls back to the connected host context.
+ * @param path          WebSocket path (e.g. "/chat"). NULL/empty becomes "/".
+ * @param subprotocol   Optional Sec-WebSocket-Protocol value, or NULL.
+ * @return 0 on success, negative error code on failure.
+ */
+CXX_C_API int coro_socket_upgrade_ws_ex(coro_socket_t *socket, const char *request_host,
+                                        const char *path, const char *subprotocol);
+
+/**
  * @brief Connect to a named pipe / Unix domain socket.
  *
  * Accepts native platform endpoints and the unified `pipe://name` form.
@@ -140,9 +156,32 @@ CXX_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host,
                                         const char *subprotocol);
 
 /**
+ * @brief Connect a WebSocket to one host while sending a different Host/SNI name.
+ * @param socket         Socket created with CORO_SOCKET_TCP_V4, CORO_SOCKET_TCP_V6, or CORO_SOCKET_TLS.
+ * @param connect_host   Remote address or hostname used for the TCP connect.
+ * @param port           Remote port.
+ * @param request_host   Host header / TLS SNI name. NULL falls back to connect_host.
+ * @param path           WebSocket path (e.g. "/chat").
+ * @param is_tls         1 for wss://, 0 for ws://.
+ * @param subprotocol    Optional Sec-WebSocket-Protocol value, or NULL.
+ */
+CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *connect_host, int port,
+                                             const char *request_host, const char *path, int is_tls,
+                                             const char *subprotocol);
+
+/**
  * @brief Send data through the socket.
  */
 CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);
+
+/**
+ * @brief Send a buffer previously returned by coro_socket_recv(), transferring ownership.
+ *
+ * This call consumes @p data regardless of whether the transport can use a
+ * zero-copy fast path. The caller must not access or free @p data after
+ * calling this function.
+ */
+CXX_C_API int coro_socket_send_owned_recv(coro_socket_t *socket, char *data, size_t len);
 
 /**
  * @brief Get a buffer for zero-copy send.

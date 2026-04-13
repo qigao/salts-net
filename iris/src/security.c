@@ -853,6 +853,28 @@ const char *iris_security_error_string(iris_security_result_t result) {
     }
 }
 
+static const char *cjwt_code_to_str(cjwt_code_t rv) {
+    switch (rv) {
+        case CJWTE_OK:                      return "OK";
+        case CJWTE_INVALID_PARAMETERS:      return "Invalid parameters";
+        case CJWTE_INVALID_SECTIONS:        return "Invalid sections";
+        case CJWTE_OUT_OF_MEMORY:           return "Out of memory";
+        case CJWTE_HEADER_MISSING:          return "Header missing";
+        case CJWTE_HEADER_INVALID_BASE64:   return "Header invalid base64";
+        case CJWTE_HEADER_INVALID_JSON:     return "Header invalid JSON";
+        case CJWTE_HEADER_MISSING_ALG:      return "Header missing alg";
+        case CJWTE_HEADER_UNSUPPORTED_ALG:  return "Header unsupported alg";
+        case CJWTE_PAYLOAD_MISSING:         return "Payload missing";
+        case CJWTE_PAYLOAD_INVALID_BASE64:  return "Payload invalid base64";
+        case CJWTE_PAYLOAD_INVALID_JSON:    return "Payload invalid JSON";
+        case CJWTE_SIGNATURE_MISSING:       return "Signature missing";
+        case CJWTE_SIGNATURE_VALIDATION_FAILED: return "Signature validation failed";
+        case CJWTE_TIME_BEFORE_NBF:         return "Time before nbf";
+        case CJWTE_TIME_AFTER_EXP:          return "Time after exp";
+        default:                            return "Other error";
+    }
+}
+
 /* ============================================================================
  * JWT (JSON Web Token) Support Implementation
  * ============================================================================ */
@@ -894,7 +916,7 @@ int iris_jwt_middleware(Req *req, Res *res, Chain *chain) {
     cjwt_code_t rv = cjwt_decode(token, (int)strlen(token), OPT_ALLOW_ONLY_HS_ALG, (const uint8_t *)g_iris_jwt_secret, (int)strlen(g_iris_jwt_secret), current_time, 0, &jwt);
 
     if (rv != CJWTE_OK) {
-        TLOG_ERROR("JWT Middleware: Token verification failed (error {})", ENUM_NAME(rv));
+        TLOG_ERROR("JWT Middleware: Token verification failed (error: {})", cjwt_code_to_str(rv));
         char err_msg[256];
         fmt(err_msg, sizeof(err_msg),
             "{{\"error\":\"Unauthorized\", \"message\":\"Invalid or expired token (cjwt error code: {})\"}}",
@@ -927,7 +949,7 @@ char *iris_jwt_encode(const char *secret, const char *claims_json) {
     turbo_free_json(&private_claims);
 
     if (rv != CJWTE_OK) {
-        TLOG_ERROR("JWT Encode: Failed to encode token (error {})", ENUM_NAME(rv));
+        TLOG_ERROR("JWT Encode: Failed to encode token (error: {})", cjwt_code_to_str(rv));
         if (token) free(token);
         return NULL;
     }

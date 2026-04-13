@@ -80,22 +80,23 @@ suite("benchmark") {
   after_each() { /* Cleanup if needed */ }
   /* Benchmark suite */
   bench("TLV Parser Performance") {
+      benchmark_titles("benchmark", "input", "iters", "avg(us)", NULL, "min(us)", "max(us)", "ops/s", NULL, NULL);
 
     /* Frame Parser benchmarks */
-    benchmark("TLV Parser: parse frame (4 bytes payload)", 100000) {
+    benchmark("TLV Parser: parse frame (4 bytes payload)", 100000, 1) {
       frame_t frame;
       FrameParseResult result = frame_parse(frame_buf, frame_len, &frame, FRAME_PARSE_FLAG_NONE);
       check(result == FRAME_PARSE_OK);
       /* Note: frame.payload points to frame_buf, no need to free */
     }
 
-    benchmark("TLV Parser: build frame (4 bytes payload)", 100000) {
+    benchmark("TLV Parser: build frame (4 bytes payload)", 100000, 1) {
       uint8_t buf[256];
       size_t len = build_frame(buf, 12345, payload, payload_len);
       check_size_gt(len, 0);
     }
 
-    benchmark("TLV Parser: round-trip frame", 50000) {
+    benchmark("TLV Parser: round-trip frame", 50000, 1) {
       /* Build */
       uint8_t buf[256];
       size_t len = build_frame(buf, 12345, payload, payload_len);
@@ -106,7 +107,7 @@ suite("benchmark") {
       check(result == FRAME_PARSE_OK);
     }
 
-    benchmark("TLV Parser: stream parser (chunked)", 50000) {
+    benchmark("TLV Parser: stream parser (chunked)", 50000, 1) {
       StreamParser *sp = stream_parser_create(1024);
 
       /* Simulate chunked receive (split frame in half) */
@@ -128,14 +129,14 @@ suite("benchmark") {
       stream_parser_destroy(sp);
     }
 
-    benchmark("TLV Parser: parse with CRC skip", 100000) {
+    benchmark("TLV Parser: parse with CRC skip", 100000, 1) {
       frame_t frame;
       FrameParseResult result =
           frame_parse(frame_buf, frame_len, &frame, FRAME_PARSE_FLAG_SKIP_CRC);
       check(result == FRAME_PARSE_OK);
     }
 
-    benchmark("TLV Parser: parse large payload (1KB)", 10000) {
+    benchmark("TLV Parser: parse large payload (1KB)", 10000, 1) {
       /* Build large frame */
       uint8_t large_buf[2048];
       char large_payload[1024];

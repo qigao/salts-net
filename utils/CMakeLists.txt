@@ -23,6 +23,9 @@ target_include_directories(
           $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+if(UNIX)
+  target_compile_definitions(${TARGET_NAME} PUBLIC _DEFAULT_SOURCE=1 _POSIX_C_SOURCE=200809L _XOPEN_SOURCE=700)
+endif()
 
 # Link dependencies
 target_link_libraries(

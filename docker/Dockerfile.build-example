@@ -1,0 +1,18 @@
+ARG TURBONET_BUILD_BASE=turbonet-build-base:bookworm
+FROM ${TURBONET_BUILD_BASE}
+
+WORKDIR /workspace
+
+COPY vcpkg.json ./
+RUN vcpkg install --triplet x64-linux
+
+COPY . ./
+
+RUN cmake --preset linux-release-user \
+    -D BUILD_EXAMPLES=OFF \
+    -D BUILD_TESTS=OFF \
+    && cmake --build --preset linux-release-user
+
+# Optional:
+# RUN ctest --preset linux-release-user
+# RUN cmake --install build --prefix /usr/local

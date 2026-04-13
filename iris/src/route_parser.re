@@ -26,9 +26,9 @@
  * @brief Parse HTTP method string to enum using re2c
  * @param method HTTP method string (e.g., "GET", "POST")
  * @param len Length of method string
- * @return http_method_t enum value
+ * @return compact route-method index
  */
-http_method_t parse_http_method_re2c(const char *method, size_t len) {
+route_method_index_t parse_http_method_re2c(const char *method, size_t len) {
     if (!method || len == 0 || len > 7) {
         return METHOD_UNKNOWN;
     }
@@ -245,3 +245,5 @@ bool match_path_segment_re2c(const char *pattern, size_t pattern_len,
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
+
+

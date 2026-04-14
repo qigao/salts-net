@@ -16,21 +16,28 @@
 
 /**
  * @brief Per-connection handler coroutine.
- * @param client Client socket (owned by this coroutine)
+ * @param client Client socket (owned by the framework, destroyed on return)
  * @param arg    User data (unused)
  *
  * Runs in its own coroutine. Receives messages and echoes them back.
- * Automatically cleaned up when connection closes.
+ *
+ * IMPORTANT: a recv timeout MUST be set here.  Without it, a client that
+ * connects but never sends data suspends this coroutine forever — the handler
+ * coroutine's stack and the OS file descriptor are both leaked until the
+ * server is restarted.
  */
 static void client_handler(coro_socket_t *client, void *arg) {
   UNUSED(arg);
   printf("[Handler] New connection in coroutine %p\n", (void *)coro_running());
 
+  /* Guard against idle clients that connect but send nothing. */
+  coro_socket_set_timeout(client, 30000);  /* 30-second recv idle timeout */
+
   char *data = NULL;
   size_t len = 0;
 
   while (coro_socket_recv(client, &data, &len) == 0) {
-    if (len == 0) break; /* EOF */
+    if (len == 0) break; /* EOF or recv interrupt — treat as clean close */
 
     printf("[Handler] Received %zu bytes: %.*s", len, (int)len, data);
 
@@ -42,6 +49,8 @@ static void client_handler(coro_socket_t *client, void *arg) {
     data = NULL;
   }
 
+  /* data is NULL here: either it was freed inside the loop, or recv failed
+   * before populating it (the API leaves data unchanged on error). */
   printf("[Handler] Connection closed\n");
 }
 

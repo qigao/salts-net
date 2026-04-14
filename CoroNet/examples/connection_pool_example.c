@@ -7,7 +7,6 @@
  */
 
 #include "CoroNet.h"
-#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +58,7 @@ static void worker(coro_t *co, void *arg) {
 
   /* Send */
   char msg[64];
-  int len = fmt(msg, sizeof(msg), "hello from worker {}", w->id);
+  int len = snprintf(msg, sizeof(msg), "hello from worker %d", w->id);
   coro_socket_send(c, msg, (size_t)len);
 
   /* Receive echo */

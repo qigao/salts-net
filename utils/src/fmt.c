@@ -127,14 +127,13 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
     if (mod_buf[0]) {
       char fb[64];
       snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "s") != NULL) ? "%%%s" : "%%%ss", mod_buf);
-      char *padded = sdsnewlen(s, strlen(s));
-      if (!padded)
-        return 0;
-      padded = sdsMakeRoomFor(padded, 8);
-      if (!padded)
-        return 0;
+      /* Stack buffer with NUL padding for stb_sprintf read-ahead safety */
+      size_t slen = strlen(s);
+      char padded[256];
+      if (slen > sizeof(padded) - 9) slen = sizeof(padded) - 9;
+      memcpy(padded, s, slen);
+      memset(padded + slen, 0, 8);
       written = stbsp_snprintf(temp, sizeof(temp), fb, padded);
-      sdsfree(padded);
     } else {
       size_t slen = strlen(s);
       if (dst + slen > end)

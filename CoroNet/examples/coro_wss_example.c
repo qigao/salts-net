@@ -1,12 +1,15 @@
 /**
  * @file coro_wss_example.c
- * @brief Demonstration of coroutine-based WebSocket Secure (WSS) client.
+ * @brief Coroutine-based WebSocket Secure (WSS) client.
  *
- * Connects to a WSS echo server, sends a message, receives the echo.
+ * Creates a plain TCP socket, then hands it to coro_socket_connect_ws() with
+ * is_tls=1.  That single call performs: DNS -> TCP connect -> TLS handshake
+ * -> HTTP Upgrade — all while the coroutine is suspended.
+ *
+ * Usage: ./coro_wss_example
  */
 
-#include "turbo_coro_socket.h"
-#include "turbo_coro.h"
+#include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +27,7 @@ static void wss_task(coro_t* co, void* arg) {
 
     coro_socket_set_timeout(client, 15000);
 
-    /* Socket type is TLS; coro_socket_connect_ws handles the WS upgrade */
+    /* is_tls=1 triggers TLS inside the connect; no separate TLS socket needed. */
     printf("[Coro] Connecting to wss://%s%s ...\n", WSS_EXAMPLE_HOST, WSS_EXAMPLE_PATH);
     int r = coro_socket_connect_ws(client, WSS_EXAMPLE_HOST, WSS_EXAMPLE_PORT, WSS_EXAMPLE_PATH, 1);
 

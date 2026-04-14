@@ -3,8 +3,7 @@
  * @brief Demonstration of coroutine timeouts and sleep.
  */
 
-#include "turbo_coro_socket.h"
-#include "turbo_coro.h"
+#include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -15,19 +15,22 @@ static uint8_t bucket_priority_bit(bucket_priority_t priority) {
 }
 
 static int bucket_highest_non_empty_priority(uint8_t mask) {
-  if (mask & bucket_priority_bit(BUCKET_PRIORITY_CRITICAL)) {
-    return (int)BUCKET_PRIORITY_CRITICAL;
-  }
-  if (mask & bucket_priority_bit(BUCKET_PRIORITY_HIGH)) {
-    return (int)BUCKET_PRIORITY_HIGH;
-  }
-  if (mask & bucket_priority_bit(BUCKET_PRIORITY_NORMAL)) {
-    return (int)BUCKET_PRIORITY_NORMAL;
-  }
-  if (mask & bucket_priority_bit(BUCKET_PRIORITY_LOW)) {
-    return (int)BUCKET_PRIORITY_LOW;
-  }
-  return -1;
+  if (mask == 0) return -1;
+#if defined(_MSC_VER)
+  unsigned long idx;
+  _BitScanReverse(&idx, (unsigned long)mask);
+  return (int)idx;
+#elif defined(__GNUC__) || defined(__clang__)
+  return 31 - __builtin_clz((unsigned int)mask);
+#else
+  /* Portable fallback: binary search for highest set bit */
+  int bit = 0;
+  uint8_t m = mask;
+  if (m & 0xF0) { bit += 4; m >>= 4; }
+  if (m & 0x0C) { bit += 2; m >>= 2; }
+  if (m & 0x02) { bit += 1; }
+  return bit;
+#endif
 }
 
 static bool bucket_capacity_overflow(size_t entries) {

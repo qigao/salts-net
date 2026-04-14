@@ -672,3 +672,52 @@ int disruptor_publisher_publish(disruptor_t *disruptor, const disruptor_cursor_t
   range.last_sequence = cursor->sequence;
   return disruptor_publish_range_internal(disruptor, &range, 0, 0);
 }
+
+// =============================================================================
+// Generic Consumer Loop
+// =============================================================================
+
+static void disruptor_idle_sleep(void) {
+#ifdef _WIN32
+  Sleep(1);
+#else
+  usleep(1000);
+#endif
+}
+
+void disruptor_consumer_run(disruptor_t *disruptor,
+                            disruptor_consumer_t *consumer,
+                            disruptor_should_run_fn should_run,
+                            disruptor_batch_fn process_batch,
+                            void *ctx) {
+  if (!disruptor || !consumer || !should_run || !process_batch) return;
+
+  uint64_t next_sequence = disruptor_consumer_register(disruptor, consumer);
+
+  while (should_run(ctx)) {
+    disruptor_cursor_t cursor;
+    cursor.sequence = next_sequence;
+
+    if (!disruptor_consumer_wait_for_nonblocking(disruptor, &cursor)) {
+      disruptor_idle_sleep();
+      continue;
+    }
+
+    process_batch(ctx, next_sequence, cursor.sequence);
+
+    disruptor_consumer_release_entry(disruptor, consumer, &cursor);
+    next_sequence = cursor.sequence + 1;
+  }
+
+  // Final drain: process any entries published before shutdown was noticed
+  {
+    disruptor_cursor_t drain_cursor;
+    drain_cursor.sequence = next_sequence;
+    if (disruptor_consumer_wait_for_nonblocking(disruptor, &drain_cursor)) {
+      process_batch(ctx, next_sequence, drain_cursor.sequence);
+      disruptor_consumer_release_entry(disruptor, consumer, &drain_cursor);
+    }
+  }
+
+  disruptor_consumer_unregister(disruptor, consumer);
+}

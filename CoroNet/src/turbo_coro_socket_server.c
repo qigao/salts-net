@@ -68,13 +68,28 @@ static void spawn_handler_coro(coro_socket_t *s, void (*handler)(coro_socket_t *
 
 /* ── Accept Loop ──────────────────────────────────────────── */
 
+/**
+ * @brief Error codes that indicate a transient OS resource shortage.
+ *
+ * These errors do NOT mean the listener is broken — they mean the system is
+ * temporarily out of file descriptors or connection slots.  The accept loop
+ * backs off briefly and retries rather than dying silently.
+ */
+static int accept_error_is_transient(int r) {
+  return (r == TURBO_EMFILE    /* per-process fd limit */
+       || r == TURBO_ENFILE    /* system-wide fd limit  */
+       || r == TURBO_ENOBUFS  /* socket buffer exhausted */
+       || r == TURBO_ENOMEM); /* kernel allocation failed */
+}
+
 static void accept_loop_task(coro_t *co, void *arg) {
   UNUSED(co);
   coro_socket_t *server = (coro_socket_t *)arg;
-  
+
   while (server->listener) {
     coro_socket_t *client = NULL;
     int r = coro_socket_accept(server->listener, &client);
+
     if (r == 0 && client) {
       if (server->transport == TURBO_TLS) {
         r = coro_socket_wrap_accepted_tls_server(client);
@@ -107,12 +122,32 @@ static void accept_loop_task(coro_t *co, void *arg) {
         }
       }
       spawn_handler_coro(client, server->handler, server->handler_arg);
-    } else if (r != TURBO_EALREADY && r != TURBO_ECANCELED && r != TURBO_EBUSY && 
-               r != TURBO_EINTR && r != 0) {
-      break;
+
+    } else if (r == TURBO_ECANCELED || r == TURBO_EBUSY ||
+               r == TURBO_EALREADY || r == TURBO_EINTR) {
+      /* Expected non-fatal codes: cancelled, no pending connection, interrupted.
+         Check listener and loop back. */
+
+    } else if (r != 0) {
+      if (accept_error_is_transient(r)) {
+        /* Transient resource shortage (e.g. EMFILE).  Back off 100 ms so the
+           OS can reclaim descriptors, then retry.  Dying here would leave the
+           port bound but silent — new clients would queue in the kernel backlog
+           forever with no indication something went wrong. */
+        TLOG_WARN("server: accept failed with transient error rc={} — backing off 100 ms", r);
+        coro_sleep(server->ctx, 100);
+      } else {
+        /* Fatal listener error — broken pipe, network down, etc.
+           Log and stop; the port will be unbound when the server socket is 
+           destroyed by the caller. */
+        TLOG_ERROR("server: accept loop fatal error rc={} — stopping accept loop", r);
+        break;
+      }
     }
+
     if (server->listener == NULL) break;
   }
+
   release_client(server);
 }
 
@@ -217,26 +252,31 @@ static int listen_pipe(coro_socket_t *server, const char *path) {
   path_len = strlen(path) + 1;
   owned_path = (char *)malloc(path_len);
   if (!owned_path) {
-    coro_socket_destroy(server->listener);
-    server->listener = NULL;
+    rollback_listener(server);
     return TURBO_ENOMEM;
   }
 
   memcpy(owned_path, path, path_len);
 
-  /* pipe_listen takes ownership of this buffer and frees it after binding. */
+  /* pipe_listen() takes ownership of owned_path: on success it frees the raw
+     string and replaces native_tcp_state with its own pipe_listener_state_t.
+     On failure, native_tcp_state still holds owned_path and must be freed here.
+     Do NOT attempt to free native_tcp_state after a successful listen — it no
+     longer points to owned_path. */
   server->listener->native_tcp_state = owned_path;
 
   int r = coro_socket_listen(server->listener, 128);
   if (r != 0) {
-    if (server->listener->native_tcp_state) {
-      free(server->listener->native_tcp_state);
-      server->listener->native_tcp_state = NULL;
-    }
+    /* pipe_listen failed before swapping native_tcp_state, so it still holds
+       owned_path.  Free it here before tearing down the listener socket. */
+    free(server->listener->native_tcp_state);
+    server->listener->native_tcp_state = NULL;
     rollback_listener(server);
     return r;
   }
 
+  /* Success: native_tcp_state was replaced by pipe_listener_state_t inside
+     pipe_listen(), which pipe_close() will free.  Do not touch it here. */
   return spawn_accept_loop(server);
 }
 

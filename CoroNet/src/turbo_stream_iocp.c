@@ -62,42 +62,7 @@ static int stream_iocp_submit_send(turbo_stream_t *s);
 static int stream_iocp_submit_accept(turbo_stream_listener_t *l);
 static int iocp_init_with_socket(turbo_stream_t *s, SOCKET existing);
 
-static unsigned short iocp_socket_port(const struct sockaddr_storage *addr) {
-  if (!addr) return 0;
-  if (addr->ss_family == AF_INET) {
-    return ntohs(((const struct sockaddr_in *)addr)->sin_port);
-  }
-  if (addr->ss_family == AF_INET6) {
-    return ntohs(((const struct sockaddr_in6 *)addr)->sin6_port);
-  }
-  return 0;
-}
 
-static void iocp_log_socket_endpoints(const char *label, SOCKET socket, void *stream_ptr) {
-  struct sockaddr_storage local_addr;
-  struct sockaddr_storage peer_addr;
-  int local_len = (int)sizeof(local_addr);
-  int peer_len = (int)sizeof(peer_addr);
-  unsigned short local_port = 0;
-  unsigned short peer_port = 0;
-
-  memset(&local_addr, 0, sizeof(local_addr));
-  memset(&peer_addr, 0, sizeof(peer_addr));
-
-  if (getsockname(socket, (struct sockaddr *)&local_addr, &local_len) == 0) {
-    local_port = iocp_socket_port(&local_addr);
-  }
-  if (getpeername(socket, (struct sockaddr *)&peer_addr, &peer_len) == 0) {
-    peer_port = iocp_socket_port(&peer_addr);
-  }
-
-  TLOG_INFO("{}: stream={:p} socket={} local_port={} peer_port={}",
-            label,
-            stream_ptr,
-            (unsigned long long)socket,
-            (unsigned)local_port,
-            (unsigned)peer_port);
-}
 
 static int stream_iocp_send_sync_buffer(turbo_stream_t *s,
                                         stream_iocp_state_t *st,
@@ -115,10 +80,7 @@ static int stream_iocp_send_sync_buffer(turbo_stream_t *s,
     total += (size_t)rc;
   }
 
-  TLOG_INFO("iocp_send_sync: stream={:p} socket={} len={}",
-            (void *)s,
-            (unsigned long long)st->socket,
-            (unsigned long)buf->used);
+
   return 0;
 }
 
@@ -209,13 +171,6 @@ void stream_iocp_handle_send_op(iocp_op_t *op) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   int status = op->status;
 
-  TLOG_INFO("iocp_send_complete: stream={:p} socket={} status={} bytes={} queued={} inflight={}",
-            (void *)s,
-            (unsigned long long)st->socket,
-            status,
-            (unsigned long)op->bytes_transferred,
-            s->send_queued,
-            st->send_inflight);
 
   /* Clear the state tracking the active send buffer */
   if (st->send_buffer) {
@@ -342,7 +297,6 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
         s->connected = 1;
         s->listener = l;
         l->active_connections++;
-        iocp_log_socket_endpoints("iocp_accept", client_socket, (void *)s);
         if (l->on_accept) {
           l->on_accept(l, s, p_remote);
         }
@@ -395,11 +349,6 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   if (!s->send_head) return 0;
   if (st->send_inflight) {
-    TLOG_INFO("iocp_send_submit: deferred stream={:p} socket={} queued={} inflight=1 next_len={}",
-              (void *)s,
-              (unsigned long long)st->socket,
-              s->send_queued,
-              (unsigned long)s->send_head->used);
     return 0;
   }
 
@@ -445,13 +394,6 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
   InterlockedIncrement(&st->inflight_count);
   iocp_pool_inflight_inc(s->ctx->iocp_pool);
 
-  TLOG_INFO("iocp_send_submit: post stream={:p} socket={} len={} queued_after_pop={}",
-            (void *)s,
-            (unsigned long long)st->socket,
-            (unsigned long)st->send_wsabuf.len,
-            s->send_queued);
-  iocp_log_socket_endpoints("iocp_send_submit_endpoints", st->socket, (void *)s);
-  
   if (WSASend(st->socket, &st->send_wsabuf, 1, NULL, 0, &op->overlapped, NULL) == SOCKET_ERROR) {
     int err = WSAGetLastError();
     if (err != WSA_IO_PENDING) {
@@ -473,16 +415,6 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
       
       return -(int)err;
     }
-    TLOG_INFO("iocp_send_submit: pending stream={:p} socket={} len={}",
-              (void *)s,
-              (unsigned long long)st->socket,
-              (unsigned long)st->send_wsabuf.len);
-  }
-  else {
-    TLOG_INFO("iocp_send_submit: immediate stream={:p} socket={} len={}",
-              (void *)s,
-              (unsigned long long)st->socket,
-              (unsigned long)st->send_wsabuf.len);
   }
   return 0;
 }
@@ -665,10 +597,6 @@ static int iocp_send(turbo_stream_t *s, const char *data, size_t len) {
   memcpy(buf->data, data, len);
   mem_set_used(buf, len);
   turbo_stream_enqueue_buffer(s, buf);
-  TLOG_INFO("iocp_send_enqueue: stream={:p} len={} queued={}",
-            (void *)s,
-            (unsigned long)len,
-            s->send_queued);
   mem_unref(buf);
   return stream_iocp_submit_send(s);
 }

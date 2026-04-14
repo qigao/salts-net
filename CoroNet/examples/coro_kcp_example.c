@@ -1,3 +1,14 @@
+/**
+ * @file coro_kcp_example.c
+ * @brief KCP reliable-UDP echo using coroutine sockets.
+ *
+ * KCP runs over UDP but provides TCP-like reliability and ordering.
+ * From the coroutine's perspective the API is identical to TCP:
+ * coro_socket_connect / send / recv all suspend transparently.
+ *
+ * Usage: ./coro_kcp_example
+ */
+
 #include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>

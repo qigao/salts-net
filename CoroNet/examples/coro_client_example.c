@@ -63,8 +63,8 @@ static void network_task(coro_t* co, void* arg) {
 }
 
 int main(int argc, char** argv) {
-    const char* host = (argc > 2) ? argv[1] : "127.0.0.1";
-    int port = (argc > 2) ? atoi(argv[2]) : 8080;
+    const char* host = (argc >= 3) ? argv[1] : "127.0.0.1";
+    int port = (argc >= 3) ? atoi(argv[2]) : 8080;
 
     printf("[Main] Initializing context\n");
     coro_context_t* ctx = coro_context_create(NULL);

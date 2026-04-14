@@ -52,8 +52,6 @@ struct mem_pool_s {
   void *oversize_head;
   mem_buffer_t *recycle_head;
   ATOMIC_SIZE_T recycle_count;
-  size_t recycle_limit;
-  turbo_mutex_t lock;
 };
 
 struct mem_buffer_s {
@@ -95,6 +93,7 @@ CXX_C_API mem_pool_t *mem_global(void);
  */
 CXX_C_API void mem_destroy(mem_pool_t *pool);
 
+CXX_C_API void mem_free(mem_pool_t* pool, void* ptr);
 /**
  * @brief Reset pool (mark all blocks as free)
  * @param pool Pool structure

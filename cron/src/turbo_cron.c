@@ -790,61 +790,112 @@ int turbo_cron_table_load_file(const char *path,
                                char *error_buf,
                                size_t error_buf_len) {
   FILE *fp;
-  char *buffer;
-  long file_size;
-  size_t read_size;
-  int rc;
+  char line_buf[2048];
+  size_t line_no = 0;
+  turbo_cron_table_t table;
 
   if (!path || !out_table) {
     cron_set_error(error_buf, error_buf_len, "path and output are required");
     return TURBO_CRON_EINVAL;
   }
 
-  fp = fopen(path, "rb");
+  fp = fopen(path, "r");
   if (!fp) {
     cron_set_error(error_buf, error_buf_len, "failed to open file '%s'", path);
     return TURBO_CRON_EINVAL;
   }
 
-  if (fseek(fp, 0, SEEK_END) != 0) {
-    fclose(fp);
-    cron_set_error(error_buf, error_buf_len, "failed to seek file '%s'", path);
-    return TURBO_CRON_EINVAL;
+  turbo_cron_table_init(&table);
+
+  while (fgets(line_buf, sizeof(line_buf), fp) != NULL) {
+    const char *line_start = line_buf;
+    const char *line_end = line_buf + strlen(line_buf);
+    const char *trimmed_start;
+    const char *trimmed_end;
+    const char *expr_start = NULL;
+    const char *payload_start = NULL;
+    size_t expr_len = 0;
+    size_t payload_len = 0;
+    char *expr_copy = NULL;
+    char *payload_copy = NULL;
+    turbo_cron_entry_t *entry;
+    int rc;
+
+    ++line_no;
+    trimmed_start = line_start;
+    trimmed_end = line_end;
+    cron_trim_span(&trimmed_start, &trimmed_end);
+
+    if (trimmed_start == trimmed_end || *trimmed_start == '#') {
+      continue;
+    }
+
+    rc = cron_split_entry_line(trimmed_start, trimmed_end,
+                               &expr_start, &expr_len,
+                               &payload_start, &payload_len);
+    if (rc != TURBO_CRON_OK) {
+      cron_set_error(error_buf, error_buf_len,
+                     "line %zu: expected 5 cron fields followed by payload",
+                     line_no);
+      turbo_cron_table_free(&table);
+      fclose(fp);
+      return rc;
+    }
+
+    if (payload_len == 0) {
+      cron_set_error(error_buf, error_buf_len,
+                     "line %zu: missing payload after cron expression",
+                     line_no);
+      turbo_cron_table_free(&table);
+      fclose(fp);
+      return TURBO_CRON_EPARSE;
+    }
+
+    rc = cron_table_reserve(&table, table.count + 1);
+    if (rc != TURBO_CRON_OK) {
+      cron_set_error(error_buf, error_buf_len,
+                     "line %zu: out of memory", line_no);
+      turbo_cron_table_free(&table);
+      fclose(fp);
+      return rc;
+    }
+
+    expr_copy = cron_dup_range(expr_start, expr_len);
+    payload_copy = cron_dup_range(payload_start, payload_len);
+    if (!expr_copy || !payload_copy) {
+      free(expr_copy);
+      free(payload_copy);
+      cron_set_error(error_buf, error_buf_len,
+                     "line %zu: out of memory", line_no);
+      turbo_cron_table_free(&table);
+      fclose(fp);
+      return TURBO_CRON_ENOMEM;
+    }
+
+    entry = &table.entries[table.count];
+    turbo_cron_expr_init(&entry->expr);
+    rc = turbo_cron_parse_ex(expr_copy, &entry->expr, error_buf, error_buf_len);
+    free(expr_copy);
+    if (rc != TURBO_CRON_OK) {
+      if (error_buf && error_buf_len > 0) {
+        char inner_error[256];
+        snprintf(inner_error, sizeof(inner_error), "%s", error_buf);
+        cron_set_error(error_buf, error_buf_len,
+                       "line %zu: %s", line_no, inner_error);
+      }
+      free(payload_copy);
+      turbo_cron_table_free(&table);
+      fclose(fp);
+      return rc;
+    }
+
+    entry->payload = payload_copy;
+    ++table.count;
   }
 
-  file_size = ftell(fp);
-  if (file_size < 0) {
-    fclose(fp);
-    cron_set_error(error_buf, error_buf_len, "failed to stat file '%s'", path);
-    return TURBO_CRON_EINVAL;
-  }
-
-  if (fseek(fp, 0, SEEK_SET) != 0) {
-    fclose(fp);
-    cron_set_error(error_buf, error_buf_len, "failed to rewind file '%s'", path);
-    return TURBO_CRON_EINVAL;
-  }
-
-  buffer = (char *)malloc((size_t)file_size + 1);
-  if (!buffer) {
-    fclose(fp);
-    cron_set_error(error_buf, error_buf_len, "out of memory");
-    return TURBO_CRON_ENOMEM;
-  }
-
-  read_size = fread(buffer, 1, (size_t)file_size, fp);
   fclose(fp);
-  buffer[read_size] = '\0';
-
-  if (read_size != (size_t)file_size) {
-    free(buffer);
-    cron_set_error(error_buf, error_buf_len, "failed to read file '%s'", path);
-    return TURBO_CRON_EINVAL;
-  }
-
-  rc = turbo_cron_table_load_string(buffer, out_table, error_buf, error_buf_len);
-  free(buffer);
-  return rc;
+  *out_table = table;
+  return TURBO_CRON_OK;
 }
 
 int turbo_cron_matches(const turbo_cron_expr_t *expr, time_t when) {
@@ -885,23 +936,116 @@ int turbo_cron_matches(const turbo_cron_expr_t *expr, time_t when) {
 }
 
 int turbo_cron_next(const turbo_cron_expr_t *expr, time_t after, time_t *next_out) {
+  struct tm local_tm;
   time_t candidate;
-  int i;
+  int iters = 0;
 
   if (!expr || !next_out) {
     return TURBO_CRON_EINVAL;
   }
 
-  candidate = after - (after % 60) + 60;
+  candidate = cron_floor_minute(after) + 60;
   if (candidate <= after) {
     candidate += 60;
   }
 
-  for (i = 0; i < CRON_SEARCH_LIMIT_MINUTES; ++i, candidate += 60) {
-    if (turbo_cron_matches(expr, candidate)) {
+  if (cron_localtime_safe(candidate, &local_tm) != 0) {
+    return TURBO_CRON_ESTATE;
+  }
+
+  while (iters < 5000) {
+    int jump = 0;
+    uint64_t remaining;
+    iters++;
+
+    // 1. Check Month
+    remaining = expr->month_bits >> (local_tm.tm_mon + 1);
+    if (remaining == 0) {
+      local_tm.tm_year++;
+      local_tm.tm_mon = 0;
+      local_tm.tm_mday = 1;
+      local_tm.tm_hour = 0;
+      local_tm.tm_min = 0;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    } else if ((remaining & 1) == 0) {
+      while ((remaining & 1) == 0) { jump++; remaining >>= 1; }
+      local_tm.tm_mon += jump;
+      local_tm.tm_mday = 1;
+      local_tm.tm_hour = 0;
+      local_tm.tm_min = 0;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    }
+
+    // 2. Check Day
+    int dom_match = ((expr->day_of_month_bits & (1ULL << local_tm.tm_mday)) != 0);
+    int dow_match = ((expr->day_of_week_bits & (1ULL << local_tm.tm_wday)) != 0);
+    int day_match = 0;
+
+    if (expr->day_of_month_any && expr->day_of_week_any) {
+      day_match = 1;
+    } else if (expr->day_of_month_any) {
+      day_match = dow_match;
+    } else if (expr->day_of_week_any) {
+      day_match = dom_match;
+    } else {
+      day_match = dom_match || dow_match;
+    }
+
+    if (!day_match) {
+      local_tm.tm_mday++;
+      local_tm.tm_hour = 0;
+      local_tm.tm_min = 0;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    }
+
+    // 3. Check Hour
+    remaining = expr->hour_bits >> local_tm.tm_hour;
+    if (remaining == 0) {
+      local_tm.tm_mday++;
+      local_tm.tm_hour = 0;
+      local_tm.tm_min = 0;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    } else if ((remaining & 1) == 0) {
+      while ((remaining & 1) == 0) { jump++; remaining >>= 1; }
+      local_tm.tm_hour += jump;
+      local_tm.tm_min = 0;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    }
+
+    // 4. Check Minute
+    remaining = expr->minute_bits >> local_tm.tm_min;
+    if (remaining == 0) {
+      local_tm.tm_hour++;
+      local_tm.tm_min = 0;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    } else if ((remaining & 1) == 0) {
+      while ((remaining & 1) == 0) { jump++; remaining >>= 1; }
+      local_tm.tm_min += jump;
+      local_tm.tm_isdst = -1;
+      mktime(&local_tm);
+      continue;
+    }
+
+    // Match found!
+    local_tm.tm_isdst = -1;
+    candidate = mktime(&local_tm);
+    if (candidate != (time_t)-1) {
       *next_out = candidate;
       return TURBO_CRON_OK;
     }
+    return TURBO_CRON_ESTATE;
   }
 
   return TURBO_CRON_ENEXT;
@@ -974,7 +1118,7 @@ int turbo_cron_runner_advance(turbo_cron_runner_t *runner, time_t now) {
   void *user_data;
   time_t current_minute;
   time_t start_minute;
-  time_t dispatch_minute;
+  time_t check;
   int fired = 0;
 
   if (!runner) {
@@ -1001,15 +1145,18 @@ int turbo_cron_runner_advance(turbo_cron_runner_t *runner, time_t now) {
   runner->cursor_minute = current_minute;
   turbo_mutex_unlock(&runner->lock);
 
-  for (dispatch_minute = start_minute; dispatch_minute <= current_minute;
-       dispatch_minute += 60) {
-    if (!turbo_cron_matches(&runner->expr, dispatch_minute)) {
-      continue;
+  check = start_minute - 60;
+  while (1) {
+    time_t next_fire = 0;
+    int rc = turbo_cron_next(&runner->expr, check, &next_fire);
+    if (rc != TURBO_CRON_OK || next_fire > current_minute) {
+      break;
     }
     if (callback) {
-      callback(&runner->expr, dispatch_minute, user_data);
+      callback(&runner->expr, next_fire, user_data);
     }
     ++fired;
+    check = next_fire;
   }
 
   return fired;

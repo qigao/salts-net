@@ -713,92 +713,56 @@ static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer);
 // Async Thread - Using Disruptor
 // =============================================================================
 
+/**
+ * @brief Drain log entries from disruptor range [first_seq, last_seq].
+ *
+ * Converts each async_log_entry_t back to turbo_log_entry_t and writes
+ * to all sinks.  Releases each mem_buffer_t after processing.
+ */
+static void logger_drain_entries(tlog_t *logger, uint64_t first_seq, uint64_t last_seq) {
+  for (uint64_t seq = first_seq; seq <= last_seq; ++seq) {
+    disruptor_cursor_t read_cursor;
+    read_cursor.sequence = seq;
+
+    mem_buffer_t **entry_ptr =
+        (mem_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
+    if (!entry_ptr || !*entry_ptr) continue;
+
+    mem_buffer_t *buffer = *entry_ptr;
+    async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
+
+    turbo_log_entry_t entry = {
+      .level = ae->level,
+      .timestamp_ms = ae->timestamp_ms,
+      .thread_id = ae->thread_id,
+      .component = ae->component,
+      .file = ae->file,
+      .line = ae->line,
+      .message = ae->message,
+      .message_len = ae->message_len
+    };
+
+    logger_write_to_sinks(logger, &entry);
+    atomic_fetch_add(&logger->logs_written, 1);
+    mem_release(buffer);
+    *entry_ptr = NULL;
+  }
+}
+
+static int logger_should_run(void *ctx) {
+  tlog_t *logger = (tlog_t *)ctx;
+  return atomic_load(&logger->running);
+}
+
+static void logger_process_batch(void *ctx, uint64_t first_seq, uint64_t last_seq) {
+  tlog_t *logger = (tlog_t *)ctx;
+  logger_drain_entries(logger, first_seq, last_seq);
+}
+
 static void async_logger_thread(void *arg) {
   tlog_t *logger = (tlog_t *)arg;
-
-  // Try to register consumer
-  uint64_t next_sequence = disruptor_consumer_register(logger->disruptor, &logger->consumer);
-
-  // Consumer loop
-  while (atomic_load(&logger->running)) {
-    disruptor_cursor_t cursor;
-    cursor.sequence = next_sequence;
-
-    // Try non-blocking first to avoid infinite spin
-    if (!disruptor_consumer_wait_for_nonblocking(logger->disruptor, &cursor)) {
-      // No data available, sleep briefly
-      turbo_sleep_ms(1);
-      continue;
-    }
-
-    // Process all available entries in batch
-    for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
-      disruptor_cursor_t read_cursor;
-      read_cursor.sequence = seq;
-
-      // Get entry pointer from disruptor
-      mem_buffer_t **entry_ptr =
-          (mem_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
-      if (!entry_ptr || !*entry_ptr) continue;
-
-      mem_buffer_t *buffer = *entry_ptr;
-      async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
-
-      // Convert and write to sinks
-      turbo_log_entry_t entry = {
-        .level = ae->level,
-        .timestamp_ms = ae->timestamp_ms,
-        .thread_id = ae->thread_id,
-        .component = ae->component,
-        .file = ae->file,
-        .line = ae->line,
-        .message = ae->message,
-        .message_len = ae->message_len
-      };
-
-      logger_write_to_sinks(logger, &entry);
-      atomic_fetch_add(&logger->logs_written, 1);
-      mem_release(buffer);
-      *entry_ptr = NULL;
-    }
-
-    // Release entries back to disruptor
-    disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &cursor);
-    next_sequence = cursor.sequence + 1;
-  }
-
-  // Final drain on shutdown
-  disruptor_cursor_t cursor;
-  cursor.sequence = next_sequence;
-  if (disruptor_consumer_wait_for_nonblocking(logger->disruptor, &cursor)) {
-    for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
-      disruptor_cursor_t read_cursor;
-      read_cursor.sequence = seq;
-      mem_buffer_t **entry_ptr =
-          (mem_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
-      if (entry_ptr && *entry_ptr) {
-        mem_buffer_t *buffer = *entry_ptr;
-        async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
-        turbo_log_entry_t entry = {
-          .level = ae->level,
-          .timestamp_ms = ae->timestamp_ms,
-          .thread_id = ae->thread_id,
-          .component = ae->component,
-          .file = ae->file,
-          .line = ae->line,
-          .message = ae->message,
-          .message_len = ae->message_len
-        };
-        logger_write_to_sinks(logger, &entry);
-        atomic_fetch_add(&logger->logs_written, 1);
-        mem_release(buffer);
-        *entry_ptr = NULL;
-      }
-    }
-    disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &cursor);
-  }
-
-  disruptor_consumer_unregister(logger->disruptor, &logger->consumer);
+  disruptor_consumer_run(logger->disruptor, &logger->consumer,
+                         logger_should_run, logger_process_batch, logger);
 }
 
 static int logger_start_async(tlog_t *logger) {
@@ -907,9 +871,8 @@ void tlog_destroy(tlog_t *logger) {
   }
 
   turbo_mutex_destroy(&logger->sink_mutex);
-  free(logger);
 
-  // Clear default if this was it
+  // Clear default logger reference BEFORE freeing memory
   if (g_default_logger == logger) {
     if (g_default_logger_mutex_init) {
       turbo_mutex_lock(&g_default_logger_mutex);
@@ -919,6 +882,8 @@ void tlog_destroy(tlog_t *logger) {
       turbo_mutex_unlock(&g_default_logger_mutex);
     }
   }
+
+  free(logger);
 }
 
 int tlog_add_sink(tlog_t *logger, turbo_log_sink_t *sink) {

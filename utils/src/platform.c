@@ -112,17 +112,20 @@ static int turbo_platform_get_windows_version(char *buffer, size_t buffer_size) 
 
 #ifdef _WIN32
 uint64_t turbo_hrtime(void) {
-  static uint64_t freq = 0;
-  if (freq == 0) {
+  /* Benign race: worst case two threads both init freq to the same value */
+  static volatile uint64_t freq = 0;
+  uint64_t f = freq;
+  if (f == 0) {
     LARGE_INTEGER li;
     QueryPerformanceFrequency(&li);
-    freq = li.QuadPart;
+    f = li.QuadPart;
+    freq = f;
   }
   LARGE_INTEGER li;
   QueryPerformanceCounter(&li);
-  if (freq == 0) return 0;
-  uint64_t whole = (li.QuadPart / freq) * 1000000000ULL;
-  uint64_t part = (li.QuadPart % freq) * 1000000000ULL / freq;
+  if (f == 0) return 0;
+  uint64_t whole = (li.QuadPart / f) * 1000000000ULL;
+  uint64_t part = (li.QuadPart % f) * 1000000000ULL / f;
   return whole + part;
 }
 
@@ -181,11 +184,14 @@ int turbo_gettimeofday(turbo_timeval_t *tv, turbo_timezone_t *tz) {
 uint64_t turbo_monotonic_ms(void) { return turbo_ns_to_ms(turbo_hrtime()); }
 
 uint64_t turbo_uptime_ms(void) {
-  static uint64_t start_time = 0;
-  if (start_time == 0) {
-    start_time = turbo_hrtime();
+  /* Benign race: worst case start_time shifts by nanoseconds */
+  static volatile uint64_t start_time = 0;
+  uint64_t st = start_time;
+  if (st == 0) {
+    st = turbo_hrtime();
+    start_time = st;
   }
-  return turbo_ns_to_ms(turbo_hrtime() - start_time);
+  return turbo_ns_to_ms(turbo_hrtime() - st);
 }
 
 int turbo_platform_os_name(char *buffer, size_t buffer_size) {

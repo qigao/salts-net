@@ -3,6 +3,7 @@
 
 #include "platform.h"
 #include "disruptor.h"
+#include "turbo_thread.h"
 #ifdef __cplusplus
   #include <atomic>
   #define ATOMIC_UINT32_T std::atomic<uint32_t>
@@ -28,17 +29,10 @@ typedef enum {
 } bucket_priority_mpmc_t;
 
 typedef size_t bucket_priority_mpmc_value_t;
+typedef struct bucket_priority_queue_mpmc_impl_s bucket_priority_queue_mpmc_impl_t;
 
 typedef struct {
-  disruptor_t *disruptor;
-  disruptor_consumer_t shared_consumer;
-  uint64_t next_read_sequence;
-  ATOMIC_UINT32_T pop_lock;
-} bucket_priority_bucket_mpmc_t;
-
-typedef struct {
-  bucket_priority_bucket_mpmc_t buckets[BUCKET_PRIORITY_MPMC_COUNT];
-  uint32_t max_consumers;
+  bucket_priority_queue_mpmc_impl_t *impl;
 } bucket_priority_queue_mpmc_t;
 
 /*

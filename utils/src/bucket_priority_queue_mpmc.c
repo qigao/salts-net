@@ -11,6 +11,20 @@
 
 #define BUCKET_ENTRY_SIZE sizeof(bucket_priority_mpmc_value_t)
 
+typedef struct {
+  disruptor_t *disruptor;
+  disruptor_consumer_t shared_consumer;
+  uint64_t next_read_sequence;
+  ATOMIC_UINT32_T pop_lock;
+} bucket_priority_bucket_mpmc_t;
+
+struct bucket_priority_queue_mpmc_impl_s {
+  bucket_priority_bucket_mpmc_t buckets[BUCKET_PRIORITY_MPMC_COUNT];
+  uint32_t max_consumers;
+  turbo_mutex_t notify_mutex;
+  turbo_cond_t notify_cond;
+};
+
 static bool bucket_priority_mpmc_valid(bucket_priority_mpmc_t priority) {
   return priority >= BUCKET_PRIORITY_MPMC_LOW && priority < BUCKET_PRIORITY_MPMC_COUNT;
 }
@@ -18,12 +32,20 @@ static bool bucket_priority_mpmc_valid(bucket_priority_mpmc_t priority) {
 bool bucket_priority_queue_mpmc_init(bucket_priority_queue_mpmc_t *queue,
                                      size_t capacity_per_bucket,
                                      uint32_t max_consumers) {
+  bucket_priority_queue_mpmc_impl_t *impl;
+
   if (queue == NULL || capacity_per_bucket == 0) {
     return false;
   }
 
   memset(queue, 0, sizeof(*queue));
-  queue->max_consumers = max_consumers;
+  impl = (bucket_priority_queue_mpmc_impl_t *)calloc(1, sizeof(*impl));
+  if (impl == NULL) {
+    return false;
+  }
+
+  impl->max_consumers = max_consumers;
+  queue->impl = impl;
 
   disruptor_config_t config = {
     .entry_size = BUCKET_ENTRY_SIZE,
@@ -32,45 +54,68 @@ bool bucket_priority_queue_mpmc_init(bucket_priority_queue_mpmc_t *queue,
   };
 
   for (size_t i = 0; i < BUCKET_PRIORITY_MPMC_COUNT; ++i) {
-    queue->buckets[i].disruptor = disruptor_create(&config);
-    if (queue->buckets[i].disruptor == NULL) {
+    impl->buckets[i].disruptor = disruptor_create(&config);
+    if (impl->buckets[i].disruptor == NULL) {
       // Cleanup on failure
       for (size_t j = 0; j < i; ++j) {
-        disruptor_destroy(queue->buckets[j].disruptor);
+        disruptor_destroy(impl->buckets[j].disruptor);
       }
+      free(impl);
+      queue->impl = NULL;
       return false;
     }
     
     // Register the shared logical consumer
-    uint64_t initial_seq = disruptor_consumer_register(queue->buckets[i].disruptor, &queue->buckets[i].shared_consumer);
-    queue->buckets[i].next_read_sequence = initial_seq;
-    atomic_store(&queue->buckets[i].pop_lock, 0);
+    uint64_t initial_seq =
+        disruptor_consumer_register(impl->buckets[i].disruptor, &impl->buckets[i].shared_consumer);
+    impl->buckets[i].next_read_sequence = initial_seq;
+    atomic_store(&impl->buckets[i].pop_lock, 0);
   }
+
+  turbo_mutex_init(&impl->notify_mutex);
+  turbo_cond_init(&impl->notify_cond);
 
   return true;
 }
 
 void bucket_priority_queue_mpmc_destroy(bucket_priority_queue_mpmc_t *queue) {
+  bucket_priority_queue_mpmc_impl_t *impl;
+
   if (queue == NULL) {
     return;
   }
 
+  impl = queue->impl;
+  if (impl == NULL) {
+    return;
+  }
+
   for (size_t i = 0; i < BUCKET_PRIORITY_MPMC_COUNT; ++i) {
-    if (queue->buckets[i].disruptor != NULL) {
-      disruptor_destroy(queue->buckets[i].disruptor);
-      queue->buckets[i].disruptor = NULL;
+    if (impl->buckets[i].disruptor != NULL) {
+      disruptor_destroy(impl->buckets[i].disruptor);
+      impl->buckets[i].disruptor = NULL;
     }
   }
+  turbo_cond_destroy(&impl->notify_cond);
+  turbo_mutex_destroy(&impl->notify_mutex);
+  free(impl);
+  queue->impl = NULL;
 }
 
 bool bucket_priority_queue_mpmc_try_push(bucket_priority_queue_mpmc_t *queue,
                                          bucket_priority_mpmc_t priority,
                                          bucket_priority_mpmc_value_t value) {
+  bucket_priority_queue_mpmc_impl_t *impl;
   if (queue == NULL || !bucket_priority_mpmc_valid(priority)) {
     return false;
   }
 
-  disruptor_t *disruptor = queue->buckets[(size_t)priority].disruptor;
+  impl = queue->impl;
+  if (impl == NULL) {
+    return false;
+  }
+
+  disruptor_t *disruptor = impl->buckets[(size_t)priority].disruptor;
   disruptor_cursor_t cursor;
 
   if (disruptor_publisher_try_claim(disruptor, &cursor) != 1) {
@@ -82,17 +127,28 @@ bool bucket_priority_queue_mpmc_try_push(bucket_priority_queue_mpmc_t *queue,
   *entry = value;
 
   disruptor_publisher_publish(disruptor, &cursor);
+
+  /* Wake any blocked poppers */
+  turbo_mutex_lock(&impl->notify_mutex);
+  turbo_cond_signal(&impl->notify_cond);
+  turbo_mutex_unlock(&impl->notify_mutex);
   return true;
 }
 
 void bucket_priority_queue_mpmc_push_blocking(bucket_priority_queue_mpmc_t *queue,
                                               bucket_priority_mpmc_t priority,
                                               bucket_priority_mpmc_value_t value) {
+  bucket_priority_queue_mpmc_impl_t *impl;
   if (queue == NULL || !bucket_priority_mpmc_valid(priority)) {
     return;
   }
 
-  disruptor_t *disruptor = queue->buckets[(size_t)priority].disruptor;
+  impl = queue->impl;
+  if (impl == NULL) {
+    return;
+  }
+
+  disruptor_t *disruptor = impl->buckets[(size_t)priority].disruptor;
   disruptor_cursor_t cursor;
 
   bucket_priority_mpmc_value_t *entry =
@@ -101,18 +157,29 @@ void bucket_priority_queue_mpmc_push_blocking(bucket_priority_queue_mpmc_t *queu
   *entry = value;
 
   disruptor_publisher_commit_entry_blocking(disruptor, &cursor);
+
+  /* Wake any blocked poppers */
+  turbo_mutex_lock(&impl->notify_mutex);
+  turbo_cond_signal(&impl->notify_cond);
+  turbo_mutex_unlock(&impl->notify_mutex);
 }
 
 bool bucket_priority_queue_mpmc_try_pop(
     bucket_priority_queue_mpmc_t *queue,
     bucket_priority_mpmc_value_t *out_value) {
+  bucket_priority_queue_mpmc_impl_t *impl;
   if (queue == NULL || out_value == NULL) {
+    return false;
+  }
+
+  impl = queue->impl;
+  if (impl == NULL) {
     return false;
   }
 
   // Poll from highest priority first (CRITICAL -> LOW)
   for (int i = BUCKET_PRIORITY_MPMC_CRITICAL; i >= BUCKET_PRIORITY_MPMC_LOW; --i) {
-    bucket_priority_bucket_mpmc_t *bucket = &queue->buckets[i];
+    bucket_priority_bucket_mpmc_t *bucket = &impl->buckets[i];
 
     // Attempt to acquire pop spinlock
     uint32_t expected = 0;
@@ -152,40 +219,50 @@ bool bucket_priority_queue_mpmc_pop_blocking(
     bucket_priority_queue_mpmc_t *queue,
     bucket_priority_mpmc_value_t *out_value,
     uint32_t timeout_ms) {
+  bucket_priority_queue_mpmc_impl_t *impl;
   if (queue == NULL || out_value == NULL) {
     return false;
   }
 
-  // Simple spin with timeout (can be improved with condition variables)
-  uint32_t elapsed = 0;
-  const uint32_t sleep_interval = 1;  // 1ms
-
-  while (elapsed < timeout_ms) {
-    if (bucket_priority_queue_mpmc_try_pop(queue, out_value)) {
-      return true;
-    }
-
-    // Sleep briefly
-    #ifdef _WIN32
-      Sleep(sleep_interval);
-    #else
-      usleep(sleep_interval * 1000);
-    #endif
-
-    elapsed += sleep_interval;
+  impl = queue->impl;
+  if (impl == NULL) {
+    return false;
   }
 
-  return false;
+  /* Fast path: try without blocking */
+  if (bucket_priority_queue_mpmc_try_pop(queue, out_value)) {
+    return true;
+  }
+
+  /* Slow path: wait on condvar with timeout */
+  uint64_t timeout_ns = (uint64_t)timeout_ms * 1000000ULL;
+  turbo_mutex_lock(&impl->notify_mutex);
+  while (!bucket_priority_queue_mpmc_try_pop(queue, out_value)) {
+    int rc = turbo_cond_timedwait(&impl->notify_cond, &impl->notify_mutex, timeout_ns);
+    if (rc != 0) {
+      /* Timed out — one final attempt before giving up */
+      turbo_mutex_unlock(&impl->notify_mutex);
+      return bucket_priority_queue_mpmc_try_pop(queue, out_value);
+    }
+  }
+  turbo_mutex_unlock(&impl->notify_mutex);
+  return true;
 }
 
 bool bucket_priority_queue_mpmc_empty(const bucket_priority_queue_mpmc_t *queue) {
+  bucket_priority_queue_mpmc_impl_t *impl;
   if (queue == NULL) {
+    return true;
+  }
+
+  impl = queue->impl;
+  if (impl == NULL) {
     return true;
   }
 
   // Check all buckets from highest to lowest priority
   for (int i = BUCKET_PRIORITY_MPMC_CRITICAL; i >= BUCKET_PRIORITY_MPMC_LOW; --i) {
-    const bucket_priority_bucket_mpmc_t *bucket = &queue->buckets[i];
+    const bucket_priority_bucket_mpmc_t *bucket = &impl->buckets[i];
     disruptor_t *disruptor = bucket->disruptor;
 
     if (disruptor == NULL) {

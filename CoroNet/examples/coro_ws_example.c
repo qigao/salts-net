@@ -1,12 +1,15 @@
 /**
  * @file coro_ws_example.c
- * @brief Demonstration of coroutine-based WebSocket client.
+ * @brief Coroutine-based WebSocket (WS) client.
  *
- * Connects to a WS echo server, sends a message, receives the echo.
+ * Connects to a public echo server over plain WebSocket, sends one
+ * message, and prints the echo.  The socket is plain TCP (CORO_SOCKET_TCP_V4);
+ * coro_socket_connect_ws() performs the HTTP Upgrade handshake on top of it.
+ *
+ * Usage: ./coro_ws_example
  */
 
-#include "turbo_coro_socket.h"
-#include "turbo_coro.h"
+#include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -2,6 +2,7 @@
 #include "tinytest.h"
 #include "turbo_thread.h"
 #include <stdatomic.h>
+#include <stdlib.h>
 
 #include <stdbool.h>
 
@@ -24,6 +25,28 @@ typedef struct {
   _Atomic uint32_t consumed_count;
   size_t target_count;
 } consumer_context_t;
+
+static bucket_priority_queue_mpmc_t *test_bucket_priority_queue_create(size_t capacity_per_bucket,
+                                                                       uint32_t max_consumers) {
+  bucket_priority_queue_mpmc_t *queue =
+      (bucket_priority_queue_mpmc_t *)calloc(1, sizeof(*queue));
+  if (queue == NULL) {
+    return NULL;
+  }
+  if (!bucket_priority_queue_mpmc_init(queue, capacity_per_bucket, max_consumers)) {
+    free(queue);
+    return NULL;
+  }
+  return queue;
+}
+
+static void test_bucket_priority_queue_destroy(bucket_priority_queue_mpmc_t *queue) {
+  if (queue == NULL) {
+    return;
+  }
+  bucket_priority_queue_mpmc_destroy(queue);
+  free(queue);
+}
 
 static void producer_thread(void *arg) {
   producer_context_t *ctx = (producer_context_t *)arg;
@@ -64,61 +87,61 @@ static void consumer_thread(void *arg) {
 
 spec("Bucket Priority Queue MPMC") {
   it("starts empty after init") {
-    bucket_priority_queue_mpmc_t queue;
-    check(bucket_priority_queue_mpmc_init(&queue, 16, 4));
-    bucket_priority_queue_mpmc_destroy(&queue);
+    bucket_priority_queue_mpmc_t *queue = test_bucket_priority_queue_create(16, 4);
+    check_not_null(queue);
+    test_bucket_priority_queue_destroy(queue);
   }
 
   it("supports single producer single consumer") {
-    bucket_priority_queue_mpmc_t queue;
-    check(bucket_priority_queue_mpmc_init(&queue, 16, 1));
+    bucket_priority_queue_mpmc_t *queue = test_bucket_priority_queue_create(16, 1);
+    check_not_null(queue);
 
     // Push items
-    check(bucket_priority_queue_mpmc_try_push(&queue, BUCKET_PRIORITY_MPMC_LOW, 1));
-    check(bucket_priority_queue_mpmc_try_push(&queue, BUCKET_PRIORITY_MPMC_CRITICAL, 4));
-    check(bucket_priority_queue_mpmc_try_push(&queue, BUCKET_PRIORITY_MPMC_NORMAL, 2));
-    check(bucket_priority_queue_mpmc_try_push(&queue, BUCKET_PRIORITY_MPMC_HIGH, 3));
+    check(bucket_priority_queue_mpmc_try_push(queue, BUCKET_PRIORITY_MPMC_LOW, 1));
+    check(bucket_priority_queue_mpmc_try_push(queue, BUCKET_PRIORITY_MPMC_CRITICAL, 4));
+    check(bucket_priority_queue_mpmc_try_push(queue, BUCKET_PRIORITY_MPMC_NORMAL, 2));
+    check(bucket_priority_queue_mpmc_try_push(queue, BUCKET_PRIORITY_MPMC_HIGH, 3));
 
     // Pop in priority order
     bucket_priority_mpmc_value_t value;
-    check(bucket_priority_queue_mpmc_try_pop(&queue, &value));
+    check(bucket_priority_queue_mpmc_try_pop(queue, &value));
     check_size_eq(value, 4);  // CRITICAL
 
-    check(bucket_priority_queue_mpmc_try_pop(&queue, &value));
+    check(bucket_priority_queue_mpmc_try_pop(queue, &value));
     check_size_eq(value, 3);  // HIGH
 
-    check(bucket_priority_queue_mpmc_try_pop(&queue, &value));
+    check(bucket_priority_queue_mpmc_try_pop(queue, &value));
     check_size_eq(value, 2);  // NORMAL
 
-    check(bucket_priority_queue_mpmc_try_pop(&queue, &value));
+    check(bucket_priority_queue_mpmc_try_pop(queue, &value));
     check_size_eq(value, 1);  // LOW
 
-    bucket_priority_queue_mpmc_destroy(&queue);
+    test_bucket_priority_queue_destroy(queue);
   }
 
   it("handles blocking push") {
-    bucket_priority_queue_mpmc_t queue;
-    check(bucket_priority_queue_mpmc_init(&queue, 16, 1));
+    bucket_priority_queue_mpmc_t *queue = test_bucket_priority_queue_create(16, 1);
+    check_not_null(queue);
 
-    bucket_priority_queue_mpmc_push_blocking(&queue, BUCKET_PRIORITY_MPMC_HIGH, 100);
+    bucket_priority_queue_mpmc_push_blocking(queue, BUCKET_PRIORITY_MPMC_HIGH, 100);
 
     bucket_priority_mpmc_value_t value;
-    check(bucket_priority_queue_mpmc_try_pop(&queue, &value));
+    check(bucket_priority_queue_mpmc_try_pop(queue, &value));
     check_size_eq(value, 100);
 
-    bucket_priority_queue_mpmc_destroy(&queue);
+    test_bucket_priority_queue_destroy(queue);
   }
 
   it("works with multiple producers and consumers") {
-    bucket_priority_queue_mpmc_t queue;
-    check(bucket_priority_queue_mpmc_init(&queue, 4096, NUM_CONSUMERS));
+    bucket_priority_queue_mpmc_t *queue = test_bucket_priority_queue_create(4096, NUM_CONSUMERS);
+    check_not_null(queue);
 
     // Setup producers
     producer_context_t producers[NUM_PRODUCERS];
     turbo_thread_t producer_threads[NUM_PRODUCERS];
 
     for (size_t i = 0; i < NUM_PRODUCERS; ++i) {
-      producers[i].queue = &queue;
+      producers[i].queue = queue;
       producers[i].start = 0;
       producers[i].done = 0;
       producers[i].items_to_process = TEST_ITEMS / NUM_PRODUCERS;
@@ -132,7 +155,7 @@ spec("Bucket Priority Queue MPMC") {
     turbo_thread_t consumer_threads[NUM_CONSUMERS];
 
     for (size_t i = 0; i < NUM_CONSUMERS; ++i) {
-      consumers[i].queue = &queue;
+      consumers[i].queue = queue;
       consumers[i].start = 0;
       consumers[i].done = 0;
       consumers[i].consumed_count = 0;
@@ -167,6 +190,6 @@ spec("Bucket Priority Queue MPMC") {
     }
     check_size_eq(total_consumed, TEST_ITEMS);
 
-    bucket_priority_queue_mpmc_destroy(&queue);
+    test_bucket_priority_queue_destroy(queue);
   }
 }

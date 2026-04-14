@@ -1,212 +1,142 @@
 /**
  * @file real_world_dashboard.c
- * @brief Real-world example: Fetching dashboard data with when_all
+ * @brief Multi-task concurrent fetch using when_all.
+ *
+ * Models three parallel "API calls" (simulated with coro_sleep) feeding into
+ * a single dashboard render. The key insight: coro_when_all() suspends the
+ * caller until every task completes while the event loop continues running
+ * other coroutines — total wall time equals max(task latencies), not their sum.
+ *
+ * Pattern:
+ *   1. coro_task_create()  — define task, do NOT start yet.
+ *   2. coro_task_start()   — schedule all tasks concurrently.
+ *   3. coro_when_all()     — suspend caller until all are done.
+ *
+ * Usage: ./real_world_dashboard
  */
 
 #include "CoroNet.h"
-#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 /* ── Data structures ──────────────────────────────────────── */
 
 typedef struct {
-    int id;
+    int  id;
     char name[64];
-    int is_premium;
+    int  is_premium;
 } user_t;
 
 typedef struct {
-    int count;
-    char titles[10][128];
+    int  count;
+    char titles[3][64];
 } posts_t;
 
 typedef struct {
-    int count;
-    char texts[20][256];
+    int  count;
+    char preview[64];  /* first comment text */
 } comments_t;
 
 typedef struct {
-    user_t user;
-    posts_t posts;
+    user_t     user;
+    posts_t    posts;
     comments_t comments;
 } dashboard_t;
 
-/* ── API fetch tasks ──────────────────────────────────────── */
+/* ── Simulated API tasks ──────────────────────────────────── */
 
-static void fetch_user_api(coro_t *co, void *arg) {
+/**
+ * @brief Simulate fetching user profile (~80 ms network round-trip).
+ */
+static void fetch_user(coro_t *co, void *arg) {
     (void)co;
-    user_t *user = (user_t *)arg;
     coro_context_t *ctx = coro_context_current();
+    user_t *out = (user_t *)arg;
 
-    printf("[API] Fetching user data...\n");
+    printf("[User]     Fetching...\n");
+    coro_sleep(ctx, 80);
 
-    coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-    coro_socket_set_timeout(client, 5000);
-
-    int r = coro_socket_connect(client, "api.example.com", 80);
-    if (r != 0) {
-        printf("[API] Failed to connect: %s\n", turbo_strerror(r));
-        coro_socket_destroy(client);
-        return;
-    }
-
-    const char *request = "GET /api/user/123 HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
-    coro_socket_send(client, request, strlen(request));
-
-    char *response;
-    size_t len;
-    r = coro_socket_recv(client, &response, &len);
-    if (r == 0) {
-        /* Parse response (simplified) */
-        user->id = 123;
-        fmt(user->name, sizeof(user->name), "John Doe");
-        user->is_premium = 1;
-        printf("[API] User fetched: %s (premium: %d)\n", user->name, user->is_premium);
-        coro_socket_free_recv(response);
-    } else {
-        printf("[API] Failed to receive: %s\n", turbo_strerror(r));
-    }
-
-    coro_socket_destroy(client);
+    out->id         = 42;
+    out->is_premium = 1;
+    snprintf(out->name, sizeof(out->name), "Ada Lovelace");
+    printf("[User]     Done.\n");
 }
 
-static void fetch_posts_api(coro_t *co, void *arg) {
+/**
+ * @brief Simulate fetching recent posts (~120 ms network round-trip).
+ */
+static void fetch_posts(coro_t *co, void *arg) {
     (void)co;
-    posts_t *posts = (posts_t *)arg;
     coro_context_t *ctx = coro_context_current();
+    posts_t *out = (posts_t *)arg;
 
-    printf("[API] Fetching posts...\n");
+    printf("[Posts]    Fetching...\n");
+    coro_sleep(ctx, 120);
 
-    coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-    coro_socket_set_timeout(client, 5000);
-
-    int r = coro_socket_connect(client, "api.example.com", 80);
-    if (r != 0) {
-        printf("[API] Failed to connect: %s\n", turbo_strerror(r));
-        coro_socket_destroy(client);
-        return;
-    }
-
-    const char *request = "GET /api/posts/123 HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
-    coro_socket_send(client, request, strlen(request));
-
-    char *response;
-    size_t len;
-    r = coro_socket_recv(client, &response, &len);
-    if (r == 0) {
-        /* Parse response (simplified) */
-        posts->count = 3;
-        fmt(posts->titles[0], sizeof(posts->titles[0]), "First Post");
-        fmt(posts->titles[1], sizeof(posts->titles[1]), "Second Post");
-        fmt(posts->titles[2], sizeof(posts->titles[2]), "Third Post");
-        printf("[API] Posts fetched: %d posts\n", posts->count);
-        coro_socket_free_recv(response);
-    } else {
-        printf("[API] Failed to receive: %s\n", turbo_strerror(r));
-    }
-
-    coro_socket_destroy(client);
+    out->count = 3;
+    snprintf(out->titles[0], sizeof(out->titles[0]), "Notes on the Analytical Engine");
+    snprintf(out->titles[1], sizeof(out->titles[1]), "On Bernoulli Numbers");
+    snprintf(out->titles[2], sizeof(out->titles[2]), "Translator's Notes");
+    printf("[Posts]    Done.\n");
 }
 
-static void fetch_comments_api(coro_t *co, void *arg) {
+/**
+ * @brief Simulate fetching comments (~60 ms network round-trip).
+ */
+static void fetch_comments(coro_t *co, void *arg) {
     (void)co;
-    comments_t *comments = (comments_t *)arg;
     coro_context_t *ctx = coro_context_current();
+    comments_t *out = (comments_t *)arg;
 
-    printf("[API] Fetching comments...\n");
+    printf("[Comments] Fetching...\n");
+    coro_sleep(ctx, 60);
 
-    coro_socket_t *client = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
-    coro_socket_set_timeout(client, 5000);
-
-    int r = coro_socket_connect(client, "api.example.com", 80);
-    if (r != 0) {
-        printf("[API] Failed to connect: %s\n", turbo_strerror(r));
-        coro_socket_destroy(client);
-        return;
-    }
-
-    const char *request = "GET /api/comments/123 HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
-    coro_socket_send(client, request, strlen(request));
-
-    char *response;
-    size_t len;
-    r = coro_socket_recv(client, &response, &len);
-    if (r == 0) {
-        /* Parse response (simplified) */
-        comments->count = 5;
-        fmt(comments->texts[0], sizeof(comments->texts[0]), "Great post!");
-        fmt(comments->texts[1], sizeof(comments->texts[1]), "Thanks for sharing");
-        printf("[API] Comments fetched: %d comments\n", comments->count);
-        coro_socket_free_recv(response);
-    } else {
-        printf("[API] Failed to receive: %s\n", turbo_strerror(r));
-    }
-
-    coro_socket_destroy(client);
+    out->count = 5;
+    snprintf(out->preview, sizeof(out->preview), "Brilliant work, as always.");
+    printf("[Comments] Done.\n");
 }
 
-/* ── Main dashboard coroutine ─────────────────────────────── */
+/* ── Dashboard orchestrator ───────────────────────────────── */
 
-static void fetch_dashboard_coro(coro_t *co, void *arg) {
+/**
+ * @brief Spawn all fetches concurrently, wait for all, then render.
+ *
+ * Wall time = max(80, 120, 60) ms = 120 ms — not 80+120+60 = 260 ms.
+ */
+static void fetch_dashboard(coro_t *co, void *arg) {
     (void)co;
     coro_context_t *ctx = (coro_context_t *)arg;
+    dashboard_t db = {0};
 
-    printf("=== Dashboard Fetch Example ===\n\n");
+    printf("=== Starting parallel fetch ===\n\n");
 
-    dashboard_t dashboard = {0};
+    coro_task_t *t_user     = coro_task_create(ctx, fetch_user,     &db.user);
+    coro_task_t *t_posts    = coro_task_create(ctx, fetch_posts,    &db.posts);
+    coro_task_t *t_comments = coro_task_create(ctx, fetch_comments, &db.comments);
 
-    /* Create lazy tasks for parallel fetching */
-    coro_task_t *user_task = coro_task_create(ctx, fetch_user_api, &dashboard.user);
-    coro_task_t *posts_task = coro_task_create(ctx, fetch_posts_api, &dashboard.posts);
-    coro_task_t *comments_task = coro_task_create(ctx, fetch_comments_api, &dashboard.comments);
+    /* Start all three concurrently, then suspend until all finish. */
+    coro_task_start(t_user);
+    coro_task_start(t_posts);
+    coro_task_start(t_comments);
 
-    /* Start all tasks concurrently */
-    printf("Starting parallel API requests...\n\n");
-    coro_task_start(user_task);
-    coro_task_start(posts_task);
-    coro_task_start(comments_task);
+    coro_when_all(ctx, (coro_task_t *[]){t_user, t_posts, t_comments}, 3);
 
-    /* Wait for all to complete */
-    printf("Waiting for all API calls to complete...\n\n");
-    coro_when_all(ctx, (coro_task_t *[]){user_task, posts_task, comments_task}, 3);
-
-    /* Render dashboard */
-    printf("\n=== Dashboard Ready ===\n");
-    printf("User: %s (ID: %d, Premium: %s)\n",
-           dashboard.user.name,
-           dashboard.user.id,
-           dashboard.user.is_premium ? "Yes" : "No");
-
-    printf("\nPosts (%d):\n", dashboard.posts.count);
-    for (int i = 0; i < dashboard.posts.count; i++) {
-        printf("  - %s\n", dashboard.posts.titles[i]);
-    }
-
-    printf("\nComments (%d):\n", dashboard.comments.count);
-    for (int i = 0; i < dashboard.comments.count && i < 2; i++) {
-        printf("  - %s\n", dashboard.comments.texts[i]);
-    }
-    if (dashboard.comments.count > 2) {
-        printf("  ... and %d more\n", dashboard.comments.count - 2);
-    }
-
-    printf("\n=== Dashboard Complete ===\n");
+    /* All tasks done: render. */
+    printf("\n=== Dashboard ===\n");
+    printf("User   : %s (id=%d, premium=%s)\n",
+           db.user.name, db.user.id, db.user.is_premium ? "yes" : "no");
+    printf("Posts  : %d total\n", db.posts.count);
+    for (int i = 0; i < db.posts.count; i++)
+        printf("         - %s\n", db.posts.titles[i]);
+    printf("Comments: %d total — \"%s\"\n", db.comments.count, db.comments.preview);
 }
 
 /* ── Entry point ──────────────────────────────────────────── */
 
 int main(void) {
     coro_context_t *ctx = coro_context_create(NULL);
-    if (!ctx) {
-        fprintf(stderr, "Failed to create context\n");
-        return 1;
-    }
-
-    coro_context_spawn(ctx, fetch_dashboard_coro, ctx);
+    coro_context_spawn(ctx, fetch_dashboard, ctx);
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
-
     coro_context_destroy(ctx);
     return 0;
 }

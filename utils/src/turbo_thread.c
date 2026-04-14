@@ -62,11 +62,6 @@ void turbo_mutex_lock(turbo_mutex_t *mutex) {
 
 void turbo_mutex_unlock(turbo_mutex_t *mutex) {
   if (mutex == NULL || *mutex == NULL) return;
-  // Debug: catch invalid mutex pointer
-  if ((uintptr_t)*mutex == 0xFFFFFFFFFFFFFFFF || (uintptr_t)*mutex == 0xCDCDCDCDCDCDCDCD) {
-    // Invalid mutex pointer detected!
-    return;
-  }
   ReleaseSRWLockExclusive((PSRWLOCK)*mutex);
 }
 
@@ -460,68 +455,39 @@ static int get_cpu_count(void) {
 #endif
 }
 
+static int worker_should_run(void *arg) {
+  worker_context_t *ctx = (worker_context_t *)arg;
+  return !atomic_load(&ctx->pool->shutdown);
+}
+
+static void worker_process_batch(void *arg, uint64_t first_seq, uint64_t last_seq) {
+  worker_context_t *ctx = (worker_context_t *)arg;
+  turbo_threadpool_t *pool = ctx->pool;
+
+  for (uint64_t seq = first_seq; seq <= last_seq; ++seq) {
+    disruptor_cursor_t read_cursor;
+    read_cursor.sequence = seq;
+
+    task_node_t **task_ptr = (task_node_t **)disruptor_show_entry(pool->disruptor, &read_cursor);
+    if (!task_ptr || !*task_ptr) continue;
+
+    task_node_t *task = *task_ptr;
+
+    turbo_threadpool_release_queue_slot(pool);
+    atomic_fetch_add(&pool->tasks_started, 1);
+    task->fn(task->arg);
+    object_pool_free(pool->task_pool, task);
+    *task_ptr = NULL;
+    turbo_threadpool_finish_task(pool);
+  }
+}
+
 static void worker_entry(void *arg) {
   worker_context_t *ctx = (worker_context_t *)arg;
   turbo_threadpool_t *pool = ctx->pool;
 
-  // Register as consumer
-  uint64_t next_sequence = disruptor_consumer_register(pool->disruptor, &ctx->consumer);
-
-  // Worker loop
-  while (!atomic_load(&pool->shutdown)) {
-    disruptor_cursor_t cursor;
-    cursor.sequence = next_sequence;
-
-    // Try non-blocking first to avoid spin
-    if (!disruptor_consumer_wait_for_nonblocking(pool->disruptor, &cursor)) {
-      turbo_sleep_ms(1);
-      continue;
-    }
-
-    // Process all available tasks in batch
-    for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
-      disruptor_cursor_t read_cursor;
-      read_cursor.sequence = seq;
-
-      // Get task pointer from disruptor
-      task_node_t **task_ptr = (task_node_t **)disruptor_show_entry(pool->disruptor, &read_cursor);
-      if (!task_ptr || !*task_ptr) continue;
-
-      task_node_t *task = *task_ptr;
-
-      turbo_threadpool_release_queue_slot(pool);
-      atomic_fetch_add(&pool->tasks_started, 1);
-      task->fn(task->arg);
-      object_pool_free(pool->task_pool, task);
-      *task_ptr = NULL;
-      turbo_threadpool_finish_task(pool);
-    }
-
-    disruptor_consumer_release_entry(pool->disruptor, &ctx->consumer, &cursor);
-    next_sequence = cursor.sequence + 1;
-  }
-
-  disruptor_cursor_t cursor;
-  cursor.sequence = next_sequence;
-  if (disruptor_consumer_wait_for_nonblocking(pool->disruptor, &cursor)) {
-    for (uint64_t seq = next_sequence; seq <= cursor.sequence; ++seq) {
-      disruptor_cursor_t read_cursor;
-      read_cursor.sequence = seq;
-      task_node_t **task_ptr = (task_node_t **)disruptor_show_entry(pool->disruptor, &read_cursor);
-      if (task_ptr && *task_ptr) {
-        task_node_t *task = *task_ptr;
-        turbo_threadpool_release_queue_slot(pool);
-        atomic_fetch_add(&pool->tasks_started, 1);
-        task->fn(task->arg);
-        object_pool_free(pool->task_pool, task);
-        *task_ptr = NULL;
-        turbo_threadpool_finish_task(pool);
-      }
-    }
-    disruptor_consumer_release_entry(pool->disruptor, &ctx->consumer, &cursor);
-  }
-
-  disruptor_consumer_unregister(pool->disruptor, &ctx->consumer);
+  disruptor_consumer_run(pool->disruptor, &ctx->consumer,
+                         worker_should_run, worker_process_batch, ctx);
   turbo_threadpool_notify_progress(pool);
 }
 

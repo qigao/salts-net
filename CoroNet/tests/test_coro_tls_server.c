@@ -1,3 +1,13 @@
+/**
+ * @file test_coro_tls_server.c
+ * @brief Unit tests: TLS server hands a fully-negotiated socket to its handler.
+ *
+ * Pattern mirrors test_coro_ws_server.c:
+ *   - deadline-based event loop drain (no magic iteration counters)
+ *   - done-predicate function decouples polling from assertions
+ *   - platform env helpers come from tls_test_support.h (no local duplicates)
+ */
+
 #include "CoroNet.h"
 #include "turbo_coro.h"
 #include "tinytest.h"
@@ -5,52 +15,62 @@
 
 #include <string.h>
 
-static int g_tls_server_handler_rc = TURBO_EBUSY;
-static int g_tls_server_client_rc = TURBO_EBUSY;
-static int g_tls_server_handler_hits = 0;
-static char g_tls_server_client_buf[128];
-
-#ifdef _WIN32
-static int tls_test_set_process_env_only(const char *ca_file,
-                                         const char *cert_file,
-                                         const char *key_file) {
-  if (!ca_file || !cert_file || !key_file) {
-    return -1;
-  }
-
-  if (!SetEnvironmentVariableA("TURBONET_TLS_CA_FILE", ca_file)) {
-    return -1;
-  }
-  if (!SetEnvironmentVariableA("TURBONET_TLS_CA_PATH", NULL)) {
-    return -1;
-  }
-  if (!SetEnvironmentVariableA("TURBONET_TLS_CERT_FILE", cert_file)) {
-    return -1;
-  }
-  if (!SetEnvironmentVariableA("TURBONET_TLS_KEY_FILE", key_file)) {
-    return -1;
-  }
-  return 0;
-}
-
-static void tls_test_clear_process_env_only(void) {
-  SetEnvironmentVariableA("TURBONET_TLS_CA_FILE", NULL);
-  SetEnvironmentVariableA("TURBONET_TLS_CA_PATH", NULL);
-  SetEnvironmentVariableA("TURBONET_TLS_CERT_FILE", NULL);
-  SetEnvironmentVariableA("TURBONET_TLS_KEY_FILE", NULL);
-}
-#endif
+/* ── Shared test state ────────────────────────────────────── */
 
 typedef struct tls_server_state_s {
   coro_context_t *ctx;
-  coro_socket_t *server;
-  unsigned short port;
+  coro_socket_t  *server;
+  unsigned short  port;
 } tls_server_state_t;
 
+static int  g_tls_server_handler_rc   = TURBO_EBUSY;
+static int  g_tls_server_client_rc    = TURBO_EBUSY;
+static int  g_tls_server_handler_hits = 0;
+static char g_tls_server_client_buf[128];
+
+static void tls_server_reset_globals(void) {
+  g_tls_server_handler_rc   = TURBO_EBUSY;
+  g_tls_server_client_rc    = TURBO_EBUSY;
+  g_tls_server_handler_hits = 0;
+  memset(g_tls_server_client_buf, 0, sizeof(g_tls_server_client_buf));
+}
+
+/* ── Done predicate ───────────────────────────────────────── */
+
+/** Returns 1 when both handler and client have recorded a result. */
+static int tls_server_case_done(void *arg) {
+  (void)arg;
+  return g_tls_server_client_rc  != TURBO_EBUSY &&
+         g_tls_server_handler_rc != TURBO_EBUSY;
+}
+
+/* ── Event loop drain ─────────────────────────────────────── */
+
+static void tls_server_run_until(coro_context_t *ctx, uint64_t timeout_ms,
+                                 int (*done)(void *), void *arg) {
+  uint64_t deadline;
+
+  if (!ctx || !done) return;
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (!done(arg) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+  }
+}
+
+/* ── Handler & client coroutines ──────────────────────────── */
+
+/**
+ * @brief Server-side connection handler.
+ *
+ * Sends a fixed banner then returns.  The recv timeout guards against
+ * a client that never connects (stale fd = infinite hang without it).
+ */
 static void tls_server_banner_handler(coro_socket_t *client, void *arg) {
   static const char banner[] = "server-ready";
   (void)arg;
 
+  coro_socket_set_timeout(client, 5000); /* match client timeout */
   g_tls_server_handler_hits++;
   g_tls_server_handler_rc = coro_socket_send(client, banner, sizeof(banner) - 1);
 }
@@ -58,9 +78,9 @@ static void tls_server_banner_handler(coro_socket_t *client, void *arg) {
 static void tls_server_client_task(coro_t *co, void *arg) {
   tls_server_state_t *state = (tls_server_state_t *)arg;
   coro_socket_t *client;
-  char *data = NULL;
-  size_t len = 0;
-  int rc;
+  char  *data = NULL;
+  size_t len  = 0;
+  int    rc;
   (void)co;
 
   client = coro_socket_create(state->ctx, CORO_SOCKET_TLS);
@@ -80,30 +100,58 @@ static void tls_server_client_task(coro_t *co, void *arg) {
     g_tls_server_client_buf[len] = '\0';
   }
 
-  if (data) {
-    coro_socket_free_recv(data);
-  }
+  if (data) coro_socket_free_recv(data);
 
   g_tls_server_client_rc = rc;
   coro_socket_destroy(client);
 }
 
+/* ── Test runner ──────────────────────────────────────────── */
+
+#ifdef _WIN32
+static int tls_test_set_process_env_only(const char *ca_file,
+                                         const char *cert_file,
+                                         const char *key_file) {
+  if (!ca_file || !cert_file || !key_file) return -1;
+  if (!SetEnvironmentVariableA("TURBONET_TLS_CA_FILE", ca_file)) return -1;
+  if (!SetEnvironmentVariableA("TURBONET_TLS_CA_PATH", NULL)) return -1;
+  if (!SetEnvironmentVariableA("TURBONET_TLS_CERT_FILE", cert_file)) return -1;
+  if (!SetEnvironmentVariableA("TURBONET_TLS_KEY_FILE", key_file)) return -1;
+  return 0;
+}
+
+static void tls_test_clear_process_env_only(void) {
+  SetEnvironmentVariableA("TURBONET_TLS_CA_FILE", NULL);
+  SetEnvironmentVariableA("TURBONET_TLS_CA_PATH", NULL);
+  SetEnvironmentVariableA("TURBONET_TLS_CERT_FILE", NULL);
+  SetEnvironmentVariableA("TURBONET_TLS_KEY_FILE", NULL);
+}
+#endif
+
+/**
+ * @param use_process_env_only  Windows-only: 1 = use SetEnvironmentVariableA
+ *                              (process-level), 0 = use _putenv_s (CRT-level).
+ */
 static void tls_server_run_case(int use_process_env_only) {
-  char ca_file[512] = {0};
+  char ca_file[512]   = {0};
   char cert_file[512] = {0};
-  char key_file[512] = {0};
+  char key_file[512]  = {0};
   tls_server_state_t state;
   test_socket_t probe = TEST_INVALID_SOCKET;
-  int limit = 4000;
+  uint64_t deadline;
 
+  /* Reserve an ephemeral port, then close the probe so CoroNet can bind it. */
   check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
+
+  /* Write cert material to temp files and point env vars at them. */
   check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
   check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
 
 #ifdef _WIN32
   if (use_process_env_only) {
+    /* Process-level env (SetEnvironmentVariableA) — separate Win32 code path. */
     check_int_eq(tls_test_set_process_env_only(ca_file, cert_file, key_file), 0);
   } else {
     check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
@@ -115,14 +163,12 @@ static void tls_server_run_case(int use_process_env_only) {
   check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
 #endif
 
-  state.ctx = coro_context_create(NULL);
+  /* Create context and server socket. */
+  state.ctx    = coro_context_create(NULL);
   state.server = NULL;
   check(state.ctx != NULL);
 
-  g_tls_server_handler_rc = TURBO_EBUSY;
-  g_tls_server_client_rc = TURBO_EBUSY;
-  g_tls_server_handler_hits = 0;
-  memset(g_tls_server_client_buf, 0, sizeof(g_tls_server_client_buf));
+  tls_server_reset_globals();
 
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
   check(state.server != NULL);
@@ -130,25 +176,26 @@ static void tls_server_run_case(int use_process_env_only) {
                                      tls_server_banner_handler, NULL), 0);
   check_int_eq(coro_context_spawn(state.ctx, tls_server_client_task, &state), 0);
 
-  while ((g_tls_server_client_rc == TURBO_EBUSY ||
-          g_tls_server_handler_rc == TURBO_EBUSY) &&
-         limit-- > 0) {
-    coro_context_run(state.ctx, TURBO_RUN_ONCE);
-  }
+  /* Drain until both sides have finished or we time out. */
+  tls_server_run_until(state.ctx, 5000, tls_server_case_done, NULL);
 
+  /* Assertions. */
   check_int_eq(g_tls_server_handler_hits, 1);
-  check_int_eq(g_tls_server_handler_rc, 0);
-  check_int_eq(g_tls_server_client_rc, 0);
+  check_int_eq(g_tls_server_handler_rc,   0);
+  check_int_eq(g_tls_server_client_rc,    0);
   check_str_eq(g_tls_server_client_buf, "server-ready");
 
+  /* Teardown: destroy server, drain remaining handles, then release context. */
   coro_socket_destroy(state.server);
 
-  limit = 500;
-  while (coro_context_alive(state.ctx) && limit-- > 0) {
+  deadline = turbo_monotonic_ms() + 1000;
+  while (coro_context_alive(state.ctx) && turbo_monotonic_ms() < deadline) {
     coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
   }
 
   coro_context_destroy(state.ctx);
+
+  /* Clear env and temp files. */
 #ifdef _WIN32
   if (use_process_env_only) {
     tls_test_clear_process_env_only();
@@ -160,6 +207,8 @@ static void tls_server_run_case(int use_process_env_only) {
   tls_test_remove_file(cert_file);
   tls_test_remove_file(key_file);
 }
+
+/* ── Test specs ───────────────────────────────────────────── */
 
 spec("Coro TLS Server") {
   it("should hand handlers a fully-open TLS socket") {

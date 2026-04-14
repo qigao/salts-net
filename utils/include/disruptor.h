@@ -77,6 +77,29 @@ CXX_C_API void disruptor_consumer_release_entry(disruptor_t *disruptor,
                                                 const disruptor_consumer_t *consumer,
                                                 const disruptor_cursor_t *cursor);
 
+/**
+ * @brief Callback: return non-zero while the consumer should keep running.
+ */
+typedef int (*disruptor_should_run_fn)(void *ctx);
+
+/**
+ * @brief Callback: process entries in range [first_seq, last_seq].
+ */
+typedef void (*disruptor_batch_fn)(void *ctx, uint64_t first_seq, uint64_t last_seq);
+
+/**
+ * @brief Generic consumer loop.
+ *
+ * Handles register, poll-wait-process-release loop, shutdown drain, and
+ * unregister.  Callers only supply two callbacks: whether to keep running,
+ * and how to process a batch of entries.
+ */
+CXX_C_API void disruptor_consumer_run(disruptor_t *disruptor,
+                                      disruptor_consumer_t *consumer,
+                                      disruptor_should_run_fn should_run,
+                                      disruptor_batch_fn process_batch,
+                                      void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

@@ -30,7 +30,7 @@ void* pool_alloc(MemoryPool *pool, size_t size) {
         return NULL;  // Pool exhausted
     }
     
-    void *ptr = pool->pool + pool->used;
+    void *ptr = (char *)pool->pool + pool->used;
     pool->used += size;
     pool->alloc_count++;
     

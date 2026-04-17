@@ -39,11 +39,56 @@ add_executable(before_after ${BEFORE_AFTER_SOURCES})
 set(GROUP_SUITE_SOURCES examples/group_suite_example.c tinytest.h)
 add_executable(group_suite_example ${GROUP_SUITE_SOURCES})
 
+set(REGRESSION_RUNTIME_SOURCES regression_runtime.c tinytest.h)
+add_executable(tinytest_regression_runtime ${REGRESSION_RUNTIME_SOURCES})
+add_test(NAME tinytest_regression_runtime COMMAND tinytest_regression_runtime)
+
+set(FOCUS_OUTPUT_SOURCES focus_output_cases.c tinytest.h)
+add_executable(tinytest_focus_output ${FOCUS_OUTPUT_SOURCES})
+
+set(FILTER_OUTPUT_SOURCES filter_output_cases.c tinytest.h)
+add_executable(tinytest_filter_output ${FILTER_OUTPUT_SOURCES})
+
+set(JUNIT_COLOR_SOURCES junit_color_cases.c tinytest.h)
+add_executable(tinytest_junit_color ${JUNIT_COLOR_SOURCES})
+
+add_test(
+  NAME tinytest_focus_tap
+  COMMAND ${CMAKE_COMMAND}
+          -DTEST_EXE=$<TARGET_FILE:tinytest_focus_output>
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_focus_tap.cmake)
+
+add_test(
+  NAME tinytest_focus_console
+  COMMAND ${CMAKE_COMMAND}
+          -DTEST_EXE=$<TARGET_FILE:tinytest_focus_output>
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_focus_console.cmake)
+
+add_test(
+  NAME tinytest_filter_junit
+  COMMAND ${CMAKE_COMMAND}
+          -DTEST_EXE=$<TARGET_FILE:tinytest_filter_output>
+          -DJUNIT_FILE=${CMAKE_CURRENT_BINARY_DIR}/tinytest-filter.junit.xml
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_filter_junit.cmake)
+
+add_test(
+  NAME tinytest_junit_color
+  COMMAND ${CMAKE_COMMAND}
+          -DTEST_EXE=$<TARGET_FILE:tinytest_junit_color>
+          -DJUNIT_FILE=${CMAKE_CURRENT_BINARY_DIR}/tinytest-color.junit.xml
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_junit_color.cmake)
+
 if(CMAKE_CXX_COMPILER OR CMAKE_CXX_COMPILER_ID)
   set(EXAMPLE_CPP_SOURCES example.cpp tinytest.h)
   add_executable(example_cpp_test ${EXAMPLE_CPP_SOURCES})
   set_target_properties(example_cpp_test PROPERTIES CXX_STANDARD 17
                                                     CXX_STANDARD_REQUIRED ON)
+
+  set(REGRESSION_CPP_SOURCES regression_cpp.cpp tinytest.h)
+  add_executable(tinytest_regression_cpp ${REGRESSION_CPP_SOURCES})
+  set_target_properties(tinytest_regression_cpp PROPERTIES CXX_STANDARD 17
+                                                           CXX_STANDARD_REQUIRED ON)
+  add_test(NAME tinytest_regression_cpp COMMAND tinytest_regression_cpp)
 endif()
 
 # JUnit to HTML Dashboard Tool
@@ -70,10 +115,18 @@ set(TINYTEST_TARGETS
     math_test
     before_after
     group_suite_example
+    tinytest_regression_runtime
+    tinytest_focus_output
+    tinytest_filter_output
+    tinytest_junit_color
     junit_to_html)
 
 if(TARGET example_cpp_test)
   list(APPEND TINYTEST_TARGETS example_cpp_test)
+endif()
+
+if(TARGET tinytest_regression_cpp)
+  list(APPEND TINYTEST_TARGETS tinytest_regression_cpp)
 endif()
 
 set_target_properties(${TINYTEST_TARGETS} PROPERTIES FOLDER "tinytest")

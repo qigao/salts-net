@@ -386,9 +386,7 @@ int coro_socket_listen_on(coro_socket_t *server, const char *host, int port,
   server->handler = handler;
   server->handler_arg = arg;
 
-  turbo_transport_t transport = server->transport;
-  TLOG_DEBUG("coro_socket_listen_on: transport={} host={}:{} ops={}",
-             (int)transport, host, port, (const void *)server->ops);
+  turbo_transport_t transport = server->transport; 
 
   switch (transport) {
   case TURBO_TCP:

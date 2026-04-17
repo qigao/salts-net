@@ -264,6 +264,7 @@ static int udp_client_bind(coro_socket_t *s, const struct sockaddr *addr) {
     return TURBO_ENOTSUP;
   }
 
+  turbo_datagram_set_reuse_port(s->handle.datagram, s->reuse_port);
   rc = turbo_datagram_bind(s->handle.datagram, host, port);
   if (rc == 0) {
     turbo_datagram_set_user_data(s->handle.datagram, s);

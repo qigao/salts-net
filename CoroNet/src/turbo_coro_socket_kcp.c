@@ -256,6 +256,7 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     s->owns_handle = 1;
   }
 
+  turbo_kcp_set_reuse_port(s->handle.kcp, s->reuse_port);
   r = turbo_kcp_bind(s->handle.kcp, host, (int)port, on_kcp_recv);
   if (r == 0) {
     s->connected = 1;

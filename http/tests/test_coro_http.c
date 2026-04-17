@@ -8,6 +8,7 @@
 #include "tinytest.h"
 #include "http_client.h"
 #include "CoroNet/turbo_coro_internal.h"
+#include "CoroNet.h"
 #include <turbo_parser.h>
 #include <string.h>
 #include <turbo_coro.h>
@@ -52,6 +53,100 @@ static void stream_cb(const char *data, size_t len, void *ud) {
   s_stream_total += len;
 }
 
+typedef struct {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int accept_count;
+  int completed;
+  int assertions_ok;
+} local_http_test_state_t;
+
+static unsigned short s_local_http_port = 19160;
+
+static void fragmented_http_handler(coro_socket_t *client, void *arg) {
+  local_http_test_state_t *state = (local_http_test_state_t *)arg;
+  char *request = NULL;
+  size_t request_len = 0;
+  static const char *pieces[] = {
+      "HTTP/1.1 200 OK\r\nSet-Co",
+      "okie: local_cookie=ok; Path=/\r\nConnec",
+      "tion: close\r\nContent-Length: 2\r\n\r\nOK",
+  };
+
+  if (state) {
+    state->accept_count++;
+  }
+
+  if (coro_socket_recv(client, &request, &request_len) == 0 && request) {
+    coro_socket_free_recv(request);
+  }
+
+  for (size_t i = 0; i < sizeof(pieces) / sizeof(pieces[0]); i++) {
+    if (coro_socket_send(client, pieces[i], strlen(pieces[i])) != 0) {
+      break;
+    }
+    coro_sleep(coro_socket_get_context(client), 5);
+  }
+}
+
+static void local_http_client_coro(coro_t *co, void *arg) {
+  local_http_test_state_t *state = (local_http_test_state_t *)arg;
+  http_client_t *client = NULL;
+  http_cookie_jar_t *jar = NULL;
+  http_response_t *first = NULL;
+  http_response_t *second = NULL;
+  char base_url[128];
+  char *connection_header = NULL;
+
+  UNUSED(co);
+
+  fmt(base_url, sizeof(base_url), "http://127.0.0.1:{}", state->port);
+  client = http_client_create(base_url);
+  jar = http_cookie_jar_create();
+  if (!client || !jar) {
+    goto cleanup;
+  }
+
+  http_client_set_timeout(client, 2000);
+  http_client_set_cookie_jar(client, jar);
+
+  first = http_get(client, "/split");
+  second = http_get(client, "/split");
+  if (!first || !second) {
+    goto cleanup;
+  }
+
+  connection_header = http_response_get_header(first, "Connection");
+  if (first->status_code == 200 &&
+      second->status_code == 200 &&
+      first->error_code == HTTP_ERROR_NONE &&
+      second->error_code == HTTP_ERROR_NONE &&
+      connection_header != NULL &&
+      strcmp(connection_header, "close") == 0 &&
+      http_cookie_jar_get(jar, "local_cookie") != NULL &&
+      strcmp(http_cookie_jar_get(jar, "local_cookie"), "ok") == 0 &&
+      state->accept_count == 2) {
+    state->assertions_ok = 1;
+  }
+
+cleanup:
+  free(connection_header);
+  http_response_free(first);
+  http_response_free(second);
+  if (client) {
+    http_client_destroy(client);
+  }
+  if (jar) {
+    http_cookie_jar_destroy(jar);
+  }
+  if (state->server) {
+    coro_socket_destroy(state->server);
+    state->server = NULL;
+  }
+  state->completed = 1;
+}
+
 /* ── Logging setup ───────────────────────────────────────────────── */
 
 static int logger_initialized = 0;
@@ -73,7 +168,7 @@ static void setup_logging(void) {
  * ══════════════════════════════════════════════════════════════════════ */
 
 spec("coro http client") {
-  before() { setup_logging(); }
+  before_all() { setup_logging(); }
 
   /* ── Lifecycle ──────────────────────────────────────────────────── */
 
@@ -514,6 +609,31 @@ spec("coro http client") {
       check_int_ne(r->error_code, HTTP_ERROR_NONE);
       http_response_free(r);
       http_client_destroy(c);
+    }
+  }
+
+  describe("local transport") {
+    it("should preserve fragmented Set-Cookie headers and discard close connections from pool") {
+      local_http_test_state_t state = {0};
+
+      state.ctx = coro_context_create(NULL);
+      check_not_null(state.ctx);
+      state.port = s_local_http_port++;
+      state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
+      check_not_null(state.server);
+      check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+                                         fragmented_http_handler, &state), 0);
+
+      check_int_eq(coro_context_spawn(state.ctx, local_http_client_coro, &state), 0);
+      coro_context_run(state.ctx, TURBO_RUN_DEFAULT);
+      if (state.server) {
+        coro_socket_destroy(state.server);
+        state.server = NULL;
+      }
+      coro_context_destroy(state.ctx);
+
+      check_int_eq(state.completed, 1);
+      check_int_eq(state.assertions_ok, 1);
     }
   }
 

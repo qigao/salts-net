@@ -228,6 +228,11 @@ int turbo_datagram_bind(turbo_datagram_t *d, const char *host,
   return d->ops->init(d, host, port);
 }
 
+void turbo_datagram_set_reuse_port(turbo_datagram_t *d, int enable) {
+  if (!d) return;
+  d->reuse_port = enable ? 1 : 0;
+}
+
 int turbo_datagram_connect(turbo_datagram_t *d, const char *host,
                             unsigned short port) {
   if (!d) return TURBO_EINVAL;

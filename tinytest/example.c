@@ -17,7 +17,7 @@ suite("tinytest C Example") {
 
     static int a, b;
 
-    before() {
+    before_all() {
         a = 3;
         b = 3;
     }

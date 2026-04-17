@@ -27,6 +27,7 @@ struct turbo_kcp_s {
   int connected;
   int connecting;
   int closing;
+  int reuse_port;
 };
 
 static void kcp_record_error(coro_context_t *ctx, int err) {
@@ -309,12 +310,13 @@ int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
     turbo_datagram_kind_t kind = (local_addr.ss_family == AF_INET6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
     kcp->udp = turbo_datagram_create(kcp->ctx, kind);
     if (!kcp->udp) return kcp_last_error_or(kcp->ctx, TURBO_EIO);
-    
-    r = turbo_datagram_bind(kcp->udp, host, (unsigned short)port);
-    if (r != 0) return r;
-    
+
     turbo_datagram_set_user_data(kcp->udp, kcp);
   }
+
+  turbo_datagram_set_reuse_port(kcp->udp, kcp->reuse_port);
+  r = turbo_datagram_bind(kcp->udp, host, (unsigned short)port);
+  if (r != 0) return r;
   
   r = turbo_datagram_recv_start(kcp->udp, on_udp_recv);
   if (r != 0) return r;
@@ -388,6 +390,14 @@ void turbo_kcp_close(turbo_kcp_t* kcp) {
   kcp->connected = 0;
   if (kcp->update_timer) turbo_timer_stop(kcp->update_timer);
   if (kcp->udp) turbo_datagram_recv_stop(kcp->udp);
+}
+
+void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable) {
+  if (!kcp) return;
+  kcp->reuse_port = enable ? 1 : 0;
+  if (kcp->udp) {
+    turbo_datagram_set_reuse_port(kcp->udp, kcp->reuse_port);
+  }
 }
 
 void turbo_kcp_set_user_data(turbo_kcp_t* kcp, void* user_data) { kcp->user_data = user_data; }

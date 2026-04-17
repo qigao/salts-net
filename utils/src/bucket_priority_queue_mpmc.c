@@ -15,7 +15,6 @@ typedef struct {
   disruptor_t *disruptor;
   disruptor_consumer_t shared_consumer;
   uint64_t next_read_sequence;
-  ATOMIC_UINT32_T pop_lock;
 } bucket_priority_bucket_mpmc_t;
 
 struct bucket_priority_queue_mpmc_impl_s {
@@ -27,6 +26,41 @@ struct bucket_priority_queue_mpmc_impl_s {
 
 static bool bucket_priority_mpmc_valid(bucket_priority_mpmc_t priority) {
   return priority >= BUCKET_PRIORITY_MPMC_LOW && priority < BUCKET_PRIORITY_MPMC_COUNT;
+}
+
+static bool bucket_priority_queue_mpmc_pop_locked(bucket_priority_queue_mpmc_impl_t *impl,
+                                                  bucket_priority_mpmc_value_t *out_value) {
+  for (int i = BUCKET_PRIORITY_MPMC_CRITICAL; i >= BUCKET_PRIORITY_MPMC_LOW; --i) {
+    bucket_priority_bucket_mpmc_t *bucket = &impl->buckets[i];
+    disruptor_t *disruptor = bucket->disruptor;
+    uint64_t seq = bucket->next_read_sequence;
+    disruptor_cursor_t cursor = {.sequence = seq};
+
+    if (disruptor == NULL) {
+      continue;
+    }
+
+    if (disruptor_consumer_wait_for_nonblocking(disruptor, &cursor) != 1) {
+      continue;
+    }
+
+    {
+      disruptor_cursor_t read_cursor = {.sequence = seq};
+      const bucket_priority_mpmc_value_t *entry =
+          (const bucket_priority_mpmc_value_t *)disruptor_show_entry(disruptor, &read_cursor);
+
+      if (entry == NULL) {
+        continue;
+      }
+
+      *out_value = *entry;
+      bucket->next_read_sequence = seq + 1;
+      disruptor_consumer_release_entry(disruptor, &bucket->shared_consumer, &read_cursor);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool bucket_priority_queue_mpmc_init(bucket_priority_queue_mpmc_t *queue,
@@ -69,7 +103,6 @@ bool bucket_priority_queue_mpmc_init(bucket_priority_queue_mpmc_t *queue,
     uint64_t initial_seq =
         disruptor_consumer_register(impl->buckets[i].disruptor, &impl->buckets[i].shared_consumer);
     impl->buckets[i].next_read_sequence = initial_seq;
-    atomic_store(&impl->buckets[i].pop_lock, 0);
   }
 
   turbo_mutex_init(&impl->notify_mutex);
@@ -177,42 +210,12 @@ bool bucket_priority_queue_mpmc_try_pop(
     return false;
   }
 
-  // Poll from highest priority first (CRITICAL -> LOW)
-  for (int i = BUCKET_PRIORITY_MPMC_CRITICAL; i >= BUCKET_PRIORITY_MPMC_LOW; --i) {
-    bucket_priority_bucket_mpmc_t *bucket = &impl->buckets[i];
-
-    // Attempt to acquire pop spinlock
-    uint32_t expected = 0;
-    if (atomic_compare_exchange_strong(&bucket->pop_lock, &expected, 1)) {
-      disruptor_t *disruptor = bucket->disruptor;
-      uint64_t seq = bucket->next_read_sequence;
-      disruptor_cursor_t cursor = {.sequence = seq};
-
-      if (disruptor_consumer_wait_for_nonblocking(disruptor, &cursor) == 1) {
-        // Data available at seq
-        disruptor_cursor_t read_cursor = {.sequence = seq};
-        const bucket_priority_mpmc_value_t *entry =
-            (const bucket_priority_mpmc_value_t *)disruptor_show_entry(disruptor, &read_cursor);
-
-        *out_value = *entry;
-
-        // Update local tracking
-        bucket->next_read_sequence = seq + 1;
-
-        // Release entry to disruptor
-        disruptor_consumer_release_entry(disruptor, &bucket->shared_consumer, &read_cursor);
-
-        // Unlock
-        atomic_store(&bucket->pop_lock, 0);
-        return true;
-      }
-      
-      // Unlock
-      atomic_store(&bucket->pop_lock, 0);
-    }
+  turbo_mutex_lock(&impl->notify_mutex);
+  {
+    bool popped = bucket_priority_queue_mpmc_pop_locked(impl, out_value);
+    turbo_mutex_unlock(&impl->notify_mutex);
+    return popped;
   }
-
-  return false;
 }
 
 bool bucket_priority_queue_mpmc_pop_blocking(
@@ -229,20 +232,14 @@ bool bucket_priority_queue_mpmc_pop_blocking(
     return false;
   }
 
-  /* Fast path: try without blocking */
-  if (bucket_priority_queue_mpmc_try_pop(queue, out_value)) {
-    return true;
-  }
-
-  /* Slow path: wait on condvar with timeout */
   uint64_t timeout_ns = (uint64_t)timeout_ms * 1000000ULL;
   turbo_mutex_lock(&impl->notify_mutex);
-  while (!bucket_priority_queue_mpmc_try_pop(queue, out_value)) {
+  while (!bucket_priority_queue_mpmc_pop_locked(impl, out_value)) {
     int rc = turbo_cond_timedwait(&impl->notify_cond, &impl->notify_mutex, timeout_ns);
     if (rc != 0) {
-      /* Timed out — one final attempt before giving up */
+      bool popped = bucket_priority_queue_mpmc_pop_locked(impl, out_value);
       turbo_mutex_unlock(&impl->notify_mutex);
-      return bucket_priority_queue_mpmc_try_pop(queue, out_value);
+      return popped;
     }
   }
   turbo_mutex_unlock(&impl->notify_mutex);

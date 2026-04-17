@@ -641,7 +641,7 @@ done:
 /* ── Test specs ───────────────────────────────────────────── */
 
 spec("coro_pool") {
-  before() {
+  before_all() {
     setup_logging();
   }
 

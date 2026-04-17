@@ -100,7 +100,7 @@ bool bucket_priority_queue_spsc_init(bucket_priority_queue_spsc_t *queue,
   memset(queue, 0, sizeof(*queue));
 
   if (capacity_per_bucket == 0) {
-    return true;
+    capacity_per_bucket = BUCKET_MIN_CAPACITY;
   }
 
   for (size_t p = 0; p < BUCKET_PRIORITY_SPSC_COUNT; ++p) {
@@ -164,11 +164,8 @@ bool bucket_priority_queue_spsc_push(bucket_priority_queue_spsc_t *queue,
 
   bucket_priority_bucket_spsc_t *bucket = &queue->buckets[(size_t)priority];
 
-  // Lazy init: allocate on first push if capacity is 0
-  if (bucket->capacity_entries == 0) {
-    if (!bucket_reserve_entries_spsc(bucket, BUCKET_MIN_CAPACITY)) {
-      return false;
-    }
+  if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+    return false;
   }
 
   uint8_t *write_ptr = ring_spsc_write_acquire(&bucket->ring, BUCKET_ENTRY_SIZE);
@@ -191,6 +188,9 @@ bool bucket_priority_queue_spsc_pop(bucket_priority_queue_spsc_t *queue,
   // Poll from highest priority first (CRITICAL -> LOW)
   for (int p = BUCKET_PRIORITY_SPSC_CRITICAL; p >= BUCKET_PRIORITY_SPSC_LOW; --p) {
     bucket_priority_bucket_spsc_t *bucket = &queue->buckets[p];
+    if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+      continue;
+    }
 
     size_t available = 0;
     uint8_t *read_ptr = ring_spsc_read_acquire(&bucket->ring, &available);
@@ -214,11 +214,12 @@ bool bucket_priority_queue_spsc_peek(const bucket_priority_queue_spsc_t *queue,
   // Poll from highest priority first
   for (int p = BUCKET_PRIORITY_SPSC_CRITICAL; p >= BUCKET_PRIORITY_SPSC_LOW; --p) {
     const bucket_priority_bucket_spsc_t *bucket = &queue->buckets[p];
+    if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+      continue;
+    }
 
     size_t available = 0;
-    // Create a copy to peek without modifying
-    ring_spsc_t ring_copy = bucket->ring;
-    uint8_t *read_ptr = ring_spsc_read_acquire(&ring_copy, &available);
+    uint8_t *read_ptr = ring_spsc_read_acquire((ring_spsc_t *)&bucket->ring, &available);
 
     if (read_ptr != NULL && available >= BUCKET_ENTRY_SIZE) {
       memcpy(out_value, read_ptr, BUCKET_ENTRY_SIZE);
@@ -241,6 +242,9 @@ size_t bucket_priority_queue_spsc_pop_batch(bucket_priority_queue_spsc_t *queue,
   // Poll from highest priority first
   for (int p = BUCKET_PRIORITY_SPSC_CRITICAL; p >= BUCKET_PRIORITY_SPSC_LOW && popped < max_items; --p) {
     bucket_priority_bucket_spsc_t *bucket = &queue->buckets[p];
+    if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+      continue;
+    }
 
     while (popped < max_items) {
       size_t available = 0;
@@ -269,7 +273,11 @@ bool bucket_priority_queue_spsc_empty(const bucket_priority_queue_spsc_t *queue)
   }
 
   for (size_t p = 0; p < BUCKET_PRIORITY_SPSC_COUNT; ++p) {
-    if (ring_spsc_read_available(&queue->buckets[p].ring) >= BUCKET_ENTRY_SIZE) {
+    const bucket_priority_bucket_spsc_t *bucket = &queue->buckets[p];
+    if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+      continue;
+    }
+    if (ring_spsc_read_available(&bucket->ring) >= BUCKET_ENTRY_SIZE) {
       return false;
     }
   }
@@ -284,17 +292,28 @@ size_t bucket_priority_queue_spsc_size(const bucket_priority_queue_spsc_t *queue
   }
 
   for (size_t p = 0; p < BUCKET_PRIORITY_SPSC_COUNT; ++p) {
-    total += ring_spsc_read_available(&queue->buckets[p].ring) / BUCKET_ENTRY_SIZE;
+    const bucket_priority_bucket_spsc_t *bucket = &queue->buckets[p];
+    if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+      continue;
+    }
+    total += ring_spsc_read_available(&bucket->ring) / BUCKET_ENTRY_SIZE;
   }
   return total;
 }
 
 size_t bucket_priority_queue_spsc_size_at(const bucket_priority_queue_spsc_t *queue,
                                           bucket_priority_spsc_t priority) {
+  const bucket_priority_bucket_spsc_t *bucket;
+
   if (queue == NULL || !bucket_priority_spsc_valid(priority)) {
     return 0;
   }
-  return ring_spsc_read_available(&queue->buckets[(size_t)priority].ring) / BUCKET_ENTRY_SIZE;
+
+  bucket = &queue->buckets[(size_t)priority];
+  if (bucket->storage == NULL || bucket->capacity_entries == 0) {
+    return 0;
+  }
+  return ring_spsc_read_available(&bucket->ring) / BUCKET_ENTRY_SIZE;
 }
 
 size_t bucket_priority_queue_spsc_capacity_at(const bucket_priority_queue_spsc_t *queue,

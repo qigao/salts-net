@@ -338,6 +338,12 @@ spec("request_parsing") {
         check_int_eq(iris_app_route_uses_stream(iris_app_default(), &arena, NULL), -1);
     }
 
+    it("should expose zero body read error by default") {
+        Req req = {0};
+        check_int_eq(req_body_read_error(&req), 0);
+        check_int_eq(req_body_read_error(NULL), 0);
+    }
+
     it("should parse query with special chars") {
         request_t query = {0};
         parse_query(&arena, "name=john-doe&email=test%40example.com", &query);

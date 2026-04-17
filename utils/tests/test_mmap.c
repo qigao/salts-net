@@ -15,7 +15,7 @@ static const char *test_data =
 
 spec("MMAP Tests") {
 
-  before() {
+  before_all() {
     // Create test file
     turbo_fs_get_tmpdir(test_file_path, sizeof(test_file_path) - 32);
     strcat(test_file_path, "/turbo_mmap_test.txt");
@@ -25,7 +25,7 @@ spec("MMAP Tests") {
     check_int_eq(err, 0);
   }
 
-  after() { turbo_fs_unlink(test_file_path); }
+  after_all() { turbo_fs_unlink(test_file_path); }
 
   it("should initialize mmap structure correctly") {
     turbo_mmap_t mmap;

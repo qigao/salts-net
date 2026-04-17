@@ -401,6 +401,17 @@ static int dg_iouring_init(turbo_datagram_t *d, const char *host,
 
   reuse = 1;
   setsockopt(st->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  if (d->reuse_port) {
+#ifdef SO_REUSEPORT
+    if (setsockopt(st->fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) != 0) {
+      rc = -errno;
+      goto fail;
+    }
+#else
+    rc = TURBO_ENOTSUP;
+    goto fail;
+#endif
+  }
 
   rc = dg_parse_addr(family, host, port, &addr, &addr_len);
   if (rc != 0) {

@@ -108,5 +108,106 @@ spec("turbo event runtime") {
       turbo_runtime_data_bind_value_destroy(event);
       turbo_runtime_data_bind_value_destroy(output_value);
     }
+
+    it("should carry child lineage in canonical bind-native tool result events") {
+      turbo_runtime_data_bind_value_t *output_value =
+          turbo_runtime_data_bind_value_create_object();
+      turbo_runtime_data_bind_value_t *event;
+
+      check_not_null(output_value);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "child_thread_id",
+              turbo_runtime_data_bind_value_create_string("thr_child")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(output_value, "child_run_id",
+                                             turbo_runtime_data_bind_value_create_string(
+                                                 "run_child")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "child_checkpoint_id",
+              turbo_runtime_data_bind_value_create_null()),
+          TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "child_status",
+              turbo_runtime_data_bind_value_create_string("completed")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+
+      event = turbo_event_tool_result_create_bind(
+          "delegate", "{\"input\":\"hello\"}",
+          "{\"ok\":true,\"summary\":\"ok\",\"stdout\":\"\",\"stderr\":\"\","
+          "\"child_thread_id\":\"thr_child\",\"child_run_id\":\"run_child\","
+          "\"child_checkpoint_id\":null,\"child_status\":\"completed\"}",
+          output_value, 0);
+
+      check_not_null(event);
+      check_int_eq(turbo_event_validate_bind(event), 0);
+      check_int_eq(turbo_event_tool_result_validate_bind(event), 0);
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "child_thread_id")),
+                   "thr_child");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "child_run_id")),
+                   "run_child");
+      check_int_eq(turbo_runtime_data_bind_value_kind(
+                       turbo_runtime_data_bind_object_get(event, "child_checkpoint_id")),
+                   TURBO_RUNTIME_DATA_BIND_VALUE_NULL);
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "child_status")),
+                   "completed");
+
+      turbo_runtime_data_bind_value_destroy(event);
+      turbo_runtime_data_bind_value_destroy(output_value);
+    }
+
+    it("should carry parent lineage in canonical bind-native tool result events") {
+      turbo_runtime_data_bind_value_t *output_value =
+          turbo_runtime_data_bind_value_create_object();
+      turbo_runtime_data_bind_value_t *event;
+
+      check_not_null(output_value);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "parent_agent_run_id",
+              turbo_runtime_data_bind_value_create_string("run_parent")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "parent_tool_call_id",
+              turbo_runtime_data_bind_value_create_string("call_parent")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "parent_tool_name",
+              turbo_runtime_data_bind_value_create_string("delegate")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+
+      event = turbo_event_tool_result_create_bind(
+          "delegate", "{\"input\":\"hello\"}",
+          "{\"ok\":true,\"summary\":\"ok\",\"stdout\":\"\",\"stderr\":\"\","
+          "\"parent_agent_run_id\":\"run_parent\","
+          "\"parent_tool_call_id\":\"call_parent\","
+          "\"parent_tool_name\":\"delegate\"}",
+          output_value, 0);
+
+      check_not_null(event);
+      check_int_eq(turbo_event_validate_bind(event), 0);
+      check_int_eq(turbo_event_tool_result_validate_bind(event), 0);
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "parent_agent_run_id")),
+                   "run_parent");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "parent_tool_call_id")),
+                   "call_parent");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "parent_tool_name")),
+                   "delegate");
+
+      turbo_runtime_data_bind_value_destroy(event);
+      turbo_runtime_data_bind_value_destroy(output_value);
+    }
   }
 }

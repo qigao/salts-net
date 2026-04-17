@@ -478,8 +478,6 @@ static void server_handler(coro_socket_t *client, void *arg) {
             should_close = iris_app_execute_parsed(app, client, &ctx->request_arena, ctx->request_ctx);
             drain_result = drain_streaming_request_body(ctx);
             if (drain_result < 0) {
-              send_simple_error(client, (drain_result == -413) ? 413 : 400,
-                                (drain_result == -413) ? "Payload Too Large" : "Bad Request");
               should_close = 1;
             }
             finish_current_request(ctx);

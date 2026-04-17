@@ -16,7 +16,7 @@ static const char *data2 = "Part 2 follows immediately!";
 
 spec("MMAP Group Tests") {
 
-  before() {
+  before_all() {
     turbo_fs_get_tmpdir(test_file1, sizeof(test_file1) - 32);
     strcpy(test_file2, test_file1);
     strcat(test_file1, "/mmap_group_1.bin");
@@ -29,7 +29,7 @@ spec("MMAP Group Tests") {
     turbo_fs_write_file(test_file2, &buf2);
   }
 
-  after() {
+  after_all() {
     turbo_fs_unlink(test_file1);
     turbo_fs_unlink(test_file2);
   }

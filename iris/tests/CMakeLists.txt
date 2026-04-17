@@ -119,6 +119,16 @@ add_test(NAME IrisRpcMemoryLeak COMMAND test_iris_rpc_memory_leak)
 
 set_target_properties(test_iris_rpc_memory_leak PROPERTIES FOLDER "iris/tests")
 
+# Test for per-app RPC endpoint context binding
+add_executable(test_iris_rpc_endpoint_context test_rpc_endpoint_context.c)
+
+target_link_libraries(test_iris_rpc_endpoint_context PRIVATE TurboNet::Iris
+                                                            TurboNet::Utils TurboNet::TinyTest)
+
+add_test(NAME IrisRpcEndpointContext COMMAND test_iris_rpc_endpoint_context)
+
+set_target_properties(test_iris_rpc_endpoint_context PROPERTIES FOLDER "iris/tests")
+
 # Test for connection context cleanup
 add_executable(test_iris_connection_cleanup test_connection_cleanup.c)
 
@@ -184,14 +194,4 @@ if(IRIS_TEST_CLANG)
   add_dependencies(test_iris_wasm_route iris_wasm_guest_test)
   add_test(NAME IrisWasmRoute COMMAND test_iris_wasm_route)
   set_target_properties(test_iris_wasm_route PROPERTIES FOLDER "iris/tests")
-endif()
-
-# Benchmark for re2c-based security validators (optional)
-if(BUILD_BENCHMARKS)
-  add_executable(benchmark_iris_security_re2c benchmark_security_re2c.c)
-
-  target_link_libraries(benchmark_iris_security_re2c PRIVATE TurboNet::Iris)
-
-  set_target_properties(benchmark_iris_security_re2c
-                        PROPERTIES FOLDER "iris/benchmarks")
 endif()

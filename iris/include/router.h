@@ -109,6 +109,7 @@ typedef struct Req {
   size_t body_len;
   int body_stream;
   size_t body_read_total;
+  int body_read_error;
   request_t headers;
   request_t query;
   request_t params;
@@ -176,6 +177,7 @@ CXX_C_API void set_header(Res *res, const char *name, const char *value);
 CXX_C_API void reply(Res *res, int status, const char *content_type, const void *body, size_t body_len);
 CXX_C_API int req_is_body_stream(const Req *req);
 CXX_C_API size_t req_read_body(Req *req, char *buffer, size_t capacity);
+CXX_C_API int req_body_read_error(const Req *req);
 
 // Context management functions
 CXX_C_API void set_context(Req *req, void *data, size_t size, void (*cleanup)(void *));

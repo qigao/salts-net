@@ -326,6 +326,7 @@ static Req *create_req(mem_pool_t *arena, struct iris_app *app, coro_socket_t *c
   req->body_len = 0;
   req->body_stream = 0;
   req->body_read_total = 0;
+  req->body_read_error = 0;
 
   // Initialize request_t structures
   memset(&req->headers, 0, sizeof(request_t));
@@ -600,12 +601,17 @@ static int populate_req_from_context(Req *req, http_context_t *context, const ch
   req->params = copy_request_t(arena, &context->url_params);
   req->body_stream = context->stream_mode ? 1 : 0;
   req->body_read_total = 0;
+  req->body_read_error = 0;
 
   return 0;
 }
 
 int req_is_body_stream(const Req *req) {
   return req ? req->body_stream : 0;
+}
+
+int req_body_read_error(const Req *req) {
+  return req ? req->body_read_error : 0;
 }
 
 size_t req_read_body(Req *req, char *buffer, size_t capacity) {
@@ -670,6 +676,8 @@ size_t req_read_body(Req *req, char *buffer, size_t capacity) {
       conn->parsed_offset += consumed;
 
       if (parse_result < 0) {
+        req->body_read_error = parse_result;
+        conn->request_streaming_active = 0;
         return 0;
       }
 
@@ -695,6 +703,8 @@ size_t req_read_body(Req *req, char *buffer, size_t capacity) {
         if (recv_data) {
           coro_socket_free_recv(recv_data);
         }
+        req->body_read_error = (r == TURBO_ETIMEDOUT) ? -408 : -400;
+        conn->request_streaming_active = 0;
         return 0;
       }
 
@@ -717,6 +727,8 @@ size_t req_read_body(Req *req, char *buffer, size_t capacity) {
         new_buffer = (char *)realloc(conn->buffer, new_capacity);
         if (!new_buffer) {
           coro_socket_free_recv(recv_data);
+          req->body_read_error = -500;
+          conn->request_streaming_active = 0;
           return 0;
         }
 
@@ -1398,6 +1410,9 @@ int iris_app_execute_parsed(iris_app_t *app, coro_socket_t *client, mem_pool_t *
   }
 
   should_close = !res->keep_alive;
+  if (req->body_stream && req->body_read_error != 0) {
+    should_close = 1;
+  }
   goto cleanup;
 
 cleanup:
@@ -1612,6 +1627,7 @@ Req *copy_req(const Req *original) {
   copy->body_len = original->body_len;
   copy->body_stream = original->body_stream;
   copy->body_read_total = original->body_read_total;
+  copy->body_read_error = original->body_read_error;
 
   // Deep copy method string
   if (original->method) {
@@ -1704,6 +1720,7 @@ Req *arena_copy_req(mem_pool_t *target_arena, const Req *original) {
   copy->body_len = original->body_len;
   copy->body_stream = original->body_stream;
   copy->body_read_total = original->body_read_total;
+  copy->body_read_error = original->body_read_error;
 
   // Deep copy strings using target arena
   if (original->method)

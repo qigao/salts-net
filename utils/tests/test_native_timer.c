@@ -1,7 +1,7 @@
 #include "platform.h"
 #include "tinytest.h"
 #include <stdio.h>
-
+#include "turbo_thread.h"
 static int count = 0;
 
 static void on_timer_tick(turbo_timer_t *timer) {

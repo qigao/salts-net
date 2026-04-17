@@ -160,7 +160,7 @@ suite("S3 Client Migration Tests") {
     static s3_credential_provider_t* prov;
     static s3_client_t* client;
 
-    before() {
+    before_all() {
         const char* test_bucket = get_test_bucket_name();
         memset(&url, 0, sizeof(url));
         url.host = tstr_dup("play.min.io");
@@ -360,7 +360,7 @@ suite("S3 Client Migration Tests") {
         }
     }
 
-    after() {
+    after_all() {
         // Cleanup (was test_cleanup)
         s3_list_objects_iter_t* iter = s3_list_objects(tctx.client, tctx.test_bucket, NULL, 1);
         if (iter) {

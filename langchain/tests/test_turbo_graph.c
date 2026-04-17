@@ -33,6 +33,15 @@ static int write_phase_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
   return 0;
 }
 
+static int write_phase_node_alt(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  string_payload_t *payload = (string_payload_t *)user_data;
+  char key[64];
+
+  snprintf(key, sizeof(key), "visited_%s", payload->value);
+  turbo_json_object_set_bool(ctx->state, key, true);
+  return 0;
+}
+
 static int write_phase_bind_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
   string_payload_t *payload = (string_payload_t *)user_data;
   char key[64];
@@ -505,6 +514,93 @@ spec("turbo graph runtime") {
 
   describe("checkpointing") {
 
+    it("should keep a stable topology id across equivalent graphs built in different orders") {
+      turbo_graph_t *source_graph = turbo_graph_create("agent");
+      turbo_graph_t *other_graph = turbo_graph_create("agent");
+      json_value_t *state = turbo_json_create_object();
+      turbo_graph_run_options_t options = {0};
+      turbo_graph_run_result_t result = {0};
+      checkpoint_capture_t capture = {0};
+      turbo_graph_checkpoint_t *checkpoint = NULL;
+      const char *interrupt_nodes[] = {"review"};
+      const char *source_topology_id;
+      const char *other_topology_id;
+      string_payload_t start = {"start"};
+      string_payload_t review = {"review"};
+      string_payload_t done = {"done"};
+
+      check_not_null(source_graph);
+      check_not_null(other_graph);
+      check_not_null(state);
+      check_int_eq(turbo_graph_add_node_ex(source_graph, "start", "node.start", write_phase_node,
+                                           &start),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_node_ex(source_graph, "review", "node.review", write_phase_node,
+                                           &review),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_node_ex(source_graph, "done", "node.done", write_phase_node,
+                                           &done),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_edge_ex(source_graph, "start", "review",
+                                           "edge.start.review", NULL, NULL),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_edge_ex(source_graph, "review", "done", "edge.review.done",
+                                           NULL, NULL),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_set_entry(source_graph, "start"), TURBO_GRAPH_EXEC_OK);
+
+      check_int_eq(turbo_graph_add_node_ex(other_graph, "done", "node.done",
+                                           write_phase_node_alt, &done),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_node_ex(other_graph, "start", "node.start",
+                                           write_phase_node_alt, &start),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_node_ex(other_graph, "review", "node.review",
+                                           write_phase_node_alt, &review),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_edge_ex(other_graph, "review", "done", "edge.review.done",
+                                           NULL, NULL),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_add_edge_ex(other_graph, "start", "review",
+                                           "edge.start.review", NULL, NULL),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(turbo_graph_set_entry(other_graph, "start"), TURBO_GRAPH_EXEC_OK);
+
+      source_topology_id = turbo_graph_topology_id(source_graph);
+      other_topology_id = turbo_graph_topology_id(other_graph);
+      check_not_null(source_topology_id);
+      check_not_null(other_topology_id);
+      check_str_eq(source_topology_id, other_topology_id);
+
+      options.interrupt_before_nodes = interrupt_nodes;
+      options.interrupt_before_count = 1;
+      options.checkpoint_cb = capture_checkpoint;
+      options.checkpoint_user_data = &capture;
+      check_int_eq(turbo_graph_run(source_graph, state, &options, &result),
+                   TURBO_GRAPH_EXEC_INTERRUPTED);
+      check_not_null(capture.serialized);
+      check_true(strstr(capture.serialized, "\"topology_id\":") != NULL);
+      check_int_eq(turbo_graph_checkpoint_deserialize(capture.serialized, capture.len,
+                                                      &checkpoint),
+                   TURBO_GRAPH_EXEC_OK);
+      check_not_null(turbo_graph_checkpoint_topology_id(checkpoint));
+      check_str_eq(turbo_graph_checkpoint_topology_id(checkpoint), source_topology_id);
+
+      options.interrupt_before_nodes = NULL;
+      options.interrupt_before_count = 0;
+      check_int_eq(turbo_graph_run_checkpoint(other_graph, checkpoint, &options, &result),
+                   TURBO_GRAPH_EXEC_OK);
+      check_int_eq(result.status, TURBO_GRAPH_EXEC_OK);
+      check_str_eq(result.last_node, "done");
+      check_size_eq(result.steps, 3);
+
+      turbo_graph_checkpoint_destroy(checkpoint);
+      turbo_json_serialize_free(capture.serialized);
+      turbo_free_json(&state);
+      turbo_graph_destroy(other_graph);
+      turbo_graph_destroy(source_graph);
+    }
+
     it("should emit resumable checkpoints between nodes") {
       turbo_graph_t *graph = turbo_graph_create("agent");
       json_value_t *state = turbo_json_create_object();
@@ -530,12 +626,15 @@ spec("turbo graph runtime") {
       check_int_eq(turbo_graph_run(graph, state, &options, &result), TURBO_GRAPH_EXEC_OK);
       check_true(capture.count >= 1);
       check_not_null(capture.serialized);
+      check_true(strstr(capture.serialized, "\"topology_id\":") != NULL);
 
       check_int_eq(turbo_graph_checkpoint_deserialize(capture.serialized, capture.len,
                                                       &checkpoint),
                    TURBO_GRAPH_EXEC_OK);
       check_str_eq(turbo_graph_checkpoint_next_node(checkpoint), "end");
       check_size_eq(turbo_graph_checkpoint_steps(checkpoint), 1);
+      check_not_null(turbo_graph_checkpoint_topology_id(checkpoint));
+      check_str_eq(turbo_graph_checkpoint_topology_id(checkpoint), turbo_graph_topology_id(graph));
       check_true(turbo_json_get_bool(turbo_graph_checkpoint_state(checkpoint),
                                      "visited_start", false));
 
@@ -558,15 +657,17 @@ spec("turbo graph runtime") {
       check_int_eq(
           turbo_graph_checkpoint_create("tool_node", 3, state, &checkpoint),
           TURBO_GRAPH_EXEC_OK);
-      check_size_eq(turbo_graph_checkpoint_schema_version(), 2);
+      check_size_eq(turbo_graph_checkpoint_schema_version(), 3);
       json = turbo_graph_checkpoint_serialize(checkpoint, &len);
       check_not_null(json);
       check_size_gt(len, 0);
-      check_true(strstr(json, "\"checkpoint_version\":2") != NULL);
+      check_true(strstr(json, "\"checkpoint_version\":3") != NULL);
+      check_true(strstr(json, "\"topology_id\":\"\"") != NULL);
       check_int_eq(turbo_graph_checkpoint_deserialize(json, len, &parsed),
                    TURBO_GRAPH_EXEC_OK);
       check_str_eq(turbo_graph_checkpoint_next_node(parsed), "tool_node");
       check_size_eq(turbo_graph_checkpoint_steps(parsed), 3);
+      check_null(turbo_graph_checkpoint_topology_id(parsed));
       check_str_eq(turbo_json_get_string(turbo_graph_checkpoint_state(parsed), "phase"),
                    "tool_result");
 
@@ -576,20 +677,15 @@ spec("turbo graph runtime") {
       turbo_free_json(&state);
     }
 
-    it("should deserialize legacy checkpoints without a checkpoint version") {
+    it("should reject legacy checkpoints without topology ids") {
       const char *json =
-          "{\"next_node\":\"tool_node\",\"steps\":3,\"state\":{\"phase\":\"tool_result\"}}";
+          "{\"checkpoint_version\":2,\"next_node\":\"tool_node\",\"steps\":3,"
+          "\"state\":{\"phase\":\"tool_result\"}}";
       turbo_graph_checkpoint_t *parsed = NULL;
 
       check_int_eq(turbo_graph_checkpoint_deserialize(json, strlen(json), &parsed),
-                   TURBO_GRAPH_EXEC_OK);
-      check_not_null(parsed);
-      check_str_eq(turbo_graph_checkpoint_next_node(parsed), "tool_node");
-      check_size_eq(turbo_graph_checkpoint_steps(parsed), 3);
-      check_str_eq(turbo_json_get_string(turbo_graph_checkpoint_state(parsed), "phase"),
-                   "tool_result");
-
-      turbo_graph_checkpoint_destroy(parsed);
+                   TURBO_GRAPH_EXEC_ERROR);
+      check_null(parsed);
     }
 
     it("should create and read checkpoints through runtime data bind") {

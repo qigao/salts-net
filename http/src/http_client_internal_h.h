@@ -105,7 +105,9 @@ typedef struct {
   
   /* Header tracking */
   tstr_t raw_headers;
-  char current_field[128];
+  tstr_t current_field;
+  tstr_t current_value;
+  int current_header_state;
   
   /* State flags */
   int headers_complete;

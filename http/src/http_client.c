@@ -14,6 +14,7 @@
 #include <cjwt/cjwt.h>
 #include <fcntl.h>
 #include <CoroNet/turbo_coro_context.h>
+#include <CoroNet/turbo_coro_internal.h>
 #include "CoroNet/turbo_coro_socket.h"
 #include "CoroNet/turbo_connection_pool.h"
 #include <stdio.h>
@@ -104,6 +105,12 @@ static http_error_code_t map_transport_error(int rc) {
 
   return HTTP_ERROR_CONNECTION_FAILED;
 }
+
+enum {
+  HTTP_HEADER_STATE_NONE = 0,
+  HTTP_HEADER_STATE_FIELD = 1,
+  HTTP_HEADER_STATE_VALUE = 2,
+};
 
 static void reset_response(http_response_t *r) {
   tstr_free(r->headers);
@@ -837,16 +844,70 @@ static int on_coro_status(llhttp_t *p, const char *at, size_t len) {
   return 0;
 }
 
+static void apply_set_cookie(http_client_t *c, const char *value, const char *host, const char *path);
+
+static void parser_ctx_clear_current_header(coro_parser_ctx_t *ctx) {
+  if (!ctx) {
+    return;
+  }
+
+  tstr_free(ctx->current_field);
+  tstr_free(ctx->current_value);
+  ctx->current_field = tstr_new();
+  ctx->current_value = tstr_new();
+  ctx->current_header_state = HTTP_HEADER_STATE_NONE;
+}
+
+static void parser_ctx_apply_cookie_header(coro_parser_ctx_t *ctx, const char *value) {
+  if (!ctx || !value) {
+    return;
+  }
+
+  uri_t *uri = NULL;
+  if (ctx->request_url &&
+      turbo_parse_uri((const uint8_t *)ctx->request_url, strlen(ctx->request_url), &uri) == 0) {
+    const char *host = turbo_uri_host(uri);
+    const char *path = turbo_uri_path(uri);
+    apply_set_cookie(ctx->client, value, host, path);
+    turbo_free_uri(&uri);
+    return;
+  }
+
+  apply_set_cookie(ctx->client, value, NULL, NULL);
+}
+
+static void parser_ctx_commit_current_header(coro_parser_ctx_t *ctx) {
+  const char *field;
+  const char *value;
+
+  if (!ctx || !ctx->current_field || tstr_len(ctx->current_field) == 0) {
+    parser_ctx_clear_current_header(ctx);
+    return;
+  }
+
+  field = ctx->current_field;
+  value = ctx->current_value ? ctx->current_value : "";
+
+  ctx->raw_headers = tstr_cat(ctx->raw_headers, field);
+  ctx->raw_headers = tstr_cat(ctx->raw_headers, ": ");
+  ctx->raw_headers = tstr_cat(ctx->raw_headers, value);
+  ctx->raw_headers = tstr_cat(ctx->raw_headers, "\r\n");
+
+  if (tstr_casecmp(field, "Set-Cookie") == 0) {
+    parser_ctx_apply_cookie_header(ctx, value);
+  }
+
+  parser_ctx_clear_current_header(ctx);
+}
+
 static int on_coro_header_field(llhttp_t *p, const char *at, size_t len) {
   coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
   if (ctx) {
-    ctx->raw_headers = tstr_cat_len(ctx->raw_headers, at, len);
-    ctx->raw_headers = tstr_cat(ctx->raw_headers, ": ");
-    
-    /* Store current field for value callback */
-    size_t copy_len = len < sizeof(ctx->current_field) - 1 ? len : sizeof(ctx->current_field) - 1;
-    memcpy(ctx->current_field, at, copy_len);
-    ctx->current_field[copy_len] = '\0';
+    if (ctx->current_header_state == HTTP_HEADER_STATE_VALUE) {
+      parser_ctx_commit_current_header(ctx);
+    }
+    ctx->current_field = tstr_cat_len(ctx->current_field, at, len);
+    ctx->current_header_state = HTTP_HEADER_STATE_FIELD;
   }
   return 0;
 }
@@ -879,28 +940,8 @@ static void apply_set_cookie(http_client_t *c, const char *value, const char *ho
 static int on_coro_header_value(llhttp_t *p, const char *at, size_t len) {
   coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
   if (ctx) {
-    ctx->raw_headers = tstr_cat_len(ctx->raw_headers, at, len);
-    ctx->raw_headers = tstr_cat(ctx->raw_headers, "\r\n");
-    
-    if (tstr_casecmp(ctx->current_field, "Set-Cookie") == 0) {
-      char *val = (char *)malloc(len + 1);
-      if (val) {
-        memcpy(val, at, len);
-        val[len] = '\0';
-        
-        /* Provide request context for default domain/path */
-        uri_t *uri = NULL;
-        if (turbo_parse_uri((const uint8_t *)ctx->request_url, strlen(ctx->request_url), &uri) == 0) {
-          const char *host = turbo_uri_host(uri);
-          const char *path = turbo_uri_path(uri);
-          apply_set_cookie(ctx->client, val, host, path);
-          turbo_free_uri(&uri);
-        } else {
-          apply_set_cookie(ctx->client, val, NULL, NULL);
-        }
-        free(val);
-      }
-    }
+    ctx->current_value = tstr_cat_len(ctx->current_value, at, len);
+    ctx->current_header_state = HTTP_HEADER_STATE_VALUE;
   }
   return 0;
 }
@@ -908,11 +949,10 @@ static int on_coro_header_value(llhttp_t *p, const char *at, size_t len) {
 static int on_coro_headers_complete(llhttp_t *p) {
   coro_parser_ctx_t *ctx = (coro_parser_ctx_t *)p->data;
   if (ctx) {
+    parser_ctx_commit_current_header(ctx);
     ctx->headers_complete = 1;
     if (ctx->response) {
       ctx->response->status_code = (int)llhttp_get_status_code(p);
-      /* Finalize raw headers string */
-      ctx->raw_headers = tstr_cat(ctx->raw_headers, "\r\n");
       ctx->response->headers = coro_strdup(ctx->raw_headers);
       ctx->response->headers_len = tstr_len(ctx->raw_headers);
     }
@@ -1148,6 +1188,8 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
   parser.data = &ctx;
 
   ctx.raw_headers = tstr_new();
+  ctx.current_field = tstr_new();
+  ctx.current_value = tstr_new();
 
   while (!ctx.message_complete) {
     char *chunk = NULL;
@@ -1188,7 +1230,45 @@ static void recv_http_response(http_client_t *c, coro_socket_t *transport, http_
     TLOG_ERROR("Received HTTP {}: body={}", ctx.response->status_code, ctx.response->body ? ctx.response->body : "(empty)");
   }
 
+  tstr_free(ctx.current_field);
+  tstr_free(ctx.current_value);
   tstr_free(ctx.raw_headers);
+}
+
+static int response_allows_pool_reuse(const http_response_t *response) {
+  char *connection_header;
+  int reusable = 1;
+
+  if (!response || response->error_code != HTTP_ERROR_NONE || response->status_code <= 0) {
+    return 0;
+  }
+
+  connection_header = http_response_get_header((http_response_t *)response, "Connection");
+  if (connection_header) {
+    if (tstr_casecmp(connection_header, "close") == 0) {
+      reusable = 0;
+    }
+    free(connection_header);
+  }
+
+  return reusable;
+}
+
+static void release_transport(http_client_t *c, coro_socket_t *transport, int use_pool,
+                              const http_response_t *response, int force_discard) {
+  if (!transport) {
+    return;
+  }
+
+  if (!use_pool) {
+    coro_socket_destroy(transport);
+    return;
+  }
+
+  if (force_discard || !response_allows_pool_reuse(response)) {
+    transport->connected = 0;
+  }
+  coro_pool_return(c->conn_pool, transport);
 }
 
 /* ── Interceptor runners ──────────────────────────────────────────── */
@@ -1556,10 +1636,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
   if (rc != 0) {
     http_error_code_t ec = (rc == TURBO_ETIMEDOUT) ? HTTP_ERROR_TIMEOUT : HTTP_ERROR_CONNECTION_FAILED;
     set_error(resp, ec, "connect failed");
-    if (use_pool)
-      coro_pool_return(c->conn_pool, transport);
-    else
-      coro_socket_destroy(transport);
+    release_transport(c, transport, use_pool, NULL, 1);
     turbo_free_uri(&uri);
     return -1;
   }
@@ -1573,10 +1650,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
 
   if (sr != 0) {
     set_error(resp, HTTP_ERROR_SEND_FAILED, "send failed");
-    if (use_pool)
-      coro_pool_return(c->conn_pool, transport);
-    else
-      coro_socket_destroy(transport);
+    release_transport(c, transport, use_pool, NULL, 1);
     turbo_free_uri(&uri);
     return -1;
   }
@@ -1596,10 +1670,7 @@ static int execute_request_attempt(http_client_t *c, http_method_t method, const
     }
   }
 
-  if (use_pool)
-    coro_pool_return(c->conn_pool, transport);
-  else
-    coro_socket_destroy(transport);
+  release_transport(c, transport, use_pool, resp, 0);
   turbo_free_uri(&uri);
 
   return 0;

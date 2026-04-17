@@ -25,4 +25,7 @@ target_include_directories(
 target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::Utils)
 
 add_subdirectory(test)
+if(BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
  

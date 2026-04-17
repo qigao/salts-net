@@ -11,13 +11,13 @@
 extern "C" {
 #endif
 
-typedef struct turbo_openai_agent_s turbo_openai_agent_t;
+typedef struct turbo_agent_s turbo_agent_t;
 typedef struct turbo_model_provider_s turbo_model_provider_t;
 typedef struct turbo_runtime_data_bind_value_s turbo_runtime_data_bind_value_t;
 
-typedef int (*turbo_model_provider_build_request_fn)(const turbo_openai_agent_t *agent,
+typedef int (*turbo_model_provider_build_request_fn)(const turbo_agent_t *agent,
                                                      json_value_t *state, char **out_request_json);
-typedef int (*turbo_model_provider_configure_http_client_fn)(const turbo_openai_agent_t *agent,
+typedef int (*turbo_model_provider_configure_http_client_fn)(const turbo_agent_t *agent,
                                                              http_client_t *http_client);
 
 struct turbo_model_provider_s {

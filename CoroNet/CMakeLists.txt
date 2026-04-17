@@ -130,5 +130,8 @@ cmake_install_headers(
   "turbo_coro_internal.h" "turbo_native_*_internal.h")
 
 add_subdirectory(tests)
+if(BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
 
 add_subdirectory(examples)

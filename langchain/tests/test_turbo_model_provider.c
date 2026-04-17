@@ -477,5 +477,63 @@ spec("turbo model provider helpers") {
       free(capture.kind);
       turbo_free_json(&chat_response);
     }
+
+    it("should normalize provider responses directly into bind-native model events") {
+      json_value_t *responses_response = turbo_json_create_object();
+      json_value_t *responses_output = turbo_json_create_array();
+      json_value_t *responses_text_item = turbo_json_create_object();
+      json_value_t *responses_content = turbo_json_create_array();
+      json_value_t *responses_text_part = turbo_json_create_object();
+      json_value_t *responses_tool_call = turbo_json_create_object();
+      turbo_runtime_data_bind_value_t *event = NULL;
+      const turbo_runtime_data_bind_value_t *tool_calls;
+      const turbo_runtime_data_bind_value_t *first_call;
+
+      check_not_null(responses_response);
+      check_not_null(responses_output);
+      check_not_null(responses_text_item);
+      check_not_null(responses_content);
+      check_not_null(responses_text_part);
+      check_not_null(responses_tool_call);
+
+      turbo_json_object_set_string(responses_response, "id", "resp_bind");
+      turbo_json_object_set_string(responses_text_part, "type", "output_text");
+      turbo_json_object_set_string(responses_text_part, "text", "hello");
+      turbo_json_array_add(responses_content, responses_text_part);
+      turbo_json_object_set_string(responses_text_item, "type", "message");
+      turbo_json_object_add(responses_text_item, "content", responses_content);
+      turbo_json_array_add(responses_output, responses_text_item);
+      turbo_json_object_set_string(responses_tool_call, "type", "function_call");
+      turbo_json_object_set_string(responses_tool_call, "call_id", "call_bind");
+      turbo_json_object_set_string(responses_tool_call, "name", "sum");
+      turbo_json_object_set_string(responses_tool_call, "arguments", "{\"a\":1}");
+      turbo_json_array_add(responses_output, responses_tool_call);
+      turbo_json_object_add(responses_response, "output", responses_output);
+
+      event = turbo_model_provider_response_to_event_bind(
+          turbo_model_provider_openai_responses(), responses_response);
+      check_not_null(event);
+      check_str_eq(turbo_event_kind_bind(event), "model");
+      check_str_eq(
+          turbo_runtime_data_bind_value_as_string(
+              turbo_runtime_data_bind_object_get(event, "response_id")),
+          "resp_bind");
+      check_str_eq(
+          turbo_runtime_data_bind_value_as_string(
+              turbo_runtime_data_bind_object_get(event, "output_text")),
+          "hello");
+
+      tool_calls = turbo_runtime_data_bind_object_get(event, "tool_calls");
+      check_not_null(tool_calls);
+      check_size_eq(turbo_runtime_data_bind_value_size(tool_calls), 1);
+      first_call = turbo_runtime_data_bind_array_get(tool_calls, 0);
+      check_str_eq(
+          turbo_runtime_data_bind_value_as_string(
+              turbo_runtime_data_bind_object_get(first_call, "name")),
+          "sum");
+
+      turbo_runtime_data_bind_value_destroy(event);
+      turbo_free_json(&responses_response);
+    }
   }
 }

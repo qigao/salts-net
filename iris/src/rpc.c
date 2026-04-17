@@ -7,14 +7,18 @@
 #include <string.h>
 #include "tlog.h"
 
-/* Global RPC context - temporary solution until iris_app_t refactor */
-static rpc_context_t *g_rpc_context = NULL;
-
 /* Cached params object to avoid re-parsing */
 typedef struct {
   json_value_t *params_obj;
   int cached;
 } rpc_params_cache_t;
+
+static rpc_context_t *iris_rpc_context_from_request(Req *req) {
+  if (!req || !req->app || !req->path) {
+    return NULL;
+  }
+  return (rpc_context_t *)iris_app_lookup_rpc_context(req->app, req->path);
+}
 
 static json_value_t *iris_rpc_parse_json(const char *json, size_t len) {
   json_value_t *root = NULL;
@@ -67,11 +71,6 @@ rpc_context_t *rpc_init(const rpc_config_t *config) {
 void rpc_destroy(rpc_context_t *ctx) {
   if (!ctx)
     return;
-
-  /* Clear global reference if this is the active context */
-  if (g_rpc_context == ctx) {
-    g_rpc_context = NULL;
-  }
 
   if (ctx->methods)
     free(ctx->methods);
@@ -494,8 +493,7 @@ int rpc_get_param_bool(rpc_request_t *rpc_req, const char *key, int *value) {
 
 /* RPC endpoint handler */
 static void rpc_endpoint_handler(Req *req, Res *res) {
-  /* Get RPC context from global (set by rpc_setup_endpoint) */
-  rpc_context_t *ctx = g_rpc_context;
+  rpc_context_t *ctx = iris_rpc_context_from_request(req);
   if (!ctx) {
     rpc_send_error(res, RPC_ERROR_INTERNAL, "RPC context not initialized", NULL);
     return;
@@ -567,7 +565,7 @@ static int rpc_introspection_handler(Req *req, Res *res, rpc_request_t *rpc_req,
   (void)res;
   (void)rpc_req;
 
-  rpc_context_t *ctx = g_rpc_context;
+  rpc_context_t *ctx = iris_rpc_context_from_request(req);
   if (!ctx) {
     rpc_set_error(rpc_res, RPC_ERROR_INTERNAL, "RPC context not initialized");
     return -1;
@@ -616,11 +614,12 @@ int rpc_setup_endpoint(rpc_context_t *ctx) {
   if (!ctx)
     return -1;
 
-  /* Store context globally for handler access */
-  g_rpc_context = ctx;
   app = iris_app_default();
-  if (app) {
-    app->rpc_context = ctx;
+  if (!app) {
+    return -1;
+  }
+  if (iris_app_bind_rpc_context(app, ctx->config.endpoint, ctx) != 0) {
+    return -1;
   }
 
   /* Register introspection method if enabled */

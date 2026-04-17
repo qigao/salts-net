@@ -92,6 +92,29 @@ spec("turbo action tool") {
     turbo_action_tool_registry_destroy(registry);
   }
 
+  it("should serialize canonical failure envelopes with escaped text") {
+    json_value_t *result = turbo_action_result_create(0, "quote: \"bad\"\npath");
+    char *serialized;
+    json_value_t *parsed = NULL;
+
+    check_not_null(result);
+    check_int_eq(turbo_action_result_set_command_fields(result, 17, "",
+                                                        "line 1\\line 2\n\"oops\""),
+                 0);
+
+    serialized = turbo_json_serialize(result, NULL);
+    check_not_null(serialized);
+    check_int_eq(turbo_parse_json((const uint8_t *)serialized, strlen(serialized), &parsed), 0);
+    check_not_null(parsed);
+    check_false(turbo_json_get_bool(parsed, "ok", true));
+    check_str_eq(turbo_json_get_string(parsed, "summary"), "quote: \"bad\"\npath");
+    check_str_eq(turbo_json_get_string(parsed, "stderr"), "line 1\\line 2\n\"oops\"");
+
+    turbo_free_json(&parsed);
+    free(serialized);
+    turbo_free_json(&result);
+  }
+
   it("should serialize action tools into chat function shape") {
     turbo_action_tool_registry_t *registry = turbo_action_tool_registry_create();
     turbo_action_tool_definition_t definition = {

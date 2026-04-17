@@ -9,27 +9,27 @@ spec("before and after hooks") {
         static int it_at, call_order = 1;
 
         describe("outer") {
-            before()            outer1.before_at = call_order++;
-            after()             outer1.after_at = call_order++;
+            before_all()        outer1.before_at = call_order++;
+            after_all()         outer1.after_at = call_order++;
             before_each()       outer1.before_each_at = call_order++;
             after_each()        outer1.after_each_at = call_order++;
 
             describe("inner") {
-                before()        inner1.before_at = call_order++;
-                after()         inner1.after_at = call_order++;
+                before_all()    inner1.before_at = call_order++;
+                after_all()     inner1.after_at = call_order++;
                 before_each()   inner1.before_each_at = call_order++;
                 after_each()    inner1.after_each_at = call_order++;
 
                 it("should be run") it_at = call_order++;
 
-                before()        inner2.before_at = call_order++;
-                after()         inner2.after_at = call_order++;
+                before_all()    inner2.before_at = call_order++;
+                after_all()     inner2.after_at = call_order++;
                 before_each()   inner2.before_each_at = call_order++;
                 after_each()    inner2.after_each_at = call_order++;
             }
 
-            before()            outer2.before_at = call_order++;
-            after()             outer2.after_at = call_order++;
+            before_all()        outer2.before_at = call_order++;
+            after_all()         outer2.after_at = call_order++;
             before_each()       outer2.before_each_at = call_order++;
             after_each()        outer2.after_each_at = call_order++;
         }

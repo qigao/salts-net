@@ -35,8 +35,8 @@ static int is_network_error(http_response_t *r) {
 
 spec("http streaming multipart") {
 
-    before() { create_test_file(); }
-    after() { remove_test_file(); }
+    before_all() { create_test_file(); }
+    after_all() { remove_test_file(); }
 
     describe("coro upload") {
 

@@ -222,7 +222,9 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
                                  ? TURBO_STREAM_TCP6
                                  : TURBO_STREAM_TCP4;
 
-  ls->listener = turbo_stream_listen(s->ctx, kind, addr, backlog, on_tcp_accept);
+  ls->reuse_port = s->reuse_port;
+  ls->listener = turbo_stream_listen_ex(s->ctx, kind, addr, backlog, on_tcp_accept,
+                                        ls->reuse_port);
   if (!ls->listener) {
     int rc = coro_context_get_last_error(s->ctx);
     return rc != 0 ? rc : TURBO_EIO;

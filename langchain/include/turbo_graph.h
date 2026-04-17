@@ -91,11 +91,29 @@ CXX_C_API turbo_graph_exec_status_t turbo_graph_add_node(turbo_graph_t *graph, c
                                                          turbo_graph_node_fn fn, void *user_data);
 
 /**
+ * @brief Add a node callback with an explicit stable semantic id.
+ */
+CXX_C_API turbo_graph_exec_status_t turbo_graph_add_node_ex(turbo_graph_t *graph,
+                                                            const char *name,
+                                                            const char *semantic_id,
+                                                            turbo_graph_node_fn fn,
+                                                            void *user_data);
+
+/**
  * @brief Add a bind-native node callback to the graph.
  */
 CXX_C_API turbo_graph_exec_status_t
 turbo_graph_add_bind_node(turbo_graph_t *graph, const char *name, turbo_graph_bind_node_fn fn,
                           void *user_data);
+
+/**
+ * @brief Add a bind-native node callback with an explicit stable semantic id.
+ */
+CXX_C_API turbo_graph_exec_status_t turbo_graph_add_bind_node_ex(turbo_graph_t *graph,
+                                                                 const char *name,
+                                                                 const char *semantic_id,
+                                                                 turbo_graph_bind_node_fn fn,
+                                                                 void *user_data);
 
 /**
  * @brief Add a directed edge between existing nodes.
@@ -111,11 +129,28 @@ turbo_graph_add_edge(turbo_graph_t *graph, const char *from, const char *to,
                      turbo_graph_edge_predicate_fn predicate, void *user_data);
 
 /**
+ * @brief Add a directed edge with an explicit stable semantic id.
+ */
+CXX_C_API turbo_graph_exec_status_t turbo_graph_add_edge_ex(turbo_graph_t *graph,
+                                                            const char *from, const char *to,
+                                                            const char *semantic_id,
+                                                            turbo_graph_edge_predicate_fn predicate,
+                                                            void *user_data);
+
+/**
  * @brief Add a directed edge with a bind-native predicate.
  */
 CXX_C_API turbo_graph_exec_status_t
 turbo_graph_add_bind_edge(turbo_graph_t *graph, const char *from, const char *to,
                           turbo_graph_bind_edge_predicate_fn predicate, void *user_data);
+
+/**
+ * @brief Add a directed bind-native edge with an explicit stable semantic id.
+ */
+CXX_C_API turbo_graph_exec_status_t
+turbo_graph_add_bind_edge_ex(turbo_graph_t *graph, const char *from, const char *to,
+                             const char *semantic_id,
+                             turbo_graph_bind_edge_predicate_fn predicate, void *user_data);
 
 /**
  * @brief Set the default entry node.
@@ -146,6 +181,13 @@ CXX_C_API size_t turbo_graph_node_count(const turbo_graph_t *graph);
  * @return Edge count.
  */
 CXX_C_API size_t turbo_graph_edge_count(const turbo_graph_t *graph);
+
+/**
+ * @brief Return the canonical stable topology id for a graph.
+ * @param graph Graph handle.
+ * @return Borrowed topology id string or NULL on failure.
+ */
+CXX_C_API const char *turbo_graph_topology_id(const turbo_graph_t *graph);
 
 /**
  * @brief Execute the graph against a mutable JSON state value.
@@ -274,6 +316,14 @@ turbo_graph_checkpoint_create_bind(const char *next_node, size_t steps,
  * @return Checkpoint schema version number.
  */
 CXX_C_API size_t turbo_graph_checkpoint_schema_version(void);
+
+/**
+ * @brief Get the canonical stable topology id stored in a checkpoint.
+ * @param checkpoint Checkpoint handle.
+ * @return Borrowed topology id string or NULL.
+ */
+CXX_C_API const char *turbo_graph_checkpoint_topology_id(
+    const turbo_graph_checkpoint_t *checkpoint);
 
 /**
  * @brief Destroy a checkpoint.

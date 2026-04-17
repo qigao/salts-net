@@ -675,6 +675,18 @@ static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
 
   int on = 1;
   setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&on, sizeof(on));
+  if (l->reuse_port) {
+#ifdef SO_REUSEPORT
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (const char *)&on, sizeof(on)) == SOCKET_ERROR) {
+      int rc = -(int)WSAGetLastError();
+      closesocket(sock);
+      return rc;
+    }
+#else
+    closesocket(sock);
+    return TURBO_ENOTSUP;
+#endif
+  }
 
   if (bind(sock, addr, (int)(addr->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) == SOCKET_ERROR) {
     int rc = -(int)WSAGetLastError();

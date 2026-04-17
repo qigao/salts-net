@@ -78,6 +78,11 @@ static void handle_upload_stream(Req *req, Res *res) {
         total += n;
     }
 
+    if (req_body_read_error(req) != 0) {
+        send_json(res, 400, "{\"error\":\"request body truncated\"}");
+        return;
+    }
+
     fmt(response, sizeof(response), "{{\"uploaded_bytes\":{}}}", total);
     send_json(res, 200, response);
 }

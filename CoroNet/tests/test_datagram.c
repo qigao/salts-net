@@ -33,6 +33,16 @@ static int on_stress_recv(void *handle, const mem_slice_t *slice, void *addr) {
     return 0;
 }
 
+static int datagram_test_run_until(coro_context_t *ctx, int *predicate, int expected, int max_iters) {
+    int limit = max_iters;
+
+    while (*predicate != expected && limit-- > 0) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+
+    return *predicate == expected ? 0 : -1;
+}
+
 spec("Datagram") {
 #if defined(__linux__) || defined(__ANDROID__)
     it("should reject unavailable io_uring udp backend") {
@@ -73,6 +83,44 @@ spec("Datagram") {
 
         turbo_datagram_destroy(dg);
 
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should honor reuse_port for udp listener binds") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *server1 = NULL;
+        coro_socket_t *server2 = NULL;
+        struct sockaddr_in addr;
+        struct sockaddr_storage local_addr;
+        int r;
+
+        check_not_null(ctx);
+
+        server1 = coro_socket_create_udpv4(ctx);
+        server2 = coro_socket_create_udpv4(ctx);
+        check_not_null(server1);
+        check_not_null(server2);
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(0);
+
+        coro_socket_set_reuse_port(server1, 1);
+        coro_socket_set_reuse_port(server2, 1);
+
+        r = coro_socket_bind(server1, (struct sockaddr *)&addr);
+        if (r == 0) {
+            check_int_eq(coro_socket_get_local_address(server1, &local_addr), 0);
+            addr.sin_port = ((const struct sockaddr_in *)&local_addr)->sin_port;
+            check_int_eq(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
+        } else {
+            check(r != 0);
+        }
+
+        coro_socket_destroy(server2);
+        coro_socket_destroy(server1);
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
     }
@@ -128,13 +176,7 @@ spec("Datagram") {
         r = turbo_datagram_sendto(client, (struct sockaddr*)&server_addr, "hello", 5);
         check_int_eq(r, 0);
 
-        // Run the event loop momentarily to process the async send and receive
-        coro_context_run(ctx, TURBO_RUN_ONCE);
-        // Sometimes it takes another tick
-        if (!s_received) coro_context_run(ctx, TURBO_RUN_ONCE);
-        if (!s_received) coro_context_run(ctx, TURBO_RUN_ONCE);
-
-        check_int_eq(s_received, 1);
+        check_int_eq(datagram_test_run_until(ctx, &s_received, 1, 1000), 0);
 
         turbo_datagram_destroy(server);
         turbo_datagram_destroy(client);

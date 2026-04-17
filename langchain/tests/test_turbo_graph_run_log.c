@@ -65,6 +65,8 @@ spec("turbo graph run log runtime") {
       check_not_null(checkpoint);
       check_str_eq(turbo_graph_checkpoint_next_node(checkpoint), "end");
       check_size_eq(turbo_graph_checkpoint_steps(checkpoint), 2);
+      check_not_null(turbo_graph_checkpoint_topology_id(checkpoint));
+      check_str_eq(turbo_graph_checkpoint_topology_id(checkpoint), turbo_graph_topology_id(graph));
 
       turbo_runtime_data_bind_value_destroy(result_state);
       turbo_runtime_data_bind_value_destroy(state);
@@ -119,8 +121,8 @@ spec("turbo graph run log runtime") {
       check_int_eq(resumed.status, TURBO_GRAPH_EXEC_OK);
       check_true(turbo_runtime_data_bind_value_as_bool(
           turbo_runtime_data_bind_object_get(result_state, "visited_end"), 0));
-      check_int_eq((int)turbo_event_log_size(turbo_graph_run_log_events(log)), 3);
       check_null(turbo_graph_run_log_checkpoint(log));
+      check_int_eq((int)turbo_event_log_size(turbo_graph_run_log_events(log)), 3);
 
       last_event = turbo_event_log_get(turbo_graph_run_log_events(log),
                                        turbo_event_log_size(turbo_graph_run_log_events(log)) - 1);

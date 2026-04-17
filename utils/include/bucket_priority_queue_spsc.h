@@ -36,7 +36,7 @@ typedef struct {
 /*
  * Initializes a SPSC priority queue.
  * `capacity_per_bucket` is the initial entry capacity for each priority.
- * Must be power of 2. 0 means lazy allocation on first push (default: 16).
+ * Must be power of 2. 0 means use the default initial capacity (16).
  *
  * IMPORTANT: This queue does NOT auto-grow at runtime for thread-safety.
  * Ensure capacity_per_bucket is large enough for your workload.

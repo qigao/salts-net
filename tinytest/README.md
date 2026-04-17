@@ -191,7 +191,7 @@ it_should_fail("known bug #123") { check(broken()); }
 ```c
 spec("with fixtures") {
     static int counter;
-    before() { counter = 0; }
+    before_all() { counter = 0; }
     before_each() { counter++; }
     it("first") { check_int_eq(counter, 1); }
     it("second") { check_int_eq(counter, 2); }

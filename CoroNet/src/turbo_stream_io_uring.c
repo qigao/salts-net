@@ -1154,6 +1154,20 @@ static int uring_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
 
   reuse = 1;
   setsockopt(st->base.fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  if (l->reuse_port) {
+#ifdef SO_REUSEPORT
+    if (setsockopt(st->base.fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) != 0) {
+      rc = -errno;
+      stream_uring_destroy_base(&st->base);
+      free(st);
+      return rc;
+    }
+#else
+    stream_uring_destroy_base(&st->base);
+    free(st);
+    return TURBO_ENOTSUP;
+#endif
+  }
 
   len = sockaddr_length(addr);
   if (bind(st->base.fd, addr, len) < 0) {

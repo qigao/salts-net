@@ -84,6 +84,7 @@ struct turbo_stream_listener_s {
 
   turbo_accept_cb on_accept;
   int active_connections;
+  int reuse_port;
   void *user_data;
   void *backend_data;
 };
@@ -107,6 +108,10 @@ extern const turbo_stream_backend_ops_t turbo_stream_pipe_win_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_pipe_unix_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_ws_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_tls_ops;
+
+turbo_stream_listener_t *turbo_stream_listen_ex(coro_context_t *ctx, turbo_stream_kind_t kind,
+                                                const struct sockaddr *addr, int backlog,
+                                                turbo_accept_cb on_accept, int reuse_port);
 
 int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,

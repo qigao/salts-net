@@ -66,6 +66,10 @@ Thumbs.db
 # User specific settings
 .env
  
+# agents
+.codex-*
+.claude
+.agent
 
 # Security - Entire projects directory (contains generated keys, licenses, and project-specific configs)
 # NEVER commit this directory - it contains:

@@ -80,6 +80,7 @@ extern "C" {
 #ifdef _MSC_VER
   #pragma warning(push)
   #pragma warning(disable : 4130)
+  #pragma warning(disable : 4611) /* setjmp/longjmp in test control flow */
   #pragma warning(disable : 4996) /* _CRT_SECURE_NO_WARNINGS */
   #pragma warning(                                                                                 \
       disable : 4127) /* conditional expression is constant (check macros with constant args) */
@@ -107,6 +108,14 @@ extern "C" {
 
 #ifndef BDD_BENCH_MAX
   #define BDD_BENCH_MAX 64
+#endif
+
+#if defined(__clang__)
+  #define __BDD_NO_SANITIZE_ADDRESS__ __attribute__((no_sanitize("address")))
+#elif defined(__GNUC__)
+  #define __BDD_NO_SANITIZE_ADDRESS__ __attribute__((no_sanitize_address))
+#else
+  #define __BDD_NO_SANITIZE_ADDRESS__
 #endif
 
 /* Cast macros to avoid -Wold-style-cast in C++ */
@@ -216,6 +225,23 @@ static void __bdd_cleanup_specs__(void) {
       static __BDD_CAT2(__bdd_ctor_struct_, fn) __BDD_CAT2(__bdd_ctor_obj_, fn);                   \
     }                                                                                              \
     static void fn(void)
+#elif defined(_WIN32) && defined(__clang__)
+  #ifdef read
+    #pragma push_macro("read")
+    #undef read
+    #define __BDD_POP_READ__ 1
+  #endif
+  #pragma section(".CRT$XCU", read)
+  #ifdef __BDD_POP_READ__
+    #pragma pop_macro("read")
+    #undef __BDD_POP_READ__
+  #endif
+typedef void(__cdecl *__bdd_ctor_fn__)(void);
+  #define __BDD_CONSTRUCTOR__(fn)                                                                  \
+    static void __cdecl fn(void);                                                                  \
+    __declspec(allocate(".CRT$XCU")) __attribute__((used)) static __bdd_ctor_fn__                  \
+        __BDD_CAT2(__bdd_ctor_, fn) = fn;                                                          \
+    static void __cdecl fn(void)
 #elif defined(_MSC_VER)
   #ifdef read
     #pragma push_macro("read")
@@ -326,6 +352,12 @@ static inline int tt_write_file(const char *path, const void *data, size_t size)
 
 static inline int tt_remove_file(const char *path) {
 #ifdef _WIN32
+  DWORD attrs = GetFileAttributesA(path);
+  if (attrs != INVALID_FILE_ATTRIBUTES &&
+      (attrs & FILE_ATTRIBUTE_REPARSE_POINT) &&
+      (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+    return RemoveDirectoryA(path) ? 0 : -1;
+  }
   return DeleteFileA(path) ? 0 : -1;
 #else
   return unlink(path) == 0 ? 0 : -1;
@@ -344,10 +376,11 @@ static inline int tt_is_dir(const char *path) {
 #ifdef _WIN32
   DWORD attrs = GetFileAttributesA(path);
   if (attrs == INVALID_FILE_ATTRIBUTES) return 0;
-  return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+         (attrs & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
 #else
   struct stat st;
-  if (stat(path, &st) != 0) return 0;
+  if (lstat(path, &st) != 0) return 0;
   return S_ISDIR(st.st_mode) ? 1 : 0;
 #endif
 }
@@ -433,10 +466,11 @@ static inline int tt_remove_tree(const char *path) {
       if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
       char child[MAX_PATH];
       snprintf(child, sizeof(child), "%s\\%s", path, name);
-      if (fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if ((fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+          (fdata.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
         tt_remove_tree(child);
       } else {
-        DeleteFileA(child);
+        tt_remove_file(child);
       }
     } while (FindNextFileA(h, &fdata));
     FindClose(h);
@@ -538,6 +572,15 @@ typedef enum __bdd_node_type__ {
   __BDD_NODE_INTERIM__ = 3
 } __bdd_node_type__;
 
+typedef enum __bdd_test_result__ {
+  __BDD_RESULT_PENDING__ = 0,
+  __BDD_RESULT_PASSED__ = 1,
+  __BDD_RESULT_FAILED__ = 2,
+  __BDD_RESULT_SKIPPED__ = 3,
+  __BDD_RESULT_EXPECTED_FAIL__ = 4,
+  __BDD_RESULT_UNEXPECTED_PASS__ = 5
+} __bdd_test_result__;
+
 typedef enum __bdd_node_flags__ {
   __bdd_node_flags_none__ = 0,
   __bdd_node_flags_focus__ = 1 << 0,
@@ -554,6 +597,8 @@ typedef struct __bdd_test_step__ {
   __bdd_node_flags__ flags;
   bool executed;
   bool passed;
+  __bdd_test_result__ result;
+  const char *skip_reason;
   char *failure_message;
   char *failure_location;
   double execution_time_ms;
@@ -615,6 +660,14 @@ typedef struct __bdd_config_type__ {
   int bench_header_printed;  /* replaces static __bdd_bench_header_printed__ */
   size_t bench_header_level; /* replaces static __bdd_bench_header_level__   */
 } __bdd_config_type__;
+
+static __BDD_NO_SANITIZE_ADDRESS__ void __bdd_longjmp_fail__(
+    __bdd_config_type__ *config) {
+  if (!config) {
+    abort();
+  }
+  longjmp(config->jump_buffer, 1);
+}
 
 static inline void __bdd_bench_reset__(__bdd_config_type__ *config) {
   config->bench_count = 0;
@@ -680,6 +733,8 @@ static inline __bdd_test_step__ *__bdd_test_step_create__(size_t level, __bdd_no
   step->flags = node->flags;
   step->executed = false;
   step->passed = false;
+  step->result = __BDD_RESULT_PENDING__;
+  step->skip_reason = NULL;
   step->failure_message = NULL;
   step->failure_location = NULL;
   step->execution_time_ms = 0.0;
@@ -773,10 +828,6 @@ static void __bdd_node_flatten_internal__(__bdd_config_type__ *config, size_t le
                                           __bdd_array__ *before_each_lists,
                                           __bdd_array__ *after_each_lists) {
   if (__bdd_node_is_leaf__(node)) {
-    if (config->has_focus_nodes && !(node->flags & __bdd_node_flags_focus__)) {
-      return;
-    }
-
     for (size_t listIndex = 0; listIndex < before_each_lists->size; ++listIndex) {
       __bdd_array__ *list = __BDD_CAST(__bdd_array__ *, before_each_lists->values[listIndex]);
       for (size_t i = 0; i < __bdd_array_size__(list); ++i) {
@@ -985,18 +1036,22 @@ static void __bdd_exit_node__(__bdd_config_type__ *config) {
   }
 }
 
+static inline const char *__bdd_skip_message__(const __bdd_test_step__ *step) {
+  return (step && step->skip_reason && step->skip_reason[0] != '\0') ? step->skip_reason
+                                                                      : "Test was skipped";
+}
+
 static void __bdd_report_skip__(__bdd_config_type__ *config, __bdd_test_step__ *step) {
   if (config->run == __BDD_TEST_RUN__) {
-    if (!config->has_focus_nodes) {
-      if (config->use_tap) {
-        if (config->test_tap_index) {
-          printf("skipped %zu - %s\n", config->test_tap_index, step->name);
-        }
-      } else {
-        __bdd_indent__(stdout, step->level);
-        printf("%s[ SKIP  ]%s\n", config->use_color ? __BDD_COLOR_YELLOW__ : "",
-               config->use_color ? __BDD_COLOR_RESET__ : "");
+    if (config->use_tap) {
+      if (config->test_tap_index) {
+        printf("ok %zu - %s # SKIP %s\n", config->test_tap_index, step->name,
+               __bdd_skip_message__(step));
       }
+    } else {
+      __bdd_indent__(stdout, step->level);
+      printf("%s[ SKIP  ]%s\n", config->use_color ? __BDD_COLOR_YELLOW__ : "",
+             config->use_color ? __BDD_COLOR_RESET__ : "");
     }
   }
 }
@@ -1101,20 +1156,25 @@ static void __bdd_run__(__bdd_config_type__ *config) {
   }
 
   bool skipped = false;
+  const char *skip_reason = NULL;
   if (step->type == __BDD_NODE_TEST__) {
-    if (config->has_focus_nodes && !(step->flags & __bdd_node_flags_focus__)) {
+    step->result = __BDD_RESULT_PENDING__;
+    step->skip_reason = NULL;
+    if (step->flags & __bdd_node_flags_skip__) {
       skipped = true;
-    } else if (step->flags & __bdd_node_flags_skip__) {
+      skip_reason = "Test was skipped";
+    } else if (config->has_focus_nodes && !(step->flags & __bdd_node_flags_focus__)) {
       skipped = true;
+      skip_reason = "filtered by focus";
     } else if (config->filter && !strstr(step->name, config->filter) &&
                !(step->full_path && strstr(step->full_path, config->filter))) {
       skipped = true;
+      skip_reason = "filtered out";
     }
     ++config->test_tap_index;
 
     /* Print the step name before running the test so it is visible even if the test crashes */
-    if ((!skipped || !config->has_focus_nodes) && config->run == __BDD_TEST_RUN__ &&
-        !config->use_tap) {
+    if (config->run == __BDD_TEST_RUN__ && !config->use_tap) {
       __bdd_indent__(stdout, step->level);
       printf("%s\n", step->name);
       fflush(stdout);
@@ -1147,6 +1207,10 @@ static void __bdd_run__(__bdd_config_type__ *config) {
     }
 
     if (skipped) {
+      step->executed = false;
+      step->passed = false;
+      step->result = __BDD_RESULT_SKIPPED__;
+      step->skip_reason = skip_reason;
       __bdd_report_skip__(config, step);
     } else if (config->error == NULL) {
       /* Test passed */
@@ -1154,10 +1218,12 @@ static void __bdd_run__(__bdd_config_type__ *config) {
       bool is_expected_fail = (step->flags & __bdd_node_flags_expected_fail__);
       if (is_expected_fail) {
         step->passed = false;
+        step->result = __BDD_RESULT_UNEXPECTED_PASS__;
         step->failure_message = strdup("Expected to fail but passed");
         __bdd_report_unexpected_pass__(config, step);
       } else {
         step->passed = true;
+        step->result = __BDD_RESULT_PASSED__;
         __bdd_report_pass__(config, step);
       }
     } else {
@@ -1166,9 +1232,11 @@ static void __bdd_run__(__bdd_config_type__ *config) {
       bool is_expected_fail = (step->flags & __bdd_node_flags_expected_fail__);
       if (is_expected_fail) {
         step->passed = true; /* Expected failure counts as pass */
+        step->result = __BDD_RESULT_EXPECTED_FAIL__;
         __bdd_report_expected_fail__(config, step);
       } else {
         step->passed = false;
+        step->result = __BDD_RESULT_FAILED__;
         step->failure_message = strdup(config->error);
         step->failure_location = strdup(config->location);
         __bdd_report_fail__(config, step);
@@ -1236,9 +1304,52 @@ static bool __bdd_is_supported_term__(void) {
 #endif
 }
 
+static inline int __bdd_is_xml_char__(unsigned char c) {
+  return c == '\t' || c == '\n' || c == '\r' || c >= 0x20;
+}
+
+static const char *__bdd_skip_ansi_escape__(const char *p) {
+  if (!p || p[0] != '\x1B') return p;
+  ++p;
+  if (*p == '[') {
+    ++p;
+    while (*p && (((unsigned char)*p >= 0x30 && (unsigned char)*p <= 0x3F) ||
+                  ((unsigned char)*p >= 0x20 && (unsigned char)*p <= 0x2F))) {
+      ++p;
+    }
+    if (*p && (unsigned char)*p >= 0x40 && (unsigned char)*p <= 0x7E) {
+      ++p;
+    }
+    return p;
+  }
+  if (*p == ']') {
+    ++p;
+    while (*p && *p != '\a') {
+      if (p[0] == '\x1B' && p[1] == '\\') {
+        p += 2;
+        return p;
+      }
+      ++p;
+    }
+    if (*p == '\a') ++p;
+    return p;
+  }
+  if (*p) ++p;
+  return p;
+}
+
 static void __bdd_xml_escape__(FILE *f, const char *str) {
   if (!str) return;
-  for (const char *p = str; *p; ++p) {
+  for (const char *p = str; *p;) {
+    unsigned char c = (unsigned char)*p;
+    if (c == 0x1B) {
+      p = __bdd_skip_ansi_escape__(p);
+      continue;
+    }
+    if (!__bdd_is_xml_char__(c)) {
+      ++p;
+      continue;
+    }
     switch (*p) {
     case '&':
       fprintf(f, "&amp;");
@@ -1259,6 +1370,7 @@ static void __bdd_xml_escape__(FILE *f, const char *str) {
       fputc(*p, f);
       break;
     }
+    ++p;
   }
 }
 
@@ -1280,7 +1392,7 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
   size_t skipped_count = 0;
   for (size_t i = 0; i < steps->size; ++i) {
     __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, steps->values[i]);
-    if (step->type == __BDD_NODE_TEST__ && (step->flags & __bdd_node_flags_skip__)) {
+    if (step->type == __BDD_NODE_TEST__ && step->result == __BDD_RESULT_SKIPPED__) {
       ++skipped_count;
     }
   }
@@ -1310,13 +1422,17 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
       }
       fprintf(f, "\" time=\"%.6f\"", step->execution_time_ms / 1000.0); /* Convert ms to seconds */
 
-      bool is_skip = (step->flags & __bdd_node_flags_skip__);
+      bool is_skip = step->result == __BDD_RESULT_SKIPPED__;
+      bool is_fail = step->result == __BDD_RESULT_FAILED__ ||
+                     step->result == __BDD_RESULT_UNEXPECTED_PASS__;
 
       if (is_skip) {
         fprintf(f, ">\n");
-        fprintf(f, "      <skipped message=\"Test was skipped\" />\n");
+        fprintf(f, "      <skipped message=\"");
+        __bdd_xml_escape__(f, __bdd_skip_message__(step));
+        fprintf(f, "\" />\n");
         fprintf(f, "    </testcase>\n");
-      } else if (step->executed && !step->passed) {
+      } else if (is_fail) {
         /* Test failed */
         fprintf(f, ">\n");
         fprintf(f, "      <failure message=\"");
@@ -1557,11 +1673,11 @@ int main(int argc, char **argv) {
   for (size_t i = 0; i < all_steps->size; ++i) {
     __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, all_steps->values[i]);
     if (step->type != __BDD_NODE_TEST__) continue;
-    if (step->flags & __bdd_node_flags_skip__) {
+    if (step->result == __BDD_RESULT_SKIPPED__) {
       skipped_count++;
-    } else if (step->flags & __bdd_node_flags_expected_fail__) {
+    } else if (step->result == __BDD_RESULT_EXPECTED_FAIL__) {
       todo_count++;
-    } else if (step->passed && step->executed) {
+    } else if (step->result == __BDD_RESULT_PASSED__) {
       passed_count++;
     }
   }
@@ -1673,15 +1789,6 @@ int main(int argc, char **argv) {
 #define after_each()                                                                               \
   __BDD_NODE__(__bdd_node_flags_none__, list_after_each, __BDD_NODE_INTERIM__, "after_each")
 
-/* Note: before() and after() can conflict with C++ standard library (e.g., std::type_info::before)
- * In C++ code, use before_each() and after_each() instead, or define BDD_USE_BEFORE_AFTER
- * before including this header if you really need them */
-#if !defined(__cplusplus) || defined(BDD_USE_BEFORE_AFTER)
-  #define before()                                                                                 \
-    __BDD_NODE__(__bdd_node_flags_none__, list_before, __BDD_NODE_INTERIM__, "before")
-  #define after() __BDD_NODE__(__bdd_node_flags_none__, list_after, __BDD_NODE_INTERIM__, "after")
-#endif
-
 #ifndef BDD_NO_CONTEXT_KEYWORD
   #define context(name) describe(name)
 #endif
@@ -1712,21 +1819,21 @@ static inline int __bdd_eval_bool__(int v) { return v; }
         ++__bdd_active_config__->assertion_count;                                                  \
         ++__bdd_active_config__->assertion_failed_count;                                           \
         if (__bdd_active_config__->run == __BDD_TEST_RUN__ && !__bdd_active_config__->error) {     \
-          char *message = __bdd_format__(__VA_ARGS__);                                             \
+          char *__bdd_message__ = __bdd_format__(__VA_ARGS__);                                     \
           const char *fmt =                                                                        \
               __bdd_active_config__->use_color ? __BDD_FMT_COLOR__ : __BDD_FMT_PLAIN__;            \
           snprintf(__bdd_active_config__->location_buf,                                            \
                    sizeof(__bdd_active_config__->location_buf), "at %s:%s", file, line);           \
           __bdd_active_config__->location = __bdd_active_config__->location_buf;                   \
-          size_t bufflen = strlen(fmt) + strlen(message) + 1;                                      \
+          size_t bufflen = strlen(fmt) + strlen(__bdd_message__) + 1;                              \
           __bdd_active_config__->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));        \
           if (__bdd_active_config__->use_color) {                                                  \
-            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, message);           \
+            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_COLOR__, __bdd_message__);   \
           } else {                                                                                 \
-            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, message);           \
+            snprintf(__bdd_active_config__->error, bufflen, __BDD_FMT_PLAIN__, __bdd_message__);   \
           }                                                                                        \
-          free(message);                                                                           \
-          longjmp(__bdd_active_config__->jump_buffer, 1);                                          \
+          free(__bdd_message__);                                                                   \
+          __bdd_longjmp_fail__(__bdd_active_config__);                                             \
         }                                                                                          \
       }                                                                                            \
     } else {                                                                                       \
@@ -1743,174 +1850,196 @@ static inline int __bdd_eval_bool__(int v) { return v; }
 
 #define check(...) __BDD_MACRO__(__BDD_CHECK_, __VA_ARGS__)
 
+#define __BDD_INT_COMPARE__(emitter, actual, expected, op, fmt)                                    \
+  do {                                                                                             \
+    int __bdd_a__ = __BDD_CAST(int, (actual));                                                     \
+    int __bdd_e__ = __BDD_CAST(int, (expected));                                                   \
+    emitter(__bdd_a__ op __bdd_e__, fmt, __bdd_e__, __bdd_a__);                                   \
+  } while (0)
+
+#define __BDD_UINT_COMPARE__(emitter, actual, expected, op, fmt)                                   \
+  do {                                                                                             \
+    unsigned __bdd_a__ = __BDD_CAST(unsigned, (actual));                                           \
+    unsigned __bdd_e__ = __BDD_CAST(unsigned, (expected));                                         \
+    emitter(__bdd_a__ op __bdd_e__, fmt, __bdd_e__, __bdd_a__);                                   \
+  } while (0)
+
+#define __BDD_SIZE_COMPARE__(emitter, actual, expected, op, fmt)                                   \
+  do {                                                                                             \
+    size_t __bdd_a__ = __BDD_CAST(size_t, (actual));                                               \
+    size_t __bdd_e__ = __BDD_CAST(size_t, (expected));                                             \
+    emitter(__bdd_a__ op __bdd_e__, fmt, __bdd_e__, __bdd_a__);                                   \
+  } while (0)
+
+#define __BDD_LLONG_COMPARE__(emitter, actual, expected, op, fmt)                                  \
+  do {                                                                                             \
+    long long __bdd_a__ = __BDD_CAST(long long, (actual));                                         \
+    long long __bdd_e__ = __BDD_CAST(long long, (expected));                                       \
+    emitter(__bdd_a__ op __bdd_e__, fmt, __bdd_e__, __bdd_a__);                                   \
+  } while (0)
+
+#define __BDD_DOUBLE_COMPARE__(emitter, actual, expected, op, fmt)                                 \
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    emitter(__bdd_a__ op __bdd_e__, fmt, __bdd_e__, __bdd_a__);                                   \
+  } while (0)
+
 /* --- Typed assertion macros --- */
 
 /* Integer comparisons */
 #define check_int_eq(actual, expected)                                                             \
-  __BDD_CHECK__((actual) == (expected), "expected %d but got %d", __BDD_CAST(int, (expected)),     \
-                __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_CHECK__, actual, expected, ==, "expected %d but got %d")
 #define check_int_eq_warn(actual, expected)                                                        \
-  __BDD_WARN__((actual) == (expected), "expected %d but got %d", __BDD_CAST(int, (expected)),      \
-               __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_WARN__, actual, expected, ==, "expected %d but got %d")
 
 #define check_int_ne(actual, expected)                                                             \
-  __BDD_CHECK__((actual) != (expected), "expected != %d but got %d", __BDD_CAST(int, (expected)),  \
-                __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_CHECK__, actual, expected, !=, "expected != %d but got %d")
 #define check_int_ne_warn(actual, expected)                                                        \
-  __BDD_WARN__((actual) != (expected), "expected != %d but got %d", __BDD_CAST(int, (expected)),   \
-               __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_WARN__, actual, expected, !=, "expected != %d but got %d")
 
 #define check_int_gt(actual, expected)                                                             \
-  __BDD_CHECK__((actual) > (expected), "expected > %d but got %d", __BDD_CAST(int, (expected)),    \
-                __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_CHECK__, actual, expected, >, "expected > %d but got %d")
 #define check_int_gt_warn(actual, expected)                                                        \
-  __BDD_WARN__((actual) > (expected), "expected > %d but got %d", __BDD_CAST(int, (expected)),     \
-               __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_WARN__, actual, expected, >, "expected > %d but got %d")
 
 #define check_int_ge(actual, expected)                                                             \
-  __BDD_CHECK__((actual) >= (expected), "expected >= %d but got %d", __BDD_CAST(int, (expected)),  \
-                __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_CHECK__, actual, expected, >=, "expected >= %d but got %d")
 #define check_int_ge_warn(actual, expected)                                                        \
-  __BDD_WARN__((actual) >= (expected), "expected >= %d but got %d", __BDD_CAST(int, (expected)),   \
-               __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_WARN__, actual, expected, >=, "expected >= %d but got %d")
 
 #define check_int_lt(actual, expected)                                                             \
-  __BDD_CHECK__((actual) < (expected), "expected < %d but got %d", __BDD_CAST(int, (expected)),    \
-                __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_CHECK__, actual, expected, <, "expected < %d but got %d")
 #define check_int_lt_warn(actual, expected)                                                        \
-  __BDD_WARN__((actual) < (expected), "expected < %d but got %d", __BDD_CAST(int, (expected)),     \
-               __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_WARN__, actual, expected, <, "expected < %d but got %d")
 
 #define check_int_le(actual, expected)                                                             \
-  __BDD_CHECK__((actual) <= (expected), "expected <= %d but got %d", __BDD_CAST(int, (expected)),  \
-                __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_CHECK__, actual, expected, <=, "expected <= %d but got %d")
 #define check_int_le_warn(actual, expected)                                                        \
-  __BDD_WARN__((actual) <= (expected), "expected <= %d but got %d", __BDD_CAST(int, (expected)),   \
-               __BDD_CAST(int, (actual)))
+  __BDD_INT_COMPARE__(__BDD_WARN__, actual, expected, <=, "expected <= %d but got %d")
 
 /* Unsigned integer comparisons */
 #define check_uint_eq(actual, expected)                                                            \
-  __BDD_CHECK__((actual) == (expected), "expected %u but got %u",                                  \
-                __BDD_CAST(unsigned, (expected)), __BDD_CAST(unsigned, (actual)))
+  __BDD_UINT_COMPARE__(__BDD_CHECK__, actual, expected, ==, "expected %u but got %u")
 #define check_uint_eq_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) == (expected), "expected %u but got %u", __BDD_CAST(unsigned, (expected)), \
-               __BDD_CAST(unsigned, (actual)))
+  __BDD_UINT_COMPARE__(__BDD_WARN__, actual, expected, ==, "expected %u but got %u")
 
 #define check_uint_ne(actual, expected)                                                            \
-  __BDD_CHECK__((actual) != (expected), "expected != %u but got %u",                               \
-                __BDD_CAST(unsigned, (expected)), __BDD_CAST(unsigned, (actual)))
+  __BDD_UINT_COMPARE__(__BDD_CHECK__, actual, expected, !=, "expected != %u but got %u")
 #define check_uint_ne_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) != (expected), "expected != %u but got %u",                                \
-               __BDD_CAST(unsigned, (expected)), __BDD_CAST(unsigned, (actual)))
+  __BDD_UINT_COMPARE__(__BDD_WARN__, actual, expected, !=, "expected != %u but got %u")
 
 /* Size_t comparisons */
 #define check_size_eq(actual, expected)                                                            \
-  __BDD_CHECK__((actual) == (expected), "expected %zu but got %zu",                                \
-                __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_CHECK__, actual, expected, ==, "expected %zu but got %zu")
 #define check_size_eq_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) == (expected), "expected %zu but got %zu", __BDD_CAST(size_t, (expected)), \
-               __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_WARN__, actual, expected, ==, "expected %zu but got %zu")
 
 #define check_size_ne(actual, expected)                                                            \
-  __BDD_CHECK__((actual) != (expected), "expected != %zu but got %zu",                             \
-                __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_CHECK__, actual, expected, !=, "expected != %zu but got %zu")
 #define check_size_ne_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) != (expected), "expected != %zu but got %zu",                              \
-               __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_WARN__, actual, expected, !=, "expected != %zu but got %zu")
 
 #define check_size_gt(actual, expected)                                                            \
-  __BDD_CHECK__((actual) > (expected), "expected > %zu but got %zu",                               \
-                __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_CHECK__, actual, expected, >, "expected > %zu but got %zu")
 #define check_size_gt_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) > (expected), "expected > %zu but got %zu",                                \
-               __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_WARN__, actual, expected, >, "expected > %zu but got %zu")
 
 #define check_size_ge(actual, expected)                                                            \
-  __BDD_CHECK__((actual) >= (expected), "expected >= %zu but got %zu",                             \
-                __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_CHECK__, actual, expected, >=, "expected >= %zu but got %zu")
 #define check_size_ge_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) >= (expected), "expected >= %zu but got %zu",                              \
-               __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_WARN__, actual, expected, >=, "expected >= %zu but got %zu")
 
 #define check_size_lt(actual, expected)                                                            \
-  __BDD_CHECK__((actual) < (expected), "expected < %zu but got %zu",                               \
-                __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_CHECK__, actual, expected, <, "expected < %zu but got %zu")
 #define check_size_lt_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) < (expected), "expected < %zu but got %zu",                                \
-               __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_WARN__, actual, expected, <, "expected < %zu but got %zu")
 
 #define check_size_le(actual, expected)                                                            \
-  __BDD_CHECK__((actual) <= (expected), "expected <= %zu but got %zu",                             \
-                __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_CHECK__, actual, expected, <=, "expected <= %zu but got %zu")
 #define check_size_le_warn(actual, expected)                                                       \
-  __BDD_WARN__((actual) <= (expected), "expected <= %zu but got %zu",                              \
-               __BDD_CAST(size_t, (expected)), __BDD_CAST(size_t, (actual)))
+  __BDD_SIZE_COMPARE__(__BDD_WARN__, actual, expected, <=, "expected <= %zu but got %zu")
 
 /* Long / 64-bit comparisons */
 #define check_long_eq(actual, expected)                                                            \
-  __BDD_CHECK__((actual) == (expected), "expected %lld but got %lld",                              \
-                __BDD_CAST(long long, (expected)), __BDD_CAST(long long, (actual)))
+  __BDD_LLONG_COMPARE__(__BDD_CHECK__, actual, expected, ==, "expected %lld but got %lld")
 
 /* Float/double comparisons with epsilon */
 #define check_float_eq(actual, expected, epsilon)                                                  \
-  __BDD_CHECK__(((actual) - (expected)) <= (epsilon) && ((expected) - (actual)) <= (epsilon),      \
-                "expected %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),                 \
-                __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    double __bdd_eps__ = __BDD_CAST(double, (epsilon));                                            \
+    __BDD_CHECK__(fabs(__bdd_a__ - __bdd_e__) <= __bdd_eps__,                                      \
+                  "expected %f (+/- %f) but got %f", __bdd_e__, __bdd_eps__, __bdd_a__);          \
+  } while (0)
 #define check_float_eq_warn(actual, expected, epsilon)                                             \
-  __BDD_WARN__(((actual) - (expected)) <= (epsilon) && ((expected) - (actual)) <= (epsilon),       \
-               "expected %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),                  \
-               __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    double __bdd_eps__ = __BDD_CAST(double, (epsilon));                                            \
+    __BDD_WARN__(fabs(__bdd_a__ - __bdd_e__) <= __bdd_eps__,                                       \
+                 "expected %f (+/- %f) but got %f", __bdd_e__, __bdd_eps__, __bdd_a__);           \
+  } while (0)
 
 #define check_float_ne(actual, expected, epsilon)                                                  \
-  __BDD_CHECK__(((actual) - (expected)) > (epsilon) || ((expected) - (actual)) > (epsilon),        \
-                "expected != %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),              \
-                __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    double __bdd_eps__ = __BDD_CAST(double, (epsilon));                                            \
+    __BDD_CHECK__(fabs(__bdd_a__ - __bdd_e__) > __bdd_eps__,                                       \
+                  "expected != %f (+/- %f) but got %f", __bdd_e__, __bdd_eps__, __bdd_a__);       \
+  } while (0)
 #define check_float_ne_warn(actual, expected, epsilon)                                             \
-  __BDD_WARN__(((actual) - (expected)) > (epsilon) || ((expected) - (actual)) > (epsilon),         \
-               "expected != %f (+/- %f) but got %f", __BDD_CAST(double, (expected)),               \
-               __BDD_CAST(double, (epsilon)), __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    double __bdd_eps__ = __BDD_CAST(double, (epsilon));                                            \
+    __BDD_WARN__(fabs(__bdd_a__ - __bdd_e__) > __bdd_eps__,                                        \
+                 "expected != %f (+/- %f) but got %f", __bdd_e__, __bdd_eps__, __bdd_a__);        \
+  } while (0)
 
 #define check_float_gt(actual, expected)                                                           \
-  __BDD_CHECK__((actual) > (expected), "expected > %f but got %f", __BDD_CAST(double, (expected)), \
-                __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_CHECK__, actual, expected, >, "expected > %f but got %f")
 #define check_float_gt_warn(actual, expected)                                                      \
-  __BDD_WARN__((actual) > (expected), "expected > %f but got %f", __BDD_CAST(double, (expected)),  \
-               __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_WARN__, actual, expected, >, "expected > %f but got %f")
 
 #define check_float_lt(actual, expected)                                                           \
-  __BDD_CHECK__((actual) < (expected), "expected < %f but got %f", __BDD_CAST(double, (expected)), \
-                __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_CHECK__, actual, expected, <, "expected < %f but got %f")
 #define check_float_lt_warn(actual, expected)                                                      \
-  __BDD_WARN__((actual) < (expected), "expected < %f but got %f", __BDD_CAST(double, (expected)),  \
-               __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_WARN__, actual, expected, <, "expected < %f but got %f")
 
 #define check_float_ge(actual, expected)                                                           \
-  __BDD_CHECK__((actual) >= (expected), "expected >= %f but got %f",                               \
-                __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_CHECK__, actual, expected, >=, "expected >= %f but got %f")
 #define check_float_ge_warn(actual, expected)                                                      \
-  __BDD_WARN__((actual) >= (expected), "expected >= %f but got %f",                                \
-               __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_WARN__, actual, expected, >=, "expected >= %f but got %f")
 
 #define check_float_le(actual, expected)                                                           \
-  __BDD_CHECK__((actual) <= (expected), "expected <= %f but got %f",                               \
-                __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_CHECK__, actual, expected, <=, "expected <= %f but got %f")
 #define check_float_le_warn(actual, expected)                                                      \
-  __BDD_WARN__((actual) <= (expected), "expected <= %f but got %f",                                \
-               __BDD_CAST(double, (expected)), __BDD_CAST(double, (actual)))
+  __BDD_DOUBLE_COMPARE__(__BDD_WARN__, actual, expected, <=, "expected <= %f but got %f")
 
 /* Relative tolerance: |actual - expected| <= rel * |expected| */
 #define check_float_within_rel(actual, expected, rel)                                              \
-  __BDD_CHECK__(fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=             \
-                    __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),              \
-                "expected %f within %f%% of %f, delta was %f", __BDD_CAST(double, (actual)),       \
-                __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                 \
-                fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    double __bdd_rel__ = __BDD_CAST(double, (rel));                                                \
+    double __bdd_delta__ = fabs(__bdd_a__ - __bdd_e__);                                            \
+    __BDD_CHECK__(__bdd_delta__ <= __bdd_rel__ * fabs(__bdd_e__),                                  \
+                  "expected %f within %f%% of %f, delta was %f", __bdd_a__,                        \
+                  __bdd_rel__ * 100.0, __bdd_e__, __bdd_delta__);                                  \
+  } while (0)
 #define check_float_within_rel_warn(actual, expected, rel)                                         \
-  __BDD_WARN__(fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))) <=              \
-                   __BDD_CAST(double, (rel)) * fabs(__BDD_CAST(double, (expected))),               \
-               "expected %f within %f%% of %f, delta was %f", __BDD_CAST(double, (actual)),        \
-               __BDD_CAST(double, (rel)) * 100.0, __BDD_CAST(double, (expected)),                  \
-               fabs(__BDD_CAST(double, (actual)) - __BDD_CAST(double, (expected))))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    double __bdd_e__ = __BDD_CAST(double, (expected));                                             \
+    double __bdd_rel__ = __BDD_CAST(double, (rel));                                                \
+    double __bdd_delta__ = fabs(__bdd_a__ - __bdd_e__);                                            \
+    __BDD_WARN__(__bdd_delta__ <= __bdd_rel__ * fabs(__bdd_e__),                                   \
+                 "expected %f within %f%% of %f, delta was %f", __bdd_a__,                         \
+                 __bdd_rel__ * 100.0, __bdd_e__, __bdd_delta__);                                   \
+  } while (0)
 
 /* Absolute tolerance — same as check_float_eq but named for clarity
  */
@@ -1970,76 +2099,154 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
   return slen >= suflen && strcmp(s + slen - suflen, suffix) == 0;
 }
 
+static inline const char *__bdd_cstr_or_null__(const char *s) { return s ? s : "(null)"; }
+
 #define check_str_eq(actual, expected)                                                             \
-  __BDD_CHECK__(__bdd_str_eq__((actual), (expected)), "expected \"%s\" but got \"%s\"",            \
-                (const char *)(expected) ? (const char *)(expected) : "(null)",                    \
-                (const char *)(actual) ? (const char *)(actual) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_a__ = (const char *)(actual);                                                \
+    const char *__bdd_e__ = (const char *)(expected);                                              \
+    __BDD_CHECK__(__bdd_str_eq__(__bdd_a__, __bdd_e__), "expected \"%s\" but got \"%s\"",          \
+                  __bdd_cstr_or_null__(__bdd_e__), __bdd_cstr_or_null__(__bdd_a__));               \
+  } while (0)
 #define check_str_eq_warn(actual, expected)                                                        \
-  __BDD_WARN__(__bdd_str_eq__((actual), (expected)), "expected \"%s\" but got \"%s\"",             \
-               (const char *)(expected) ? (const char *)(expected) : "(null)",                     \
-               (const char *)(actual) ? (const char *)(actual) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_a__ = (const char *)(actual);                                                \
+    const char *__bdd_e__ = (const char *)(expected);                                              \
+    __BDD_WARN__(__bdd_str_eq__(__bdd_a__, __bdd_e__), "expected \"%s\" but got \"%s\"",           \
+                 __bdd_cstr_or_null__(__bdd_e__), __bdd_cstr_or_null__(__bdd_a__));                \
+  } while (0)
 
 #define check_str_ne(actual, expected)                                                             \
-  __BDD_CHECK__(__bdd_str_ne__((actual), (expected)), "expected != \"%s\" but got \"%s\"",         \
-                (const char *)(expected) ? (const char *)(expected) : "(null)",                    \
-                (const char *)(actual) ? (const char *)(actual) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_a__ = (const char *)(actual);                                                \
+    const char *__bdd_e__ = (const char *)(expected);                                              \
+    __BDD_CHECK__(__bdd_str_ne__(__bdd_a__, __bdd_e__), "expected != \"%s\" but got \"%s\"",       \
+                  __bdd_cstr_or_null__(__bdd_e__), __bdd_cstr_or_null__(__bdd_a__));               \
+  } while (0)
 #define check_str_ne_warn(actual, expected)                                                        \
-  __BDD_WARN__(__bdd_str_ne__((actual), (expected)), "expected != \"%s\" but got \"%s\"",          \
-               (const char *)(expected) ? (const char *)(expected) : "(null)",                     \
-               (const char *)(actual) ? (const char *)(actual) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_a__ = (const char *)(actual);                                                \
+    const char *__bdd_e__ = (const char *)(expected);                                              \
+    __BDD_WARN__(__bdd_str_ne__(__bdd_a__, __bdd_e__), "expected != \"%s\" but got \"%s\"",        \
+                 __bdd_cstr_or_null__(__bdd_e__), __bdd_cstr_or_null__(__bdd_a__));                \
+  } while (0)
 
 #define check_str_contains(haystack, needle)                                                       \
-  __BDD_CHECK__(__bdd_str_contains__((haystack), (needle)), "expected \"%s\" to contain \"%s\"",   \
-                (haystack) ? (haystack) : "(null)", (needle) ? (needle) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_h__ = (const char *)(haystack);                                              \
+    const char *__bdd_n__ = (const char *)(needle);                                                \
+    __BDD_CHECK__(__bdd_str_contains__(__bdd_h__, __bdd_n__), "expected \"%s\" to contain \"%s\"", \
+                  __bdd_cstr_or_null__(__bdd_h__), __bdd_cstr_or_null__(__bdd_n__));               \
+  } while (0)
 #define check_str_contains_warn(haystack, needle)                                                  \
-  __BDD_WARN__(__bdd_str_contains__((haystack), (needle)), "expected \"%s\" to contain \"%s\"",    \
-               (haystack) ? (haystack) : "(null)", (needle) ? (needle) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_h__ = (const char *)(haystack);                                              \
+    const char *__bdd_n__ = (const char *)(needle);                                                \
+    __BDD_WARN__(__bdd_str_contains__(__bdd_h__, __bdd_n__), "expected \"%s\" to contain \"%s\"",  \
+                 __bdd_cstr_or_null__(__bdd_h__), __bdd_cstr_or_null__(__bdd_n__));                \
+  } while (0)
 
 #define check_str_starts_with(str, prefix)                                                         \
-  __BDD_CHECK__(__bdd_str_starts_with__((str), (prefix)), "expected \"%s\" to start with \"%s\"",  \
-                (str) ? (str) : "(null)", (prefix) ? (prefix) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_s__ = (const char *)(str);                                                   \
+    const char *__bdd_p__ = (const char *)(prefix);                                                \
+    __BDD_CHECK__(__bdd_str_starts_with__(__bdd_s__, __bdd_p__),                                   \
+                  "expected \"%s\" to start with \"%s\"", __bdd_cstr_or_null__(__bdd_s__),         \
+                  __bdd_cstr_or_null__(__bdd_p__));                                                \
+  } while (0)
 #define check_str_starts_with_warn(str, prefix)                                                    \
-  __BDD_WARN__(__bdd_str_starts_with__((str), (prefix)), "expected \"%s\" to start with \"%s\"",   \
-               (str) ? (str) : "(null)", (prefix) ? (prefix) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_s__ = (const char *)(str);                                                   \
+    const char *__bdd_p__ = (const char *)(prefix);                                                \
+    __BDD_WARN__(__bdd_str_starts_with__(__bdd_s__, __bdd_p__),                                    \
+                 "expected \"%s\" to start with \"%s\"", __bdd_cstr_or_null__(__bdd_s__),          \
+                 __bdd_cstr_or_null__(__bdd_p__));                                                 \
+  } while (0)
 
 #define check_str_ends_with(str, suffix)                                                           \
-  __BDD_CHECK__(__bdd_str_ends_with__((str), (suffix)), "expected \"%s\" to end with \"%s\"",      \
-                (str) ? (str) : "(null)", (suffix) ? (suffix) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_s__ = (const char *)(str);                                                   \
+    const char *__bdd_x__ = (const char *)(suffix);                                                \
+    __BDD_CHECK__(__bdd_str_ends_with__(__bdd_s__, __bdd_x__), "expected \"%s\" to end with \"%s\"",\
+                  __bdd_cstr_or_null__(__bdd_s__), __bdd_cstr_or_null__(__bdd_x__));               \
+  } while (0)
 #define check_str_ends_with_warn(str, suffix)                                                      \
-  __BDD_WARN__(__bdd_str_ends_with__((str), (suffix)), "expected \"%s\" to end with \"%s\"",       \
-               (str) ? (str) : "(null)", (suffix) ? (suffix) : "(null)")
+  do {                                                                                             \
+    const char *__bdd_s__ = (const char *)(str);                                                   \
+    const char *__bdd_x__ = (const char *)(suffix);                                                \
+    __BDD_WARN__(__bdd_str_ends_with__(__bdd_s__, __bdd_x__),                                      \
+                 "expected \"%s\" to end with \"%s\"", __bdd_cstr_or_null__(__bdd_s__),            \
+                 __bdd_cstr_or_null__(__bdd_x__));                                                 \
+  } while (0)
 
 /* Memory comparisons */
 #define check_mem_eq(actual, expected, len)                                                        \
-  __BDD_CHECK__(memcmp((actual), (expected), (len)) == 0, "memory mismatch at %zu bytes",          \
-                __BDD_CAST(size_t, (len)))
+  do {                                                                                             \
+    const void *__bdd_a__ = (const void *)(actual);                                                \
+    const void *__bdd_e__ = (const void *)(expected);                                              \
+    size_t __bdd_n__ = __BDD_CAST(size_t, (len));                                                  \
+    __BDD_CHECK__(memcmp(__bdd_a__, __bdd_e__, __bdd_n__) == 0, "memory mismatch at %zu bytes",   \
+                  __bdd_n__);                                                                       \
+  } while (0)
 #define check_mem_eq_warn(actual, expected, len)                                                   \
-  __BDD_WARN__(memcmp((actual), (expected), (len)) == 0, "memory mismatch at %zu bytes",           \
-               __BDD_CAST(size_t, (len)))
+  do {                                                                                             \
+    const void *__bdd_a__ = (const void *)(actual);                                                \
+    const void *__bdd_e__ = (const void *)(expected);                                              \
+    size_t __bdd_n__ = __BDD_CAST(size_t, (len));                                                  \
+    __BDD_WARN__(memcmp(__bdd_a__, __bdd_e__, __bdd_n__) == 0, "memory mismatch at %zu bytes",    \
+                 __bdd_n__);                                                                        \
+  } while (0)
 
 #define check_mem_ne(actual, expected, len)                                                        \
-  __BDD_CHECK__(memcmp((actual), (expected), (len)) != 0,                                          \
-                "expected memory to differ at %zu bytes", __BDD_CAST(size_t, (len)))
+  do {                                                                                             \
+    const void *__bdd_a__ = (const void *)(actual);                                                \
+    const void *__bdd_e__ = (const void *)(expected);                                              \
+    size_t __bdd_n__ = __BDD_CAST(size_t, (len));                                                  \
+    __BDD_CHECK__(memcmp(__bdd_a__, __bdd_e__, __bdd_n__) != 0,                                    \
+                  "expected memory to differ at %zu bytes", __bdd_n__);                            \
+  } while (0)
 #define check_mem_ne_warn(actual, expected, len)                                                   \
-  __BDD_WARN__(memcmp((actual), (expected), (len)) != 0, "expected memory to differ at %zu bytes", \
-               __BDD_CAST(size_t, (len)))
+  do {                                                                                             \
+    const void *__bdd_a__ = (const void *)(actual);                                                \
+    const void *__bdd_e__ = (const void *)(expected);                                              \
+    size_t __bdd_n__ = __BDD_CAST(size_t, (len));                                                  \
+    __BDD_WARN__(memcmp(__bdd_a__, __bdd_e__, __bdd_n__) != 0,                                     \
+                 "expected memory to differ at %zu bytes", __bdd_n__);                             \
+  } while (0)
 
 /* Pointer checks */
-#define check_not_null(ptr) __BDD_CHECK__((ptr) != NULL, "expected non-null but got NULL")
-#define check_not_null_warn(ptr) __BDD_WARN__((ptr) != NULL, "expected non-null but got NULL")
+#define check_not_null(ptr)                                                                        \
+  do {                                                                                             \
+    const void *__bdd_ptr__ = (const void *)(ptr);                                                 \
+    __BDD_CHECK__(__bdd_ptr__ != NULL, "expected non-null but got NULL");                          \
+  } while (0)
+#define check_not_null_warn(ptr)                                                                   \
+  do {                                                                                             \
+    const void *__bdd_ptr__ = (const void *)(ptr);                                                 \
+    __BDD_WARN__(__bdd_ptr__ != NULL, "expected non-null but got NULL");                           \
+  } while (0)
 
-#define check_null(ptr) __BDD_CHECK__((ptr) == NULL, "expected NULL but got %p", (void *)(ptr))
-#define check_null_warn(ptr) __BDD_WARN__((ptr) == NULL, "expected NULL but got %p", (void *)(ptr))
+#define check_null(ptr)                                                                            \
+  do {                                                                                             \
+    const void *__bdd_ptr__ = (const void *)(ptr);                                                 \
+    __BDD_CHECK__(__bdd_ptr__ == NULL, "expected NULL but got %p", __bdd_ptr__);                   \
+  } while (0)
+#define check_null_warn(ptr)                                                                       \
+  do {                                                                                             \
+    const void *__bdd_ptr__ = (const void *)(ptr);                                                 \
+    __BDD_WARN__(__bdd_ptr__ == NULL, "expected NULL but got %p", __bdd_ptr__);                    \
+  } while (0)
 
 /* Hex comparisons */
 #define check_hex_eq(actual, expected)                                                             \
-  __BDD_CHECK__((actual) == (expected), "expected 0x%x but got 0x%x",                              \
-                __BDD_CAST(unsigned, (expected)), __BDD_CAST(unsigned, (actual)))
+  __BDD_UINT_COMPARE__(__BDD_CHECK__, actual, expected, ==, "expected 0x%x but got 0x%x")
 
 #define check_hex64_eq(actual, expected)                                                           \
-  __BDD_CHECK__((actual) == (expected), "expected 0x%llx but got 0x%llx",                          \
-                __BDD_CAST(unsigned long long, (expected)),                                        \
-                __BDD_CAST(unsigned long long, (actual)))
+  do {                                                                                             \
+    unsigned long long __bdd_a__ = __BDD_CAST(unsigned long long, (actual));                       \
+    unsigned long long __bdd_e__ = __BDD_CAST(unsigned long long, (expected));                     \
+    __BDD_CHECK__(__bdd_a__ == __bdd_e__, "expected 0x%llx but got 0x%llx", __bdd_e__, __bdd_a__);\
+  } while (0)
 
 /* Boolean assertions */
 #define check_true(actual) __BDD_CHECK__((actual), "expected true but got false")
@@ -2048,34 +2255,51 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
 
 /* Pointer address comparisons */
 #define check_ptr_eq(actual, expected)                                                             \
-  __BDD_CHECK__((const void *)(actual) == (const void *)(expected), "expected %p but got %p",      \
-                (const void *)(expected), (const void *)(actual))
+  do {                                                                                             \
+    const void *__bdd_a__ = (const void *)(actual);                                                \
+    const void *__bdd_e__ = (const void *)(expected);                                              \
+    __BDD_CHECK__(__bdd_a__ == __bdd_e__, "expected %p but got %p", __bdd_e__, __bdd_a__);        \
+  } while (0)
 
 #define check_ptr_ne(actual, expected)                                                             \
-  __BDD_CHECK__((const void *)(actual) != (const void *)(expected), "expected != %p but got %p",   \
-                (const void *)(expected), (const void *)(actual))
+  do {                                                                                             \
+    const void *__bdd_a__ = (const void *)(actual);                                                \
+    const void *__bdd_e__ = (const void *)(expected);                                              \
+    __BDD_CHECK__(__bdd_a__ != __bdd_e__, "expected != %p but got %p", __bdd_e__, __bdd_a__);     \
+  } while (0)
 
 /* Range assertion: lo <= actual <= hi */
 #define check_int_range(actual, lo, hi)                                                            \
-  __BDD_CHECK__(__BDD_CAST(int, (actual)) >= __BDD_CAST(int, (lo)) &&                              \
-                    __BDD_CAST(int, (actual)) <= __BDD_CAST(int, (hi)),                            \
-                "expected %d in range [%d, %d]", __BDD_CAST(int, (actual)), __BDD_CAST(int, (lo)), \
-                __BDD_CAST(int, (hi)))
+  do {                                                                                             \
+    int __bdd_a__ = __BDD_CAST(int, (actual));                                                     \
+    int __bdd_lo__ = __BDD_CAST(int, (lo));                                                        \
+    int __bdd_hi__ = __BDD_CAST(int, (hi));                                                        \
+    __BDD_CHECK__(__bdd_a__ >= __bdd_lo__ && __bdd_a__ <= __bdd_hi__,                              \
+                  "expected %d in range [%d, %d]", __bdd_a__, __bdd_lo__, __bdd_hi__);            \
+  } while (0)
 
 /* Float special value assertions */
 #define check_float_nan(actual)                                                                    \
-  __BDD_CHECK__(isnan(__BDD_CAST(double, (actual))), "expected NaN but got %f",                    \
-                __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    __BDD_CHECK__(isnan(__bdd_a__), "expected NaN but got %f", __bdd_a__);                         \
+  } while (0)
 #define check_float_nan_warn(actual)                                                               \
-  __BDD_WARN__(isnan(__BDD_CAST(double, (actual))), "expected NaN but got %f",                     \
-               __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    __BDD_WARN__(isnan(__bdd_a__), "expected NaN but got %f", __bdd_a__);                          \
+  } while (0)
 
 #define check_float_inf(actual)                                                                    \
-  __BDD_CHECK__(isinf(__BDD_CAST(double, (actual))), "expected Inf but got %f",                    \
-                __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    __BDD_CHECK__(isinf(__bdd_a__), "expected Inf but got %f", __bdd_a__);                         \
+  } while (0)
 #define check_float_inf_warn(actual)                                                               \
-  __BDD_WARN__(isinf(__BDD_CAST(double, (actual))), "expected Inf but got %f",                     \
-               __BDD_CAST(double, (actual)))
+  do {                                                                                             \
+    double __bdd_a__ = __BDD_CAST(double, (actual));                                               \
+    __BDD_WARN__(isinf(__bdd_a__), "expected Inf but got %f", __bdd_a__);                          \
+  } while (0)
 
 #define check_double_nan(actual) check_float_nan(actual)
 #define check_double_nan_warn(actual) check_float_nan_warn(actual)
@@ -2085,11 +2309,13 @@ static inline int __bdd_str_ends_with__(const char *s, const char *suffix) {
 
 /* Bitmask assertion: (val & mask) == mask */
 #define check_bits(actual, mask)                                                                   \
-  __BDD_CHECK__((__BDD_CAST(unsigned, (actual)) & __BDD_CAST(unsigned, (mask))) ==                 \
-                    __BDD_CAST(unsigned, (mask)),                                                  \
-                "expected bits 0x%x set in 0x%x, got 0x%x", __BDD_CAST(unsigned, (mask)),          \
-                __BDD_CAST(unsigned, (actual)),                                                    \
-                __BDD_CAST(unsigned, (actual)) & __BDD_CAST(unsigned, (mask)))
+  do {                                                                                             \
+    unsigned __bdd_a__ = __BDD_CAST(unsigned, (actual));                                           \
+    unsigned __bdd_m__ = __BDD_CAST(unsigned, (mask));                                             \
+    unsigned __bdd_got__ = __bdd_a__ & __bdd_m__;                                                  \
+    __BDD_CHECK__(__bdd_got__ == __bdd_m__, "expected bits 0x%x set in 0x%x, got 0x%x",           \
+                  __bdd_m__, __bdd_a__, __bdd_got__);                                              \
+  } while (0)
 
 /* --- Array comparison helpers --- */
 
@@ -2302,23 +2528,27 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 /* --- Non-fatal assertion --- */
 /* Internal implementation that takes file and line */
 #define __BDD_WARN_IMPL__(condition, file, line, ...)                                              \
-  if (!__bdd_eval_bool__(!!(condition))) {                                                         \
-    ++__bdd_active_config__->assertion_count;                                                      \
-    char *message = __bdd_format__(__VA_ARGS__);                                                   \
-    ++__bdd_active_config__->warn_count;                                                           \
-    __bdd_indent__(stdout, __bdd_active_config__->current_test                                     \
-                               ? __bdd_active_config__->current_test->level + 1                    \
-                               : 1);                                                               \
-    if (__bdd_active_config__->use_color) {                                                        \
-      printf(__BDD_COLOR_YELLOW__ "Warning:" __BDD_COLOR_RESET__ " %s", message);                  \
-    } else {                                                                                       \
-      printf("Warning: %s", message);                                                              \
+  do {                                                                                             \
+    if (__bdd_active_config__) {                                                                   \
+      if (!__bdd_eval_bool__(!!(condition))) {                                                     \
+        ++__bdd_active_config__->assertion_count;                                                  \
+        char *__bdd_message__ = __bdd_format__(__VA_ARGS__);                                       \
+        ++__bdd_active_config__->warn_count;                                                       \
+        __bdd_indent__(stdout, __bdd_active_config__->current_test                                 \
+                                   ? __bdd_active_config__->current_test->level + 1                \
+                                   : 1);                                                           \
+        if (__bdd_active_config__->use_color) {                                                    \
+          printf(__BDD_COLOR_YELLOW__ "Warning:" __BDD_COLOR_RESET__ " %s", __bdd_message__);      \
+        } else {                                                                                   \
+          printf("Warning: %s", __bdd_message__);                                                  \
+        }                                                                                          \
+        printf(" at %s:%s\n", file, line);                                                         \
+        free(__bdd_message__);                                                                     \
+      } else {                                                                                     \
+        ++__bdd_active_config__->assertion_count;                                                  \
+      }                                                                                            \
     }                                                                                              \
-    printf(" at %s:%s\n", file, line);                                                             \
-    free(message);                                                                                 \
-  } else {                                                                                         \
-    ++__bdd_active_config__->assertion_count;                                                      \
-  }
+  } while (0)
 
 /* Wrapper that captures __FILE__ and __LINE__ */
 #define __BDD_WARN__(condition, ...)                                                               \
@@ -2693,83 +2923,101 @@ namespace __bdd_cpp__ {
 
   #define check_equal(actual, expected)                                                            \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_equal__((actual), (expected))))) {              \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        std::string __e = __bdd_cpp__::to_string_safe((expected));                                 \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_equal__(__bdd_a_ref__, __bdd_e_ref__)))) {      \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
         __BDD_CHECK__(0, "expected %s but got %s", __e.c_str(), __a.c_str());                      \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
   #define check_equal_warn(actual, expected)                                                       \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!((actual) == (expected)))) {                                        \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        std::string __e = __bdd_cpp__::to_string_safe((expected));                                 \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_equal__(__bdd_a_ref__, __bdd_e_ref__)))) {      \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
         __BDD_WARN__(0, "expected %s but got %s", __e.c_str(), __a.c_str());                       \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
 
   #define check_not_equal(actual, expected)                                                        \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_not_equal__((actual), (expected))))) {          \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        __BDD_CHECK__(0, "expected != %s but got %s", __a.c_str(), __a.c_str());                   \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_not_equal__(__bdd_a_ref__, __bdd_e_ref__)))) {  \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
+        __BDD_CHECK__(0, "expected != %s but got %s", __e.c_str(), __a.c_str());                   \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
   #define check_not_equal_warn(actual, expected)                                                   \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_not_equal__((actual), (expected))))) {          \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        __BDD_WARN__(0, "expected != %s but got %s", __a.c_str(), __a.c_str());                    \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_cpp__::__bdd_not_equal__(__bdd_a_ref__, __bdd_e_ref__)))) {  \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
+        __BDD_WARN__(0, "expected != %s but got %s", __e.c_str(), __a.c_str());                    \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
 
   #define check_greater(actual, expected)                                                          \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!((actual) > (expected)))) {                                         \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        std::string __e = __bdd_cpp__::to_string_safe((expected));                                 \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_a_ref__ > __bdd_e_ref__))) {                                 \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
         __BDD_CHECK__(0, "expected > %s but got %s", __e.c_str(), __a.c_str());                    \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
   #define check_greater_warn(actual, expected)                                                     \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!((actual) > (expected)))) {                                         \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        std::string __e = __bdd_cpp__::to_string_safe((expected));                                 \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_a_ref__ > __bdd_e_ref__))) {                                 \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
         __BDD_WARN__(0, "expected > %s but got %s", __e.c_str(), __a.c_str());                     \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
 
   #define check_less(actual, expected)                                                             \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!((actual) < (expected)))) {                                         \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        std::string __e = __bdd_cpp__::to_string_safe((expected));                                 \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_a_ref__ < __bdd_e_ref__))) {                                 \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
         __BDD_CHECK__(0, "expected < %s but got %s", __e.c_str(), __a.c_str());                    \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
   #define check_less_warn(actual, expected)                                                        \
     do {                                                                                           \
-      if (!__bdd_eval_bool__(!!((actual) < (expected)))) {                                         \
-        std::string __a = __bdd_cpp__::to_string_safe((actual));                                   \
-        std::string __e = __bdd_cpp__::to_string_safe((expected));                                 \
+      const auto &__bdd_a_ref__ = (actual);                                                        \
+      const auto &__bdd_e_ref__ = (expected);                                                      \
+      if (!__bdd_eval_bool__(!!(__bdd_a_ref__ < __bdd_e_ref__))) {                                 \
+        std::string __a = __bdd_cpp__::to_string_safe(__bdd_a_ref__);                              \
+        std::string __e = __bdd_cpp__::to_string_safe(__bdd_e_ref__);                              \
         __BDD_WARN__(0, "expected < %s but got %s", __e.c_str(), __a.c_str());                     \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
 
@@ -2846,7 +3094,7 @@ namespace __bdd_cpp__ {
       if (__bdd_threw__) {                                                                         \
         __BDD_CHECK__(0, "expected no exception but got: %s", __bdd_what__.c_str());               \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
 
@@ -2918,11 +3166,16 @@ namespace __bdd_cpp__ {
       if (__bdd_threw__) {                                                                         \
         __BDD_WARN__(0, "expected no exception but got: %s", __bdd_what__.c_str());                \
       } else {                                                                                     \
-        ++__bdd_config__->assertion_count;                                                         \
+        ++__bdd_active_config__->assertion_count;                                                  \
       }                                                                                            \
     } while (0)
 
 #endif /* __cplusplus */
+
+/* Use before_all()/after_all() as the cross-language names for one-time setup/teardown hooks. */
+#define before_all()                                                                               \
+  __BDD_NODE__(__bdd_node_flags_none__, list_before, __BDD_NODE_INTERIM__, "before")
+#define after_all() __BDD_NODE__(__bdd_node_flags_none__, list_after, __BDD_NODE_INTERIM__, "after")
 
 #ifdef _MSC_VER
   #pragma warning(pop)

@@ -1091,12 +1091,12 @@ static M3Result call_start_capture(turbo_wasm3_vm_t *vm, IM3Function start,
 
 spec("Turbo wasm3 integration") {
 
-  before() {
+  before_all() {
     memset(g_fixture_a, 0, sizeof(g_fixture_a));
     memset(g_fixture_b, 0, sizeof(g_fixture_b));
   }
 
-  after() {
+  after_all() {
     cleanup_fixture_dir(g_fixture_a);
     cleanup_fixture_dir(g_fixture_b);
   }

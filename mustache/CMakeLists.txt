@@ -45,6 +45,9 @@ target_link_libraries(mustache_xml_example PRIVATE TurboNet::Mustache cxml)
 set_target_properties(mustache_xml_example PROPERTIES FOLDER mustache/examples)
 
 add_subdirectory(test)
+if(BUILD_BENCHMARKS OR BUILD_TESTS)
+  add_subdirectory(benchmarks)
+endif()
 
 # Install targets
 install(

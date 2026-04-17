@@ -16,7 +16,7 @@ static char g_file2[1024]; /* rename target */
 
 spec("Turbo FS Tests") {
 
-  before() {
+  before_all() {
     strncpy(g_file,  "turbo_fs_test.txt",    sizeof(g_file));
     strncpy(g_dir,   "turbo_fs_test_dir",    sizeof(g_dir));
     strncpy(g_file2, "turbo_fs_renamed.txt", sizeof(g_file2));
@@ -26,7 +26,7 @@ spec("Turbo FS Tests") {
     turbo_fs_rmdir(g_dir);
   }
 
-  after() {
+  after_all() {
     turbo_fs_unlink(g_file);
     turbo_fs_unlink(g_file2);
     turbo_fs_rmdir(g_dir);

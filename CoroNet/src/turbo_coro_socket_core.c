@@ -769,6 +769,9 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
 
     *data = recv_data;
     *len = recv_len;
+    if (recv_data != NULL && status == TURBO_EOF) {
+      return 0;
+    }
     return status;
   }
 }

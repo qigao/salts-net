@@ -532,9 +532,10 @@ void turbo_stream_close(turbo_stream_t *s) {
 
 /* ── Public API: Listener ─────────────────────────────────── */
 
-turbo_stream_listener_t *turbo_stream_listen(
+turbo_stream_listener_t *turbo_stream_listen_ex(
     coro_context_t *ctx, turbo_stream_kind_t kind,
-    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept) {
+    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept,
+    int reuse_port) {
   turbo_stream_listener_t *l;
   const turbo_stream_backend_ops_t *ops;
   int rc;
@@ -561,6 +562,7 @@ turbo_stream_listener_t *turbo_stream_listen(
   l->ops = ops;
   l->arena = ctx->arena;
   l->on_accept = on_accept;
+  l->reuse_port = reuse_port ? 1 : 0;
 
   rc = ops->bind(l, addr);
   if (rc != 0) {
@@ -578,6 +580,12 @@ turbo_stream_listener_t *turbo_stream_listen(
 
   stream_record_error(ctx, 0);
   return l;
+}
+
+turbo_stream_listener_t *turbo_stream_listen(
+    coro_context_t *ctx, turbo_stream_kind_t kind,
+    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept) {
+  return turbo_stream_listen_ex(ctx, kind, addr, backlog, on_accept, 0);
 }
 
 turbo_stream_listener_t *turbo_stream_listen_pipe(

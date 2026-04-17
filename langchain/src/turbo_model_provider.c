@@ -1,6 +1,6 @@
 #include "turbo_model_provider.h"
 
-#include "turbo_openai_agent_sse.h"
+#include "turbo_agent_sse.h"
 #include "turbo_prompt.h"
 
 #include <stdlib.h>
@@ -1037,12 +1037,10 @@ static int turbo_model_provider_apply_responses_event(
   return 0;
 }
 
-static json_value_t *turbo_model_provider_build_model_event(const char *response_id,
-                                                            char *output_text,
-                                                            json_value_t *tool_calls) {
+static turbo_runtime_data_bind_value_t *turbo_model_provider_build_model_event_bind(
+    const char *response_id, char *output_text, json_value_t *tool_calls) {
   turbo_runtime_data_bind_value_t *tool_calls_bind;
   turbo_runtime_data_bind_value_t *event_bind;
-  json_value_t *event;
 
   if (!output_text || !tool_calls) {
     free(output_text);
@@ -1059,17 +1057,23 @@ static json_value_t *turbo_model_provider_build_model_event(const char *response
       turbo_event_model_create_bind(response_id ? response_id : "", output_text, tool_calls_bind);
   turbo_runtime_data_bind_value_destroy(tool_calls_bind);
   turbo_free_json(&tool_calls);
+  free(output_text);
+  return event_bind;
+}
+
+static json_value_t *turbo_model_provider_build_model_event(const char *response_id,
+                                                            char *output_text,
+                                                            json_value_t *tool_calls) {
+  turbo_runtime_data_bind_value_t *event_bind;
+  json_value_t *event;
+
+  event_bind = turbo_model_provider_build_model_event_bind(response_id, output_text, tool_calls);
   if (!event_bind) {
-    free(output_text);
     return NULL;
   }
+
   event = turbo_runtime_data_bind_value_to_json(event_bind);
   turbo_runtime_data_bind_value_destroy(event_bind);
-  if (!event) {
-    free(output_text);
-    return NULL;
-  }
-  free(output_text);
   return event;
 }
 
@@ -1083,15 +1087,15 @@ static int turbo_model_provider_sse_to_response_json(const turbo_model_provider_
   *out_response_json = NULL;
 
   if (provider == turbo_model_provider_openai_responses()) {
-    return turbo_openai_responses_sse_to_json(sse_data, sse_len, out_response_json);
+    return turbo_agent_responses_sse_to_json(sse_data, sse_len, out_response_json);
   }
 
   if (turbo_model_provider_is_legacy_chat(provider)) {
-    return turbo_openai_chat_sse_to_json(sse_data, sse_len, out_response_json);
+    return turbo_agent_chat_sse_to_json(sse_data, sse_len, out_response_json);
   }
 
   if (turbo_model_provider_is_anthropic_messages(provider)) {
-    return turbo_openai_anthropic_messages_sse_to_json(sse_data, sse_len, out_response_json);
+    return turbo_agent_anthropic_messages_sse_to_json(sse_data, sse_len, out_response_json);
   }
 
   return -1;
@@ -1279,16 +1283,46 @@ json_value_t *turbo_model_provider_sse_to_event_json(
 
 turbo_runtime_data_bind_value_t *turbo_model_provider_response_to_event_bind(
     const turbo_model_provider_t *provider, const json_value_t *response) {
-  json_value_t *event_json;
+  char *response_id;
+  char *output_text;
+  json_value_t *tool_calls;
+  const json_value_t *choices;
+  const json_value_t *choice;
+  const json_value_t *message;
   turbo_runtime_data_bind_value_t *event_bind;
 
-  event_json = turbo_model_provider_response_to_event_json(provider, response);
-  if (!event_json) {
+  if (!provider || !response || turbo_json_type(response) != TURBO_JSON_OBJECT) {
     return NULL;
   }
 
-  event_bind = turbo_runtime_data_bind_value_from_json(event_json);
-  turbo_free_json(&event_json);
+  response_id = turbo_model_provider_response_id_copy(response);
+  if (!response_id) {
+    return NULL;
+  }
+
+  if (provider == turbo_model_provider_openai_responses()) {
+    output_text = turbo_model_provider_extract_responses_text(response);
+    tool_calls = turbo_model_provider_collect_responses_tool_calls(response);
+  } else if (turbo_model_provider_is_legacy_chat(provider)) {
+    choices = turbo_json_object_get(response, "choices");
+    choice = choices && turbo_json_type(choices) == TURBO_JSON_ARRAY && turbo_json_array_size(choices) > 0
+                 ? turbo_json_array_get(choices, 0)
+                 : NULL;
+    message = choice && turbo_json_type(choice) == TURBO_JSON_OBJECT
+                  ? turbo_json_object_get(choice, "message")
+                  : NULL;
+    output_text = turbo_model_provider_extract_chat_text(message);
+    tool_calls = turbo_model_provider_collect_chat_tool_calls(message);
+  } else if (turbo_model_provider_is_anthropic_messages(provider)) {
+    output_text = turbo_model_provider_extract_anthropic_text(response);
+    tool_calls = turbo_model_provider_collect_anthropic_tool_calls(response);
+  } else {
+    free(response_id);
+    return NULL;
+  }
+
+  event_bind = turbo_model_provider_build_model_event_bind(response_id, output_text, tool_calls);
+  free(response_id);
   if (!event_bind || turbo_event_model_validate_bind(event_bind) != 0) {
     turbo_runtime_data_bind_value_destroy(event_bind);
     return NULL;
@@ -1319,21 +1353,30 @@ int turbo_model_provider_response_emit_bind(const turbo_model_provider_t *provid
 
 turbo_runtime_data_bind_value_t *turbo_model_provider_sse_to_event_bind(
     const turbo_model_provider_t *provider, const char *sse_data, size_t sse_len) {
-  json_value_t *event_json;
-  turbo_runtime_data_bind_value_t *event_bind;
+  char *response_json = NULL;
+  json_value_t *response = NULL;
+  turbo_runtime_data_bind_value_t *event_bind = NULL;
 
-  event_json = turbo_model_provider_sse_to_event_json(provider, sse_data, sse_len);
-  if (!event_json) {
+  if (!provider || !sse_data) {
     return NULL;
   }
 
-  event_bind = turbo_runtime_data_bind_value_from_json(event_json);
-  turbo_free_json(&event_json);
-  if (!event_bind || turbo_event_model_validate_bind(event_bind) != 0) {
-    turbo_runtime_data_bind_value_destroy(event_bind);
+  if (turbo_model_provider_sse_to_response_json(provider, sse_data, sse_len, &response_json) != 0 ||
+      !response_json) {
+    free(response_json);
     return NULL;
   }
 
+  if (turbo_parse_json((const uint8_t *)response_json, strlen(response_json), &response) != 0 ||
+      !response) {
+    free(response_json);
+    turbo_free_json(&response);
+    return NULL;
+  }
+
+  event_bind = turbo_model_provider_response_to_event_bind(provider, response);
+  free(response_json);
+  turbo_free_json(&response);
   return event_bind;
 }
 

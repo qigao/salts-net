@@ -60,6 +60,11 @@ CXX_C_API int turbo_datagram_bind(turbo_datagram_t *d, const char *host,
                                    unsigned short port);
 
 /**
+ * @brief Enable or disable SO_REUSEPORT for future bind calls on this handle.
+ */
+CXX_C_API void turbo_datagram_set_reuse_port(turbo_datagram_t *d, int enable);
+
+/**
  * @brief Connect to a remote address (enables send without dest).
  */
 CXX_C_API int turbo_datagram_connect(turbo_datagram_t *d, const char *host,

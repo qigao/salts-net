@@ -60,6 +60,21 @@ spec("Bucket Priority Queue SPSC") {
     bucket_priority_queue_spsc_destroy(&queue);
   }
 
+  it("allows empty reads after init with default capacity") {
+    bucket_priority_queue_spsc_t queue;
+    bucket_priority_spsc_value_t value = 123;
+    bucket_priority_spsc_value_t out[4] = {0};
+
+    check(bucket_priority_queue_spsc_init(&queue, 0));
+    check(!bucket_priority_queue_spsc_pop(&queue, &value));
+    check(!bucket_priority_queue_spsc_peek(&queue, &value));
+    check_size_eq(bucket_priority_queue_spsc_pop_batch(&queue, 4, out), 0);
+    check(bucket_priority_queue_spsc_empty(&queue));
+    check_size_eq(bucket_priority_queue_spsc_size(&queue), 0);
+
+    bucket_priority_queue_spsc_destroy(&queue);
+  }
+
   it("is FIFO within the same priority") {
     bucket_priority_queue_spsc_t queue;
     bucket_priority_spsc_value_t value = 0;

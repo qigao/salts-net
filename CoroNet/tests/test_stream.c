@@ -9,6 +9,7 @@
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <unistd.h>
 #endif
 
 static int s_connected = -1;
@@ -59,6 +60,46 @@ static void on_accept_local(void *server, void *client, void *peer) {
         s_accepted_clients[s_accepted_count] = (turbo_stream_t *)client;
     }
     s_accepted_count++;
+}
+
+static unsigned short stream_test_pick_loopback_port(void) {
+    unsigned short port = 0;
+    struct sockaddr_in addr;
+#ifdef _WIN32
+    int addr_len = (int)sizeof(addr);
+    SOCKET sock = INVALID_SOCKET;
+#else
+    socklen_t addr_len = (socklen_t)sizeof(addr);
+    int sock = -1;
+#endif
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#ifdef _WIN32
+    if (sock == INVALID_SOCKET) {
+        return 0;
+    }
+#else
+    if (sock < 0) {
+        return 0;
+    }
+#endif
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+        getsockname(sock, (struct sockaddr *)&addr, &addr_len) == 0) {
+        port = ntohs(addr.sin_port);
+    }
+
+#ifdef _WIN32
+    closesocket(sock);
+#else
+    close(sock);
+#endif
+    return port;
 }
 
 spec("Stream") {
@@ -229,6 +270,47 @@ spec("Stream") {
         check_int_eq(coro_socket_bind(NULL, NULL), TURBO_EINVAL);
         check_int_eq(coro_socket_listen(NULL, 1), TURBO_EINVAL);
         check_int_eq(coro_socket_accept(NULL, NULL), TURBO_EINVAL);
+    }
+
+    it("should honor reuse_port for tcp listeners") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *server1 = NULL;
+        coro_socket_t *server2 = NULL;
+        struct sockaddr_in addr;
+        unsigned short port;
+        int r;
+
+        check_not_null(ctx);
+
+        server1 = coro_socket_create_tcpv4(ctx);
+        server2 = coro_socket_create_tcpv4(ctx);
+        check_not_null(server1);
+        check_not_null(server2);
+
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+
+        coro_socket_set_reuse_port(server1, 1);
+        coro_socket_set_reuse_port(server2, 1);
+
+        check_int_eq(coro_socket_bind(server1, (struct sockaddr *)&addr), 0);
+        r = coro_socket_listen(server1, 16);
+        if (r == 0) {
+            check_int_eq(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
+            check_int_eq(coro_socket_listen(server2, 16), 0);
+        } else {
+            check(r != 0);
+        }
+
+        coro_socket_destroy(server2);
+        coro_socket_destroy(server1);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
     }
 
     it("should listen and accept ipv6 connections") {

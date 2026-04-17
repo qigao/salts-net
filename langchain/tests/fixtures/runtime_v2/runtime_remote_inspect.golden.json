@@ -1,0 +1,50 @@
+{
+  "thread_observability_index_response": {
+    "id": "req-index",
+    "index": {
+      "thread_id": "remote-thread-1",
+      "current_status": "interrupted",
+      "current_checkpoint_summary_required": true
+    }
+  },
+  "thread_observability_index_request": {
+    "id": "req-index",
+    "method": "runtime.getThreadObservabilityIndex",
+    "params": {
+      "thread_id": "remote-thread-1"
+    }
+  },
+  "list_observability_indexes_request": {
+    "id": "req-list",
+    "method": "runtime.listObservabilityIndexesFiltered",
+    "params": {
+      "filters": {
+        "status": "interrupted",
+        "thread_id_prefix": "remote-thread-",
+        "limit": 1
+      }
+    }
+  },
+  "list_observability_indexes_response": {
+    "id": "req-list",
+    "indexes": {
+      "expected_thread_ids": ["remote-thread-1"]
+    }
+  },
+  "checkpoint_context_request": {
+    "id": "req-context",
+    "method": "runtime.getCheckpointContext",
+    "params": {
+      "checkpoint_id_required": true
+    }
+  },
+  "checkpoint_context_response": {
+    "id": "req-context",
+    "context": {
+      "thread_id": "remote-thread-1",
+      "checkpoint_summary_required": true,
+      "run_id_required": true,
+      "history_events_min": 1
+    }
+  }
+}

@@ -18,6 +18,68 @@
 /* Default global app instance for backward compatibility */
 static iris_app_t *g_default_app = NULL;
 
+#define IRIS_RPC_REGISTRY_MAGIC 0x49525043u
+
+typedef struct iris_rpc_binding_s {
+    char *path;
+    void *context;
+    struct iris_rpc_binding_s *next;
+} iris_rpc_binding_t;
+
+typedef struct iris_rpc_registry_s {
+    unsigned int magic;
+    iris_rpc_binding_t *head;
+} iris_rpc_registry_t;
+
+static iris_rpc_registry_t *iris_app_rpc_registry_get(const iris_app_t *app) {
+    iris_rpc_registry_t *registry;
+
+    if (!app || !app->rpc_context) {
+        return NULL;
+    }
+    registry = (iris_rpc_registry_t *)app->rpc_context;
+    return registry->magic == IRIS_RPC_REGISTRY_MAGIC ? registry : NULL;
+}
+
+static iris_rpc_registry_t *iris_app_rpc_registry_ensure(iris_app_t *app) {
+    iris_rpc_registry_t *registry;
+
+    if (!app) {
+        return NULL;
+    }
+    registry = iris_app_rpc_registry_get(app);
+    if (registry) {
+        return registry;
+    }
+    if (app->rpc_context) {
+        return NULL;
+    }
+    registry = (iris_rpc_registry_t *)calloc(1, sizeof(*registry));
+    if (!registry) {
+        return NULL;
+    }
+    registry->magic = IRIS_RPC_REGISTRY_MAGIC;
+    app->rpc_context = registry;
+    return registry;
+}
+
+static void iris_app_rpc_registry_free(iris_rpc_registry_t *registry) {
+    iris_rpc_binding_t *binding;
+    iris_rpc_binding_t *next;
+
+    if (!registry) {
+        return;
+    }
+    binding = registry->head;
+    while (binding) {
+        next = binding->next;
+        free(binding->path);
+        free(binding);
+        binding = next;
+    }
+    free(registry);
+}
+
 iris_app_t *iris_app_create(void) {
     iris_app_t *app = calloc(1, sizeof(iris_app_t));
     if (!app) {
@@ -81,6 +143,11 @@ void iris_app_destroy(iris_app_t *app) {
         g_default_app = NULL;
     }
 
+    if (iris_app_rpc_registry_get(app)) {
+        iris_app_rpc_registry_free((iris_rpc_registry_t *)app->rpc_context);
+        app->rpc_context = NULL;
+    }
+
     free(app);
 }
 
@@ -100,6 +167,93 @@ void iris_app_reset_default(void) {
         iris_app_destroy(g_default_app);
         g_default_app = NULL;
     }
+}
+
+int iris_app_bind_rpc_context(iris_app_t *app, const char *path, void *rpc_context) {
+    iris_rpc_registry_t *registry;
+    iris_rpc_binding_t *binding;
+
+    if (!app || !path || path[0] != '/' || !rpc_context) {
+        return -1;
+    }
+    registry = iris_app_rpc_registry_ensure(app);
+    if (!registry) {
+        return -1;
+    }
+
+    for (binding = registry->head; binding; binding = binding->next) {
+        if (strcmp(binding->path, path) == 0) {
+            if (binding->context && binding->context != rpc_context) {
+                return -1;
+            }
+            binding->context = rpc_context;
+            return 0;
+        }
+    }
+
+    binding = (iris_rpc_binding_t *)calloc(1, sizeof(*binding));
+    if (!binding) {
+        return -1;
+    }
+    binding->path = strdup(path);
+    if (!binding->path) {
+        free(binding);
+        return -1;
+    }
+    binding->context = rpc_context;
+    binding->next = registry->head;
+    registry->head = binding;
+    return 0;
+}
+
+void *iris_app_lookup_rpc_context(const iris_app_t *app, const char *path) {
+    iris_rpc_registry_t *registry;
+    iris_rpc_binding_t *binding;
+
+    if (!app || !path || path[0] == '\0') {
+        return NULL;
+    }
+    registry = iris_app_rpc_registry_get(app);
+    if (!registry) {
+        return NULL;
+    }
+    for (binding = registry->head; binding; binding = binding->next) {
+        if (strcmp(binding->path, path) == 0) {
+            return binding->context;
+        }
+    }
+    return NULL;
+}
+
+int iris_app_unbind_rpc_context(iris_app_t *app, const char *path, const void *rpc_context) {
+    iris_rpc_registry_t *registry;
+    iris_rpc_binding_t *binding;
+    iris_rpc_binding_t *prev = NULL;
+
+    if (!app || !path || path[0] == '\0') {
+        return -1;
+    }
+    registry = iris_app_rpc_registry_get(app);
+    if (!registry) {
+        return -1;
+    }
+    for (binding = registry->head; binding; prev = binding, binding = binding->next) {
+        if (strcmp(binding->path, path) != 0) {
+            continue;
+        }
+        if (rpc_context && binding->context != rpc_context) {
+            return -1;
+        }
+        if (prev) {
+            prev->next = binding->next;
+        } else {
+            registry->head = binding->next;
+        }
+        free(binding->path);
+        free(binding);
+        return 0;
+    }
+    return -1;
 }
 
 /* ============================================================================

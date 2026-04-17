@@ -150,6 +150,10 @@ CXX_C_API int rpc_unregister_method(rpc_context_t *ctx, const char *method_name)
 /**
  * @brief Setup RPC endpoint in Iris router
  *
+ * Binds this RPC context to the default app under `config.endpoint` and
+ * registers one HTTP route for that path. Multiple RPC endpoints may coexist
+ * on the same app as long as their endpoint paths differ.
+ *
  * @param ctx RPC context
  * @return 0 on success, -1 on failure
  */

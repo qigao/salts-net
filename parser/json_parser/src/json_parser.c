@@ -303,8 +303,17 @@ void json_array_append_arena(json_arena_t *arena, json_value_t *arr, json_value_
 
 void json_object_set_arena_ex(json_arena_t *arena, json_value_t *obj, const char *key,
                               size_t key_len, int key_owned, json_value_t *val) {
+  json_pair_t *existing;
+
   if (!obj || obj->type != JSON_OBJECT || !key || !val)
     return;
+
+  for (existing = obj->data.object_val.pairs; existing; existing = existing->next) {
+    if (existing->key_len == key_len && memcmp(existing->key, key, key_len) == 0) {
+      existing->value = val;
+      return;
+    }
+  }
 
   json_pair_t *pair = (json_pair_t *)json_arena_alloc(arena, sizeof(json_pair_t));
   if (!pair)

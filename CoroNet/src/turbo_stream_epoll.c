@@ -611,6 +611,20 @@ static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
     st->fd = socket(a->sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (st->fd < 0) { epoll_shutdown_state(st); epoll_destroy_state(st); return -errno; }
     int reuse = 1; setsockopt(st->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    if (l->reuse_port) {
+#ifdef SO_REUSEPORT
+        if (setsockopt(st->fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) != 0) {
+            int rc = -errno;
+            epoll_shutdown_state(st);
+            epoll_destroy_state(st);
+            return rc;
+        }
+#else
+        epoll_shutdown_state(st);
+        epoll_destroy_state(st);
+        return TURBO_ENOTSUP;
+#endif
+    }
     socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
                          (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
                                                       sizeof(struct sockaddr_in);

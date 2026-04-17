@@ -1,4 +1,5 @@
 #include "turbo_event.h"
+#include "turbo_parser.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,221 @@ static int turbo_event_set_string_field(turbo_runtime_data_bind_value_t *object,
     return -1;
   }
 
+  return 0;
+}
+
+static int turbo_event_set_optional_string_or_null_field(
+    turbo_runtime_data_bind_value_t *object, const char *key, const char *value, int set_null) {
+  turbo_runtime_data_bind_value_t *field_value = NULL;
+
+  if (!object || !key) {
+    return -1;
+  }
+  if (!value && !set_null) {
+    return 0;
+  }
+
+  field_value = value ? turbo_runtime_data_bind_value_create_string(value)
+                      : turbo_runtime_data_bind_value_create_null();
+  if (!field_value) {
+    return -1;
+  }
+  if (turbo_runtime_data_bind_object_set(object, key, field_value) != TURBO_RUNTIME_DATA_BIND_OK) {
+    turbo_runtime_data_bind_value_destroy(field_value);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int turbo_event_string_or_null_schema_field(turbo_runtime_data_bind_value_t *properties,
+                                                   const char *key, int allow_null) {
+  turbo_runtime_data_bind_value_t *field = turbo_runtime_data_bind_value_create_object();
+  turbo_runtime_data_bind_value_t *type_value = NULL;
+
+  if (!properties || !key || !field) {
+    turbo_runtime_data_bind_value_destroy(field);
+    return -1;
+  }
+
+  if (allow_null) {
+    turbo_runtime_data_bind_value_t *types = turbo_runtime_data_bind_value_create_array();
+    if (!types) {
+      turbo_runtime_data_bind_value_destroy(field);
+      return -1;
+    }
+    if (turbo_runtime_data_bind_array_append(
+            types, turbo_runtime_data_bind_value_create_string("string")) !=
+            TURBO_RUNTIME_DATA_BIND_OK ||
+        turbo_runtime_data_bind_array_append(types,
+                                             turbo_runtime_data_bind_value_create_string("null")) !=
+            TURBO_RUNTIME_DATA_BIND_OK) {
+      turbo_runtime_data_bind_value_destroy(types);
+      turbo_runtime_data_bind_value_destroy(field);
+      return -1;
+    }
+    type_value = types;
+  } else {
+    type_value = turbo_runtime_data_bind_value_create_string("string");
+    if (!type_value) {
+      turbo_runtime_data_bind_value_destroy(field);
+      return -1;
+    }
+  }
+
+  if (turbo_runtime_data_bind_object_set(field, "type", type_value) !=
+      TURBO_RUNTIME_DATA_BIND_OK) {
+    turbo_runtime_data_bind_value_destroy(type_value);
+    turbo_runtime_data_bind_value_destroy(field);
+    return -1;
+  }
+  type_value = NULL;
+  if (turbo_runtime_data_bind_object_set(properties, key, field) !=
+      TURBO_RUNTIME_DATA_BIND_OK) {
+    turbo_runtime_data_bind_value_destroy(field);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int turbo_event_tool_result_optional_field_valid(
+    const turbo_runtime_data_bind_value_t *event, const char *key, int allow_null) {
+  const turbo_runtime_data_bind_value_t *value;
+  turbo_runtime_data_bind_value_kind_t kind;
+
+  if (!event || !key) {
+    return 0;
+  }
+
+  value = turbo_runtime_data_bind_object_get(event, key);
+  if (!value) {
+    return 1;
+  }
+
+  kind = turbo_runtime_data_bind_value_kind(value);
+  return kind == TURBO_RUNTIME_DATA_BIND_VALUE_STRING ||
+                 (allow_null && kind == TURBO_RUNTIME_DATA_BIND_VALUE_NULL)
+             ? 1
+             : 0;
+}
+
+static int turbo_event_tool_result_attach_child_fields_from_bind_object(
+    turbo_runtime_data_bind_value_t *event, const turbo_runtime_data_bind_value_t *object) {
+  const turbo_runtime_data_bind_value_t *value;
+  const char *text = NULL;
+  int allow_null = 0;
+  size_t i;
+  static const struct {
+    const char *target_key;
+    const char *primary_key;
+    const char *fallback_key;
+    int allow_null;
+  } field_map[] = {
+      {"child_thread_id", "child_thread_id", "thread_id", 0},
+      {"child_run_id", "child_run_id", "run_id", 0},
+      {"child_checkpoint_id", "child_checkpoint_id", "checkpoint_id", 1},
+      {"child_status", "child_status", "status", 0},
+      {"parent_agent_run_id", "parent_agent_run_id", NULL, 0},
+      {"parent_tool_call_id", "parent_tool_call_id", NULL, 0},
+      {"parent_tool_name", "parent_tool_name", NULL, 0},
+  };
+
+  if (!event || !object ||
+      turbo_runtime_data_bind_value_kind(object) != TURBO_RUNTIME_DATA_BIND_VALUE_OBJECT) {
+    return 0;
+  }
+
+  for (i = 0; i < sizeof(field_map) / sizeof(field_map[0]); ++i) {
+    if (turbo_runtime_data_bind_object_get(event, field_map[i].target_key)) {
+      continue;
+    }
+    value = turbo_runtime_data_bind_object_get(object, field_map[i].primary_key);
+    if (!value && field_map[i].fallback_key) {
+      value = turbo_runtime_data_bind_object_get(object, field_map[i].fallback_key);
+    }
+    if (!value) {
+      continue;
+    }
+    allow_null = field_map[i].allow_null &&
+                 turbo_runtime_data_bind_value_kind(value) == TURBO_RUNTIME_DATA_BIND_VALUE_NULL;
+    text = turbo_runtime_data_bind_value_as_string(value);
+    if (!text && !allow_null) {
+      continue;
+    }
+    if (turbo_event_set_optional_string_or_null_field(event, field_map[i].target_key, text,
+                                                      allow_null) != 0) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+static int turbo_event_tool_result_attach_child_fields_from_output_json(
+    turbo_runtime_data_bind_value_t *event, const char *output) {
+  json_value_t *output_json = NULL;
+  const json_value_t *value;
+  const char *value_key = NULL;
+  const char *text = NULL;
+  int set_null = 0;
+  size_t i;
+  static const struct {
+    const char *target_key;
+    const char *primary_key;
+    const char *fallback_key;
+    int allow_null;
+  } field_map[] = {
+      {"child_thread_id", "child_thread_id", "thread_id", 0},
+      {"child_run_id", "child_run_id", "run_id", 0},
+      {"child_checkpoint_id", "child_checkpoint_id", "checkpoint_id", 1},
+      {"child_status", "child_status", "status", 0},
+      {"parent_agent_run_id", "parent_agent_run_id", NULL, 0},
+      {"parent_tool_call_id", "parent_tool_call_id", NULL, 0},
+      {"parent_tool_name", "parent_tool_name", NULL, 0},
+  };
+
+  if (!event || !output || output[0] != '{') {
+    return 0;
+  }
+  if (turbo_parse_json((const uint8_t *)output, strlen(output), &output_json) != 0 ||
+      !output_json || turbo_json_type(output_json) != TURBO_JSON_OBJECT) {
+    turbo_free_json(&output_json);
+    return 0;
+  }
+
+  for (i = 0; i < sizeof(field_map) / sizeof(field_map[0]); ++i) {
+    if (turbo_runtime_data_bind_object_get(event, field_map[i].target_key)) {
+      continue;
+    }
+    value_key = NULL;
+    value = turbo_json_object_get(output_json, field_map[i].primary_key);
+    if (value) {
+      value_key = field_map[i].primary_key;
+    } else if (field_map[i].fallback_key) {
+      value = turbo_json_object_get(output_json, field_map[i].fallback_key);
+      if (value) {
+        value_key = field_map[i].fallback_key;
+      }
+    }
+    if (!value) {
+      continue;
+    }
+    set_null = field_map[i].allow_null && turbo_json_type(value) == TURBO_JSON_NULL;
+    text = turbo_json_type(value) == TURBO_JSON_STRING && value_key
+               ? turbo_json_get_string(output_json, value_key)
+               : NULL;
+    if (!text && !set_null) {
+      continue;
+    }
+    if (turbo_event_set_optional_string_or_null_field(event, field_map[i].target_key, text,
+                                                      set_null) != 0) {
+      turbo_free_json(&output_json);
+      return -1;
+    }
+  }
+
+  turbo_free_json(&output_json);
   return 0;
 }
 
@@ -232,6 +448,17 @@ turbo_runtime_data_bind_value_t *turbo_event_tool_result_schema_bind(void) {
   turbo_runtime_data_bind_object_set(properties, "status", field);
   turbo_runtime_data_bind_array_append(required, turbo_runtime_data_bind_value_create_string("status"));
 
+  if (turbo_event_string_or_null_schema_field(properties, "child_thread_id", 0) != 0 ||
+      turbo_event_string_or_null_schema_field(properties, "child_run_id", 0) != 0 ||
+      turbo_event_string_or_null_schema_field(properties, "child_checkpoint_id", 1) != 0 ||
+      turbo_event_string_or_null_schema_field(properties, "child_status", 0) != 0 ||
+      turbo_event_string_or_null_schema_field(properties, "parent_agent_run_id", 0) != 0 ||
+      turbo_event_string_or_null_schema_field(properties, "parent_tool_call_id", 0) != 0 ||
+      turbo_event_string_or_null_schema_field(properties, "parent_tool_name", 0) != 0) {
+    turbo_runtime_data_bind_value_destroy(schema);
+    return NULL;
+  }
+
   return schema;
 }
 
@@ -337,6 +564,15 @@ int turbo_event_tool_result_validate_bind(const turbo_runtime_data_bind_value_t 
       turbo_runtime_data_bind_value_kind(status) != TURBO_RUNTIME_DATA_BIND_VALUE_INT64) {
     return -1;
   }
+  if (!turbo_event_tool_result_optional_field_valid(event, "child_thread_id", 0) ||
+      !turbo_event_tool_result_optional_field_valid(event, "child_run_id", 0) ||
+      !turbo_event_tool_result_optional_field_valid(event, "child_checkpoint_id", 1) ||
+      !turbo_event_tool_result_optional_field_valid(event, "child_status", 0) ||
+      !turbo_event_tool_result_optional_field_valid(event, "parent_agent_run_id", 0) ||
+      !turbo_event_tool_result_optional_field_valid(event, "parent_tool_call_id", 0) ||
+      !turbo_event_tool_result_optional_field_valid(event, "parent_tool_name", 0)) {
+    return -1;
+  }
 
   return 0;
 }
@@ -437,6 +673,13 @@ turbo_runtime_data_bind_value_t *turbo_event_tool_result_create_bind(
       turbo_runtime_data_bind_value_destroy(event);
       return NULL;
     }
+  }
+
+  if ((output_value &&
+       turbo_event_tool_result_attach_child_fields_from_bind_object(event, output_value) != 0) ||
+      turbo_event_tool_result_attach_child_fields_from_output_json(event, output) != 0) {
+    turbo_runtime_data_bind_value_destroy(event);
+    return NULL;
   }
 
   return event;

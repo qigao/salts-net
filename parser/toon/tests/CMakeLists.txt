@@ -18,5 +18,3 @@ endfunction()
 add_toon_test(toon_debug_test debug_test.c)
 
 add_toon_test(test_toonc test_toonc.c)
-
-add_toon_test(benchmark_toon benchmark_toon.c)

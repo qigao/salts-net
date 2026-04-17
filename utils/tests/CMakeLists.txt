@@ -1,7 +1,7 @@
 # Common module tests
 
 # Collect test files
-cmake_add_source(TEST_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR} PATTERNS "test_*.c" "bench_*.c")
+cmake_add_source(TEST_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR} PATTERNS "test_*.c")
 cmake_add_source(CXX_TEST_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR} PATTERNS "test_*.cpp")
 
 # Common libraries for all tests
@@ -17,13 +17,13 @@ cmake_add_test(
   LIBS ${COMMON_LIBS} uri_parser)
 
 # Link specific libraries for certain tests
-foreach(tgt test_fmt_re2c test_fmt test_fmt_bench)
+foreach(tgt test_fmt_re2c test_fmt)
   if(TARGET ${tgt})
     target_link_libraries(${tgt} PRIVATE fmt_lexer)
   endif()
 endforeach()
 
-foreach(tgt test_turbo_str test_str_bench)
+foreach(tgt test_turbo_str)
   if(TARGET ${tgt})
     target_link_libraries(${tgt} PRIVATE TurboNet::SDS)
   endif()

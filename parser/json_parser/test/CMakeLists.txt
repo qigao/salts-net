@@ -1,5 +1,5 @@
-# JSON Parser tests and benchmarks
-set(TEST_SOURCES test_json_parser.c benchmark_json_parser.c benchmark_query.c)
+# JSON Parser tests
+set(TEST_SOURCES test_json_parser.c)
 
 cmake_add_test(
     SOURCES ${TEST_SOURCES}

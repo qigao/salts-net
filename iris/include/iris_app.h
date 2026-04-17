@@ -33,7 +33,7 @@ typedef struct iris_app {
     /* CORS */
     cors_t *cors_opts;
 
-    /* RPC context (if any) */
+    /* App-local RPC binding registry (internal; use bind/lookup helpers) */
     void *rpc_context;
 
     /* Lifecycle hooks */
@@ -79,6 +79,47 @@ CXX_C_API iris_app_t *iris_app_get_default_if_exists(void);
  * @brief Reset the default application (for testing)
  */
 CXX_C_API void iris_app_reset_default(void);
+
+/* ============================================================================
+ * App-local RPC context binding
+ * ============================================================================ */
+
+/**
+ * @brief Bind one RPC-like context to one path on one app.
+ *
+ * The same app may host multiple RPC endpoints as long as their paths differ.
+ * Rebinding the same path to the same context is a no-op. Rebinding the same
+ * path to a different context fails.
+ *
+ * @param app Application instance
+ * @param path Static route path (for example "/rpc" or "/v1/runtime/jsonrpc")
+ * @param rpc_context Opaque endpoint context pointer
+ * @return 0 on success, -1 on failure
+ */
+CXX_C_API int iris_app_bind_rpc_context(iris_app_t *app, const char *path, void *rpc_context);
+
+/**
+ * @brief Lookup one RPC-like context bound to one app/path pair.
+ *
+ * @param app Application instance
+ * @param path Static route path
+ * @return Bound context pointer or NULL when not found
+ */
+CXX_C_API void *iris_app_lookup_rpc_context(const iris_app_t *app, const char *path);
+
+/**
+ * @brief Unbind one RPC-like context from one app/path pair.
+ *
+ * Passing a non-NULL `rpc_context` makes the unbind conditional on pointer
+ * equality. This helps avoid clearing a path rebound by another caller.
+ *
+ * @param app Application instance
+ * @param path Static route path
+ * @param rpc_context Expected bound context or NULL to ignore pointer match
+ * @return 0 when one binding was removed, -1 otherwise
+ */
+CXX_C_API int iris_app_unbind_rpc_context(iris_app_t *app, const char *path,
+                                          const void *rpc_context);
 
 /* ============================================================================
  * App-aware route registration

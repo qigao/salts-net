@@ -30,7 +30,7 @@ static void setup_logging(void) {
 }
 
 spec("http cookies") {
-  before() { setup_logging(); }
+  before_all() { setup_logging(); }
 
     describe("cookie jar") {
 

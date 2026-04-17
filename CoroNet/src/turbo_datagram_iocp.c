@@ -171,6 +171,20 @@ static int dg_iocp_init(turbo_datagram_t *d, const char *host, unsigned short po
 
   int reuse = 1;
   setsockopt(st->socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
+  if (d->reuse_port) {
+#ifdef SO_REUSEPORT
+    if (setsockopt(st->socket, SOL_SOCKET, SO_REUSEPORT, (const char *)&reuse, sizeof(reuse)) == SOCKET_ERROR) {
+      int rc = -(int)WSAGetLastError();
+      closesocket(st->socket);
+      free(st);
+      return rc;
+    }
+#else
+    closesocket(st->socket);
+    free(st);
+    return TURBO_ENOTSUP;
+#endif
+  }
 
   if (iocp_pool_associate(d->ctx->iocp_pool, st->socket) != 0) {
     closesocket(st->socket);

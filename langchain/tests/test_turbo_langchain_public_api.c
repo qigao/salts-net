@@ -53,19 +53,453 @@ spec("turbo langchain public api") {
     void *runnable_invoke_bind_log = (void *)turbo_runnable_invoke_bind_log;
     void *runnable_pipe = (void *)turbo_runnable_pipe;
     void *chain_run_bind_log = (void *)turbo_chain_run_bind_log;
-    void *agent_trace_bind_sink = (void *)turbo_openai_agent_add_trace_bind_sink;
-    void *agent_state_trace_events_bind = (void *)turbo_openai_agent_state_trace_events_bind;
-    void *agent_state_add_trace_event_bind = (void *)turbo_openai_agent_state_add_trace_event_bind;
+    void *agent_trace_bind_sink = (void *)turbo_agent_add_trace_bind_sink;
+    void *agent_runtime_create = (void *)turbo_agent_runtime_create;
+    void *agent_runtime_destroy = (void *)turbo_agent_runtime_destroy;
+    void *agent_runtime_remote_create = (void *)turbo_agent_runtime_remote_create;
+    void *agent_runtime_remote_destroy = (void *)turbo_agent_runtime_remote_destroy;
+    void *agent_runtime_remote_dispatch = (void *)turbo_agent_runtime_remote_dispatch_jsonrpc;
+    void *agent_runtime_remote_dispatch_text =
+        (void *)turbo_agent_runtime_remote_dispatch_jsonrpc_text;
+    void *agent_runtime_remote_handle_http =
+        (void *)turbo_agent_runtime_remote_handle_http_jsonrpc;
+    void *agent_runtime_remote_iris_create =
+        (void *)turbo_agent_runtime_remote_iris_create;
+    void *agent_runtime_remote_iris_destroy =
+        (void *)turbo_agent_runtime_remote_iris_destroy;
+    void *agent_runtime_remote_iris_mount =
+        (void *)turbo_agent_runtime_remote_iris_mount;
+    void *agent_runtime_store_memory = (void *)turbo_agent_runtime_store_memory_create;
+    void *agent_runtime_store_file = (void *)turbo_agent_runtime_store_file_create;
+    void *agent_runtime_start = (void *)turbo_agent_runtime_start_bind_graph;
+    void *agent_runtime_start_linked = (void *)turbo_agent_runtime_start_bind_graph_linked;
+    void *agent_runtime_resume = (void *)turbo_agent_runtime_resume_bind_graph;
+    void *agent_runtime_fork = (void *)turbo_agent_runtime_fork_bind_graph;
+    void *agent_runtime_resume_thread = (void *)turbo_agent_runtime_resume_thread_bind_graph;
+    void *agent_runtime_fork_thread = (void *)turbo_agent_runtime_fork_thread_bind_graph;
+    void *agent_runtime_resume_checkpoint =
+        (void *)turbo_agent_runtime_resume_checkpoint_bind_graph;
+    void *agent_runtime_fork_checkpoint = (void *)turbo_agent_runtime_fork_checkpoint_bind_graph;
+    void *agent_runtime_get_thread = (void *)turbo_agent_runtime_get_thread;
+    void *agent_runtime_get_run = (void *)turbo_agent_runtime_get_run;
+    void *agent_runtime_get_latest_run = (void *)turbo_agent_runtime_get_latest_run;
+    void *agent_runtime_get_pending_run = (void *)turbo_agent_runtime_get_pending_run;
+    void *agent_runtime_get_thread_timeline =
+        (void *)turbo_agent_runtime_get_thread_timeline_bind;
+    void *agent_runtime_get_observability_index =
+        (void *)turbo_agent_runtime_get_thread_observability_index;
+    void *agent_runtime_list_observability_indexes =
+        (void *)turbo_agent_runtime_list_observability_indexes;
+    void *agent_runtime_list_observability_indexes_filtered =
+        (void *)turbo_agent_runtime_list_observability_indexes_filtered;
+    void *agent_runtime_get_branch_tree = (void *)turbo_agent_runtime_get_branch_tree;
+    void *agent_runtime_get_checkpoint = (void *)turbo_agent_runtime_get_checkpoint;
+    void *agent_runtime_get_latest_checkpoint = (void *)turbo_agent_runtime_get_latest_checkpoint;
+    void *agent_runtime_get_checkpoint_context =
+        (void *)turbo_agent_runtime_get_checkpoint_context;
+    void *agent_runtime_get_thread_state = (void *)turbo_agent_runtime_get_thread_state_bind;
+    void *agent_runtime_get_thread_trace_events =
+        (void *)turbo_agent_runtime_get_thread_trace_events_bind;
+    void *agent_runtime_get_run_state = (void *)turbo_agent_runtime_get_run_state_bind;
+    void *agent_runtime_get_run_trace_events =
+        (void *)turbo_agent_runtime_get_run_trace_events_bind;
+    void *agent_runtime_get_checkpoint_state =
+        (void *)turbo_agent_runtime_get_checkpoint_state_bind;
+    void *agent_runtime_update_checkpoint_state =
+        (void *)turbo_agent_runtime_update_checkpoint_state_bind;
+    void *agent_runtime_update_thread_state =
+        (void *)turbo_agent_runtime_update_thread_state_bind;
+    void *agent_runtime_get_checkpoint_trace_events =
+        (void *)turbo_agent_runtime_get_checkpoint_trace_events_bind;
+    void *agent_runtime_list_runs = (void *)turbo_agent_runtime_list_runs;
+    void *agent_runtime_list_thread_lineage = (void *)turbo_agent_runtime_list_thread_lineage;
+    void *agent_runtime_list_child_runs = (void *)turbo_agent_runtime_list_child_runs;
+    void *agent_runtime_list_checkpoints = (void *)turbo_agent_runtime_list_checkpoints;
+    void *agent_runtime_history = (void *)turbo_agent_runtime_load_history_events_bind;
+    void *agent_runtime_thread_history = (void *)turbo_agent_runtime_load_thread_history_events_bind;
+    void *agent_runtime_replay_history = (void *)turbo_agent_runtime_replay_history_bind;
+    void *agent_runtime_replay_thread_history =
+        (void *)turbo_agent_runtime_replay_thread_history_bind;
+    void *agent_runtime_observe_history = (void *)turbo_agent_runtime_observe_history_bind;
+    void *agent_runtime_observe_thread_history =
+        (void *)turbo_agent_runtime_observe_thread_history_bind;
+    void *agent_runtime_apply_command = (void *)turbo_agent_runtime_apply_command_bind;
+    void *agent_runtime_apply_checkpoint_command =
+        (void *)turbo_agent_runtime_apply_checkpoint_command_bind;
+    void *agent_runtime_apply_thread_command =
+        (void *)turbo_agent_runtime_apply_thread_command_bind;
+    void *agent_runtime_resume_command = (void *)turbo_agent_runtime_resume_command_bind;
+    void *agent_runtime_resume_checkpoint_command =
+        (void *)turbo_agent_runtime_resume_checkpoint_command_bind;
+    void *agent_runtime_resume_thread_command =
+        (void *)turbo_agent_runtime_resume_thread_command_bind;
+    void *agent_runtime_fork_command = (void *)turbo_agent_runtime_fork_command_bind;
+    void *agent_runtime_fork_checkpoint_command =
+        (void *)turbo_agent_runtime_fork_checkpoint_command_bind;
+    void *agent_runtime_fork_thread_command =
+        (void *)turbo_agent_runtime_fork_thread_command_bind;
+    void *agent_runtime_resume_checkpoint_state =
+        (void *)turbo_agent_runtime_resume_checkpoint_state_bind_graph;
+    void *agent_runtime_resume_thread_state =
+        (void *)turbo_agent_runtime_resume_thread_state_bind_graph;
+    void *agent_runtime_fork_checkpoint_state =
+        (void *)turbo_agent_runtime_fork_checkpoint_state_bind_graph;
+    void *agent_runtime_fork_thread_state =
+        (void *)turbo_agent_runtime_fork_thread_state_bind_graph;
+    void *agent_memory_store_memory = (void *)turbo_agent_memory_store_memory_create;
+    void *agent_memory_store_file = (void *)turbo_agent_memory_store_file_create;
+    void *agent_memory_store_destroy = (void *)turbo_agent_memory_store_destroy;
+    void *agent_memory_get = (void *)turbo_agent_memory_get;
+    void *agent_memory_put = (void *)turbo_agent_memory_put;
+    void *agent_memory_delete = (void *)turbo_agent_memory_delete;
+    void *agent_memory_list = (void *)turbo_agent_memory_list;
+    void *agent_memory_list_records = (void *)turbo_agent_memory_list_records;
+    void *agent_memory_query_records = (void *)turbo_agent_memory_query_records;
+    void *agent_app_create = (void *)turbo_agent_app_create;
+    void *agent_app_destroy = (void *)turbo_agent_app_destroy;
+    void *agent_app_session = (void *)turbo_agent_app_session;
+    void *agent_app_thread_id = (void *)turbo_agent_app_thread_id;
+    void *agent_app_last_run_id = (void *)turbo_agent_app_last_run_id;
+    void *agent_app_last_checkpoint_id = (void *)turbo_agent_app_last_checkpoint_id;
+    void *agent_app_workflow_kind = (void *)turbo_agent_app_workflow_kind;
+    void *agent_app_memory_namespace = (void *)turbo_agent_app_memory_namespace;
+    void *agent_app_memory_store = (void *)turbo_agent_app_memory_store;
+    void *agent_app_add_trace_bind_sink = (void *)turbo_agent_app_add_trace_bind_sink;
+    void *agent_app_add_observer_bind_sink = (void *)turbo_agent_app_add_observer_bind_sink;
+    void *agent_app_set_trace_history_enabled = (void *)turbo_agent_app_set_trace_history_enabled;
+    void *agent_app_get_thread = (void *)turbo_agent_app_get_thread;
+    void *agent_app_get_run = (void *)turbo_agent_app_get_run;
+    void *agent_app_get_latest_run = (void *)turbo_agent_app_get_latest_run;
+    void *agent_app_get_pending_run = (void *)turbo_agent_app_get_pending_run;
+    void *agent_app_get_thread_timeline = (void *)turbo_agent_app_get_thread_timeline_bind;
+    void *agent_app_get_observability_index =
+        (void *)turbo_agent_app_get_observability_index;
+    void *agent_app_get_branch_tree = (void *)turbo_agent_app_get_branch_tree;
+    void *agent_app_get_checkpoint = (void *)turbo_agent_app_get_checkpoint;
+    void *agent_app_get_latest_checkpoint = (void *)turbo_agent_app_get_latest_checkpoint;
+    void *agent_app_get_checkpoint_context = (void *)turbo_agent_app_get_checkpoint_context;
+    void *agent_app_get_thread_state = (void *)turbo_agent_app_get_thread_state_bind;
+    void *agent_app_get_thread_trace_events =
+        (void *)turbo_agent_app_get_thread_trace_events_bind;
+    void *agent_app_get_run_state = (void *)turbo_agent_app_get_run_state_bind;
+    void *agent_app_get_run_trace_events =
+        (void *)turbo_agent_app_get_run_trace_events_bind;
+    void *agent_app_get_checkpoint_state = (void *)turbo_agent_app_get_checkpoint_state_bind;
+    void *agent_app_update_checkpoint_state =
+        (void *)turbo_agent_app_update_checkpoint_state_bind;
+    void *agent_app_update_thread_state = (void *)turbo_agent_app_update_thread_state_bind;
+    void *agent_app_get_supervisor_inbox = (void *)turbo_agent_app_get_supervisor_inbox;
+    void *agent_app_get_supervisor_handoff_history =
+        (void *)turbo_agent_app_get_supervisor_handoff_history;
+    void *agent_app_get_supervisor_inspect = (void *)turbo_agent_app_get_supervisor_inspect;
+    void *agent_app_get_orchestration_inspect =
+        (void *)turbo_agent_app_get_orchestration_inspect;
+    void *agent_app_append_supervisor_inbox_message =
+        (void *)turbo_agent_app_append_supervisor_inbox_message_bind;
+    void *agent_app_get_checkpoint_trace_events =
+        (void *)turbo_agent_app_get_checkpoint_trace_events_bind;
+    void *agent_app_get_child_run = (void *)turbo_agent_app_get_child_run;
+    void *agent_app_get_child_checkpoint = (void *)turbo_agent_app_get_child_checkpoint;
+    void *agent_app_get_child_checkpoint_context =
+        (void *)turbo_agent_app_get_child_checkpoint_context;
+    void *agent_app_get_child_thread_timeline =
+        (void *)turbo_agent_app_get_child_thread_timeline_bind;
+    void *agent_app_get_child_branch_tree =
+        (void *)turbo_agent_app_get_child_branch_tree;
+    void *agent_app_get_child_inspect = (void *)turbo_agent_app_get_child_inspect;
+    void *agent_app_get_child_orchestration_inspect =
+        (void *)turbo_agent_app_get_child_orchestration_inspect;
+    void *agent_app_get_child_multi_agent_inspect =
+        (void *)turbo_agent_app_get_child_multi_agent_inspect;
+    void *agent_app_list_runs = (void *)turbo_agent_app_list_runs;
+    void *agent_app_list_thread_lineage = (void *)turbo_agent_app_list_thread_lineage;
+    void *agent_app_list_child_runs = (void *)turbo_agent_app_list_child_runs;
+    void *agent_app_list_child_checkpoints = (void *)turbo_agent_app_list_child_checkpoints;
+    void *agent_app_list_checkpoints = (void *)turbo_agent_app_list_checkpoints;
+    void *agent_app_history = (void *)turbo_agent_app_load_history_events_bind;
+    void *agent_app_thread_history = (void *)turbo_agent_app_load_thread_history_events_bind;
+    void *agent_app_replay_history = (void *)turbo_agent_app_replay_history_bind;
+    void *agent_app_replay_thread_history =
+        (void *)turbo_agent_app_replay_thread_history_bind;
+    void *agent_app_observe_history = (void *)turbo_agent_app_observe_history_bind;
+    void *agent_app_observe_thread_history =
+        (void *)turbo_agent_app_observe_thread_history_bind;
+    void *agent_app_child_history = (void *)turbo_agent_app_load_child_history_events_bind;
+    void *agent_app_child_trace_events = (void *)turbo_agent_app_get_child_trace_events_bind;
+    void *agent_app_apply_command = (void *)turbo_agent_app_apply_command_bind;
+    void *agent_app_apply_checkpoint_command =
+        (void *)turbo_agent_app_apply_checkpoint_command_bind;
+    void *agent_app_apply_thread_command = (void *)turbo_agent_app_apply_thread_command_bind;
+    void *agent_app_resume_command = (void *)turbo_agent_app_resume_command_bind;
+    void *agent_app_resume_checkpoint_command =
+        (void *)turbo_agent_app_resume_checkpoint_command_bind;
+    void *agent_app_resume_thread_command = (void *)turbo_agent_app_resume_thread_command_bind;
+    void *agent_app_fork_command = (void *)turbo_agent_app_fork_command_bind;
+    void *agent_app_fork_checkpoint_command =
+        (void *)turbo_agent_app_fork_checkpoint_command_bind;
+    void *agent_app_fork_thread_command = (void *)turbo_agent_app_fork_thread_command_bind;
+    void *agent_app_resume_thread = (void *)turbo_agent_app_resume_thread_bind_graph;
+    void *agent_app_fork_thread = (void *)turbo_agent_app_fork_thread_bind_graph;
+    void *agent_app_resume_checkpoint = (void *)turbo_agent_app_resume_checkpoint_bind_graph;
+    void *agent_app_fork_checkpoint = (void *)turbo_agent_app_fork_checkpoint_bind_graph;
+    void *agent_app_resume_checkpoint_state =
+        (void *)turbo_agent_app_resume_checkpoint_state_bind_graph;
+    void *agent_app_resume_thread_state =
+        (void *)turbo_agent_app_resume_thread_state_bind_graph;
+    void *agent_app_fork_checkpoint_state =
+        (void *)turbo_agent_app_fork_checkpoint_state_bind_graph;
+    void *agent_app_fork_thread_state =
+        (void *)turbo_agent_app_fork_thread_state_bind_graph;
+    void *agent_app_resume_preset = (void *)turbo_agent_app_resume_preset_bind_graph;
+    void *agent_app_fork_preset = (void *)turbo_agent_app_fork_preset_bind_graph;
+    void *agent_app_resume_preset_command = (void *)turbo_agent_app_resume_preset_command_bind;
+    void *agent_app_resume_thread_preset_command =
+        (void *)turbo_agent_app_resume_thread_preset_command_bind;
+    void *agent_app_fork_preset_command = (void *)turbo_agent_app_fork_preset_command_bind;
+    void *agent_app_fork_thread_preset_command =
+        (void *)turbo_agent_app_fork_thread_preset_command_bind;
+    void *agent_app_start_text = (void *)turbo_agent_app_start_text;
+    void *agent_app_start_messages = (void *)turbo_agent_app_start_messages;
+    void *agent_app_invoke_text = (void *)turbo_agent_app_invoke_text;
+    void *agent_app_invoke_messages_text = (void *)turbo_agent_app_invoke_messages_text;
+    void *agent_app_invoke_json = (void *)turbo_agent_app_invoke_json;
+    void *agent_app_invoke_messages_json = (void *)turbo_agent_app_invoke_messages_json;
+    void *agent_app_memory_get = (void *)turbo_agent_app_memory_get;
+    void *agent_app_memory_put = (void *)turbo_agent_app_memory_put;
+    void *agent_app_memory_put_context = (void *)turbo_agent_app_memory_put_context;
+    void *agent_app_memory_delete = (void *)turbo_agent_app_memory_delete;
+    void *agent_app_memory_list = (void *)turbo_agent_app_memory_list;
+    void *agent_app_memory_list_records = (void *)turbo_agent_app_memory_list_records;
+    void *agent_app_memory_query_records = (void *)turbo_agent_app_memory_query_records;
+    void *agent_session_create = (void *)turbo_agent_session_create;
+    void *agent_session_destroy = (void *)turbo_agent_session_destroy;
+    void *agent_session_agent = (void *)turbo_agent_session_agent;
+    void *agent_session_runtime = (void *)turbo_agent_session_runtime;
+    void *agent_session_memory_store = (void *)turbo_agent_session_memory_store;
+    void *agent_session_model = (void *)turbo_agent_session_model;
+    void *agent_session_base_url = (void *)turbo_agent_session_base_url;
+    void *agent_session_provider_name = (void *)turbo_agent_session_provider_name;
+    void *agent_session_has_api_key = (void *)turbo_agent_session_has_api_key;
+    void *agent_session_workflow_kind = (void *)turbo_agent_session_workflow_kind;
+    void *agent_session_memory_namespace = (void *)turbo_agent_session_memory_namespace;
+    void *agent_session_add_trace_bind_sink =
+        (void *)turbo_agent_session_add_trace_bind_sink;
+    void *agent_session_add_observer_bind_sink =
+        (void *)turbo_agent_session_add_observer_bind_sink;
+    void *agent_session_set_trace_history_enabled =
+        (void *)turbo_agent_session_set_trace_history_enabled;
+    void *agent_session_get_thread = (void *)turbo_agent_session_get_thread;
+    void *agent_session_get_run = (void *)turbo_agent_session_get_run;
+    void *agent_session_get_latest_run = (void *)turbo_agent_session_get_latest_run;
+    void *agent_session_get_pending_run = (void *)turbo_agent_session_get_pending_run;
+    void *agent_session_get_thread_timeline =
+        (void *)turbo_agent_session_get_thread_timeline_bind;
+    void *agent_session_get_observability_index =
+        (void *)turbo_agent_session_get_observability_index;
+    void *agent_session_get_branch_tree = (void *)turbo_agent_session_get_branch_tree;
+    void *agent_session_get_checkpoint = (void *)turbo_agent_session_get_checkpoint;
+    void *agent_session_get_latest_checkpoint =
+        (void *)turbo_agent_session_get_latest_checkpoint;
+    void *agent_session_get_checkpoint_context =
+        (void *)turbo_agent_session_get_checkpoint_context;
+    void *agent_session_get_thread_state = (void *)turbo_agent_session_get_thread_state_bind;
+    void *agent_session_get_thread_trace_events =
+        (void *)turbo_agent_session_get_thread_trace_events_bind;
+    void *agent_session_get_run_state = (void *)turbo_agent_session_get_run_state_bind;
+    void *agent_session_get_run_trace_events =
+        (void *)turbo_agent_session_get_run_trace_events_bind;
+    void *agent_session_get_checkpoint_state =
+        (void *)turbo_agent_session_get_checkpoint_state_bind;
+    void *agent_session_update_checkpoint_state =
+        (void *)turbo_agent_session_update_checkpoint_state_bind;
+    void *agent_session_update_thread_state =
+        (void *)turbo_agent_session_update_thread_state_bind;
+    void *agent_session_get_supervisor_inbox =
+        (void *)turbo_agent_session_get_supervisor_inbox;
+    void *agent_session_get_supervisor_handoff_history =
+        (void *)turbo_agent_session_get_supervisor_handoff_history;
+    void *agent_session_get_supervisor_inspect =
+        (void *)turbo_agent_session_get_supervisor_inspect;
+    void *agent_session_get_orchestration_inspect =
+        (void *)turbo_agent_session_get_orchestration_inspect;
+    void *agent_session_append_supervisor_inbox_message =
+        (void *)turbo_agent_session_append_supervisor_inbox_message_bind;
+    void *agent_session_get_checkpoint_trace_events =
+        (void *)turbo_agent_session_get_checkpoint_trace_events_bind;
+    void *agent_session_get_child_run = (void *)turbo_agent_session_get_child_run;
+    void *agent_session_get_child_checkpoint =
+        (void *)turbo_agent_session_get_child_checkpoint;
+    void *agent_session_get_child_checkpoint_context =
+        (void *)turbo_agent_session_get_child_checkpoint_context;
+    void *agent_session_get_child_thread_timeline =
+        (void *)turbo_agent_session_get_child_thread_timeline_bind;
+    void *agent_session_get_child_branch_tree =
+        (void *)turbo_agent_session_get_child_branch_tree;
+    void *agent_session_get_child_inspect = (void *)turbo_agent_session_get_child_inspect;
+    void *agent_session_get_child_orchestration_inspect =
+        (void *)turbo_agent_session_get_child_orchestration_inspect;
+    void *agent_session_get_child_multi_agent_inspect =
+        (void *)turbo_agent_session_get_child_multi_agent_inspect;
+    void *agent_session_list_runs = (void *)turbo_agent_session_list_runs;
+    void *agent_session_list_thread_lineage = (void *)turbo_agent_session_list_thread_lineage;
+    void *agent_session_list_child_runs = (void *)turbo_agent_session_list_child_runs;
+    void *agent_session_list_child_checkpoints =
+        (void *)turbo_agent_session_list_child_checkpoints;
+    void *agent_session_list_checkpoints = (void *)turbo_agent_session_list_checkpoints;
+    void *agent_session_history = (void *)turbo_agent_session_load_history_events_bind;
+    void *agent_session_thread_history =
+        (void *)turbo_agent_session_load_thread_history_events_bind;
+    void *agent_session_replay_history = (void *)turbo_agent_session_replay_history_bind;
+    void *agent_session_replay_thread_history =
+        (void *)turbo_agent_session_replay_thread_history_bind;
+    void *agent_session_observe_history =
+        (void *)turbo_agent_session_observe_history_bind;
+    void *agent_session_observe_thread_history =
+        (void *)turbo_agent_session_observe_thread_history_bind;
+    void *agent_session_child_history =
+        (void *)turbo_agent_session_load_child_history_events_bind;
+    void *agent_session_child_trace_events =
+        (void *)turbo_agent_session_get_child_trace_events_bind;
+    void *agent_session_apply_command = (void *)turbo_agent_session_apply_command_bind;
+    void *agent_session_apply_checkpoint_command =
+        (void *)turbo_agent_session_apply_checkpoint_command_bind;
+    void *agent_session_apply_thread_command =
+        (void *)turbo_agent_session_apply_thread_command_bind;
+    void *agent_session_resume_command = (void *)turbo_agent_session_resume_command_bind;
+    void *agent_session_resume_checkpoint_command =
+        (void *)turbo_agent_session_resume_checkpoint_command_bind;
+    void *agent_session_resume_thread_command =
+        (void *)turbo_agent_session_resume_thread_command_bind;
+    void *agent_session_fork_command = (void *)turbo_agent_session_fork_command_bind;
+    void *agent_session_fork_checkpoint_command =
+        (void *)turbo_agent_session_fork_checkpoint_command_bind;
+    void *agent_session_fork_thread_command =
+        (void *)turbo_agent_session_fork_thread_command_bind;
+    void *agent_session_resume_preset_command =
+        (void *)turbo_agent_session_resume_preset_command_bind;
+    void *agent_session_resume_thread_preset_command =
+        (void *)turbo_agent_session_resume_thread_preset_command_bind;
+    void *agent_session_fork_preset_command =
+        (void *)turbo_agent_session_fork_preset_command_bind;
+    void *agent_session_fork_thread_preset_command =
+        (void *)turbo_agent_session_fork_thread_preset_command_bind;
+    void *agent_session_start = (void *)turbo_agent_session_start_bind_graph;
+    void *agent_session_resume = (void *)turbo_agent_session_resume_bind_graph;
+    void *agent_session_fork = (void *)turbo_agent_session_fork_bind_graph;
+    void *agent_session_resume_thread = (void *)turbo_agent_session_resume_thread_bind_graph;
+    void *agent_session_fork_thread = (void *)turbo_agent_session_fork_thread_bind_graph;
+    void *agent_session_resume_checkpoint =
+        (void *)turbo_agent_session_resume_checkpoint_bind_graph;
+    void *agent_session_fork_checkpoint = (void *)turbo_agent_session_fork_checkpoint_bind_graph;
+    void *agent_session_resume_checkpoint_state =
+        (void *)turbo_agent_session_resume_checkpoint_state_bind_graph;
+    void *agent_session_resume_thread_state =
+        (void *)turbo_agent_session_resume_thread_state_bind_graph;
+    void *agent_session_fork_checkpoint_state =
+        (void *)turbo_agent_session_fork_checkpoint_state_bind_graph;
+    void *agent_session_fork_thread_state =
+        (void *)turbo_agent_session_fork_thread_state_bind_graph;
+    void *agent_session_loop_graph = (void *)turbo_agent_session_create_loop_graph;
+    void *agent_session_review_graph = (void *)turbo_agent_session_create_review_graph;
+    void *agent_session_engineering_graph = (void *)turbo_agent_session_create_engineering_graph;
+    void *agent_session_preset_graph = (void *)turbo_agent_session_create_preset_graph;
+    void *agent_session_input_state = (void *)turbo_agent_session_create_input_state_bind;
+    void *agent_session_input_messages_state =
+        (void *)turbo_agent_session_create_input_messages_state_bind;
+    void *agent_session_start_preset = (void *)turbo_agent_session_start_preset_bind_graph;
+    void *agent_session_start_preset_text = (void *)turbo_agent_session_start_preset_text;
+    void *agent_session_start_preset_text_with_memory =
+        (void *)turbo_agent_session_start_preset_text_with_memory;
+    void *agent_session_start_preset_messages =
+        (void *)turbo_agent_session_start_preset_messages;
+    void *agent_session_start_text = (void *)turbo_agent_session_start_text;
+    void *agent_session_start_messages = (void *)turbo_agent_session_start_messages;
+    void *agent_session_result_text = (void *)turbo_agent_session_result_text;
+    void *agent_session_invoke_preset_text = (void *)turbo_agent_session_invoke_preset_text;
+    void *agent_session_invoke_text = (void *)turbo_agent_session_invoke_text;
+    void *agent_session_invoke_preset_text_with_memory =
+        (void *)turbo_agent_session_invoke_preset_text_with_memory;
+    void *agent_session_invoke_preset_messages_text =
+        (void *)turbo_agent_session_invoke_preset_messages_text;
+    void *agent_session_invoke_messages_text =
+        (void *)turbo_agent_session_invoke_messages_text;
+    void *agent_session_invoke_preset_json = (void *)turbo_agent_session_invoke_preset_json;
+    void *agent_session_invoke_json = (void *)turbo_agent_session_invoke_json;
+    void *agent_session_invoke_preset_json_with_memory =
+        (void *)turbo_agent_session_invoke_preset_json_with_memory;
+    void *agent_session_invoke_preset_messages_json =
+        (void *)turbo_agent_session_invoke_preset_messages_json;
+    void *agent_session_invoke_messages_json =
+        (void *)turbo_agent_session_invoke_messages_json;
+    void *agent_session_memory_get = (void *)turbo_agent_session_memory_get;
+    void *agent_session_memory_put = (void *)turbo_agent_session_memory_put;
+    void *agent_session_memory_put_context = (void *)turbo_agent_session_memory_put_context;
+    void *agent_session_memory_delete = (void *)turbo_agent_session_memory_delete;
+    void *agent_session_memory_list = (void *)turbo_agent_session_memory_list;
+    void *agent_session_memory_list_records = (void *)turbo_agent_session_memory_list_records;
+    void *agent_session_memory_query_records = (void *)turbo_agent_session_memory_query_records;
+    void *agent_session_load_memory_context = (void *)turbo_agent_session_load_memory_context;
+    void *agent_session_input_state_with_memory =
+        (void *)turbo_agent_session_create_input_state_with_memory_bind;
+    void *agent_session_input_messages_state_with_memory =
+        (void *)turbo_agent_session_create_input_messages_state_with_memory_bind;
+    void *agent_session_resume_preset = (void *)turbo_agent_session_resume_preset_bind_graph;
+    void *agent_session_fork_preset = (void *)turbo_agent_session_fork_preset_bind_graph;
+    void *agent_subagent_add_runtime = (void *)turbo_agent_subagent_add_tool_runtime;
+    void *agent_subagent_add_registry = (void *)turbo_agent_subagent_add_tool_registry;
+    void *agent_install_supervisor_loop = (void *)turbo_agent_install_supervisor_loop;
+    void *agent_state_trace_events_bind = (void *)turbo_agent_state_trace_events_bind;
+    void *agent_state_add_trace_event_bind = (void *)turbo_agent_state_add_trace_event_bind;
     void *agent_state_capture_trace_event_bind =
-        (void *)turbo_openai_agent_state_capture_trace_event_bind;
+        (void *)turbo_agent_state_capture_trace_event_bind;
     void *agent_state_planner_event_version_bind =
-        (void *)turbo_openai_agent_state_planner_event_version_bind;
+        (void *)turbo_agent_state_planner_event_version_bind;
     void *agent_state_executor_event_version_bind =
-        (void *)turbo_openai_agent_state_executor_event_version_bind;
+        (void *)turbo_agent_state_executor_event_version_bind;
     void *agent_state_latest_planner_event_version_bind =
-        (void *)turbo_openai_agent_state_latest_planner_event_version_bind;
+        (void *)turbo_agent_state_latest_planner_event_version_bind;
     void *agent_state_latest_executor_event_version_bind =
-        (void *)turbo_openai_agent_state_latest_executor_event_version_bind;
+        (void *)turbo_agent_state_latest_executor_event_version_bind;
+    void *agent_state_completed_steps_bind =
+        (void *)turbo_agent_state_completed_steps_bind;
+    void *agent_state_completed_step_bind =
+        (void *)turbo_agent_state_completed_step_bind;
+    void *agent_state_latest_completed_step_bind =
+        (void *)turbo_agent_state_latest_completed_step_bind;
+    void *agent_state_latest_tool_results_event =
+        (void *)turbo_agent_state_latest_tool_results_event;
+    void *agent_state_tool_results_outputs =
+        (void *)turbo_agent_state_tool_results_outputs;
+    void *agent_tool_result_output_item_create =
+        (void *)turbo_agent_tool_result_output_item_create;
+    void *agent_state_tool_result_child_thread_id =
+        (void *)turbo_agent_state_tool_result_child_thread_id;
+    void *agent_state_tool_result_child_run_id =
+        (void *)turbo_agent_state_tool_result_child_run_id;
+    void *agent_state_tool_result_child_checkpoint_id =
+        (void *)turbo_agent_state_tool_result_child_checkpoint_id;
+    void *agent_state_tool_result_child_status =
+        (void *)turbo_agent_state_tool_result_child_status;
+    void *agent_state_tool_result_parent_agent_run_id =
+        (void *)turbo_agent_state_tool_result_parent_agent_run_id;
+    void *agent_state_tool_result_parent_tool_call_id =
+        (void *)turbo_agent_state_tool_result_parent_tool_call_id;
+    void *agent_state_tool_result_parent_tool_name =
+        (void *)turbo_agent_state_tool_result_parent_tool_name;
+    void *agent_state_set_active_agent = (void *)turbo_agent_state_set_active_agent;
+    void *agent_state_request_handoff = (void *)turbo_agent_state_request_handoff;
+    void *agent_state_commit_handoff = (void *)turbo_agent_state_commit_handoff;
+    void *agent_state_append_supervisor_inbox_message =
+        (void *)turbo_agent_state_append_supervisor_inbox_message;
+    void *agent_state_active_agent = (void *)turbo_agent_state_active_agent;
+    void *agent_state_handoff_target_agent = (void *)turbo_agent_state_handoff_target_agent;
+    void *agent_state_handoff_reason = (void *)turbo_agent_state_handoff_reason;
+    void *agent_state_supervisor_inbox = (void *)turbo_agent_state_supervisor_inbox;
+    void *agent_state_supervisor_inbox_count =
+        (void *)turbo_agent_state_supervisor_inbox_count;
+    void *agent_state_supervisor_inbox_at = (void *)turbo_agent_state_supervisor_inbox_at;
+    void *agent_state_supervisor_handoff_history =
+        (void *)turbo_agent_state_supervisor_handoff_history;
     void *tool_execute_bind = (void *)turbo_tool_registry_execute_bind;
     void *tool_runtime_default = (void *)turbo_tool_runtime_default_create;
     void *tool_runtime_invoke_bind = (void *)turbo_tool_runtime_invoke_bind;
@@ -73,8 +507,14 @@ spec("turbo langchain public api") {
     turbo_tool_runtime_t *tool_runtime = turbo_tool_runtime_native_create();
     void *wasm3_runtime_create = (void *)turbo_tool_runtime_wasm3_create;
     turbo_action_tool_registry_t *action_registry = turbo_action_tool_registry_create();
+    turbo_agent_memory_store_t memory_store = turbo_agent_memory_store_memory_create();
+    turbo_agent_app_config_t app_config = {0};
+    turbo_agent_session_config_t app_session_config = {0};
+    turbo_agent_app_t *app = NULL;
+    turbo_agent_session_config_t session_config = {0};
+    turbo_agent_session_t *session = NULL;
     json_value_t *messages = turbo_prompt_messages_create();
-    json_value_t *agent_state = turbo_openai_agent_state_create();
+    json_value_t *agent_state = turbo_agent_state_create();
     turbo_graph_checkpoint_t *checkpoint = NULL;
     const turbo_model_provider_t *provider = turbo_model_provider_by_name("openai");
 
@@ -84,6 +524,11 @@ spec("turbo langchain public api") {
     if (runtime_value) {
       turbo_graph_checkpoint_create_bind("entry", 0, runtime_value, &checkpoint);
     }
+    app_session_config.runtime_store = turbo_agent_runtime_store_memory_create();
+    app_config.session_config = &app_session_config;
+    app = turbo_agent_app_create(&app_config);
+    session_config.runtime_store = turbo_agent_runtime_store_memory_create();
+    session = turbo_agent_session_create(&session_config);
 
     check_not_null(graph);
     check_not_null(chain);
@@ -133,6 +578,281 @@ spec("turbo langchain public api") {
     check_not_null(runnable_pipe);
     check_not_null(chain_run_bind_log);
     check_not_null(agent_trace_bind_sink);
+    check_not_null(agent_runtime_create);
+    check_not_null(agent_runtime_destroy);
+    check_not_null(agent_runtime_remote_create);
+    check_not_null(agent_runtime_remote_destroy);
+    check_not_null(agent_runtime_remote_dispatch);
+    check_not_null(agent_runtime_remote_dispatch_text);
+    check_not_null(agent_runtime_remote_handle_http);
+    check_not_null(agent_runtime_remote_iris_create);
+    check_not_null(agent_runtime_remote_iris_destroy);
+    check_not_null(agent_runtime_remote_iris_mount);
+    check_not_null(agent_runtime_store_memory);
+    check_not_null(agent_runtime_store_file);
+    check_not_null(agent_runtime_start);
+    check_not_null(agent_runtime_start_linked);
+    check_not_null(agent_runtime_resume);
+    check_not_null(agent_runtime_fork);
+    check_not_null(agent_runtime_resume_checkpoint);
+    check_not_null(agent_runtime_fork_checkpoint);
+    check_not_null(agent_runtime_get_thread);
+    check_not_null(agent_runtime_get_run);
+    check_not_null(agent_runtime_get_latest_run);
+    check_not_null(agent_runtime_get_pending_run);
+    check_not_null(agent_runtime_get_thread_timeline);
+    check_not_null(agent_runtime_get_observability_index);
+    check_not_null(agent_runtime_list_observability_indexes);
+    check_not_null(agent_runtime_list_observability_indexes_filtered);
+    check_not_null(agent_runtime_get_checkpoint);
+    check_not_null(agent_runtime_get_latest_checkpoint);
+    check_not_null(agent_runtime_get_checkpoint_context);
+    check_not_null(agent_runtime_get_thread_state);
+    check_not_null(agent_runtime_get_thread_trace_events);
+    check_not_null(agent_runtime_get_run_state);
+    check_not_null(agent_runtime_get_run_trace_events);
+    check_not_null(agent_runtime_get_checkpoint_state);
+    check_not_null(agent_runtime_update_checkpoint_state);
+    check_not_null(agent_runtime_update_thread_state);
+    check_not_null(agent_runtime_get_checkpoint_trace_events);
+    check_not_null(agent_runtime_list_runs);
+    check_not_null(agent_runtime_list_thread_lineage);
+    check_not_null(agent_runtime_list_child_runs);
+    check_not_null(agent_runtime_list_checkpoints);
+    check_not_null(agent_runtime_history);
+    check_not_null(agent_runtime_thread_history);
+    check_not_null(agent_runtime_replay_history);
+    check_not_null(agent_runtime_replay_thread_history);
+    check_not_null(agent_runtime_observe_history);
+    check_not_null(agent_runtime_observe_thread_history);
+    check_not_null(agent_runtime_apply_command);
+    check_not_null(agent_runtime_apply_checkpoint_command);
+    check_not_null(agent_runtime_apply_thread_command);
+    check_not_null(agent_runtime_resume_command);
+    check_not_null(agent_runtime_resume_checkpoint_command);
+    check_not_null(agent_runtime_resume_thread_command);
+    check_not_null(agent_runtime_fork_command);
+    check_not_null(agent_runtime_fork_checkpoint_command);
+    check_not_null(agent_runtime_fork_thread_command);
+    check_not_null(agent_runtime_resume_checkpoint_state);
+    check_not_null(agent_runtime_resume_thread_state);
+    check_not_null(agent_runtime_fork_checkpoint_state);
+    check_not_null(agent_runtime_fork_thread_state);
+    check_not_null(agent_memory_store_memory);
+    check_not_null(agent_memory_store_file);
+    check_not_null(agent_memory_store_destroy);
+    check_not_null(agent_memory_get);
+    check_not_null(agent_memory_put);
+    check_not_null(agent_memory_delete);
+    check_not_null(agent_memory_list);
+    check_not_null(agent_memory_list_records);
+    check_not_null(agent_memory_query_records);
+    check_not_null(agent_app_create);
+    check_not_null(agent_app_destroy);
+    check_not_null(agent_app_session);
+    check_not_null(agent_app_thread_id);
+    check_not_null(agent_app_last_run_id);
+    check_not_null(agent_app_last_checkpoint_id);
+    check_not_null(agent_app_workflow_kind);
+    check_not_null(agent_app_memory_namespace);
+    check_not_null(agent_app_memory_store);
+    check_not_null(agent_app_add_trace_bind_sink);
+    check_not_null(agent_app_add_observer_bind_sink);
+    check_not_null(agent_app_set_trace_history_enabled);
+    check_not_null(agent_app_get_thread);
+    check_not_null(agent_app_get_run);
+    check_not_null(agent_app_get_latest_run);
+    check_not_null(agent_app_get_pending_run);
+    check_not_null(agent_app_get_thread_timeline);
+    check_not_null(agent_app_get_observability_index);
+    check_not_null(agent_app_get_checkpoint);
+    check_not_null(agent_app_get_latest_checkpoint);
+    check_not_null(agent_app_get_checkpoint_context);
+    check_not_null(agent_app_get_thread_state);
+    check_not_null(agent_app_get_thread_trace_events);
+    check_not_null(agent_app_get_run_state);
+    check_not_null(agent_app_get_run_trace_events);
+    check_not_null(agent_app_get_checkpoint_state);
+    check_not_null(agent_app_update_checkpoint_state);
+    check_not_null(agent_app_update_thread_state);
+    check_not_null(agent_app_get_supervisor_inbox);
+    check_not_null(agent_app_get_supervisor_handoff_history);
+    check_not_null(agent_app_get_supervisor_inspect);
+    check_not_null(agent_app_get_orchestration_inspect);
+    check_not_null(agent_app_append_supervisor_inbox_message);
+    check_not_null(agent_app_get_checkpoint_trace_events);
+    check_not_null(agent_app_get_child_run);
+    check_not_null(agent_app_get_child_checkpoint);
+    check_not_null(agent_app_get_child_checkpoint_context);
+    check_not_null(agent_app_get_child_thread_timeline);
+    check_not_null(agent_app_get_child_branch_tree);
+    check_not_null(agent_app_get_child_inspect);
+    check_not_null(agent_app_get_child_orchestration_inspect);
+    check_not_null(agent_app_get_child_multi_agent_inspect);
+    check_not_null(agent_app_list_runs);
+    check_not_null(agent_app_list_thread_lineage);
+    check_not_null(agent_app_list_child_runs);
+    check_not_null(agent_app_list_child_checkpoints);
+    check_not_null(agent_app_list_checkpoints);
+    check_not_null(agent_app_history);
+    check_not_null(agent_app_thread_history);
+    check_not_null(agent_app_replay_history);
+    check_not_null(agent_app_replay_thread_history);
+    check_not_null(agent_app_observe_history);
+    check_not_null(agent_app_observe_thread_history);
+    check_not_null(agent_app_child_history);
+    check_not_null(agent_app_child_trace_events);
+    check_not_null(agent_app_apply_command);
+    check_not_null(agent_app_apply_checkpoint_command);
+    check_not_null(agent_app_apply_thread_command);
+    check_not_null(agent_app_resume_command);
+    check_not_null(agent_app_resume_checkpoint_command);
+    check_not_null(agent_app_resume_thread_command);
+    check_not_null(agent_app_fork_command);
+    check_not_null(agent_app_fork_checkpoint_command);
+    check_not_null(agent_app_fork_thread_command);
+    check_not_null(agent_app_resume_checkpoint);
+    check_not_null(agent_app_fork_checkpoint);
+    check_not_null(agent_app_resume_checkpoint_state);
+    check_not_null(agent_app_resume_thread_state);
+    check_not_null(agent_app_fork_checkpoint_state);
+    check_not_null(agent_app_fork_thread_state);
+    check_not_null(agent_app_resume_preset);
+    check_not_null(agent_app_fork_preset);
+    check_not_null(agent_app_resume_preset_command);
+    check_not_null(agent_app_resume_thread_preset_command);
+    check_not_null(agent_app_fork_preset_command);
+    check_not_null(agent_app_fork_thread_preset_command);
+    check_not_null(agent_app_start_text);
+    check_not_null(agent_app_start_messages);
+    check_not_null(agent_app_invoke_text);
+    check_not_null(agent_app_invoke_messages_text);
+    check_not_null(agent_app_invoke_json);
+    check_not_null(agent_app_invoke_messages_json);
+    check_not_null(agent_app_memory_get);
+    check_not_null(agent_app_memory_put);
+    check_not_null(agent_app_memory_put_context);
+    check_not_null(agent_app_memory_delete);
+    check_not_null(agent_app_memory_list);
+    check_not_null(agent_app_memory_list_records);
+    check_not_null(agent_app_memory_query_records);
+    check_not_null(agent_session_create);
+    check_not_null(agent_session_destroy);
+    check_not_null(agent_session_agent);
+    check_not_null(agent_session_runtime);
+    check_not_null(agent_session_memory_store);
+    check_not_null(agent_session_model);
+    check_not_null(agent_session_base_url);
+    check_not_null(agent_session_provider_name);
+    check_not_null(agent_session_has_api_key);
+    check_not_null(agent_session_workflow_kind);
+    check_not_null(agent_session_memory_namespace);
+    check_not_null(agent_session_add_trace_bind_sink);
+    check_not_null(agent_session_add_observer_bind_sink);
+    check_not_null(agent_session_set_trace_history_enabled);
+    check_not_null(agent_session_get_thread);
+    check_not_null(agent_session_get_run);
+    check_not_null(agent_session_get_latest_run);
+    check_not_null(agent_session_get_pending_run);
+    check_not_null(agent_session_get_thread_timeline);
+    check_not_null(agent_session_get_observability_index);
+    check_not_null(agent_session_get_checkpoint);
+    check_not_null(agent_session_get_latest_checkpoint);
+    check_not_null(agent_session_get_checkpoint_context);
+    check_not_null(agent_session_get_thread_state);
+    check_not_null(agent_session_get_thread_trace_events);
+    check_not_null(agent_session_get_run_state);
+    check_not_null(agent_session_get_run_trace_events);
+    check_not_null(agent_session_get_checkpoint_state);
+    check_not_null(agent_session_update_checkpoint_state);
+    check_not_null(agent_session_update_thread_state);
+    check_not_null(agent_session_get_supervisor_inbox);
+    check_not_null(agent_session_get_supervisor_handoff_history);
+    check_not_null(agent_session_get_supervisor_inspect);
+    check_not_null(agent_session_get_orchestration_inspect);
+    check_not_null(agent_session_append_supervisor_inbox_message);
+    check_not_null(agent_session_get_checkpoint_trace_events);
+    check_not_null(agent_session_get_child_run);
+    check_not_null(agent_session_get_child_checkpoint);
+    check_not_null(agent_session_get_child_checkpoint_context);
+    check_not_null(agent_session_get_child_thread_timeline);
+    check_not_null(agent_session_get_child_branch_tree);
+    check_not_null(agent_session_get_child_inspect);
+    check_not_null(agent_session_get_child_orchestration_inspect);
+    check_not_null(agent_session_get_child_multi_agent_inspect);
+    check_not_null(agent_session_list_runs);
+    check_not_null(agent_session_list_thread_lineage);
+    check_not_null(agent_session_list_child_runs);
+    check_not_null(agent_session_list_child_checkpoints);
+    check_not_null(agent_session_list_checkpoints);
+    check_not_null(agent_session_history);
+    check_not_null(agent_session_thread_history);
+    check_not_null(agent_session_replay_history);
+    check_not_null(agent_session_replay_thread_history);
+    check_not_null(agent_session_observe_history);
+    check_not_null(agent_session_observe_thread_history);
+    check_not_null(agent_session_child_history);
+    check_not_null(agent_session_child_trace_events);
+    check_not_null(agent_session_apply_command);
+    check_not_null(agent_session_apply_checkpoint_command);
+    check_not_null(agent_session_apply_thread_command);
+    check_not_null(agent_session_resume_command);
+    check_not_null(agent_session_resume_checkpoint_command);
+    check_not_null(agent_session_resume_thread_command);
+    check_not_null(agent_session_fork_command);
+    check_not_null(agent_session_fork_checkpoint_command);
+    check_not_null(agent_session_fork_thread_command);
+    check_not_null(agent_session_resume_checkpoint);
+    check_not_null(agent_session_fork_checkpoint);
+    check_not_null(agent_session_resume_checkpoint_state);
+    check_not_null(agent_session_resume_thread_state);
+    check_not_null(agent_session_fork_checkpoint_state);
+    check_not_null(agent_session_fork_thread_state);
+    check_not_null(agent_session_resume_preset_command);
+    check_not_null(agent_session_resume_thread_preset_command);
+    check_not_null(agent_session_fork_preset_command);
+    check_not_null(agent_session_fork_thread_preset_command);
+    check_not_null(agent_session_start);
+    check_not_null(agent_session_resume);
+    check_not_null(agent_session_fork);
+    check_not_null(agent_session_loop_graph);
+    check_not_null(agent_session_review_graph);
+    check_not_null(agent_session_engineering_graph);
+    check_not_null(agent_session_preset_graph);
+    check_not_null(agent_session_input_state);
+    check_not_null(agent_session_input_messages_state);
+    check_not_null(agent_session_start_preset);
+    check_not_null(agent_session_start_preset_text);
+    check_not_null(agent_session_start_preset_text_with_memory);
+    check_not_null(agent_session_start_preset_messages);
+    check_not_null(agent_session_start_text);
+    check_not_null(agent_session_start_messages);
+    check_not_null(agent_session_result_text);
+    check_not_null(agent_session_invoke_preset_text);
+    check_not_null(agent_session_invoke_text);
+    check_not_null(agent_session_invoke_preset_text_with_memory);
+    check_not_null(agent_session_invoke_preset_messages_text);
+    check_not_null(agent_session_invoke_messages_text);
+    check_not_null(agent_session_invoke_preset_json);
+    check_not_null(agent_session_invoke_json);
+    check_not_null(agent_session_invoke_preset_json_with_memory);
+    check_not_null(agent_session_invoke_preset_messages_json);
+    check_not_null(agent_session_invoke_messages_json);
+    check_not_null(agent_session_memory_get);
+    check_not_null(agent_session_memory_put);
+    check_not_null(agent_session_memory_put_context);
+    check_not_null(agent_session_memory_delete);
+    check_not_null(agent_session_memory_list);
+    check_not_null(agent_session_memory_list_records);
+    check_not_null(agent_session_memory_query_records);
+    check_not_null(agent_session_load_memory_context);
+    check_not_null(agent_session_input_state_with_memory);
+    check_not_null(agent_session_input_messages_state_with_memory);
+    check_not_null(agent_session_resume_preset);
+    check_not_null(agent_session_fork_preset);
+    check_not_null(agent_subagent_add_runtime);
+    check_not_null(agent_subagent_add_registry);
+    check_not_null(agent_install_supervisor_loop);
     check_not_null(agent_state_trace_events_bind);
     check_not_null(agent_state_add_trace_event_bind);
     check_not_null(agent_state_capture_trace_event_bind);
@@ -140,6 +860,30 @@ spec("turbo langchain public api") {
     check_not_null(agent_state_executor_event_version_bind);
     check_not_null(agent_state_latest_planner_event_version_bind);
     check_not_null(agent_state_latest_executor_event_version_bind);
+    check_not_null(agent_state_completed_steps_bind);
+    check_not_null(agent_state_completed_step_bind);
+    check_not_null(agent_state_latest_completed_step_bind);
+    check_not_null(agent_state_latest_tool_results_event);
+    check_not_null(agent_state_tool_results_outputs);
+    check_not_null(agent_tool_result_output_item_create);
+    check_not_null(agent_state_tool_result_child_thread_id);
+    check_not_null(agent_state_tool_result_child_run_id);
+    check_not_null(agent_state_tool_result_child_checkpoint_id);
+    check_not_null(agent_state_tool_result_child_status);
+    check_not_null(agent_state_tool_result_parent_agent_run_id);
+    check_not_null(agent_state_tool_result_parent_tool_call_id);
+    check_not_null(agent_state_tool_result_parent_tool_name);
+    check_not_null(agent_state_set_active_agent);
+    check_not_null(agent_state_request_handoff);
+    check_not_null(agent_state_commit_handoff);
+    check_not_null(agent_state_append_supervisor_inbox_message);
+    check_not_null(agent_state_active_agent);
+    check_not_null(agent_state_handoff_target_agent);
+    check_not_null(agent_state_handoff_reason);
+    check_not_null(agent_state_supervisor_inbox);
+    check_not_null(agent_state_supervisor_inbox_count);
+    check_not_null(agent_state_supervisor_inbox_at);
+    check_not_null(agent_state_supervisor_handoff_history);
     check_not_null(tool_execute_bind);
     check_not_null(tool_runtime_default);
     check_not_null(tool_runtime_invoke_bind);
@@ -147,11 +891,18 @@ spec("turbo langchain public api") {
     check_not_null(tool_runtime);
     check_not_null(wasm3_runtime_create);
     check_not_null(action_registry);
+    check_not_null(memory_store.get);
+    check_not_null(memory_store.query);
     check_not_null(messages);
     check_not_null(agent_state);
     check_not_null(checkpoint);
     check_not_null(provider);
+    check_not_null(app);
+    check_not_null(session);
 
+    turbo_agent_app_destroy(app);
+    turbo_agent_session_destroy(session);
+    turbo_agent_memory_store_destroy(&memory_store);
     turbo_graph_checkpoint_destroy(checkpoint);
     turbo_runtime_binary_mir_plan_destroy(binary_mir_plan);
     turbo_runtime_binary_schema_destroy(binary_schema);
@@ -166,3 +917,4 @@ spec("turbo langchain public api") {
     turbo_graph_destroy(graph);
   }
 }
+

@@ -16,7 +16,49 @@ add_library(
   src/turbo_tool_runtime_wasm3.c
   src/turbo_tool_registry.c
   src/turbo_tool_schema.c
-  src/turbo_openai_agent.c
+  src/turbo_agent_util_internal.c
+  src/turbo_agent_app.c
+  src/turbo_agent_memory_store.c
+  src/turbo_agent_runtime.c
+  src/turbo_agent_runtime_remote.c
+  src/turbo_agent_runtime_remote_iris.c
+  src/turbo_agent_runtime_v1.c
+  src/turbo_agent_session.c
+  src/turbo_agent_subagent.c
+  src/turbo_agent_request.c
+  src/turbo_agent_request_text.c
+  src/turbo_agent_request_structured_output.c
+  src/turbo_agent_request_replay.c
+  src/turbo_agent_request_messages.c
+  src/turbo_agent_request_responses.c
+  src/turbo_agent_request_chat.c
+  src/turbo_agent_config.c
+  src/turbo_agent_state_base.c
+  src/turbo_agent_state.c
+  src/turbo_agent_state_bind.c
+  src/turbo_agent_state_event.c
+  src/turbo_agent_state_failure.c
+  src/turbo_agent_state_flow.c
+  src/turbo_agent_state_memory.c
+  src/turbo_agent_state_version.c
+  src/turbo_agent_state_snapshot.c
+  src/turbo_agent_transport.c
+  src/turbo_agent_validation.c
+  src/turbo_agent_hooks.c
+  src/turbo_agent_support.c
+  src/turbo_agent_lifecycle.c
+  src/turbo_agent_sse.c
+  src/turbo_agent_sse_json.c
+  src/turbo_agent_sse_responses.c
+  src/turbo_agent_sse_chat.c
+  src/turbo_agent_sse_anthropic.c
+  src/turbo_agent_workflow_model_node.c
+  src/turbo_agent_workflow_tool_node.c
+  src/turbo_agent_workflow_plan.c
+  src/turbo_agent_workflow.c
+  src/turbo_agent_workflow_loops.c
+  src/turbo_agent_workflow_replan.c
+  src/turbo_agent_workflow_review.c
   src/turbo_action_tool.c
   src/turbo_agent_policy.c)
 cmake_config_target(
@@ -34,9 +76,33 @@ target_include_directories(
 
 target_link_libraries(
   turbo_langchain
-  PUBLIC TurboNet::Parser TurboNet::HttpClient
+  PUBLIC TurboNet::Parser TurboNet::HttpClient TurboNet::Iris
   PRIVATE TurboNet::Wasm3 mir)
 target_compile_definitions(turbo_langchain PRIVATE SHARED_CXX)
+
+add_executable(langchain_runtime_review_resume_example
+               examples/runtime_review_resume.c)
+target_link_libraries(langchain_runtime_review_resume_example PRIVATE turbo_langchain)
+set_target_properties(langchain_runtime_review_resume_example
+                      PROPERTIES FOLDER "langchain/examples")
+add_test(NAME langchain_runtime_review_resume_example_smoke
+         COMMAND langchain_runtime_review_resume_example)
+set_tests_properties(
+  langchain_runtime_review_resume_example_smoke
+  PROPERTIES PASS_REGULAR_EXPRESSION
+             "initial run;status: interrupted;parent_agent_run_id: \\(null\\);checkpoint control snapshot present: yes;resumed run;status: completed;forked run")
+
+add_executable(langchain_runtime_history_inspect_example
+               examples/runtime_history_inspect.c)
+target_link_libraries(langchain_runtime_history_inspect_example PRIVATE turbo_langchain)
+set_target_properties(langchain_runtime_history_inspect_example
+                      PROPERTIES FOLDER "langchain/examples")
+add_test(NAME langchain_runtime_history_inspect_example_smoke
+         COMMAND langchain_runtime_history_inspect_example)
+set_tests_properties(
+  langchain_runtime_history_inspect_example_smoke
+  PROPERTIES PASS_REGULAR_EXPRESSION
+             "summary;parent_agent_run_id: \\(null\\);thread record;run record;checkpoint record;list_runs count: 1;list_checkpoints count: 1;history event count: 1;resumed status: completed")
 
 install(
   FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_langchain.h
@@ -57,12 +123,19 @@ install(
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_tool_runtime_wasm3.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_tool_registry.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_tool_schema.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_openai_agent.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_openai_agent_extensions.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_openai_agent_state.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_openai_agent_sse.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_openai_agent_graph.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_openai_agent_workflow.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_app.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_extensions.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_memory_store.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime_remote.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime_remote_iris.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_session.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_subagent.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_state.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_sse.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_graph.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_workflow.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_action_tool.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_policy.h
   DESTINATION include)
@@ -103,22 +176,72 @@ cmake_add_test(
   FOLDER langchain)
 
 cmake_add_test(
-  SOURCES tests/test_turbo_openai_agent_graph_api.c
+  SOURCES tests/test_turbo_agent_app_api.c
   LIBS turbo_langchain TurboNet::TinyTest
   FOLDER langchain)
 
 cmake_add_test(
-  SOURCES tests/test_turbo_openai_agent_state_api.c
+  SOURCES tests/test_turbo_agent_graph_api.c
   LIBS turbo_langchain TurboNet::TinyTest
   FOLDER langchain)
 
 cmake_add_test(
-  SOURCES tests/test_turbo_openai_agent_extensions_api.c
+  SOURCES tests/test_turbo_agent_state_api.c
   LIBS turbo_langchain TurboNet::TinyTest
   FOLDER langchain)
 
 cmake_add_test(
-  SOURCES tests/test_turbo_openai_agent_workflow_api.c
+  SOURCES tests/test_turbo_agent_extensions_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_request_internal.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_runtime_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_runtime_remote_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_runtime_remote_iris_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_memory_store_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_session_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_subagent_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_sse_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_workflow_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_workflow_graph.c
   LIBS turbo_langchain TurboNet::TinyTest
   FOLDER langchain)
 

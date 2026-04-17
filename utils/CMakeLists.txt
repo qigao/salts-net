@@ -49,4 +49,7 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/parser/fmt_lexer.h
 
 # Tests
 add_subdirectory(tests)
+if(BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
 add_subdirectory(examples)

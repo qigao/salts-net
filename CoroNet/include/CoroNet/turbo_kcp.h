@@ -39,6 +39,11 @@ int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
                    turbo_recv_cb on_recv);
 
 /**
+ * @brief Enable or disable SO_REUSEPORT for future bind calls on this KCP handle.
+ */
+void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
+
+/**
  * @brief Connect to a remote KCP server.
  * 
  * @param kcp The KCP context.

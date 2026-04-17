@@ -39,6 +39,10 @@ message(STATUS "SSL backend used: ${SSL_BACKEND_USED}")
 
 option(BUILD_EXAMPLES "Build example programs" ON)
 option(BUILD_TESTS "Build test suite" ON)
+cmake_dependent_option(
+    BUILD_BENCHMARKS "Build benchmark executables" ON
+    "BUILD_TESTS" OFF
+)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 

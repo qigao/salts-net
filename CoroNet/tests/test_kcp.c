@@ -177,6 +177,44 @@ spec("KCP Transport") {
         coro_context_destroy(ctx);
     }
 
+    it("should honor reuse_port for kcp listener binds") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *server1 = NULL;
+        coro_socket_t *server2 = NULL;
+        struct sockaddr_in addr;
+        struct sockaddr_storage local_addr;
+        int r;
+
+        check_not_null(ctx);
+
+        server1 = coro_socket_create_kcp(ctx);
+        server2 = coro_socket_create_kcp(ctx);
+        check_not_null(server1);
+        check_not_null(server2);
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(0);
+
+        coro_socket_set_reuse_port(server1, 1);
+        coro_socket_set_reuse_port(server2, 1);
+
+        r = coro_socket_bind(server1, (struct sockaddr *)&addr);
+        if (r == 0) {
+            check_int_eq(coro_socket_get_local_address(server1, &local_addr), 0);
+            addr.sin_port = ((const struct sockaddr_in *)&local_addr)->sin_port;
+            check_int_eq(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
+        } else {
+            check(r != 0);
+        }
+
+        coro_socket_destroy(server2);
+        coro_socket_destroy(server1);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
     it("should support KCP server sockets through coro_socket_listen_on") {
         coro_context_t *ctx = coro_context_create(NULL);
         check_not_null(ctx);

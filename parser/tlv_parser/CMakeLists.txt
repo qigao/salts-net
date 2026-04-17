@@ -64,3 +64,6 @@ set_target_properties(production_example PROPERTIES FOLDER parser/tlv_parser/exa
 # =============================================================================
 
 add_subdirectory(test)
+if(BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
+endif()

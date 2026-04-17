@@ -475,6 +475,18 @@ static int kqueue_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
     st->fd = socket(a->sa_family, SOCK_STREAM, 0);
     if (st->fd < 0) { kqueue_cleanup_state(st); return -errno; }
     int reuse = 1; setsockopt(st->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    if (l->reuse_port) {
+#ifdef SO_REUSEPORT
+        if (setsockopt(st->fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) != 0) {
+            int rc = -errno;
+            kqueue_cleanup_state(st);
+            return rc;
+        }
+#else
+        kqueue_cleanup_state(st);
+        return TURBO_ENOTSUP;
+#endif
+    }
     socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
                          (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
                                                       sizeof(struct sockaddr_in);

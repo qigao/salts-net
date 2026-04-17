@@ -85,6 +85,25 @@ spec("turbo_parser") {
       turbo_free_json(&root);
     }
 
+    it("should overwrite existing object keys when setting strings") {
+      json_value_t *root = turbo_json_create_object();
+      char *serialized;
+
+      check_not_null(root);
+
+      turbo_json_object_set_string(root, "stderr", "");
+      turbo_json_object_set_string(root, "stderr", "line 1\\line 2\n\"oops\"");
+
+      check_str_eq(turbo_json_get_string(root, "stderr"), "line 1\\line 2\n\"oops\"");
+
+      serialized = turbo_json_serialize(root, NULL);
+      check_not_null(serialized);
+      check(strstr(serialized, "\"stderr\":\"line 1\\\\line 2\\n\\\"oops\\\"\"") != NULL);
+
+      turbo_json_serialize_free(serialized);
+      turbo_free_json(&root);
+    }
+
   }
 
   describe("INI") {

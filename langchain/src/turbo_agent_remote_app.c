@@ -193,6 +193,14 @@ CXX_C_API int turbo_agent_remote_app_get_thread_state_bind(
   return turbo_agent_remote_session_get_thread_state_bind(app->session, out_state);
 }
 
+CXX_C_API int turbo_agent_remote_app_memory_delete_record(
+    const turbo_agent_remote_app_t *app, const char *memory_namespace, const char *key) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_remote_session_memory_delete_record(app->session, memory_namespace, key);
+}
+
 CXX_C_API int turbo_agent_remote_app_memory_list_records(
     const turbo_agent_remote_app_t *app, const char *namespace_prefix,
     json_value_t **out_records_json) {
@@ -221,8 +229,12 @@ CXX_C_API int turbo_agent_remote_app_memory_put_record(
   return turbo_agent_remote_session_memory_put_record(app->session, record_json);
 }
 
-CXX_C_API int turbo_agent_remote_app_memory_validate_record(const json_value_t *record_json) {
-  return turbo_agent_remote_session_memory_validate_record(record_json);
+CXX_C_API int turbo_agent_remote_app_memory_validate_record(
+    const turbo_agent_remote_app_t *app, const json_value_t *record_json, int *out_valid) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_remote_session_memory_validate_record(app->session, record_json, out_valid);
 }
 
 CXX_C_API int turbo_agent_remote_app_memory_query_records(

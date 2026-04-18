@@ -93,6 +93,7 @@ typedef struct stream_uring_server_state_s {
 static void stream_uring_worker(void *arg);
 static void stream_uring_stream_cleanup_task(void *arg1, void *arg2);
 static void stream_uring_listener_cleanup_task(void *arg1, void *arg2);
+static stream_uring_op_t *stream_uring_queue_pop(stream_uring_base_t *base);
 static void stream_uring_handle_completion(void *arg1, void *arg2);
 static int stream_uring_submit_recv(turbo_stream_t *s);
 static int stream_uring_submit_send(turbo_stream_t *s);
@@ -297,6 +298,21 @@ static stream_uring_op_t *stream_uring_queue_pop(stream_uring_base_t *base) {
   return op;
 }
 
+static void stream_uring_free_queued_commands(stream_uring_base_t *base) {
+  stream_uring_op_t *op;
+
+  if (!base) {
+    return;
+  }
+
+  while ((op = stream_uring_queue_pop(base)) != NULL) {
+    if (op->kind == STREAM_URING_OP_SEND && op->buffer && op->owns_buffer) {
+      mem_unref(op->buffer);
+    }
+    free(op);
+  }
+}
+
 static struct io_uring_sqe *stream_uring_get_sqe(stream_uring_base_t *base) {
   struct io_uring_sqe *sqe;
 
@@ -326,6 +342,7 @@ static int stream_uring_submit_wake(stream_uring_base_t *base) {
   op->kind = STREAM_URING_OP_WAKE;
   io_uring_prep_read(sqe, base->wake_fd, &op->wake_value, sizeof(op->wake_value), 0);
   io_uring_sqe_set_data(sqe, op);
+  stream_uring_track_inflight(base, op);
   return 0;
 }
 
@@ -453,6 +470,7 @@ static void stream_uring_worker(void *arg) {
     io_uring_cqe_seen(&base->ring, cqe);
 
     if (op->kind == STREAM_URING_OP_WAKE) {
+      stream_uring_untrack_inflight(base, op);
       free(op);
       stream_uring_drain_commands(base);
       if (!base->stopping && base->wake_fd >= 0) {
@@ -556,6 +574,7 @@ static void stream_uring_destroy_base(stream_uring_base_t *base) {
     base->ring_ready = 0;
   }
   stream_uring_free_inflight(base);
+  stream_uring_free_queued_commands(base);
   if (base->cmd_queue_data) {
     free(base->cmd_queue_data);
     base->cmd_queue_data = NULL;

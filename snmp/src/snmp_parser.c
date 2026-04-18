@@ -32,6 +32,10 @@ static int parse_oid(const asn1_value_t *asn1_oid, snmp_oid_t *oid, MemoryPool *
   return SNMP_PARSE_OK;
 }
 
+static void *snmp_parse_alloc(MemoryPool *pool, size_t size) {
+  return pool ? pool_alloc(pool, size) : malloc(size);
+}
+
 /* Helper: Parse VarBind value */
 static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *varbind,
                                MemoryPool *pool) {
@@ -372,6 +376,9 @@ void snmp_message_free(snmp_message_t *msg) {
  */
 int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const snmp_v3_user_t *user,
                   MemoryPool *pool) {
+  asn1_value_t *scoped_pdu = NULL;
+  uint8_t *context_engine_id = NULL;
+  char *context_name = NULL;
   if (!data || !msg) {
     return SNMP_PARSE_ERROR_INVALID;
   }
@@ -382,11 +389,15 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
   asn1_value_t *root = NULL;
   int result = scan_binary_asn1(data, len, &root);
   if (result != 0 || !root || root->tag != 0x30) {
+    if (root) {
+      asn1_free(root);
+    }
     return SNMP_PARSE_ERROR_MALFORMED;
   }
 
   /* Must have 4 children: version, msgGlobalData, msgSecurityParameters, msgData */
   if (root->value.sequence.count != 4) {
+    asn1_free(root);
     return SNMP_PARSE_ERROR_MALFORMED;
   }
 
@@ -394,12 +405,14 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
 
   /* 1. version (must be 3) */
   if (children[0]->tag != 0x02 || children[0]->value.integer != 3) {
+    asn1_free(root);
     return SNMP_PARSE_ERROR_VERSION;
   }
   msg->version = SNMP_VERSION_3;
 
   /* 2. msgGlobalData */
   if (children[1]->tag != 0x30 || children[1]->value.sequence.count != 4) {
+    asn1_free(root);
     return SNMP_PARSE_ERROR_MALFORMED;
   }
   asn1_value_t **global_data = children[1]->value.sequence.children;
@@ -411,12 +424,14 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
 
   /* 3. msgSecurityParameters (OCTET STRING containing USM params) */
   if (children[2]->tag != 0x04) {
+    asn1_free(root);
     return SNMP_PARSE_ERROR_MALFORMED;
   }
 
   result = usm_decode_security_params(children[2]->value.octet_string.data, children[2]->value.octet_string.length,
                                       &msg->usm_params, pool);
   if (result != USM_OK) {
+    asn1_free(root);
     return SNMP_PARSE_ERROR_MALFORMED;
   }
 
@@ -440,10 +455,12 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
   if (is_encrypted) {
     /* Encrypted - msgData is OCTET STRING */
     if (msg_data->tag != 0x04) {
+      asn1_free(root);
       return SNMP_PARSE_ERROR_MALFORMED;
     }
 
     if (!user || user->priv_protocol == SNMP_PRIV_NONE) {
+      asn1_free(root);
       return SNMP_PARSE_ERROR_MALFORMED; /* Cannot decrypt without keys */
     }
 
@@ -457,13 +474,17 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
                          &plaintext_len);
 
     if (result != USM_OK) {
+      asn1_free(root);
       return SNMP_PARSE_ERROR_MALFORMED;
     }
 
     /* Parse decrypted scopedPDU */
-    asn1_value_t *scoped_pdu = NULL;
     result = scan_binary_asn1(plaintext, plaintext_len, &scoped_pdu);
     if (result != 0 || !scoped_pdu || scoped_pdu->tag != 0x30) {
+      asn1_free(root);
+      if (scoped_pdu) {
+        asn1_free(scoped_pdu);
+      }
       return SNMP_PARSE_ERROR_MALFORMED;
     }
 
@@ -472,24 +493,57 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
 
   /* Parse scopedPDU: contextEngineID, contextName, PDU */
   if (msg_data->tag != 0x30 || msg_data->value.sequence.count != 3) {
+    asn1_free(root);
+    if (scoped_pdu) {
+      asn1_free(scoped_pdu);
+    }
     return SNMP_PARSE_ERROR_MALFORMED;
   }
 
   asn1_value_t **scoped = msg_data->value.sequence.children;
-
-  msg->scoped_pdu.context_engine_id = scoped[0]->value.octet_string.data;
   msg->scoped_pdu.context_engine_id_len = scoped[0]->value.octet_string.length;
-  msg->scoped_pdu.context_name = (char *)scoped[1]->value.octet_string.data;
+  if (msg->scoped_pdu.context_engine_id_len > 0) {
+    context_engine_id = (uint8_t *)snmp_parse_alloc(pool, msg->scoped_pdu.context_engine_id_len);
+    if (!context_engine_id) {
+      asn1_free(root);
+      if (scoped_pdu) {
+        asn1_free(scoped_pdu);
+      }
+      return SNMP_PARSE_ERROR_MALFORMED;
+    }
+    memcpy(context_engine_id, scoped[0]->value.octet_string.data, msg->scoped_pdu.context_engine_id_len);
+  }
+  msg->scoped_pdu.context_engine_id = context_engine_id;
   msg->scoped_pdu.context_name_len = scoped[1]->value.octet_string.length;
+  context_name = (char *)snmp_parse_alloc(pool, msg->scoped_pdu.context_name_len + 1);
+  if (!context_name) {
+    asn1_free(root);
+    if (scoped_pdu) {
+      asn1_free(scoped_pdu);
+    }
+    return SNMP_PARSE_ERROR_MALFORMED;
+  }
+  memcpy(context_name, scoped[1]->value.octet_string.data, msg->scoped_pdu.context_name_len);
+  context_name[msg->scoped_pdu.context_name_len] = '\0';
+  msg->scoped_pdu.context_name = context_name;
 
   /* Parse PDU */
   result = parse_pdu(scoped[2], &msg->pdu, pool);
   if (result != SNMP_PARSE_OK) {
+    asn1_free(root);
+    if (scoped_pdu) {
+      asn1_free(scoped_pdu);
+    }
     return result;
   }
 
   /* Copy PDU to scoped_pdu for v3 */
   msg->scoped_pdu.pdu = msg->pdu;
+
+  asn1_free(root);
+  if (scoped_pdu) {
+    asn1_free(scoped_pdu);
+  }
 
   return (int)len; /* Successfully consumed all bytes */
 }

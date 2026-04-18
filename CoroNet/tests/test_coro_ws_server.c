@@ -64,6 +64,19 @@ static void ws_server_run_until(coro_context_t *ctx, uint64_t timeout_ms,
   }
 }
 
+static void ws_server_wait_for_client_result(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (g_ws_server_client_rc == TURBO_EBUSY && turbo_monotonic_ms() < deadline) {
+    coro_sleep(ctx, 1);
+  }
+}
+
 static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
   const ws_server_state_t *state = (const ws_server_state_t *)arg;
   int rc;
@@ -101,6 +114,10 @@ static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
     }
 
     g_ws_server_handler_roundtrips++;
+  }
+
+  if (rc == 0 && state != NULL) {
+    ws_server_wait_for_client_result(state->ctx, 1000);
   }
 
   g_ws_server_handler_rc = rc;
@@ -239,9 +256,13 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
   check_int_eq(g_ws_server_handler_sends, state.roundtrips);
   check_int_eq(g_ws_server_client_sends, state.roundtrips);
   check_int_eq((int)g_ws_server_handler_len, (int)request_len);
-  check_int_eq(memcmp(g_ws_server_handler_buf, request_data, request_len), 0);
   check_int_eq((int)g_ws_server_client_len, (int)reply_len);
-  check_int_eq(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
+  if (g_ws_server_handler_len == request_len) {
+    check_int_eq(memcmp(g_ws_server_handler_buf, request_data, request_len), 0);
+  }
+  if (g_ws_server_client_len == reply_len) {
+    check_int_eq(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
+  }
 
   coro_socket_destroy(state.server);
 

@@ -147,6 +147,12 @@ CXX_C_API int turbo_agent_remote_session_get_thread_state_bind(
     turbo_agent_remote_session_t *session, turbo_runtime_data_bind_value_t **out_state);
 
 /**
+ * @brief Delete one canonical memory record through the remote runtime.
+ */
+CXX_C_API int turbo_agent_remote_session_memory_delete_record(
+    const turbo_agent_remote_session_t *session, const char *memory_namespace, const char *key);
+
+/**
  * @brief List long-term memory records by namespace prefix through the remote runtime.
  */
 CXX_C_API int turbo_agent_remote_session_memory_list_records(
@@ -167,9 +173,10 @@ CXX_C_API int turbo_agent_remote_session_memory_put_record(
     const turbo_agent_remote_session_t *session, const json_value_t *record_json);
 
 /**
- * @brief Validate one canonical memory record locally.
+ * @brief Validate one canonical memory record through the remote runtime.
  */
-CXX_C_API int turbo_agent_remote_session_memory_validate_record(const json_value_t *record_json);
+CXX_C_API int turbo_agent_remote_session_memory_validate_record(
+    const turbo_agent_remote_session_t *session, const json_value_t *record_json, int *out_valid);
 
 /**
  * @brief Query long-term memory records through the remote runtime.

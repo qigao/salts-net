@@ -184,11 +184,18 @@ static int ws_protocol_error(ws_state_t *st) {
   uint8_t close_payload[2] = { 0x03, 0xEA }; /* 1002 Protocol Error */
 
   if (st && st->state == WS_ST_OPEN) {
+    int rc;
+
     st->state = WS_ST_CLOSING;
-    ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
+    rc = ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
+    if (rc == 0 && st->tcp) {
+      (void)turbo_stream_flush(st->tcp);
+      return 0;
+    }
   }
 
-  return ws_fail(st, TURBO_EPROTONOSUPPORT);
+  ws_fail(st, TURBO_EPROTONOSUPPORT);
+  return 0;
 }
 
 /* ── TCP callbacks (called on coro event-loop thread) ─────── */
@@ -256,6 +263,8 @@ static void ws_on_tcp_connect(void *handle, int status, void *peer) {
 static void ws_on_tcp_close(void *handle) {
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   ws_state_t     *st  = (ws_state_t *)tcp->user_data;
+  tcp->managed = 0;
+  tcp->destroyed = 1;
   if (!st) return;
 
   turbo_stream_t *outer = st->outer;

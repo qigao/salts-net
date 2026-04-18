@@ -5,6 +5,7 @@
 #include "CoroNet/turbo_dns.h"
 #include "ikcp.h"
 #include "platform.h"
+#include "turbo_kcp_fec_internal.h"
 #include "turbo_error.h"
 #include "turbo_thread.h"
 #include "tlog.h"
@@ -28,6 +29,8 @@ struct turbo_kcp_s {
   int connecting;
   int closing;
   int reuse_port;
+  turbo_kcp_fec_config_t fec_config;
+  turbo_kcp_fec_state_t* fec;
 };
 
 static void kcp_record_error(coro_context_t *ctx, int err) {
@@ -108,11 +111,35 @@ static int kcp_low_level_output(const char* buf, int len, ikcpcb* ikcp, void* us
   UNUSED(ikcp);
   turbo_kcp_t* k = (turbo_kcp_t*)user;
   if (!k->udp || k->closing) return -1;
+  if (k->fec) {
+    return turbo_kcp_fec_send_data(k->fec, k->udp,
+                                   (const struct sockaddr*)&k->peer_addr,
+                                   buf, (size_t)len);
+  }
   return turbo_datagram_sendto(k->udp, (const struct sockaddr*)&k->peer_addr, buf, (size_t)len);
+}
+
+typedef struct kcp_fec_input_s {
+  turbo_kcp_t* k;
+  int delivered;
+} kcp_fec_input_t;
+
+static int kcp_deliver_input(void* user, const char* data, size_t len) {
+  kcp_fec_input_t* input = (kcp_fec_input_t*)user;
+  if (!input || !input->k || !input->k->ikcp || !data || len == 0) {
+    return TURBO_EINVAL;
+  }
+
+  ikcp_input(input->k->ikcp, data, (long)len);
+  input->delivered++;
+  return 0;
 }
 
 static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
   turbo_kcp_t* k = (turbo_kcp_t*)turbo_datagram_get_user_data((turbo_datagram_t*)handle);
+  kcp_fec_input_t fec_input;
+  int input_rc;
+
   if (!k || !k->ikcp || k->closing) return 0;
 
   if (!slice || !slice->data || slice->length == 0) {
@@ -150,9 +177,21 @@ static int on_udp_recv(void* handle, const mem_slice_t* slice, void* peer) {
       return 0;
     }
   }
-  
-  /* Feed raw UDP into KCP */
-  ikcp_input(k->ikcp, slice->data, (long)slice->length);
+
+  memset(&fec_input, 0, sizeof(fec_input));
+  fec_input.k = k;
+  if (k->fec) {
+    input_rc = turbo_kcp_fec_receive_frame(k->fec, slice, kcp_deliver_input, &fec_input);
+    if (input_rc != 0 && fec_input.delivered == 0) {
+      return 0;
+    }
+    if (fec_input.delivered == 0) {
+      return 0;
+    }
+  } else {
+    ikcp_input(k->ikcp, slice->data, (long)slice->length);
+    fec_input.delivered = 1;
+  }
 
   /* Flush ACKs (and any pending sends) immediately via ikcp_flush().
    * ikcp_update() would be a no-op here: it guards on ts_flush which is
@@ -211,6 +250,11 @@ static void turbo_kcp_cleanup_create_failure(turbo_kcp_t *k, int external_ref_he
     k->ikcp = NULL;
   }
 
+  if (k->fec) {
+    turbo_kcp_fec_close(k->fec);
+    k->fec = NULL;
+  }
+
   if (external_ref_held && k->ctx) {
     coro_context_release_external(k->ctx);
   }
@@ -229,6 +273,7 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
   }
   
   k->ctx = ctx;
+  turbo_kcp_fec_config_init(&k->fec_config);
   if (ctx) {
     coro_context_acquire_external(ctx);
     external_ref_held = 1;
@@ -281,6 +326,11 @@ void turbo_kcp_destroy(turbo_kcp_t* kcp) {
     ikcp_release(kcp->ikcp);
     kcp->ikcp = NULL;
   }
+
+  if (kcp->fec) {
+    turbo_kcp_fec_close(kcp->fec);
+    kcp->fec = NULL;
+  }
   
   if (kcp->udp) {
     turbo_datagram_set_user_data(kcp->udp, NULL);
@@ -294,6 +344,68 @@ void turbo_kcp_destroy(turbo_kcp_t* kcp) {
   } else {
     free(kcp);
   }
+}
+
+void turbo_kcp_fec_config_default(turbo_kcp_fec_config_t* config) {
+  turbo_kcp_fec_config_init(config);
+}
+
+int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend) {
+  return turbo_kcp_fec_backend_is_available(backend);
+}
+
+int turbo_kcp_set_fec(turbo_kcp_t* kcp, const turbo_kcp_fec_config_t* config) {
+  turbo_kcp_fec_state_t* next_fec;
+  turbo_kcp_fec_config_t next_config;
+  int rc;
+
+  if (!kcp || !config) {
+    kcp_record_error(kcp ? kcp->ctx : NULL, TURBO_EINVAL);
+    return TURBO_EINVAL;
+  }
+
+  if (kcp->udp || kcp->connected || kcp->connecting) {
+    kcp_record_error(kcp->ctx, TURBO_EINVAL);
+    return TURBO_EINVAL;
+  }
+
+  next_config = *config;
+  if (!next_config.enabled) {
+    turbo_kcp_fec_config_init(&next_config);
+    if (kcp->fec) {
+      turbo_kcp_fec_close(kcp->fec);
+      kcp->fec = NULL;
+    }
+    kcp->fec_config = next_config;
+    kcp_record_error(kcp->ctx, 0);
+    return 0;
+  }
+
+  next_fec = NULL;
+  rc = turbo_kcp_fec_open(&next_config, &next_fec);
+  if (rc != 0) {
+    kcp_record_error(kcp->ctx, rc);
+    return rc;
+  }
+
+  if (kcp->fec) {
+    turbo_kcp_fec_close(kcp->fec);
+  }
+  kcp->fec = next_fec;
+  kcp->fec_config = next_config;
+  kcp_record_error(kcp->ctx, 0);
+  return 0;
+}
+
+int turbo_kcp_get_fec(turbo_kcp_t* kcp, turbo_kcp_fec_config_t* config) {
+  if (!kcp || !config) {
+    kcp_record_error(kcp ? kcp->ctx : NULL, TURBO_EINVAL);
+    return TURBO_EINVAL;
+  }
+
+  *config = kcp->fec_config;
+  kcp_record_error(kcp->ctx, 0);
+  return 0;
 }
 
 int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,

@@ -18,6 +18,7 @@ static int test_get_callback(const char* data, size_t len, void* userdata) {
 }
 
 static char g_test_bucket[64] = {0};
+static int g_s3_live_enabled = -1;
 
 static const char* get_test_bucket_name() {
     if (g_test_bucket[0] == 0) {
@@ -31,6 +32,18 @@ static const char* get_test_bucket_name() {
 }
 
 static coro_context_t *g_ctx = NULL;
+
+static int s3_live_enabled(void) {
+    const char *run_live;
+
+    if (g_s3_live_enabled != -1) {
+        return g_s3_live_enabled;
+    }
+
+    run_live = getenv("TURBONET_RUN_LIVE_S3");
+    g_s3_live_enabled = (run_live && strcmp(run_live, "1") == 0) ? 1 : 0;
+    return g_s3_live_enabled;
+}
 
 // Helper: run a void(*)(void*) inside a coroutine with the event loop
 typedef void (*test_fn_t)(void* arg);
@@ -161,6 +174,10 @@ suite("S3 Client Migration Tests") {
     static s3_client_t* client;
 
     before_all() {
+        if (!s3_live_enabled()) {
+            return;
+        }
+
         const char* test_bucket = get_test_bucket_name();
         memset(&url, 0, sizeof(url));
         url.host = tstr_dup("play.min.io");
@@ -190,6 +207,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should successfully list buckets from a mock/real server") {
+        if (!s3_live_enabled()) return;
         s3_list_buckets_response_t resp = s3_list_buckets(tctx.client);
         if (s3_is_ok(resp.error)) {
             printf("Found %d buckets\n", (int)S3BucketVec_size(resp.buckets));
@@ -205,6 +223,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should return false for non-existent bucket") {
+        if (!s3_live_enabled()) return;
         s3_error_t err = S3_OK;
         int exists = s3_bucket_exists(tctx.client, "non-existent-bucket-xyz-123456789", &err);
         check_int_eq(exists, 0);
@@ -213,6 +232,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should fail to stat non-existent object") {
+        if (!s3_live_enabled()) return;
         s3_stat_object_response_t resp = s3_stat_object(tctx.client, tctx.test_bucket, "non-existent-object-xyz");
         check(!s3_is_ok(resp.error));
         if (resp.error.message) {
@@ -222,6 +242,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should fail with invalid credentials") {
+        if (!s3_live_enabled()) return;
         s3_credential_provider_t* bad_prov = s3_creds_static("INVALID_ACCESS_KEY", "INVALID_SECRET_KEY", NULL);
         s3_client_t* bad_client = s3_client_create(g_ctx, tctx.url, bad_prov);
         s3_list_buckets_response_t resp = s3_list_buckets(bad_client);
@@ -233,6 +254,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should attempt to remove an object") {
+        if (!s3_live_enabled()) return;
         s3_error_t err = s3_remove_object(tctx.client, tctx.test_bucket, "non-existent-to-remove");
         if (s3_is_ok(err)) {
             printf("RemoveObject succeeded (standard S3 behavior for non-existent)\n");
@@ -243,6 +265,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should list objects in a bucket") {
+        if (!s3_live_enabled()) return;
         ensure_test_bucket(&tctx, __bdd_config__);
         s3_list_objects_iter_t* iter = s3_list_objects(tctx.client, tctx.test_bucket, NULL, 0);
         check_not_null(iter);
@@ -262,6 +285,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should put and get an object") {
+        if (!s3_live_enabled()) return;
         ensure_test_bucket(&tctx, __bdd_config__);
         const char* test_data = "Hello from S3 C Client SDK!";
         size_t test_len = strlen(test_data);
@@ -283,6 +307,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should upload and download a file") {
+        if (!s3_live_enabled()) return;
         ensure_test_bucket(&tctx, __bdd_config__);
         const char* local_test_file = "s3_test_upload.txt";
         const char* local_download_file = "s3_test_download.txt";
@@ -321,6 +346,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should put a large object via parallel multipart upload") {
+        if (!s3_live_enabled()) return;
         multipart_test_result_t result = {0};
         typedef struct { test_ctx_t* t; multipart_test_result_t* out; } coro_args_t;
         coro_args_t args = { &tctx, &result };
@@ -340,6 +366,7 @@ suite("S3 Client Migration Tests") {
     }
 
     it("should still put small objects via simple PUT") {
+        if (!s3_live_enabled()) return;
         ensure_test_bucket(&tctx, __bdd_config__);
         const char* small_data = "small object via simple PUT path";
         const char* object_name = "test-small-put.txt";
@@ -361,6 +388,10 @@ suite("S3 Client Migration Tests") {
     }
 
     after_all() {
+        if (!s3_live_enabled()) {
+            return;
+        }
+
         // Cleanup (was test_cleanup)
         s3_list_objects_iter_t* iter = s3_list_objects(tctx.client, tctx.test_bucket, NULL, 1);
         if (iter) {

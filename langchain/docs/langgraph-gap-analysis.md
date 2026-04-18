@@ -257,10 +257,15 @@ surface 已经进入 record-first 第一阶段。
 - 仍缺语义检索
 - 仍缺 memory index / ranking / recall contract
 - 仍缺 profile / semantic memory 这类更高层 recall contract
-- remote 侧虽已补显式 `memory.*` record-first contract，但还没有更强的
-  remote query/index/retrieval 产品面；目前 remote `memory.queryRecordsEx`
-  也只对齐到了本地 filter + metadata/id filter + `created_at` time-window +
-  `sort_by / sort_order / limit` 这一层 ergonomics
+- remote 侧虽已补显式 `memory.*` record-first contract，并且现在已有
+  `memory.getRecord` / `memory.putRecord` / `memory.listRecords` /
+  `memory.deleteRecord` / `memory.queryRecordsEx` 这一组最小 transport
+  contract；其中 `listRecords` 返回 canonical records，`deleteRecord`
+  成功返回 `{ "deleted": true }`，且 remote 不暴露 legacy raw
+  `memory.list`。但它还没有更强的 remote query/index/retrieval 产品面；
+  目前 remote `memory.queryRecordsEx` 也只对齐到了本地 filter +
+  metadata/id filter + `created_at` time-window + `sort_by / sort_order /
+  limit` 这一层 ergonomics
 - `context` record 已 canonical，但更丰富的 typed record family 仍未展开
 
 因此下一步最小切口不再是“先把 record schema 立起来”，而是：
@@ -275,9 +280,10 @@ surface 已经进入 record-first 第一阶段。
 
 这里还要刻意保留一条边界：当前 remote runtime bridge 没有把
 `memory_store` 折叠进 `runtime.*` JSON-RPC 方法集，而是单独补了
-`memory.getRecord` / `memory.putRecord` / `memory.queryRecordsEx` 这一组
-memory-facing contract。也就是说，remote memory 已经有了最小 record-first
-主面，但它仍不是“runtime state 附属字段”那种混合设计。
+`memory.getRecord` / `memory.putRecord` / `memory.listRecords` /
+`memory.deleteRecord` / `memory.queryRecordsEx` 这一组 memory-facing
+contract。也就是说，remote memory 已经有了最小 record-first 主面，但它
+仍不是“runtime state 附属字段”那种混合设计。
 
 ### 5. 流式运行面还偏协议级，未到 runtime-host 级
 
@@ -540,6 +546,8 @@ LangGraph 产品面并不止本地库，还覆盖：
   - `runtime.listObservabilityIndexesFiltered`
   - `memory.getRecord`
   - `memory.putRecord`
+  - `memory.listRecords`
+  - `memory.deleteRecord`
   - `memory.queryRecordsEx`
 
 它只是 future transport adapter 的 contract bridge，不是 HTTP server，也

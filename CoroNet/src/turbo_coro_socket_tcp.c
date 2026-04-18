@@ -38,9 +38,16 @@ static void on_tcp_connect(void *handle, int status, void *extra) {
 static void on_tcp_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  stream->managed = 0;
+  stream->destroyed = 1;
   if (s) {
+    int release_accepted_ref = s->accepted_ref;
+    s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
+    if (release_accepted_ref) {
+      release_client(s);
+    }
   }
 }
 
@@ -114,8 +121,13 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
   coro_yield();
   {
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
       release_client(s);
     }
     if (status != 0) {
@@ -160,7 +172,10 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle,
   turbo_stream_listener_t *l = (turbo_stream_listener_t *)listener_handle;
   tcp_listener_state_t *ls =
       (tcp_listener_state_t *)turbo_stream_listener_get_user_data(l);
-  if (!ls) return;
+  if (!ls) {
+    turbo_stream_destroy((turbo_stream_t *)stream_handle);
+    return;
+  }
 
   tcp_accept_node_t *node = malloc(sizeof(tcp_accept_node_t));
   if (!node) {
@@ -278,12 +293,13 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 
   child->handle.stream = stream;
   child->owns_handle = 1;
+  child->accepted_ref = 1;
+  retain_client(child);
   turbo_stream_set_user_data(stream, child);
   stream->on_recv = on_tcp_recv;
   stream->on_connect = on_tcp_connect;
   stream->on_close = on_tcp_close;
   child->connected = 1;
-  retain_client(child);
 
   *accepted = child;
   release_client(s);
@@ -318,7 +334,10 @@ static void tcp_close(coro_socket_t *s) {
   /* Listener close */
   if (s->native_tcp_state) {
     tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
-    if (ls->listener) turbo_stream_listener_close(ls->listener);
+    if (ls->listener) {
+      turbo_stream_listener_set_user_data(ls->listener, NULL);
+      turbo_stream_listener_close(ls->listener);
+    }
     if (s->co_wait) {
       s->accept_pending = 0;
       s->status = (s->status == 0) ? TURBO_ECANCELED : s->status;

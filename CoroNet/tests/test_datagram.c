@@ -33,10 +33,16 @@ static int on_stress_recv(void *handle, const mem_slice_t *slice, void *addr) {
     return 0;
 }
 
-static int datagram_test_run_until(coro_context_t *ctx, int *predicate, int expected, int max_iters) {
-    int limit = max_iters;
+static int datagram_test_run_until(coro_context_t *ctx, int *predicate, int expected,
+                                   uint64_t timeout_ms) {
+    uint64_t deadline;
 
-    while (*predicate != expected && limit-- > 0) {
+    if (!ctx || !predicate) {
+        return -1;
+    }
+
+    deadline = turbo_monotonic_ms() + timeout_ms;
+    while (*predicate != expected && turbo_monotonic_ms() < deadline) {
         coro_context_run(ctx, TURBO_RUN_ONCE);
     }
 
@@ -48,9 +54,12 @@ spec("Datagram") {
     it("should reject unavailable io_uring udp backend") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);
-
+#if defined(TURBO_HAS_IO_URING)
+        check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
+#else
         check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING),
                      TURBO_ENOTSUP);
+#endif
 
         coro_context_destroy(ctx);
     }
@@ -176,7 +185,7 @@ spec("Datagram") {
         r = turbo_datagram_sendto(client, (struct sockaddr*)&server_addr, "hello", 5);
         check_int_eq(r, 0);
 
-        check_int_eq(datagram_test_run_until(ctx, &s_received, 1, 1000), 0);
+        check_int_eq(datagram_test_run_until(ctx, &s_received, 1, 3000), 0);
 
         turbo_datagram_destroy(server);
         turbo_datagram_destroy(client);
@@ -213,8 +222,8 @@ spec("Datagram") {
         }
 
         /* Run loop until all received or timeout */
-        int limit = 1000;
-        while (s_stress_received < total && limit-- > 0) {
+        uint64_t deadline = turbo_monotonic_ms() + 3000;
+        while (s_stress_received < total && turbo_monotonic_ms() < deadline) {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }
 

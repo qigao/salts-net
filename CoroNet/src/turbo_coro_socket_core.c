@@ -130,7 +130,7 @@ void retain_client(coro_socket_t *client) {
   if (!client) {
     return;
   }
-  client->ref_count++;
+  atomic_fetch_add_explicit(&client->ref_count, 1, memory_order_relaxed);
 }
 
 void release_client(coro_socket_t *client) {
@@ -138,7 +138,8 @@ void release_client(coro_socket_t *client) {
     return;
   }
 
-  if (--client->ref_count == 0) {
+  if (atomic_fetch_sub_explicit(&client->ref_count, 1, memory_order_acq_rel) == 1) {
+    atomic_thread_fence(memory_order_acquire);
     /* Clean up TLS context (TODO: migrate) */
 
     /* Clean up listener socket */
@@ -188,17 +189,29 @@ static void release_destroy_wait_handoff(coro_socket_t *s) {
 
 /* ── Timeout Management ───────────────────────────────────── */
 
+enum {
+  CORO_TIMEOUT_IDLE = 0,
+  CORO_TIMEOUT_ARMED = 1,
+  CORO_TIMEOUT_POSTED = 2,
+  CORO_TIMEOUT_CANCELED_POSTED = 3,
+};
+
 static void on_timer_fired_bounce(void *arg1, void *arg2) {
   (void)arg2;
   coro_socket_t *s = (coro_socket_t *)arg1;
 
-  if (!s->timer_active) {
+  if (s->timer_active == CORO_TIMEOUT_IDLE) {
     return; /* Already cancelled and released via stop_timeout_timer */
+  }
+  if (s->timer_active == CORO_TIMEOUT_CANCELED_POSTED) {
+    s->timer_active = CORO_TIMEOUT_IDLE;
+    release_client(s);
+    return;
   }
 
   s->timed_out = 1;
   s->status = TURBO_ETIMEDOUT;
-  s->timer_active = 0; /* Clear flag before resume to avoid race */
+  s->timer_active = CORO_TIMEOUT_IDLE; /* Clear flag before resume to avoid race */
   if (s->co_wait) coro_resume_waiter(s);
   release_client(s);
 }
@@ -210,6 +223,10 @@ static void on_timer_fired(turbo_timer_t *timer) {
   if (!s) {
     return;
   }
+  if (s->timer_active != CORO_TIMEOUT_ARMED) {
+    return;
+  }
+  s->timer_active = CORO_TIMEOUT_POSTED;
 
   rc = coro_post(s->ctx, on_timer_fired_bounce, s, NULL);
   if (rc != 0) {
@@ -220,17 +237,22 @@ static void on_timer_fired(turbo_timer_t *timer) {
 void start_timeout_timer(coro_socket_t *s) {
   s->timed_out = 0;
   if (s->timeout_ms > 0 && s->timer && !s->timer_active) {
-    s->timer_active = 1;
+    s->timer_active = CORO_TIMEOUT_ARMED;
     retain_client(s);
     turbo_timer_start(s->timer, on_timer_fired, s->timeout_ms, 0);
   }
 }
 
 void stop_timeout_timer(coro_socket_t *s) {
-  if (s->timer_active) {
-    s->timer_active = 0;
+  if (s->timer_active == CORO_TIMEOUT_ARMED) {
+    s->timer_active = CORO_TIMEOUT_IDLE;
     turbo_timer_stop(s->timer);
     release_client(s);
+    return;
+  }
+  if (s->timer_active == CORO_TIMEOUT_POSTED) {
+    s->timer_active = CORO_TIMEOUT_CANCELED_POSTED;
+    turbo_timer_stop(s->timer);
   }
 }
 
@@ -270,6 +292,8 @@ void coro_socket_handle_transport_connect(coro_socket_t *s, int status) {
 
 void coro_socket_handle_transport_close(coro_socket_t *s) {
   int resumed_waiter = 0;
+  int release_close_ref = 0;
+  int release_wait_ref = 0;
 
   if (!s) return;
 
@@ -295,13 +319,19 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
 
   if (s->close_pending) {
     s->close_pending = 0;
-    release_client(s); /* Balance retain from tcp_close */
+    release_close_ref = 1;
   }
 
   if (resumed_waiter) {
-    if (!s->destroy_wait_handoff) {
-      release_client(s); /* Balance retain from recv/connect wait */
-    }
+    release_wait_ref = !s->destroy_wait_handoff;
+  }
+
+  if (release_wait_ref) {
+    release_client(s); /* Balance retain from recv/connect wait */
+  }
+
+  if (release_close_ref) {
+    release_client(s); /* Balance retain from tcp_close */
   }
 }
 
@@ -313,7 +343,10 @@ void coro_client_wake_eof(coro_socket_t *client) {
   client->recv_data = NULL;
   client->recv_len = 0;
   retain_client(client);
-  coro_resume_waiter(client);
+  coro_resume_waiter_with_handoff(client);
+  if (!client->destroy_wait_handoff) {
+    release_client(client); /* Balance pending recv wait retain */
+  }
   release_client(client);
 }
 
@@ -491,7 +524,7 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
 
   s->loop = ctx->loop;
   s->ctx = ctx;
-  s->ref_count = 1;
+  atomic_init(&s->ref_count, 1);
   s->arena = ctx->arena;
   s->transport = transport;
   s->ops = ops;
@@ -606,10 +639,13 @@ static turbo_transport_t socket_type_to_transport(coro_socket_type_t type) {
   }
 }
 
-int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
+static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_host, int port,
+                                         const char *request_host) {
   uint64_t deadline_ms;
+  const char *target_host;
 
-  if (!s || !host) return TURBO_EINVAL;
+  if (!s || !connect_host) return TURBO_EINVAL;
+  target_host = (request_host && request_host[0] != '\0') ? request_host : connect_host;
 
   /* If transport is already set (e.g. by coro_socket_create), use it.
      Good taste: don't re-resolve what we already know. */
@@ -628,14 +664,14 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
   deadline_ms = coro_socket_connect_deadline_ms(s);
 
   if (transport == TURBO_PIPE) {
-    return s->ops->connect(s, host, port);
+    return s->ops->connect(s, connect_host, port);
   }
 
   /* DNS resolution for host-based protocols */
   struct sockaddr_storage probe;
-  if (turbo_dns_parse_address(host, 0, &probe) == 0) {
+  if (turbo_dns_parse_address(connect_host, 0, &probe) == 0) {
     /* Already an IP address */
-    strncpy(s->resolved_ip, host, sizeof(s->resolved_ip) - 1);
+    strncpy(s->resolved_ip, connect_host, sizeof(s->resolved_ip) - 1);
     s->resolved_ip[sizeof(s->resolved_ip) - 1] = '\0';
   } else {
     /* Need DNS resolution */
@@ -645,7 +681,7 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
     retain_client(s);
     coro_set_wait(s);
 
-    r = turbo_dns_resolve_async_results2(s->loop, host, s->dns_pref, on_dns_resolved, s,
+    r = turbo_dns_resolve_async_results2(s->loop, connect_host, s->dns_pref, on_dns_resolved, s,
                                          &s->dns_query);
 
     if (r != 0) {
@@ -668,7 +704,16 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
     }
   }
 
-  return coro_socket_connect_resolved(s, host, port, deadline_ms);
+  return coro_socket_connect_resolved(s, target_host, port, deadline_ms);
+}
+
+int coro_socket_connect_host_ex(coro_socket_t *s, const char *connect_host, int port,
+                                const char *request_host) {
+  return coro_socket_connect_host_impl(s, connect_host, port, request_host);
+}
+
+int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
+  return coro_socket_connect_host_impl(s, host, port, host);
 }
 
 int coro_socket_connect_pipe(coro_socket_t *s, const char *path) {

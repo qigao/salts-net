@@ -5630,6 +5630,14 @@ CXX_C_API int turbo_agent_runtime_get_thread_observability_index(
 
   *out_index_json = index_json;
   index_json = NULL;
+  free(owned_executor_failure_reason);
+  turbo_runtime_data_bind_value_destroy(control_snapshot_bind);
+  turbo_runtime_data_bind_value_destroy(thread_state_bind);
+  turbo_runtime_data_bind_value_destroy(trace_events_bind);
+  turbo_runtime_data_bind_value_destroy(history_events_bind);
+  turbo_runtime_data_bind_value_destroy(thread_timeline_bind);
+  turbo_free_json(&thread_state_json);
+  turbo_free_json(&control_snapshot_json);
   return 0;
 
 cleanup:

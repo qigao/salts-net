@@ -1019,13 +1019,14 @@ static void turbo_wasm3_redis_command_task(coro_t *co, void *arg) {
 }
 
 static int turbo_wasm3_redis_run_until_done(coro_context_t *ctx, int *done) {
-  int limit = 2000;
+  uint64_t deadline_ms;
 
   if (!ctx || !done) {
     return TURBO_EINVAL;
   }
 
-  while (!*done && limit-- > 0) {
+  deadline_ms = turbo_monotonic_ms() + 2000;
+  while (!*done && turbo_monotonic_ms() < deadline_ms) {
     coro_context_run(ctx, TURBO_RUN_ONCE);
   }
 

@@ -366,7 +366,10 @@ What changes is persistence and replay:
   `runtime.getThreadObservabilityIndex`, and
   `runtime.listObservabilityIndexesFiltered`. When the remote config borrows
   one optional `memory_store`, the same dispatcher also exposes:
-  `memory.getRecord`, `memory.putRecord`, and `memory.queryRecordsEx`.
+  `memory.getRecord`, `memory.putRecord`, `memory.listRecords`,
+  `memory.deleteRecord`, and `memory.queryRecordsEx`. Remote memory stays
+  canonical record-first on this surface; it does not expose one legacy raw
+  `memory.list` transport shape.
   It is a contract bridge for future remote adapters, not an HTTP server
 - `turbo_agent_runtime_remote_dispatch_jsonrpc_text(...)` is the raw JSON text
   adapter above that dispatcher
@@ -384,8 +387,8 @@ What changes is persistence and replay:
   `load_history_events_bind(...)`, `get_run_trace_events_bind(...)`,
   `get_checkpoint_trace_events_bind(...)`,
   `get_memory_record(...)`, `put_memory_record(...)`,
-  `query_memory_records_ex(...)`, `query_memory_records(...)`,
-  `list_memory_records(...)`,
+  `delete_memory_record(...)`, `query_memory_records_ex(...)`,
+  `query_memory_records(...)`, `list_memory_records(...)`,
   `get_thread_timeline_bind(...)`, `get_branch_tree(...)`,
   `get_thread_observability_index(...)`,
   `list_observability_indexes(...)`,
@@ -517,8 +520,61 @@ in JSON-RPC 2.0 envelopes. Two stable happy-path examples are:
 ```
 
 Long-term memory is explicit on the same remote transport but stays separate
-from `runtime.*` inspect/control. The current record-first memory query shape
-is:
+from `runtime.*` inspect/control. Remote memory stays canonical record-first:
+`memory.listRecords` returns canonical records, `memory.deleteRecord` returns
+`{ "deleted": true }` on success, and the bridge does not expose one legacy
+raw `memory.list` result shape. The current query shape is:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-list",
+  "method": "memory.listRecords",
+  "params": { "namespace_prefix": "project/" }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-list",
+  "result": {
+    "records": [
+      {
+        "id": "project/demo::context",
+        "namespace": "project/demo",
+        "kind": "context",
+        "key": "context",
+        "text": "remember this note"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-delete",
+  "method": "memory.deleteRecord",
+  "params": {
+    "namespace": "project/demo",
+    "key": "context"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-delete",
+  "result": { "deleted": true },
+  "error": null
+}
+```
+
+The current canonical memory query shape is:
 
 ```json
 {

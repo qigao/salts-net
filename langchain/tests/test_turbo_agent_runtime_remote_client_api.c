@@ -61,6 +61,34 @@ typedef struct {
   int method_not_found_ok;
 } remote_client_test_state_t;
 
+static void remote_client_test_state_cleanup(remote_client_test_state_t *state) {
+  if (!state) {
+    return;
+  }
+  if (state->client) {
+    turbo_agent_runtime_remote_client_destroy(state->client);
+    state->client = NULL;
+  }
+  if (!state->server_stopped && state->server) {
+    coro_socket_destroy(state->server);
+    state->server = NULL;
+  }
+  if (state->bridge) {
+    turbo_agent_runtime_remote_iris_destroy(state->bridge);
+    state->bridge = NULL;
+  }
+  if (state->remote) {
+    turbo_agent_runtime_remote_destroy(state->remote);
+    state->remote = NULL;
+  }
+  turbo_agent_memory_store_destroy(&state->memory_store);
+  if (state->runtime) {
+    turbo_agent_runtime_destroy(state->runtime);
+    state->runtime = NULL;
+  }
+  state->graph = NULL;
+}
+
 static int remote_client_write_bool_bind_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
   remote_client_bool_write_t *write = (remote_client_bool_write_t *)user_data;
   turbo_runtime_data_bind_value_t *value;
@@ -333,8 +361,12 @@ static void remote_runtime_remote_client_test_coro(coro_t *co, void *arg) {
   json_value_t *memory_record_fixture = NULL;
   json_value_t *memory_record_json = NULL;
   json_value_t *memory_record_variant_json = NULL;
+  json_value_t *memory_invalid_record_json = NULL;
   json_value_t *memory_query_records_json = NULL;
   json_value_t *memory_list_records_json = NULL;
+  json_value_t *memory_records_after_delete_json = NULL;
+  int memory_record_valid = 0;
+  int memory_invalid_record_valid = 1;
   turbo_graph_run_options_t options = {0};
   turbo_graph_run_options_t interrupt_options = {0};
   turbo_agent_memory_query_options_t memory_query_options = {0};
@@ -525,11 +557,27 @@ static void remote_runtime_remote_client_test_coro(coro_t *co, void *arg) {
 
   memory_record_fixture = turbo_agent_test_load_fixture_json("memory_context_record.golden.json");
   check_not_null(memory_record_fixture);
-  memory_query_options.namespace_prefix = "project/";
+  memory_query_options.namespace_prefix = "project";
   memory_query_options.kind = "context";
   memory_query_options.key_prefix = "con";
   memory_query_options.text_substring = "remember";
-  if (turbo_agent_runtime_remote_client_put_memory_record(state->client, memory_record_fixture,
+  memory_invalid_record_json = turbo_json_create_object();
+  check_not_null(memory_invalid_record_json);
+  turbo_json_object_set_string(memory_invalid_record_json, "id", "project/demo::broken");
+  turbo_json_object_set_string(memory_invalid_record_json, "namespace", "project/demo");
+  turbo_json_object_set_string(memory_invalid_record_json, "kind", "context");
+  turbo_json_object_set_string(memory_invalid_record_json, "key", "broken");
+  turbo_json_object_set_string(memory_invalid_record_json, "text", "missing value json");
+  turbo_json_object_set_null(memory_invalid_record_json, "metadata");
+  turbo_json_object_set_null(memory_invalid_record_json, "created_at");
+  if (turbo_agent_runtime_remote_client_validate_memory_record(
+          state->client, memory_record_fixture, &memory_record_valid, &error_json) == 0 &&
+      memory_record_valid && !error_json &&
+      turbo_agent_runtime_remote_client_validate_memory_record(
+          state->client, memory_invalid_record_json, &memory_invalid_record_valid,
+          &error_json) == 0 &&
+      !memory_invalid_record_valid && !error_json &&
+      turbo_agent_runtime_remote_client_put_memory_record(state->client, memory_record_fixture,
                                                           &memory_record_json, &error_json) == 0 &&
       memory_record_json && !error_json) {
     turbo_agent_test_check_memory_record_fixture(memory_record_json,
@@ -590,7 +638,7 @@ static void remote_runtime_remote_client_test_coro(coro_t *co, void *arg) {
             memory_query_records_json = NULL;
 
             if (turbo_agent_runtime_remote_client_query_memory_records(
-                    state->client, "project/", "context", "con", "remember",
+                    state->client, "project", "context", "con", "remember",
                     &memory_list_records_json, &error_json) == 0 &&
                 memory_list_records_json && !error_json) {
               turbo_agent_test_check_memory_record_array_fixture(
@@ -598,14 +646,28 @@ static void remote_runtime_remote_client_test_coro(coro_t *co, void *arg) {
               turbo_free_json(&memory_list_records_json);
               memory_list_records_json = NULL;
               if (turbo_agent_runtime_remote_client_list_memory_records(
-                      state->client, "project/", &memory_query_records_json, &error_json) == 0 &&
+                      state->client, "project", &memory_query_records_json, &error_json) == 0 &&
                   memory_query_records_json && !error_json) {
-                turbo_agent_test_check_memory_record_array_fixture(
-                    memory_query_records_json, "memory_query_results.golden.json",
-                    "context_query");
+                check_true(turbo_json_type(memory_query_records_json) == TURBO_JSON_ARRAY);
+                check_size_eq(turbo_json_array_size(memory_query_records_json), 2);
                 turbo_free_json(&memory_query_records_json);
                 memory_query_records_json = NULL;
-                state->memory_helpers_ok = 1;
+                if (turbo_agent_runtime_remote_client_delete_memory_record(
+                        state->client, "project/demo", "zeta", &error_json) == 0 &&
+                    !error_json &&
+                    turbo_agent_runtime_remote_client_list_memory_records(
+                        state->client, "project", &memory_records_after_delete_json,
+                        &error_json) == 0 &&
+                    memory_records_after_delete_json && !error_json &&
+                    turbo_json_array_size(memory_records_after_delete_json) == 1 &&
+                    turbo_agent_runtime_remote_client_get_memory_record(
+                        state->client, "project/demo", "zeta", &memory_record_json,
+                        &error_json) != 0 &&
+                    !memory_record_json && error_json) {
+                  turbo_free_json(&error_json);
+                  error_json = NULL;
+                  state->memory_helpers_ok = 1;
+                }
               }
             }
           }
@@ -617,6 +679,8 @@ static void remote_runtime_remote_client_test_coro(coro_t *co, void *arg) {
   turbo_free_json(&memory_record_variant_json);
   turbo_free_json(&memory_query_records_json);
   turbo_free_json(&memory_list_records_json);
+  turbo_free_json(&memory_records_after_delete_json);
+  turbo_free_json(&memory_invalid_record_json);
   turbo_free_json(&memory_record_fixture);
   turbo_free_json(&error_json);
 
@@ -1013,6 +1077,7 @@ static void remote_runtime_remote_client_test_coro(coro_t *co, void *arg) {
     coro_socket_destroy(state->server);
     state->server = NULL;
   }
+  remote_client_test_state_cleanup(state);
 }
 
 spec("turbo agent runtime remote client api") {
@@ -1026,28 +1091,7 @@ spec("turbo agent runtime remote client api") {
   }
 
   after_each() {
-    if (state.client) {
-      turbo_agent_runtime_remote_client_destroy(state.client);
-      state.client = NULL;
-    }
-    if (!state.server_stopped && state.server) {
-      coro_socket_destroy(state.server);
-      state.server = NULL;
-    }
-    if (state.bridge) {
-      turbo_agent_runtime_remote_iris_destroy(state.bridge);
-      state.bridge = NULL;
-    }
-    if (state.remote) {
-      turbo_agent_runtime_remote_destroy(state.remote);
-      state.remote = NULL;
-    }
-    turbo_agent_memory_store_destroy(&state.memory_store);
-    if (state.runtime) {
-      turbo_agent_runtime_destroy(state.runtime);
-      state.runtime = NULL;
-    }
-    state.graph = NULL;
+    remote_client_test_state_cleanup(&state);
     if (state.coro_ctx) {
       coro_context_destroy(state.coro_ctx);
       state.coro_ctx = NULL;

@@ -96,8 +96,12 @@ spec("turbo langchain public api") {
         (void *)turbo_agent_runtime_remote_client_get_checkpoint_trace_events_bind;
     void *agent_runtime_remote_client_get_memory_record =
         (void *)turbo_agent_runtime_remote_client_get_memory_record;
+    void *agent_runtime_remote_client_delete_memory_record =
+        (void *)turbo_agent_runtime_remote_client_delete_memory_record;
     void *agent_runtime_remote_client_put_memory_record =
         (void *)turbo_agent_runtime_remote_client_put_memory_record;
+    void *agent_runtime_remote_client_validate_memory_record =
+        (void *)turbo_agent_runtime_remote_client_validate_memory_record;
     void *agent_runtime_remote_client_query_memory_records_ex =
         (void *)turbo_agent_runtime_remote_client_query_memory_records_ex;
     void *agent_runtime_remote_client_query_memory_records =
@@ -158,6 +162,8 @@ spec("turbo langchain public api") {
         (void *)turbo_agent_remote_session_get_thread_state_bind;
     void *agent_remote_session_memory_list_records =
         (void *)turbo_agent_remote_session_memory_list_records;
+    void *agent_remote_session_memory_delete_record =
+        (void *)turbo_agent_remote_session_memory_delete_record;
     void *agent_remote_session_memory_get_record =
         (void *)turbo_agent_remote_session_memory_get_record;
     void *agent_remote_session_memory_put_record =
@@ -248,6 +254,8 @@ spec("turbo langchain public api") {
         (void *)turbo_agent_remote_app_get_thread_state_bind;
     void *agent_remote_app_memory_list_records =
         (void *)turbo_agent_remote_app_memory_list_records;
+    void *agent_remote_app_memory_delete_record =
+        (void *)turbo_agent_remote_app_memory_delete_record;
     void *agent_remote_app_memory_get_record =
         (void *)turbo_agent_remote_app_memory_get_record;
     void *agent_remote_app_memory_put_record =
@@ -925,7 +933,9 @@ spec("turbo langchain public api") {
     check_not_null(agent_runtime_remote_client_get_run_trace_events);
     check_not_null(agent_runtime_remote_client_get_checkpoint_trace_events);
     check_not_null(agent_runtime_remote_client_get_memory_record);
+    check_not_null(agent_runtime_remote_client_delete_memory_record);
     check_not_null(agent_runtime_remote_client_put_memory_record);
+    check_not_null(agent_runtime_remote_client_validate_memory_record);
     check_not_null(agent_runtime_remote_client_query_memory_records_ex);
     check_not_null(agent_runtime_remote_client_query_memory_records);
     check_not_null(agent_runtime_remote_client_list_memory_records);
@@ -962,6 +972,7 @@ spec("turbo langchain public api") {
     check_not_null(agent_remote_session_get_pending_run);
     check_not_null(agent_remote_session_get_thread_state);
     check_not_null(agent_remote_session_memory_list_records);
+    check_not_null(agent_remote_session_memory_delete_record);
     check_not_null(agent_remote_session_memory_get_record);
     check_not_null(agent_remote_session_memory_put_record);
     check_not_null(agent_remote_session_memory_validate_record);
@@ -1015,6 +1026,7 @@ spec("turbo langchain public api") {
     check_not_null(agent_remote_app_get_pending_run);
     check_not_null(agent_remote_app_get_thread_state);
     check_not_null(agent_remote_app_memory_list_records);
+    check_not_null(agent_remote_app_memory_delete_record);
     check_not_null(agent_remote_app_memory_get_record);
     check_not_null(agent_remote_app_memory_put_record);
     check_not_null(agent_remote_app_memory_validate_record);

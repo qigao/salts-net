@@ -105,6 +105,11 @@ install(FILES "${CMAKE_BINARY_DIR}/TurboNetConfig.cmake"
   DESTINATION "lib/cmake/TurboNet")
 
 # Install the export set
+export(
+  EXPORT TurboNetTargets
+  FILE "${CMAKE_BINARY_DIR}/TurboNetTargets.cmake"
+  NAMESPACE TurboNet::)
+
 install(
   EXPORT TurboNetTargets
   FILE TurboNetTargets.cmake

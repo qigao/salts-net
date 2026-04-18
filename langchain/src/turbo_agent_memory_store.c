@@ -542,6 +542,7 @@ static int turbo_agent_memory_make_canonical_record_json_from_parts(const char *
   const char *scope;
   const char *path;
   const char *text;
+  const char *created_at;
   int is_context_candidate = 0;
 
   if (!memory_namespace || !key || !value_json || !out_record) {
@@ -567,6 +568,7 @@ static int turbo_agent_memory_make_canonical_record_json_from_parts(const char *
       value && turbo_json_type(value) == TURBO_JSON_OBJECT) {
     scope = turbo_json_get_string(value, "scope");
     path = turbo_json_get_string(value, "path");
+    created_at = turbo_json_get_string(value, "created_at");
     is_context_candidate = turbo_json_object_get(value, "scope") != NULL ||
                            turbo_json_object_get(value, "path") != NULL;
     if (is_context_candidate) {
@@ -595,6 +597,9 @@ static int turbo_agent_memory_make_canonical_record_json_from_parts(const char *
       }
       turbo_json_object_add(canonical, "metadata", metadata);
       metadata = NULL;
+      if (created_at) {
+        turbo_json_object_set_string(canonical, "created_at", created_at);
+      }
     }
   }
 
@@ -692,7 +697,9 @@ static int turbo_agent_memory_record_value_json_from_canonical(const json_value_
   const char *kind;
   const json_value_t *metadata;
   const json_value_t *text_value;
+  const json_value_t *created_at_value;
   const char *text;
+  const char *created_at = NULL;
   json_value_t *payload = NULL;
   char *serialized = NULL;
 
@@ -711,6 +718,7 @@ static int turbo_agent_memory_record_value_json_from_canonical(const json_value_
 
     metadata = turbo_json_object_get(record, "metadata");
     text_value = turbo_json_object_get(record, "text");
+    created_at_value = turbo_json_object_get(record, "created_at");
     if (!metadata || turbo_json_type(metadata) != TURBO_JSON_OBJECT || !text_value ||
         turbo_json_type(text_value) != TURBO_JSON_STRING) {
       return -1;
@@ -725,8 +733,15 @@ static int turbo_agent_memory_record_value_json_from_canonical(const json_value_
                         turbo_json_type(path_value) != TURBO_JSON_STRING)) {
       return -1;
     }
+    if (!created_at_value || (turbo_json_type(created_at_value) != TURBO_JSON_NULL &&
+                              turbo_json_type(created_at_value) != TURBO_JSON_STRING)) {
+      return -1;
+    }
     if (turbo_json_type(path_value) == TURBO_JSON_STRING) {
       path = turbo_json_get_string(metadata, "path");
+    }
+    if (turbo_json_type(created_at_value) == TURBO_JSON_STRING) {
+      created_at = turbo_json_get_string(record, "created_at");
     }
     payload = turbo_json_create_object();
     if (!payload) {
@@ -735,6 +750,9 @@ static int turbo_agent_memory_record_value_json_from_canonical(const json_value_
     turbo_json_object_set_string(payload, "scope", scope);
     turbo_json_object_set_string(payload, "path", path ? path : "");
     turbo_json_object_set_string(payload, "text", text);
+    if (created_at) {
+      turbo_json_object_set_string(payload, "created_at", created_at);
+    }
     serialized = turbo_json_serialize(payload, NULL);
     turbo_free_json(&payload);
     if (!serialized) {

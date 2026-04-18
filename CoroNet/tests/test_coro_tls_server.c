@@ -58,6 +58,17 @@ static void tls_server_run_until(coro_context_t *ctx, uint64_t timeout_ms,
   }
 }
 
+static void tls_server_wait_for_client_result(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) return;
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (g_tls_server_client_rc == TURBO_EBUSY && turbo_monotonic_ms() < deadline) {
+    coro_sleep(ctx, 1);
+  }
+}
+
 /* ── Handler & client coroutines ──────────────────────────── */
 
 /**
@@ -67,12 +78,15 @@ static void tls_server_run_until(coro_context_t *ctx, uint64_t timeout_ms,
  * a client that never connects (stale fd = infinite hang without it).
  */
 static void tls_server_banner_handler(coro_socket_t *client, void *arg) {
+  tls_server_state_t *state = (tls_server_state_t *)arg;
   static const char banner[] = "server-ready";
-  (void)arg;
 
   coro_socket_set_timeout(client, 5000); /* match client timeout */
   g_tls_server_handler_hits++;
   g_tls_server_handler_rc = coro_socket_send(client, banner, sizeof(banner) - 1);
+  if (g_tls_server_handler_rc == 0 && state != NULL) {
+    tls_server_wait_for_client_result(state->ctx, 1000);
+  }
 }
 
 static void tls_server_client_task(coro_t *co, void *arg) {
@@ -173,7 +187,7 @@ static void tls_server_run_case(int use_process_env_only) {
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
   check(state.server != NULL);
   check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
-                                     tls_server_banner_handler, NULL), 0);
+                                     tls_server_banner_handler, &state), 0);
   check_int_eq(coro_context_spawn(state.ctx, tls_server_client_task, &state), 0);
 
   /* Drain until both sides have finished or we time out. */

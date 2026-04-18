@@ -373,9 +373,11 @@ The same defaulting rule also now applies to command application:
   `runtime.getThreadObservabilityIndex`, and
   `runtime.listObservabilityIndexesFiltered`. When the remote config borrows
   one optional `memory_store`, the same bridge also exposes
-  `memory.getRecord`, `memory.putRecord`, and `memory.queryRecordsEx`.
-  It exists so a future HTTP or RPC adapter can reuse one stable runtime
-  contract instead of re-encoding calls ad hoc.
+  `memory.getRecord`, `memory.putRecord`, `memory.listRecords`,
+  `memory.deleteRecord`, and `memory.queryRecordsEx`. Remote memory stays
+  canonical record-first on this surface and does not expose one legacy raw
+  `memory.list` transport contract. It exists so a future HTTP or RPC adapter
+  can reuse one stable runtime contract instead of re-encoding calls ad hoc.
 - `turbo_agent_runtime_remote_dispatch_jsonrpc_text(...)` is the transport-
   neutral raw JSON text adapter over that same dispatcher.
 - `turbo_agent_runtime_remote_handle_http_jsonrpc(...)` is the current HTTP-
@@ -394,8 +396,8 @@ The same defaulting rule also now applies to command application:
   `load_history_events_bind(...)`, `get_run_trace_events_bind(...)`,
   `get_checkpoint_trace_events_bind(...)`,
   `get_memory_record(...)`, `put_memory_record(...)`,
-  `query_memory_records_ex(...)`, `query_memory_records(...)`, and
-  `list_memory_records(...)`,
+  `delete_memory_record(...)`, `query_memory_records_ex(...)`,
+  `query_memory_records(...)`, and `list_memory_records(...)`,
   `get_thread_timeline_bind(...)`, `get_branch_tree(...)`,
   `get_thread_observability_index(...)`,
   `list_observability_indexes(...)`,
@@ -462,8 +464,61 @@ existing runtime payloads and wraps them in JSON-RPC 2.0 envelopes:
 ```
 
 Long-term memory is explicit on the same remote transport but stays separate
-from `runtime.*` inspect/control. The current record-first memory query shape
-is:
+from `runtime.*` inspect/control. Remote memory stays canonical record-first:
+`memory.listRecords` returns canonical records, `memory.deleteRecord` returns
+`{ "deleted": true }` on success, and the bridge does not expose one legacy
+raw `memory.list` result shape. The current list/delete/query shapes are:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-list",
+  "method": "memory.listRecords",
+  "params": { "namespace_prefix": "project/" }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-list",
+  "result": {
+    "records": [
+      {
+        "id": "project/demo::context",
+        "namespace": "project/demo",
+        "kind": "context",
+        "key": "context",
+        "text": "remember this note"
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-delete",
+  "method": "memory.deleteRecord",
+  "params": {
+    "namespace": "project/demo",
+    "key": "context"
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-delete",
+  "result": { "deleted": true },
+  "error": null
+}
+```
+
+The current record-first memory query shape is:
 
 ```json
 {

@@ -79,6 +79,10 @@ typedef struct PROVIDER_DATA {
     json_value_t* root;
     json_value_t* partials;
     int lambda_calls;
+    struct {
+        char name[256];
+        MUSTACHE_TEMPLATE* templ;
+    } partial_dict[64];
 } PROVIDER_DATA;
 
 static int
@@ -247,17 +251,15 @@ static MUSTACHE_TEMPLATE*
 get_partial_val(const char* name, size_t size, void* data)
 {
     PROVIDER_DATA* provider_data = (PROVIDER_DATA*) data;
-    if (!provider_data->partials) return NULL;
+    int i;
 
-    char key_buffer[256];
-    if (size >= sizeof(key_buffer)) return NULL;
-    memcpy(key_buffer, name, size);
-    key_buffer[size] = '\0';
-
-    json_value_t* p_val = json_object_get(provider_data->partials, key_buffer);
-    if (!p_val || json_type(p_val) != JSON_STRING) return NULL;
-
-    return mustache_compile(json_string(p_val), json_string_len(p_val), NULL, NULL, 0);
+    for (i = 0; provider_data->partial_dict[i].templ != NULL; i++) {
+        if (size == strlen(provider_data->partial_dict[i].name) &&
+            strncmp(name, provider_data->partial_dict[i].name, size) == 0) {
+            return provider_data->partial_dict[i].templ;
+        }
+    }
+    return NULL;
 }
 
 static int
@@ -344,7 +346,9 @@ static void run_spec_test_case(__bdd_config_type__ *__bdd_config__, const char* 
                                json_value_t* data, json_value_t* partials, const char* expected)
 {
     MUSTACHE_TEMPLATE* t = NULL;
+    PROVIDER_DATA provider_data = { data, partials, 0 };
     BUFFER buf = { 0 };
+    int i;
 
     // Compile template
     t = mustache_compile(template_str, strlen(template_str), &parser, (void*) &buf, 0);
@@ -356,8 +360,28 @@ static void run_spec_test_case(__bdd_config_type__ *__bdd_config__, const char* 
         return;
     }
 
-    // Render
-    PROVIDER_DATA provider_data = { data, partials, 0 };
+    if (partials && json_type(partials) == JSON_OBJECT) {
+        int partial_count = (int)json_object_size(partials);
+        if (partial_count > (int)(sizeof(provider_data.partial_dict) / sizeof(provider_data.partial_dict[0])) - 1) {
+            partial_count = (int)(sizeof(provider_data.partial_dict) / sizeof(provider_data.partial_dict[0])) - 1;
+        }
+        for (i = 0; i < partial_count; i++) {
+            const char* key = json_object_key(partials, i);
+            json_value_t* val = json_object_value(partials, i);
+
+            if (!key || !val || json_type(val) != JSON_STRING) {
+                continue;
+            }
+
+            strncpy(provider_data.partial_dict[i].name, key,
+                    sizeof(provider_data.partial_dict[i].name) - 1);
+            provider_data.partial_dict[i].name[sizeof(provider_data.partial_dict[i].name) - 1] = '\0';
+            provider_data.partial_dict[i].templ =
+                mustache_compile(json_string(val), json_string_len(val), NULL, NULL, 0);
+            check_not_null(provider_data.partial_dict[i].templ);
+        }
+    }
+
     (void)mustache_process(t, &renderer, (void*) &buf, &provider, &provider_data);
 
     // Check result
@@ -371,6 +395,9 @@ static void run_spec_test_case(__bdd_config_type__ *__bdd_config__, const char* 
     check_str_eq(buf.data, expected);
 
     // Cleanup
+    for (i = 0; provider_data.partial_dict[i].templ != NULL; i++) {
+        mustache_release(provider_data.partial_dict[i].templ);
+    }
     mustache_release(t);
 }
 

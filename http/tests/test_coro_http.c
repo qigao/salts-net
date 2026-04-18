@@ -11,6 +11,7 @@
 #include "CoroNet.h"
 #include <turbo_parser.h>
 #include <string.h>
+#include <stdlib.h>
 #include <turbo_coro.h>
 #include "tlog.h"
 
@@ -46,11 +47,31 @@ static void test_resp_interceptor(http_response_context_t *ctx) {
 /* ── Stream callback helper ───────────────────────────────────────── */
 
 static size_t s_stream_total = 0;
+static int s_httpbin_dns_ready = -1;
 
 static void stream_cb(const char *data, size_t len, void *ud) {
   UNUSED(ud);
   UNUSED(data);
   s_stream_total += len;
+}
+
+static int httpbin_dns_ready(void) {
+  char resolved_ip[INET6_ADDRSTRLEN];
+  const char *run_live;
+
+  run_live = getenv("TURBONET_RUN_LIVE_HTTP");
+  if (!run_live || strcmp(run_live, "1") != 0) {
+    s_httpbin_dns_ready = 0;
+    return 0;
+  }
+
+  if (s_httpbin_dns_ready != -1) {
+    return s_httpbin_dns_ready;
+  }
+
+  s_httpbin_dns_ready =
+      (turbo_dns_resolve_sync("httpbin.org", resolved_ip, sizeof(resolved_ip), 0) == 0) ? 1 : 0;
+  return s_httpbin_dns_ready;
 }
 
 typedef struct {
@@ -480,6 +501,7 @@ spec("coro http client") {
 
   describe("live GET") {
     it("should GET and receive 200") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
       http_response_t *r = http_get(c, "get");
@@ -504,6 +526,7 @@ spec("coro http client") {
 
   describe("live POST JSON") {
     it("should POST JSON and get echo") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
       const char *json = "{\"hello\": \"world\"}";
@@ -528,6 +551,7 @@ spec("coro http client") {
 
   describe("live bearer auth") {
     it("should authenticate with bearer token") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
       http_client_set_bearer_token(c, "test-token-abc");
@@ -551,6 +575,7 @@ spec("coro http client") {
 
   describe("live redirect") {
     it("should follow redirects") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 15000);
       http_response_t *r = http_get(c, "redirect/2");
@@ -641,6 +666,7 @@ spec("coro http client") {
 
   describe("live stats") {
     it("should track request statistics") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
       http_response_t *r = http_get(c, "get");
@@ -667,6 +693,7 @@ spec("coro http client") {
 
   describe("live streaming") {
     it("should stream body via callback") {
+      if (!httpbin_dns_ready()) return;
       s_stream_total = 0;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
@@ -783,6 +810,7 @@ spec("coro http client") {
 
   describe("live compression") {
     it("should handle compression negotiation") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
       http_client_enable_compression(c, 1);
@@ -809,6 +837,7 @@ spec("coro http client") {
 
   describe("live range request") {
     it("should get partial content") {
+      if (!httpbin_dns_ready()) return;
       http_client_t *c = http_client_create("https://httpbin.org");
       http_client_set_timeout(c, 10000);
       http_response_t *r = http_get_range(c, "range/100", 0, 49);
@@ -831,6 +860,7 @@ spec("coro http client") {
 
   describe("live progress callback") {
     it("should fire progress callback during download") {
+      if (!httpbin_dns_ready()) return;
       s_progress_calls = 0;
       s_progress_last_downloaded = 0;
       s_progress_total = 0;

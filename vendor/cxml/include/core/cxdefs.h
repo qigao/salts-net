@@ -215,29 +215,38 @@ typedef _cxml_node_t         cxml_node_t;
 /**************************************/
 
 // Reserved Prefixes
-extern const char *_cxml_reserved_prefixes[];
+static const char *const _cxml_reserved_prefixes[] = {"xml", "xmlns"};
 
 // Reserved Namespace Names (URIs)
-extern const char *_cxml_reserved_namespaces[];
+static const char *const _cxml_reserved_namespaces[] = {
+    "http://www.w3.org/XML/1998/namespace",
+    "http://www.w3.org/2000/xmlns/"
+};
 
-extern const int _cxml_reserved_prefixes_len[];
+static const int _cxml_reserved_prefixes_len[] = {3, 5};
 
-extern const int _cxml_reserved_namespaces_len[];
+static const int _cxml_reserved_namespaces_len[] = {36, 29};
 
 // "xml"
-extern const char *_cxml_xml_name;
+static const char _cxml_xml_name[] = "xml";
 
 // "xmlns"
-extern const char *_cxml_xmlns_name;
+static const char _cxml_xmlns_name[] = "xmlns";
 
 // predefined entities untransposed version
-extern const char* _cxml_pred_entities_ut[];
+static const char *const _cxml_pred_entities_ut[] = {"<", ">", "&", "\"", "'"};
 
 // predefined entities transposed version
-extern const char* _cxml_pred_entities_t[];
+static const char *const _cxml_pred_entities_t[] = {
+    "&lt;",
+    "&gt;",
+    "&amp;",
+    "&quot;",
+    "&apos;"
+};
 
 // length or each predefined entity transposed version
-extern int _cxml_pred_entities_t_lens[];
+static const int _cxml_pred_entities_t_lens[] = {4, 4, 5, 6, 6};
 
 
 /***
@@ -313,25 +322,25 @@ void cxml_xhdr_node_free(cxml_xhdr_node *xml);
 
 void cxml_destroy(void *node);
 
-extern void (*cxml_free_element_node)(cxml_elem_node *node);
+#define cxml_free_element_node cxml_elem_node_free
 
-extern void (*cxml_free_text_node)(cxml_text_node *node);
+#define cxml_free_text_node cxml_text_node_free
 
-extern void (*cxml_free_root_node)(cxml_root_node *node);
+#define cxml_free_root_node cxml_root_node_free
 
-extern void (*cxml_free_comment_node)(cxml_comment_node *node);
+#define cxml_free_comment_node cxml_comm_node_free
 
-extern void (*cxml_free_attribute_node)(cxml_attribute_node *node);
+#define cxml_free_attribute_node cxml_attr_node_free
 
-extern void (*cxml_free_namespace_node)(cxml_namespace_node *node);
+#define cxml_free_namespace_node cxml_ns_node_free
 
-extern void (*cxml_free_pi_node)(cxml_pi_node *node);
+#define cxml_free_pi_node cxml_pi_node_free
 
-extern void (*cxml_free_xhdr_node)(cxml_xhdr_node *node);
+#define cxml_free_xhdr_node cxml_xhdr_node_free
 
-extern void (*cxml_free_dtd_node)(cxml_dtd_node *node);
+#define cxml_free_dtd_node cxml_dtd_node_free
 
-extern void (*cxml_free_node)(void *node);
+#define cxml_free_node cxml_node_free
 
 _cxml_node_t _cxml_get_node_type(void* node);
 

@@ -19,16 +19,44 @@ static char s_tls_rx_buf[4096];
 static size_t s_tls_rx_len = 0;
 
 static void run_ctx_until_not(coro_context_t *ctx, volatile int *flag, int pending,
-                              int limit) {
-  while (*flag == pending && limit-- > 0) {
+                              uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx || !flag) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (*flag == pending && turbo_monotonic_ms() < deadline) {
     coro_context_run(ctx, TURBO_RUN_ONCE);
     turbo_thread_yield();
   }
 }
 
-static void run_ctx_until_body(coro_context_t *ctx, const char *needle, int limit) {
-  while (strstr(s_tls_rx_buf, needle) == NULL && limit-- > 0) {
+static void run_ctx_until_body(coro_context_t *ctx, const char *needle, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx || !needle) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (strstr(s_tls_rx_buf, needle) == NULL && turbo_monotonic_ms() < deadline) {
     coro_context_run(ctx, TURBO_RUN_ONCE);
+    turbo_thread_yield();
+  }
+}
+
+static void run_ctx_until_idle(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_NOWAIT);
     turbo_thread_yield();
   }
 }
@@ -162,7 +190,6 @@ spec("Stream TLS Client") {
   it("should connect, handshake, send and receive encrypted data") {
     char ca_file[512] = {0};
     unsigned short port = 0;
-    int limit;
     coro_context_t *ctx = NULL;
     turbo_stream_t *s = NULL;
     tls_test_server_t server;
@@ -202,16 +229,14 @@ spec("Stream TLS Client") {
 
     check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_tls_connect, on_tls_close), 0);
 
-    limit = 20000;
-    run_ctx_until_not(ctx, &s_tls_connected, -1, limit);
+    run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
     check_int_eq(s_tls_connected, 0);
 
     check_int_eq(turbo_stream_recv_start(s, on_tls_recv), 0);
     check_int_eq(turbo_stream_send(s, req, strlen(req)), 0);
     check_int_eq(turbo_stream_flush(s), 0);
 
-    limit = 20000;
-    run_ctx_until_body(ctx, "\r\n\r\nhello", limit);
+    run_ctx_until_body(ctx, "\r\n\r\nhello", 3000);
 
     check_int_eq(s_tls_connected, 0);
     check(s_tls_rx_len > 0);
@@ -219,14 +244,16 @@ spec("Stream TLS Client") {
     check(strstr(s_tls_rx_buf, "\r\n\r\nhello") != NULL);
 
     turbo_stream_close(s);
+    turbo_stream_destroy(s);
 
-    limit = 200;
-    run_ctx_until_not(ctx, &s_tls_closed, 0, limit);
+    run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
 
-    turbo_thread_join(&server.thread);
+    check_int_eq(turbo_thread_join(&server.thread), 0);
 
     check_int_eq(server.status, 0);
     check(server.saw_request == 1);
+
+    run_ctx_until_idle(ctx, 1000);
 
     coro_context_destroy(ctx);
     tls_test_clear_ca_env();

@@ -1510,6 +1510,7 @@ spec("turbo agent app api") {
     turbo_free_json(&summary2);
     turbo_free_json(&summary);
     turbo_free_json(&lineage);
+    turbo_free_json(&branch_tree);
     turbo_runtime_data_bind_value_destroy(prepared_command_override);
     turbo_runtime_data_bind_value_destroy(legacy_state_override);
     turbo_runtime_data_bind_value_destroy(prepared_state_override);

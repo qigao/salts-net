@@ -1786,8 +1786,11 @@ spec("turbo agent runtime remote api") {
     json_value_t *result_json;
     const json_value_t *record_json;
     const json_value_t *records_json;
+    const json_value_t *valid_json;
     json_value_t *record_clone;
     json_value_t *record_variant_clone;
+    json_value_t *invalid_record;
+    const json_value_t *deleted_json;
 
     check_not_null(runtime);
     check_not_null(record_fixture);
@@ -1813,6 +1816,53 @@ spec("turbo agent runtime remote api") {
     record_json = turbo_json_object_get(result_json, "record");
     turbo_agent_test_check_memory_record_fixture(record_json, "memory_context_record.golden.json",
                                                  NULL);
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    record_clone = turbo_json_clone(record_fixture);
+    check_not_null(record_clone);
+    turbo_json_object_add(params_json, "record", record_clone);
+    request_json =
+        create_remote_jsonrpc_request("req-memory-validate", "memory.validateRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-validate");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    valid_json = turbo_json_object_get(result_json, "valid");
+    check_not_null(valid_json);
+    check_true(turbo_json_get_bool(result_json, "valid", false));
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    invalid_record = turbo_json_create_object();
+    check_not_null(invalid_record);
+    turbo_json_object_set_string(invalid_record, "id", "project/demo::broken");
+    turbo_json_object_set_string(invalid_record, "namespace", "project/demo");
+    turbo_json_object_set_string(invalid_record, "kind", "context");
+    turbo_json_object_set_string(invalid_record, "key", "broken");
+    turbo_json_object_set_string(invalid_record, "text", "missing value json");
+    turbo_json_object_set_null(invalid_record, "metadata");
+    turbo_json_object_set_null(invalid_record, "created_at");
+    turbo_json_object_add(params_json, "record", invalid_record);
+    request_json = create_remote_jsonrpc_request("req-memory-validate-invalid",
+                                                 "memory.validateRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-validate-invalid");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    valid_json = turbo_json_object_get(result_json, "valid");
+    check_not_null(valid_json);
+    check_false(turbo_json_get_bool(result_json, "valid", true));
     turbo_free_json(&response_json);
     turbo_free_json(&request_json);
     turbo_free_json(&params_json);
@@ -1882,6 +1932,60 @@ spec("turbo agent runtime remote api") {
     turbo_free_json(&response_json);
     turbo_free_json(&request_json);
     turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "namespace_prefix", "project/");
+    request_json =
+        create_remote_jsonrpc_request("req-memory-list", "memory.listRecords", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-list");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    records_json = turbo_json_object_get(result_json, "records");
+    check_true(turbo_json_type(records_json) == TURBO_JSON_ARRAY);
+    check_size_eq(turbo_json_array_size(records_json), 2);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "namespace", "project/demo");
+    turbo_json_object_set_string(params_json, "key", "zeta");
+    request_json =
+        create_remote_jsonrpc_request("req-memory-delete", "memory.deleteRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-delete");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    deleted_json = turbo_json_object_get(result_json, "deleted");
+    check_not_null(deleted_json);
+    check_true(turbo_json_get_bool(result_json, "deleted", false));
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "memory_namespace", "project/demo");
+    turbo_json_object_set_string(params_json, "key", "zeta");
+    request_json = create_remote_jsonrpc_request("req-memory-get-missing", "memory.getRecord",
+                                                 params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-get-missing", -32603);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
     turbo_free_json(&record_fixture);
     turbo_agent_runtime_remote_destroy(remote);
     turbo_agent_memory_store_destroy(&memory_store);
@@ -1914,6 +2018,61 @@ spec("turbo agent runtime remote api") {
     check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
                  0);
     check_remote_jsonrpc_error(response_json, "req-memory-invalid", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    request_json = create_remote_jsonrpc_request("req-memory-validate-missing-record",
+                                                 "memory.validateRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-validate-missing-record", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "record", "not-object");
+    request_json = create_remote_jsonrpc_request("req-memory-validate-record-not-object",
+                                                 "memory.validateRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-validate-record-not-object", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "key", "context");
+    request_json = create_remote_jsonrpc_request("req-memory-delete-missing-namespace",
+                                                 "memory.deleteRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-delete-missing-namespace", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "namespace", "project/demo");
+    request_json = create_remote_jsonrpc_request("req-memory-delete-missing-key",
+                                                 "memory.deleteRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-delete-missing-key", -32602);
 
     turbo_free_json(&response_json);
     turbo_free_json(&request_json);

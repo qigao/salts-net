@@ -87,9 +87,16 @@ static void on_tls_connect(void *handle, int status, void *extra) {
 static void on_tls_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  stream->managed = 0;
+  stream->destroyed = 1;
   if (s) {
+    int release_accepted_ref = s->accepted_ref;
+    s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
+    if (release_accepted_ref) {
+      release_client(s);
+    }
   }
 }
 
@@ -159,8 +166,13 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   {
     tls_note_wait_resume(s);
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
       release_client(s);
     }
     if (status != 0) {
@@ -227,8 +239,13 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   {
     tls_note_wait_resume(s);
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
       release_client(s);
     }
     tls_clear_wait_metric(s);
@@ -276,8 +293,13 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
   coro_yield();
   {
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
       release_client(s);
     }
     tls_clear_wait_metric(s);
@@ -314,6 +336,7 @@ static void tls_close(coro_socket_t *s) {
   turbo_stream_t *stream = s->handle.stream;
   if (!stream || !s->owns_handle) return;
   s->handle.stream = NULL;
+  s->close_pending = 1;
   retain_client(s);
   stream->on_close = on_tls_close;
   turbo_stream_close(stream);

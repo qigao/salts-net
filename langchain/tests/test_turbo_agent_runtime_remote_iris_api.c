@@ -41,6 +41,33 @@ typedef struct {
   int method_not_allowed_ok;
 } remote_iris_test_state_t;
 
+static void remote_iris_test_state_cleanup(remote_iris_test_state_t *state) {
+  if (!state) {
+    return;
+  }
+  if (!state->server_stopped && state->server) {
+    coro_socket_destroy(state->server);
+    state->server = NULL;
+  }
+  if (state->bridge) {
+    turbo_agent_runtime_remote_iris_destroy(state->bridge);
+    state->bridge = NULL;
+  }
+  if (state->remote) {
+    turbo_agent_runtime_remote_destroy(state->remote);
+    state->remote = NULL;
+  }
+  if (state->runtime) {
+    turbo_agent_runtime_destroy(state->runtime);
+    state->runtime = NULL;
+  }
+  state->graph = NULL;
+  if (state->rpc_ctx) {
+    rpc_destroy(state->rpc_ctx);
+    state->rpc_ctx = NULL;
+  }
+}
+
 static int remote_iris_write_bool_bind_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
   remote_iris_bool_write_t *write = (remote_iris_bool_write_t *)user_data;
   turbo_runtime_data_bind_value_t *value;
@@ -451,6 +478,7 @@ static void remote_runtime_remote_iris_test_coro(coro_t *co, void *arg) {
     coro_socket_destroy(state->server);
     state->server = NULL;
   }
+  remote_iris_test_state_cleanup(state);
 }
 
 spec("turbo agent runtime remote iris api") {
@@ -464,27 +492,7 @@ spec("turbo agent runtime remote iris api") {
   }
 
   after_each() {
-    if (!state.server_stopped && state.server) {
-      coro_socket_destroy(state.server);
-      state.server = NULL;
-    }
-    if (state.bridge) {
-      turbo_agent_runtime_remote_iris_destroy(state.bridge);
-      state.bridge = NULL;
-    }
-    if (state.remote) {
-      turbo_agent_runtime_remote_destroy(state.remote);
-      state.remote = NULL;
-    }
-    if (state.runtime) {
-      turbo_agent_runtime_destroy(state.runtime);
-      state.runtime = NULL;
-    }
-    state.graph = NULL;
-    if (state.rpc_ctx) {
-      rpc_destroy(state.rpc_ctx);
-      state.rpc_ctx = NULL;
-    }
+    remote_iris_test_state_cleanup(&state);
     if (state.coro_ctx) {
       coro_context_destroy(state.coro_ctx);
       state.coro_ctx = NULL;
@@ -500,6 +508,7 @@ spec("turbo agent runtime remote iris api") {
 
     coro_context_spawn(state.coro_ctx, remote_runtime_remote_iris_test_coro, &state);
     coro_context_run(state.coro_ctx, TURBO_RUN_DEFAULT);
+    remote_iris_test_state_cleanup(&state);
 
     check_true(state.rpc_ok);
     check_true(state.remote_ok);

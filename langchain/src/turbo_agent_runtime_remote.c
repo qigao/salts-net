@@ -1469,6 +1469,50 @@ static int turbo_agent_runtime_remote_dispatch_get_memory_record(
   return turbo_agent_runtime_remote_wrap_object(record_json, "record", out_result_json);
 }
 
+static int turbo_agent_runtime_remote_dispatch_delete_memory_record(
+    turbo_agent_runtime_remote_t *remote, const json_value_t *params_json,
+    json_value_t **out_result_json) {
+  const turbo_agent_memory_store_t *memory_store;
+  const char *memory_namespace;
+  const char *key;
+  json_value_t *result_json = NULL;
+
+  if (!out_result_json || !params_json) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+  *out_result_json = NULL;
+  memory_store = turbo_agent_runtime_remote_memory_store(remote);
+  if (!memory_store) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
+  }
+
+  memory_namespace = turbo_json_get_string(params_json, "namespace");
+  key = turbo_json_get_string(params_json, "key");
+  if (turbo_json_object_get(params_json, "namespace") &&
+      turbo_json_type(turbo_json_object_get(params_json, "namespace")) != TURBO_JSON_STRING) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+  if (turbo_json_object_get(params_json, "key") &&
+      turbo_json_type(turbo_json_object_get(params_json, "key")) != TURBO_JSON_STRING) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+  if (!memory_namespace || !memory_namespace[0] || !key || !key[0]) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+
+  if (turbo_agent_memory_delete(memory_store, memory_namespace, key) != 0) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
+  }
+
+  result_json = turbo_json_create_object();
+  if (!result_json) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
+  }
+  turbo_json_object_set_bool(result_json, "deleted", true);
+  *out_result_json = result_json;
+  return 0;
+}
+
 static int turbo_agent_runtime_remote_dispatch_put_memory_record(
     turbo_agent_runtime_remote_t *remote, const json_value_t *params_json,
     json_value_t **out_result_json) {
@@ -1518,6 +1562,67 @@ static int turbo_agent_runtime_remote_dispatch_put_memory_record(
     return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
   }
   return turbo_agent_runtime_remote_wrap_object(stored_record_json, "record", out_result_json);
+}
+
+static int turbo_agent_runtime_remote_dispatch_validate_memory_record(
+    turbo_agent_runtime_remote_t *remote, const json_value_t *params_json,
+    json_value_t **out_result_json) {
+  const json_value_t *record_json;
+  json_value_t *result_json = NULL;
+
+  (void)remote;
+  if (!out_result_json || !params_json) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+  *out_result_json = NULL;
+  record_json = turbo_json_object_get(params_json, "record");
+  if (!record_json || turbo_json_type(record_json) != TURBO_JSON_OBJECT) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+
+  result_json = turbo_json_create_object();
+  if (!result_json) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
+  }
+  turbo_json_object_set_bool(result_json, "valid",
+                             turbo_agent_memory_validate_record(record_json) == 0);
+  *out_result_json = result_json;
+  return 0;
+}
+
+static int turbo_agent_runtime_remote_dispatch_list_memory_records(
+    turbo_agent_runtime_remote_t *remote, const json_value_t *params_json,
+    json_value_t **out_result_json) {
+  const turbo_agent_memory_store_t *memory_store;
+  const json_value_t *field_json;
+  const char *namespace_prefix;
+  json_value_t *records_json = NULL;
+
+  if (!out_result_json) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+  *out_result_json = NULL;
+  memory_store = turbo_agent_runtime_remote_memory_store(remote);
+  if (!memory_store) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
+  }
+
+  field_json = params_json ? turbo_json_object_get(params_json, "namespace_prefix") : NULL;
+  if (field_json && turbo_json_type(field_json) != TURBO_JSON_STRING &&
+      turbo_json_type(field_json) != TURBO_JSON_NULL) {
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INVALID_PARAMS;
+  }
+  namespace_prefix = turbo_json_string(field_json);
+  if (namespace_prefix && namespace_prefix[0] == '\0') {
+    namespace_prefix = NULL;
+  }
+
+  if (turbo_agent_memory_list_records(memory_store, namespace_prefix, &records_json) != 0 ||
+      !records_json) {
+    turbo_free_json(&records_json);
+    return TURBO_AGENT_RUNTIME_REMOTE_RPC_INTERNAL;
+  }
+  return turbo_agent_runtime_remote_wrap_object(records_json, "records", out_result_json);
 }
 
 static int turbo_agent_runtime_remote_dispatch_query_memory_records_ex(
@@ -1643,9 +1748,17 @@ static int turbo_agent_runtime_remote_dispatch_method(
   if (strcmp(method, "runtime.listChildRuns") == 0) {
     return turbo_agent_runtime_remote_dispatch_list_child_runs(remote, params_json, out_result_json);
   }
+  if (strcmp(method, "memory.deleteRecord") == 0) {
+    return turbo_agent_runtime_remote_dispatch_delete_memory_record(remote, params_json,
+                                                                    out_result_json);
+  }
   if (strcmp(method, "memory.getRecord") == 0) {
     return turbo_agent_runtime_remote_dispatch_get_memory_record(remote, params_json,
                                                                  out_result_json);
+  }
+  if (strcmp(method, "memory.listRecords") == 0) {
+    return turbo_agent_runtime_remote_dispatch_list_memory_records(remote, params_json,
+                                                                   out_result_json);
   }
   if (strcmp(method, "memory.putRecord") == 0) {
     return turbo_agent_runtime_remote_dispatch_put_memory_record(remote, params_json,
@@ -1654,6 +1767,10 @@ static int turbo_agent_runtime_remote_dispatch_method(
   if (strcmp(method, "memory.queryRecordsEx") == 0) {
     return turbo_agent_runtime_remote_dispatch_query_memory_records_ex(remote, params_json,
                                                                        out_result_json);
+  }
+  if (strcmp(method, "memory.validateRecord") == 0) {
+    return turbo_agent_runtime_remote_dispatch_validate_memory_record(remote, params_json,
+                                                                      out_result_json);
   }
   return TURBO_AGENT_RUNTIME_REMOTE_RPC_METHOD_NOT_FOUND;
 }

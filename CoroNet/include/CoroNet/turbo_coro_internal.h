@@ -19,6 +19,7 @@
 #include "turbo_coro_socket.h"
 #include "turbo_thread.h"
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h> 
@@ -31,6 +32,7 @@
 #include "turbo_dns.h" 
 #include "turbo_stream.h"
 #include "turbo_datagram.h"  
+#include "turbo_kcp.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -248,6 +250,8 @@ struct coro_socket_s {
   void (*handler)(coro_socket_t *client, void *arg); /**< Connection handler */
   void *handler_arg;                                 /**< Handler argument */
   int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
+  int kcp_fec_configured;                            /**< 1 = KCP FEC config should be applied */
+  turbo_kcp_fec_config_t kcp_fec_config;             /**< Pending KCP FEC config */
 
   /* ── Connection state ──────────────────────────────────── */
   int connected;      /**< 1 = transport is connected */
@@ -283,7 +287,7 @@ struct coro_socket_s {
   turbo_timer_t *timer;  /**< Timeout timer handle */
   uint64_t timeout_ms;   /**< Timeout duration (0 = no timeout) */
   int timed_out;         /**< 1 = last op timed out */
-  int timer_active;      /**< 1 = timeout timer is currently running and holds a reference */
+  int timer_active;      /**< 0 idle, 1 armed, 2 timeout posted, 3 posted then canceled */
   int close_pending;     /**< 1 = transport close was requested and holds a reference */
   int destroy_wait_handoff; /**< 1 = a resumed waiter still owns the pending wait reference */
   int wait_metric_tls_handshake; /**< 1 = current wait should feed TLS handshake timing */
@@ -292,9 +296,10 @@ struct coro_socket_s {
   uint64_t wait_resume_signal_ns; /**< Scheduler wake timestamp for current wait */
 
   /* ── Lifecycle ─────────────────────────────────────────── */
-  int ref_count;         /**< Reference count for safe destruction */
+  atomic_int ref_count;  /**< Reference count for safe destruction */
   int owns_handle;       /**< 1 = we allocated the transport handle, 0 = borrowed */
   int accept_pending;    /**< 1 = a native accept event arrived before a waiter */
+  int accepted_ref;      /**< 1 = accepted transport close owns an extra reference */
   coro_t *co_write_wait; /**< Coroutine waiting for write completion */
   int write_status;      /**< Status of the last write operation */
 

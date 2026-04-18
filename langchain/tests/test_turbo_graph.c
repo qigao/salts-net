@@ -24,6 +24,10 @@ typedef struct {
   char last_payload[64];
 } graph_event_capture_t;
 
+static const string_payload_t s_router_payload = {"router"};
+static const string_payload_t s_tool_payload = {"tool"};
+static const string_payload_t s_done_payload = {"done"};
+
 static int write_phase_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
   string_payload_t *payload = (string_payload_t *)user_data;
   char key[64];
@@ -356,8 +360,6 @@ spec("turbo graph runtime") {
       turbo_runtime_data_bind_value_t *mode = turbo_runtime_data_bind_value_create_string("tool");
       turbo_runtime_data_bind_value_t *result_state = NULL;
       turbo_graph_run_result_t result = {0};
-      string_payload_t tool = {"tool"};
-      string_payload_t done = {"done"};
 
       check_not_null(graph);
       check_not_null(state);
@@ -365,11 +367,14 @@ spec("turbo graph runtime") {
       check_int_eq(turbo_runtime_data_bind_object_set(state, "mode", mode),
                    TURBO_RUNTIME_DATA_BIND_OK);
 
-      check_int_eq(turbo_graph_add_bind_node(graph, "router", write_phase_bind_node, &(string_payload_t){"router"}),
+      check_int_eq(turbo_graph_add_bind_node(graph, "router", write_phase_bind_node,
+                                             (void *)&s_router_payload),
                    TURBO_GRAPH_EXEC_OK);
-      check_int_eq(turbo_graph_add_bind_node(graph, "tool", write_phase_bind_node, &tool),
+      check_int_eq(turbo_graph_add_bind_node(graph, "tool", write_phase_bind_node,
+                                             (void *)&s_tool_payload),
                    TURBO_GRAPH_EXEC_OK);
-      check_int_eq(turbo_graph_add_bind_node(graph, "done", write_phase_bind_node, &done),
+      check_int_eq(turbo_graph_add_bind_node(graph, "done", write_phase_bind_node,
+                                             (void *)&s_done_payload),
                    TURBO_GRAPH_EXEC_OK);
       check_int_eq(
           turbo_graph_add_bind_edge(graph, "router", "tool", predicate_mode_equals_bind, "tool"),

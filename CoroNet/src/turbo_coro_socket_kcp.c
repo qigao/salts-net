@@ -31,6 +31,78 @@ static int kcp_listen(coro_socket_t *s, int backlog);
 static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted);
 static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr);
 
+static int kcp_fec_config_validate_public(const turbo_kcp_fec_config_t *config) {
+  if (!config) {
+    return TURBO_EINVAL;
+  }
+  if (!config->enabled) {
+    return 0;
+  }
+  if (config->backend == TURBO_KCP_FEC_BACKEND_NONE ||
+      config->data_shards == 0 || config->parity_shards == 0 ||
+      config->data_shards > 256 || config->parity_shards > 256 ||
+      config->max_payload_size == 0) {
+    return TURBO_EINVAL;
+  }
+  if (!turbo_kcp_fec_backend_available(config->backend)) {
+    return TURBO_ENOTSUP;
+  }
+  return 0;
+}
+
+static int kcp_apply_pending_fec(coro_socket_t *s) {
+  if (!s || !s->handle.kcp || !s->kcp_fec_configured) {
+    return 0;
+  }
+  return turbo_kcp_set_fec(s->handle.kcp, &s->kcp_fec_config);
+}
+
+int coro_socket_set_kcp_fec(coro_socket_t *s, const turbo_kcp_fec_config_t *config) {
+  int rc;
+
+  if (!s || s->transport != TURBO_KCP || !config) {
+    return TURBO_EINVAL;
+  }
+
+  if (s->handle.kcp) {
+    rc = turbo_kcp_set_fec(s->handle.kcp, config);
+    if (rc != 0) {
+      return rc;
+    }
+  } else {
+    rc = kcp_fec_config_validate_public(config);
+    if (rc != 0) {
+      return rc;
+    }
+  }
+
+  if (config->enabled) {
+    s->kcp_fec_config = *config;
+    s->kcp_fec_configured = 1;
+  } else {
+    turbo_kcp_fec_config_default(&s->kcp_fec_config);
+    s->kcp_fec_configured = 0;
+  }
+  return 0;
+}
+
+int coro_socket_get_kcp_fec(coro_socket_t *s, turbo_kcp_fec_config_t *config) {
+  if (!s || s->transport != TURBO_KCP || !config) {
+    return TURBO_EINVAL;
+  }
+
+  if (s->handle.kcp) {
+    return turbo_kcp_get_fec(s->handle.kcp, config);
+  }
+
+  if (s->kcp_fec_configured) {
+    *config = s->kcp_fec_config;
+  } else {
+    turbo_kcp_fec_config_default(config);
+  }
+  return 0;
+}
+
 static void kcp_listener_fail(coro_socket_t *s, int status) {
   if (!s || status == 0) {
     return;
@@ -183,17 +255,23 @@ static void on_kcp_connect(void *handle, int status, void *extra) {
 /* ── KCP Connect ──────────────────────────────────────────── */
 
 static int kcp_connect(coro_socket_t *s, const char *host, int port) {
+  int r;
+
   /* Create handle if not existing */
   if (!s->handle.kcp) {
     s->handle.kcp = turbo_kcp_create(s->ctx);
     if (!s->handle.kcp) return socket_ctx_error(s, TURBO_EIO);
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
+    r = kcp_apply_pending_fec(s);
+    if (r != 0) {
+      return r;
+    }
   }
   
   retain_client(s);
   coro_set_wait(s);
-  int r = turbo_kcp_connect(
+  r = turbo_kcp_connect(
       s->handle.kcp, 
       host, 
       port,
@@ -254,6 +332,10 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     }
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
+    r = kcp_apply_pending_fec(s);
+    if (r != 0) {
+      return r;
+    }
   }
 
   turbo_kcp_set_reuse_port(s->handle.kcp, s->reuse_port);

@@ -1666,7 +1666,7 @@ CXX_C_API int turbo_agent_runtime_remote_client_get_memory_record(
   turbo_free_json(&params_json);
   if (rc != 0 || !result_json) {
     turbo_free_json(&result_json);
-    return rc;
+    return rc != 0 ? rc : -1;
   }
   rc = turbo_agent_runtime_remote_client_extract_object(result_json, "record", out_record_json);
   turbo_free_json(&result_json);
@@ -1675,6 +1675,43 @@ CXX_C_API int turbo_agent_runtime_remote_client_get_memory_record(
         turbo_agent_runtime_remote_client_build_error_json(NULL, 1, "Malformed memory.getRecord result");
   }
   return rc;
+}
+
+CXX_C_API int turbo_agent_runtime_remote_client_delete_memory_record(
+    turbo_agent_runtime_remote_client_t *client, const char *memory_namespace, const char *key,
+    json_value_t **out_error_json) {
+  json_value_t *params_json = turbo_json_create_object();
+  json_value_t *result_json = NULL;
+  int rc;
+
+  if (!params_json || !memory_namespace || !memory_namespace[0] || !key || !key[0]) {
+    turbo_free_json(&params_json);
+    if (out_error_json) {
+      *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+          NULL, 1, "Failed to build memory.deleteRecord params");
+    }
+    return -1;
+  }
+
+  turbo_json_object_set_string(params_json, "namespace", memory_namespace);
+  turbo_json_object_set_string(params_json, "key", key);
+  rc = turbo_agent_runtime_remote_client_call_json(client, "memory.deleteRecord", params_json,
+                                                   &result_json, out_error_json);
+  turbo_free_json(&params_json);
+  if (rc != 0 || !result_json) {
+    turbo_free_json(&result_json);
+    return rc;
+  }
+  if (!turbo_json_get_bool(result_json, "deleted", false)) {
+    turbo_free_json(&result_json);
+    if (out_error_json && !*out_error_json) {
+      *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+          NULL, 1, "Malformed memory.deleteRecord result");
+    }
+    return -1;
+  }
+  turbo_free_json(&result_json);
+  return 0;
 }
 
 CXX_C_API int turbo_agent_runtime_remote_client_put_memory_record(
@@ -1722,6 +1759,59 @@ CXX_C_API int turbo_agent_runtime_remote_client_put_memory_record(
         turbo_agent_runtime_remote_client_build_error_json(NULL, 1, "Malformed memory.putRecord result");
   }
   return rc;
+}
+
+CXX_C_API int turbo_agent_runtime_remote_client_validate_memory_record(
+    turbo_agent_runtime_remote_client_t *client, const json_value_t *record_json, int *out_valid,
+    json_value_t **out_error_json) {
+  json_value_t *params_json = turbo_json_create_object();
+  json_value_t *result_json = NULL;
+  json_value_t *record_clone = NULL;
+  const json_value_t *valid_json;
+  int rc;
+
+  if (out_valid) {
+    *out_valid = 0;
+  }
+  if (!params_json || !record_json || turbo_json_type(record_json) != TURBO_JSON_OBJECT ||
+      !out_valid) {
+    turbo_free_json(&params_json);
+    if (out_error_json) {
+      *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+          NULL, 1, "Failed to build memory.validateRecord params");
+    }
+    return -1;
+  }
+
+  record_clone = turbo_json_clone(record_json);
+  if (!record_clone) {
+    turbo_free_json(&params_json);
+    if (out_error_json) {
+      *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+          NULL, 1, "Failed to clone memory record");
+    }
+    return -1;
+  }
+  turbo_json_object_add(params_json, "record", record_clone);
+  rc = turbo_agent_runtime_remote_client_call_json(client, "memory.validateRecord", params_json,
+                                                   &result_json, out_error_json);
+  turbo_free_json(&params_json);
+  if (rc != 0 || !result_json) {
+    turbo_free_json(&result_json);
+    return rc;
+  }
+  valid_json = turbo_json_object_get(result_json, "valid");
+  if (!valid_json || turbo_json_type(valid_json) != TURBO_JSON_BOOL) {
+    turbo_free_json(&result_json);
+    if (out_error_json && !*out_error_json) {
+      *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+          NULL, 1, "Malformed memory.validateRecord result");
+    }
+    return -1;
+  }
+  *out_valid = turbo_json_get_bool(result_json, "valid", false) ? 1 : 0;
+  turbo_free_json(&result_json);
+  return 0;
 }
 
 CXX_C_API int turbo_agent_runtime_remote_client_query_memory_records_ex(
@@ -1776,6 +1866,37 @@ CXX_C_API int turbo_agent_runtime_remote_client_query_memory_records(
 CXX_C_API int turbo_agent_runtime_remote_client_list_memory_records(
     turbo_agent_runtime_remote_client_t *client, const char *namespace_prefix,
     json_value_t **out_records_json, json_value_t **out_error_json) {
-  return turbo_agent_runtime_remote_client_query_memory_records(
-      client, namespace_prefix, NULL, NULL, NULL, out_records_json, out_error_json);
+  json_value_t *params_json = turbo_json_create_object();
+  json_value_t *result_json = NULL;
+  int rc;
+
+  if (out_records_json) {
+    *out_records_json = NULL;
+  }
+  if (!params_json || !out_records_json) {
+    turbo_free_json(&params_json);
+    if (out_error_json) {
+      *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+          NULL, 1, "Failed to build memory.listRecords params");
+    }
+    return -1;
+  }
+  if (namespace_prefix && namespace_prefix[0] != '\0') {
+    turbo_json_object_set_string(params_json, "namespace_prefix", namespace_prefix);
+  }
+
+  rc = turbo_agent_runtime_remote_client_call_json(client, "memory.listRecords", params_json,
+                                                   &result_json, out_error_json);
+  turbo_free_json(&params_json);
+  if (rc != 0 || !result_json) {
+    turbo_free_json(&result_json);
+    return rc;
+  }
+  rc = turbo_agent_runtime_remote_client_extract_object(result_json, "records", out_records_json);
+  turbo_free_json(&result_json);
+  if (rc != 0 && out_error_json && !*out_error_json) {
+    *out_error_json = turbo_agent_runtime_remote_client_build_error_json(
+        NULL, 1, "Malformed memory.listRecords result");
+  }
+  return rc;
 }

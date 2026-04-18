@@ -3,6 +3,7 @@
 
 #include "turbo_callbacks.h"
 #include "turbo_datagram.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,6 +11,19 @@ extern "C" {
 
 typedef struct turbo_kcp_s turbo_kcp_t;
 typedef struct turbo_kcp_server_s turbo_kcp_server_t;
+
+typedef enum turbo_kcp_fec_backend_e {
+  TURBO_KCP_FEC_BACKEND_NONE = 0,
+  TURBO_KCP_FEC_BACKEND_WIREHAIR = 1
+} turbo_kcp_fec_backend_t;
+
+typedef struct turbo_kcp_fec_config_s {
+  int enabled;
+  turbo_kcp_fec_backend_t backend;
+  uint16_t data_shards;
+  uint16_t parity_shards;
+  uint16_t max_payload_size;
+} turbo_kcp_fec_config_t;
 
 /**
  * @brief Create a KCP client context.
@@ -42,6 +56,32 @@ int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
  * @brief Enable or disable SO_REUSEPORT for future bind calls on this KCP handle.
  */
 void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
+
+/**
+ * @brief Fill a KCP FEC config with safe defaults.
+ *
+ * Defaults keep FEC disabled. Callers must explicitly enable it before bind
+ * or connect. Enabling an unavailable backend returns TURBO_ENOTSUP.
+ */
+void turbo_kcp_fec_config_default(turbo_kcp_fec_config_t* config);
+
+/**
+ * @brief Return non-zero if a KCP FEC backend is compiled in.
+ */
+int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
+
+/**
+ * @brief Configure optional packet-erasure FEC for this KCP handle.
+ *
+ * FEC is off by default and must be configured before bind/connect so both
+ * peers agree on packet framing. Passing a disabled config turns FEC off.
+ */
+int turbo_kcp_set_fec(turbo_kcp_t* kcp, const turbo_kcp_fec_config_t* config);
+
+/**
+ * @brief Read the current KCP FEC config.
+ */
+int turbo_kcp_get_fec(turbo_kcp_t* kcp, turbo_kcp_fec_config_t* config);
 
 /**
  * @brief Connect to a remote KCP server.

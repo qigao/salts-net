@@ -57,9 +57,12 @@ CXX_C_API void turbo_agent_runtime_remote_destroy(turbo_agent_runtime_remote_t *
  * - `runtime.forkThreadStatePatchBindGraph`
  * - `runtime.getThreadObservabilityIndex`
  * - `runtime.listObservabilityIndexesFiltered`
+ * - `memory.deleteRecord`
  * - `memory.getRecord`
+ * - `memory.listRecords`
  * - `memory.putRecord`
  * - `memory.queryRecordsEx`
+ * - `memory.validateRecord`
  *
  * Requests and responses use plain JSON-RPC 2.0 objects. This dispatcher is a
  * contract bridge, not a second persisted runtime state source.

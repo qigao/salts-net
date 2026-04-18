@@ -814,14 +814,28 @@ static void wait_mock_ready(int *ready, int *failed) {
   }
 }
 
+static void run_context_until(coro_context_t *ctx, int *done, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx || !done) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (!*done && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+  }
+}
+
 static void drain_context_destroy(coro_context_t *ctx) {
-  int limit = 200;
+  uint64_t deadline;
 
   if (!ctx) {
     return;
   }
 
-  while (limit-- > 0 && coro_context_alive(ctx)) {
+  deadline = turbo_monotonic_ms() + 1000;
+  while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
     coro_context_run(ctx, TURBO_RUN_ONCE);
   }
 
@@ -831,12 +845,17 @@ static void drain_context_destroy(coro_context_t *ctx) {
 static void wasm3_socket_echo_handler(coro_socket_t *client, void *arg) {
   char *data = NULL;
   size_t len = 0;
+  coro_context_t *ctx;
 
   (void)arg;
+  ctx = coro_socket_get_context(client);
 
   if (coro_socket_recv(client, &data, &len) == 0 && data) {
     coro_socket_send(client, data, len);
     coro_socket_free_recv(data);
+    if (ctx) {
+      coro_sleep(ctx, 10);
+    }
   }
 }
 
@@ -846,6 +865,7 @@ static void wasm3_socket_bridge_task(coro_t *co, void *arg) {
   coro_socket_t *client = NULL;
   const m3_wasi_socket_ops_t *ops = NULL;
   void *user_data = NULL;
+  uint64_t recv_deadline = 0;
   uint8_t recv_after_unregister_buf[8];
   uint32_t recv_after_unregister_len = 0;
   uint16_t recv_after_unregister_flags = 0;
@@ -909,10 +929,17 @@ static void wasm3_socket_bridge_task(coro_t *co, void *arg) {
       ops->send(user_data, state->wasi_fd, (const uint8_t *)"ping", 4, 0,
                 &state->sent_len);
   state->stage = 10;
-  state->recv_err =
-      ops->recv(user_data, state->wasi_fd, (uint8_t *)state->recv_buf,
-                (uint32_t)(sizeof(state->recv_buf) - 1), 0, &state->recv_len,
-                &state->recv_flags);
+  recv_deadline = turbo_monotonic_ms() + 1000;
+  do {
+    state->recv_err =
+        ops->recv(user_data, state->wasi_fd, (uint8_t *)state->recv_buf,
+                  (uint32_t)(sizeof(state->recv_buf) - 1), 0, &state->recv_len,
+                  &state->recv_flags);
+    if (state->recv_err == 0) {
+      break;
+    }
+    coro_sleep(state->ctx, 1);
+  } while (turbo_monotonic_ms() < recv_deadline);
   if (state->recv_len < sizeof(state->recv_buf)) {
     state->recv_buf[state->recv_len] = '\0';
   } else {
@@ -2055,7 +2082,6 @@ spec("Turbo wasm3 integration") {
       m3_wasi_context_t *wasi = m3_NewWasiContext();
       turbo_wasm3_socket_registry_t *registry =
           turbo_wasm3_socket_registry_create(4);
-      int limit = 200;
 
       memset(&state, 0, sizeof(state));
       state.ctx = ctx;
@@ -2069,12 +2095,7 @@ spec("Turbo wasm3 integration") {
       check_int_eq(turbo_wasm3_socket_registry_bind_wasi(registry, wasi), 0);
       check_int_eq(coro_context_spawn(ctx, wasm3_socket_bridge_task, &state), 0);
 
-      while (!state.finished && limit-- > 0) {
-        coro_context_run(ctx, TURBO_RUN_ONCE);
-#ifdef _WIN32
-        native_sleep_ms(1);
-#endif
-      }
+      run_context_until(ctx, &state.finished, 2000);
 
       check_int_eq(state.finished, 1);
       check_int_eq(state.stage, 13);

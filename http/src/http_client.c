@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <CoroNet/turbo_coro_context.h>
 #include <CoroNet/turbo_coro_internal.h>
+#include <CoroNet/turbo_dns.h>
 #include "CoroNet/turbo_coro_socket.h"
 #include "CoroNet/turbo_connection_pool.h"
 #include <stdio.h>
@@ -72,6 +73,7 @@ static char *coro_strdup(const char *s) {
 }
 
 static double coro_time_sec(void) { return (double)turbo_monotonic_ms() / 1000.0; }
+static void drain_owned_http_context(http_client_t *c, uint64_t timeout_ms);
 
 static http_response_t *alloc_response(void) {
   return (http_response_t *)calloc(1, sizeof(http_response_t));
@@ -428,20 +430,12 @@ void http_client_destroy(http_client_t *c) {
   if (!c)
     return;
 
-  if (c->owns_coro_ctx && c->coro_ctx) {
-    for (int i = 0; i < 1024; i++) {
-      coro_context_run(c->coro_ctx, TURBO_RUN_NOWAIT);
-    }
-  }
+  drain_owned_http_context(c, 1000);
 
   if (c->conn_pool)
     coro_pool_destroy(c->conn_pool);
 
-  if (c->owns_coro_ctx && c->coro_ctx) {
-    for (int i = 0; i < 1024; i++) {
-      coro_context_run(c->coro_ctx, TURBO_RUN_NOWAIT);
-    }
-  }
+  drain_owned_http_context(c, 1000);
 
   /* Do not destroy cookie_jar because the client doesn't own it. */
   if (c->owns_coro_ctx && c->coro_ctx) {
@@ -1271,6 +1265,29 @@ static void release_transport(http_client_t *c, coro_socket_t *transport, int us
   coro_pool_return(c->conn_pool, transport);
 }
 
+static void drain_owned_http_context(http_client_t *c, uint64_t timeout_ms) {
+  uint64_t deadline;
+  int idle_spins = 0;
+
+  if (!c || !c->owns_coro_ctx || !c->coro_ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (turbo_monotonic_ms() < deadline) {
+    coro_context_run(c->coro_ctx, TURBO_RUN_ONCE);
+
+    if (coro_context_alive(c->coro_ctx)) {
+      idle_spins = 0;
+      continue;
+    }
+
+    if (++idle_spins >= 4) {
+      break;
+    }
+  }
+}
+
 /* ── Interceptor runners ──────────────────────────────────────────── */
 
 static int run_request_interceptors(http_client_t *c, http_method_t method, const char *url,
@@ -1428,9 +1445,12 @@ static int prepare_transport(http_client_t *c, const char *url, const char *host
     return 0;
   }
 
-  /* Use pool only if URL matches base_url AND we're inside a coroutine */
+  /* Only reuse the pool when the caller already owns a long-lived coro context.
+   * Synchronous wrappers spin up a private context per client; pre-opening pooled
+   * connections there leaves more async teardown work than useful reuse. */
   int in_coro = coro_running() != NULL;
-  if (c->conn_pool && c->base_url && url_matches_base(c, url) && in_coro) {
+  int allow_pool = in_coro && !c->owns_coro_ctx;
+  if (c->conn_pool && c->base_url && url_matches_base(c, url) && allow_pool) {
     /* Lazy-open pool on first request */
     if (!coro_pool_is_open(c->conn_pool)) {
       int rc = coro_pool_open(c->conn_pool, host, port, socket_type);
@@ -1462,6 +1482,8 @@ static int prepare_transport(http_client_t *c, const char *url, const char *host
 static int connect_transport(http_client_t *c, coro_socket_t *transport, 
                             const char *host, int port, int is_tls, uri_t *uri, int use_pool) {
   int rc;
+  const char *connect_host = host;
+  char resolved_ip[INET6_ADDRSTRLEN];
 
   if (use_pool)
     return 0; /* Already connected */
@@ -1495,8 +1517,18 @@ static int connect_transport(http_client_t *c, coro_socket_t *transport,
     return 0;
   }
 
+  if (c->owns_coro_ctx) {
+    int dns_rc = turbo_dns_resolve_sync(host, resolved_ip, sizeof(resolved_ip),
+                                        is_tls ? 0 : 4);
+    if (dns_rc != 0) {
+      TLOG_ERROR("Synchronous DNS resolution failed for {}: rc={}", host, dns_rc);
+      return dns_rc;
+    }
+    connect_host = resolved_ip;
+  }
+
   TLOG_INFO("Connecting to: {}:{}", host, port);
-  rc = coro_socket_connect(transport, host, port);
+  rc = coro_socket_connect_host_ex(transport, connect_host, port, host);
   if (rc == 0) {
     TLOG_DEBUG("Connected successfully to {}:{}", host, port);
   } else {
@@ -1884,6 +1916,7 @@ http_response_t *do_request_full(http_client_t *c, http_method_t method, const c
     return resp;
   }
   coro_context_run(c->coro_ctx, TURBO_RUN_DEFAULT);
+  drain_owned_http_context(c, 1000);
   if (!task.result) {
     http_response_t *resp = alloc_response();
     if (resp)

@@ -4,15 +4,36 @@
 
 #include <string.h>
 
-static json_value_t *parse_sse_response_or_fail(int rc, char *response_json) {
+static json_value_t *parse_sse_response_or_fail(int rc, char **response_json) {
   json_value_t *parsed = NULL;
 
   check_int_eq(rc, 0);
   check_not_null(response_json);
-  check_int_eq(turbo_parse_json((const uint8_t *)response_json, strlen(response_json), &parsed), 0);
+  check_not_null(*response_json);
+  check_int_eq(
+      turbo_parse_json((const uint8_t *)*response_json, strlen(*response_json), &parsed), 0);
   check_not_null(parsed);
-  turbo_json_serialize_free(response_json);
+  turbo_json_serialize_free(*response_json);
+  *response_json = NULL;
   return parsed;
+}
+
+static json_value_t *parse_chat_sse_or_fail(const char *sse) {
+  char *response_json = NULL;
+  int rc = turbo_agent_chat_sse_to_json(sse, strlen(sse), &response_json);
+  return parse_sse_response_or_fail(rc, &response_json);
+}
+
+static json_value_t *parse_responses_sse_or_fail(const char *sse) {
+  char *response_json = NULL;
+  int rc = turbo_agent_responses_sse_to_json(sse, strlen(sse), &response_json);
+  return parse_sse_response_or_fail(rc, &response_json);
+}
+
+static json_value_t *parse_anthropic_sse_or_fail(const char *sse) {
+  char *response_json = NULL;
+  int rc = turbo_agent_anthropic_messages_sse_to_json(sse, strlen(sse), &response_json);
+  return parse_sse_response_or_fail(rc, &response_json);
 }
 
 spec("turbo agent sse api") {
@@ -22,13 +43,11 @@ spec("turbo agent sse api") {
         "data: {\"id\":\"chat_1\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"he\"}}]}\n\n"
         "data: {\"id\":\"chat_1\",\"choices\":[{\"delta\":{\"content\":\"llo\"},\"finish_reason\":\"stop\"}]}\n\n"
         "data: [DONE]\n\n";
-    char *response_json = NULL;
     json_value_t *response;
     const json_value_t *choices;
     const json_value_t *message;
 
-    response = parse_sse_response_or_fail(
-        turbo_agent_chat_sse_to_json(sse, strlen(sse), &response_json), response_json);
+    response = parse_chat_sse_or_fail(sse);
     check_str_eq(turbo_json_get_string(response, "id"), "chat_1");
     choices = turbo_json_object_get(response, "choices");
     check_not_null(choices);
@@ -46,13 +65,11 @@ spec("turbo agent sse api") {
         "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"yo\"}]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n"
         "data: [DONE]\n\n";
-    char *response_json = NULL;
     json_value_t *response;
     const json_value_t *output;
     const json_value_t *content;
 
-    response = parse_sse_response_or_fail(
-        turbo_agent_responses_sse_to_json(sse, strlen(sse), &response_json), response_json);
+    response = parse_responses_sse_or_fail(sse);
     check_str_eq(turbo_json_get_string(response, "id"), "resp_1");
     output = turbo_json_object_get(response, "output");
     check_not_null(output);
@@ -69,12 +86,10 @@ spec("turbo agent sse api") {
         "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"{\\\"ok\\\":true}\"}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_rebuilt\"}}\n\n"
         "data: [DONE]\n\n";
-    char *response_json = NULL;
     json_value_t *response;
     const json_value_t *output;
 
-    response = parse_sse_response_or_fail(
-        turbo_agent_responses_sse_to_json(sse, strlen(sse), &response_json), response_json);
+    response = parse_responses_sse_or_fail(sse);
     check_str_eq(turbo_json_get_string(response, "id"), "resp_rebuilt");
     output = turbo_json_object_get(response, "output");
     check_not_null(output);
@@ -148,12 +163,10 @@ spec("turbo agent sse api") {
         "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"th\"}}\n\n"
         "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"
         "data: {\"type\":\"message_stop\"}\n\n";
-    char *response_json = NULL;
     json_value_t *response;
     const json_value_t *content;
 
-    response = parse_sse_response_or_fail(
-        turbo_agent_anthropic_messages_sse_to_json(sse, strlen(sse), &response_json), response_json);
+    response = parse_anthropic_sse_or_fail(sse);
     check_str_eq(turbo_json_get_string(response, "id"), "msg_1");
     check_str_eq(turbo_json_get_string(response, "stop_reason"), "end_turn");
     content = turbo_json_object_get(response, "content");
@@ -172,14 +185,12 @@ spec("turbo agent sse api") {
         "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"a\\\":2\"}}\n\n"
         "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\",\\\"b\\\":3}\"}}\n\n"
         "data: {\"type\":\"message_stop\"}\n\n";
-    char *response_json = NULL;
     json_value_t *response;
     const json_value_t *content;
     const json_value_t *tool_use;
     const json_value_t *input;
 
-    response = parse_sse_response_or_fail(
-        turbo_agent_anthropic_messages_sse_to_json(sse, strlen(sse), &response_json), response_json);
+    response = parse_anthropic_sse_or_fail(sse);
     content = turbo_json_object_get(response, "content");
     check_not_null(content);
     check_size_eq(turbo_json_array_size(content), 1);
@@ -261,15 +272,13 @@ spec("turbo agent sse api") {
         "data: {\"id\":\"chat_tool\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"sum\",\"arguments\":\"{\\\"a\\\":2\"}}]}}]}\n\n"
         "data: {\"id\":\"chat_tool\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\",\\\"b\\\":3}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"
         "data: [DONE]\n\n";
-    char *response_json = NULL;
     json_value_t *response;
     const json_value_t *choices;
     const json_value_t *message;
     const json_value_t *tool_calls;
     const json_value_t *function;
 
-    response = parse_sse_response_or_fail(
-        turbo_agent_chat_sse_to_json(sse, strlen(sse), &response_json), response_json);
+    response = parse_chat_sse_or_fail(sse);
     choices = turbo_json_object_get(response, "choices");
     check_not_null(choices);
     message = turbo_json_object_get(turbo_json_array_get(choices, 0), "message");

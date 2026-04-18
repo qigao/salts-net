@@ -70,6 +70,33 @@ typedef struct {
   int high_level_helpers_ok;
 } remote_app_test_state_t;
 
+static void remote_app_test_state_cleanup(remote_app_test_state_t *state) {
+  if (!state) {
+    return;
+  }
+  if (state->app) {
+    turbo_agent_remote_app_destroy(state->app);
+    state->app = NULL;
+  }
+  if (!state->server_stopped && state->server) {
+    coro_socket_destroy(state->server);
+    state->server = NULL;
+  }
+  if (state->bridge) {
+    turbo_agent_runtime_remote_iris_destroy(state->bridge);
+    state->bridge = NULL;
+  }
+  if (state->remote) {
+    turbo_agent_runtime_remote_destroy(state->remote);
+    state->remote = NULL;
+  }
+  if (state->runtime) {
+    turbo_agent_runtime_destroy(state->runtime);
+    state->runtime = NULL;
+  }
+  state->graph = NULL;
+}
+
 static int remote_app_write_bool_bind_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
   remote_app_bool_write_t *write = (remote_app_bool_write_t *)user_data;
   turbo_runtime_data_bind_value_t *value;
@@ -716,6 +743,7 @@ static void remote_app_test_coro(coro_t *co, void *arg) {
     coro_socket_destroy(state->server);
     state->server = NULL;
   }
+  remote_app_test_state_cleanup(state);
 }
 
 typedef struct {
@@ -731,6 +759,33 @@ typedef struct {
   int memory_helpers_ok;
 } remote_app_memory_test_state_t;
 
+static void remote_app_memory_test_state_cleanup(remote_app_memory_test_state_t *state) {
+  if (!state) {
+    return;
+  }
+  if (state->app) {
+    turbo_agent_remote_app_destroy(state->app);
+    state->app = NULL;
+  }
+  if (!state->server_stopped && state->server) {
+    coro_socket_destroy(state->server);
+    state->server = NULL;
+  }
+  if (state->bridge) {
+    turbo_agent_runtime_remote_iris_destroy(state->bridge);
+    state->bridge = NULL;
+  }
+  if (state->remote) {
+    turbo_agent_runtime_remote_destroy(state->remote);
+    state->remote = NULL;
+  }
+  turbo_agent_memory_store_destroy(&state->memory_store);
+  if (state->runtime) {
+    turbo_agent_runtime_destroy(state->runtime);
+    state->runtime = NULL;
+  }
+}
+
 static void remote_app_memory_test_coro(coro_t *co, void *arg) {
   remote_app_memory_test_state_t *state = (remote_app_memory_test_state_t *)arg;
   iris_app_t *app = iris_app_default();
@@ -741,10 +796,15 @@ static void remote_app_memory_test_coro(coro_t *co, void *arg) {
   turbo_agent_memory_query_options_t options = {0};
   json_value_t *record = NULL;
   json_value_t *record_variant = NULL;
+  json_value_t *invalid_record = NULL;
   json_value_t *loaded_record = NULL;
+  json_value_t *deleted_record = NULL;
   json_value_t *listed_records = NULL;
+  json_value_t *listed_records_after_delete = NULL;
   json_value_t *queried_records = NULL;
   json_value_t *queried_records_ex = NULL;
+  int record_valid = 0;
+  int invalid_record_valid = 1;
   char endpoint_url[256];
   int written;
   const unsigned short port = 29887;
@@ -800,7 +860,23 @@ static void remote_app_memory_test_coro(coro_t *co, void *arg) {
     return;
   }
 
-  if (turbo_agent_remote_app_memory_validate_record(record) == 0 &&
+  invalid_record = turbo_json_create_object();
+  if (!invalid_record) {
+    return;
+  }
+  turbo_json_object_set_string(invalid_record, "id", "project/demo::broken");
+  turbo_json_object_set_string(invalid_record, "namespace", "project/demo");
+  turbo_json_object_set_string(invalid_record, "kind", "context");
+  turbo_json_object_set_string(invalid_record, "key", "broken");
+  turbo_json_object_set_string(invalid_record, "text", "missing value json");
+  turbo_json_object_set_null(invalid_record, "metadata");
+  turbo_json_object_set_null(invalid_record, "created_at");
+
+  if (turbo_agent_remote_app_memory_validate_record(state->app, record, &record_valid) == 0 &&
+      record_valid &&
+      turbo_agent_remote_app_memory_validate_record(state->app, invalid_record,
+                                                    &invalid_record_valid) == 0 &&
+      !invalid_record_valid &&
       turbo_agent_remote_app_memory_put_record(state->app, record) == 0 &&
       turbo_agent_remote_app_memory_get_record(state->app, "project/demo", "context",
                                                &loaded_record) == 0 &&
@@ -851,7 +927,15 @@ static void remote_app_memory_test_coro(coro_t *co, void *arg) {
                                                            &queried_records_ex) == 0 &&
             queried_records_ex && turbo_json_array_size(queried_records_ex) == 1 &&
             strcmp(turbo_json_get_string(turbo_json_array_get(queried_records_ex, 0), "key"),
-                   "zeta") == 0) {
+                   "zeta") == 0 &&
+            turbo_agent_remote_app_memory_delete_record(state->app, "project/demo", "zeta") == 0 &&
+            turbo_agent_remote_app_memory_list_records(state->app, "project",
+                                                       &listed_records_after_delete) == 0 &&
+            listed_records_after_delete &&
+            turbo_json_array_size(listed_records_after_delete) == 1 &&
+            turbo_agent_remote_app_memory_get_record(state->app, "project/demo", "zeta",
+                                                     &deleted_record) != 0 &&
+            !deleted_record) {
           state->memory_helpers_ok = 1;
         }
       }
@@ -861,8 +945,11 @@ static void remote_app_memory_test_coro(coro_t *co, void *arg) {
   turbo_free_json(&record_variant);
   turbo_free_json(&queried_records_ex);
   turbo_free_json(&queried_records);
+  turbo_free_json(&listed_records_after_delete);
   turbo_free_json(&listed_records);
+  turbo_free_json(&deleted_record);
   turbo_free_json(&loaded_record);
+  turbo_free_json(&invalid_record);
   turbo_free_json(&record);
 
   if (state->server) {
@@ -870,6 +957,7 @@ static void remote_app_memory_test_coro(coro_t *co, void *arg) {
     coro_socket_destroy(state->server);
     state->server = NULL;
   }
+  remote_app_memory_test_state_cleanup(state);
 }
 
 static void remote_app_committed_handoff_coro(coro_t *co, void *arg) {
@@ -995,6 +1083,7 @@ cleanup:
     coro_socket_destroy(state->server);
     state->server = NULL;
   }
+  remote_app_test_state_cleanup(state);
 }
 
 static void remote_app_high_level_test_coro(coro_t *co, void *arg) {
@@ -1175,6 +1264,7 @@ cleanup:
     coro_socket_destroy(state->server);
     state->server = NULL;
   }
+  remote_app_test_state_cleanup(state);
 }
 
 spec("turbo agent remote app api") {
@@ -1188,27 +1278,7 @@ spec("turbo agent remote app api") {
   }
 
   after_each() {
-    if (state.app) {
-      turbo_agent_remote_app_destroy(state.app);
-      state.app = NULL;
-    }
-    if (!state.server_stopped && state.server) {
-      coro_socket_destroy(state.server);
-      state.server = NULL;
-    }
-    if (state.bridge) {
-      turbo_agent_runtime_remote_iris_destroy(state.bridge);
-      state.bridge = NULL;
-    }
-    if (state.remote) {
-      turbo_agent_runtime_remote_destroy(state.remote);
-      state.remote = NULL;
-    }
-    if (state.runtime) {
-      turbo_agent_runtime_destroy(state.runtime);
-      state.runtime = NULL;
-    }
-    state.graph = NULL;
+    remote_app_test_state_cleanup(&state);
     if (state.coro_ctx) {
       coro_context_destroy(state.coro_ctx);
       state.coro_ctx = NULL;
@@ -1288,27 +1358,7 @@ spec("turbo agent remote app api") {
     coro_context_run(memory_state.coro_ctx, TURBO_RUN_DEFAULT);
 
     check_true(memory_state.memory_helpers_ok);
-    if (!memory_state.server_stopped && memory_state.server) {
-      coro_socket_destroy(memory_state.server);
-      memory_state.server = NULL;
-    }
-    if (memory_state.app) {
-      turbo_agent_remote_app_destroy(memory_state.app);
-      memory_state.app = NULL;
-    }
-    if (memory_state.bridge) {
-      turbo_agent_runtime_remote_iris_destroy(memory_state.bridge);
-      memory_state.bridge = NULL;
-    }
-    if (memory_state.remote) {
-      turbo_agent_runtime_remote_destroy(memory_state.remote);
-      memory_state.remote = NULL;
-    }
-    if (memory_state.runtime) {
-      turbo_agent_runtime_destroy(memory_state.runtime);
-      memory_state.runtime = NULL;
-    }
-    turbo_agent_memory_store_destroy(&memory_state.memory_store);
+    remote_app_memory_test_state_cleanup(&memory_state);
     if (memory_state.coro_ctx) {
       coro_context_destroy(memory_state.coro_ctx);
       memory_state.coro_ctx = NULL;

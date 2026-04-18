@@ -285,19 +285,65 @@ static void cmd_arger_apply_env_vars(CmdArgerDesc *args, uint32_t count) {
  */
 typedef struct {
   char **argv;
+  uint8_t *owned;
   int argc;
   int capacity;
 } ArgList;
 
+typedef struct ExpandedArgsCleanup_s {
+  char **argv;
+  uint8_t *owned;
+  int argc;
+  struct ExpandedArgsCleanup_s *next;
+} ExpandedArgsCleanup;
+
+static ExpandedArgsCleanup *g_expanded_args_cleanup;
+static int g_expanded_args_atexit_registered;
+
+static void free_expanded_args_cleanup(void) {
+  ExpandedArgsCleanup *node = g_expanded_args_cleanup;
+  while (node) {
+    ExpandedArgsCleanup *next = node->next;
+    if (node->owned) {
+      for (int i = 0; i < node->argc; i++) {
+        if (node->owned[i]) {
+          free(node->argv[i]);
+        }
+      }
+    }
+    free(node->owned);
+    free(node->argv);
+    free(node);
+    node = next;
+  }
+  g_expanded_args_cleanup = NULL;
+}
+
+static void register_expanded_args_cleanup(char **argv, uint8_t *owned, int argc) {
+  ExpandedArgsCleanup *node = (ExpandedArgsCleanup *)malloc(sizeof(*node));
+  if (!node) return;
+  node->argv = argv;
+  node->owned = owned;
+  node->argc = argc;
+  node->next = g_expanded_args_cleanup;
+  g_expanded_args_cleanup = node;
+  if (!g_expanded_args_atexit_registered) {
+    atexit(free_expanded_args_cleanup);
+    g_expanded_args_atexit_registered = 1;
+  }
+}
+
 /**
  * @brief Adds an argument to the ArgList.
  */
-static void arg_list_add(ArgList *list, char *arg) {
+static void arg_list_add(ArgList *list, char *arg, uint8_t owned) {
   if (list->argc >= list->capacity) {
     list->capacity *= 2;
     list->argv = realloc(list->argv, sizeof(char *) * list->capacity);
+    list->owned = realloc(list->owned, sizeof(uint8_t) * list->capacity);
   }
   list->argv[list->argc++] = arg;
+  list->owned[list->argc - 1] = owned;
 }
 
 /**
@@ -307,7 +353,15 @@ static void expand_args(int *argc_out, char ***argv_out, int argc_in, char **arg
   ArgList list;
   list.capacity = argc_in + 16;
   list.argv = malloc(sizeof(char *) * list.capacity);
+  list.owned = malloc(sizeof(uint8_t) * list.capacity);
   list.argc = 0;
+  if (!list.argv || !list.owned) {
+    free(list.argv);
+    free(list.owned);
+    *argc_out = argc_in;
+    *argv_out = argv_in;
+    return;
+  }
 
   for (int i = 0; i < argc_in; i++) {
     char *arg = argv_in[i];
@@ -324,26 +378,29 @@ static void expand_args(int *argc_out, char ***argv_out, int argc_in, char **arg
             char *token_cstr = tstr_to_cstr(token);
             tstr_free(token);
             if (token_cstr) {
-              arg_list_add(&list, token_cstr);
+              arg_list_add(&list, token_cstr, 1);
             }
           }
         }
         free(content);
       } else {
-        arg_list_add(&list, arg);
+        arg_list_add(&list, arg, 0);
       }
     } else {
-      arg_list_add(&list, arg);
+      arg_list_add(&list, arg, 0);
     }
   }
 
   if (list.argc >= list.capacity) {
     list.argv = realloc(list.argv, sizeof(char *) * (list.capacity + 1));
+    list.owned = realloc(list.owned, sizeof(uint8_t) * (list.capacity + 1));
   }
   list.argv[list.argc] = NULL;
+  list.owned[list.argc] = 0;
 
   *argc_out = list.argc;
   *argv_out = list.argv;
+  register_expanded_args_cleanup(list.argv, list.owned, list.argc);
 }
 
 // ============================================================================

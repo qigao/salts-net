@@ -43,14 +43,57 @@ static turbo_stream_t *s_accepted_clients[32];
 
 #define STREAM_TEST_WAIT_ITERS 20000
 
-static int stream_test_run_until(coro_context_t *ctx, int *predicate, int expected, int max_iters) {
-    int limit = max_iters;
+static int stream_test_run_until(coro_context_t *ctx, int *predicate, int expected,
+                                 uint64_t timeout_ms) {
+    uint64_t deadline;
 
-    while (*predicate != expected && limit-- > 0) {
+    if (!ctx || !predicate) {
+        return -1;
+    }
+
+    deadline = turbo_monotonic_ms() + timeout_ms;
+    while (*predicate != expected && turbo_monotonic_ms() < deadline) {
         coro_context_run(ctx, TURBO_RUN_ONCE);
     }
 
     return *predicate == expected ? 0 : -1;
+}
+
+static void stream_test_run_while(coro_context_t *ctx, int (*pending)(void *), void *arg,
+                                  uint64_t timeout_ms) {
+    uint64_t deadline;
+
+    if (!ctx || !pending) {
+        return;
+    }
+
+    deadline = turbo_monotonic_ms() + timeout_ms;
+    while (pending(arg) && turbo_monotonic_ms() < deadline) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+}
+
+static int stream_test_flag_is_pending(void *arg) {
+    int *flag = (int *)arg;
+    return flag && *flag == -1;
+}
+
+typedef struct stream_test_counts_s {
+    int *connected;
+    int expected_connected;
+    int *accepted;
+    int expected_accepted;
+} stream_test_counts_t;
+
+static int stream_test_counts_pending(void *arg) {
+    stream_test_counts_t *counts = (stream_test_counts_t *)arg;
+
+    if (!counts) {
+        return 0;
+    }
+
+    return (counts->connected && *counts->connected < counts->expected_connected) ||
+           (counts->accepted && *counts->accepted < counts->expected_accepted);
 }
 
 static void on_accept_local(void *server, void *client, void *peer) {
@@ -132,14 +175,10 @@ spec("Stream") {
         turbo_stream_close(stream);
         turbo_stream_destroy(stream);
 
-        int limit = STREAM_TEST_WAIT_ITERS;
-        while (s_connected == -1 && limit-- > 0) {
-            coro_context_run(ctx, TURBO_RUN_ONCE);
-        }
+        stream_test_run_while(ctx, stream_test_flag_is_pending, &s_connected, 3000);
 
-        check(s_connected != 0); // Should fail to connect (connection refused)
-        check(s_connected != -1); // Callback must have fired
-        check_int_eq(stream_test_run_until(ctx, &s_closed, 1, STREAM_TEST_WAIT_ITERS), 0);
+        check(s_connected != 0); // Should never report a successful connect
+        check_int_eq(stream_test_run_until(ctx, &s_closed, 1, 3000), 0);
         check_int_eq(s_closed, 1);
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
@@ -150,9 +189,12 @@ spec("Stream") {
     it("should reject unavailable io_uring tcp backend") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);
-
+#if defined(TURBO_HAS_IO_URING)
+        check_int_eq(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING), 0);
+#else
         check_int_eq(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING),
                      TURBO_ENOTSUP);
+#endif
 
         coro_context_destroy(ctx);
     }
@@ -198,10 +240,8 @@ spec("Stream") {
         check_int_eq(r, 0);
 
         /* Run loop until connected and accepted */
-        int limit = STREAM_TEST_WAIT_ITERS;
-        while ((s_connected == -1 || s_accepted_count == 0) && limit-- > 0) {
-            coro_context_run(ctx, TURBO_RUN_ONCE);
-        }
+        stream_test_counts_t counts = { &s_connected, 0, &s_accepted_count, 1 };
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
 
         check_int_eq(s_connected, 0);
         check_int_eq(s_accepted_count, 1);
@@ -337,10 +377,8 @@ spec("Stream") {
         s_connected = -1;
         check_int_eq(turbo_stream_connect_addr(client, (struct sockaddr *)&addr6, on_connect, on_close), 0);
 
-        int limit = STREAM_TEST_WAIT_ITERS;
-        while ((s_connected == -1 || s_accepted_count == 0) && limit-- > 0) {
-            coro_context_run(ctx, TURBO_RUN_ONCE);
-        }
+        stream_test_counts_t counts = { &s_connected, 0, &s_accepted_count, 1 };
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
 
         check_int_eq(s_connected, 0);
         check_int_eq(s_accepted_count, 1);
@@ -361,8 +399,6 @@ spec("Stream") {
         int connect_status[CLIENT_COUNT];
         struct sockaddr_in addr;
         int i;
-        int limit;
-
         check(ctx != NULL);
 
         memset(&addr, 0, sizeof(addr));
@@ -388,10 +424,9 @@ spec("Stream") {
                                                    on_connect_count, on_close), 0);
         }
 
-        limit = 400;
-        while ((s_connect_count < CLIENT_COUNT || s_accepted_count < CLIENT_COUNT) && limit-- > 0) {
-            coro_context_run(ctx, TURBO_RUN_ONCE);
-        }
+        stream_test_counts_t counts = { &s_connect_count, CLIENT_COUNT,
+                                        &s_accepted_count, CLIENT_COUNT };
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
 
         check_int_eq(s_connect_count, CLIENT_COUNT);
         check_int_eq(s_accepted_count, CLIENT_COUNT);

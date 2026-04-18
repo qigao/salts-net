@@ -28,6 +28,7 @@ suite("cjwt pbes2") {
       check_int_eq(alg_pbes2_hs256_a128kw, decrypted->header.alg);
 
       free(token);
+      turbo_free_json(&jwt.header.private_headers);
       cjwt_destroy(decrypted);
     }
   }

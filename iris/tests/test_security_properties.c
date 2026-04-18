@@ -96,6 +96,7 @@ static void generate_invalid_header_value(char *buffer, size_t max_len) {
 /* Generate valid URL path */
 static void generate_valid_url_path(char *buffer, size_t max_len) {
     const char *valid_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+    const char *segment_start_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_~";
     
     /* Always start with '/' */
     buffer[0] = '/';
@@ -110,8 +111,15 @@ static void generate_valid_url_path(char *buffer, size_t max_len) {
             if (pos + segment_len >= remaining) {
                 segment_len = remaining - pos - 1;
             }
+
+            if (segment_len == 0) {
+                break;
+            }
+
+            /* 避免生成 "/."，保持与现有路径校验语义一致。 */
+            buffer[pos++] = segment_start_chars[pbt_rand() % strlen(segment_start_chars)];
             
-            for (size_t i = 0; i < segment_len && pos < remaining - 1; i++) {
+            for (size_t i = 1; i < segment_len && pos < remaining - 1; i++) {
                 buffer[pos++] = valid_chars[pbt_rand() % strlen(valid_chars)];
             }
             

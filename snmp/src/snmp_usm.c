@@ -591,6 +591,7 @@ int usm_decode_security_params(
     snmp_usm_params_t *params,
     void *pool
 ) {
+    uint8_t *engine_id_copy = NULL;
     if (!data || !params) {
         return USM_ERROR_INVALID;
     }
@@ -601,11 +602,15 @@ int usm_decode_security_params(
     asn1_value_t *root = NULL;
     int result = scan_binary_asn1(data, len, &root);
     if (result != 0 || !root || root->tag != 0x30) {
+        if (root) {
+            asn1_free(root);
+        }
         return USM_ERROR_INVALID;
     }
 
     /* Must have 6 children */
     if (root->value.sequence.count != 6) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
 
@@ -613,31 +618,46 @@ int usm_decode_security_params(
 
     /* 1. msgAuthoritativeEngineID - OCTET STRING */
     if (children[0]->tag != 0x04) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
-    params->authoritative_engine_id = children[0]->value.octet_string.data;
     params->engine_id_len = children[0]->value.octet_string.length;
+    if (params->engine_id_len > 0) {
+        engine_id_copy = mem_pool ? (uint8_t *)pool_alloc(mem_pool, params->engine_id_len)
+                                  : (uint8_t *)malloc(params->engine_id_len);
+        if (!engine_id_copy) {
+            asn1_free(root);
+            return USM_ERROR_INVALID;
+        }
+        memcpy(engine_id_copy, children[0]->value.octet_string.data, params->engine_id_len);
+    }
+    params->authoritative_engine_id = engine_id_copy;
 
     /* 2. msgAuthoritativeEngineBoots - INTEGER */
     if (children[1]->tag != 0x02) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
     params->engine_boots = (uint32_t)children[1]->value.integer;
 
     /* 3. msgAuthoritativeEngineTime - INTEGER */
     if (children[2]->tag != 0x02) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
     params->engine_time = (uint32_t)children[2]->value.integer;
 
     /* 4. msgUserName - OCTET STRING */
     if (children[3]->tag != 0x04) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
     /* Need null-terminated string */
     size_t user_name_len = children[3]->value.octet_string.length;
-    char *user_name_str = (char *)pool_alloc(mem_pool, user_name_len + 1);
+    char *user_name_str =
+        mem_pool ? (char *)pool_alloc(mem_pool, user_name_len + 1) : (char *)malloc(user_name_len + 1);
     if (!user_name_str) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
     memcpy(user_name_str, children[3]->value.octet_string.data, user_name_len);
@@ -646,16 +666,19 @@ int usm_decode_security_params(
 
     /* 5. msgAuthenticationParameters - OCTET STRING */
     if (children[4]->tag != 0x04 || children[4]->value.octet_string.length != 12) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
     memcpy(params->auth_params, children[4]->value.octet_string.data, 12);
 
     /* 6. msgPrivacyParameters - OCTET STRING */
     if (children[5]->tag != 0x04 || children[5]->value.octet_string.length != 8) {
+        asn1_free(root);
         return USM_ERROR_INVALID;
     }
     memcpy(params->priv_params, children[5]->value.octet_string.data, 8);
 
+    asn1_free(root);
     return USM_OK;
 }
 

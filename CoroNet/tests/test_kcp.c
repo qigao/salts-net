@@ -1,6 +1,7 @@
 #include "CoroNet.h"
 #include "CoroNet/turbo_coro_internal.h"
 #include "CoroNet/turbo_kcp.h"
+#include "../src/turbo_kcp_fec_internal.h"
 #include "tinytest.h"
 #include <stdio.h>
 #include <string.h>
@@ -23,6 +24,25 @@ static int on_kcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
 
 static void on_kcp_connect(void *handle, int status, void *peer) {
     (void)handle; (void)status; (void)peer;
+}
+
+typedef struct {
+    int count;
+    char payloads[4][32];
+    size_t lens[4];
+} fec_deliver_capture_t;
+
+static int on_fec_deliver(void *user, const char *data, size_t len) {
+    fec_deliver_capture_t *cap = (fec_deliver_capture_t *)user;
+    if (!cap || !data || len == 0 || cap->count >= 4 || len >= sizeof(cap->payloads[0])) {
+        return TURBO_EINVAL;
+    }
+
+    memcpy(cap->payloads[cap->count], data, len);
+    cap->payloads[cap->count][len] = '\0';
+    cap->lens[cap->count] = len;
+    cap->count++;
+    return 0;
 }
 
 typedef struct {
@@ -88,6 +108,111 @@ spec("KCP Transport") {
 
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
+    }
+
+    it("should keep KCP FEC disabled by default") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_kcp_fec_config_t cfg;
+        turbo_kcp_t *kcp;
+
+        check(ctx != NULL);
+        kcp = turbo_kcp_create(ctx);
+        check(kcp != NULL);
+
+        check_int_eq(turbo_kcp_get_fec(kcp, &cfg), 0);
+        check_int_eq(cfg.enabled, 0);
+        check_int_eq(cfg.backend, TURBO_KCP_FEC_BACKEND_NONE);
+        check_int_eq(cfg.data_shards, 8);
+        check_int_eq(cfg.parity_shards, 2);
+        check_int_eq(cfg.max_payload_size, 1200);
+
+        turbo_kcp_destroy(kcp);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should validate KCP FEC configuration before enabling") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_kcp_fec_config_t cfg;
+        turbo_kcp_t *kcp;
+        int rc;
+
+        check(ctx != NULL);
+        kcp = turbo_kcp_create(ctx);
+        check(kcp != NULL);
+
+        turbo_kcp_fec_config_default(&cfg);
+        cfg.enabled = 1;
+        cfg.backend = TURBO_KCP_FEC_BACKEND_NONE;
+        check_int_eq(turbo_kcp_set_fec(kcp, &cfg), TURBO_EINVAL);
+        check_int_eq(coro_context_get_last_error(ctx), TURBO_EINVAL);
+
+        turbo_kcp_fec_config_default(&cfg);
+        cfg.enabled = 1;
+        cfg.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+        rc = turbo_kcp_set_fec(kcp, &cfg);
+        if (turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
+            check_int_eq(rc, 0);
+        } else {
+            check_int_eq(rc, TURBO_ENOTSUP);
+            check_int_eq(coro_context_get_last_error(ctx), TURBO_ENOTSUP);
+        }
+
+        turbo_kcp_destroy(kcp);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should recover a missing data shard through Wirehair FEC when available") {
+        turbo_kcp_fec_config_t cfg;
+        turbo_kcp_fec_state_t *fec;
+        mem_buffer_t *data_frame = NULL;
+        mem_buffer_t *parity_frame = NULL;
+        mem_slice_t slice;
+        const char *packets[2] = { "alpha", "bravo" };
+        const size_t packet_lens[2] = { 5, 5 };
+        fec_deliver_capture_t cap;
+
+        if (!turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
+            check_int_eq(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR), 0);
+            return;
+        }
+
+        memset(&cap, 0, sizeof(cap));
+        turbo_kcp_fec_config_default(&cfg);
+        cfg.enabled = 1;
+        cfg.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+        cfg.data_shards = 2;
+        cfg.parity_shards = 1;
+        cfg.max_payload_size = 32;
+
+        check_int_eq(turbo_kcp_fec_open(&cfg, &fec), 0);
+        check_not_null(fec);
+        check_int_eq(turbo_kcp_fec_build_data_frame_for_test(&cfg, 7, 1, packets[1], packet_lens[1], &data_frame), 0);
+        check_int_eq(
+            turbo_kcp_fec_build_wirehair_parity_frame_for_test(&cfg, 7, 0, packets, packet_lens, 2, &parity_frame), 0);
+
+        memset(&slice, 0, sizeof(slice));
+        slice.data = data_frame->data;
+        slice.length = data_frame->used;
+        slice.buffer = data_frame;
+        check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
+        check_int_eq(cap.count, 1);
+        check_size_eq(cap.lens[0], 5);
+        check_str_eq(cap.payloads[0], "bravo");
+
+        memset(&slice, 0, sizeof(slice));
+        slice.data = parity_frame->data;
+        slice.length = parity_frame->used;
+        slice.buffer = parity_frame;
+        check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
+        check_int_eq(cap.count, 2);
+        check_size_eq(cap.lens[1], 5);
+        check_str_eq(cap.payloads[1], "alpha");
+
+        mem_unref(parity_frame);
+        mem_unref(data_frame);
+        turbo_kcp_fec_close(fec);
     }
 
     it("should initiate KCP over UDP") {
@@ -177,6 +302,64 @@ spec("KCP Transport") {
         coro_context_destroy(ctx);
     }
 
+    it("should send and receive data over KCP with FEC when available") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_kcp_t *server;
+        turbo_kcp_t *client;
+        turbo_kcp_fec_config_t fec;
+        struct sockaddr_storage server_addr;
+        turbo_datagram_t *s_dg;
+        unsigned short port = 0;
+        uint64_t wait_start;
+        uint64_t start;
+
+        check(ctx != NULL);
+        if (!turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
+            check_int_eq(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR), 0);
+            coro_context_destroy(ctx);
+            return;
+        }
+
+        server = turbo_kcp_create(ctx);
+        client = turbo_kcp_create(ctx);
+        check(server != NULL);
+        check(client != NULL);
+
+        turbo_kcp_fec_config_default(&fec);
+        fec.enabled = 1;
+        fec.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+        check_int_eq(turbo_kcp_set_fec(server, &fec), 0);
+        check_int_eq(turbo_kcp_set_fec(client, &fec), 0);
+
+        s_kcp_recv_count = 0;
+        check_int_eq(turbo_kcp_bind(server, "127.0.0.1", 0, on_kcp_recv), 0);
+        check_int_eq(turbo_kcp_bind(client, "127.0.0.1", 0, on_kcp_recv), 0);
+
+        s_dg = turbo_kcp_get_datagram(server);
+        check_int_eq(turbo_datagram_get_local_addr(s_dg, &server_addr), 0);
+        if (server_addr.ss_family == AF_INET) {
+            port = ntohs(((struct sockaddr_in*)&server_addr)->sin_port);
+        }
+        check_int_eq(turbo_kcp_connect(client, "127.0.0.1", port, on_kcp_connect, on_kcp_recv), 0);
+        check_int_eq(turbo_kcp_send(client, "world", 5), 0);
+
+        wait_start = coro_context_now(ctx);
+        while (s_kcp_recv_count < 1 && coro_context_alive(ctx) && (coro_context_now(ctx) - wait_start < 2000)) {
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        }
+        check_int_gt(s_kcp_recv_count, 0);
+
+        turbo_kcp_destroy(client);
+        turbo_kcp_destroy(server);
+
+        start = coro_context_now(ctx);
+        while (coro_context_alive(ctx) && (coro_context_now(ctx) - start < 1000)) {
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        }
+        check(!coro_context_alive(ctx));
+        coro_context_destroy(ctx);
+    }
+
     it("should honor reuse_port for kcp listener binds") {
         coro_context_t *ctx = coro_context_create(NULL);
         coro_socket_t *server1 = NULL;
@@ -211,6 +394,35 @@ spec("KCP Transport") {
 
         coro_socket_destroy(server2);
         coro_socket_destroy(server1);
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+
+    it("should expose pending KCP FEC config through coro_socket") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *sock;
+        turbo_kcp_fec_config_t cfg;
+        turbo_kcp_fec_config_t got;
+
+        check_not_null(ctx);
+        sock = coro_socket_create_kcp(ctx);
+        check_not_null(sock);
+
+        check_int_eq(coro_socket_get_kcp_fec(sock, &got), 0);
+        check_int_eq(got.enabled, 0);
+        check_int_eq(got.backend, TURBO_KCP_FEC_BACKEND_NONE);
+
+        turbo_kcp_fec_config_default(&cfg);
+        check_int_eq(coro_socket_set_kcp_fec(sock, &cfg), 0);
+        check_int_eq(coro_socket_get_kcp_fec(sock, &got), 0);
+        check_int_eq(got.enabled, 0);
+
+        turbo_kcp_fec_config_default(&cfg);
+        cfg.enabled = 1;
+        cfg.backend = TURBO_KCP_FEC_BACKEND_NONE;
+        check_int_eq(coro_socket_set_kcp_fec(sock, &cfg), TURBO_EINVAL);
+
+        coro_socket_destroy(sock);
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
     }

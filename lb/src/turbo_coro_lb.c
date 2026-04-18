@@ -7,6 +7,7 @@
 #include "turbo_coro.h"
 #include "turbo_coro_bidi_pump.h"
 #include "CoroNet/turbo_coro_socket.h"
+#include <CoroNet/turbo_stream.h>
 #include <CoroNet/turbo_coro_context.h>
 #include <CoroNet/turbo_coro_internal.h>
 #include "CoroNet/turbo_coro_socket.h"
@@ -29,6 +30,20 @@ typedef struct lb_waiter_s {
   struct lb_waiter_s *next;
 } lb_waiter_t;
 
+typedef struct lb_active_client_s {
+  coro_socket_t *client;
+  struct lb_active_client_s *next;
+} lb_active_client_t;
+
+typedef struct lb_active_worker_s {
+  coro_t *co;
+  struct lb_active_worker_s *next;
+} lb_active_worker_t;
+
+typedef struct {
+  int done;
+} lb_write_drain_t;
+
 struct coro_lb_s {
   coro_context_t *ctx;
   coro_lb_config_t config;
@@ -42,9 +57,109 @@ struct coro_lb_s {
   lb_waiter_t *wait_head;
   lb_waiter_t *wait_tail;
 
+  lb_active_client_t *active_clients;
+  lb_active_worker_t *active_workers;
+
   int active_conns;
   int stopped;
 };
+
+static lb_active_client_t *track_active_client(coro_lb_t *lb, coro_socket_t *client) {
+  lb_active_client_t *node;
+
+  if (!lb || !client) return NULL;
+
+  node = (lb_active_client_t *)calloc(1, sizeof(*node));
+  if (!node) return NULL;
+  node->client = client;
+  node->next = lb->active_clients;
+  lb->active_clients = node;
+  return node;
+}
+
+static void untrack_active_client(coro_lb_t *lb, lb_active_client_t *node) {
+  lb_active_client_t **prev;
+  lb_active_client_t *cur;
+
+  if (!lb || !node) return;
+
+  prev = &lb->active_clients;
+  cur = lb->active_clients;
+  while (cur) {
+    if (cur == node) {
+      *prev = cur->next;
+      free(cur);
+      return;
+    }
+    prev = &cur->next;
+    cur = cur->next;
+  }
+}
+
+static lb_active_worker_t *track_active_worker(coro_lb_t *lb, coro_t *co) {
+  lb_active_worker_t *node;
+
+  if (!lb || !co) return NULL;
+
+  node = (lb_active_worker_t *)calloc(1, sizeof(*node));
+  if (!node) return NULL;
+  node->co = co;
+  node->next = lb->active_workers;
+  lb->active_workers = node;
+  return node;
+}
+
+static void untrack_active_worker(coro_lb_t *lb, lb_active_worker_t *node) {
+  lb_active_worker_t **prev;
+  lb_active_worker_t *cur;
+
+  if (!lb || !node) return;
+
+  prev = &lb->active_workers;
+  cur = lb->active_workers;
+  while (cur) {
+    if (cur == node) {
+      *prev = cur->next;
+      free(cur);
+      return;
+    }
+    prev = &cur->next;
+    cur = cur->next;
+  }
+}
+
+static void on_lb_write_complete(turbo_stream_t *stream, int status) {
+  coro_socket_t *socket;
+  lb_write_drain_t *drain;
+  UNUSED(status);
+
+  socket = stream ? (coro_socket_t *)turbo_stream_get_user_data(stream) : NULL;
+  drain = socket ? (lb_write_drain_t *)socket->user_data : NULL;
+  if (drain) {
+    drain->done = 1;
+  }
+}
+
+static void wait_for_socket_write_drain(coro_socket_t *socket, uint64_t timeout_ms) {
+  lb_write_drain_t drain = {0};
+  void *prev_user_data;
+  uint64_t deadline;
+
+  if (!socket || !socket->handle.stream) return;
+
+  prev_user_data = socket->user_data;
+  socket->user_data = &drain;
+  turbo_stream_set_write_cb(socket->handle.stream, on_lb_write_complete);
+  (void)turbo_stream_flush(socket->handle.stream);
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (!drain.done && turbo_monotonic_ms() < deadline) {
+    coro_sleep(socket->ctx, 1);
+  }
+
+  turbo_stream_set_write_cb(socket->handle.stream, NULL);
+  socket->user_data = prev_user_data;
+}
 
 /* ── Idle pool ────────────────────────────────────────────── */
 
@@ -228,7 +343,10 @@ static int read_frame(coro_socket_t *client, coro_lb_t *lb, frame_buf_t *fb, cha
 
 static void on_worker_connect(coro_socket_t *worker, void *arg) {
   coro_lb_t *lb = (coro_lb_t *)arg;
+  lb_active_worker_t *active_worker;
   if (lb->stopped) return;
+
+  active_worker = track_active_worker(lb, coro_running());
 
   lb_worker_conn_t wc = {0};
   wc.client = worker;
@@ -250,13 +368,18 @@ static void on_worker_connect(coro_socket_t *worker, void *arg) {
 
   coro_set_waiting_for_io(coro_running(), 1);
   coro_yield();
+  coro_set_waiting_for_io(coro_running(), 0);
+  untrack_active_worker(lb, active_worker);
 }
 
 /* ── SESSION mode frontend handler ────────────────────────── */
 
 static void on_client_session(coro_socket_t *client, void *arg) {
   coro_lb_t *lb = (coro_lb_t *)arg;
+  lb_active_client_t *active_client;
   if (lb->stopped) return;
+
+  active_client = track_active_client(lb, client);
 
   char *peeked = NULL;
   size_t peeked_len = 0;
@@ -264,14 +387,24 @@ static void on_client_session(coro_socket_t *client, void *arg) {
 
   if (lb->config.route_cb && lb->config.peek_bytes > 0) {
     int r = coro_socket_recv(client, &peeked, &peeked_len);
-    if (r < 0) return;
+    if (r < 0) {
+      untrack_active_client(lb, active_client);
+      return;
+    }
     group = lb->config.route_cb(peeked, peeked_len, lb->config.route_cb_arg);
   }
 
   /* Filter on peeked data */
-  if (peeked && run_filter(lb, client, peeked, peeked_len) != TURBO_LB_ACCEPT) {
-    coro_socket_free_recv(peeked);
-    return;
+  if (peeked) {
+    turbo_lb_filter_verdict_t verdict = run_filter(lb, client, peeked, peeked_len);
+    if (verdict != TURBO_LB_ACCEPT) {
+      if (verdict == TURBO_LB_REJECT) {
+        wait_for_socket_write_drain(client, 100);
+      }
+      coro_socket_free_recv(peeked);
+      untrack_active_client(lb, active_client);
+      return;
+    }
   }
 
   lb_worker_conn_t *wc = pop_idle(lb, group);
@@ -280,6 +413,7 @@ static void on_client_session(coro_socket_t *client, void *arg) {
   }
   if (!wc) {
     coro_socket_free_recv(peeked);
+    untrack_active_client(lb, active_client);
     return;
   }
 
@@ -295,15 +429,19 @@ static void on_client_session(coro_socket_t *client, void *arg) {
   coro_t *worker_co = wc->co;
   free(wc);
 
-  /* Allow the worker coroutine to finish and be cleaned up by scheduler */
-  coro_set_waiting_for_io(worker_co, 0);
+  /* Let the bridge coroutine finish via the normal scheduler wake path. */
+  coro_resume_co(lb->ctx, worker_co);
+  untrack_active_client(lb, active_client);
 }
 
 /* ── REQUEST mode frontend handler ────────────────────────── */
 
 static void on_client_request(coro_socket_t *client, void *arg) {
   coro_lb_t *lb = (coro_lb_t *)arg;
+  lb_active_client_t *active_client;
   if (lb->stopped) return;
+
+  active_client = track_active_client(lb, client);
 
   frame_buf_t fb;
   frame_buf_init(&fb);
@@ -338,7 +476,7 @@ static void on_client_request(coro_socket_t *client, void *arg) {
     if (coro_socket_send(wc->client, frame, frame_len) < 0) {
       free(frame);
       /* Worker dead — resume its backend handler, try next worker */
-      coro_set_waiting_for_io(wc->co, 0);
+      coro_resume_co(lb->ctx, wc->co);
       free(wc);
       continue;
     }
@@ -365,6 +503,7 @@ static void on_client_request(coro_socket_t *client, void *arg) {
 
   lb->active_conns--;
   frame_buf_free(&fb);
+  untrack_active_client(lb, active_client);
 }
 
 /* ── Public API ───────────────────────────────────────────── */
@@ -402,14 +541,41 @@ int coro_lb_accept_workers(coro_lb_t *lb, const char *host, int port) {
 }
 
 void coro_lb_stop(coro_lb_t *lb) {
+  lb_active_client_t *active;
+  lb_active_worker_t *worker;
+
   if (!lb) return;
   lb->stopped = 1;
 
+  active = lb->active_clients;
+  while (active) {
+    lb_active_client_t *next = active->next;
+    if (active->client) {
+      if (coro_socket_interrupt_wait(active->client, TURBO_ECANCELED) != 0) {
+        coro_socket_destroy(active->client);
+      }
+    }
+    active = next;
+  }
+
+  worker = lb->active_workers;
+  while (worker) {
+    lb_active_worker_t *next = worker->next;
+    if (worker->co) {
+      coro_resume_co(lb->ctx, worker->co);
+    }
+    worker = next;
+  }
+
   if (lb->frontend) {
+    lb->frontend->handler = NULL;
+    lb->frontend->handler_arg = NULL;
     coro_socket_destroy(lb->frontend);
     lb->frontend = NULL;
   }
   if (lb->backend) {
+    lb->backend->handler = NULL;
+    lb->backend->handler_arg = NULL;
     coro_socket_destroy(lb->backend);
     lb->backend = NULL;
   }
@@ -438,7 +604,7 @@ void coro_lb_destroy(coro_lb_t *lb) {
   if (!lb) return;
   coro_lb_stop(lb);
   if (lb->ctx) {
-    for (int i = 0; i < 1024 && lb->active_conns > 0; i++) {
+    for (int i = 0; i < 1024 && (lb->active_conns > 0 || coro_context_alive(lb->ctx)); i++) {
       coro_context_run(lb->ctx, TURBO_RUN_NOWAIT);
     }
   }

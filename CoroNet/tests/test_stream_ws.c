@@ -58,6 +58,19 @@ static int ws_test_rx_contains(void *arg) {
   return needle && strstr(s_ws_rx_buf, needle) != NULL;
 }
 
+static void ws_test_run_until_idle(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_NOWAIT);
+  }
+}
+
 /**
  * @brief Record WSS connect completion.
  */
@@ -423,14 +436,17 @@ spec("Stream WebSocket Client") {
     check(strstr(s_ws_rx_buf, msg) != NULL);
 
     turbo_stream_close(s);
+    turbo_stream_destroy(s);
 
     ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
 
-    turbo_thread_join(&server.thread);
+    check_int_eq(turbo_thread_join(&server.thread), 0);
 
     check_int_eq(server.status, 0);
     check(server.handshake_ok == 1);
     check(server.saw_echo == 1);
+
+    ws_test_run_until_idle(ctx, 1000);
 
     coro_context_destroy(ctx);
     tls_test_clear_ca_env();
@@ -481,13 +497,17 @@ spec("Stream WebSocket Client") {
 
     ws_test_run_until(ctx, 3000, ws_test_closed_ready, NULL);
 
-    turbo_thread_join(&server.thread);
+    check_int_eq(turbo_thread_join(&server.thread), 0);
 
     check_int_eq(s_ws_closed, 1);
     check_int_eq(server.status, 0);
     check_int_eq(server.handshake_ok, 1);
     check_int_eq(server.saw_close, 1);
     check_int_eq(s_ws_rx_len, 0);
+
+    turbo_stream_destroy(s);
+
+    ws_test_run_until_idle(ctx, 1000);
 
     coro_context_destroy(ctx);
     tls_test_clear_ca_env();

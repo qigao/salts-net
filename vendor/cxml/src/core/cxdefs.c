@@ -8,27 +8,6 @@
 // transpose_text = 1 : & -> &amp;  transpose forward
 // transpose_text = 0 : &amp; -> &  transpose backward/reverse
 
-// predefined entities "untransposed" version
-const char *_cxml_pred_entities_ut[] = {"<", ">", "&", "\"", "'"};
-
-// predefined entities transposed version
-const char *_cxml_pred_entities_t[] = {"&lt;", "&gt;", "&amp;", "&quot;", "&apos;"};
-
-// constant names
-const char *_cxml_xml_name = "xml";
-const char *_cxml_xmlns_name = "xmlns";
-
-// length or each predefined entity (transposed form)
-int _cxml_pred_entities_t_lens[] = {4, 4, 5, 6, 6};
-
-// Reserved Prefixes and Namespace Names (URIs)
-const char *_cxml_reserved_prefixes[] = {"xml", "xmlns"};
-const char *_cxml_reserved_namespaces[] = {"http://www.w3.org/XML/1998/namespace", "http://www.w3.org/2000/xmlns/"};
-
-// Reserved Prefixes and Namespace Names (URIs) - Lengths
-const int _cxml_reserved_prefixes_len[] = {3, 5};
-const int _cxml_reserved_namespaces_len[] = {36, 29};
-
 static void _cxml_table_attr_free(cxml_table *table, bool _FREE);
 
 
@@ -318,26 +297,6 @@ void cxml_elem_node_free(cxml_elem_node *node) {
 void cxml_destroy(void *node){
     cxml_node_free(node);
 }
-
-void (*cxml_free_element_node)(cxml_elem_node *node) = cxml_elem_node_free;
-
-void (*cxml_free_text_node)(cxml_text_node *node) = cxml_text_node_free;
-
-void (*cxml_free_root_node)(cxml_root_node *node) = cxml_root_node_free;
-
-void (*cxml_free_comment_node)(cxml_comment_node *node) = cxml_comm_node_free;
-
-void (*cxml_free_attribute_node)(cxml_attribute_node *node) = cxml_attr_node_free;
-
-void (*cxml_free_namespace_node)(cxml_namespace_node *node) = cxml_ns_node_free;
-
-void (*cxml_free_pi_node)(cxml_pi_node *node) = cxml_pi_node_free;
-
-void (*cxml_free_xhdr_node)(cxml_xhdr_node *node) = cxml_xhdr_node_free;
-
-void (*cxml_free_dtd_node)(cxml_dtd_node *node) = cxml_dtd_node_free;
-
-void (*cxml_free_node)(void *node) = cxml_node_free;
 
 
 _cxml_node_t _cxml_get_node_type(void* node){

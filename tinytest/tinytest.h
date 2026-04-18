@@ -720,6 +720,15 @@ static inline void __bdd_bench_flush__(__bdd_config_type__ *config, size_t level
   }
 }
 
+static inline void __bdd_bench_cleanup__(__bdd_config_type__ *config) {
+  free(config->bench_entries);
+  config->bench_entries = NULL;
+  config->bench_count = 0;
+  config->bench_cap = 0;
+  config->bench_header_printed = 0;
+  config->bench_header_level = 0;
+}
+
 static inline __bdd_test_step__ *__bdd_test_step_create__(size_t level, __bdd_node__ *node) {
   __bdd_test_step__ *step = __BDD_CAST(__bdd_test_step__ *, malloc(sizeof(__bdd_test_step__)));
   if (!step) {
@@ -1634,6 +1643,8 @@ int main(int argc, char **argv) {
     __bdd_array_free__(all_step_arrays);
     __bdd_array_free__(all_specs);
     __bdd_array_free__(all_steps);
+    __bdd_bench_cleanup__(&config);
+    __bdd_cleanup_specs__();
     return 0;
   }
 
@@ -1740,6 +1751,7 @@ int main(int argc, char **argv) {
     __bdd_test_step_free__(__BDD_CAST(__bdd_test_step__ *, all_steps->values[i]));
   }
   __bdd_array_free__(all_steps);
+  __bdd_bench_cleanup__(&config);
   __bdd_cleanup_specs__();
 
   return config.failed_test_count > 0 ? 1 : 0;

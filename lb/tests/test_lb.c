@@ -24,12 +24,99 @@ static void run_until_flag(coro_context_t *ctx, int *flag) {
     }
 }
 
+static void run_until_coro_count_at_most(coro_context_t *ctx, int max_count, uint64_t timeout_ms) {
+    uint64_t deadline = turbo_monotonic_ms() + timeout_ms;
+    while (coro_context_coro_count(ctx) > max_count && turbo_monotonic_ms() < deadline) {
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+        turbo_sleep_ms(1);
+    }
+}
+
 static void drain_after_stop(coro_context_t *ctx) {
     uint64_t deadline = turbo_monotonic_ms() + 200;
     while (turbo_monotonic_ms() < deadline) {
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
         turbo_sleep_ms(1);
     }
+}
+
+static void drain_until_context_quiescent(coro_context_t *ctx, uint64_t timeout_ms, uint64_t stable_ms) {
+    uint64_t deadline;
+    uint64_t stable_since = 0;
+
+    if (!ctx) return;
+
+    deadline = turbo_monotonic_ms() + timeout_ms;
+    while (turbo_monotonic_ms() < deadline) {
+        int alive_before = coro_context_alive(ctx);
+
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+
+        if (!alive_before && !coro_context_alive(ctx)) {
+            if (stable_since == 0) {
+                stable_since = turbo_monotonic_ms();
+            } else if (turbo_monotonic_ms() - stable_since >= stable_ms) {
+                break;
+            }
+        } else {
+            stable_since = 0;
+        }
+
+        turbo_sleep_ms(1);
+    }
+}
+
+static void robust_context_destroy(coro_context_t *ctx) {
+    int max_drain = 500;
+
+    if (!ctx) return;
+
+    while (max_drain-- > 0) {
+        if (!coro_context_alive(ctx)) {
+            break;
+        }
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+    }
+
+    drain_until_context_quiescent(ctx, 3000, 100);
+
+    coro_context_destroy(ctx);
+}
+
+static coro_context_t *create_lb_test_context(void) {
+    return coro_context_create(NULL);
+}
+
+static void destroy_lb_and_context(coro_lb_t *lb, coro_context_t *ctx) {
+    uint64_t deadline;
+
+    if (!ctx) return;
+
+    if (lb) {
+        coro_lb_stop(lb);
+        deadline = turbo_monotonic_ms() + 3000;
+        while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
+            coro_context_run(ctx, TURBO_RUN_NOWAIT);
+            turbo_sleep_ms(1);
+        }
+        drain_until_context_quiescent(ctx, 3000, 100);
+        coro_lb_destroy(lb);
+        drain_until_context_quiescent(ctx, 3000, 100);
+    }
+
+    robust_context_destroy(ctx);
+}
+
+static void destroy_stopped_lb_and_context(coro_lb_t *lb, coro_context_t *ctx) {
+    if (!ctx) return;
+
+    if (lb) {
+        drain_until_context_quiescent(ctx, 3000, 100);
+        coro_lb_destroy(lb);
+        drain_until_context_quiescent(ctx, 3000, 100);
+    }
+
+    robust_context_destroy(ctx);
 }
 
 /* ── L4 Helpers ───────────────────────────────────────────── */
@@ -107,9 +194,6 @@ static void test_client_coro(coro_t *co, void *arg) {
 
     coro_socket_destroy(c);
 
-    /* Stop the loop after test completes */
-    coro_sleep(cctx->ctx, 100);
-    coro_context_stop(cctx->ctx);
 }
 
 /* ── L7 Helpers ───────────────────────────────────────────── */
@@ -205,10 +289,7 @@ static void l7_test_client_coro(coro_t *co, void *arg) {
 
     coro_socket_destroy(c);
 
-    if (cctx->stop_after) {
-        coro_sleep(cctx->ctx, 100);
-        coro_context_stop(cctx->ctx);
-    }
+    (void)cctx->stop_after;
 }
 
 /* ── Tests ────────────────────────────────────────────────── */
@@ -325,10 +406,7 @@ static void tlv_test_client_coro(coro_t *co, void *arg) {
 
     coro_socket_destroy(c);
 
-    if (cctx->stop_after) {
-        coro_sleep(cctx->ctx, 100);
-        coro_context_stop(cctx->ctx);
-    }
+    (void)cctx->stop_after;
 }
 
 /* Filter: reject type 0xFF, drop type 0xFE, accept everything else */
@@ -367,28 +445,26 @@ static turbo_lb_filter_result_t session_filter_cb(const char *data, size_t len,
 spec("coro_lb") {
     describe("lifecycle") {
         it("creates and destroys LB") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = coro_LB_CONFIG_DEFAULT;
 
             coro_lb_t *lb = coro_lb_create(ctx, &config);
             check(lb != NULL);
 
-            coro_lb_destroy(lb);
-            coro_context_destroy(ctx);
+            destroy_lb_and_context(lb, ctx);
         }
 
         it("creates with NULL config uses defaults") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
 
             coro_lb_t *lb = coro_lb_create(ctx, NULL);
             check(lb != NULL);
 
-            coro_lb_destroy(lb);
-            coro_context_destroy(ctx);
+            destroy_lb_and_context(lb, ctx);
         }
 
         it("listens on frontend and backend") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = coro_LB_CONFIG_DEFAULT;
             coro_lb_t *lb = coro_lb_create(ctx, &config);
 
@@ -398,14 +474,13 @@ spec("coro_lb") {
             int r2 = coro_lb_accept_workers(lb, "127.0.0.1", 19090);
             check(r2 == 0);
 
-            coro_lb_destroy(lb);
-            coro_context_destroy(ctx);
+            destroy_lb_and_context(lb, ctx);
         }
     }
 
     describe("L4 echo") {
         it("forwards data between client and worker") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = coro_LB_CONFIG_DEFAULT;
             coro_lb_t *lb = coro_lb_create(ctx, &config);
 
@@ -435,16 +510,17 @@ spec("coro_lb") {
 
             check(cctx.success == 1);
             check(strcmp(cctx.recv_buf, "hello LB") == 0);
-
-            coro_lb_destroy(lb);
+            run_until_flag(ctx, &wctx.sessions_served);
+            run_until_coro_count_at_most(ctx, 2, 3000);
             drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+
+            destroy_lb_and_context(lb, ctx);
         }
     }
 
     describe("L7 routing") {
         it("routes API: prefix to api worker") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .route_cb = test_route_cb,
@@ -492,14 +568,14 @@ spec("coro_lb") {
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[API]", 5) == 0);
-
-            coro_lb_destroy(lb);
-            drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+            run_until_flag(ctx, &api_wctx.sessions_served);
+            coro_lb_stop(lb);
+            run_until_flag(ctx, &web_wctx.sessions_served);
+            destroy_stopped_lb_and_context(lb, ctx);
         }
 
         it("routes WEB: prefix to web worker") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .route_cb = test_route_cb,
@@ -547,14 +623,14 @@ spec("coro_lb") {
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[WEB]", 5) == 0);
-
-            coro_lb_destroy(lb);
-            drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+            run_until_flag(ctx, &web_wctx.sessions_served);
+            coro_lb_stop(lb);
+            run_until_flag(ctx, &api_wctx.sessions_served);
+            destroy_stopped_lb_and_context(lb, ctx);
         }
 
         it("unknown prefix falls back to any worker") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .route_cb = test_route_cb,
@@ -591,16 +667,17 @@ spec("coro_lb") {
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[WEB]", 5) == 0);
-
-            coro_lb_destroy(lb);
+            run_until_flag(ctx, &web_wctx.sessions_served);
+            run_until_coro_count_at_most(ctx, 2, 3000);
             drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+
+            destroy_lb_and_context(lb, ctx);
         }
     }
 
     describe("REQUEST mode TLV") {
         it("dispatches TLV message and gets response") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .mode = TURBO_LB_MODE_REQUEST,
@@ -634,16 +711,17 @@ spec("coro_lb") {
             check(cctx.success == 1);
             check(cctx.recv_type == 0x81);  /* 0x01 | 0x80 */
             check(strcmp(cctx.recv_payload, "hello") == 0);
-
-            coro_lb_destroy(lb);
+            run_until_flag(ctx, &wctx.messages_handled);
+            run_until_coro_count_at_most(ctx, 3, 3000);
             drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+
+            destroy_lb_and_context(lb, ctx);
         }
     }
 
     describe("filter") {
         it("REQUEST mode: rejects forbidden TLV type with error response") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .mode = TURBO_LB_MODE_REQUEST,
@@ -683,13 +761,11 @@ spec("coro_lb") {
             /* Worker should NOT have handled anything */
             check(wctx.messages_handled == 0);
 
-            coro_lb_destroy(lb);
-            drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+            destroy_lb_and_context(lb, ctx);
         }
 
         it("SESSION mode: rejects blocked connection") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .mode = TURBO_LB_MODE_SESSION,
@@ -728,13 +804,11 @@ spec("coro_lb") {
             check(cctx.success == 1);
             check(strcmp(cctx.recv_buf, "BLOCKED") == 0);
 
-            coro_lb_destroy(lb);
-            drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+            destroy_lb_and_context(lb, ctx);
         }
 
         it("SESSION mode: accepts normal connection through filter") {
-            coro_context_t *ctx = coro_context_create(NULL);
+            coro_context_t *ctx = create_lb_test_context();
             coro_lb_config_t config = {
                 .balance = TURBO_LB_ROUND_ROBIN,
                 .mode = TURBO_LB_MODE_SESSION,
@@ -771,10 +845,11 @@ spec("coro_lb") {
 
             check(cctx.success == 1);
             check(memcmp(cctx.recv_buf, "[API]", 5) == 0);
-
-            coro_lb_destroy(lb);
+            run_until_flag(ctx, &api_wctx.sessions_served);
+            run_until_coro_count_at_most(ctx, 2, 3000);
             drain_after_stop(ctx);
-            coro_context_destroy(ctx);
+
+            destroy_lb_and_context(lb, ctx);
         }
     }
 }

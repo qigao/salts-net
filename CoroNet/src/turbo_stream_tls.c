@@ -1346,6 +1346,8 @@ static void tls_on_tcp_close(void *handle) {
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   tls_state_t    *st  = (tls_state_t *)tcp->user_data;
   turbo_stream_t *outer;
+  tcp->managed = 0;
+  tcp->destroyed = 1;
   if (!st) return;
 
   outer = st->outer;

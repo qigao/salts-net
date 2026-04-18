@@ -9,6 +9,11 @@
 #include <stdlib.h>
 #include <time.h>
 
+typedef struct {
+  mime_mhtml_resource_t base;
+  int owns_data;
+} mime_mhtml_resource_node_t;
+
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
 int mime_is_mhtml(const char *content_type, size_t len) {
@@ -202,16 +207,41 @@ mime_mhtml_document_t *mime_mhtml_document_create(mem_pool_t *pool) {
 }
 
 void mime_mhtml_document_free(mime_mhtml_document_t *doc) {
-  // Note: In pool-based allocation, this is a no-op
-  (void)doc;
+  if (!doc) return;
+
+  free(doc->html_content);
+  free(doc->html_content_type);
+
+  mime_mhtml_resource_t *res = doc->resources;
+  while (res) {
+    mime_mhtml_resource_t *next = res->next;
+    free(res->content_type);
+    free(res->content_location);
+    free(res->content_id);
+    free(res->content_encoding);
+    if (((mime_mhtml_resource_node_t *)res)->owns_data) {
+      free((void *)res->data);
+    }
+    free(res);
+    res = next;
+  }
+
+  doc->html_content = NULL;
+  doc->html_content_type = NULL;
+  doc->resources = NULL;
+  doc->resource_count = 0;
 }
 
 int mime_mhtml_set_html(mime_mhtml_document_t *doc, const char *html, size_t len,
                         const char *charset) {
   if (!doc || !html) return -1;
 
-  // Note: In pool-based system, we'd need the pool here
-  // For now, assume doc was created with pool and we can allocate
+  free(doc->html_content);
+  free(doc->html_content_type);
+  doc->html_content = NULL;
+  doc->html_content_type = NULL;
+  doc->html_len = 0;
+
   doc->html_content = (char *)malloc(len + 1);
   if (!doc->html_content) return -1;
 
@@ -229,8 +259,26 @@ int mime_mhtml_set_html(mime_mhtml_document_t *doc, const char *html, size_t len
   } else {
     doc->html_content_type = strdup("text/html; charset=utf-8");
   }
+  if (!doc->html_content_type) {
+    free(doc->html_content);
+    doc->html_content = NULL;
+    doc->html_len = 0;
+    return -1;
+  }
 
   return 0;
+}
+
+static void mime_mhtml_resource_free(mime_mhtml_resource_t *res) {
+  if (!res) return;
+  free(res->content_type);
+  free(res->content_location);
+  free(res->content_id);
+  free(res->content_encoding);
+  if (((mime_mhtml_resource_node_t *)res)->owns_data) {
+    free((void *)res->data);
+  }
+  free(res);
 }
 
 int mime_mhtml_add_resource(mime_mhtml_document_t *doc, const char *content_type,
@@ -238,21 +286,30 @@ int mime_mhtml_add_resource(mime_mhtml_document_t *doc, const char *content_type
                             const char *data, size_t data_len, int copy_data) {
   if (!doc || !data) return -1;
 
-  mime_mhtml_resource_t *res = (mime_mhtml_resource_t *)calloc(1, sizeof(mime_mhtml_resource_t));
-  if (!res) return -1;
+  mime_mhtml_resource_node_t *node =
+      (mime_mhtml_resource_node_t *)calloc(1, sizeof(mime_mhtml_resource_node_t));
+  if (!node) return -1;
+  mime_mhtml_resource_t *res = &node->base;
 
   if (content_type) res->content_type = strdup(content_type);
   if (content_location) res->content_location = strdup(content_location);
   if (content_id) res->content_id = strdup(content_id);
+  if ((content_type && !res->content_type) ||
+      (content_location && !res->content_location) ||
+      (content_id && !res->content_id)) {
+    mime_mhtml_resource_free(res);
+    return -1;
+  }
 
   if (copy_data) {
     char *data_copy = (char *)malloc(data_len);
     if (!data_copy) {
-      free(res);
+      mime_mhtml_resource_free(res);
       return -1;
     }
     memcpy(data_copy, data, data_len);
     res->data = data_copy;
+    node->owns_data = 1;
   } else {
     res->data = data;
   }

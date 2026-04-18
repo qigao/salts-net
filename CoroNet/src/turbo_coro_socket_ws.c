@@ -176,9 +176,16 @@ static void on_ws_connect(void *handle, int status, void *extra) {
 static void on_ws_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  stream->managed = 0;
+  stream->destroyed = 1;
   if (s) {
+    int release_accepted_ref = s->accepted_ref;
+    s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
+    if (release_accepted_ref) {
+      release_client(s);
+    }
   }
 }
 
@@ -250,9 +257,18 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
   coro_yield();
   {
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
       release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
+      release_client(s);
+    }
+    if (status != 0) {
+      s->connected = 0;
+      ws_discard_stream(s);
     }
     return status;
   }
@@ -297,6 +313,7 @@ static void ws_close(coro_socket_t *s) {
     return;
   }
   s->handle.stream = NULL;
+  s->close_pending = 1;
   retain_client(s);
   stream->on_close = on_ws_close;
   turbo_stream_close(stream);
@@ -421,8 +438,13 @@ int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host,
   coro_yield();
   {
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
       release_client(s);
     }
     return status;
@@ -477,8 +499,13 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
   coro_yield();
   {
     int status = s->status;
+    int timed_out = s->timed_out;
     if (s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    if (timed_out) {
+      s->timed_out = 0;
       release_client(s);
     }
     return status;

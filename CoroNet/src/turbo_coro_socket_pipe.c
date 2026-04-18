@@ -33,9 +33,16 @@ static void on_pipe_connect(void *handle, int status, void *extra) {
 static void on_pipe_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  stream->managed = 0;
+  stream->destroyed = 1;
   if (s) {
+    int release_accepted_ref = s->accepted_ref;
+    s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
+    if (release_accepted_ref) {
+      release_client(s);
+    }
   }
 }
 
@@ -124,7 +131,10 @@ static void on_pipe_accept(void *listener_handle, void *stream_handle, void *pee
   UNUSED(peer);
   turbo_stream_listener_t *l = (turbo_stream_listener_t *)listener_handle;
   pipe_listener_state_t *ls = (pipe_listener_state_t *)turbo_stream_listener_get_user_data(l);
-  if (!ls) return;
+  if (!ls) {
+    turbo_stream_destroy((turbo_stream_t *)stream_handle);
+    return;
+  }
 
   pipe_accept_node_t *node = malloc(sizeof(pipe_accept_node_t));
   if (!node) {
@@ -220,6 +230,7 @@ static int pipe_accept(coro_socket_t *s, coro_socket_t **accepted) {
   stream->on_connect = on_pipe_connect;
   stream->on_close   = on_pipe_close;
   child->connected = 1;
+  child->accepted_ref = 1;
   retain_client(child);
 
   *accepted = child;
@@ -247,7 +258,10 @@ static void pipe_close(coro_socket_t *s) {
   /* Listener close */
   if (s->native_tcp_state) {
     pipe_listener_state_t *ls = (pipe_listener_state_t *)s->native_tcp_state;
-    if (ls->listener) turbo_stream_listener_close(ls->listener);
+    if (ls->listener) {
+      turbo_stream_listener_set_user_data(ls->listener, NULL);
+      turbo_stream_listener_close(ls->listener);
+    }
     if (s->co_wait) {
       s->accept_pending = 0;
       s->status = (s->status == 0) ? TURBO_ECANCELED : s->status;
@@ -268,6 +282,7 @@ static void pipe_close(coro_socket_t *s) {
   turbo_stream_t *stream = s->handle.stream;
   if (!stream || !s->owns_handle) return;
   s->handle.stream = NULL;
+  s->close_pending = 1;
   retain_client(s);
   stream->on_close = on_pipe_close;
   turbo_stream_close(stream);

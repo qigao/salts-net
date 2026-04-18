@@ -36,6 +36,7 @@ typedef enum dg_uring_op_kind_e {
 
 typedef struct dg_uring_op_s {
   dg_uring_op_kind_t kind;
+  struct dg_uring_op_s *next_inflight;
   turbo_datagram_t *dg;
   mem_buffer_t *buffer;
   int owns_buffer;
@@ -61,6 +62,7 @@ typedef struct dg_uring_state_s {
   int recv_inflight;
   volatile int stopping;
   volatile long inflight_count;
+  dg_uring_op_t *inflight_head;
   turbo_mutex_t cmd_lock;
   ring_spsc_t cmd_queue;
   uint8_t *cmd_queue_data;
@@ -70,6 +72,64 @@ static void dg_uring_worker(void *arg);
 static void dg_uring_cleanup_task(void *arg1, void *arg2);
 static void dg_uring_handle_completion(void *arg1, void *arg2);
 static int dg_uring_submit_recv(turbo_datagram_t *d);
+
+static void dg_uring_track_inflight(dg_uring_state_t *st, dg_uring_op_t *op) {
+  if (!st || !op) {
+    return;
+  }
+
+  op->next_inflight = st->inflight_head;
+  st->inflight_head = op;
+  __atomic_add_fetch(&st->inflight_count, 1, __ATOMIC_RELAXED);
+}
+
+static void dg_uring_untrack_inflight(dg_uring_state_t *st, dg_uring_op_t *op) {
+  dg_uring_op_t *prev;
+  dg_uring_op_t *cur;
+
+  if (!st || !op) {
+    return;
+  }
+
+  prev = NULL;
+  cur = st->inflight_head;
+  while (cur) {
+    if (cur == op) {
+      if (prev) {
+        prev->next_inflight = cur->next_inflight;
+      } else {
+        st->inflight_head = cur->next_inflight;
+      }
+      cur->next_inflight = NULL;
+      __atomic_sub_fetch(&st->inflight_count, 1, __ATOMIC_RELAXED);
+      return;
+    }
+    prev = cur;
+    cur = cur->next_inflight;
+  }
+}
+
+static void dg_uring_free_inflight(dg_uring_state_t *st) {
+  dg_uring_op_t *op;
+  dg_uring_op_t *next;
+
+  if (!st) {
+    return;
+  }
+
+  op = st->inflight_head;
+  while (op) {
+    next = op->next_inflight;
+    if (op->buffer && op->owns_buffer) {
+      mem_unref(op->buffer);
+    }
+    free(op);
+    op = next;
+  }
+
+  st->inflight_head = NULL;
+  __atomic_store_n(&st->inflight_count, 0, __ATOMIC_RELAXED);
+}
 
 static int dg_uring_post_wait(dg_uring_state_t *st,
                               coro_post_fn fn,
@@ -205,6 +265,7 @@ static int dg_submit_wake(dg_uring_state_t *st) {
   op->kind = DG_URING_OP_WAKE;
   io_uring_prep_read(sqe, st->wake_fd, &op->wake_value, sizeof(op->wake_value), 0);
   io_uring_sqe_set_data(sqe, op);
+  dg_uring_track_inflight(st, op);
   return 0;
 }
 
@@ -222,7 +283,7 @@ static int dg_submit_command(dg_uring_state_t *st, dg_uring_op_t *op) {
       io_uring_prep_send(sqe, st->fd, op->buffer->data, op->length, 0);
     }
     io_uring_sqe_set_data(sqe, op);
-    __atomic_add_fetch(&st->inflight_count, 1, __ATOMIC_RELAXED);
+    dg_uring_track_inflight(st, op);
     return 0;
 
   case DG_URING_OP_RECV:
@@ -238,7 +299,7 @@ static int dg_submit_command(dg_uring_state_t *st, dg_uring_op_t *op) {
     op->msg.msg_iovlen = 1;
     io_uring_prep_recvmsg(sqe, st->fd, &op->msg, 0);
     io_uring_sqe_set_data(sqe, op);
-    __atomic_add_fetch(&st->inflight_count, 1, __ATOMIC_RELAXED);
+    dg_uring_track_inflight(st, op);
     return 0;
 
   case DG_URING_OP_CLOSE:
@@ -292,8 +353,7 @@ static void dg_uring_worker(void *arg) {
     dg_drain_commands(st);
     io_uring_submit(&st->ring);
 
-    if (st->stopping &&
-        __atomic_load_n(&st->inflight_count, __ATOMIC_RELAXED) == 0) {
+    if (st->stopping) {
       break;
     }
 
@@ -313,6 +373,7 @@ static void dg_uring_worker(void *arg) {
 
     op->result = cqe->res;
     io_uring_cqe_seen(&st->ring, cqe);
+    dg_uring_untrack_inflight(st, op);
 
     if (op->kind == DG_URING_OP_WAKE) {
       free(op);
@@ -324,7 +385,6 @@ static void dg_uring_worker(void *arg) {
       continue;
     }
 
-    __atomic_sub_fetch(&st->inflight_count, 1, __ATOMIC_RELAXED);
     (void)dg_uring_post_wait(st, dg_uring_handle_completion, op, NULL);
   }
 
@@ -435,6 +495,9 @@ fail:
   if (st->ring_ready) io_uring_queue_exit(&st->ring);
   if (st->cmd_queue_data) free(st->cmd_queue_data);
   turbo_mutex_destroy(&st->cmd_lock);
+  if (d->backend_data == st) {
+    d->backend_data = NULL;
+  }
   free(st);
   return rc;
 }
@@ -580,6 +643,15 @@ static void dg_iouring_close(turbo_datagram_t *d) {
   op->dg = d;
   if (dg_queue_push(st, op) != 0) {
     free(op);
+    st->stopping = 1;
+    if (st->fd >= 0) {
+      close(st->fd);
+      st->fd = -1;
+    }
+    if (st->wake_fd >= 0) {
+      close(st->wake_fd);
+      st->wake_fd = -1;
+    }
     (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, d);
   }
 }
@@ -785,6 +857,7 @@ static void dg_uring_cleanup_task(void *arg1, void *arg2) {
   if (st->wake_fd >= 0) close(st->wake_fd);
   if (st->fd >= 0) close(st->fd);
   if (st->ring_ready) io_uring_queue_exit(&st->ring);
+  dg_uring_free_inflight(st);
   if (st->cmd_queue_data) free(st->cmd_queue_data);
   turbo_mutex_destroy(&st->cmd_lock);
   coro_context_release_external(st->ctx);

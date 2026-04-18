@@ -148,6 +148,11 @@ void asn1_free(asn1_value_t *value) {
     switch (value->type) {
         case ASN1_TYPE_OCTET_STRING:
         case ASN1_TYPE_BIT_STRING:
+        case ASN1_TYPE_UTF8_STRING:
+        case ASN1_TYPE_PRINTABLE_STRING:
+        case ASN1_TYPE_IA5_STRING:
+        case ASN1_TYPE_UTC_TIME:
+        case ASN1_TYPE_GENERALIZED_TIME:
             free(value->value.octet_string.data);
             break;
             

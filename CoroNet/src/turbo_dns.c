@@ -804,7 +804,6 @@ int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer,
  */
 typedef struct {
   turbo_dns_parent_query_t *parent;
-  turbo_thread_t         thread;
   volatile int           running;
 } async_driver_t;
 
@@ -824,6 +823,15 @@ static void async_driver_thread(void *arg) {
 
   if (drv->running && deadline <= 0 && parent && ares && ares->initialized) {
     parent->timed_out = 1;
+    parent->cancelled = 1;
+    ares_cancel(ares->channel);
+  }
+
+  /* c-ares can occasionally go idle with one family query still pending.
+     Force-cancel any leftovers so every child query drops its parent ref. */
+  if (drv->running && parent != NULL && ares != NULL && ares->initialized &&
+      !parent->cancelled &&
+      atomic_load_explicit(&parent->ref_count, memory_order_acquire) > 1) {
     parent->cancelled = 1;
     ares_cancel(ares->channel);
   }
@@ -886,6 +894,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
 
   /* Start background driver thread */
   async_driver_t *drv = malloc(sizeof(*drv));
+  turbo_thread_t driver_thread = NULL;
   if (!drv) {
     if (out_query) {
       *out_query = NULL; 
@@ -899,7 +908,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
   drv->running = 1;
   atomic_fetch_add(&parent->ref_count, 1); /* driver thread owns parent/ares lifetime */
 
-  if (turbo_thread_create(&drv->thread, async_driver_thread, drv) != 0) {
+  if (turbo_thread_create(&driver_thread, async_driver_thread, drv) != 0) {
     release_parent_ref(parent);
     free(drv);
     if (out_query) { *out_query = NULL; }
@@ -908,7 +917,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
     free(parent);
     return TURBO_EAI_FAIL;
   }
-  turbo_thread_destroy(&drv->thread); /* detach so it cleans itself up */
+  turbo_thread_destroy(&driver_thread); /* detach so it cleans itself up */
 
   release_parent_ref(parent); /* release initial ref */
   TLOG_DEBUG("Started async DNS lookup for {}", hostname);
@@ -977,6 +986,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
   }
 
   async_driver_t *drv = malloc(sizeof(*drv));
+  turbo_thread_t driver_thread = NULL;
   if (!drv) {
     if (out_query) {
       *out_query = NULL;
@@ -990,7 +1000,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
   drv->running = 1;
   atomic_fetch_add(&parent->ref_count, 1); /* driver thread owns parent/ares lifetime */
 
-  if (turbo_thread_create(&drv->thread, async_driver_thread, drv) != 0) {
+  if (turbo_thread_create(&driver_thread, async_driver_thread, drv) != 0) {
     release_parent_ref(parent);
     free(drv);
     if (out_query) {
@@ -1001,7 +1011,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
     free(parent);
     return TURBO_EAI_FAIL;
   }
-  turbo_thread_destroy(&drv->thread);
+  turbo_thread_destroy(&driver_thread);
 
   release_parent_ref(parent); /* release initial ref */
   TLOG_DEBUG("Started async DNS multi-result lookup for {}", hostname);

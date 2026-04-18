@@ -40,9 +40,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef SDS_ALLOC_POOL
-#define SDS_ALLOC_POOL 1
-#endif
+#undef SDS_ALLOC_POOL
+#define SDS_ALLOC_POOL 0
 
 #ifndef SDS_POOL_MAX
 #define SDS_POOL_MAX (64 * 1024)

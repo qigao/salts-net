@@ -6,6 +6,7 @@
 #include "memory_pool.h"
 #include "sds.h"
 #include "tlog.h"
+#include "turbo_thread.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -662,50 +663,250 @@ int turbo_timer_stop(turbo_timer_t *timer) {
 }
 
 #else
-// POSIX implementation using timer_create with SIGEV_THREAD
+// POSIX implementation using a process-local timer manager thread.
+//
+// Rationale:
+// timer_delete(2) specifies that treatment of any pending notification is
+// unspecified. The old SIGEV_THREAD backend could therefore free the timer
+// object while glibc still had a callback thread pending, which produced
+// intermittent use-after-free reports during socket shutdown under ASan/LSan.
+//
+// The manager below owns all armed POSIX timers, tracks due times with
+// CLOCK_MONOTONIC, and spawns a detached worker thread for each firing. This
+// preserves the "callback runs off-thread" contract without relying on the
+// unspecified lifetime semantics of timer_delete().
 
-  #include <signal.h>
   #include <time.h>
 
 struct turbo_native_timer_s {
-  timer_t timerid;
   turbo_timer_cb callback;
   void *data;
   uint64_t timeout;
   uint64_t repeat;
+  uint64_t due_ms;
   int active;
+  int destroying;
+  int queued;
+  int callbacks_inflight;
+  turbo_mutex_t lock;
+  turbo_cond_t cond;
+  struct turbo_native_timer_s *next;
 };
 
-// POSIX timer callback wrapper
-static void native_timer_callback_posix(union sigval sv) {
-  turbo_timer_t *timer = (turbo_timer_t *)sv.sival_ptr;
-  if (timer && timer->callback) {
-    timer->callback(timer);
+typedef struct {
+  turbo_mutex_t lock;
+  turbo_cond_t cond;
+  turbo_timer_t *head;
+  int initialized;
+  int init_failed;
+} turbo_posix_timer_manager_t;
+
+typedef struct {
+  turbo_timer_t *timer;
+  turbo_timer_cb callback;
+} turbo_posix_timer_task_t;
+
+static turbo_posix_timer_manager_t g_turbo_posix_timer_manager;
+static turbo_once_t g_turbo_posix_timer_manager_once = TURBO_ONCE_INIT;
+
+static void turbo_posix_timer_queue_remove_locked(turbo_timer_t *timer) {
+  turbo_timer_t **cursor;
+
+  if (timer == NULL || !timer->queued) {
+    return;
   }
+
+  cursor = &g_turbo_posix_timer_manager.head;
+  while (*cursor != NULL) {
+    if (*cursor == timer) {
+      *cursor = timer->next;
+      timer->next = NULL;
+      timer->queued = 0;
+      return;
+    }
+    cursor = &(*cursor)->next;
+  }
+}
+
+static void turbo_posix_timer_queue_insert_locked(turbo_timer_t *timer) {
+  turbo_timer_t **cursor;
+
+  if (timer == NULL) {
+    return;
+  }
+
+  turbo_posix_timer_queue_remove_locked(timer);
+  cursor = &g_turbo_posix_timer_manager.head;
+  while (*cursor != NULL && (*cursor)->due_ms <= timer->due_ms) {
+    cursor = &(*cursor)->next;
+  }
+  timer->next = *cursor;
+  *cursor = timer;
+  timer->queued = 1;
+}
+
+static void turbo_posix_timer_finish_callback(turbo_timer_t *timer) {
+  if (timer == NULL) {
+    return;
+  }
+
+  turbo_mutex_lock(&timer->lock);
+  timer->callbacks_inflight--;
+  if (timer->destroying && timer->callbacks_inflight == 0) {
+    turbo_cond_signal(&timer->cond);
+  }
+  turbo_mutex_unlock(&timer->lock);
+}
+
+static void turbo_posix_timer_callback_thread(void *arg) {
+  turbo_posix_timer_task_t *task = (turbo_posix_timer_task_t *)arg;
+  turbo_timer_t *timer;
+  turbo_timer_cb callback;
+
+  if (task == NULL) {
+    return;
+  }
+
+  timer = task->timer;
+  callback = task->callback;
+  free(task);
+
+  if (callback != NULL) {
+    callback(timer);
+  }
+  turbo_posix_timer_finish_callback(timer);
+}
+
+static void turbo_posix_timer_dispatch(turbo_timer_t *timer, turbo_timer_cb callback) {
+  turbo_posix_timer_task_t *task;
+  turbo_thread_t worker = NULL;
+
+  if (timer == NULL || callback == NULL) {
+    turbo_posix_timer_finish_callback(timer);
+    return;
+  }
+
+  task = (turbo_posix_timer_task_t *)malloc(sizeof(*task));
+  if (task == NULL) {
+    callback(timer);
+    turbo_posix_timer_finish_callback(timer);
+    return;
+  }
+
+  task->timer = timer;
+  task->callback = callback;
+  if (turbo_thread_create(&worker, turbo_posix_timer_callback_thread, task) != 0) {
+    free(task);
+    callback(timer);
+    turbo_posix_timer_finish_callback(timer);
+    return;
+  }
+  turbo_thread_destroy(&worker);
+}
+
+static void turbo_posix_timer_manager_thread(void *arg) {
+  UNUSED(arg);
+
+  for (;;) {
+    turbo_timer_t *timer = NULL;
+    turbo_timer_cb callback = NULL;
+    uint64_t now_ms;
+
+    turbo_mutex_lock(&g_turbo_posix_timer_manager.lock);
+    for (;;) {
+      uint64_t wait_ms;
+
+      timer = g_turbo_posix_timer_manager.head;
+      if (timer == NULL) {
+        turbo_cond_wait(&g_turbo_posix_timer_manager.cond, &g_turbo_posix_timer_manager.lock);
+        continue;
+      }
+
+      now_ms = turbo_monotonic_ms();
+      if (timer->due_ms <= now_ms) {
+        break;
+      }
+
+      wait_ms = timer->due_ms - now_ms;
+      if (turbo_cond_timedwait(&g_turbo_posix_timer_manager.cond,
+                               &g_turbo_posix_timer_manager.lock,
+                               wait_ms * 1000000ULL) != 0) {
+        continue;
+      }
+    }
+
+    timer = g_turbo_posix_timer_manager.head;
+    g_turbo_posix_timer_manager.head = timer->next;
+    timer->next = NULL;
+    timer->queued = 0;
+
+    turbo_mutex_lock(&timer->lock);
+    if (!timer->destroying && timer->active && timer->callback != NULL) {
+      callback = timer->callback;
+      timer->callbacks_inflight++;
+      if (timer->repeat > 0U) {
+        uint64_t next_due_ms = timer->due_ms + timer->repeat;
+
+        if (next_due_ms <= now_ms) {
+          uint64_t skipped = ((now_ms - timer->due_ms) / timer->repeat) + 1U;
+          next_due_ms = timer->due_ms + skipped * timer->repeat;
+        }
+        timer->due_ms = next_due_ms;
+        turbo_posix_timer_queue_insert_locked(timer);
+        turbo_cond_signal(&g_turbo_posix_timer_manager.cond);
+      } else {
+        timer->active = 0;
+        timer->due_ms = 0U;
+      }
+    }
+    turbo_mutex_unlock(&timer->lock);
+    turbo_mutex_unlock(&g_turbo_posix_timer_manager.lock);
+
+    if (callback != NULL) {
+      turbo_posix_timer_dispatch(timer, callback);
+    }
+  }
+}
+
+static void turbo_posix_timer_manager_init_once(void) {
+  turbo_thread_t worker = NULL;
+
+  memset(&g_turbo_posix_timer_manager, 0, sizeof(g_turbo_posix_timer_manager));
+  turbo_mutex_init(&g_turbo_posix_timer_manager.lock);
+  turbo_cond_init(&g_turbo_posix_timer_manager.cond);
+  if (turbo_thread_create(&worker, turbo_posix_timer_manager_thread, NULL) != 0) {
+    g_turbo_posix_timer_manager.init_failed = 1;
+    turbo_cond_destroy(&g_turbo_posix_timer_manager.cond);
+    turbo_mutex_destroy(&g_turbo_posix_timer_manager.lock);
+    return;
+  }
+
+  turbo_thread_destroy(&worker);
+  g_turbo_posix_timer_manager.initialized = 1;
+}
+
+static int turbo_posix_timer_manager_ensure_started(void) {
+  turbo_once(&g_turbo_posix_timer_manager_once, turbo_posix_timer_manager_init_once);
+  return g_turbo_posix_timer_manager.initialized && !g_turbo_posix_timer_manager.init_failed
+             ? 0
+             : -1;
 }
 
 turbo_timer_t *turbo_timer_create(void *loop) {
   UNUSED(loop);
   turbo_timer_t *timer = malloc(sizeof(turbo_timer_t));
+
+  if (turbo_posix_timer_manager_ensure_started() != 0) {
+    return NULL;
+  }
+
   if (!timer) {
     return NULL;
   }
 
   memset(timer, 0, sizeof(*timer));
-
-  // Create POSIX timer with SIGEV_THREAD (callback in new thread)
-  struct sigevent sev;
-  memset(&sev, 0, sizeof(sev));
-  sev.sigev_notify = SIGEV_THREAD;
-  sev.sigev_notify_function = native_timer_callback_posix;
-  sev.sigev_value.sival_ptr = timer;
-
-  if (timer_create(CLOCK_MONOTONIC, &sev, &timer->timerid) == -1) {
-    TLOG_ERROR("timer_create failed: {}", strerror(errno));
-    free(timer);
-    return NULL;
-  }
-
+  turbo_mutex_init(&timer->lock);
+  turbo_cond_init(&timer->cond);
   return timer;
 }
 
@@ -714,51 +915,66 @@ void turbo_timer_destroy(turbo_timer_t *timer) {
     return;
   }
 
-  turbo_timer_stop(timer);
-  timer_delete(timer->timerid);
+  turbo_mutex_lock(&g_turbo_posix_timer_manager.lock);
+  turbo_mutex_lock(&timer->lock);
+  timer->destroying = 1;
+  timer->callback = NULL;
+  timer->active = 0;
+  timer->due_ms = 0U;
+  turbo_posix_timer_queue_remove_locked(timer);
+  turbo_cond_signal(&g_turbo_posix_timer_manager.cond);
+  turbo_mutex_unlock(&g_turbo_posix_timer_manager.lock);
+  while (timer->callbacks_inflight > 0) {
+    turbo_cond_wait(&timer->cond, &timer->lock);
+  }
+  turbo_mutex_unlock(&timer->lock);
+
+  turbo_cond_destroy(&timer->cond);
+  turbo_mutex_destroy(&timer->lock);
   free(timer);
 }
 
 int turbo_timer_start(turbo_timer_t *timer, turbo_timer_cb cb, uint64_t timeout, uint64_t repeat) {
+  uint64_t due_ms;
+
   if (!timer || !cb) {
     return -1;
   }
 
+  due_ms = turbo_monotonic_ms() + timeout;
+  turbo_mutex_lock(&g_turbo_posix_timer_manager.lock);
+  turbo_mutex_lock(&timer->lock);
+  if (timer->destroying) {
+    turbo_mutex_unlock(&timer->lock);
+    turbo_mutex_unlock(&g_turbo_posix_timer_manager.lock);
+    return -1;
+  }
+  turbo_posix_timer_queue_remove_locked(timer);
   timer->callback = cb;
   timer->timeout = timeout;
   timer->repeat = repeat;
-
-  struct itimerspec its;
-  memset(&its, 0, sizeof(its));
-
-  // Initial expiration
-  its.it_value.tv_sec = timeout / 1000;
-  its.it_value.tv_nsec = (timeout % 1000) * 1000000;
-
-  // Repeat interval (0 for one-shot)
-  its.it_interval.tv_sec = repeat / 1000;
-  its.it_interval.tv_nsec = (repeat % 1000) * 1000000;
-
-  if (timer_settime(timer->timerid, 0, &its, NULL) == -1) {
-    return -1;
-  }
-
+  timer->due_ms = due_ms;
   timer->active = 1;
+  turbo_posix_timer_queue_insert_locked(timer);
+  turbo_mutex_unlock(&timer->lock);
+  turbo_cond_signal(&g_turbo_posix_timer_manager.cond);
+  turbo_mutex_unlock(&g_turbo_posix_timer_manager.lock);
   return 0;
 }
 
 int turbo_timer_stop(turbo_timer_t *timer) {
-  if (!timer || !timer->active) {
+  if (!timer) {
     return 0;
   }
 
-  // Disarm timer by setting it_value to 0
-  struct itimerspec its;
-  memset(&its, 0, sizeof(its));
-
-  timer_settime(timer->timerid, 0, &its, NULL);
+  turbo_mutex_lock(&g_turbo_posix_timer_manager.lock);
+  turbo_mutex_lock(&timer->lock);
+  turbo_posix_timer_queue_remove_locked(timer);
   timer->active = 0;
- 
+  timer->due_ms = 0U;
+  turbo_mutex_unlock(&timer->lock);
+  turbo_cond_signal(&g_turbo_posix_timer_manager.cond);
+  turbo_mutex_unlock(&g_turbo_posix_timer_manager.lock);
   return 0;
 }
 

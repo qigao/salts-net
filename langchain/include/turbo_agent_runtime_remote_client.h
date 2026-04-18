@@ -144,6 +144,13 @@ CXX_C_API int turbo_agent_runtime_remote_client_get_checkpoint_trace_events_bind
     turbo_runtime_data_bind_value_t **out_events, json_value_t **out_error_json);
 
 /**
+ * @brief Delete one remote canonical memory record through `memory.deleteRecord`.
+ */
+CXX_C_API int turbo_agent_runtime_remote_client_delete_memory_record(
+    turbo_agent_runtime_remote_client_t *client, const char *memory_namespace,
+    const char *key, json_value_t **out_error_json);
+
+/**
  * @brief Load one remote canonical memory record through `memory.getRecord`.
  */
 CXX_C_API int turbo_agent_runtime_remote_client_get_memory_record(
@@ -156,6 +163,13 @@ CXX_C_API int turbo_agent_runtime_remote_client_get_memory_record(
 CXX_C_API int turbo_agent_runtime_remote_client_put_memory_record(
     turbo_agent_runtime_remote_client_t *client, const json_value_t *record_json,
     json_value_t **out_record_json, json_value_t **out_error_json);
+
+/**
+ * @brief Validate one remote canonical memory record through `memory.validateRecord`.
+ */
+CXX_C_API int turbo_agent_runtime_remote_client_validate_memory_record(
+    turbo_agent_runtime_remote_client_t *client, const json_value_t *record_json, int *out_valid,
+    json_value_t **out_error_json);
 
 /**
  * @brief Query remote canonical memory records through `memory.queryRecordsEx`.
@@ -173,7 +187,7 @@ CXX_C_API int turbo_agent_runtime_remote_client_query_memory_records(
     json_value_t **out_records_json, json_value_t **out_error_json);
 
 /**
- * @brief List remote canonical memory records through the convenience wrapper.
+ * @brief List remote canonical memory records through `memory.listRecords`.
  */
 CXX_C_API int turbo_agent_runtime_remote_client_list_memory_records(
     turbo_agent_runtime_remote_client_t *client, const char *namespace_prefix,

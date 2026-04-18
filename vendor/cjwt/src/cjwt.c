@@ -115,7 +115,7 @@ struct alg_map {
 /*----------------------------------------------------------------------------*/
 /*                            File Scoped Variables                           */
 /*----------------------------------------------------------------------------*/
-const struct alg_map the_alg_map[] = {
+static const struct alg_map the_alg_map[] = {
     {.alg = alg_none,  .symmetric = false, .text = "none" },
     {.alg = alg_es256, .symmetric = false, .text = "ES256"},
     {.alg = alg_es384, .symmetric = false, .text = "ES384"},
@@ -147,7 +147,7 @@ struct enc_map {
     const char *text;
 };
 
-const struct enc_map the_enc_map[] = {
+static const struct enc_map the_enc_map[] = {
     {.enc = enc_a128gcm, .text = "A128GCM"},
     {.enc = enc_a192gcm, .text = "A192GCM"},
     {.enc = enc_a256gcm, .text = "A256GCM"},

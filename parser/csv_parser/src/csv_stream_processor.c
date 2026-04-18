@@ -246,6 +246,16 @@ static void free_filter_plan(csv_stream_processor_t *p) {
     p->filter_compiled = false;
 }
 
+static void free_column_names(csv_stream_processor_t *p) {
+    if (!p || !p->cols) return;
+    for (size_t i = 0; i < p->col_count; i++) {
+        free(p->cols[i].name);
+        free(p->cols[i].raw_name);
+        p->cols[i].name = NULL;
+        p->cols[i].raw_name = NULL;
+    }
+}
+
 static void skip_ws(const char **cur, const char *end) {
     while (*cur < end && isspace((unsigned char)**cur)) (*cur)++;
 }
@@ -848,6 +858,7 @@ void csv_stream_processor_destroy(csv_stream_processor_t *p) {
     free(p->select_cols_str);
     free(p->col_selected);
     free_filter_plan(p);
+    free_column_names(p);
 
     str_store_free(&p->str_store);
     mem_destroy(&p->arena);

@@ -10,6 +10,7 @@
 #include "turbo_buffer.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
+#include "turbo_kcp.h"
 #include "turbo_tcp_backend.h"
 #include "turbo_udp_backend.h"
 #include <stddef.h>
@@ -88,12 +89,39 @@ CXX_C_API int coro_socket_accept(coro_socket_t *socket, coro_socket_t **accepted
 CXX_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
 
 /**
+ * @brief Configure optional FEC for a KCP socket before bind/connect.
+ */
+CXX_C_API int coro_socket_set_kcp_fec(coro_socket_t *socket,
+                                      const turbo_kcp_fec_config_t *config);
+
+/**
+ * @brief Read the pending or active KCP FEC config for a KCP socket.
+ */
+CXX_C_API int coro_socket_get_kcp_fec(coro_socket_t *socket,
+                                      turbo_kcp_fec_config_t *config);
+
+/**
  * @brief Connect to a remote host:port.
  *
  * The transport is determined by the socket type passed to coro_socket_create.
  * For WebSocket, use coro_socket_connect_ws instead.
  */
 CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
+
+/**
+ * @brief Connect to one host while preserving a different host context.
+ *
+ * This is useful when the caller already resolved an address but still needs
+ * the original host name for higher-layer behavior such as TLS SNI.
+ *
+ * @param socket        Socket handle.
+ * @param connect_host  Remote address or hostname used for the actual connect.
+ * @param port          Remote port.
+ * @param request_host  Higher-layer host context; NULL falls back to connect_host.
+ * @return 0 on success, negative error code on failure.
+ */
+CXX_C_API int coro_socket_connect_host_ex(coro_socket_t *socket, const char *connect_host, int port,
+                                          const char *request_host);
 
 /**
  * @brief Upgrade an already-connected TCP socket to TLS.

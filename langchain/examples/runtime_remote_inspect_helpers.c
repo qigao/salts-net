@@ -172,9 +172,27 @@ static void runtime_remote_example_print_child_multi_agent(const char *label,
                                          : NULL));
 }
 
+static void runtime_remote_example_drain_context(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) {
+    return;
+  }
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_NOWAIT);
+  }
+}
+
 static void runtime_remote_example_cleanup(runtime_remote_example_state_t *state) {
   if (!state) {
     return;
+  }
+  if (state->server) {
+    state->server_stopped = 1;
+    coro_socket_destroy(state->server);
+    state->server = NULL;
+    runtime_remote_example_drain_context(state->coro_ctx, 1000);
   }
   if (state->app) {
     turbo_agent_remote_app_destroy(state->app);
@@ -188,10 +206,6 @@ static void runtime_remote_example_cleanup(runtime_remote_example_state_t *state
     turbo_agent_runtime_remote_client_destroy(state->client);
     state->client = NULL;
   }
-  if (!state->server_stopped && state->server) {
-    coro_socket_destroy(state->server);
-    state->server = NULL;
-  }
   if (state->bridge) {
     turbo_agent_runtime_remote_iris_destroy(state->bridge);
     state->bridge = NULL;
@@ -204,7 +218,11 @@ static void runtime_remote_example_cleanup(runtime_remote_example_state_t *state
     turbo_agent_runtime_destroy(state->runtime);
     state->runtime = NULL;
   }
-  state->graph = NULL;
+  if (state->graph) {
+    turbo_graph_destroy(state->graph);
+    state->graph = NULL;
+  }
+  runtime_remote_example_drain_context(state->coro_ctx, 1000);
 }
 
 static void runtime_remote_example_coro(coro_t *co, void *arg) {

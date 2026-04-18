@@ -216,6 +216,7 @@ CXX_C_API turbo_log_level_t tlog_get_level(const tlog_t *logger);
 
 CXX_C_API void tlog_set_default(tlog_t *logger);
 CXX_C_API tlog_t *tlog_get_default(void);
+CXX_C_API tlog_t *tlog_peek_default(void);
 
 // =============================================================================
 // Statistics (for monitoring)
@@ -329,7 +330,7 @@ inline void turbo_log_cpp_wrapper(tlog_t* logger, turbo_log_level_t level,
 #endif
 
 #define TLOG_DEBUG(fmt, ...)                                                                       \
-  TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_DEBUG, NULL, fmt, ##__VA_ARGS__)
+  TURBO_LOG_TYPED(tlog_peek_default(), TURBO_LOG_LEVEL_DEBUG, NULL, fmt, ##__VA_ARGS__)
 #define TLOG_INFO(fmt, ...)                                                                        \
   TURBO_LOG_TYPED(tlog_get_default(), TURBO_LOG_LEVEL_INFO, NULL, fmt, ##__VA_ARGS__)
 #define TLOG_WARN(fmt, ...)                                                                        \

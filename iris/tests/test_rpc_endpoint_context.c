@@ -118,6 +118,19 @@ static int send_rpc_http_request_and_match(coro_context_t *ctx, unsigned short p
   return matched;
 }
 
+static void drain_test_context(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_ONCE);
+  }
+}
+
 static void rpc_endpoint_context_test_coro(coro_t *co, void *arg) {
   rpc_endpoint_test_state_t *state = (rpc_endpoint_test_state_t *)arg;
   iris_app_t *app = iris_app_default();
@@ -181,6 +194,7 @@ spec("rpc_endpoint_context") {
       state.rpc_b = NULL;
     }
     if (state.coro_ctx) {
+      drain_test_context(state.coro_ctx, 1000);
       coro_context_destroy(state.coro_ctx);
       state.coro_ctx = NULL;
     }
@@ -200,6 +214,11 @@ spec("rpc_endpoint_context") {
     check_not_null(state.rpc_b);
     check_true(state.request_a_ok);
     check_true(state.request_b_ok);
+
+    rpc_destroy(state.rpc_a);
+    rpc_destroy(state.rpc_b);
+    state.rpc_a = NULL;
+    state.rpc_b = NULL;
   }
 
   it("should clear rpc owner binding when the app registry is destroyed first") {

@@ -13,6 +13,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
   endif()
 endif()
 
+find_path(TURBO_WIREHAIR_INCLUDE_DIR NAMES wirehair/wirehair.h)
+find_library(TURBO_WIREHAIR_LIBRARY NAMES wirehair)
+if(TURBO_WIREHAIR_INCLUDE_DIR AND TURBO_WIREHAIR_LIBRARY)
+  set(TURBO_HAS_WIREHAIR ON)
+else()
+  set(TURBO_HAS_WIREHAIR OFF)
+endif()
+
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/turbo_build_config_internal.h.in
   ${CMAKE_CURRENT_BINARY_DIR}/generated/include/turbo_build_config_internal.h
@@ -120,6 +128,12 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   if(TURBO_HAS_IO_URING)
     target_link_libraries(${tgt} PRIVATE PkgConfig::TURBO_IO_URING)
+  endif()
+
+  if(TURBO_HAS_WIREHAIR)
+    target_compile_definitions(${tgt} PRIVATE TURBO_HAS_WIREHAIR=1)
+    target_include_directories(${tgt} PRIVATE ${TURBO_WIREHAIR_INCLUDE_DIR})
+    target_link_libraries(${tgt} PRIVATE ${TURBO_WIREHAIR_LIBRARY})
   endif()
 endforeach()
 

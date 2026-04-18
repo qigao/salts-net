@@ -695,6 +695,7 @@ struct tlog_s {
   // Background Thread
   // ---------------------------------------------------------------------------
   atomic_int running;
+  atomic_int consumer_ready;
   turbo_thread_t thread;
 
   // ---------------------------------------------------------------------------
@@ -724,11 +725,16 @@ static void logger_drain_entries(tlog_t *logger, uint64_t first_seq, uint64_t la
     disruptor_cursor_t read_cursor;
     read_cursor.sequence = seq;
 
-    mem_buffer_t **entry_ptr =
-        (mem_buffer_t **)disruptor_show_entry(logger->disruptor, &read_cursor);
-    if (!entry_ptr || !*entry_ptr) continue;
+    _Atomic(mem_buffer_t *) *entry_ptr =
+        (_Atomic(mem_buffer_t *) *)disruptor_show_entry(logger->disruptor, &read_cursor);
+    if (!entry_ptr) continue;
 
-    mem_buffer_t *buffer = *entry_ptr;
+    mem_buffer_t *buffer = atomic_load_explicit(entry_ptr, memory_order_acquire);
+    while (buffer == NULL) {
+      turbo_thread_yield();
+      buffer = atomic_load_explicit(entry_ptr, memory_order_acquire);
+    }
+
     async_log_entry_t *ae = (async_log_entry_t *)buffer->data;
 
     turbo_log_entry_t entry = {
@@ -745,7 +751,7 @@ static void logger_drain_entries(tlog_t *logger, uint64_t first_seq, uint64_t la
     logger_write_to_sinks(logger, &entry);
     atomic_fetch_add(&logger->logs_written, 1);
     mem_release(buffer);
-    *entry_ptr = NULL;
+    atomic_store_explicit(entry_ptr, NULL, memory_order_release);
   }
 }
 
@@ -761,15 +767,45 @@ static void logger_process_batch(void *ctx, uint64_t first_seq, uint64_t last_se
 
 static void async_logger_thread(void *arg) {
   tlog_t *logger = (tlog_t *)arg;
-  disruptor_consumer_run(logger->disruptor, &logger->consumer,
-                         logger_should_run, logger_process_batch, logger);
+  uint64_t next_sequence = disruptor_consumer_register(logger->disruptor, &logger->consumer);
+  atomic_store(&logger->consumer_ready, 1);
+
+  while (logger_should_run(logger)) {
+    disruptor_cursor_t cursor;
+    cursor.sequence = next_sequence;
+
+    if (!disruptor_consumer_wait_for_nonblocking(logger->disruptor, &cursor)) {
+      turbo_sleep_ms(1);
+      continue;
+    }
+
+    logger_process_batch(logger, next_sequence, cursor.sequence);
+    disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &cursor);
+    next_sequence = cursor.sequence + 1;
+  }
+
+  {
+    disruptor_cursor_t drain_cursor;
+    drain_cursor.sequence = next_sequence;
+    if (disruptor_consumer_wait_for_nonblocking(logger->disruptor, &drain_cursor)) {
+      logger_process_batch(logger, next_sequence, drain_cursor.sequence);
+      disruptor_consumer_release_entry(logger->disruptor, &logger->consumer, &drain_cursor);
+    }
+  }
+
+  disruptor_consumer_unregister(logger->disruptor, &logger->consumer);
 }
 
 static int logger_start_async(tlog_t *logger) {
   atomic_store(&logger->running, 1);
+  atomic_store(&logger->consumer_ready, 0);
 
   if (turbo_thread_create(&logger->thread, async_logger_thread, logger) != 0) {
     return -1;
+  }
+
+  while (!atomic_load(&logger->consumer_ready)) {
+    turbo_thread_yield();
   }
 
   return 0;
@@ -784,15 +820,15 @@ static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer) {
   disruptor_cursor_t cursor = {0};
   disruptor_publisher_next_entry_blocking(logger->disruptor, &cursor);
 
-  mem_buffer_t **slot =
-      (mem_buffer_t **)disruptor_acquire_entry(logger->disruptor, &cursor);
+  _Atomic(mem_buffer_t *) *slot =
+      (_Atomic(mem_buffer_t *) *)disruptor_acquire_entry(logger->disruptor, &cursor);
   if (!slot || cursor.sequence == 0U) {
     mem_release(buffer);
     atomic_fetch_add(&logger->logs_dropped, 1);
     return -1;
   }
 
-  *slot = buffer;
+  atomic_store_explicit(slot, buffer, memory_order_release);
   disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
   atomic_fetch_add(&logger->logs_published, 1);
   return 0;
@@ -921,21 +957,13 @@ void tlog_flush(tlog_t *logger) {
   if (!logger)
     return;
  
-  // Wait for all currently published logs to be written.
+  // Wait until all logs visible at flush entry have been written.
+  //
+  // Async stress tests can legitimately take longer than a fixed heuristic
+  // budget under scheduler pressure. Returning early here violates the flush
+  // contract and makes callback/file sinks observe partial output.
   uint64_t published = atomic_load(&logger->logs_published);
-  uint64_t last_written = UINT64_MAX;
-  unsigned idle_spins = 0;
   while (atomic_load(&logger->logs_written) < published) {
-    uint64_t written = atomic_load(&logger->logs_written);
-    if (written == last_written) {
-      idle_spins++;
-    } else {
-      idle_spins = 0;
-      last_written = written;
-    }
-    if (idle_spins > 1000) {
-      break;
-    }
     turbo_sleep_ms(1);
   }
 
@@ -1089,6 +1117,10 @@ void tlog_set_default(tlog_t *logger) {
 
 tlog_t *tlog_get_default(void) {
   turbo_once(&g_default_logger_once, create_default_logger);
+  return g_default_logger;
+}
+
+tlog_t *tlog_peek_default(void) {
   return g_default_logger;
 }
 

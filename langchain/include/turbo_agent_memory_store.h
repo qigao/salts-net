@@ -9,6 +9,21 @@ extern "C" {
 
 typedef struct json_value_s json_value_t;
 
+typedef struct turbo_agent_memory_query_options_s {
+  const char *namespace_prefix;
+  const char *kind;
+  const char *key_prefix;
+  const char *text_substring;
+  const char *id_prefix;
+  const char *metadata_scope;
+  const char *metadata_path_prefix;
+  const char *created_after;
+  const char *created_before;
+  const char *sort_by;
+  const char *sort_order;
+  size_t limit;
+} turbo_agent_memory_query_options_t;
+
 typedef int (*turbo_agent_memory_store_get_fn)(void *user_data, const char *memory_namespace,
                                                const char *key, char **out_value_json);
 typedef int (*turbo_agent_memory_store_put_fn)(void *user_data, const char *memory_namespace,
@@ -143,6 +158,37 @@ CXX_C_API int turbo_agent_memory_list_records(const turbo_agent_memory_store_t *
                                               json_value_t **out_records_json);
 
 /**
+ * @brief Load one canonical long-term memory record by namespace/key.
+ *
+ * Returned records follow the stable JSON shape:
+ * - `id`
+ * - `namespace`
+ * - `kind`
+ * - `key`
+ * - `text`
+ * - `metadata`
+ * - `created_at`
+ */
+CXX_C_API int turbo_agent_memory_get_record(const turbo_agent_memory_store_t *store,
+                                            const char *memory_namespace, const char *key,
+                                            json_value_t **out_record_json);
+
+/**
+ * @brief Persist one canonical long-term memory record.
+ *
+ * `context` records are reconstructed from canonical fields. Other record kinds
+ * currently require one optional `value_json` string field on the input record.
+ */
+CXX_C_API int turbo_agent_memory_put_record(const turbo_agent_memory_store_t *store,
+                                            const json_value_t *record_json);
+
+/**
+ * @brief Validate one canonical long-term memory record.
+ * @return 0 when the record matches the public contract, negative on error.
+ */
+CXX_C_API int turbo_agent_memory_validate_record(const json_value_t *record_json);
+
+/**
  * @brief Query canonical memory records with lightweight in-process filters.
  *
  * Filters are additive:
@@ -150,15 +196,33 @@ CXX_C_API int turbo_agent_memory_list_records(const turbo_agent_memory_store_t *
  * - `kind` filters canonical `kind`
  * - `key_prefix` filters `key` by prefix
  * - `text_substring` filters canonical `text` by substring
+ * - `id_prefix` filters canonical `id` by prefix
+ * - `metadata_scope` filters `metadata.scope` by exact match
+ * - `metadata_path_prefix` filters `metadata.path` by prefix
+ * - `created_after` applies one inclusive lower bound to `created_at`
+ * - `created_before` applies one inclusive upper bound to `created_at`
+ * - `sort_by` currently supports `namespace`, `kind`, `key`, and `id`
+ * - `sort_order` supports `asc` or `desc`
+ * - `limit` truncates the final canonical result array after filtering/sorting
  *
  * Stores may implement one native `query` callback. When absent, this helper
- * falls back to `list + canonicalize + filter`.
+ * falls back to `list + canonicalize + filter`. Extended filters, sorting, and
+ * limiting are always applied to the canonical record array by the host helper.
+ * Empty strings are treated the same as NULL for extended filters. The native
+ * backend callback signature remains unchanged.
  */
 CXX_C_API int turbo_agent_memory_query_records(const turbo_agent_memory_store_t *store,
                                                const char *namespace_prefix, const char *kind,
                                                const char *key_prefix,
                                                const char *text_substring,
                                                json_value_t **out_records_json);
+
+/**
+ * @brief Query canonical memory records with one options struct.
+ */
+CXX_C_API int turbo_agent_memory_query_records_ex(
+    const turbo_agent_memory_store_t *store, const turbo_agent_memory_query_options_t *options,
+    json_value_t **out_records_json);
 
 #ifdef __cplusplus
 }

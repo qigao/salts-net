@@ -84,6 +84,8 @@ CXX_C_API void iris_app_reset_default(void);
  * App-local RPC context binding
  * ============================================================================ */
 
+typedef void (*iris_app_rpc_context_unbind_fn)(void *rpc_context, void *user_data);
+
 /**
  * @brief Bind one RPC-like context to one path on one app.
  *
@@ -97,6 +99,24 @@ CXX_C_API void iris_app_reset_default(void);
  * @return 0 on success, -1 on failure
  */
 CXX_C_API int iris_app_bind_rpc_context(iris_app_t *app, const char *path, void *rpc_context);
+
+/**
+ * @brief Bind one RPC-like context and notify it when the app/path binding is removed.
+ *
+ * This is the ownership-aware form used by contexts that cache their owning
+ * app/path for destroy-time unbinding. The callback is invoked when the binding
+ * is explicitly removed or when the app destroys its registry.
+ *
+ * @param app Application instance
+ * @param path Static route path
+ * @param rpc_context Opaque endpoint context pointer
+ * @param on_unbind Optional callback invoked before the binding node is freed
+ * @param user_data Callback user data
+ * @return 0 on success, -1 on failure
+ */
+CXX_C_API int iris_app_bind_rpc_context_ex(iris_app_t *app, const char *path, void *rpc_context,
+                                           iris_app_rpc_context_unbind_fn on_unbind,
+                                           void *user_data);
 
 /**
  * @brief Lookup one RPC-like context bound to one app/path pair.

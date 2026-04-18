@@ -46,5 +46,87 @@
       "run_id_required": true,
       "history_events_min": 1
     }
+  },
+  "get_run_request": {
+    "id": "req-get-run",
+    "method": "runtime.getRun",
+    "params": {
+      "run_id_required": true
+    }
+  },
+  "get_run_response": {
+    "id": "req-get-run",
+    "run": {
+      "id_required": true,
+      "thread_id": "remote-thread-1"
+    }
+  },
+  "get_checkpoint_request": {
+    "id": "req-get-checkpoint",
+    "method": "runtime.getCheckpoint",
+    "params": {
+      "checkpoint_id_required": true
+    }
+  },
+  "get_checkpoint_response": {
+    "id": "req-get-checkpoint",
+    "checkpoint": {
+      "id_required": true,
+      "run_id_required": true
+    }
+  },
+  "list_checkpoints_request": {
+    "id": "req-list-checkpoints",
+    "method": "runtime.listCheckpoints",
+    "params": {
+      "run_id_required": true
+    }
+  },
+  "list_checkpoints_response": {
+    "id": "req-list-checkpoints",
+    "checkpoints": {
+      "expected_count": 1,
+      "first_id_required": true,
+      "first_run_id_required": true
+    }
+  },
+  "load_history_events_request": {
+    "id": "req-history",
+    "method": "runtime.loadHistoryEvents",
+    "params": {
+      "checkpoint_id_required": true
+    }
+  },
+  "load_history_events_response": {
+    "id": "req-history",
+    "events": {
+      "min": 1
+    }
+  },
+  "get_checkpoint_trace_events_request": {
+    "id": "req-checkpoint-trace",
+    "method": "runtime.getCheckpointTraceEvents",
+    "params": {
+      "checkpoint_id_required": true
+    }
+  },
+  "get_checkpoint_trace_events_response": {
+    "id": "req-checkpoint-trace",
+    "events": {
+      "count": 0
+    }
+  },
+  "get_run_trace_events_request": {
+    "id": "req-run-trace",
+    "method": "runtime.getRunTraceEvents",
+    "params": {
+      "run_id_required": true
+    }
+  },
+  "get_run_trace_events_response": {
+    "id": "req-run-trace",
+    "events": {
+      "count": 0
+    }
   }
 }

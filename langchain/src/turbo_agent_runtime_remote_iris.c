@@ -9,7 +9,21 @@
 struct turbo_agent_runtime_remote_iris_s {
   turbo_agent_runtime_remote_t *remote;
   char *path;
+  iris_app_t *bound_app;
 };
+
+static void turbo_agent_runtime_remote_iris_unbound(void *rpc_context, void *user_data) {
+  turbo_agent_runtime_remote_iris_t *bridge =
+      (turbo_agent_runtime_remote_iris_t *)rpc_context;
+  iris_app_t *app = (iris_app_t *)user_data;
+
+  if (!bridge) {
+    return;
+  }
+  if (!app || bridge->bound_app == app) {
+    bridge->bound_app = NULL;
+  }
+}
 
 static http_method_t turbo_agent_runtime_remote_iris_parse_method(const char *method) {
   if (!method) {
@@ -122,6 +136,10 @@ CXX_C_API void turbo_agent_runtime_remote_iris_destroy(
   if (!bridge) {
     return;
   }
+  if (bridge->bound_app && bridge->path) {
+    iris_app_unbind_rpc_context(bridge->bound_app, bridge->path, bridge);
+    bridge->bound_app = NULL;
+  }
   free(bridge->path);
   free(bridge);
 }
@@ -131,9 +149,11 @@ CXX_C_API int turbo_agent_runtime_remote_iris_mount(turbo_agent_runtime_remote_i
   if (!bridge || !bridge->remote || !bridge->path || !app) {
     return -1;
   }
-  if (iris_app_bind_rpc_context(app, bridge->path, bridge) != 0) {
+  if (iris_app_bind_rpc_context_ex(app, bridge->path, bridge,
+                                   turbo_agent_runtime_remote_iris_unbound, app) != 0) {
     return -1;
   }
+  bridge->bound_app = app;
   iris_app_post(app, bridge->path, turbo_agent_runtime_remote_iris_handler);
   iris_app_get(app, bridge->path, turbo_agent_runtime_remote_iris_handler);
   iris_app_put(app, bridge->path, turbo_agent_runtime_remote_iris_handler);

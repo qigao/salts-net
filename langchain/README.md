@@ -57,12 +57,22 @@ Or include only the narrower headers you need, such as `turbo_graph.h` or
 For the local JSON-RPC bridge over the durable runtime surface, use:
 
 ```c
+#include "turbo_agent_remote_app.h"
+#include "turbo_agent_remote_session.h"
 #include "turbo_agent_runtime_remote.h"
+#include "turbo_agent_runtime_remote_client.h"
 ```
 
 That layer is transport-agnostic by design. It dispatches local JSON-RPC 2.0
 requests over an existing `turbo_agent_runtime_t`; it does not start an HTTP
 endpoint, own a store, or define a second persisted runtime state source.
+
+Above the typed remote client, `turbo_agent_remote_session.h` now provides one
+thread-scoped facade that caches `thread_id`, `last_run_id`, and
+`last_checkpoint_id` across remote starts, resumes, forks, and thread-command
+helpers. `turbo_agent_remote_app.h` adds one thinner wrapper that fixes one
+remote `graph_name` and forwards the same inspect/control helpers through that
+session layer.
 
 `turbo_prompt.h` now exposes parallel bind-native message and template helpers,
 and `turbo_tool_registry.h` exposes bind-native tool execution. That lets hosts
@@ -153,6 +163,7 @@ The Agent surface is layered from low to high as:
 - `turbo_agent_runtime.h` for durable thread/run/checkpoint execution
 - `turbo_agent_session.h` for runtime session helpers
 - `turbo_agent_subagent.h` for subagent-as-tool adapters
+- `turbo_agent_subgraph.h` for graph-native subgraph nodes
 - `turbo_agent_memory_store.h` for namespaced long-term memory records
 - `turbo_agent_extensions.h` for optional middleware, trace, store,
   guardrail, and runnable helpers
@@ -353,13 +364,93 @@ What changes is persistence and replay:
   `runtime.resumeThreadStatePatchBindGraph`,
   `runtime.forkThreadStatePatchBindGraph`,
   `runtime.getThreadObservabilityIndex`, and
-  `runtime.listObservabilityIndexesFiltered`. It is a contract bridge for
-  future remote adapters, not an HTTP server
+  `runtime.listObservabilityIndexesFiltered`. When the remote config borrows
+  one optional `memory_store`, the same dispatcher also exposes:
+  `memory.getRecord`, `memory.putRecord`, and `memory.queryRecordsEx`.
+  It is a contract bridge for future remote adapters, not an HTTP server
 - `turbo_agent_runtime_remote_dispatch_jsonrpc_text(...)` is the raw JSON text
   adapter above that dispatcher
 - `turbo_agent_runtime_remote_handle_http_jsonrpc(...)` is one HTTP-like
   adapter for `POST /v1/runtime/jsonrpc`; adapter-level path/method/body
   failures map to HTTP status, while the response body remains JSON
+- `turbo_agent_runtime_remote_client_call_json(...)` is the matching consumer-
+  side bridge over `rpc_client`. It keeps the same `result` payloads, returns
+  normalized JSON-RPC error objects (`code`, `message`, `http_status`,
+  `transport_error`), and does not invent a second remote contract
+- `turbo_agent_runtime_remote_client_start_bind_graph(...)`,
+  `resume_bind_graph(...)`, `fork_bind_graph(...)`,
+  `get_thread_state_bind(...)`, `get_checkpoint_context(...)`,
+  `get_run(...)`, `get_checkpoint(...)`, `list_checkpoints(...)`,
+  `load_history_events_bind(...)`, `get_run_trace_events_bind(...)`,
+  `get_checkpoint_trace_events_bind(...)`,
+  `get_memory_record(...)`, `put_memory_record(...)`,
+  `query_memory_records_ex(...)`, `query_memory_records(...)`,
+  `list_memory_records(...)`,
+  `get_thread_timeline_bind(...)`, `get_branch_tree(...)`,
+  `get_thread_observability_index(...)`,
+  `list_observability_indexes(...)`,
+  `list_observability_indexes_filtered(...)`,
+  `list_child_runs(...)`,
+  `get_supervisor_inspect(...)`, `get_orchestration_inspect(...)`,
+  `resume_thread_command_bind(...)`, and `fork_thread_command_bind(...)` are
+  the first typed convenience helpers above that generic client call. They keep
+  the remote method names hidden while preserving the existing runtime
+  `summary/state/context/index` split
+- `turbo_agent_runtime_remote_client_get_child_inspect(...)`,
+  `get_child_orchestration_inspect(...)`, and
+  `get_child_multi_agent_inspect(...)` extend that same typed helper surface
+  for child-lineage and multi-agent inspect. They are still derived from the
+  existing remote thread-state, observability, child-run, and child-history
+  facts instead of inventing a second client-only contract
+- `turbo_agent_remote_session_start_bind_graph(...)`,
+  `start_text(...)`, `start_messages(...)`, `resume_bind_graph(...)`,
+  `fork_bind_graph(...)`, `invoke_text(...)`, `invoke_messages_text(...)`,
+  `invoke_json(...)`, `invoke_messages_json(...)`,
+  `memory_list_records(...)`, `memory_get_record(...)`,
+  `memory_put_record(...)`, `memory_validate_record(...)`,
+  `memory_query_records(...)`, `memory_query_records_ex(...)`,
+  `get_thread(...)`, `get_latest_run(...)`, `get_pending_run(...)`,
+  `get_thread_state_bind(...)`, `get_checkpoint_context(...)`,
+  `get_observability_index(...)`, `get_thread_timeline_bind(...)`,
+  `load_thread_history_events_bind(...)`, `replay_thread_history_bind(...)`,
+  `observe_thread_history_bind(...)`, `get_thread_trace_events_bind(...)`,
+  `get_branch_tree(...)`, `list_thread_lineage(...)`,
+  `get_supervisor_inbox(...)`, `get_supervisor_handoff_history(...)`,
+  `get_supervisor_inspect(...)`, `list_child_runs(...)`,
+  `get_orchestration_inspect(...)`,
+  `get_child_run(...)`, `get_child_checkpoint(...)`,
+  `get_child_checkpoint_context(...)`, `get_child_thread_timeline_bind(...)`,
+  `get_child_branch_tree(...)`, `list_child_checkpoints(...)`,
+  `load_child_history_events_bind(...)`, `get_child_trace_events_bind(...)`,
+  `get_child_inspect(...)`, `get_child_orchestration_inspect(...)`,
+  `get_child_multi_agent_inspect(...)`,
+  `resume_thread_command_bind(...)`, and `fork_thread_command_bind(...)` add
+  one thread-scoped host facade above the typed remote client without
+  inventing a second remote payload shape
+- `turbo_agent_remote_app_start_bind_graph(...)`,
+  `start_text(...)`, `start_messages(...)`, `resume_bind_graph(...)`,
+  `fork_bind_graph(...)`, `invoke_text(...)`, `invoke_messages_text(...)`,
+  `invoke_json(...)`, `invoke_messages_json(...)`,
+  `memory_list_records(...)`, `memory_get_record(...)`,
+  `memory_put_record(...)`, `memory_validate_record(...)`,
+  `memory_query_records(...)`, `memory_query_records_ex(...)`,
+  `get_thread(...)`, `get_latest_run(...)`, `get_pending_run(...)`,
+  `get_thread_state_bind(...)`, `get_checkpoint_context(...)`,
+  `get_observability_index(...)`, `get_thread_timeline_bind(...)`,
+  `load_thread_history_events_bind(...)`, `replay_thread_history_bind(...)`,
+  `observe_thread_history_bind(...)`, `get_thread_trace_events_bind(...)`,
+  `get_branch_tree(...)`, `list_thread_lineage(...)`,
+  `get_supervisor_inbox(...)`, `get_supervisor_handoff_history(...)`,
+  `get_supervisor_inspect(...)`, `list_child_runs(...)`,
+  `get_orchestration_inspect(...)`,
+  `get_child_run(...)`, `get_child_checkpoint(...)`,
+  `get_child_checkpoint_context(...)`, `get_child_thread_timeline_bind(...)`,
+  `get_child_branch_tree(...)`, `list_child_checkpoints(...)`,
+  `load_child_history_events_bind(...)`, `get_child_trace_events_bind(...)`,
+  `get_child_inspect(...)`, `get_child_orchestration_inspect(...)`,
+  `get_child_multi_agent_inspect(...)`,
+  `resume_thread_command_bind(...)`, and `fork_thread_command_bind(...)` add
+  one graph-name-configured app facade on top of that remote session layer
 - `turbo_agent_runtime_remote_iris_mount(...)` mounts that same adapter on an
   `iris_app_t` through Iris's app-local RPC endpoint registry, so it may now
   coexist with Iris's own `rpc_setup_endpoint(...)` on the same app as long as
@@ -425,6 +516,36 @@ in JSON-RPC 2.0 envelopes. Two stable happy-path examples are:
 }
 ```
 
+Long-term memory is explicit on the same remote transport but stays separate
+from `runtime.*` inspect/control. The current record-first memory query shape
+is:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-memory-query",
+  "method": "memory.queryRecordsEx",
+  "params": {
+    "namespace_prefix": "project/",
+    "kind": "context",
+    "key_prefix": "con",
+    "text_substring": "remember",
+    "created_after": "2026-02-01T00:00:00Z",
+    "created_before": "2026-02-28T23:59:59Z",
+    "sort_by": "key",
+    "sort_order": "desc",
+    "limit": 1
+  }
+}
+```
+
+`sort_by` currently supports `id`, `namespace`, `kind`, and `key`;
+`sort_order` supports `asc` or `desc`; `limit=0` means no truncation.
+`created_after` and `created_before` apply one inclusive lower/upper bound to
+canonical `created_at`. The current comparison depends on canonical
+`created_at` staying in one stable ISO-8601 string shape so lexicographic
+string order matches time order.
+
 The current stable error matrix is:
 - `-32600`: invalid request
 - `-32601`: method not found
@@ -442,6 +563,8 @@ The remote JSON-RPC contract is also locked by these golden fixtures under
 - `runtime_remote_inspect.golden.json`
 - `runtime_remote_errors.golden.json`
 - `runtime_remote_invalid_params.golden.json`
+- `child_orchestration_inspect.golden.json`
+- `child_multi_agent_inspect.golden.json`
 
 The invalid-params golden set intentionally covers both simple inspect calls
 and graph-bound/thread-bound calls, so method-level parameter contracts do not
@@ -597,6 +720,7 @@ Its CMake target name is:
 - `turbo_agent_session.h`
 - `turbo_agent_memory_store.h`
 - `turbo_agent_subagent.h`
+- `turbo_agent_subgraph.h`
 
 `turbo_agent_session_t` wraps one runtime plus one optional agent and can load
 provider settings from `.env` through `turbo_agent_config_apply_env(...)`,
@@ -685,22 +809,36 @@ same output item can then be resolved through
 `turbo_agent_app_get_child_checkpoint(...)`,
 `turbo_agent_app_load_child_history_events_bind(...)`.
 When no parent lineage is known, top-level `parent_agent_run_id`,
-`parent_tool_call_id`, and `parent_tool_name` remain present as `null` so
-hosts can treat the result envelope as one stable shape.
+`parent_tool_call_id`, `parent_tool_name`, `parent_graph_run_id`, and
+`call_frame_id` remain present as `null` so hosts can treat the result envelope
+as one stable shape.
 
 For hosts that already know parent context before starting a child run, runtime
-records may now also persist `parent_agent_run_id`, `parent_tool_call_id`, and
-`parent_tool_name`, and child runs can be indexed later through
+records may now also persist `parent_agent_run_id`, `parent_tool_call_id`,
+`parent_tool_name`, `parent_graph_run_id`, and `call_frame_id`, and child runs
+can be indexed later through
 `turbo_agent_runtime_list_child_runs(...)`,
 `turbo_agent_session_list_child_runs(...)`, and
 `turbo_agent_app_list_child_runs(...)`. When that lineage is known up front, the
-same three fields are also echoed on the returned runtime `summary`. When one
-subagent starts during an active parent tool call and the child session did not
-set explicit parent metadata, those same fields are now inherited
+same fields are also echoed on the returned runtime `summary`. The graph/run
+pair gives hosts a stable nested call-frame marker without introducing a second
+event log or store.
+
+When one subagent starts during an active parent tool call and the child session
+did not set explicit parent metadata, those same fields are now inherited
 automatically from the current parent run + tool context. The same active-tool
 fallback also applies to `list_child_runs(NULL, ...)` on the session/app
 wrappers, so hosts can query child runs without restating the parent run id
 inside that tool execution window.
+
+For graph-native nesting, `turbo_agent_subgraph.h` adds
+`turbo_agent_install_subgraph_node(...)`. The installed bind-native node starts
+the child graph through the same durable runtime and records the child run with
+the current parent run id plus `parent_graph_run_id` / `call_frame_id`. The
+parent state receives one `subgraph_result` envelope by default, including
+child status booleans and pending child checkpoint hints when the child graph
+interrupts. Hosts resume or fork that child through the same runtime checkpoint
+APIs; the child run/checkpoint records remain the durable source of truth.
 
 `turbo_agent_memory_store_t` is a separate long-term memory surface with
 explicit `namespace + key + value_json` records. Stores may now also expose one
@@ -710,6 +848,32 @@ back to `list + canonicalize + filter`. That native `query` callback returns
 the same canonical record shape used by `*_memory_list_records(...)` /
 `*_memory_query_records(...)`, not the raw `namespace/key/value_json` entries
 used by `list(...)`. It does not replace:
+
+`Runtime V3` also raises the canonical memory-record contract into one explicit
+host-facing helper group:
+
+- `turbo_agent_memory_get_record(...)`
+- `turbo_agent_memory_put_record(...)`
+- `turbo_agent_memory_validate_record(...)`
+- `turbo_agent_memory_query_records_ex(...)`
+- session/app wrapper twins for the same helpers
+
+That keeps the old raw KV surface intact while giving hosts one stable
+record-first path for `context` records and one struct-based query entrypoint.
+
+`turbo_agent_memory_query_options_t` carries `namespace_prefix`, `kind`,
+`key_prefix`, `text_substring`, `id_prefix`, `metadata_scope`,
+`metadata_path_prefix`, `created_after`, `created_before`, `sort_by`,
+`sort_order`, and `limit`. `sort_by` supports `id`, `namespace`, `kind`, and
+`key`; `sort_order` supports `asc` or `desc`; `limit=0` means no truncation.
+`created_after` and `created_before` apply one inclusive lower/upper bound to
+canonical `created_at`, and the current implementation relies on stable
+ISO-8601 timestamp strings so the window can be checked lexicographically. The native backend
+callback remains the stable four-filter
+`query(namespace_prefix, kind, key_prefix, text_substring)` contract;
+`id_prefix`/`metadata_scope`/`metadata_path_prefix`/
+`created_after`/`created_before`/`sort_by`/`sort_order`/`limit` stay in the
+host-facing layer as canonical record post-processing.
 
 - `turbo_agent_store_t` for state memory slots
 - `turbo_agent_runtime_store_t` for thread/run/checkpoint lineage
@@ -745,7 +909,11 @@ and direct preset-run wrappers:
 - `turbo_agent_session_memory_delete(...)`
 - `turbo_agent_session_memory_list(...)`
 - `turbo_agent_session_memory_list_records(...)`
+- `turbo_agent_session_memory_get_record(...)`
+- `turbo_agent_session_memory_put_record(...)`
+- `turbo_agent_session_memory_validate_record(...)`
 - `turbo_agent_session_memory_query_records(...)`
+- `turbo_agent_session_memory_query_records_ex(...)`
 - `turbo_agent_session_load_memory_context(...)`
 - `turbo_agent_session_create_input_state_with_memory_bind(...)`
 - `turbo_agent_session_create_input_messages_state_with_memory_bind(...)`
@@ -771,7 +939,31 @@ For the full `Runtime V2` design and API notes, see:
 Use the two examples for different questions:
 
 - `runtime_review_resume.c`: how to interrupt, override state, resume, and fork
+- `runtime_memory_record_helpers.c`: how to use record-first memory helpers on
+  the store/session/app layers
 - `runtime_history_inspect.c`: how to inspect persisted runs, checkpoints, and history
+
+For the remote host-facing inspect layers, use
+`langchain/examples/runtime_remote_inspect_helpers.c`.
+That example mounts one in-process Iris JSON-RPC bridge, starts one interrupted
+thread, and then walks the three remote host layers with one representative
+inspect helper per layer so the smoke test stays small and stable:
+
+- typed remote client:
+  prints `get_supervisor_inspect(...)`
+- remote session wrapper:
+  prints `get_orchestration_inspect(...)`
+- remote app wrapper:
+  prints `get_child_multi_agent_inspect(...)`
+
+The source comments point at the matching sibling helpers on each layer, so the
+example still serves as the entrypoint for the full supervisor/orchestration/
+child-multi-agent inspect trio without turning one example into a huge remote
+round-trip stress test.
+
+Its CMake target name is:
+
+- `langchain_runtime_remote_inspect_helpers_example`
 
 For a fuller walkthrough, see:
 

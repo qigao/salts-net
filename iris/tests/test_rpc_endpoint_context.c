@@ -172,8 +172,14 @@ spec("rpc_endpoint_context") {
       coro_socket_destroy(state.server);
       state.server = NULL;
     }
-    state.rpc_a = NULL;
-    state.rpc_b = NULL;
+    if (state.rpc_a) {
+      rpc_destroy(state.rpc_a);
+      state.rpc_a = NULL;
+    }
+    if (state.rpc_b) {
+      rpc_destroy(state.rpc_b);
+      state.rpc_b = NULL;
+    }
     if (state.coro_ctx) {
       coro_context_destroy(state.coro_ctx);
       state.coro_ctx = NULL;
@@ -194,5 +200,19 @@ spec("rpc_endpoint_context") {
     check_not_null(state.rpc_b);
     check_true(state.request_a_ok);
     check_true(state.request_b_ok);
+  }
+
+  it("should clear rpc owner binding when the app registry is destroyed first") {
+    state.rpc_a = create_rpc_endpoint_context("/rpc-a", rpc_endpoint_which_a);
+    check_not_null(state.rpc_a);
+    check_not_null(state.rpc_a->bound_app);
+    check_str_eq(state.rpc_a->bound_endpoint, "/rpc-a");
+
+    iris_app_reset_default();
+
+    check_null(state.rpc_a->bound_app);
+    check_null(state.rpc_a->bound_endpoint);
+    rpc_destroy(state.rpc_a);
+    state.rpc_a = NULL;
   }
 }

@@ -895,6 +895,10 @@ static void turbo_agent_test_check_child_orchestration_inspect(
   turbo_agent_test_check_lineage_string_field(inspect, "parent_tool_call_id",
                                               parent_tool_call_id);
   turbo_agent_test_check_lineage_string_field(inspect, "parent_tool_name", parent_tool_name);
+  turbo_agent_test_check_lineage_string_field(inspect, "parent_graph_run_id",
+                                              parent_agent_run_id);
+  turbo_agent_test_check_lineage_string_field(inspect, "call_frame_id",
+                                              parent_tool_call_id);
   child_inspect = turbo_json_object_get(inspect, "child_inspect");
   check_not_null(child_inspect);
   turbo_agent_test_check_child_inspect(child_inspect, thread_id, run_id, checkpoint_id,

@@ -39,6 +39,16 @@ typedef struct {
   char *root_dir;
 } turbo_agent_runtime_file_store_t;
 
+typedef struct turbo_agent_runtime_stream_capture_s {
+  turbo_event_log_t *events;
+  turbo_graph_checkpoint_t *checkpoint;
+  turbo_graph_exec_status_t checkpoint_status;
+  turbo_graph_checkpoint_cb user_checkpoint_cb;
+  void *user_checkpoint_user_data;
+  turbo_event_sink_bind_fn user_event_sink;
+  void *user_event_sink_user_data;
+} turbo_agent_runtime_stream_capture_t;
+
 struct turbo_agent_runtime_s {
   turbo_agent_runtime_store_t store;
 };
@@ -52,6 +62,42 @@ static atomic_ullong turbo_agent_runtime_id_counter = 1;
 CXX_C_API int turbo_agent_runtime_apply_state_patch_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_runtime_start_bind_graph_linked_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    const char *thread_id, const turbo_agent_runtime_parent_link_t *parent_link,
+    turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state);
+static int turbo_agent_runtime_record_checkpoint_with_event_log(
+    turbo_agent_runtime_t *runtime, const char *thread_id, const char *run_id,
+    const char *parent_checkpoint_id, const char *parent_agent_run_id,
+    const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id, size_t seq,
+    const char *timestamp, const turbo_graph_checkpoint_t *checkpoint,
+    const turbo_event_log_t *event_log, const turbo_runtime_data_bind_value_t *state,
+    const char **out_checkpoint_id);
+CXX_C_API int turbo_agent_runtime_get_thread_head_state_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    turbo_runtime_data_bind_value_t **out_state);
+CXX_C_API int turbo_agent_runtime_get_thread_head_trace_events_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    turbo_runtime_data_bind_value_t **out_events);
+CXX_C_API int turbo_agent_runtime_prepare_checkpoint_state_override_bind(
+    turbo_agent_runtime_t *runtime, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_runtime_prepare_thread_state_override_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_runtime_prepare_checkpoint_command_override_bind(
+    turbo_agent_runtime_t *runtime, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_runtime_prepare_thread_command_override_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override);
 CXX_C_API int turbo_agent_runtime_apply_checkpoint_state_patch_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
@@ -90,6 +136,23 @@ CXX_C_API int turbo_agent_runtime_fork_thread_state_patch_bind_graph(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *thread_id,
     const turbo_runtime_data_bind_value_t *state_patch,
     const turbo_graph_run_options_t *options, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state);
+CXX_C_API int turbo_agent_runtime_start_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    const char *thread_id, turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state);
+CXX_C_API int turbo_agent_runtime_resume_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state);
+CXX_C_API int turbo_agent_runtime_fork_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
     turbo_runtime_data_bind_value_t **out_state);
 
 static int turbo_agent_runtime_bind_object_set_string(
@@ -932,7 +995,8 @@ static void turbo_agent_runtime_interrupt_metadata(
 static int turbo_agent_runtime_make_summary(
     const char *thread_id, const char *run_id, const char *status, const char *checkpoint_id,
     const char *parent_agent_run_id, const char *parent_tool_call_id,
-    const char *parent_tool_name, const turbo_graph_run_result_t *result,
+    const char *parent_tool_name, const char *parent_graph_run_id,
+    const char *call_frame_id, const turbo_graph_run_result_t *result,
     const json_value_t *state_json,
     json_value_t **out_summary_json) {
   json_value_t *summary;
@@ -984,6 +1048,16 @@ static int turbo_agent_runtime_make_summary(
     turbo_json_object_set_string(summary, "parent_tool_name", parent_tool_name);
   } else {
     turbo_json_object_set_null(summary, "parent_tool_name");
+  }
+  if (parent_graph_run_id) {
+    turbo_json_object_set_string(summary, "parent_graph_run_id", parent_graph_run_id);
+  } else {
+    turbo_json_object_set_null(summary, "parent_graph_run_id");
+  }
+  if (call_frame_id) {
+    turbo_json_object_set_string(summary, "call_frame_id", call_frame_id);
+  } else {
+    turbo_json_object_set_null(summary, "call_frame_id");
   }
   if (state_json) {
     active_agent = turbo_agent_state_active_agent(state_json);
@@ -1415,6 +1489,95 @@ static int turbo_agent_runtime_collect_log_events(const turbo_graph_run_log_t *l
   return 0;
 }
 
+static int turbo_agent_runtime_collect_event_log_events(
+    const turbo_event_log_t *log, json_value_t **out_events_json) {
+  turbo_runtime_data_bind_value_t *events_bind;
+  json_value_t *events_json;
+
+  if (!log || !out_events_json) {
+    return -1;
+  }
+
+  events_bind = turbo_event_log_events_bind(log);
+  if (!events_bind) {
+    return -1;
+  }
+  events_json = turbo_runtime_data_bind_value_to_json(events_bind);
+  turbo_runtime_data_bind_value_destroy(events_bind);
+  if (!events_json || turbo_json_type(events_json) != TURBO_JSON_ARRAY) {
+    turbo_free_json(&events_json);
+    return -1;
+  }
+  *out_events_json = events_json;
+  return 0;
+}
+
+static turbo_graph_exec_status_t turbo_agent_runtime_clone_checkpoint(
+    const turbo_graph_checkpoint_t *checkpoint, turbo_graph_checkpoint_t **out_checkpoint) {
+  char *serialized;
+  size_t len = 0;
+  turbo_graph_exec_status_t status;
+
+  if (!checkpoint || !out_checkpoint) {
+    return TURBO_GRAPH_EXEC_INVALID_ARGUMENT;
+  }
+  *out_checkpoint = NULL;
+
+  serialized = turbo_graph_checkpoint_serialize(checkpoint, &len);
+  if (!serialized) {
+    return TURBO_GRAPH_EXEC_OUT_OF_MEMORY;
+  }
+  status = turbo_graph_checkpoint_deserialize(serialized, len, out_checkpoint);
+  turbo_json_serialize_free(serialized);
+  return status;
+}
+
+static turbo_graph_exec_status_t turbo_agent_runtime_replace_checkpoint(
+    turbo_graph_checkpoint_t **target, const turbo_graph_checkpoint_t *checkpoint) {
+  turbo_graph_checkpoint_t *copy = NULL;
+  turbo_graph_exec_status_t status;
+
+  if (!target || !checkpoint) {
+    return TURBO_GRAPH_EXEC_INVALID_ARGUMENT;
+  }
+  status = turbo_agent_runtime_clone_checkpoint(checkpoint, &copy);
+  if (status != TURBO_GRAPH_EXEC_OK) {
+    return status;
+  }
+  turbo_graph_checkpoint_destroy(*target);
+  *target = copy;
+  return TURBO_GRAPH_EXEC_OK;
+}
+
+static void turbo_agent_runtime_capture_stream_checkpoint(
+    const turbo_graph_checkpoint_t *checkpoint, void *user_data) {
+  turbo_agent_runtime_stream_capture_t *capture =
+      (turbo_agent_runtime_stream_capture_t *)user_data;
+
+  if (!capture || !checkpoint || capture->checkpoint_status != TURBO_GRAPH_EXEC_OK) {
+    return;
+  }
+  capture->checkpoint_status =
+      turbo_agent_runtime_replace_checkpoint(&capture->checkpoint, checkpoint);
+  if (capture->user_checkpoint_cb) {
+    capture->user_checkpoint_cb(checkpoint, capture->user_checkpoint_user_data);
+  }
+}
+
+static void turbo_agent_runtime_capture_stream_event(
+    const turbo_runtime_data_bind_value_t *event, void *user_data) {
+  turbo_agent_runtime_stream_capture_t *capture =
+      (turbo_agent_runtime_stream_capture_t *)user_data;
+
+  if (!capture || !event || !capture->events) {
+    return;
+  }
+  turbo_event_log_capture_bind(event, capture->events);
+  if (capture->user_event_sink) {
+    capture->user_event_sink(event, capture->user_event_sink_user_data);
+  }
+}
+
 static int turbo_agent_runtime_build_thread_record(const char *thread_id, const char *timestamp,
                                                    json_value_t **out_record) {
   json_value_t *record;
@@ -1436,7 +1599,8 @@ static int turbo_agent_runtime_build_thread_record(const char *thread_id, const 
 static int turbo_agent_runtime_build_run_record(
     const char *run_id, const char *thread_id, const char *parent_run_id,
     const char *parent_agent_run_id, const char *parent_tool_call_id,
-    const char *parent_tool_name,
+    const char *parent_tool_name, const char *parent_graph_run_id,
+    const char *call_frame_id,
     const char *forked_from_checkpoint_id, const char *graph_name, const char *topology_id,
     const char *status, const char *created_at, const char *updated_at,
     const char *latest_checkpoint_id, const turbo_graph_run_result_t *result,
@@ -1482,6 +1646,16 @@ static int turbo_agent_runtime_build_run_record(
   } else {
     turbo_json_object_set_null(record, "parent_tool_name");
   }
+  if (parent_graph_run_id) {
+    turbo_json_object_set_string(record, "parent_graph_run_id", parent_graph_run_id);
+  } else {
+    turbo_json_object_set_null(record, "parent_graph_run_id");
+  }
+  if (call_frame_id) {
+    turbo_json_object_set_string(record, "call_frame_id", call_frame_id);
+  } else {
+    turbo_json_object_set_null(record, "call_frame_id");
+  }
   if (forked_from_checkpoint_id) {
     turbo_json_object_set_string(record, "forked_from_checkpoint_id", forked_from_checkpoint_id);
   } else {
@@ -1510,7 +1684,8 @@ static int turbo_agent_runtime_build_run_record(
 static int turbo_agent_runtime_build_checkpoint_record(
     const char *checkpoint_id, const char *thread_id, const char *run_id,
     const char *parent_checkpoint_id, const char *parent_agent_run_id,
-    const char *parent_tool_call_id, const char *parent_tool_name, size_t seq,
+    const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id, size_t seq,
     const char *status, const char *created_at, const turbo_graph_checkpoint_t *checkpoint,
     const json_value_t *control_snapshot, const json_value_t *workflow_snapshot,
     const json_value_t *events_json, json_value_t **out_record) {
@@ -1566,6 +1741,16 @@ static int turbo_agent_runtime_build_checkpoint_record(
     turbo_json_object_set_string(record, "parent_tool_name", parent_tool_name);
   } else {
     turbo_json_object_set_null(record, "parent_tool_name");
+  }
+  if (parent_graph_run_id) {
+    turbo_json_object_set_string(record, "parent_graph_run_id", parent_graph_run_id);
+  } else {
+    turbo_json_object_set_null(record, "parent_graph_run_id");
+  }
+  if (call_frame_id) {
+    turbo_json_object_set_string(record, "call_frame_id", call_frame_id);
+  } else {
+    turbo_json_object_set_null(record, "call_frame_id");
   }
   turbo_json_object_set_number(record, "seq", (double)seq);
   turbo_json_object_set_string(record, "status", status);
@@ -2124,10 +2309,25 @@ static int turbo_agent_runtime_capture_snapshots(
 static int turbo_agent_runtime_record_checkpoint(
     turbo_agent_runtime_t *runtime, const char *thread_id, const char *run_id,
     const char *parent_checkpoint_id, const char *parent_agent_run_id,
-    const char *parent_tool_call_id, const char *parent_tool_name, size_t seq,
+    const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id, size_t seq,
     const char *timestamp, const turbo_graph_run_log_t *log,
     const turbo_runtime_data_bind_value_t *state, const char **out_checkpoint_id) {
-  const turbo_graph_checkpoint_t *checkpoint;
+  return turbo_agent_runtime_record_checkpoint_with_event_log(
+      runtime, thread_id, run_id, parent_checkpoint_id, parent_agent_run_id,
+      parent_tool_call_id, parent_tool_name, parent_graph_run_id, call_frame_id, seq, timestamp,
+      log ? turbo_graph_run_log_checkpoint(log) : NULL, log ? turbo_graph_run_log_events(log) : NULL,
+      state, out_checkpoint_id);
+}
+
+static int turbo_agent_runtime_record_checkpoint_with_event_log(
+    turbo_agent_runtime_t *runtime, const char *thread_id, const char *run_id,
+    const char *parent_checkpoint_id, const char *parent_agent_run_id,
+    const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id, size_t seq,
+    const char *timestamp, const turbo_graph_checkpoint_t *checkpoint,
+    const turbo_event_log_t *event_log, const turbo_runtime_data_bind_value_t *state,
+    const char **out_checkpoint_id) {
   json_value_t *control_snapshot = NULL;
   json_value_t *workflow_snapshot = NULL;
   json_value_t *events_json = NULL;
@@ -2135,11 +2335,11 @@ static int turbo_agent_runtime_record_checkpoint(
   char *checkpoint_id = NULL;
   int rc = -1;
 
-  if (!runtime || !thread_id || !run_id || !timestamp || !log || !state || !out_checkpoint_id) {
+  if (!runtime || !thread_id || !run_id || !timestamp || !event_log || !state ||
+      !out_checkpoint_id) {
     return -1;
   }
   *out_checkpoint_id = NULL;
-  checkpoint = turbo_graph_run_log_checkpoint(log);
   if (!checkpoint) {
     return 0;
   }
@@ -2147,11 +2347,60 @@ static int turbo_agent_runtime_record_checkpoint(
   checkpoint_id = turbo_agent_runtime_make_id("ckpt");
   if (!checkpoint_id ||
       turbo_agent_runtime_capture_snapshots(state, &control_snapshot, &workflow_snapshot) != 0 ||
-      turbo_agent_runtime_collect_log_events(log, &events_json) != 0 ||
+      turbo_agent_runtime_collect_event_log_events(event_log, &events_json) != 0 ||
       turbo_agent_runtime_build_checkpoint_record(
           checkpoint_id, thread_id, run_id, parent_checkpoint_id, parent_agent_run_id,
-          parent_tool_call_id, parent_tool_name, seq, "interrupted", timestamp, checkpoint,
-          control_snapshot, workflow_snapshot, events_json, &record) != 0 ||
+          parent_tool_call_id, parent_tool_name, parent_graph_run_id, call_frame_id, seq,
+          "interrupted", timestamp, checkpoint, control_snapshot, workflow_snapshot,
+          events_json, &record) != 0 ||
+      turbo_agent_runtime_store_put_json(runtime, turbo_agent_runtime_checkpoints_collection,
+                                         checkpoint_id, record) != 0) {
+    goto cleanup;
+  }
+
+  *out_checkpoint_id = checkpoint_id;
+  checkpoint_id = NULL;
+  rc = 0;
+
+cleanup:
+  free(checkpoint_id);
+  turbo_free_json(&control_snapshot);
+  turbo_free_json(&workflow_snapshot);
+  turbo_free_json(&events_json);
+  turbo_free_json(&record);
+  return rc;
+}
+
+static int turbo_agent_runtime_record_checkpoint_from_parts(
+    turbo_agent_runtime_t *runtime, const char *thread_id, const char *run_id,
+    const char *parent_checkpoint_id, const char *parent_agent_run_id,
+    const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id, size_t seq,
+    const char *timestamp, const turbo_graph_checkpoint_t *checkpoint,
+    const turbo_event_log_t *events_log, const turbo_runtime_data_bind_value_t *state,
+    const char **out_checkpoint_id) {
+  json_value_t *control_snapshot = NULL;
+  json_value_t *workflow_snapshot = NULL;
+  json_value_t *events_json = NULL;
+  json_value_t *record = NULL;
+  char *checkpoint_id = NULL;
+  int rc = -1;
+
+  if (!runtime || !thread_id || !run_id || !timestamp || !checkpoint || !events_log || !state ||
+      !out_checkpoint_id) {
+    return -1;
+  }
+  *out_checkpoint_id = NULL;
+
+  checkpoint_id = turbo_agent_runtime_make_id("ckpt");
+  if (!checkpoint_id ||
+      turbo_agent_runtime_capture_snapshots(state, &control_snapshot, &workflow_snapshot) != 0 ||
+      turbo_agent_runtime_collect_event_log_events(events_log, &events_json) != 0 ||
+      turbo_agent_runtime_build_checkpoint_record(
+          checkpoint_id, thread_id, run_id, parent_checkpoint_id, parent_agent_run_id,
+          parent_tool_call_id, parent_tool_name, parent_graph_run_id, call_frame_id, seq,
+          "interrupted", timestamp, checkpoint, control_snapshot, workflow_snapshot, events_json,
+          &record) != 0 ||
       turbo_agent_runtime_store_put_json(runtime, turbo_agent_runtime_checkpoints_collection,
                                          checkpoint_id, record) != 0) {
     goto cleanup;
@@ -2174,6 +2423,7 @@ static int turbo_agent_runtime_finalize_run(
     turbo_agent_runtime_t *runtime, const char *run_id, const char *thread_id,
     const char *parent_run_id, const char *parent_agent_run_id,
     const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id,
     const char *forked_from_checkpoint_id, turbo_graph_t *graph, const char *created_at,
     const char *updated_at, const char *latest_checkpoint_id,
     const turbo_graph_run_result_t *result,
@@ -2199,7 +2449,8 @@ static int turbo_agent_runtime_finalize_run(
   if (!topology_id || !graph_name ||
       turbo_agent_runtime_build_run_record(
           run_id, thread_id, parent_run_id, parent_agent_run_id, parent_tool_call_id,
-          parent_tool_name, forked_from_checkpoint_id, graph_name, topology_id,
+          parent_tool_name, parent_graph_run_id, call_frame_id, forked_from_checkpoint_id,
+          graph_name, topology_id,
           turbo_agent_runtime_status_text(result->status), created_at, updated_at,
           latest_checkpoint_id, result, state_json, &run_record) != 0 ||
       turbo_agent_runtime_store_put_json(runtime, turbo_agent_runtime_runs_collection, run_id,
@@ -2223,14 +2474,20 @@ static int turbo_agent_runtime_run_segment(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *thread_id, const char *run_id,
     const char *parent_run_id, const char *parent_agent_run_id,
     const char *parent_tool_call_id, const char *parent_tool_name,
+    const char *parent_graph_run_id, const char *call_frame_id,
     const char *forked_from_checkpoint_id, const char *parent_checkpoint_id,
     size_t next_checkpoint_seq, const char *run_created_at,
     const turbo_runtime_data_bind_value_t *start_state,
     const turbo_graph_checkpoint_t *start_checkpoint, const turbo_graph_run_options_t *options,
+    turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
     json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state) {
   turbo_agent_execution_context_t saved_context = {0};
   turbo_agent_execution_context_t current_context = {0};
   turbo_graph_run_log_t *log = NULL;
+  turbo_event_log_t *stream_events = NULL;
+  turbo_graph_checkpoint_t *stream_checkpoint = NULL;
+  turbo_graph_run_options_t effective_options;
+  turbo_agent_runtime_stream_capture_t stream_capture = {0};
   turbo_graph_run_result_t result = {0};
   turbo_runtime_data_bind_value_t *result_state = NULL;
   json_value_t *summary_json = NULL;
@@ -2268,7 +2525,43 @@ static int turbo_agent_runtime_run_segment(
     return -1;
   }
 
-  if (start_checkpoint) {
+  if (event_sink) {
+    stream_events = turbo_event_log_create();
+    if (!stream_events) {
+      turbo_agent_execution_context_set(&saved_context);
+      turbo_graph_run_log_destroy(log);
+      return -1;
+    }
+    if (options) {
+      effective_options = *options;
+    } else {
+      memset(&effective_options, 0, sizeof(effective_options));
+    }
+    stream_capture.events = stream_events;
+    stream_capture.checkpoint = NULL;
+    stream_capture.checkpoint_status = TURBO_GRAPH_EXEC_OK;
+    stream_capture.user_checkpoint_cb = effective_options.checkpoint_cb;
+    stream_capture.user_checkpoint_user_data = effective_options.checkpoint_user_data;
+    stream_capture.user_event_sink = event_sink;
+    stream_capture.user_event_sink_user_data = event_sink_user_data;
+    effective_options.checkpoint_cb = turbo_agent_runtime_capture_stream_checkpoint;
+    effective_options.checkpoint_user_data = &stream_capture;
+    if (start_checkpoint) {
+      status = turbo_graph_run_checkpoint_bind_stream(
+          graph, start_checkpoint, &effective_options, turbo_agent_runtime_capture_stream_event,
+          &stream_capture, &result, &result_state);
+    } else {
+      status = turbo_graph_run_bind_stream(graph, start_state, &effective_options,
+                                           turbo_agent_runtime_capture_stream_event,
+                                           &stream_capture, &result, &result_state);
+    }
+    stream_checkpoint = stream_capture.checkpoint;
+    if (stream_capture.checkpoint_status != TURBO_GRAPH_EXEC_OK) {
+      status = stream_capture.checkpoint_status;
+    } else if (turbo_event_log_status(stream_events) != TURBO_EVENT_LOG_OK) {
+      status = TURBO_GRAPH_EXEC_OUT_OF_MEMORY;
+    }
+  } else if (start_checkpoint) {
     status = turbo_graph_run_checkpoint_bind_log(graph, start_checkpoint, options, log, &result,
                                                  &result_state);
   } else {
@@ -2276,15 +2569,29 @@ static int turbo_agent_runtime_run_segment(
   }
   if (!result_state) {
     turbo_agent_execution_context_set(&saved_context);
+    turbo_graph_checkpoint_destroy(stream_checkpoint);
+    turbo_event_log_destroy(stream_events);
     turbo_graph_run_log_destroy(log);
     return -1;
   }
+  if (event_sink &&
+      (stream_capture.checkpoint_status != TURBO_GRAPH_EXEC_OK ||
+       turbo_event_log_status(stream_events) != TURBO_EVENT_LOG_OK)) {
+    goto cleanup;
+  }
 
   if (status == TURBO_GRAPH_EXEC_INTERRUPTED) {
-    if (turbo_agent_runtime_record_checkpoint(
-            runtime, thread_id, run_id, parent_checkpoint_id, parent_agent_run_id,
-            parent_tool_call_id, parent_tool_name, next_checkpoint_seq, updated_at, log,
-            result_state, &checkpoint_id) != 0) {
+    if ((event_sink &&
+         turbo_agent_runtime_record_checkpoint_from_parts(
+             runtime, thread_id, run_id, parent_checkpoint_id, parent_agent_run_id,
+             parent_tool_call_id, parent_tool_name, parent_graph_run_id, call_frame_id,
+             next_checkpoint_seq, updated_at, stream_checkpoint, stream_events, result_state,
+             &checkpoint_id) != 0) ||
+        (!event_sink &&
+         turbo_agent_runtime_record_checkpoint(
+             runtime, thread_id, run_id, parent_checkpoint_id, parent_agent_run_id,
+             parent_tool_call_id, parent_tool_name, parent_graph_run_id, call_frame_id,
+             next_checkpoint_seq, updated_at, log, result_state, &checkpoint_id) != 0)) {
       goto cleanup;
     }
   }
@@ -2293,14 +2600,14 @@ static int turbo_agent_runtime_run_segment(
 
   if (turbo_agent_runtime_finalize_run(runtime, run_id, thread_id, parent_run_id,
                                        parent_agent_run_id, parent_tool_call_id,
-                                       parent_tool_name, forked_from_checkpoint_id, graph,
-                                       created_at, updated_at, persisted_checkpoint_id, &result,
-                                       result_state,
+                                       parent_tool_name, parent_graph_run_id, call_frame_id,
+                                       forked_from_checkpoint_id, graph, created_at, updated_at,
+                                       persisted_checkpoint_id, &result, result_state,
                                        NULL) != 0 ||
       turbo_agent_runtime_make_summary(
           thread_id, run_id, turbo_agent_runtime_status_text(status), checkpoint_id,
-          parent_agent_run_id, parent_tool_call_id, parent_tool_name, &result, summary_state_json,
-          &summary_json) != 0) {
+          parent_agent_run_id, parent_tool_call_id, parent_tool_name, parent_graph_run_id,
+          call_frame_id, &result, summary_state_json, &summary_json) != 0) {
     goto cleanup;
   }
 
@@ -2316,6 +2623,8 @@ cleanup:
   turbo_free_json(&summary_state_json);
   turbo_free_json(&summary_json);
   turbo_runtime_data_bind_value_destroy(result_state);
+  turbo_graph_checkpoint_destroy(stream_checkpoint);
+  turbo_event_log_destroy(stream_events);
   turbo_graph_run_log_destroy(log);
   return rc;
 }
@@ -2725,6 +3034,11 @@ static int turbo_agent_runtime_current_checkpoint_id_for_thread(
   rc = turbo_agent_runtime_latest_checkpoint_id_for_run(runtime, run_id, out_checkpoint_id);
   free(run_id);
   return rc;
+}
+
+static int turbo_agent_runtime_thread_head_run_id_for_thread(
+    turbo_agent_runtime_t *runtime, const char *thread_id, char **out_run_id) {
+  return turbo_agent_runtime_current_run_id_for_thread(runtime, thread_id, out_run_id);
 }
 
 static int turbo_agent_runtime_root_checkpoint_id_for_checkpoint(
@@ -3165,6 +3479,17 @@ CXX_C_API int turbo_agent_runtime_start_bind_graph_linked(
     const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
     const char *thread_id, const turbo_agent_runtime_parent_link_t *parent_link,
     json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state) {
+  return turbo_agent_runtime_start_bind_graph_linked_stream(
+      runtime, graph, state, options, thread_id, parent_link, NULL, NULL, out_summary_json,
+      out_state);
+}
+
+CXX_C_API int turbo_agent_runtime_start_bind_graph_linked_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    const char *thread_id, const turbo_agent_runtime_parent_link_t *parent_link,
+    turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state) {
   char *owned_thread_id = NULL;
   char *run_id = NULL;
   int rc;
@@ -3187,8 +3512,10 @@ CXX_C_API int turbo_agent_runtime_start_bind_graph_linked(
       runtime, graph, owned_thread_id, run_id, NULL,
       parent_link ? parent_link->parent_agent_run_id : NULL,
       parent_link ? parent_link->parent_tool_call_id : NULL,
-      parent_link ? parent_link->parent_tool_name : NULL, NULL, NULL, 1, NULL, state, NULL,
-      options, out_summary_json, out_state);
+      parent_link ? parent_link->parent_tool_name : NULL,
+      parent_link ? parent_link->parent_graph_run_id : NULL,
+      parent_link ? parent_link->call_frame_id : NULL, NULL, NULL, 1, NULL, state, NULL, options,
+      event_sink, event_sink_user_data, out_summary_json, out_state);
   free(owned_thread_id);
   free(run_id);
   return rc;
@@ -3199,14 +3526,38 @@ CXX_C_API int turbo_agent_runtime_start_bind_graph(
     const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
     const char *thread_id,
     json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state) {
-  return turbo_agent_runtime_start_bind_graph_linked(runtime, graph, state, options, thread_id,
-                                                     NULL, out_summary_json, out_state);
+  return turbo_agent_runtime_start_bind_graph_linked_stream(
+      runtime, graph, state, options, thread_id, NULL, NULL, NULL, out_summary_json, out_state);
+}
+
+CXX_C_API int turbo_agent_runtime_start_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    const char *thread_id, turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state) {
+  if (!event_sink) {
+    return -1;
+  }
+  return turbo_agent_runtime_start_bind_graph_linked_stream(
+      runtime, graph, state, options, thread_id, NULL, event_sink, event_sink_user_data,
+      out_summary_json, out_state);
 }
 
 CXX_C_API int turbo_agent_runtime_resume_bind_graph(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_override,
     const turbo_graph_run_options_t *options, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state) {
+  return turbo_agent_runtime_resume_bind_graph_stream(runtime, graph, checkpoint_id, state_override,
+                                                      options, NULL, NULL, out_summary_json,
+                                                      out_state);
+}
+
+CXX_C_API int turbo_agent_runtime_resume_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
     turbo_runtime_data_bind_value_t **out_state) {
   json_value_t *checkpoint_record = NULL;
   json_value_t *run_record = NULL;
@@ -3241,8 +3592,11 @@ CXX_C_API int turbo_agent_runtime_resume_bind_graph(
       turbo_json_get_string(run_record, "parent_agent_run_id"),
       turbo_json_get_string(run_record, "parent_tool_call_id"),
       turbo_json_get_string(run_record, "parent_tool_name"),
+      turbo_json_get_string(run_record, "parent_graph_run_id"),
+      turbo_json_get_string(run_record, "call_frame_id"),
       turbo_json_get_string(run_record, "forked_from_checkpoint_id"), checkpoint_id, seq + 1,
-      created_at, NULL, checkpoint, options, out_summary_json, out_state);
+      created_at, NULL, checkpoint, options, event_sink, event_sink_user_data, out_summary_json,
+      out_state);
 
 cleanup:
   turbo_graph_checkpoint_destroy(checkpoint);
@@ -3264,6 +3618,17 @@ CXX_C_API int turbo_agent_runtime_fork_bind_graph(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_override,
     const turbo_graph_run_options_t *options, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state) {
+  return turbo_agent_runtime_fork_bind_graph_stream(runtime, graph, checkpoint_id, state_override,
+                                                    options, NULL, NULL, out_summary_json,
+                                                    out_state);
+}
+
+CXX_C_API int turbo_agent_runtime_fork_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
     turbo_runtime_data_bind_value_t **out_state) {
   json_value_t *checkpoint_record = NULL;
   json_value_t *source_run_record = NULL;
@@ -3298,8 +3663,10 @@ CXX_C_API int turbo_agent_runtime_fork_bind_graph(
       runtime, graph, thread_id, new_run_id, source_run_id,
       turbo_json_get_string(source_run_record, "parent_agent_run_id"),
       turbo_json_get_string(source_run_record, "parent_tool_call_id"),
-      turbo_json_get_string(source_run_record, "parent_tool_name"), checkpoint_id, NULL, 1, NULL,
-      NULL, checkpoint, options, out_summary_json, out_state);
+      turbo_json_get_string(source_run_record, "parent_tool_name"),
+      turbo_json_get_string(source_run_record, "parent_graph_run_id"),
+      turbo_json_get_string(source_run_record, "call_frame_id"), checkpoint_id, NULL, 1, NULL, NULL,
+      checkpoint, options, event_sink, event_sink_user_data, out_summary_json, out_state);
 
 cleanup:
   free(new_run_id);
@@ -3505,6 +3872,24 @@ CXX_C_API int turbo_agent_runtime_get_thread_state_bind(
   return rc;
 }
 
+CXX_C_API int turbo_agent_runtime_get_thread_head_state_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    turbo_runtime_data_bind_value_t **out_state) {
+  char *run_id = NULL;
+  int rc;
+
+  if (!runtime || !thread_id || !out_state) {
+    return -1;
+  }
+  if (turbo_agent_runtime_thread_head_run_id_for_thread(runtime, thread_id, &run_id) != 0 ||
+      !run_id) {
+    return -1;
+  }
+  rc = turbo_agent_runtime_get_run_state_bind(runtime, run_id, out_state);
+  free(run_id);
+  return rc;
+}
+
 CXX_C_API int turbo_agent_runtime_get_thread_trace_events_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,
     turbo_runtime_data_bind_value_t **out_events) {
@@ -3515,6 +3900,25 @@ CXX_C_API int turbo_agent_runtime_get_thread_trace_events_bind(
     return -1;
   }
   rc = turbo_agent_runtime_get_thread_state_bind(runtime, thread_id, &state);
+  if (rc != 0 || !state) {
+    turbo_runtime_data_bind_value_destroy(state);
+    return -1;
+  }
+  rc = turbo_agent_runtime_trace_events_from_state_bind(state, out_events);
+  turbo_runtime_data_bind_value_destroy(state);
+  return rc;
+}
+
+CXX_C_API int turbo_agent_runtime_get_thread_head_trace_events_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    turbo_runtime_data_bind_value_t **out_events) {
+  turbo_runtime_data_bind_value_t *state = NULL;
+  int rc;
+
+  if (!runtime || !thread_id || !out_events) {
+    return -1;
+  }
+  rc = turbo_agent_runtime_get_thread_head_state_bind(runtime, thread_id, &state);
   if (rc != 0 || !state) {
     turbo_runtime_data_bind_value_destroy(state);
     return -1;
@@ -5384,6 +5788,14 @@ CXX_C_API int turbo_agent_runtime_apply_command_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override) {
+  return turbo_agent_runtime_prepare_checkpoint_command_override_bind(runtime, checkpoint_id,
+                                                                     command, out_state_override);
+}
+
+CXX_C_API int turbo_agent_runtime_prepare_checkpoint_command_override_bind(
+    turbo_agent_runtime_t *runtime, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override) {
   turbo_runtime_data_bind_value_t *state = NULL;
   json_value_t *state_json = NULL;
   json_value_t *command_json = NULL;
@@ -5423,6 +5835,14 @@ CXX_C_API int turbo_agent_runtime_apply_state_patch_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override) {
+  return turbo_agent_runtime_prepare_checkpoint_state_override_bind(runtime, checkpoint_id,
+                                                                   state_patch, out_state_override);
+}
+
+CXX_C_API int turbo_agent_runtime_prepare_checkpoint_state_override_bind(
+    turbo_agent_runtime_t *runtime, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override) {
   turbo_runtime_data_bind_value_t *state = NULL;
   int rc;
 
@@ -5447,19 +5867,27 @@ CXX_C_API int turbo_agent_runtime_apply_checkpoint_state_patch_bind(
   if (!runtime || !checkpoint_id || !checkpoint_id[0] || !state_patch || !out_state_override) {
     return -1;
   }
-  return turbo_agent_runtime_apply_state_patch_bind(runtime, checkpoint_id, state_patch,
-                                                    out_state_override);
+  return turbo_agent_runtime_prepare_checkpoint_state_override_bind(runtime, checkpoint_id,
+                                                                   state_patch, out_state_override);
 }
 
 CXX_C_API int turbo_agent_runtime_update_checkpoint_state_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override) {
-  return turbo_agent_runtime_apply_checkpoint_state_patch_bind(runtime, checkpoint_id, state_patch,
-                                                               out_state_override);
+  return turbo_agent_runtime_prepare_checkpoint_state_override_bind(runtime, checkpoint_id,
+                                                                   state_patch, out_state_override);
 }
 
 CXX_C_API int turbo_agent_runtime_apply_thread_state_patch_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override) {
+  return turbo_agent_runtime_prepare_thread_state_override_bind(runtime, thread_id, state_patch,
+                                                               out_state_override);
+}
+
+CXX_C_API int turbo_agent_runtime_prepare_thread_state_override_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,
     const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override) {
@@ -5474,8 +5902,8 @@ CXX_C_API int turbo_agent_runtime_apply_thread_state_patch_bind(
     free(checkpoint_id);
     return -1;
   }
-  rc = turbo_agent_runtime_apply_state_patch_bind(runtime, checkpoint_id, state_patch,
-                                                  out_state_override);
+  rc = turbo_agent_runtime_prepare_checkpoint_state_override_bind(runtime, checkpoint_id,
+                                                                 state_patch, out_state_override);
   free(checkpoint_id);
   return rc;
 }
@@ -5484,18 +5912,27 @@ CXX_C_API int turbo_agent_runtime_update_thread_state_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,
     const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override) {
-  return turbo_agent_runtime_apply_thread_state_patch_bind(runtime, thread_id, state_patch,
-                                                           out_state_override);
+  return turbo_agent_runtime_prepare_thread_state_override_bind(runtime, thread_id, state_patch,
+                                                               out_state_override);
 }
 
 CXX_C_API int turbo_agent_runtime_apply_checkpoint_command_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override) {
-  return turbo_agent_runtime_apply_command_bind(runtime, checkpoint_id, command, out_state_override);
+  return turbo_agent_runtime_prepare_checkpoint_command_override_bind(runtime, checkpoint_id,
+                                                                     command, out_state_override);
 }
 
 CXX_C_API int turbo_agent_runtime_apply_thread_command_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override) {
+  return turbo_agent_runtime_prepare_thread_command_override_bind(runtime, thread_id, command,
+                                                                 out_state_override);
+}
+
+CXX_C_API int turbo_agent_runtime_prepare_thread_command_override_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,
     const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override) {
@@ -5510,7 +5947,8 @@ CXX_C_API int turbo_agent_runtime_apply_thread_command_bind(
     free(checkpoint_id);
     return -1;
   }
-  rc = turbo_agent_runtime_apply_command_bind(runtime, checkpoint_id, command, out_state_override);
+  rc = turbo_agent_runtime_prepare_checkpoint_command_override_bind(runtime, checkpoint_id, command,
+                                                                   out_state_override);
   free(checkpoint_id);
   return rc;
 }

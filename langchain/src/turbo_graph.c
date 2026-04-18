@@ -841,6 +841,16 @@ turbo_graph_run_internal_bind(turbo_graph_t *graph, turbo_runtime_data_bind_valu
       ctx.state = json_state;
       node_status =
           graph->nodes[current_index].json_fn(&ctx, graph->nodes[current_index].user_data);
+      if (ctx.next_node) {
+        size_t next_index = turbo_graph_find_node_index(graph, ctx.next_node);
+        if (next_index == (size_t)-1) {
+          turbo_free_json(&json_state);
+          turbo_graph_result_init(out_result, TURBO_GRAPH_EXEC_NODE_NOT_FOUND, last_node,
+                                  ctx.next_node, steps);
+          return TURBO_GRAPH_EXEC_NODE_NOT_FOUND;
+        }
+        ctx.next_node = graph->nodes[next_index].name;
+      }
       updated_state = turbo_runtime_data_bind_value_from_json(json_state);
       turbo_free_json(&json_state);
       if (!updated_state) {

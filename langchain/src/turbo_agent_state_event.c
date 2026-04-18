@@ -82,6 +82,11 @@ CXX_C_API const json_value_t *turbo_agent_state_last_event_impl(const json_value
   return turbo_agent_state_last_event_local(state);
 }
 
+CXX_C_API const json_value_t *turbo_agent_state_latest_handoff_event_impl(
+    const json_value_t *state) {
+  return turbo_agent_state_last_event_of_kind_local(state, "handoff");
+}
+
 static const json_value_t *turbo_agent_state_last_tool_results_event_local(
     const json_value_t *state) {
   const json_value_t *events;
@@ -127,6 +132,38 @@ static int turbo_agent_state_event_kind_is_local(const json_value_t *event, cons
 
 CXX_C_API int turbo_agent_event_kind_is(const json_value_t *event, const char *kind) {
   return turbo_agent_state_event_kind_is_local(event, kind);
+}
+
+static const char *turbo_agent_handoff_event_field_local(const json_value_t *event,
+                                                         const char *key) {
+  if (!turbo_agent_state_event_kind_is_local(event, "handoff") || !key) {
+    return NULL;
+  }
+
+  return turbo_json_get_string(event, key);
+}
+
+CXX_C_API const char *turbo_agent_state_handoff_event_phase_impl(const json_value_t *event) {
+  return turbo_agent_handoff_event_field_local(event, "phase");
+}
+
+CXX_C_API const char *turbo_agent_state_handoff_event_from_agent_impl(
+    const json_value_t *event) {
+  return turbo_agent_handoff_event_field_local(event, "from_agent");
+}
+
+CXX_C_API const char *turbo_agent_state_handoff_event_target_agent_impl(
+    const json_value_t *event) {
+  return turbo_agent_handoff_event_field_local(event, "target_agent");
+}
+
+CXX_C_API const char *turbo_agent_state_handoff_event_reason_impl(const json_value_t *event) {
+  return turbo_agent_handoff_event_field_local(event, "reason");
+}
+
+CXX_C_API const char *turbo_agent_state_handoff_event_active_agent_impl(
+    const json_value_t *event) {
+  return turbo_agent_handoff_event_field_local(event, "active_agent");
 }
 
 CXX_C_API const char *turbo_agent_event_output_text(const json_value_t *event) {
@@ -212,6 +249,17 @@ CXX_C_API const char *turbo_agent_state_tool_result_parent_tool_name_impl(
     const json_value_t *output_item) {
   return turbo_agent_tool_result_output_child_field_local(output_item,
                                                           "parent_tool_name");
+}
+
+CXX_C_API const char *turbo_agent_state_tool_result_parent_graph_run_id_impl(
+    const json_value_t *output_item) {
+  return turbo_agent_tool_result_output_child_field_local(output_item,
+                                                          "parent_graph_run_id");
+}
+
+CXX_C_API const char *turbo_agent_state_tool_result_call_frame_id_impl(
+    const json_value_t *output_item) {
+  return turbo_agent_tool_result_output_child_field_local(output_item, "call_frame_id");
 }
 
 CXX_C_API size_t turbo_agent_model_event_tool_call_count(const json_value_t *event) {
@@ -330,6 +378,10 @@ static void turbo_agent_tool_result_output_item_try_attach_child_refs(
       output_item, output_json, "parent_tool_call_id", "parent_tool_call_id", NULL);
   turbo_agent_tool_result_output_item_set_child_ref_local(
       output_item, output_json, "parent_tool_name", "parent_tool_name", NULL);
+  turbo_agent_tool_result_output_item_set_child_ref_local(
+      output_item, output_json, "parent_graph_run_id", "parent_graph_run_id", NULL);
+  turbo_agent_tool_result_output_item_set_child_ref_local(
+      output_item, output_json, "call_frame_id", "call_frame_id", NULL);
   turbo_agent_tool_result_output_item_set_child_ref_local(
       output_item, output_json, "active_agent", "active_agent", NULL);
   turbo_agent_tool_result_output_item_set_child_ref_local(

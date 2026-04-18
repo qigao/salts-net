@@ -7,6 +7,7 @@
 #include "turbo_agent_test_support.h"
 #include "turbo_parser.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -82,6 +83,26 @@ static json_value_t *create_remote_state_json(void) {
   state_json = turbo_runtime_data_bind_value_to_json(state);
   turbo_runtime_data_bind_value_destroy(state);
   return state_json;
+}
+
+static json_value_t *create_remote_memory_record_variant(const json_value_t *record_fixture,
+                                                        const char *key, const char *text) {
+  json_value_t *record_json;
+  char record_id[128];
+  const char *record_namespace;
+
+  check_not_null(record_fixture);
+  check_not_null(key);
+  check_not_null(text);
+  record_namespace = turbo_json_get_string(record_fixture, "namespace");
+  check_not_null(record_namespace);
+  record_json = turbo_json_clone(record_fixture);
+  check_not_null(record_json);
+  check_true(snprintf(record_id, sizeof(record_id), "%s::%s", record_namespace, key) > 0);
+  turbo_json_object_set_string(record_json, "id", record_id);
+  turbo_json_object_set_string(record_json, "key", key);
+  turbo_json_object_set_string(record_json, "text", text);
+  return record_json;
 }
 
 static json_value_t *create_remote_jsonrpc_request(const char *id, const char *method,
@@ -201,6 +222,9 @@ static void check_remote_jsonrpc_request_fixture(const json_value_t *request_jso
     if (turbo_json_get_bool(params_fixture, "checkpoint_id_required", false)) {
       check_not_null(turbo_json_get_string(params_json, "checkpoint_id"));
     }
+    if (turbo_json_get_bool(params_fixture, "run_id_required", false)) {
+      check_not_null(turbo_json_get_string(params_json, "run_id"));
+    }
 
     options_fixture = turbo_json_object_get(params_fixture, "options");
     if (options_fixture && turbo_json_type(options_fixture) == TURBO_JSON_OBJECT) {
@@ -298,6 +322,10 @@ static void check_remote_jsonrpc_success_fixture(const json_value_t *response_js
   const json_value_t *result_json;
   const json_value_t *summary_fixture;
   const json_value_t *state_fixture;
+  const json_value_t *run_fixture;
+  const json_value_t *checkpoint_fixture;
+  const json_value_t *checkpoints_fixture;
+  const json_value_t *events_fixture;
   const json_value_t *index_fixture;
   const json_value_t *indexes_fixture;
   const json_value_t *context_fixture;
@@ -357,6 +385,94 @@ static void check_remote_jsonrpc_success_fixture(const json_value_t *response_js
         check_str_eq(turbo_json_get_string(last_message_json, "content"),
                      turbo_json_get_string(last_message_fixture, "content"));
       }
+    }
+  }
+
+  run_fixture = turbo_json_object_get(fixture, "run");
+  if (run_fixture && turbo_json_type(run_fixture) == TURBO_JSON_OBJECT) {
+    const json_value_t *run_json = turbo_json_object_get(result_json, "run");
+
+    check_true(turbo_json_type(run_json) == TURBO_JSON_OBJECT);
+    if (turbo_json_get_bool(run_fixture, "id_required", false)) {
+      check_not_null(turbo_json_get_string(run_json, "id"));
+    }
+    if (turbo_json_get_string(run_fixture, "id")) {
+      check_str_eq(turbo_json_get_string(run_json, "id"),
+                   turbo_json_get_string(run_fixture, "id"));
+    }
+    if (turbo_json_get_bool(run_fixture, "thread_id_required", false)) {
+      check_not_null(turbo_json_get_string(run_json, "thread_id"));
+    }
+    if (turbo_json_get_string(run_fixture, "thread_id")) {
+      check_str_eq(turbo_json_get_string(run_json, "thread_id"),
+                   turbo_json_get_string(run_fixture, "thread_id"));
+    }
+  }
+
+  checkpoint_fixture = turbo_json_object_get(fixture, "checkpoint");
+  if (checkpoint_fixture && turbo_json_type(checkpoint_fixture) == TURBO_JSON_OBJECT) {
+    const json_value_t *checkpoint_json = turbo_json_object_get(result_json, "checkpoint");
+
+    check_true(turbo_json_type(checkpoint_json) == TURBO_JSON_OBJECT);
+    if (turbo_json_get_bool(checkpoint_fixture, "id_required", false)) {
+      check_not_null(turbo_json_get_string(checkpoint_json, "id"));
+    }
+    if (turbo_json_get_string(checkpoint_fixture, "id")) {
+      check_str_eq(turbo_json_get_string(checkpoint_json, "id"),
+                   turbo_json_get_string(checkpoint_fixture, "id"));
+    }
+    if (turbo_json_get_bool(checkpoint_fixture, "run_id_required", false)) {
+      check_not_null(turbo_json_get_string(checkpoint_json, "run_id"));
+    }
+    if (turbo_json_get_string(checkpoint_fixture, "run_id")) {
+      check_str_eq(turbo_json_get_string(checkpoint_json, "run_id"),
+                   turbo_json_get_string(checkpoint_fixture, "run_id"));
+    }
+  }
+
+  checkpoints_fixture = turbo_json_object_get(fixture, "checkpoints");
+  if (checkpoints_fixture && turbo_json_type(checkpoints_fixture) == TURBO_JSON_OBJECT) {
+    const json_value_t *checkpoints_json = turbo_json_object_get(result_json, "checkpoints");
+    const json_value_t *expected_checkpoint_ids =
+        turbo_json_object_get(checkpoints_fixture, "expected_checkpoint_ids");
+    size_t i;
+
+    check_true(turbo_json_type(checkpoints_json) == TURBO_JSON_ARRAY);
+    if (turbo_json_object_get(checkpoints_fixture, "expected_count")) {
+      check_size_eq(turbo_json_array_size(checkpoints_json),
+                    (size_t)turbo_json_get_int(checkpoints_fixture, "expected_count", 0));
+    }
+    if (turbo_json_get_bool(checkpoints_fixture, "first_id_required", false)) {
+      check_true(turbo_json_array_size(checkpoints_json) > 0);
+      check_not_null(turbo_json_get_string(turbo_json_array_get(checkpoints_json, 0), "id"));
+    }
+    if (turbo_json_get_bool(checkpoints_fixture, "first_run_id_required", false)) {
+      check_true(turbo_json_array_size(checkpoints_json) > 0);
+      check_not_null(turbo_json_get_string(turbo_json_array_get(checkpoints_json, 0), "run_id"));
+    }
+    if (expected_checkpoint_ids && turbo_json_type(expected_checkpoint_ids) == TURBO_JSON_ARRAY) {
+      check_size_eq(turbo_json_array_size(checkpoints_json), turbo_json_array_size(expected_checkpoint_ids));
+      for (i = 0; i < turbo_json_array_size(expected_checkpoint_ids); ++i) {
+        const json_value_t *checkpoint_json = turbo_json_array_get(checkpoints_json, i);
+        check_true(turbo_json_type(checkpoint_json) == TURBO_JSON_OBJECT);
+        check_str_eq(turbo_json_get_string(checkpoint_json, "id"),
+                     turbo_json_string(turbo_json_array_get(expected_checkpoint_ids, i)));
+      }
+    }
+  }
+
+  events_fixture = turbo_json_object_get(fixture, "events");
+  if (events_fixture && turbo_json_type(events_fixture) == TURBO_JSON_OBJECT) {
+    const json_value_t *events_json = turbo_json_object_get(result_json, "events");
+
+    check_true(turbo_json_type(events_json) == TURBO_JSON_ARRAY);
+    if (turbo_json_object_get(events_fixture, "count")) {
+      check_size_eq(turbo_json_array_size(events_json),
+                    (size_t)turbo_json_get_int(events_fixture, "count", 0));
+    }
+    if (turbo_json_object_get(events_fixture, "min")) {
+      check_true(turbo_json_array_size(events_json) >=
+                 (size_t)turbo_json_get_int(events_fixture, "min", 0));
     }
   }
 
@@ -830,6 +946,130 @@ spec("turbo agent runtime remote api") {
       turbo_free_json(&response_json);
       turbo_free_json(&request_json);
       turbo_free_json(&context_params);
+    }
+
+    {
+      json_value_t *run_params = turbo_json_create_object();
+
+      check_not_null(run_params);
+      turbo_json_object_set_string(run_params, "run_id", run_id);
+      request_json = create_remote_jsonrpc_request("req-get-run", "runtime.getRun", run_params);
+      check_not_null(request_json);
+      check_remote_jsonrpc_request_fixture(request_json, "runtime_remote_inspect.golden.json",
+                                           "get_run_request");
+      check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                   0);
+      check_remote_jsonrpc_success_fixture(response_json, "runtime_remote_inspect.golden.json",
+                                           "get_run_response");
+
+      turbo_free_json(&response_json);
+      turbo_free_json(&request_json);
+      turbo_free_json(&run_params);
+    }
+
+    {
+      json_value_t *checkpoint_params = turbo_json_create_object();
+
+      check_not_null(checkpoint_params);
+      turbo_json_object_set_string(checkpoint_params, "checkpoint_id", checkpoint_id);
+      request_json = create_remote_jsonrpc_request("req-get-checkpoint",
+                                                   "runtime.getCheckpoint",
+                                                   checkpoint_params);
+      check_not_null(request_json);
+      check_remote_jsonrpc_request_fixture(request_json, "runtime_remote_inspect.golden.json",
+                                           "get_checkpoint_request");
+      check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                   0);
+      check_remote_jsonrpc_success_fixture(response_json, "runtime_remote_inspect.golden.json",
+                                           "get_checkpoint_response");
+
+      turbo_free_json(&response_json);
+      turbo_free_json(&request_json);
+      turbo_free_json(&checkpoint_params);
+    }
+
+    {
+      json_value_t *list_checkpoints_params = turbo_json_create_object();
+
+      check_not_null(list_checkpoints_params);
+      turbo_json_object_set_string(list_checkpoints_params, "run_id", run_id);
+      request_json = create_remote_jsonrpc_request("req-list-checkpoints",
+                                                   "runtime.listCheckpoints",
+                                                   list_checkpoints_params);
+      check_not_null(request_json);
+      check_remote_jsonrpc_request_fixture(request_json, "runtime_remote_inspect.golden.json",
+                                           "list_checkpoints_request");
+      check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                   0);
+      check_remote_jsonrpc_success_fixture(response_json, "runtime_remote_inspect.golden.json",
+                                           "list_checkpoints_response");
+
+      turbo_free_json(&response_json);
+      turbo_free_json(&request_json);
+      turbo_free_json(&list_checkpoints_params);
+    }
+
+    {
+      json_value_t *history_params = turbo_json_create_object();
+
+      check_not_null(history_params);
+      turbo_json_object_set_string(history_params, "checkpoint_id", checkpoint_id);
+      request_json = create_remote_jsonrpc_request("req-history",
+                                                   "runtime.loadHistoryEvents",
+                                                   history_params);
+      check_not_null(request_json);
+      check_remote_jsonrpc_request_fixture(request_json, "runtime_remote_inspect.golden.json",
+                                           "load_history_events_request");
+      check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                   0);
+      check_remote_jsonrpc_success_fixture(response_json, "runtime_remote_inspect.golden.json",
+                                           "load_history_events_response");
+
+      turbo_free_json(&response_json);
+      turbo_free_json(&request_json);
+      turbo_free_json(&history_params);
+    }
+
+    {
+      json_value_t *trace_params = turbo_json_create_object();
+
+      check_not_null(trace_params);
+      turbo_json_object_set_string(trace_params, "checkpoint_id", checkpoint_id);
+      request_json = create_remote_jsonrpc_request("req-checkpoint-trace",
+                                                   "runtime.getCheckpointTraceEvents",
+                                                   trace_params);
+      check_not_null(request_json);
+      check_remote_jsonrpc_request_fixture(request_json, "runtime_remote_inspect.golden.json",
+                                           "get_checkpoint_trace_events_request");
+      check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                   0);
+      check_remote_jsonrpc_success_fixture(response_json, "runtime_remote_inspect.golden.json",
+                                           "get_checkpoint_trace_events_response");
+
+      turbo_free_json(&response_json);
+      turbo_free_json(&request_json);
+      turbo_free_json(&trace_params);
+    }
+
+    {
+      json_value_t *trace_params = turbo_json_create_object();
+
+      check_not_null(trace_params);
+      turbo_json_object_set_string(trace_params, "run_id", run_id);
+      request_json = create_remote_jsonrpc_request("req-run-trace",
+                                                   "runtime.getRunTraceEvents",
+                                                   trace_params);
+      check_not_null(request_json);
+      check_remote_jsonrpc_request_fixture(request_json, "runtime_remote_inspect.golden.json",
+                                           "get_run_trace_events_request");
+      check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                   0);
+      check_remote_jsonrpc_success_fixture(response_json, "runtime_remote_inspect.golden.json",
+                                           "get_run_trace_events_response");
+
+      turbo_free_json(&response_json);
+      turbo_free_json(&request_json);
+      turbo_free_json(&trace_params);
     }
 
     thread2_start_params = turbo_json_create_object();
@@ -1532,6 +1772,257 @@ spec("turbo agent runtime remote api") {
     turbo_agent_runtime_destroy(runtime);
   }
 
+  it("should dispatch memory methods through the borrowed memory store") {
+    turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
+    turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
+    turbo_agent_memory_store_t memory_store = turbo_agent_memory_store_memory_create();
+    turbo_agent_runtime_remote_config_t config = {0};
+    turbo_agent_runtime_remote_t *remote;
+    json_value_t *record_fixture =
+        turbo_agent_test_load_fixture_json("memory_context_record.golden.json");
+    json_value_t *request_json;
+    json_value_t *params_json;
+    json_value_t *response_json = NULL;
+    json_value_t *result_json;
+    const json_value_t *record_json;
+    const json_value_t *records_json;
+    json_value_t *record_clone;
+    json_value_t *record_variant_clone;
+
+    check_not_null(runtime);
+    check_not_null(record_fixture);
+    check_not_null(memory_store.get);
+    check_not_null(memory_store.put);
+    config.runtime = runtime;
+    config.memory_store = &memory_store;
+    remote = turbo_agent_runtime_remote_create(&config);
+    check_not_null(remote);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    record_clone = turbo_json_clone(record_fixture);
+    check_not_null(record_clone);
+    turbo_json_object_add(params_json, "record", record_clone);
+    request_json = create_remote_jsonrpc_request("req-memory-put", "memory.putRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-put");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    record_json = turbo_json_object_get(result_json, "record");
+    turbo_agent_test_check_memory_record_fixture(record_json, "memory_context_record.golden.json",
+                                                 NULL);
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    record_variant_clone =
+        create_remote_memory_record_variant(record_fixture, "zeta", "remember this too");
+    check_not_null(record_variant_clone);
+    turbo_json_object_set_string(record_variant_clone, "created_at", "2026-02-15T12:00:00Z");
+    turbo_json_object_add(params_json, "record", record_variant_clone);
+    request_json = create_remote_jsonrpc_request("req-memory-put-variant", "memory.putRecord",
+                                                 params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-put-variant");
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "memory_namespace", "project/demo");
+    turbo_json_object_set_string(params_json, "key", "context");
+    request_json = create_remote_jsonrpc_request("req-memory-get", "memory.getRecord", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-get");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    record_json = turbo_json_object_get(result_json, "record");
+    turbo_agent_test_check_memory_record_fixture(record_json, "memory_context_record.golden.json",
+                                                 NULL);
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "namespace_prefix", "project/");
+    turbo_json_object_set_string(params_json, "kind", "context");
+    turbo_json_object_set_string(params_json, "text_substring", "remember");
+    turbo_json_object_set_string(params_json, "id_prefix", "project/demo::z");
+    turbo_json_object_set_string(params_json, "metadata_scope", "project");
+    turbo_json_object_set_string(params_json, "metadata_path_prefix", "/tmp");
+    turbo_json_object_set_string(params_json, "created_after", "2026-02-01T00:00:00Z");
+    turbo_json_object_set_string(params_json, "created_before", "2026-02-28T23:59:59Z");
+    turbo_json_object_set_string(params_json, "sort_by", "key");
+    turbo_json_object_set_string(params_json, "sort_order", "desc");
+    turbo_json_object_set_number(params_json, "limit", 1);
+    request_json =
+        create_remote_jsonrpc_request("req-memory-query", "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_success(response_json, "req-memory-query");
+    result_json = turbo_json_object_get(response_json, "result");
+    check_not_null(result_json);
+    records_json = turbo_json_object_get(result_json, "records");
+    check_true(turbo_json_type(records_json) == TURBO_JSON_ARRAY);
+    check_size_eq(turbo_json_array_size(records_json), 1);
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(records_json, 0), "key"),
+                 "zeta");
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+    turbo_free_json(&record_fixture);
+    turbo_agent_runtime_remote_destroy(remote);
+    turbo_agent_memory_store_destroy(&memory_store);
+    turbo_agent_runtime_destroy(runtime);
+  }
+
+  it("should return json-rpc invalid params for malformed memory payloads") {
+    turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
+    turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
+    turbo_agent_memory_store_t memory_store = turbo_agent_memory_store_memory_create();
+    turbo_agent_runtime_remote_config_t config = {0};
+    turbo_agent_runtime_remote_t *remote;
+    json_value_t *params_json = turbo_json_create_object();
+    json_value_t *request_json;
+    json_value_t *response_json = NULL;
+
+    check_not_null(runtime);
+    check_not_null(params_json);
+    check_not_null(memory_store.get);
+    check_not_null(memory_store.put);
+    config.runtime = runtime;
+    config.memory_store = &memory_store;
+    remote = turbo_agent_runtime_remote_create(&config);
+    check_not_null(remote);
+
+    turbo_json_object_set_number(params_json, "memory_namespace", 1);
+    request_json = create_remote_jsonrpc_request("req-memory-invalid", "memory.getRecord",
+                                                 params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "namespace_prefix", "project/");
+    turbo_json_object_set_string(params_json, "sort_by", "bogus");
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-sort-by",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-sort-by", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_number(params_json, "id_prefix", 1);
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-id-prefix",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-id-prefix", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_bool(params_json, "metadata_scope", true);
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-metadata-scope",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-metadata-scope", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_number(params_json, "metadata_path_prefix", 1);
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-metadata-path-prefix",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-metadata-path-prefix", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_bool(params_json, "created_after", true);
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-created-after",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-created-after", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_number(params_json, "created_before", 1);
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-created-before",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-created-before", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+
+    params_json = turbo_json_create_object();
+    check_not_null(params_json);
+    turbo_json_object_set_string(params_json, "namespace_prefix", "project/");
+    turbo_json_object_set_string(params_json, "sort_order", "sideways");
+    request_json = create_remote_jsonrpc_request("req-memory-invalid-sort-order",
+                                                 "memory.queryRecordsEx", params_json);
+    check_not_null(request_json);
+    check_int_eq(turbo_agent_runtime_remote_dispatch_jsonrpc(remote, request_json, &response_json),
+                 0);
+    check_remote_jsonrpc_error(response_json, "req-memory-invalid-sort-order", -32602);
+
+    turbo_free_json(&response_json);
+    turbo_free_json(&request_json);
+    turbo_free_json(&params_json);
+    turbo_agent_runtime_remote_destroy(remote);
+    turbo_agent_memory_store_destroy(&memory_store);
+    turbo_agent_runtime_destroy(runtime);
+  }
+
   it("should return json-rpc invalid params for malformed method payloads") {
     static const char *const cases[] = {
         "start_missing_graph_name",
@@ -1617,6 +2108,28 @@ spec("turbo agent runtime remote api") {
         turbo_agent_test_find_named_fixture_entry(inspect_fixture, "checkpoint_context_request"));
     check_not_null(
         turbo_agent_test_find_named_fixture_entry(inspect_fixture, "checkpoint_context_response"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture, "get_run_request"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture, "get_run_response"));
+    check_not_null(
+        turbo_agent_test_find_named_fixture_entry(inspect_fixture, "get_checkpoint_request"));
+    check_not_null(
+        turbo_agent_test_find_named_fixture_entry(inspect_fixture, "get_checkpoint_response"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "list_checkpoints_request"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "list_checkpoints_response"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "load_history_events_request"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "load_history_events_response"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "get_checkpoint_trace_events_request"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "get_checkpoint_trace_events_response"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "get_run_trace_events_request"));
+    check_not_null(turbo_agent_test_find_named_fixture_entry(inspect_fixture,
+                                                             "get_run_trace_events_response"));
     check_not_null(
         turbo_agent_test_find_named_fixture_entry(errors_fixture, "invalid_request_response"));
     check_not_null(

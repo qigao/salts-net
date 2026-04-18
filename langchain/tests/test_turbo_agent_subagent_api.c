@@ -415,9 +415,13 @@ spec("turbo agent subagent api") {
     check_true(turbo_json_object_get(result_json, "parent_agent_run_id") != NULL);
     check_true(turbo_json_object_get(result_json, "parent_tool_call_id") != NULL);
     check_true(turbo_json_object_get(result_json, "parent_tool_name") != NULL);
+    check_true(turbo_json_object_get(result_json, "parent_graph_run_id") != NULL);
+    check_true(turbo_json_object_get(result_json, "call_frame_id") != NULL);
     check_true(turbo_json_object_get(summary, "parent_agent_run_id") != NULL);
     check_true(turbo_json_object_get(summary, "parent_tool_call_id") != NULL);
     check_true(turbo_json_object_get(summary, "parent_tool_name") != NULL);
+    check_true(turbo_json_object_get(summary, "parent_graph_run_id") != NULL);
+    check_true(turbo_json_object_get(summary, "call_frame_id") != NULL);
     check_true(turbo_json_object_get(result_json, "active_agent") != NULL);
     check_true(turbo_json_object_get(result_json, "handoff_target_agent") != NULL);
     check_true(turbo_json_object_get(result_json, "handoff_reason") != NULL);
@@ -427,9 +431,13 @@ spec("turbo agent subagent api") {
     check_null(turbo_json_get_string(result_json, "parent_agent_run_id"));
     check_null(turbo_json_get_string(result_json, "parent_tool_call_id"));
     check_null(turbo_json_get_string(result_json, "parent_tool_name"));
+    check_null(turbo_json_get_string(result_json, "parent_graph_run_id"));
+    check_null(turbo_json_get_string(result_json, "call_frame_id"));
     check_null(turbo_json_get_string(summary, "parent_agent_run_id"));
     check_null(turbo_json_get_string(summary, "parent_tool_call_id"));
     check_null(turbo_json_get_string(summary, "parent_tool_name"));
+    check_null(turbo_json_get_string(summary, "parent_graph_run_id"));
+    check_null(turbo_json_get_string(summary, "call_frame_id"));
     check_null(turbo_json_get_string(result_json, "active_agent"));
     check_null(turbo_json_get_string(result_json, "handoff_target_agent"));
     check_null(turbo_json_get_string(result_json, "handoff_reason"));
@@ -459,6 +467,8 @@ spec("turbo agent subagent api") {
     session_config.parent_agent_run_id = "run_parent";
     session_config.parent_tool_call_id = "call_parent";
     session_config.parent_tool_name = "delegate";
+    session_config.parent_graph_run_id = "run_graph_parent";
+    session_config.call_frame_id = "frame_parent";
     tool_config.name = "delegate_parent_surface";
     tool_config.description = "Return one subagent result with configured parent lineage.";
     tool_config.mode = TURBO_AGENT_SUBAGENT_SHARED_APP;
@@ -480,12 +490,19 @@ spec("turbo agent subagent api") {
     check_str_eq(turbo_json_get_string(result_json, "parent_agent_run_id"), "run_parent");
     check_str_eq(turbo_json_get_string(result_json, "parent_tool_call_id"), "call_parent");
     check_str_eq(turbo_json_get_string(result_json, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(result_json, "parent_graph_run_id"),
+                 "run_graph_parent");
+    check_str_eq(turbo_json_get_string(result_json, "call_frame_id"), "frame_parent");
     check_str_eq(turbo_json_get_string(result_json, "parent_agent_run_id"),
                  turbo_json_get_string(summary, "parent_agent_run_id"));
     check_str_eq(turbo_json_get_string(result_json, "parent_tool_call_id"),
                  turbo_json_get_string(summary, "parent_tool_call_id"));
     check_str_eq(turbo_json_get_string(result_json, "parent_tool_name"),
                  turbo_json_get_string(summary, "parent_tool_name"));
+    check_str_eq(turbo_json_get_string(result_json, "parent_graph_run_id"),
+                 turbo_json_get_string(summary, "parent_graph_run_id"));
+    check_str_eq(turbo_json_get_string(result_json, "call_frame_id"),
+                 turbo_json_get_string(summary, "call_frame_id"));
 
     turbo_free_json(&result_json);
     turbo_json_serialize_free(output);

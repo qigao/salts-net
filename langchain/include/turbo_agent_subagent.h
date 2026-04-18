@@ -53,6 +53,8 @@ typedef struct turbo_agent_subagent_tool_config_s {
  * - nullable `parent_agent_run_id`
  * - nullable `parent_tool_call_id`
  * - nullable `parent_tool_name`
+ * - nullable `parent_graph_run_id`
+ * - nullable `call_frame_id`
  * - `summary`
  *
  * In `TURBO_AGENT_SUBAGENT_RESULT_TEXT` mode, the object also includes

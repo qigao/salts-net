@@ -3,7 +3,7 @@
 #include "turbo_model_provider.h"
 
 spec("turbo event runtime") {
-  describe("canonical model events") {
+  describe("canonical runtime events") {
     it("should build and validate bind-native model events") {
       turbo_runtime_data_bind_value_t *tool_calls = turbo_runtime_data_bind_value_create_array();
       turbo_runtime_data_bind_value_t *call = turbo_runtime_data_bind_value_create_object();
@@ -184,13 +184,25 @@ spec("turbo event runtime") {
               output_value, "parent_tool_name",
               turbo_runtime_data_bind_value_create_string("delegate")),
           TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(
+              output_value, "parent_graph_run_id",
+              turbo_runtime_data_bind_value_create_string("run_graph_parent")),
+          TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(
+          turbo_runtime_data_bind_object_set(output_value, "call_frame_id",
+                                             turbo_runtime_data_bind_value_create_string(
+                                                 "frame_parent")),
+          TURBO_RUNTIME_DATA_BIND_OK);
 
       event = turbo_event_tool_result_create_bind(
           "delegate", "{\"input\":\"hello\"}",
           "{\"ok\":true,\"summary\":\"ok\",\"stdout\":\"\",\"stderr\":\"\","
           "\"parent_agent_run_id\":\"run_parent\","
           "\"parent_tool_call_id\":\"call_parent\","
-          "\"parent_tool_name\":\"delegate\"}",
+          "\"parent_tool_name\":\"delegate\","
+          "\"parent_graph_run_id\":\"run_graph_parent\","
+          "\"call_frame_id\":\"frame_parent\"}",
           output_value, 0);
 
       check_not_null(event);
@@ -205,9 +217,110 @@ spec("turbo event runtime") {
       check_str_eq(turbo_runtime_data_bind_value_as_string(
                        turbo_runtime_data_bind_object_get(event, "parent_tool_name")),
                    "delegate");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "parent_graph_run_id")),
+                   "run_graph_parent");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "call_frame_id")),
+                   "frame_parent");
 
       turbo_runtime_data_bind_value_destroy(event);
       turbo_runtime_data_bind_value_destroy(output_value);
+    }
+
+    it("should build and validate canonical bind-native handoff events") {
+      turbo_runtime_data_bind_value_t *schema = turbo_event_handoff_schema_bind();
+      turbo_runtime_data_bind_value_t *properties = NULL;
+      turbo_runtime_data_bind_value_t *required = NULL;
+      turbo_runtime_data_bind_value_t *event = turbo_event_handoff_create_bind(
+          "requested", "planner", "executor", "delegate execution", "planner", 0);
+
+      check_not_null(schema);
+      properties = turbo_runtime_data_bind_object_get(schema, "properties");
+      required = turbo_runtime_data_bind_object_get(schema, "required");
+      check_not_null(properties);
+      check_not_null(required);
+      check_not_null(turbo_runtime_data_bind_object_get(properties, "phase"));
+      check_not_null(turbo_runtime_data_bind_object_get(properties, "from_agent"));
+      check_not_null(turbo_runtime_data_bind_object_get(properties, "target_agent"));
+      check_not_null(turbo_runtime_data_bind_object_get(properties, "reason"));
+      check_not_null(turbo_runtime_data_bind_object_get(properties, "active_agent"));
+      check_not_null(turbo_runtime_data_bind_object_get(properties, "status"));
+
+      check_not_null(event);
+      check_str_eq(turbo_event_kind_bind(event), "handoff");
+      check_int_eq(turbo_event_validate_bind(event), 0);
+      check_int_eq(turbo_event_handoff_validate_bind(event), 0);
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "phase")),
+                   "requested");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "from_agent")),
+                   "planner");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "target_agent")),
+                   "executor");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "reason")),
+                   "delegate execution");
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "active_agent")),
+                   "planner");
+
+      turbo_runtime_data_bind_value_destroy(event);
+      turbo_runtime_data_bind_value_destroy(schema);
+    }
+
+    it("should preserve nullable handoff fields in canonical bind-native handoff events") {
+      turbo_runtime_data_bind_value_t *event =
+          turbo_event_handoff_create_bind("committed", "planner", NULL, NULL, "executor", 0);
+
+      check_not_null(event);
+      check_int_eq(turbo_event_validate_bind(event), 0);
+      check_int_eq(turbo_event_handoff_validate_bind(event), 0);
+      check_int_eq(
+          turbo_runtime_data_bind_value_kind(turbo_runtime_data_bind_object_get(event, "target_agent")),
+          TURBO_RUNTIME_DATA_BIND_VALUE_NULL);
+      check_int_eq(
+          turbo_runtime_data_bind_value_kind(turbo_runtime_data_bind_object_get(event, "reason")),
+          TURBO_RUNTIME_DATA_BIND_VALUE_NULL);
+      check_str_eq(turbo_runtime_data_bind_value_as_string(
+                       turbo_runtime_data_bind_object_get(event, "active_agent")),
+                   "executor");
+
+      turbo_runtime_data_bind_value_destroy(event);
+    }
+
+    it("should reject malformed canonical bind-native handoff events") {
+      turbo_runtime_data_bind_value_t *event = turbo_runtime_data_bind_value_create_object();
+
+      check_not_null(event);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "kind", turbo_runtime_data_bind_value_create_string("handoff")),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "phase", turbo_runtime_data_bind_value_create_string("requested")),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "from_agent", turbo_runtime_data_bind_value_create_string("planner")),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "target_agent",
+                       turbo_runtime_data_bind_value_create_string("executor")),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "reason", turbo_runtime_data_bind_value_create_string("delegate")),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "active_agent", turbo_runtime_data_bind_value_create_array()),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_runtime_data_bind_object_set(
+                       event, "status", turbo_runtime_data_bind_value_create_int64(0)),
+                   TURBO_RUNTIME_DATA_BIND_OK);
+      check_int_eq(turbo_event_validate_bind(event), -1);
+      check_int_eq(turbo_event_handoff_validate_bind(event), -1);
+
+      turbo_runtime_data_bind_value_destroy(event);
     }
   }
 }

@@ -72,6 +72,23 @@ CXX_C_API turbo_runtime_data_bind_value_t *turbo_event_tool_result_create_bind(
     const char *name, const char *arguments_json, const char *output,
     const turbo_runtime_data_bind_value_t *output_value, int64_t status);
 
+/**
+ * @brief Return the canonical bind-native schema for supervisor handoff events.
+ */
+CXX_C_API turbo_runtime_data_bind_value_t *turbo_event_handoff_schema_bind(void);
+
+/**
+ * @brief Validate one bind-native supervisor handoff event.
+ */
+CXX_C_API int turbo_event_handoff_validate_bind(const turbo_runtime_data_bind_value_t *event);
+
+/**
+ * @brief Create one canonical bind-native supervisor handoff event.
+ */
+CXX_C_API turbo_runtime_data_bind_value_t *turbo_event_handoff_create_bind(
+    const char *phase, const char *from_agent, const char *target_agent, const char *reason,
+    const char *active_agent, int64_t status);
+
 #ifdef __cplusplus
 }
 #endif

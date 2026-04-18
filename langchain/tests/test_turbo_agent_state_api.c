@@ -28,6 +28,12 @@ spec("turbo agent state api") {
     void *supervisor_inbox_count = (void *)turbo_agent_state_supervisor_inbox_count;
     void *supervisor_inbox_at = (void *)turbo_agent_state_supervisor_inbox_at;
     void *supervisor_handoff_history = (void *)turbo_agent_state_supervisor_handoff_history;
+    void *latest_handoff_event = (void *)turbo_agent_state_latest_handoff_event;
+    void *handoff_event_phase = (void *)turbo_agent_state_handoff_event_phase;
+    void *handoff_event_from_agent = (void *)turbo_agent_state_handoff_event_from_agent;
+    void *handoff_event_target_agent = (void *)turbo_agent_state_handoff_event_target_agent;
+    void *handoff_event_reason = (void *)turbo_agent_state_handoff_event_reason;
+    void *handoff_event_active_agent = (void *)turbo_agent_state_handoff_event_active_agent;
 
     check_not_null(schema_version);
     check_not_null(create_state);
@@ -50,6 +56,12 @@ spec("turbo agent state api") {
     check_not_null(supervisor_inbox_count);
     check_not_null(supervisor_inbox_at);
     check_not_null(supervisor_handoff_history);
+    check_not_null(latest_handoff_event);
+    check_not_null(handoff_event_phase);
+    check_not_null(handoff_event_from_agent);
+    check_not_null(handoff_event_target_agent);
+    check_not_null(handoff_event_reason);
+    check_not_null(handoff_event_active_agent);
   }
 
   it("should build state and snapshots through runtime data bind") {
@@ -624,6 +636,46 @@ spec("turbo agent state api") {
     turbo_free_json(&state);
   }
 
+  it("should append canonical handoff state events for request and commit") {
+    json_value_t *state = turbo_agent_state_create();
+    const json_value_t *events = NULL;
+    const json_value_t *latest_event = NULL;
+
+    check_not_null(state);
+    check_int_eq(turbo_agent_state_set_active_agent(state, "planner"), 0);
+    check_size_eq(turbo_agent_state_event_count(state), 0);
+
+    check_int_eq(turbo_agent_state_request_handoff(state, "executor", "delegate execution"), 0);
+    check_size_eq(turbo_agent_state_event_count(state), 1);
+
+    events = turbo_agent_state_events(state);
+    latest_event = turbo_agent_state_latest_handoff_event(state);
+    check_not_null(events);
+    check_not_null(latest_event);
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(events, 0), "kind"), "handoff");
+    check_str_eq(turbo_agent_state_handoff_event_phase(latest_event), "requested");
+    check_str_eq(turbo_agent_state_handoff_event_from_agent(latest_event), "planner");
+    check_str_eq(turbo_agent_state_handoff_event_target_agent(latest_event), "executor");
+    check_str_eq(turbo_agent_state_handoff_event_reason(latest_event), "delegate execution");
+    check_str_eq(turbo_agent_state_handoff_event_active_agent(latest_event), "planner");
+
+    check_int_eq(turbo_agent_state_commit_handoff(state), 0);
+    check_size_eq(turbo_agent_state_event_count(state), 2);
+
+    events = turbo_agent_state_events(state);
+    latest_event = turbo_agent_state_latest_handoff_event(state);
+    check_not_null(events);
+    check_not_null(latest_event);
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(events, 1), "kind"), "handoff");
+    check_str_eq(turbo_agent_state_handoff_event_phase(latest_event), "committed");
+    check_str_eq(turbo_agent_state_handoff_event_from_agent(latest_event), "planner");
+    check_str_eq(turbo_agent_state_handoff_event_target_agent(latest_event), "executor");
+    check_str_eq(turbo_agent_state_handoff_event_reason(latest_event), "delegate execution");
+    check_str_eq(turbo_agent_state_handoff_event_active_agent(latest_event), "executor");
+
+    turbo_free_json(&state);
+  }
+
   it("should preserve final output json and surface malformed tool result failures") {
     json_value_t *state = turbo_agent_state_create();
     json_value_t *parsed = NULL;
@@ -736,6 +788,10 @@ spec("turbo agent state api") {
         turbo_json_array_get(latest_outputs, 0)));
     check_null(turbo_agent_state_tool_result_parent_tool_name(
         turbo_json_array_get(latest_outputs, 0)));
+    check_null(turbo_agent_state_tool_result_parent_graph_run_id(
+        turbo_json_array_get(latest_outputs, 0)));
+    check_null(turbo_agent_state_tool_result_call_frame_id(
+        turbo_json_array_get(latest_outputs, 0)));
 
     turbo_free_json(&state);
   }
@@ -762,6 +818,8 @@ spec("turbo agent state api") {
         "\"parent_agent_run_id\":\"run_parent\","
         "\"parent_tool_call_id\":\"call_parent\","
         "\"parent_tool_name\":\"delegate\","
+        "\"parent_graph_run_id\":\"run_graph_parent\","
+        "\"call_frame_id\":\"frame_parent\","
         "\"active_agent\":\"planner\","
         "\"handoff_target_agent\":\"executor\","
         "\"handoff_reason\":\"delegate execution\"}");
@@ -792,6 +850,12 @@ spec("turbo agent state api") {
     check_str_eq(turbo_agent_state_tool_result_parent_tool_name(
                      turbo_json_array_get(latest_outputs, 0)),
                  "delegate");
+    check_str_eq(turbo_agent_state_tool_result_parent_graph_run_id(
+                     turbo_json_array_get(latest_outputs, 0)),
+                 "run_graph_parent");
+    check_str_eq(turbo_agent_state_tool_result_call_frame_id(
+                     turbo_json_array_get(latest_outputs, 0)),
+                 "frame_parent");
     check_str_eq(turbo_json_get_string(turbo_json_array_get(latest_outputs, 0), "active_agent"),
                  "planner");
     check_str_eq(

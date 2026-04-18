@@ -2,6 +2,8 @@
   "parent_agent_run_id": "run_parent",
   "parent_tool_call_id": "call_parent",
   "parent_tool_name": "delegate",
+  "parent_graph_run_id": "run_parent",
+  "call_frame_id": "call_parent",
   "child_inspect": {
     "run": {
       "id": "run_123"

@@ -47,6 +47,8 @@ static void turbo_agent_subagent_session_config_clear(turbo_agent_session_config
   free((char *)config->parent_agent_run_id);
   free((char *)config->parent_tool_call_id);
   free((char *)config->parent_tool_name);
+  free((char *)config->parent_graph_run_id);
+  free((char *)config->call_frame_id);
   memset(config, 0, sizeof(*config));
 }
 
@@ -64,6 +66,8 @@ static int turbo_agent_subagent_session_config_copy_ephemeral(
   dst->parent_agent_run_id = turbo_agent_subagent_strdup(src->parent_agent_run_id);
   dst->parent_tool_call_id = turbo_agent_subagent_strdup(src->parent_tool_call_id);
   dst->parent_tool_name = turbo_agent_subagent_strdup(src->parent_tool_name);
+  dst->parent_graph_run_id = turbo_agent_subagent_strdup(src->parent_graph_run_id);
+  dst->call_frame_id = turbo_agent_subagent_strdup(src->call_frame_id);
   dst->workflow_kind = src->workflow_kind;
   dst->load_env = src->load_env;
   dst->overwrite_env = src->overwrite_env;
@@ -83,6 +87,8 @@ static int turbo_agent_subagent_session_config_copy_ephemeral(
       (src->parent_agent_run_id && !dst->parent_agent_run_id) ||
       (src->parent_tool_call_id && !dst->parent_tool_call_id) ||
       (src->parent_tool_name && !dst->parent_tool_name) ||
+      (src->parent_graph_run_id && !dst->parent_graph_run_id) ||
+      (src->call_frame_id && !dst->call_frame_id) ||
       (src->agent_config.api_key && !dst->agent_config.api_key) ||
       (src->agent_config.model && !dst->agent_config.model) ||
       (src->agent_config.base_url && !dst->agent_config.base_url) ||
@@ -246,6 +252,8 @@ static int turbo_agent_subagent_result_set_base(json_value_t *result, const json
   const char *parent_agent_run_id;
   const char *parent_tool_call_id;
   const char *parent_tool_name;
+  const char *parent_graph_run_id;
+  const char *call_frame_id;
   const char *active_agent;
   const char *handoff_target_agent;
   const char *handoff_reason;
@@ -260,6 +268,8 @@ static int turbo_agent_subagent_result_set_base(json_value_t *result, const json
   parent_agent_run_id = turbo_json_get_string(summary, "parent_agent_run_id");
   parent_tool_call_id = turbo_json_get_string(summary, "parent_tool_call_id");
   parent_tool_name = turbo_json_get_string(summary, "parent_tool_name");
+  parent_graph_run_id = turbo_json_get_string(summary, "parent_graph_run_id");
+  call_frame_id = turbo_json_get_string(summary, "call_frame_id");
   active_agent = turbo_json_get_string(summary, "active_agent");
   handoff_target_agent = turbo_json_get_string(summary, "handoff_target_agent");
   handoff_reason = turbo_json_get_string(summary, "handoff_reason");
@@ -289,6 +299,16 @@ static int turbo_agent_subagent_result_set_base(json_value_t *result, const json
     turbo_json_object_set_string(result, "parent_tool_name", parent_tool_name);
   } else {
     turbo_json_object_add(result, "parent_tool_name", turbo_json_create_null());
+  }
+  if (parent_graph_run_id) {
+    turbo_json_object_set_string(result, "parent_graph_run_id", parent_graph_run_id);
+  } else {
+    turbo_json_object_add(result, "parent_graph_run_id", turbo_json_create_null());
+  }
+  if (call_frame_id) {
+    turbo_json_object_set_string(result, "call_frame_id", call_frame_id);
+  } else {
+    turbo_json_object_add(result, "call_frame_id", turbo_json_create_null());
   }
   if (active_agent) {
     turbo_json_object_set_string(result, "active_agent", active_agent);

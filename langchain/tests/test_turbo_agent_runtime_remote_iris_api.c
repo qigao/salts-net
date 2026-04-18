@@ -481,7 +481,10 @@ spec("turbo agent runtime remote iris api") {
       state.runtime = NULL;
     }
     state.graph = NULL;
-    state.rpc_ctx = NULL;
+    if (state.rpc_ctx) {
+      rpc_destroy(state.rpc_ctx);
+      state.rpc_ctx = NULL;
+    }
     if (state.coro_ctx) {
       coro_context_destroy(state.coro_ctx);
       state.coro_ctx = NULL;
@@ -501,5 +504,31 @@ spec("turbo agent runtime remote iris api") {
     check_true(state.rpc_ok);
     check_true(state.remote_ok);
     check_true(state.method_not_allowed_ok);
+  }
+
+  it("should tolerate app registry teardown before bridge teardown") {
+    turbo_agent_runtime_remote_config_t remote_config = {0};
+    turbo_agent_runtime_remote_iris_config_t bridge_config = {0};
+    iris_app_t *app = iris_app_default();
+
+    state.store = turbo_agent_runtime_store_memory_create();
+    state.runtime = turbo_agent_runtime_create(&state.store);
+    check_not_null(state.runtime);
+
+    remote_config.runtime = state.runtime;
+    state.remote = turbo_agent_runtime_remote_create(&remote_config);
+    check_not_null(state.remote);
+
+    bridge_config.remote = state.remote;
+    bridge_config.path = "/v1/runtime/jsonrpc";
+    state.bridge = turbo_agent_runtime_remote_iris_create(&bridge_config);
+    check_not_null(state.bridge);
+    check_int_eq(turbo_agent_runtime_remote_iris_mount(state.bridge, app), 0);
+    check_not_null(iris_app_lookup_rpc_context(app, "/v1/runtime/jsonrpc"));
+
+    iris_app_reset_default();
+
+    turbo_agent_runtime_remote_iris_destroy(state.bridge);
+    state.bridge = NULL;
   }
 }

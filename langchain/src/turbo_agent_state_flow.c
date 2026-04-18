@@ -625,6 +625,40 @@ static json_value_t *turbo_agent_state_supervisor_version_local(
   return version;
 }
 
+static void turbo_agent_state_handoff_event_set_optional_string_local(json_value_t *event,
+                                                                      const char *key,
+                                                                      const char *value) {
+  if (!event || turbo_json_type(event) != TURBO_JSON_OBJECT || !key) {
+    return;
+  }
+
+  if (value) {
+    turbo_json_object_set_string(event, key, value);
+  } else {
+    turbo_json_object_set_null(event, key);
+  }
+}
+
+static json_value_t *turbo_agent_state_handoff_event_local(const char *phase,
+                                                           const char *from_agent,
+                                                           const char *target_agent,
+                                                           const char *reason,
+                                                           const char *active_agent) {
+  json_value_t *event = turbo_agent_event_create("handoff");
+
+  if (!event) {
+    return NULL;
+  }
+
+  turbo_json_object_set_string(event, "phase", phase ? phase : "");
+  turbo_agent_state_handoff_event_set_optional_string_local(event, "from_agent", from_agent);
+  turbo_agent_state_handoff_event_set_optional_string_local(event, "target_agent", target_agent);
+  turbo_agent_state_handoff_event_set_optional_string_local(event, "reason", reason);
+  turbo_agent_state_handoff_event_set_optional_string_local(event, "active_agent", active_agent);
+  turbo_json_object_set_number(event, "status", 0);
+  return event;
+}
+
 int turbo_agent_state_set_active_agent_impl(json_value_t *state, const char *active_agent) {
   json_value_t *version;
 
@@ -648,6 +682,8 @@ int turbo_agent_state_request_handoff_impl(json_value_t *state, const char *targ
   json_value_t *version;
   json_value_t *history;
   json_value_t *entry;
+  json_value_t *event;
+  json_value_t *events;
   const char *active_agent;
 
   if (!state || !target_agent) {
@@ -660,7 +696,12 @@ int turbo_agent_state_request_handoff_impl(json_value_t *state, const char *targ
   history = turbo_json_object_get(version, "handoff_history");
   entry = turbo_json_create_object();
   active_agent = turbo_agent_state_active_agent(state);
-  if (!history || turbo_json_type(history) != TURBO_JSON_ARRAY || !entry) {
+  event = turbo_agent_state_handoff_event_local("requested", active_agent, target_agent, reason,
+                                                active_agent);
+  events = turbo_agent_state_get_array(state, "events");
+  if (!history || turbo_json_type(history) != TURBO_JSON_ARRAY || !entry || !event || !events ||
+      turbo_json_type(events) != TURBO_JSON_ARRAY) {
+    turbo_free_json(&event);
     turbo_free_json(&entry);
     turbo_free_json(&version);
     return -1;
@@ -672,34 +713,49 @@ int turbo_agent_state_request_handoff_impl(json_value_t *state, const char *targ
   turbo_json_object_set_string(entry, "reason", reason ? reason : "");
   turbo_json_array_add(history, entry);
   if (turbo_agent_state_append_object_version(state, "supervisor_versions", version) != 0) {
+    turbo_free_json(&event);
     turbo_free_json(&version);
     return -1;
   }
+  turbo_json_array_add(events, event);
   return 0;
 }
 
 int turbo_agent_state_commit_handoff_impl(json_value_t *state) {
   json_value_t *version;
+  json_value_t *event;
+  json_value_t *events;
+  const char *from_agent;
+  const char *reason;
   const char *target_agent;
 
   if (!state) {
     return -1;
   }
+  from_agent = turbo_agent_state_active_agent(state);
   target_agent = turbo_agent_state_handoff_target_agent(state);
+  reason = turbo_agent_state_handoff_reason(state);
   if (!target_agent || target_agent[0] == '\0') {
     return -1;
   }
   version = turbo_agent_state_supervisor_version_local(state);
-  if (!version) {
+  event = turbo_agent_state_handoff_event_local("committed", from_agent, target_agent, reason,
+                                                target_agent);
+  events = turbo_agent_state_get_array(state, "events");
+  if (!version || !event || !events || turbo_json_type(events) != TURBO_JSON_ARRAY) {
+    turbo_free_json(&event);
+    turbo_free_json(&version);
     return -1;
   }
   turbo_json_object_set_string(version, "active_agent", target_agent);
   turbo_json_object_set_string(version, "target_agent", "");
   turbo_json_object_set_string(version, "handoff_reason", "");
   if (turbo_agent_state_append_object_version(state, "supervisor_versions", version) != 0) {
+    turbo_free_json(&event);
     turbo_free_json(&version);
     return -1;
   }
+  turbo_json_array_add(events, event);
   return 0;
 }
 

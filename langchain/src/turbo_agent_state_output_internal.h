@@ -27,6 +27,10 @@ CXX_C_API const char *turbo_agent_state_tool_result_parent_tool_call_id_impl(
     const json_value_t *output_item);
 CXX_C_API const char *turbo_agent_state_tool_result_parent_tool_name_impl(
     const json_value_t *output_item);
+CXX_C_API const char *turbo_agent_state_tool_result_parent_graph_run_id_impl(
+    const json_value_t *output_item);
+CXX_C_API const char *turbo_agent_state_tool_result_call_frame_id_impl(
+    const json_value_t *output_item);
 CXX_C_API const char *turbo_agent_state_final_answer_text_impl(
     const json_value_t *state);
 CXX_C_API int turbo_agent_state_parse_final_output_json_impl(const json_value_t *state,
@@ -51,6 +55,10 @@ CXX_C_API int turbo_agent_state_parse_final_output_json_impl(const json_value_t 
   turbo_agent_state_tool_result_parent_tool_call_id_impl
 #define turbo_agent_state_tool_result_parent_tool_name \
   turbo_agent_state_tool_result_parent_tool_name_impl
+#define turbo_agent_state_tool_result_parent_graph_run_id \
+  turbo_agent_state_tool_result_parent_graph_run_id_impl
+#define turbo_agent_state_tool_result_call_frame_id \
+  turbo_agent_state_tool_result_call_frame_id_impl
 #define turbo_agent_state_executor_tool_results_failed \
   turbo_agent_state_executor_tool_results_failed_impl
 #define turbo_agent_state_final_answer_text turbo_agent_state_final_answer_text_impl

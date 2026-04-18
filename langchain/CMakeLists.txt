@@ -19,12 +19,16 @@ add_library(
   src/turbo_agent_util_internal.c
   src/turbo_agent_app.c
   src/turbo_agent_memory_store.c
+  src/turbo_agent_remote_app.c
+  src/turbo_agent_remote_session.c
   src/turbo_agent_runtime.c
   src/turbo_agent_runtime_remote.c
+  src/turbo_agent_runtime_remote_client.c
   src/turbo_agent_runtime_remote_iris.c
   src/turbo_agent_runtime_v1.c
   src/turbo_agent_session.c
   src/turbo_agent_subagent.c
+  src/turbo_agent_subgraph.c
   src/turbo_agent_request.c
   src/turbo_agent_request_text.c
   src/turbo_agent_request_structured_output.c
@@ -76,7 +80,7 @@ target_include_directories(
 
 target_link_libraries(
   turbo_langchain
-  PUBLIC TurboNet::Parser TurboNet::HttpClient TurboNet::Iris
+  PUBLIC TurboNet::Parser TurboNet::HttpClient TurboNet::Iris TurboNet::RPCClient
   PRIVATE TurboNet::Wasm3 mir)
 target_compile_definitions(turbo_langchain PRIVATE SHARED_CXX)
 
@@ -104,6 +108,42 @@ set_tests_properties(
   PROPERTIES PASS_REGULAR_EXPRESSION
              "summary;parent_agent_run_id: \\(null\\);thread record;run record;checkpoint record;list_runs count: 1;list_checkpoints count: 1;history event count: 1;resumed status: completed")
 
+add_executable(langchain_runtime_live_stream_example
+               examples/runtime_live_stream.c)
+target_link_libraries(langchain_runtime_live_stream_example PRIVATE turbo_langchain)
+set_target_properties(langchain_runtime_live_stream_example
+                      PROPERTIES FOLDER "langchain/examples")
+add_test(NAME langchain_runtime_live_stream_example_smoke
+         COMMAND langchain_runtime_live_stream_example)
+set_tests_properties(
+  langchain_runtime_live_stream_example_smoke
+  PROPERTIES PASS_REGULAR_EXPRESSION
+             "initial run;status: interrupted;live stream;event kind: .*;live summary;status: completed")
+
+add_executable(langchain_runtime_remote_inspect_helpers_example
+               examples/runtime_remote_inspect_helpers.c)
+target_link_libraries(langchain_runtime_remote_inspect_helpers_example PRIVATE turbo_langchain)
+set_target_properties(langchain_runtime_remote_inspect_helpers_example
+                      PROPERTIES FOLDER "langchain/examples")
+add_test(NAME langchain_runtime_remote_inspect_helpers_example_smoke
+         COMMAND langchain_runtime_remote_inspect_helpers_example)
+set_tests_properties(
+  langchain_runtime_remote_inspect_helpers_example_smoke
+  PROPERTIES PASS_REGULAR_EXPRESSION
+             "remote seed;thread_id: thr_remote_example;remote client supervisor active_agent: planner;remote session orchestration thread_id: thr_remote_example;remote app child multi-agent parent_tool_name: delegate")
+
+add_executable(langchain_runtime_memory_record_helpers_example
+               examples/runtime_memory_record_helpers.c)
+target_link_libraries(langchain_runtime_memory_record_helpers_example PRIVATE turbo_langchain)
+set_target_properties(langchain_runtime_memory_record_helpers_example
+                      PROPERTIES FOLDER "langchain/examples")
+add_test(NAME langchain_runtime_memory_record_helpers_example_smoke
+         COMMAND langchain_runtime_memory_record_helpers_example)
+set_tests_properties(
+  langchain_runtime_memory_record_helpers_example_smoke
+  PROPERTIES PASS_REGULAR_EXPRESSION
+             "store record id: project/demo::context;session query count: 1;session memory text: .*remember this.*;app record kind: context;app query count: 1")
+
 install(
   FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_langchain.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_event.h
@@ -127,11 +167,15 @@ install(
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_app.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_extensions.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_memory_store.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_remote_app.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_remote_session.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime_remote.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime_remote_client.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_runtime_remote_iris.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_session.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_subagent.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_subgraph.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_state.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_sse.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/turbo_agent_graph.h
@@ -207,6 +251,21 @@ cmake_add_test(
 
 cmake_add_test(
   SOURCES tests/test_turbo_agent_runtime_remote_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_runtime_remote_client_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_remote_session_api.c
+  LIBS turbo_langchain TurboNet::TinyTest
+  FOLDER langchain)
+
+cmake_add_test(
+  SOURCES tests/test_turbo_agent_remote_app_api.c
   LIBS turbo_langchain TurboNet::TinyTest
   FOLDER langchain)
 

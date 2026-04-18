@@ -3,6 +3,7 @@
 #include "turbo_agent_graph.h"
 #include "turbo_agent_session.h"
 #include "turbo_agent_state.h"
+#include "turbo_agent_workflow.h"
 #include "turbo_prompt.h"
 #include "../src/turbo_agent_runtime_internal.h"
 
@@ -46,6 +47,24 @@
 CXX_C_API int turbo_agent_session_apply_state_patch_bind(
     turbo_agent_session_t *session, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_get_thread_head_state_bind(
+    turbo_agent_session_t *session, turbo_runtime_data_bind_value_t **out_state);
+CXX_C_API int turbo_agent_session_get_thread_head_trace_events_bind(
+    turbo_agent_session_t *session, turbo_runtime_data_bind_value_t **out_events);
+CXX_C_API int turbo_agent_session_prepare_checkpoint_state_override_bind(
+    turbo_agent_session_t *session, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_prepare_thread_state_override_bind(
+    turbo_agent_session_t *session, const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_prepare_checkpoint_command_override_bind(
+    turbo_agent_session_t *session, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_prepare_thread_command_override_bind(
+    turbo_agent_session_t *session, const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override);
 CXX_C_API int turbo_agent_session_apply_thread_state_patch_bind(
     turbo_agent_session_t *session, const turbo_runtime_data_bind_value_t *state_patch,
@@ -217,6 +236,26 @@ static int session_write_bool_bind_node(turbo_graph_exec_ctx_t *ctx, void *user_
              : -1;
 }
 
+static int session_supervisor_planner_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  const char *reason = (const char *)user_data;
+
+  if (!ctx || !ctx->state || !reason) {
+    return -1;
+  }
+  turbo_json_object_set_bool(ctx->state, "visited_planner", true);
+  return turbo_agent_state_request_handoff(ctx->state, "executor", reason);
+}
+
+static int session_supervisor_executor_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  const char *final_output = (const char *)user_data;
+
+  if (!ctx || !ctx->state || !final_output) {
+    return -1;
+  }
+  turbo_json_object_set_bool(ctx->state, "visited_executor", true);
+  return turbo_agent_state_set_final_answer(ctx->state, final_output);
+}
+
 static turbo_graph_t *create_session_review_graph(void) {
   turbo_graph_t *graph = turbo_graph_create("session-review");
   static session_bool_write_t start = {"visited_start", 1};
@@ -237,6 +276,27 @@ static turbo_graph_t *create_session_review_graph(void) {
   return graph;
 }
 
+static turbo_graph_t *create_session_supervisor_handoff_graph(void) {
+  turbo_graph_t *graph = turbo_graph_create("session-supervisor-handoff");
+  static const char *handoff_reason = "delegate execution";
+  static const char *final_output = "executor finished";
+
+  check_not_null(graph);
+  check_int_eq(turbo_agent_install_supervisor_loop(graph, "supervisor", "handoff", "end", 1),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_node(graph, "planner", session_supervisor_planner_node,
+                                    (void *)handoff_reason),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_node(graph, "executor", session_supervisor_executor_node,
+                                    (void *)final_output),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_bind_edge(graph, "planner", "handoff", NULL, NULL),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_bind_edge(graph, "executor", "end", NULL, NULL),
+               TURBO_GRAPH_EXEC_OK);
+  return graph;
+}
+
 static turbo_runtime_data_bind_value_t *create_session_review_state(int approved) {
   json_value_t *state = turbo_agent_state_create();
   turbo_runtime_data_bind_value_t *bound;
@@ -244,6 +304,17 @@ static turbo_runtime_data_bind_value_t *create_session_review_state(int approved
   check_not_null(state);
   check_int_eq(turbo_agent_state_request_review(state, "need approval"), 0);
   check_int_eq(turbo_agent_state_set_review_approved(state, approved), 0);
+  bound = turbo_runtime_data_bind_value_from_json(state);
+  turbo_free_json(&state);
+  return bound;
+}
+
+static turbo_runtime_data_bind_value_t *create_session_supervisor_handoff_state(void) {
+  json_value_t *state = turbo_agent_state_create();
+  turbo_runtime_data_bind_value_t *bound;
+
+  check_not_null(state);
+  check_int_eq(turbo_agent_state_set_active_agent(state, "planner"), 0);
   bound = turbo_runtime_data_bind_value_from_json(state);
   turbo_free_json(&state);
   return bound;
@@ -1041,6 +1112,105 @@ spec("turbo agent session api") {
     turbo_agent_session_destroy(session);
   }
 
+  it("should emit live canonical stream events through session wrappers") {
+    turbo_agent_session_config_t config = {0};
+    turbo_agent_session_t *session;
+    turbo_graph_t *graph = create_session_review_graph();
+    turbo_runtime_data_bind_value_t *state = create_session_review_state(0);
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    turbo_runtime_data_bind_value_t *override = NULL;
+    turbo_runtime_data_bind_value_t *resumed_state = NULL;
+    turbo_runtime_data_bind_value_t *forked_state = NULL;
+    turbo_runtime_data_bind_value_t *command = NULL;
+    json_value_t *summary = NULL;
+    json_value_t *resumed_summary = NULL;
+    json_value_t *forked_summary = NULL;
+    session_replay_capture_t start_capture = {0};
+    session_replay_capture_t resume_capture = {0};
+    session_replay_capture_t fork_capture = {0};
+    const char *interrupt_before_review[] = {"review"};
+    turbo_graph_run_options_t options = {0};
+    char *first_run_id = NULL;
+    char *first_checkpoint_id = NULL;
+
+    config.runtime_store = turbo_agent_runtime_store_memory_create();
+    session = turbo_agent_session_create(&config);
+    check_not_null(session);
+    check_not_null(graph);
+    check_not_null(state);
+
+    options.interrupt_before_nodes = interrupt_before_review;
+    options.interrupt_before_count = 1;
+    check_int_eq(turbo_agent_session_start_bind_graph_stream(
+                     session, graph, state, &options, session_capture_replayed_history_event,
+                     &start_capture, &summary, &result_state),
+                 0);
+    check_str_eq(turbo_json_get_string(summary, "status"), "interrupted");
+    check_true(start_capture.count >= 1);
+    check_true(start_capture.trace_count + start_capture.model_count +
+                   start_capture.tool_result_count >=
+               1);
+    check_not_null(turbo_agent_session_thread_id(session));
+    check_not_null(turbo_agent_session_last_run_id(session));
+    check_not_null(turbo_agent_session_last_checkpoint_id(session));
+    first_run_id = session_query_only_memory_strdup(turbo_agent_session_last_run_id(session));
+    first_checkpoint_id =
+        session_query_only_memory_strdup(turbo_agent_session_last_checkpoint_id(session));
+    check_not_null(first_run_id);
+    check_not_null(first_checkpoint_id);
+
+    command = turbo_runtime_data_bind_value_create_object();
+    check_not_null(command);
+    check_int_eq(turbo_runtime_data_bind_object_set(
+                     command, "kind",
+                     turbo_runtime_data_bind_value_create_string("approve_review")),
+                 TURBO_RUNTIME_DATA_BIND_OK);
+    check_int_eq(turbo_agent_session_apply_checkpoint_command_bind(session, first_checkpoint_id,
+                                                                   command, &override),
+                 0);
+    turbo_runtime_data_bind_value_destroy(command);
+    command = NULL;
+
+    options.interrupt_before_nodes = NULL;
+    options.interrupt_before_count = 0;
+    check_int_eq(turbo_agent_session_resume_bind_graph_stream(
+                     session, graph, first_checkpoint_id, override, &options,
+                     session_capture_replayed_history_event, &resume_capture, &resumed_summary,
+                     &resumed_state),
+                 0);
+    check_str_eq(turbo_json_get_string(resumed_summary, "status"), "completed");
+    check_str_eq(turbo_agent_session_last_run_id(session), first_run_id);
+    check_true(resume_capture.count >= 1);
+    check_true(resume_capture.trace_count + resume_capture.model_count +
+                   resume_capture.tool_result_count >=
+               1);
+
+    check_int_eq(turbo_agent_session_fork_bind_graph_stream(
+                     session, graph, first_checkpoint_id, override, &options,
+                     session_capture_replayed_history_event, &fork_capture, &forked_summary,
+                     &forked_state),
+                 0);
+    check_str_eq(turbo_json_get_string(forked_summary, "status"), "completed");
+    check_true(strcmp(turbo_agent_session_last_run_id(session), first_run_id) != 0);
+    check_true(fork_capture.count >= 1);
+    check_true(fork_capture.trace_count + fork_capture.model_count + fork_capture.tool_result_count >=
+               1);
+
+    free(first_checkpoint_id);
+    free(first_run_id);
+    turbo_free_json(&forked_summary);
+    turbo_free_json(&resumed_summary);
+    turbo_free_json(&summary);
+    turbo_runtime_data_bind_value_destroy(forked_state);
+    turbo_runtime_data_bind_value_destroy(resumed_state);
+    turbo_runtime_data_bind_value_destroy(override);
+    turbo_runtime_data_bind_value_destroy(command);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_graph_destroy(graph);
+    turbo_agent_session_destroy(session);
+  }
+
   it("should fail loudly on malformed memory-context records") {
     turbo_agent_session_config_t config = {0};
     turbo_agent_session_t *session;
@@ -1135,6 +1305,54 @@ spec("turbo agent session api") {
 
     turbo_free_json(&queried);
     turbo_free_json(&record_views);
+    turbo_agent_session_destroy(session);
+  }
+
+  it("should expose canonical memory-record helpers through the session") {
+    turbo_agent_session_config_t config = {0};
+    turbo_agent_session_t *session;
+    turbo_agent_memory_query_options_t options = {0};
+    json_value_t *record = turbo_agent_test_load_fixture_json("memory_context_record.golden.json");
+    json_value_t *loaded = NULL;
+    json_value_t *queried = NULL;
+    turbo_runtime_data_bind_value_t *state = NULL;
+    json_value_t *state_json = NULL;
+    char *memory_text = NULL;
+
+    config.runtime_store = turbo_agent_runtime_store_memory_create();
+    config.memory_store = turbo_agent_memory_store_memory_create();
+    session = turbo_agent_session_create(&config);
+    check_not_null(session);
+    check_not_null(record);
+
+    check_int_eq(turbo_agent_session_memory_validate_record(record), 0);
+    check_int_eq(turbo_agent_session_memory_put_record(session, record), 0);
+    check_int_eq(turbo_agent_session_memory_get_record(session, "project/demo", "context", &loaded),
+                 0);
+    session_check_memory_record_fixture(loaded, "memory_context_record.golden.json", NULL);
+
+    options.namespace_prefix = "project";
+    options.kind = "context";
+    options.key_prefix = "con";
+    options.text_substring = "remember";
+    check_int_eq(turbo_agent_session_memory_query_records_ex(session, &options, &queried), 0);
+    session_check_memory_record_array_fixture(queried, "memory_query_results.golden.json",
+                                              "context_query");
+
+    state = turbo_agent_session_create_input_state_with_memory_bind(session, "hello", "project");
+    check_not_null(state);
+    state_json = turbo_runtime_data_bind_value_to_json(state);
+    check_not_null(state_json);
+    memory_text = turbo_agent_state_memory_context_text(state_json);
+    check_not_null(memory_text);
+    check_true(strstr(memory_text, "remember this") != NULL);
+
+    free(memory_text);
+    turbo_free_json(&state_json);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_free_json(&queried);
+    turbo_free_json(&loaded);
+    turbo_free_json(&record);
     turbo_agent_session_destroy(session);
   }
 
@@ -1601,6 +1819,7 @@ spec("turbo agent session api") {
     const json_value_t *supervisor = NULL;
     const json_value_t *inbox = NULL;
     const json_value_t *history = NULL;
+    const json_value_t *latest_handoff_event = NULL;
     const json_value_t *control = NULL;
     const json_value_t *workflow = NULL;
     turbo_graph_run_options_t options = {0};
@@ -1624,11 +1843,13 @@ spec("turbo agent session api") {
     supervisor = turbo_json_object_get(inspect, "supervisor");
     inbox = turbo_json_object_get(inspect, "inbox");
     history = turbo_json_object_get(inspect, "handoff_history");
+    latest_handoff_event = turbo_json_object_get(inspect, "latest_handoff_event");
     control = turbo_json_object_get(inspect, "control_snapshot");
     workflow = turbo_json_object_get(inspect, "workflow_snapshot");
     check_not_null(supervisor);
     check_not_null(inbox);
     check_not_null(history);
+    check_not_null(latest_handoff_event);
     check_not_null(control);
     check_not_null(workflow);
     check_str_eq(turbo_json_get_string(supervisor, "active_agent"), "planner");
@@ -1638,10 +1859,141 @@ spec("turbo agent session api") {
     check_int_eq(turbo_json_get_int(supervisor, "handoff_count", 0), 1);
     check_size_eq(turbo_json_array_size(inbox), 0);
     check_size_eq(turbo_json_array_size(history), 1);
+    check_str_eq(turbo_json_get_string(latest_handoff_event, "kind"), "handoff");
+    check_str_eq(turbo_agent_state_handoff_event_phase(latest_handoff_event), "requested");
+    check_str_eq(turbo_agent_state_handoff_event_from_agent(latest_handoff_event), "planner");
+    check_str_eq(turbo_agent_state_handoff_event_target_agent(latest_handoff_event), "executor");
+    check_str_eq(turbo_agent_state_handoff_event_reason(latest_handoff_event),
+                 "delegate execution");
+    check_str_eq(turbo_agent_state_handoff_event_active_agent(latest_handoff_event), "planner");
     check_not_null(turbo_json_object_get(control, "supervisor"));
     check_not_null(turbo_json_object_get(workflow, "supervisor"));
 
     turbo_free_json(&inspect);
+    turbo_free_json(&summary);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_graph_destroy(graph);
+    turbo_agent_session_destroy(session);
+  }
+
+  it("should run one real supervisor handoff loop through the session surface") {
+    turbo_agent_session_config_t config = {0};
+    turbo_agent_session_t *session;
+    turbo_graph_t *graph = create_session_supervisor_handoff_graph();
+    turbo_runtime_data_bind_value_t *state = create_session_supervisor_handoff_state();
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    turbo_runtime_data_bind_value_t *inspect_timeline = NULL;
+    json_value_t *summary = NULL;
+    json_value_t *state_json = NULL;
+    json_value_t *inbox = NULL;
+    json_value_t *history = NULL;
+    json_value_t *supervisor_inspect = NULL;
+    json_value_t *orchestration_inspect = NULL;
+    const json_value_t *latest_handoff_event = NULL;
+    const json_value_t *nested_latest_handoff_event = NULL;
+    const json_value_t *thread_lineage;
+    const json_value_t *child_runs;
+
+    config.runtime_store = turbo_agent_runtime_store_memory_create();
+    session = turbo_agent_session_create(&config);
+    check_not_null(session);
+    check_not_null(graph);
+    check_not_null(state);
+
+    check_int_eq(turbo_agent_session_start_bind_graph(session, graph, state, NULL, &summary,
+                                                      &result_state),
+                 0);
+    check_str_eq(turbo_json_get_string(summary, "status"), "completed");
+    check_str_eq(turbo_json_get_string(summary, "thread_id"),
+                 turbo_agent_session_thread_id(session));
+    check_str_eq(turbo_json_get_string(summary, "run_id"),
+                 turbo_agent_session_last_run_id(session));
+    check_true(turbo_json_type(turbo_json_object_get(summary, "checkpoint_id")) == TURBO_JSON_NULL);
+    check_str_eq(turbo_json_get_string(summary, "active_agent"), "executor");
+    check_true(turbo_json_type(turbo_json_object_get(summary, "handoff_target_agent")) ==
+               TURBO_JSON_NULL);
+    check_true(turbo_json_type(turbo_json_object_get(summary, "handoff_reason")) ==
+               TURBO_JSON_NULL);
+    check_not_null(turbo_agent_session_thread_id(session));
+    check_not_null(turbo_agent_session_last_run_id(session));
+    check_null(turbo_agent_session_last_checkpoint_id(session));
+
+    state_json = turbo_runtime_data_bind_value_to_json(result_state);
+    check_not_null(state_json);
+    check_true(turbo_json_get_bool(state_json, "visited_planner", false));
+    check_true(turbo_json_get_bool(state_json, "visited_executor", false));
+    check_str_eq(turbo_agent_state_active_agent(state_json), "executor");
+    check_null(turbo_agent_state_handoff_target_agent(state_json));
+    check_null(turbo_agent_state_handoff_reason(state_json));
+
+    check_int_eq(turbo_agent_session_get_supervisor_inbox(session, &inbox), 0);
+    check_int_eq(turbo_agent_session_get_supervisor_handoff_history(session, &history), 0);
+    check_size_eq(turbo_json_array_size(inbox), 0);
+    check_size_eq(turbo_json_array_size(history), 1);
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(history, 0), "from_agent"), "planner");
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(history, 0), "target_agent"),
+                 "executor");
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(history, 0), "reason"),
+                 "delegate execution");
+
+    check_int_eq(turbo_agent_session_get_supervisor_inspect(session, &supervisor_inspect), 0);
+    turbo_agent_test_check_supervisor_inspect(supervisor_inspect, "executor", "", "", 0, 1);
+    latest_handoff_event = turbo_json_object_get(supervisor_inspect, "latest_handoff_event");
+    check_not_null(latest_handoff_event);
+    check_str_eq(turbo_json_get_string(latest_handoff_event, "kind"), "handoff");
+    check_str_eq(turbo_agent_state_handoff_event_phase(latest_handoff_event), "committed");
+    check_str_eq(turbo_agent_state_handoff_event_from_agent(latest_handoff_event), "planner");
+    check_str_eq(turbo_agent_state_handoff_event_target_agent(latest_handoff_event), "executor");
+    check_str_eq(turbo_agent_state_handoff_event_reason(latest_handoff_event),
+                 "delegate execution");
+    check_str_eq(turbo_agent_state_handoff_event_active_agent(latest_handoff_event), "executor");
+
+    check_int_eq(turbo_agent_session_get_orchestration_inspect(session, &orchestration_inspect), 0);
+    turbo_agent_test_check_supervisor_inspect(
+        turbo_json_object_get(orchestration_inspect, "supervisor_inspect"), "executor", "", "",
+        0, 1);
+    nested_latest_handoff_event = turbo_json_object_get(
+        turbo_json_object_get(orchestration_inspect, "supervisor_inspect"), "latest_handoff_event");
+    check_not_null(nested_latest_handoff_event);
+    check_str_eq(turbo_json_get_string(nested_latest_handoff_event, "kind"), "handoff");
+    check_str_eq(turbo_agent_state_handoff_event_phase(nested_latest_handoff_event), "committed");
+    check_str_eq(turbo_agent_state_handoff_event_from_agent(nested_latest_handoff_event),
+                 "planner");
+    check_str_eq(turbo_agent_state_handoff_event_target_agent(nested_latest_handoff_event),
+                 "executor");
+    check_str_eq(turbo_agent_state_handoff_event_reason(nested_latest_handoff_event),
+                 "delegate execution");
+    check_str_eq(turbo_agent_state_handoff_event_active_agent(nested_latest_handoff_event),
+                 "executor");
+    inspect_timeline = turbo_runtime_data_bind_value_from_json(
+        turbo_json_object_get(orchestration_inspect, "thread_timeline"));
+    check_not_null(inspect_timeline);
+    session_check_thread_timeline_bind(inspect_timeline, turbo_agent_session_thread_id(session),
+                                       turbo_agent_session_last_run_id(session), NULL, 0, 1, 0,
+                                       0);
+    thread_lineage = turbo_json_object_get(orchestration_inspect, "thread_lineage");
+    check_not_null(thread_lineage);
+    check_str_eq(turbo_json_get_string(thread_lineage, "thread_id"),
+                 turbo_agent_session_thread_id(session));
+    check_str_eq(turbo_json_get_string(thread_lineage, "latest_run_id"),
+                 turbo_agent_session_last_run_id(session));
+    check_not_null(turbo_json_object_get(thread_lineage, "pending_run_id"));
+    check_not_null(turbo_json_object_get(thread_lineage, "root_checkpoint_id"));
+    check_not_null(turbo_json_object_get(thread_lineage, "branches"));
+    check_true(turbo_json_type(turbo_json_object_get(thread_lineage, "branches")) ==
+               TURBO_JSON_ARRAY);
+    child_runs = turbo_json_object_get(orchestration_inspect, "child_runs");
+    check_not_null(child_runs);
+    check_true(turbo_json_type(child_runs) == TURBO_JSON_ARRAY);
+    check_size_eq(turbo_json_array_size(child_runs), 0);
+
+    turbo_runtime_data_bind_value_destroy(inspect_timeline);
+    turbo_free_json(&orchestration_inspect);
+    turbo_free_json(&supervisor_inspect);
+    turbo_free_json(&history);
+    turbo_free_json(&inbox);
+    turbo_free_json(&state_json);
     turbo_free_json(&summary);
     turbo_runtime_data_bind_value_destroy(result_state);
     turbo_runtime_data_bind_value_destroy(state);
@@ -1662,6 +2014,7 @@ spec("turbo agent session api") {
     const json_value_t *thread_lineage = NULL;
     const json_value_t *branch_tree = NULL;
     const json_value_t *child_runs = NULL;
+    const json_value_t *latest_handoff_event = NULL;
     const char *interrupt_before_review[] = {"review"};
     turbo_graph_run_options_t options = {0};
 
@@ -1691,6 +2044,15 @@ spec("turbo agent session api") {
     check_true(turbo_json_type(child_runs) == TURBO_JSON_ARRAY);
     check_size_eq(turbo_json_array_size(child_runs), 0);
     check_not_null(turbo_json_object_get(supervisor_inspect, "supervisor"));
+    latest_handoff_event = turbo_json_object_get(supervisor_inspect, "latest_handoff_event");
+    check_not_null(latest_handoff_event);
+    check_str_eq(turbo_json_get_string(latest_handoff_event, "kind"), "handoff");
+    check_str_eq(turbo_agent_state_handoff_event_phase(latest_handoff_event), "requested");
+    check_str_eq(turbo_agent_state_handoff_event_from_agent(latest_handoff_event), "planner");
+    check_str_eq(turbo_agent_state_handoff_event_target_agent(latest_handoff_event), "executor");
+    check_str_eq(turbo_agent_state_handoff_event_reason(latest_handoff_event),
+                 "delegate execution");
+    check_str_eq(turbo_agent_state_handoff_event_active_agent(latest_handoff_event), "planner");
     check_not_null(turbo_json_object_get(supervisor_inspect, "control_snapshot"));
     check_not_null(turbo_json_object_get(supervisor_inspect, "workflow_snapshot"));
 
@@ -1975,11 +2337,18 @@ spec("turbo agent session api") {
     turbo_runtime_data_bind_value_t *state = create_session_review_state(0);
     turbo_runtime_data_bind_value_t *result_state = NULL;
     turbo_runtime_data_bind_value_t *thread_state = NULL;
+    turbo_runtime_data_bind_value_t *thread_head_state = NULL;
+    turbo_runtime_data_bind_value_t *thread_trace_events = NULL;
+    turbo_runtime_data_bind_value_t *thread_head_trace_events = NULL;
     turbo_runtime_data_bind_value_t *run_state = NULL;
     turbo_runtime_data_bind_value_t *checkpoint_state = NULL;
+    turbo_runtime_data_bind_value_t *state_patch = NULL;
+    turbo_runtime_data_bind_value_t *prepared_state_override = NULL;
+    turbo_runtime_data_bind_value_t *legacy_state_override = NULL;
     turbo_runtime_data_bind_value_t *command = NULL;
     turbo_runtime_data_bind_value_t *override = NULL;
     turbo_runtime_data_bind_value_t *rejected_override = NULL;
+    turbo_runtime_data_bind_value_t *prepared_command_override = NULL;
     turbo_runtime_data_bind_value_t *resumed_state = NULL;
     json_value_t *summary = NULL;
     json_value_t *summary2 = NULL;
@@ -2004,6 +2373,15 @@ spec("turbo agent session api") {
     check_int_eq(turbo_agent_session_get_thread_state_bind(session, &thread_state), 0);
     check_true(turbo_runtime_data_bind_value_as_bool(
         turbo_runtime_data_bind_object_get(thread_state, "visited_start"), 0));
+    check_int_eq(turbo_agent_session_get_thread_head_state_bind(session, &thread_head_state), 0);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(thread_head_state, "visited_start"), 0));
+    check_int_eq(turbo_agent_session_get_thread_trace_events_bind(session, &thread_trace_events), 0);
+    check_int_eq(turbo_agent_session_get_thread_head_trace_events_bind(session,
+                                                                       &thread_head_trace_events),
+                 0);
+    check_size_eq(turbo_runtime_data_bind_value_size(thread_head_trace_events),
+                  turbo_runtime_data_bind_value_size(thread_trace_events));
 
     check_int_eq(turbo_agent_session_get_run_state_bind(session, NULL, &run_state), 0);
     check_true(turbo_runtime_data_bind_value_as_bool(
@@ -2013,6 +2391,31 @@ spec("turbo agent session api") {
                  0);
     check_true(turbo_runtime_data_bind_value_as_bool(
         turbo_runtime_data_bind_object_get(checkpoint_state, "visited_start"), 0));
+
+    state_patch = create_session_state_patch_bind();
+    check_not_null(state_patch);
+    check_int_eq(turbo_agent_session_prepare_thread_state_override_bind(session, state_patch,
+                                                                        &prepared_state_override),
+                 0);
+    check_int_eq(
+        turbo_agent_session_update_thread_state_bind(session, state_patch, &legacy_state_override),
+        0);
+    check_str_eq(turbo_runtime_data_bind_value_as_string(turbo_runtime_data_bind_object_get(
+                     turbo_runtime_data_bind_object_get(
+                         turbo_runtime_data_bind_object_get(prepared_state_override, "profile"),
+                         "settings"),
+                     "theme")),
+                 "dark");
+    check_str_eq(turbo_runtime_data_bind_value_as_string(turbo_runtime_data_bind_object_get(
+                     turbo_runtime_data_bind_object_get(
+                         turbo_runtime_data_bind_object_get(legacy_state_override, "profile"),
+                         "settings"),
+                     "theme")),
+                 "dark");
+    turbo_runtime_data_bind_value_destroy(thread_state);
+    thread_state = NULL;
+    check_int_eq(turbo_agent_session_get_thread_state_bind(session, &thread_state), 0);
+    check_null(turbo_runtime_data_bind_object_get(thread_state, "profile"));
 
     command = turbo_runtime_data_bind_value_create_object();
     check_not_null(command);
@@ -2027,6 +2430,37 @@ spec("turbo agent session api") {
     turbo_free_json(&override_json);
     turbo_runtime_data_bind_value_destroy(command);
     command = NULL;
+
+    command = turbo_runtime_data_bind_value_create_object();
+    check_not_null(command);
+    check_int_eq(turbo_runtime_data_bind_object_set(
+                     command, "kind",
+                     turbo_runtime_data_bind_value_create_string("request_replan")),
+                 TURBO_RUNTIME_DATA_BIND_OK);
+    check_int_eq(turbo_runtime_data_bind_object_set(
+                     command, "reason",
+                     turbo_runtime_data_bind_value_create_string("manual review requested")),
+                 TURBO_RUNTIME_DATA_BIND_OK);
+    check_int_eq(turbo_agent_session_prepare_checkpoint_command_override_bind(
+                     session, turbo_agent_session_last_checkpoint_id(session), command,
+                     &prepared_command_override),
+                 0);
+    override_json = turbo_runtime_data_bind_value_to_json(prepared_command_override);
+    check_not_null(override_json);
+    check_true(turbo_agent_state_replan_requested(override_json));
+    check_str_eq(turbo_agent_state_replan_reason(override_json), "manual review requested");
+    turbo_free_json(&override_json);
+    turbo_runtime_data_bind_value_destroy(command);
+    command = NULL;
+    turbo_runtime_data_bind_value_destroy(checkpoint_state);
+    checkpoint_state = NULL;
+    check_int_eq(turbo_agent_session_get_checkpoint_state_bind(session, NULL, &checkpoint_state),
+                 0);
+    override_json = turbo_runtime_data_bind_value_to_json(checkpoint_state);
+    check_not_null(override_json);
+    check_false(turbo_agent_state_replan_requested(override_json));
+    turbo_free_json(&override_json);
+    override_json = NULL;
 
     command = turbo_runtime_data_bind_value_create_object();
     check_not_null(command);
@@ -2093,11 +2527,18 @@ spec("turbo agent session api") {
     check_str_eq(turbo_agent_state_replan_reason(override_json), "manual review requested");
 
     turbo_free_json(&override_json);
+    turbo_runtime_data_bind_value_destroy(prepared_command_override);
+    turbo_runtime_data_bind_value_destroy(legacy_state_override);
+    turbo_runtime_data_bind_value_destroy(prepared_state_override);
+    turbo_runtime_data_bind_value_destroy(state_patch);
     turbo_runtime_data_bind_value_destroy(override);
     turbo_runtime_data_bind_value_destroy(rejected_override);
     turbo_runtime_data_bind_value_destroy(command);
     turbo_runtime_data_bind_value_destroy(checkpoint_state);
     turbo_runtime_data_bind_value_destroy(run_state);
+    turbo_runtime_data_bind_value_destroy(thread_head_trace_events);
+    turbo_runtime_data_bind_value_destroy(thread_trace_events);
+    turbo_runtime_data_bind_value_destroy(thread_head_state);
     turbo_runtime_data_bind_value_destroy(thread_state);
     turbo_runtime_data_bind_value_destroy(result_state);
     turbo_runtime_data_bind_value_destroy(state);
@@ -2153,6 +2594,8 @@ spec("turbo agent session api") {
     turbo_json_object_set_string(output_item, "parent_agent_run_id", "run_parent");
     turbo_json_object_set_string(output_item, "parent_tool_call_id", "call_parent");
     turbo_json_object_set_string(output_item, "parent_tool_name", "delegate");
+    turbo_json_object_set_string(output_item, "parent_graph_run_id", "run_graph_parent");
+    turbo_json_object_set_string(output_item, "call_frame_id", "frame_parent");
 
     check_int_eq(turbo_agent_session_get_child_run(session, output_item, &run_json), 0);
     check_int_eq(turbo_agent_session_get_child_checkpoint(session, output_item, &checkpoint_json),
@@ -2224,6 +2667,9 @@ spec("turbo agent session api") {
     check_str_eq(turbo_json_get_string(orchestration_inspect, "parent_tool_call_id"),
                  "call_parent");
     check_str_eq(turbo_json_get_string(orchestration_inspect, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(orchestration_inspect, "parent_graph_run_id"),
+                 "run_graph_parent");
+    check_str_eq(turbo_json_get_string(orchestration_inspect, "call_frame_id"), "frame_parent");
     check_str_eq(turbo_json_get_string(turbo_json_object_get(
                      turbo_json_object_get(orchestration_inspect, "child_inspect"), "run"),
                      "id"),
@@ -2236,6 +2682,10 @@ spec("turbo agent session api") {
                      turbo_json_object_get(multi_agent_inspect, "child_orchestration_inspect"),
                      "parent_tool_name"),
                  "delegate");
+    check_str_eq(turbo_json_get_string(
+                     turbo_json_object_get(multi_agent_inspect, "child_orchestration_inspect"),
+                     "call_frame_id"),
+                 "frame_parent");
 
     turbo_free_json(&multi_agent_inspect);
     turbo_runtime_data_bind_value_destroy(inspect_timeline);
@@ -2338,6 +2788,8 @@ spec("turbo agent session api") {
     config.parent_agent_run_id = "run_parent";
     config.parent_tool_call_id = "call_parent";
     config.parent_tool_name = "delegate";
+    config.parent_graph_run_id = "run_graph_parent";
+    config.call_frame_id = "frame_parent";
     session = turbo_agent_session_create(&config);
     check_not_null(session);
     check_not_null(graph);
@@ -2349,12 +2801,18 @@ spec("turbo agent session api") {
     check_str_eq(turbo_json_get_string(summary, "parent_agent_run_id"), "run_parent");
     check_str_eq(turbo_json_get_string(summary, "parent_tool_call_id"), "call_parent");
     check_str_eq(turbo_json_get_string(summary, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(summary, "parent_graph_run_id"), "run_graph_parent");
+    check_str_eq(turbo_json_get_string(summary, "call_frame_id"), "frame_parent");
     check_int_eq(turbo_agent_session_list_child_runs(session, NULL, &runs_json), 0);
     check_size_eq(turbo_json_array_size(runs_json), 1);
     check_str_eq(turbo_json_get_string(turbo_json_array_get(runs_json, 0), "id"),
                  turbo_agent_session_last_run_id(session));
     check_str_eq(turbo_json_get_string(turbo_json_array_get(runs_json, 0), "parent_tool_call_id"),
                  "call_parent");
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(runs_json, 0), "parent_graph_run_id"),
+                 "run_graph_parent");
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(runs_json, 0), "call_frame_id"),
+                 "frame_parent");
 
     turbo_free_json(&runs_json);
     turbo_free_json(&summary);
@@ -2384,9 +2842,13 @@ spec("turbo agent session api") {
     check_true(turbo_json_object_get(summary, "parent_agent_run_id") != NULL);
     check_true(turbo_json_object_get(summary, "parent_tool_call_id") != NULL);
     check_true(turbo_json_object_get(summary, "parent_tool_name") != NULL);
+    check_true(turbo_json_object_get(summary, "parent_graph_run_id") != NULL);
+    check_true(turbo_json_object_get(summary, "call_frame_id") != NULL);
     check_null(turbo_json_get_string(summary, "parent_agent_run_id"));
     check_null(turbo_json_get_string(summary, "parent_tool_call_id"));
     check_null(turbo_json_get_string(summary, "parent_tool_name"));
+    check_null(turbo_json_get_string(summary, "parent_graph_run_id"));
+    check_null(turbo_json_get_string(summary, "call_frame_id"));
 
     turbo_free_json(&summary);
     turbo_runtime_data_bind_value_destroy(result_state);
@@ -2425,6 +2887,8 @@ spec("turbo agent session api") {
     check_str_eq(turbo_json_get_string(summary, "parent_agent_run_id"), "run_parent_auto");
     check_str_eq(turbo_json_get_string(summary, "parent_tool_call_id"), "call_parent_auto");
     check_str_eq(turbo_json_get_string(summary, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(summary, "parent_graph_run_id"), "run_parent_auto");
+    check_str_eq(turbo_json_get_string(summary, "call_frame_id"), "call_parent_auto");
     check_int_eq(turbo_agent_session_list_child_runs(session, NULL, &runs_json), 0);
     check_size_eq(turbo_json_array_size(runs_json), 1);
     check_str_eq(turbo_json_get_string(turbo_json_array_get(runs_json, 0), "id"),
@@ -2432,6 +2896,11 @@ spec("turbo agent session api") {
     check_str_eq(
         turbo_json_get_string(turbo_json_array_get(runs_json, 0), "parent_agent_run_id"),
         "run_parent_auto");
+    check_str_eq(
+        turbo_json_get_string(turbo_json_array_get(runs_json, 0), "parent_graph_run_id"),
+        "run_parent_auto");
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(runs_json, 0), "call_frame_id"),
+                 "call_parent_auto");
 
     turbo_agent_execution_context_set(&saved_context);
     turbo_free_json(&runs_json);

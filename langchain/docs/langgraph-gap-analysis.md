@@ -202,8 +202,12 @@ LangGraph 把 subgraph 当一等构件，而不是仅把另一个 agent 包成 t
 
 - subagent tool adapter
 - parent/child run linkage
+- nested call-frame metadata: `parent_graph_run_id` / `call_frame_id`
 
-这足以表达“agent 调另一个 agent”，但还不足以表达：
+这足以表达“agent 调另一个 agent”，也给 graph-native subgraph 留下了可持久化
+的父图运行与调用帧锚点。当前最小 subgraph contract 已能把子图运行、子图
+checkpoint、父图调用帧和 `subgraph_result` envelope 串到同一 runtime 事实源，
+但还不足以表达：
 
 - graph 内直接嵌 graph
 - 父图与子图共享或映射 state channel
@@ -212,11 +216,18 @@ LangGraph 把 subgraph 当一等构件，而不是仅把另一个 agent 包成 t
 
 最小切口：
 
-- 定义 `turbo_agent_subgraph_*` 或 `turbo_graph_subgraph_*` contract
-- 子图运行不经 tool envelope，而走 graph-native call frame
-- checkpoint record 明确 `parent_checkpoint_id` 之外的 `parent_graph_run_id` / `call_frame_id`
+- 已先把 `parent_graph_run_id` / `call_frame_id` 贯穿 runtime parent link、
+  run/checkpoint record、summary、subagent result 与 tool-result output accessor
+- 已补 `turbo_agent_subgraph_node(...)` /
+  `turbo_agent_install_subgraph_node(...)` 作为 graph-native 最小合同
+- 子图运行可以不经 tool envelope，而走 graph-native call frame
+- `subgraph_result` 已包含 child status booleans 与 interrupted child 的
+  `pending_checkpoint_id` / `pending_node`，host 可通过现有 checkpoint API
+  resume/fork 子图
+- checkpoint record 继续以 `parent_checkpoint_id` + `parent_graph_run_id` /
+  `call_frame_id` 表达嵌套关系，不新建第二套事实源
 
-### 4. Memory 还停在 KV/context 注入层，未到 LangGraph 的 memory/store 产品面
+### 4. Memory 已进入 record-first / store-query 第一阶段，但离 LangGraph 的 memory/store 产品面仍有距离
 
 LangGraph 官方 memory 面更强调：
 
@@ -230,20 +241,43 @@ LangGraph 官方 memory 面更强调：
 - `turbo_agent_store_t`
 - `turbo_agent_memory_store_t`
 - namespaced context 读写
-- session/app memory wrapper
+- `memory_list_records(...)` / `memory_query_records(...)`
+- `turbo_agent_memory_get_record(...)`
+- `turbo_agent_memory_put_record(...)`
+- `turbo_agent_memory_validate_record(...)`
+- `turbo_agent_memory_query_records_ex(...)`
+- `session/app` 同构 memory wrapper
+- canonical memory record：`id / namespace / kind / key / text / metadata / created_at`
 
-但本质仍是：
+这说明 memory 已不再只是随手拼出来的 KV/context 注入层；本地 host-facing
+surface 已经进入 record-first 第一阶段。
 
-- key/value + context 拼接
-- 缺语义检索
-- 缺 structured memory record schema
-- 缺 memory index / ranking / recall contract
+但距离 LangGraph 的 memory/store 产品面，仍主要差在：
 
-最小切口：
+- 仍缺语义检索
+- 仍缺 memory index / ranking / recall contract
+- 仍缺 profile / semantic memory 这类更高层 recall contract
+- remote 侧虽已补显式 `memory.*` record-first contract，但还没有更强的
+  remote query/index/retrieval 产品面；目前 remote `memory.queryRecordsEx`
+  也只对齐到了本地 filter + metadata/id filter + `created_at` time-window +
+  `sort_by / sort_order / limit` 这一层 ergonomics
+- `context` record 已 canonical，但更丰富的 typed record family 仍未展开
 
-- 引入 canonical memory record：`id / namespace / kind / key / text / metadata / created_at`
-- 把 memory store callback 从简单 KV 升为 `put/get/list/query`
-- `query(...)` 先只做 filter + substring / prefix，embedding 检索留到下一轮
+因此下一步最小切口不再是“先把 record schema 立起来”，而是：
+
+- 在现有 canonical memory record 之上继续扩 `kind` 与 `metadata` 约束
+- 把 memory store callback 继续稳定在 `put/get/list/query`
+- `query(...)` 当前已做到 filter + substring / prefix + metadata/id filter +
+  `created_at` time-window + host-facing sort/limit，其中时间窗仍依赖
+  canonical `created_at` 的 ISO-8601 字符串按字典序比较；embedding 检索
+  留到下一轮
+- 让 host/UI 能区分“runtime durable state inspect”和“long-term memory query”
+
+这里还要刻意保留一条边界：当前 remote runtime bridge 没有把
+`memory_store` 折叠进 `runtime.*` JSON-RPC 方法集，而是单独补了
+`memory.getRecord` / `memory.putRecord` / `memory.queryRecordsEx` 这一组
+memory-facing contract。也就是说，remote memory 已经有了最小 record-first
+主面，但它仍不是“runtime state 附属字段”那种混合设计。
 
 ### 5. 流式运行面还偏协议级，未到 runtime-host 级
 
@@ -402,6 +436,90 @@ LangGraph 产品面并不止本地库，还覆盖：
 - `turbo_agent_runtime_remote_dispatch_jsonrpc(...)`
 - `turbo_agent_runtime_remote_dispatch_jsonrpc_text(...)`
 - `turbo_agent_runtime_remote_handle_http_jsonrpc(...)`
+- `turbo_agent_runtime_remote_client_call_json(...)`
+- `turbo_agent_runtime_remote_client_start_bind_graph(...)`
+- `turbo_agent_runtime_remote_client_resume_bind_graph(...)`
+- `turbo_agent_runtime_remote_client_fork_bind_graph(...)`
+- `turbo_agent_runtime_remote_client_get_thread_state_bind(...)`
+- `turbo_agent_runtime_remote_client_get_checkpoint_context(...)`
+- `turbo_agent_runtime_remote_client_get_run(...)`
+- `turbo_agent_runtime_remote_client_get_checkpoint(...)`
+- `turbo_agent_runtime_remote_client_list_checkpoints(...)`
+- `turbo_agent_runtime_remote_client_load_history_events_bind(...)`
+- `turbo_agent_runtime_remote_client_get_run_trace_events_bind(...)`
+- `turbo_agent_runtime_remote_client_get_checkpoint_trace_events_bind(...)`
+- `turbo_agent_runtime_remote_client_get_thread_timeline_bind(...)`
+- `turbo_agent_runtime_remote_client_get_branch_tree(...)`
+- `turbo_agent_runtime_remote_client_get_thread_observability_index(...)`
+- `turbo_agent_runtime_remote_client_list_observability_indexes(...)`
+- `turbo_agent_runtime_remote_client_list_observability_indexes_filtered(...)`
+- `turbo_agent_runtime_remote_client_list_child_runs(...)`
+- `turbo_agent_runtime_remote_client_get_supervisor_inspect(...)`
+- `turbo_agent_runtime_remote_client_get_orchestration_inspect(...)`
+- `turbo_agent_runtime_remote_client_get_child_inspect(...)`
+- `turbo_agent_runtime_remote_client_get_child_orchestration_inspect(...)`
+- `turbo_agent_runtime_remote_client_get_child_multi_agent_inspect(...)`
+- `turbo_agent_runtime_remote_client_get_memory_record(...)`
+- `turbo_agent_runtime_remote_client_put_memory_record(...)`
+- `turbo_agent_runtime_remote_client_query_memory_records_ex(...)`
+- `turbo_agent_runtime_remote_client_query_memory_records(...)`
+- `turbo_agent_runtime_remote_client_list_memory_records(...)`
+- `turbo_agent_runtime_remote_client_resume_thread_command_bind(...)`
+- `turbo_agent_runtime_remote_client_fork_thread_command_bind(...)`
+- `turbo_agent_remote_session_*`
+  - 当前已覆盖 `start/resume/fork`
+  - 也已补 `get_thread(...)` / `get_latest_run(...)` / `get_pending_run(...)`
+  - 并补 `start_text(...)` / `start_messages(...)` / `invoke_text(...)` /
+    `invoke_messages_text(...)` / `invoke_json(...)` /
+    `invoke_messages_json(...)`
+  - 也已补 `load_thread_history_events_bind(...)` /
+    `replay_thread_history_bind(...)` /
+    `observe_thread_history_bind(...)` /
+    `get_thread_trace_events_bind(...)`
+  - 也已补 `list_thread_lineage(...)` /
+    `get_supervisor_inbox(...)` /
+    `get_supervisor_handoff_history(...)` /
+    `get_supervisor_inspect(...)`
+  - 也已补 `list_child_runs(...)` /
+    `get_orchestration_inspect(...)`
+  - 也已补 `memory_list_records(...)` / `memory_get_record(...)` /
+    `memory_put_record(...)` / `memory_validate_record(...)` /
+    `memory_query_records(...)` / `memory_query_records_ex(...)`
+  - 也已补 `get_child_run(...)` / `get_child_checkpoint(...)` /
+    `get_child_checkpoint_context(...)` /
+    `get_child_thread_timeline_bind(...)` / `get_child_branch_tree(...)` /
+    `list_child_checkpoints(...)` / `load_child_history_events_bind(...)` /
+    `get_child_trace_events_bind(...)` / `get_child_inspect(...)` /
+    `get_child_orchestration_inspect(...)` /
+    `get_child_multi_agent_inspect(...)`
+  - 继续复用同一份 remote observability bundle，而不是新增 RPC method
+- `turbo_agent_remote_app_*`
+  - 当前已覆盖 `start/resume/fork`
+  - 也已补 `get_thread(...)` / `get_latest_run(...)` / `get_pending_run(...)`
+  - 并补 `start_text(...)` / `start_messages(...)` / `invoke_text(...)` /
+    `invoke_messages_text(...)` / `invoke_json(...)` /
+    `invoke_messages_json(...)`
+  - 也已补 `load_thread_history_events_bind(...)` /
+    `replay_thread_history_bind(...)` /
+    `observe_thread_history_bind(...)` /
+    `get_thread_trace_events_bind(...)`
+  - 也已补 `list_thread_lineage(...)` /
+    `get_supervisor_inbox(...)` /
+    `get_supervisor_handoff_history(...)` /
+    `get_supervisor_inspect(...)`
+  - 也已补 `list_child_runs(...)` /
+    `get_orchestration_inspect(...)`
+  - 也已补 `memory_list_records(...)` / `memory_get_record(...)` /
+    `memory_put_record(...)` / `memory_validate_record(...)` /
+    `memory_query_records(...)` / `memory_query_records_ex(...)`
+  - 也已补 `get_child_run(...)` / `get_child_checkpoint(...)` /
+    `get_child_checkpoint_context(...)` /
+    `get_child_thread_timeline_bind(...)` / `get_child_branch_tree(...)` /
+    `list_child_checkpoints(...)` / `load_child_history_events_bind(...)` /
+    `get_child_trace_events_bind(...)` / `get_child_inspect(...)` /
+    `get_child_orchestration_inspect(...)` /
+    `get_child_multi_agent_inspect(...)`
+  - 仅作为 `remote_session` 之上的 graph-name facade
 - `turbo_agent_runtime_remote_iris_mount(...)`
 - 当前最小方法集是：
   - `runtime.start`
@@ -420,9 +538,24 @@ LangGraph 产品面并不止本地库，还覆盖：
   - `runtime.forkThreadStatePatchBindGraph`
   - `runtime.getThreadObservabilityIndex`
   - `runtime.listObservabilityIndexesFiltered`
+  - `memory.getRecord`
+  - `memory.putRecord`
+  - `memory.queryRecordsEx`
 
 它只是 future transport adapter 的 contract bridge，不是 HTTP server，也
-不是第二套持久化 runtime store。
+不是第二套持久化 runtime store。现在 server 侧与 consumer 侧都继续复用
+同一套 thread/run/checkpoint/state JSON，而不是各自长出第二套结果模型。
+
+这也意味着 remote runtime 目前仍然没有把 `memory_store` 折进
+`runtime.*` RPC 方法集。memory 继续保持为独立的 long-term store surface，
+而 remote bridge 通过显式 `memory.*` contract 暴露 record-first helper；
+后续若继续扩 remote memory，也应沿这条 memory-facing 路径前进，而不是把它
+伪装成 runtime state 的附属字段。
+
+`remote_session` / `remote_app` 也只是 typed remote client 之上的
+host-facing convenience facade，负责缓存 `thread_id / run_id / checkpoint_id`
+与固定 `graph_name`，并不伪装成本地 `turbo_agent_session_t` /
+`turbo_agent_app_t` 的完整替身。
 
 同时，Iris bridge 现在不再依赖单个全局 `rpc_context` 或 app-level 单槽。
 同一 `iris_app_t` 上的 endpoint 绑定已按 path 隔离，所以 native
@@ -515,8 +648,8 @@ LangChain 除 agent / graph 外，还有较强的：
 
 优先理由：
 
-- 当前 memory 只是“能存”
-- 距离“能检索、能召回、能解释”还远
+- canonical record 与 query helper 已落地
+- 但距离“能检索、能召回、能解释”还远
 - 这是后续长期记忆、profile、跨线程回忆的底座
 
 ## 建议的 Runtime V3 范围
@@ -533,7 +666,7 @@ LangChain 除 agent / graph 外，还有较强的：
 - 向量检索
 - SQLite backend
 - server / MCP / A2A
-- 真正的 subgraph call-frame persistence
+- 完整 graph-native subgraph resume/fork/interrupt 冒泡语义
 - 完整 runnable framework
 
 原因很简单：上述四项几乎都可复用现有 runtime/checkpoint/snapshot/trace 基础，不需要推倒重来。
@@ -546,5 +679,6 @@ LangChain 除 agent / graph 外，还有较强的：
 - runtime-host streaming
 - 正式 multi-agent orchestration contract
 - 更强的 memory / inspect / remote surface
+- 以及更清晰的 runtime remote 与 memory remote 分层
 
 下一轮不应再大拆文件，而应围绕这些产品边界做小步抬升。

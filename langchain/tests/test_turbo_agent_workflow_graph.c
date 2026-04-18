@@ -1,5 +1,6 @@
 #include "tinytest.h"
 #include "turbo_agent.h"
+#include "turbo_agent_state.h"
 #include "turbo_agent_workflow.h"
 
 static int dummy_transport(const char *request_json, char **out_response_json, void *user_data) {
@@ -21,6 +22,25 @@ static turbo_agent_t *create_test_agent(const char *model) {
   config.model = model;
   config.transport_fn = dummy_transport;
   return turbo_agent_create(&config);
+}
+
+static int supervisor_planner_handoff_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  (void)user_data;
+
+  check_not_null(ctx);
+  check_not_null(ctx->state);
+  turbo_json_object_set_bool(ctx->state, "planner_visited", true);
+  check_int_eq(turbo_agent_state_request_handoff(ctx->state, "executor", "delegate execution"), 0);
+  return turbo_graph_ctx_set_next(ctx, "handoff");
+}
+
+static int supervisor_executor_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  (void)user_data;
+
+  check_not_null(ctx);
+  check_not_null(ctx->state);
+  turbo_json_object_set_bool(ctx->state, "executor_visited", true);
+  return turbo_graph_ctx_set_next(ctx, "end");
 }
 
 spec("turbo agent workflow graph") {
@@ -105,6 +125,61 @@ spec("turbo agent workflow graph") {
     check_size_eq(turbo_graph_edge_count(graph), 2);
     check_not_null(turbo_graph_topology_id(graph));
 
+    turbo_graph_destroy(graph);
+  }
+
+  it("should route one staged handoff through the supervisor loop") {
+    turbo_graph_t *graph = turbo_graph_create("supervisor-handoff-loop");
+    json_value_t *state = turbo_agent_state_create();
+    turbo_runtime_data_bind_value_t *input = NULL;
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    json_value_t *result_json = NULL;
+    const json_value_t *handoff_history = NULL;
+    const json_value_t *handoff_entry = NULL;
+    turbo_graph_run_result_t result = {0};
+
+    check_not_null(graph);
+    check_not_null(state);
+    check_int_eq(
+        turbo_agent_install_supervisor_loop(graph, "supervisor", "handoff", "end", 1),
+        TURBO_GRAPH_EXEC_OK);
+    check_int_eq(
+        turbo_graph_add_node(graph, "planner", supervisor_planner_handoff_node, NULL),
+        TURBO_GRAPH_EXEC_OK);
+    check_int_eq(
+        turbo_graph_add_node(graph, "executor", supervisor_executor_node, NULL),
+        TURBO_GRAPH_EXEC_OK);
+    check_int_eq(turbo_agent_state_set_active_agent(state, "planner"), 0);
+
+    input = turbo_runtime_data_bind_value_from_json(state);
+    turbo_free_json(&state);
+    check_not_null(input);
+
+    check_int_eq(turbo_graph_run_bind(graph, input, NULL, &result, &result_state),
+                 TURBO_GRAPH_EXEC_STOP);
+    check_int_eq(result.status, TURBO_GRAPH_EXEC_STOP);
+    check_str_eq(result.last_node, "end");
+    check_not_null(result_state);
+
+    result_json = turbo_runtime_data_bind_value_to_json(result_state);
+    check_not_null(result_json);
+    check_true(turbo_json_get_bool(result_json, "planner_visited", false));
+    check_true(turbo_json_get_bool(result_json, "executor_visited", false));
+    check_str_eq(turbo_agent_state_active_agent(result_json), "executor");
+    check_null(turbo_agent_state_handoff_target_agent(result_json));
+    check_null(turbo_agent_state_handoff_reason(result_json));
+    handoff_history = turbo_agent_state_supervisor_handoff_history(result_json);
+    check_not_null(handoff_history);
+    check_size_eq(turbo_json_array_size(handoff_history), 1);
+    handoff_entry = turbo_json_array_get(handoff_history, 0);
+    check_not_null(handoff_entry);
+    check_str_eq(turbo_json_get_string(handoff_entry, "from_agent"), "planner");
+    check_str_eq(turbo_json_get_string(handoff_entry, "target_agent"), "executor");
+    check_str_eq(turbo_json_get_string(handoff_entry, "reason"), "delegate execution");
+
+    turbo_free_json(&result_json);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(input);
     turbo_graph_destroy(graph);
   }
 }

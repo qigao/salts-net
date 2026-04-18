@@ -55,10 +55,42 @@ CXX_C_API int turbo_agent_app_get_checkpoint(turbo_agent_app_t *app, const char 
 CXX_C_API int turbo_agent_app_get_latest_checkpoint(turbo_agent_app_t *app, const char *run_id,
                                                     json_value_t **out_checkpoint_json);
 
+/**
+ * @brief Load the app thread's latest persisted state through the owned session runtime.
+ *
+ * This legacy surface resolves the newest run on the thread by `updated_at`.
+ * It does not prefer the thread head / pending checkpoint. New hosts that need
+ * thread-head semantics should prefer `get_thread_head_state_bind(...)`.
+ */
 CXX_C_API int turbo_agent_app_get_thread_state_bind(
     turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_state);
 
+/**
+ * @brief Load the app thread head state snapshot through the owned session runtime.
+ *
+ * The runtime resolves the newest interrupted run first. When the thread has
+ * no interrupted run, it falls back to the newest run by `updated_at`.
+ */
+CXX_C_API int turbo_agent_app_get_thread_head_state_bind(
+    turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Compatibility accessor for the app thread's latest-run trace events.
+ *
+ * This legacy surface resolves the newest run on the thread by `updated_at`.
+ * It does not prefer the thread head / pending checkpoint. New hosts that need
+ * thread-head semantics should prefer `get_thread_head_trace_events_bind(...)`.
+ */
 CXX_C_API int turbo_agent_app_get_thread_trace_events_bind(
+    turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_events);
+
+/**
+ * @brief Load the app thread head trace-event snapshot through the owned session runtime.
+ *
+ * The runtime resolves the newest interrupted run first. When the thread has
+ * no interrupted run, it falls back to the newest run by `updated_at`.
+ */
+CXX_C_API int turbo_agent_app_get_thread_head_trace_events_bind(
     turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_events);
 
 CXX_C_API int turbo_agent_app_get_run_state_bind(
@@ -73,9 +105,34 @@ CXX_C_API int turbo_agent_app_get_checkpoint_state_bind(
     turbo_agent_app_t *app, const char *checkpoint_id,
     turbo_runtime_data_bind_value_t **out_state);
 
+/**
+ * @brief Prepare one checkpoint-scoped state override from a bind-native patch.
+ *
+ * The runtime loads the checkpoint state, recursively merges object fields from
+ * `state_patch`, and returns the resulting full state as `out_state_override`.
+ * Arrays, scalars, and null replace the target value. This helper does not
+ * persist the prepared override back into the runtime.
+ */
+CXX_C_API int turbo_agent_app_prepare_checkpoint_state_override_bind(
+    turbo_agent_app_t *app, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
 CXX_C_API int turbo_agent_app_update_checkpoint_state_bind(
     turbo_agent_app_t *app, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
+/**
+ * @brief Prepare one thread-head state override from a bind-native patch.
+ *
+ * The runtime resolves the thread's newest interrupted run first. If no
+ * interrupted run exists, it falls back to the newest run by `updated_at`,
+ * then applies the patch to that run's latest checkpoint state. This helper
+ * only prepares the full override value and does not persist it.
+ */
+CXX_C_API int turbo_agent_app_prepare_thread_state_override_bind(
+    turbo_agent_app_t *app, const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override);
 
 CXX_C_API int turbo_agent_app_update_thread_state_bind(
@@ -193,8 +250,60 @@ CXX_C_API int turbo_agent_app_observe_history_bind(
 CXX_C_API int turbo_agent_app_observe_thread_history_bind(
     turbo_agent_app_t *app, const turbo_agent_observer_bind_sink_t *sink);
 
+/**
+ * @brief Start one new app-backed graph run and emit live canonical events.
+ *
+ * This stream surface forwards the existing graph canonical events to the host
+ * sink while the app-backed session updates its cached ids. It does not create
+ * an observer store or alter the durable observer/history contract.
+ */
+CXX_C_API int turbo_agent_app_start_bind_graph_stream(
+    turbo_agent_app_t *app, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Resume one app-backed checkpointed graph run and emit live canonical events.
+ *
+ * This live stream is a transient projection over the graph's existing
+ * canonical events. Durable replay/history continue to use the existing runtime
+ * facts instead of a second observer store.
+ */
+CXX_C_API int turbo_agent_app_resume_bind_graph_stream(
+    turbo_agent_app_t *app, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Fork one app-backed checkpointed graph run and emit live canonical events.
+ *
+ * This surface reuses the graph's existing canonical events for live host
+ * streaming only. It does not redefine durable observer/history semantics.
+ */
+CXX_C_API int turbo_agent_app_fork_bind_graph_stream(
+    turbo_agent_app_t *app, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state);
+
 CXX_C_API int turbo_agent_app_get_thread_timeline_bind(
     turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_timeline);
+
+/**
+ * @brief Prepare one checkpoint-scoped command-derived state override.
+ *
+ * The command is interpreted against the checkpoint's serialized state and the
+ * resulting full state override is returned as `out_state_override`. This
+ * helper does not persist the prepared override back into the runtime.
+ */
+CXX_C_API int turbo_agent_app_prepare_checkpoint_command_override_bind(
+    turbo_agent_app_t *app, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
 
 CXX_C_API int turbo_agent_app_apply_command_bind(
     turbo_agent_app_t *app, const char *checkpoint_id,
@@ -204,6 +313,18 @@ CXX_C_API int turbo_agent_app_apply_command_bind(
 CXX_C_API int turbo_agent_app_apply_checkpoint_command_bind(
     turbo_agent_app_t *app, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
+/**
+ * @brief Prepare one thread-head command-derived state override.
+ *
+ * The runtime resolves the thread's newest interrupted run first, then falls
+ * back to the newest run by `updated_at`, and finally applies the command to
+ * that run's latest checkpoint. This helper only prepares the resulting
+ * override and does not persist it.
+ */
+CXX_C_API int turbo_agent_app_prepare_thread_command_override_bind(
+    turbo_agent_app_t *app, const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override);
 
 CXX_C_API int turbo_agent_app_apply_thread_command_bind(
@@ -413,12 +534,25 @@ CXX_C_API int turbo_agent_app_memory_list_records(const turbo_agent_app_t *app,
                                                   const char *namespace_prefix,
                                                   json_value_t **out_records_json);
 
+CXX_C_API int turbo_agent_app_memory_get_record(const turbo_agent_app_t *app,
+                                                const char *memory_namespace, const char *key,
+                                                json_value_t **out_record_json);
+
+CXX_C_API int turbo_agent_app_memory_put_record(const turbo_agent_app_t *app,
+                                                const json_value_t *record_json);
+
+CXX_C_API int turbo_agent_app_memory_validate_record(const json_value_t *record_json);
+
 CXX_C_API int turbo_agent_app_memory_query_records(const turbo_agent_app_t *app,
                                                    const char *namespace_prefix,
                                                    const char *kind,
                                                    const char *key_prefix,
                                                    const char *text_substring,
                                                    json_value_t **out_records_json);
+
+CXX_C_API int turbo_agent_app_memory_query_records_ex(
+    const turbo_agent_app_t *app, const turbo_agent_memory_query_options_t *options,
+    json_value_t **out_records_json);
 
 #ifdef __cplusplus
 }

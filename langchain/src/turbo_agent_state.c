@@ -141,6 +141,18 @@ TURBO_AGENT_STATE_FORWARD2(const json_value_t *, turbo_agent_state_supervisor_in
                            const json_value_t *, state, size_t, index)
 TURBO_AGENT_STATE_FORWARD1(const json_value_t *, turbo_agent_state_supervisor_handoff_history,
                            const json_value_t *, state)
+TURBO_AGENT_STATE_FORWARD1(const json_value_t *, turbo_agent_state_latest_handoff_event,
+                           const json_value_t *, state)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_handoff_event_phase,
+                           const json_value_t *, event)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_handoff_event_from_agent,
+                           const json_value_t *, event)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_handoff_event_target_agent,
+                           const json_value_t *, event)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_handoff_event_reason,
+                           const json_value_t *, event)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_handoff_event_active_agent,
+                           const json_value_t *, event)
 TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_last_output_text, const json_value_t *,
                            state)
 TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_latest_executor_output_text,
@@ -203,6 +215,10 @@ TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_tool_result_parent_ag
 TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_tool_result_parent_tool_call_id,
                            const json_value_t *, output_item)
 TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_tool_result_parent_tool_name,
+                           const json_value_t *, output_item)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_tool_result_parent_graph_run_id,
+                           const json_value_t *, output_item)
+TURBO_AGENT_STATE_FORWARD1(const char *, turbo_agent_state_tool_result_call_frame_id,
                            const json_value_t *, output_item)
 TURBO_AGENT_STATE_FORWARD1(int, turbo_agent_state_executor_tool_results_failed,
                            const json_value_t *, state)

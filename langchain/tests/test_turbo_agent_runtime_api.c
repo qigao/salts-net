@@ -4,6 +4,8 @@
 #include "turbo_agent_graph.h"
 #include "turbo_agent_runtime.h"
 #include "turbo_agent_state.h"
+#include "turbo_agent_subgraph.h"
+#include "turbo_agent_workflow.h"
 
 #include <platform.h>
 #include <stdlib.h>
@@ -36,7 +38,6 @@
 #define runtime_check_branch_tree turbo_agent_test_check_branch_tree
 #define runtime_replay_capture_t turbo_agent_test_replay_capture_t
 #define runtime_capture_replayed_history_event turbo_agent_test_capture_replayed_history_event
-
 CXX_C_API int turbo_agent_runtime_apply_state_patch_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
@@ -88,6 +89,60 @@ static int runtime_write_bool_bind_node(turbo_graph_exec_ctx_t *ctx, void *user_
              : -1;
 }
 
+static int runtime_supervisor_planner_handoff_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  (void)user_data;
+
+  check_not_null(ctx);
+  check_not_null(ctx->state);
+  check_str_eq(turbo_agent_state_active_agent(ctx->state), "planner");
+  check_null(turbo_agent_state_handoff_target_agent(ctx->state));
+  check_null(turbo_agent_state_handoff_reason(ctx->state));
+  turbo_json_object_set_bool(ctx->state, "planner_requested_handoff", 1);
+  return turbo_agent_state_request_handoff(ctx->state, "executor", "delegate execution");
+}
+
+static int runtime_supervisor_executor_complete_node(turbo_graph_exec_ctx_t *ctx, void *user_data) {
+  const json_value_t *history;
+  const json_value_t *entry;
+
+  (void)user_data;
+
+  check_not_null(ctx);
+  check_not_null(ctx->state);
+  history = turbo_agent_state_supervisor_handoff_history(ctx->state);
+  entry = history ? turbo_json_array_get(history, 0) : NULL;
+  check_str_eq(turbo_agent_state_active_agent(ctx->state), "executor");
+  check_null(turbo_agent_state_handoff_target_agent(ctx->state));
+  check_null(turbo_agent_state_handoff_reason(ctx->state));
+  check_not_null(history);
+  check_size_eq(turbo_json_array_size(history), 1);
+  check_not_null(entry);
+  check_str_eq(turbo_json_get_string(entry, "from_agent"), "planner");
+  check_str_eq(turbo_json_get_string(entry, "target_agent"), "executor");
+  check_str_eq(turbo_json_get_string(entry, "reason"), "delegate execution");
+  turbo_json_object_set_bool(ctx->state, "executor_completed", 1);
+  return 0;
+}
+
+static turbo_graph_t *create_runtime_supervisor_handoff_graph(void) {
+  turbo_graph_t *graph = turbo_graph_create("runtime-supervisor-handoff");
+
+  check_not_null(graph);
+  check_int_eq(
+      turbo_agent_install_supervisor_loop(graph, "supervisor_route", "handoff_route", "end", 1),
+      TURBO_GRAPH_EXEC_OK);
+  check_int_eq(
+      turbo_graph_add_node(graph, "planner", runtime_supervisor_planner_handoff_node, NULL),
+      TURBO_GRAPH_EXEC_OK);
+  check_int_eq(
+      turbo_graph_add_node(graph, "executor", runtime_supervisor_executor_complete_node, NULL),
+      TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_edge(graph, "planner", "handoff_route", NULL, NULL),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_edge(graph, "executor", "end", NULL, NULL), TURBO_GRAPH_EXEC_OK);
+  return graph;
+}
+
 static turbo_graph_t *create_runtime_review_graph(void) {
   turbo_graph_t *graph = turbo_graph_create("runtime-review");
   static runtime_bool_write_t start = {"visited_start", 1};
@@ -124,6 +179,34 @@ static turbo_graph_t *create_runtime_simple_graph(void) {
   return graph;
 }
 
+static turbo_graph_t *create_runtime_subgraph_child_graph(void) {
+  turbo_graph_t *graph = turbo_graph_create("runtime-subgraph-child");
+  static runtime_bool_write_t child = {"child_visited", 1};
+
+  check_not_null(graph);
+  check_int_eq(turbo_graph_add_bind_node(graph, "child", runtime_write_bool_bind_node, &child),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_set_entry(graph, "child"), TURBO_GRAPH_EXEC_OK);
+  return graph;
+}
+
+static turbo_graph_t *create_runtime_subgraph_parent_graph(
+    turbo_agent_subgraph_node_config_t *subgraph_config) {
+  turbo_graph_t *graph = turbo_graph_create("runtime-subgraph-parent");
+  static runtime_bool_write_t after = {"after_subgraph", 1};
+
+  check_not_null(graph);
+  check_int_eq(turbo_agent_install_subgraph_node(graph, "child_call", "subgraph.child_call",
+                                                 subgraph_config),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_bind_node(graph, "after", runtime_write_bool_bind_node, &after),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_add_bind_edge(graph, "child_call", "after", NULL, NULL),
+               TURBO_GRAPH_EXEC_OK);
+  check_int_eq(turbo_graph_set_entry(graph, "child_call"), TURBO_GRAPH_EXEC_OK);
+  return graph;
+}
+
 static turbo_runtime_data_bind_value_t *create_review_state_bind(int approved) {
   json_value_t *state = turbo_agent_state_create();
   turbo_runtime_data_bind_value_t *bound;
@@ -145,6 +228,17 @@ static turbo_runtime_data_bind_value_t *create_supervisor_review_state_bind(void
   check_int_eq(turbo_agent_state_request_handoff(state, "executor", "delegate execution"), 0);
   check_int_eq(turbo_agent_state_request_review(state, "need review"), 0);
   check_int_eq(turbo_agent_state_set_review_approved(state, 0), 0);
+  bound = turbo_runtime_data_bind_value_from_json(state);
+  turbo_free_json(&state);
+  return bound;
+}
+
+static turbo_runtime_data_bind_value_t *create_supervisor_handoff_state_bind(void) {
+  json_value_t *state = turbo_agent_state_create();
+  turbo_runtime_data_bind_value_t *bound;
+
+  check_not_null(state);
+  check_int_eq(turbo_agent_state_set_active_agent(state, "planner"), 0);
   bound = turbo_runtime_data_bind_value_from_json(state);
   turbo_free_json(&state);
   return bound;
@@ -394,6 +488,26 @@ static char *create_runtime_temp_root(void) {
   return path;
 }
 
+static void runtime_check_completed_supervisor_handoff_state(const json_value_t *state_json) {
+  const json_value_t *history;
+  const json_value_t *entry;
+
+  check_not_null(state_json);
+  check_true(turbo_json_get_bool(state_json, "planner_requested_handoff", false));
+  check_true(turbo_json_get_bool(state_json, "executor_completed", false));
+  check_str_eq(turbo_agent_state_active_agent(state_json), "executor");
+  check_null(turbo_agent_state_handoff_target_agent(state_json));
+  check_null(turbo_agent_state_handoff_reason(state_json));
+  history = turbo_agent_state_supervisor_handoff_history(state_json);
+  check_not_null(history);
+  check_size_eq(turbo_json_array_size(history), 1);
+  entry = turbo_json_array_get(history, 0);
+  check_not_null(entry);
+  check_str_eq(turbo_json_get_string(entry, "from_agent"), "planner");
+  check_str_eq(turbo_json_get_string(entry, "target_agent"), "executor");
+  check_str_eq(turbo_json_get_string(entry, "reason"), "delegate execution");
+}
+
 static char *runtime_test_record_file(const char *root, const char *collection, const char *id) {
   int needed;
   char *path;
@@ -576,6 +690,99 @@ spec("turbo agent runtime api") {
     check_size_eq(checkpoint_capture.interrupted_count, thread_capture.interrupted_count);
 
     turbo_free_json(&summary);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_graph_destroy(graph);
+    turbo_agent_runtime_destroy(runtime);
+  }
+
+  it("should emit live canonical stream events through runtime stream helpers") {
+    turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
+    turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
+    turbo_graph_t *graph = create_runtime_review_graph();
+    turbo_runtime_data_bind_value_t *state = create_review_state_bind(0);
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    turbo_runtime_data_bind_value_t *override = NULL;
+    turbo_runtime_data_bind_value_t *resumed_state = NULL;
+    turbo_runtime_data_bind_value_t *forked_state = NULL;
+    turbo_runtime_data_bind_value_t *command = NULL;
+    json_value_t *summary = NULL;
+    json_value_t *resumed_summary = NULL;
+    json_value_t *forked_summary = NULL;
+    runtime_replay_capture_t start_capture = {0};
+    runtime_replay_capture_t resume_capture = {0};
+    runtime_replay_capture_t fork_capture = {0};
+    const char *interrupt_before_review[] = {"review"};
+    turbo_graph_run_options_t options = {0};
+    const char *checkpoint_id;
+    const char *run_id;
+
+    check_not_null(runtime);
+    check_not_null(graph);
+    check_not_null(state);
+
+    options.interrupt_before_nodes = interrupt_before_review;
+    options.interrupt_before_count = 1;
+    check_int_eq(turbo_agent_runtime_start_bind_graph_stream(
+                     runtime, graph, state, &options, NULL,
+                     runtime_capture_replayed_history_event,
+                     &start_capture, &summary,
+                     &result_state),
+                 0);
+    check_str_eq(turbo_json_get_string(summary, "status"), "interrupted");
+    check_true(start_capture.count >= 1);
+    check_true(start_capture.trace_count + start_capture.model_count +
+                   start_capture.tool_result_count >=
+               1);
+    checkpoint_id = turbo_json_get_string(summary, "checkpoint_id");
+    run_id = turbo_json_get_string(summary, "run_id");
+    check_not_null(checkpoint_id);
+    check_not_null(run_id);
+
+    command = turbo_runtime_data_bind_value_create_object();
+    check_not_null(command);
+    check_int_eq(turbo_runtime_data_bind_object_set(
+                     command, "kind",
+                     turbo_runtime_data_bind_value_create_string("approve_review")),
+                 TURBO_RUNTIME_DATA_BIND_OK);
+    check_int_eq(turbo_agent_runtime_apply_checkpoint_command_bind(runtime, checkpoint_id, command,
+                                                                   &override),
+                 0);
+    turbo_runtime_data_bind_value_destroy(command);
+    command = NULL;
+
+    options.interrupt_before_nodes = NULL;
+    options.interrupt_before_count = 0;
+    check_int_eq(turbo_agent_runtime_resume_bind_graph_stream(
+                     runtime, graph, checkpoint_id, override, &options,
+                     runtime_capture_replayed_history_event, &resume_capture, &resumed_summary,
+                     &resumed_state),
+                 0);
+    check_str_eq(turbo_json_get_string(resumed_summary, "status"), "completed");
+    check_str_eq(turbo_json_get_string(resumed_summary, "run_id"), run_id);
+    check_true(resume_capture.count >= 1);
+    check_true(resume_capture.trace_count + resume_capture.model_count +
+                   resume_capture.tool_result_count >=
+               1);
+
+    check_int_eq(turbo_agent_runtime_fork_bind_graph_stream(
+                     runtime, graph, checkpoint_id, override, &options,
+                     runtime_capture_replayed_history_event, &fork_capture, &forked_summary,
+                     &forked_state),
+                 0);
+    check_str_eq(turbo_json_get_string(forked_summary, "status"), "completed");
+    check_true(strcmp(turbo_json_get_string(forked_summary, "run_id"), run_id) != 0);
+    check_true(fork_capture.count >= 1);
+    check_true(fork_capture.trace_count + fork_capture.model_count + fork_capture.tool_result_count >=
+               1);
+
+    turbo_free_json(&forked_summary);
+    turbo_free_json(&resumed_summary);
+    turbo_free_json(&summary);
+    turbo_runtime_data_bind_value_destroy(forked_state);
+    turbo_runtime_data_bind_value_destroy(resumed_state);
+    turbo_runtime_data_bind_value_destroy(override);
+    turbo_runtime_data_bind_value_destroy(command);
     turbo_runtime_data_bind_value_destroy(result_state);
     turbo_runtime_data_bind_value_destroy(state);
     turbo_graph_destroy(graph);
@@ -1090,13 +1297,18 @@ spec("turbo agent runtime api") {
         runtime_load_fixture_json("interrupted_timeline.golden.json");
     json_value_t *observability_queries =
         runtime_load_fixture_json("observability_queries.golden.json");
+    json_value_t *subgraph_result_fixture =
+        runtime_load_fixture_json("subgraph_result.golden.json");
     turbo_runtime_data_bind_value_t *timeline = turbo_runtime_data_bind_value_from_json(timeline_json);
     const json_value_t *query_fixture;
+    const json_value_t *subgraph_completed_fixture;
+    const json_value_t *subgraph_interrupted_fixture;
 
     check_not_null(checkpoint_context);
     check_not_null(branch_tree);
     check_not_null(timeline_json);
     check_not_null(observability_queries);
+    check_not_null(subgraph_result_fixture);
     check_not_null(timeline);
 
     runtime_check_checkpoint_context(checkpoint_context, "thr_123", "run_123", "ckpt_123", NULL, 1);
@@ -1119,8 +1331,22 @@ spec("turbo agent runtime api") {
                TURBO_JSON_OBJECT);
     check_true(turbo_json_type(turbo_json_object_get(query_fixture, "expected_thread_ids")) ==
                TURBO_JSON_ARRAY);
+    subgraph_completed_fixture =
+        turbo_agent_test_find_named_fixture_entry(subgraph_result_fixture, "completed");
+    subgraph_interrupted_fixture =
+        turbo_agent_test_find_named_fixture_entry(subgraph_result_fixture, "interrupted");
+    check_not_null(subgraph_completed_fixture);
+    check_not_null(subgraph_interrupted_fixture);
+    check_str_eq(turbo_json_get_string(subgraph_completed_fixture, "kind"), "subgraph_result");
+    check_true(turbo_json_get_bool(subgraph_completed_fixture, "completed", false));
+    check_true(turbo_json_is_null(
+        turbo_json_object_get(subgraph_completed_fixture, "pending_checkpoint_id")));
+    check_str_eq(turbo_json_get_string(subgraph_interrupted_fixture, "status"), "interrupted");
+    check_true(turbo_json_get_bool(subgraph_interrupted_fixture, "interrupted", false));
+    check_str_eq(turbo_json_get_string(subgraph_interrupted_fixture, "pending_node"), "review");
 
     turbo_runtime_data_bind_value_destroy(timeline);
+    turbo_free_json(&subgraph_result_fixture);
     turbo_free_json(&observability_queries);
     turbo_free_json(&timeline_json);
     turbo_free_json(&branch_tree);
@@ -1620,6 +1846,68 @@ spec("turbo agent runtime api") {
     turbo_agent_runtime_destroy(runtime);
   }
 
+  it("should complete a Stage 3 supervisor handoff loop with consistent runtime state") {
+    turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
+    turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
+    turbo_graph_t *graph = create_runtime_supervisor_handoff_graph();
+    turbo_runtime_data_bind_value_t *state = create_supervisor_handoff_state_bind();
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    turbo_runtime_data_bind_value_t *thread_state = NULL;
+    turbo_runtime_data_bind_value_t *run_state = NULL;
+    json_value_t *summary = NULL;
+    json_value_t *result_json = NULL;
+    json_value_t *thread_json = NULL;
+    json_value_t *run_json = NULL;
+    const char *thread_id;
+    const char *run_id;
+
+    check_not_null(runtime);
+    check_not_null(graph);
+    check_not_null(state);
+
+    check_int_eq(turbo_agent_runtime_start_bind_graph(runtime, graph, state, NULL, NULL,
+                                                      &summary, &result_state),
+                 0);
+    check_str_eq(turbo_json_get_string(summary, "status"), "completed");
+    check_true(turbo_json_is_null(turbo_json_object_get(summary, "checkpoint_id")));
+    check_str_eq(turbo_json_get_string(summary, "active_agent"), "executor");
+    check_true(turbo_json_is_null(turbo_json_object_get(summary, "handoff_target_agent")));
+    check_true(turbo_json_is_null(turbo_json_object_get(summary, "handoff_reason")));
+
+    result_json = turbo_runtime_data_bind_value_to_json(result_state);
+    check_not_null(result_json);
+    runtime_check_completed_supervisor_handoff_state(result_json);
+    check_str_eq(turbo_json_get_string(summary, "active_agent"),
+                 turbo_agent_state_active_agent(result_json));
+
+    thread_id = turbo_json_get_string(summary, "thread_id");
+    run_id = turbo_json_get_string(summary, "run_id");
+    check_int_eq(turbo_agent_runtime_get_thread_state_bind(runtime, thread_id, &thread_state), 0);
+    check_int_eq(turbo_agent_runtime_get_run_state_bind(runtime, run_id, &run_state), 0);
+
+    thread_json = turbo_runtime_data_bind_value_to_json(thread_state);
+    run_json = turbo_runtime_data_bind_value_to_json(run_state);
+    check_not_null(thread_json);
+    check_not_null(run_json);
+    runtime_check_completed_supervisor_handoff_state(thread_json);
+    runtime_check_completed_supervisor_handoff_state(run_json);
+    check_str_eq(turbo_agent_state_active_agent(thread_json),
+                 turbo_agent_state_active_agent(result_json));
+    check_str_eq(turbo_agent_state_active_agent(run_json),
+                 turbo_agent_state_active_agent(result_json));
+
+    turbo_free_json(&run_json);
+    turbo_free_json(&thread_json);
+    turbo_free_json(&result_json);
+    turbo_free_json(&summary);
+    turbo_runtime_data_bind_value_destroy(run_state);
+    turbo_runtime_data_bind_value_destroy(thread_state);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_graph_destroy(graph);
+    turbo_agent_runtime_destroy(runtime);
+  }
+
   it("should replay one checkpoint through the explicit checkpoint-scoped replay aliases") {
     turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
     turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
@@ -1757,8 +2045,8 @@ spec("turbo agent runtime api") {
     json_value_t *runs = NULL;
     turbo_graph_run_options_t options = {0};
     const char *interrupt_before_review[] = {"review"};
-    turbo_agent_runtime_parent_link_t parent_link = {"run_parent", "call_parent",
-                                                     "delegate"};
+    turbo_agent_runtime_parent_link_t parent_link = {
+        "run_parent", "call_parent", "delegate", "run_graph_parent", "frame_parent"};
 
     check_not_null(runtime);
     check_not_null(graph);
@@ -1773,12 +2061,16 @@ spec("turbo agent runtime api") {
     check_str_eq(turbo_json_get_string(summary, "parent_agent_run_id"), "run_parent");
     check_str_eq(turbo_json_get_string(summary, "parent_tool_call_id"), "call_parent");
     check_str_eq(turbo_json_get_string(summary, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(summary, "parent_graph_run_id"), "run_graph_parent");
+    check_str_eq(turbo_json_get_string(summary, "call_frame_id"), "frame_parent");
     check_int_eq(turbo_agent_runtime_get_run(runtime, turbo_json_get_string(summary, "run_id"),
                                              &run),
                  0);
     check_str_eq(turbo_json_get_string(run, "parent_agent_run_id"), "run_parent");
     check_str_eq(turbo_json_get_string(run, "parent_tool_call_id"), "call_parent");
     check_str_eq(turbo_json_get_string(run, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(run, "parent_graph_run_id"), "run_graph_parent");
+    check_str_eq(turbo_json_get_string(run, "call_frame_id"), "frame_parent");
 
     check_int_eq(turbo_agent_runtime_get_checkpoint(
                      runtime, turbo_json_get_string(summary, "checkpoint_id"), &checkpoint),
@@ -1786,11 +2078,18 @@ spec("turbo agent runtime api") {
     check_str_eq(turbo_json_get_string(checkpoint, "parent_agent_run_id"), "run_parent");
     check_str_eq(turbo_json_get_string(checkpoint, "parent_tool_call_id"), "call_parent");
     check_str_eq(turbo_json_get_string(checkpoint, "parent_tool_name"), "delegate");
+    check_str_eq(turbo_json_get_string(checkpoint, "parent_graph_run_id"),
+                 "run_graph_parent");
+    check_str_eq(turbo_json_get_string(checkpoint, "call_frame_id"), "frame_parent");
 
     check_int_eq(turbo_agent_runtime_list_child_runs(runtime, "run_parent", &runs), 0);
     check_size_eq(turbo_json_array_size(runs), 1);
     check_str_eq(turbo_json_get_string(turbo_json_array_get(runs, 0), "id"),
                  turbo_json_get_string(summary, "run_id"));
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(runs, 0), "parent_graph_run_id"),
+                 "run_graph_parent");
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(runs, 0), "call_frame_id"),
+                 "frame_parent");
 
     turbo_free_json(&runs);
     turbo_free_json(&checkpoint);
@@ -1802,6 +2101,206 @@ spec("turbo agent runtime api") {
     turbo_agent_runtime_destroy(runtime);
   }
 
+  it("should run a graph-native subgraph node with durable call-frame lineage") {
+    turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
+    turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
+    turbo_graph_t *child_graph = create_runtime_subgraph_child_graph();
+    turbo_agent_subgraph_node_config_t subgraph_config = {0};
+    turbo_graph_t *parent_graph = NULL;
+    turbo_runtime_data_bind_value_t *state = create_review_state_bind(1);
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    const turbo_runtime_data_bind_value_t *subgraph_result;
+    const turbo_runtime_data_bind_value_t *child_state;
+    json_value_t *summary = NULL;
+    json_value_t *child_run = NULL;
+    json_value_t *child_runs = NULL;
+    const char *parent_run_id;
+    const char *child_run_id;
+
+    check_not_null(runtime);
+    check_not_null(child_graph);
+    check_not_null(state);
+
+    subgraph_config.runtime = runtime;
+    subgraph_config.subgraph = child_graph;
+    subgraph_config.call_frame_id = "frame_child_call";
+    subgraph_config.output_key = "child_call_result";
+    parent_graph = create_runtime_subgraph_parent_graph(&subgraph_config);
+
+    check_int_eq(turbo_agent_runtime_start_bind_graph(runtime, parent_graph, state, NULL, NULL,
+                                                      &summary, &result_state),
+                 0);
+    check_str_eq(turbo_json_get_string(summary, "status"), "completed");
+    parent_run_id = turbo_json_get_string(summary, "run_id");
+    check_not_null(parent_run_id);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(result_state, "after_subgraph"), 0));
+
+    subgraph_result = turbo_runtime_data_bind_object_get(result_state, "child_call_result");
+    check_not_null(subgraph_result);
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "kind")),
+                 "subgraph_result");
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "ok"), 0));
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "completed"), 0));
+    check_false(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "interrupted"), 1));
+    check_false(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "failed"), 1));
+    check_null(turbo_runtime_data_bind_value_as_string(
+        turbo_runtime_data_bind_object_get(subgraph_result, "pending_checkpoint_id")));
+    check_null(turbo_runtime_data_bind_value_as_string(
+        turbo_runtime_data_bind_object_get(subgraph_result, "pending_node")));
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "parent_agent_run_id")),
+                 parent_run_id);
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "parent_graph_run_id")),
+                 parent_run_id);
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "parent_tool_call_id")),
+                 "frame_child_call");
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "call_frame_id")),
+                 "frame_child_call");
+    child_run_id = turbo_runtime_data_bind_value_as_string(
+        turbo_runtime_data_bind_object_get(subgraph_result, "run_id"));
+    check_not_null(child_run_id);
+    child_state = turbo_runtime_data_bind_object_get(subgraph_result, "state");
+    check_not_null(child_state);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(child_state, "child_visited"), 0));
+
+    check_int_eq(turbo_agent_runtime_get_run(runtime, child_run_id, &child_run), 0);
+    check_str_eq(turbo_json_get_string(child_run, "parent_agent_run_id"), parent_run_id);
+    check_str_eq(turbo_json_get_string(child_run, "parent_graph_run_id"), parent_run_id);
+    check_str_eq(turbo_json_get_string(child_run, "parent_tool_call_id"), "frame_child_call");
+    check_str_eq(turbo_json_get_string(child_run, "call_frame_id"), "frame_child_call");
+    check_int_eq(turbo_agent_runtime_list_child_runs(runtime, parent_run_id, &child_runs), 0);
+    check_size_eq(turbo_json_array_size(child_runs), 1);
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(child_runs, 0), "id"),
+                 child_run_id);
+
+    turbo_free_json(&child_runs);
+    turbo_free_json(&child_run);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_free_json(&summary);
+    turbo_graph_destroy(parent_graph);
+    turbo_graph_destroy(child_graph);
+    turbo_agent_runtime_destroy(runtime);
+  }
+
+  it("should keep interrupted subgraph checkpoints durable for child resume") {
+    turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
+    turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
+    turbo_graph_t *child_graph = create_runtime_review_graph();
+    turbo_agent_subgraph_node_config_t subgraph_config = {0};
+    turbo_graph_t *parent_graph = NULL;
+    turbo_runtime_data_bind_value_t *state = create_review_state_bind(1);
+    turbo_runtime_data_bind_value_t *result_state = NULL;
+    turbo_runtime_data_bind_value_t *resumed_child_state = NULL;
+    const turbo_runtime_data_bind_value_t *subgraph_result;
+    const turbo_runtime_data_bind_value_t *child_state;
+    const char *interrupt_before_review[] = {"review"};
+    turbo_graph_run_options_t child_options = {0};
+    json_value_t *summary = NULL;
+    json_value_t *resumed_summary = NULL;
+    json_value_t *child_run = NULL;
+    json_value_t *child_runs = NULL;
+    const char *parent_run_id;
+    const char *child_run_id;
+    const char *child_checkpoint_id;
+
+    check_not_null(runtime);
+    check_not_null(child_graph);
+    check_not_null(state);
+
+    child_options.interrupt_before_nodes = interrupt_before_review;
+    child_options.interrupt_before_count = 1;
+    subgraph_config.runtime = runtime;
+    subgraph_config.subgraph = child_graph;
+    subgraph_config.options = &child_options;
+    subgraph_config.call_frame_id = "frame_child_interrupt";
+    subgraph_config.output_key = "child_call_result";
+    parent_graph = create_runtime_subgraph_parent_graph(&subgraph_config);
+
+    check_int_eq(turbo_agent_runtime_start_bind_graph(runtime, parent_graph, state, NULL, NULL,
+                                                      &summary, &result_state),
+                 0);
+    check_str_eq(turbo_json_get_string(summary, "status"), "completed");
+    parent_run_id = turbo_json_get_string(summary, "run_id");
+    check_not_null(parent_run_id);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(result_state, "after_subgraph"), 0));
+
+    subgraph_result = turbo_runtime_data_bind_object_get(result_state, "child_call_result");
+    check_not_null(subgraph_result);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "ok"), 0));
+    check_false(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "completed"), 1));
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "interrupted"), 0));
+    check_false(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(subgraph_result, "failed"), 1));
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "status")),
+                 "interrupted");
+    check_str_eq(turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "pending_node")),
+                 "review");
+    child_checkpoint_id = turbo_runtime_data_bind_value_as_string(
+        turbo_runtime_data_bind_object_get(subgraph_result, "pending_checkpoint_id"));
+    check_not_null(child_checkpoint_id);
+    check_str_eq(child_checkpoint_id,
+                 turbo_runtime_data_bind_value_as_string(
+                     turbo_runtime_data_bind_object_get(subgraph_result, "checkpoint_id")));
+    child_run_id = turbo_runtime_data_bind_value_as_string(
+        turbo_runtime_data_bind_object_get(subgraph_result, "run_id"));
+    check_not_null(child_run_id);
+    child_state = turbo_runtime_data_bind_object_get(subgraph_result, "state");
+    check_not_null(child_state);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(child_state, "visited_start"), 0));
+
+    check_int_eq(turbo_agent_runtime_get_run(runtime, child_run_id, &child_run), 0);
+    check_str_eq(turbo_json_get_string(child_run, "status"), "interrupted");
+    check_str_eq(turbo_json_get_string(child_run, "parent_agent_run_id"), parent_run_id);
+    check_str_eq(turbo_json_get_string(child_run, "parent_graph_run_id"), parent_run_id);
+    check_str_eq(turbo_json_get_string(child_run, "parent_tool_call_id"),
+                 "frame_child_interrupt");
+    check_str_eq(turbo_json_get_string(child_run, "call_frame_id"), "frame_child_interrupt");
+
+    check_int_eq(turbo_agent_runtime_resume_bind_graph(runtime, child_graph, child_checkpoint_id,
+                                                       NULL, NULL, &resumed_summary,
+                                                       &resumed_child_state),
+                 0);
+    check_str_eq(turbo_json_get_string(resumed_summary, "status"), "completed");
+    check_str_eq(turbo_json_get_string(resumed_summary, "run_id"), child_run_id);
+    check_str_eq(turbo_json_get_string(resumed_summary, "parent_agent_run_id"), parent_run_id);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(resumed_child_state, "visited_end"), 0));
+
+    check_int_eq(turbo_agent_runtime_list_child_runs(runtime, parent_run_id, &child_runs), 0);
+    check_size_eq(turbo_json_array_size(child_runs), 1);
+    check_str_eq(turbo_json_get_string(turbo_json_array_get(child_runs, 0), "id"),
+                 child_run_id);
+
+    turbo_free_json(&child_runs);
+    turbo_free_json(&child_run);
+    turbo_runtime_data_bind_value_destroy(resumed_child_state);
+    turbo_free_json(&resumed_summary);
+    turbo_runtime_data_bind_value_destroy(result_state);
+    turbo_runtime_data_bind_value_destroy(state);
+    turbo_free_json(&summary);
+    turbo_graph_destroy(parent_graph);
+    turbo_graph_destroy(child_graph);
+    turbo_agent_runtime_destroy(runtime);
+  }
+
   it("should expose persisted state and apply checkpoint commands") {
     turbo_agent_runtime_store_t store = turbo_agent_runtime_store_memory_create();
     turbo_agent_runtime_t *runtime = turbo_agent_runtime_create(&store);
@@ -1809,13 +2308,20 @@ spec("turbo agent runtime api") {
     turbo_runtime_data_bind_value_t *state = create_review_state_bind(0);
     turbo_runtime_data_bind_value_t *result_state = NULL;
     turbo_runtime_data_bind_value_t *thread_state = NULL;
+    turbo_runtime_data_bind_value_t *thread_head_state = NULL;
+    turbo_runtime_data_bind_value_t *thread_trace_events = NULL;
+    turbo_runtime_data_bind_value_t *thread_head_trace_events = NULL;
     turbo_runtime_data_bind_value_t *run_state = NULL;
     turbo_runtime_data_bind_value_t *checkpoint_state = NULL;
+    turbo_runtime_data_bind_value_t *state_patch = NULL;
+    turbo_runtime_data_bind_value_t *prepared_state_override = NULL;
+    turbo_runtime_data_bind_value_t *legacy_state_override = NULL;
     turbo_runtime_data_bind_value_t *approved_override = NULL;
     turbo_runtime_data_bind_value_t *replan_override = NULL;
     turbo_runtime_data_bind_value_t *rejected_override = NULL;
     turbo_runtime_data_bind_value_t *feedback_override = NULL;
     turbo_runtime_data_bind_value_t *final_output_override = NULL;
+    turbo_runtime_data_bind_value_t *prepared_command_override = NULL;
     turbo_runtime_data_bind_value_t *resumed_state = NULL;
     turbo_runtime_data_bind_value_t *fork_state = NULL;
     turbo_runtime_data_bind_value_t *command = NULL;
@@ -1851,6 +2357,19 @@ spec("turbo agent runtime api") {
     check_int_eq(turbo_agent_runtime_get_thread_state_bind(runtime, thread_id, &thread_state), 0);
     check_true(turbo_runtime_data_bind_value_as_bool(
         turbo_runtime_data_bind_object_get(thread_state, "visited_start"), 0));
+    check_int_eq(turbo_agent_runtime_get_thread_head_state_bind(runtime, thread_id,
+                                                                &thread_head_state),
+                 0);
+    check_true(turbo_runtime_data_bind_value_as_bool(
+        turbo_runtime_data_bind_object_get(thread_head_state, "visited_start"), 0));
+    check_int_eq(turbo_agent_runtime_get_thread_trace_events_bind(runtime, thread_id,
+                                                                  &thread_trace_events),
+                 0);
+    check_int_eq(turbo_agent_runtime_get_thread_head_trace_events_bind(
+                     runtime, thread_id, &thread_head_trace_events),
+                 0);
+    check_size_eq(turbo_runtime_data_bind_value_size(thread_head_trace_events),
+                  turbo_runtime_data_bind_value_size(thread_trace_events));
 
     check_int_eq(turbo_agent_runtime_get_run_state_bind(runtime, run_id, &run_state), 0);
     check_true(turbo_runtime_data_bind_value_as_bool(
@@ -1861,6 +2380,32 @@ spec("turbo agent runtime api") {
                  0);
     check_true(turbo_runtime_data_bind_value_as_bool(
         turbo_runtime_data_bind_object_get(checkpoint_state, "visited_start"), 0));
+
+    state_patch = create_runtime_state_patch_bind();
+    check_not_null(state_patch);
+    check_int_eq(turbo_agent_runtime_prepare_thread_state_override_bind(runtime, thread_id,
+                                                                       state_patch,
+                                                                       &prepared_state_override),
+                 0);
+    check_int_eq(turbo_agent_runtime_update_thread_state_bind(runtime, thread_id, state_patch,
+                                                              &legacy_state_override),
+                 0);
+    check_str_eq(turbo_runtime_data_bind_value_as_string(turbo_runtime_data_bind_object_get(
+                     turbo_runtime_data_bind_object_get(
+                         turbo_runtime_data_bind_object_get(prepared_state_override, "profile"),
+                         "settings"),
+                     "theme")),
+                 "dark");
+    check_str_eq(turbo_runtime_data_bind_value_as_string(turbo_runtime_data_bind_object_get(
+                     turbo_runtime_data_bind_object_get(
+                         turbo_runtime_data_bind_object_get(legacy_state_override, "profile"),
+                         "settings"),
+                     "theme")),
+                 "dark");
+    turbo_runtime_data_bind_value_destroy(thread_state);
+    thread_state = NULL;
+    check_int_eq(turbo_agent_runtime_get_thread_state_bind(runtime, thread_id, &thread_state), 0);
+    check_null(turbo_runtime_data_bind_object_get(thread_state, "profile"));
 
     command = turbo_runtime_data_bind_value_create_object();
     check_not_null(command);
@@ -1877,6 +2422,37 @@ spec("turbo agent runtime api") {
     turbo_free_json(&override_json);
     turbo_runtime_data_bind_value_destroy(command);
     command = NULL;
+
+    command = turbo_runtime_data_bind_value_create_object();
+    check_not_null(command);
+    check_int_eq(turbo_runtime_data_bind_object_set(
+                     command, "kind",
+                     turbo_runtime_data_bind_value_create_string("request_replan")),
+                 TURBO_RUNTIME_DATA_BIND_OK);
+    check_int_eq(turbo_runtime_data_bind_object_set(
+                     command, "reason",
+                     turbo_runtime_data_bind_value_create_string("manual review requested")),
+                 TURBO_RUNTIME_DATA_BIND_OK);
+    check_int_eq(turbo_agent_runtime_prepare_checkpoint_command_override_bind(
+                     runtime, checkpoint_id, command, &prepared_command_override),
+                 0);
+    override_json = turbo_runtime_data_bind_value_to_json(prepared_command_override);
+    check_not_null(override_json);
+    check_true(turbo_agent_state_replan_requested(override_json));
+    check_str_eq(turbo_agent_state_replan_reason(override_json), "manual review requested");
+    turbo_free_json(&override_json);
+    turbo_runtime_data_bind_value_destroy(command);
+    command = NULL;
+    turbo_runtime_data_bind_value_destroy(checkpoint_state);
+    checkpoint_state = NULL;
+    check_int_eq(turbo_agent_runtime_get_checkpoint_state_bind(runtime, checkpoint_id,
+                                                               &checkpoint_state),
+                 0);
+    override_json = turbo_runtime_data_bind_value_to_json(checkpoint_state);
+    check_not_null(override_json);
+    check_false(turbo_agent_state_replan_requested(override_json));
+    turbo_free_json(&override_json);
+    override_json = NULL;
 
     command = turbo_runtime_data_bind_value_create_object();
     check_not_null(command);
@@ -2011,6 +2587,10 @@ spec("turbo agent runtime api") {
     turbo_runtime_data_bind_value_destroy(command);
     command = NULL;
     turbo_runtime_data_bind_value_destroy(payload);
+    turbo_runtime_data_bind_value_destroy(prepared_command_override);
+    turbo_runtime_data_bind_value_destroy(legacy_state_override);
+    turbo_runtime_data_bind_value_destroy(prepared_state_override);
+    turbo_runtime_data_bind_value_destroy(state_patch);
     turbo_runtime_data_bind_value_destroy(fork_state);
     turbo_runtime_data_bind_value_destroy(final_output_override);
     turbo_runtime_data_bind_value_destroy(feedback_override);
@@ -2020,6 +2600,9 @@ spec("turbo agent runtime api") {
     turbo_runtime_data_bind_value_destroy(approved_override);
     turbo_runtime_data_bind_value_destroy(checkpoint_state);
     turbo_runtime_data_bind_value_destroy(run_state);
+    turbo_runtime_data_bind_value_destroy(thread_head_trace_events);
+    turbo_runtime_data_bind_value_destroy(thread_trace_events);
+    turbo_runtime_data_bind_value_destroy(thread_head_state);
     turbo_runtime_data_bind_value_destroy(thread_state);
     turbo_runtime_data_bind_value_destroy(result_state);
     turbo_runtime_data_bind_value_destroy(state);

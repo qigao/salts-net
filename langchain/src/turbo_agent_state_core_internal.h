@@ -31,6 +31,16 @@ CXX_C_API const json_value_t *turbo_agent_state_last_event_of_kind_impl(
     const json_value_t *state, const char *kind);
 CXX_C_API const json_value_t *turbo_agent_state_last_event_impl(
     const json_value_t *state);
+CXX_C_API const json_value_t *turbo_agent_state_latest_handoff_event_impl(
+    const json_value_t *state);
+CXX_C_API const char *turbo_agent_state_handoff_event_phase_impl(const json_value_t *event);
+CXX_C_API const char *turbo_agent_state_handoff_event_from_agent_impl(
+    const json_value_t *event);
+CXX_C_API const char *turbo_agent_state_handoff_event_target_agent_impl(
+    const json_value_t *event);
+CXX_C_API const char *turbo_agent_state_handoff_event_reason_impl(const json_value_t *event);
+CXX_C_API const char *turbo_agent_state_handoff_event_active_agent_impl(
+    const json_value_t *event);
 CXX_C_API json_value_t *turbo_agent_state_get_array_impl(json_value_t *state,
                                                          const char *key);
 CXX_C_API json_value_t *turbo_agent_state_get_or_create_array_impl(
@@ -91,6 +101,15 @@ CXX_C_API int turbo_agent_state_append_replan_version(json_value_t *state, int r
 #define turbo_agent_state_capture_trace_event_bind turbo_agent_state_capture_trace_event_bind_impl
 #define turbo_agent_state_last_event_of_kind turbo_agent_state_last_event_of_kind_impl
 #define turbo_agent_state_last_event turbo_agent_state_last_event_impl
+#define turbo_agent_state_latest_handoff_event turbo_agent_state_latest_handoff_event_impl
+#define turbo_agent_state_handoff_event_phase turbo_agent_state_handoff_event_phase_impl
+#define turbo_agent_state_handoff_event_from_agent \
+  turbo_agent_state_handoff_event_from_agent_impl
+#define turbo_agent_state_handoff_event_target_agent \
+  turbo_agent_state_handoff_event_target_agent_impl
+#define turbo_agent_state_handoff_event_reason turbo_agent_state_handoff_event_reason_impl
+#define turbo_agent_state_handoff_event_active_agent \
+  turbo_agent_state_handoff_event_active_agent_impl
 #define turbo_agent_state_get_array turbo_agent_state_get_array_impl
 #define turbo_agent_state_get_or_create_array turbo_agent_state_get_or_create_array_impl
 #define turbo_agent_state_get_object turbo_agent_state_get_object_impl

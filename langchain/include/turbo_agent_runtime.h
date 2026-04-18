@@ -35,6 +35,8 @@ typedef struct turbo_agent_runtime_parent_link_s {
   const char *parent_agent_run_id;
   const char *parent_tool_call_id;
   const char *parent_tool_name;
+  const char *parent_graph_run_id;
+  const char *call_frame_id;
 } turbo_agent_runtime_parent_link_t;
 
 typedef void (*turbo_agent_observer_bind_fn)(
@@ -118,12 +120,28 @@ CXX_C_API int turbo_agent_runtime_start_bind_graph(
  *
  * The runtime persists `parent_link` onto the created run record and any
  * checkpoint records produced by that run segment. The returned summary also
- * includes these three fields when known.
+ * includes these lineage fields when known. `parent_graph_run_id` and
+ * `call_frame_id` are optional nested/subgraph call-frame metadata; they do
+ * not create a second persistence source.
  */
 CXX_C_API int turbo_agent_runtime_start_bind_graph_linked(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph,
     const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
     const char *thread_id, const turbo_agent_runtime_parent_link_t *parent_link,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Start one new graph run and emit live canonical events to one host sink.
+ *
+ * This live stream surface forwards the graph's existing canonical events to
+ * `event_sink` during execution. It does not introduce a second observer store
+ * or alter the durable observer/history contract; persisted replay and history
+ * inspection continue to read from the existing runtime facts.
+ */
+CXX_C_API int turbo_agent_runtime_start_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    const char *thread_id, turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
     json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state);
 
 /**
@@ -151,6 +169,20 @@ CXX_C_API int turbo_agent_runtime_resume_bind_graph(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_override,
     const turbo_graph_run_options_t *options, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Resume one checkpointed run segment with a live canonical event stream.
+ *
+ * This surface reuses the graph's existing canonical event emission while the
+ * resumed segment executes. It does not create new observer persistence or
+ * change how durable replay/history selectors are resolved later.
+ */
+CXX_C_API int turbo_agent_runtime_resume_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
     turbo_runtime_data_bind_value_t **out_state);
 
 /**
@@ -203,6 +235,20 @@ CXX_C_API int turbo_agent_runtime_fork_bind_graph(
     turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_override,
     const turbo_graph_run_options_t *options, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Fork one checkpointed run segment with a live canonical event stream.
+ *
+ * This surface emits the same live canonical graph events that regular
+ * execution would produce. It remains a transient host stream only and does not
+ * add a parallel observer store or redefine durable history semantics.
+ */
+CXX_C_API int turbo_agent_runtime_fork_bind_graph_stream(
+    turbo_agent_runtime_t *runtime, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
     turbo_runtime_data_bind_value_t **out_state);
 
 /**
@@ -383,9 +429,11 @@ CXX_C_API int turbo_agent_runtime_get_run_trace_events_bind(
     turbo_runtime_data_bind_value_t **out_events);
 
 /**
- * @brief Load the latest persisted state for one thread as a bind-native object.
+ * @brief Compatibility accessor for one thread's latest-run state snapshot.
  *
- * The runtime resolves the newest run on the thread by `updated_at`.
+ * This legacy surface resolves the newest run on the thread by `updated_at`.
+ * It does not prefer the thread head / pending checkpoint. New hosts that need
+ * thread-head semantics should prefer `get_thread_head_state_bind(...)`.
  *
  * @param runtime Runtime handle.
  * @param thread_id Thread id.
@@ -397,11 +445,39 @@ CXX_C_API int turbo_agent_runtime_get_thread_state_bind(
     turbo_runtime_data_bind_value_t **out_state);
 
 /**
- * @brief Apply one explicit bind-native state patch to a checkpoint state.
+ * @brief Load one thread head state snapshot as a bind-native object.
+ *
+ * The runtime resolves the newest interrupted run first. When the thread has
+ * no interrupted run, it falls back to the newest run by `updated_at`.
+ *
+ * @param runtime Runtime handle.
+ * @param thread_id Thread id.
+ * @param out_state Output bind-native state owned by caller.
+ * @return 0 on success, negative on error.
+ */
+CXX_C_API int turbo_agent_runtime_get_thread_head_state_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    turbo_runtime_data_bind_value_t **out_state);
+
+/**
+ * @brief Prepare one checkpoint-scoped state override from a bind-native patch.
  *
  * The runtime loads the checkpoint state, recursively merges object fields from
  * `state_patch`, and returns the resulting full state as `out_state_override`.
- * Arrays, scalars, and null replace the target value.
+ * Arrays, scalars, and null replace the target value. This helper does not
+ * persist the prepared override back into the runtime.
+ */
+CXX_C_API int turbo_agent_runtime_prepare_checkpoint_state_override_bind(
+    turbo_agent_runtime_t *runtime, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
+/**
+ * @brief Compatibility alias for `prepare_checkpoint_state_override_bind(...)`.
+ *
+ * This older convenience surface still returns one prepared state override and
+ * does not persist the result back into the runtime. New hosts should prefer
+ * `prepare_checkpoint_state_override_bind(...)`.
  */
 CXX_C_API int turbo_agent_runtime_update_checkpoint_state_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
@@ -409,18 +485,48 @@ CXX_C_API int turbo_agent_runtime_update_checkpoint_state_bind(
     turbo_runtime_data_bind_value_t **out_state_override);
 
 /**
- * @brief Apply one explicit bind-native state patch to the current thread head.
+ * @brief Prepare one thread-head state override from a bind-native patch.
  *
  * The runtime resolves the thread's newest interrupted run first. If no
  * interrupted run exists, it falls back to the newest run by `updated_at`,
- * then applies the patch to that run's latest checkpoint state.
+ * then applies the patch to that run's latest checkpoint state. This helper
+ * only prepares the full override value and does not persist it.
+ */
+CXX_C_API int turbo_agent_runtime_prepare_thread_state_override_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
+/**
+ * @brief Compatibility alias for `prepare_thread_state_override_bind(...)`.
+ *
+ * This older convenience surface keeps the thread-head resolution semantics
+ * but returns only one prepared state override. It does not write the result
+ * back into runtime persistence.
  */
 CXX_C_API int turbo_agent_runtime_update_thread_state_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,
     const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override);
 
+/**
+ * @brief Compatibility accessor for one thread's latest-run trace events.
+ *
+ * This legacy surface resolves the newest run on the thread by `updated_at`.
+ * It does not prefer the thread head / pending checkpoint. New hosts that need
+ * thread-head semantics should prefer `get_thread_head_trace_events_bind(...)`.
+ */
 CXX_C_API int turbo_agent_runtime_get_thread_trace_events_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    turbo_runtime_data_bind_value_t **out_events);
+
+/**
+ * @brief Load one thread head trace-event snapshot as a bind-native array.
+ *
+ * The runtime resolves the newest interrupted run first. When the thread has
+ * no interrupted run, it falls back to the newest run by `updated_at`.
+ */
+CXX_C_API int turbo_agent_runtime_get_thread_head_trace_events_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,
     turbo_runtime_data_bind_value_t **out_events);
 
@@ -822,7 +928,8 @@ CXX_C_API int turbo_agent_runtime_list_observability_indexes_filtered(
  *   `output_json`, or `output`
  *
  * The returned `out_state_override` is suitable for
- * `resume_bind_graph(...)` or `fork_bind_graph(...)`.
+ * `resume_bind_graph(...)` or `fork_bind_graph(...)`. This helper does not
+ * persist the prepared override back into the runtime.
  *
  * @param runtime Runtime handle.
  * @param checkpoint_id Checkpoint id to read and modify.
@@ -830,17 +937,29 @@ CXX_C_API int turbo_agent_runtime_list_observability_indexes_filtered(
  * @param out_state_override Output bind-native state owned by caller.
  * @return 0 on success, negative on error.
  */
+CXX_C_API int turbo_agent_runtime_prepare_checkpoint_command_override_bind(
+    turbo_agent_runtime_t *runtime, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
+/**
+ * @brief Compatibility alias for `prepare_checkpoint_command_override_bind(...)`.
+ *
+ * This older convenience surface still returns one prepared state override and
+ * does not persist it. New hosts should prefer
+ * `prepare_checkpoint_command_override_bind(...)`.
+ */
 CXX_C_API int turbo_agent_runtime_apply_command_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override);
 
 /**
- * @brief Explicit checkpoint-scoped alias for `apply_command_bind(...)`.
+ * @brief Explicit checkpoint-scoped compatibility alias for `apply_command_bind(...)`.
  *
- * This host-facing time-travel control entrypoint keeps the checkpoint id
- * explicit at the callsite. Its semantics are identical to
- * `apply_command_bind(...)`.
+ * This checkpoint-named entrypoint exists for callsite clarity on older code.
+ * The recommended main surface is now
+ * `prepare_checkpoint_command_override_bind(...)`.
  */
 CXX_C_API int turbo_agent_runtime_apply_checkpoint_command_bind(
     turbo_agent_runtime_t *runtime, const char *checkpoint_id,
@@ -848,11 +967,24 @@ CXX_C_API int turbo_agent_runtime_apply_checkpoint_command_bind(
     turbo_runtime_data_bind_value_t **out_state_override);
 
 /**
- * @brief Apply one host-facing runtime command to the current thread checkpoint.
+ * @brief Prepare one thread-head command-derived state override.
  *
  * The runtime resolves the thread's newest interrupted run first, then falls
  * back to the newest run by `updated_at`, and finally applies the command to
- * that run's latest checkpoint.
+ * that run's latest checkpoint. This helper only prepares the resulting
+ * override and does not persist it.
+ */
+CXX_C_API int turbo_agent_runtime_prepare_thread_command_override_bind(
+    turbo_agent_runtime_t *runtime, const char *thread_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
+
+/**
+ * @brief Compatibility alias for `prepare_thread_command_override_bind(...)`.
+ *
+ * This older convenience surface keeps the thread-head resolution semantics
+ * but only returns one prepared override. It does not write the result back
+ * into runtime persistence.
  */
 CXX_C_API int turbo_agent_runtime_apply_thread_command_bind(
     turbo_agent_runtime_t *runtime, const char *thread_id,

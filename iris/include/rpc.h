@@ -7,6 +7,7 @@
 /* Forward declarations */
 typedef struct Req Req;
 typedef struct Res Res;
+struct iris_app;
 
 #include "router.h"
 /* Phase IRIS-1: Use turbo_arena instead of vendor arena */
@@ -112,6 +113,8 @@ typedef struct rpc_context_s {
   size_t method_count;
   size_t method_capacity;
   mem_pool_t *arena;
+  struct iris_app *bound_app;
+  const char *bound_endpoint;
 } rpc_context_t;
 
 /**

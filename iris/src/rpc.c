@@ -20,6 +20,19 @@ static rpc_context_t *iris_rpc_context_from_request(Req *req) {
   return (rpc_context_t *)iris_app_lookup_rpc_context(req->app, req->path);
 }
 
+static void iris_rpc_context_unbound(void *rpc_context, void *user_data) {
+  rpc_context_t *ctx = (rpc_context_t *)rpc_context;
+  iris_app_t *app = (iris_app_t *)user_data;
+
+  if (!ctx) {
+    return;
+  }
+  if (!app || ctx->bound_app == app) {
+    ctx->bound_app = NULL;
+    ctx->bound_endpoint = NULL;
+  }
+}
+
 static json_value_t *iris_rpc_parse_json(const char *json, size_t len) {
   json_value_t *root = NULL;
   if (!json) {
@@ -71,6 +84,12 @@ rpc_context_t *rpc_init(const rpc_config_t *config) {
 void rpc_destroy(rpc_context_t *ctx) {
   if (!ctx)
     return;
+
+  if (ctx->bound_app && ctx->bound_endpoint) {
+    iris_app_unbind_rpc_context(ctx->bound_app, ctx->bound_endpoint, ctx);
+    ctx->bound_app = NULL;
+    ctx->bound_endpoint = NULL;
+  }
 
   if (ctx->methods)
     free(ctx->methods);
@@ -618,9 +637,12 @@ int rpc_setup_endpoint(rpc_context_t *ctx) {
   if (!app) {
     return -1;
   }
-  if (iris_app_bind_rpc_context(app, ctx->config.endpoint, ctx) != 0) {
+  if (iris_app_bind_rpc_context_ex(app, ctx->config.endpoint, ctx, iris_rpc_context_unbound,
+                                   app) != 0) {
     return -1;
   }
+  ctx->bound_app = app;
+  ctx->bound_endpoint = ctx->config.endpoint;
 
   /* Register introspection method if enabled */
   if (ctx->config.enable_introspection) {
@@ -630,6 +652,9 @@ int rpc_setup_endpoint(rpc_context_t *ctx) {
     introspection.description = "List all available RPC methods";
     introspection.requires_auth = 0;
     if (rpc_register_method(ctx, &introspection) != 0) {
+      iris_app_unbind_rpc_context(app, ctx->config.endpoint, ctx);
+      ctx->bound_app = NULL;
+      ctx->bound_endpoint = NULL;
       return -1;
     }
   }

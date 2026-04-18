@@ -541,6 +541,51 @@ CXX_C_API const json_value_t *turbo_agent_state_supervisor_handoff_history(
     const json_value_t *state);
 
 /**
+ * @brief Return the latest recorded supervisor handoff event from state events.
+ * @param state Agent state.
+ * @return Borrowed event object or NULL.
+ */
+CXX_C_API const json_value_t *turbo_agent_state_latest_handoff_event(
+    const json_value_t *state);
+
+/**
+ * @brief Return the phase recorded on one `handoff` event.
+ * @param event Handoff event object.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_handoff_event_phase(const json_value_t *event);
+
+/**
+ * @brief Return the source agent recorded on one `handoff` event.
+ * @param event Handoff event object.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_handoff_event_from_agent(const json_value_t *event);
+
+/**
+ * @brief Return the target agent recorded on one `handoff` event.
+ * @param event Handoff event object.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_handoff_event_target_agent(
+    const json_value_t *event);
+
+/**
+ * @brief Return the handoff reason recorded on one `handoff` event.
+ * @param event Handoff event object.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_handoff_event_reason(const json_value_t *event);
+
+/**
+ * @brief Return the active agent recorded on one `handoff` event.
+ * @param event Handoff event object.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_handoff_event_active_agent(
+    const json_value_t *event);
+
+/**
  * @brief Return the latest assistant text seen in model events.
  * @param state Agent state.
  * @return Pointer owned by state, or NULL.
@@ -734,8 +779,9 @@ CXX_C_API const json_value_t *turbo_agent_state_tool_results_outputs(
  * @brief Create one canonical tool-result output item from `call_id` and serialized output JSON/text.
  *
  * When `output` is one JSON object string, child/parent lineage fields such as
- * `child_run_id` or `parent_tool_call_id` are copied onto the returned item so
- * later state accessors can read them directly from `tool_results.outputs[]`.
+ * `child_run_id`, `parent_tool_call_id`, or `call_frame_id` are copied onto the
+ * returned item so later state accessors can read them directly from
+ * `tool_results.outputs[]`.
  *
  * @param call_id Tool call id from the originating model/tool call record.
  * @param output Serialized tool output payload.
@@ -798,6 +844,22 @@ CXX_C_API const char *turbo_agent_state_tool_result_parent_tool_call_id(
  * @return Pointer owned by state, or NULL.
  */
 CXX_C_API const char *turbo_agent_state_tool_result_parent_tool_name(
+    const json_value_t *output_item);
+
+/**
+ * @brief Return the parent graph run id recorded on one tool-result output item.
+ * @param output_item One entry from `tool_results.outputs`.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_tool_result_parent_graph_run_id(
+    const json_value_t *output_item);
+
+/**
+ * @brief Return the nested call-frame id recorded on one tool-result output item.
+ * @param output_item One entry from `tool_results.outputs`.
+ * @return Pointer owned by state, or NULL.
+ */
+CXX_C_API const char *turbo_agent_state_tool_result_call_frame_id(
     const json_value_t *output_item);
 
 /**

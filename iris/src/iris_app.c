@@ -23,6 +23,8 @@ static iris_app_t *g_default_app = NULL;
 typedef struct iris_rpc_binding_s {
     char *path;
     void *context;
+    iris_app_rpc_context_unbind_fn on_unbind;
+    void *unbind_user_data;
     struct iris_rpc_binding_s *next;
 } iris_rpc_binding_t;
 
@@ -73,6 +75,9 @@ static void iris_app_rpc_registry_free(iris_rpc_registry_t *registry) {
     binding = registry->head;
     while (binding) {
         next = binding->next;
+        if (binding->on_unbind) {
+            binding->on_unbind(binding->context, binding->unbind_user_data);
+        }
         free(binding->path);
         free(binding);
         binding = next;
@@ -170,6 +175,11 @@ void iris_app_reset_default(void) {
 }
 
 int iris_app_bind_rpc_context(iris_app_t *app, const char *path, void *rpc_context) {
+    return iris_app_bind_rpc_context_ex(app, path, rpc_context, NULL, NULL);
+}
+
+int iris_app_bind_rpc_context_ex(iris_app_t *app, const char *path, void *rpc_context,
+                                 iris_app_rpc_context_unbind_fn on_unbind, void *user_data) {
     iris_rpc_registry_t *registry;
     iris_rpc_binding_t *binding;
 
@@ -187,6 +197,8 @@ int iris_app_bind_rpc_context(iris_app_t *app, const char *path, void *rpc_conte
                 return -1;
             }
             binding->context = rpc_context;
+            binding->on_unbind = on_unbind;
+            binding->unbind_user_data = user_data;
             return 0;
         }
     }
@@ -201,6 +213,8 @@ int iris_app_bind_rpc_context(iris_app_t *app, const char *path, void *rpc_conte
         return -1;
     }
     binding->context = rpc_context;
+    binding->on_unbind = on_unbind;
+    binding->unbind_user_data = user_data;
     binding->next = registry->head;
     registry->head = binding;
     return 0;
@@ -248,6 +262,9 @@ int iris_app_unbind_rpc_context(iris_app_t *app, const char *path, const void *r
             prev->next = binding->next;
         } else {
             registry->head = binding->next;
+        }
+        if (binding->on_unbind) {
+            binding->on_unbind(binding->context, binding->unbind_user_data);
         }
         free(binding->path);
         free(binding);

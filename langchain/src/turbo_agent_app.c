@@ -17,6 +17,24 @@ CXX_C_API int turbo_agent_session_apply_checkpoint_state_patch_bind(
 CXX_C_API int turbo_agent_session_apply_thread_state_patch_bind(
     turbo_agent_session_t *session, const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_get_thread_head_state_bind(
+    turbo_agent_session_t *session, turbo_runtime_data_bind_value_t **out_state);
+CXX_C_API int turbo_agent_session_get_thread_head_trace_events_bind(
+    turbo_agent_session_t *session, turbo_runtime_data_bind_value_t **out_events);
+CXX_C_API int turbo_agent_session_prepare_checkpoint_state_override_bind(
+    turbo_agent_session_t *session, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_prepare_thread_state_override_bind(
+    turbo_agent_session_t *session, const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_prepare_checkpoint_command_override_bind(
+    turbo_agent_session_t *session, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
+CXX_C_API int turbo_agent_session_prepare_thread_command_override_bind(
+    turbo_agent_session_t *session, const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override);
 CXX_C_API int turbo_agent_session_resume_state_patch_bind_graph(
     turbo_agent_session_t *session, turbo_graph_t *graph, const char *checkpoint_id,
     const turbo_runtime_data_bind_value_t *state_patch,
@@ -183,12 +201,28 @@ CXX_C_API int turbo_agent_app_get_thread_state_bind(
   return turbo_agent_session_get_thread_state_bind(app->session, out_state);
 }
 
+CXX_C_API int turbo_agent_app_get_thread_head_state_bind(
+    turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_state) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_get_thread_head_state_bind(app->session, out_state);
+}
+
 CXX_C_API int turbo_agent_app_get_thread_trace_events_bind(
     turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_events) {
   if (!app || !app->session) {
     return -1;
   }
   return turbo_agent_session_get_thread_trace_events_bind(app->session, out_events);
+}
+
+CXX_C_API int turbo_agent_app_get_thread_head_trace_events_bind(
+    turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_events) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_get_thread_head_trace_events_bind(app->session, out_events);
 }
 
 CXX_C_API int turbo_agent_app_get_run_state_bind(
@@ -229,6 +263,18 @@ CXX_C_API int turbo_agent_app_update_checkpoint_state_bind(
                                                           out_state_override);
 }
 
+CXX_C_API int turbo_agent_app_prepare_checkpoint_state_override_bind(
+    turbo_agent_app_t *app, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_prepare_checkpoint_state_override_bind(app->session, checkpoint_id,
+                                                                   state_patch,
+                                                                   out_state_override);
+}
+
 CXX_C_API int turbo_agent_app_update_thread_state_bind(
     turbo_agent_app_t *app, const turbo_runtime_data_bind_value_t *state_patch,
     turbo_runtime_data_bind_value_t **out_state_override) {
@@ -237,6 +283,16 @@ CXX_C_API int turbo_agent_app_update_thread_state_bind(
   }
   return turbo_agent_session_update_thread_state_bind(app->session, state_patch,
                                                       out_state_override);
+}
+
+CXX_C_API int turbo_agent_app_prepare_thread_state_override_bind(
+    turbo_agent_app_t *app, const turbo_runtime_data_bind_value_t *state_patch,
+    turbo_runtime_data_bind_value_t **out_state_override) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_prepare_thread_state_override_bind(app->session, state_patch,
+                                                                out_state_override);
 }
 
 CXX_C_API int turbo_agent_app_get_supervisor_inbox(
@@ -487,12 +543,40 @@ CXX_C_API int turbo_agent_app_observe_thread_history_bind(
   return turbo_agent_session_observe_thread_history_bind(app->session, sink);
 }
 
+CXX_C_API int turbo_agent_app_start_bind_graph_stream(
+    turbo_agent_app_t *app, turbo_graph_t *graph,
+    const turbo_runtime_data_bind_value_t *state, const turbo_graph_run_options_t *options,
+    turbo_event_sink_bind_fn event_sink, void *event_sink_user_data,
+    json_value_t **out_summary_json, turbo_runtime_data_bind_value_t **out_state) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_start_bind_graph_stream(app->session, graph, state, options,
+                                                     event_sink, event_sink_user_data,
+                                                     out_summary_json, out_state);
+}
+
 CXX_C_API int turbo_agent_app_get_thread_timeline_bind(
     turbo_agent_app_t *app, turbo_runtime_data_bind_value_t **out_timeline) {
   if (!app || !app->session) {
     return -1;
   }
   return turbo_agent_session_get_thread_timeline_bind(app->session, out_timeline);
+}
+
+CXX_C_API int turbo_agent_app_resume_bind_graph_stream(
+    turbo_agent_app_t *app, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_resume_bind_graph_stream(app->session, graph, checkpoint_id,
+                                                      state_override, options, event_sink,
+                                                      event_sink_user_data, out_summary_json,
+                                                      out_state);
 }
 
 CXX_C_API int turbo_agent_app_apply_command_bind(
@@ -517,6 +601,18 @@ CXX_C_API int turbo_agent_app_apply_checkpoint_command_bind(
                                                            out_state_override);
 }
 
+CXX_C_API int turbo_agent_app_prepare_checkpoint_command_override_bind(
+    turbo_agent_app_t *app, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_prepare_checkpoint_command_override_bind(app->session, checkpoint_id,
+                                                                     command,
+                                                                     out_state_override);
+}
+
 CXX_C_API int turbo_agent_app_apply_thread_command_bind(
     turbo_agent_app_t *app, const turbo_runtime_data_bind_value_t *command,
     turbo_runtime_data_bind_value_t **out_state_override) {
@@ -525,6 +621,16 @@ CXX_C_API int turbo_agent_app_apply_thread_command_bind(
   }
   return turbo_agent_session_apply_thread_command_bind(app->session, command,
                                                        out_state_override);
+}
+
+CXX_C_API int turbo_agent_app_prepare_thread_command_override_bind(
+    turbo_agent_app_t *app, const turbo_runtime_data_bind_value_t *command,
+    turbo_runtime_data_bind_value_t **out_state_override) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_prepare_thread_command_override_bind(app->session, command,
+                                                                  out_state_override);
 }
 
 CXX_C_API int turbo_agent_app_apply_state_patch_bind(
@@ -746,7 +852,22 @@ CXX_C_API int turbo_agent_app_fork_thread_command_bind(
     return -1;
   }
   return turbo_agent_session_fork_thread_command_bind(app->session, graph, command, options,
-                                                      out_summary_json, out_state);
+                                                       out_summary_json, out_state);
+}
+
+CXX_C_API int turbo_agent_app_fork_bind_graph_stream(
+    turbo_agent_app_t *app, turbo_graph_t *graph, const char *checkpoint_id,
+    const turbo_runtime_data_bind_value_t *state_override,
+    const turbo_graph_run_options_t *options, turbo_event_sink_bind_fn event_sink,
+    void *event_sink_user_data, json_value_t **out_summary_json,
+    turbo_runtime_data_bind_value_t **out_state) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_fork_bind_graph_stream(app->session, graph, checkpoint_id,
+                                                    state_override, options, event_sink,
+                                                    event_sink_user_data, out_summary_json,
+                                                    out_state);
 }
 
 CXX_C_API int turbo_agent_app_resume_checkpoint_bind_graph(
@@ -1010,6 +1131,28 @@ CXX_C_API int turbo_agent_app_memory_list_records(const turbo_agent_app_t *app,
   return turbo_agent_session_memory_list_records(app->session, namespace_prefix, out_records_json);
 }
 
+CXX_C_API int turbo_agent_app_memory_get_record(const turbo_agent_app_t *app,
+                                                const char *memory_namespace, const char *key,
+                                                json_value_t **out_record_json) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_memory_get_record(app->session, memory_namespace, key,
+                                               out_record_json);
+}
+
+CXX_C_API int turbo_agent_app_memory_put_record(const turbo_agent_app_t *app,
+                                                const json_value_t *record_json) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_memory_put_record(app->session, record_json);
+}
+
+CXX_C_API int turbo_agent_app_memory_validate_record(const json_value_t *record_json) {
+  return turbo_agent_session_memory_validate_record(record_json);
+}
+
 CXX_C_API int turbo_agent_app_memory_query_records(const turbo_agent_app_t *app,
                                                    const char *namespace_prefix,
                                                    const char *kind,
@@ -1021,4 +1164,13 @@ CXX_C_API int turbo_agent_app_memory_query_records(const turbo_agent_app_t *app,
   }
   return turbo_agent_session_memory_query_records(app->session, namespace_prefix, kind,
                                                   key_prefix, text_substring, out_records_json);
+}
+
+CXX_C_API int turbo_agent_app_memory_query_records_ex(
+    const turbo_agent_app_t *app, const turbo_agent_memory_query_options_t *options,
+    json_value_t **out_records_json) {
+  if (!app || !app->session) {
+    return -1;
+  }
+  return turbo_agent_session_memory_query_records_ex(app->session, options, out_records_json);
 }

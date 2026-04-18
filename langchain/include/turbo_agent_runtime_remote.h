@@ -4,6 +4,7 @@
 #include <platform.h>
 
 #include "http_common.h"
+#include "turbo_agent_memory_store.h"
 #include "turbo_agent_runtime.h"
 
 #ifdef __cplusplus
@@ -17,6 +18,7 @@ typedef turbo_graph_t *(*turbo_agent_runtime_remote_graph_resolver_fn)(const cha
 
 typedef struct turbo_agent_runtime_remote_config_s {
   turbo_agent_runtime_t *runtime;
+  const turbo_agent_memory_store_t *memory_store;
   turbo_agent_runtime_remote_graph_resolver_fn graph_resolver;
   void *graph_resolver_user_data;
 } turbo_agent_runtime_remote_config_t;
@@ -55,6 +57,9 @@ CXX_C_API void turbo_agent_runtime_remote_destroy(turbo_agent_runtime_remote_t *
  * - `runtime.forkThreadStatePatchBindGraph`
  * - `runtime.getThreadObservabilityIndex`
  * - `runtime.listObservabilityIndexesFiltered`
+ * - `memory.getRecord`
+ * - `memory.putRecord`
+ * - `memory.queryRecordsEx`
  *
  * Requests and responses use plain JSON-RPC 2.0 objects. This dispatcher is a
  * contract bridge, not a second persisted runtime state source.

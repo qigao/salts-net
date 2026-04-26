@@ -108,6 +108,22 @@ spec("turl_unit") {
         turbo_free_json(&ctx);
     }
 
+    it("should leave literal json unchanged when no mustache tags are present") {
+        json_value_t *ctx = turbo_json_create_object();
+        const char *rpc_body =
+            "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"broker.control\",\"params\":{}}";
+        char *rendered = NULL;
+
+        turbo_json_object_set_string(ctx, "unused", "value");
+
+        rendered = turl_render_template(rpc_body, ctx);
+        check_not_null(rendered);
+        check_str_eq(rendered, rpc_body);
+
+        free(rendered);
+        turbo_free_json(&ctx);
+    }
+
     it("should fail request when JWT claims are invalid JSON") {
         turl_http_config_t config = {0};
         config.url = "http://127.0.0.1:1";

@@ -45,10 +45,17 @@ typedef struct ws_state_s {
 
   ws_state_e      state;
   int             server_mode;
+  int             tls_client_configured;
+  int             tls_verify_peer;
   char            key_b64[32];  /* Sec-WebSocket-Key (base64, always 24+1 chars) */
   char            path[256];    /* URI path, e.g. "/" */
   char            host[256];    /* Host header value */
   char            protocol[128];/* Optional Sec-WebSocket-Protocol value */
+  char           *tls_ca_file;
+  char           *tls_cert_file;
+  char           *tls_key_file;
+  char           *tls_key_password;
+  char           *tls_cipher_list;
 
   /* Handshake accumulation buffer */
   mem_buffer_t   *hs_buf;
@@ -88,6 +95,9 @@ static int  ws_prepare_client_key(ws_state_t *st);
 static int  ws_start_client_handshake(ws_state_t *st);
 static int  ws_reserve_buffer(ws_state_t *st, mem_buffer_t **buf, size_t needed,
                               size_t initial_cap);
+static char *ws_strdup_nullable(const char *value);
+static void ws_clear_tls_client_config(ws_state_t *st);
+static int ws_copy_tls_client_config(ws_state_t *st, const turbo_tls_client_config_t *config);
 
 static int ws_fail(ws_state_t *st, int err);
 static int ws_protocol_error(ws_state_t *st);
@@ -110,7 +120,103 @@ static void ws_drop_inner_tcp(ws_state_t *st) {
   st->tcp = NULL;
   tcp->user_data = NULL;
   tcp->managed = 0;
+  tcp->on_write_complete = NULL;
   turbo_stream_destroy(tcp);
+}
+
+static char *ws_strdup_nullable(const char *value) {
+  size_t len;
+  char *copy;
+
+  if (value == NULL) {
+    return NULL;
+  }
+
+  len = strlen(value);
+  copy = (char *)malloc(len + 1U);
+  if (copy == NULL) {
+    return NULL;
+  }
+
+  memcpy(copy, value, len + 1U);
+  return copy;
+}
+
+static void ws_clear_tls_client_config(ws_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  free(st->tls_ca_file);
+  free(st->tls_cert_file);
+  free(st->tls_key_file);
+  free(st->tls_key_password);
+  free(st->tls_cipher_list);
+  st->tls_ca_file = NULL;
+  st->tls_cert_file = NULL;
+  st->tls_key_file = NULL;
+  st->tls_key_password = NULL;
+  st->tls_cipher_list = NULL;
+  st->tls_client_configured = 0;
+  st->tls_verify_peer = 1;
+}
+
+static int ws_copy_tls_client_config(ws_state_t *st, const turbo_tls_client_config_t *config) {
+  char *ca_file = NULL;
+  char *cert_file = NULL;
+  char *key_file = NULL;
+  char *key_password = NULL;
+  char *cipher_list = NULL;
+
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+
+  if (config == NULL) {
+    ws_clear_tls_client_config(st);
+    return 0;
+  }
+
+  ca_file = ws_strdup_nullable(config->ca_file);
+  if (config->ca_file != NULL && ca_file == NULL) {
+    return TURBO_ENOMEM;
+  }
+  cert_file = ws_strdup_nullable(config->cert_file);
+  if (config->cert_file != NULL && cert_file == NULL) {
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  key_file = ws_strdup_nullable(config->key_file);
+  if (config->key_file != NULL && key_file == NULL) {
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  key_password = ws_strdup_nullable(config->key_password);
+  if (config->key_password != NULL && key_password == NULL) {
+    free(key_file);
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  cipher_list = ws_strdup_nullable(config->cipher_list);
+  if (config->cipher_list != NULL && cipher_list == NULL) {
+    free(key_password);
+    free(key_file);
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+
+  ws_clear_tls_client_config(st);
+  st->tls_ca_file = ca_file;
+  st->tls_cert_file = cert_file;
+  st->tls_key_file = key_file;
+  st->tls_key_password = key_password;
+  st->tls_cipher_list = cipher_list;
+  st->tls_client_configured = 1;
+  st->tls_verify_peer = config->verify_peer ? 1 : 0;
+  return 0;
 }
 
 static int ws_reserve_buffer(ws_state_t *st, mem_buffer_t **buf, size_t needed,
@@ -166,6 +272,7 @@ static void ws_free_state(ws_state_t *st) {
   if (st->hs_buf) mem_unref(st->hs_buf);
   if (st->rx_buf) mem_unref(st->rx_buf);
   if (st->frag_buf) mem_unref(st->frag_buf);
+  ws_clear_tls_client_config(st);
   free(st);
 }
 
@@ -968,6 +1075,24 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   st->tcp->user_data = st;
   st->tcp->managed   = 1;   /* ws_state_t owns this stream */
 
+  if (s->kind == TURBO_STREAM_WSS && st->tls_client_configured) {
+    turbo_tls_client_config_t tls_config;
+    int rc;
+
+    memset(&tls_config, 0, sizeof(tls_config));
+    tls_config.ca_file = st->tls_ca_file;
+    tls_config.cert_file = st->tls_cert_file;
+    tls_config.key_file = st->tls_key_file;
+    tls_config.key_password = st->tls_key_password;
+    tls_config.cipher_list = st->tls_cipher_list;
+    tls_config.verify_peer = st->tls_verify_peer;
+    rc = turbo_stream_tls_set_client_config_internal(st->tcp, &tls_config);
+    if (rc != 0) {
+      ws_drop_inner_tcp(st);
+      return rc;
+    }
+  }
+
   if (st->host[0] == '\0') {
     /* Resolve host string from addr for the Host header */
     if (addr->sa_family == AF_INET) {
@@ -1107,6 +1232,25 @@ const turbo_stream_backend_ops_t turbo_stream_ws_ops = {
   .listener_close = ws_listener_close,
 };
 
+int turbo_stream_wss_set_client_config_internal(turbo_stream_t *s,
+                                                const turbo_tls_client_config_t *config) {
+  ws_state_t *st;
+
+  if (!s || s->kind != TURBO_STREAM_WSS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (ws_state_t *)s->backend_data;
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+  if (st->state != WS_ST_INIT || st->tcp != NULL) {
+    return TURBO_EBUSY;
+  }
+
+  return ws_copy_tls_client_config(st, config);
+}
+
 CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host) {
   turbo_stream_ws_set_path_host_protocol(s, path, host, NULL);
 }
@@ -1157,6 +1301,8 @@ int turbo_stream_ws_wrap_server(turbo_stream_t *ws_stream,
   st->tcp->managed = 1;
   st->tcp->on_connect = NULL;
   st->tcp->on_close = ws_on_tcp_close;
+  /* Once wrapped, write completions belong to the WebSocket layer only. */
+  st->tcp->on_write_complete = NULL;
 
   st->state = WS_ST_HANDSHAKING;
   ws_stream->connected = 0;
@@ -1195,6 +1341,8 @@ int turbo_stream_ws_wrap_client(turbo_stream_t *ws_stream,
   st->tcp->managed = 1;
   st->tcp->on_connect = NULL;
   st->tcp->on_close = ws_on_tcp_close;
+  /* Once wrapped, write completions belong to the WebSocket layer only. */
+  st->tcp->on_write_complete = NULL;
   ws_stream->connected = 0;
 
   rc = ws_prepare_client_key(st);

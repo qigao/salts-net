@@ -377,7 +377,9 @@ extern "C" {
 /* Detect implementation based on OS, arch and compiler. */
 #if !defined(MCO_USE_UCONTEXT) && !defined(MCO_USE_FIBERS) && !defined(MCO_USE_ASM) && !defined(MCO_USE_ASYNCIFY)
   #if defined(_WIN32)
-    #if (defined(__GNUC__) && defined(__x86_64__)) || (defined(_MSC_VER) && defined(_M_X64))
+    #if defined(_MSC_VER) && defined(_M_X64) && defined(__SANITIZE_ADDRESS__)
+      #define MCO_USE_FIBERS
+    #elif (defined(__GNUC__) && defined(__x86_64__)) || (defined(_MSC_VER) && defined(_M_X64))
       #define MCO_USE_ASM
     #else
       #define MCO_USE_FIBERS
@@ -547,6 +549,12 @@ extern "C" {
 void __sanitizer_start_switch_fiber(void** fake_stack_save, const void *bottom, size_t size);
 void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void **bottom_old, size_t *size_old);
 #endif
+#if defined(_MCO_USE_ASAN) && !(defined(_WIN32) && defined(MCO_USE_FIBERS))
+#define _MCO_USE_ASAN_PREPARE_SWITCH
+#endif
+#if defined(_MCO_USE_ASAN) && defined(_WIN32) && defined(MCO_USE_FIBERS) && !defined(_MSC_VER)
+#define _MCO_USE_ASAN_WIN_FIBERS
+#endif
 #ifdef _MCO_USE_TSAN
 void* __tsan_get_current_fiber(void);
 void* __tsan_create_fiber(unsigned flags);
@@ -574,7 +582,7 @@ static MCO_FORCE_INLINE void _mco_prepare_jumpin(mco_coro* co) {
     prev_co->state = MCO_NORMAL;
   }
   mco_current_co = co;
-#ifdef _MCO_USE_ASAN
+#ifdef _MCO_USE_ASAN_PREPARE_SWITCH
   if(prev_co) {
     void* bottom_old = NULL;
     size_t size_old = 0;
@@ -599,7 +607,7 @@ static MCO_FORCE_INLINE void _mco_prepare_jumpout(mco_coro* co) {
     prev_co->state = MCO_RUNNING;
   }
   mco_current_co = prev_co;
-#ifdef _MCO_USE_ASAN
+#ifdef _MCO_USE_ASAN_PREPARE_SWITCH
   void* bottom_old = NULL;
   size_t size_old = 0;
   __sanitizer_finish_switch_fiber(co->asan_prev_stack, (const void**)&bottom_old, &size_old);
@@ -1386,7 +1394,33 @@ static MCO_FORCE_INLINE void _mco_init_desc_sizes(mco_desc* desc, size_t stack_s
 typedef struct _mco_context {
   void* fib;
   void* back_fib;
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+  void* back_stack_base;
+  size_t back_stack_size;
+#endif
 } _mco_context;
+
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+static MCO_FORCE_INLINE void _mco_win_asan_finish_switch(mco_coro* co, int remember_back_stack) {
+  const void* bottom_old = NULL;
+  size_t size_old = 0;
+  _mco_context* context = (_mco_context*)co->context;
+  __sanitizer_finish_switch_fiber(co->asan_prev_stack, &bottom_old, &size_old);
+  co->asan_prev_stack = NULL;
+  if(remember_back_stack) {
+    context->back_stack_base = (void*)bottom_old;
+    context->back_stack_size = size_old;
+  }
+}
+
+static MCO_FORCE_INLINE void _mco_win_asan_start_switch(mco_coro* co, const void* bottom, size_t size) {
+  if(co->state == MCO_DEAD) {
+    __sanitizer_start_switch_fiber(NULL, bottom, size);
+  } else {
+    __sanitizer_start_switch_fiber(&co->asan_prev_stack, bottom, size);
+  }
+}
+#endif
 
 static void _mco_jumpin(mco_coro* co) {
   void *cur_fib = GetCurrentFiber();
@@ -1397,11 +1431,21 @@ static void _mco_jumpin(mco_coro* co) {
   _mco_context* context = (_mco_context*)co->context;
   context->back_fib = cur_fib;
   _mco_prepare_jumpin(co);
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+  _mco_win_asan_start_switch(co, co->stack_base, co->stack_size);
+#endif
   SwitchToFiber(context->fib);
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+  _mco_win_asan_finish_switch(co, 0);
+#endif
 }
 
 static void CALLBACK _mco_wrap_main(void* co) {
-  _mco_main((mco_coro*)co);
+  mco_coro* coro = (mco_coro*)co;
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+  _mco_win_asan_finish_switch(coro, 1);
+#endif
+  _mco_main(coro);
 }
 
 static void _mco_jumpout(mco_coro* co) {
@@ -1410,7 +1454,13 @@ static void _mco_jumpout(mco_coro* co) {
   MCO_ASSERT(back_fib != NULL);
   context->back_fib = NULL;
   _mco_prepare_jumpout(co);
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+  _mco_win_asan_start_switch(co, context->back_stack_base, context->back_stack_size);
+#endif
   SwitchToFiber(back_fib);
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
+  _mco_win_asan_finish_switch(co, 1);
+#endif
 }
 
 /* Reverse engineered Fiber struct, used to get stack base. */
@@ -1444,7 +1494,7 @@ static mco_result _mco_create_context(mco_coro* co, mco_desc* desc) {
   }
   context->fib = fib;
   co->context = context;
-#ifdef _MCO_USE_ASAN
+#ifdef _MCO_USE_ASAN_WIN_FIBERS
   co->stack_base = fib->stack_limit;
   co->stack_size = (size_t)((char*)fib->stack_base - (char*)fib->stack_limit);
 #else

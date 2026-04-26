@@ -53,6 +53,7 @@ typedef struct stream_iocp_server_state_s {
   volatile LONG accepts_posted;
   volatile LONG inflight_count;
   int closing;
+  CRITICAL_SECTION shutdown_lock;
 } stream_iocp_server_state_t;
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -92,7 +93,10 @@ static void stream_report_connect_once(turbo_stream_t *s, stream_iocp_state_t *s
   st->connect_reported = 1;
   st->connect_pending = 0;
   if (s->on_connect) {
+    turbo_stream_callback_enter(s);
     s->on_connect(s, status, NULL);
+    turbo_stream_callback_leave(s);
+    turbo_stream_maybe_free(s);
   }
 }
 
@@ -110,18 +114,46 @@ static void stream_maybe_shutdown(turbo_stream_t *s) {
   }
 }
 
+static int listener_can_shutdown_locked(turbo_stream_listener_t *l,
+                                        stream_iocp_server_state_t *st) {
+  if (!l || !st || !st->closing) return 0;
+  if (l->active_connections > 0) return 0;
+  return InterlockedCompareExchange(&st->inflight_count, 0, 0) == 0;
+}
+
+static void listener_finalize_shutdown(turbo_stream_listener_t *l,
+                                       stream_iocp_server_state_t *st) {
+  if (!l || !st) return;
+
+  EnterCriticalSection(&st->shutdown_lock);
+  if (!listener_can_shutdown_locked(l, st)) {
+    LeaveCriticalSection(&st->shutdown_lock);
+    return;
+  }
+  if (st->socket != INVALID_SOCKET) {
+    closesocket(st->socket);
+    st->socket = INVALID_SOCKET;
+  }
+  l->backend_data = NULL;
+  LeaveCriticalSection(&st->shutdown_lock);
+
+  DeleteCriticalSection(&st->shutdown_lock);
+  free(st);
+  turbo_stream_listener_finalize_close(l);
+}
+
 static void listener_maybe_shutdown(turbo_stream_listener_t *l) {
   stream_iocp_server_state_t *st = (stream_iocp_server_state_t *)l->backend_data;
-  if (!st || !st->closing) return;
-  if (InterlockedCompareExchange(&st->inflight_count, 0, 0) == 0) {
-    if (st->socket != INVALID_SOCKET) {
-      closesocket(st->socket);
-      st->socket = INVALID_SOCKET;
-    }
-    free(st);
-    l->backend_data = NULL;
-    turbo_stream_listener_finalize_close(l);
+  if (!st) return;
+  listener_finalize_shutdown(l, st);
+}
+
+void turbo_stream_iocp_listener_on_connection_closed(turbo_stream_listener_t *l) {
+  if (!l) {
+    return;
   }
+
+  listener_maybe_shutdown(l);
 }
 
 /* ── Completion handlers ──────────────────────────────────── */
@@ -189,12 +221,22 @@ void stream_iocp_handle_send_op(iocp_op_t *op) {
   }
 
   if (s->on_write_complete) {
+    turbo_stream_callback_enter(s);
     s->on_write_complete(s, status);
+    turbo_stream_callback_leave(s);
+    if (s->finalized) {
+      turbo_stream_maybe_free(s);
+      return;
+    }
   }
 
   if (s->send_head && !s->closing) {
-    stream_iocp_submit_send(s);
+    if (stream_iocp_submit_send(s) != 0) {
+      return;
+    }
   }
+
+  turbo_stream_maybe_free(s);
 }
 
 void stream_iocp_handle_recv_op(iocp_op_t *op) {
@@ -229,7 +271,13 @@ void stream_iocp_handle_recv_op(iocp_op_t *op) {
 
   if (status != 0 || bytes == 0) {
     if (s->on_recv) {
+      turbo_stream_callback_enter(s);
       s->on_recv(s, NULL, NULL);
+      turbo_stream_callback_leave(s);
+      if (s->finalized) {
+        turbo_stream_maybe_free(s);
+        return;
+      }
     }
     turbo_stream_close(s);
     return;
@@ -245,8 +293,15 @@ void stream_iocp_handle_recv_op(iocp_op_t *op) {
   s->recv_toggle ^= 1;
 
   if (s->on_recv) {
-    int close_requested = s->on_recv(s, &slice, NULL);
+    int close_requested;
+    turbo_stream_callback_enter(s);
+    close_requested = s->on_recv(s, &slice, NULL);
+    turbo_stream_callback_leave(s);
     mem_slice_release(&slice);
+    if (s->finalized) {
+      turbo_stream_maybe_free(s);
+      return;
+    }
     if (close_requested) {
       turbo_stream_close(s);
       return;
@@ -260,6 +315,8 @@ void stream_iocp_handle_recv_op(iocp_op_t *op) {
   if (st != NULL && st->recv_started && !s->closing && !st->closing) {
     stream_iocp_submit_recv(s);
   }
+
+  turbo_stream_maybe_free(s);
 }
 
 void stream_iocp_handle_accept_op(iocp_op_t *op) {
@@ -268,12 +325,11 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
   int status = op->status;
   SOCKET client_socket = op->client_socket;
 
-  InterlockedDecrement(&st->inflight_count);
-  InterlockedDecrement(&st->accepts_posted);
-  iocp_pool_inflight_dec(l->ctx->iocp_pool);
-
   if (st->closing) {
     if (client_socket != INVALID_SOCKET) closesocket(client_socket);
+    InterlockedDecrement(&st->inflight_count);
+    InterlockedDecrement(&st->accepts_posted);
+    iocp_pool_inflight_dec(l->ctx->iocp_pool);
     free(op);
     listener_maybe_shutdown(l);
     return;
@@ -313,7 +369,12 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
   while (!st->closing && InterlockedCompareExchange(&st->accepts_posted, 0, 0) < st->accept_depth) {
     if (stream_iocp_submit_accept(l) != 0) break;
   }
+
+  InterlockedDecrement(&st->inflight_count);
+  InterlockedDecrement(&st->accepts_posted);
+  iocp_pool_inflight_dec(l->ctx->iocp_pool);
   free(op);
+  listener_maybe_shutdown(l);
 }
 
 /* ── Submit helpers ───────────────────────────────────────── */
@@ -347,6 +408,9 @@ static int stream_iocp_submit_recv(turbo_stream_t *s) {
 
 static int stream_iocp_submit_send(turbo_stream_t *s) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
+  if (!st || s->closing || st->closing || st->socket == INVALID_SOCKET) {
+    return TURBO_ECANCELED;
+  }
   if (!s->send_head) return 0;
   if (st->send_inflight) {
     return 0;
@@ -366,19 +430,24 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
     int sync_rc = stream_iocp_send_sync_buffer(s, st, buf);
     st->send_buffer = NULL;
     if (sync_rc != 0) {
-      buf->next = s->send_head;
-      s->send_head = buf;
-      if (!s->send_tail) s->send_tail = buf;
-      s->send_queued += buf->used;
+      mem_unref(buf);
+      turbo_stream_close(s);
       return sync_rc;
     }
     mem_unref(buf);
     if (s->on_write_complete) {
+      turbo_stream_callback_enter(s);
       s->on_write_complete(s, 0);
+      turbo_stream_callback_leave(s);
+      if (s->finalized) {
+        turbo_stream_maybe_free(s);
+        return 0;
+      }
     }
     if (s->send_head && !s->closing) {
       return stream_iocp_submit_send(s);
     }
+    turbo_stream_maybe_free(s);
     return 0;
   }
 
@@ -405,14 +474,9 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
       InterlockedDecrement(&st->inflight_count);
       iocp_pool_inflight_dec(s->ctx->iocp_pool);
       st->send_inflight = 0;
-
-      /* Prepend the buffer back to the send queue */
-      st->send_buffer->next = s->send_head;
-      s->send_head = st->send_buffer;
-      if (!s->send_tail) s->send_tail = st->send_buffer;
-      s->send_queued += st->send_buffer->used;
+      mem_unref(st->send_buffer);
       st->send_buffer = NULL;
-      
+      turbo_stream_close(s);
       return -(int)err;
     }
   }
@@ -709,6 +773,7 @@ static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
   st->socket = sock;
   st->accept_family = addr->sa_family;
   st->accept_depth = STREAM_IOCP_ACCEPT_DEPTH;
+  InitializeCriticalSection(&st->shutdown_lock);
 
   GUID accept_guid = WSAID_ACCEPTEX;
   GUID getaddr_guid = WSAID_GETACCEPTEXSOCKADDRS;
@@ -716,12 +781,14 @@ static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
   if (WSAIoctl(sock, SIO_GET_EXTENSION_FUNCTION_POINTER, &accept_guid, sizeof(accept_guid),
                &st->accept_ex, sizeof(st->accept_ex), &bytes, NULL, NULL) == SOCKET_ERROR) {
     closesocket(sock);
+    DeleteCriticalSection(&st->shutdown_lock);
     free(st);
     return -(int)WSAGetLastError();
   }
   if (WSAIoctl(sock, SIO_GET_EXTENSION_FUNCTION_POINTER, &getaddr_guid, sizeof(getaddr_guid),
                &st->get_accept_ex_sockaddrs, sizeof(st->get_accept_ex_sockaddrs), &bytes, NULL, NULL) == SOCKET_ERROR) {
     closesocket(sock);
+    DeleteCriticalSection(&st->shutdown_lock);
     free(st);
     return -(int)WSAGetLastError();
   }
@@ -756,12 +823,14 @@ static void iocp_listener_close(turbo_stream_listener_t *l) {
     turbo_stream_listener_finalize_close(l);
     return;
   }
+  EnterCriticalSection(&st->shutdown_lock);
   st->closing = 1;
   if (st->socket != INVALID_SOCKET) {
     closesocket(st->socket);
     st->socket = INVALID_SOCKET;
   }
-  listener_maybe_shutdown(l);
+  LeaveCriticalSection(&st->shutdown_lock);
+  listener_finalize_shutdown(l, st);
 }
 
 const turbo_stream_backend_ops_t turbo_stream_iocp_ops = {

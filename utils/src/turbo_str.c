@@ -44,6 +44,10 @@ tstr_t tstr_dup_len(const char *s, size_t n) {
   return sdsnewlen(s, n);
 }
 
+tstr_t tstr_new_len(const void *init, size_t n) {
+  return sdsnewlen(init, n);
+}
+
 void tstr_free(tstr_t s) {
   sdsfree(s);
 }
@@ -64,6 +68,10 @@ size_t tstr_avail(tstr_t s) {
 
 int tstr_empty(tstr_t s) {
   return !s || sdslen(s) == 0;
+}
+
+void tstr_set_len(tstr_t s, size_t n) {
+  if (s) sdssetlen(s, n);
 }
 
 /* ============================================================================

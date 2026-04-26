@@ -35,6 +35,20 @@ static void on_tcp_connect(void *handle, int status, void *extra) {
   coro_socket_handle_transport_connect(s, status);
 }
 
+static void on_tcp_write_complete(turbo_stream_t *stream, int status) {
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  coro_t *co;
+
+  if (!s || !s->co_write_wait) {
+    return;
+  }
+
+  s->write_status = status;
+  co = s->co_write_wait;
+  s->co_write_wait = NULL;
+  coro_resume_co(s->ctx, co);
+}
+
 static void on_tcp_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
@@ -103,6 +117,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
     s->handle.stream = turbo_stream_create(s->ctx, kind);
     if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
     turbo_stream_set_user_data(s->handle.stream, s);
+    turbo_stream_set_write_cb(s->handle.stream, on_tcp_write_complete);
     s->handle.stream->managed = 1;
   }
 
@@ -239,13 +254,11 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
 
   ls->reuse_port = s->reuse_port;
   ls->listener = turbo_stream_listen_ex(s->ctx, kind, addr, backlog, on_tcp_accept,
-                                        ls->reuse_port);
+                                        ls->reuse_port, ls);
   if (!ls->listener) {
     int rc = coro_context_get_last_error(s->ctx);
     return rc != 0 ? rc : TURBO_EIO;
   }
-
-  turbo_stream_listener_set_user_data(ls->listener, ls);
   return 0;
 }
 
@@ -299,6 +312,7 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   stream->on_recv = on_tcp_recv;
   stream->on_connect = on_tcp_connect;
   stream->on_close = on_tcp_close;
+  stream->on_write_complete = on_tcp_write_complete;
   child->connected = 1;
 
   *accepted = child;
@@ -309,7 +323,40 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 /* ── Send/Recv ────────────────────────────────────────────── */
 
 static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
-  return turbo_stream_send(s->handle.stream, data, len);
+  coro_t *co;
+  int scheduled;
+  int rc;
+
+  if (!s || !s->handle.stream) {
+    return TURBO_EINVAL;
+  }
+
+  co = coro_running();
+  if (!co) {
+    return turbo_stream_send(s->handle.stream, data, len);
+  }
+
+  s->write_status = 0;
+  s->co_write_wait = co;
+  scheduled = coro_is_scheduled(co);
+  if (scheduled) {
+    coro_set_waiting_for_io(co, 1);
+  }
+
+  rc = turbo_stream_send(s->handle.stream, data, len);
+  if (rc != 0) {
+    s->co_write_wait = NULL;
+    if (scheduled) {
+      coro_set_waiting_for_io(co, 0);
+    }
+    return rc;
+  }
+
+  if (s->co_write_wait) {
+    coro_yield();
+  }
+
+  return s->write_status;
 }
 
 static mem_buffer_t *tcp_get_send_buffer(coro_socket_t *s, size_t min_size) {
@@ -360,6 +407,7 @@ static void tcp_close(coro_socket_t *s) {
   s->handle.stream = NULL;
   s->close_pending = 1;
   retain_client(s);
+  stream->on_write_complete = NULL;
   stream->on_close = on_tcp_close;
   turbo_stream_close(stream);
 }

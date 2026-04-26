@@ -6,17 +6,23 @@
 
 #include <string.h>
 
+extern void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
+
 typedef struct {
   turbo_thread_t thread;
   test_socket_t listen_socket;
   int status;
   int saw_request;
+  int read_request;
+  int send_response;
+  uint64_t hold_after_handshake_ms;
 } tls_test_server_t;
 
 static int s_tls_connected = -1;
 static int s_tls_closed = 0;
 static char s_tls_rx_buf[4096];
 static size_t s_tls_rx_len = 0;
+static char s_tls_send_payload[128 * 1024];
 
 static void run_ctx_until_not(coro_context_t *ctx, volatile int *flag, int pending,
                               uint64_t timeout_ms) {
@@ -57,6 +63,19 @@ static void run_ctx_until_idle(coro_context_t *ctx, uint64_t timeout_ms) {
   deadline = turbo_monotonic_ms() + timeout_ms;
   while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
     coro_context_run(ctx, TURBO_RUN_NOWAIT);
+    turbo_thread_yield();
+  }
+}
+
+static void tls_test_wait_ms(uint64_t wait_ms) {
+  uint64_t deadline;
+
+  if (wait_ms == 0) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + wait_ms;
+  while (turbo_monotonic_ms() < deadline) {
     turbo_thread_yield();
   }
 }
@@ -143,6 +162,12 @@ static void tls_test_server_main(void *arg) {
     goto done;
   }
 
+  if (!server->read_request && !server->send_response) {
+    tls_test_wait_ms(server->hold_after_handshake_ms);
+    server->status = 0;
+    goto done;
+  }
+
   while (total < (int)sizeof(req) - 1) {
     int n = SSL_read(ssl, req + total, (int)sizeof(req) - 1 - total);
     if (n <= 0) {
@@ -162,9 +187,11 @@ static void tls_test_server_main(void *arg) {
 
   server->saw_request = 1;
 
-  if (SSL_write(ssl, resp, (int)strlen(resp)) <= 0) {
-    server->status = -9;
-    goto done;
+  if (server->send_response) {
+    if (SSL_write(ssl, resp, (int)strlen(resp)) <= 0) {
+      server->status = -9;
+      goto done;
+    }
   }
 
   server->status = 0;
@@ -192,6 +219,7 @@ spec("Stream TLS Client") {
     unsigned short port = 0;
     coro_context_t *ctx = NULL;
     turbo_stream_t *s = NULL;
+    turbo_tls_client_config_t tls_config;
     tls_test_server_t server;
     struct sockaddr_in addr;
     const char *req =
@@ -202,10 +230,12 @@ spec("Stream TLS Client") {
 
     memset(&server, 0, sizeof(server));
     server.listen_socket = TEST_INVALID_SOCKET;
+    server.read_request = 1;
+    server.send_response = 1;
+    turbo_stream_tls_reset_client_session_cache();
 
     check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
     check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
     check_int_eq(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
 
     ctx = coro_context_create(NULL);
@@ -213,6 +243,11 @@ spec("Stream TLS Client") {
 
     s = turbo_stream_create(ctx, TURBO_STREAM_TLS);
     check(s != NULL);
+
+    memset(&tls_config, 0, sizeof(tls_config));
+    tls_config.ca_file = ca_file;
+    tls_config.verify_peer = 1;
+    check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
 
     extern void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
     turbo_stream_tls_set_sni(s, "localhost");
@@ -255,8 +290,148 @@ spec("Stream TLS Client") {
 
     run_ctx_until_idle(ctx, 1000);
 
+    turbo_stream_tls_reset_client_session_cache();
     coro_context_destroy(ctx);
     tls_test_clear_ca_env();
     tls_test_remove_file(ca_file);
+  }
+
+  it("should close tls streams with pending recv without use-after-free") {
+    enum { TLS_RECV_CLOSE_LOOPS = 4 };
+    int i;
+
+    for (i = 0; i < TLS_RECV_CLOSE_LOOPS; ++i) {
+      char ca_file[512] = {0};
+      unsigned short port = 0;
+      coro_context_t *ctx = NULL;
+      turbo_stream_t *s = NULL;
+      turbo_tls_client_config_t tls_config;
+      tls_test_server_t server;
+      struct sockaddr_in addr;
+
+      memset(&server, 0, sizeof(server));
+      server.listen_socket = TEST_INVALID_SOCKET;
+      server.hold_after_handshake_ms = 200;
+      turbo_stream_tls_reset_client_session_cache();
+
+      check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+      check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+      check_int_eq(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
+
+      ctx = coro_context_create(NULL);
+      check_not_null(ctx);
+
+      s = turbo_stream_create(ctx, TURBO_STREAM_TLS);
+      check_not_null(s);
+
+      memset(&tls_config, 0, sizeof(tls_config));
+      tls_config.ca_file = ca_file;
+      tls_config.verify_peer = 1;
+      check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+      turbo_stream_tls_set_sni(s, "localhost");
+
+      s_tls_connected = -1;
+      s_tls_closed = 0;
+      s_tls_rx_len = 0;
+      memset(s_tls_rx_buf, 0, sizeof(s_tls_rx_buf));
+
+      memset(&addr, 0, sizeof(addr));
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(port);
+      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+      check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+                                             on_tls_connect, on_tls_close), 0);
+      run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
+      check_int_eq(s_tls_connected, 0);
+
+      check_int_eq(turbo_stream_recv_start(s, on_tls_recv), 0);
+      tls_test_wait_ms(50);
+      turbo_stream_close(s);
+      turbo_stream_destroy(s);
+
+      run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
+      check_int_eq(turbo_thread_join(&server.thread), 0);
+      check_int_eq(server.status, 0);
+
+      run_ctx_until_idle(ctx, 1000);
+
+      turbo_stream_tls_reset_client_session_cache();
+      coro_context_destroy(ctx);
+      tls_test_clear_ca_env();
+      tls_test_remove_file(ca_file);
+    }
+  }
+
+  it("should close tls streams with pending send without use-after-free") {
+    enum { TLS_SEND_CLOSE_LOOPS = 4, TLS_SEND_BURST = 8 };
+    int i;
+
+    memset(s_tls_send_payload, 't', sizeof(s_tls_send_payload));
+
+    for (i = 0; i < TLS_SEND_CLOSE_LOOPS; ++i) {
+      char ca_file[512] = {0};
+      unsigned short port = 0;
+      coro_context_t *ctx = NULL;
+      turbo_stream_t *s = NULL;
+      turbo_tls_client_config_t tls_config;
+      tls_test_server_t server;
+      struct sockaddr_in addr;
+      int j;
+
+      memset(&server, 0, sizeof(server));
+      server.listen_socket = TEST_INVALID_SOCKET;
+      server.hold_after_handshake_ms = 200;
+      turbo_stream_tls_reset_client_session_cache();
+
+      check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+      check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+      check_int_eq(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
+
+      ctx = coro_context_create(NULL);
+      check_not_null(ctx);
+
+      s = turbo_stream_create(ctx, TURBO_STREAM_TLS);
+      check_not_null(s);
+
+      memset(&tls_config, 0, sizeof(tls_config));
+      tls_config.ca_file = ca_file;
+      tls_config.verify_peer = 1;
+      check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+      turbo_stream_tls_set_sni(s, "localhost");
+
+      s_tls_connected = -1;
+      s_tls_closed = 0;
+      s_tls_rx_len = 0;
+      memset(s_tls_rx_buf, 0, sizeof(s_tls_rx_buf));
+
+      memset(&addr, 0, sizeof(addr));
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(port);
+      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+      check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+                                             on_tls_connect, on_tls_close), 0);
+      run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
+      check_int_eq(s_tls_connected, 0);
+
+      for (j = 0; j < TLS_SEND_BURST; ++j) {
+        check_int_eq(turbo_stream_send(s, s_tls_send_payload, sizeof(s_tls_send_payload)), 0);
+      }
+
+      turbo_stream_close(s);
+      turbo_stream_destroy(s);
+
+      run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
+      check_int_eq(turbo_thread_join(&server.thread), 0);
+      check_int_eq(server.status, 0);
+
+      run_ctx_until_idle(ctx, 1000);
+
+      turbo_stream_tls_reset_client_session_cache();
+      coro_context_destroy(ctx);
+      tls_test_clear_ca_env();
+      tls_test_remove_file(ca_file);
+    }
   }
 }

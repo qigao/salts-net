@@ -34,6 +34,7 @@ static void on_accept_local(void *server, void *client, void *peer) {
 
 static int s_recv_count = 0;
 static char s_recv_buf[1024];
+static char s_send_payload[256 * 1024];
 
 static int on_recv(void *stream, const mem_slice_t *slice, void *peer) {
     (void)peer;
@@ -92,6 +93,23 @@ static void pipe_test_run_until_idle(coro_context_t *ctx, uint64_t timeout_ms) {
     while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
     }
+}
+
+static void pipe_test_destroy_context_robust(coro_context_t *ctx) {
+    int max_drain = 500;
+
+    if (!ctx) {
+        return;
+    }
+
+    coro_context_stop(ctx);
+    while (max_drain-- > 0) {
+        if (!coro_context_alive(ctx)) {
+            break;
+        }
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+    }
+    coro_context_destroy(ctx);
 }
 
 static void run_pipe_case(coro_context_t *ctx, const char *endpoint) {
@@ -170,6 +188,143 @@ spec("Stream Pipe") {
         run_pipe_case(ctx, pipe_name);
         coro_context_destroy(ctx);
     }
+
+#ifdef _WIN32
+    it("should close pipe listeners with pending accepts without use-after-free") {
+        enum { PIPE_LISTENER_CLOSE_LOOPS = 16 };
+        int i;
+
+        for (i = 0; i < PIPE_LISTENER_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_listener_t *listener;
+            char pipe_name[256];
+
+            check_not_null(ctx);
+            check_true(snprintf(pipe_name, sizeof(pipe_name),
+                                "\\\\.\\pipe\\turbo_test_pipe_close_%llu_%d",
+                                pipe_test_unique_id(), i) > 0);
+
+            listener = turbo_stream_listen_pipe(ctx, pipe_name, 128, on_accept_local);
+            check_not_null(listener);
+
+            turbo_stream_listener_close(listener);
+            pipe_test_destroy_context_robust(ctx);
+        }
+    }
+
+    it("should close pipe clients with pending connects without use-after-free") {
+        enum { PIPE_CONNECT_CLOSE_LOOPS = 16 };
+        int i;
+
+        for (i = 0; i < PIPE_CONNECT_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_t *client;
+            char pipe_name[256];
+
+            check_not_null(ctx);
+            client = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
+            check_not_null(client);
+
+            check_true(snprintf(pipe_name, sizeof(pipe_name),
+                                "\\\\.\\pipe\\turbo_test_pipe_missing_%llu_%d",
+                                pipe_test_unique_id(), i) > 0);
+
+            s_connected = -1;
+            s_closed = 0;
+
+            check_int_eq(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+
+            turbo_stream_close(client);
+            turbo_stream_destroy(client);
+            pipe_test_destroy_context_robust(ctx);
+        }
+    }
+
+    it("should close pipe clients with pending recv without use-after-free") {
+        enum { PIPE_RECV_CLOSE_LOOPS = 16 };
+        int i;
+
+        for (i = 0; i < PIPE_RECV_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_listener_t *listener;
+            turbo_stream_t *client;
+            char pipe_name[256];
+
+            check_not_null(ctx);
+            reset_pipe_test_state();
+
+            check_true(snprintf(pipe_name, sizeof(pipe_name),
+                                "\\\\.\\pipe\\turbo_test_pipe_recv_close_%llu_%d",
+                                pipe_test_unique_id(), i) > 0);
+
+            listener = turbo_stream_listen_pipe(ctx, pipe_name, 128, on_accept_local);
+            check_not_null(listener);
+
+            client = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
+            check_not_null(client);
+            check_int_eq(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+
+            check_int_eq(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
+            check_int_eq(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
+            check_int_eq(s_connected, 0);
+            check_int_eq(s_accepted_count, 1);
+            check_not_null(s_accepted_client);
+
+            check_int_eq(turbo_stream_recv_start(client, on_recv), 0);
+
+            turbo_stream_close(client);
+            turbo_stream_destroy(client);
+            turbo_stream_destroy(s_accepted_client);
+            turbo_stream_listener_close(listener);
+            pipe_test_destroy_context_robust(ctx);
+        }
+    }
+
+    it("should close pipe clients with pending send without use-after-free") {
+        enum { PIPE_SEND_CLOSE_LOOPS = 8, PIPE_SEND_BURST = 8 };
+        int i;
+
+        memset(s_send_payload, 'p', sizeof(s_send_payload));
+
+        for (i = 0; i < PIPE_SEND_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_listener_t *listener;
+            turbo_stream_t *client;
+            char pipe_name[256];
+            int j;
+
+            check_not_null(ctx);
+            reset_pipe_test_state();
+
+            check_true(snprintf(pipe_name, sizeof(pipe_name),
+                                "\\\\.\\pipe\\turbo_test_pipe_send_close_%llu_%d",
+                                pipe_test_unique_id(), i) > 0);
+
+            listener = turbo_stream_listen_pipe(ctx, pipe_name, 128, on_accept_local);
+            check_not_null(listener);
+
+            client = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
+            check_not_null(client);
+            check_int_eq(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+
+            check_int_eq(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
+            check_int_eq(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
+            check_int_eq(s_connected, 0);
+            check_int_eq(s_accepted_count, 1);
+            check_not_null(s_accepted_client);
+
+            for (j = 0; j < PIPE_SEND_BURST; ++j) {
+                check_int_eq(turbo_stream_send(client, s_send_payload, sizeof(s_send_payload)), 0);
+            }
+
+            turbo_stream_close(client);
+            turbo_stream_destroy(client);
+            turbo_stream_destroy(s_accepted_client);
+            turbo_stream_listener_close(listener);
+            pipe_test_destroy_context_robust(ctx);
+        }
+    }
+#endif
 
 #ifndef _WIN32
     it("should preserve legacy ipc URL on unix") {

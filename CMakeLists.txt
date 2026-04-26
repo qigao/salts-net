@@ -51,6 +51,7 @@ find_package(c-ares CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(llhttp CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
 
 # Additional components
@@ -79,11 +80,10 @@ add_subdirectory(s3)
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 
-add_subdirectory(ice)
 add_subdirectory(lb)
 add_subdirectory(tproxy)
 add_subdirectory(email)
-add_subdirectory(langchain) 
+
 # Package Configuration
 include(CMakePackageConfigHelpers)
 

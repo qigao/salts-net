@@ -207,6 +207,7 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
   const char *ip;
   const char *request_host;
   struct sockaddr *sa = NULL;
+  turbo_tls_client_config_t tls_config;
   ws_connect_state_t *cfg;
 
   if (!s || !host) {
@@ -233,6 +234,20 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
     s->handle.stream = turbo_stream_create(s->ctx, ws_stream_kind(cfg));
     if (!s->handle.stream) {
       return socket_ctx_error(s, TURBO_EIO);
+    }
+
+    if (cfg->is_tls && s->tls_client_configured) {
+      memset(&tls_config, 0, sizeof(tls_config));
+      tls_config.ca_file = s->tls_ca_file;
+      tls_config.cert_file = s->tls_cert_file;
+      tls_config.key_file = s->tls_key_file;
+      tls_config.key_password = s->tls_key_password;
+      tls_config.cipher_list = s->tls_cipher_list;
+      tls_config.verify_peer = s->tls_verify_peer;
+      if (turbo_stream_tls_set_client_config(s->handle.stream, &tls_config) != 0) {
+        ws_discard_stream(s);
+        return socket_ctx_error(s, TURBO_EIO);
+      }
     }
 
     turbo_stream_ws_set_path_host_protocol(s->handle.stream, cfg->path[0] ? cfg->path : "/", request_host,

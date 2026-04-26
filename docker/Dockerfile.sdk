@@ -1,4 +1,4 @@
-ARG TURBONET_BUILD_BASE=turbonet-build-base:bookworm
+ARG TURBONET_BUILD_BASE=turbonet_build_base
 FROM ${TURBONET_BUILD_BASE}
 
 ENV CMAKE_PREFIX_PATH=/opt/turbonet
@@ -12,5 +12,4 @@ RUN cmake --preset linux-release-user \
     -D BUILD_EXAMPLES=OFF \
     -D BUILD_TESTS=OFF \
     -D CMAKE_INSTALL_PREFIX=/opt/turbonet \
-    && cmake --build --preset linux-release-user \
-    && cmake --install build --prefix /opt/turbonet
+    && cmake --build --preset linux-release-user --target install

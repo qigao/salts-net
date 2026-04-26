@@ -9,9 +9,11 @@ ARG VCPKG_REF=master
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
+    bison \
     build-essential \
     ca-certificates \
     curl \
+    flex \
     git \
     libssl-dev \
     libtool \

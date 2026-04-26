@@ -38,7 +38,7 @@ include(CTest)
 add_library(
     mir OBJECT mir.c mir-gen.c c2mir/c2mir.c mir.h mir-gen.h c2mir/c2mir.h
 )
-target_include_directories(mir PRIVATE ${PROJECT_SOURCE_DIR})
+target_include_directories(mir PUBLIC ${PROJECT_SOURCE_DIR})
 if(Threads_FOUND)
     target_compile_definitions(mir PUBLIC "MIR_PARALLEL_GEN")
 endif()

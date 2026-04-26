@@ -67,6 +67,7 @@ struct turbo_stream_s {
   int finalized;     /**< 1 = finalize_close already ran */
   int managed;       /**< 1 = caller manages lifetime (coro socket wrapper) */
   int destroyed;     /**< 1 = user called turbo_stream_destroy() */
+  int callback_depth; /**< Active callback guard against synchronous destroy */
   void *user_data;
   void *backend_data; /**< Backend-private state (IOCP handle, fd, etc.) */
 
@@ -84,6 +85,8 @@ struct turbo_stream_listener_s {
 
   turbo_accept_cb on_accept;
   int active_connections;
+  int closing;
+  int finalized;
   int reuse_port;
   void *user_data;
   void *backend_data;
@@ -111,13 +114,18 @@ extern const turbo_stream_backend_ops_t turbo_stream_tls_ops;
 
 turbo_stream_listener_t *turbo_stream_listen_ex(coro_context_t *ctx, turbo_stream_kind_t kind,
                                                 const struct sockaddr *addr, int backlog,
-                                                turbo_accept_cb on_accept, int reuse_port);
+                                                turbo_accept_cb on_accept, int reuse_port,
+                                                void *user_data);
 
 int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,
                                  const char *hostname,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close);
+int turbo_stream_tls_set_client_config_internal(turbo_stream_t *s,
+                                                const turbo_tls_client_config_t *config);
+int turbo_stream_wss_set_client_config_internal(turbo_stream_t *s,
+                                                const turbo_tls_client_config_t *config);
 int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,
                                  turbo_connect_cb on_connect,
@@ -149,6 +157,10 @@ int turbo_stream_init_common(turbo_stream_t *s, coro_context_t *ctx,
  * @brief Enqueue a buffer into the send queue.
  */
 void turbo_stream_enqueue_buffer(turbo_stream_t *s, mem_buffer_t *buf);
+void turbo_stream_callback_enter(turbo_stream_t *s);
+void turbo_stream_callback_leave(turbo_stream_t *s);
+void turbo_stream_maybe_free(turbo_stream_t *s);
+void turbo_stream_listener_notify_backend_released(turbo_stream_listener_t *l);
 
 #ifdef __cplusplus
 }

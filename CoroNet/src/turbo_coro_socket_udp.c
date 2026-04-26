@@ -213,20 +213,9 @@ static int udp_client_bind(coro_socket_t *s, const struct sockaddr *addr) {
   char host[INET6_ADDRSTRLEN];
   unsigned short port;
   int rc;
-  udp_listener_state_t *ls = NULL;
 
   if (!s || !addr) {
     return TURBO_EINVAL;
-  }
-
-  /* Server case: initialize listener state */
-  if (!s->native_tcp_state) {
-    ls = calloc(1, sizeof(udp_listener_state_t));
-    if (!ls) return TURBO_ENOMEM;
-    ls->server_coro = s;
-    s->native_tcp_state = ls;
-  } else {
-    ls = (udp_listener_state_t *)s->native_tcp_state;
   }
 
   if (!s->handle.datagram) {
@@ -234,18 +223,9 @@ static int udp_client_bind(coro_socket_t *s, const struct sockaddr *addr) {
         (addr->sa_family == AF_INET6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
     s->handle.datagram = turbo_datagram_create(s->ctx, kind);
     if (!s->handle.datagram) {
-      if (ls && ls == s->native_tcp_state && ls->head == NULL && ls->tail == NULL &&
-          ls->recv_ref_held == 0) {
-        free(ls);
-        s->native_tcp_state = NULL;
-      }
       return socket_ctx_error(s, TURBO_EIO);
     }
     s->owns_handle = 1;
-  }
-
-  if (ls) {
-    ls->datagram = s->handle.datagram;
   }
 
   if (s->connected) {
@@ -273,6 +253,10 @@ static int udp_client_bind(coro_socket_t *s, const struct sockaddr *addr) {
 }
 
 static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
+  if (!s || !accepted || !s->native_tcp_state) {
+    return TURBO_ENOTSUP;
+  }
+
   retain_client(s);
 
   if (s->accept_pending) {
@@ -313,7 +297,25 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 }
 
 static int udp_client_listen(coro_socket_t *s, int backlog) {
+  udp_listener_state_t *ls;
+
   UNUSED(backlog);
+
+  if (!s || !s->handle.datagram) {
+    return TURBO_EINVAL;
+  }
+
+  ls = (udp_listener_state_t *)s->native_tcp_state;
+  if (!ls) {
+    ls = calloc(1, sizeof(*ls));
+    if (!ls) {
+      return TURBO_ENOMEM;
+    }
+    ls->server_coro = s;
+    ls->datagram = s->handle.datagram;
+    s->native_tcp_state = ls;
+  }
+
   return udp_client_recv_start(s);
 }
 

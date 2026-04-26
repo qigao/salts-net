@@ -15,6 +15,21 @@
 // Global logger for turl
 tlog_t *g_turl_logger = NULL;
 
+static int turl_template_has_mustache_tag(const char *template_str) {
+  const char *cursor;
+
+  if (template_str == NULL) {
+    return 0;
+  }
+
+  cursor = template_str;
+  while ((cursor = strstr(cursor, "{{")) != NULL) {
+    return 1;
+  }
+
+  return 0;
+}
+
 void turl_setup_logger(int verbose) {
   tlog_config_t config = {.min_level = verbose ? TURBO_LOG_LEVEL_DEBUG : TURBO_LOG_LEVEL_INFO,
                           .buffer_size = 0,
@@ -50,7 +65,7 @@ void turl_ensure_directory_exists(const char *path) {
 char *turl_render_template(const char *template_str, json_value_t *context) {
   if (!template_str)
     return NULL;
-  if (!context)
+  if (!context || !turl_template_has_mustache_tag(template_str))
     return strdup(template_str);
 
   MUSTACHE_TEMPLATE *template = mustache_compile(template_str, strlen(template_str), NULL, NULL, 0);

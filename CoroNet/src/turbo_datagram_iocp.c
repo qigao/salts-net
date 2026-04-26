@@ -266,17 +266,21 @@ static int dg_iocp_send_buffer(turbo_datagram_t *d, const struct sockaddr *dest,
   op->wsabuf.buf = buf->data;
   op->wsabuf.len = (ULONG)len;
 
+  const struct sockaddr *dest_ptr = NULL;
   int dest_len = 0;
   if (dest) {
     dest_len = (dest->sa_family == AF_INET6)
       ? (int)sizeof(struct sockaddr_in6)
       : (int)sizeof(struct sockaddr_in);
+    memcpy(&op->addr, dest, (size_t)dest_len);
+    op->addr_len = dest_len;
+    dest_ptr = (const struct sockaddr *)&op->addr;
   }
 
   InterlockedIncrement(&st->inflight_count);
   iocp_pool_inflight_inc(d->ctx->iocp_pool);
 
-  int rc = WSASendTo(st->socket, &op->wsabuf, 1, NULL, 0, dest, dest_len,
+  int rc = WSASendTo(st->socket, &op->wsabuf, 1, NULL, 0, dest_ptr, dest_len,
                      &op->overlapped, NULL);
   if (rc == SOCKET_ERROR) {
     int err = WSAGetLastError();

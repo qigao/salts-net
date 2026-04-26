@@ -36,13 +36,31 @@ typedef struct {
   coro_socket_t *socket;
   void (*handler)(coro_socket_t *, void *);
   void *arg;
+  coro_handler_closed_fn handler_closed;
+  void *handler_closed_arg;
 } coro_task_arg_t;
+
+static void wait_for_socket_close_completion(coro_socket_t *socket) {
+  if (socket == NULL || socket->ctx == NULL) {
+    return;
+  }
+
+  while (socket->close_pending) {
+    coro_sleep(socket->ctx, 1);
+  }
+}
 
 static void coro_entry_bridge(coro_t *co, void *arg) {
   UNUSED(co);
   coro_task_arg_t *task = (coro_task_arg_t *)arg;
+  retain_client(task->socket);
   task->handler(task->socket, task->arg);
   coro_socket_destroy(task->socket);
+  wait_for_socket_close_completion(task->socket);
+  if (task->handler_closed != NULL) {
+    task->handler_closed(task->handler_closed_arg);
+  }
+  release_client(task->socket);
   free(task);
 }
 
@@ -57,6 +75,8 @@ static void spawn_handler_coro(coro_socket_t *s, void (*handler)(coro_socket_t *
   task->socket = s;
   task->handler = handler;
   task->arg = arg;
+  task->handler_closed = s->handler_closed;
+  task->handler_closed_arg = s->handler_closed_arg;
   
   if (coro_context_spawn(s->ctx, coro_entry_bridge, task) != 0) {
     TLOG_ERROR("server: failed to spawn handler coroutine");
@@ -381,10 +401,19 @@ static int listen_ws_internal(coro_socket_t *server, const char *host, int port,
 
 int coro_socket_listen_on(coro_socket_t *server, const char *host, int port,
                            void (*handler)(coro_socket_t *, void *), void *arg) {
+  return coro_socket_listen_on_ex(server, host, port, handler, arg, NULL, NULL);
+}
+
+int coro_socket_listen_on_ex(coro_socket_t *server, const char *host, int port,
+                             void (*handler)(coro_socket_t *, void *), void *arg,
+                             coro_handler_closed_fn handler_closed,
+                             void *handler_closed_arg) {
   if (!server || !host) return TURBO_EINVAL;
 
   server->handler = handler;
   server->handler_arg = arg;
+  server->handler_closed = handler_closed;
+  server->handler_closed_arg = handler_closed_arg;
 
   turbo_transport_t transport = server->transport; 
 
@@ -400,12 +429,21 @@ int coro_socket_listen_on(coro_socket_t *server, const char *host, int port,
 
 int coro_socket_listen_ws(coro_socket_t *server, const char *host, int port,
                            int is_tls, void (*handler)(coro_socket_t *, void *), void *arg) {
+  return coro_socket_listen_ws_ex(server, host, port, is_tls, handler, arg, NULL, NULL);
+}
+
+int coro_socket_listen_ws_ex(coro_socket_t *server, const char *host, int port,
+                             int is_tls, void (*handler)(coro_socket_t *, void *), void *arg,
+                             coro_handler_closed_fn handler_closed,
+                             void *handler_closed_arg) {
   if (!server || !host) {
     return TURBO_EINVAL;
   }
 
   server->handler = handler;
   server->handler_arg = arg;
+  server->handler_closed = handler_closed;
+  server->handler_closed_arg = handler_closed_arg;
   return listen_ws_internal(server, host, port, is_tls);
 }
 

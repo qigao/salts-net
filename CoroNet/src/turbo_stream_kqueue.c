@@ -212,7 +212,6 @@ static void on_kqueue_event_bounce(void *arg1, void *arg2) {
                     turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
                     turbo_stream_t *child = (turbo_stream_t *)ev->extra;
                     void *peer = (ev->peer_addr_len > 0) ? (void *)&ev->peer_addr : NULL;
-                    l->active_connections++;
                     if (l->on_accept) l->on_accept(l, child, peer);
                     break;
                 }
@@ -278,6 +277,7 @@ static void* stream_kqueue_worker(void* arg) {
                             if (kqueue_init_with_socket(child, client_fd) == 0) {
                                 child->connected = 1;
                                 child->listener = l;
+                                l->active_connections++;
                                 post_event(st, SEP_OP_ACCEPT, 0, child,
                                            (const struct sockaddr *)&addr, addr_len);
                             } else {
@@ -468,6 +468,23 @@ static void kqueue_close(turbo_stream_t *s) {
     s->backend_data = NULL;
 }
 
+static void kqueue_listener_close(turbo_stream_listener_t *l) {
+    stream_kqueue_state_t *st;
+
+    if (!l) {
+        return;
+    }
+
+    st = (stream_kqueue_state_t *)l->backend_data;
+    if (!st) {
+        turbo_stream_listener_notify_backend_released(l);
+        return;
+    }
+
+    kqueue_cleanup_state(st);
+    turbo_stream_listener_notify_backend_released(l);
+}
+
 static int kqueue_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
     stream_kqueue_state_t *st;
     int r = kqueue_init_state(&st, l, l->ctx, 1);
@@ -530,7 +547,7 @@ const turbo_stream_backend_ops_t turbo_stream_kqueue_ops = {
     .init = kqueue_init, .connect = kqueue_connect, .connect_pipe = kqueue_connect_pipe,
     .send = kqueue_send, .flush = NULL, .recv_start = (int(*)(turbo_stream_t*))NULL, .recv_stop = (void(*)(turbo_stream_t*))NULL,
     .close = kqueue_close, .bind = kqueue_bind, .bind_pipe = kqueue_bind_pipe, .listen = kqueue_listen,
-    .listener_close = (void(*)(turbo_stream_listener_t*))kqueue_close
+    .listener_close = kqueue_listener_close
 };
 
 #endif

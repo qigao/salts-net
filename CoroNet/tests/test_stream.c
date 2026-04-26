@@ -9,12 +9,15 @@
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 static int s_connected = -1;
 static int s_closed = 0;
 static int s_connect_count = 0;
+static char s_send_payload[256 * 1024];
 
 static void on_connect(turbo_stream_t *s, int status, void *arg) {
     (void)arg;
@@ -37,11 +40,20 @@ static void on_close(turbo_stream_t *s) {
     s_closed = 1;
 }
 
+static int on_recv_noop(turbo_stream_t *s, const mem_slice_t *slice, void *arg) {
+    (void)s;
+    (void)slice;
+    (void)arg;
+    return 0;
+}
+
 static turbo_stream_t *s_accepted_client = NULL;
 static int s_accepted_count = 0;
 static turbo_stream_t *s_accepted_clients[32];
 
 #define STREAM_TEST_WAIT_ITERS 20000
+
+static unsigned short stream_test_pick_loopback_port(void);
 
 static int stream_test_run_until(coro_context_t *ctx, int *predicate, int expected,
                                  uint64_t timeout_ms) {
@@ -73,10 +85,376 @@ static void stream_test_run_while(coro_context_t *ctx, int (*pending)(void *), v
     }
 }
 
+static void stream_test_destroy_context_robust(coro_context_t *ctx) {
+    int max_drain = 500;
+
+    if (!ctx) {
+        return;
+    }
+
+    coro_context_stop(ctx);
+    while (max_drain-- > 0) {
+        int has_handles = coro_context_alive(ctx);
+        int has_coros = ctx->scheduler != NULL ? (coro_scheduler_count(ctx->scheduler) > 0) : 0;
+        if (!has_handles && !has_coros) {
+            break;
+        }
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+    }
+    coro_context_destroy(ctx);
+}
+
 static int stream_test_flag_is_pending(void *arg) {
     int *flag = (int *)arg;
     return flag && *flag == -1;
 }
+
+typedef struct stream_coro_close_state_s {
+    coro_context_t *ctx;
+    unsigned short port;
+    int handler_rc;
+    int handler_hits;
+    int timeout_count;
+    int client_rc;
+    size_t recv_len;
+    int recv_data_was_null;
+} stream_coro_close_state_t;
+
+static void stream_coro_close_state_reset(stream_coro_close_state_t *state) {
+    if (!state) {
+        return;
+    }
+
+    state->ctx = NULL;
+    state->port = 0;
+    state->handler_rc = TURBO_EBUSY;
+    state->handler_hits = 0;
+    state->timeout_count = 0;
+    state->client_rc = TURBO_EBUSY;
+    state->recv_len = 0U;
+    state->recv_data_was_null = 1;
+}
+
+static int stream_coro_close_waiting_pending(void *arg) {
+    stream_coro_close_state_t *state = (stream_coro_close_state_t *)arg;
+
+    if (!state) {
+        return 0;
+    }
+
+    return state->handler_hits == 0;
+}
+
+static int stream_coro_close_done_pending(void *arg) {
+    stream_coro_close_state_t *state = (stream_coro_close_state_t *)arg;
+
+    if (!state) {
+        return 0;
+    }
+
+    return state->handler_rc == TURBO_EBUSY;
+}
+
+static void stream_coro_recv_timeout_then_close_handler(coro_socket_t *client, void *arg) {
+    stream_coro_close_state_t *state = (stream_coro_close_state_t *)arg;
+    char *data = NULL;
+    size_t len = 0U;
+    int rc;
+
+    if (!client || !state) {
+        return;
+    }
+
+    state->handler_hits++;
+    coro_socket_set_timeout(client, 5000);
+
+    rc = coro_socket_recv(client, &data, &len);
+    state->handler_rc = rc;
+    state->recv_len = len;
+    state->recv_data_was_null = data == NULL ? 1 : 0;
+    if (data != NULL) {
+        coro_socket_free_recv(data);
+    }
+}
+
+#if defined(__linux__) && defined(TURBO_HAS_IO_URING)
+static void stream_coro_recv_timeout_loop_handler(coro_socket_t *client, void *arg) {
+    stream_coro_close_state_t *state = (stream_coro_close_state_t *)arg;
+    char *data = NULL;
+    size_t len = 0U;
+    int rc;
+
+    if (!client || !state) {
+        return;
+    }
+
+    state->handler_hits++;
+    coro_socket_set_timeout(client, 25);
+
+    for (;;) {
+        rc = coro_socket_recv(client, &data, &len);
+        if (rc == TURBO_ETIMEDOUT) {
+            state->timeout_count++;
+            if (data != NULL) {
+                coro_socket_free_recv(data);
+                data = NULL;
+            }
+            len = 0U;
+            /* Stale timeout status used to spin here forever; cap it as a test failure. */
+            if (state->timeout_count > 8) {
+                state->handler_rc = rc;
+                state->recv_len = len;
+                state->recv_data_was_null = 1;
+                return;
+            }
+            continue;
+        }
+
+        state->handler_rc = rc;
+        state->recv_len = len;
+        state->recv_data_was_null = data == NULL ? 1 : 0;
+        if (data != NULL) {
+            coro_socket_free_recv(data);
+        }
+        return;
+    }
+}
+
+static void stream_coro_raw_client_close_task(coro_t *co, void *arg) {
+    stream_coro_close_state_t *state = (stream_coro_close_state_t *)arg;
+    struct sockaddr_in addr;
+    uint64_t deadline;
+    int fd;
+    (void)co;
+
+    if (state == NULL || state->ctx == NULL || state->port == 0) {
+        return;
+    }
+
+    fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) {
+        state->client_rc = -1;
+        return;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(state->port);
+    if (connect(fd, (struct sockaddr *)&addr, (socklen_t)sizeof(addr)) != 0) {
+        close(fd);
+        state->client_rc = -2;
+        return;
+    }
+
+    state->client_rc = 0;
+    deadline = turbo_monotonic_ms() + 1000;
+    while (state->timeout_count == 0 && turbo_monotonic_ms() < deadline) {
+        coro_sleep(state->ctx, 10);
+    }
+    close(fd);
+}
+
+enum {
+    STREAM_IO_URING_EOF_SCENARIO_OK = 0,
+    STREAM_IO_URING_EOF_SCENARIO_CONTEXT = 2,
+    STREAM_IO_URING_EOF_SCENARIO_BACKEND = 3,
+    STREAM_IO_URING_EOF_SCENARIO_SERVER = 4,
+    STREAM_IO_URING_EOF_SCENARIO_PORT = 5,
+    STREAM_IO_URING_EOF_SCENARIO_LISTEN = 6,
+    STREAM_IO_URING_EOF_SCENARIO_CLIENT_SOCKET = 7,
+    STREAM_IO_URING_EOF_SCENARIO_CONNECT = 8,
+    STREAM_IO_URING_EOF_SCENARIO_WAITING = 9,
+    STREAM_IO_URING_EOF_SCENARIO_EOF = 10,
+    STREAM_IO_URING_EOF_SCENARIO_NO_HANDLER = 11,
+    STREAM_IO_URING_EOF_SCENARIO_NO_TIMEOUT = 12,
+    STREAM_IO_URING_EOF_SCENARIO_EARLY_RECV_RESULT = 13
+};
+
+static int stream_run_forked_scenario(int (*scenario)(void), uint64_t timeout_ms) {
+    pid_t child_pid;
+    int status = 0;
+    uint64_t deadline;
+
+    child_pid = fork();
+    if (child_pid < 0) {
+        return 253;
+    }
+    if (child_pid == 0) {
+        _exit(scenario());
+    }
+
+    deadline = turbo_monotonic_ms() + timeout_ms;
+    while (turbo_monotonic_ms() < deadline) {
+        pid_t done = waitpid(child_pid, &status, WNOHANG);
+        if (done == child_pid) {
+            if (WIFEXITED(status)) {
+                return WEXITSTATUS(status);
+            }
+            return 252;
+        }
+        usleep(1000);
+    }
+
+    kill(child_pid, SIGKILL);
+    (void)waitpid(child_pid, &status, 0);
+    return 254;
+}
+
+static int stream_run_io_uring_recv_eof_scenario(void) {
+    coro_context_t *ctx = NULL;
+    coro_socket_t *server = NULL;
+    stream_coro_close_state_t state;
+    unsigned short port;
+    int client_fd = -1;
+    int rc = STREAM_IO_URING_EOF_SCENARIO_CONTEXT;
+    struct sockaddr_in addr;
+
+    ctx = coro_context_create(NULL);
+    if (ctx == NULL) {
+        goto cleanup;
+    }
+    rc = STREAM_IO_URING_EOF_SCENARIO_BACKEND;
+    if (coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING) != 0) {
+        goto cleanup;
+    }
+
+    rc = STREAM_IO_URING_EOF_SCENARIO_SERVER;
+    server = coro_socket_create_tcpv4(ctx);
+    if (server == NULL || coro_socket_get_tcp_backend(server) != TURBO_TCP_BACKEND_IO_URING) {
+        goto cleanup;
+    }
+
+    stream_coro_close_state_reset(&state);
+    rc = STREAM_IO_URING_EOF_SCENARIO_PORT;
+    port = stream_test_pick_loopback_port();
+    if (port == 0) {
+        goto cleanup;
+    }
+    rc = STREAM_IO_URING_EOF_SCENARIO_LISTEN;
+    if (coro_socket_listen_on(server, "127.0.0.1", port,
+                              stream_coro_recv_timeout_then_close_handler, &state) != 0) {
+        goto cleanup;
+    }
+
+    rc = STREAM_IO_URING_EOF_SCENARIO_CLIENT_SOCKET;
+    client_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (client_fd < 0) {
+        goto cleanup;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    rc = STREAM_IO_URING_EOF_SCENARIO_CONNECT;
+    if (connect(client_fd, (struct sockaddr *)&addr, (socklen_t)sizeof(addr)) != 0) {
+        goto cleanup;
+    }
+
+    rc = STREAM_IO_URING_EOF_SCENARIO_WAITING;
+    stream_test_run_while(ctx, stream_coro_close_waiting_pending, &state, 3000);
+    if (state.handler_hits != 1) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_NO_HANDLER;
+        goto cleanup;
+    }
+    if (state.handler_rc != TURBO_EBUSY) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_EARLY_RECV_RESULT;
+        goto cleanup;
+    }
+    close(client_fd);
+    client_fd = -1;
+
+    stream_test_run_while(ctx, stream_coro_close_done_pending, &state, 3000);
+    rc = STREAM_IO_URING_EOF_SCENARIO_EOF;
+    if (state.handler_rc == TURBO_EOF && state.recv_len == 0U && state.recv_data_was_null == 1) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_OK;
+    }
+
+cleanup:
+    if (client_fd >= 0) {
+        close(client_fd);
+    }
+    if (server != NULL) {
+        coro_socket_destroy(server);
+    }
+    if (ctx != NULL) {
+        stream_test_destroy_context_robust(ctx);
+    }
+    return rc;
+}
+
+static int stream_run_io_uring_timeout_loop_recv_eof_scenario(void) {
+    coro_context_t *ctx = NULL;
+    coro_socket_t *server = NULL;
+    stream_coro_close_state_t state;
+    uint64_t deadline;
+    int rc = STREAM_IO_URING_EOF_SCENARIO_CONTEXT;
+
+    ctx = coro_context_create(NULL);
+    if (ctx == NULL) {
+        goto cleanup;
+    }
+    if (coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING) != 0) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_BACKEND;
+        goto cleanup;
+    }
+
+    server = coro_socket_create_tcpv4(ctx);
+    if (server == NULL || coro_socket_get_tcp_backend(server) != TURBO_TCP_BACKEND_IO_URING) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_SERVER;
+        goto cleanup;
+    }
+
+    stream_coro_close_state_reset(&state);
+    state.ctx = ctx;
+    state.port = stream_test_pick_loopback_port();
+    if (state.port == 0) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_PORT;
+        goto cleanup;
+    }
+    if (coro_socket_listen_on(server, "127.0.0.1", state.port,
+                              stream_coro_recv_timeout_loop_handler, &state) != 0) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_LISTEN;
+        goto cleanup;
+    }
+    if (coro_context_spawn(ctx, stream_coro_raw_client_close_task, &state) != 0) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_CLIENT_SOCKET;
+        goto cleanup;
+    }
+
+    deadline = turbo_monotonic_ms() + 6000;
+    while (state.handler_rc == TURBO_EBUSY && turbo_monotonic_ms() < deadline) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+    }
+
+    if (state.client_rc != 0) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_CONNECT;
+        goto cleanup;
+    }
+    if (state.handler_hits != 1) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_NO_HANDLER;
+        goto cleanup;
+    }
+    if (state.timeout_count == 0) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_NO_TIMEOUT;
+        goto cleanup;
+    }
+    rc = STREAM_IO_URING_EOF_SCENARIO_EOF;
+    if (state.handler_rc == TURBO_EOF && state.recv_len == 0U && state.recv_data_was_null == 1) {
+        rc = STREAM_IO_URING_EOF_SCENARIO_OK;
+    }
+
+cleanup:
+    if (server != NULL) {
+        coro_socket_destroy(server);
+    }
+    if (ctx != NULL) {
+        stream_test_destroy_context_robust(ctx);
+    }
+    return rc;
+}
+#endif
 
 typedef struct stream_test_counts_s {
     int *connected;
@@ -185,6 +563,155 @@ spec("Stream") {
         coro_context_destroy(ctx);
     }
 
+#ifdef _WIN32
+    it("should close tcp streams with pending connects without use-after-free") {
+        enum { STREAM_CONNECT_CLOSE_LOOPS = 16 };
+        int i;
+
+        for (i = 0; i < STREAM_CONNECT_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_t *stream;
+            unsigned short port;
+
+            check_not_null(ctx);
+
+            stream = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+            check_not_null(stream);
+
+            port = stream_test_pick_loopback_port();
+            check_int_gt(port, 0);
+
+            s_connected = -1;
+            s_closed = 0;
+
+            check_int_eq(turbo_stream_connect(stream, "127.0.0.1", port, on_connect, on_close), 0);
+
+            turbo_stream_close(stream);
+            turbo_stream_destroy(stream);
+            stream_test_destroy_context_robust(ctx);
+        }
+    }
+
+    it("should close tcp streams with pending recv without use-after-free") {
+        enum { STREAM_RECV_CLOSE_LOOPS = 16 };
+        int i;
+
+        for (i = 0; i < STREAM_RECV_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_listener_t *listener;
+            turbo_stream_t *client;
+            struct sockaddr_in addr;
+            stream_test_counts_t counts;
+            unsigned short port;
+
+            check_not_null(ctx);
+
+            port = stream_test_pick_loopback_port();
+            check_int_gt(port, 0);
+
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(port);
+
+            s_accepted_client = NULL;
+            s_accepted_count = 0;
+            s_connected = -1;
+            s_closed = 0;
+
+            listener = turbo_stream_listen(ctx, TURBO_STREAM_TCP4,
+                                           (struct sockaddr *)&addr, 128,
+                                           on_accept_local);
+            check_not_null(listener);
+
+            client = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+            check_not_null(client);
+            check_int_eq(turbo_stream_connect_addr(client, (struct sockaddr *)&addr,
+                                                   on_connect, on_close), 0);
+
+            counts.connected = &s_connected;
+            counts.expected_connected = 0;
+            counts.accepted = &s_accepted_count;
+            counts.expected_accepted = 1;
+            stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+
+            check_int_eq(s_connected, 0);
+            check_int_eq(s_accepted_count, 1);
+            check_not_null(s_accepted_client);
+
+            check_int_eq(turbo_stream_recv_start(client, on_recv_noop), 0);
+
+            turbo_stream_close(client);
+            turbo_stream_destroy(client);
+            turbo_stream_destroy(s_accepted_client);
+            turbo_stream_listener_close(listener);
+            stream_test_destroy_context_robust(ctx);
+        }
+    }
+
+    it("should close tcp streams with pending send without use-after-free") {
+        enum { STREAM_SEND_CLOSE_LOOPS = 8, STREAM_SEND_BURST = 8 };
+        int i;
+
+        memset(s_send_payload, 's', sizeof(s_send_payload));
+
+        for (i = 0; i < STREAM_SEND_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_listener_t *listener;
+            turbo_stream_t *client;
+            struct sockaddr_in addr;
+            stream_test_counts_t counts;
+            unsigned short port;
+            int j;
+
+            check_not_null(ctx);
+
+            port = stream_test_pick_loopback_port();
+            check_int_gt(port, 0);
+
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(port);
+
+            s_accepted_client = NULL;
+            s_accepted_count = 0;
+            s_connected = -1;
+            s_closed = 0;
+
+            listener = turbo_stream_listen(ctx, TURBO_STREAM_TCP4,
+                                           (struct sockaddr *)&addr, 128,
+                                           on_accept_local);
+            check_not_null(listener);
+
+            client = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+            check_not_null(client);
+            check_int_eq(turbo_stream_connect_addr(client, (struct sockaddr *)&addr,
+                                                   on_connect, on_close), 0);
+
+            counts.connected = &s_connected;
+            counts.expected_connected = 0;
+            counts.accepted = &s_accepted_count;
+            counts.expected_accepted = 1;
+            stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+
+            check_int_eq(s_connected, 0);
+            check_int_eq(s_accepted_count, 1);
+            check_not_null(s_accepted_client);
+
+            for (j = 0; j < STREAM_SEND_BURST; ++j) {
+                check_int_eq(turbo_stream_send(client, s_send_payload, sizeof(s_send_payload)), 0);
+            }
+
+            turbo_stream_close(client);
+            turbo_stream_destroy(client);
+            turbo_stream_destroy(s_accepted_client);
+            turbo_stream_listener_close(listener);
+            stream_test_destroy_context_robust(ctx);
+        }
+    }
+#endif
+
 #if defined(__linux__) || defined(__ANDROID__)
     it("should reject unavailable io_uring tcp backend") {
         coro_context_t *ctx = coro_context_create(NULL);
@@ -212,6 +739,14 @@ spec("Stream") {
 
         coro_socket_destroy(sock);
         coro_context_destroy(ctx);
+    }
+
+    it("should wake a recv waiter with eof after peer close on io_uring") {
+        check_int_eq(stream_run_forked_scenario(stream_run_io_uring_recv_eof_scenario, 8000), 0);
+    }
+
+    it("should wake a timeout-looping recv waiter with eof after peer close on io_uring") {
+        check_int_eq(stream_run_io_uring_timeout_loop_recv_eof_scenario(), 0);
     }
 #endif
 
@@ -445,4 +980,32 @@ spec("Stream") {
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
     }
+
+#ifdef _WIN32
+    it("should close tcp listeners with pending accepts without use-after-free") {
+        enum { LISTENER_CLOSE_LOOPS = 16 };
+        int i;
+
+        for (i = 0; i < LISTENER_CLOSE_LOOPS; ++i) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_stream_listener_t *listener;
+            struct sockaddr_in addr;
+
+            check_not_null(ctx);
+
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(0);
+
+            listener = turbo_stream_listen(ctx, TURBO_STREAM_TCP4,
+                                           (struct sockaddr *)&addr, 128,
+                                           on_accept_local);
+            check_not_null(listener);
+
+            turbo_stream_listener_close(listener);
+            stream_test_destroy_context_robust(ctx);
+        }
+    }
+#endif
 }

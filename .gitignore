@@ -4,6 +4,8 @@ install/
 bin/
 out/
 cmake-build-*/
+.vcpkg_installed/
+vcpkg_installed/
 conan-cache/
 coverage.xml
 

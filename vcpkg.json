@@ -13,7 +13,7 @@
     {
       "name": "kcp",
       "version>=": "1.7"
-    }, 
+    },
     {
       "name": "c-ares",
       "version>=": "1.34.1"
@@ -21,7 +21,7 @@
     {
       "name": "openssl",
       "version>=": "3.2.0"
-    }, 
+    },
     {
       "name": "aklomp-base64",
       "version>=": "0.5.2"
@@ -38,9 +38,6 @@
     },
     {
       "name": "zstd"
-    },
-    {
-      "name": "simde"
     },
     {
       "name": "sqlite3",

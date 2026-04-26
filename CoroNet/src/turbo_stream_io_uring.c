@@ -119,6 +119,14 @@ static const char *stream_uring_op_name(stream_uring_op_kind_t kind) {
   }
 }
 
+static void stream_uring_shutdown_fd(int fd) {
+  if (fd < 0) {
+    return;
+  }
+
+  (void)shutdown(fd, SHUT_RDWR);
+}
+
 static void stream_uring_track_inflight(stream_uring_base_t *base,
                                         stream_uring_op_t *op) {
   if (!base || !op) {
@@ -391,6 +399,7 @@ static int stream_uring_submit_command(stream_uring_base_t *base,
                (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
     base->stopping = 1;
     if (base->fd >= 0) {
+      stream_uring_shutdown_fd(base->fd);
       close(base->fd);
       base->fd = -1;
     }
@@ -442,21 +451,32 @@ static void stream_uring_worker(void *arg) {
     struct io_uring_cqe *cqe;
     stream_uring_op_t *op;
     int rc;
+    long inflight;
 
     stream_uring_drain_commands(base);
     io_uring_submit(&base->ring);
 
-    if (base->stopping) {
-      TLOG_DEBUG("uring[{:p}] worker-stop requested inflight={:d}", (void *)base,
-                 (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
+    inflight = __atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED);
+    if (base->stopping && inflight == 0) {
+      TLOG_DEBUG("uring[{:p}] worker-stop requested inflight drained", (void *)base);
       break;
     }
 
     rc = io_uring_wait_cqe_timeout(&base->ring, &cqe, &timeout);
     if (rc == -ETIME || rc == -EINTR) {
+      if (base->stopping &&
+          __atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED) == 0) {
+        TLOG_DEBUG("uring[{:p}] worker-stop timeout after inflight drained", (void *)base);
+        break;
+      }
       continue;
     }
     if (rc < 0) {
+      if (base->stopping &&
+          __atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED) == 0) {
+        TLOG_DEBUG("uring[{:p}] worker-stop after wait error with no inflight", (void *)base);
+        break;
+      }
       continue;
     }
 
@@ -607,8 +627,7 @@ static void stream_uring_listener_cleanup_task(void *arg1, void *arg2) {
   TLOG_DEBUG("uring[{:p}] listener-cleanup-task listener={:p}", (void *)st, (void *)l);
   stream_uring_destroy_base(&st->base);
   free(st);
-  l->backend_data = NULL;
-  turbo_stream_listener_finalize_close(l);
+  turbo_stream_listener_notify_backend_released(l);
 }
 
 static int stream_uring_submit_recv(turbo_stream_t *s) {
@@ -1069,6 +1088,7 @@ static void uring_close(turbo_stream_t *s) {
   if (!op) {
     st->base.stopping = 1;
     if (st->base.fd >= 0) {
+      stream_uring_shutdown_fd(st->base.fd);
       close(st->base.fd);
       st->base.fd = -1;
     }
@@ -1087,6 +1107,7 @@ static void uring_close(turbo_stream_t *s) {
     free(op);
     st->base.stopping = 1;
     if (st->base.fd >= 0) {
+      stream_uring_shutdown_fd(st->base.fd);
       close(st->base.fd);
       st->base.fd = -1;
     }

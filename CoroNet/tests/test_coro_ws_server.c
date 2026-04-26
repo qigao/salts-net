@@ -19,6 +19,18 @@ typedef struct ws_server_state_s {
   size_t reply_len;
 } ws_server_state_t;
 
+typedef struct ws_close_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  coro_socket_t *client;
+  unsigned short port;
+  int client_connected;
+  int client_rc;
+  int handler_rc;
+  int handler_hits;
+  uint64_t hold_ms;
+} ws_close_state_t;
+
 static int g_ws_server_handler_rc = TURBO_EBUSY;
 static int g_ws_server_client_rc = TURBO_EBUSY;
 static int g_ws_server_handler_hits = 0;
@@ -30,6 +42,7 @@ static uint8_t g_ws_server_handler_buf[128];
 static size_t g_ws_server_handler_len = 0;
 static uint8_t g_ws_server_client_buf[128];
 static size_t g_ws_server_client_len = 0;
+static char g_ws_close_send_payload[128 * 1024];
 
 static const uint8_t g_ws_server_request[] = "hello-websocket";
 static const uint8_t g_ws_server_reply[] = "server-ready";
@@ -75,6 +88,25 @@ static void ws_server_wait_for_client_result(coro_context_t *ctx, uint64_t timeo
   while (g_ws_server_client_rc == TURBO_EBUSY && turbo_monotonic_ms() < deadline) {
     coro_sleep(ctx, 1);
   }
+}
+
+static void ws_close_run_until_idle(coro_context_t *ctx, uint64_t timeout_ms) {
+  uint64_t deadline;
+
+  if (!ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + timeout_ms;
+  while (coro_context_alive(ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(ctx, TURBO_RUN_NOWAIT);
+  }
+}
+
+static int ws_close_case_done(void *arg) {
+  ws_close_state_t *state = (ws_close_state_t *)arg;
+  if (!state) return 1;
+  return state->client_rc != TURBO_EBUSY && state->handler_rc != TURBO_EBUSY;
 }
 
 static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
@@ -183,6 +215,105 @@ static void ws_server_client_task(coro_t *co, void *arg) {
   coro_socket_destroy(client);
 }
 
+static void ws_close_idle_handler(coro_socket_t *client, void *arg) {
+  ws_close_state_t *state = (ws_close_state_t *)arg;
+
+  if (!state) {
+    coro_socket_destroy(client);
+    return;
+  }
+
+  coro_socket_set_timeout(client, 5000);
+  state->handler_hits++;
+  coro_sleep(state->ctx, state->hold_ms);
+  state->handler_rc = 0;
+  coro_socket_destroy(client);
+}
+
+static void ws_close_client_recv_task(coro_t *co, void *arg) {
+  ws_close_state_t *state = (ws_close_state_t *)arg;
+  coro_socket_t *client;
+  char *data = NULL;
+  size_t len = 0;
+  int rc;
+  (void)co;
+
+  client = coro_socket_create(state->ctx, CORO_SOCKET_TCP_V4);
+  if (!client) {
+    state->client_rc = TURBO_ENOMEM;
+    return;
+  }
+
+  coro_socket_set_timeout(client, 5000);
+  rc = coro_socket_connect_ws(client, "127.0.0.1", state->port, "/chat", 0);
+  if (rc == 0) {
+    state->client = client;
+    state->client_connected = 1;
+    rc = coro_socket_recv(client, &data, &len);
+  }
+
+  if (data) {
+    coro_socket_free_recv(data);
+  }
+
+  state->client_rc = rc;
+}
+
+static void ws_close_client_destroy_task(coro_t *co, void *arg) {
+  ws_close_state_t *state = (ws_close_state_t *)arg;
+  uint64_t deadline;
+  coro_socket_t *client;
+  (void)co;
+
+  if (!state || !state->ctx) {
+    return;
+  }
+
+  deadline = turbo_monotonic_ms() + 3000;
+  while (!state->client_connected && turbo_monotonic_ms() < deadline) {
+    coro_sleep(state->ctx, 1);
+  }
+
+  if (!state->client_connected) {
+    return;
+  }
+
+  coro_sleep(state->ctx, 10);
+  client = state->client;
+  state->client = NULL;
+  if (client) {
+    coro_socket_destroy(client);
+  }
+}
+
+static void ws_close_client_send_task(coro_t *co, void *arg) {
+  ws_close_state_t *state = (ws_close_state_t *)arg;
+  coro_socket_t *client;
+  int rc;
+  int i;
+  (void)co;
+
+  client = coro_socket_create(state->ctx, CORO_SOCKET_TCP_V4);
+  if (!client) {
+    state->client_rc = TURBO_ENOMEM;
+    return;
+  }
+
+  coro_socket_set_timeout(client, 5000);
+  rc = coro_socket_connect_ws(client, "127.0.0.1", state->port, "/chat", 0);
+  if (rc == 0) {
+    for (i = 0; i < 8; ++i) {
+      rc = coro_socket_send(client, g_ws_close_send_payload, sizeof(g_ws_close_send_payload));
+      if (rc != 0) {
+        break;
+      }
+    }
+  }
+
+  state->client_rc = rc;
+  coro_socket_destroy(client);
+}
+
 static void ws_server_run_case(int secure, const char *protocol) {
   ws_server_run_case_with_payload(secure, protocol,
                                   g_ws_server_request,
@@ -282,9 +413,72 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
   }
 }
 
+static void ws_server_run_close_case(int pending_recv) {
+  ws_close_state_t state;
+  test_socket_t probe = TEST_INVALID_SOCKET;
+  uint64_t deadline;
+
+  memset(&state, 0, sizeof(state));
+  state.client_rc = TURBO_EBUSY;
+  state.handler_rc = TURBO_EBUSY;
+  state.hold_ms = 200;
+
+  memset(g_ws_close_send_payload, 'w', sizeof(g_ws_close_send_payload));
+
+  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  test_close_socket(probe);
+
+  state.ctx = coro_context_create(NULL);
+  check_not_null(state.ctx);
+
+  state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
+  check_not_null(state.server);
+  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+                                     0, ws_close_idle_handler, &state), 0);
+
+  if (pending_recv) {
+    check_int_eq(coro_context_spawn(state.ctx, ws_close_client_recv_task, &state), 0);
+    check_int_eq(coro_context_spawn(state.ctx, ws_close_client_destroy_task, &state), 0);
+  } else {
+    check_int_eq(coro_context_spawn(state.ctx, ws_close_client_send_task, &state), 0);
+  }
+
+  ws_server_run_until(state.ctx, 5000, ws_close_case_done, &state);
+
+  check_int_eq(state.handler_hits, 1);
+  check_int_eq(state.handler_rc, 0);
+  if (pending_recv) {
+    check_int_eq(state.client_rc, TURBO_ECANCELED);
+  } else {
+    check_int_eq(state.client_rc, 0);
+  }
+
+  if (state.client) {
+    coro_socket_destroy(state.client);
+    state.client = NULL;
+  }
+  coro_socket_destroy(state.server);
+
+  deadline = turbo_monotonic_ms() + 1000;
+  while (coro_context_alive(state.ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+  }
+
+  ws_close_run_until_idle(state.ctx, 1000);
+  coro_context_destroy(state.ctx);
+}
+
 spec("Coro WebSocket Server") {
   it("should hand handlers a fully-open WebSocket socket") {
     ws_server_run_case(0, NULL);
+  }
+
+  it("should close coro websocket sockets with pending recv without use-after-free") {
+    ws_server_run_close_case(1);
+  }
+
+  it("should close coro websocket sockets with pending send without use-after-free") {
+    ws_server_run_close_case(0);
   }
 
   it("should hand handlers a fully-open Secure WebSocket socket") {

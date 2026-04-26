@@ -888,7 +888,7 @@ static int pw_listen(turbo_stream_listener_t *l, int backlog) {
 
 static void pw_listener_close(turbo_stream_listener_t *l) {
   if (!l->backend_data) {
-    turbo_stream_listener_finalize_close(l);
+    turbo_stream_listener_notify_backend_released(l);
     return;
   }
 
@@ -912,7 +912,7 @@ static void pw_listener_close(turbo_stream_listener_t *l) {
   free(lst->pipe_name);
   free(lst);
 
-  turbo_stream_listener_finalize_close(l);
+  turbo_stream_listener_notify_backend_released(l);
 }
 
 const turbo_stream_backend_ops_t turbo_stream_pipe_win_ops = {

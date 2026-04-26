@@ -32,6 +32,11 @@ typedef struct {
     int index;
 } worker_ctx_t;
 
+static void coro_thread_pool_request_stop_post(void *arg1, void *arg2) {
+    (void)arg2;
+    coro_context_stop((coro_context_t *)arg1);
+}
+
 static int turbo_detect_cpu_count(void) {
 #ifdef _WIN32
     SYSTEM_INFO sysinfo;
@@ -185,11 +190,18 @@ void coro_thread_pool_destroy(coro_thread_pool_t *pool) {
     }
     turbo_mutex_unlock(&pool->lifecycle_mutex);
 
-    /* 1. Let each context drain naturally after existing coroutines finish. */
+    /* 1. Let each context drain naturally after existing coroutines finish.
+     * Clearing the persistent ref is enough to let the loop exit once
+     * in-flight transport cleanup callbacks have posted back into the context.
+     * An eager stop_requested short-circuits that drain and leaves external
+     * refs behind during teardown. */
     for (int i = 0; i < pool->thread_count; i++) {
         if (pool->contexts[i]) {
-            coro_context_stop(pool->contexts[i]);
             coro_context_set_persistent(pool->contexts[i], 0);
+            if (coro_post(pool->contexts[i], coro_thread_pool_request_stop_post,
+                          pool->contexts[i], NULL) != 0) {
+                coro_context_stop(pool->contexts[i]);
+            }
             turbo_loop_wake(pool->contexts[i]->loop);
         }
     }

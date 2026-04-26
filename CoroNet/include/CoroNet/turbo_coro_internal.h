@@ -244,11 +244,20 @@ struct coro_socket_s {
     struct turbo_kcp_s *kcp;       /**< KCP (reliable UDP) */
   } handle;
   void *native_tcp_state;         /**< Listener state (tcp_listener_state_t / pipe path) */
+  int tls_client_configured;      /**< 1 = use per-socket TLS client settings */
+  int tls_verify_peer;            /**< 1 = verify peer certificate */
+  char *tls_ca_file;              /**< Optional CA bundle file for client verification */
+  char *tls_cert_file;            /**< Optional client certificate */
+  char *tls_key_file;             /**< Optional client private key */
+  char *tls_key_password;         /**< Optional client key password */
+  char *tls_cipher_list;          /**< Optional OpenSSL cipher list */
 
   /* ── Server fields (for listening sockets) ────────────── */
   coro_socket_t *listener;                           /**< Listening socket (server mode) */
   void (*handler)(coro_socket_t *client, void *arg); /**< Connection handler */
   void *handler_arg;                                 /**< Handler argument */
+  coro_handler_closed_fn handler_closed;             /**< Accepted-socket close completion callback */
+  void *handler_closed_arg;                          /**< User data for handler_closed */
   int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
   int kcp_fec_configured;                            /**< 1 = KCP FEC config should be applied */
   turbo_kcp_fec_config_t kcp_fec_config;             /**< Pending KCP FEC config */
@@ -268,6 +277,7 @@ struct coro_socket_s {
   int co_is_scheduled; /**< 1 = scheduler-managed, 0 = manually-managed.
                             Captured at yield time to avoid touching a
                             potentially dangling pointer in callbacks. */
+  int recv_call_inflight; /**< 1 = coro_socket_recv() has yielded and not finished unwinding */
   char *recv_data;     /**< Received data buffer (caller frees via
                             coro_socket_free_recv) */
   size_t recv_len;     /**< Length of received data */
@@ -297,6 +307,7 @@ struct coro_socket_s {
 
   /* ── Lifecycle ─────────────────────────────────────────── */
   atomic_int ref_count;  /**< Reference count for safe destruction */
+  int destroyed;         /**< 1 = user already called coro_socket_destroy() */
   int owns_handle;       /**< 1 = we allocated the transport handle, 0 = borrowed */
   int accept_pending;    /**< 1 = a native accept event arrived before a waiter */
   int accepted_ref;      /**< 1 = accepted transport close owns an extra reference */

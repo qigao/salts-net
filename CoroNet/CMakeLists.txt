@@ -1,5 +1,4 @@
-set(TARGET_NAME CoroNet)
-find_package(Stb REQUIRED)
+set(TARGET_NAME CoroNet) 
 # Add WebSocket parser subdirectory
 add_subdirectory(parser)
 
@@ -113,7 +112,7 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
            $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
-    PRIVATE ${Stb_INCLUDE_DIR} ${WEBSOCKET_PARSER_INCLUDE_DIRS})
+    PRIVATE  ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
   target_link_libraries(
     ${tgt}

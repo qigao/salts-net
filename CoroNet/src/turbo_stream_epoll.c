@@ -239,7 +239,6 @@ static void on_epoll_event_bounce(void *arg1, void *arg2) {
                     turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
                     turbo_stream_t *child = (turbo_stream_t *)ev->extra;
                     void *peer = (ev->peer_addr_len > 0) ? (void *)&ev->peer_addr : NULL;
-                    l->active_connections++;
                     if (l->on_accept) l->on_accept(l, child, peer);
                     break;
                 }
@@ -308,6 +307,7 @@ static void* stream_epoll_worker(void* arg) {
                                 if (epoll_init_with_socket(child, client_fd) == 0) {
                                     child->connected = 1;
                                     child->listener = l;
+                                    l->active_connections++;
                                     post_event(st, SEP_OP_ACCEPT, 0, child,
                                                (const struct sockaddr *)&addr, addr_len);
                                 } else {
@@ -326,6 +326,7 @@ static void* stream_epoll_worker(void* arg) {
                     }
                 } else {
                     uint32_t evmask = events[i].events;
+                    int read_terminal_reported = 0;
 
                     if (events[i].events & EPOLLOUT) {
                         if (!st->connected) {
@@ -337,25 +338,38 @@ static void* stream_epoll_worker(void* arg) {
                         should_flush = 1;
                     }
                     if (events[i].events & EPOLLIN) {
-                        ssize_t n = recv(st->fd, io_buf, sizeof(io_buf), 0);
-                        if (n > 0) {
-                            uint8_t *dest = wait_ring_write(st, &st->read_ring, (size_t)n);
-                            memcpy(dest, io_buf, (size_t)n);
-                            ring_spsc_write_release(&st->read_ring, (size_t)n);
-                            post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
-                        } else if (n == 0) {
-                            post_event(st, SEP_OP_READ, TURBO_EOF, NULL, NULL, 0);
-                        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                        for (;;) {
+                            ssize_t n = recv(st->fd, io_buf, sizeof(io_buf), 0);
+                            if (n > 0) {
+                                uint8_t *dest = wait_ring_write(st, &st->read_ring, (size_t)n);
+                                memcpy(dest, io_buf, (size_t)n);
+                                ring_spsc_write_release(&st->read_ring, (size_t)n);
+                                post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
+                                continue;
+                            }
+                            if (n == 0) {
+                                post_event(st, SEP_OP_READ, TURBO_EOF, NULL, NULL, 0);
+                                read_terminal_reported = 1;
+                                break;
+                            }
+                            if (errno == EINTR) {
+                                continue;
+                            }
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                break;
+                            }
                             post_event(st, SEP_OP_READ, -errno, NULL, NULL, 0);
+                            read_terminal_reported = 1;
+                            break;
                         }
                     }
                     if ((evmask & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) &&
-                        !(evmask & EPOLLIN)) {
+                        !read_terminal_reported) {
                         TLOG_DEBUG("epoll[{:p}] hup/err event fd={:d} mask=0x{:x}", (void *)st,
                                    st->fd, (unsigned int)evmask);
-                        int err = 0;
-                        socklen_t len = sizeof(err);
                         if (evmask & EPOLLERR) {
+                            int err = 0;
+                            socklen_t len = sizeof(err);
                             if (getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 ||
                                 err == 0) {
                                 err = EIO;
@@ -501,9 +515,8 @@ static void epoll_stream_cleanup_task(void *arg1, void *arg2) {
 static void epoll_listener_cleanup_task(void *arg1, void *arg2) {
     stream_epoll_state_t *st = (stream_epoll_state_t *)arg1;
     turbo_stream_listener_t *l = (turbo_stream_listener_t *)arg2;
-    if (l) l->backend_data = NULL;
     epoll_destroy_state(st);
-    if (l) turbo_stream_listener_finalize_close(l);
+    if (l) turbo_stream_listener_notify_backend_released(l);
 }
 
 static int epoll_init(turbo_stream_t *s) {

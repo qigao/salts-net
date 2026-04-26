@@ -118,6 +118,7 @@ static void tls_discard_stream(coro_socket_t *s) {
 
 static int tls_connect(coro_socket_t *s, const char *host, int port) {
   const char *ip = s->resolved_ip[0] ? s->resolved_ip : host;
+  turbo_tls_client_config_t tls_config;
 
   struct sockaddr *sa = (struct sockaddr *)&s->peer_addr;
   memset(sa, 0, sizeof(s->peer_addr));
@@ -139,6 +140,20 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   if (!s->handle.stream) {
     s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
     if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
+
+    if (s->tls_client_configured) {
+      memset(&tls_config, 0, sizeof(tls_config));
+      tls_config.ca_file = s->tls_ca_file;
+      tls_config.cert_file = s->tls_cert_file;
+      tls_config.key_file = s->tls_key_file;
+      tls_config.key_password = s->tls_key_password;
+      tls_config.cipher_list = s->tls_cipher_list;
+      tls_config.verify_peer = s->tls_verify_peer;
+      if (turbo_stream_tls_set_client_config(s->handle.stream, &tls_config) != 0) {
+        tls_discard_stream(s);
+        return socket_ctx_error(s, TURBO_EIO);
+      }
+    }
 
     /* Important: Set SNI for TLS handshake */
     turbo_stream_tls_set_sni(s->handle.stream, host);
@@ -187,6 +202,7 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
 int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   turbo_stream_t *tcp_stream;
   turbo_stream_t *tls_stream;
+  turbo_tls_client_config_t tls_config;
   int rc;
 
   if (!s || !s->ctx) {
@@ -203,6 +219,21 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   tls_stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
   if (!tls_stream) {
     return socket_ctx_error(s, TURBO_EIO);
+  }
+
+  if (s->tls_client_configured) {
+    memset(&tls_config, 0, sizeof(tls_config));
+    tls_config.ca_file = s->tls_ca_file;
+    tls_config.cert_file = s->tls_cert_file;
+    tls_config.key_file = s->tls_key_file;
+    tls_config.key_password = s->tls_key_password;
+    tls_config.cipher_list = s->tls_cipher_list;
+    tls_config.verify_peer = s->tls_verify_peer;
+    rc = turbo_stream_tls_set_client_config(tls_stream, &tls_config);
+    if (rc != 0) {
+      turbo_stream_destroy(tls_stream);
+      return rc;
+    }
   }
 
   turbo_stream_set_user_data(tls_stream, s);

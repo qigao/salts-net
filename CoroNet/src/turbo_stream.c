@@ -17,6 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+void turbo_stream_iocp_listener_on_connection_closed(turbo_stream_listener_t *l);
+#endif
+
 /* ── Backend resolution ───────────────────────────────────── */
 
 static int stream_has_prefix(const char *value, const char *prefix) {
@@ -134,6 +138,7 @@ static void turbo_stream_listener_cleanup_create_failure(turbo_stream_listener_t
   }
 
   if (l->backend_data && l->ops && l->ops->listener_close) {
+    l->closing = 1;
     l->ops->listener_close(l);
     return;
   }
@@ -275,35 +280,126 @@ static void drain_send_queue(turbo_stream_t *s) {
   s->send_queued = 0;
 }
 
+static void turbo_stream_free_if_releasable(turbo_stream_t *s) {
+  if (!s) {
+    return;
+  }
+
+  if (s->finalized && s->destroyed && !s->managed && s->callback_depth == 0) {
+    free(s);
+  }
+}
+
+static void turbo_stream_listener_maybe_finalize_close(turbo_stream_listener_t *l) {
+  if (!l || l->finalized) {
+    return;
+  }
+
+#ifdef _WIN32
+  if (l->ops == &turbo_stream_iocp_ops) {
+    turbo_stream_iocp_listener_on_connection_closed(l);
+    return;
+  }
+#endif
+
+  if (l->closing && l->backend_data == NULL && l->active_connections == 0) {
+    turbo_stream_listener_finalize_close(l);
+  }
+}
+
+static void turbo_stream_release_listener(turbo_stream_t *s) {
+  turbo_stream_listener_t *listener;
+
+  if (!s || !s->listener) {
+    return;
+  }
+
+  listener = s->listener;
+  s->listener = NULL;
+
+  if (listener->active_connections > 0) {
+    listener->active_connections--;
+  } else {
+    listener->active_connections = 0;
+  }
+
+  turbo_stream_listener_maybe_finalize_close(listener);
+}
+
+void turbo_stream_maybe_free(turbo_stream_t *s) {
+  turbo_stream_free_if_releasable(s);
+}
+
+void turbo_stream_callback_enter(turbo_stream_t *s) {
+  if (!s) {
+    return;
+  }
+
+  s->callback_depth++;
+}
+
+void turbo_stream_callback_leave(turbo_stream_t *s) {
+  if (!s) {
+    return;
+  }
+
+  if (s->callback_depth > 0) {
+    s->callback_depth--;
+  }
+}
+
 void turbo_stream_finalize_close(turbo_stream_t *s) {
+  int has_close_cb;
+
   if (!s || s->finalized) {
     return;
   }
 
   s->finalized = 1;
+  turbo_stream_release_listener(s);
   drain_send_queue(s);
   if (s->recv_buf[0]) { mem_unref(s->recv_buf[0]); s->recv_buf[0] = NULL; }
   if (s->recv_buf[1]) { mem_unref(s->recv_buf[1]); s->recv_buf[1] = NULL; }
   s->connected = 0;
   s->closing = 0;
+  has_close_cb = (s->on_close != NULL);
 
-  if (s->on_close) {
+  if (has_close_cb) {
+    turbo_stream_callback_enter(s);
     s->on_close(s);
   }
 
   coro_context_native_unref(s->ctx);
 
-  if (s->destroyed && !s->managed) {
-    free(s);
+  if (has_close_cb) {
+    turbo_stream_callback_leave(s);
+    turbo_stream_free_if_releasable(s);
+    return;
   }
+
+  turbo_stream_free_if_releasable(s);
 }
 
 void turbo_stream_listener_finalize_close(turbo_stream_listener_t *l) {
+  if (!l || l->finalized) {
+    return;
+  }
+
+  l->finalized = 1;
   if (l->backend_data) {
     /* Backend should have cleaned up already */
     l->backend_data = NULL;
   }
   free(l);
+}
+
+void turbo_stream_listener_notify_backend_released(turbo_stream_listener_t *l) {
+  if (!l) {
+    return;
+  }
+
+  l->backend_data = NULL;
+  turbo_stream_listener_maybe_finalize_close(l);
 }
 
 /* ── Public API: Lifecycle ────────────────────────────────── */
@@ -358,9 +454,7 @@ void turbo_stream_destroy(turbo_stream_t *s) {
   s->destroyed = 1;
 
   if (s->finalized) {
-    if (!s->managed) {
-      free(s);
-    }
+    turbo_stream_free_if_releasable(s);
     return;
   }
 
@@ -480,6 +574,7 @@ mem_buffer_t *turbo_stream_get_send_buffer(turbo_stream_t *s,
 int turbo_stream_send_buffer(turbo_stream_t *s, mem_buffer_t *buf,
                               size_t len) {
   if (!s || !buf) return TURBO_EINVAL;
+  if (s->closing || s->finalized) return TURBO_ECANCELED;
   mem_set_used(buf, len);
   turbo_stream_enqueue_buffer(s, buf);
   return turbo_stream_flush(s);
@@ -490,6 +585,7 @@ int turbo_stream_flush(turbo_stream_t *s) {
   int rc;
 
   if (!s) return TURBO_EINVAL;
+  if (s->closing || s->finalized) return TURBO_ECANCELED;
   if (!s->send_head) return 0;
   if (s->ops->flush) return s->ops->flush(s);
   if (!s->ops->send) return TURBO_ENOTSUP;
@@ -535,7 +631,7 @@ void turbo_stream_close(turbo_stream_t *s) {
 turbo_stream_listener_t *turbo_stream_listen_ex(
     coro_context_t *ctx, turbo_stream_kind_t kind,
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept,
-    int reuse_port) {
+    int reuse_port, void *user_data) {
   turbo_stream_listener_t *l;
   const turbo_stream_backend_ops_t *ops;
   int rc;
@@ -562,6 +658,7 @@ turbo_stream_listener_t *turbo_stream_listen_ex(
   l->ops = ops;
   l->arena = ctx->arena;
   l->on_accept = on_accept;
+  l->user_data = user_data;
   l->reuse_port = reuse_port ? 1 : 0;
 
   rc = ops->bind(l, addr);
@@ -585,12 +682,25 @@ turbo_stream_listener_t *turbo_stream_listen_ex(
 turbo_stream_listener_t *turbo_stream_listen(
     coro_context_t *ctx, turbo_stream_kind_t kind,
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept) {
-  return turbo_stream_listen_ex(ctx, kind, addr, backlog, on_accept, 0);
+  return turbo_stream_listen_ex(ctx, kind, addr, backlog, on_accept, 0, NULL);
+}
+
+turbo_stream_listener_t *turbo_stream_listen_with_data(
+    coro_context_t *ctx, turbo_stream_kind_t kind,
+    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept,
+    void *user_data) {
+  return turbo_stream_listen_ex(ctx, kind, addr, backlog, on_accept, 0, user_data);
 }
 
 turbo_stream_listener_t *turbo_stream_listen_pipe(
     coro_context_t *ctx, const char *name, int backlog,
     turbo_accept_cb on_accept) {
+  return turbo_stream_listen_pipe_with_data(ctx, name, backlog, on_accept, NULL);
+}
+
+turbo_stream_listener_t *turbo_stream_listen_pipe_with_data(
+    coro_context_t *ctx, const char *name, int backlog,
+    turbo_accept_cb on_accept, void *user_data) {
   const turbo_stream_backend_ops_t *ops;
   turbo_stream_listener_t *l;
   char *native_name;
@@ -618,6 +728,7 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
   l->ops = ops;
   l->arena = ctx->arena;
   l->on_accept = on_accept;
+  l->user_data = user_data;
 
   native_name = stream_normalize_pipe_name(name);
   if (!native_name) {
@@ -647,6 +758,8 @@ turbo_stream_listener_t *turbo_stream_listen_pipe(
 
 void turbo_stream_listener_close(turbo_stream_listener_t *l) {
   if (!l) return;
+  if (l->closing || l->finalized) return;
+  l->closing = 1;
   l->ops->listener_close(l);
 }
 
@@ -685,4 +798,19 @@ void *turbo_stream_get_user_data(turbo_stream_t *s) {
 void turbo_stream_set_write_cb(turbo_stream_t *s,
                                 turbo_stream_write_cb cb) {
   if (s) s->on_write_complete = cb;
+}
+
+int turbo_stream_tls_set_client_config(turbo_stream_t *s,
+                                       const turbo_tls_client_config_t *config) {
+  if (!s) {
+    return TURBO_EINVAL;
+  }
+
+  if (s->kind == TURBO_STREAM_TLS) {
+    return turbo_stream_tls_set_client_config_internal(s, config);
+  }
+  if (s->kind == TURBO_STREAM_WSS) {
+    return turbo_stream_wss_set_client_config_internal(s, config);
+  }
+  return TURBO_EINVAL;
 }

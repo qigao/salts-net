@@ -57,6 +57,9 @@ CXX_C_API tstr_t tstr_dup(const char *s);
 /** Create from buffer with length (binary-safe) */
 CXX_C_API tstr_t tstr_dup_len(const char *s, size_t n);
 
+/** Create from buffer with length (binary-safe, NULL init allowed) */
+CXX_C_API tstr_t tstr_new_len(const void *init, size_t n);
+
 /** Free string */
 CXX_C_API void tstr_free(tstr_t s);
 
@@ -72,6 +75,9 @@ CXX_C_API size_t tstr_avail(tstr_t s);
 
 /** Check if empty */
 CXX_C_API int tstr_empty(tstr_t s);
+
+/** Set length manually (for in-place edits, binary-safe) */
+CXX_C_API void tstr_set_len(tstr_t s, size_t n);
 
 /* ============================================================================
  * Concatenation

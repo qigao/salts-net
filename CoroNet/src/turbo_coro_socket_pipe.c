@@ -171,14 +171,13 @@ static int pipe_listen(coro_socket_t *s, int backlog) {
   ls->server_coro = s;
   ls->head = ls->tail = NULL;
 
-  ls->listener = turbo_stream_listen_pipe(s->ctx, path, backlog, on_pipe_accept);
+  ls->listener = turbo_stream_listen_pipe_with_data(s->ctx, path, backlog,
+                                                    on_pipe_accept, ls);
   if (!ls->listener) {
     int rc = coro_context_get_last_error(s->ctx);
     free(ls);
     return rc != 0 ? rc : TURBO_EIO;
   }
-
-  turbo_stream_listener_set_user_data(ls->listener, ls);
   /* replace native_tcp_state with the listener state */
   free(s->native_tcp_state);
   s->native_tcp_state = ls;

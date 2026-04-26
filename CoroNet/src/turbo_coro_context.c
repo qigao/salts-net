@@ -56,6 +56,7 @@ static int post_queue_empty(const coro_context_t *ctx);
 static void drain_shutdown_callbacks(coro_context_t *ctx);
 void coro_context_acquire_external(coro_context_t *ctx);
 void coro_context_release_external(coro_context_t *ctx);
+static int context_loop_alive(const coro_context_t *ctx);
 
 static void coro_context_cleanup_create_failure(coro_context_t *ctx) {
   if (!ctx) {
@@ -193,7 +194,10 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
       cleanup_done_tasks(ctx);
 
       if (ctx->stop_requested ||
-          (!turbo_loop_alive(ctx->loop) && !coro_scheduler_count(ctx->scheduler))) {
+          (!context_loop_alive(ctx) &&
+           !coro_scheduler_count(ctx->scheduler) &&
+           atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
+           post_queue_empty(ctx))) {
         break;
       }
     }
@@ -231,7 +235,8 @@ void coro_context_stop(coro_context_t *ctx) {
 
 int coro_context_alive(coro_context_t *ctx) {
   if (!ctx) return 0;
-  if (turbo_loop_alive(ctx->loop)) return 1;
+  if (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0) return 1;
+  if (context_loop_alive(ctx)) return 1;
   if (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) return 1;
   if (ctx->post_initialized) {
     int tail = atomic_load_explicit(&ctx->post_tail, memory_order_relaxed);
@@ -262,6 +267,13 @@ static int post_queue_empty(const coro_context_t *ctx) {
   return tail == head;
 }
 
+static int context_loop_alive(const coro_context_t *ctx) {
+  if (!ctx || !ctx->loop || !ctx->owns_loop) {
+    return 0;
+  }
+  return turbo_loop_alive(ctx->loop);
+}
+
 static void drain_shutdown_callbacks(coro_context_t *ctx) {
   int forced_teardown;
   coro_context_t *prev;
@@ -272,14 +284,14 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
   prev = tls_current_context;
   tls_current_context = ctx;
   forced_teardown = 1;
-  deadline_ms = turbo_uptime_ms() + 2000;
+  deadline_ms = turbo_uptime_ms() + 8000;
 
   while (turbo_uptime_ms() < deadline_ms) {
     int waiting_for_shutdown;
 
     waiting_for_shutdown =
         atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
-        turbo_loop_alive(ctx->loop) ||
+        context_loop_alive(ctx) ||
         (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
         !post_queue_empty(ctx);
 
@@ -301,7 +313,7 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
     cleanup_done_tasks(ctx);
 
     if (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
-        !turbo_loop_alive(ctx->loop) &&
+        !context_loop_alive(ctx) &&
         (!ctx->scheduler || coro_scheduler_count(ctx->scheduler) == 0) &&
         post_queue_empty(ctx)) {
       forced_teardown = 0;
@@ -313,10 +325,15 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
 
   if (forced_teardown &&
       (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
-       turbo_loop_alive(ctx->loop) ||
+       context_loop_alive(ctx) ||
        (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
        !post_queue_empty(ctx))) {
-    TLOG_WARN("coro_context_destroy: forced teardown with pending loop work");
+    TLOG_WARN(
+        "coro_context_destroy: forced teardown with pending loop work "
+        "(ctx={}, external_refs={}, loop_alive={}, coro_count={}, post_empty={})",
+        (void *)ctx, atomic_load_explicit(&ctx->external_refs, memory_order_acquire),
+        turbo_loop_alive(ctx->loop), ctx->scheduler ? coro_scheduler_count(ctx->scheduler) : 0,
+        post_queue_empty(ctx));
   }
 }
 

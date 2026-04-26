@@ -11,6 +11,7 @@
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
 #include "turbo_kcp.h"
+#include "turbo_stream.h"
 #include "turbo_tcp_backend.h"
 #include "turbo_udp_backend.h"
 #include <stddef.h>
@@ -135,6 +136,15 @@ CXX_C_API int coro_socket_connect_host_ex(coro_socket_t *socket, const char *con
  * @return 0 on success, negative error code on failure.
  */
 CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostname);
+
+/**
+ * @brief Configure per-socket TLS client settings for future TLS/WSS connects.
+ *
+ * Passing NULL clears any custom client config and restores the default
+ * process/global TLS behavior.
+ */
+CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
+                                                const turbo_tls_client_config_t *config);
 
 /**
  * @brief Upgrade an already-connected TCP or TLS socket to WebSocket.
@@ -348,6 +358,13 @@ CXX_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
 typedef void (*coro_handler_fn)(coro_socket_t *client, void *arg);
 
 /**
+ * @brief Optional callback fired after an accepted client socket has fully
+ *        finished its destroy path.
+ * @param arg  User-supplied argument
+ */
+typedef void (*coro_handler_closed_fn)(void *arg);
+
+/**
  * @brief Start listening on a URL (tcp://, udp://, ws://, etc.).
  * @param socket   Socket to use as server
  * @param url      Bind URL (e.g., "tcp://0.0.0.0:8080")
@@ -371,6 +388,18 @@ CXX_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int
                                     coro_handler_fn handler, void *arg);
 
 /**
+ * @brief Start a server on the given host:port with an accepted-socket close
+ *        completion callback.
+ *
+ * The close callback runs after the server bridge has destroyed the accepted
+ * socket and the transport close completion has been observed.
+ */
+CXX_C_API int coro_socket_listen_on_ex(coro_socket_t *socket, const char *host, int port,
+                                       coro_handler_fn handler, void *arg,
+                                       coro_handler_closed_fn handler_closed,
+                                       void *handler_closed_arg);
+
+/**
  * @brief Start a WebSocket server.
  *
  * @param socket   Server socket.
@@ -382,6 +411,14 @@ CXX_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int
  */
 CXX_C_API int coro_socket_listen_ws(coro_socket_t *socket, const char *host, int port, int is_tls,
                                     coro_handler_fn handler, void *arg);
+
+/**
+ * @brief Start a WebSocket server with an accepted-socket close completion callback.
+ */
+CXX_C_API int coro_socket_listen_ws_ex(coro_socket_t *socket, const char *host, int port,
+                                       int is_tls, coro_handler_fn handler, void *arg,
+                                       coro_handler_closed_fn handler_closed,
+                                       void *handler_closed_arg);
 
 /**
  * @brief Send datagram from server socket (UDP).

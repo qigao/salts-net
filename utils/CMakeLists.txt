@@ -1,5 +1,4 @@
 set(TARGET_NAME turbo_utils)
-find_package(Stb REQUIRED) 
 # Add parser subdirectory first (generates lexer)
 add_subdirectory(parser)
 cmake_add_source(SOURCE_FILES RECURSE)

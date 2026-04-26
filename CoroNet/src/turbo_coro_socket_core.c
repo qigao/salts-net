@@ -55,6 +55,101 @@ static mem_buffer_t *socket_return_buffer_error(coro_socket_t *s, int err) {
   return NULL;
 }
 
+static char *socket_strdup_nullable(const char *value) {
+  size_t len;
+  char *copy;
+
+  if (value == NULL) {
+    return NULL;
+  }
+
+  len = strlen(value);
+  copy = (char *)malloc(len + 1U);
+  if (copy == NULL) {
+    return NULL;
+  }
+
+  memcpy(copy, value, len + 1U);
+  return copy;
+}
+
+static void socket_clear_tls_client_config(coro_socket_t *s) {
+  if (!s) {
+    return;
+  }
+
+  free(s->tls_ca_file);
+  free(s->tls_cert_file);
+  free(s->tls_key_file);
+  free(s->tls_key_password);
+  free(s->tls_cipher_list);
+  s->tls_ca_file = NULL;
+  s->tls_cert_file = NULL;
+  s->tls_key_file = NULL;
+  s->tls_key_password = NULL;
+  s->tls_cipher_list = NULL;
+  s->tls_client_configured = 0;
+  s->tls_verify_peer = 1;
+}
+
+static int socket_copy_tls_client_config(coro_socket_t *s, const turbo_tls_client_config_t *config) {
+  char *ca_file = NULL;
+  char *cert_file = NULL;
+  char *key_file = NULL;
+  char *key_password = NULL;
+  char *cipher_list = NULL;
+
+  if (!s) {
+    return TURBO_EINVAL;
+  }
+
+  if (config == NULL) {
+    socket_clear_tls_client_config(s);
+    return 0;
+  }
+
+  ca_file = socket_strdup_nullable(config->ca_file);
+  if (config->ca_file != NULL && ca_file == NULL) {
+    return TURBO_ENOMEM;
+  }
+  cert_file = socket_strdup_nullable(config->cert_file);
+  if (config->cert_file != NULL && cert_file == NULL) {
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  key_file = socket_strdup_nullable(config->key_file);
+  if (config->key_file != NULL && key_file == NULL) {
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  key_password = socket_strdup_nullable(config->key_password);
+  if (config->key_password != NULL && key_password == NULL) {
+    free(key_file);
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  cipher_list = socket_strdup_nullable(config->cipher_list);
+  if (config->cipher_list != NULL && cipher_list == NULL) {
+    free(key_password);
+    free(key_file);
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+
+  socket_clear_tls_client_config(s);
+  s->tls_ca_file = ca_file;
+  s->tls_cert_file = cert_file;
+  s->tls_key_file = key_file;
+  s->tls_key_password = key_password;
+  s->tls_cipher_list = cipher_list;
+  s->tls_client_configured = 1;
+  s->tls_verify_peer = config->verify_peer ? 1 : 0;
+  return 0;
+}
+
 static int socket_last_error_or(coro_socket_t *s, int fallback) {
   return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
 }
@@ -107,6 +202,7 @@ static void socket_destroy_shell(coro_socket_t *s) {
     s->timer = NULL;
   }
 
+  socket_clear_tls_client_config(s);
   free(s);
 }
 
@@ -121,6 +217,7 @@ static void coro_socket_cleanup_create_failure(coro_socket_t *s) {
     s->timer = NULL;
   }
 
+  socket_clear_tls_client_config(s);
   free(s);
 }
 
@@ -134,11 +231,14 @@ void retain_client(coro_socket_t *client) {
 }
 
 void release_client(coro_socket_t *client) {
+  int old_ref;
+
   if (!client) {
     return;
   }
 
-  if (atomic_fetch_sub_explicit(&client->ref_count, 1, memory_order_acq_rel) == 1) {
+  old_ref = (int)atomic_fetch_sub_explicit(&client->ref_count, 1, memory_order_acq_rel);
+  if (old_ref == 1) {
     atomic_thread_fence(memory_order_acquire);
     /* Clean up TLS context (TODO: migrate) */
 
@@ -174,6 +274,7 @@ void release_client(coro_socket_t *client) {
       client->native_tcp_state = NULL;
     }
 
+    socket_clear_tls_client_config(client);
     free(client);
   }
 }
@@ -728,6 +829,40 @@ int coro_socket_connect_pipe(coro_socket_t *s, const char *path) {
 
 /* WebSocket connect lives in turbo_coro_socket_ws.c. */
 
+int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_config_t *config) {
+  turbo_tls_client_config_t applied;
+  int rc;
+
+  if (!s) {
+    return TURBO_EINVAL;
+  }
+
+  rc = socket_copy_tls_client_config(s, config);
+  if (rc != 0) {
+    return socket_return_error(s, rc);
+  }
+
+  if (s->handle.stream == NULL ||
+      (s->transport != TURBO_TLS && s->transport != TURBO_WEBSOCKET)) {
+    return socket_return_error(s, 0);
+  }
+
+  memset(&applied, 0, sizeof(applied));
+  if (s->tls_client_configured) {
+    applied.ca_file = s->tls_ca_file;
+    applied.cert_file = s->tls_cert_file;
+    applied.key_file = s->tls_key_file;
+    applied.key_password = s->tls_key_password;
+    applied.cipher_list = s->tls_cipher_list;
+    applied.verify_peer = s->tls_verify_peer;
+    rc = turbo_stream_tls_set_client_config(s->handle.stream, &applied);
+  } else {
+    rc = turbo_stream_tls_set_client_config(s->handle.stream, NULL);
+  }
+
+  return socket_return_error(s, rc);
+}
+
 /* ── Socket I/O ───────────────────────────────────────────── */
 
 int coro_socket_send(coro_socket_t *s, const char *d, size_t l) {
@@ -773,11 +908,17 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
   if (!s->ops || !s->ops->recv_start) return socket_return_error(s, TURBO_ENOTSUP);
   /* Return buffered data if available */
   if (s->recv_data) {
+    int ret;
     *data = s->recv_data;
     *len = s->recv_len;
     s->recv_data = NULL;
     s->recv_len = 0;
-    int ret = s->status;
+    ret = s->status;
+    if (ret == TURBO_ETIMEDOUT || ret == TURBO_ECANCELED) {
+      s->status = 0;
+      s->timed_out = 0;
+      ret = 0;
+    }
     return ret == TURBO_EOF ? 0 : ret;
   }
 
@@ -785,12 +926,18 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
     return s->status;
   }
 
+  if (s->recv_call_inflight || (s->co_wait && s->co_wait != coro_running())) {
+    return socket_return_error(s, TURBO_EBUSY);
+  }
+
+  s->recv_call_inflight = 1;
   retain_client(s);
   coro_set_wait(s);
 
   int r = s->ops->recv_start(s);
   if (r != 0 && r != TURBO_EALREADY) {
     s->co_wait = NULL;
+    s->recv_call_inflight = 0;
     release_client(s);
     return r;
   }
@@ -806,9 +953,13 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
 
     s->recv_data = NULL;
     s->recv_len = 0;
+    s->recv_call_inflight = 0;
     release_destroy_wait_handoff(s);
     if (timed_out) {
       s->timed_out = 0;
+      if (status == TURBO_ETIMEDOUT) {
+        s->status = 0;
+      }
       release_client(s);
     }
 
@@ -999,12 +1150,17 @@ void coro_socket_set_reuse_port(coro_socket_t *s, int enable) {
 
 void coro_socket_destroy(coro_socket_t *s) {
   if (!s) return;
+  if (s->destroyed) return;
+  s->destroyed = 1;
 
   /* Wake waiting coroutines */
   if (s->co_wait) {
     stop_timeout_timer(s);
     s->timed_out = 0;
-    s->destroy_wait_handoff = 1;
+    if (!s->destroy_wait_handoff) {
+      s->destroy_wait_handoff = 1;
+      retain_client(s);
+    }
     s->status = TURBO_ECANCELED;
     coro_resume_waiter(s);
   }

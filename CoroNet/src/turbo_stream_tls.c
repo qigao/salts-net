@@ -341,7 +341,15 @@ typedef struct tls_state_s {
 
   tls_state_e     state;
   int             server_mode;
+  int             client_verify_peer;
+  int             client_configured;
+  int             client_ctx_owned;
   char            hostname[256]; /* Used for SNI */
+  char           *ca_file;
+  char           *cert_file;
+  char           *key_file;
+  char           *key_password;
+  char           *cipher_list;
 
   SSL_CTX        *ctx;    /* OpenSSL context */
   SSL            *ssl;    /* OpenSSL connection object */
@@ -360,6 +368,252 @@ typedef struct tls_state_s {
   int             close_deferred;
 
 } tls_state_t;
+
+static SSL_CTX *get_default_tls_ctx(void);
+static int tls_apply_protocol_mode_to_ctx(SSL_CTX *ctx);
+static int tls_on_new_client_session(SSL *ssl, SSL_SESSION *session);
+static void tls_install_msg_callback(tls_state_t *st);
+
+static char *tls_strdup_nullable(const char *value) {
+  size_t len;
+  char *copy;
+
+  if (value == NULL) {
+    return NULL;
+  }
+
+  len = strlen(value);
+  copy = (char *)malloc(len + 1U);
+  if (copy == NULL) {
+    return NULL;
+  }
+
+  memcpy(copy, value, len + 1U);
+  return copy;
+}
+
+static void tls_clear_client_config(tls_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  free(st->ca_file);
+  free(st->cert_file);
+  free(st->key_file);
+  free(st->key_password);
+  free(st->cipher_list);
+  st->ca_file = NULL;
+  st->cert_file = NULL;
+  st->key_file = NULL;
+  st->key_password = NULL;
+  st->cipher_list = NULL;
+  st->client_configured = 0;
+  st->client_verify_peer = 1;
+}
+
+static int tls_copy_client_config(tls_state_t *st, const turbo_tls_client_config_t *config) {
+  char *ca_file = NULL;
+  char *cert_file = NULL;
+  char *key_file = NULL;
+  char *key_password = NULL;
+  char *cipher_list = NULL;
+
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+
+  if (config == NULL) {
+    tls_clear_client_config(st);
+    return 0;
+  }
+
+  ca_file = tls_strdup_nullable(config->ca_file);
+  if (config->ca_file != NULL && ca_file == NULL) {
+    return TURBO_ENOMEM;
+  }
+  cert_file = tls_strdup_nullable(config->cert_file);
+  if (config->cert_file != NULL && cert_file == NULL) {
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  key_file = tls_strdup_nullable(config->key_file);
+  if (config->key_file != NULL && key_file == NULL) {
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  key_password = tls_strdup_nullable(config->key_password);
+  if (config->key_password != NULL && key_password == NULL) {
+    free(key_file);
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+  cipher_list = tls_strdup_nullable(config->cipher_list);
+  if (config->cipher_list != NULL && cipher_list == NULL) {
+    free(key_password);
+    free(key_file);
+    free(cert_file);
+    free(ca_file);
+    return TURBO_ENOMEM;
+  }
+
+  tls_clear_client_config(st);
+  st->ca_file = ca_file;
+  st->cert_file = cert_file;
+  st->key_file = key_file;
+  st->key_password = key_password;
+  st->cipher_list = cipher_list;
+  st->client_configured = 1;
+  st->client_verify_peer = config->verify_peer ? 1 : 0;
+  return 0;
+}
+
+static int tls_password_cb(char *buf, int size, int rwflag, void *userdata) {
+  const char *password = (const char *)userdata;
+  size_t length;
+
+  UNUSED(rwflag);
+  if (buf == NULL || size <= 0 || password == NULL) {
+    return 0;
+  }
+
+  length = strlen(password);
+  if ((int)length > size - 1) {
+    length = (size_t)(size - 1);
+  }
+  memcpy(buf, password, length);
+  buf[length] = '\0';
+  return (int)length;
+}
+
+static void tls_release_client_ctx(tls_state_t *st) {
+  if (!st) {
+    return;
+  }
+
+  if (st->ssl) {
+    SSL_free(st->ssl);
+    st->ssl = NULL;
+    st->rbio = NULL;
+    st->wbio = NULL;
+  }
+
+  if (st->client_ctx_owned && st->ctx) {
+    SSL_CTX_free(st->ctx);
+  }
+  st->ctx = NULL;
+  st->client_ctx_owned = 0;
+}
+
+static int tls_prepare_client_ssl(tls_state_t *st) {
+  SSL_CTX *ctx = NULL;
+  SSL *ssl = NULL;
+  BIO *rbio = NULL;
+  BIO *wbio = NULL;
+  int owns_ctx = 0;
+  int rc;
+
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+
+  tls_release_client_ctx(st);
+  if (st->server_mode) {
+    return TURBO_EINVAL;
+  }
+
+  if (!st->client_configured) {
+    ctx = get_default_tls_ctx();
+    if (!ctx) {
+      return TURBO_ENOMEM;
+    }
+  } else {
+    ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+      return TURBO_ENOMEM;
+    }
+    owns_ctx = 1;
+
+    SSL_CTX_set_mode(ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+    SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
+    SSL_CTX_sess_set_new_cb(ctx, tls_on_new_client_session);
+    SSL_CTX_set_verify(ctx, st->client_verify_peer ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
+    if (st->client_verify_peer) {
+      SSL_CTX_set_default_verify_paths(ctx);
+      if (st->ca_file != NULL && st->ca_file[0] != '\0' &&
+          SSL_CTX_load_verify_locations(ctx, st->ca_file, NULL) != 1) {
+        SSL_CTX_free(ctx);
+        return TURBO_EIO;
+      }
+    }
+    rc = tls_apply_protocol_mode_to_ctx(ctx);
+    if (rc != 0) {
+      SSL_CTX_free(ctx);
+      return rc;
+    }
+    if (st->cipher_list != NULL && st->cipher_list[0] != '\0' &&
+        SSL_CTX_set_cipher_list(ctx, st->cipher_list) != 1) {
+      SSL_CTX_free(ctx);
+      return TURBO_EIO;
+    }
+    if (st->key_password != NULL && st->key_password[0] != '\0') {
+      SSL_CTX_set_default_passwd_cb(ctx, tls_password_cb);
+      SSL_CTX_set_default_passwd_cb_userdata(ctx, st->key_password);
+    }
+    if (st->cert_file != NULL && st->cert_file[0] != '\0' &&
+        SSL_CTX_use_certificate_file(ctx, st->cert_file, SSL_FILETYPE_PEM) != 1) {
+      SSL_CTX_free(ctx);
+      return TURBO_EIO;
+    }
+    if (st->key_file != NULL && st->key_file[0] != '\0' &&
+        SSL_CTX_use_PrivateKey_file(ctx, st->key_file, SSL_FILETYPE_PEM) != 1) {
+      SSL_CTX_free(ctx);
+      return TURBO_EIO;
+    }
+    if ((st->cert_file != NULL && st->cert_file[0] != '\0') ||
+        (st->key_file != NULL && st->key_file[0] != '\0')) {
+      if (SSL_CTX_check_private_key(ctx) != 1) {
+        SSL_CTX_free(ctx);
+        return TURBO_EIO;
+      }
+    }
+  }
+
+  ssl = SSL_new(ctx);
+  if (!ssl) {
+    if (owns_ctx) {
+      SSL_CTX_free(ctx);
+    }
+    return TURBO_ENOMEM;
+  }
+
+  rbio = BIO_new(BIO_s_mem());
+  wbio = BIO_new(BIO_s_mem());
+  if (!rbio || !wbio) {
+    if (rbio) {
+      BIO_free(rbio);
+    }
+    if (wbio) {
+      BIO_free(wbio);
+    }
+    SSL_free(ssl);
+    if (owns_ctx) {
+      SSL_CTX_free(ctx);
+    }
+    return TURBO_ENOMEM;
+  }
+
+  SSL_set_bio(ssl, rbio, wbio);
+  st->ctx = ctx;
+  st->client_ctx_owned = owns_ctx;
+  st->ssl = ssl;
+  st->rbio = rbio;
+  st->wbio = wbio;
+  tls_install_msg_callback(st);
+  return 0;
+}
 
 /* ── Forward declarations ─────────────────────────────────── */
 
@@ -532,6 +786,7 @@ static void tls_detach_tcp(tls_state_t *st) {
   tcp->managed = 0;
   tcp->on_connect = NULL;
   tcp->on_close = NULL;
+  tcp->on_write_complete = NULL;
 }
 
 static void tls_drop_inner_tcp(tls_state_t *st) {
@@ -551,17 +806,12 @@ static void tls_free_state(tls_state_t *st) {
     return;
   }
 
-  if (st->ssl) {
-    SSL_free(st->ssl);
-    st->ssl = NULL;
-  }
-
-  st->rbio = NULL;
-  st->wbio = NULL;
+  tls_release_client_ctx(st);
   if (st->pending_plaintext) {
     mem_unref(st->pending_plaintext);
   }
   st->pending_plaintext = NULL;
+  tls_clear_client_config(st);
   free(st);
 }
 
@@ -685,6 +935,8 @@ static int tls_is_closed_or_deferred(const tls_state_t *st) {
 }
 
 static void tls_pump_leave(tls_state_t *st) {
+  turbo_stream_t *outer;
+
   if (!st) {
     return;
   }
@@ -694,7 +946,12 @@ static void tls_pump_leave(tls_state_t *st) {
   }
 
   if (st->pumping == 0 && st->close_deferred) {
+    outer = st->outer;
+    st->outer = NULL;
     tls_free_state(st);
+    if (outer) {
+      turbo_stream_finalize_close(outer);
+    }
   }
 }
 
@@ -889,6 +1146,9 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
   st->tcp->managed = 1;
   st->tcp->on_connect = NULL;
   st->tcp->on_close = tls_on_tcp_close;
+  /* The wrapper owns all inner-stream writes; inherited transport callbacks
+   * would interpret tls_state_t as a different user_data payload. */
+  st->tcp->on_write_complete = NULL;
   turbo_stream_recv_stop(st->tcp);
 
   st->state = TLS_ST_HANDSHAKING;
@@ -1358,10 +1618,6 @@ static void tls_on_tcp_close(void *handle) {
 
   if (st->pumping > 0) {
     st->close_deferred = 1;
-    st->outer = NULL;
-    if (outer) {
-      turbo_stream_finalize_close(outer);
-    }
     return;
   }
 
@@ -1384,37 +1640,11 @@ static int tls_init(turbo_stream_t *s) {
 
   st->outer = s;
   st->state = TLS_ST_INIT;
-  st->ctx   = get_default_tls_ctx();
-  if (!st->ctx) {
-    rc = TURBO_ENOMEM;
+  st->client_verify_peer = 1;
+  rc = tls_prepare_client_ssl(st);
+  if (rc != 0) {
     goto fail;
   }
-
-  st->ssl = SSL_new(st->ctx);
-  if (!st->ssl) {
-    rc = TURBO_ENOMEM;
-    goto fail;
-  }
-  tls_install_msg_callback(st);
-
-  /* Create Memory BIOs: network->SSL (rbio), SSL->network (wbio) */
-  st->rbio = BIO_new(BIO_s_mem());
-  st->wbio = BIO_new(BIO_s_mem());
-  if (!st->rbio || !st->wbio) {
-    if (st->rbio) {
-      BIO_free(st->rbio);
-      st->rbio = NULL;
-    }
-    if (st->wbio) {
-      BIO_free(st->wbio);
-      st->wbio = NULL;
-    }
-    rc = TURBO_ENOMEM;
-    goto fail;
-  }
-  
-  /* SSL_set_bio takes ownership of the BIOs */
-  SSL_set_bio(st->ssl, st->rbio, st->wbio);
 
   s->backend_data = st;
   return 0;
@@ -1495,21 +1725,16 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
     return TURBO_EINVAL;
   }
 
+  tls_release_client_ctx(st);
   st->ctx = get_default_tls_server_ctx();
   if (!st->ctx) {
     return TURBO_ENOMEM;
   }
+  st->client_ctx_owned = 0;
 
   rc = configure_server_ctx_from_env();
   if (rc != 0) {
     return rc;
-  }
-
-  if (st->ssl) {
-    SSL_free(st->ssl);
-    st->ssl = NULL;
-    st->rbio = NULL;
-    st->wbio = NULL;
   }
 
   st->ssl = SSL_new(st->ctx);
@@ -1540,6 +1765,30 @@ fail:
   tls_free_state(st);
   tls_stream->backend_data = NULL;
   return rc;
+}
+
+int turbo_stream_tls_set_client_config_internal(turbo_stream_t *s,
+                                                const turbo_tls_client_config_t *config) {
+  tls_state_t *st;
+  int rc;
+
+  if (!s || s->kind != TURBO_STREAM_TLS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)s->backend_data;
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+  if (st->server_mode || st->tcp != NULL || st->state != TLS_ST_INIT) {
+    return TURBO_EBUSY;
+  }
+
+  rc = tls_copy_client_config(st, config);
+  if (rc != 0) {
+    return rc;
+  }
+  return tls_prepare_client_ssl(st);
 }
 
 static int tls_connect_pipe(turbo_stream_t *s, const char *name) {
@@ -1640,7 +1889,13 @@ static void tls_close(turbo_stream_t *s) {
   /* Initiate Graceful TLS Shutdown if currently open */
   if (st->state == TLS_ST_OPEN || st->state == TLS_ST_HANDSHAKING) {
     st->state = TLS_ST_CLOSING;
-    tls_pump(st); /* Triggers SSL_shutdown and flushing */
+    if (st->pumping == 0) {
+      tls_pump(st); /* Triggers SSL_shutdown and flushing */
+    }
+  }
+
+  if (st->pumping > 0) {
+    return;
   }
 
   if (st->tcp) {

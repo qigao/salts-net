@@ -48,6 +48,15 @@ typedef enum turbo_tls_protocol_mode_e {
   TURBO_TLS_PROTOCOL_TLS13_ONLY = 1,
 } turbo_tls_protocol_mode_t;
 
+typedef struct turbo_tls_client_config_s {
+  const char *ca_file;
+  const char *cert_file;
+  const char *key_file;
+  const char *key_password;
+  const char *cipher_list;
+  int verify_peer;
+} turbo_tls_client_config_t;
+
 typedef struct turbo_tls_metrics_s {
   uint64_t client_handshakes_started;
   uint64_t client_handshakes_completed;
@@ -194,6 +203,14 @@ CXX_C_API turbo_stream_listener_t *turbo_stream_listen(
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept);
 
 /**
+ * @brief Create a TCP listener bound to addr with initial listener user data.
+ */
+CXX_C_API turbo_stream_listener_t *turbo_stream_listen_with_data(
+    coro_context_t *ctx, turbo_stream_kind_t kind,
+    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept,
+    void *user_data);
+
+/**
  * @brief Create a named-pipe listener.
  *
  * Accepts native platform endpoints and the unified `pipe://name` form.
@@ -201,6 +218,13 @@ CXX_C_API turbo_stream_listener_t *turbo_stream_listen(
 CXX_C_API turbo_stream_listener_t *turbo_stream_listen_pipe(
     coro_context_t *ctx, const char *name, int backlog,
     turbo_accept_cb on_accept);
+
+/**
+ * @brief Create a named-pipe listener with initial listener user data.
+ */
+CXX_C_API turbo_stream_listener_t *turbo_stream_listen_pipe_with_data(
+    coro_context_t *ctx, const char *name, int backlog,
+    turbo_accept_cb on_accept, void *user_data);
 
 /**
  * @brief Close a listener and stop accepting.
@@ -218,7 +242,9 @@ CXX_C_API int turbo_stream_get_peer_addr(turbo_stream_t *s,
 CXX_C_API void turbo_stream_set_user_data(turbo_stream_t *s, void *data);
 CXX_C_API void *turbo_stream_get_user_data(turbo_stream_t *s);
 CXX_C_API void turbo_stream_set_write_cb(turbo_stream_t *s,
-                                          turbo_stream_write_cb cb);
+                                         turbo_stream_write_cb cb);
+CXX_C_API int turbo_stream_tls_set_client_config(turbo_stream_t *s,
+                                                 const turbo_tls_client_config_t *config);
 CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode);
 CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void);
 CXX_C_API void turbo_stream_tls_reset_client_session_cache(void);

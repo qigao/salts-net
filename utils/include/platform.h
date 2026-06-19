@@ -87,6 +87,7 @@ typedef intptr_t ssize_t;
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -143,6 +144,58 @@ CXX_C_API uint64_t turbo_hrtime(void);
  * @return Process uptime in milliseconds
  */
 CXX_C_API uint64_t turbo_uptime_ms(void);
+
+/**
+ * @brief Thread-safe UTC time decomposition.
+ * @param t Seconds since Unix epoch
+ * @param out Broken-down UTC time
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_gmtime(time_t t, struct tm *out);
+
+/**
+ * @brief Thread-safe local time decomposition.
+ * @param t Seconds since Unix epoch
+ * @param out Broken-down local time
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_localtime(time_t t, struct tm *out);
+
+/**
+ * @brief Convert broken-down UTC time to seconds since Unix epoch.
+ * @param tm_value Broken-down UTC time
+ * @return Seconds since Unix epoch, or (time_t)-1 on invalid input
+ */
+CXX_C_API time_t turbo_timegm(const struct tm *tm_value);
+
+/**
+ * @brief Convert broken-down local time to seconds since Unix epoch.
+ * @param tm_value Broken-down local time, normalized by the platform mktime
+ * @return Seconds since Unix epoch, or (time_t)-1 on failure
+ */
+CXX_C_API time_t turbo_mktime(struct tm *tm_value);
+
+/**
+ * @brief Format UTC time with strftime semantics.
+ * @param t Seconds since Unix epoch
+ * @param format strftime format string
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return Number of bytes written, or negative error code on failure
+ */
+CXX_C_API int turbo_strftime_utc(time_t t, const char *format, char *buffer,
+                                 size_t buffer_size);
+
+/**
+ * @brief Format local time with strftime semantics.
+ * @param t Seconds since Unix epoch
+ * @param format strftime format string
+ * @param buffer Destination buffer
+ * @param buffer_size Size of destination buffer
+ * @return Number of bytes written, or negative error code on failure
+ */
+CXX_C_API int turbo_strftime_local(time_t t, const char *format, char *buffer,
+                                   size_t buffer_size);
 
 /**
  * @brief Maximum platform info string length including trailing NUL

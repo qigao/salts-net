@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
   #include <windows.h>
@@ -193,6 +194,109 @@ uint64_t turbo_uptime_ms(void) {
     start_time = st;
   }
   return turbo_ns_to_ms(turbo_hrtime() - st);
+}
+
+static int turbo_is_leap_year(int year) {
+  return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+static int turbo_days_in_month(int year, int month) {
+  static const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month < 1 || month > 12) return 0;
+  if (month == 2 && turbo_is_leap_year(year)) return 29;
+  return days[month - 1];
+}
+
+static int64_t turbo_days_before_year(int year) {
+  int64_t y = (int64_t)year - 1;
+  return y * 365 + y / 4 - y / 100 + y / 400;
+}
+
+static int64_t turbo_days_before_month(int year, int month) {
+  static const int days_before[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+  int64_t days;
+  if (month < 1 || month > 12) return -1;
+  days = days_before[month - 1];
+  if (month > 2 && turbo_is_leap_year(year)) days++;
+  return days;
+}
+
+int turbo_gmtime(time_t t, struct tm *out) {
+  if (!out) return -EINVAL;
+#ifdef _WIN32
+  return gmtime_s(out, &t) == 0 ? 0 : -EINVAL;
+#else
+  return gmtime_r(&t, out) ? 0 : -EINVAL;
+#endif
+}
+
+int turbo_localtime(time_t t, struct tm *out) {
+  if (!out) return -EINVAL;
+#ifdef _WIN32
+  return localtime_s(out, &t) == 0 ? 0 : -EINVAL;
+#else
+  return localtime_r(&t, out) ? 0 : -EINVAL;
+#endif
+}
+
+time_t turbo_timegm(const struct tm *tm_value) {
+  int year;
+  int month;
+  int day;
+  int64_t days;
+  int64_t seconds;
+
+  if (!tm_value) {
+    errno = EINVAL;
+    return (time_t)-1;
+  }
+
+  year = tm_value->tm_year + 1900;
+  month = tm_value->tm_mon + 1;
+  day = tm_value->tm_mday;
+  if (month < 1 || month > 12 || day < 1 || day > turbo_days_in_month(year, month) ||
+      tm_value->tm_hour < 0 || tm_value->tm_hour > 23 ||
+      tm_value->tm_min < 0 || tm_value->tm_min > 59 ||
+      tm_value->tm_sec < 0 || tm_value->tm_sec > 60) {
+    errno = EINVAL;
+    return (time_t)-1;
+  }
+
+  days = turbo_days_before_year(year) - turbo_days_before_year(1970);
+  days += turbo_days_before_month(year, month);
+  days += day - 1;
+  seconds = days * 86400 + tm_value->tm_hour * 3600 + tm_value->tm_min * 60 + tm_value->tm_sec;
+  return (time_t)seconds;
+}
+
+time_t turbo_mktime(struct tm *tm_value) {
+  if (!tm_value) {
+    errno = EINVAL;
+    return (time_t)-1;
+  }
+  return mktime(tm_value);
+}
+
+int turbo_strftime_utc(time_t t, const char *format, char *buffer, size_t buffer_size) {
+  struct tm tm_value;
+  size_t written;
+
+  if (!format || !buffer || buffer_size == 0) return -EINVAL;
+  if (turbo_gmtime(t, &tm_value) != 0) return -EINVAL;
+  written = strftime(buffer, buffer_size, format, &tm_value);
+  if (written == 0) return -ENOSPC;
+  return (int)written;
+}
+
+int turbo_strftime_local(time_t t, const char *format, char *buffer, size_t buffer_size) {
+  struct tm tm_value;
+  size_t written;
+
+  if (!format || !buffer || buffer_size == 0) return -EINVAL;
+  if (turbo_localtime(t, &tm_value) != 0) return -EINVAL;
+  written = strftime(buffer, buffer_size, format, &tm_value);
+  if (written == 0) return -ENOSPC;
+  return (int)written;
 }
 
 int turbo_platform_os_name(char *buffer, size_t buffer_size) {

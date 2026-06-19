@@ -63,12 +63,14 @@ static int on_tls_recv(void *handle, const mem_slice_t *slice, void *peer) {
   UNUSED(peer);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  retain_client(s);
   if (s) {
     if (s->wait_metric_tls_handshake) {
       s->wait_handler_entry_ns = turbo_hrtime();
     }
     coro_socket_handle_transport_recv(s, slice);
   }
+  release_client(s);
   return 0;
 }
 
@@ -76,12 +78,14 @@ static void on_tls_connect(void *handle, int status, void *extra) {
   UNUSED(extra);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  retain_client(s);
   if (s) {
     if (s->wait_metric_tls_handshake) {
       s->wait_handler_entry_ns = turbo_hrtime();
     }
     coro_socket_handle_transport_connect(s, status);
   }
+  release_client(s);
 }
 
 static void on_tls_close(void *handle) {
@@ -89,14 +93,19 @@ static void on_tls_close(void *handle) {
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   stream->managed = 0;
   stream->destroyed = 1;
+  stream->on_recv = NULL;
+  stream->on_connect = NULL;
+  stream->on_write_complete = NULL;
   if (s) {
     int release_accepted_ref = s->accepted_ref;
+    retain_client(s);
     s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
     if (release_accepted_ref) {
       release_client(s);
     }
+    release_client(s);
   }
 }
 
@@ -369,6 +378,9 @@ static void tls_close(coro_socket_t *s) {
   s->handle.stream = NULL;
   s->close_pending = 1;
   retain_client(s);
+  stream->on_recv = NULL;
+  stream->on_connect = NULL;
+  stream->on_write_complete = NULL;
   stream->on_close = on_tls_close;
   turbo_stream_close(stream);
 }

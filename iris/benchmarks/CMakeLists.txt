@@ -1,3 +1,0 @@
-add_executable(benchmark_iris_security_re2c benchmark_security_re2c.c)
-target_link_libraries(benchmark_iris_security_re2c PRIVATE TurboNet::Iris)
-set_target_properties(benchmark_iris_security_re2c PROPERTIES FOLDER "iris/benchmarks")

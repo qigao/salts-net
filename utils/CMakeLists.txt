@@ -21,7 +21,10 @@ target_include_directories(
   PRIVATE $<BUILD_INTERFACE:${FMT_LEXER_INCLUDE_DIRS}>
           $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>)
 
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+target_compile_definitions(
+  ${TARGET_NAME}
+  PUBLIC $<$<OR:$<CONFIG:Release>,$<CONFIG:MinSizeRel>,$<CONFIG:RelWithDebInfo>>:TURBO_LOG_CAPTURE_SOURCE=0>
+  PRIVATE SHARED_CXX)
 if(UNIX)
   target_compile_definitions(${TARGET_NAME} PUBLIC _DEFAULT_SOURCE=1 _POSIX_C_SOURCE=200809L _XOPEN_SOURCE=700)
 endif()
@@ -29,9 +32,10 @@ endif()
 # Link dependencies
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC aklomp::base64 # Base64 utilities
+  
   PRIVATE ${FMT_LEXER_LIBRARY} PkgConfig::STC # Thread-safe containers
           TurboNet::SDS # Simple Dynamic Strings
+           aklomp::base64 
           ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
 )
 

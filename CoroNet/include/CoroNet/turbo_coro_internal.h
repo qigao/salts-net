@@ -259,6 +259,7 @@ struct coro_socket_s {
   coro_handler_closed_fn handler_closed;             /**< Accepted-socket close completion callback */
   void *handler_closed_arg;                          /**< User data for handler_closed */
   int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
+  int accept_prestart_recv_disabled;                 /**< Listener: 1 = accepted raw TCP must not pre-read wrapper handshakes */
   int kcp_fec_configured;                            /**< 1 = KCP FEC config should be applied */
   turbo_kcp_fec_config_t kcp_fec_config;             /**< Pending KCP FEC config */
 
@@ -483,6 +484,9 @@ static inline void coro_resume_waiter(coro_socket_t *client) {
     // Scheduler-managed: clear waiting_for_io flag so scheduler will resume
     // it on a later tick. Do not resume here.
     coro_set_waiting_for_io(co, 0);
+    if (client->ctx && client->ctx->loop) {
+      turbo_loop_wake(client->ctx->loop);
+    }
     return;
   }
 
@@ -525,6 +529,9 @@ static inline void coro_resume_co(coro_context_t *ctx, coro_t *co) {
   if (!co) return;
   if (coro_is_scheduled(co)) {
     coro_set_waiting_for_io(co, 0);
+    if (ctx && ctx->loop) {
+      turbo_loop_wake(ctx->loop);
+    }
   } else if (co != coro_running()) {
     coro_resume(co);
   }

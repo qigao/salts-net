@@ -13,6 +13,7 @@
 #include "turbo_stream_internal.h"
 #include "CoroNet/turbo_coro_internal.h"
 #include "turbo_buffer.h"
+#include "turbo_thread.h"
 #include "tlog.h"
 
 #include <stdlib.h>
@@ -53,6 +54,8 @@ static int s_server_configured = 0;
 static SSL_SESSION *s_cached_client_session = NULL;
 static char s_cached_client_session_host[256] = {0};
 static turbo_tls_protocol_mode_t s_tls_protocol_mode = TURBO_TLS_PROTOCOL_DEFAULT;
+static turbo_once_t s_tls_server_ctx_once = TURBO_ONCE_INIT;
+static turbo_mutex_t s_tls_server_ctx_mutex;
 static struct {
   atomic_ullong client_handshakes_started;
   atomic_ullong client_handshakes_completed;
@@ -104,6 +107,19 @@ static void tls_metric_add(atomic_ullong *counter, uint64_t value) {
 
 static unsigned long long tls_metric_load(const atomic_ullong *counter) {
   return atomic_load_explicit(counter, memory_order_relaxed);
+}
+
+static void tls_server_ctx_lock_init(void) {
+  turbo_mutex_init(&s_tls_server_ctx_mutex);
+}
+
+static void tls_server_ctx_lock(void) {
+  turbo_once(&s_tls_server_ctx_once, tls_server_ctx_lock_init);
+  turbo_mutex_lock(&s_tls_server_ctx_mutex);
+}
+
+static void tls_server_ctx_unlock(void) {
+  turbo_mutex_unlock(&s_tls_server_ctx_mutex);
 }
 
 static void tls_reset_client_session_cache_internal(void) {
@@ -239,7 +255,7 @@ static void configure_ca_from_env(void) {
   }
 }
 
-static int configure_server_ctx_from_env(void) {
+static int configure_server_ctx_from_env_unlocked(void) {
   char cert_file_buf[1024];
   char key_file_buf[1024];
   const char *cert_file;
@@ -784,6 +800,7 @@ static void tls_detach_tcp(tls_state_t *st) {
   st->tcp = NULL;
   tcp->user_data = NULL;
   tcp->managed = 0;
+  tcp->on_recv = NULL;
   tcp->on_connect = NULL;
   tcp->on_close = NULL;
   tcp->on_write_complete = NULL;
@@ -1126,10 +1143,6 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
   st->server_mode = server_mode ? 1 : 0;
 
   if (server_mode) {
-    int rc = configure_server_ctx_from_env();
-    if (rc != 0) {
-      return rc;
-    }
     SSL_set_accept_state(st->ssl);
   } else {
     int rc = tls_configure_hostname(st);
@@ -1208,11 +1221,18 @@ static SSL_CTX *get_default_tls_ctx(void) {
 }
 
 static SSL_CTX *get_default_tls_server_ctx(void) {
+  SSL_CTX *ctx;
+  int rc = 0;
+
+  tls_server_ctx_lock();
+
   if (s_server_ctx) {
-    if (tls_apply_protocol_mode_to_ctx(s_server_ctx) != 0) {
-      return NULL;
+    if (!s_server_configured) {
+      rc = configure_server_ctx_from_env_unlocked();
     }
-    return s_server_ctx;
+    ctx = (rc == 0) ? s_server_ctx : NULL;
+    tls_server_ctx_unlock();
+    return ctx;
   }
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
   SSL_library_init();
@@ -1223,13 +1243,20 @@ static SSL_CTX *get_default_tls_server_ctx(void) {
     SSL_CTX_set_mode(s_server_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_mode(s_server_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
     SSL_CTX_set_session_cache_mode(s_server_ctx, SSL_SESS_CACHE_SERVER);
-    if (tls_apply_protocol_mode_to_ctx(s_server_ctx) != 0) {
+    rc = tls_apply_protocol_mode_to_ctx(s_server_ctx);
+    if (rc == 0) {
+      rc = configure_server_ctx_from_env_unlocked();
+    }
+    if (rc != 0) {
       SSL_CTX_free(s_server_ctx);
       s_server_ctx = NULL;
-      return NULL;
+      s_server_configured = 0;
     }
   }
-  return s_server_ctx;
+
+  ctx = s_server_ctx;
+  tls_server_ctx_unlock();
+  return ctx;
 }
 
 /* ── Pump Logic (where the magic happens) ─────────────────── */
@@ -1521,10 +1548,16 @@ static void tls_pump(tls_state_t *st) {
 static int tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer) {
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
-  tls_state_t    *st  = (tls_state_t *)tcp->user_data;
+  tls_state_t    *st;
   uint64_t cb_start_ns = 0;
   uint64_t bio_start_ns = 0;
-  if (!st || !st->rbio || !slice || !slice->data || slice->length == 0) return 0;
+  if (!tcp) return 0;
+  st = (tls_state_t *)tcp->user_data;
+  if (!st || !st->outer || !st->rbio) return 0;
+  if (!slice || !slice->data || slice->length == 0) {
+    turbo_stream_close(st->outer);
+    return 0;
+  }
 
   /* Push encrypted network bytes into rbio */
   if (st->state == TLS_ST_HANDSHAKING) {
@@ -1564,9 +1597,11 @@ static int tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer
 static void tls_on_tcp_connect(void *handle, int status, void *peer) {
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
-  tls_state_t    *st  = (tls_state_t *)tcp->user_data;
+  tls_state_t    *st;
   uint64_t cb_start_ns = 0;
-  if (!st) return;
+  if (!tcp) return;
+  st = (tls_state_t *)tcp->user_data;
+  if (!st || !st->outer) return;
 
   if (status != 0) {
     st->state = TLS_ST_CLOSED;
@@ -1604,10 +1639,15 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
 
 static void tls_on_tcp_close(void *handle) {
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
-  tls_state_t    *st  = (tls_state_t *)tcp->user_data;
+  tls_state_t    *st;
   turbo_stream_t *outer;
+  if (!tcp) return;
+  st = (tls_state_t *)tcp->user_data;
   tcp->managed = 0;
   tcp->destroyed = 1;
+  tcp->on_recv = NULL;
+  tcp->on_connect = NULL;
+  tcp->on_write_complete = NULL;
   if (!st) return;
 
   outer = st->outer;
@@ -1731,11 +1771,6 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
     return TURBO_ENOMEM;
   }
   st->client_ctx_owned = 0;
-
-  rc = configure_server_ctx_from_env();
-  if (rc != 0) {
-    return rc;
-  }
 
   st->ssl = SSL_new(st->ctx);
   if (!st->ssl) {
@@ -1899,6 +1934,9 @@ static void tls_close(turbo_stream_t *s) {
   }
 
   if (st->tcp) {
+    st->tcp->on_recv = NULL;
+    st->tcp->on_connect = NULL;
+    st->tcp->on_write_complete = NULL;
     turbo_stream_close(st->tcp); /* triggers async close -> tls_on_tcp_close */
   } else {
     s->backend_data = NULL;
@@ -1987,12 +2025,15 @@ CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode)
       return rc;
     }
   }
+  tls_server_ctx_lock();
   if (s_server_ctx) {
     rc = tls_apply_protocol_mode_to_ctx(s_server_ctx);
     if (rc != 0) {
+      tls_server_ctx_unlock();
       return rc;
     }
   }
+  tls_server_ctx_unlock();
 
   return 0;
 }

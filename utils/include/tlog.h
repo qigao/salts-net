@@ -89,8 +89,25 @@ struct turbo_log_sink_s {
  * Default: "[{time}] [{level}] {message}"
  */
 #define TURBO_LOG_DEFAULT_PATTERN "[{time}] [{level}] {message}"
-#define TURBO_LOG_FULL_PATTERN                                                                     \
-  "[{time_ms}] [{level}] [{thread}] [{component}] ({file}:{line}) {message}"
+
+#ifndef TURBO_LOG_CAPTURE_SOURCE
+  #ifdef NDEBUG
+    #define TURBO_LOG_CAPTURE_SOURCE 0
+  #else
+    #define TURBO_LOG_CAPTURE_SOURCE 1
+  #endif
+#endif
+
+#if TURBO_LOG_CAPTURE_SOURCE
+  #define TURBO_LOG_SOURCE_FILE __FILE__
+  #define TURBO_LOG_SOURCE_LINE __LINE__
+  #define TURBO_LOG_FULL_PATTERN                                                                   \
+    "[{time_ms}] [{level}] [{thread}] [{component}] ({file}:{line}) {message}"
+#else
+  #define TURBO_LOG_SOURCE_FILE NULL
+  #define TURBO_LOG_SOURCE_LINE 0
+  #define TURBO_LOG_FULL_PATTERN "[{time_ms}] [{level}] [{thread}] [{component}] {message}"
+#endif
 
 /**
  * @brief Console sink options
@@ -99,7 +116,8 @@ typedef struct {
   FILE *output;        // stdout/stderr (default: stdout)
   int use_colors;      // ANSI colors (default: 1)
   const char *pattern; // Format pattern (default: TURBO_LOG_DEFAULT_PATTERN)
-                       // Use TURBO_LOG_FULL_PATTERN for file:line info
+                       // TURBO_LOG_FULL_PATTERN includes file:line only when
+                       // TURBO_LOG_CAPTURE_SOURCE is enabled.
 } turbo_console_sink_opts_t;
 
 /**
@@ -311,7 +329,8 @@ inline void turbo_log_cpp_wrapper(tlog_t* logger, turbo_log_level_t level,
   do {                                                                                             \
     tlog_t* _tlog_ptr = (logger);                                                                  \
     if (_tlog_ptr && (lvl) >= tlog_get_level(_tlog_ptr)) {                                         \
-      turbo_log_cpp_wrapper(_tlog_ptr, (lvl), (comp), __FILE__, __LINE__, (fmt), ##__VA_ARGS__);   \
+      turbo_log_cpp_wrapper(_tlog_ptr, (lvl), (comp), TURBO_LOG_SOURCE_FILE,                       \
+                            TURBO_LOG_SOURCE_LINE, (fmt), ##__VA_ARGS__);                          \
     }                                                                                              \
   } while (0)
 
@@ -322,7 +341,7 @@ inline void turbo_log_cpp_wrapper(tlog_t* logger, turbo_log_level_t level,
   do {                                                                                             \
     tlog_t* _log_ptr = (logger);                                                                   \
     if (_log_ptr && (lvl) >= tlog_get_level(_log_ptr)) {                                           \
-      turbo_log_typed(_log_ptr, (lvl), (comp), __FILE__, __LINE__, (fmt),                          \
+      turbo_log_typed(_log_ptr, (lvl), (comp), TURBO_LOG_SOURCE_FILE, TURBO_LOG_SOURCE_LINE, (fmt), \
                       FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__));                              \
     }                                                                                              \
   } while (0)

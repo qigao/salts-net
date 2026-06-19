@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 OLD)
+endif()
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 OLD)
+endif()
+
 
 # TurboNet Project - Unified High-Performance Networking Library
 project(
@@ -42,15 +48,13 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-find_package(Threads REQUIRED)
-
 find_package(kcp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(c-ares CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
-find_package(llhttp CONFIG REQUIRED)
+
 find_package(Stb REQUIRED)
 pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
 
@@ -68,22 +72,12 @@ add_subdirectory(uuid)
 add_subdirectory(cron)
 
 add_subdirectory(CoroNet)
-add_subdirectory(wasm3)
-add_subdirectory(redis)
-add_subdirectory(http)
-
-add_subdirectory(iris)
-add_subdirectory(rpc_client)
-add_subdirectory(s3)
-
-
+add_subdirectory(redis) 
+ 
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 
-add_subdirectory(lb)
-add_subdirectory(tproxy)
-add_subdirectory(email)
-
+add_subdirectory(email) 
 # Package Configuration
 include(CMakePackageConfigHelpers)
 

@@ -10,11 +10,12 @@ extern "C" {
 /**
  * @brief TCP transport backend selector.
  *
- * AUTO resolves to CoroNet's current runtime default for TCP on the platform.
- * The long-term native-reactor design is tracked separately via
- * turbo_io_backend.h:
+ * Contexts store a concrete backend. There is no AUTO mode; callers that need
+ * a non-default backend must set it explicitly before creating TCP streams.
+ *
+ * The long-term native-reactor design is tracked separately via turbo_io_backend.h:
  * - Windows target: IOCP
- * - Linux target: io_uring when built, otherwise epoll
+ * - Linux target: epoll
  * - Android target: epoll
  * - BSD/macOS target: kqueue
  *
@@ -22,7 +23,6 @@ extern "C" {
  * TURBO_ENOTSUP rather than silently falling back.
  */
 typedef enum turbo_tcp_backend_e {
-  TURBO_TCP_BACKEND_AUTO = 0,
   TURBO_TCP_BACKEND_IOCP = 1,
   TURBO_TCP_BACKEND_EPOLL = 2,
   TURBO_TCP_BACKEND_IO_URING = 3,

@@ -5,7 +5,7 @@
  * Design:
  * - One worker thread owns one io_uring instance.
  * - The loop thread only enqueues commands and handles completions.
- * - No fake fallback: if io_uring is built, AUTO resolves here.
+ * - No fake fallback: io_uring is used only when explicitly selected.
  */
 
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
@@ -633,6 +633,7 @@ static void stream_uring_listener_cleanup_task(void *arg1, void *arg2) {
 static int stream_uring_submit_recv(turbo_stream_t *s) {
   stream_uring_state_t *st;
   stream_uring_op_t *op;
+  ssize_t n;
 
   st = (stream_uring_state_t *)s->backend_data;
   if (!st || st->recv_inflight || st->base.stopping) {
@@ -647,6 +648,16 @@ static int stream_uring_submit_recv(turbo_stream_t *s) {
   op->kind = STREAM_URING_OP_RECV;
   op->owner = s;
   op->buffer = s->recv_buf[s->recv_toggle];
+
+  if (st->base.fd >= 0) {
+    n = recv(st->base.fd, op->buffer->data, op->buffer->capacity, MSG_DONTWAIT);
+    if (n > 0 || n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+      op->result = n < 0 ? -errno : n;
+      stream_uring_post_completion(&st->base, op);
+      return 0;
+    }
+  }
+
   st->recv_inflight = 1;
   TLOG_DEBUG("uring[{:p}] submit-recv stream={:p} fd={:d}", (void *)&st->base, (void *)s,
              st->base.fd);

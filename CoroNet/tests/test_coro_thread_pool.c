@@ -17,6 +17,12 @@ typedef struct {
     turbo_mutex_t mutex;
 } thread_audit_t;
 
+typedef struct {
+    int ran;
+    turbo_mutex_t mutex;
+    turbo_cond_t cond;
+} wake_audit_t;
+
 static void worker_coro(coro_t *co, void *arg) {
     (void)co;
     thread_audit_t *audit = (thread_audit_t *)arg;
@@ -30,6 +36,16 @@ static void worker_coro(coro_t *co, void *arg) {
     turbo_mutex_unlock(&audit->mutex);
     
     printf("[Coro] Running on thread %lu\n", tid);
+}
+
+static void wake_coro(coro_t *co, void *arg) {
+    (void)co;
+    wake_audit_t *audit = (wake_audit_t *)arg;
+
+    turbo_mutex_lock(&audit->mutex);
+    audit->ran = 1;
+    turbo_cond_signal(&audit->cond);
+    turbo_mutex_unlock(&audit->mutex);
 }
 
 spec("coro_thread_pool") {
@@ -72,6 +88,29 @@ spec("coro_thread_pool") {
             printf("[Test] Unique threads detected: %d\n", unique_threads);
             check_true(unique_threads > 1);
             
+            turbo_mutex_destroy(&audit.mutex);
+        }
+
+        it("should wake an idle persistent worker for later spawns") {
+            coro_thread_pool_t *pool = coro_thread_pool_create(1);
+            check_not_null(pool);
+
+            wake_audit_t audit = {0};
+            turbo_mutex_init(&audit.mutex);
+            turbo_cond_init(&audit.cond);
+
+            turbo_sleep_ms(100);
+            check_int_eq(coro_thread_pool_spawn(pool, wake_coro, &audit), 0);
+
+            turbo_mutex_lock(&audit.mutex);
+            for (int i = 0; i < 50 && !audit.ran; ++i) {
+                turbo_cond_timedwait(&audit.cond, &audit.mutex, 20ULL * 1000ULL * 1000ULL);
+            }
+            check_int_eq(audit.ran, 1);
+            turbo_mutex_unlock(&audit.mutex);
+
+            coro_thread_pool_destroy(pool);
+            turbo_cond_destroy(&audit.cond);
             turbo_mutex_destroy(&audit.mutex);
         }
     }

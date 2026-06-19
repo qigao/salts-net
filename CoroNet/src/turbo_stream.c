@@ -160,32 +160,17 @@ static int stream_kind_is_valid(turbo_stream_kind_t kind) {
   }
 }
 
-static const turbo_stream_backend_ops_t *stream_platform_default_ops(void) {
-#if defined(_WIN32)
-  return &turbo_stream_iocp_ops;
-#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
-  return &turbo_stream_io_uring_ops;
-#elif defined(__linux__) || defined(__ANDROID__)
-  return &turbo_stream_epoll_ops;
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-  return &turbo_stream_kqueue_ops;
-#else
-  return NULL;
-#endif
-}
-
 static const turbo_stream_backend_ops_t *stream_tcp_backend_ops(
     turbo_tcp_backend_t backend) {
   switch (backend) {
-  case TURBO_TCP_BACKEND_AUTO:
-    return stream_platform_default_ops();
 #ifdef _WIN32
   case TURBO_TCP_BACKEND_IOCP:
     return &turbo_stream_iocp_ops;
-#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
+#elif defined(__linux__) || defined(__ANDROID__)
+#if !defined(__ANDROID__) && TURBO_HAS_IO_URING
   case TURBO_TCP_BACKEND_IO_URING:
     return &turbo_stream_io_uring_ops;
-#elif defined(__linux__) || defined(__ANDROID__)
+#endif
   case TURBO_TCP_BACKEND_EPOLL:
     return &turbo_stream_epoll_ops;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
@@ -195,6 +180,18 @@ static const turbo_stream_backend_ops_t *stream_tcp_backend_ops(
   default:
     return NULL;
   }
+}
+
+static turbo_tcp_backend_t stream_default_tcp_backend(void) {
+#ifdef _WIN32
+  return TURBO_TCP_BACKEND_IOCP;
+#elif defined(__linux__) || defined(__ANDROID__)
+  return TURBO_TCP_BACKEND_EPOLL;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  return TURBO_TCP_BACKEND_KQUEUE;
+#else
+  return (turbo_tcp_backend_t)0;
+#endif
 }
 
 const turbo_stream_backend_ops_t *turbo_stream_resolve_backend(
@@ -215,7 +212,7 @@ const turbo_stream_backend_ops_t *turbo_stream_resolve_backend(
   if (kind == TURBO_STREAM_TLS) {
     return &turbo_stream_tls_ops;
   }
-  return stream_tcp_backend_ops(ctx ? ctx->tcp_backend : TURBO_TCP_BACKEND_AUTO);
+  return stream_tcp_backend_ops(ctx ? ctx->tcp_backend : stream_default_tcp_backend());
 }
 
 /* ── Common init / teardown ───────────────────────────────── */

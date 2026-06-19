@@ -158,9 +158,9 @@ static int on_ws_recv(void *handle, const mem_slice_t *slice, void *peer) {
   UNUSED(peer);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
-  if (s) {
-    coro_socket_handle_transport_recv(s, slice);
-  }
+  retain_client(s);
+  coro_socket_handle_transport_recv(s, slice);
+  release_client(s);
   return 0;
 }
 
@@ -168,9 +168,9 @@ static void on_ws_connect(void *handle, int status, void *extra) {
   UNUSED(extra);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
-  if (s) {
-    coro_socket_handle_transport_connect(s, status);
-  }
+  retain_client(s);
+  coro_socket_handle_transport_connect(s, status);
+  release_client(s);
 }
 
 static void on_ws_close(void *handle) {
@@ -178,14 +178,19 @@ static void on_ws_close(void *handle) {
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   stream->managed = 0;
   stream->destroyed = 1;
+  stream->on_recv = NULL;
+  stream->on_connect = NULL;
+  stream->on_write_complete = NULL;
   if (s) {
     int release_accepted_ref = s->accepted_ref;
+    retain_client(s);
     s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
     if (release_accepted_ref) {
       release_client(s);
     }
+    release_client(s);
   }
 }
 
@@ -330,6 +335,9 @@ static void ws_close(coro_socket_t *s) {
   s->handle.stream = NULL;
   s->close_pending = 1;
   retain_client(s);
+  stream->on_recv = NULL;
+  stream->on_connect = NULL;
+  stream->on_write_complete = NULL;
   stream->on_close = on_ws_close;
   turbo_stream_close(stream);
 }

@@ -309,6 +309,11 @@ static void on_timer_fired_bounce(void *arg1, void *arg2) {
     release_client(s);
     return;
   }
+  if (!s->co_wait) {
+    s->timer_active = CORO_TIMEOUT_IDLE;
+    release_client(s);
+    return;
+  }
 
   s->timed_out = 1;
   s->status = TURBO_ETIMEDOUT;
@@ -357,6 +362,36 @@ void stop_timeout_timer(coro_socket_t *s) {
   }
 }
 
+typedef struct {
+  coro_socket_t *socket;
+  char *data;
+  size_t len;
+  int has_slice;
+} recv_post_t;
+
+static void recv_post_cb(void *arg1, void *arg2) {
+  recv_post_t *post = (recv_post_t *)arg1;
+  (void)arg2;
+
+  if (post != NULL && post->socket != NULL) {
+    if (post->has_slice) {
+      mem_slice_t slice;
+      slice.data = post->data;
+      slice.length = post->len;
+      slice.buffer = NULL;
+      coro_deliver_recv(post->socket, &slice);
+    } else {
+      coro_deliver_recv(post->socket, NULL);
+    }
+    coro_resume_waiter_with_handoff(post->socket);
+    release_client(post->socket);
+  }
+  if (post != NULL) {
+    free(post->data);
+    free(post);
+  }
+}
+
 /* ── Transport Bridge Logic ───────────────────────────────── */
 
 void coro_socket_handle_transport_recv(coro_socket_t *s, const mem_slice_t *slice) {
@@ -368,6 +403,35 @@ void coro_socket_handle_transport_recv(coro_socket_t *s, const mem_slice_t *slic
   }
 
   stop_timeout_timer(s);
+  if (s->co_is_scheduled && s->ctx != NULL && coro_context_current() != s->ctx) {
+    recv_post_t *post = (recv_post_t *)calloc(1, sizeof(*post));
+    if (post != NULL) {
+      post->socket = s;
+      if (slice != NULL) {
+        post->has_slice = 1;
+        post->len = slice->length;
+        if (slice->length > 0U) {
+          post->data = (char *)malloc(slice->length);
+          if (post->data == NULL) {
+            free(post);
+            post = NULL;
+          } else {
+            memcpy(post->data, slice->data, slice->length);
+          }
+        }
+      }
+    }
+    if (post != NULL) {
+      retain_client(s);
+      if (coro_post(s->ctx, recv_post_cb, post, NULL) == 0) {
+        return;
+      }
+      release_client(s);
+      free(post->data);
+      free(post);
+    }
+  }
+
   coro_deliver_recv(s, slice);
   coro_resume_waiter_with_handoff(s);
   if (!s->destroy_wait_handoff) {
@@ -914,16 +978,25 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
     s->recv_data = NULL;
     s->recv_len = 0;
     ret = s->status;
-    if (ret == TURBO_ETIMEDOUT || ret == TURBO_ECANCELED) {
+    if (ret == TURBO_ETIMEDOUT || ret == TURBO_ECANCELED || ret == TURBO_EINTR) {
       s->status = 0;
       s->timed_out = 0;
       ret = 0;
+    }
+    if (*data != NULL) {
+      s->status = 0;
+      s->timed_out = 0;
+      return 0;
     }
     return ret == TURBO_EOF ? 0 : ret;
   }
 
   if (s->status != 0) {
-    return s->status;
+    int ret = s->status;
+    if (ret == TURBO_EINTR) {
+      s->status = 0;
+    }
+    return ret;
   }
 
   if (s->recv_call_inflight || (s->co_wait && s->co_wait != coro_running())) {
@@ -965,6 +1038,14 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
 
     *data = recv_data;
     *len = recv_len;
+    if (recv_data != NULL) {
+      s->status = 0;
+      s->timed_out = 0;
+      return 0;
+    }
+    if (status == TURBO_EINTR) {
+      s->status = 0;
+    }
     if (recv_data != NULL && status == TURBO_EOF) {
       return 0;
     }
@@ -1240,27 +1321,17 @@ void coro_socket_set_user_data(coro_socket_t *s, void *d) { s->user_data = d; }
 void *coro_socket_get_user_data(coro_socket_t *s) { return s->user_data; }
 
 turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *s) {
-  turbo_tcp_backend_t preferred;
-
-  if (!s || s->transport != TURBO_TCP) {
-    return TURBO_TCP_BACKEND_AUTO;
+  if (s && s->transport == TURBO_TCP && s->ctx) {
+    return s->ctx->tcp_backend;
   }
-
-  preferred = s->ctx ? s->ctx->tcp_backend : TURBO_TCP_BACKEND_AUTO;
-  if (preferred != TURBO_TCP_BACKEND_AUTO) {
-    return preferred;
-  }
-
 #ifdef _WIN32
   return TURBO_TCP_BACKEND_IOCP;
-#elif defined(__linux__) && TURBO_HAS_IO_URING
-  return TURBO_TCP_BACKEND_IO_URING;
 #elif defined(__linux__)
   return TURBO_TCP_BACKEND_EPOLL;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
   return TURBO_TCP_BACKEND_KQUEUE;
 #else
-  return TURBO_TCP_BACKEND_AUTO;
+  return (turbo_tcp_backend_t)0;
 #endif
 }
 

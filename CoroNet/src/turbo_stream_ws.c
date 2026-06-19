@@ -74,7 +74,6 @@ typedef struct ws_state_s {
 
 /* ── Forward declarations ─────────────────────────────────── */
 
-static void ws_on_tcp_recv(void *handle, const mem_slice_t *slice, void *peer);
 /* turbo_recv_cb signature: int(void*, const mem_slice_t*, void*) */
 static int  ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer);
 static void ws_on_tcp_connect(void *handle, int status, void *peer);
@@ -83,7 +82,6 @@ static void ws_on_tcp_close(void *handle);
 static int  ws_process_rx(ws_state_t *st);
 static int  ws_process_handshake(ws_state_t *st);
 static int  ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len);
-static int  ws_try_deliver_pooled_frame(ws_state_t *st, const mem_slice_t *slice);
 static int  ws_store_unconsumed(ws_state_t *st, const uint8_t *data, size_t len);
 static int  ws_append_rx_bytes(ws_state_t *st, const uint8_t *data, size_t len);
 static int  ws_send_frame(ws_state_t *st, uint8_t opcode,
@@ -101,6 +99,27 @@ static int ws_copy_tls_client_config(ws_state_t *st, const turbo_tls_client_conf
 
 static int ws_fail(ws_state_t *st, int err);
 static int ws_protocol_error(ws_state_t *st);
+
+static uint8_t *ws_find_header_end(uint8_t *data, size_t len) {
+  if (!data || len < 4) {
+    return NULL;
+  }
+
+  for (size_t i = 0; i + 3 < len; ++i) {
+    if (data[i] == '\r' && data[i + 1] == '\n' &&
+        data[i + 2] == '\r' && data[i + 3] == '\n') {
+      return data + i;
+    }
+  }
+  return NULL;
+}
+
+static int ws_handshake_token_is_progress(int token) {
+  return token == WEBSOCKET_HANDSHAKE_TOKEN_REQUEST_LINE ||
+         token == WEBSOCKET_HANDSHAKE_TOKEN_RESPONSE_LINE ||
+         token == WEBSOCKET_HANDSHAKE_TOKEN_HEADER ||
+         token == WEBSOCKET_HANDSHAKE_TOKEN_BODY;
+}
 
 static void ws_release_owned_recv(void *data, void *user_data) {
   UNUSED(data);
@@ -120,6 +139,9 @@ static void ws_drop_inner_tcp(ws_state_t *st) {
   st->tcp = NULL;
   tcp->user_data = NULL;
   tcp->managed = 0;
+  tcp->on_recv = NULL;
+  tcp->on_connect = NULL;
+  tcp->on_close = NULL;
   tcp->on_write_complete = NULL;
   turbo_stream_destroy(tcp);
 }
@@ -310,28 +332,19 @@ static int ws_protocol_error(ws_state_t *st) {
 static int ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer) {
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
-  ws_state_t     *st  = (ws_state_t *)tcp->user_data;
-  if (!st) return 0;
+  ws_state_t     *st;
+
+  if (!tcp) return 0;
+  st = (ws_state_t *)tcp->user_data;
+  if (!st || !st->outer) return 0;
 
   if (!slice || !slice->data || slice->length == 0) {
     /* EOF from inner stream. Process any remaining buffered data, then close. */
     if (st->rx_len > 0) {
       ws_process_rx(st);
     }
-    if (st->outer) turbo_stream_close(st->outer);
+    turbo_stream_close(st->outer);
     return 0;
-  }
-
-  /* Fast path: parse complete frames directly from the incoming slice. */
-  if (st->state == WS_ST_OPEN && st->outer->on_recv != NULL && st->rx_len == 0) {
-    int handled = ws_try_deliver_pooled_frame(st, slice);
-    if (handled < 0) {
-      return handled;
-    }
-    if (handled > 0) {
-      return 0;
-    }
-    return ws_process_frame(st, (const uint8_t *)slice->data, slice->length);
   }
 
   if (ws_append_rx_bytes(st, (const uint8_t *)slice->data, slice->length) != 0) {
@@ -344,8 +357,11 @@ static int ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer)
 static void ws_on_tcp_connect(void *handle, int status, void *peer) {
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
-  ws_state_t     *st  = (ws_state_t *)tcp->user_data;
-  if (!st) return;
+  ws_state_t     *st;
+
+  if (!tcp) return;
+  st = (ws_state_t *)tcp->user_data;
+  if (!st || !st->outer) return;
 
   if (status != 0) {
     st->state = WS_ST_CLOSED;
@@ -369,9 +385,15 @@ static void ws_on_tcp_connect(void *handle, int status, void *peer) {
 
 static void ws_on_tcp_close(void *handle) {
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
-  ws_state_t     *st  = (ws_state_t *)tcp->user_data;
+  ws_state_t     *st;
+
+  if (!tcp) return;
+  st = (ws_state_t *)tcp->user_data;
   tcp->managed = 0;
   tcp->destroyed = 1;
+  tcp->on_recv = NULL;
+  tcp->on_connect = NULL;
+  tcp->on_write_complete = NULL;
   if (!st) return;
 
   turbo_stream_t *outer = st->outer;
@@ -585,8 +607,8 @@ static int ws_start_client_handshake(ws_state_t *st) {
 }
 
 static int ws_process_handshake(ws_state_t *st) {
-  /* Need full HTTP response: look for \r\n\r\n */
-  uint8_t *end = (uint8_t *)strstr((const char *)st->hs_buf->data, "\r\n\r\n");
+  /* Need full HTTP handshake: look for \r\n\r\n within received bytes. */
+  uint8_t *end = ws_find_header_end((uint8_t *)st->hs_buf->data, st->hs_len);
   if (!end) return 0; /* need more */
 
   size_t   hdr_len = (size_t)(end + 4 - (uint8_t *)st->hs_buf->data);
@@ -602,8 +624,18 @@ static int ws_process_handshake(ws_state_t *st) {
   
   websocket_handshake_token_value_t val;
   int res;
-  while ((res = websocket_handshake_parser_scan(&parser, &val)) > 0) {
-    if (res == WEBSOCKET_HANDSHAKE_TOKEN_END) break;
+  do {
+    res = websocket_handshake_parser_scan(&parser, &val);
+  } while (ws_handshake_token_is_progress(res));
+
+  if (res != WEBSOCKET_HANDSHAKE_TOKEN_END) {
+    websocket_handshake_parser_destroy(&parser);
+    st->state = WS_ST_CLOSED;
+    if (st->outer->on_connect)
+      st->outer->on_connect(st->outer, TURBO_EPROTONOSUPPORT, NULL);
+    st->hs_len = 0;
+    mem_set_used(st->hs_buf, 0);
+    return -1;
   }
   
   int ok = 0;
@@ -668,70 +700,10 @@ static int ws_process_handshake(ws_state_t *st) {
 /* ── Frame dispatch ───────────────────────────────────────── */
 
 static void ws_deliver(ws_state_t *st, const uint8_t *data, size_t len) {
-  if (!st->outer->on_recv || len == 0) return;
+  if (!st || !st->outer || !st->outer->on_recv || len == 0) return;
   mem_slice_t sl = { .data = (char *)data, .length = len, .buffer = NULL };
   int close_req = st->outer->on_recv(st->outer, &sl, NULL);
   if (close_req) turbo_stream_close(st->outer);
-}
-
-static int ws_try_deliver_pooled_frame(ws_state_t *st, const mem_slice_t *slice) {
-  mem_slice_t payload_slice;
-  ws_frame_t frame;
-  ws_parse_result_t pr;
-  uint8_t *payload;
-  size_t frame_total;
-  int close_req;
-
-  if (!st || !slice || !slice->buffer || !slice->data || slice->length == 0) {
-    return 0;
-  }
-  if (st->expecting_cont || !st->outer || !st->outer->on_recv) {
-    return 0;
-  }
-  if (slice->data != slice->buffer->data + sizeof(coro_recv_header_t)) {
-    return 0;
-  }
-
-  if (!coro_recv_slice_is_pooled_view(slice, NULL)) {
-    return 0;
-  }
-
-  pr = ws_frame_parse((const uint8_t *)slice->data, slice->length, &frame);
-  if (pr == WS_PARSE_NEED_MORE) {
-    return 0;
-  }
-  if (pr != WS_PARSE_OK) {
-    return ws_protocol_error(st);
-  }
-  if (!frame.fin || (frame.opcode != WS_OPCODE_TEXT && frame.opcode != WS_OPCODE_BINARY)) {
-    return 0;
-  }
-  if (st->server_mode && !frame.masked) {
-    return ws_protocol_error(st);
-  }
-
-  frame_total = frame.header_len + (size_t)frame.payload_len;
-  if (frame_total != slice->length) {
-    return 0;
-  }
-
-  payload = (uint8_t *)frame.payload;
-  if (frame.payload_len > 0) {
-    if (frame.masked) {
-      ws_frame_unmask(payload, (size_t)frame.payload_len, frame.masking_key);
-    }
-  }
-
-  coro_recv_header_store_before_data(payload, CORO_RECV_MAGIC_POOLED,
-                                     (size_t)frame.payload_len, slice->buffer);
-  payload_slice.data = (char *)payload;
-  payload_slice.length = (size_t)frame.payload_len;
-  payload_slice.buffer = slice->buffer;
-  close_req = st->outer->on_recv(st->outer, &payload_slice, NULL);
-  if (close_req) {
-    turbo_stream_close(st->outer);
-  }
-  return 1;
 }
 
 static int ws_store_unconsumed(ws_state_t *st, const uint8_t *data, size_t len) {
@@ -893,6 +865,9 @@ static int ws_process_rx(ws_state_t *st) {
   if (st->state == WS_ST_HANDSHAKING) {
     /* Accumulate into hs_buf */
     size_t need = st->hs_len + st->rx_len;
+    if (!st->outer) {
+      return TURBO_EINVAL;
+    }
     if (!st->hs_buf) {
       st->hs_buf = mem_get_buffer(st->outer->arena, WS_HS_BUF_CAP);
       if (!st->hs_buf) return ws_fail(st, TURBO_ENOMEM);
@@ -910,7 +885,7 @@ static int ws_process_rx(ws_state_t *st) {
   }
 
   if (st->state == WS_ST_OPEN) {
-    if (st->outer->on_recv == NULL) {
+    if (!st->outer || st->outer->on_recv == NULL) {
       return 0;
     }
 
@@ -1179,6 +1154,9 @@ static void ws_close(turbo_stream_t *s) {
   if (st->tcp) {
     /* Flush any queued close frame before tearing down the transport. */
     (void)turbo_stream_flush(st->tcp);
+    st->tcp->on_recv = NULL;
+    st->tcp->on_connect = NULL;
+    st->tcp->on_write_complete = NULL;
     turbo_stream_close(st->tcp);   /* triggers ws_on_tcp_close async */
   } else {
     s->backend_data = NULL;

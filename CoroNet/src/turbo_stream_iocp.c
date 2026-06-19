@@ -366,14 +366,15 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
     if (client_socket != INVALID_SOCKET) closesocket(client_socket);
   }
 
-  while (!st->closing && InterlockedCompareExchange(&st->accepts_posted, 0, 0) < st->accept_depth) {
-    if (stream_iocp_submit_accept(l) != 0) break;
-  }
-
   InterlockedDecrement(&st->inflight_count);
   InterlockedDecrement(&st->accepts_posted);
   iocp_pool_inflight_dec(l->ctx->iocp_pool);
   free(op);
+
+  while (!st->closing && InterlockedCompareExchange(&st->accepts_posted, 0, 0) < st->accept_depth) {
+    if (stream_iocp_submit_accept(l) != 0) break;
+  }
+
   listener_maybe_shutdown(l);
 }
 

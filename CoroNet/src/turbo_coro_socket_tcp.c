@@ -14,6 +14,8 @@
 
 extern const coro_transport_ops_t transport_ops_tcp;
 
+static int tcp_recv_start(coro_socket_t *s);
+
 static int socket_ctx_error(coro_socket_t *s, int fallback) {
   return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
 }
@@ -24,7 +26,9 @@ static int on_tcp_recv(void *handle, const mem_slice_t *slice, void *peer) {
   UNUSED(peer);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  retain_client(s);
   coro_socket_handle_transport_recv(s, slice);
+  release_client(s);
   return 0;
 }
 
@@ -32,14 +36,18 @@ static void on_tcp_connect(void *handle, int status, void *extra) {
   UNUSED(extra);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  retain_client(s);
   coro_socket_handle_transport_connect(s, status);
+  release_client(s);
 }
 
 static void on_tcp_write_complete(turbo_stream_t *stream, int status) {
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   coro_t *co;
 
+  retain_client(s);
   if (!s || !s->co_write_wait) {
+    release_client(s);
     return;
   }
 
@@ -47,6 +55,7 @@ static void on_tcp_write_complete(turbo_stream_t *stream, int status) {
   co = s->co_write_wait;
   s->co_write_wait = NULL;
   coro_resume_co(s->ctx, co);
+  release_client(s);
 }
 
 static void on_tcp_close(void *handle) {
@@ -54,14 +63,19 @@ static void on_tcp_close(void *handle) {
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   stream->managed = 0;
   stream->destroyed = 1;
+  stream->on_recv = NULL;
+  stream->on_connect = NULL;
+  stream->on_write_complete = NULL;
   if (s) {
     int release_accepted_ref = s->accepted_ref;
+    retain_client(s);
     s->accepted_ref = 0;
     turbo_stream_set_user_data(stream, NULL);
     coro_socket_handle_transport_close(s);
     if (release_accepted_ref) {
       release_client(s);
     }
+    release_client(s);
   }
 }
 
@@ -156,7 +170,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 /* ── Bind/Listen/Accept ───────────────────────────────────── */
 
 typedef struct tcp_accept_node_s {
-  turbo_stream_t *stream;
+  coro_socket_t *socket;
   struct tcp_accept_node_s *next;
 } tcp_accept_node_t;
 
@@ -187,18 +201,50 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle,
   turbo_stream_listener_t *l = (turbo_stream_listener_t *)listener_handle;
   tcp_listener_state_t *ls =
       (tcp_listener_state_t *)turbo_stream_listener_get_user_data(l);
+  turbo_stream_t *stream = (turbo_stream_t *)stream_handle;
+  coro_socket_t *child = NULL;
   if (!ls) {
-    turbo_stream_destroy((turbo_stream_t *)stream_handle);
+    turbo_stream_destroy(stream);
     return;
   }
 
   tcp_accept_node_t *node = malloc(sizeof(tcp_accept_node_t));
   if (!node) {
-    turbo_stream_destroy((turbo_stream_t *)stream_handle);
+    turbo_stream_destroy(stream);
     tcp_listener_fail(ls->server_coro, TURBO_ENOMEM);
     return;
   }
-  node->stream = (turbo_stream_t *)stream_handle;
+
+  child = coro_socket_create_shell(ls->server_coro->ctx, TURBO_TCP, &transport_ops_tcp);
+  if (!child) {
+    free(node);
+    turbo_stream_destroy(stream);
+    tcp_listener_fail(ls->server_coro, TURBO_ENOMEM);
+    return;
+  }
+
+  child->handle.stream = stream;
+  child->owns_handle = 1;
+  child->accepted_ref = 1;
+  retain_client(child);
+  turbo_stream_set_user_data(stream, child);
+  stream->on_recv = on_tcp_recv;
+  stream->on_connect = on_tcp_connect;
+  stream->on_close = on_tcp_close;
+  stream->on_write_complete = on_tcp_write_complete;
+  child->connected = 1;
+
+  if (!ls->server_coro->accept_prestart_recv_disabled) {
+    int rc = tcp_recv_start(child);
+    if (rc != 0 && rc != TURBO_EALREADY) {
+      coro_socket_destroy(child);
+      free(node);
+      tcp_listener_fail(ls->server_coro, rc);
+      return;
+    }
+  }
+
+  node->socket = child;
   node->next = NULL;
 
   if (ls->tail)
@@ -263,17 +309,24 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
 }
 
 static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
+  tcp_listener_state_t *ls;
+
   retain_client(s);
 
+  ls = (tcp_listener_state_t *)s->native_tcp_state;
   if (s->accept_pending) {
     s->accept_pending = 0;
-  } else {
+  }
+  if (!ls || !ls->head) {
     coro_set_wait(s);
     coro_yield();
     if (s->status != 0) {
       int status = s->status;
       release_client(s);
       return status;
+    }
+    if (s->accept_pending) {
+      s->accept_pending = 0;
     }
   }
 
@@ -283,7 +336,7 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
     return status;
   }
 
-  tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
+  ls = (tcp_listener_state_t *)s->native_tcp_state;
   if (!ls || !ls->head) {
     release_client(s);
     return TURBO_EBUSY;
@@ -293,27 +346,8 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   ls->head = node->next;
   if (!ls->head) ls->tail = NULL;
 
-  turbo_stream_t *stream = node->stream;
+  coro_socket_t *child = node->socket;
   free(node);
-
-  coro_socket_t *child =
-      coro_socket_create_shell(s->ctx, TURBO_TCP, &transport_ops_tcp);
-  if (!child) {
-    turbo_stream_destroy(stream);
-    release_client(s);
-    return TURBO_ENOMEM;
-  }
-
-  child->handle.stream = stream;
-  child->owns_handle = 1;
-  child->accepted_ref = 1;
-  retain_client(child);
-  turbo_stream_set_user_data(stream, child);
-  stream->on_recv = on_tcp_recv;
-  stream->on_connect = on_tcp_connect;
-  stream->on_close = on_tcp_close;
-  stream->on_write_complete = on_tcp_write_complete;
-  child->connected = 1;
 
   *accepted = child;
   release_client(s);
@@ -393,7 +427,7 @@ static void tcp_close(coro_socket_t *s) {
     tcp_accept_node_t *n = ls->head;
     while (n) {
       tcp_accept_node_t *nx = n->next;
-      turbo_stream_destroy(n->stream);
+      coro_socket_destroy(n->socket);
       free(n);
       n = nx;
     }
@@ -407,6 +441,8 @@ static void tcp_close(coro_socket_t *s) {
   s->handle.stream = NULL;
   s->close_pending = 1;
   retain_client(s);
+  stream->on_recv = NULL;
+  stream->on_connect = NULL;
   stream->on_write_complete = NULL;
   stream->on_close = on_tcp_close;
   turbo_stream_close(stream);

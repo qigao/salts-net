@@ -3,28 +3,32 @@
 #include "turbo_stream.h"
 #include "tinytest.h"
 #include <stdio.h>
+#include <string.h>
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <signal.h>
-#include <sys/wait.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
 static int s_connected = -1;
 static int s_closed = 0;
 static int s_connect_count = 0;
+#ifdef _WIN32
 static char s_send_payload[256 * 1024];
+#endif
 
-static void on_connect(turbo_stream_t *s, int status, void *arg) {
+static void on_connect(void *handle, int status, void *arg) {
+    (void)handle;
     (void)arg;
     s_connected = status;
 }
 
-static void on_connect_count(turbo_stream_t *s, int status, void *arg) {
+static void on_connect_count(void *handle, int status, void *arg) {
+    turbo_stream_t *s = (turbo_stream_t *)handle;
     int *status_out = (int *)turbo_stream_get_user_data(s);
     (void)arg;
     if (status_out) {
@@ -35,21 +39,48 @@ static void on_connect_count(turbo_stream_t *s, int status, void *arg) {
     }
 }
 
-static void on_close(turbo_stream_t *s) {
-    (void)s;
+static void on_close(void *handle) {
+    (void)handle;
     s_closed = 1;
 }
 
-static int on_recv_noop(turbo_stream_t *s, const mem_slice_t *slice, void *arg) {
-    (void)s;
+#ifdef _WIN32
+static int on_recv_noop(void *handle, const mem_slice_t *slice, void *arg) {
+    (void)handle;
     (void)slice;
     (void)arg;
     return 0;
 }
+#endif
+
+static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg);
 
 static turbo_stream_t *s_accepted_client = NULL;
 static int s_accepted_count = 0;
 static turbo_stream_t *s_accepted_clients[32];
+static int s_recv_hit = 0;
+static char s_recv_data[64];
+static size_t s_recv_len = 0;
+
+static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg) {
+    size_t copy_len;
+    (void)handle;
+    (void)arg;
+
+    if (!slice || !slice->data) {
+        return 0;
+    }
+
+    copy_len = slice->length;
+    if (copy_len >= sizeof(s_recv_data)) {
+        copy_len = sizeof(s_recv_data) - 1U;
+    }
+    memcpy(s_recv_data, slice->data, copy_len);
+    s_recv_data[copy_len] = '\0';
+    s_recv_len = copy_len;
+    s_recv_hit++;
+    return 0;
+}
 
 #define STREAM_TEST_WAIT_ITERS 20000
 
@@ -108,6 +139,73 @@ static int stream_test_flag_is_pending(void *arg) {
     int *flag = (int *)arg;
     return flag && *flag == -1;
 }
+
+#ifdef _WIN32
+typedef struct stream_queued_close_state_s {
+    coro_socket_t *server;
+    int done;
+    int accept_rc;
+    int recv_rc;
+    int connected_after_accept;
+    size_t recv_len;
+    int recv_data_was_null;
+} stream_queued_close_state_t;
+
+static int stream_queued_close_pending(void *arg) {
+    stream_queued_close_state_t *state = (stream_queued_close_state_t *)arg;
+    return state && !state->done;
+}
+
+static int stream_raw_connect_and_close(unsigned short port) {
+    SOCKET fd;
+    struct sockaddr_in addr;
+
+    fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == INVALID_SOCKET) {
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+
+    if (connect(fd, (struct sockaddr *)&addr, (int)sizeof(addr)) != 0) {
+        closesocket(fd);
+        return -2;
+    }
+
+    shutdown(fd, SD_BOTH);
+    closesocket(fd);
+    return 0;
+}
+
+static void stream_accept_queued_closed_task(coro_t *co, void *arg) {
+    stream_queued_close_state_t *state = (stream_queued_close_state_t *)arg;
+    coro_socket_t *client = NULL;
+    char *data = NULL;
+    size_t len = 0U;
+    (void)co;
+
+    if (!state || !state->server) {
+        return;
+    }
+
+    state->accept_rc = coro_socket_accept(state->server, &client);
+    if (state->accept_rc == 0 && client != NULL) {
+        state->connected_after_accept = client->connected;
+        state->recv_rc = coro_socket_recv(client, &data, &len);
+        state->recv_len = len;
+        state->recv_data_was_null = data == NULL ? 1 : 0;
+        if (data != NULL) {
+            coro_socket_free_recv(data);
+        }
+        coro_socket_destroy(client);
+    }
+
+    state->done = 1;
+}
+#endif
 
 typedef struct stream_coro_close_state_s {
     coro_context_t *ctx;
@@ -270,36 +368,6 @@ enum {
     STREAM_IO_URING_EOF_SCENARIO_NO_TIMEOUT = 12,
     STREAM_IO_URING_EOF_SCENARIO_EARLY_RECV_RESULT = 13
 };
-
-static int stream_run_forked_scenario(int (*scenario)(void), uint64_t timeout_ms) {
-    pid_t child_pid;
-    int status = 0;
-    uint64_t deadline;
-
-    child_pid = fork();
-    if (child_pid < 0) {
-        return 253;
-    }
-    if (child_pid == 0) {
-        _exit(scenario());
-    }
-
-    deadline = turbo_monotonic_ms() + timeout_ms;
-    while (turbo_monotonic_ms() < deadline) {
-        pid_t done = waitpid(child_pid, &status, WNOHANG);
-        if (done == child_pid) {
-            if (WIFEXITED(status)) {
-                return WEXITSTATUS(status);
-            }
-            return 252;
-        }
-        usleep(1000);
-    }
-
-    kill(child_pid, SIGKILL);
-    (void)waitpid(child_pid, &status, 0);
-    return 254;
-}
 
 static int stream_run_io_uring_recv_eof_scenario(void) {
     coro_context_t *ctx = NULL;
@@ -523,6 +591,35 @@ static unsigned short stream_test_pick_loopback_port(void) {
     return port;
 }
 
+#if defined(__linux__) || defined(__ANDROID__)
+static int stream_test_raw_connect_send(unsigned short port, const char *payload) {
+    struct sockaddr_in addr;
+    int fd;
+
+    fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) {
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+
+    if (connect(fd, (struct sockaddr *)&addr, (socklen_t)sizeof(addr)) != 0) {
+        close(fd);
+        return -2;
+    }
+
+    if (send(fd, payload, strlen(payload), 0) < 0) {
+        close(fd);
+        return -3;
+    }
+
+    return fd;
+}
+#endif
+
 spec("Stream") {
     it("should create and destroy stream") {
         coro_context_t *ctx = coro_context_create(NULL);
@@ -558,9 +655,7 @@ spec("Stream") {
         check(s_connected != 0); // Should never report a successful connect
         check_int_eq(stream_test_run_until(ctx, &s_closed, 1, 3000), 0);
         check_int_eq(s_closed, 1);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-
-        coro_context_destroy(ctx);
+        stream_test_destroy_context_robust(ctx);
     }
 
 #ifdef _WIN32
@@ -728,21 +823,86 @@ spec("Stream") {
 #endif
 
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
-    it("should default tcp sockets to io_uring on linux") {
+    it("should default tcp sockets to epoll on linux") {
         coro_context_t *ctx = coro_context_create(NULL);
         coro_socket_t *sock;
 
         check(ctx != NULL);
         sock = coro_socket_create_tcpv4(ctx);
         check(sock != NULL);
-        check_int_eq(coro_socket_get_tcp_backend(sock), TURBO_TCP_BACKEND_IO_URING);
+        check_int_eq(coro_socket_get_tcp_backend(sock), TURBO_TCP_BACKEND_EPOLL);
 
         coro_socket_destroy(sock);
         coro_context_destroy(ctx);
     }
+#endif
 
+#if defined(__linux__) || defined(__ANDROID__)
+    it("should preserve epoll data received before recv_start") {
+        static const char payload[] = "epoll-pre-recv";
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_stream_listener_t *listener;
+        struct sockaddr_in addr;
+        stream_test_counts_t counts;
+        unsigned short port;
+        int fd;
+        int i;
+
+        check_not_null(ctx);
+        check_int_eq(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_EPOLL), 0);
+
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+
+        s_accepted_client = NULL;
+        s_accepted_count = 0;
+        s_recv_hit = 0;
+        s_recv_len = 0;
+        s_recv_data[0] = '\0';
+
+        listener = turbo_stream_listen(ctx, TURBO_STREAM_TCP4,
+                                       (struct sockaddr *)&addr, 128,
+                                       on_accept_local);
+        check_not_null(listener);
+
+        fd = stream_test_raw_connect_send(port, payload);
+        check_int_gt(fd, -1);
+
+        counts.connected = NULL;
+        counts.expected_connected = 0;
+        counts.accepted = &s_accepted_count;
+        counts.expected_accepted = 1;
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+        check_int_eq(s_accepted_count, 1);
+        check_not_null(s_accepted_client);
+
+        for (i = 0; i < 64; ++i) {
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+            usleep(1000);
+        }
+
+        check_int_eq(turbo_stream_recv_start(s_accepted_client, on_recv_capture), 0);
+        stream_test_run_until(ctx, &s_recv_hit, 1, 3000);
+
+        check_int_eq(s_recv_hit, 1);
+        check_int_eq((int)s_recv_len, (int)strlen(payload));
+        check_str_eq(s_recv_data, payload);
+
+        close(fd);
+        turbo_stream_destroy(s_accepted_client);
+        turbo_stream_listener_close(listener);
+        stream_test_destroy_context_robust(ctx);
+    }
+#endif
+
+#if defined(__linux__) && defined(TURBO_HAS_IO_URING)
     it("should wake a recv waiter with eof after peer close on io_uring") {
-        check_int_eq(stream_run_forked_scenario(stream_run_io_uring_recv_eof_scenario, 8000), 0);
+        check_int_eq(stream_run_io_uring_recv_eof_scenario(), 0);
     }
 
     it("should wake a timeout-looping recv waiter with eof after peer close on io_uring") {
@@ -1006,6 +1166,59 @@ spec("Stream") {
             turbo_stream_listener_close(listener);
             stream_test_destroy_context_robust(ctx);
         }
+    }
+
+    it("should observe eof for queued accepted sockets closed before accept") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *server = NULL;
+        struct sockaddr_in addr;
+        stream_queued_close_state_t state;
+        unsigned short port;
+        uint64_t drain_deadline;
+
+        check_not_null(ctx);
+
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+
+        server = coro_socket_create_tcpv4(ctx);
+        check_not_null(server);
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+
+        check_int_eq(coro_socket_bind(server, (struct sockaddr *)&addr), 0);
+        check_int_eq(coro_socket_listen(server, 16), 0);
+        check_int_eq(stream_raw_connect_and_close(port), 0);
+
+        check_int_eq(stream_test_run_until(ctx, &server->accept_pending, 1, 3000), 0);
+
+        drain_deadline = turbo_monotonic_ms() + 200;
+        while (turbo_monotonic_ms() < drain_deadline) {
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        }
+
+        memset(&state, 0, sizeof(state));
+        state.server = server;
+        state.accept_rc = TURBO_EBUSY;
+        state.recv_rc = TURBO_EBUSY;
+        state.connected_after_accept = -1;
+        state.recv_data_was_null = 1;
+
+        check_int_eq(coro_context_spawn(ctx, stream_accept_queued_closed_task, &state), 0);
+        stream_test_run_while(ctx, stream_queued_close_pending, &state, 3000);
+
+        check_int_eq(state.done, 1);
+        check_int_eq(state.accept_rc, 0);
+        check_int_eq(state.connected_after_accept, 0);
+        check_int_eq(state.recv_rc, TURBO_EOF);
+        check_int_eq((int)state.recv_len, 0);
+        check_int_eq(state.recv_data_was_null, 1);
+
+        coro_socket_destroy(server);
+        stream_test_destroy_context_robust(ctx);
     }
 #endif
 }

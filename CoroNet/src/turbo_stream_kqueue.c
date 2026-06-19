@@ -143,7 +143,7 @@ static void handle_read_event(stream_kqueue_state_t *st, stream_kqueue_event_t *
 
     if (data && bytes > 0) {
         if (s->on_recv) {
-            mem_slice_t slice = { .data = (char *)data, .length = bytes };
+            mem_slice_t slice = { .data = (char *)data, .length = bytes, .buffer = NULL };
             close_requested = s->on_recv(s, &slice, NULL);
         }
         ring_spsc_read_release(&st->read_ring, bytes);

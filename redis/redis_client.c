@@ -425,8 +425,12 @@ int redis_commandv(redis_client_t *client, int argc, const char **argv, const si
 
     char *data = NULL;
     size_t len = 0;
-    if (coro_socket_recv(client->socket, &data, &len) != 0) {
-      if (data) {
+    int recv_rc = coro_socket_recv(client->socket, &data, &len);
+    if (data != NULL && len > 0U) {
+      recv_rc = 0;
+    }
+    if (recv_rc != 0) {
+      if (data != NULL) {
         coro_socket_free_recv(data);
       }
       client->is_connected = 0;

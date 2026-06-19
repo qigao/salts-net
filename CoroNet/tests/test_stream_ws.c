@@ -19,6 +19,7 @@ typedef struct {
   test_socket_t listen_socket;
   int status;
   int handshake_ok;
+  int send_invalid_handshake_response;
   int send_invalid_opcode;
   int saw_echo;
   int saw_close;
@@ -48,6 +49,11 @@ static void ws_test_run_until(coro_context_t *ctx, uint64_t timeout_ms,
 static int ws_test_connected_ready(void *arg) {
   int expected = arg ? *(int *)arg : 0;
   return s_ws_connected == expected;
+}
+
+static int ws_test_connect_finished(void *arg) {
+  (void)arg;
+  return s_ws_connected != -1;
 }
 
 static int ws_test_closed_ready(void *arg) {
@@ -261,6 +267,16 @@ static void wss_test_server_main(void *arg) {
     goto done;
   }
 
+  if (server->send_invalid_handshake_response) {
+    static const char invalid_resp[] = "not http\r\n\r\n";
+    if (SSL_write(ssl, invalid_resp, (int)sizeof(invalid_resp) - 1) <= 0) {
+      server->status = -24;
+      goto done;
+    }
+    server->status = 0;
+    goto done;
+  }
+
   if (wss_test_compute_accept_key(client_key, accept_key, sizeof(accept_key)) != 0) {
     server->status = -10;
     goto done;
@@ -471,6 +487,65 @@ spec("Stream WebSocket Client") {
     check_int_eq(server.status, 0);
     check(server.handshake_ok == 1);
     check(server.saw_echo == 1);
+
+    ws_test_run_until_idle(ctx, 1000);
+
+    turbo_stream_tls_reset_client_session_cache();
+    coro_context_destroy(ctx);
+    tls_test_clear_ca_env();
+    tls_test_remove_file(ca_file);
+  }
+
+  it("should fail invalid websocket handshake responses without spinning") {
+    char ca_file[512] = {0};
+    unsigned short port = 0;
+    coro_context_t *ctx = NULL;
+    turbo_stream_t *s = NULL;
+    turbo_tls_client_config_t tls_config;
+    wss_test_server_t server;
+    struct sockaddr_in addr;
+
+    memset(&server, 0, sizeof(server));
+    server.listen_socket = TEST_INVALID_SOCKET;
+    server.send_invalid_handshake_response = 1;
+    turbo_stream_tls_reset_client_session_cache();
+
+    check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+
+    ctx = coro_context_create(NULL);
+    check(ctx != NULL);
+
+    s = turbo_stream_create(ctx, TURBO_STREAM_WSS);
+    check(s != NULL);
+    memset(&tls_config, 0, sizeof(tls_config));
+    tls_config.ca_file = ca_file;
+    tls_config.verify_peer = 1;
+    check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+    turbo_stream_ws_set_path_host(s, "/chat", "localhost");
+
+    s_ws_connected = -1;
+    s_ws_closed = 0;
+    s_ws_rx_len = 0;
+    memset(s_ws_rx_buf, 0, sizeof(s_ws_rx_buf));
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+                                           on_ws_connect, on_ws_close), 0);
+
+    ws_test_run_until(ctx, 1000, ws_test_connect_finished, NULL);
+    check_int_eq(s_ws_connected, TURBO_EPROTONOSUPPORT);
+
+    turbo_stream_close(s);
+    turbo_stream_destroy(s);
+
+    check_int_eq(turbo_thread_join(&server.thread), 0);
+    check_int_eq(server.status, 0);
 
     ws_test_run_until_idle(ctx, 1000);
 

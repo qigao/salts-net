@@ -38,6 +38,8 @@ typedef struct {
   void *arg;
   coro_handler_closed_fn handler_closed;
   void *handler_closed_arg;
+  turbo_transport_t server_transport;
+  int ws_is_tls;
 } coro_task_arg_t;
 
 static void wait_for_socket_close_completion(coro_socket_t *socket) {
@@ -53,7 +55,44 @@ static void wait_for_socket_close_completion(coro_socket_t *socket) {
 static void coro_entry_bridge(coro_t *co, void *arg) {
   UNUSED(co);
   coro_task_arg_t *task = (coro_task_arg_t *)arg;
+  int r = 0;
+
   retain_client(task->socket);
+
+  if (task->server_transport == TURBO_TLS) {
+    r = coro_socket_wrap_accepted_tls_server(task->socket);
+    if (r != 0) {
+      TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
+    } else {
+      TLOG_DEBUG("server: accepted client wrapped as TLS");
+    }
+  } else if (task->server_transport == TURBO_WEBSOCKET) {
+    if (task->ws_is_tls) {
+      r = coro_socket_wrap_accepted_tls_server(task->socket);
+      if (r != 0) {
+        TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
+      }
+    }
+    if (r == 0) {
+      r = coro_socket_wrap_accepted_ws_server(task->socket);
+      if (r != 0) {
+        if (r == TURBO_EOF) {
+          TLOG_DEBUG("server: accepted client closed before WebSocket handoff completed");
+        } else {
+          TLOG_ERROR("server: failed to wrap accepted client as WebSocket rc={}", r);
+        }
+      }
+    }
+  }
+
+  if (r != 0) {
+    coro_socket_destroy(task->socket);
+    wait_for_socket_close_completion(task->socket);
+    release_client(task->socket);
+    free(task);
+    return;
+  }
+
   task->handler(task->socket, task->arg);
   coro_socket_destroy(task->socket);
   wait_for_socket_close_completion(task->socket);
@@ -65,7 +104,8 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
 }
 
 static void spawn_handler_coro(coro_socket_t *s, void (*handler)(coro_socket_t *, void *),
-                               void *arg) {
+                               void *arg, turbo_transport_t server_transport,
+                               int ws_is_tls) {
   coro_task_arg_t *task = malloc(sizeof(coro_task_arg_t));
   if (!task) {
     TLOG_ERROR("server: failed to allocate handler task");
@@ -77,6 +117,8 @@ static void spawn_handler_coro(coro_socket_t *s, void (*handler)(coro_socket_t *
   task->arg = arg;
   task->handler_closed = s->handler_closed;
   task->handler_closed_arg = s->handler_closed_arg;
+  task->server_transport = server_transport;
+  task->ws_is_tls = ws_is_tls ? 1 : 0;
   
   if (coro_context_spawn(s->ctx, coro_entry_bridge, task) != 0) {
     TLOG_ERROR("server: failed to spawn handler coroutine");
@@ -111,37 +153,15 @@ static void accept_loop_task(coro_t *co, void *arg) {
     int r = coro_socket_accept(server->listener, &client);
 
     if (r == 0 && client) {
-      if (server->transport == TURBO_TLS) {
-        r = coro_socket_wrap_accepted_tls_server(client);
-        if (r != 0) {
-          TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
-          coro_socket_destroy(client);
-          continue;
-        }
-        TLOG_DEBUG("server: accepted client wrapped as TLS");
-      } else if (server->transport == TURBO_WEBSOCKET) {
+      int ws_is_tls = 0;
+
+      if (server->transport == TURBO_WEBSOCKET) {
         ws_server_listener_state_t *ws_state =
             (ws_server_listener_state_t *)server->native_tcp_state;
-        if (ws_state && ws_state->is_tls) {
-          r = coro_socket_wrap_accepted_tls_server(client);
-          if (r != 0) {
-            TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
-            coro_socket_destroy(client);
-            continue;
-          }
-        }
-        r = coro_socket_wrap_accepted_ws_server(client);
-        if (r != 0) {
-          if (r == TURBO_EOF) {
-            TLOG_DEBUG("server: accepted client closed before WebSocket handoff completed");
-          } else {
-            TLOG_ERROR("server: failed to wrap accepted client as WebSocket rc={}", r);
-          }
-          coro_socket_destroy(client);
-          continue;
-        }
+        ws_is_tls = (ws_state && ws_state->is_tls) ? 1 : 0;
       }
-      spawn_handler_coro(client, server->handler, server->handler_arg);
+      spawn_handler_coro(client, server->handler, server->handler_arg,
+                         server->transport, ws_is_tls);
 
     } else if (r == TURBO_ECANCELED || r == TURBO_EBUSY ||
                r == TURBO_EALREADY || r == TURBO_EINTR) {
@@ -246,6 +266,8 @@ static int listen_tcp(coro_socket_t *server, const char *host, int port) {
   server->listener = coro_socket_create(server->ctx, server_tcp_listener_type(&saddr));
   if (!server->listener) return TURBO_ENOMEM;
   server->listener->reuse_port = server->reuse_port;
+  server->listener->accept_prestart_recv_disabled =
+      (server->transport == TURBO_TCP) ? 0 : 1;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
   if (r != 0) {
@@ -368,6 +390,7 @@ static int listen_ws_internal(coro_socket_t *server, const char *host, int port,
     return TURBO_ENOMEM;
   }
   server->listener->reuse_port = server->reuse_port;
+  server->listener->accept_prestart_recv_disabled = 1;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
   if (r != 0) {

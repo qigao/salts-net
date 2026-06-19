@@ -6,11 +6,21 @@
 #include <string.h>
  
 static int callback_count = 0;
+static const char *callback_file = NULL;
+static int callback_line = 0;
+
 static void test_callback(const turbo_log_entry_t *entry, void *user_data) {
   (void)user_data;
   callback_count++;
   printf("  [Callback] level=%s msg=%s\n", turbo_log_level_name(entry->level),
          entry->message);
+}
+
+static void source_callback(const turbo_log_entry_t *entry, void *user_data) {
+  (void)user_data;
+  callback_file = entry->file;
+  callback_line = entry->line;
+  callback_count++;
 }
 
 static void count_only_callback(const turbo_log_entry_t *entry, void *user_data) {
@@ -193,6 +203,37 @@ spec("TLog Tests") {
 
     tlog_flush(logger); // Wait for async queue to drain before checking count
     check_int_eq(callback_count, 3);
+
+    tlog_destroy(logger);
+  }
+
+  it("should capture source only for debug builds by default") {
+    callback_count = 0;
+    callback_file = NULL;
+    callback_line = 0;
+
+    tlog_t *logger = tlog_create(NULL);
+    check_not_null(logger);
+
+    turbo_log_sink_t *cb_sink = turbo_sink_callback_create(source_callback, NULL);
+    check_not_null(cb_sink);
+    tlog_add_sink(logger, cb_sink);
+
+    TURBO_LOG_INFO(logger, "source", "source capture test");
+    tlog_flush(logger);
+
+    check_int_eq(callback_count, 1);
+#if TURBO_LOG_CAPTURE_SOURCE
+    check_not_null(callback_file);
+    check(callback_line > 0);
+    check(strstr(TURBO_LOG_FULL_PATTERN, "{file}") != NULL);
+    check(strstr(TURBO_LOG_FULL_PATTERN, "{line}") != NULL);
+#else
+    check(callback_file == NULL);
+    check_int_eq(callback_line, 0);
+    check(strstr(TURBO_LOG_FULL_PATTERN, "{file}") == NULL);
+    check(strstr(TURBO_LOG_FULL_PATTERN, "{line}") == NULL);
+#endif
 
     tlog_destroy(logger);
   }

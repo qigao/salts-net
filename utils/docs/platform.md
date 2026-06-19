@@ -51,6 +51,12 @@ uint64_t ns = turbo_hrtime();             // 高精度纳秒
 uint64_t ms = turbo_uptime_ms();          // 进程运行时间
 void turbo_sleep_ms(100);                 // 阻塞睡眠
 
+// 日期时间
+struct tm tm_value;
+turbo_gmtime((time_t)1704110400, &tm_value);
+time_t utc = turbo_timegm(&tm_value);
+turbo_strftime_utc(utc, "%Y-%m-%dT%H:%M:%SZ", buf, sizeof(buf));
+
 // 转换
 uint64_t ms = turbo_ns_to_ms(ns);
 uint64_t ns = turbo_ms_to_ns(ms);

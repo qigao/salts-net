@@ -10,7 +10,8 @@
             "cacheVariables": {
                 "CMAKE_MAKE_PROGRAM": "C:/Users/lockg/scoop/shims/ninja.exe",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "VCPKG_MANIFEST_MODE": "ON"
+                "VCPKG_MANIFEST_MODE": "ON",
+                "CMAKE_INSTALL_PREFIX": "C:/projects/cpp/external/pkgs/turbonet"
             },
             "environment": {
                 "VCPKG_ROOT": "C:/tools/vcpkg"
@@ -30,6 +31,7 @@
             "cacheVariables": {
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "VCPKG_MANIFEST_MODE": "ON",
+                "CMAKE_INSTALL_PREFIX": "/opt/turbonet",
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja"
             },
             "environment": {
@@ -42,7 +44,7 @@
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows/",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug",
                 "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe"
             },
             "inherits": [
@@ -87,6 +89,21 @@
                 "release-linux-ninja",
                 "linux-paths"
             ]
+        },
+        {
+            "name": "linux-sdk-package",
+            "displayName": "TurboNet SDK Package (Linux, User)",
+            "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux",
+                "BUILD_EXAMPLES": "OFF",
+                "BUILD_TESTS": "OFF"
+            },
+            "inherits": [
+                "release-linux-ninja",
+                "linux-paths"
+            ]
         }
     ],
     "buildPresets": [
@@ -105,6 +122,10 @@
         {
             "name": "linux-release-user",
             "configurePreset": "linux-release-user"
+        },
+        {
+            "name": "linux-sdk-package",
+            "configurePreset": "linux-sdk-package"
         }
     ],
     "testPresets": [

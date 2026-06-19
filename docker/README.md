@@ -110,9 +110,8 @@ FROM ${TURBONET_SDK_IMAGE} AS mqtt-build
 WORKDIR /src/mqtt
 COPY . ./
 
-RUN cmake -S . -B build -G Ninja \
-    -D CMAKE_PREFIX_PATH=/opt/turbonet \
-    && cmake --build build
+RUN cmake --preset linux-release-user \
+    && cmake --build --preset linux-release-user
 
 FROM debian:bookworm AS mqtt-runtime
 COPY --from=mqtt-build /src/mqtt/build/bin/mqtt /app/mqtt

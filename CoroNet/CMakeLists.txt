@@ -1,4 +1,4 @@
-set(TARGET_NAME CoroNet) 
+set(TARGET_NAME CoroNet)
 # Add WebSocket parser subdirectory
 add_subdirectory(parser)
 
@@ -39,6 +39,7 @@ set(BACKEND_FILES_KQUEUE
 
 set(BACKEND_FILES_IO_URING
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c)
 
@@ -87,8 +88,8 @@ add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
 
 # Configure targets
-cmake_config_target(${STATIC_TARGET_NAME} ALIAS TurboNet::CoroNet_static
-                          FOLDER ${TARGET_NAME} NO_INSTALL)
+cmake_config_target(${STATIC_TARGET_NAME} ALIAS TurboNet::CoroNet_static FOLDER
+                    ${TARGET_NAME} NO_INSTALL)
 
 cmake_config_target(
   ${TARGET_NAME}
@@ -101,8 +102,8 @@ cmake_config_target(
 if(WIN32)
   target_compile_definitions(${STATIC_TARGET_NAME}
                              PUBLIC WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-  target_compile_definitions(${TARGET_NAME}
-                             PUBLIC WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(${TARGET_NAME} PUBLIC WIN32_LEAN_AND_MEAN
+                                                   _CRT_SECURE_NO_WARNINGS)
 endif()
 # Apply configuration to both
 foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
@@ -111,14 +112,19 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
-           $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/CoroNet>
-    PRIVATE  ${WEBSOCKET_PARSER_INCLUDE_DIRS})
+           $<INSTALL_INTERFACE:include>
+           $<INSTALL_INTERFACE:include/CoroNet>
+    PRIVATE ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
   target_link_libraries(
     ${tgt}
-    PUBLIC OpenSSL::SSL OpenSSL::Crypto TurboNet::Utils TurboNet::Parser
-           Threads::Threads c-ares::cares
-    PRIVATE kcp::kcp llhttp::llhttp_static PkgConfig::STC TurboNet::SDS
+    PUBLIC TurboNet::Utils TurboNet::Parser Threads::Threads
+    PRIVATE kcp::kcp
+            PkgConfig::STC
+            TurboNet::SDS
+            c-ares::cares
+            OpenSSL::SSL
+            OpenSSL::Crypto
             TurboNet::WebSocketParser)
 
   if(WIN32)

@@ -19,6 +19,7 @@
 #ifdef _WIN32
   #include <windows.h>
 #else
+  #include <errno.h>
   #include <sched.h>
 #endif 
 #ifdef _WIN32
@@ -29,6 +30,18 @@ static __thread coro_context_t *tls_current_context = NULL;
 
 int turbo_tcp_backend_is_available(int backend);
 int turbo_udp_backend_is_available(int backend);
+
+static turbo_tcp_backend_t turbo_tcp_backend_default(void) {
+#ifdef _WIN32
+  return TURBO_TCP_BACKEND_IOCP;
+#elif defined(__linux__) || defined(__ANDROID__)
+  return TURBO_TCP_BACKEND_EPOLL;
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  return TURBO_TCP_BACKEND_KQUEUE;
+#else
+  return (turbo_tcp_backend_t)0;
+#endif
+}
 
 /* ── coro_task_s definition ───────────────────────────────────── */
 struct coro_task_s {
@@ -156,7 +169,7 @@ coro_context_t *coro_context_create(void *loop) {
     return NULL;
   }
 
-  ctx->tcp_backend = TURBO_TCP_BACKEND_AUTO;
+  ctx->tcp_backend = turbo_tcp_backend_default();
   ctx->udp_backend = TURBO_UDP_BACKEND_AUTO;
 
   return ctx;
@@ -183,7 +196,7 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
       if (has_ready) {
         turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
       } else {
-        turbo_loop_poll(ctx->loop, 1, 1); /* block up to 1ms */
+        turbo_loop_poll(ctx->loop, -1, 1); /* block until wake */
       }
 
       drain_post_queue(ctx);
@@ -589,7 +602,7 @@ int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backend_t backen
 }
 
 turbo_tcp_backend_t coro_context_get_tcp_backend(const coro_context_t *ctx) {
-  return ctx ? ctx->tcp_backend : TURBO_TCP_BACKEND_AUTO;
+  return ctx ? ctx->tcp_backend : turbo_tcp_backend_default();
 }
 
 int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backend) {
@@ -637,6 +650,7 @@ int coro_context_spawn(coro_context_t *ctx, coro_fn fn, void *arg) {
 
   coro_set_cleanup(co, pooled_coro_cleanup_callback, ctx->pool);
   coro_scheduler_adopt(ctx->scheduler, co);
+  turbo_loop_wake(ctx->loop);
   return 0;
 }
 
@@ -1025,9 +1039,19 @@ void turbo_loop_wake(turbo_loop_t *loop) {
 #else
   uint64_t val = 1;
 #ifdef __linux__
-  write(loop->wake_fds[0], &val, sizeof(val));
+  if (loop->wake_fds[0] >= 0) {
+    ssize_t n;
+    do {
+      n = write(loop->wake_fds[0], &val, sizeof(val));
+    } while (n < 0 && errno == EINTR);
+  }
 #else
-  if (loop->wake_fds[1] >= 0) write(loop->wake_fds[1], &val, sizeof(val));
+  if (loop->wake_fds[1] >= 0) {
+    ssize_t n;
+    do {
+      n = write(loop->wake_fds[1], &val, sizeof(val));
+    } while (n < 0 && errno == EINTR);
+  }
 #endif
 #endif
 }
@@ -1046,15 +1070,14 @@ void* coro_context_get_arena(coro_context_t *ctx) {
 /* ── Backend info ── */
 int turbo_tcp_backend_is_available(int backend) {
   switch (backend) {
-    case TURBO_TCP_BACKEND_AUTO:
-      return 1;
 #ifdef _WIN32
     case TURBO_TCP_BACKEND_IOCP:
       return 1;
-#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
+#elif defined(__linux__) || defined(__ANDROID__)
+#if !defined(__ANDROID__) && TURBO_HAS_IO_URING
     case TURBO_TCP_BACKEND_IO_URING:
       return 1;
-#elif defined(__linux__) || defined(__ANDROID__)
+#endif
     case TURBO_TCP_BACKEND_EPOLL:
       return 1;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)

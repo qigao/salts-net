@@ -2,12 +2,6 @@
 
 include(CMakeFindDependencyMacro)
 
-# Find dependencies (add more as needed)
-find_dependency(Threads)
-find_dependency(OpenSSL)  
-find_dependency(c-ares)
-find_dependency(base64) 
-find_dependency(zstd)
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboNetTargets.cmake")
 

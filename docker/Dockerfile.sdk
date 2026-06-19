@@ -8,8 +8,5 @@ WORKDIR /src/turbonet
 
 COPY . ./
 
-RUN cmake --preset linux-release-user \
-    -D BUILD_EXAMPLES=OFF \
-    -D BUILD_TESTS=OFF \
-    -D CMAKE_INSTALL_PREFIX=/opt/turbonet \
-    && cmake --build --preset linux-release-user --target install
+RUN cmake --preset linux-sdk-package \
+    && cmake --build --preset linux-sdk-package --target install

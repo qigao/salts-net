@@ -50,6 +50,11 @@ typedef struct {
   /* Cache-line aligned to prevent false sharing */
   alignas(64) ATOMIC_SIZE_T write_pos;  /**< Write position (producer only) */
   alignas(64) ATOMIC_SIZE_T read_pos;   /**< Read position (consumer only) */
+
+  /* Producer may reserve a tail padding span when a contiguous write wraps. */
+  alignas(64) ATOMIC_SIZE_T wrap_pos;
+  ATOMIC_SIZE_T wrap_len;
+  size_t pending_wrap_len;
 } ring_spsc_t;
 
 /******************** FUNCTION PROTOTYPES *********************/

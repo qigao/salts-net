@@ -14,12 +14,6 @@ Async Redis client implementing the RESP (REdis Serialization Protocol) protocol
 - **Database Selection**: Select different Redis databases (0-15)
 - **Zero External Dependencies**: Pure RESP implementation
 
-## Building
-
-```bash
-cmake -B build -G Ninja
-cmake --build build --target turbo_redis
-```
 
 ## Usage
 

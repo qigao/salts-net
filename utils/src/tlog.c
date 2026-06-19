@@ -348,6 +348,9 @@ static int format_with_pattern(char *buf, size_t buf_size, const compiled_patter
       }
       break;
     case LOG_TOKEN_LINE: {
+      if (entry->line <= 0) {
+        break;
+      }
       char temp[16];
       fmt(temp, sizeof(temp), "{}", entry->line);
       written = (int)strlen(temp);
@@ -697,6 +700,8 @@ struct tlog_s {
   atomic_int running;
   atomic_int consumer_ready;
   turbo_thread_t thread;
+  turbo_mutex_t wake_mutex;
+  turbo_cond_t wake_cond;
 
   // ---------------------------------------------------------------------------
   // Stats
@@ -760,6 +765,60 @@ static int logger_should_run(void *ctx) {
   return atomic_load(&logger->running);
 }
 
+static void logger_signal_consumer(tlog_t *logger) {
+  if (!logger || !logger->wake_mutex || !logger->wake_cond) {
+    return;
+  }
+
+  turbo_mutex_lock(&logger->wake_mutex);
+  turbo_cond_signal(&logger->wake_cond);
+  turbo_mutex_unlock(&logger->wake_mutex);
+}
+
+static void logger_broadcast_consumer(tlog_t *logger) {
+  if (!logger || !logger->wake_mutex || !logger->wake_cond) {
+    return;
+  }
+
+  turbo_mutex_lock(&logger->wake_mutex);
+  turbo_cond_broadcast(&logger->wake_cond);
+  turbo_mutex_unlock(&logger->wake_mutex);
+}
+
+static int logger_wait_for_available(tlog_t *logger, uint64_t next_sequence,
+                                     disruptor_cursor_t *cursor) {
+  if (!logger || !cursor) {
+    return 0;
+  }
+
+  cursor->sequence = next_sequence;
+  if (disruptor_consumer_wait_for_nonblocking(logger->disruptor, cursor)) {
+    return 1;
+  }
+
+  if (!logger->wake_mutex || !logger->wake_cond) {
+    return 0;
+  }
+
+  turbo_mutex_lock(&logger->wake_mutex);
+  while (logger_should_run(logger)) {
+    cursor->sequence = next_sequence;
+    if (disruptor_consumer_wait_for_nonblocking(logger->disruptor, cursor)) {
+      turbo_mutex_unlock(&logger->wake_mutex);
+      return 1;
+    }
+    turbo_cond_wait(&logger->wake_cond, &logger->wake_mutex);
+  }
+
+  cursor->sequence = next_sequence;
+  if (disruptor_consumer_wait_for_nonblocking(logger->disruptor, cursor)) {
+    turbo_mutex_unlock(&logger->wake_mutex);
+    return 1;
+  }
+  turbo_mutex_unlock(&logger->wake_mutex);
+  return 0;
+}
+
 static void logger_process_batch(void *ctx, uint64_t first_seq, uint64_t last_seq) {
   tlog_t *logger = (tlog_t *)ctx;
   logger_drain_entries(logger, first_seq, last_seq);
@@ -772,10 +831,8 @@ static void async_logger_thread(void *arg) {
 
   while (logger_should_run(logger)) {
     disruptor_cursor_t cursor;
-    cursor.sequence = next_sequence;
 
-    if (!disruptor_consumer_wait_for_nonblocking(logger->disruptor, &cursor)) {
-      turbo_sleep_ms(1);
+    if (!logger_wait_for_available(logger, next_sequence, &cursor)) {
       continue;
     }
 
@@ -813,6 +870,7 @@ static int logger_start_async(tlog_t *logger) {
 
 static void logger_stop_async(tlog_t *logger) {
   atomic_store(&logger->running, 0);
+  logger_broadcast_consumer(logger);
   turbo_thread_join(&logger->thread);
 }
 
@@ -831,6 +889,7 @@ static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer) {
   atomic_store_explicit(slot, buffer, memory_order_release);
   disruptor_publisher_commit_entry_blocking(logger->disruptor, &cursor);
   atomic_fetch_add(&logger->logs_published, 1);
+  logger_signal_consumer(logger);
   return 0;
 }
 
@@ -846,6 +905,8 @@ tlog_t *tlog_create(const tlog_config_t *config) {
   logger->min_level = config ? config->min_level : TURBO_LOG_LEVEL_INFO;
 
   turbo_mutex_init(&logger->sink_mutex);
+  turbo_mutex_init(&logger->wake_mutex);
+  turbo_cond_init(&logger->wake_cond);
 
   atomic_store(&logger->logs_written, 0);
   atomic_store(&logger->logs_dropped, 0);
@@ -862,6 +923,8 @@ tlog_t *tlog_create(const tlog_config_t *config) {
 
   logger->disruptor = disruptor_create(&disruptor_config);
   if (!logger->disruptor) {
+    turbo_cond_destroy(&logger->wake_cond);
+    turbo_mutex_destroy(&logger->wake_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
     return NULL;
@@ -872,6 +935,8 @@ tlog_t *tlog_create(const tlog_config_t *config) {
       (config && config->pool_size) ? config->pool_size : DEFAULT_POOL_SIZE;
   if (mem_init(&logger->async_pool, async_pool_size) != 0) {
     disruptor_destroy(logger->disruptor);
+    turbo_cond_destroy(&logger->wake_cond);
+    turbo_mutex_destroy(&logger->wake_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
     return NULL;
@@ -880,6 +945,8 @@ tlog_t *tlog_create(const tlog_config_t *config) {
   if (logger_start_async(logger) != 0) {
     mem_destroy(&logger->async_pool);
     disruptor_destroy(logger->disruptor);
+    turbo_cond_destroy(&logger->wake_cond);
+    turbo_mutex_destroy(&logger->wake_mutex);
     turbo_mutex_destroy(&logger->sink_mutex);
     free(logger);
     return NULL;
@@ -907,6 +974,8 @@ void tlog_destroy(tlog_t *logger) {
   }
 
   turbo_mutex_destroy(&logger->sink_mutex);
+  turbo_cond_destroy(&logger->wake_cond);
+  turbo_mutex_destroy(&logger->wake_mutex);
 
   // Clear default logger reference BEFORE freeing memory
   if (g_default_logger == logger) {

@@ -382,6 +382,7 @@ typedef struct tls_state_s {
   uint64_t        server_client_finished_read_ns;
   int             pumping;
   int             close_deferred;
+  int             close_requested;
 
 } tls_state_t;
 
@@ -951,6 +952,32 @@ static int tls_is_closed_or_deferred(const tls_state_t *st) {
   return !st || st->close_deferred || st->state == TLS_ST_CLOSED;
 }
 
+static void tls_finish_close(tls_state_t *st) {
+  turbo_stream_t *outer;
+
+  if (!st) {
+    return;
+  }
+
+  if (st->tcp) {
+    st->tcp->on_recv = NULL;
+    st->tcp->on_connect = NULL;
+    st->tcp->on_write_complete = NULL;
+    turbo_stream_close(st->tcp);
+    return;
+  }
+
+  outer = st->outer;
+  if (outer) {
+    outer->backend_data = NULL;
+  }
+  st->outer = NULL;
+  tls_free_state(st);
+  if (outer) {
+    turbo_stream_finalize_close(outer);
+  }
+}
+
 static void tls_pump_leave(tls_state_t *st) {
   turbo_stream_t *outer;
 
@@ -969,6 +996,12 @@ static void tls_pump_leave(tls_state_t *st) {
     if (outer) {
       turbo_stream_finalize_close(outer);
     }
+    return;
+  }
+
+  if (st->pumping == 0 && st->close_requested) {
+    st->close_requested = 0;
+    tls_finish_close(st);
   }
 }
 
@@ -1551,9 +1584,11 @@ static int tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer
   tls_state_t    *st;
   uint64_t cb_start_ns = 0;
   uint64_t bio_start_ns = 0;
+  int server_mode = 0;
   if (!tcp) return 0;
   st = (tls_state_t *)tcp->user_data;
   if (!st || !st->outer || !st->rbio) return 0;
+  server_mode = st->server_mode;
   if (!slice || !slice->data || slice->length == 0) {
     turbo_stream_close(st->outer);
     return 0;
@@ -1583,7 +1618,7 @@ static int tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer
   /* Drive TLS state machine to consume the data */
   tls_pump(st);
   if (cb_start_ns != 0) {
-    if (!st->server_mode) {
+    if (!server_mode) {
       tls_metric_add(&s_tls_metrics.client_handshake_recv_cb_ns,
                      turbo_hrtime() - cb_start_ns);
     } else {
@@ -1930,19 +1965,11 @@ static void tls_close(turbo_stream_t *s) {
   }
 
   if (st->pumping > 0) {
+    st->close_requested = 1;
     return;
   }
 
-  if (st->tcp) {
-    st->tcp->on_recv = NULL;
-    st->tcp->on_connect = NULL;
-    st->tcp->on_write_complete = NULL;
-    turbo_stream_close(st->tcp); /* triggers async close -> tls_on_tcp_close */
-  } else {
-    s->backend_data = NULL;
-    tls_free_state(st);
-    turbo_stream_finalize_close(s);
-  }
+  tls_finish_close(st);
 }
 
 static int tls_get_local(turbo_stream_t *s, struct sockaddr_storage *a) {

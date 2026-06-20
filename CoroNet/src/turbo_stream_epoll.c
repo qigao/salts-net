@@ -32,7 +32,7 @@
 /* ── Constants ───────────────────────────────────────────── */
 
 #define EVENT_RING_BYTES (64 * 1024)
-#define DATA_RING_SIZE   (64 * 1024)
+#define DATA_RING_SIZE   (128 * 1024)
 
 typedef enum {
     SEP_OP_NONE,

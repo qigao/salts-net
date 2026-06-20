@@ -12,6 +12,33 @@
 #include "platform.h"
 
 // =============================================================================
+// Thread-local storage
+// =============================================================================
+
+/**
+ * @brief Cross-platform thread-local storage specifier.
+ *
+ * Use as a storage-class specifier together with static when file-local state is
+ * required, for example:
+ *
+ *   static TURBO_THREAD_LOCAL int value;
+ */
+#ifndef TURBO_THREAD_LOCAL
+  #if defined(__cplusplus)
+    #define TURBO_THREAD_LOCAL thread_local
+  #elif defined(_MSC_VER)
+    #define TURBO_THREAD_LOCAL __declspec(thread)
+  #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && \
+      !defined(__STDC_NO_THREADS__)
+    #define TURBO_THREAD_LOCAL _Thread_local
+  #elif defined(__GNUC__) || defined(__clang__)
+    #define TURBO_THREAD_LOCAL __thread
+  #else
+    #error "TURBO_THREAD_LOCAL is not supported by this compiler"
+  #endif
+#endif
+
+// =============================================================================
 // Threading types
 // =============================================================================
 

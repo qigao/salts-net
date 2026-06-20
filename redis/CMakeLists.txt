@@ -1,17 +1,18 @@
 # Redis Client (RESP Protocol) Async Redis client implementing RESP protocol
 
-set(REDIS_HEADERS
-  redis_client.h
-  redis_pool.h
-  redis_cluster.h
-  turbo_redis.h)
+set(REDIS_HEADERS redis_client.h redis_pool.h redis_cluster.h)
 
-add_library(tedis SHARED redis_client.c redis_pool.c redis_cluster.c ${REDIS_HEADERS})
+add_library(tedis SHARED redis_client.c redis_pool.c redis_cluster.c
+                         ${REDIS_HEADERS})
 
-cmake_config_target(tedis
-  ALIAS TurboNet::Redis
-  FOLDER tedis
-  EXPORT_NAME Redis)
+cmake_config_target(
+  tedis
+  ALIAS
+  TurboNet::Redis
+  FOLDER
+  tedis
+  EXPORT_NAME
+  Redis)
 
 target_compile_definitions(tedis PRIVATE SHARED_CXX)
 if(BUILD_TESTING)
@@ -20,8 +21,7 @@ endif()
 
 target_include_directories(
   tedis PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-               $<INSTALL_INTERFACE:include>
-               $<INSTALL_INTERFACE:include/redis>)
+               $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/redis>)
 
 target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboNet::Utils)
 

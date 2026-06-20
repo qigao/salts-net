@@ -52,20 +52,27 @@ static void worker_thread_refined(void *arg) {
   worker_ctx_t *wctx = (worker_ctx_t *)arg;
   coro_thread_pool_t *pool = wctx->pool;
   coro_context_t *ctx = pool->contexts[wctx->index];
+  uint64_t shutdown_deadline_ms = 0;
   free(wctx);
 
     /* Good taste: run until shutdown is requested and the context is drained. */
     for (;;) {
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-
         if (!atomic_load_explicit(&pool->stopping, memory_order_acquire)) {
+            coro_context_run(ctx, TURBO_RUN_DEFAULT);
             continue;
         }
 
-        if (coro_context_coro_count(ctx) == 0 &&
-            (!coro_context_alive(ctx) || ctx->stop_requested)) {
+        if (shutdown_deadline_ms == 0) {
+            shutdown_deadline_ms = turbo_uptime_ms() + 8000;
+        }
+
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+
+        if (!coro_context_alive(ctx) || turbo_uptime_ms() >= shutdown_deadline_ms) {
             break;
         }
+
+        turbo_sleep_ms(1);
     }
 }
 

@@ -49,6 +49,7 @@ typedef struct stream_uring_op_s {
   void *owner;
   mem_buffer_t *buffer;
   int owns_buffer;
+  size_t offset;
   size_t length;
   ssize_t result;
   int fd;
@@ -370,7 +371,8 @@ static int stream_uring_submit_command(stream_uring_base_t *base,
   case STREAM_URING_OP_SEND:
     sqe = stream_uring_get_sqe(base);
     if (!sqe) return TURBO_ENOMEM;
-    io_uring_prep_send(sqe, base->fd, op->buffer->data, op->length, MSG_NOSIGNAL);
+    io_uring_prep_send(sqe, base->fd, op->buffer->data + op->offset,
+                       op->length - op->offset, MSG_NOSIGNAL);
     io_uring_sqe_set_data(sqe, op);
     stream_uring_track_inflight(base, op);
     return 0;
@@ -776,10 +778,30 @@ static void stream_uring_handle_send(stream_uring_op_t *op) {
   turbo_stream_t *s;
   stream_uring_state_t *st;
   int status;
+  size_t remaining;
 
   s = (turbo_stream_t *)op->owner;
   st = (stream_uring_state_t *)s->backend_data;
   status = (op->result < 0) ? (int)op->result : 0;
+
+  if (st && (op->result == -EAGAIN || op->result == -EWOULDBLOCK ||
+             op->result == -EINTR)) {
+    if (stream_uring_queue_push(&st->base, op) == 0) {
+      return;
+    }
+    status = TURBO_ENOMEM;
+  }
+
+  if (st && status == 0 && op->result > 0) {
+    remaining = op->length - op->offset;
+    if ((size_t)op->result < remaining) {
+      op->offset += (size_t)op->result;
+      if (stream_uring_queue_push(&st->base, op) == 0) {
+        return;
+      }
+      status = TURBO_ENOMEM;
+    }
+  }
 
   if (op->buffer && op->owns_buffer) {
     mem_unref(op->buffer);

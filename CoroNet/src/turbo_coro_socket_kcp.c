@@ -460,7 +460,8 @@ static void kcp_close(coro_socket_t *s) {
   }
 
   if (s->owns_handle && s->handle.kcp) {
-    turbo_kcp_close(s->handle.kcp);
+    turbo_kcp_destroy(s->handle.kcp);
+    s->handle.kcp = NULL;
   }
 }
 

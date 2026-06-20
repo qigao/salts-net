@@ -21,8 +21,6 @@
 #endif
 
 extern const coro_transport_ops_t transport_ops_ws;
-extern const coro_transport_ops_t transport_ops_tcp;
-extern const coro_transport_ops_t transport_ops_tls;
 const coro_transport_ops_t ws_server_ops;
 int turbo_stream_ws_wrap_client(turbo_stream_t *ws_stream, turbo_stream_t *tcp_stream,
                                 turbo_connect_cb on_connect, turbo_close_cb on_close);
@@ -491,12 +489,6 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
     return socket_ctx_error(s, TURBO_EIO);
   }
 
-  rc = turbo_stream_ws_wrap_server(ws_stream, raw_stream, on_ws_connect, on_ws_close);
-  if (rc != 0) {
-    turbo_stream_destroy(ws_stream);
-    return rc;
-  }
-
   s->handle.stream = ws_stream;
   ws_configure_server_socket(s);
   s->owns_handle = 1;
@@ -505,21 +497,32 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
 
   retain_client(s);
   coro_set_wait(s);
+  rc = turbo_stream_ws_wrap_server(ws_stream, raw_stream, on_ws_connect, on_ws_close);
+  if (rc != 0) {
+    s->co_wait = NULL;
+    release_client(s);
+    turbo_stream_set_user_data(ws_stream, NULL);
+    s->handle.stream = NULL;
+    s->connected = 0;
+    turbo_stream_destroy(ws_stream);
+    return rc;
+  }
+
   rc = turbo_stream_recv_start(ws_stream, on_ws_recv);
   if (rc != 0 && rc != TURBO_EALREADY) {
     s->co_wait = NULL;
     release_client(s);
     turbo_stream_set_user_data(ws_stream, NULL);
-    s->handle.stream = raw_stream;
-    s->transport = (kind == TURBO_STREAM_WSS) ? TURBO_TLS : TURBO_TCP;
-    s->ops = (kind == TURBO_STREAM_WSS) ? &transport_ops_tls : &transport_ops_tcp;
-    s->owns_handle = 1;
+    s->handle.stream = NULL;
+    s->connected = 0;
     turbo_stream_close(ws_stream);
     return rc;
   }
 
-  start_timeout_timer(s);
-  coro_yield();
+  if (s->co_wait) {
+    start_timeout_timer(s);
+    coro_yield();
+  }
   {
     int status = s->status;
     int timed_out = s->timed_out;

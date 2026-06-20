@@ -192,6 +192,14 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
     while (1) {
       int has_ready = coro_scheduler_has_ready(ctx->scheduler);
 
+      if (ctx->stop_requested ||
+          (!context_loop_alive(ctx) &&
+           !coro_scheduler_count(ctx->scheduler) &&
+           atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
+           post_queue_empty(ctx))) {
+        break;
+      }
+
       /* If we have ready coros, don't block. If not, wait for wake. */
       if (has_ready) {
         turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
@@ -870,6 +878,7 @@ static void on_sleep_timer_bounce(void *arg1, void *arg2) {
   }
 
   turbo_timer_destroy(sctx->timer);
+  coro_context_release_external(sctx->ctx);
   free(sctx);
 }
 
@@ -919,7 +928,16 @@ void coro_sleep(coro_context_t *ctx, uint64_t ms) {
     coro_set_waiting_for_io(co, 1);
   }
 
-  turbo_timer_start(sctx->timer, on_sleep_timer, ms, 0);
+  coro_context_acquire_external(ctx);
+  if (turbo_timer_start(sctx->timer, on_sleep_timer, ms, 0) != 0) {
+    if (sctx->co_is_scheduled) {
+      coro_set_waiting_for_io(co, 0);
+    }
+    coro_context_release_external(ctx);
+    turbo_timer_destroy(sctx->timer);
+    free(sctx);
+    return;
+  }
   coro_yield();
 }
 

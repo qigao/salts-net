@@ -87,7 +87,6 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
 
   if (r != 0) {
     coro_socket_destroy(task->socket);
-    wait_for_socket_close_completion(task->socket);
     release_client(task->socket);
     free(task);
     return;

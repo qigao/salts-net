@@ -1,6 +1,7 @@
 #include "object_pool.h"
 #include "tinytest.h"
 
+#include <stdint.h>
 #include <string.h>
 
 // Test structure
@@ -298,6 +299,30 @@ suite("ObjectPool") {
 
             object_pool_free(pool, obj);
             object_pool_destroy(pool);
+        }
+
+        it("rejects object size alignment overflow") {
+            object_pool_config_t config = {
+                .object_size = SIZE_MAX - 3,
+                .initial_capacity = 1,
+                .max_capacity = 0,
+                .zero_on_alloc = false
+            };
+
+            object_pool_t *pool = object_pool_create(&config);
+            check(pool == NULL);
+        }
+
+        it("rejects chunk byte size overflow") {
+            object_pool_config_t config = {
+                .object_size = SIZE_MAX / 2 + 1,
+                .initial_capacity = 2,
+                .max_capacity = 0,
+                .zero_on_alloc = false
+            };
+
+            object_pool_t *pool = object_pool_create(&config);
+            check(pool == NULL);
         }
     }
 

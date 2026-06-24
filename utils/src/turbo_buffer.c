@@ -421,6 +421,7 @@ static mem_buffer_t* pool_pop_recycled_buffer_nolock(mem_pool_t* pool, size_t mi
             *prev = buffer->next;
             atomic_fetch_sub(&pool->recycle_count, 1);
             buffer->next = NULL;
+            buffer->used = 0;
             atomic_store(&buffer->ref_count, 1);
             buffer->pool = pool;
             return buffer;

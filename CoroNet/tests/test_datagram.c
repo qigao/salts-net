@@ -248,8 +248,7 @@ spec("Datagram") {
 
         turbo_datagram_destroy(dg);
 
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should honor reuse_port for udp listener binds") {
@@ -286,8 +285,7 @@ spec("Datagram") {
 
         coro_socket_destroy(server2);
         coro_socket_destroy(server1);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should record datagram creation errors on the context") {
@@ -302,8 +300,7 @@ spec("Datagram") {
         check_int_eq(coro_context_get_last_error(ctx), 0);
 
         turbo_datagram_destroy(dg);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should fail udp socket creation when the datagram backend is invalid") {
@@ -346,8 +343,7 @@ spec("Datagram") {
         turbo_datagram_destroy(server);
         turbo_datagram_destroy(client);
 
-        coro_context_run(ctx, TURBO_RUN_DEFAULT); // Clean up handles
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should stress send and receive") {
@@ -387,8 +383,7 @@ spec("Datagram") {
 
         turbo_datagram_destroy(server);
         turbo_datagram_destroy(client);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should exchange data on connected datagrams") {
@@ -426,8 +421,7 @@ spec("Datagram") {
 
         turbo_datagram_destroy(left);
         turbo_datagram_destroy(right);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
 #ifdef _WIN32
@@ -553,8 +547,7 @@ spec("Datagram") {
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should exchange data on unconnected coro udp sockets with sendto") {
@@ -632,8 +625,7 @@ spec("Datagram") {
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should receive datagrams after an earlier recvfrom timeout") {
@@ -700,8 +692,7 @@ spec("Datagram") {
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 
     it("should send datagrams after an earlier recvfrom timeout on the sender") {
@@ -768,7 +759,6 @@ spec("Datagram") {
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        datagram_test_destroy_context_robust(ctx);
     }
 }

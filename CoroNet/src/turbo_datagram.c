@@ -110,7 +110,6 @@ int turbo_datagram_init_common(turbo_datagram_t *d, coro_context_t *ctx,
   d->recv_buf[1] = mem_get_buffer(d->arena, 65536);
   if (!d->recv_buf[0] || !d->recv_buf[1]) return TURBO_ENOMEM;
 
-  coro_context_native_ref(ctx);
   return 0;
 }
 
@@ -151,7 +150,10 @@ void turbo_datagram_finalize_close(turbo_datagram_t *d) {
     close_cb(close_cb_arg);
   }
 
-  coro_context_native_unref(d->ctx);
+  if (d->native_ref_held) {
+    d->native_ref_held = 0;
+    coro_context_native_unref(d->ctx);
+  }
   datagram_maybe_free(d);
 }
 
@@ -224,8 +226,15 @@ void turbo_datagram_destroy(turbo_datagram_t *d) {
 
 int turbo_datagram_bind(turbo_datagram_t *d, const char *host,
                          unsigned short port) {
+  int rc;
+
   if (!d) return TURBO_EINVAL;
-  return d->ops->init(d, host, port);
+  rc = d->ops->init(d, host, port);
+  if (rc == 0 && !d->native_ref_held) {
+    d->native_ref_held = 1;
+    coro_context_native_ref(d->ctx);
+  }
+  return rc;
 }
 
 void turbo_datagram_set_reuse_port(turbo_datagram_t *d, int enable) {

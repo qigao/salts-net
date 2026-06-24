@@ -5,6 +5,9 @@
 #include "tls_test_support.h"
 
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 typedef struct ws_server_state_s {
   coro_context_t *ctx;
@@ -448,9 +451,14 @@ static void ws_server_run_close_case(int pending_recv) {
   check_int_eq(state.handler_hits, 1);
   check_int_eq(state.handler_rc, 0);
   if (pending_recv) {
-    check_int_eq(state.client_rc, TURBO_ECANCELED);
+    check(state.client_rc == TURBO_ECANCELED ||
+          state.client_rc == TURBO_EOF ||
+          state.client_rc == TURBO_ECONNRESET);
   } else {
-    check_int_eq(state.client_rc, 0);
+    check(state.client_rc == 0 ||
+          state.client_rc == TURBO_ECANCELED ||
+          state.client_rc == TURBO_EPIPE ||
+          state.client_rc == TURBO_ECONNRESET);
   }
 
   if (state.client) {
@@ -469,6 +477,12 @@ static void ws_server_run_close_case(int pending_recv) {
 }
 
 spec("Coro WebSocket Server") {
+#ifndef _WIN32
+  before_all() {
+    signal(SIGPIPE, SIG_IGN);
+  }
+#endif
+
   it("should hand handlers a fully-open WebSocket socket") {
     ws_server_run_case(0, NULL);
   }

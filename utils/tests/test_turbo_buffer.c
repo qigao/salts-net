@@ -117,10 +117,12 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     
     mem_buffer_t* b1 = mem_get_buffer(&pool, 100);
     void* data1 = b1->data;
+    b1->used = 17;
     mem_release(b1);
     
     mem_buffer_t* b2 = mem_get_buffer(&pool, 100);
     check_ptr_eq(b2->data, data1);
+    check_size_eq(b2->used, 0);
     
     mem_release(b2);
     mem_destroy(&pool);

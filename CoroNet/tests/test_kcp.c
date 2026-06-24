@@ -96,6 +96,23 @@ static void kcp_socket_echo_client(coro_t *co, void *arg) {
     coro_context_stop(state->ctx);
 }
 
+static void kcp_test_destroy_context_robust(coro_context_t *ctx) {
+    int max_drain = 500;
+
+    if (!ctx) {
+        return;
+    }
+
+    coro_context_stop(ctx);
+    while (max_drain-- > 0) {
+        if (!coro_context_alive(ctx)) {
+            break;
+        }
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+    }
+    coro_context_destroy(ctx);
+}
+
 spec("KCP Transport") {
     it("should create and destroy kcp context") {
         coro_context_t *ctx = coro_context_create(NULL);
@@ -106,8 +123,7 @@ spec("KCP Transport") {
 
         turbo_kcp_destroy(kcp);
 
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should keep KCP FEC disabled by default") {
@@ -127,8 +143,7 @@ spec("KCP Transport") {
         check_int_eq(cfg.max_payload_size, 1200);
 
         turbo_kcp_destroy(kcp);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should validate KCP FEC configuration before enabling") {
@@ -159,8 +174,7 @@ spec("KCP Transport") {
         }
 
         turbo_kcp_destroy(kcp);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should recover a missing data shard through Wirehair FEC when available") {
@@ -248,8 +262,7 @@ spec("KCP Transport") {
         check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
         turbo_kcp_destroy(client);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should send and receive data over KCP") {
@@ -394,8 +407,7 @@ spec("KCP Transport") {
 
         coro_socket_destroy(server2);
         coro_socket_destroy(server1);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should expose pending KCP FEC config through coro_socket") {
@@ -423,8 +435,7 @@ spec("KCP Transport") {
         check_int_eq(coro_socket_set_kcp_fec(sock, &cfg), TURBO_EINVAL);
 
         coro_socket_destroy(sock);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should support KCP server sockets through coro_socket_listen_on") {
@@ -467,7 +478,6 @@ spec("KCP Transport") {
         check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
         coro_socket_destroy(server);
-        coro_context_run(ctx, TURBO_RUN_DEFAULT);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 }

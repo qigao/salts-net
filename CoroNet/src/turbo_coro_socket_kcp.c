@@ -256,6 +256,7 @@ static void on_kcp_connect(void *handle, int status, void *extra) {
 
 static int kcp_connect(coro_socket_t *s, const char *host, int port) {
   int r;
+  int created_handle = 0;
 
   /* Create handle if not existing */
   if (!s->handle.kcp) {
@@ -263,8 +264,12 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
     if (!s->handle.kcp) return socket_ctx_error(s, TURBO_EIO);
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
+    created_handle = 1;
     r = kcp_apply_pending_fec(s);
     if (r != 0) {
+      turbo_kcp_destroy(s->handle.kcp);
+      s->handle.kcp = NULL;
+      s->owns_handle = 0;
       return r;
     }
   }
@@ -282,6 +287,11 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
+    if (created_handle) {
+      turbo_kcp_destroy(s->handle.kcp);
+      s->handle.kcp = NULL;
+      s->owns_handle = 0;
+    }
     return r;
   }
 
@@ -306,6 +316,8 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
   char host[INET6_ADDRSTRLEN];
   unsigned short port;
   int r;
+  int created_listener_state = 0;
+  int created_handle = 0;
 
   if (!s || !addr) {
     return TURBO_EINVAL;
@@ -323,23 +335,48 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     }
     ls->listener_coro = s;
     s->native_tcp_state = ls;
+    created_listener_state = 1;
   }
 
   if (!s->handle.kcp) {
     s->handle.kcp = turbo_kcp_create(s->ctx);
     if (!s->handle.kcp) {
+      if (created_listener_state) {
+        free(s->native_tcp_state);
+        s->native_tcp_state = NULL;
+      }
       return socket_ctx_error(s, TURBO_EIO);
     }
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
+    created_handle = 1;
     r = kcp_apply_pending_fec(s);
     if (r != 0) {
+      turbo_kcp_destroy(s->handle.kcp);
+      s->handle.kcp = NULL;
+      s->owns_handle = 0;
+      if (created_listener_state) {
+        free(s->native_tcp_state);
+        s->native_tcp_state = NULL;
+      }
       return r;
     }
   }
 
   turbo_kcp_set_reuse_port(s->handle.kcp, s->reuse_port);
   r = turbo_kcp_bind(s->handle.kcp, host, (int)port, on_kcp_recv);
+  if (r != 0) {
+    if (created_handle) {
+      turbo_kcp_destroy(s->handle.kcp);
+      s->handle.kcp = NULL;
+      s->owns_handle = 0;
+    }
+    if (created_listener_state) {
+      free(s->native_tcp_state);
+      s->native_tcp_state = NULL;
+    }
+    return r;
+  }
   if (r == 0) {
     s->connected = 1;
     s->status = 0;

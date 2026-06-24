@@ -6,15 +6,16 @@
  * @file turbo_stream_epoll.c
  * @brief High-performance Linux epoll backend for turbo_stream_t.
  *
- * Implements the "one worker thread per handle" pattern with SPSC rings
- * for data and event notifications to eliminate heap churn and locks.
- * Supports scatter-gather oriented buffering.
+ * Implements a shared epoll reactor per process. Stream instances own their
+ * buffers and state, while a bounded number of worker threads multiplex all
+ * registered file descriptors.
  */
 
 #ifdef __linux__
 
 #include "turbo_stream_internal.h"
 #include "CoroNet/turbo_coro_context.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "turbo_buffer.h"
 #include "turbo_thread.h"
 #include "tlog.h"
@@ -28,6 +29,8 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 /* ── Constants ───────────────────────────────────────────── */
 
@@ -58,10 +61,7 @@ typedef struct {
 typedef struct {
     void *owner;         /* turbo_stream_t or turbo_stream_listener_t */
     coro_context_t *ctx;
-    int epoll_fd;
     int fd;
-    int wake_fd;
-    turbo_thread_t worker_thread;
     int fd_armed;
     int connected;
     int send_pending;
@@ -69,7 +69,11 @@ typedef struct {
     int event_post_pending;
     int terminal_posted;
     int is_listener;
-    int stopping;
+    atomic_int stopping;
+    int registered;
+    int cleanup_posted;
+    int close_fd_on_cleanup;
+    int ctx_ref_acquired;
     
     /* Event Notification Ring (SPSC from worker to main) */
     ring_spsc_t event_ring;
@@ -83,6 +87,37 @@ typedef struct {
     uint8_t *write_buf;
 } stream_epoll_state_t;
 
+typedef enum {
+    REACTOR_CMD_ADD = 1,
+    REACTOR_CMD_MOD,
+    REACTOR_CMD_REMOVE,
+    REACTOR_CMD_WAKE,
+    REACTOR_CMD_CLOSE,
+    REACTOR_CMD_FREE,
+    REACTOR_CMD_STOP
+} reactor_cmd_kind_t;
+
+typedef struct reactor_cmd_s {
+    reactor_cmd_kind_t kind;
+    stream_epoll_state_t *st;
+    uint32_t events;
+} reactor_cmd_t;
+
+typedef struct {
+    int epoll_fd;
+    int wake_fd;
+    turbo_thread_t worker_thread;
+    turbo_mutex_t lock;
+    int initialized;
+    int stopping;
+    reactor_cmd_t cmds[4096];
+    size_t cmd_head;
+    size_t cmd_tail;
+} stream_epoll_reactor_t;
+
+static stream_epoll_reactor_t g_reactor;
+static turbo_once_t g_reactor_once = TURBO_ONCE_INIT;
+
 /* ── Helpers ─────────────────────────────────────────────── */
 
 static void set_nonblocking(int fd) {
@@ -91,12 +126,15 @@ static void set_nonblocking(int fd) {
 }
 
 static int epoll_is_stopping(stream_epoll_state_t *st) {
-    return st && __atomic_load_n(&st->stopping, __ATOMIC_ACQUIRE) != 0;
+    if (!st) {
+        return 1;
+    }
+    return atomic_load_explicit(&st->stopping, memory_order_acquire) != 0;
 }
 
 static void epoll_request_stop(stream_epoll_state_t *st) {
     if (st) {
-        __atomic_store_n(&st->stopping, 1, __ATOMIC_RELEASE);
+        atomic_store_explicit(&st->stopping, 1, memory_order_release);
     }
 }
 
@@ -111,10 +149,13 @@ static void flush_write_ring(stream_epoll_state_t *st);
 static void try_flush_write_ring(stream_epoll_state_t *st);
 static void epoll_destroy_state(stream_epoll_state_t *st);
 static void epoll_shutdown_state(stream_epoll_state_t *st);
+static void epoll_release_context_ref(stream_epoll_state_t *st);
 static void epoll_stream_cleanup_task(void *arg1, void *arg2);
 static void epoll_listener_cleanup_task(void *arg1, void *arg2);
-static int epoll_ensure_poll_fds(stream_epoll_state_t *st);
-static int epoll_start_worker(stream_epoll_state_t *st);
+static int epoll_register_state(stream_epoll_state_t *st, uint32_t events);
+static int epoll_reactor_wake_state(stream_epoll_state_t *st);
+static int epoll_reactor_close_state(stream_epoll_state_t *st);
+static void epoll_reactor_free_state(stream_epoll_state_t *st);
 
 static void epoll_event_write_lock(stream_epoll_state_t *st) {
     while (__sync_lock_test_and_set(&st->event_write_lock, 1)) {
@@ -130,8 +171,11 @@ static void epoll_disarm_stream_fd(stream_epoll_state_t *st) {
     if (!st || st->is_listener || st->fd < 0 || !st->fd_armed) {
         return;
     }
-    (void)epoll_ctl(st->epoll_fd, EPOLL_CTL_DEL, st->fd, NULL);
+    if (g_reactor.epoll_fd >= 0) {
+        (void)epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_DEL, st->fd, NULL);
+    }
     st->fd_armed = 0;
+    st->registered = 0;
 }
 
 static void post_terminal_event(stream_epoll_state_t *st, int status) {
@@ -159,9 +203,8 @@ static uint8_t *wait_ring_write(stream_epoll_state_t *st, ring_spsc_t *ring, siz
         }
 
         turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
-        if (st->wake_fd >= 0) {
-            uint64_t val = 1;
-            write(st->wake_fd, &val, sizeof(val));
+        if (ring == &st->write_ring) {
+            (void)epoll_reactor_wake_state(st);
         }
         turbo_thread_yield();
     }
@@ -384,169 +427,377 @@ static void on_epoll_event_bounce(void *arg1, void *arg2) {
     }
 }
 
-/* ── Worker Thread ───────────────────────────────────────── */
+/* ── Shared Reactor Thread ───────────────────────────────── */
 
-static void stream_epoll_worker(void* arg) {
-    stream_epoll_state_t *st = (stream_epoll_state_t *)arg;
-    struct epoll_event events[8];
+static void epoll_reactor_signal(void) {
+    if (g_reactor.wake_fd >= 0) {
+        uint64_t val = 1;
+        ssize_t n;
+        do {
+            n = write(g_reactor.wake_fd, &val, sizeof(val));
+        } while (n < 0 && errno == EINTR);
+    }
+}
+
+static int epoll_reactor_push(reactor_cmd_kind_t kind, stream_epoll_state_t *st,
+                              uint32_t events) {
+    size_t next_head;
+
+    turbo_mutex_lock(&g_reactor.lock);
+    for (;;) {
+        next_head = (g_reactor.cmd_head + 1) %
+                    (sizeof(g_reactor.cmds) / sizeof(g_reactor.cmds[0]));
+        if (next_head != g_reactor.cmd_tail) {
+            break;
+        }
+        turbo_mutex_unlock(&g_reactor.lock);
+        turbo_thread_yield();
+        turbo_mutex_lock(&g_reactor.lock);
+    }
+
+    g_reactor.cmds[g_reactor.cmd_head].kind = kind;
+    g_reactor.cmds[g_reactor.cmd_head].st = st;
+    g_reactor.cmds[g_reactor.cmd_head].events = events;
+    g_reactor.cmd_head = next_head;
+    turbo_mutex_unlock(&g_reactor.lock);
+    epoll_reactor_signal();
+    return 0;
+}
+
+static int epoll_reactor_pop(reactor_cmd_t *out) {
+    int has_cmd = 0;
+
+    turbo_mutex_lock(&g_reactor.lock);
+    if (g_reactor.cmd_tail != g_reactor.cmd_head) {
+        *out = g_reactor.cmds[g_reactor.cmd_tail];
+        g_reactor.cmd_tail = (g_reactor.cmd_tail + 1) %
+                             (sizeof(g_reactor.cmds) / sizeof(g_reactor.cmds[0]));
+        has_cmd = 1;
+    }
+    turbo_mutex_unlock(&g_reactor.lock);
+    return has_cmd;
+}
+
+static void epoll_reactor_close_fd(stream_epoll_state_t *st) {
+    if (!st) {
+        return;
+    }
+    if (st->fd_armed && g_reactor.epoll_fd >= 0 && st->fd >= 0) {
+        (void)epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_DEL, st->fd, NULL);
+    }
+    st->fd_armed = 0;
+    st->registered = 0;
+    if (st->fd >= 0) {
+        if (st->close_fd_on_cleanup) {
+            close(st->fd);
+        }
+        st->fd = -1;
+    }
+}
+
+static void epoll_reactor_process_commands(void) {
+    reactor_cmd_t cmd;
+
+    while (epoll_reactor_pop(&cmd)) {
+        stream_epoll_state_t *st = cmd.st;
+        struct epoll_event ev;
+
+        if (cmd.kind == REACTOR_CMD_STOP) {
+            g_reactor.stopping = 1;
+            continue;
+        }
+        if (!st) {
+            continue;
+        }
+
+        switch (cmd.kind) {
+            case REACTOR_CMD_ADD:
+            case REACTOR_CMD_MOD:
+                if (epoll_is_stopping(st) || st->fd < 0) {
+                    break;
+                }
+                memset(&ev, 0, sizeof(ev));
+                ev.events = cmd.events;
+                ev.data.ptr = st;
+                if (!st->fd_armed) {
+                    if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_ADD, st->fd, &ev) == 0 ||
+                        errno == EEXIST) {
+                        st->fd_armed = 1;
+                        st->registered = 1;
+                    } else {
+                        st->registered = 0;
+                        post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+                    }
+                } else if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_MOD, st->fd, &ev) != 0 &&
+                           errno != ENOENT) {
+                    post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+                }
+                break;
+
+            case REACTOR_CMD_REMOVE:
+                epoll_reactor_close_fd(st);
+                break;
+
+            case REACTOR_CMD_WAKE:
+                if (!epoll_is_stopping(st) && !st->is_listener) {
+                    try_flush_write_ring(st);
+                }
+                break;
+
+            case REACTOR_CMD_CLOSE:
+                epoll_reactor_close_fd(st);
+                if (st->is_listener) {
+                    epoll_post_wait(st, epoll_listener_cleanup_task, st, st->owner);
+                } else {
+                    epoll_post_wait(st, epoll_stream_cleanup_task, st, st->owner);
+                }
+                break;
+
+            case REACTOR_CMD_FREE:
+                epoll_destroy_state(st);
+                break;
+
+            default:
+                break;
+        }
+    }
+}
+
+static void stream_epoll_handle_listener_event(stream_epoll_state_t *st) {
+    if (!st || epoll_is_stopping(st)) {
+        return;
+    }
+
+    for (;;) {
+        struct sockaddr_storage addr;
+        socklen_t addr_len = sizeof(addr);
+        int client_fd = accept4(st->fd, (struct sockaddr *)&addr, &addr_len,
+                                SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if (client_fd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                return;
+            }
+            post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+            return;
+        }
+
+        turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
+        turbo_stream_t *child = turbo_stream_create(l->ctx, l->kind);
+        if (child) {
+            extern int epoll_init_with_socket(turbo_stream_t *s, int existing);
+            if (epoll_init_with_socket(child, client_fd) == 0) {
+                child->connected = 1;
+                child->listener = l;
+                l->active_connections++;
+                post_event(st, SEP_OP_ACCEPT, 0, child,
+                           (const struct sockaddr *)&addr, addr_len);
+                continue;
+            }
+            turbo_stream_destroy(child);
+        } else {
+            close(client_fd);
+        }
+
+        post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL, NULL, 0);
+        return;
+    }
+}
+
+static void stream_epoll_handle_stream_event(stream_epoll_state_t *st, uint32_t evmask) {
     uint8_t io_buf[8192];
-    
-    while (!epoll_is_stopping(st)) {
-        int nfds = epoll_wait(st->epoll_fd, events, 8, -1);
-        if (epoll_is_stopping(st)) break;
+    int read_terminal_reported = 0;
+
+    if (!st || epoll_is_stopping(st)) {
+        return;
+    }
+
+    if (evmask & EPOLLOUT) {
+        if (!st->connected) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            st->connected = 1;
+            post_event(st, SEP_OP_CONNECT, (err == 0) ? 0 : -err, NULL, NULL, 0);
+        }
+        try_flush_write_ring(st);
+    }
+
+    if (evmask & EPOLLIN) {
+        for (;;) {
+            ssize_t n = recv(st->fd, io_buf, sizeof(io_buf), 0);
+            if (n > 0) {
+                uint8_t *dest = ring_spsc_write_acquire(&st->read_ring, (size_t)n);
+                if (dest == NULL) {
+                    post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
+                    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
+                    break;
+                }
+                memcpy(dest, io_buf, (size_t)n);
+                ring_spsc_write_release(&st->read_ring, (size_t)n);
+                post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
+                continue;
+            }
+            if (n == 0) {
+                post_terminal_event(st, TURBO_EOF);
+                read_terminal_reported = 1;
+                break;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+            post_terminal_event(st, -errno);
+            read_terminal_reported = 1;
+            break;
+        }
+    }
+
+    if ((evmask & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) && !read_terminal_reported) {
+        if (evmask & EPOLLERR) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            if (getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err == 0) {
+                err = EIO;
+            }
+            post_terminal_event(st, -err);
+        } else {
+            post_terminal_event(st, TURBO_EOF);
+        }
+    }
+}
+
+static void stream_epoll_reactor_worker(void *arg) {
+    (void)arg;
+
+    while (!g_reactor.stopping) {
+        struct epoll_event events[64];
+        int nfds = epoll_wait(g_reactor.epoll_fd, events, 64, -1);
+
         if (nfds < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            TLOG_ERROR("epoll[{:p}] wait failed fd={:d} err={:d}", (void *)st, st->fd, errno);
+            TLOG_ERROR("epoll reactor wait failed err={:d}", errno);
             break;
         }
-        
-        /* Always check for write data after waking up, even if no network event */
-        int should_flush = 0;
-        if (nfds > 0) {
-            for (int i = 0; i < nfds; i++) {
-                if (events[i].data.fd == st->wake_fd) {
-                    uint64_t val;
-                    read(st->wake_fd, &val, sizeof(val));
-                    should_flush = 1;
-                } else if (st->is_listener) {
-                    if (events[i].events & EPOLLIN) {
-                        while (1) {
-                            struct sockaddr_storage addr;
-                            socklen_t addr_len = sizeof(addr);
-                            int client_fd = accept4(st->fd, (struct sockaddr *)&addr, &addr_len,
-                                                    SOCK_NONBLOCK | SOCK_CLOEXEC);
-                            if (client_fd < 0) break;
-                            
-                            turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
-                            turbo_stream_t *child = turbo_stream_create(l->ctx, l->kind);
-                            if (child) {
-                                extern int epoll_init_with_socket(turbo_stream_t *s, int existing);
-                                if (epoll_init_with_socket(child, client_fd) == 0) {
-                                    child->connected = 1;
-                                    child->listener = l;
-                                    l->active_connections++;
-                                    post_event(st, SEP_OP_ACCEPT, 0, child,
-                                               (const struct sockaddr *)&addr, addr_len);
-                                } else {
-                                    turbo_stream_destroy(child);
-                                    epoll_request_stop(st);
-                                    post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL, NULL, 0);
-                                    break;
-                                }
-                            } else {
-                                close(client_fd);
-                                epoll_request_stop(st);
-                                post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL, NULL, 0);
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    uint32_t evmask = events[i].events;
-                    int read_terminal_reported = 0;
 
-                    if (events[i].events & EPOLLOUT) {
-                        if (!st->connected) {
-                            int err = 0; socklen_t len = sizeof(err);
-                            getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                            st->connected = 1;
-                            post_event(st, SEP_OP_CONNECT, (err == 0) ? 0 : -err, NULL, NULL, 0);
-                        }
-                        should_flush = 1;
-                    }
-                    if (events[i].events & EPOLLIN) {
-                        for (;;) {
-                            ssize_t n = recv(st->fd, io_buf, sizeof(io_buf), 0);
-                            if (n > 0) {
-                                uint8_t *dest = wait_ring_write(st, &st->read_ring, (size_t)n);
-                                if (dest == NULL) {
-                                    break;
-                                }
-                                memcpy(dest, io_buf, (size_t)n);
-                                ring_spsc_write_release(&st->read_ring, (size_t)n);
-                                post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
-                                continue;
-                            }
-                            if (n == 0) {
-                                post_terminal_event(st, TURBO_EOF);
-                                read_terminal_reported = 1;
-                                break;
-                            }
-                            if (errno == EINTR) {
-                                continue;
-                            }
-                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                                break;
-                            }
-                            post_terminal_event(st, -errno);
-                            read_terminal_reported = 1;
-                            break;
-                        }
-                    }
-                    if ((evmask & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) &&
-                        !read_terminal_reported) {
-                        TLOG_DEBUG("epoll[{:p}] hup/err event fd={:d} mask=0x{:x}", (void *)st,
-                                   st->fd, (unsigned int)evmask);
-                        if (evmask & EPOLLERR) {
-                            int err = 0;
-                            socklen_t len = sizeof(err);
-                            if (getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 ||
-                                err == 0) {
-                                err = EIO;
-                            }
-                            post_terminal_event(st, -err);
-                        } else {
-                            post_terminal_event(st, TURBO_EOF);
-                        }
-                    }
+        for (int i = 0; i < nfds; i++) {
+            if (events[i].data.ptr == &g_reactor) {
+                uint64_t val;
+                while (read(g_reactor.wake_fd, &val, sizeof(val)) > 0) {
                 }
+                epoll_reactor_process_commands();
+                continue;
+            }
+
+            stream_epoll_state_t *st = (stream_epoll_state_t *)events[i].data.ptr;
+            if (!st || epoll_is_stopping(st)) {
+                continue;
+            }
+            if (st->is_listener) {
+                stream_epoll_handle_listener_event(st);
+            } else {
+                stream_epoll_handle_stream_event(st, events[i].events);
             }
         }
-
-        if (should_flush && !st->is_listener) {
-            try_flush_write_ring(st);
-        }
     }
-    TLOG_DEBUG("epoll[{:p}] worker-exit listener={:d} fd={:d} wake_fd={:d}", (void *)st,
-               st->is_listener, st->fd, st->wake_fd);
-    return;
 }
 
-static int epoll_start_worker(stream_epoll_state_t *st) {
+static void epoll_reactor_init_once(void) {
     struct epoll_event ev;
+
+    memset(&g_reactor, 0, sizeof(g_reactor));
+    g_reactor.epoll_fd = -1;
+    g_reactor.wake_fd = -1;
+    turbo_mutex_init(&g_reactor.lock);
+
+    g_reactor.epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (g_reactor.epoll_fd < 0) {
+        return;
+    }
+
+    g_reactor.wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (g_reactor.wake_fd < 0) {
+        close(g_reactor.epoll_fd);
+        g_reactor.epoll_fd = -1;
+        return;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data.ptr = &g_reactor;
+    if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_ADD, g_reactor.wake_fd, &ev) < 0) {
+        close(g_reactor.wake_fd);
+        close(g_reactor.epoll_fd);
+        g_reactor.wake_fd = -1;
+        g_reactor.epoll_fd = -1;
+        return;
+    }
+
+    if (turbo_thread_create(&g_reactor.worker_thread, stream_epoll_reactor_worker, NULL) != 0) {
+        close(g_reactor.wake_fd);
+        close(g_reactor.epoll_fd);
+        g_reactor.wake_fd = -1;
+        g_reactor.epoll_fd = -1;
+        return;
+    }
+
+    g_reactor.initialized = 1;
+}
+
+static int epoll_reactor_ensure(void) {
+    turbo_once(&g_reactor_once, epoll_reactor_init_once);
+    return g_reactor.initialized ? 0 : TURBO_ENOMEM;
+}
+
+static int epoll_register_state(stream_epoll_state_t *st, uint32_t events) {
     int rc;
 
-    if (!st) {
+    if (!st || st->fd < 0) {
         return TURBO_EINVAL;
     }
-    if (st->worker_thread) {
+    if (st->registered) {
         return 0;
     }
-    if (st->fd < 0) {
-        return TURBO_EINVAL;
-    }
-    rc = epoll_ensure_poll_fds(st);
+    rc = epoll_reactor_ensure();
     if (rc != 0) {
         return rc;
     }
-    if (!st->fd_armed) {
-        ev.events = EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP;
-        ev.data.fd = st->fd;
-        if (epoll_ctl(st->epoll_fd, EPOLL_CTL_ADD, st->fd, &ev) < 0) {
-            if (errno != EEXIST) {
-                return -errno;
-            }
-        }
-        st->fd_armed = 1;
-    }
+    st->registered = 1;
+    return epoll_reactor_push(st->fd_armed ? REACTOR_CMD_MOD : REACTOR_CMD_ADD, st, events);
+}
 
-    rc = turbo_thread_create(&st->worker_thread, stream_epoll_worker, st);
-    if (rc != 0) {
-        return rc;
+static int epoll_reactor_wake_state(stream_epoll_state_t *st) {
+    if (!st || epoll_is_stopping(st)) {
+        return TURBO_ECANCELED;
     }
-    return 0;
+    if (epoll_reactor_ensure() != 0) {
+        return TURBO_ENOMEM;
+    }
+    return epoll_reactor_push(REACTOR_CMD_WAKE, st, 0);
+}
+
+static int epoll_reactor_close_state(stream_epoll_state_t *st) {
+    if (!st || !__sync_bool_compare_and_swap(&st->cleanup_posted, 0, 1)) {
+        return 0;
+    }
+    if (epoll_reactor_ensure() != 0) {
+        return TURBO_ENOMEM;
+    }
+    return epoll_reactor_push(REACTOR_CMD_CLOSE, st, 0);
+}
+
+static void epoll_reactor_free_state(stream_epoll_state_t *st) {
+    if (!st) {
+        return;
+    }
+    if (!g_reactor.initialized) {
+        epoll_destroy_state(st);
+        return;
+    }
+    (void)epoll_reactor_push(REACTOR_CMD_FREE, st, 0);
 }
 
 /* ── Backend Ops ─────────────────────────────────────────── */
@@ -561,9 +812,10 @@ static int epoll_init_state(stream_epoll_state_t **out, void *owner, coro_contex
     st->owner = owner;
     st->ctx = ctx;
     st->fd = -1;
-    st->epoll_fd = -1;
-    st->wake_fd = -1;
     st->is_listener = is_listener;
+    st->close_fd_on_cleanup = 1;
+    coro_context_acquire_external(st->ctx);
+    st->ctx_ref_acquired = 1;
 
     st->event_buf = (uint8_t *)malloc(EVENT_RING_BYTES);
     if (!st->event_buf) {
@@ -605,94 +857,63 @@ fail:
     return rc;
 }
 
-static int epoll_ensure_poll_fds(stream_epoll_state_t *st) {
-    struct epoll_event ev;
-
-    if (!st) {
-        return TURBO_EINVAL;
-    }
-    if (st->epoll_fd >= 0) {
-        return 0;
-    }
-
-    st->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-    if (st->epoll_fd < 0) {
-        return -errno;
-    }
-
-    st->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (st->wake_fd < 0) {
-        int rc = -errno;
-        close(st->epoll_fd);
-        st->epoll_fd = -1;
-        return rc;
-    }
-
-    ev.events = EPOLLIN;
-    ev.data.fd = st->wake_fd;
-    if (epoll_ctl(st->epoll_fd, EPOLL_CTL_ADD, st->wake_fd, &ev) < 0) {
-        int rc = -errno;
-        close(st->wake_fd);
-        close(st->epoll_fd);
-        st->wake_fd = -1;
-        st->epoll_fd = -1;
-        return rc;
-    }
-
-    return 0;
-}
-
 static void epoll_destroy_state(stream_epoll_state_t *st) {
     if (!st) return;
-    if (st->epoll_fd >= 0) {
-        close(st->epoll_fd);
-        st->epoll_fd = -1;
-    }
     if (st->fd >= 0) {
-        close(st->fd);
+        if (st->close_fd_on_cleanup) {
+            close(st->fd);
+        }
         st->fd = -1;
-    }
-    if (st->wake_fd >= 0) {
-        close(st->wake_fd);
-        st->wake_fd = -1;
     }
     free(st->event_buf);
     free(st->read_buf);
     free(st->write_buf);
+    epoll_release_context_ref(st);
     free(st);
+}
+
+static void epoll_release_context_ref(stream_epoll_state_t *st) {
+    if (!st) {
+        return;
+    }
+    if (st->ctx_ref_acquired) {
+        coro_context_release_external(st->ctx);
+        st->ctx_ref_acquired = 0;
+    }
 }
 
 static void epoll_shutdown_state(stream_epoll_state_t *st) {
     if (!st) return;
-    TLOG_DEBUG("epoll[{:p}] shutdown-begin fd={:d} wake_fd={:d} listener={:d}",
-               (void *)st, st->fd, st->wake_fd, st->is_listener);
+    TLOG_DEBUG("epoll[{:p}] shutdown-begin fd={:d} listener={:d}",
+               (void *)st, st->fd, st->is_listener);
     epoll_request_stop(st);
-    if (st->wake_fd >= 0) { uint64_t val = 1; write(st->wake_fd, &val, sizeof(val)); }
-    if (st->worker_thread) turbo_thread_join(&st->worker_thread);
-    TLOG_DEBUG("epoll[{:p}] shutdown-joined fd={:d} wake_fd={:d}", (void *)st, st->fd,
-               st->wake_fd);
-    if (st->epoll_fd >= 0) close(st->epoll_fd);
-    if (st->fd >= 0) close(st->fd);
-    if (st->wake_fd >= 0) close(st->wake_fd);
-    st->epoll_fd = -1;
-    st->fd = -1;
-    st->wake_fd = -1;
-    st->worker_thread = 0;
+    if (st->fd >= 0) {
+        (void)shutdown(st->fd, SHUT_RDWR);
+    }
+    if (epoll_reactor_close_state(st) != 0) {
+        if (st->is_listener) {
+            epoll_listener_cleanup_task(st, st->owner);
+        } else {
+            epoll_stream_cleanup_task(st, st->owner);
+        }
+    }
 }
 
 static void epoll_stream_cleanup_task(void *arg1, void *arg2) {
     stream_epoll_state_t *st = (stream_epoll_state_t *)arg1;
     turbo_stream_t *s = (turbo_stream_t *)arg2;
     if (s) s->backend_data = NULL;
-    epoll_destroy_state(st);
     if (s) turbo_stream_finalize_close(s);
+    epoll_release_context_ref(st);
+    epoll_reactor_free_state(st);
 }
 
 static void epoll_listener_cleanup_task(void *arg1, void *arg2) {
     stream_epoll_state_t *st = (stream_epoll_state_t *)arg1;
     turbo_stream_listener_t *l = (turbo_stream_listener_t *)arg2;
-    epoll_destroy_state(st);
     if (l) turbo_stream_listener_notify_backend_released(l);
+    epoll_release_context_ref(st);
+    epoll_reactor_free_state(st);
 }
 
 static int epoll_init(turbo_stream_t *s) {
@@ -700,9 +921,20 @@ static int epoll_init(turbo_stream_t *s) {
 }
 
 int epoll_init_with_socket(turbo_stream_t *s, int existing) {
-    int r = epoll_init(s);
-    if (r != 0) return r;
-    stream_epoll_state_t *st = (stream_epoll_state_t *)s->backend_data;
+    stream_epoll_state_t *st;
+    int r;
+
+    if (!s) {
+        return TURBO_EINVAL;
+    }
+    if (!s->backend_data) {
+        r = epoll_init(s);
+        if (r != 0) return r;
+    }
+    st = (stream_epoll_state_t *)s->backend_data;
+    if (st->fd >= 0 && st->fd != existing) {
+        close(st->fd);
+    }
     st->fd = existing;
     st->connected = 1;
     return 0;
@@ -711,21 +943,15 @@ int epoll_init_with_socket(turbo_stream_t *s, int existing) {
 static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
     stream_epoll_state_t *st = (stream_epoll_state_t *)s->backend_data;
     int connect_rc;
-    int thread_rc;
     int rc;
 
-    rc = epoll_ensure_poll_fds(st);
+    rc = epoll_reactor_ensure();
     if (rc != 0) {
         return rc;
     }
     st->fd = socket(a->sa_family, SOCK_STREAM, 0);
     if (st->fd < 0) return -errno;
     set_nonblocking(st->fd);
-    struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP;
-    ev.data.fd = st->fd;
-    epoll_ctl(st->epoll_fd, EPOLL_CTL_ADD, st->fd, &ev);
-    st->fd_armed = 1;
     socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
                          (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
                                                       sizeof(struct sockaddr_in);
@@ -737,11 +963,11 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
         return err;
     }
 
-    thread_rc = turbo_thread_create(&st->worker_thread, stream_epoll_worker, st);
-    if (thread_rc != 0) {
+    rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
+    if (rc != 0) {
         close(st->fd);
         st->fd = -1;
-        return thread_rc;
+        return rc;
     }
 
     if (connect_rc == 0) {
@@ -762,28 +988,36 @@ static int epoll_connect_pipe(turbo_stream_t *s, const char *n) {
 static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
     stream_epoll_state_t *st;
     int rc;
+    size_t offset;
 
     if (!s || !s->backend_data || !d || l == 0) {
         return TURBO_EINVAL;
     }
     st = (stream_epoll_state_t *)s->backend_data;
-    rc = epoll_start_worker(st);
+    rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
     if (rc != 0) {
         return rc;
     }
-    uint8_t *dest = wait_ring_write(st, &st->write_ring, l);
-    if (dest == NULL) {
-        return TURBO_ECANCELED;
+
+    offset = 0;
+    while (offset < l) {
+        size_t chunk = l - offset;
+        uint8_t *dest;
+
+        if (chunk > 16 * 1024) {
+            chunk = 16 * 1024;
+        }
+
+        dest = wait_ring_write(st, &st->write_ring, chunk);
+        if (dest == NULL) {
+            return TURBO_ECANCELED;
+        }
+        memcpy(dest, d + offset, chunk);
+        ring_spsc_write_release(&st->write_ring, chunk);
+        offset += chunk;
+        (void)epoll_reactor_wake_state(st);
     }
-    memcpy(dest, d, l);
-    ring_spsc_write_release(&st->write_ring, l);
-    
-    /* Wake worker to flush */
-    if (st->wake_fd >= 0) {
-        uint64_t val = 1;
-        write(st->wake_fd, &val, sizeof(val));
-    }
-    try_flush_write_ring(st);
+
     return 0;
 }
 
@@ -795,7 +1029,7 @@ static int epoll_recv_start(turbo_stream_t *s) {
         return TURBO_EINVAL;
     }
     if (!st->is_listener) {
-        rc = epoll_start_worker(st);
+        rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
         if (rc != 0) {
             return rc;
         }
@@ -818,28 +1052,25 @@ static void epoll_close(turbo_stream_t *s) {
     TLOG_DEBUG("epoll[{:p}] stream-close stream={:p} fd={:d}", (void *)st, (void *)s, st->fd);
 
     epoll_shutdown_state(st);
-    epoll_post_wait(st, epoll_stream_cleanup_task, st, s);
 }
 
 static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
     stream_epoll_state_t *st;
     int r = epoll_init_state(&st, l, l->ctx, 1);
     if (r != 0) return r;
-    r = epoll_ensure_poll_fds(st);
-    if (r != 0) { epoll_shutdown_state(st); epoll_destroy_state(st); return r; }
+    r = epoll_reactor_ensure();
+    if (r != 0) { epoll_destroy_state(st); return r; }
     st->fd = socket(a->sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    if (st->fd < 0) { epoll_shutdown_state(st); epoll_destroy_state(st); return -errno; }
+    if (st->fd < 0) { epoll_destroy_state(st); return -errno; }
     int reuse = 1; setsockopt(st->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     if (l->reuse_port) {
 #ifdef SO_REUSEPORT
         if (setsockopt(st->fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) != 0) {
             int rc = -errno;
-            epoll_shutdown_state(st);
             epoll_destroy_state(st);
             return rc;
         }
 #else
-        epoll_shutdown_state(st);
         epoll_destroy_state(st);
         return TURBO_ENOTSUP;
 #endif
@@ -847,7 +1078,7 @@ static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
     socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
                          (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
                                                       sizeof(struct sockaddr_in);
-    if (bind(st->fd, a, addr_len) < 0) { epoll_shutdown_state(st); epoll_destroy_state(st); return -errno; }
+    if (bind(st->fd, a, addr_len) < 0) { int rc = -errno; epoll_destroy_state(st); return rc; }
     l->backend_data = st;
     return 0;
 }
@@ -864,24 +1095,13 @@ static int epoll_listen(turbo_stream_listener_t *l, int b) {
     if (listen(st->fd, b) < 0) {
         rc = -errno;
         l->backend_data = NULL;
-        epoll_shutdown_state(st);
         epoll_destroy_state(st);
         return rc;
     }
-    struct epoll_event ev; ev.events = EPOLLIN | EPOLLET; ev.data.fd = st->fd;
-    if (epoll_ctl(st->epoll_fd, EPOLL_CTL_ADD, st->fd, &ev) < 0) {
-        rc = -errno;
-        l->backend_data = NULL;
-        epoll_shutdown_state(st);
-        epoll_destroy_state(st);
-        return rc;
-    }
-    st->fd_armed = 1;
-    rc = turbo_thread_create(&st->worker_thread, stream_epoll_worker, st);
+    rc = epoll_register_state(st, EPOLLIN);
     if (rc != 0) {
         l->backend_data = NULL;
         epoll_shutdown_state(st);
-        epoll_destroy_state(st);
         return rc;
     }
     return 0;
@@ -899,7 +1119,6 @@ static void epoll_listener_close(turbo_stream_listener_t *l) {
                st->fd);
 
     epoll_shutdown_state(st);
-    epoll_post_wait(st, epoll_listener_cleanup_task, st, l);
 }
 
 const turbo_stream_backend_ops_t turbo_stream_epoll_ops = {

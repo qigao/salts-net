@@ -60,6 +60,7 @@ struct turbo_datagram_s {
   int closing;
   int closed;
   int destroyed;      /**< 1 = user called turbo_datagram_destroy() */
+  int native_ref_held; /**< 1 = bound backend keeps the context loop alive */
   int reuse_port;     /**< 1 = request SO_REUSEPORT on next bind */
   void *user_data;
   turbo_datagram_close_cb close_cb;

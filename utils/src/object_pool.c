@@ -1,5 +1,6 @@
 #include "object_pool.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,12 +37,24 @@ struct object_pool_s {
  * @brief Allocate a new chunk
  */
 static bool object_pool_grow(object_pool_t *pool, size_t count) {
-  if (pool->max_capacity > 0 && pool->total_capacity + count > pool->max_capacity) {
-    // Would exceed max capacity
-    count = pool->max_capacity - pool->total_capacity;
-    if (count == 0) {
+  if (count == 0) {
+    return false;
+  }
+
+  if (pool->max_capacity > 0) {
+    size_t remaining;
+    if (pool->total_capacity >= pool->max_capacity) {
       return false;
     }
+    remaining = pool->max_capacity - pool->total_capacity;
+    if (count > remaining) {
+      // Would exceed max capacity
+      count = remaining;
+    }
+  }
+
+  if (count > SIZE_MAX / pool->object_size) {
+    return false;
   }
 
   // Allocate chunk
@@ -86,6 +99,10 @@ object_pool_t *object_pool_create(const object_pool_config_t *config) {
   // Ensure object_size is aligned up to pointer boundaries for memory safety
   size_t ptr_size = sizeof(void *);
   if (pool->object_size % ptr_size != 0) {
+    if (pool->object_size > SIZE_MAX - (ptr_size - 1)) {
+      free(pool);
+      return NULL;
+    }
     pool->object_size += ptr_size - (pool->object_size % ptr_size);
   }
   

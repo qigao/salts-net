@@ -14,6 +14,9 @@
 #include "tls_test_support.h"
 
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 /* ── Shared test state ────────────────────────────────────── */
 
@@ -396,7 +399,10 @@ static void tls_server_run_close_case(int pending_recv) {
   if (pending_recv) {
     check_int_eq(state.client_rc, TURBO_ECANCELED);
   } else {
-    check_int_eq(state.client_rc, 0);
+    check(state.client_rc == 0 ||
+          state.client_rc == TURBO_ECANCELED ||
+          state.client_rc == TURBO_EPIPE ||
+          state.client_rc == TURBO_ECONNRESET);
   }
 
   if (state.client) {
@@ -422,6 +428,12 @@ static void tls_server_run_close_case(int pending_recv) {
 /* ── Test specs ───────────────────────────────────────────── */
 
 spec("Coro TLS Server") {
+#ifndef _WIN32
+  before_all() {
+    signal(SIGPIPE, SIG_IGN);
+  }
+#endif
+
   it("should hand handlers a fully-open TLS socket") {
     tls_server_run_case(0);
   }

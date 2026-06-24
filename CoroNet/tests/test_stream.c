@@ -85,6 +85,9 @@ static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg) {
 #define STREAM_TEST_WAIT_ITERS 20000
 
 static unsigned short stream_test_pick_loopback_port(void);
+#if defined(__linux__)
+static int stream_test_read_thread_count(void);
+#endif
 
 static int stream_test_run_until(coro_context_t *ctx, int *predicate, int expected,
                                  uint64_t timeout_ms) {
@@ -591,6 +594,27 @@ static unsigned short stream_test_pick_loopback_port(void) {
     return port;
 }
 
+#if defined(__linux__)
+static int stream_test_read_thread_count(void) {
+    FILE *fp = fopen("/proc/self/status", "r");
+    char line[128];
+    int threads = -1;
+
+    if (!fp) {
+        return -1;
+    }
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "Threads:%d", &threads) == 1) {
+            break;
+        }
+    }
+
+    fclose(fp);
+    return threads;
+}
+#endif
+
 #if defined(__linux__) || defined(__ANDROID__)
 static int stream_test_raw_connect_send(unsigned short port, const char *payload) {
     struct sockaddr_in addr;
@@ -912,13 +936,17 @@ spec("Stream") {
 
     it("should listen and accept connections") {
         coro_context_t *ctx = coro_context_create(NULL);
+        unsigned short port;
         check(ctx != NULL);
 
         struct sockaddr_in addr;
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-        addr.sin_port = htons(49201); // Use a fixed port for test
+        addr.sin_port = htons(port);
 
         s_accepted_client = NULL;
         s_accepted_count = 0;
@@ -1093,13 +1121,17 @@ spec("Stream") {
         turbo_stream_t *clients[CLIENT_COUNT] = {0};
         int connect_status[CLIENT_COUNT];
         struct sockaddr_in addr;
+        unsigned short port;
         int i;
         check(ctx != NULL);
+
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
 
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-        addr.sin_port = htons(49203);
+        addr.sin_port = htons(port);
 
         memset(s_accepted_clients, 0, sizeof(s_accepted_clients));
         memset(connect_status, 0xFF, sizeof(connect_status));
@@ -1140,6 +1172,72 @@ spec("Stream") {
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
         coro_context_destroy(ctx);
     }
+
+#if defined(__linux__)
+    it("should not create one epoll worker thread per tcp connection") {
+        enum { CLIENT_COUNT = 24 };
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_stream_t *clients[CLIENT_COUNT] = {0};
+        int connect_status[CLIENT_COUNT];
+        struct sockaddr_in addr;
+        unsigned short port;
+        int threads_before;
+        int threads_after;
+        int i;
+
+        check(ctx != NULL);
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+
+        memset(s_accepted_clients, 0, sizeof(s_accepted_clients));
+        memset(connect_status, 0xFF, sizeof(connect_status));
+        s_accepted_client = NULL;
+        s_accepted_count = 0;
+        s_connect_count = 0;
+
+        threads_before = stream_test_read_thread_count();
+        check_int_gt(threads_before, 0);
+
+        turbo_stream_listener_t *listener =
+            turbo_stream_listen(ctx, TURBO_STREAM_TCP4, (struct sockaddr *)&addr, 128, on_accept_local);
+        check(listener != NULL);
+
+        for (i = 0; i < CLIENT_COUNT; i++) {
+            clients[i] = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+            check(clients[i] != NULL);
+            turbo_stream_set_user_data(clients[i], &connect_status[i]);
+            check_int_eq(turbo_stream_connect_addr(clients[i], (struct sockaddr *)&addr,
+                                                   on_connect_count, on_close), 0);
+        }
+
+        stream_test_counts_t counts = { &s_connect_count, CLIENT_COUNT,
+                                        &s_accepted_count, CLIENT_COUNT };
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+
+        check_int_eq(s_connect_count, CLIENT_COUNT);
+        check_int_eq(s_accepted_count, CLIENT_COUNT);
+
+        threads_after = stream_test_read_thread_count();
+        check_int_gt(threads_after, 0);
+        check((threads_after - threads_before) <= 3);
+
+        for (i = 0; i < CLIENT_COUNT; i++) {
+            if (clients[i]) turbo_stream_destroy(clients[i]);
+            if (i < s_accepted_count && s_accepted_clients[i]) {
+                turbo_stream_destroy(s_accepted_clients[i]);
+            }
+        }
+        turbo_stream_listener_close(listener);
+
+        coro_context_run(ctx, TURBO_RUN_DEFAULT);
+        coro_context_destroy(ctx);
+    }
+#endif
 
 #ifdef _WIN32
     it("should close tcp listeners with pending accepts without use-after-free") {

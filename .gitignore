@@ -8,6 +8,7 @@ cmake-build-*/
 vcpkg_installed/
 conan-cache/
 coverage.xml
+.codegraph/
 
 # IDE files
 .vs/

@@ -5,6 +5,9 @@
 #include "turbo_thread.h"
 
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 extern void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
 
@@ -214,6 +217,12 @@ done:
 }
 
 spec("Stream TLS Client") {
+#ifndef _WIN32
+  before_all() {
+    signal(SIGPIPE, SIG_IGN);
+  }
+#endif
+
   it("should connect, handshake, send and receive encrypted data") {
     char ca_file[512] = {0};
     unsigned short port = 0;

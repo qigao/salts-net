@@ -1,4 +1,5 @@
 #include "memory_pool.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,9 +25,12 @@ void* pool_alloc(MemoryPool *pool, size_t size) {
     if (!pool || !size) return NULL;
     
     // Align to 8 bytes
+    if (size > SIZE_MAX - 7) {
+        return NULL;
+    }
     size = (size + 7) & ~7;
     
-    if (pool->used + size > pool->size) {
+    if (size > pool->size || pool->used > pool->size - size) {
         return NULL;  // Pool exhausted
     }
     

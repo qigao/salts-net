@@ -279,12 +279,30 @@ void release_client(coro_socket_t *client) {
   }
 }
 
-static void release_destroy_wait_handoff(coro_socket_t *s) {
+void coro_socket_release_destroy_wait_handoff(coro_socket_t *s) {
   if (!s || !s->destroy_wait_handoff) {
     return;
   }
 
   s->destroy_wait_handoff = 0;
+  release_client(s);
+}
+
+void coro_socket_release_destroy_wait_guard(coro_socket_t *s) {
+  if (!s || !s->destroy_wait_guard_ref) {
+    return;
+  }
+
+  s->destroy_wait_guard_ref = 0;
+  release_client(s);
+}
+
+static void release_accepted_transport_ref_if_orphaned(coro_socket_t *s) {
+  if (!s || !s->accepted_ref || s->close_pending) {
+    return;
+  }
+
+  s->accepted_ref = 0;
   release_client(s);
 }
 
@@ -862,7 +880,7 @@ static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_h
     {
       int timed_out = s->timed_out;
       int status = s->status;
-      release_destroy_wait_handoff(s);
+      coro_socket_release_destroy_wait_handoff(s);
 
       if (timed_out) return TURBO_ETIMEDOUT;
       if (status != 0) return status;
@@ -1023,11 +1041,12 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
     size_t recv_len = s->recv_len;
     int status = s->status;
     int timed_out = s->timed_out;
+    int ret;
 
     s->recv_data = NULL;
     s->recv_len = 0;
     s->recv_call_inflight = 0;
-    release_destroy_wait_handoff(s);
+    coro_socket_release_destroy_wait_handoff(s);
     if (timed_out) {
       s->timed_out = 0;
       if (status == TURBO_ETIMEDOUT) {
@@ -1041,15 +1060,20 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
     if (recv_data != NULL) {
       s->status = 0;
       s->timed_out = 0;
-      return 0;
+      ret = 0;
+      coro_socket_release_destroy_wait_guard(s);
+      return ret;
     }
     if (status == TURBO_EINTR) {
       s->status = 0;
     }
     if (recv_data != NULL && status == TURBO_EOF) {
-      return 0;
+      ret = 0;
+    } else {
+      ret = status;
     }
-    return status;
+    coro_socket_release_destroy_wait_guard(s);
+    return ret;
   }
 }
 
@@ -1240,6 +1264,7 @@ void coro_socket_destroy(coro_socket_t *s) {
     s->timed_out = 0;
     if (!s->destroy_wait_handoff) {
       s->destroy_wait_handoff = 1;
+      s->destroy_wait_guard_ref = 1;
       retain_client(s);
     }
     s->status = TURBO_ECANCELED;
@@ -1256,6 +1281,7 @@ void coro_socket_destroy(coro_socket_t *s) {
   if (s->ops && s->ops->close) {
     s->ops->close(s);
   }
+  release_accepted_transport_ref_if_orphaned(s);
 
   /* Close WebSocket server */
 

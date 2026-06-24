@@ -4,6 +4,7 @@
 #include "tinytest.h"
 #include "tls_test_support.h"
 
+#include <stdio.h>
 #include <string.h>
 #ifndef _WIN32
 #include <signal.h>
@@ -33,6 +34,26 @@ typedef struct ws_close_state_s {
   int handler_hits;
   uint64_t hold_ms;
 } ws_close_state_t;
+
+typedef struct ws_two_client_state_s ws_two_client_state_t;
+
+typedef struct ws_two_client_arg_s {
+  ws_two_client_state_t *state;
+  int index;
+} ws_two_client_arg_t;
+
+struct ws_two_client_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int handler_hits;
+  int first_handler_ready;
+  int client_rc[2];
+  int handler_rc[2];
+  int client_roundtrips[2];
+  int handler_roundtrips[2];
+  ws_two_client_arg_t client_args[2];
+};
 
 static int g_ws_server_handler_rc = TURBO_EBUSY;
 static int g_ws_server_client_rc = TURBO_EBUSY;
@@ -65,6 +86,8 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
                                             const uint8_t *request_data, size_t request_len,
                                             const uint8_t *reply_data, size_t reply_len,
                                             int rounds);
+static void ws_close_client_destroy_task(coro_t *co, void *arg);
+static void ws_two_client_task(coro_t *co, void *arg);
 
 static void ws_server_run_until(coro_context_t *ctx, uint64_t timeout_ms,
                                 int (*done)(void *), void *arg) {
@@ -218,6 +241,117 @@ static void ws_server_client_task(coro_t *co, void *arg) {
   coro_socket_destroy(client);
 }
 
+static int ws_two_client_case_done(void *arg) {
+  ws_two_client_state_t *state = (ws_two_client_state_t *)arg;
+  if (!state) return 1;
+  return state->client_rc[0] != TURBO_EBUSY &&
+         state->client_rc[1] != TURBO_EBUSY &&
+         state->handler_rc[0] != TURBO_EBUSY &&
+         state->handler_rc[1] != TURBO_EBUSY;
+}
+
+static int ws_two_client_first_ready(void *arg) {
+  ws_two_client_state_t *state = (ws_two_client_state_t *)arg;
+  if (!state) return 1;
+  return state->first_handler_ready != 0 || state->client_rc[0] != TURBO_EBUSY;
+}
+
+static void ws_two_client_handler(coro_socket_t *client, void *arg) {
+  ws_two_client_state_t *state = (ws_two_client_state_t *)arg;
+  char *data = NULL;
+  size_t len = 0;
+  int index = -1;
+  int rc;
+
+  if (!state) {
+    coro_socket_destroy(client);
+    return;
+  }
+
+  state->handler_hits++;
+  coro_socket_set_timeout(client, 5000);
+  rc = coro_socket_recv(client, &data, &len);
+  if (rc == 0 && data != NULL && len > 0) {
+    if (data[len - 1] == '0') {
+      index = 0;
+    } else if (data[len - 1] == '1') {
+      index = 1;
+    }
+  }
+
+  if (rc == 0 && index >= 0) {
+    const char *reply = (index == 0) ? "reply-0" : "reply-1";
+    rc = coro_socket_send(client, reply, strlen(reply));
+    if (rc == 0) {
+      state->handler_roundtrips[index]++;
+    }
+    if (index == 0) {
+      state->first_handler_ready = 1;
+    }
+  }
+
+  if (data != NULL) {
+    coro_socket_free_recv(data);
+  }
+  if (index >= 0) {
+    state->handler_rc[index] = rc;
+  }
+}
+
+static void ws_two_client_task(coro_t *co, void *arg) {
+  ws_two_client_arg_t *client_arg = (ws_two_client_arg_t *)arg;
+  ws_two_client_state_t *state = client_arg ? client_arg->state : NULL;
+  int index = client_arg ? client_arg->index : -1;
+  coro_socket_t *client;
+  char payload[16];
+  const char *expected_reply;
+  char *data = NULL;
+  size_t len = 0;
+  int rc;
+
+  (void)co;
+  if (!state || index < 0 || index > 1) {
+    return;
+  }
+
+  if (index == 1) {
+    uint64_t deadline = turbo_monotonic_ms() + 3000;
+    while (!state->first_handler_ready && turbo_monotonic_ms() < deadline) {
+      coro_sleep(state->ctx, 1);
+    }
+  }
+
+  client = coro_socket_create(state->ctx, CORO_SOCKET_TCP_V4);
+  if (!client) {
+    state->client_rc[index] = TURBO_ENOMEM;
+    return;
+  }
+
+  coro_socket_set_timeout(client, 5000);
+  rc = coro_socket_connect_ws_ex(client, "127.0.0.1", state->port, "/chat", 0, "mqtt");
+  if (rc == 0) {
+    snprintf(payload, sizeof(payload), "client-%d", index);
+    rc = coro_socket_send(client, payload, strlen(payload));
+  }
+  if (rc == 0) {
+    rc = coro_socket_recv(client, &data, &len);
+  }
+  if (rc == 0) {
+    expected_reply = (index == 0) ? "reply-0" : "reply-1";
+    if (len == strlen(expected_reply) && memcmp(data, expected_reply, len) == 0) {
+      state->client_roundtrips[index]++;
+    } else {
+      rc = TURBO_EPROTO;
+    }
+  }
+
+  if (data != NULL) {
+    coro_socket_free_recv(data);
+  }
+  state->client_rc[index] = rc;
+  coro_socket_destroy(client);
+}
+
 static void ws_close_idle_handler(coro_socket_t *client, void *arg) {
   ws_close_state_t *state = (ws_close_state_t *)arg;
 
@@ -252,6 +386,7 @@ static void ws_close_client_recv_task(coro_t *co, void *arg) {
   if (rc == 0) {
     state->client = client;
     state->client_connected = 1;
+    (void)coro_context_spawn(state->ctx, ws_close_client_destroy_task, state);
     rc = coro_socket_recv(client, &data, &len);
   }
 
@@ -260,6 +395,9 @@ static void ws_close_client_recv_task(coro_t *co, void *arg) {
   }
 
   state->client_rc = rc;
+  if (!state->client_connected) {
+    coro_socket_destroy(client);
+  }
 }
 
 static void ws_close_client_destroy_task(coro_t *co, void *arg) {
@@ -382,6 +520,15 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
 
   ws_server_run_until(state.ctx, 3000, ws_server_case_done, NULL);
 
+  if (g_ws_server_handler_hits != 1 || g_ws_server_client_rc != 0 ||
+      g_ws_server_handler_rc != 0) {
+    fprintf(stderr,
+            "ws open case state: secure=%d client_rc=%d handler_rc=%d handler_hits=%d "
+            "client_roundtrips=%d handler_roundtrips=%d\n",
+            state.secure, g_ws_server_client_rc, g_ws_server_handler_rc,
+            g_ws_server_handler_hits, g_ws_server_client_roundtrips,
+            g_ws_server_handler_roundtrips);
+  }
   check_int_eq(g_ws_server_handler_hits, 1);
   check_int_eq(g_ws_server_handler_rc, 0);
   check_int_eq(g_ws_server_client_rc, 0);
@@ -441,13 +588,19 @@ static void ws_server_run_close_case(int pending_recv) {
 
   if (pending_recv) {
     check_int_eq(coro_context_spawn(state.ctx, ws_close_client_recv_task, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, ws_close_client_destroy_task, &state), 0);
   } else {
     check_int_eq(coro_context_spawn(state.ctx, ws_close_client_send_task, &state), 0);
   }
 
   ws_server_run_until(state.ctx, 5000, ws_close_case_done, &state);
 
+  if (state.handler_hits != 1) {
+    fprintf(stderr,
+            "ws close case state: pending_recv=%d client_connected=%d client_rc=%d "
+            "handler_rc=%d handler_hits=%d\n",
+            pending_recv, state.client_connected, state.client_rc,
+            state.handler_rc, state.handler_hits);
+  }
   check_int_eq(state.handler_hits, 1);
   check_int_eq(state.handler_rc, 0);
   if (pending_recv) {
@@ -476,6 +629,79 @@ static void ws_server_run_close_case(int pending_recv) {
   coro_context_destroy(state.ctx);
 }
 
+static void ws_server_run_two_client_case(void) {
+  ws_two_client_state_t state;
+  test_socket_t probe = TEST_INVALID_SOCKET;
+  uint64_t deadline;
+
+  memset(&state, 0, sizeof(state));
+  state.client_rc[0] = TURBO_EBUSY;
+  state.client_rc[1] = TURBO_EBUSY;
+  state.handler_rc[0] = TURBO_EBUSY;
+  state.handler_rc[1] = TURBO_EBUSY;
+
+  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  test_close_socket(probe);
+
+  state.ctx = coro_context_create(NULL);
+  check_not_null(state.ctx);
+
+  state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
+  check_not_null(state.server);
+  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+                                     0, ws_two_client_handler, &state), 0);
+
+  state.client_args[0].state = &state;
+  state.client_args[0].index = 0;
+  state.client_args[1].state = &state;
+  state.client_args[1].index = 1;
+  check_int_eq(coro_context_spawn(state.ctx, ws_two_client_task, &state.client_args[0]), 0);
+
+  ws_server_run_until(state.ctx, 8000, ws_two_client_first_ready, &state);
+  if (!state.first_handler_ready) {
+    fprintf(stderr,
+            "ws two-client first state: client_rc=%d handler_rc=%d "
+            "handler_hits=%d first_ready=%d\n",
+            state.client_rc[0], state.handler_rc[0],
+            state.handler_hits, state.first_handler_ready);
+  }
+  check_int_eq(state.first_handler_ready, 1);
+
+  check_int_eq(coro_context_spawn(state.ctx, ws_two_client_task, &state.client_args[1]), 0);
+
+  ws_server_run_until(state.ctx, 8000, ws_two_client_case_done, &state);
+
+  if (!ws_two_client_case_done(&state) ||
+      state.client_rc[0] != 0 || state.client_rc[1] != 0 ||
+      state.handler_rc[0] != 0 || state.handler_rc[1] != 0) {
+    fprintf(stderr,
+            "ws two-client state: client_rc=[%d,%d] handler_rc=[%d,%d] "
+            "handler_hits=%d first_ready=%d client_roundtrips=[%d,%d] "
+            "handler_roundtrips=[%d,%d]\n",
+            state.client_rc[0], state.client_rc[1],
+            state.handler_rc[0], state.handler_rc[1],
+            state.handler_hits, state.first_handler_ready,
+            state.client_roundtrips[0], state.client_roundtrips[1],
+            state.handler_roundtrips[0], state.handler_roundtrips[1]);
+  }
+  check_int_eq(state.handler_hits, 2);
+  check_int_eq(state.client_rc[0], 0);
+  check_int_eq(state.client_rc[1], 0);
+  check_int_eq(state.handler_rc[0], 0);
+  check_int_eq(state.handler_rc[1], 0);
+  check_int_eq(state.client_roundtrips[0], 1);
+  check_int_eq(state.client_roundtrips[1], 1);
+  check_int_eq(state.handler_roundtrips[0], 1);
+  check_int_eq(state.handler_roundtrips[1], 1);
+
+  coro_socket_destroy(state.server);
+  deadline = turbo_monotonic_ms() + 1000;
+  while (coro_context_alive(state.ctx) && turbo_monotonic_ms() < deadline) {
+    coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+  }
+  coro_context_destroy(state.ctx);
+}
+
 spec("Coro WebSocket Server") {
 #ifndef _WIN32
   before_all() {
@@ -501,6 +727,10 @@ spec("Coro WebSocket Server") {
 
   it("should hand handlers a WebSocket socket negotiated with a subprotocol") {
     ws_server_run_case(0, "mqtt");
+  }
+
+  it("should flush WebSocket sends when handlers return before the client recv") {
+    ws_server_run_two_client_case();
   }
 
   it("should hand handlers a Secure WebSocket socket negotiated with a subprotocol") {

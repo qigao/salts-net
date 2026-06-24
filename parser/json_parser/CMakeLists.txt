@@ -5,12 +5,16 @@ cmake_add_grammar(JSON
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/json_lexer.re
   GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/json_grammar.y)
 
+cmake_add_grammar(JSONPATH
+  GRAMMAR_Y ${CMAKE_CURRENT_SOURCE_DIR}/parser/jsonpath_grammar.y)
+
 # Library
 cmake_add_source(SOURCE_FILES DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${JSON_LEXER_GEN}
-                                  ${JSON_GRAMMAR_GEN})
-add_dependencies(${TARGET_NAME} ${JSON_LEXER_TARGET} ${JSON_GRAMMAR_TARGET})
+                                  ${JSON_GRAMMAR_GEN} ${JSONPATH_GRAMMAR_GEN})
+add_dependencies(${TARGET_NAME} ${JSON_LEXER_TARGET} ${JSON_GRAMMAR_TARGET}
+                               ${JSONPATH_GRAMMAR_TARGET})
 
 cmake_config_target(${TARGET_NAME}
   ALIAS TurboNet::JsonParser

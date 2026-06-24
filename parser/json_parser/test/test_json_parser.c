@@ -337,6 +337,86 @@ spec("json_parser") {
     }
   }
 
+  describe("JSONPath") {
+    it("should get a nested object member by path") {
+      const char *json = "{\"listeners\":[{\"port\":1883,\"transport\":\"tcp\"},"
+                         "{\"port\":8883,\"transport\":\"tls\"}]}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      json_value_t *port = json_path_get(v, "$.listeners[0].port");
+      check_not_null(port);
+      check_int_eq((int)json_number(port), 1883);
+
+      json_value_t *last = json_path_get(v, "$.listeners[-1].transport");
+      check_not_null(last);
+      check_str_eq(json_string(last), "tls");
+
+      json_free(v);
+    }
+
+    it("should return all wildcard matches") {
+      const char *json = "{\"listeners\":[{\"transport\":\"tcp\"},{\"transport\":\"tls\"}]}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      json_path_result_t *result = json_path_query(v, "$.listeners[*].transport");
+      check_not_null(result);
+      check_size_eq(json_path_result_size(result), 2);
+      check_str_eq(json_string(json_path_result_get(result, 0)), "tcp");
+      check_str_eq(json_string(json_path_result_get(result, 1)), "tls");
+
+      json_path_result_free(result);
+      json_free(v);
+    }
+
+    it("should support bracket key union on objects") {
+      const char *json = "{\"settings\":{\"max_clients\":10000,\"connect_timeout_ms\":5000,"
+                         "\"name\":\"edge\"}}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      json_path_result_t *result =
+          json_path_query(v, "$.settings['max_clients','connect_timeout_ms']");
+      check_not_null(result);
+      check_size_eq(json_path_result_size(result), 2);
+      check_int_eq((int)json_number(json_path_result_get(result, 0)), 10000);
+      check_int_eq((int)json_number(json_path_result_get(result, 1)), 5000);
+
+      json_path_result_free(result);
+      json_free(v);
+    }
+
+    it("should filter array elements using current-node paths") {
+      const char *json = "{\"listeners\":[{\"port\":1883,\"transport\":\"tcp\"},"
+                         "{\"port\":8883,\"transport\":\"tls\"},"
+                         "{\"port\":8080,\"transport\":\"ws\"}]}";
+      json_value_t *v = json_parse(json, strlen(json));
+      check_not_null(v);
+
+      json_path_result_t *result =
+          json_path_query(v, "$.listeners[@.port >= 8000].transport");
+      check_not_null(result);
+      check_size_eq(json_path_result_size(result), 2);
+      check_str_eq(json_string(json_path_result_get(result, 0)), "tls");
+      check_str_eq(json_string(json_path_result_get(result, 1)), "ws");
+
+      json_path_result_free(result);
+      json_free(v);
+    }
+
+    it("should report invalid JSONPath expressions") {
+      json_value_t *v = json_parse("{\"a\":1}", 7);
+      check_not_null(v);
+
+      json_path_result_t *result = json_path_query(v, "$.a[");
+      check_null(result);
+      check_not_null(json_path_get_error());
+
+      json_free(v);
+    }
+  }
+
   describe("Error Handling") {
     it("should return NULL and set error for invalid JSON") {
       json_value_t *v = json_parse("invalid", 7);

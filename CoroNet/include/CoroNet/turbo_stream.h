@@ -250,6 +250,21 @@ CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void);
 CXX_C_API void turbo_stream_tls_reset_client_session_cache(void);
 CXX_C_API void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics);
 CXX_C_API void turbo_stream_tls_reset_metrics(void);
+/**
+ * @brief Release TLS resources owned by the current thread.
+ *
+ * Call this from worker threads after all TLS streams on that thread are
+ * closed and before the thread exits.
+ */
+CXX_C_API void turbo_stream_tls_thread_cleanup(void);
+/**
+ * @brief Release process-global TLS resources during process shutdown.
+ *
+ * This is a shutdown-only boundary for tests and short-lived tools. Do not call
+ * it while other streams may still use TLS, and do not create new TLS streams
+ * after calling it in the same process.
+ */
+CXX_C_API void turbo_stream_tls_global_cleanup(void);
 
 /* ── Convenience macros ───────────────────────────────────── */
 

@@ -233,7 +233,7 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
     if (mode == TURBO_RUN_NOWAIT || has_ready || !post_queue_empty(ctx)) {
       turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
     } else {
-      turbo_loop_poll(ctx->loop, 0, 1); /* yield to OS, no fixed sleep */
+      turbo_loop_poll(ctx->loop, 1, 1); /* idle ONCE: wait briefly for posted I/O */
     }
 
     drain_post_queue(ctx);

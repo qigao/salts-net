@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 typedef struct json_value_s json_value_t;
+typedef struct json_path_result_s json_path_result_t;
 
 typedef enum {
   JSON_NULL,
@@ -64,6 +65,17 @@ char *json_serialize(const json_value_t *value, size_t *out_len);
 char *json_serialize_pretty(const json_value_t *value, size_t *out_len);
 char *json_serialize_pretty_crlf(const json_value_t *value, size_t *out_len);
 void json_serialize_free(char *str);
+
+/* ============================================================================
+ * JSONPath Query API
+ * ============================================================================ */
+
+json_value_t *json_path_get(const json_value_t *root, const char *expr);
+json_path_result_t *json_path_query(const json_value_t *root, const char *expr);
+size_t json_path_result_size(const json_path_result_t *result);
+json_value_t *json_path_result_get(const json_path_result_t *result, size_t index);
+void json_path_result_free(json_path_result_t *result);
+const char *json_path_get_error(void);
 
 /* ============================================================================
  * Builder API

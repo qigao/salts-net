@@ -166,6 +166,7 @@ static void accept_loop_task(coro_t *co, void *arg) {
                r == TURBO_EALREADY || r == TURBO_EINTR) {
       /* Expected non-fatal codes: cancelled, no pending connection, interrupted.
          Check listener and loop back. */
+      coro_yield();
 
     } else if (r != 0) {
       if (accept_error_is_transient(r)) {

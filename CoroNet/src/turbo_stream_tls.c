@@ -54,8 +54,10 @@ static int s_server_configured = 0;
 static SSL_SESSION *s_cached_client_session = NULL;
 static char s_cached_client_session_host[256] = {0};
 static turbo_tls_protocol_mode_t s_tls_protocol_mode = TURBO_TLS_PROTOCOL_DEFAULT;
+static turbo_once_t s_tls_cleanup_once = TURBO_ONCE_INIT;
 static turbo_once_t s_tls_server_ctx_once = TURBO_ONCE_INIT;
 static turbo_mutex_t s_tls_server_ctx_mutex;
+static atomic_int s_tls_cleanup_done;
 static struct {
   atomic_ullong client_handshakes_started;
   atomic_ullong client_handshakes_completed;
@@ -151,6 +153,43 @@ static void tls_store_client_session_for_host(const char *hostname, SSL_SESSION 
   strncpy(s_cached_client_session_host, hostname, sizeof(s_cached_client_session_host) - 1);
   s_cached_client_session_host[sizeof(s_cached_client_session_host) - 1] = '\0';
   tls_metric_inc(&s_tls_metrics.client_session_stores);
+}
+
+static void tls_global_cleanup(void) {
+  if (atomic_exchange_explicit(&s_tls_cleanup_done, 1, memory_order_acq_rel) != 0) {
+    return;
+  }
+
+  tls_reset_client_session_cache_internal();
+
+  if (s_default_ctx) {
+    SSL_CTX_free(s_default_ctx);
+    s_default_ctx = NULL;
+  }
+  s_ca_configured = 0;
+
+  tls_server_ctx_lock();
+  if (s_server_ctx) {
+    SSL_CTX_free(s_server_ctx);
+    s_server_ctx = NULL;
+  }
+  s_server_configured = 0;
+  tls_server_ctx_unlock();
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+  OPENSSL_cleanup();
+#endif
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((destructor))
+static void tls_global_cleanup_destructor(void) {
+  tls_global_cleanup();
+}
+#endif
+
+static void tls_register_global_cleanup(void) {
+  (void)atexit(tls_global_cleanup);
 }
 
 static const char *tls_get_env_value(const char *name, char *buffer, size_t buffer_size) {
@@ -636,6 +675,7 @@ static int tls_prepare_client_ssl(tls_state_t *st) {
 
 static void tls_on_tcp_connect(void *handle, int status, void *peer);
 static void tls_on_tcp_close(void *handle);
+static void tls_on_tcp_write_complete(turbo_stream_t *tcp, int status);
 /* turbo_recv_cb signature: int(void*, const mem_slice_t*, void*) */
 static int  tls_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer);
 static int  tls_deliver_or_queue_plaintext(tls_state_t *st, const char *data, size_t len);
@@ -1192,9 +1232,7 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
   st->tcp->managed = 1;
   st->tcp->on_connect = NULL;
   st->tcp->on_close = tls_on_tcp_close;
-  /* The wrapper owns all inner-stream writes; inherited transport callbacks
-   * would interpret tls_state_t as a different user_data payload. */
-  st->tcp->on_write_complete = NULL;
+  st->tcp->on_write_complete = tls_on_tcp_write_complete;
   turbo_stream_recv_stop(st->tcp);
 
   st->state = TLS_ST_HANDSHAKING;
@@ -1220,6 +1258,8 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 /* ── Initialization ───────────────────────────────────────── */
 
 static SSL_CTX *get_default_tls_ctx(void) {
+  turbo_once(&s_tls_cleanup_once, tls_register_global_cleanup);
+
   if (s_default_ctx) {
     if (tls_apply_protocol_mode_to_ctx(s_default_ctx) != 0) {
       return NULL;
@@ -1256,6 +1296,8 @@ static SSL_CTX *get_default_tls_ctx(void) {
 static SSL_CTX *get_default_tls_server_ctx(void) {
   SSL_CTX *ctx;
   int rc = 0;
+
+  turbo_once(&s_tls_cleanup_once, tls_register_global_cleanup);
 
   tls_server_ctx_lock();
 
@@ -1704,6 +1746,18 @@ static void tls_on_tcp_close(void *handle) {
   }
 }
 
+static void tls_on_tcp_write_complete(turbo_stream_t *tcp, int status) {
+  tls_state_t *st;
+
+  if (!tcp) {
+    return;
+  }
+  st = (tls_state_t *)tcp->user_data;
+  if (st && st->outer && st->outer->on_write_complete) {
+    st->outer->on_write_complete(st->outer, status);
+  }
+}
+
 /* ── Backend vtable implementation ───────────────────────── */
 
 static int tls_init(turbo_stream_t *s) {
@@ -1741,6 +1795,7 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   st->tcp->user_data = st;
   st->tcp->managed   = 1; /* Owned by tls_state_t */
+  st->tcp->on_write_complete = tls_on_tcp_write_complete;
 
   /* Inform OpenSSL of the hostname for SNI Extension, only if not already set */
   if (st->hostname[0] == '\0') {
@@ -2071,6 +2126,16 @@ CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void) {
 
 CXX_C_API void turbo_stream_tls_reset_client_session_cache(void) {
   tls_reset_client_session_cache_internal();
+}
+
+CXX_C_API void turbo_stream_tls_thread_cleanup(void) {
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+  OPENSSL_thread_stop();
+#endif
+}
+
+CXX_C_API void turbo_stream_tls_global_cleanup(void) {
+  tls_global_cleanup();
 }
 
 CXX_C_API void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics) {

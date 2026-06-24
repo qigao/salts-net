@@ -320,6 +320,7 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   if (!ls || !ls->head) {
     coro_set_wait(s);
     coro_yield();
+    coro_socket_release_destroy_wait_handoff(s);
     if (s->status != 0) {
       int status = s->status;
       release_client(s);

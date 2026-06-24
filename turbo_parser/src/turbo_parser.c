@@ -28,6 +28,17 @@
 #include "xpath/cxxpeval.h"
 #endif
 
+static void turbo_cxml_set_destroy(cxml_set *nodeset) {
+  if (!nodeset)
+    return;
+  cxml_set_free(nodeset);
+  free(nodeset);
+}
+
+static const char *turbo_cxml_string_raw(const cxml_string *str) {
+  return str ? cxml_string_as_raw((cxml_string *)str) : NULL;
+}
+
 /* JSON */
 int turbo_parse_json(const uint8_t *data, size_t len, void *out) {
   if (!data || !out)
@@ -47,6 +58,30 @@ void turbo_free_json(void *out) {
     json_free((json_value_t *)ptr);
   *(void **)out = NULL;
 }
+
+json_value_t *turbo_json_path_get(const json_value_t *root, const char *expr) {
+  return json_path_get(root, expr);
+}
+
+turbo_json_path_result_t *turbo_json_path_query(const json_value_t *root,
+                                                const char *expr) {
+  return (turbo_json_path_result_t *)json_path_query(root, expr);
+}
+
+size_t turbo_json_path_result_size(const turbo_json_path_result_t *result) {
+  return json_path_result_size((const json_path_result_t *)result);
+}
+
+json_value_t *turbo_json_path_result_get(const turbo_json_path_result_t *result,
+                                         size_t index) {
+  return json_path_result_get((const json_path_result_t *)result, index);
+}
+
+void turbo_json_path_result_free(turbo_json_path_result_t *result) {
+  json_path_result_free((json_path_result_t *)result);
+}
+
+const char *turbo_json_path_error(void) { return json_path_get_error(); }
 
 /* XML (cxml) */
 int turbo_parse_xml(const uint8_t *data, size_t len, void *out) {
@@ -84,7 +119,7 @@ turbo_xml_node_t *turbo_xml_root_element(const turbo_xml_doc_t *doc) {
 }
 
 const char *turbo_xml_node_name(const turbo_xml_node_t *node) {
-  return node ? cxml_string_as_raw(&node->name.qname) : NULL;
+  return node ? turbo_cxml_string_raw(&node->name.qname) : NULL;
 }
 
 void turbo_xml_list_init(turbo_xml_list_t *list) {
@@ -148,13 +183,13 @@ const char *turbo_xml_get_text(const turbo_xml_doc_t *doc, const char *xpath) {
 #ifdef CXML_USE_XPATH_MOD
   cxml_set *nodeset = cxml_xpath((void *)doc, xpath);
   if (!nodeset || cxml_set_is_empty(nodeset)) {
-    if (nodeset) cxml_set_free(nodeset);
+    turbo_cxml_set_destroy(nodeset);
     return NULL;
   }
 
   cxml_node_t *node = (cxml_node_t *)cxml_set_get(nodeset, 0);
   if (!node) {
-    cxml_set_free(nodeset);
+    turbo_cxml_set_destroy(nodeset);
     return NULL;
   }
 
@@ -179,7 +214,7 @@ const char *turbo_xml_get_text(const turbo_xml_doc_t *doc, const char *xpath) {
       break;
   }
 
-  cxml_set_free(nodeset);
+  turbo_cxml_set_destroy(nodeset);
   return text;
 #else
   (void)doc;
@@ -196,13 +231,189 @@ size_t turbo_xml_count(const turbo_xml_doc_t *doc, const char *xpath) {
   if (!nodeset) return 0;
 
   size_t count = (size_t)cxml_set_size(nodeset);
-  cxml_set_free(nodeset);
+  turbo_cxml_set_destroy(nodeset);
   return count;
 #else
   (void)doc;
   (void>xpath;
   return 0;
 #endif
+}
+
+turbo_xml_xpath_node_t *turbo_xml_xpath_get(const turbo_xml_doc_t *doc, const char *xpath) {
+  if (!doc || !xpath)
+    return NULL;
+
+#ifdef CXML_USE_XPATH_MOD
+  cxml_set *nodeset = cxml_xpath((void *)doc, xpath);
+  if (!nodeset || cxml_set_is_empty(nodeset)) {
+    turbo_cxml_set_destroy(nodeset);
+    return NULL;
+  }
+
+  turbo_xml_xpath_node_t *node = (turbo_xml_xpath_node_t *)cxml_set_get(nodeset, 0);
+  turbo_cxml_set_destroy(nodeset);
+  return node;
+#else
+  (void)doc;
+  (void)xpath;
+  return NULL;
+#endif
+}
+
+void turbo_xml_xpath_query(const turbo_xml_doc_t *doc, const char *xpath, turbo_xml_list_t *out) {
+  if (!out)
+    return;
+
+  turbo_xml_list_init(out);
+
+  if (!doc || !xpath)
+    return;
+
+#ifdef CXML_USE_XPATH_MOD
+  cxml_set *nodeset = cxml_xpath((void *)doc, xpath);
+  if (!nodeset)
+    return;
+
+  int count = cxml_set_size(nodeset);
+  for (int i = 0; i < count; ++i) {
+    void *node = cxml_set_get(nodeset, i);
+    if (node)
+      cxml_list_append((cxml_list *)out, node);
+  }
+
+  turbo_cxml_set_destroy(nodeset);
+#else
+  (void)doc;
+  (void)xpath;
+#endif
+}
+
+size_t turbo_xml_xpath_count(const turbo_xml_doc_t *doc, const char *xpath) {
+  return turbo_xml_count(doc, xpath);
+}
+
+const char *turbo_xml_xpath_text(const turbo_xml_doc_t *doc, const char *xpath) {
+  return turbo_xml_get_text(doc, xpath);
+}
+
+static cxml_node_t turbo_cxml_node_type(const turbo_xml_xpath_node_t *node) {
+  if (!node)
+    return (cxml_node_t)-1;
+  return *(const cxml_node_t *)node;
+}
+
+turbo_xml_node_type_t turbo_xml_xpath_node_type(const turbo_xml_xpath_node_t *node) {
+  switch (turbo_cxml_node_type(node)) {
+  case CXML_TEXT_NODE:
+    return TURBO_XML_NODE_TEXT;
+  case CXML_ELEM_NODE:
+    return TURBO_XML_NODE_ELEMENT;
+  case CXML_COMM_NODE:
+    return TURBO_XML_NODE_COMMENT;
+  case CXML_ATTR_NODE:
+    return TURBO_XML_NODE_ATTRIBUTE;
+  case CXML_ROOT_NODE:
+    return TURBO_XML_NODE_ROOT;
+  case CXML_PI_NODE:
+    return TURBO_XML_NODE_PI;
+  case CXML_NS_NODE:
+    return TURBO_XML_NODE_NAMESPACE;
+  case CXML_XHDR_NODE:
+    return TURBO_XML_NODE_XML_HEADER;
+  case CXML_DTD_NODE:
+    return TURBO_XML_NODE_DTD;
+  default:
+    return TURBO_XML_NODE_UNKNOWN;
+  }
+}
+
+const char *turbo_xml_xpath_node_type_name(const turbo_xml_xpath_node_t *node) {
+  switch (turbo_xml_xpath_node_type(node)) {
+  case TURBO_XML_NODE_TEXT:
+    return "text";
+  case TURBO_XML_NODE_ELEMENT:
+    return "element";
+  case TURBO_XML_NODE_COMMENT:
+    return "comment";
+  case TURBO_XML_NODE_ATTRIBUTE:
+    return "attribute";
+  case TURBO_XML_NODE_ROOT:
+    return "root";
+  case TURBO_XML_NODE_PI:
+    return "pi";
+  case TURBO_XML_NODE_NAMESPACE:
+    return "namespace";
+  case TURBO_XML_NODE_XML_HEADER:
+    return "xml_header";
+  case TURBO_XML_NODE_DTD:
+    return "dtd";
+  default:
+    return "unknown";
+  }
+}
+
+const char *turbo_xml_xpath_node_name(const turbo_xml_xpath_node_t *node) {
+  if (!node)
+    return NULL;
+
+  switch (turbo_cxml_node_type(node)) {
+  case CXML_ELEM_NODE:
+    return turbo_cxml_string_raw(&((const cxml_elem_node *)node)->name.qname);
+  case CXML_ATTR_NODE:
+    return turbo_cxml_string_raw(&((const cxml_attr_node *)node)->name.qname);
+  case CXML_ROOT_NODE:
+    return turbo_cxml_string_raw(&((const cxml_root_node *)node)->name);
+  case CXML_PI_NODE:
+    return turbo_cxml_string_raw(&((const cxml_pi_node *)node)->target);
+  case CXML_NS_NODE: {
+    const cxml_ns_node *ns = (const cxml_ns_node *)node;
+    return ns->is_default ? "xmlns" : turbo_cxml_string_raw(&ns->prefix);
+  }
+  default:
+    return NULL;
+  }
+}
+
+const char *turbo_xml_xpath_node_text(const turbo_xml_xpath_node_t *node) {
+  if (!node)
+    return NULL;
+
+  switch (turbo_cxml_node_type(node)) {
+  case CXML_ELEM_NODE: {
+    const cxml_elem_node *elem = (const cxml_elem_node *)node;
+    if (elem->has_text && !cxml_list_is_empty((cxml_list *)&elem->children)) {
+      cxml_text_node *txt = (cxml_text_node *)cxml_list_get((cxml_list *)&elem->children, 0);
+      if (txt && txt->_type == CXML_TEXT_NODE)
+        return cxml_string_as_raw(&txt->value);
+    }
+    return NULL;
+  }
+  case CXML_TEXT_NODE:
+    return turbo_cxml_string_raw(&((const cxml_text_node *)node)->value);
+  case CXML_ATTR_NODE:
+    return turbo_cxml_string_raw(&((const cxml_attr_node *)node)->value);
+  case CXML_COMM_NODE:
+    return turbo_cxml_string_raw(&((const cxml_comm_node *)node)->value);
+  case CXML_PI_NODE:
+    return turbo_cxml_string_raw(&((const cxml_pi_node *)node)->value);
+  case CXML_NS_NODE:
+    return turbo_cxml_string_raw(&((const cxml_ns_node *)node)->uri);
+  case CXML_DTD_NODE:
+    return turbo_cxml_string_raw(&((const cxml_dtd_node *)node)->value);
+  default:
+    return NULL;
+  }
+}
+
+char *turbo_xml_xpath_node_xml_dup(const turbo_xml_xpath_node_t *node) {
+  if (!node)
+    return NULL;
+  return cxml_node_to_rstring((void *)node);
+}
+
+void turbo_xml_string_free(char *str) {
+  free(str);
 }
 
 turbo_json_type_t turbo_json_type(const json_value_t *value) {

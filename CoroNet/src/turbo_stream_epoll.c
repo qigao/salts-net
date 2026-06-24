@@ -905,7 +905,7 @@ static void epoll_stream_cleanup_task(void *arg1, void *arg2) {
     if (s) s->backend_data = NULL;
     if (s) turbo_stream_finalize_close(s);
     epoll_release_context_ref(st);
-    epoll_reactor_free_state(st);
+    epoll_destroy_state(st);
 }
 
 static void epoll_listener_cleanup_task(void *arg1, void *arg2) {
@@ -913,7 +913,7 @@ static void epoll_listener_cleanup_task(void *arg1, void *arg2) {
     turbo_stream_listener_t *l = (turbo_stream_listener_t *)arg2;
     if (l) turbo_stream_listener_notify_backend_released(l);
     epoll_release_context_ref(st);
-    epoll_reactor_free_state(st);
+    epoll_destroy_state(st);
 }
 
 static int epoll_init(turbo_stream_t *s) {

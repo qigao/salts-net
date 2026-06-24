@@ -104,6 +104,28 @@ spec("turbo_parser") {
       turbo_free_json(&root);
     }
 
+    it("should query JSON with JSONPath") {
+      const char *json_data = "{\"listeners\":[{\"port\":1883,\"transport\":\"tcp\"},"
+                              "{\"port\":8883,\"transport\":\"tls\"}]}";
+      json_value_t *root = NULL;
+      int rc = turbo_parse_json((const uint8_t *)json_data, strlen(json_data), &root);
+      check_int_eq(rc, 0);
+      check_not_null(root);
+
+      json_value_t *transport = turbo_json_path_get(root, "$.listeners[-1].transport");
+      check_not_null(transport);
+      check_str_eq(turbo_json_string(transport), "tls");
+
+      turbo_json_path_result_t *ports = turbo_json_path_query(root, "$.listeners[*].port");
+      check_not_null(ports);
+      check_size_eq(turbo_json_path_result_size(ports), 2);
+      check_int_eq((int)turbo_json_number(turbo_json_path_result_get(ports, 0)), 1883);
+      check_int_eq((int)turbo_json_number(turbo_json_path_result_get(ports, 1)), 8883);
+
+      turbo_json_path_result_free(ports);
+      turbo_free_json(&root);
+    }
+
   }
 
   describe("INI") {

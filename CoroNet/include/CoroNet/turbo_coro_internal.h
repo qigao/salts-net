@@ -301,6 +301,7 @@ struct coro_socket_s {
   int timer_active;      /**< 0 idle, 1 armed, 2 timeout posted, 3 posted then canceled */
   int close_pending;     /**< 1 = transport close was requested and holds a reference */
   int destroy_wait_handoff; /**< 1 = a resumed waiter still owns the pending wait reference */
+  int destroy_wait_guard_ref; /**< 1 = destroy kept the socket alive until the waiter returns */
   int wait_metric_tls_handshake; /**< 1 = current wait should feed TLS handshake timing */
   turbo_stream_t *wait_metric_stream; /**< TLS stream associated with the current wait metric */
   uint64_t wait_handler_entry_ns; /**< Handler entry timestamp for current wait */
@@ -520,6 +521,8 @@ static inline void coro_resume_waiter_with_handoff(coro_socket_t *client) {
  */
 void start_timeout_timer(coro_socket_t *s);
 void stop_timeout_timer(coro_socket_t *s);
+void coro_socket_release_destroy_wait_handoff(coro_socket_t *s);
+void coro_socket_release_destroy_wait_guard(coro_socket_t *s);
 
 /**
  * @brief Resume a specific coroutine in the given context.

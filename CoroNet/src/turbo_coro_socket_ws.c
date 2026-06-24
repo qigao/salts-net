@@ -171,6 +171,23 @@ static void on_ws_connect(void *handle, int status, void *extra) {
   release_client(s);
 }
 
+static void on_ws_write_complete(turbo_stream_t *stream, int status) {
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  coro_t *co;
+
+  retain_client(s);
+  if (!s || !s->co_write_wait) {
+    release_client(s);
+    return;
+  }
+
+  s->write_status = status;
+  co = s->co_write_wait;
+  s->co_write_wait = NULL;
+  coro_resume_co(s->ctx, co);
+  release_client(s);
+}
+
 static void on_ws_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
@@ -190,6 +207,52 @@ static void on_ws_close(void *handle) {
     }
     release_client(s);
   }
+}
+
+static int ws_begin_write_wait(coro_socket_t *s, int *scheduled_out) {
+  coro_t *co;
+  int scheduled;
+
+  if (!s || !scheduled_out) {
+    return TURBO_EINVAL;
+  }
+
+  co = coro_running();
+  if (!co) {
+    *scheduled_out = 0;
+    return 0;
+  }
+  if (s->co_write_wait) {
+    return TURBO_EBUSY;
+  }
+
+  s->write_status = 0;
+  s->co_write_wait = co;
+  scheduled = coro_is_scheduled(co);
+  if (scheduled) {
+    coro_set_waiting_for_io(co, 1);
+  }
+  *scheduled_out = scheduled ? 1 : -1;
+  return 0;
+}
+
+static int ws_finish_write_wait(coro_socket_t *s, int rc, int scheduled_state) {
+  if (!s || scheduled_state == 0) {
+    return rc;
+  }
+
+  if (rc != 0) {
+    s->co_write_wait = NULL;
+    if (scheduled_state > 0) {
+      coro_set_waiting_for_io(coro_running(), 0);
+    }
+    return rc;
+  }
+
+  if (s->co_write_wait) {
+    coro_yield();
+  }
+  return s->write_status;
 }
 
 static void ws_discard_stream(coro_socket_t *s) {
@@ -256,6 +319,7 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
     turbo_stream_ws_set_path_host_protocol(s->handle.stream, cfg->path[0] ? cfg->path : "/", request_host,
                                            cfg->subprotocol[0] ? cfg->subprotocol : NULL);
     turbo_stream_set_user_data(s->handle.stream, s);
+    turbo_stream_set_write_cb(s->handle.stream, on_ws_write_complete);
     s->handle.stream->managed = 1;
   }
 
@@ -293,11 +357,23 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
 }
 
 static int ws_send(coro_socket_t *s, const char *data, size_t len) {
-  return turbo_stream_send(s->handle.stream, data, len);
+  int scheduled_state = 0;
+  int rc = ws_begin_write_wait(s, &scheduled_state);
+  if (rc != 0) {
+    return rc;
+  }
+  rc = turbo_stream_send(s->handle.stream, data, len);
+  return ws_finish_write_wait(s, rc, scheduled_state);
 }
 
 static int ws_send_owned_recv(coro_socket_t *s, char *data, size_t len) {
-  return turbo_stream_ws_send_owned_recv(s->handle.stream, data, len);
+  int scheduled_state = 0;
+  int rc = ws_begin_write_wait(s, &scheduled_state);
+  if (rc != 0) {
+    return rc;
+  }
+  rc = turbo_stream_ws_send_owned_recv(s->handle.stream, data, len);
+  return ws_finish_write_wait(s, rc, scheduled_state);
 }
 
 static int ws_recv_start(coro_socket_t *s) {
@@ -318,7 +394,13 @@ static mem_buffer_t *ws_get_send_buffer(coro_socket_t *s, size_t min_size) {
 }
 
 static int ws_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
-  return turbo_stream_send_buffer(s->handle.stream, buffer, len);
+  int scheduled_state = 0;
+  int rc = ws_begin_write_wait(s, &scheduled_state);
+  if (rc != 0) {
+    return rc;
+  }
+  rc = turbo_stream_send_buffer(s->handle.stream, buffer, len);
+  return ws_finish_write_wait(s, rc, scheduled_state);
 }
 
 static void ws_close(coro_socket_t *s) {
@@ -436,11 +518,20 @@ int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host,
       (actual_request_host && actual_request_host[0] != '\0') ? actual_request_host : NULL,
       (subprotocol && subprotocol[0] != '\0') ? subprotocol : NULL);
   turbo_stream_set_user_data(ws_stream, s);
+  turbo_stream_set_write_cb(ws_stream, on_ws_write_complete);
   ws_stream->managed = 1;
 
+  s->handle.stream = ws_stream;
+  ws_configure_socket(s);
+  s->owns_handle = 1;
+
   retain_client(s);
+  coro_set_wait(s);
+  start_timeout_timer(s);
   rc = turbo_stream_ws_wrap_client(ws_stream, raw_stream, on_ws_connect, on_ws_close);
   if (rc != 0) {
+    stop_timeout_timer(s);
+    s->co_wait = NULL;
     turbo_stream_set_user_data(ws_stream, NULL);
     ws_stream->managed = 0;
     s->handle.stream = NULL;
@@ -450,13 +541,9 @@ int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host,
     return rc;
   }
 
-  s->handle.stream = ws_stream;
-  ws_configure_socket(s);
-  s->owns_handle = 1;
-
-  coro_set_wait(s);
-  start_timeout_timer(s);
-  coro_yield();
+  if (s->co_wait) {
+    coro_yield();
+  }
   {
     int status = s->status;
     int timed_out = s->timed_out;
@@ -493,7 +580,17 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
   ws_configure_server_socket(s);
   s->owns_handle = 1;
   turbo_stream_set_user_data(ws_stream, s);
+  turbo_stream_set_write_cb(ws_stream, on_ws_write_complete);
   ws_stream->managed = 1;
+
+  rc = turbo_stream_recv_start(ws_stream, on_ws_recv);
+  if (rc != 0 && rc != TURBO_EALREADY) {
+    turbo_stream_set_user_data(ws_stream, NULL);
+    s->handle.stream = NULL;
+    s->connected = 0;
+    turbo_stream_destroy(ws_stream);
+    return rc;
+  }
 
   retain_client(s);
   coro_set_wait(s);
@@ -505,17 +602,6 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
     s->handle.stream = NULL;
     s->connected = 0;
     turbo_stream_destroy(ws_stream);
-    return rc;
-  }
-
-  rc = turbo_stream_recv_start(ws_stream, on_ws_recv);
-  if (rc != 0 && rc != TURBO_EALREADY) {
-    s->co_wait = NULL;
-    release_client(s);
-    turbo_stream_set_user_data(ws_stream, NULL);
-    s->handle.stream = NULL;
-    s->connected = 0;
-    turbo_stream_close(ws_stream);
     return rc;
   }
 

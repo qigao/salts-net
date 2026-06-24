@@ -164,7 +164,7 @@ spec("Turbo Parser") {
 
     describe("XML Parser") {
         it("should parse valid XML") {
-            const char* xml_data = "<root><child>text</child></root>";
+            const char* xml_data = "<root><child id=\"a\">text</child></root>";
             void* result = NULL;
             int rc = turbo_parse_xml((const uint8_t*)xml_data, strlen(xml_data), &result);
             
@@ -198,6 +198,44 @@ spec("Turbo Parser") {
             }
             check(count == 1);
             turbo_xml_list_free(&items);
+
+            check(turbo_xml_xpath_count(result, "//child") == 1);
+            check(strcmp(turbo_xml_xpath_text(result, "//child"), "text") == 0);
+
+            turbo_xml_xpath_node_t *xpath_child = turbo_xml_xpath_get(result, "//child");
+            check(xpath_child != NULL);
+            check(turbo_xml_xpath_node_type(xpath_child) == TURBO_XML_NODE_ELEMENT);
+            check(strcmp(turbo_xml_xpath_node_type_name(xpath_child), "element") == 0);
+            check(strcmp(turbo_xml_xpath_node_name(xpath_child), "child") == 0);
+            check(strcmp(turbo_xml_xpath_node_text(xpath_child), "text") == 0);
+
+            char *child_xml = turbo_xml_xpath_node_xml_dup(xpath_child);
+            check(child_xml != NULL);
+            check(strstr(child_xml, "<child") != NULL);
+            turbo_xml_string_free(child_xml);
+
+            turbo_xml_xpath_node_t *xpath_attr = turbo_xml_xpath_get(result, "//@id");
+            check(xpath_attr != NULL);
+            check(turbo_xml_xpath_node_type(xpath_attr) == TURBO_XML_NODE_ATTRIBUTE);
+            check(strcmp(turbo_xml_xpath_node_type_name(xpath_attr), "attribute") == 0);
+            check(strcmp(turbo_xml_xpath_node_name(xpath_attr), "id") == 0);
+            check(strcmp(turbo_xml_xpath_node_text(xpath_attr), "a") == 0);
+
+            turbo_xml_xpath_node_t *xpath_text = turbo_xml_xpath_get(result, "//child/text()");
+            check(xpath_text != NULL);
+            check(turbo_xml_xpath_node_type(xpath_text) == TURBO_XML_NODE_TEXT);
+            check(strcmp(turbo_xml_xpath_node_type_name(xpath_text), "text") == 0);
+            check(strcmp(turbo_xml_xpath_node_text(xpath_text), "text") == 0);
+
+            turbo_xml_list_t xpath_items;
+            turbo_xml_xpath_query(result, "//*", &xpath_items);
+            int xpath_count = 0;
+            turbo_xml_for(xpath_node, &xpath_items) {
+                check(xpath_node != NULL);
+                xpath_count++;
+            }
+            check(xpath_count == 2);
+            turbo_xml_list_free(&xpath_items);
             
             turbo_free_xml(&result);
             check(result == NULL);

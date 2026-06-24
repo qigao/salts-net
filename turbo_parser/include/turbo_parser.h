@@ -13,6 +13,7 @@ extern "C" {
 
 /* JSON Parser */
 typedef struct json_value_s json_value_t;
+typedef struct json_path_result_s turbo_json_path_result_t;
 
 typedef enum {
   TURBO_JSON_NULL,
@@ -198,6 +199,51 @@ CXX_C_API void turbo_json_serialize_free(char *str);
  */
 CXX_C_API json_value_t *turbo_json_clone(const json_value_t *value);
 
+/**
+ * @brief Get the first JSON value matching a JSONPath expression.
+ * @param root Root JSON value.
+ * @param expr JSONPath expression.
+ * @return First matching value, or NULL if not found or invalid.
+ */
+CXX_C_API json_value_t *turbo_json_path_get(const json_value_t *root, const char *expr);
+
+/**
+ * @brief Query JSON values matching a JSONPath expression.
+ * @param root Root JSON value.
+ * @param expr JSONPath expression.
+ * @return Result handle containing non-owning JSON value pointers.
+ */
+CXX_C_API turbo_json_path_result_t *turbo_json_path_query(const json_value_t *root,
+                                                          const char *expr);
+
+/**
+ * @brief Get number of values in a JSONPath result.
+ * @param result JSONPath result handle.
+ * @return Match count.
+ */
+CXX_C_API size_t turbo_json_path_result_size(const turbo_json_path_result_t *result);
+
+/**
+ * @brief Get one value from a JSONPath result.
+ * @param result JSONPath result handle.
+ * @param index Match index.
+ * @return Matching value or NULL.
+ */
+CXX_C_API json_value_t *turbo_json_path_result_get(const turbo_json_path_result_t *result,
+                                                   size_t index);
+
+/**
+ * @brief Free a JSONPath result handle. Does not free matched JSON values.
+ * @param result JSONPath result handle.
+ */
+CXX_C_API void turbo_json_path_result_free(turbo_json_path_result_t *result);
+
+/**
+ * @brief Get last JSONPath error.
+ * @return Error string or NULL.
+ */
+CXX_C_API const char *turbo_json_path_error(void);
+
 /* JSON Builder/Modifier */
 /**
  * @brief Create an empty JSON object.
@@ -287,6 +333,19 @@ CXX_C_API void turbo_json_object_set_null(json_value_t *obj, const char *key);
 /* XML Parser (cxml) */
 typedef struct _cx_doc_node turbo_xml_doc_t;
 typedef struct _cx_elem_node turbo_xml_node_t;
+typedef void turbo_xml_xpath_node_t;
+typedef enum {
+  TURBO_XML_NODE_UNKNOWN = 0,
+  TURBO_XML_NODE_TEXT,
+  TURBO_XML_NODE_ELEMENT,
+  TURBO_XML_NODE_COMMENT,
+  TURBO_XML_NODE_ATTRIBUTE,
+  TURBO_XML_NODE_ROOT,
+  TURBO_XML_NODE_PI,
+  TURBO_XML_NODE_NAMESPACE,
+  TURBO_XML_NODE_XML_HEADER,
+  TURBO_XML_NODE_DTD
+} turbo_xml_node_type_t;
 typedef struct turbo_xml_list_node_s {
   void *item;
   struct turbo_xml_list_node_s *next;
@@ -394,6 +453,82 @@ CXX_C_API const char *turbo_xml_get_text(const turbo_xml_doc_t *doc, const char 
  * @return Number of matching nodes.
  */
 CXX_C_API size_t turbo_xml_count(const turbo_xml_doc_t *doc, const char *xpath);
+
+/**
+ * @brief Get the first XML node matching an XPath expression.
+ * @param doc Pointer to the XML document.
+ * @param xpath XPath expression.
+ * @return First matching opaque XML node pointer, or NULL.
+ */
+CXX_C_API turbo_xml_xpath_node_t *turbo_xml_xpath_get(const turbo_xml_doc_t *doc,
+                                                      const char *xpath);
+
+/**
+ * @brief Query XML nodes matching an XPath expression.
+ * @param doc Pointer to the XML document.
+ * @param xpath XPath expression.
+ * @param out Target list. Contains non-owning opaque XML node pointers.
+ */
+CXX_C_API void turbo_xml_xpath_query(const turbo_xml_doc_t *doc, const char *xpath,
+                                     turbo_xml_list_t *out);
+
+/**
+ * @brief Count XML nodes matching an XPath expression.
+ * @param doc Pointer to the XML document.
+ * @param xpath XPath expression.
+ * @return Number of matching nodes.
+ */
+CXX_C_API size_t turbo_xml_xpath_count(const turbo_xml_doc_t *doc, const char *xpath);
+
+/**
+ * @brief Get text content of the first XML node matching an XPath expression.
+ * @param doc Pointer to the XML document.
+ * @param xpath XPath expression.
+ * @return Pointer to text content of first matching node, or NULL if not found.
+ */
+CXX_C_API const char *turbo_xml_xpath_text(const turbo_xml_doc_t *doc, const char *xpath);
+
+/**
+ * @brief Get the type of an opaque XPath node.
+ * @param node Node returned from turbo_xml_xpath_get/query.
+ * @return Stable TurboNet XML node type.
+ */
+CXX_C_API turbo_xml_node_type_t
+turbo_xml_xpath_node_type(const turbo_xml_xpath_node_t *node);
+
+/**
+ * @brief Get the stable string name for an opaque XPath node type.
+ * @param node Node returned from turbo_xml_xpath_get/query.
+ * @return Type name such as "element", "text", or "attribute".
+ */
+CXX_C_API const char *turbo_xml_xpath_node_type_name(const turbo_xml_xpath_node_t *node);
+
+/**
+ * @brief Get the qualified name for an opaque XPath node when it has one.
+ * @param node Node returned from turbo_xml_xpath_get/query.
+ * @return Node name, or NULL for unnamed node kinds.
+ */
+CXX_C_API const char *turbo_xml_xpath_node_name(const turbo_xml_xpath_node_t *node);
+
+/**
+ * @brief Get textual value for an opaque XPath node when it has one.
+ * @param node Node returned from turbo_xml_xpath_get/query.
+ * @return Text value, or NULL when unavailable. The pointer is non-owning.
+ */
+CXX_C_API const char *turbo_xml_xpath_node_text(const turbo_xml_xpath_node_t *node);
+
+/**
+ * @brief Serialize an opaque XPath node to XML/text.
+ * @param node Node returned from turbo_xml_xpath_get/query.
+ * @return Newly allocated string, or NULL. Free with turbo_xml_string_free().
+ */
+CXX_C_API char *turbo_xml_xpath_node_xml_dup(const turbo_xml_xpath_node_t *node);
+
+/**
+ * @brief Free a string returned by TurboNet XML helpers.
+ * @param str String returned by a *_dup XML API.
+ */
+CXX_C_API void turbo_xml_string_free(char *str);
 
 /* CSV */
 typedef struct csv_doc_s turbo_csv_doc_t;

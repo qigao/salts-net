@@ -78,6 +78,7 @@ typedef struct ws_state_s {
 static int  ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer);
 static void ws_on_tcp_connect(void *handle, int status, void *peer);
 static void ws_on_tcp_close(void *handle);
+static void ws_on_tcp_write_complete(turbo_stream_t *tcp, int status);
 
 static int  ws_process_rx(ws_state_t *st);
 static int  ws_process_handshake(ws_state_t *st);
@@ -404,6 +405,18 @@ static void ws_on_tcp_close(void *handle) {
   ws_free_state(st);
   if (outer) {
     turbo_stream_finalize_close(outer);
+  }
+}
+
+static void ws_on_tcp_write_complete(turbo_stream_t *tcp, int status) {
+  ws_state_t *st;
+
+  if (!tcp) {
+    return;
+  }
+  st = (ws_state_t *)tcp->user_data;
+  if (st && st->outer && st->outer->on_write_complete) {
+    st->outer->on_write_complete(st->outer, status);
   }
 }
 
@@ -1049,6 +1062,7 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   st->tcp->user_data = st;
   st->tcp->managed   = 1;   /* ws_state_t owns this stream */
+  st->tcp->on_write_complete = ws_on_tcp_write_complete;
 
   if (s->kind == TURBO_STREAM_WSS && st->tls_client_configured) {
     turbo_tls_client_config_t tls_config;
@@ -1279,8 +1293,7 @@ int turbo_stream_ws_wrap_server(turbo_stream_t *ws_stream,
   st->tcp->managed = 1;
   st->tcp->on_connect = NULL;
   st->tcp->on_close = ws_on_tcp_close;
-  /* Once wrapped, write completions belong to the WebSocket layer only. */
-  st->tcp->on_write_complete = NULL;
+  st->tcp->on_write_complete = ws_on_tcp_write_complete;
 
   st->state = WS_ST_HANDSHAKING;
   ws_stream->connected = 0;
@@ -1319,8 +1332,7 @@ int turbo_stream_ws_wrap_client(turbo_stream_t *ws_stream,
   st->tcp->managed = 1;
   st->tcp->on_connect = NULL;
   st->tcp->on_close = ws_on_tcp_close;
-  /* Once wrapped, write completions belong to the WebSocket layer only. */
-  st->tcp->on_write_complete = NULL;
+  st->tcp->on_write_complete = ws_on_tcp_write_complete;
   ws_stream->connected = 0;
 
   rc = ws_prepare_client_key(st);

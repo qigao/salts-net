@@ -1480,6 +1480,10 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
 /* main() must not be in extern "C" block */
 #ifndef TINYTEST_NO_MAIN
 int main(int argc, char **argv) {
+#ifdef _WIN32
+  SetConsoleOutputCP(CP_UTF8);
+#endif
+
   double __bdd_start_time__ = __bdd_get_time_ms__();
   struct __bdd_config_type__ config;
   memset(&config, 0, sizeof(config));

@@ -598,6 +598,10 @@ static int tls_prepare_client_ssl(tls_state_t *st) {
     SSL_CTX_set_verify(ctx, st->client_verify_peer ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
     if (st->client_verify_peer) {
       SSL_CTX_set_default_verify_paths(ctx);
+#ifdef _WIN32
+      load_windows_cert_store(ctx, "ROOT");
+      load_windows_cert_store(ctx, "CA");
+#endif
       if (st->ca_file != NULL && st->ca_file[0] != '\0' &&
           SSL_CTX_load_verify_locations(ctx, st->ca_file, NULL) != 1) {
         SSL_CTX_free(ctx);

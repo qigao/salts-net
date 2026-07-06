@@ -12,6 +12,7 @@
 #include "ini_parser.h"
 #include "json_parser.h"
 #include "ltv_parser.h"
+#include "modbus_parser.h"
 #include "soa_parser.h"
 #include "uri_parser.h"
 #include "cmd_arger.h"
@@ -961,6 +962,142 @@ int turbo_ltv_stream_feed(turbo_ltv_stream_t *stream, const uint8_t *data, size_
 
 void turbo_ltv_stream_reset(turbo_ltv_stream_t *stream) {
   ltv_stream_reset((ltv_stream_t *)stream);
+}
+
+/* Modbus */
+static void turbo_modbus_pdu_from_native(turbo_modbus_pdu_t *dst,
+                                         const modbus_pdu_t *src) {
+  dst->function_code = src->function_code;
+  dst->data = src->data;
+  dst->data_size = src->data_size;
+}
+
+static void turbo_modbus_pdu_to_native(modbus_pdu_t *dst,
+                                       const turbo_modbus_pdu_t *src) {
+  dst->function_code = src->function_code;
+  dst->data = src->data;
+  dst->data_size = src->data_size;
+}
+
+static void turbo_modbus_tcp_from_native(turbo_modbus_tcp_adu_t *dst,
+                                         const modbus_tcp_adu_t *src) {
+  dst->transaction_id = src->transaction_id;
+  dst->protocol_id = src->protocol_id;
+  dst->length = src->length;
+  dst->unit_id = src->unit_id;
+  turbo_modbus_pdu_from_native(&dst->pdu, &src->pdu);
+  dst->consumed = src->consumed;
+}
+
+static void turbo_modbus_tcp_to_native(modbus_tcp_adu_t *dst,
+                                       const turbo_modbus_tcp_adu_t *src) {
+  dst->transaction_id = src->transaction_id;
+  dst->protocol_id = src->protocol_id;
+  dst->length = src->length;
+  dst->unit_id = src->unit_id;
+  turbo_modbus_pdu_to_native(&dst->pdu, &src->pdu);
+  dst->consumed = src->consumed;
+}
+
+static void turbo_modbus_rtu_from_native(turbo_modbus_rtu_adu_t *dst,
+                                         const modbus_rtu_adu_t *src) {
+  dst->address = src->address;
+  turbo_modbus_pdu_from_native(&dst->pdu, &src->pdu);
+  dst->crc = src->crc;
+  dst->consumed = src->consumed;
+}
+
+static void turbo_modbus_rtu_to_native(modbus_rtu_adu_t *dst,
+                                       const turbo_modbus_rtu_adu_t *src) {
+  dst->address = src->address;
+  turbo_modbus_pdu_to_native(&dst->pdu, &src->pdu);
+  dst->crc = src->crc;
+  dst->consumed = src->consumed;
+}
+
+int turbo_modbus_tcp_peek_size(const uint8_t *data, size_t len, size_t *out_size) {
+  return (int)modbus_tcp_peek_size(data, len, out_size);
+}
+
+int turbo_modbus_tcp_read(const uint8_t *data, size_t len, turbo_modbus_tcp_adu_t *out) {
+  if (!out)
+    return (int)MODBUS_PARSE_INVALID_INPUT;
+
+  modbus_tcp_adu_t native;
+  ModbusParseResult rc = modbus_tcp_read(data, len, &native);
+  if (rc == MODBUS_PARSE_OK)
+    turbo_modbus_tcp_from_native(out, &native);
+  return (int)rc;
+}
+
+size_t turbo_modbus_tcp_write(const turbo_modbus_tcp_adu_t *adu, uint8_t *out,
+                              size_t out_len) {
+  if (!adu)
+    return 0;
+
+  modbus_tcp_adu_t native;
+  turbo_modbus_tcp_to_native(&native, adu);
+  return modbus_tcp_write(&native, out, out_len);
+}
+
+uint16_t turbo_modbus_rtu_crc16(const uint8_t *data, size_t len) {
+  return modbus_rtu_crc16(data, len);
+}
+
+int turbo_modbus_rtu_read(const uint8_t *data, size_t len, turbo_modbus_rtu_adu_t *out) {
+  if (!out)
+    return (int)MODBUS_PARSE_INVALID_INPUT;
+
+  modbus_rtu_adu_t native;
+  ModbusParseResult rc = modbus_rtu_read(data, len, &native);
+  if (rc == MODBUS_PARSE_OK)
+    turbo_modbus_rtu_from_native(out, &native);
+  return (int)rc;
+}
+
+size_t turbo_modbus_rtu_write(const turbo_modbus_rtu_adu_t *adu, uint8_t *out,
+                              size_t out_len) {
+  if (!adu)
+    return 0;
+
+  modbus_rtu_adu_t native;
+  turbo_modbus_rtu_to_native(&native, adu);
+  return modbus_rtu_write(&native, out, out_len);
+}
+
+int turbo_modbus_read(turbo_modbus_transport_t transport, const uint8_t *data,
+                      size_t len, turbo_modbus_adu_t *out) {
+  if (!out)
+    return (int)MODBUS_PARSE_INVALID_INPUT;
+
+  if (transport == TURBO_MODBUS_TRANSPORT_TCP) {
+    int rc = turbo_modbus_tcp_read(data, len, &out->frame.tcp);
+    if (rc == TURBO_MODBUS_PARSE_OK)
+      out->transport = TURBO_MODBUS_TRANSPORT_TCP;
+    return rc;
+  }
+
+  if (transport == TURBO_MODBUS_TRANSPORT_RTU) {
+    int rc = turbo_modbus_rtu_read(data, len, &out->frame.rtu);
+    if (rc == TURBO_MODBUS_PARSE_OK)
+      out->transport = TURBO_MODBUS_TRANSPORT_RTU;
+    return rc;
+  }
+
+  return (int)MODBUS_PARSE_INVALID_INPUT;
+}
+
+size_t turbo_modbus_write(const turbo_modbus_adu_t *adu, uint8_t *out, size_t out_len) {
+  if (!adu)
+    return 0;
+
+  if (adu->transport == TURBO_MODBUS_TRANSPORT_TCP)
+    return turbo_modbus_tcp_write(&adu->frame.tcp, out, out_len);
+
+  if (adu->transport == TURBO_MODBUS_TRANSPORT_RTU)
+    return turbo_modbus_rtu_write(&adu->frame.rtu, out, out_len);
+
+  return 0;
 }
 
 /* SOA */

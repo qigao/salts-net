@@ -20,6 +20,7 @@ target_link_libraries(
           uri_parser
           tlv_parser
           ltv_parser
+          modbus_parser
           soa_parser
           dotenv_parser
           cmd_parser

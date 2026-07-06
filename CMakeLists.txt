@@ -68,7 +68,6 @@ add_subdirectory(turbo_parser)
 add_subdirectory(mustache)
 add_subdirectory(tinytest)
 add_subdirectory(utils)
-add_subdirectory(uuid)
 add_subdirectory(cron)
 
 add_subdirectory(CoroNet)

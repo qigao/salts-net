@@ -391,4 +391,88 @@ spec("turbo_parser") {
       check(strstr(buf, "Mar") != NULL);
     }
   }
+
+  describe("Modbus") {
+    it("should write and read a Modbus TCP struct") {
+      uint8_t pdu_data[] = {0x00, 0x6B, 0x00, 0x03};
+      turbo_modbus_tcp_adu_t adu = {
+          .transaction_id = 0x1234,
+          .protocol_id = 0,
+          .unit_id = 0x11,
+          .pdu = {
+              .function_code = 0x03,
+              .data = pdu_data,
+              .data_size = sizeof(pdu_data),
+          },
+      };
+      uint8_t buf[TURBO_MODBUS_TCP_MAX_ADU_SIZE];
+
+      size_t written = turbo_modbus_tcp_write(&adu, buf, sizeof(buf));
+      check_size_eq(written, 12);
+
+      turbo_modbus_tcp_adu_t parsed;
+      int rc = turbo_modbus_tcp_read(buf, written, &parsed);
+      check_int_eq(rc, TURBO_MODBUS_PARSE_OK);
+      check_int_eq(parsed.transaction_id, 0x1234);
+      check_int_eq(parsed.unit_id, 0x11);
+      check_int_eq(parsed.pdu.function_code, 0x03);
+      check_mem_eq(parsed.pdu.data, pdu_data, sizeof(pdu_data));
+    }
+
+    it("should write and read a Modbus RTU struct") {
+      uint8_t pdu_data[] = {0x00, 0x00, 0x00, 0x0A};
+      turbo_modbus_rtu_adu_t adu = {
+          .address = 0x01,
+          .pdu = {
+              .function_code = 0x03,
+              .data = pdu_data,
+              .data_size = sizeof(pdu_data),
+          },
+      };
+      uint8_t buf[TURBO_MODBUS_RTU_MAX_ADU_SIZE];
+
+      size_t written = turbo_modbus_rtu_write(&adu, buf, sizeof(buf));
+      check_size_eq(written, 8);
+      check_int_eq(buf[6], 0xC5);
+      check_int_eq(buf[7], 0xCD);
+
+      turbo_modbus_rtu_adu_t parsed;
+      int rc = turbo_modbus_rtu_read(buf, written, &parsed);
+      check_int_eq(rc, TURBO_MODBUS_PARSE_OK);
+      check_int_eq(parsed.address, 0x01);
+      check_int_eq(parsed.pdu.function_code, 0x03);
+      check_mem_eq(parsed.pdu.data, pdu_data, sizeof(pdu_data));
+    }
+
+    it("should round trip through generic Modbus read and write") {
+      uint8_t pdu_data[] = {0x00, 0x01};
+      turbo_modbus_tcp_adu_t tcp = {
+          .transaction_id = 9,
+          .protocol_id = 0,
+          .unit_id = 1,
+          .pdu = {
+              .function_code = 0x06,
+              .data = pdu_data,
+              .data_size = sizeof(pdu_data),
+          },
+      };
+      turbo_modbus_adu_t adu = {
+          .transport = TURBO_MODBUS_TRANSPORT_TCP,
+          .frame = {.tcp = tcp},
+      };
+      uint8_t buf[TURBO_MODBUS_TCP_MAX_ADU_SIZE];
+      uint8_t out[TURBO_MODBUS_TCP_MAX_ADU_SIZE];
+
+      size_t written = turbo_modbus_write(&adu, buf, sizeof(buf));
+      check(written > 0);
+
+      turbo_modbus_adu_t parsed;
+      int rc = turbo_modbus_read(TURBO_MODBUS_TRANSPORT_TCP, buf, written, &parsed);
+      check_int_eq(rc, TURBO_MODBUS_PARSE_OK);
+
+      size_t out_len = turbo_modbus_write(&parsed, out, sizeof(out));
+      check_size_eq(out_len, written);
+      check_mem_eq(out, buf, written);
+    }
+  }
 }

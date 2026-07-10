@@ -989,8 +989,7 @@ static mem_buffer_t *tls_alloc_plaintext_chunk(tls_state_t *st, size_t *payload_
   if (payload_capacity) {
     *payload_capacity = TLS_PLAINTEXT_READ_CHUNK_SIZE;
   }
-  return chunk;
-  return NULL;
+  return chunk; 
 }
 
 static int tls_deliver_or_queue_plaintext_chunk(tls_state_t *st, mem_buffer_t *chunk, size_t len) {

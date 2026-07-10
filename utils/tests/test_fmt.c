@@ -304,6 +304,25 @@ spec("FMT Tests") {
       tstr_free(s);
     }
 
+    it("should create formatted tstr_t") {
+      tstr_t s = tstr_format("id={} name={}", 42, "alice");
+      check_str_eq(s, "id=42 name=alice");
+      tstr_free(s);
+    }
+
+    it("should append through the named format backend") {
+      tstr_t s = tstr_format("start");
+      s = tstr_append_format(s, " id={}", 42);
+      check_str_eq(s, "start id=42");
+      tstr_free(s);
+    }
+
+    it("should preserve explicit format specifiers in tstr_t output") {
+      tstr_t s = tstr_format("hex={:08X} dec={:05d} pi={:.2f}", 255u, 42, 3.14159);
+      check_str_eq(s, "hex=000000FF dec=00042 pi=3.14");
+      tstr_free(s);
+    }
+
     it("should chain multiple appends") {
       tstr_t s = tstr_new();
       s = tstr_cat_typed(s, "a={}", 1);
@@ -318,6 +337,27 @@ spec("FMT Tests") {
       tstr_v role = tstr_v_from_cstr("admin");
       s = tstr_cat_typed(s, "role={}", role);
       check_str_eq(s, "role=admin");
+      tstr_free(s);
+    }
+
+    it("should format content larger than the old stack buffer") {
+      char long_buf[1500];
+      memset(long_buf, 'x', sizeof(long_buf));
+      tstr_v long_view = tstr_v_from_buf(long_buf, sizeof(long_buf));
+
+      tstr_t s = tstr_format("prefix:{}:suffix", long_view);
+
+      check_int_eq(tstr_len(s), strlen("prefix:") + sizeof(long_buf) + strlen(":suffix"));
+      check_int_eq(memcmp(s, "prefix:", strlen("prefix:")), 0);
+      check_int_eq(memcmp(s + strlen("prefix:"), long_buf, sizeof(long_buf)), 0);
+      check_str_eq(s + tstr_len(s) - strlen(":suffix"), ":suffix");
+      tstr_free(s);
+    }
+
+    it("should preserve empty formatted output") {
+      tstr_t s = tstr_format("{}", "");
+      check_not_null(s);
+      check_int_eq(tstr_len(s), 0);
       tstr_free(s);
     }
   }

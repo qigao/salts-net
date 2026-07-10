@@ -937,6 +937,59 @@ TLOG_INFO("Email sent to: {}", mask_email(email));
 
 ## TurboNet tlog 使用指南
 
+### TinyTest 测试分组
+
+tlog 测试可按功能类别拆成多个 `suite(...)` / `spec(...)`，也可以在一个 `suite` 内用多个 `group(...)` 组织子类别。推荐按行为边界命名，而不是按实现文件或临时修复点命名。
+
+**适用规则**：
+- 一个测试文件可以包含多个 `suite` / `spec`，用于区分大类，例如 `TLog Core`、`TLog Sinks`、`TLog Formatting`、`TLog Async`。
+- 同一大类内用 `group(...)` 组织子类，例如 `Level Filtering`、`Console Sink`、`File Sink`、`Rotation`、`Backpressure`。
+- 每个 `it(...)` 只验证一个可描述行为；异步日志测试必须显式 `tlog_flush()` 或等待可观察状态后再断言。
+- 共享 logger、sink、临时路径或 callback 计数器时，优先用 `before_each()` / `after_each()` 做初始化和清理。
+- 不要把多个不相关行为塞进一个 `it(...)`；日志测试失败时必须能从测试名看出失败类别。
+
+**示例结构**：
+```c
+#include "tlog.h"
+#include "tinytest.h"
+
+suite("TLog Core") {
+  group("Lifecycle") {
+    it("creates and destroys a logger") {
+      tlog_t *logger = tlog_create(NULL);
+      check_not_null(logger);
+      tlog_destroy(logger);
+    }
+  }
+
+  group("Level Filtering") {
+    it("rejects invalid runtime levels") {
+      tlog_t *logger = tlog_create(NULL);
+      check_not_null(logger);
+      check_int_eq(tlog_set_level_ex(logger, (turbo_log_level_t)-1), -1);
+      tlog_destroy(logger);
+    }
+  }
+}
+
+suite("TLog Sinks") {
+  group("Callback Sink") {
+    it("receives published entries after flush") {
+      /* create logger + callback sink */
+      /* publish log */
+      /* tlog_flush(logger); */
+      /* assert callback count */
+    }
+  }
+
+  group("File Sink") {
+    it("rotates when the configured size is exceeded") {
+      /* focused rotation behavior */
+    }
+  }
+}
+```
+
 ### 初始化完整示例
 
 ```c

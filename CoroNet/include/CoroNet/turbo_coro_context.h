@@ -441,7 +441,6 @@ CXX_C_API void coro_sleep(coro_context_t *ctx, uint64_t ms);
  * Defined in turbo_error.h — included here for convenience.
  * ──────────────────────────────────────────────────────────── */
 #include "turbo_error.h"
-#define TURBO_OK 0
 
 // =============================================================================
 // Memory Pool

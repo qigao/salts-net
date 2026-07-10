@@ -11,6 +11,13 @@ extern "C" {
 #endif
 
 typedef struct disruptor_s disruptor_t;
+typedef struct disruptor_topology_s disruptor_topology_t;
+
+#define DISRUPTOR_STAGE_INVALID UINT32_MAX
+#define DISRUPTOR_GROUP_INVALID UINT32_MAX
+
+typedef uint32_t disruptor_stage_t;
+typedef uint32_t disruptor_group_t;
 
 typedef struct {
   uint64_t sequence;
@@ -25,10 +32,16 @@ typedef struct {
   uint32_t slot;
 } disruptor_consumer_t;
 
+typedef enum {
+  DISRUPTOR_MODE_BROADCAST = 0,
+  DISRUPTOR_MODE_WORKER_POOL = 1
+} disruptor_mode_t;
+
 typedef struct {
   size_t entry_size;
   uint64_t capacity;
   uint32_t consumer_capacity;
+  disruptor_mode_t mode;
 } disruptor_config_t;
 
 CXX_C_API disruptor_t *disruptor_create(const disruptor_config_t *config);
@@ -73,9 +86,58 @@ CXX_C_API int disruptor_consumer_wait_for_nonblocking(const disruptor_t *disrupt
                                                       disruptor_cursor_t *cursor);
 CXX_C_API void disruptor_consumer_wait_for_blocking(const disruptor_t *disruptor,
                                                     disruptor_cursor_t *cursor);
+CXX_C_API int disruptor_consumer_wait_for_nonblocking_for(
+    const disruptor_t *disruptor,
+    const disruptor_consumer_t *consumer,
+    disruptor_cursor_t *cursor);
+CXX_C_API void disruptor_consumer_wait_for_blocking_for(
+    const disruptor_t *disruptor,
+    const disruptor_consumer_t *consumer,
+    disruptor_cursor_t *cursor);
 CXX_C_API void disruptor_consumer_release_entry(disruptor_t *disruptor,
                                                 const disruptor_consumer_t *consumer,
                                                 const disruptor_cursor_t *cursor);
+CXX_C_API int disruptor_consumer_set_dependencies(
+    disruptor_t *disruptor,
+    const disruptor_consumer_t *consumer,
+    const disruptor_consumer_t *dependencies,
+    uint32_t dependency_count);
+
+CXX_C_API disruptor_topology_t *disruptor_topology_create(disruptor_t *disruptor);
+CXX_C_API void disruptor_topology_destroy(disruptor_topology_t *topology);
+CXX_C_API disruptor_stage_t disruptor_topology_stage(disruptor_topology_t *topology,
+                                                     const char *name,
+                                                     const disruptor_consumer_t *consumer);
+CXX_C_API disruptor_group_t disruptor_topology_group(disruptor_topology_t *topology,
+                                                     const char *name,
+                                                     const disruptor_stage_t *stages,
+                                                     uint32_t stage_count);
+CXX_C_API int disruptor_topology_after(disruptor_topology_t *topology,
+                                       disruptor_stage_t stage,
+                                       disruptor_stage_t dependency);
+CXX_C_API int disruptor_topology_after_all(disruptor_topology_t *topology,
+                                           disruptor_stage_t stage,
+                                           const disruptor_stage_t *dependencies,
+                                           uint32_t dependency_count);
+CXX_C_API int disruptor_topology_stage_after_group(disruptor_topology_t *topology,
+                                                   disruptor_stage_t stage,
+                                                   disruptor_group_t dependency_group);
+CXX_C_API int disruptor_topology_group_after(disruptor_topology_t *topology,
+                                             disruptor_group_t group,
+                                             disruptor_stage_t dependency);
+CXX_C_API int disruptor_topology_group_after_group(disruptor_topology_t *topology,
+                                                   disruptor_group_t group,
+                                                   disruptor_group_t dependency_group);
+CXX_C_API int disruptor_topology_chain(disruptor_topology_t *topology,
+                                       const disruptor_stage_t *stages,
+                                       uint32_t stage_count);
+CXX_C_API int disruptor_topology_commit(disruptor_topology_t *topology);
+
+CXX_C_API int disruptor_worker_try_claim(disruptor_t *disruptor, disruptor_cursor_t *cursor);
+CXX_C_API void disruptor_worker_claim_blocking(disruptor_t *disruptor,
+                                               disruptor_cursor_t *cursor);
+CXX_C_API void disruptor_worker_release_entry(disruptor_t *disruptor,
+                                              const disruptor_cursor_t *cursor);
 
 /**
  * @brief Callback: return non-zero while the consumer should keep running.

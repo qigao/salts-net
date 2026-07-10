@@ -63,7 +63,7 @@ static void iocp_pool_tick(void *arg1, void *arg2);
 
 iocp_pool_t *iocp_pool_create(coro_context_t *ctx, int num_workers) {
   iocp_pool_t *pool;
-  disruptor_config_t dcfg;
+  disruptor_config_t dcfg = {0};
   int i;
 
   if (!ctx) return NULL;
@@ -94,6 +94,7 @@ iocp_pool_t *iocp_pool_create(coro_context_t *ctx, int num_workers) {
   dcfg.entry_size = sizeof(iocp_op_t *);
   dcfg.capacity = IOCP_POOL_QUEUE_CAPACITY;
   dcfg.consumer_capacity = 1;
+  dcfg.mode = DISRUPTOR_MODE_BROADCAST;
   pool->queue = disruptor_create(&dcfg);
   if (!pool->queue) {
     CloseHandle(pool->completion_port);

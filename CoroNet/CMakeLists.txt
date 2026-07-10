@@ -120,7 +120,6 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     ${tgt}
     PUBLIC TurboNet::Utils TurboNet::Parser Threads::Threads
     PRIVATE kcp::kcp
-            PkgConfig::STC
             TurboNet::SDS
             c-ares::cares
             OpenSSL::SSL

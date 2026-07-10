@@ -2,41 +2,45 @@ set(TARGET_NAME turbo_utils)
 # Add parser subdirectory first (generates lexer)
 add_subdirectory(parser)
 cmake_add_source(SOURCE_FILES RECURSE)
+find_path(UTF8H_INCLUDE_DIRS "utf8h/utf8.h" REQUIRED)
 
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 # Configure target
 cmake_config_target(
   ${TARGET_NAME}
-  ALIAS TurboNet::Utils
-  FOLDER "utils"
-  EXPORT_NAME Utils)
+  ALIAS
+  TurboNet::Utils
+  FOLDER
+  "utils"
+  EXPORT_NAME
+  Utils)
 
 # Include directories
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${Stb_INCLUDE_DIR}>
          $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/parser>
          $<INSTALL_INTERFACE:include>
-  PRIVATE $<BUILD_INTERFACE:${FMT_LEXER_INCLUDE_DIRS}>
+  PRIVATE $<BUILD_INTERFACE:${UTF8H_INCLUDE_DIRS}>
+          $<BUILD_INTERFACE:${FMT_LEXER_INCLUDE_DIRS}>
           $<BUILD_INTERFACE:${LOG_PATTERN_LEXER_INCLUDE_DIRS}>)
 
 target_compile_definitions(
   ${TARGET_NAME}
-  PUBLIC $<$<OR:$<CONFIG:Release>,$<CONFIG:MinSizeRel>,$<CONFIG:RelWithDebInfo>>:TURBO_LOG_CAPTURE_SOURCE=0>
+  PUBLIC
+    $<$<OR:$<CONFIG:Release>,$<CONFIG:MinSizeRel>,$<CONFIG:RelWithDebInfo>>:TURBO_LOG_CAPTURE_SOURCE=0>
   PRIVATE SHARED_CXX)
 if(UNIX)
-  target_compile_definitions(${TARGET_NAME} PUBLIC _DEFAULT_SOURCE=1 _POSIX_C_SOURCE=200809L _XOPEN_SOURCE=700)
+  target_compile_definitions(
+    ${TARGET_NAME} PUBLIC _DEFAULT_SOURCE=1 _POSIX_C_SOURCE=200809L
+                          _XOPEN_SOURCE=700)
 endif()
 
 # Link dependencies
 target_link_libraries(
   ${TARGET_NAME}
-  
-  PRIVATE ${FMT_LEXER_LIBRARY} PkgConfig::STC # Thread-safe containers
-          TurboNet::SDS # Simple Dynamic Strings
-           aklomp::base64 
-          ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
+  PRIVATE ${FMT_LEXER_LIBRARY} TurboNet::SDS # Simple Dynamic Strings
+          aklomp::base64 ${LOG_PATTERN_LEXER_LIBRARY} # Log pattern lexer
 )
 
 if(WIN32)

@@ -21,9 +21,7 @@
 #include "tlog.h"
 #include "fmt.h"
 #include "log_pattern_lexer.h"
-#include "turbo_buffer.h"
-#include "sds.h"
-#include "stb_sprintf.h"
+#include "turbo_buffer.h" 
 #include <stdatomic.h>
 #include "turbo_fs.h"
 #include "turbo_mmap.h"
@@ -85,8 +83,6 @@ typedef struct {
 #ifdef _MSC_VER
   #pragma warning(pop)
 #endif
-
-/* STC Deque for async log queue - REMOVED for Lock-Free Ring Buffer */
 
 // =============================================================================
 // Default Logger and Time Cache Initialization
@@ -576,16 +572,23 @@ static void file_sink_rotate(file_sink_t *fs) {
 
   if (fs->max_files > 0) {
     // Rotate files: file.log.N -> file.log.N+1
-    char old_path[512], new_path[512];
+    tstr_t old_path = NULL;
+    tstr_t new_path = NULL;
     for (int i = fs->max_files - 1; i >= 0; i--) {
+      tstr_free(old_path);
+      tstr_free(new_path);
       if (i == 0) {
-        fmt(old_path, sizeof(old_path), "{}", fs->path);
+        old_path = tstr_dup(fs->path);
       } else {
-        fmt(old_path, sizeof(old_path), "{}.{}", fs->path, i);
+        old_path = tstr_format("{}.{}", fs->path, i);
       }
-      fmt(new_path, sizeof(new_path), "{}.{}", fs->path, i + 1);
-      turbo_fs_rename(old_path, new_path);
+      new_path = tstr_format("{}.{}", fs->path, i + 1);
+      if (old_path && new_path) {
+        turbo_fs_rename(old_path, new_path);
+      }
     }
+    tstr_free(old_path);
+    tstr_free(new_path);
   }
 
   // Open new file (when max_files == 0, just recreate/truncate the current file)
@@ -650,7 +653,7 @@ static void file_sink_destroy(turbo_log_sink_t *sink) {
   }
   turbo_mutex_unlock(&fs->rotate_mutex);
   turbo_mutex_destroy(&fs->rotate_mutex);
-  sdsfree(fs->path);
+  tstr_free(fs->path);
   pattern_free(&fs->pattern);
   free(fs);
 }
@@ -672,7 +675,7 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
       pattern_compile(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN,
                       &sink->pattern) != 0) {
     turbo_mutex_destroy(&sink->rotate_mutex);
-    sdsfree(sink->path);
+    tstr_free(sink->path);
     free(sink);
     return NULL;
   }
@@ -685,7 +688,7 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
   sink->fd = turbo_fs_open(opts->path, flags, TURBO_FS_DEFAULT_MODE);
   if (sink->fd == TURBO_INVALID_FILE) {
     turbo_mutex_destroy(&sink->rotate_mutex);
-    sdsfree(sink->path);
+    tstr_free(sink->path);
     pattern_free(&sink->pattern);
     free(sink);
     return NULL;

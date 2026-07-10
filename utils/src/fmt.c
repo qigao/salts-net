@@ -5,8 +5,6 @@
 
 #include "platform.h"
 #include "fmt.h"
-#include "sds.h"
-#include "stb_sprintf.h"
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -14,18 +12,12 @@
 #include <string.h>
 #include <time.h>
 
-/* Suppress warnings for stb_sprintf optimization and dynamic format strings */
+/* Suppress warnings for dynamic printf-compatible format strings. */
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #pragma GCC diagnostic ignored "-Wformat-contains-nul"
 #endif
-
-/*
- * stb_sprintf optimization reads 4-8 bytes at a time for performance.
- * Short format strings can cause AddressSanitizer overreads.
- */
-#define P(s) (s "\0\0\0\0\0\0\0\0")
 
 /* ============================================================================
  * Formatting Helpers
@@ -36,6 +28,11 @@ enum {
   FMT_FORMAT_CAP = 64,
   FMT_MODIFIER_MAX = 59
 };
+
+typedef struct {
+  char text[FMT_FORMAT_CAP];
+  size_t len;
+} fmt_spec_t;
 
 static inline size_t fmt_available(const char *dst, const char *end) {
   return (dst < end) ? (size_t)(end - dst) : 0;
@@ -50,7 +47,6 @@ static inline int fmt_copy_to_buffer(char *dst, char *end, const char *src, size
   return (int)len;
 }
 
-#define FMT_CALL_STB(buf, cap, format, ap)  stbsp_vsnprintf((buf), (int)(cap), (format), (ap))
 #define FMT_CALL_LIBC(buf, cap, format, ap) vsnprintf((buf), (cap), (format), (ap))
 
 #define FMT_DEFINE_VWRITE(name, call_backend)                                                        \
@@ -110,114 +106,150 @@ static inline int fmt_copy_to_buffer(char *dst, char *end, const char *src, size
     return copied;                                                                                   \
   }
 
-FMT_DEFINE_VWRITE(stb, FMT_CALL_STB)
-FMT_DEFINE_WRITE(stb)
 FMT_DEFINE_VWRITE(libc, FMT_CALL_LIBC)
 FMT_DEFINE_WRITE(libc)
 
 #undef FMT_DEFINE_WRITE
 #undef FMT_DEFINE_VWRITE
 #undef FMT_CALL_LIBC
-#undef FMT_CALL_STB
 
-static inline void fmt_build_format(char *dst, size_t dst_size, const char *modifier,
-                                    const char *default_suffix, const char *conversion_chars) {
-  if (strpbrk(modifier, conversion_chars) != NULL) {
-    snprintf(dst, dst_size, "%%%s", modifier);
-  } else {
-    snprintf(dst, dst_size, "%%%s%s", modifier, default_suffix);
+static inline fmt_spec_t fmt_spec_from_token(const char *modifier, size_t mod_len) {
+  fmt_spec_t spec;
+  spec.text[0] = '\0';
+  spec.len = 0;
+
+  if (modifier && mod_len > 0 && mod_len <= FMT_MODIFIER_MAX) {
+    memcpy(spec.text, modifier, mod_len);
+    spec.text[mod_len] = '\0';
+    spec.len = mod_len;
   }
+
+  return spec;
+}
+
+static inline int fmt_spec_empty(const fmt_spec_t *spec) {
+  return !spec || spec->len == 0;
+}
+
+static inline int fmt_spec_has_conversion(const fmt_spec_t *spec, const char *conversion_chars) {
+  return !fmt_spec_empty(spec) && strpbrk(spec->text, conversion_chars) != NULL;
+}
+
+static inline int fmt_spec_printf(char *dst, size_t dst_size, const fmt_spec_t *spec,
+                                  const char *default_suffix, const char *conversion_chars) {
+  size_t pos = 0;
+  size_t suffix_len = fmt_spec_has_conversion(spec, conversion_chars) ? 0 : strlen(default_suffix);
+  size_t needed = 1 + (spec ? spec->len : 0) + suffix_len;
+
+  if (!dst || dst_size == 0 || needed >= dst_size)
+    return 0;
+
+  dst[pos++] = '%';
+  if (spec && spec->len > 0) {
+    memcpy(dst + pos, spec->text, spec->len);
+    pos += spec->len;
+  }
+  if (suffix_len > 0) {
+    memcpy(dst + pos, default_suffix, suffix_len);
+    pos += suffix_len;
+  }
+  dst[pos] = '\0';
+  return 1;
 }
 
 static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *arg,
                                        const char *modifier, size_t mod_len) {
-  char mod_buf[FMT_FORMAT_CAP] = {0};
-
-  if (mod_len > 0 && mod_len <= FMT_MODIFIER_MAX) {
-    memcpy(mod_buf, modifier, mod_len);
-    mod_buf[mod_len] = '\0';
-  }
+  fmt_spec_t spec = fmt_spec_from_token(modifier, mod_len);
 
   switch (arg->type) {
   case FMT_TYPE_CHAR:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "c", "c");
-      return fmt_write_stb(dst, end, fb, arg->val.c);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "c", "c"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.c);
     }
-    return fmt_write_stb(dst, end, P("%c"), arg->val.c);
+    return fmt_write_libc(dst, end, "%c", arg->val.c);
 
   case FMT_TYPE_INT:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "d", "diouxXc");
-      return fmt_write_stb(dst, end, fb, arg->val.i);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "d", "diouxXc"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.i);
     }
-    return fmt_write_stb(dst, end, P("%d"), arg->val.i);
+    return fmt_write_libc(dst, end, "%d", arg->val.i);
 
   case FMT_TYPE_UINT:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "u", "diouxXc");
-      return fmt_write_stb(dst, end, fb, arg->val.u);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "u", "diouxXc"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.u);
     }
-    return fmt_write_stb(dst, end, P("%u"), arg->val.u);
+    return fmt_write_libc(dst, end, "%u", arg->val.u);
 
   case FMT_TYPE_LONG:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "ld", "diouxXc");
-      return fmt_write_stb(dst, end, fb, arg->val.l);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "ld", "diouxXc"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.l);
     }
-    return fmt_write_stb(dst, end, P("%ld"), arg->val.l);
+    return fmt_write_libc(dst, end, "%ld", arg->val.l);
 
   case FMT_TYPE_ULONG:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "lu", "ouxXc");
-      return fmt_write_stb(dst, end, fb, arg->val.ul);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "lu", "ouxXc"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.ul);
     }
-    return fmt_write_stb(dst, end, P("%lu"), arg->val.ul);
+    return fmt_write_libc(dst, end, "%lu", arg->val.ul);
 
   case FMT_TYPE_LLONG:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "lld", "diouxXc");
-      return fmt_write_stb(dst, end, fb, arg->val.ll);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "lld", "diouxXc"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.ll);
     }
-    return fmt_write_stb(dst, end, P("%lld"), arg->val.ll);
+    return fmt_write_libc(dst, end, "%lld", arg->val.ll);
 
   case FMT_TYPE_ULLONG:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "llu", "ouxXc");
-      return fmt_write_stb(dst, end, fb, arg->val.ull);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "llu", "ouxXc"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.ull);
     }
-    return fmt_write_stb(dst, end, P("%llu"), arg->val.ull);
+    return fmt_write_libc(dst, end, "%llu", arg->val.ull);
 
   case FMT_TYPE_DOUBLE:
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "g", "fegEG");
-      return fmt_write_stb(dst, end, fb, arg->val.f);
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "g", "fegEG"))
+        return 0;
+      return fmt_write_libc(dst, end, fb, arg->val.f);
     }
-    return fmt_write_stb(dst, end, P("%.17g"), arg->val.f);
+    return fmt_write_libc(dst, end, "%.17g", arg->val.f);
 
   case FMT_TYPE_STR: {
     const char *s = arg->val.s ? arg->val.s : "(null)";
-    if (mod_buf[0]) {
+    if (!fmt_spec_empty(&spec)) {
       char fb[FMT_FORMAT_CAP] = {0};
-      fmt_build_format(fb, sizeof(fb), mod_buf, "s", "s");
+      if (!fmt_spec_printf(fb, sizeof(fb), &spec, "s", "s"))
+        return 0;
       return fmt_write_libc(dst, end, fb, s);
     }
     return fmt_copy_to_buffer(dst, end, s, strlen(s));
   }
 
   case FMT_TYPE_PTR:
-    return fmt_write_stb(dst, end, P("%p"), arg->val.p);
+    return fmt_write_libc(dst, end, "%p", arg->val.p);
 
   case FMT_TYPE_SIZE:
-    return fmt_write_stb(dst, end, P("%zu"), arg->val.sz);
+    return fmt_write_libc(dst, end, "%zu", arg->val.sz);
 
   case FMT_TYPE_BOOL: {
     const char *bstr = arg->val.b ? "true" : "false";
@@ -244,9 +276,9 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
     }
 #endif
     char temp[FMT_TEMP_CAP];
-    const char *time_fmt = (mod_buf[0]) ? mod_buf : "%Y-%m-%d %H:%M:%S";
+    const char *time_fmt = !fmt_spec_empty(&spec) ? spec.text : "%Y-%m-%d %H:%M:%S";
     int written = (int)strftime(temp, sizeof(temp), time_fmt, &tm_buf);
-    if (written > 0 && !mod_buf[0] && arg->val.tv.tv_usec > 0) {
+    if (written > 0 && fmt_spec_empty(&spec) && arg->val.tv.tv_usec > 0) {
       int ms = arg->val.tv.tv_usec / 1000;
       written += snprintf(temp + written, sizeof(temp) - (size_t)written, ".%03d", ms);
     }
@@ -259,7 +291,7 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
   }
 
   default:
-    return fmt_write_stb(dst, end, P("0x%llx"), (unsigned long long)(uintptr_t)arg->val.p);
+    return fmt_write_libc(dst, end, "0x%llx", (unsigned long long)(uintptr_t)arg->val.p);
   }
 }
 
@@ -347,6 +379,45 @@ done:
     }
   }
   return (int)(dst - buf);
+}
+
+CXX_C_API tstr_t fmt_print_tstr(tstr_t s, const char *fmt, const fmt_arg_t *args,
+                                size_t arg_count) {
+  enum { FMT_TSTR_STACK_CAP = 256 };
+  char stack[FMT_TSTR_STACK_CAP];
+  char *buf = stack;
+  size_t cap = FMT_TSTR_STACK_CAP;
+
+  if (!s)
+    s = tstr_new();
+  if (!fmt || (!args && arg_count > 0))
+    return s;
+
+  for (;;) {
+    int written = fmt_print(buf, cap, fmt, args, arg_count);
+    if (written < 0)
+      break;
+
+    if ((size_t)written < cap - 1) {
+      if (written > 0)
+        s = tstr_cat_len(s, buf, (size_t)written);
+      break;
+    }
+
+    if (buf != stack)
+      free(buf);
+    if (cap > (SIZE_MAX / 2))
+      return s;
+
+    cap *= 2;
+    buf = (char *)malloc(cap);
+    if (!buf)
+      return s;
+  }
+
+  if (buf != stack)
+    free(buf);
+  return s;
 }
 
 #if defined(__GNUC__) || defined(__clang__)

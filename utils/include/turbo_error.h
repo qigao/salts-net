@@ -1,12 +1,33 @@
 #ifndef TURBO_ERROR_H
 #define TURBO_ERROR_H
 
+#include "platform.h"
 #include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
+#ifdef __cplusplus
+extern "C" {
 #endif
+
+#define TURBO_OK 0
+
+typedef enum {
+  TURBO_ERROR_DOMAIN_NONE = 0,
+  TURBO_ERROR_DOMAIN_TURBO,
+  TURBO_ERROR_DOMAIN_CUSTOM,
+  TURBO_ERROR_DOMAIN_POSIX,
+  TURBO_ERROR_DOMAIN_WIN32,
+  TURBO_ERROR_DOMAIN_UNKNOWN
+} turbo_error_domain_t;
+
+#define TURBO_ERROR_CUSTOM_DOMAIN_MIN 1
+#define TURBO_ERROR_CUSTOM_DOMAIN_MAX 32767
+#define TURBO_ERROR_CUSTOM_LOCAL_MAX 65535
+#define TURBO_ERROR_CUSTOM(domain, local)                                                           \
+  (-(int)(((((domain) & 0x7fff) << 16) | ((local) & 0xffff))))
+#define TURBO_ERROR_CUSTOM_DOMAIN(code) (((-(code)) >> 16) & 0x7fff)
+#define TURBO_ERROR_CUSTOM_LOCAL(code) ((-(code)) & 0xffff)
 
 // Mapping EAI codes
 #define TURBO_EAI_ADDRFAMILY -3000
@@ -78,5 +99,78 @@
 #define TURBO_EXDEV -4052
 #define TURBO_UNKNOWN -4053
 #define TURBO_EOF -4095
+
+typedef struct {
+  int code;
+  int custom_domain;
+  turbo_error_domain_t domain;
+  const char *domain_name;
+  const char *name;
+  const char *message;
+} turbo_error_info_t;
+
+typedef struct {
+  int code;
+  const char *name;
+  const char *message;
+} turbo_error_entry_t;
+
+typedef struct {
+  int domain;
+  const char *domain_name;
+  const turbo_error_entry_t *entries;
+  size_t count;
+} turbo_error_domain_desc_t;
+
+typedef struct {
+  bool ok;
+  int code;
+  const char *message;
+} turbo_result_t;
+
+/** Return human-readable text for TURBO_*, negative errno, or negative Win32 error codes. */
+CXX_C_API const char *turbo_strerror(int err);
+
+/** Return structured metadata for an error code. */
+CXX_C_API turbo_error_info_t turbo_error_info(int err);
+
+/**
+ * Register a custom error domain.
+ *
+ * The descriptor and entry table must remain alive until process exit or until
+ * turbo_error_unregister_domain() is called. Domain ids must be in
+ * [TURBO_ERROR_CUSTOM_DOMAIN_MIN, TURBO_ERROR_CUSTOM_DOMAIN_MAX].
+ */
+CXX_C_API int turbo_error_register_domain(const turbo_error_domain_desc_t *domain);
+
+/** Remove a previously registered custom domain. */
+CXX_C_API int turbo_error_unregister_domain(int domain);
+
+static inline turbo_result_t turbo_result_ok(void) {
+  turbo_result_t r;
+  r.ok = true;
+  r.code = TURBO_OK;
+  r.message = "success";
+  return r;
+}
+
+static inline turbo_result_t turbo_result_err(int code) {
+  turbo_result_t r;
+  r.ok = false;
+  r.code = code;
+  r.message = turbo_strerror(code);
+  return r;
+}
+
+static inline turbo_result_t turbo_result_from_code(int code) {
+  return code == TURBO_OK ? turbo_result_ok() : turbo_result_err(code);
+}
+
+static inline bool turbo_result_is_ok(turbo_result_t r) { return r.ok; }
+static inline bool turbo_result_is_err(turbo_result_t r) { return !r.ok; }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* TURBO_ERROR_H */

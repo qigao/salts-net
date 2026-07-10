@@ -212,19 +212,8 @@ target_link_libraries(your_target TurboNet::CoroNet)
 
 - c-ares (DNS resolution)
 - KCP
-- llhttp
-- STC (data structures library)
-
-## Architecture
-
-The CoroNet library leverages efficient data structures from the STC library:
-
-- Hashmap for configuration storage and URL scheme lookup
-- Arrays and queues for connection management
-- Ring buffers for I/O operations
-- Arena allocators for zero-copy memory management
-
-This provides production-grade performance and reliability for network applications.
+- llhttp 
+- OpenSSL
 
 ## Examples
 

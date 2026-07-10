@@ -481,6 +481,11 @@ void mem_ref(mem_buffer_t* buffer) {
     atomic_fetch_add(&buffer->ref_count, 1);
 }
 
+mem_buffer_t* mem_buffer_retain(mem_buffer_t* buffer) {
+    mem_ref(buffer);
+    return buffer;
+}
+
 static void external_wrapper_init_cb(void) {
     turbo_mutex_init(&g_external_wrapper_lock);
 }
@@ -523,6 +528,10 @@ void mem_unref(mem_buffer_t* buffer) {
 
 void mem_release(mem_buffer_t* buffer) {
     if (buffer) mem_unref(buffer);
+}
+
+void mem_buffer_release(mem_buffer_t* buffer) {
+    mem_release(buffer);
 }
 
 mem_slice_t mem_slice(mem_buffer_t* buffer, size_t offset, size_t length) {

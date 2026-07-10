@@ -11,10 +11,18 @@
  * - Binary-safe (can contain \0)
  * - Compatible with C string functions for reading
  * - Seamless integration with tstr_v (string view)
+ * - Typed "{}" formatting is provided by fmt.h via tstr_format() and
+ *   tstr_append_format(). turbo_str.h keeps only the printf-compatible
+ *   tstr_cat_fmt() entry to avoid a reverse dependency on the formatter.
  *
- * Memory model:
- * - tstr_t is internally managed, use tstr_free()
- * - tstr_to_cstr() returns malloc'd copy, use free()
+ * Ownership model:
+ * - tstr_t is a unique-owned mutable string. Do not share one mutable tstr_t
+ *   instance across owners; use tstr_clone() for a deep copy or tstr_move() for
+ *   explicit ownership transfer.
+ * - Functions that may grow a tstr_t return the updated pointer; callers must
+ *   assign it back, e.g. s = tstr_cat(s, "text")
+ * - Use tstr_free() or tstr_freep() to release ownership.
+ * - tstr_to_cstr() returns a malloc'd copy; use free().
  */
 
 #ifndef TURBO_STR_H
@@ -24,6 +32,7 @@
 #include "turbo_str_view.h"
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +63,9 @@ CXX_C_API tstr_t tstr_new(void);
 /** Create from C string (like strdup) */
 CXX_C_API tstr_t tstr_dup(const char *s);
 
+/** Deep-copy an owned string; NULL stays NULL to preserve optional ownership */
+CXX_C_API tstr_t tstr_clone(tstr_t s);
+
 /** Create from buffer with length (binary-safe) */
 CXX_C_API tstr_t tstr_dup_len(const char *s, size_t n);
 
@@ -62,6 +74,12 @@ CXX_C_API tstr_t tstr_new_len(const void *init, size_t n);
 
 /** Free string */
 CXX_C_API void tstr_free(tstr_t s);
+
+/** Free string and set the caller's handle to NULL */
+CXX_C_API void tstr_freep(tstr_t *s);
+
+/** Move ownership out of *s and set *s to NULL */
+CXX_C_API tstr_t tstr_move(tstr_t *s);
 
 /* ============================================================================
  * Properties
@@ -76,8 +94,16 @@ CXX_C_API size_t tstr_avail(tstr_t s);
 /** Check if empty */
 CXX_C_API int tstr_empty(tstr_t s);
 
-/** Set length manually (for in-place edits, binary-safe) */
+/**
+ * Set length manually after writing into reserved capacity.
+ *
+ * This is a no-op if n is greater than the current allocation. Prefer
+ * tstr_set_len_checked() when the caller needs to detect invalid lengths.
+ */
 CXX_C_API void tstr_set_len(tstr_t s, size_t n);
+
+/** Checked length setter: returns 1 on success, 0 on invalid input/capacity */
+CXX_C_API int tstr_set_len_checked(tstr_t s, size_t n);
 
 /* ============================================================================
  * Concatenation
@@ -160,6 +186,9 @@ CXX_C_API int tstr_contains(const char *s, const char *substr);
 /** Check if string contains view */
 CXX_C_API int tstr_contains_v(tstr_t s, tstr_v needle);
 
+/** Count non-overlapping occurrences of a view */
+CXX_C_API size_t tstr_count_v(tstr_t s, tstr_v needle);
+
 /* ============================================================================
  * Search (returns position, TSTR_V_NPOS if not found)
  * ========================================================================= */
@@ -182,6 +211,64 @@ CXX_C_API size_t tstr_rfind_char(tstr_t s, char c);
 
 /** Trim characters from both ends */
 CXX_C_API tstr_t tstr_trim(tstr_t s, const char *cset);
+
+/** Trim characters from the left side */
+CXX_C_API tstr_t tstr_ltrim(tstr_t s, const char *cset);
+
+/** Trim characters from the right side */
+CXX_C_API tstr_t tstr_rtrim(tstr_t s, const char *cset);
+
+/** Return an owned slice [pos, pos + n) */
+CXX_C_API tstr_t tstr_slice(tstr_t s, size_t pos, size_t n);
+
+/** Strict UTF-8 validation */
+CXX_C_API int tstr_utf8_valid(tstr_t s);
+
+/** Invalid byte offset, or TSTR_V_NPOS when the string is valid UTF-8 */
+CXX_C_API size_t tstr_utf8_invalid_offset(tstr_t s);
+
+/** Count Unicode code points; returns TSTR_V_NPOS when input is invalid UTF-8 */
+CXX_C_API size_t tstr_utf8_len(tstr_t s);
+
+/** Count Unicode code points in at most n bytes; invalid/truncated input returns TSTR_V_NPOS */
+CXX_C_API size_t tstr_utf8_nlen(tstr_t s, size_t n);
+
+/** Byte size including/excluding the trailing NUL, matching utf8size/utf8size_lazy naming */
+CXX_C_API size_t tstr_utf8_size(tstr_t s);
+CXX_C_API size_t tstr_utf8_size_lazy(tstr_t s);
+
+/** Return an owned slice by Unicode code-point indexes */
+CXX_C_API tstr_t tstr_utf8_slice(tstr_t s, size_t char_pos, size_t char_count);
+
+/** Append one Unicode code point encoded as UTF-8; invalid code points are ignored */
+CXX_C_API tstr_t tstr_utf8_append_cp(tstr_t s, uint32_t codepoint);
+
+/** Create a UTF-8 string from one Unicode code point; returns NULL for invalid code points */
+CXX_C_API tstr_t tstr_utf8_from_cp(uint32_t codepoint);
+
+/** Find first/last byte offset of a Unicode code point */
+CXX_C_API size_t tstr_utf8_find_cp(tstr_t s, uint32_t codepoint);
+CXX_C_API size_t tstr_utf8_rfind_cp(tstr_t s, uint32_t codepoint);
+
+/** Find a UTF-8 needle only at code-point boundaries */
+CXX_C_API size_t tstr_utf8_find(tstr_t haystack, tstr_v needle);
+
+/** Repeat a C string count times */
+CXX_C_API tstr_t tstr_repeat(const char *s, size_t count);
+
+/** Repeat a string view count times */
+CXX_C_API tstr_t tstr_repeat_v(tstr_v v, size_t count);
+
+/** Replace at most max_count non-overlapping occurrences in-place */
+CXX_C_API tstr_t tstr_replace(tstr_t s, const char *needle, const char *replacement,
+                              size_t max_count);
+
+/** Replace at most max_count non-overlapping view occurrences in-place */
+CXX_C_API tstr_t tstr_replace_v(tstr_t s, tstr_v needle, tstr_v replacement,
+                                size_t max_count);
+
+/** Replace all non-overlapping occurrences in-place */
+CXX_C_API tstr_t tstr_replace_all(tstr_t s, const char *needle, const char *replacement);
 
 /** Convert to lowercase in place */
 CXX_C_API void tstr_lower(tstr_t s);

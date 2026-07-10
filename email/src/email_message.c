@@ -349,7 +349,7 @@ static void append_address_list(tstr_t *result, mime_address_t *addr) {
     first = 0;
 
     if (addr->display_name) {
-      *result = tstr_cat_fmt(*result, "\"%s\" <%s>", addr->display_name, addr->email);
+      *result = tstr_append_format(*result, "\"{}\" <{}>", addr->display_name, addr->email);
     } else {
       *result = tstr_cat(*result, addr->email);
     }
@@ -431,12 +431,12 @@ tstr_t email_message_to_string(email_message_t *msg) {
 
   // In-Reply-To
   if (msg->in_reply_to) {
-    result = tstr_cat_fmt(result, "In-Reply-To: %s\r\n", msg->in_reply_to);
+    result = tstr_append_format(result, "In-Reply-To: {}\r\n", msg->in_reply_to);
   }
 
   // References
   if (msg->references) {
-    result = tstr_cat_fmt(result, "References: %s\r\n", msg->references);
+    result = tstr_append_format(result, "References: {}\r\n", msg->references);
   }
 
   // Priority
@@ -477,9 +477,9 @@ tstr_t email_message_to_string(email_message_t *msg) {
   char *boundary = generate_boundary();
 
   if (has_attachments) {
-    result = tstr_cat_fmt(result, "Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary);
+    result = tstr_append_format(result, "Content-Type: multipart/mixed; boundary=\"{}\"\r\n", boundary);
   } else {
-    result = tstr_cat_fmt(result, "Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary);
+    result = tstr_append_format(result, "Content-Type: multipart/alternative; boundary=\"{}\"\r\n", boundary);
   }
 
   result = tstr_cat(result, "\r\n");
@@ -489,12 +489,12 @@ tstr_t email_message_to_string(email_message_t *msg) {
   if (has_text && has_html) {
     char *alt_boundary = generate_boundary();
 
-    result = tstr_cat_fmt(result, "\r\n--%s\r\n", boundary);
-    result = tstr_cat_fmt(result, "Content-Type: multipart/alternative; boundary=\"%s\"\r\n", alt_boundary);
+    result = tstr_append_format(result, "\r\n--{}\r\n", boundary);
+    result = tstr_append_format(result, "Content-Type: multipart/alternative; boundary=\"{}\"\r\n", alt_boundary);
     result = tstr_cat(result, "\r\n");
 
     // Text part
-    result = tstr_cat_fmt(result, "\r\n--%s\r\n", alt_boundary);
+    result = tstr_append_format(result, "\r\n--{}\r\n", alt_boundary);
     result = tstr_cat(result, "Content-Type: text/plain; charset=utf-8\r\n");
     result = tstr_cat(result, "Content-Transfer-Encoding: 8bit\r\n");
     result = tstr_cat(result, "\r\n");
@@ -502,24 +502,24 @@ tstr_t email_message_to_string(email_message_t *msg) {
     result = tstr_cat(result, "\r\n");
 
     // HTML part
-    result = tstr_cat_fmt(result, "\r\n--%s\r\n", alt_boundary);
+    result = tstr_append_format(result, "\r\n--{}\r\n", alt_boundary);
     result = tstr_cat(result, "Content-Type: text/html; charset=utf-8\r\n");
     result = tstr_cat(result, "Content-Transfer-Encoding: 8bit\r\n");
     result = tstr_cat(result, "\r\n");
     result = tstr_cat(result, msg->html_body);
     result = tstr_cat(result, "\r\n");
 
-    result = tstr_cat_fmt(result, "\r\n--%s--\r\n", alt_boundary);
+    result = tstr_append_format(result, "\r\n--{}--\r\n", alt_boundary);
     free(alt_boundary);
   } else if (has_text) {
-    result = tstr_cat_fmt(result, "\r\n--%s\r\n", boundary);
+    result = tstr_append_format(result, "\r\n--{}\r\n", boundary);
     result = tstr_cat(result, "Content-Type: text/plain; charset=utf-8\r\n");
     result = tstr_cat(result, "Content-Transfer-Encoding: 8bit\r\n");
     result = tstr_cat(result, "\r\n");
     result = tstr_cat(result, msg->text_body);
     result = tstr_cat(result, "\r\n");
   } else if (has_html) {
-    result = tstr_cat_fmt(result, "\r\n--%s\r\n", boundary);
+    result = tstr_append_format(result, "\r\n--{}\r\n", boundary);
     result = tstr_cat(result, "Content-Type: text/html; charset=utf-8\r\n");
     result = tstr_cat(result, "Content-Transfer-Encoding: 8bit\r\n");
     result = tstr_cat(result, "\r\n");
@@ -531,19 +531,19 @@ tstr_t email_message_to_string(email_message_t *msg) {
   if (has_attachments) {
     email_attachment_t *att = msg->attachments;
     while (att) {
-      result = tstr_cat_fmt(result, "\r\n--%s\r\n", boundary);
-      result = tstr_cat_fmt(result, "Content-Type: %s\r\n",
+      result = tstr_append_format(result, "\r\n--{}\r\n", boundary);
+      result = tstr_append_format(result, "Content-Type: {}\r\n",
                            att->content_type ? att->content_type : "application/octet-stream");
 
       if (att->inline_attachment && att->content_id) {
-        result = tstr_cat_fmt(result, "Content-ID: <%s>\r\n", att->content_id);
+        result = tstr_append_format(result, "Content-ID: <{}>\r\n", att->content_id);
         result = tstr_cat(result, "Content-Disposition: inline");
       } else {
         result = tstr_cat(result, "Content-Disposition: attachment");
       }
 
       if (att->filename) {
-        result = tstr_cat_fmt(result, "; filename=\"%s\"", att->filename);
+        result = tstr_append_format(result, "; filename=\"{}\"", att->filename);
       }
       result = tstr_cat(result, "\r\n");
 
@@ -563,7 +563,7 @@ tstr_t email_message_to_string(email_message_t *msg) {
   }
 
   // Final boundary
-  result = tstr_cat_fmt(result, "\r\n--%s--\r\n", boundary);
+  result = tstr_append_format(result, "\r\n--{}--\r\n", boundary);
   free(boundary);
 
   return result;

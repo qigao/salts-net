@@ -183,7 +183,7 @@ CXX_C_API void turbo_cond_wait(turbo_cond_t *cond, turbo_mutex_t *mutex);
  * @param cond Condition variable to wait on
  * @param mutex Mutex to hold while waiting
  * @param timeout_ns Timeout in nanoseconds
- * @return 0 on success, UV_ETIMEDOUT on timeout
+ * @return 0 on success, -ETIMEDOUT on timeout
  */
 CXX_C_API int turbo_cond_timedwait(turbo_cond_t *cond, turbo_mutex_t *mutex, uint64_t timeout_ns);
 

@@ -20,8 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define STB_SPRINTF_IMPLEMENTATION
-#include <stb_sprintf.h>
 
 #ifdef _WIN32
   #include <windows.h>
@@ -181,7 +179,7 @@ void example_statistics(void) {
 
   for (int i = 0; i < 1000; i++) {
     char payload[64];
-    stbsp_snprintf(payload, sizeof(payload), "Message %d", i);
+    snprintf(payload, sizeof(payload), "Message %d", i);
     size_t frame_len = create_frame(buffer, i, payload, strlen(payload));
 
     uint64_t parse_start = get_time_ns();

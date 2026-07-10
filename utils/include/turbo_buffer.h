@@ -73,6 +73,17 @@ struct mem_slice_s {
   mem_buffer_t *buffer;
 };
 
+/*
+ * Ownership model:
+ * - mem_pool_t owns allocation storage and must outlive pool-managed buffers
+ *   borrowed from it.
+ * - mem_buffer_t is a shared buffer handle with an atomic reference count.
+ *   mem_buffer_retain()/mem_buffer_release() are the preferred ownership names.
+ *   mem_ref()/mem_unref()/mem_release() remain as compatibility aliases.
+ * - mem_slice_t is a borrowed view that retains its source buffer until
+ *   mem_slice_release().
+ */
+
 /**
  * @brief Initialize slab pool
  * @param pool Pool structure
@@ -140,7 +151,7 @@ CXX_C_API char *mem_sprintf(mem_pool_t *pool, const char *fmt, ...);
 CXX_C_API mem_buffer_t *mem_get_buffer(mem_pool_t *pool, size_t min_size);
 
 /**
- * @brief Return buffer to pool's recycle list
+ * @brief Release one shared buffer reference
  * @param buffer Buffer instance
  */
 CXX_C_API void mem_release(mem_buffer_t *buffer);
@@ -156,6 +167,19 @@ CXX_C_API void mem_ref(mem_buffer_t *buffer);
  * @param buffer Buffer instance
  */
 CXX_C_API void mem_unref(mem_buffer_t *buffer);
+
+/**
+ * @brief Retain a shared buffer reference and return the same handle
+ * @param buffer Buffer instance
+ * @return The same buffer, or NULL
+ */
+CXX_C_API mem_buffer_t *mem_buffer_retain(mem_buffer_t *buffer);
+
+/**
+ * @brief Release one shared buffer reference
+ * @param buffer Buffer instance
+ */
+CXX_C_API void mem_buffer_release(mem_buffer_t *buffer);
 
 /**
  * @brief Wrap external memory as zero-copy buffer

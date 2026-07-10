@@ -13,27 +13,40 @@
    - 无锁数据结构（Disruptor、环形缓冲区、桶式优先队列）
    - 使用场景映射表、性能指标
 
-2. **[c_design_patterns.md](c_design_patterns.md)** - C 语言设计模式实现指南
+2. **[coronet.md](coronet.md)** - CoroNet 协程网络开发指南
+   - coroutine context、task、scheduler 生命周期
+   - TCP/TLS/UDP/KCP/Pipe/WebSocket socket 选择矩阵
+   - stream/datagram/coro_socket 分层边界
+   - SOCKS5 与 TProxy 边界
+   - I/O buffer 所有权、连接池、TLS/WS、测试目标
+
+3. **[cmake_presets.md](cmake_presets.md)** - CMake Presets 构建测试指南
+   - configure/build/test preset 使用方式
+   - Windows VS toolchain 命令
+   - target 构建、CTest 过滤、TinyTest exe 调试
+   - build tree 损坏恢复与 preset 修改规则
+
+4. **[c_design_patterns.md](c_design_patterns.md)** - C 语言设计模式实现指南
    - 创建型模式：工厂、建造者、单例
    - 结构型模式：适配器、桥接、组合、装饰器
    - 行为型模式：策略、观察者、命令、访问者、模板方法
    - C 语言最佳实践、SOLID 原则、反模式警告
 
-3. **[performance_optimization.md](performance_optimization.md)** - 性能优化专项指南
+5. **[performance_optimization.md](performance_optimization.md)** - 性能优化专项指南
    - 热路径识别与优化
    - 算法复杂度约束
    - 内存管理优化（批量分配、对象池、缓存对齐）
    - SIMD 与向量化、缓存优化、并发优化
    - 性能测试框架、优化检查清单
 
-4. **[logging_guide.md](logging_guide.md)** - 日志系统最佳实践
+6. **[logging_guide.md](logging_guide.md)** - 日志系统最佳实践
    - 日志数量与性能约束（量化标准）
    - 日志内容质量规范
    - 日志级别使用规范
    - 文件管理（滚动、归档、保留策略）
    - 生产环境配置、审查检查清单
 
-5. **[plugin_system.md](plugin_system.md)** - 插件系统开发规范
+7. **[plugin_system.md](plugin_system.md)** - 插件系统开发规范
    - 插件架构设计（生命周期、版本管理）
    - 插件接口设计（稳定 ABI）
    - 插件隔离机制（内存、资源、权限、崩溃）
@@ -41,7 +54,7 @@
    - 插件通信（事件总线、服务注册）
    - 热重载、安全机制、测试与调试
 
-6. **[tinytest.md](tinytest.md)** - TinyTest 测试框架指南
+8. **[tinytest.md](tinytest.md)** - TinyTest 测试框架指南
    - C/C++ 单元测试结构（suite/spec/group/it）
    - fixture、typed assertions、临时文件 helper
    - 过滤、TAP、JUnit、benchmark 使用规范
@@ -51,6 +64,8 @@
 在对话中使用 `#` 引用 skill 文件名：
 ```
 #skills/turbonet_utils.md
+#skills/coronet.md
+#skills/cmake_presets.md
 #skills/c_design_patterns.md
 #skills/performance_optimization.md
 #skills/logging_guide.md

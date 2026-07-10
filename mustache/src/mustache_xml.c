@@ -121,9 +121,9 @@ static int xml_dump(void *node, int (*out_fn)(const char *, size_t, void *), voi
 
             if (!has_elem_children) {
                 int res = 0;
-                cxml_for_each(child, &elem->children) {
-                    if (_cxml_get_node_type(child) == CXML_TEXT_NODE) {
-                        cxml_text_node *t = (cxml_text_node *)child;
+                cxml_for_each(text_child, &elem->children) {
+                    if (_cxml_get_node_type(text_child) == CXML_TEXT_NODE) {
+                        cxml_text_node *t = (cxml_text_node *)text_child;
                         const char *raw = cxml_string_as_raw(&t->value);
                         if (raw) {
                             res = out_fn(raw, strlen(raw), renderer_data);
@@ -200,9 +200,9 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
     }
 
     if (count == 1) {
-        cxml_for_each(child, children) {
-            if (_cxml_get_node_type(child) == CXML_ELEM_NODE) {
-                cxml_elem_node *e = (cxml_elem_node *)child;
+        cxml_for_each(match_child, children) {
+            if (_cxml_get_node_type(match_child) == CXML_ELEM_NODE) {
+                cxml_elem_node *e = (cxml_elem_node *)match_child;
                 const char *qname = cxml_string_as_raw(&e->name.qname);
                 const char *lname = e->name.lname;
                 if (tstr_casecmp(qname, key) == 0 || (lname && tstr_casecmp(lname, key) == 0)) {
@@ -214,9 +214,9 @@ static void *xml_get_child_by_name(void *node, const char *name, size_t size, vo
     } else if (count > 1) {
         SURROGATE_LIST *slist = add_surrogate(p, count);
         size_t i = 0;
-        cxml_for_each(child, children) {
-            if (_cxml_get_node_type(child) == CXML_ELEM_NODE) {
-                cxml_elem_node *e = (cxml_elem_node *)child;
+        cxml_for_each(match_child, children) {
+            if (_cxml_get_node_type(match_child) == CXML_ELEM_NODE) {
+                cxml_elem_node *e = (cxml_elem_node *)match_child;
                 const char *qname = cxml_string_as_raw(&e->name.qname);
                 const char *lname = e->name.lname;
                 if (tstr_casecmp(qname, key) == 0 || (lname && tstr_casecmp(lname, key) == 0)) {

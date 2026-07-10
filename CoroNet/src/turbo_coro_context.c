@@ -446,52 +446,6 @@ void coro_context_destroy(coro_context_t *ctx) {
   free(ctx);
 }
 
-/* ── Error string lookup ─────────────────────────────────────── */
-
-static const struct {
-  int code;
-  const char *msg;
-} turbo_error_table[] = {{TURBO_EOF, "end of file"},
-                         {TURBO_ENOMEM, "not enough memory"},
-                         {TURBO_EINVAL, "invalid argument"},
-                         {TURBO_ETIMEDOUT, "connection timed out"},
-                         {TURBO_ECONNREFUSED, "connection refused"},
-                         {TURBO_ECONNRESET, "connection reset by peer"},
-                         {TURBO_ECONNABORTED, "connection aborted"},
-                         {TURBO_EPROTONOSUPPORT, "protocol not supported"},
-                         {TURBO_EALREADY, "connection already in progress"},
-                         {TURBO_ENOTSUP, "operation not supported"},
-                         {TURBO_ECANCELED, "operation canceled"},
-                         {TURBO_ENOTCONN, "socket is not connected"},
-                         {TURBO_ENOSYS, "function not implemented"},
-                         {TURBO_EBUSY, "resource busy or locked"},
-                         {TURBO_EADDRINUSE, "address already in use"},
-                         {TURBO_EADDRNOTAVAIL, "address not available"},
-                         {TURBO_EAFNOSUPPORT, "address family not supported"},
-                         {TURBO_EBADF, "bad file descriptor"},
-                         {TURBO_EDESTADDRREQ, "destination address required"},
-                         {TURBO_EHOSTUNREACH, "host is unreachable"},
-                         {TURBO_ENETUNREACH, "network is unreachable"},
-                         {TURBO_ENETDOWN, "network is down"},
-                         {TURBO_EPIPE, "broken pipe"},
-                         {TURBO_ESHUTDOWN, "cannot send after transport endpoint shutdown"},
-                         {TURBO_EMSGSIZE, "message too long"},
-                         {TURBO_ENOBUFS, "no buffer space available"},
-                         {TURBO_EAI_NONAME, "hostname not found"},
-                         {TURBO_EAI_AGAIN, "temporary DNS failure"},
-                         {TURBO_EAI_FAIL, "non-recoverable DNS failure"},
-                         {TURBO_EAI_MEMORY, "out of memory (DNS)"},
-                         {TURBO_EAI_CANCELED, "DNS lookup canceled"},
-                         {0, NULL}};
-
-const char *turbo_strerror(int err) {
-  if (err == 0) return "success";
-  for (int i = 0; turbo_error_table[i].msg; i++) {
-    if (turbo_error_table[i].code == err) return turbo_error_table[i].msg;
-  }
-  return "unknown error";
-}
-
 /* ── Post queue: thread-safe callback posting to event loop ── */
 
 /**

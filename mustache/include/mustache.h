@@ -196,11 +196,11 @@ CXX_C_API int mustache_process(const MUSTACHE_TEMPLATE *t, const MUSTACHE_RENDER
                      void *provider_data);
 
 /**
- * Simple string renderer that appends to a buffer (uses turbo_string internally)
+ * Simple string renderer that appends to a tstr_t internally.
  */
 typedef struct MUSTACHE_STRING_RENDERER {
   MUSTACHE_RENDERER base;
-  char *buffer;  /* Internal turbo_string - do not access directly */
+  char *buffer;  /* Internal tstr_t - do not access directly */
 } MUSTACHE_STRING_RENDERER;
 
 /**

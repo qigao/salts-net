@@ -16,6 +16,7 @@
 #include "memory_pool.h"
 #include "turbo_buffer.h"
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef __cplusplus
@@ -78,6 +79,7 @@ CXX_C_API size_t tstr_v_find(tstr_v s, tstr_v needle);
 CXX_C_API size_t tstr_v_rfind(tstr_v s, tstr_v needle);
 CXX_C_API size_t tstr_v_find_char(tstr_v s, char c);
 CXX_C_API size_t tstr_v_rfind_char(tstr_v s, char c);
+CXX_C_API size_t tstr_v_count(tstr_v s, tstr_v needle);
 
 /* ============================================================================
  * Slicing
@@ -87,6 +89,44 @@ CXX_C_API tstr_v tstr_v_sub(tstr_v s, size_t pos, size_t n);
 CXX_C_API tstr_v tstr_v_trim(tstr_v s, const char *cset);
 CXX_C_API tstr_v tstr_v_trim_left(tstr_v s, const char *cset);
 CXX_C_API tstr_v tstr_v_trim_right(tstr_v s, const char *cset);
+
+/* ============================================================================
+ * UTF-8 helpers
+ * ========================================================================= */
+
+/** Strict UTF-8 validation */
+CXX_C_API int tstr_v_utf8_valid(tstr_v s);
+
+/** Invalid byte offset, or TSTR_V_NPOS when the view is valid UTF-8 */
+CXX_C_API size_t tstr_v_utf8_invalid_offset(tstr_v s);
+
+/** Count Unicode code points; returns TSTR_V_NPOS when input is invalid UTF-8 */
+CXX_C_API size_t tstr_v_utf8_len(tstr_v s);
+
+/** Count Unicode code points in at most n bytes; invalid/truncated input returns TSTR_V_NPOS */
+CXX_C_API size_t tstr_v_utf8_nlen(tstr_v s, size_t n);
+
+/** Number of bytes, equivalent to utf8size_lazy() for a bounded view */
+CXX_C_API size_t tstr_v_utf8_size_lazy(tstr_v s);
+
+/** Convert code-point index to byte offset; index at end returns s.len */
+CXX_C_API size_t tstr_v_utf8_byte_offset(tstr_v s, size_t char_index);
+
+/** Return a view sliced by Unicode code-point indexes */
+CXX_C_API tstr_v tstr_v_utf8_sub(tstr_v s, size_t char_pos, size_t char_count);
+
+/** Decode and consume one Unicode code point from rest */
+CXX_C_API int tstr_v_utf8_next(tstr_v *rest, uint32_t *codepoint);
+
+/** Find first/last byte offset of a Unicode code point */
+CXX_C_API size_t tstr_v_utf8_find_cp(tstr_v s, uint32_t codepoint);
+CXX_C_API size_t tstr_v_utf8_rfind_cp(tstr_v s, uint32_t codepoint);
+
+/** Find a UTF-8 needle only at code-point boundaries */
+CXX_C_API size_t tstr_v_utf8_find(tstr_v haystack, tstr_v needle);
+
+/** Encoded byte size of one Unicode code point, or 0 when invalid */
+CXX_C_API size_t tstr_utf8_codepoint_size(uint32_t codepoint);
 
 /* ============================================================================
  * Split (zero-allocation iterator)

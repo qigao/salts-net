@@ -36,6 +36,8 @@ char *mem_sprintf(mem_pool_t *pool, const char *fmt, ...);
 
 // 缓冲区管理
 mem_buffer_t *mem_get_buffer(mem_pool_t *pool, size_t min_size);
+mem_buffer_t *mem_buffer_retain(mem_buffer_t *buffer);
+void mem_buffer_release(mem_buffer_t *buffer);
 void mem_release(mem_buffer_t *buffer);
 void mem_ref(mem_buffer_t *buffer);    // 增加引用计数
 void mem_unref(mem_buffer_t *buffer);  // 减少引用计数
@@ -72,8 +74,14 @@ char *mem_write_ptr(mem_buffer_t *buffer);
 **使用场景**：
 - ✅ 网络缓冲区（零拷贝、引用计数）
 - ✅ 解析器临时分配（批量分配 + `mem_reset()`）
-- ✅ 跨模块传递数据（`mem_ref`/`mem_unref` 管理生命周期）
+- ✅ 跨模块传递数据（`mem_buffer_retain()` / `mem_buffer_release()` 管理共享生命周期）
 - ❌ 替代全局 `malloc`（应使用专用池）
+
+**Ownership 规则**：
+- `mem_pool_t` 是生命周期域，拥有 pool-managed allocation；调用 `mem_destroy()` 后，池内分配与池管理 buffer 全部失效。
+- `mem_buffer_t` 是 shared buffer handle，使用 atomic refcount；新代码优先用 `mem_buffer_retain()` / `mem_buffer_release()` 表达所有权，`mem_ref()` / `mem_unref()` / `mem_release()` 保留为兼容名。
+- `mem_slice_t` 是零拷贝 view，创建时 retain 源 buffer，必须用 `mem_slice_release()` 释放该引用。
+- 不要把 `mem_pool_t` 本身做引用计数；需要跨线程/跨模块共享数据时共享 `mem_buffer_t`，不要共享 pool 内裸指针。
 
 **示例**：
 ```c
@@ -91,6 +99,7 @@ mem_set_used(buf, len);
 mem_slice_t slice = mem_slice(buf, 10, 50);  // 引用 [10, 60)
 // ... 使用 slice.data
 mem_slice_release(&slice);  // 自动 unref buffer
+mem_buffer_release(buf);
 
 // 批量重置
 mem_reset(&pool);  // 所有分配失效，可重用内存
@@ -203,23 +212,195 @@ pool_destroy(pool);
 
 ---
 
+## 错误处理
+
+### 统一错误表达 (`turbo_error.h`)
+
+TurboNet 基础错误层采用两级表达：
+
+- `int` 错误码：公共 ABI、热路径、回调状态、I/O 操作继续使用 `0` 表示成功、负数表示失败。
+- `turbo_result_t`：需要显式携带成功/失败状态和可读消息时使用，符合 `skills/c_design_patterns.md` 的 Result 模式。
+- custom error domain：模块专有错误不抢全局 `TURBO_E*` 编号，通过 domain + local code 注册到统一错误处理器。
+
+**错误码规则**：
+```c
+#define TURBO_OK 0
+
+// TURBO_* 项目错误码：稳定负数区间
+#define TURBO_EINVAL -4016
+#define TURBO_ENOMEM -4030
+#define TURBO_EPROTO -4042
+
+// 模块自定义错误：domain + local code
+#define TURBO_ERROR_CUSTOM(domain, local) ...
+
+// 原生后端错误：允许向上传播负 errno / 负 Win32 code
+return -errno;
+return -(int)GetLastError();
+```
+
+**主要 API**：
+```c
+typedef enum {
+  TURBO_ERROR_DOMAIN_NONE = 0,
+  TURBO_ERROR_DOMAIN_TURBO,
+  TURBO_ERROR_DOMAIN_CUSTOM,
+  TURBO_ERROR_DOMAIN_POSIX,
+  TURBO_ERROR_DOMAIN_WIN32,
+  TURBO_ERROR_DOMAIN_UNKNOWN
+} turbo_error_domain_t;
+
+typedef struct {
+  int code;
+  int custom_domain;
+  turbo_error_domain_t domain;
+  const char *domain_name;
+  const char *name;
+  const char *message;
+} turbo_error_info_t;
+
+typedef struct {
+  int code;
+  const char *name;
+  const char *message;
+} turbo_error_entry_t;
+
+typedef struct {
+  int domain;
+  const char *domain_name;
+  const turbo_error_entry_t *entries;
+  size_t count;
+} turbo_error_domain_desc_t;
+
+typedef struct {
+  bool ok;
+  int code;
+  const char *message;
+} turbo_result_t;
+
+const char *turbo_strerror(int err);
+turbo_error_info_t turbo_error_info(int err);
+int turbo_error_register_domain(const turbo_error_domain_desc_t *domain);
+int turbo_error_unregister_domain(int domain);
+turbo_result_t turbo_result_ok(void);
+turbo_result_t turbo_result_err(int code);
+turbo_result_t turbo_result_from_code(int code);
+bool turbo_result_is_ok(turbo_result_t r);
+bool turbo_result_is_err(turbo_result_t r);
+```
+
+**使用规则**：
+- 内部链路能只传播错误码时，返回 `int`，不要为了“模式化”给热路径套结构体。
+- 边界层需要对用户、日志或调用方表达错误上下文时，用 `turbo_error_info()` 或 `turbo_result_t`。
+- `turbo_strerror()` 必须能处理 `TURBO_*`、负 `errno` 和负 Win32 错误码；日志中不要直接写 `"unknown error"`。
+- 新增 `TURBO_*` 错误码时必须同步加入错误表和测试。
+- 模块专有错误使用 `TURBO_ERROR_CUSTOM(domain, local)`，并在模块初始化阶段注册静态错误表。
+- custom domain id 范围是 1..32767；local code 范围是 1..65535。对外可见错误码必须稳定，不能重排或复用旧含义。
+- `turbo_result_t.message` 指向静态或线程局部错误文本，调用方不拥有该内存。
+
+**示例**：
+```c
+int open_socket(...) {
+  if (!addr) return TURBO_EINVAL;
+  if (socket_failed) return -errno;
+  return TURBO_OK;
+}
+
+turbo_result_t connect_checked(...) {
+  int rc = open_socket(...);
+  return turbo_result_from_code(rc);
+}
+
+turbo_result_t r = connect_checked(...);
+if (turbo_result_is_err(r)) {
+  TLOG_ERROR("connect failed: code={}, reason={}", r.code, r.message);
+}
+```
+
+**模块自定义错误示例**：
+```c
+#define TURBO_ERROR_DOMAIN_EMAIL 10
+#define EMAIL_EAUTH_FAILED TURBO_ERROR_CUSTOM(TURBO_ERROR_DOMAIN_EMAIL, 1)
+#define EMAIL_EBAD_ADDRESS TURBO_ERROR_CUSTOM(TURBO_ERROR_DOMAIN_EMAIL, 2)
+
+static const turbo_error_entry_t email_errors[] = {
+    {EMAIL_EAUTH_FAILED, "EMAIL_EAUTH_FAILED", "SMTP authentication failed"},
+    {EMAIL_EBAD_ADDRESS, "EMAIL_EBAD_ADDRESS", "invalid email address"},
+};
+
+static const turbo_error_domain_desc_t email_domain = {
+    .domain = TURBO_ERROR_DOMAIN_EMAIL,
+    .domain_name = "email",
+    .entries = email_errors,
+    .count = sizeof(email_errors) / sizeof(email_errors[0]),
+};
+
+int email_init(void) {
+  int rc = turbo_error_register_domain(&email_domain);
+  return (rc == TURBO_EALREADY) ? TURBO_OK : rc;
+}
+```
+
+---
+
 ## 字符串处理
+
+### 分层原则：`tstr_v` / `tstr_t` / `fmt`
+
+TurboNet 新代码默认按三层处理字符串：
+
+- `tstr_v`：只读、零拷贝、无所有权。用于 parser token、协议字段、临时 slice、查找 key、日志/模板中的非持久引用。
+- `tstr_t`：拥有内存、可增长、二进制安全。用于拼接、格式化结果、跨函数返回、需要保存的动态字符串。
+- `fmt.h`：统一 `{}` 类型安全格式化后端。可写入固定 buffer，也可直接写入/追加到 `tstr_t`。
+
+**多语义模型**：
+- `tstr_t` 的底层事实永远是 byte string：它保存字节、长度为字节数、允许内嵌 `\0`。
+- UTF-8 是显式语义层：只有 `tstr_utf8_*()` / `tstr_v_utf8_*()` 会把内容解释为 Unicode code point。
+- 同一个 `tstr_t` 可以保存 UTF-8 文本，也可以保存二进制数据；区别由调用点选择的 API 决定。
+- 一段逻辑内必须明确当前字符串是“文本”还是“二进制”。文本路径可先 `tstr_utf8_valid()` 再进入 `tstr_utf8_*()`；二进制路径只使用 byte API。
+- 不要让 `tstr_len()`、`tstr_slice()`、`tstr_find*()` 隐式承担字符语义；字符数量、字符切片、codepoint 查找必须走 UTF-8 API。
+
+**优先级**：
+1. 只读引用、解析中间结果：优先 `tstr_v`
+2. 动态构造、返回字符串：优先 `tstr_t`
+3. 格式化构造：优先 `tstr_format()` / `tstr_append_format()`
+4. 固定小缓冲、热路径且长度明确：可用 `fmt(buf, sizeof(buf), ...)`
+5. 兼容旧 printf 风格：保留 `tstr_cat_fmt()`，新代码不优先使用
+
+**禁止倾向**：
+- 不为解析临时子串无故分配 `tstr_t`
+- 不用 `snprintf + strlen + 固定临时 buffer` 构造长度不确定的字符串
+- 不把协议读取缓冲区、bytecode 或网络 ring buffer 伪装成“文本” `tstr_t`
+- 不在同一段业务逻辑中混用 byte offset 和 UTF-8 codepoint index
+- 不忽略任何可能增长 `tstr_t` 的函数返回值
+
+**Ownership 规则**：
+- `tstr_v` 是 borrowed view，不拥有内存，不延长来源生命周期。
+- `tstr_t` 是 unique-owned mutable string；不要把同一个 `tstr_t` 当作共享可变字符串跨 owner 持有。
+- 需要复制所有权时用 `tstr_clone()`；需要转移所有权时用 `tstr_move()`；释放并清空句柄用 `tstr_freep()`。
+- 不给 `tstr_t` 加 atomic refcount/arc 语义；需要共享不可变数据时优先用 `mem_buffer_t` + `tstr_v`/`mem_slice_t`。
+
+---
 
 ### 动态字符串 (`turbo_str.h`)
 
 **核心类型**：
 - `tstr_t` = `char*`（可直接用于 `printf("%s", s)`）
 - O(1) 长度查询、二进制安全
+- 可能 `realloc`，所有拼接/复制/格式化函数返回值都必须重新赋值
 
 **创建/销毁**：
 ```c
 tstr_t tstr_new(void);
 tstr_t tstr_dup(const char *s);
+tstr_t tstr_clone(tstr_t s);
 tstr_t tstr_dup_len(const char *s, size_t n);
 tstr_t tstr_new_len(const void *init, size_t n);
 tstr_t tstr_from_v(tstr_v v);
 tstr_t tstr_from_ll(long long value);
 void tstr_free(tstr_t s);
+void tstr_freep(tstr_t *s);
+tstr_t tstr_move(tstr_t *s);
 ```
 
 **属性**：
@@ -227,7 +408,8 @@ void tstr_free(tstr_t s);
 size_t tstr_len(tstr_t s);        // O(1)
 size_t tstr_avail(tstr_t s);      // 可用空间
 int tstr_empty(tstr_t s);
-void tstr_set_len(tstr_t s, size_t n);  // 手动设置长度
+void tstr_set_len(tstr_t s, size_t n);  // 手动设置长度，超出容量时 no-op
+int tstr_set_len_checked(tstr_t s, size_t n); // 成功返回 1
 void tstr_clear(tstr_t s);        // 清空但保留内存
 ```
 
@@ -238,8 +420,7 @@ tstr_t tstr_cat(tstr_t s, const char *t);
 tstr_t tstr_cat_len(tstr_t s, const char *t, size_t n);
 tstr_t tstr_cat_str(tstr_t s, tstr_t t);
 tstr_t tstr_cat_v(tstr_t s, tstr_v v);  // 拼接 view
-tstr_t tstr_cat_fmt(tstr_t s, const char *fmt, ...);
-tstr_t tstr_cat_typed(tstr_t s, const char *fmt, ...); // 需 fmt.h，{} 语法
+tstr_t tstr_cat_fmt(tstr_t s, const char *fmt, ...); // printf 兼容旧接口
 ```
 
 **复制**：
@@ -264,6 +445,7 @@ int tstr_ends_with(const char *s, const char *suffix);
 int tstr_ends_with_v(tstr_t s, tstr_v suffix);
 int tstr_contains(const char *s, const char *substr);
 int tstr_contains_v(tstr_t s, tstr_v needle);
+size_t tstr_count_v(tstr_t s, tstr_v needle);    // 非重叠计数
 
 size_t tstr_find_v(tstr_t s, tstr_v needle);      // 位置或 TSTR_V_NPOS
 size_t tstr_find_char(tstr_t s, char c);
@@ -276,6 +458,28 @@ size_t tstr_rfind_char(tstr_t s, char c);
 void tstr_lower(tstr_t s);  // 小写
 void tstr_upper(tstr_t s);  // 大写
 tstr_t tstr_trim(tstr_t s, const char *cset);
+tstr_t tstr_ltrim(tstr_t s, const char *cset);
+tstr_t tstr_rtrim(tstr_t s, const char *cset);
+tstr_t tstr_slice(tstr_t s, size_t pos, size_t len); // 拥有新字符串
+int tstr_utf8_valid(tstr_t s);
+size_t tstr_utf8_invalid_offset(tstr_t s); // 合法时返回 TSTR_V_NPOS
+size_t tstr_utf8_len(tstr_t s); // Unicode code point 数，非法 UTF-8 返回 TSTR_V_NPOS
+size_t tstr_utf8_nlen(tstr_t s, size_t n);
+size_t tstr_utf8_size(tstr_t s);      // 字节数，含 NUL
+size_t tstr_utf8_size_lazy(tstr_t s); // 字节数，不含 NUL
+tstr_t tstr_utf8_slice(tstr_t s, size_t char_pos, size_t char_count);
+tstr_t tstr_utf8_append_cp(tstr_t s, uint32_t codepoint);
+tstr_t tstr_utf8_from_cp(uint32_t codepoint);
+size_t tstr_utf8_find_cp(tstr_t s, uint32_t codepoint);
+size_t tstr_utf8_rfind_cp(tstr_t s, uint32_t codepoint);
+size_t tstr_utf8_find(tstr_t haystack, tstr_v needle);
+tstr_t tstr_repeat(const char *s, size_t count);
+tstr_t tstr_repeat_v(tstr_v v, size_t count);
+tstr_t tstr_replace(tstr_t s, const char *needle, const char *replacement,
+                    size_t max_count);
+tstr_t tstr_replace_v(tstr_t s, tstr_v needle, tstr_v replacement,
+                      size_t max_count);
+tstr_t tstr_replace_all(tstr_t s, const char *needle, const char *replacement);
 
 // 与 view 互转
 tstr_t tstr_from_v(tstr_v v);       // 拷贝
@@ -292,23 +496,61 @@ void tstr_free_split(tstr_t *tokens, int count);
 tstr_t tstr_join(char **argv, int argc, const char *sep);
 ```
 
+**Python-like 操作语义**：
+- `tstr_slice()` 返回拥有内存的新 `tstr_t`，越界返回空串。
+- 默认字符串 API 是 byte-based：`tstr_len()`、`tstr_slice()`、`tstr_find*()` 的位置都是字节偏移。
+- UTF-8 语义必须显式使用 `tstr_utf8_*()`：这些函数按 Unicode code point 计数、切片和查找，并严格拒绝 overlong、surrogate、截断序列和超出 `U+10FFFF` 的编码。
+- UTF-8 API 对齐 `sheredom/utf8.h` 的使用模型：`*_len()` 是 codepoint 数，`*_size()` 是字节数，`*_find_cp()` 类似 `utf8chr()` / `utf8rchr()`。不同点是 `tstr` API 返回 byte offset 或 `TSTR_V_NPOS`，不返回裸指针。
+- `utils` 通过 CMake 查找 header-only `utf8h`：`find_path(UTF8H_INCLUDE_DIRS "utf8h/utf8.h")`，实现层可复用其编码辅助，公开 API 仍保持 `tstr` 命名与错误语义。
+- `tstr_lower()` / `tstr_upper()` 是 ASCII/byte 级转换，不做 Unicode case folding。
+- `tstr_repeat()` / `tstr_repeat_v()` 返回新字符串；长度溢出或分配失败返回 `NULL`。
+- `tstr_replace*()` 修改并返回输入字符串，和其它可能扩容的 API 一样必须重新赋值。
+- `tstr_split(s, "", &count)` 返回整个字符串作为单个 token；`tstr_join()` 将 `NULL` separator 当作空串。
+- `tstr_set_len()` 只允许设置到当前 allocation 内；需要知道失败时用 `tstr_set_len_checked()`。
+
+**byte 与 UTF-8 同时使用示例**：
+```c
+tstr_t s = tstr_dup("hello");
+s = tstr_cat_len(s, "\xE4\xB8\xAD", 3); // byte append: 追加 UTF-8 编码字节
+
+size_t bytes = tstr_len(s);             // 8: 字节数
+if (tstr_utf8_valid(s)) {
+  size_t chars = tstr_utf8_len(s);       // 6: Unicode code point 数
+  tstr_t one = tstr_utf8_slice(s, 5, 1); // "中"，按字符切片
+  tstr_free(one);
+}
+
+tstr_free(s);
+```
+
+**边界规则**：
+- 文本值可用 `tstr_t` 保存，但进入文本算法前先确认来源已经是 UTF-8，或调用 `tstr_utf8_valid()`。
+- 二进制值可用 `tstr_t` 保存短期构造结果，但只使用 `tstr_*_len()`、`tstr_len()`、`tstr_slice()` 等 byte API。
+- 网络接收缓冲区、ring buffer、arena slice 等事实源仍优先用专用 buffer 或 `tstr_v` 视图，不要为了“字符串化”提前复制成 `tstr_t`。
+
 **使用场景**：
 - ✅ 配置文件解析
 - ✅ SQL/命令构建
 - ✅ 日志消息拼接
 - ✅ 路径拼接
+- ✅ MIME/协议消息构造
+- ✅ 已验证 UTF-8 文本的 codepoint 计数、切片、查找
 - ❌ 固定字符串（用 `const char*` 或 `tstr_v`）
+- ❌ 协议读取缓冲区、bytecode buffer、ring buffer（用专用 buffer）
+- ❌ 未验证外部输入时直接调用 `tstr_utf8_*()` 并假设成功
 
 **示例**：
 ```c
 tstr_t path = tstr_new();
 path = tstr_cat(path, "/usr/local");
 path = tstr_cat(path, "/bin");
-path = tstr_cat_fmt(path, "/%s", filename);
-path = tstr_cat_typed(path, "?id={}", 42);
+path = tstr_append_format(path, "/{}", filename);  // 需包含 fmt.h
+path = tstr_append_format(path, "?id={}", 42);
 printf("Path: %s\n", path);  // 直接打印
 tstr_free(path);
 ```
+
+**注意**：`tstr_format()`、`tstr_append_format()` 声明在 `fmt.h` 中。`tstr_cat_typed()` 是兼容旧调用点的同后端追加接口，新代码优先使用 `tstr_append_format()`。`turbo_str.h` 保持基础字符串层，不反向依赖格式化层。
 
 ---
 
@@ -340,11 +582,26 @@ size_t tstr_v_find(tstr_v v, tstr_v needle);
 size_t tstr_v_rfind(tstr_v v, tstr_v needle);
 size_t tstr_v_find_char(tstr_v v, char c);
 size_t tstr_v_rfind_char(tstr_v v, char c);
+size_t tstr_v_count(tstr_v v, tstr_v needle);
 tstr_v tstr_v_sub(tstr_v v, size_t pos, size_t len);
 tstr_v tstr_v_trim(tstr_v v, const char *cset);
 tstr_v tstr_v_trim_left(tstr_v v, const char *cset);
 tstr_v tstr_v_trim_right(tstr_v v, const char *cset);
 tstr_v tstr_v_split_next(tstr_v *rest, tstr_v delim);
+
+// UTF-8（严格校验，按 Unicode code point 工作）
+int tstr_v_utf8_valid(tstr_v v);
+size_t tstr_v_utf8_invalid_offset(tstr_v v);
+size_t tstr_v_utf8_len(tstr_v v);
+size_t tstr_v_utf8_nlen(tstr_v v, size_t n);
+size_t tstr_v_utf8_size_lazy(tstr_v v);
+size_t tstr_v_utf8_byte_offset(tstr_v v, size_t char_index);
+tstr_v tstr_v_utf8_sub(tstr_v v, size_t char_pos, size_t char_count);
+int tstr_v_utf8_next(tstr_v *rest, uint32_t *codepoint);
+size_t tstr_v_utf8_find_cp(tstr_v v, uint32_t codepoint);
+size_t tstr_v_utf8_rfind_cp(tstr_v v, uint32_t codepoint);
+size_t tstr_v_utf8_find(tstr_v haystack, tstr_v needle);
+size_t tstr_utf8_codepoint_size(uint32_t codepoint);
 
 // 需要拷贝的转换
 char *tstr_v_to_cstr(tstr_v v);
@@ -352,12 +609,19 @@ char *tstr_v_to_pool(tstr_v v, MemoryPool *pool);
 char *tstr_v_to_arena(tstr_v v, mem_pool_t *arena);
 ```
 
+**安全语义**：
+- `tstr_v` 是无所有权 view。`data == NULL && len > 0` 视为非法 view；查找/比较返回失败，拷贝函数返回 `NULL`。
+- `tstr_v_to_*()` 会拒绝 `SIZE_MAX` 长度，避免 `len + 1` 溢出。
+- `tstr_v_split_next()` 遇到空 delimiter 时返回剩余内容一次，并清空 `rest`，避免迭代器不前进。
+
 **使用场景**：
 - ✅ 解析中间结果（不拷贝原始数据）
 - ✅ 函数参数（只读引用）
 - ✅ 临时子串操作
+- ✅ 协议字段、header name/value、模板 tag name、JSON key view
 - ❌ 需要修改内容（用 `tstr_t`）
 - ❌ 跨函数保存（原始数据可能失效）
+- ❌ 需要 NUL 结尾的外部 API（先复制到 `tstr_t` 或 `tstr_v_to_cstr()`）
 
 **示例**：
 ```c
@@ -367,6 +631,139 @@ size_t pos = tstr_v_find_char(v, '=');
 tstr_v key = tstr_v_sub(v, 0, pos);
 tstr_v val = tstr_v_sub(v, pos + 1, tstr_v_len(v) - pos - 1);
 // key 和 val 都是零拷贝引用 text
+```
+
+---
+
+## 通用容器
+
+TurboNet Utils 提供自有基础容器层。STC 可作为外部设计参考，但生产 `utils`/`CoroNet` 公开 API 不暴露 STC 类型，新代码优先使用 `turbo_*` 容器。
+
+聚合头：`turbo_containers.h` 包含 `turbo_vec.h`、`turbo_hash.h`、`turbo_set.h`、`turbo_heap.h`、`turbo_deque.h`。
+
+### 动态数组 (`turbo_vec.h`)
+
+**核心类型**：
+- `turbo_vec_t` - `elem_size + void*` 的稳定 ABI 动态数组
+- `TURBO_VEC_DEFINE(name, type)` - 生成 typed wrapper
+
+**主要 API**：
+```c
+int turbo_vec_init(turbo_vec_t *vec, size_t elem_size);
+void turbo_vec_destroy(turbo_vec_t *vec);
+void turbo_vec_clear(turbo_vec_t *vec);
+int turbo_vec_reserve(turbo_vec_t *vec, size_t min_capacity);
+int turbo_vec_resize(turbo_vec_t *vec, size_t new_size);
+int turbo_vec_push(turbo_vec_t *vec, const void *elem);
+int turbo_vec_pop(turbo_vec_t *vec, void *out_elem);
+int turbo_vec_insert(turbo_vec_t *vec, size_t index, const void *elem);
+int turbo_vec_erase(turbo_vec_t *vec, size_t index, void *out_elem);
+int turbo_vec_swap_remove(turbo_vec_t *vec, size_t index, void *out_elem);
+void *turbo_vec_at(turbo_vec_t *vec, size_t index);
+size_t turbo_vec_size(const turbo_vec_t *vec);
+```
+
+**示例**：
+```c
+TURBO_VEC_DEFINE(int_vec_t, int)
+
+int_vec_t values;
+int_vec_t_init(&values);
+int_vec_t_push(&values, 10);
+int_vec_t_push(&values, 20);
+int *v = int_vec_t_at(&values, 1);
+int_vec_t_destroy(&values);
+```
+
+### Hash Map (`turbo_hash.h`)
+
+**核心类型**：
+- `turbo_hash_map_t` - fixed-size key/value open-addressing hash map
+- `TURBO_HASH_MAP_DEFINE(name, key_type, value_type)` - 生成 typed wrapper
+
+**主要 API**：
+```c
+int turbo_hash_map_init(turbo_hash_map_t *map, size_t key_size, size_t value_size,
+                        turbo_hash_fn hash, turbo_hash_equal_fn equal, void *ctx);
+void turbo_hash_map_destroy(turbo_hash_map_t *map);
+int turbo_hash_map_reserve(turbo_hash_map_t *map, size_t min_capacity);
+int turbo_hash_map_put(turbo_hash_map_t *map, const void *key, const void *value);
+void *turbo_hash_map_get(turbo_hash_map_t *map, const void *key);
+int turbo_hash_map_remove(turbo_hash_map_t *map, const void *key, void *out_value);
+size_t turbo_hash_map_size(const turbo_hash_map_t *map);
+```
+
+**使用规则**：
+- 默认 hash 是 FNV-1a over key bytes，默认 equal 是 `memcmp()`。
+- key/value 会被拷贝进 map；调用方仍拥有原始对象。
+- 适合固定大小 key：整数、结构化 binary key、短定长字段。动态字符串 key 优先先归一化为 `tstr_v`/bytes 后定义明确所有权。
+
+### Hash Set (`turbo_set.h`)
+
+**核心类型**：
+- `turbo_set_t` - 基于 `turbo_hash_map_t` 的 fixed-size key hash set
+- `TURBO_SET_DEFINE(name, key_type)` - 生成 typed wrapper
+
+**主要 API**：
+```c
+int turbo_set_init(turbo_set_t *set, size_t key_size,
+                   turbo_hash_fn hash, turbo_hash_equal_fn equal, void *ctx);
+void turbo_set_destroy(turbo_set_t *set);
+int turbo_set_reserve(turbo_set_t *set, size_t min_capacity);
+int turbo_set_add(turbo_set_t *set, const void *key);
+bool turbo_set_contains(const turbo_set_t *set, const void *key);
+int turbo_set_remove(turbo_set_t *set, const void *key);
+size_t turbo_set_size(const turbo_set_t *set);
+```
+
+**使用规则**：
+- key 会被拷贝进 set；调用方仍拥有原始对象。
+- 去重、成员测试、访问标记优先用 `turbo_set_t`，不要用 `turbo_hash_map_t` 人工塞 dummy value。
+- `turbo_set_remove()` 找不到 key 返回 `TURBO_ENOENT`；typed wrapper 的 `remove()` 返回 `bool`。
+
+### Deque (`turbo_deque.h`)
+
+**核心类型**：
+- `turbo_deque_t` - circular buffer backed 双端队列
+- `TURBO_DEQUE_DEFINE(name, type)` - 生成 typed wrapper
+
+**主要 API**：
+```c
+int turbo_deque_init(turbo_deque_t *deque, size_t elem_size);
+void turbo_deque_destroy(turbo_deque_t *deque);
+int turbo_deque_reserve(turbo_deque_t *deque, size_t min_capacity);
+int turbo_deque_push_back(turbo_deque_t *deque, const void *elem);
+int turbo_deque_push_front(turbo_deque_t *deque, const void *elem);
+int turbo_deque_pop_back(turbo_deque_t *deque, void *out_elem);
+int turbo_deque_pop_front(turbo_deque_t *deque, void *out_elem);
+void *turbo_deque_front(turbo_deque_t *deque);
+void *turbo_deque_back(turbo_deque_t *deque);
+void *turbo_deque_at(turbo_deque_t *deque, size_t index);
+size_t turbo_deque_size(const turbo_deque_t *deque);
+```
+
+**使用规则**：
+- 需要两端 push/pop 时用 `turbo_deque_t`；只需要末尾追加和随机访问时优先 `turbo_vec_t`。
+- 扩容时保持逻辑顺序，元素按 `elem_size` 拷贝；元素内部资源所有权由调用方管理。
+- 空队列 pop 返回 `TURBO_ENOENT`。
+
+### Binary Heap (`turbo_heap.h`)
+
+**核心类型**：
+- `turbo_heap_t` - comparator-driven binary heap
+- `TURBO_HEAP_DEFINE(name, type, compare_fn)` - 生成 typed wrapper
+
+**规则**：
+- comparator 返回 `< 0` 的元素优先级更高；默认可表达 min-heap，反转 comparator 可表达 max-heap。
+- 通用 heap 适合任意优先级排序；固定 4 级任务调度仍优先 `bucket_priority_queue_t`。
+
+```c
+static int int_cmp(const void *a, const void *b, void *ctx) {
+  (void)ctx;
+  return (*(const int *)a > *(const int *)b) - (*(const int *)a < *(const int *)b);
+}
+
+TURBO_HEAP_DEFINE(int_heap_t, int, int_cmp)
 ```
 
 ---
@@ -956,6 +1353,8 @@ turbo_threadpool_get_stats(pool, &stats);
 - ✅ 异步任务队列
 - ❌ 低延迟需求（用专用线程）
 
+**实现说明**：线程池内部使用 `disruptor_t` 的 `DISRUPTOR_MODE_WORKER_POOL` 模式作为 MPMC work queue；一个提交任务只会被一个 worker 执行。调用方仍只使用 `turbo_threadpool_*` API，不直接操作内部 disruptor。
+
 **示例**：
 ```c
 // 创建线程池（自动检测核心数）
@@ -992,29 +1391,94 @@ turbo_threadpool_destroy(pool);
 - `disruptor_t` - MPMC 无锁队列（LMAX Disruptor 算法）
 - `disruptor_cursor_t` - 序列号游标
 - `disruptor_consumer_t` - 消费者句柄
+- `disruptor_mode_t` - 消费模式：broadcast 或 worker-pool
+- `disruptor_topology_t` - broadcast 消费者依赖拓扑
 
 **主要 API**：
 ```c
 disruptor_t *disruptor_create(const disruptor_config_t *config);
 void disruptor_destroy(disruptor_t *disruptor);
+int disruptor_reset(disruptor_t *disruptor);
+uint64_t disruptor_capacity(const disruptor_t *disruptor);
+size_t disruptor_entry_size(const disruptor_t *disruptor);
 
 // 生产者
 int disruptor_publisher_try_claim(disruptor_t *d, disruptor_cursor_t *cursor);
+int disruptor_publisher_try_claim_n(disruptor_t *d, uint32_t count,
+                                    disruptor_sequence_range_t *range);
 void disruptor_publisher_next_entry_blocking(disruptor_t *d, disruptor_cursor_t *cursor);
 void *disruptor_publisher_next_entry_and_acquire_blocking(disruptor_t *d, disruptor_cursor_t *cursor);
+int disruptor_publisher_claim_n_blocking(disruptor_t *d, uint32_t count,
+                                         disruptor_sequence_range_t *range);
 int disruptor_publisher_publish(disruptor_t *d, const disruptor_cursor_t *cursor);
+int disruptor_publisher_publish_range(disruptor_t *d, const disruptor_sequence_range_t *range);
 
-// 消费者
+// entry 访问
+void *disruptor_acquire_entry(disruptor_t *d, const disruptor_cursor_t *cursor);
+const void *disruptor_show_entry(const disruptor_t *d, const disruptor_cursor_t *cursor);
+
+// broadcast 消费者：每个消费者都看到每条消息
+int disruptor_consumer_try_register(disruptor_t *d, disruptor_consumer_t *consumer,
+                                    uint64_t *next_sequence);
 uint64_t disruptor_consumer_register(disruptor_t *d, disruptor_consumer_t *consumer);
 void disruptor_consumer_unregister(disruptor_t *d, const disruptor_consumer_t *consumer);
+int disruptor_consumer_wait_for_nonblocking(const disruptor_t *d, disruptor_cursor_t *cursor);
 void disruptor_consumer_wait_for_blocking(const disruptor_t *d, disruptor_cursor_t *cursor);
 void disruptor_consumer_release_entry(disruptor_t *d, const disruptor_consumer_t *consumer,
                                       const disruptor_cursor_t *cursor);
+
+// broadcast 依赖：当前消费者只能看到依赖消费者已 release 的序列
+int disruptor_consumer_set_dependencies(disruptor_t *d,
+                                        const disruptor_consumer_t *consumer,
+                                        const disruptor_consumer_t *dependencies,
+                                        uint32_t dependency_count);
+int disruptor_consumer_wait_for_nonblocking_for(const disruptor_t *d,
+                                                const disruptor_consumer_t *consumer,
+                                                disruptor_cursor_t *cursor);
+void disruptor_consumer_wait_for_blocking_for(const disruptor_t *d,
+                                              const disruptor_consumer_t *consumer,
+                                              disruptor_cursor_t *cursor);
 
 // 通用消费者循环
 void disruptor_consumer_run(disruptor_t *disruptor, disruptor_consumer_t *consumer,
                             disruptor_should_run_fn should_run,
                             disruptor_batch_fn process_batch, void *ctx);
+
+// worker-pool：每条消息只被一个 worker claim
+int disruptor_worker_try_claim(disruptor_t *d, disruptor_cursor_t *cursor);
+void disruptor_worker_claim_blocking(disruptor_t *d, disruptor_cursor_t *cursor);
+void disruptor_worker_release_entry(disruptor_t *d, const disruptor_cursor_t *cursor);
+
+// 拓扑 builder：用 stage/group 组织链式、菱形、组合依赖
+disruptor_topology_t *disruptor_topology_create(disruptor_t *d);
+void disruptor_topology_destroy(disruptor_topology_t *topology);
+disruptor_stage_t disruptor_topology_stage(disruptor_topology_t *topology,
+                                           const char *name,
+                                           const disruptor_consumer_t *consumer);
+disruptor_group_t disruptor_topology_group(disruptor_topology_t *topology,
+                                           const char *name,
+                                           const disruptor_stage_t *stages,
+                                           uint32_t stage_count);
+int disruptor_topology_after(disruptor_topology_t *topology,
+                             disruptor_stage_t stage,
+                             disruptor_stage_t dependency);
+int disruptor_topology_after_all(disruptor_topology_t *topology,
+                                 disruptor_stage_t stage,
+                                 const disruptor_stage_t *dependencies,
+                                 uint32_t dependency_count);
+int disruptor_topology_stage_after_group(disruptor_topology_t *topology,
+                                         disruptor_stage_t stage,
+                                         disruptor_group_t dependency_group);
+int disruptor_topology_group_after(disruptor_topology_t *topology,
+                                   disruptor_group_t group,
+                                   disruptor_stage_t dependency);
+int disruptor_topology_group_after_group(disruptor_topology_t *topology,
+                                         disruptor_group_t group,
+                                         disruptor_group_t dependency_group);
+int disruptor_topology_chain(disruptor_topology_t *topology,
+                             const disruptor_stage_t *stages,
+                             uint32_t stage_count);
+int disruptor_topology_commit(disruptor_topology_t *topology);
 ```
 
 **配置**：
@@ -1022,9 +1486,20 @@ void disruptor_consumer_run(disruptor_t *disruptor, disruptor_consumer_t *consum
 disruptor_config_t config = {
     .entry_size = sizeof(event_t),
     .capacity = 1024,  // 必须是 2 的幂
-    .consumer_capacity = 16
+    .consumer_capacity = 16,
+    .mode = DISRUPTOR_MODE_BROADCAST
 };
 ```
+
+**模式选择**：
+- `DISRUPTOR_MODE_BROADCAST`：默认模式。每条消息会被每个注册消费者看到，适合事件流、日志 fan-out、流水线 stage。
+- `DISRUPTOR_MODE_WORKER_POOL`：负载均衡模式。每条消息只会被一个 worker claim，适合任务队列、线程池、并行 job 分发。
+
+**依赖拓扑**：
+- 依赖只用于 broadcast 消费者。worker-pool 是竞争领取语义，不参与 stage 依赖。
+- `disruptor_consumer_set_dependencies()` 适合少量手写依赖。
+- `disruptor_topology_*()` 适合表达链式、菱形、fan-in/fan-out 和 stage group，最后必须调用 `disruptor_topology_commit()`。
+- `disruptor_topology_commit()` 会拒绝循环依赖；返回 0 表示拓扑无效，不应继续运行该 pipeline。
 
 **性能**：
 - **吞吐量**：数百万 ops/s（多线程）
@@ -1033,19 +1508,22 @@ disruptor_config_t config = {
 
 **使用场景**：
 - ✅ 高频事件总线（日志传输、事件流）
-- ✅ MPMC 任务队列（生产者 > 1，消费者 > 1）
+- ✅ broadcast pipeline（一条消息进入多个 stage）
+- ✅ worker-pool 任务队列（一条消息只被一个 worker 处理）
+- ✅ stage 依赖流转（链式、菱形、组合 group）
 - ✅ 低延迟消息传递
 - ❌ 低频场景（用带锁队列更简单）
 - ❌ 动态大小消息（固定 entry_size）
 
-**示例**：
+**示例：broadcast 事件流**：
 ```c
 typedef struct { int id; char data[64]; } event_t;
 
 disruptor_config_t cfg = {
     .entry_size = sizeof(event_t),
     .capacity = 1024,
-    .consumer_capacity = 4
+    .consumer_capacity = 4,
+    .mode = DISRUPTOR_MODE_BROADCAST
 };
 disruptor_t *d = disruptor_create(&cfg);
 
@@ -1076,6 +1554,66 @@ void consumer(void *arg) {
     int running = 1;
     disruptor_consumer_run(d, &cons, should_run, process_batch, &running);
 }
+```
+
+**示例：worker-pool 任务队列**：
+```c
+typedef struct { int job_id; } job_t;
+
+disruptor_t *jobs = disruptor_create(&(disruptor_config_t){
+    .entry_size = sizeof(job_t),
+    .capacity = 1024,
+    .consumer_capacity = 1,
+    .mode = DISRUPTOR_MODE_WORKER_POOL
+});
+
+// producer
+disruptor_cursor_t w = {0};
+if (disruptor_publisher_try_claim(jobs, &w)) {
+    job_t *job = disruptor_acquire_entry(jobs, &w);
+    job->job_id = 42;
+    disruptor_publisher_publish(jobs, &w);
+}
+
+// each worker thread
+disruptor_cursor_t r = {0};
+if (disruptor_worker_try_claim(jobs, &r)) {
+    const job_t *job = disruptor_show_entry(jobs, &r);
+    run_job(job);
+    disruptor_worker_release_entry(jobs, &r);
+}
+```
+
+**示例：链式/菱形依赖拓扑**：
+```c
+disruptor_consumer_t parse, validate, enrich, persist;
+disruptor_consumer_register(d, &parse);
+disruptor_consumer_register(d, &validate);
+disruptor_consumer_register(d, &enrich);
+uint64_t next_persist = disruptor_consumer_register(d, &persist);
+
+disruptor_topology_t *topology = disruptor_topology_create(d);
+disruptor_stage_t s_parse = disruptor_topology_stage(topology, "parse", &parse);
+disruptor_stage_t s_validate = disruptor_topology_stage(topology, "validate", &validate);
+disruptor_stage_t s_enrich = disruptor_topology_stage(topology, "enrich", &enrich);
+disruptor_stage_t s_persist = disruptor_topology_stage(topology, "persist", &persist);
+
+disruptor_stage_t middle_stages[] = {s_validate, s_enrich};
+disruptor_group_t middle = disruptor_topology_group(topology, "middle", middle_stages, 2);
+
+disruptor_topology_group_after(topology, middle, s_parse);       // validate/enrich after parse
+disruptor_topology_stage_after_group(topology, s_persist, middle); // persist after both
+if (!disruptor_topology_commit(topology)) {
+    // cycle or invalid topology
+    disruptor_topology_destroy(topology);
+    return -1;
+}
+
+// dependent consumers must use *_for variants so dependency gates are applied
+disruptor_cursor_t cursor = {.sequence = next_persist};
+disruptor_consumer_wait_for_blocking_for(d, &persist, &cursor);
+process_persist(disruptor_show_entry(d, &cursor));
+disruptor_consumer_release_entry(d, &persist, &cursor);
 ```
 
 ---
@@ -1232,20 +1770,24 @@ free(decoded);
 
 ### 类型安全格式化 (`fmt.h`)
 
-轻量级、零分配的类型安全格式化库，C/C++ 双模支持。使用 `{}` 占位符语法，修饰符透传 `printf`。
+`fmt.h` 是 `tstr_t`/`tstr_v` 之上的统一 `{}` 格式化后端，C/C++ 双模支持。固定小输出可写入调用方 buffer；长度不确定或需要返回/继续拼接的字符串应直接写入 `tstr_t`，避免 `snprintf + strlen + 临时 buffer`。
 
 **主要 API**：
 ```c
 fmt(buf, size, format, ...);  // 宏：包装 fmt_print + FMT_ARGS
 int fmt_print(char *buf, size_t size, const char *format,
               const fmt_arg_t *args, size_t arg_count);
+tstr_t fmt_print_tstr(tstr_t s, const char *format,
+                      const fmt_arg_t *args, size_t arg_count);
 
 FMT_ARG(value)       // 单个参数
 FMT_ARGS(...)        // 多个参数
 FMT_NARGS(...)       // 参数个数
 FMT_TIME(time_value) // time_t 转时间参数
 
-tstr_t tstr_cat_typed(tstr_t s, const char *format, ...);
+tstr_t tstr_format(const char *format, ...);
+tstr_t tstr_append_format(tstr_t s, const char *format, ...);
+tstr_t tstr_cat_typed(tstr_t s, const char *format, ...); // 兼容旧名
 ```
 
 **基本使用**：
@@ -1256,12 +1798,18 @@ fmt(buf, sizeof(buf), "hello {}", "world");
 fmt(buf, sizeof(buf), "{} + {} = {}", 1, 2, 3);
 fmt(buf, sizeof(buf), "{:08d} {:x} {:.2f}", 42, 255, 3.14159);
 
-tstr_t s = tstr_new();
-s = tstr_cat_typed(s, "id={} name={}", 42, "alice");
+tstr_t s = tstr_format("id={} name={}", 42, "alice");
+s = tstr_append_format(s, " role={}", "admin");
 tstr_free(s);
 
 TLOG_INFO("port={}, path={}", port, path);
 ```
+
+**选型规则**：
+- 固定小 buffer、长度上限明确：用 `fmt(buf, sizeof(buf), ...)`
+- 构造返回值、日志/协议/模板片段、长度不确定：用 `tstr_format()`
+- 追加到已有动态字符串：用 `tstr_append_format()`
+- 已有 `fmt_arg_t` 数组或需要手动分派：用 `fmt_print()` / `fmt_print_tstr()`
 
 **支持类型**：
 - 整数、浮点、字符串、指针、`size_t`、`bool`
@@ -1273,7 +1821,7 @@ TLOG_INFO("port={}, path={}", port, path);
 - 最多 8 个格式化参数
 - 单个参数格式化后最大 256 字节
 - 修饰符最大 60 字节
-- `tstr_cat_typed()` 单次追加最大 1024 字节，返回值必须重新赋值
+- 所有返回 `tstr_t` 的格式化函数都可能扩容，返回值必须重新赋值
 - 不支持位置参数、命名参数、自定义对齐和千位分隔符
 
 ---
@@ -1284,7 +1832,13 @@ TLOG_INFO("port={}, path={}", port, path);
 |---------|---------|---------|---------|
 | 解析器临时内存 | `mem_pool_t` + `mem_reset()` | `MemoryPool` | 全局 `malloc` |
 | AST 节点分配 | `object_pool_t` | `mem_pool_t` | 裸 `malloc`/`free` |
-| 字符串拼接 | `tstr_cat()` | `sds`（vendor） | `char*` + `strcat` |
+| 动态数组 | `turbo_vec_t` / `TURBO_VEC_DEFINE` | `mem_pool_t` 临时数组 | 手写 `realloc` 循环 |
+| 固定 key/value 映射 | `turbo_hash_map_t` / `TURBO_HASH_MAP_DEFINE` | 自定义 hash/equal | 万能 `void*` map |
+| 成员去重/集合测试 | `turbo_set_t` / `TURBO_SET_DEFINE` | `turbo_hash_map_t` | dummy-value map |
+| 双端队列 | `turbo_deque_t` / `TURBO_DEQUE_DEFINE` | `turbo_vec_t` + head index | 手写循环数组 |
+| 通用优先级排序 | `turbo_heap_t` / `TURBO_HEAP_DEFINE` | `bucket_priority_queue_t`（固定 4 级） | 每次 `qsort` |
+| 字符串拼接 | `tstr_t` + `tstr_cat()`/`tstr_cat_len()` | `sds`（vendor） | `char*` + `strcat` |
+| 格式化字符串构造 | `tstr_format()`/`tstr_append_format()` | `fmt()` 写固定 buffer | `snprintf` + 固定临时 buffer |
 | 只读字符串引用 | `tstr_v` | `const char* + size_t` | 拷贝字符串 |
 | 配置文件读取 | `turbo_fs_read_file()` | `turbo_mmap_open()` | 裸标准 I/O |
 | 大文件零拷贝 | `turbo_mmap_open()` | `turbo_fs_pread()` | 手写逐块读取循环 |
@@ -1294,7 +1848,8 @@ TLOG_INFO("port={}, path={}", port, path);
 | 读写锁 | `turbo_rwlock_t` | `turbo_mutex_t` | 手写双锁 |
 | 线程创建 | `turbo_thread_create()` | C11 `thrd_create` | 平台线程 API 直接使用 |
 | 线程池 | `turbo_threadpool_create()` | 手写线程池 | 每任务创建线程 |
-| MPMC 队列 | `disruptor_t` | 带锁队列 | 手写无锁队列 |
+| MPMC 任务队列 | `disruptor_t` worker-pool mode | `turbo_threadpool_t` | 手写无锁队列 |
+| 事件广播/流水线 | `disruptor_t` broadcast mode + topology | 带锁队列 | 多份独立队列复制消息 |
 | SPSC 队列 | `ring_buffer_spsc` | `disruptor_t` | 带锁队列 |
 | 优先队列 | `bucket_priority_queue_t` | 手写堆 | `qsort` 排序 |
 | Base64 编码 | `tn_base64_encode()` | aklomp-base64（vcpkg） | 手写 Base64 |
@@ -1309,6 +1864,11 @@ TLOG_INFO("port={}, path={}", port, path);
 | `mem_pool_t` | - | O(1) 分配 | Slab 分配，预分配块 |
 | `object_pool_t` | 100M+ ops/s | O(1) | Free-list，缓存友好 |
 | `MemoryPool` | - | O(1) | Arena，批量分配 |
+| `turbo_vec_t` | - | O(1) amortized push | 连续数组，按元素尺寸拷贝 |
+| `turbo_hash_map_t` | - | O(1) average get/put | open addressing，固定 key/value 尺寸 |
+| `turbo_set_t` | - | O(1) average add/contains/remove | 基于 `turbo_hash_map_t`，固定 key 尺寸 |
+| `turbo_deque_t` | - | O(1) amortized 双端 push/pop | circular buffer，按逻辑顺序访问 |
+| `turbo_heap_t` | - | O(log n) push/pop | binary heap，comparator-driven |
 | `tstr_t` | - | O(1) 长度 | 动态扩容，O(n) 拷贝 |
 | `tstr_v` | - | O(1) | 零拷贝，栈分配 |
 | `turbo_fs_read_file()` | - | 阻塞 I/O | 单次 `malloc` |
@@ -1316,8 +1876,8 @@ TLOG_INFO("port={}, path={}", port, path);
 | `tlog` | ~9M ops/s (4线程) | <100ns (异步) | Lock-free ring buffer |
 | `turbo_mutex_t` | - | 微秒级 | TurboNet 跨平台封装 |
 | `turbo_rwlock_t` | - | 微秒级 | 多读单写 |
-| `turbo_threadpool_t` | - | 毫秒级 | 固定线程，队列调度 |
-| `disruptor_t` | 数百万 ops/s | 微秒级 | MPMC，预分配环形 |
+| `turbo_threadpool_t` | - | 毫秒级 | 固定线程，disruptor worker-pool 队列 |
+| `disruptor_t` | 数百万 ops/s | 微秒级 | broadcast/worker-pool/topology，预分配环形 |
 | `ring_buffer_spsc` | 数千万 ops/s | 纳秒级 | SPSC，无锁 |
 | `bucket_priority_queue` | - | O(1) push/pop | 4 个环形缓冲区 |
 
@@ -1372,7 +1932,10 @@ turbo_threadpool_t *pool = turbo_threadpool_create(0);  // auto-detect cores
 
 // 3. 创建 Disruptor 事件队列
 disruptor_t *events = disruptor_create(&(disruptor_config_t){
-    .entry_size = sizeof(request_t), .capacity = 4096, .consumer_capacity = 16
+    .entry_size = sizeof(request_t),
+    .capacity = 4096,
+    .consumer_capacity = 16,
+    .mode = DISRUPTOR_MODE_BROADCAST
 });
 
 // 4. 启动消费者线程
@@ -1408,18 +1971,23 @@ tlog_destroy(logger);
 
 - **不要**混用不同内存管理器（`mem_pool_t` 分配 → `free()` 释放）
 - **不要**跨池传递指针（`mem_pool_t A` 分配 → 传给使用 `mem_pool_t B` 的函数）
-- **不要**在热路径使用 `tstr_cat()`（每次可能 `realloc`，用 `tstr_reserve()` 预分配）
+- **不要**在热路径反复无预留地使用 `tstr_cat()`/`tstr_append_format()`（每次可能 `realloc`，用 `tstr_reserve()` 预分配，固定小输出可用 `fmt()` 写栈 buffer）
+- **不要**用 `snprintf + strlen + 固定临时 buffer` 构造长度不确定的动态字符串（用 `tstr_format()`/`tstr_append_format()`）
 - **不要**在 SPSC `ring_buffer` 上多生产者/消费者（数据竞争）
+- **不要**在 Disruptor `try_claim` 成功后放弃 publish；claim 后必须写入 entry 并 publish，否则后续序列会被卡住
+- **不要**把 Disruptor worker-pool 当 broadcast pipeline 用；worker-pool 中每条消息只会被一个 worker 看到
 - **不要**在 `turbo_mmap_t` 上频繁 `sync()`（严重性能损失）
 - **不要**在锁内执行 I/O 或长时间计算（死锁/性能下降）
 
 ### ✅ 务必
 
-- **务必**在使用 `tstr_cat()` 后重新赋值：`s = tstr_cat(s, "text")`
+- **务必**在使用 `tstr_cat()`、`tstr_cat_len()`、`tstr_append_format()` 后重新赋值：`s = tstr_append_format(s, "id={}", id)`
 - **务必**在 `mem_buffer_t` 使用完后 `mem_unref()`（引用计数）
 - **务必**在 `object_pool_free()` 前清理对象内部资源（池不调用析构函数）
 - **务必**在生产环境关闭 DEBUG 日志（`tlog_set_level(logger, TURBO_LOG_LEVEL_INFO)`）
 - **务必**为 Disruptor 选择 2 的幂容量（性能优化）
+- **务必**在 Disruptor 消费完成后 release：broadcast 用 `disruptor_consumer_release_entry()`，worker-pool 用 `disruptor_worker_release_entry()`
+- **务必**让带依赖的 broadcast consumer 使用 `disruptor_consumer_wait_for_*_for()`，否则依赖 gate 不会生效
 - **务必**在多线程环境用 `turbo_fs_pread()` 而非 `turbo_fs_read()`（后者改变文件位置）
 
 ---
@@ -1439,8 +2007,17 @@ tlog_destroy(logger);
 - **头文件目录**：`%TURBONET_ROOT%/turbonet/utils/include/`
 - **测试示例**：查看 TurboNet 仓库的 `tests/` 和 `examples/` 目录
 - **性能基准**：参考 TurboNet 文档中的 benchmark 数据
+- **C 机制背景**：《Pointers on C》可用于补强指针、数组、字符串、函数指针、生命周期和内存布局理解；实际实现仍以 TurboNet Utils API 为准。
+
+### 背景知识到 Utils 的映射
+
+- 指针/数组/字符串：优先映射到 `tstr_v`、`tstr_t`、`mem_slice_t` 和显式 `len`，避免裸 `char*` 隐式长度。
+- 生命周期/所有权：优先映射到 `mem_pool_t`、`mem_buffer_t` 引用计数、`object_pool_t` 和清晰 cleanup 路径。
+- 函数指针/回调：优先映射到 parser callback、Disruptor consumer、threadpool task 和 plugin ABI，必须文档化 `ctx` 所有权与线程约束。
+- 内存布局：优先映射到连续数组、ring buffer、Disruptor entry、arena/pool 分配，避免不必要的指针追逐。
+- 错误处理：优先映射到 `int` 错误码、`turbo_error_info()`、`turbo_result_t` 和 custom error domain，不散落自定义负数。
 
 ---
 
-**最后更新**：2026-07-05  
+**最后更新**：2026-07-10
 **适用项目**：TurboScript 及所有使用 TurboNet Utils 的 C 项目

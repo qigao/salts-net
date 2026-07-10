@@ -15,6 +15,13 @@
 static turbo_mutex_t counter_mutex;
 static volatile int counter = 0;
 static atomic_int gate_open;
+static atomic_int mpmc_counter;
+
+typedef struct {
+    turbo_threadpool_t *pool;
+    int tasks;
+    atomic_int *submit_failures;
+} submitter_ctx_t;
 
 static void increment_task(void *arg) {
     UNUSED(arg);
@@ -43,11 +50,26 @@ static void gated_task(void *arg) {
     }
 }
 
+static void mpmc_count_task(void *arg) {
+    UNUSED(arg);
+    atomic_fetch_add(&mpmc_counter, 1);
+}
+
+static void submitter_thread(void *arg) {
+    submitter_ctx_t *ctx = (submitter_ctx_t *)arg;
+    for (int i = 0; i < ctx->tasks; ++i) {
+        if (turbo_threadpool_submit(ctx->pool, mpmc_count_task, NULL) != 0) {
+            atomic_fetch_add(ctx->submit_failures, 1);
+        }
+    }
+}
+
 spec("Thread Pool Tests") {
     before_each() {
         turbo_mutex_init(&counter_mutex);
         counter = 0;
         atomic_store(&gate_open, 0);
+        atomic_store(&mpmc_counter, 0);
     }
 
     after_each() {
@@ -89,6 +111,34 @@ spec("Thread Pool Tests") {
 
         turbo_threadpool_wait(pool);
         check_int_eq(counter, NUM_TASKS);
+
+        turbo_threadpool_destroy(pool);
+    }
+
+    it("should accept tasks from multiple producers") {
+        enum { PRODUCERS = 4, TASKS_PER_PRODUCER = 250 };
+        turbo_threadpool_t *pool = turbo_threadpool_create(4);
+        turbo_thread_t producers[PRODUCERS];
+        submitter_ctx_t contexts[PRODUCERS];
+        atomic_int submit_failures;
+
+        atomic_store(&submit_failures, 0);
+        check(pool != NULL);
+
+        for (int i = 0; i < PRODUCERS; ++i) {
+            contexts[i].pool = pool;
+            contexts[i].tasks = TASKS_PER_PRODUCER;
+            contexts[i].submit_failures = &submit_failures;
+            check_int_eq(turbo_thread_create(&producers[i], submitter_thread, &contexts[i]), 0);
+        }
+
+        for (int i = 0; i < PRODUCERS; ++i) {
+            turbo_thread_join(&producers[i]);
+        }
+
+        turbo_threadpool_wait(pool);
+        check_int_eq(atomic_load(&submit_failures), 0);
+        check_int_eq(atomic_load(&mpmc_counter), PRODUCERS * TASKS_PER_PRODUCER);
 
         turbo_threadpool_destroy(pool);
     }

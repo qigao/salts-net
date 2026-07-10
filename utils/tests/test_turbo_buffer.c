@@ -105,6 +105,12 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     
     mem_unref(buffer);
     check_size_eq((size_t)mem_buffer_ref_count(buffer), 1);
+
+    check_ptr_eq(mem_buffer_retain(buffer), buffer);
+    check_size_eq((size_t)mem_buffer_ref_count(buffer), 2);
+
+    mem_buffer_release(buffer);
+    check_size_eq((size_t)mem_buffer_ref_count(buffer), 1);
     
     mem_release(buffer);
     

@@ -14,6 +14,8 @@
 本文件保留核心约束与原则。详细技术规范已拆分为独立 skills，按需激活：
 
 - **`skills/turbonet_utils.md`** - TurboNet Utils 完整 API 参考（内存管理、字符串、文件、日志、并发、无锁数据结构）
+- **`skills/coronet.md`** - CoroNet 协程网络开发指南（coroutine、TCP/TLS/UDP/KCP/Pipe/WebSocket、SOCKS5/TProxy 边界）
+- **`skills/cmake_presets.md`** - CMake Presets 构建测试指南（configure/build/test preset、target 构建、build tree 恢复）
 - **`skills/c_design_patterns.md`** - C 语言设计模式实现指南（12 种模式、SOLID 原则、反模式警告）
 - **`skills/performance_optimization.md`** - 性能优化专项指南（热路径识别、SIMD、缓存优化、性能测试）
 - **`skills/logging_guide.md`** - 日志系统最佳实践（数量约束、质量规范、文件管理、生产配置）
@@ -209,7 +211,7 @@
 
 1. **TurboNet Utils**（通过 `TURBONET_ROOT` 或项目构建配置定位，例如 `%TURBONET_ROOT%/turbonet/utils/include/`）— 最优先
 2. **项目内模块**（`exprtk/`、`plugins/` 等）
-3. **vendor/ 库**（sds、croar、stc、mir、monocypher、sha2、uuid、miniblas）
+3. **vendor/ 库**（sds、croar、mir、monocypher、sha2、uuid、miniblas）
 4. **vcpkg 依赖**（xxhash、sqlite3、zstd、openssl、c-ares、aklomp-base64、simde）
 5. **C 标准库**（libc：`string.h`、`stdlib.h`、`stdio.h`）
 6. **底层系统 API**（仅允许封装在 TurboNet util/coro 或项目适配层之后使用）
@@ -224,9 +226,10 @@
 
 #### 避免重复造轮子（强制规则）
 
-- ❌ **禁止手写**：动态数组 → 用 `turbo_buffer` 或 `mem_pool_t`
+- ❌ **禁止手写**：动态数组 → 用 `turbo_vec_t` / `TURBO_VEC_DEFINE`，临时数组可用 `mem_pool_t`
 - ❌ **禁止手写**：字符串拼接 → 用 `tstr_t`（TurboNet）或 `sds`（vendor）
-- ❌ **禁止手写**：哈希表 → 用 `stc`（vendor）
+- ❌ **禁止手写**：哈希表/集合 → 用 `turbo_hash_map_t` / `TURBO_HASH_MAP_DEFINE` 或 `turbo_set_t` / `TURBO_SET_DEFINE`
+- ❌ **禁止手写**：双端队列 → 用 `turbo_deque_t` / `TURBO_DEQUE_DEFINE`
 - ❌ **禁止手写**：文件读写 → 用 `turbo_fs`（TurboNet）
 - ❌ **禁止手写**：日志系统 → 用 `tlog`（TurboNet）
 - ❌ **禁止手写**：线程池 → 用 `turbo_threadpool`（TurboNet）

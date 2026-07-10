@@ -3,7 +3,7 @@
 cmake_add_source(BENCHMARK_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR}
                  PATTERNS "bench_*.c" "test_*_bench.c")
 
-set(COMMON_LIBS TurboNet::TinyTest TurboNet::Utils PkgConfig::STC)
+set(COMMON_LIBS TurboNet::TinyTest TurboNet::Utils)
 if(WIN32)
   list(APPEND COMMON_LIBS psapi iphlpapi userenv ws2_32)
 endif()

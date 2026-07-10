@@ -17,8 +17,9 @@
 #define ENUM_NAME(x) #x
 
 #ifdef __cplusplus
-#include <type_traits>
-#include <chrono>
+  #include <chrono>
+  #include <type_traits>
+
 extern "C" {
 #endif
 
@@ -145,13 +146,16 @@ static inline fmt_arg_t fmt_arg_detect(long x) { return fmt_arg_long(x); }
 static inline fmt_arg_t fmt_arg_detect(unsigned long x) { return fmt_arg_ulong(x); }
 static inline fmt_arg_t fmt_arg_detect(long long x) { return fmt_arg_llong(x); }
 static inline fmt_arg_t fmt_arg_detect(unsigned long long x) { return fmt_arg_ullong(x); }
-/* size_t overload: only enabled when size_t is a distinct type from unsigned long/unsigned long long */
+/* size_t overload: only enabled when size_t is a distinct type from unsigned long/unsigned long
+ * long */
 template <typename T = size_t>
-static inline typename std::enable_if<
-    std::is_integral<T>::value &&
-    !std::is_same<T, unsigned long>::value && !std::is_same<T, unsigned long long>::value,
-    fmt_arg_t>::type
-fmt_arg_detect(T x) { return fmt_arg_size(x); }
+static inline
+    typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, unsigned long>::value &&
+                                !std::is_same<T, unsigned long long>::value,
+                            fmt_arg_t>::type
+    fmt_arg_detect(T x) {
+  return fmt_arg_size(x);
+}
 static inline fmt_arg_t fmt_arg_detect(float x) { return fmt_arg_double((double)x); }
 static inline fmt_arg_t fmt_arg_detect(double x) { return fmt_arg_double(x); }
 static inline fmt_arg_t fmt_arg_detect(bool x) { return fmt_arg_bool(x); }
@@ -180,12 +184,13 @@ static inline auto fmt_arg_detect(const T &x) -> decltype(fmt_arg_str(x.c_str())
 /* Template for classes with data()+size() but no c_str() (e.g. std::string_view) */
 namespace __fmt_detail {
   template <typename T, typename = void> struct has_c_str : std::false_type {};
-  template <typename T> struct has_c_str<T, decltype(void(std::declval<T>().c_str()))> : std::true_type {};
-}
+  template <typename T>
+  struct has_c_str<T, decltype(void(std::declval<T>().c_str()))> : std::true_type {};
+} // namespace __fmt_detail
 template <typename T>
-static inline auto fmt_arg_detect(const T &x)
-    -> typename std::enable_if<!__fmt_detail::has_c_str<T>::value,
-                               decltype(x.data(), x.size(), fmt_arg_t{})>::type {
+static inline auto fmt_arg_detect(const T &x) ->
+    typename std::enable_if<!__fmt_detail::has_c_str<T>::value,
+                            decltype(x.data(), x.size(), fmt_arg_t{})>::type {
   tstr_v sv;
   sv.data = x.data();
   sv.len = x.size();
@@ -199,8 +204,7 @@ template <typename T> static inline fmt_arg_t fmt_arg_detect(T *x) {
 
 /* Template for enum types: cast to underlying integer type */
 template <typename T>
-static inline typename std::enable_if<std::is_enum<T>::value, fmt_arg_t>::type
-fmt_arg_detect(T x) {
+static inline typename std::enable_if<std::is_enum<T>::value, fmt_arg_t>::type fmt_arg_detect(T x) {
   using U = typename std::underlying_type<T>::type;
   // Promote char/uchar sized enums to int so they print as numbers, not characters
   using P = typename std::conditional<(sizeof(U) == 1), int, U>::type;
@@ -280,8 +284,7 @@ extern "C" { /* Re-open extern "C" */
 
 /* Count arguments (up to 8). MSVC compatible 0-arg detection. */
 #define FMT_NARGS_IMPL(_0, _1, _2, _3, _4, _5, _6, _7, _8, N, ...) N
-#define FMT_NARGS(...)                                                                             \
-  FMT_EXPAND(FMT_NARGS_IMPL(0, ##__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0))
+#define FMT_NARGS(...) FMT_EXPAND(FMT_NARGS_IMPL(0, ##__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0))
 
 /* Expand each argument with FMT_ARG */
 #define FMT_WRAP_0() {FMT_TYPE_NONE}
@@ -331,20 +334,42 @@ extern "C" { /* Re-open extern "C" */
 CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t *args,
                         size_t arg_count);
 
+/**
+ * @brief Append formatted content directly to tstr_t.
+ *
+ * This is the dynamic-string backend for fmt formatting. It avoids fixed-size
+ * temporary buffers by growing the render buffer until fmt_print() can produce
+ * the full output, then appends that output to s.
+ *
+ * @param s         Existing tstr_t, or NULL to create one.
+ * @param fmt       Format string with {} placeholders.
+ * @param args      Array of typed arguments.
+ * @param arg_count Number of arguments.
+ * @return Updated tstr_t. Callers must assign the return value.
+ */
+CXX_C_API tstr_t fmt_print_tstr(tstr_t s, const char *fmt, const fmt_arg_t *args, size_t arg_count);
+
 /* ============================================================================
  * tstr_t Integration
  * ============================================================================ */
 
 static inline tstr_t tstr_cat_typed_impl(tstr_t s, const char *format, const fmt_arg_t *args,
-                                          size_t count) {
-  char tmp[1024];
-  int n = fmt_print(tmp, sizeof(tmp), format, args, count);
-  if (n > 0)
-    return tstr_cat_len(s, tmp, (size_t)n);
-  return s;
+                                         size_t count) {
+  return fmt_print_tstr(s, format, args, count);
 }
 
 #define tstr_cat_typed(s, format, ...)                                                             \
+  tstr_cat_typed_impl((s), (format), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
+
+static inline tstr_t tstr_format_typed_impl(const char *format, const fmt_arg_t *args,
+                                            size_t count) {
+  return fmt_print_tstr(tstr_new(), format, args, count);
+}
+
+#define tstr_format(format, ...)                                                                   \
+  tstr_format_typed_impl((format), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
+
+#define tstr_append_format(s, format, ...)                                                         \
   tstr_cat_typed_impl((s), (format), FMT_ARGS(__VA_ARGS__), FMT_NARGS(__VA_ARGS__))
 
 #ifdef __cplusplus
@@ -358,13 +383,13 @@ static inline tstr_t tstr_cat_typed_impl(tstr_t s, const char *format, const fmt
  * @brief Buffer for custom formatters - wraps char* with position tracking
  */
 struct fmt_buffer_t {
-  char* data;
+  char *data;
   size_t size;
   size_t pos;
 
-  fmt_buffer_t(char* d, size_t s) : data(d), size(s), pos(0) {}
+  fmt_buffer_t(char *d, size_t s) : data(d), size(s), pos(0) {}
 
-  void write(const char* str, size_t len) {
+  void write(const char *str, size_t len) {
     if (pos + len < size) {
       memcpy(data + pos, str, len);
       pos += len;
@@ -372,10 +397,9 @@ struct fmt_buffer_t {
     }
   }
 
-  void write(const char* str) { write(str, strlen(str)); }
+  void write(const char *str) { write(str, strlen(str)); }
 
-  template <typename... Args>
-  void print(const char* format, const Args&... args) {
+  template <typename... Args> void print(const char *format, const Args &...args) {
     if (pos < size) {
       int n = fmt_cpp_wrapper(data + pos, size - pos, format, args...);
       if (n > 0) pos += (size_t)n;
@@ -387,14 +411,13 @@ struct fmt_buffer_t {
  * @brief SFINAE helper to detect ADL fmt_format(fmt_buffer_t&, const T&)
  */
 namespace __fmt_detail {
-  template <typename T, typename = void>
-  struct has_adl_format : std::false_type {};
+  template <typename T, typename = void> struct has_adl_format : std::false_type {};
 
   template <typename T>
-  struct has_adl_format<T, decltype(void(
-      fmt_format(std::declval<fmt_buffer_t&>(), std::declval<const T&>())
-  ))> : std::true_type {};
-}
+  struct has_adl_format<T, decltype(void(fmt_format(std::declval<fmt_buffer_t &>(),
+                                                    std::declval<const T &>())))> : std::true_type {
+  };
+} // namespace __fmt_detail
 
 /**
  * @brief fmt_arg_detect for types with ADL fmt_format()
@@ -405,11 +428,8 @@ namespace __fmt_detail {
  *   }
  */
 template <typename T>
-static inline auto fmt_arg_detect(const T& x)
-    -> typename std::enable_if<
-        __fmt_detail::has_adl_format<T>::value &&
-        !__fmt_detail::has_c_str<T>::value,
-        fmt_arg_t>::type {
+static inline auto fmt_arg_detect(const T &x) -> typename std::enable_if<
+    __fmt_detail::has_adl_format<T>::value && !__fmt_detail::has_c_str<T>::value, fmt_arg_t>::type {
   thread_local char buf[512];
   fmt_buffer_t fb(buf, sizeof(buf));
   fmt_format(fb, x);
@@ -428,22 +448,30 @@ inline int fmt_cpp_wrapper(char *buf, size_t size, const char *fmt, const Args &
   return fmt_print(buf, size, fmt, arg_array, sizeof...(Args));
 }
 
-/* Override macro for C++ */
-#undef fmt
-#define fmt(buf, size, fmt, ...) fmt_cpp_wrapper((buf), (size), (fmt), ##__VA_ARGS__)
+  /* Override macro for C++ */
+  #undef fmt
+  #define fmt(buf, size, fmt, ...) fmt_cpp_wrapper((buf), (size), (fmt), ##__VA_ARGS__)
 
 template <typename... Args>
 inline tstr_t tstr_cat_typed_cpp(tstr_t s, const char *format, const Args &...args) {
-  char tmp[1024];
-  int n = fmt_cpp_wrapper(tmp, sizeof(tmp), format, args...);
-  if (n > 0)
-    return tstr_cat_len(s, tmp, (size_t)n);
-  return s;
+  const fmt_arg_t arg_array[] = {FMT_ARG(args)..., {FMT_TYPE_NONE}};
+  return fmt_print_tstr(s, format, arg_array, sizeof...(Args));
 }
 
-#undef tstr_cat_typed
-#define tstr_cat_typed(s, format, ...) tstr_cat_typed_cpp((s), (format), ##__VA_ARGS__)
+  #undef tstr_cat_typed
+  #define tstr_cat_typed(s, format, ...) tstr_cat_typed_cpp((s), (format), ##__VA_ARGS__)
+
+template <typename... Args>
+inline tstr_t tstr_format_typed_cpp(const char *format, const Args &...args) {
+  const fmt_arg_t arg_array[] = {FMT_ARG(args)..., {FMT_TYPE_NONE}};
+  return fmt_print_tstr(tstr_new(), format, arg_array, sizeof...(Args));
+}
+
+  #undef tstr_format
+  #define tstr_format(format, ...) tstr_format_typed_cpp((format), ##__VA_ARGS__)
+
+  #undef tstr_append_format
+  #define tstr_append_format(s, format, ...) tstr_cat_typed_cpp((s), (format), ##__VA_ARGS__)
 #endif
 
 #endif /* FMT_H */
-

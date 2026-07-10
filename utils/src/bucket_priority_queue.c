@@ -26,9 +26,17 @@ static int bucket_highest_non_empty_priority(uint8_t mask) {
   /* Portable fallback: binary search for highest set bit */
   int bit = 0;
   uint8_t m = mask;
-  if (m & 0xF0) { bit += 4; m >>= 4; }
-  if (m & 0x0C) { bit += 2; m >>= 2; }
-  if (m & 0x02) { bit += 1; }
+  if (m & 0xF0) {
+    bit += 4;
+    m >>= 4;
+  }
+  if (m & 0x0C) {
+    bit += 2;
+    m >>= 2;
+  }
+  if (m & 0x02) {
+    bit += 1;
+  }
   return bit;
 #endif
 }
@@ -396,7 +404,8 @@ size_t bucket_priority_queue_size(const bucket_priority_queue_t *queue) {
   return queue->total_size;
 }
 
-size_t bucket_priority_queue_size_at(const bucket_priority_queue_t *queue, bucket_priority_t priority) {
+size_t bucket_priority_queue_size_at(const bucket_priority_queue_t *queue,
+                                     bucket_priority_t priority) {
   if (queue == NULL || !bucket_priority_valid(priority)) {
     return 0;
   }

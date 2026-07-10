@@ -55,9 +55,6 @@ find_package(c-ares CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-find_package(Stb REQUIRED)
-pkg_check_modules(STC REQUIRED IMPORTED_TARGET stc)
-
 # Additional components
 add_subdirectory(tools)
 include(FindTools) 

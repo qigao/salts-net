@@ -13,7 +13,7 @@ target_include_directories(
 
 # Link llhttp for HTTP handshake parsing
 target_link_libraries(websocket_parser PRIVATE llhttp::llhttp_static
-                                               TurboNet::Utils)
+                                               TurboUtils::Core)
 
 # Export include directories for parent scope
 set(WEBSOCKET_PARSER_INCLUDE_DIRS

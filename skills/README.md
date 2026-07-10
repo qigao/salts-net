@@ -1,10 +1,10 @@
-# TurboScript Development Skills
+# TurboUtils Development Skills
 
-本目录包含 TurboScript 项目的专项技术规范，作为 AGENTS.md 核心约束的补充。
+本目录包含 TurboUtils 项目的专项技术规范，作为 AGENTS.md 核心约束的补充。
 
 ## 可用 Skills
 
-1. **[turbonet_utils.md](turbonet_utils.md)** - TurboNet Utils 完整 API 参考
+1. **[`turboutils.md`](turboutils.md)** - TurboUtils 完整 API 参考
    - 内存管理（Slab 分配器、对象池、Arena）
    - 字符串处理（tstr_t、tstr_v）
    - 文件系统（turbo_fs、turbo_mmap）
@@ -65,7 +65,7 @@
  
 在对话中使用 `#` 引用 skill 文件名：
 ```
-#skills/turbonet_utils.md
+#skills/turboutils.md
 #skills/coronet.md
 #skills/cmake_presets.md
 #skills/c_design_patterns.md

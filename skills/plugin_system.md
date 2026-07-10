@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档定义 C 语言插件系统的完整架构、接口设计、隔离机制和最佳实践，适用于 TurboScript 等需要动态扩展的 C 项目。
+本文档定义 C 语言插件系统的完整架构、接口设计、隔离机制和最佳实践，适用于需要动态扩展的 C 项目。
 
 **核心原则**：
 1. **稳定 ABI**：纯 C 接口，二进制兼容
@@ -51,7 +51,7 @@
   "name": "math_plugin",
   "version": "1.2.0",
   "api_version": "1.0",
-  "author": "TurboScript Team",
+  "author": "TurboUtils Team",
   "description": "Mathematical functions plugin",
   "library": "math_plugin.so",
   "entry_point": "plugin_init",
@@ -283,7 +283,7 @@ PLUGIN_EXPORT const plugin_interface_t *plugin_get_api(void) {
         .metadata = {
             .name = "math_plugin",
             .version = "1.0.0",
-            .author = "TurboScript Team",
+            .author = "TurboUtils Team",
             .description = "Mathematical functions"
         }
     };
@@ -302,7 +302,7 @@ PLUGIN_EXPORT const plugin_interface_t *plugin_get_api(void) {
 typedef struct host_library_t host_library_t;
 
 typedef struct plugin_handle_t {
-    host_library_t *library;   // 主程序通过 TurboNet util 适配层持有模块句柄
+    host_library_t *library;   // 主程序通过 TurboUtils 平台适配层持有模块句柄
     plugin_interface_t *api;   // 插件 API
     plugin_info_t info;        // 插件元信息
     bool loaded;
@@ -316,7 +316,7 @@ int plugin_unload(plugin_handle_t *handle);
 
 ```c
 // plugin_loader.c
-// host_library_* 是主程序封装的动态库入口，底层平台差异由 TurboNet util 处理。
+// host_library_* 是主程序封装的动态库入口，底层平台差异由 TurboUtils 平台适配层处理。
 
 int plugin_load(const char *path, plugin_handle_t *handle) {
     // 1. 加载插件模块
@@ -457,7 +457,7 @@ turbo_file_t plugin_open_file(plugin_t *plugin, const char *path, int flags) {
         return TURBO_INVALID_FILE;
     }
     
-    // 通过 TurboNet 文件系统封装打开文件
+    // 通过 TurboUtils 文件系统封装打开文件
     turbo_file_t fd = turbo_fs_open(path, flags, 0);
     if (fd != TURBO_INVALID_FILE) {
         // 注册到插件文件管理器
@@ -1200,7 +1200,7 @@ typedef struct {
 } plugin_sandbox_policy_t;
 
 /**
- * @brief 启用插件沙箱；隔离细节由主程序通过 TurboNet util/coro 统一适配。
+ * @brief 启用插件沙箱；隔离细节由主程序通过 TurboUtils utility/coroutine primitive 统一适配。
  */
 int plugin_enable_sandbox(plugin_t *plugin, const plugin_sandbox_policy_t *policy) {
     if (!plugin || !policy) {
@@ -1631,7 +1631,7 @@ int main(int argc, char **argv) {
 
 ## 参考资料
 
-- **动态加载**：通过主程序的 TurboNet util 适配层统一封装模块加载、符号查找与句柄释放
+- **动态加载**：通过主程序的 TurboUtils 平台适配层统一封装模块加载、符号查找与句柄释放
 - **版本管理**：[Semantic Versioning 2.0.0](https://semver.org/)
 - **进程隔离**：通过主程序沙箱策略接口封装隔离能力，不在插件逻辑中直接调用平台 API
 - **热重载**：[Martin Fowler - Plugin Pattern](https://martinfowler.com/eaaCatalog/plugin.html)

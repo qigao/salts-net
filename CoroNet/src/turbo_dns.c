@@ -16,7 +16,6 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include "sds.h"
 #include "turbo_error.h"
 #include <stdatomic.h>
 
@@ -38,6 +37,8 @@
   #define DNS_SELECT(n,r,w,t) select((int)(n),(r),(w),NULL,(t))
   #define TURBO_DNS_CLOSE_SOCKET(s) close(s)
 #endif
+
+#include "turbo_str_view.h"
 
 // =============================================================================
 // Internal Constants
@@ -138,6 +139,14 @@ static int           g_dns_refcount         = 0;
 static turbo_dns_cache_entry_t g_dns_cache[DNS_CACHE_CAPACITY];
 
 static void destroy_ares_context(turbo_ares_t *ctx);
+
+static char *dns_hostname_dup(const char *hostname) {
+  return tstr_v_to_cstr(tstr_v_from_cstr(hostname));
+}
+
+static void dns_hostname_free(char *hostname) {
+  free(hostname);
+}
 
 // =============================================================================
 // DNS cache
@@ -597,7 +606,7 @@ static void release_parent_ref(turbo_dns_parent_query_t *parent) {
   if (parent->ares && parent->ares->initialized)
     destroy_ares_context(parent->ares);
 
-  sdsfree(parent->hostname);
+  dns_hostname_free(parent->hostname);
   free(parent);
 }
 
@@ -855,7 +864,7 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
     return TURBO_ENOMEM;
   }
 
-  parent->hostname  = tstr_dup(host);
+  parent->hostname  = dns_hostname_dup(host);
   parent->results_callback = sync_dns_results_callback;
   parent->user_data = &state;
   parent->pref      = TURBO_DNS_ANY;
@@ -1017,7 +1026,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
   turbo_dns_parent_query_t *parent = calloc(1, sizeof(*parent));
   if (!parent) { destroy_ares_context(ares_ctx); return TURBO_ENOMEM; }
 
-  parent->hostname  = tstr_dup(hostname);
+  parent->hostname  = dns_hostname_dup(hostname);
   parent->callback  = callback;
   parent->user_data = user_data;
   parent->pref      = pref;
@@ -1052,7 +1061,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
       *out_query = NULL; 
     }
     destroy_ares_context(ares_ctx);
-    sdsfree(parent->hostname);
+    dns_hostname_free(parent->hostname);
     free(parent);
     return TURBO_ENOMEM;
   }
@@ -1065,7 +1074,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
     free(drv);
     if (out_query) { *out_query = NULL; }
     destroy_ares_context(ares_ctx);
-    sdsfree(parent->hostname);
+    dns_hostname_free(parent->hostname);
     free(parent);
     return TURBO_EAI_FAIL;
   }
@@ -1118,7 +1127,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
     return TURBO_ENOMEM;
   }
 
-  parent->hostname = tstr_dup(hostname);
+  parent->hostname = dns_hostname_dup(hostname);
   parent->results_callback = callback;
   parent->user_data = user_data;
   parent->pref = pref;
@@ -1152,7 +1161,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
       *out_query = NULL;
     }
     destroy_ares_context(ares_ctx);
-    sdsfree(parent->hostname);
+    dns_hostname_free(parent->hostname);
     free(parent);
     return TURBO_ENOMEM;
   }
@@ -1167,7 +1176,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
       *out_query = NULL;
     }
     destroy_ares_context(ares_ctx);
-    sdsfree(parent->hostname);
+    dns_hostname_free(parent->hostname);
     free(parent);
     return TURBO_EAI_FAIL;
   }

@@ -23,7 +23,7 @@ target_include_directories(
   tedis PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/redis>)
 
-target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboNet::Utils)
+target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboUtils::Core)
 
 # Platform-specific settings
 if(WIN32)

@@ -118,12 +118,8 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   target_link_libraries(
     ${tgt}
-    PUBLIC TurboNet::Utils TurboNet::Parser Threads::Threads
-    PRIVATE kcp::kcp
-            TurboNet::SDS
-            c-ares::cares
-            OpenSSL::SSL
-            OpenSSL::Crypto
+    PUBLIC TurboUtils::Core TurboUtils::Parser Threads::Threads
+    PRIVATE kcp::kcp c-ares::cares OpenSSL::SSL OpenSSL::Crypto
             TurboNet::WebSocketParser)
 
   if(WIN32)

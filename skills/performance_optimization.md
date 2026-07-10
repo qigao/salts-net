@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档定义 C 语言项目的性能优化标准、热路径识别、内存管理优化、SIMD 使用和性能测试框架。
+本文档定义 C/C++ 语言项目的性能优化标准、热路径识别、内存管理优化、SIMD 使用和性能测试框架。
 
 **核心原则**：
 1. **测量优先**：profiling 证明瓶颈后再优化，不做过早优化
@@ -46,7 +46,7 @@
    - 替代：查表法、多项式近似、miniblas 或 SIMDe 封装路径
 
 5. **I/O 操作**
-   - 禁止：裸标准 I/O；统一走 TurboNet 文件系统封装
+   - 禁止：裸标准 I/O；统一走 TurboUtils 文件系统封装
    - 替代：批量 I/O、异步 I/O、内存映射文件
 
 6. **锁操作**
@@ -394,7 +394,7 @@ typedef struct {
     char padding[CACHE_LINE_SIZE - sizeof(atomic_int)];
 } aligned_counter_t;
 
-// 动态对齐分配必须通过 TurboNet 或项目内存适配层提供；
+// 动态对齐分配必须通过 TurboUtils 或项目内存适配层提供；
 // 若当前没有统一入口，优先使用 SIMDe 的 loadu/storeu 处理未对齐输入。
 ```
 
@@ -739,7 +739,7 @@ void update_positions(particle_system_t *ps, int count) {
 - 每次解析分配 >100 次小字符串
 
 **优化**：
-- 使用 arena 分配器统一生命周期
+- 使用分配器统一生命周期
 - String view 替代字符串拷贝
 - 预分配 token 缓冲区
 

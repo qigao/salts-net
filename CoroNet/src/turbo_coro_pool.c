@@ -3,8 +3,8 @@
  * @brief CoroNet coroutine object pool adapter.
  */
 
-#include "CoroNet/turbo_coro_pool.h"
-#include "../../utils/include/turbo_coro_pool.h"
+#include "CoroNet/turbo_coro_object_pool.h"
+#include <turbo_coro_pool.h>
 #include "turbo_buffer.h"
 #include "turbo_coro_internal.h"
 #include <assert.h>

@@ -6,7 +6,6 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 OLD)
 endif()
 
-
 # TurboNet Project - Unified High-Performance Networking Library
 project(
   TurboNet
@@ -54,26 +53,19 @@ find_package(Threads REQUIRED)
 find_package(c-ares CONFIG REQUIRED)
 find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
 
 # Additional components
 add_subdirectory(tools)
-include(FindTools) 
+include(FindTools)
 add_subdirectory(vendor)
-add_subdirectory(parser) 
-add_subdirectory(turbo_parser)
-
-add_subdirectory(mustache)
-add_subdirectory(tinytest)
-add_subdirectory(utils)
-add_subdirectory(cron)
 
 add_subdirectory(CoroNet)
-add_subdirectory(redis) 
- 
 add_subdirectory(snmp)
 add_subdirectory(ldap)
+add_subdirectory(email)
+add_subdirectory(redis)
 
-add_subdirectory(email) 
 # Package Configuration
 include(CMakePackageConfigHelpers)
 
@@ -91,8 +83,8 @@ write_basic_package_version_file(
 
 # Install the config files
 install(FILES "${CMAKE_BINARY_DIR}/TurboNetConfig.cmake"
-  "${CMAKE_BINARY_DIR}/TurboNetConfigVersion.cmake"
-  DESTINATION "lib/cmake/TurboNet")
+              "${CMAKE_BINARY_DIR}/TurboNetConfigVersion.cmake"
+        DESTINATION "lib/cmake/TurboNet")
 
 # Install the export set
 export(

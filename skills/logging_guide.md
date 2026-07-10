@@ -244,7 +244,7 @@ TLOG_DEBUG("Value: {}", expensive_call());  // DEBUG 关闭时不调用 expensiv
 #### 2. 异步日志
 
 ```c
-// TurboNet tlog 默认使用异步写入
+// TurboUtils tlog 默认使用异步写入
 tlog_config_t cfg = {
     .min_level = TURBO_LOG_LEVEL_INFO,
     .buffer_size = 64 * 1024,  // 64KB ring buffer
@@ -471,7 +471,7 @@ TLOG_DEBUG("Validation result: value={}, range=[{}, {}], valid={}",
 [时间戳] [级别] [模块] [线程] 消息内容 key1=value1 key2=value2
 ```
 
-**TurboNet tlog 配置**：
+**TurboUtils tlog 配置**：
 ```c
 turbo_file_sink_opts_t opts = {
     .path = "app.log",
@@ -491,7 +491,7 @@ turbo_file_sink_opts_t opts = {
 - **时间戳**：微秒级精度（`{time_ms}`）
 - **级别**：DEBUG/INFO/WARN/ERROR/FATAL
 - **模块**：组件名（Parser、Server、Cache 等）
-- **线程 ID**：使用日志系统内置 `{thread}` 字段；需要手工采集时走 TurboNet 线程抽象，不直接调用平台线程 API
+- **线程 ID**：使用日志系统内置 `{thread}` 字段；需要手工采集时走 TurboUtils 线程抽象，不直接调用平台线程 API
 - **文件:行号**（可选，DEBUG 模式）：`{file}:{line}`
 
 #### 可选字段（根据场景）
@@ -625,9 +625,9 @@ TLOG_ERROR("Cache miss");  // 应该是 DEBUG 或 WARN
 
 **示例**：
 ```
-turboscript.error.2026-07-05.log
-turboscript.info.2026-07-05.log
-turboscript.debug.2026-07-05.log
+turboutils.error.2026-07-05.log
+turboutils.info.2026-07-05.log
+turboutils.debug.2026-07-05.log
 ```
 
 **分级存储**：
@@ -693,9 +693,9 @@ turbo_file_sink_opts_t archive_opts = {
 0 2 * * * /usr/local/bin/cleanup_logs.sh
 
 # cleanup_logs.sh
-find /var/log/turboscript -name "*.error.*.log.gz" -mtime +90 -delete
-find /var/log/turboscript -name "*.info.*.log.gz" -mtime +30 -delete
-find /var/log/turboscript -name "*.debug.*.log" -mtime +7 -delete
+find /var/log/turboutils -name "*.error.*.log.gz" -mtime +90 -delete
+find /var/log/turboutils -name "*.info.*.log.gz" -mtime +30 -delete
+find /var/log/turboutils -name "*.debug.*.log" -mtime +7 -delete
 ```
 
 ---
@@ -706,7 +706,7 @@ find /var/log/turboscript -name "*.debug.*.log" -mtime +7 -delete
 ```c
 // config.toml
 [logging]
-path = "/var/log/turboscript"
+path = "/var/log/turboutils"
 level = "INFO"
 max_size_mb = 100
 max_files = 10
@@ -715,11 +715,11 @@ max_files = 10
 **权限控制**：
 ```bash
 # 日志目录权限
-chmod 700 /var/log/turboscript
-chown turboscript:turboscript /var/log/turboscript
+chmod 700 /var/log/turboutils
+chown turboutils:turboutils /var/log/turboutils
 
 # 日志文件权限
-chmod 600 /var/log/turboscript/*.log
+chmod 600 /var/log/turboutils/*.log
 ```
 
 **磁盘空间检查**：
@@ -763,7 +763,7 @@ tlog_config_t prod_config = {
 };
 
 turbo_file_sink_opts_t prod_file_opts = {
-    .path = "/var/log/turboscript/app.log",
+    .path = "/var/log/turboutils/app.log",
     .max_size = 100 * 1024 * 1024,  // 100MB
     .max_files = 10,
     .append = 1,
@@ -935,7 +935,7 @@ TLOG_INFO("Email sent to: {}", mask_email(email));
 
 ---
 
-## TurboNet tlog 使用指南
+## TurboUtils tlog 使用指南
 
 ### TinyTest 测试分组
 
@@ -1254,7 +1254,7 @@ if (turbo_sink_set_min_level(sink, TURBO_LOG_LEVEL_ERROR) != 0 ||
 
 2. **异步日志**
    ```c
-   // ✅ 使用 TurboNet tlog（默认异步）
+   // ✅ 使用 TurboUtils tlog（默认异步）
    TLOG_INFO("Message");  // 非阻塞，写入 ring buffer
    ```
 
@@ -1347,5 +1347,5 @@ cat app.json.log | jq 'select(.user_id == "12345")'
 ---
 
 **最后更新**：2026-07-05  
-**适用项目**：TurboScript 及所有使用 TurboNet tlog 的 C 项目  
-**参考资料**：TurboNet tlog API 文档、《The Art of Logging》
+**适用项目**：所有使用 tlog 的 C 项目  
+**参考资料**：tlog API 文档、《The Art of Logging》

@@ -1,8 +1,0 @@
-app_name: MyApplication
-version: 1.0.0
-debug: true
-port: 8080
-database:
-  host: localhost
-  port: 5432
-  name: mydb

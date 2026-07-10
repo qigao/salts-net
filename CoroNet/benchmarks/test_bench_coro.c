@@ -7,9 +7,9 @@
  */
 
 #include "CoroNet.h"
-#include "CoroNet/turbo_coro.h"
+#include "turbo_coro.h"
 #include "CoroNet/turbo_coro_context.h"
-#include "CoroNet/turbo_coro_pool.h"
+#include "CoroNet/turbo_coro_object_pool.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "CoroNet/turbo_stream.h"
 #include "platform.h"

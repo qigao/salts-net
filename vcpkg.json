@@ -31,14 +31,7 @@
     },
     {
       "name": "zstd"
-    },
-    {
-      "name": "sqlite3",
-      "version>=": "3.49.0"
-    },
-    {
-      "name": "utf8h"
-    },
+    }, 
     {
       "name": "liburing",
       "platform": "linux & !android"

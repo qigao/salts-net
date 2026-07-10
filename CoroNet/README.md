@@ -64,7 +64,7 @@ int main(void) {
 
 ```c
 #include "turbo_coro.h"
-#include "turbo_coro_pool.h"
+#include "CoroNet/turbo_coro_object_pool.h"
 
 static void worker(coro_t *co, void *arg) {
   int *counter = (int *)arg;

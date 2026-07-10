@@ -102,6 +102,89 @@ build\Msvc-Release\bin\test_stream.exe --filter "without use-after-free"
 
 ---
 
+## 安装与本机 Setup
+
+本仓库的 install prefix 由 `CMakeUserPresets.json` 提供：
+
+| Preset family | Install prefix |
+|---------------|----------------|
+| Windows user presets | `C:/projects/cpp/external/pkgs/turboutils` |
+| Linux user presets | `/opt/turboutils` |
+
+普通本机 setup 使用 Release preset；不要用 Debug/ASan 覆盖 Release SDK，除非明确需要调试安装包。
+
+Windows Release 安装：
+
+```bash
+cmd /c "call ""C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\Tools\VsDevCmd.bat"" -arch=x64 -host_arch=x64 >nul && cmake --fresh --preset win-release-user && cmake --build --preset win-release-user && cmake --install build\Msvc-Release"
+```
+
+Linux Release 安装：
+
+```bash
+cmake --fresh --preset linux-release-user
+cmake --build --preset linux-release-user
+cmake --install build/linux-gcc-release
+```
+
+需要 Debug/ASan 安装时必须显式使用独立 prefix，避免覆盖 Release：
+
+```bash
+cmake --install build\Msvc --prefix C:\projects\cpp\external\pkgs\turboutils-debug
+```
+
+安装后消费端通过 CMake package 使用：
+
+```cmake
+find_package(TurboUtils CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE TurboUtils::Core)
+```
+
+消费端 configure 时把安装前缀放入 `CMAKE_PREFIX_PATH`：
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=C:/projects/cpp/external/pkgs/turboutils
+```
+
+---
+
+## CMake Helper 使用规则
+
+本仓库的一方模块优先使用 `cmake/CmakeUtils.cmake` 中的 helper，避免每个目录重复手写 target、CTest 和安装规则：
+
+| 场景 | 默认使用 |
+|------|----------|
+| 收集源码 | `cmake_add_source()` |
+| 配置库/可执行文件属性、alias、安装 | `cmake_config_target()` |
+| Lemon/re2c 代码生成 | `cmake_add_grammar()` |
+| 单测 target + CTest 注册 | `cmake_add_test()` |
+| benchmark target | `cmake_add_benchmark()` |
+| 安装头文件目录 | `cmake_install_headers()` |
+
+推荐模式：
+
+```cmake
+cmake_add_source(SOURCE_FILES RECURSE)
+
+add_library(my_module ${SOURCE_FILES})
+target_link_libraries(my_module PUBLIC TurboUtils::Core)
+cmake_config_target(my_module
+  ALIAS TurboUtils::MyModule
+  FOLDER "my_module")
+
+cmake_add_test(
+  SOURCES tests/test_my_module.c
+  LIBS my_module TurboUtils::TinyTest
+  FOLDER "my_module/tests")
+```
+
+例外：
+- `vendor/` 上游 CMake、外部示例或第三方工程保持原生写法。
+- helper 无法表达的自定义 target 名、特殊生成文件依赖、非标准测试命令，可以直接写原生 CMake，但创建 target 后仍调用 `cmake_config_target(... NO_INSTALL FOLDER ...)`。
+- 测试、benchmark、examples、内部工具默认 `NO_INSTALL`；公开库才进入 `TurboUtilsTargets` 导出集。
+
+---
+
 ## Preset 选择规则
 
 - 普通 Windows 验证：`win-release-user`。
@@ -182,4 +265,4 @@ cmake --fresh --preset win-release-user
 ---
 
 **最后更新**：2026-07-10
-**适用项目**：TurboNet/TurboScript CMake preset 构建、测试与打包
+**适用项目**：TurboUtils CMake preset 构建、测试与打包

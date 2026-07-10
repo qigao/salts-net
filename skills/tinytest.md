@@ -2,12 +2,12 @@
 
 ## 适用场景
 
-使用 TinyTest 编写 TurboScript/TurboNet 的 C/C++ 单元测试、回归测试、行为测试和小型 benchmark。
+使用 TinyTest 编写 C/C++ 单元测试、回归测试、行为测试和小型 benchmark。
 
 事实源：
-- 头文件：`$TURBONET_ROOT/turbonet/tinytest/tinytest.h`
-- CMake target：`TurboNet::TinyTest`
-- 本地示例：`$TURBONET_ROOT/turbonet/tinytest/example.c`、`example.cpp`
+- 头文件：`tinytest/tinytest.h`
+- CMake target：`TurboUtils::TinyTest`
+- 本地示例：`tinytest/example.c`、`tinytest/example.cpp`
 
 ## 基本原则
 
@@ -20,22 +20,29 @@
 
 ## CMake 接入
 
+仓库内新增 TinyTest 测试优先走 `cmake_add_test()`，它会按源文件名创建 target、链接依赖并注册 CTest：
+
 ```cmake
-add_executable(my_module_test test_my_module.c)
-target_link_libraries(my_module_test PRIVATE TurboNet::TinyTest)
-add_test(NAME my_module_test COMMAND my_module_test)
+cmake_add_test(
+  SOURCES test_my_module.c
+  LIBS TurboUtils::TinyTest
+  FOLDER "my_module/tests")
 ```
 
-C++ 测试同样链接 `TurboNet::TinyTest`，并显式设置需要的 C++ 标准：
+C++ 测试同样使用 `cmake_add_test()`；需要额外 target 属性时，使用源文件 stem 作为 target 名再补 `set_target_properties()`：
 
 ```cmake
-add_executable(my_module_cpp_test test_my_module.cpp)
-target_link_libraries(my_module_cpp_test PRIVATE TurboNet::TinyTest)
+cmake_add_test(
+  SOURCES test_my_module_cpp.cpp
+  LIBS TurboUtils::TinyTest
+  FOLDER "my_module/tests")
+
 set_target_properties(my_module_cpp_test PROPERTIES
   CXX_STANDARD 17
   CXX_STANDARD_REQUIRED ON)
-add_test(NAME my_module_cpp_test COMMAND my_module_cpp_test)
 ```
+
+只有在需要自定义 target 名、特殊生成文件依赖、非标准 CTest 命令或 helper 无法表达的属性时，才直接写原生 CMake；这类 target 仍应调用 `cmake_config_target(... NO_INSTALL FOLDER ...)` 统一 IDE 分组和安装策略。
 
 ## C 测试模板
 
@@ -212,11 +219,11 @@ benchmark 只能辅助判断性能变化，不能替代正确性断言。必要�
 - 不要在一个 `it(...)` 里塞多个无关行为。
 - 不要用裸 `check(a == b)` 替代能给出更好失败信息的 `check_int_eq(a, b)`、`check_str_eq(a, b)` 或 `check_eq(a, b)`。
 - 不要依赖测试执行顺序；每个 `it(...)` 都应能通过 fixture 独立准备状态。
-- 不要把平台专用文件路径、线程或时间假设写进测试；优先用 TinyTest helper、TurboNet util/coro 和可注入时钟。
+- 不要把平台专用文件路径、线程或时间假设写进测试；优先用 TinyTest helper、TurboUtils utility/coroutine primitive 和可注入时钟。
 
 ## 新增测试检查清单
 
-1. 已链接 `TurboNet::TinyTest` 或能从项目 include path 找到 `tinytest.h`。
+1. 已链接 `TurboUtils::TinyTest` 或能从项目 include path 找到 `tinytest.h`。
 2. 测试文件没有自定义 `main()`。
 3. 每个测试用例名称描述行为结果，不描述实现步骤。
 4. fixture 状态通过 `before_each()` 重置。

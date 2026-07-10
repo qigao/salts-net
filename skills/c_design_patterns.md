@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档提供常用设计模式在纯 C 语言中的实现方法，适用于 TurboScript 等 C 项目。
+本文档提供常用设计模式在纯 C 语言中的实现方法，适用于所有 C 项目。
 
 **核心原则**：
 - 使用 opaque 指针隐藏实现细节
@@ -1557,11 +1557,11 @@ cleanup:
 ---
 
 **最后更新**：2026-07-10
-**适用项目**：TurboScript 及所有 C 语言项目
+**适用项目**： 所有 C 语言项目
 **参考资料**：《Design Patterns》、《C Interfaces and Implementations》、《Pointers on C》
 
 ### 背景资料使用方式
 
 - 《Pointers on C》用于补强指针、数组、字符串、生命周期、函数指针和内存布局判断。
 - 设计模式落地时，以本文件的 ownership、destroy、opaque pointer、函数指针表和 Result 约束为准，不直接照搬书中示例风格。
-- 涉及 TurboNet 代码时，优先复用 `utils` 的 `tstr_t`/`tstr_v`、`turbo_result_t`、内存池、线程和队列 API。
+- 优先复用 `utils` 的 `tstr_t`/`tstr_v`、`turbo_result_t`、内存池、线程和队列 API。

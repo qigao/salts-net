@@ -10,11 +10,13 @@
    - 文件系统（turbo_fs、turbo_mmap）
    - 日志系统（tlog）
    - 并发原语（线程、锁、线程池）
+   - 协程原语与通用协程池（turbo_coro、turbo_coro_pool）
    - 无锁数据结构（Disruptor、环形缓冲区、桶式优先队列）
    - 使用场景映射表、性能指标
 
 2. **[coronet.md](coronet.md)** - CoroNet 协程网络开发指南
    - coroutine context、task、scheduler 生命周期
+   - Utils coroutine primitive/pool 与 CoroNet context/object-pool 适配边界
    - TCP/TLS/UDP/KCP/Pipe/WebSocket socket 选择矩阵
    - stream/datagram/coro_socket 分层边界
    - SOCKS5 与 TProxy 边界

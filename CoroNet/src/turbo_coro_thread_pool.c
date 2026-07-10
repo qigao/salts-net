@@ -6,12 +6,6 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <sched.h>
-#endif
-
 #define UNUSED(x) (void)(x)
 
 struct coro_thread_pool_s {
@@ -35,17 +29,6 @@ typedef struct {
 static void coro_thread_pool_request_stop_post(void *arg1, void *arg2) {
     (void)arg2;
     coro_context_stop((coro_context_t *)arg1);
-}
-
-static int turbo_detect_cpu_count(void) {
-#ifdef _WIN32
-    SYSTEM_INFO sysinfo;
-    GetSystemInfo(&sysinfo);
-    return (sysinfo.dwNumberOfProcessors > 0) ? (int)sysinfo.dwNumberOfProcessors : 4;
-#else
-    long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
-    return (cpu_count > 0) ? (int)cpu_count : 4;
-#endif
 }
 
 static void worker_thread_refined(void *arg) {
@@ -118,7 +101,7 @@ static void coro_thread_pool_leave_spawn(coro_thread_pool_t *pool) {
 
 coro_thread_pool_t *coro_thread_pool_create(int num_threads) {
     if (num_threads <= 0) {
-        num_threads = turbo_detect_cpu_count();
+        num_threads = turbo_cpu_count();
     }
 
     coro_thread_pool_t *pool = (coro_thread_pool_t *)calloc(1, sizeof(*pool));

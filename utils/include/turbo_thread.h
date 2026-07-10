@@ -231,6 +231,12 @@ CXX_C_API void turbo_sleep_ms(uint32_t ms);
  */
 CXX_C_API void turbo_thread_yield(void);
 
+/**
+ * @brief Get the number of online logical CPUs available to this process.
+ * @return CPU count, or 4 if the platform query fails.
+ */
+CXX_C_API int turbo_cpu_count(void);
+
 // =============================================================================
 // Global Synchronization Policy
 // =============================================================================

@@ -448,14 +448,14 @@ static void turbo_threadpool_release_queue_slot(turbo_threadpool_t *pool) {
   turbo_threadpool_signal_queue_space(pool);
 }
 
-static int get_cpu_count(void) {
+int turbo_cpu_count(void) {
 #ifdef _WIN32
   SYSTEM_INFO si;
   GetSystemInfo(&si);
-  return (int)si.dwNumberOfProcessors;
+  return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 4;
 #else
   int n = (int)sysconf(_SC_NPROCESSORS_ONLN);
-  return n > 0 ? n : 1;
+  return n > 0 ? n : 4;
 #endif
 }
 
@@ -516,7 +516,7 @@ turbo_threadpool_t *turbo_threadpool_create_with_config(const turbo_threadpool_c
 
   num_threads = config->num_threads;
   if (num_threads <= 0) {
-    num_threads = get_cpu_count();
+    num_threads = turbo_cpu_count();
   }
   queue_capacity =
       config->queue_capacity > 0U ? config->queue_capacity : TURBO_THREADPOOL_DEFAULT_QUEUE_CAPACITY;

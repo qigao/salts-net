@@ -5,7 +5,6 @@
 
 #define MINICORO_IMPL
 #include "turbo_coro.h"
-#include "CoroNet/turbo_coro_pool.h"
 #include "minicoro.h"
 #include <assert.h>
 #include <stdlib.h>
@@ -23,6 +22,7 @@ struct coro_s {
   coro_fn fn;                  // user entry function
   void *arg;                   // user argument
   void *user_data;             // user data
+  void *owner_data;            // lifecycle adapter metadata
   coro_scheduler_t *scheduler; // owning scheduler (if any)
   coro_t *next;                // linked list for scheduler
   coro_t *prev;                // doubly linked list for O(1) removal
@@ -34,6 +34,8 @@ struct coro_s {
   coro_t *ready_prev;          // prev in ready queue (for O(1) removal)
   void (*cleanup_fn)(coro_t *co, void *arg); // cleanup callback
   void *cleanup_arg;                         // cleanup argument
+  void (*discard_fn)(coro_t *co, void *arg); // force-destroy callback
+  void *discard_arg;                         // force-destroy argument
 };
 
 struct coro_scheduler_s {
@@ -58,10 +60,6 @@ static void coro_entry_wrapper(mco_coro *mco) {
   if (co && co->fn) {
     co->fn(co, co->arg);
   }
-}
-
-static void pooled_scheduler_cleanup(coro_t *co, void *arg) {
-  coro_object_pool_release((coro_object_pool_t *)arg, co);
 }
 
 static void coro_scheduler_link_ready(coro_scheduler_t *sched, coro_t *co) {
@@ -119,8 +117,12 @@ coro_t *coro_create(coro_fn fn, void *arg, const coro_opts_t *opts) {
   coro_t *co = (coro_t *)block;
   co->mco_allocation = block;
   co->mco = coro_block_to_mco(block);
-  co->fn = fn;
-  co->arg = arg;
+    co->fn = fn;
+    co->arg = arg;
+    co->cleanup_fn = NULL;
+    co->cleanup_arg = NULL;
+    co->discard_fn = NULL;
+    co->discard_arg = NULL;
   desc.user_data = co;
 
   if (opts) {
@@ -187,6 +189,8 @@ int coro_resume(coro_t *co) {
 int coro_reset(coro_t *co, coro_fn fn, void *arg) {
   if (!co || !co->mco || !fn) return -1;
 
+  if (co->scheduler) return -1;
+
   // Verify coroutine is dead or hasn't started
   mco_state status = mco_status(co->mco);
   if (status != MCO_DEAD && status != MCO_SUSPENDED) return -1;
@@ -196,6 +200,16 @@ int coro_reset(coro_t *co, coro_fn fn, void *arg) {
 
   co->fn = fn;
   co->arg = arg;
+  co->waiting_for_io = 0;
+  co->in_ready_queue = 0;
+  co->next = NULL;
+  co->prev = NULL;
+  co->ready_next = NULL;
+  co->ready_prev = NULL;
+  co->cleanup_fn = NULL;
+  co->cleanup_arg = NULL;
+  co->discard_fn = NULL;
+  co->discard_arg = NULL;
 
   // Re-init with same sizes
   mco_desc desc = mco_desc_init(coro_entry_wrapper, co->stack_size);
@@ -248,6 +262,12 @@ void coro_set_data(coro_t *co, void *data) {
   if (co) co->user_data = data;
 }
 
+void *coro_get_owner_data(coro_t *co) { return co ? co->owner_data : NULL; }
+
+void coro_set_owner_data(coro_t *co, void *data) {
+  if (co) co->owner_data = data;
+}
+
 int coro_push(coro_t *co, const void *data, size_t size) {
   if (!co || !co->mco || !data || !size) return -1;
   mco_result res = mco_push(co->mco, data, size);
@@ -280,7 +300,9 @@ void coro_scheduler_destroy(coro_scheduler_t *sched) {
   coro_t *co = sched->head;
   while (co) {
     coro_t *next = co->next;
-    coro_object_pool_discard_coro(co);
+    if (co->discard_fn) {
+      co->discard_fn(co, co->discard_arg);
+    }
     coro_destroy(co);
     co = next;
   }
@@ -303,24 +325,6 @@ void coro_scheduler_adopt(coro_scheduler_t *sched, coro_t *co) {
   if (!sched || !co) return;
 
   coro_scheduler_link_ready(sched, co);
-}
-
-coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
-                          coro_object_pool_t *pool,
-                          coro_fn fn,
-                          void *arg) {
-  if (!sched || !pool || !fn) {
-    return NULL;
-  }
-
-  coro_t *co = coro_object_pool_acquire(pool, fn, arg);
-  if (!co) {
-    return NULL;
-  }
-
-  coro_set_cleanup(co, pooled_scheduler_cleanup, pool);
-  coro_scheduler_link_ready(sched, co);
-  return co;
 }
 
 int coro_scheduler_tick(coro_scheduler_t *sched) {
@@ -426,5 +430,12 @@ void coro_set_cleanup(coro_t *co, void (*fn)(coro_t *, void *), void *arg) {
   if (co) {
     co->cleanup_fn = fn;
     co->cleanup_arg = arg;
+  }
+}
+
+void coro_set_discard(coro_t *co, void (*fn)(coro_t *, void *), void *arg) {
+  if (co) {
+    co->discard_fn = fn;
+    co->discard_arg = arg;
   }
 }

@@ -78,6 +78,26 @@ CXX_C_API void coro_object_pool_destroy(coro_object_pool_t *pool);
 CXX_C_API coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn, void *arg);
 
 /**
+ * @brief Spawn a coroutine into a scheduler using an object pool.
+ *
+ * This is the steady-state fast path for high-frequency scheduler workloads:
+ * it borrows a coroutine shell from @p pool, arranges automatic return on
+ * completion, and adopts it into @p sched.
+ *
+ * The pool must outlive all coroutines spawned through this API.
+ *
+ * @param sched Scheduler
+ * @param pool  Coroutine object pool
+ * @param fn    Entry function
+ * @param arg   Argument passed to entry function
+ * @return Coroutine handle or NULL on failure
+ */
+CXX_C_API coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
+                                    coro_object_pool_t *pool,
+                                    coro_fn fn,
+                                    void *arg);
+
+/**
  * @brief Release a coroutine back to the pool
  * @param pool Pool handle
  * @param co Coroutine to release (must have been acquired from this pool)

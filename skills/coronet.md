@@ -5,9 +5,10 @@
 CoroNet 是 TurboNet 的协程网络层，负责 coroutine-aware socket、stream/datagram transport、TLS、WebSocket、KCP、pipe、DNS、连接池和跨平台事件循环。
 
 **边界**：
-- CoroNet：通用网络 transport primitive、coroutine 调度、socket/stream/datagram、TLS/WS/KCP/Pipe。
+- Utils：`turbo_coro.h` coroutine primitive、`turbo_coro_pool.h` 通用协程池、错误码、内存池、字符串、日志、线程和无锁结构。
+- CoroNet：event-loop/context integration、coroutine-aware socket/stream/datagram、TLS/WS/KCP/Pipe、DNS、连接池和网络生命周期管理。
 - TProxy：SOCKS5 TCP connect、SOCKS5 UDP ASSOCIATE、HTTP/SOCKS proxy routing。不要把 SOCKS5 代理语义放回 CoroNet。
-- Utils：错误码、内存池、字符串、日志、线程和无锁结构。CoroNet 新代码优先复用 `turbo_error.h`、`tstr_t`/`tstr_v`、`mem_buffer_t`、`tlog`。
+- CoroNet 新代码优先复用 Utils 的 `turbo_error.h`、`tstr_t`/`tstr_v`、`mem_buffer_t`、`tlog`、`coro_t` 和 `turbo_coro_pool_t`。
 
 ---
 
@@ -19,13 +20,16 @@ CoroNet 是 TurboNet 的协程网络层，负责 coroutine-aware socket、stream
 - `coro_context_spawn()`：默认协程入口，自动生命周期管理，下一次 scheduler tick 才运行。
 - `coro_task_create()` + `coro_task_start()`：需要 lazy task、取消或组合时使用。
 - `coro_when_all()` / `coro_when_any()`：只能在 coroutine 内调用。
-- `coro_create()` / `coro_resume()` / `coro_destroy()`：高级手动 API，除非明确需要，不用于普通 I/O 代码。
+- `coro_create()` / `coro_resume()` / `coro_destroy()` / `coro_scheduler_*()`：来自 Utils 的高级手动 API，除非实现 runtime、executor 或测试 scheduler，不用于普通 I/O 代码。
+- `turbo_coro_pool_*()`：来自 Utils 的通用协程池；用于不依赖 event loop 的 coroutine shell reuse。
+- `coro_object_pool_*()`：CoroNet 兼容/特例 wrapper，把 `coro_context_t->arena` 接入 `turbo_coro_pool_*()`；普通 CoroNet 业务不要直接管理它，优先走 `coro_context_spawn()` 或 task API。
 
 **规则**：
 - 不在 event loop 线程内做阻塞 I/O、长时间 CPU 计算或等待外部线程 join。
 - 从其他线程回到 loop 线程用 `coro_post()`。
 - `coro_context_run(ctx, TURBO_RUN_DEFAULT)` 用于主循环；测试和嵌入式驱动可用 `TURBO_RUN_ONCE` / `TURBO_RUN_NOWAIT`。
 - context wrapping 外部 loop 时，caller 拥有 loop；`coro_context_destroy()` 不释放外部 loop。
+- 不要在 CoroNet 中重新实现 coroutine free-list；需要复用 coroutine shell 时用 `turbo_coro_pool_t`，需要 context arena 绑定时用现有 `coro_object_pool_*` 适配。
 
 ### Transport 基础层
 
@@ -126,6 +130,7 @@ if (rc == 0 && data) {
 | WebSocket | `test_stream_ws`, `test_coro_ws_server`, `test_websocket_protocol` |
 | KCP/FEC | `test_kcp` |
 | coroutine lifecycle/task | `test_coro`, `test_coro_auto_cleanup`, `test_lazy_task` |
+| utils coroutine primitive/pool | `test_turbo_coro` |
 | connection pool | `test_coro_pool` |
 
 Windows preset 示例：

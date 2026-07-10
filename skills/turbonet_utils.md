@@ -1383,6 +1383,119 @@ turbo_threadpool_destroy(pool);
 
 ---
 
+### 协程原语与通用协程池 (`turbo_coro.h`, `turbo_coro_pool.h`)
+
+`turbo_coro.h` 是 Utils 层的 stackful coroutine primitive，包装 `minicoro`，只负责 coroutine 生命周期、yield/resume、轻量 scheduler 和生命周期 hook。它不依赖 CoroNet、socket、event loop 或 `coro_context_t`。
+
+**核心类型**：
+- `coro_t` - coroutine 句柄
+- `coro_scheduler_t` - 简单协作式 scheduler
+- `coro_fn` - coroutine entry 回调
+- `turbo_coro_pool_t` - 通用 coroutine reuse pool
+- `turbo_coro_pool_config_t` - 通用 pool 配置
+
+**Coroutine primitive API**：
+```c
+coro_t *coro_create(coro_fn fn, void *arg, const coro_opts_t *opts);
+void coro_destroy(coro_t *co);
+
+int coro_resume(coro_t *co);
+int coro_yield(void);
+int coro_reset(coro_t *co, coro_fn fn, void *arg);
+coro_state_t coro_state(coro_t *co);
+int coro_alive(coro_t *co);
+
+void *coro_get_data(coro_t *co);
+void coro_set_data(coro_t *co, void *data);
+
+// Reserved for lifecycle adapters such as turbo_coro_pool_t.
+void *coro_get_owner_data(coro_t *co);
+void coro_set_owner_data(coro_t *co, void *data);
+
+coro_scheduler_t *coro_scheduler_create(void);
+void coro_scheduler_destroy(coro_scheduler_t *sched);
+coro_t *coro_spawn(coro_scheduler_t *sched, coro_fn fn, void *arg, const coro_opts_t *opts);
+void coro_scheduler_adopt(coro_scheduler_t *sched, coro_t *co);
+int coro_scheduler_tick(coro_scheduler_t *sched);
+void coro_scheduler_run(coro_scheduler_t *sched);
+int coro_scheduler_count(coro_scheduler_t *sched);
+int coro_scheduler_has_ready(coro_scheduler_t *sched);
+
+void coro_set_waiting_for_io(coro_t *co, int waiting);
+void coro_set_cleanup(coro_t *co, void (*fn)(coro_t *co, void *arg), void *arg);
+void coro_set_discard(coro_t *co, void (*fn)(coro_t *co, void *arg), void *arg);
+void coro_detach_scheduler(coro_t *co);
+```
+
+**通用协程池 API**：
+```c
+turbo_coro_pool_t *turbo_coro_pool_create(const turbo_coro_pool_config_t *config);
+void turbo_coro_pool_destroy(turbo_coro_pool_t *pool);
+
+coro_t *turbo_coro_pool_acquire(turbo_coro_pool_t *pool, coro_fn fn, void *arg);
+void turbo_coro_pool_release(turbo_coro_pool_t *pool, coro_t *co);
+void turbo_coro_pool_discard_coro(coro_t *co);
+void turbo_coro_pool_forget_active(turbo_coro_pool_t *pool);
+
+coro_t *turbo_coro_spawn_pooled(coro_scheduler_t *sched,
+                                turbo_coro_pool_t *pool,
+                                coro_fn fn,
+                                void *arg);
+
+size_t turbo_coro_pool_free_count(const turbo_coro_pool_t *pool);
+size_t turbo_coro_pool_active_count(const turbo_coro_pool_t *pool);
+size_t turbo_coro_pool_capacity(const turbo_coro_pool_t *pool);
+```
+
+**配置与 allocator hook**：
+```c
+turbo_coro_pool_config_t cfg = {
+    .initial_capacity = 16,
+    .max_capacity = 1024,
+    .stack_size = 0,       // minicoro default
+    .storage_size = 0,     // minicoro default
+    .alloc_fn = NULL,      // NULL = default calloc for entry shells
+    .free_fn = NULL,
+    .allocator_data = NULL
+};
+```
+
+`alloc_fn/free_fn` 只管理 pool entry shell，不管理 coroutine stack 本体。CoroNet 的 `coro_object_pool_*` 会把 `coro_context_t->arena` 作为 entry allocator 传给这里；普通 Utils 用户直接用默认 allocator。
+
+**生命周期规则**：
+- `turbo_coro_pool_release()` 只接受 `coro_DEAD` 状态的 coroutine；live coroutine 不会被放回 pool。
+- scheduler 正常跑完 pooled coroutine 时，`turbo_coro_spawn_pooled()` 自动设置 cleanup，把 coroutine 归还 pool。
+- `coro_scheduler_destroy()` 强制销毁 live coroutine 时，pool 通过 `coro_set_discard()` 回收 bookkeeping，避免 pool active count 或 entry 指针悬空。
+- `coro_get_data()/coro_set_data()` 属于用户数据；pool 元数据必须使用 `coro_get_owner_data()/coro_set_owner_data()`。
+- 通用 pool 默认单线程使用；跨线程传递 coroutine 需要由上层 executor/threadpool 定义所有权转移和同步。
+
+**示例**：
+```c
+static void worker(coro_t *co, void *arg) {
+    int *count = (int *)arg;
+    (*count)++;
+    coro_yield();
+    (*count)++;
+}
+
+turbo_coro_pool_t *pool = turbo_coro_pool_create(NULL);
+coro_scheduler_t *sched = coro_scheduler_create();
+int count = 0;
+
+turbo_coro_spawn_pooled(sched, pool, worker, &count);
+coro_scheduler_run(sched);
+
+coro_scheduler_destroy(sched);
+turbo_coro_pool_destroy(pool);
+```
+
+**边界**：
+- Utils 只提供 coroutine primitive 与通用 pool。
+- CoroNet 的 `coro_context_spawn()`、`coro_task_*`、socket wait/wake、event-loop integration 属于 CoroNet。
+- CoroNet 的 `coro_object_pool_*` 是 `turbo_coro_pool_*` 的 context/arena 特例 wrapper，不应反向进入 Utils。
+
+---
+
 ## 无锁数据结构
 
 ### Disruptor (`disruptor.h`)
@@ -1848,6 +1961,8 @@ TLOG_INFO("port={}, path={}", port, path);
 | 读写锁 | `turbo_rwlock_t` | `turbo_mutex_t` | 手写双锁 |
 | 线程创建 | `turbo_thread_create()` | C11 `thrd_create` | 平台线程 API 直接使用 |
 | 线程池 | `turbo_threadpool_create()` | 手写线程池 | 每任务创建线程 |
+| 协程原语 | `coro_create()`/`coro_spawn()` | CoroNet context API | 直接使用 `minicoro.h` |
+| 协程对象复用 | `turbo_coro_pool_t` | CoroNet `coro_object_pool_*` 特例 | 手写 coroutine free-list |
 | MPMC 任务队列 | `disruptor_t` worker-pool mode | `turbo_threadpool_t` | 手写无锁队列 |
 | 事件广播/流水线 | `disruptor_t` broadcast mode + topology | 带锁队列 | 多份独立队列复制消息 |
 | SPSC 队列 | `ring_buffer_spsc` | `disruptor_t` | 带锁队列 |
@@ -1877,6 +1992,8 @@ TLOG_INFO("port={}, path={}", port, path);
 | `turbo_mutex_t` | - | 微秒级 | TurboNet 跨平台封装 |
 | `turbo_rwlock_t` | - | 微秒级 | 多读单写 |
 | `turbo_threadpool_t` | - | 毫秒级 | 固定线程，disruptor worker-pool 队列 |
+| `coro_t` / scheduler | - | 协作式 tick | stackful coroutine primitive，单线程调度 |
+| `turbo_coro_pool_t` | - | O(1) acquire/release | coroutine shell reuse，可插拔 entry allocator |
 | `disruptor_t` | 数百万 ops/s | 微秒级 | broadcast/worker-pool/topology，预分配环形 |
 | `ring_buffer_spsc` | 数千万 ops/s | 纳秒级 | SPSC，无锁 |
 | `bucket_priority_queue` | - | O(1) push/pop | 4 个环形缓冲区 |

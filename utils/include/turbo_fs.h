@@ -84,6 +84,71 @@ CXX_C_API int turbo_fs_write_file(const char *path, const turbo_fs_buf_t *buf);
 CXX_C_API int turbo_fs_stat(const char *path, turbo_fs_stat_t *stat);
 
 /**
+ * @brief Get file information without following symbolic links when supported
+ *
+ * @param path Path to file, directory, or symbolic link
+ * @param stat Pointer to turbo_fs_stat_t to fill with file information
+ * @return 0 on success, negative error code on failure
+ *
+ * @note On POSIX this uses lstat(). On Windows this reports reparse-point
+ *       symlinks using Win32 file attributes.
+ */
+CXX_C_API int turbo_fs_lstat(const char *path, turbo_fs_stat_t *stat);
+
+/**
+ * @brief Change file permissions
+ *
+ * @param path Path to file
+ * @param mode Permission bits, e.g. 0644
+ * @return 0 on success, negative error code on failure
+ *
+ * @note Windows maps this to read-only/read-write CRT permissions.
+ */
+CXX_C_API int turbo_fs_chmod(const char *path, int mode);
+
+// Access check flags for turbo_fs_access()
+#define TURBO_FS_ACCESS_EXISTS 0x00
+#define TURBO_FS_ACCESS_READ   0x01
+#define TURBO_FS_ACCESS_WRITE  0x02
+#define TURBO_FS_ACCESS_EXEC   0x04
+
+/**
+ * @brief Check file accessibility
+ *
+ * @param path Path to check
+ * @param mode TURBO_FS_ACCESS_* bitmask, or TURBO_FS_ACCESS_EXISTS
+ * @return 0 if accessible, negative error code otherwise
+ *
+ * @note Windows CRT access checks read/write/existence. Execute is treated as
+ *       existence on Windows because executable permission is not a mode bit.
+ */
+CXX_C_API int turbo_fs_access(const char *path, int mode);
+
+/**
+ * @brief Create a symbolic link
+ *
+ * @param target Link target path
+ * @param link_path Path of the symlink to create
+ * @param is_directory Non-zero when target is a directory
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_fs_symlink(const char *target, const char *link_path, int is_directory);
+
+/**
+ * @brief Read a symbolic link target into buffer
+ *
+ * @param path Symlink path
+ * @param buffer Destination buffer
+ * @param buffer_size Destination size including trailing NUL
+ * @return Number of bytes written, or negative error code on failure
+ *
+ * @note POSIX returns the symlink payload. Windows returns the resolved final
+ *       path for the reparse point because Win32 does not expose POSIX readlink
+ *       semantics through the CRT.
+ */
+CXX_C_API int turbo_fs_readlink(const char *path, char *buffer, size_t buffer_size);
+
+/**
  * @brief Create a directory
  *
  * @param path Directory path to create
@@ -198,6 +263,11 @@ CXX_C_API int turbo_fs_path_basename(const char *path, char *basename, size_t ba
 #define TURBO_FS_O_TRUNC 0x0200
 #define TURBO_FS_O_APPEND 0x0400
 
+// Advisory file lock flags for turbo_fs_lock()
+#define TURBO_FS_LOCK_SHARED    0x01
+#define TURBO_FS_LOCK_EXCLUSIVE 0x02
+#define TURBO_FS_LOCK_NONBLOCK  0x04
+
 // File handle type
 typedef int turbo_file_t;
 #define TURBO_INVALID_FILE (-1)
@@ -223,6 +293,8 @@ CXX_C_API turbo_file_t turbo_fs_open(const char *path, int flags, int mode);
  * @param buf Buffer to store read data
  * @param len Maximum number of bytes to read
  * @return Number of bytes read, or negative error code
+ *
+ * @note len must be <= INT_MAX because the return type is int
  */
 CXX_C_API int turbo_fs_read(turbo_file_t fd, char *buf, size_t len);
 
@@ -237,6 +309,8 @@ CXX_C_API int turbo_fs_read(turbo_file_t fd, char *buf, size_t len);
  * @param len Maximum number of bytes to read
  * @param offset Byte offset in the file to read from
  * @return Number of bytes read, or negative error code
+ *
+ * @note len must be <= INT_MAX because the return type is int
  */
 CXX_C_API int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t offset);
 
@@ -248,6 +322,8 @@ CXX_C_API int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t off
  * @param len Number of bytes to write
  * @param offset Byte offset in the file to write to
  * @return Number of bytes written, or negative error code
+ *
+ * @note len must be <= INT_MAX because the return type is int
  */
 CXX_C_API int turbo_fs_pwrite(turbo_file_t fd, const char *data, size_t len, int64_t offset);
 
@@ -258,6 +334,8 @@ CXX_C_API int turbo_fs_pwrite(turbo_file_t fd, const char *data, size_t len, int
  * @param data Data to write
  * @param len Number of bytes to write
  * @return Number of bytes written, or negative error code
+ *
+ * @note len must be <= INT_MAX because the return type is int
  */
 CXX_C_API int turbo_fs_write(turbo_file_t fd, const char *data, size_t len);
 
@@ -285,6 +363,31 @@ CXX_C_API int turbo_fs_ftruncate(turbo_file_t fd, int64_t length);
  * @return 0 on success, negative error code on failure
  */
 CXX_C_API int turbo_fs_fsync(turbo_file_t fd);
+
+/**
+ * @brief Acquire an advisory byte-range lock
+ *
+ * @param fd File handle
+ * @param flags TURBO_FS_LOCK_SHARED or TURBO_FS_LOCK_EXCLUSIVE, optionally
+ *              OR'd with TURBO_FS_LOCK_NONBLOCK
+ * @param offset Start offset
+ * @param len Length to lock; 0 means to EOF
+ * @return 0 on success, negative error code on failure
+ *
+ * @note POSIX uses fcntl record locks. Windows uses LockFileEx. Locks are
+ *       advisory and process/OS semantics differ across platforms.
+ */
+CXX_C_API int turbo_fs_lock(turbo_file_t fd, int flags, int64_t offset, uint64_t len);
+
+/**
+ * @brief Release an advisory byte-range lock
+ *
+ * @param fd File handle
+ * @param offset Start offset
+ * @param len Length to unlock; 0 means to EOF
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int turbo_fs_unlock(turbo_file_t fd, int64_t offset, uint64_t len);
 
 /**
  * @brief Rename/move a file

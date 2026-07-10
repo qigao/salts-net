@@ -1024,6 +1024,8 @@ spec("Stream") {
     }
 
     it("should reject invalid socket helper arguments without crashing") {
+        struct sockaddr_storage addr;
+
         check_int_eq(coro_socket_connect_pipe(NULL, "\\\\.\\pipe\\missing"), TURBO_EINVAL);
         check_int_eq(coro_socket_connect_ws(NULL, "127.0.0.1", 80, "/", 0), TURBO_EINVAL);
         check_int_eq(coro_socket_send(NULL, "x", 1), TURBO_EINVAL);
@@ -1033,6 +1035,11 @@ spec("Stream") {
         check_int_eq(coro_socket_bind(NULL, NULL), TURBO_EINVAL);
         check_int_eq(coro_socket_listen(NULL, 1), TURBO_EINVAL);
         check_int_eq(coro_socket_accept(NULL, NULL), TURBO_EINVAL);
+        check(coro_socket_get_context(NULL) == NULL);
+        coro_socket_set_user_data(NULL, NULL);
+        check(coro_socket_get_user_data(NULL) == NULL);
+        check_int_eq(coro_socket_get_local_address(NULL, &addr), TURBO_EINVAL);
+        check_int_eq(coro_socket_get_local_address((coro_socket_t *)1, NULL), TURBO_EINVAL);
     }
 
     it("should honor reuse_port for tcp listeners") {

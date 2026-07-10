@@ -52,6 +52,9 @@ add_executable(tinytest_filter_output ${FILTER_OUTPUT_SOURCES})
 set(JUNIT_COLOR_SOURCES junit_color_cases.c tinytest.h)
 add_executable(tinytest_junit_color ${JUNIT_COLOR_SOURCES})
 
+set(BENCHMARK_INVALID_SOURCES benchmark_invalid_cases.c tinytest.h)
+add_executable(tinytest_benchmark_invalid ${BENCHMARK_INVALID_SOURCES})
+
 add_test(
   NAME tinytest_focus_tap
   COMMAND ${CMAKE_COMMAND}
@@ -77,6 +80,12 @@ add_test(
           -DTEST_EXE=$<TARGET_FILE:tinytest_junit_color>
           -DJUNIT_FILE=${CMAKE_CURRENT_BINARY_DIR}/tinytest-color.junit.xml
           -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_junit_color.cmake)
+
+add_test(
+  NAME tinytest_benchmark_invalid
+  COMMAND ${CMAKE_COMMAND}
+          -DTEST_EXE=$<TARGET_FILE:tinytest_benchmark_invalid>
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_benchmark_invalid.cmake)
 
 if(CMAKE_CXX_COMPILER OR CMAKE_CXX_COMPILER_ID)
   set(EXAMPLE_CPP_SOURCES example.cpp tinytest.h)
@@ -119,6 +128,7 @@ set(TINYTEST_TARGETS
     tinytest_focus_output
     tinytest_filter_output
     tinytest_junit_color
+    tinytest_benchmark_invalid
     junit_to_html)
 
 if(TARGET example_cpp_test)

@@ -51,8 +51,8 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     int rc = mem_init(&pool, 0);
     check_size_eq((size_t)rc, 0);
     
-    check_size_eq(atomic_load(&pool.total_allocated), 0);
-    check_size_eq(atomic_load(&pool.total_used), 0);
+    check_size_eq(mem_pool_total_allocated(&pool), 0);
+    check_size_eq(mem_pool_total_used(&pool), 0);
     
     mem_destroy(&pool);
   }
@@ -68,8 +68,8 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     check_not_null(p2);
     check_ptr_ne(p1, p2);
     
-    check_size_gt(atomic_load(&pool.total_allocated), 0);
-    check_size_gt(atomic_load(&pool.total_used), 64);
+    check_size_gt(mem_pool_total_allocated(&pool), 0);
+    check_size_gt(mem_pool_total_used(&pool), 64);
     
     mem_free(&pool, p1);
     mem_free(&pool, p2);
@@ -85,7 +85,7 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     void* p = mem_alloc(&pool, large_size);
     check_not_null(p);
     
-    check_size_ge(atomic_load(&pool.total_used), large_size);
+    check_size_ge(mem_pool_total_used(&pool), large_size);
     
     mem_free(&pool, p);
     mem_destroy(&pool);
@@ -97,14 +97,14 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     
     mem_buffer_t* buffer = mem_get_buffer(&pool, 100);
     check_not_null(buffer);
-    check_size_eq((size_t)atomic_load(&buffer->ref_count), 1);
-    check_ptr_eq(buffer->pool, &pool);
+    check_size_eq((size_t)mem_buffer_ref_count(buffer), 1);
+    check_ptr_eq(mem_buffer_pool(buffer), &pool);
     
     mem_ref(buffer);
-    check_size_eq((size_t)atomic_load(&buffer->ref_count), 2);
+    check_size_eq((size_t)mem_buffer_ref_count(buffer), 2);
     
     mem_unref(buffer);
-    check_size_eq((size_t)atomic_load(&buffer->ref_count), 1);
+    check_size_eq((size_t)mem_buffer_ref_count(buffer), 1);
     
     mem_release(buffer);
     
@@ -116,13 +116,13 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     mem_init(&pool, 0);
     
     mem_buffer_t* b1 = mem_get_buffer(&pool, 100);
-    void* data1 = b1->data;
+    void* data1 = mem_buffer_data(b1);
     b1->used = 17;
     mem_release(b1);
     
     mem_buffer_t* b2 = mem_get_buffer(&pool, 100);
-    check_ptr_eq(b2->data, data1);
-    check_size_eq(b2->used, 0);
+    check_ptr_eq(mem_buffer_data(b2), data1);
+    check_size_eq(mem_buffer_used(b2), 0);
     
     mem_release(b2);
     mem_destroy(&pool);
@@ -138,13 +138,13 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
         buffer->used = strlen(buffer->data) + 1;
         
         mem_slice_t slice = mem_slice(buffer, 6, 5);
-        check_ptr_eq(slice.data, buffer->data + 6);
+        check_ptr_eq(slice.data, mem_buffer_data(buffer) + 6);
         check_size_eq(slice.length, 5);
         check_ptr_eq(slice.buffer, buffer);
-        check_size_eq((size_t)atomic_load(&buffer->ref_count), 2);
+        check_size_eq((size_t)mem_buffer_ref_count(buffer), 2);
         
         mem_slice_release(&slice);
-        check_size_eq((size_t)atomic_load(&buffer->ref_count), 1);
+        check_size_eq((size_t)mem_buffer_ref_count(buffer), 1);
         
         mem_release(buffer);
     }
@@ -157,7 +157,7 @@ spec("Turbo Buffer (mem_pool_t) Tests") {
     
     check_not_null(buffer);
     check_size_eq((size_t)mem_is_external(buffer), 1);
-    check_ptr_eq(buffer->data, data);
+    check_ptr_eq(mem_buffer_data(buffer), data);
     
     mem_release(buffer);
   }

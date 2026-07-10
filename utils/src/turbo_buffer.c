@@ -564,3 +564,39 @@ mem_buffer_t* mem_wrap_external(void* data, size_t size, void (*free_cb)(void*, 
 int mem_is_external(const mem_buffer_t* buffer) {
     return buffer ? buffer->is_external : 0;
 }
+
+size_t mem_pool_total_allocated(const mem_pool_t* pool) {
+    return pool ? atomic_load(&((mem_pool_t*)pool)->total_allocated) : 0;
+}
+
+size_t mem_pool_total_used(const mem_pool_t* pool) {
+    return pool ? atomic_load(&((mem_pool_t*)pool)->total_used) : 0;
+}
+
+size_t mem_pool_recycle_count(const mem_pool_t* pool) {
+    return pool ? atomic_load(&((mem_pool_t*)pool)->recycle_count) : 0;
+}
+
+char* mem_buffer_data(mem_buffer_t* buffer) {
+    return buffer ? buffer->data : NULL;
+}
+
+const char* mem_buffer_const_data(const mem_buffer_t* buffer) {
+    return buffer ? buffer->data : NULL;
+}
+
+size_t mem_buffer_capacity(const mem_buffer_t* buffer) {
+    return buffer ? buffer->capacity : 0;
+}
+
+size_t mem_buffer_used(const mem_buffer_t* buffer) {
+    return buffer ? buffer->used : 0;
+}
+
+uint32_t mem_buffer_ref_count(const mem_buffer_t* buffer) {
+    return buffer ? atomic_load(&((mem_buffer_t*)buffer)->ref_count) : 0;
+}
+
+const mem_pool_t* mem_buffer_pool(const mem_buffer_t* buffer) {
+    return buffer ? buffer->pool : NULL;
+}

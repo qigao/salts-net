@@ -136,6 +136,30 @@ spec("FMT Tests") {
       check_str_eq(buf, "Padded: 00042");
     }
 
+    it("should handle large formatted width without truncating to internal temp size") {
+      char buf[BUFFER_SIZE];
+      fmt_arg_t args[] = {fmt_arg_int(7)};
+      int len = fmt_print(buf, sizeof(buf), "{:300d}", args, 1);
+      check_int_eq(len, 300);
+      check_size_eq(strlen(buf), 300);
+      check_int_eq(buf[299], '7');
+      for (int i = 0; i < 299; ++i) {
+        check_int_eq(buf[i], ' ');
+      }
+    }
+
+    it("should not truncate long strings with string specifiers") {
+      char buf[BUFFER_SIZE];
+      char long_str[400];
+      memset(long_str, 'A', sizeof(long_str) - 1);
+      long_str[sizeof(long_str) - 1] = '\0';
+
+      fmt_arg_t args[] = {fmt_arg_str(long_str)};
+      int len = fmt_print(buf, sizeof(buf), "{:s}", args, 1);
+      check_int_eq(len, (int)strlen(long_str));
+      check_str_eq(buf, long_str);
+    }
+
     it("should handle escape sequences") {
       char buf[BUFFER_SIZE];
       fmt_arg_t args[] = {fmt_arg_int(42)};
@@ -156,7 +180,13 @@ spec("FMT Tests") {
       check_str_eq(buf, "Value: (null)");
 
       check_int_eq(fmt_print(NULL, 0, "test", NULL, 0), 0);
+      strcpy(buf, "stale");
       check_int_eq(fmt_print(buf, sizeof(buf), NULL, NULL, 0), 0);
+      check_str_eq(buf, "");
+
+      strcpy(buf, "stale");
+      check_int_eq(fmt_print(buf, sizeof(buf), "{}", NULL, 1), 0);
+      check_str_eq(buf, "");
     }
 
     it("should protect against buffer overflow") {
@@ -175,6 +205,9 @@ spec("FMT Tests") {
       fmt_print(buf, sizeof(buf), "{} {} {}", args, 1);
       check_not_null(strstr(buf, "1"));
       check_not_null(strstr(buf, "{}"));
+
+      fmt_print(buf, sizeof(buf), "{} {:x} end", args, 1);
+      check_str_eq(buf, "1 {:x} end");
     }
 
     it("should handle large numbers") {
@@ -240,6 +273,16 @@ spec("FMT Tests") {
       fmt_arg_t args[] = {fmt_arg_strv(empty)};
       fmt_print(buf, sizeof(buf), "val={}", args, 1);
       check_str_eq(buf, "val=(null)");
+    }
+
+    it("should clamp oversized tstr_v lengths to output capacity") {
+      char buf[8];
+      char source[16] = "abcdefghijkl";
+      tstr_v invalid_len = tstr_v_from_buf(source, SIZE_MAX);
+      fmt_arg_t args[] = {fmt_arg_strv(invalid_len)};
+      int len = fmt_print(buf, sizeof(buf), "{}", args, 1);
+      check_int_eq(len, 7);
+      check_str_eq(buf, "abcdefg");
     }
 
 #if FMT_HAS_GENERIC
@@ -321,6 +364,20 @@ spec("FMT Tests") {
       check(strlen(buf) > 0);
       check(strstr(buf, ".") == NULL); /* custom format suppresses ms */
       printf("  custom format: %s\n", buf);
+    }
+
+    it("should handle invalid time values deterministically") {
+      char buf[BUFFER_SIZE];
+      turbo_timeval_t tv;
+      tv.tv_sec = INT64_MAX;
+      tv.tv_usec = 0;
+      fmt_arg_t args[] = {fmt_arg_timeval(tv)};
+      fmt_print(buf, sizeof(buf), "{}", args, 1);
+#ifdef _WIN32
+      check_str_eq(buf, "(invalid time)");
+#else
+      check(strlen(buf) > 0);
+#endif
     }
 
 #if FMT_HAS_GENERIC

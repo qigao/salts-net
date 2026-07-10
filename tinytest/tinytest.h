@@ -174,6 +174,29 @@ static void __bdd_indent__(FILE *fp, size_t level);
 typedef struct __bdd_config_type__ __bdd_config_type__;
 typedef void (*__bdd_spec_fn__)(__bdd_config_type__ *__bdd_config__);
 
+typedef enum __bdd_error_code__ {
+  __BDD_ERR_OK__ = 0,
+  __BDD_ERR_IO__ = -1,
+  __BDD_ERR_TIME__ = -2,
+  __BDD_ERR_FORMAT__ = -3
+} __bdd_error_code__;
+
+typedef struct __bdd_result__ {
+  bool ok;
+  __bdd_error_code__ error;
+  const char *message;
+} __bdd_result__;
+
+static inline __bdd_result__ __bdd_result_ok__(void) {
+  __bdd_result__ result = {true, __BDD_ERR_OK__, NULL};
+  return result;
+}
+
+static inline __bdd_result__ __bdd_result_error__(__bdd_error_code__ error, const char *message) {
+  __bdd_result__ result = {false, error, message};
+  return result;
+}
+
 typedef struct __bdd_spec_entry__ {
   const char *name;
   __bdd_spec_fn__ fn;
@@ -1263,13 +1286,22 @@ static char *__bdd_vformat__(const char *format, va_list va) {
   va_copy(va2, va);
   int len = vsnprintf(NULL, 0, format, va2);
   va_end(va2);
+  if (len < 0) {
+    fprintf(stderr, "tinytest: format error while building message\n");
+    abort();
+  }
 
   char *result = __BDD_CAST(char *, malloc((size_t)len + 1));
   if (!result) {
     perror("malloc(result)");
     abort();
   }
-  vsnprintf(result, (size_t)len + 1, format, va);
+  int written = vsnprintf(result, (size_t)len + 1, format, va);
+  if (written < 0 || written > len) {
+    free(result);
+    fprintf(stderr, "tinytest: format error while writing message\n");
+    abort();
+  }
   return result;
 }
 
@@ -1383,19 +1415,25 @@ static void __bdd_xml_escape__(FILE *f, const char *str) {
   }
 }
 
-static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *steps,
-                                   size_t test_count) {
+static __bdd_result__ __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *steps,
+                                            size_t test_count) {
   FILE *f = fopen(config->junit_file, "w");
   if (!f) {
-    fprintf(stderr, "Error: Could not open JUnit output file: %s\n", config->junit_file);
-    return;
+    return __bdd_result_error__(__BDD_ERR_IO__, "could not open JUnit output file");
   }
 
   /* Get current timestamp in ISO 8601 format */
   time_t now = time(NULL);
   struct tm *tm_info = gmtime(&now);
+  if (!tm_info) {
+    fclose(f);
+    return __bdd_result_error__(__BDD_ERR_TIME__, "could not build JUnit timestamp");
+  }
   char timestamp[32];
-  strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", tm_info);
+  if (strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", tm_info) == 0) {
+    fclose(f);
+    return __bdd_result_error__(__BDD_ERR_TIME__, "could not format JUnit timestamp");
+  }
 
   /* Count skipped tests */
   size_t skipped_count = 0;
@@ -1470,7 +1508,14 @@ static void __bdd_generate_junit__(__bdd_config_type__ *config, __bdd_array__ *s
 
   fprintf(f, "  </testsuite>\n");
   fprintf(f, "</testsuites>\n");
-  fclose(f);
+  if (ferror(f)) {
+    fclose(f);
+    return __bdd_result_error__(__BDD_ERR_IO__, "could not write complete JUnit output");
+  }
+  if (fclose(f) != 0) {
+    return __bdd_result_error__(__BDD_ERR_IO__, "could not close JUnit output file");
+  }
+  return __bdd_result_ok__();
 }
 
 #ifdef __cplusplus
@@ -1728,8 +1773,13 @@ int main(int argc, char **argv) {
   }
 
   /* Generate JUnit XML report if requested - must be done before freeing steps */
+  int exit_code = config.failed_test_count > 0 ? 1 : 0;
   if (config.junit_file) {
-    __bdd_generate_junit__(&config, all_steps, total_test_count);
+    __bdd_result__ junit_result = __bdd_generate_junit__(&config, all_steps, total_test_count);
+    if (!junit_result.ok) {
+      fprintf(stderr, "Error: %s: %s\n", junit_result.message, config.junit_file);
+      exit_code = 1;
+    }
   }
 
   for (size_t i = 0; i < all_nodes->size; ++i) {
@@ -1758,7 +1808,7 @@ int main(int argc, char **argv) {
   __bdd_bench_cleanup__(&config);
   __bdd_cleanup_specs__();
 
-  return config.failed_test_count > 0 ? 1 : 0;
+  return exit_code;
 }
 #endif /* TINYTEST_NO_MAIN */
 
@@ -2575,6 +2625,45 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
 
 #define check_warn(...) __BDD_MACRO__(__BDD_WARN_, __VA_ARGS__)
 
+static inline void __bdd_fail_framework__(__bdd_config_type__ *config, const char *file,
+                                          const char *line, const char *format, ...) {
+  if (!config || config->run != __BDD_TEST_RUN__ || !config->current_test) {
+    fprintf(stderr, "tinytest: framework failure outside an active test\n");
+    abort();
+  }
+
+  va_list va;
+  va_start(va, format);
+  char *message = __bdd_vformat__(format, va);
+  va_end(va);
+
+  ++config->assertion_count;
+  ++config->assertion_failed_count;
+  snprintf(config->location_buf, sizeof(config->location_buf), "at %s:%s", file, line);
+  config->location = config->location_buf;
+
+  const char *prefix = "Framework error: ";
+  size_t bufflen = strlen(prefix) + strlen(message) + 1;
+  config->error = __BDD_CAST(char *, calloc(bufflen, sizeof(char)));
+  if (!config->error) {
+    free(message);
+    perror("calloc(config->error)");
+    abort();
+  }
+  snprintf(config->error, bufflen, "%s%s", prefix, message);
+  free(message);
+  __bdd_longjmp_fail__(config);
+}
+
+static inline bool __bdd_bench_require_iterations__(__bdd_config_type__ *config, const char *title,
+                                                    size_t iters, const char *file,
+                                                    const char *line) {
+  if (iters > 0) return true;
+  __bdd_fail_framework__(config, file, line, "benchmark \"%s\" requires at least one iteration",
+                         title ? title : "(null)");
+  return false;
+}
+
 /* --- Info context --- */
 #define info(...)                                                                                  \
   do {                                                                                             \
@@ -2624,12 +2713,16 @@ static inline bool __bdd_str_array_eq__(const char *const *actual, const char *c
         double __max;                                                                              \
         double __sum;                                                                              \
         double __scale;                                                                            \
+        const char *__title;                                                                       \
       } __bdd_bm__ = {0, __BDD_CAST(size_t, (iters)), 1e18, 0.0, 0.0,                              \
-                      __BDD_CAST(double, (scale))};                                                \
-      !__bdd_bm__.__done; __bdd_bm__.__done = 1,                                                   \
+                      __BDD_CAST(double, (scale)), (title)};                                       \
+      !__bdd_bm__.__done &&                                                                        \
+      __bdd_bench_require_iterations__(__bdd_active_config__, __bdd_bm__.__title,                  \
+                                       __bdd_bm__.__n, __FILE__, __STRING__LINE__);                \
+      __bdd_bm__.__done = 1,                                                                       \
         __bdd_bench_print__(                                                                       \
-            __bdd_active_config__, (title), __bdd_bm__.__n, __bdd_bm__.__sum, __bdd_bm__.__min,  \
-            __bdd_bm__.__max, __bdd_bm__.__scale,                                                 \
+            __bdd_active_config__, __bdd_bm__.__title, __bdd_bm__.__n, __bdd_bm__.__sum,          \
+            __bdd_bm__.__min, __bdd_bm__.__max, __bdd_bm__.__scale,                               \
             __bdd_active_config__->current_test ? __bdd_active_config__->current_test->level + 1  \
                                                 : 1,                                               \
             __bdd_active_config__->use_color))                                                     \

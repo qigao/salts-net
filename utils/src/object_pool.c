@@ -1,5 +1,6 @@
 #include "object_pool.h"
 
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,6 +84,51 @@ static bool object_pool_grow(object_pool_t *pool, size_t count) {
   pool->chunks = chunk;
 
   return true;
+}
+
+static bool object_pool_owns_allocated_object(const object_pool_t *pool, const void *obj) {
+  const object_pool_chunk_t *chunk;
+  uintptr_t ptr;
+
+  if (!pool || !obj) {
+    return false;
+  }
+
+  ptr = (uintptr_t)obj;
+  for (chunk = pool->chunks; chunk != NULL; chunk = chunk->next) {
+    uintptr_t start = (uintptr_t)chunk->memory;
+    uintptr_t end = start + chunk->capacity * pool->object_size;
+    if (ptr >= start && ptr < end) {
+      uintptr_t bump = (uintptr_t)pool->bump_ptr;
+      if (((ptr - start) % pool->object_size) != 0) {
+        return false;
+      }
+      if (bump >= start && bump <= end && ptr >= bump) {
+        return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool object_pool_object_is_free(const object_pool_t *pool, const void *obj) {
+  const void *node;
+  size_t scanned = 0;
+
+  if (!pool || !obj) {
+    return false;
+  }
+
+  node = pool->free_list;
+  while (node != NULL && scanned <= pool->free_count) {
+    if (node == obj) {
+      return true;
+    }
+    node = *(void * const *)node;
+    scanned++;
+  }
+  return false;
 }
 
 object_pool_t *object_pool_create(const object_pool_config_t *config) {
@@ -187,6 +233,15 @@ void *object_pool_alloc(object_pool_t *pool) {
 
 void object_pool_free(object_pool_t *pool, void *obj) {
   if (!pool || !obj) {
+    return;
+  }
+
+  if (!object_pool_owns_allocated_object(pool, obj) || object_pool_object_is_free(pool, obj)) {
+    assert(!"object_pool_free received an invalid or already-freed object");
+    return;
+  }
+  if (pool->allocated_count == 0) {
+    assert(!"object_pool_free called with no active allocations");
     return;
   }
 

@@ -48,6 +48,17 @@ typedef enum {
  * Tagged Argument Structure
  * ============================================================================ */
 
+/**
+ * @brief Public value type for one formatted argument.
+ *
+ * This struct is intentionally not opaque: fmt() builds stack-allocated argument
+ * arrays through C11 _Generic/C++ overloads, and callers may also pass explicit
+ * fmt_arg_t arrays to fmt_print(). Construct values through fmt_arg_* helpers so
+ * new enum values or union members can be added without changing call sites.
+ *
+ * Strings and tstr_v values are non-owning views. The referenced storage must
+ * remain valid until fmt_print() returns.
+ */
 typedef struct {
   fmt_type_t type;
   union {
@@ -312,7 +323,10 @@ extern "C" { /* Re-open extern "C" */
  * @param fmt      Format string with {} placeholders
  * @param args     Array of typed arguments
  * @param arg_count Number of arguments
- * @return Number of characters written
+ * @return Number of characters written, or 0 for invalid input or backend failure.
+ *
+ * Error conditions: NULL buf, zero size, NULL fmt, or args == NULL with
+ * arg_count > 0. On valid buf/size, failures leave buf as an empty string.
  */
 CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t *args,
                         size_t arg_count);

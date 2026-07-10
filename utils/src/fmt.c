@@ -7,11 +7,12 @@
 #include "fmt.h"
 #include "sds.h"
 #include "stb_sprintf.h"
+#include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
- 
 
 /* Suppress warnings for stb_sprintf optimization and dynamic format strings */
 #if defined(__GNUC__) || defined(__clang__)
@@ -30,13 +31,109 @@
  * Formatting Helpers
  * ============================================================================ */
 
+enum {
+  FMT_TEMP_CAP = 256,
+  FMT_FORMAT_CAP = 64,
+  FMT_MODIFIER_MAX = 59
+};
+
+static inline size_t fmt_available(const char *dst, const char *end) {
+  return (dst < end) ? (size_t)(end - dst) : 0;
+}
+
+static inline int fmt_copy_to_buffer(char *dst, char *end, const char *src, size_t len) {
+  size_t avail = fmt_available(dst, end);
+  if (len > avail)
+    len = avail;
+  if (len > 0)
+    memcpy(dst, src, len);
+  return (int)len;
+}
+
+#define FMT_CALL_STB(buf, cap, format, ap)  stbsp_vsnprintf((buf), (int)(cap), (format), (ap))
+#define FMT_CALL_LIBC(buf, cap, format, ap) vsnprintf((buf), (cap), (format), (ap))
+
+#define FMT_DEFINE_VWRITE(name, call_backend)                                                        \
+  static int fmt_vwrite_##name(char *dst, char *end, const char *format, va_list ap) {              \
+    char temp[FMT_TEMP_CAP];                                                                         \
+    size_t avail = fmt_available(dst, end);                                                          \
+    va_list ap_copy;                                                                                 \
+    va_copy(ap_copy, ap);                                                                            \
+                                                                                                     \
+    int written = call_backend(temp, sizeof(temp), format, ap);                                      \
+    if (written <= 0) {                                                                              \
+      va_end(ap_copy);                                                                               \
+      return 0;                                                                                      \
+    }                                                                                                \
+                                                                                                     \
+    size_t requested = (size_t)written;                                                              \
+    size_t copy_len = requested;                                                                     \
+    if (copy_len > avail)                                                                            \
+      copy_len = avail;                                                                              \
+                                                                                                     \
+    if (requested < sizeof(temp)) {                                                                  \
+      va_end(ap_copy);                                                                               \
+      return fmt_copy_to_buffer(dst, end, temp, copy_len);                                           \
+    }                                                                                                \
+                                                                                                     \
+    if (copy_len == 0) {                                                                             \
+      va_end(ap_copy);                                                                               \
+      return 0;                                                                                      \
+    }                                                                                                \
+                                                                                                     \
+    if (copy_len > (size_t)INT_MAX - 1)                                                              \
+      copy_len = (size_t)INT_MAX - 1;                                                                \
+    char *dynamic = (char *)malloc(copy_len + 1);                                                    \
+    if (!dynamic) {                                                                                  \
+      va_end(ap_copy);                                                                               \
+      return 0;                                                                                      \
+    }                                                                                                \
+                                                                                                     \
+    int second = call_backend(dynamic, copy_len + 1, format, ap_copy);                               \
+    va_end(ap_copy);                                                                                 \
+    if (second <= 0) {                                                                               \
+      free(dynamic);                                                                                 \
+      return 0;                                                                                      \
+    }                                                                                                \
+                                                                                                     \
+    int copied = fmt_copy_to_buffer(dst, end, dynamic, copy_len);                                    \
+    free(dynamic);                                                                                   \
+    return copied;                                                                                   \
+  }
+
+#define FMT_DEFINE_WRITE(name)                                                                       \
+  static int fmt_write_##name(char *dst, char *end, const char *format, ...) {                       \
+    va_list ap;                                                                                      \
+    va_start(ap, format);                                                                            \
+    int copied = fmt_vwrite_##name(dst, end, format, ap);                                            \
+    va_end(ap);                                                                                      \
+    return copied;                                                                                   \
+  }
+
+FMT_DEFINE_VWRITE(stb, FMT_CALL_STB)
+FMT_DEFINE_WRITE(stb)
+FMT_DEFINE_VWRITE(libc, FMT_CALL_LIBC)
+FMT_DEFINE_WRITE(libc)
+
+#undef FMT_DEFINE_WRITE
+#undef FMT_DEFINE_VWRITE
+#undef FMT_CALL_LIBC
+#undef FMT_CALL_STB
+
+static inline void fmt_build_format(char *dst, size_t dst_size, const char *modifier,
+                                    const char *default_suffix, const char *conversion_chars) {
+  if (strpbrk(modifier, conversion_chars) != NULL) {
+    snprintf(dst, dst_size, "%%%s", modifier);
+  } else {
+    snprintf(dst, dst_size, "%%%s%s", modifier, default_suffix);
+  }
+}
+
 static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *arg,
                                        const char *modifier, size_t mod_len) {
-  char temp[256];
-  char mod_buf[64] = {0};
-  int written = 0;
+  char mod_buf[FMT_FORMAT_CAP] = {0};
 
-  if (mod_len > 0 && mod_len < 60) {
+  if (mod_len > 0 && mod_len <= FMT_MODIFIER_MAX) {
     memcpy(mod_buf, modifier, mod_len);
     mod_buf[mod_len] = '\0';
   }
@@ -44,163 +141,126 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
   switch (arg->type) {
   case FMT_TYPE_CHAR:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "c") != NULL) ? "%%%s" : "%%%sc", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.c);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%c"), arg->val.c);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "c", "c");
+      return fmt_write_stb(dst, end, fb, arg->val.c);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%c"), arg->val.c);
 
   case FMT_TYPE_INT:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%sd", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.i);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%d"), arg->val.i);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "d", "diouxXc");
+      return fmt_write_stb(dst, end, fb, arg->val.i);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%d"), arg->val.i);
 
   case FMT_TYPE_UINT:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%su", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.u);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%u"), arg->val.u);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "u", "diouxXc");
+      return fmt_write_stb(dst, end, fb, arg->val.u);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%u"), arg->val.u);
 
   case FMT_TYPE_LONG:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%sld", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.l);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%ld"), arg->val.l);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "ld", "diouxXc");
+      return fmt_write_stb(dst, end, fb, arg->val.l);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%ld"), arg->val.l);
 
   case FMT_TYPE_ULONG:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "ouxXc") != NULL) ? "%%%s" : "%%%slu", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.ul);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%lu"), arg->val.ul);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "lu", "ouxXc");
+      return fmt_write_stb(dst, end, fb, arg->val.ul);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%lu"), arg->val.ul);
 
   case FMT_TYPE_LLONG:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "diouxXc") != NULL) ? "%%%s" : "%%%slld", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.ll);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%lld"), arg->val.ll);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "lld", "diouxXc");
+      return fmt_write_stb(dst, end, fb, arg->val.ll);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%lld"), arg->val.ll);
 
   case FMT_TYPE_ULLONG:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "ouxXc") != NULL) ? "%%%s" : "%%%sllu", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.ull);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%llu"), arg->val.ull);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "llu", "ouxXc");
+      return fmt_write_stb(dst, end, fb, arg->val.ull);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%llu"), arg->val.ull);
 
   case FMT_TYPE_DOUBLE:
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "fegEG") != NULL) ? "%%%s" : "%%%sg", mod_buf);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, arg->val.f);
-    } else {
-      written = stbsp_snprintf(temp, sizeof(temp), P("%.17g"), arg->val.f);
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "g", "fegEG");
+      return fmt_write_stb(dst, end, fb, arg->val.f);
     }
-    break;
+    return fmt_write_stb(dst, end, P("%.17g"), arg->val.f);
 
   case FMT_TYPE_STR: {
     const char *s = arg->val.s ? arg->val.s : "(null)";
     if (mod_buf[0]) {
-      char fb[64];
-      snprintf(fb, sizeof(fb), (strpbrk(mod_buf, "s") != NULL) ? "%%%s" : "%%%ss", mod_buf);
-      /* Stack buffer with NUL padding for stb_sprintf read-ahead safety */
-      size_t slen = strlen(s);
-      char padded[256];
-      if (slen > sizeof(padded) - 9) slen = sizeof(padded) - 9;
-      memcpy(padded, s, slen);
-      memset(padded + slen, 0, 8);
-      written = stbsp_snprintf(temp, sizeof(temp), fb, padded);
-    } else {
-      size_t slen = strlen(s);
-      if (dst + slen > end)
-        slen = (size_t)(end - dst);
-      memcpy(dst, s, slen);
-      return (int)slen;
+      char fb[FMT_FORMAT_CAP] = {0};
+      fmt_build_format(fb, sizeof(fb), mod_buf, "s", "s");
+      return fmt_write_libc(dst, end, fb, s);
     }
-    break;
+    return fmt_copy_to_buffer(dst, end, s, strlen(s));
   }
 
   case FMT_TYPE_PTR:
-    written = stbsp_snprintf(temp, sizeof(temp), P("%p"), arg->val.p);
-    break;
+    return fmt_write_stb(dst, end, P("%p"), arg->val.p);
 
   case FMT_TYPE_SIZE:
-    written = stbsp_snprintf(temp, sizeof(temp), P("%zu"), arg->val.sz);
-    break;
+    return fmt_write_stb(dst, end, P("%zu"), arg->val.sz);
 
   case FMT_TYPE_BOOL: {
     const char *bstr = arg->val.b ? "true" : "false";
     size_t blen = arg->val.b ? 4 : 5;
-    if (dst + blen > end)
-      blen = (size_t)(end - dst);
-    memcpy(dst, bstr, blen);
-    return (int)blen;
+    return fmt_copy_to_buffer(dst, end, bstr, blen);
   }
 
   case FMT_TYPE_STRV: {
     const char *s = arg->val.sv.data ? arg->val.sv.data : "(null)";
     size_t slen = arg->val.sv.data ? arg->val.sv.len : 6;
-    if (dst + slen > end)
-      slen = (size_t)(end - dst);
-    memcpy(dst, s, slen);
-    return (int)slen;
+    return fmt_copy_to_buffer(dst, end, s, slen);
   }
 
   case FMT_TYPE_TIME: {
     time_t sec = (time_t)arg->val.tv.tv_sec;
     struct tm tm_buf;
 #ifdef _WIN32
-    localtime_s(&tm_buf, &sec);
+    if (localtime_s(&tm_buf, &sec) != 0) {
+      return fmt_copy_to_buffer(dst, end, "(invalid time)", 14);
+    }
 #else
-    localtime_r(&sec, &tm_buf);
+    if (!localtime_r(&sec, &tm_buf)) {
+      return fmt_copy_to_buffer(dst, end, "(invalid time)", 14);
+    }
 #endif
+    char temp[FMT_TEMP_CAP];
     const char *time_fmt = (mod_buf[0]) ? mod_buf : "%Y-%m-%d %H:%M:%S";
-    written = (int)strftime(temp, sizeof(temp), time_fmt, &tm_buf);
+    int written = (int)strftime(temp, sizeof(temp), time_fmt, &tm_buf);
     if (written > 0 && !mod_buf[0] && arg->val.tv.tv_usec > 0) {
       int ms = arg->val.tv.tv_usec / 1000;
       written += snprintf(temp + written, sizeof(temp) - (size_t)written, ".%03d", ms);
     }
-    break;
+    if (written <= 0)
+      return 0;
+    size_t copy_len = (size_t)written;
+    if (copy_len >= sizeof(temp))
+      copy_len = sizeof(temp) - 1;
+    return fmt_copy_to_buffer(dst, end, temp, copy_len);
   }
 
   default:
-    written =
-        stbsp_snprintf(temp, sizeof(temp), P("0x%llx"), (unsigned long long)(uintptr_t)arg->val.p);
-    break;
+    return fmt_write_stb(dst, end, P("0x%llx"), (unsigned long long)(uintptr_t)arg->val.p);
   }
-
-  if (written > 0) {
-    size_t copy_len = (size_t)written;
-    if (dst + copy_len > end)
-      copy_len = (size_t)(end - dst);
-    memcpy(dst, temp, copy_len);
-    return (int)copy_len;
-  }
-  return 0;
 }
 
 /* ============================================================================
@@ -209,7 +269,10 @@ static inline int format_arg_to_buffer(char *dst, char *end, const fmt_arg_t *ar
 
 CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t *args,
                         size_t arg_count) {
-  if (!buf || !fmt || size == 0)
+  if (!buf || size == 0)
+    return 0;
+  buf[0] = '\0';
+  if (!fmt || (!args && arg_count > 0))
     return 0;
 
   const char *cursor = fmt;
@@ -227,10 +290,8 @@ CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t
 
     case FMT_TOKEN_TEXT: {
       size_t len = token_view.len;
-      if (dst + len > end)
-        len = (size_t)(end - dst);
-      memcpy(dst, token_view.data, len);
-      dst += len;
+      int copied = fmt_copy_to_buffer(dst, end, token_view.data, len);
+      dst += copied;
       break;
     }
 
@@ -259,20 +320,19 @@ CXX_C_API int fmt_print(char *buf, size_t size, const char *fmt, const fmt_arg_t
       if (arg_idx < arg_count) {
         // token_start points to internal content, length is token_len
         dst += format_arg_to_buffer(dst, end, &args[arg_idx++], token_view.data, token_view.len);
+      } else {
+        dst += fmt_copy_to_buffer(dst, end, "{:", 2);
+        dst += fmt_copy_to_buffer(dst, end, token_view.data, token_view.len);
+        dst += fmt_copy_to_buffer(dst, end, "}", 1);
       }
-      // If arg_idx out of bounds, we simply skip? Or print raw?
-      // The re2c version skipped printing it entirely if idx > count.
-      // We'll mimic re2c behavior: if arg missing, nothing output for the specifier.
       break;
 
     case FMT_TOKEN_INVALID:
       // Copy exact content
       {
         size_t len = token_view.len;
-        if (dst + len > end)
-          len = (size_t)(end - dst);
-        memcpy(dst, token_view.data, len);
-        dst += len;
+        int copied = fmt_copy_to_buffer(dst, end, token_view.data, len);
+        dst += copied;
       }
       break;
     }

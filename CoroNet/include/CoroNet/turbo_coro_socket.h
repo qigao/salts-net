@@ -213,6 +213,11 @@ CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *
 CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);
 
 /**
+ * @brief Send a WebSocket text message.
+ */
+CXX_C_API int coro_socket_send_ws_text(coro_socket_t *socket, const char *text, size_t len);
+
+/**
  * @brief Send a buffer previously returned by coro_socket_recv(), transferring ownership.
  *
  * This call consumes @p data regardless of whether the transport can use a
@@ -242,6 +247,11 @@ CXX_C_API int coro_socket_send_buffer(coro_socket_t *socket, mem_buffer_t *buffe
  * @brief Receive data from the socket.
  */
 CXX_C_API int coro_socket_recv(coro_socket_t *socket, char **data, size_t *len);
+
+/**
+ * @brief Receive a WebSocket message and report whether it was a text frame.
+ */
+CXX_C_API int coro_socket_recv_ws(coro_socket_t *socket, char **data, size_t *len, int *is_text);
 
 /**
  * @brief Interrupt a pending `coro_socket_recv()` wait from any thread.

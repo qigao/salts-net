@@ -11,11 +11,17 @@
 #include "tlog.h"
 #include "turbo_fs.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef EOVERFLOW
+  #define EOVERFLOW ERANGE
+#endif
+
 /* ── Platform headers ─────────────────────────────────────────────────────── */
 #ifdef _WIN32
+  #include <share.h>
   #include <direct.h>
   #include <fcntl.h>
   #include <io.h>
@@ -32,6 +38,9 @@
   #define fs_stat_t  struct __stat64
   #define fs_ftrunc  _chsize_s
   #define fs_fsync   _commit
+  #define fs_unlink  _unlink
+  #define fs_chmod   _chmod
+  #define fs_access  _access
 
   /* Win32 does not have S_ISxxx macros by default */
   #ifndef S_ISREG
@@ -49,6 +58,9 @@
   #define FS_ST_MTIME_SEC(s)  ((s).st_mtime)
   #define FS_ST_CTIME_SEC(s)  ((s).st_ctime)
   #define FS_ST_XTIME_NSEC    0   /* MSVC stat has no nanosecond field */
+  #ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+    #define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+  #endif
 
 #else  /* POSIX */
   #include <fcntl.h>
@@ -65,6 +77,9 @@
   #define fs_stat_t  struct stat
   #define fs_ftrunc  ftruncate
   #define fs_fsync   fsync
+  #define fs_unlink  unlink
+  #define fs_chmod   chmod
+  #define fs_access  access
 
   #define FS_ST_ATIME_SEC(s)  ((s).st_atim.tv_sec)
   #define FS_ST_MTIME_SEC(s)  ((s).st_mtim.tv_sec)
@@ -78,6 +93,300 @@
 
 /* Helper: map errno to negative return value */
 static inline int err_from_errno(void) { return -errno; }
+
+#ifdef _WIN32
+static int err_from_win32(DWORD error) {
+  switch (error) {
+  case ERROR_FILE_NOT_FOUND:
+  case ERROR_PATH_NOT_FOUND:
+    return -ENOENT;
+  case ERROR_ACCESS_DENIED:
+  case ERROR_PRIVILEGE_NOT_HELD:
+    return -EACCES;
+  case ERROR_ALREADY_EXISTS:
+  case ERROR_FILE_EXISTS:
+    return -EEXIST;
+  case ERROR_INVALID_PARAMETER:
+  case ERROR_INVALID_NAME:
+    return -EINVAL;
+  case ERROR_LOCK_VIOLATION:
+  case ERROR_IO_PENDING:
+    return -EAGAIN;
+  default:
+    return -EIO;
+  }
+}
+
+static uint64_t filetime_to_unix_us(const FILETIME *ft) {
+  ULARGE_INTEGER t;
+  t.LowPart = ft->dwLowDateTime;
+  t.HighPart = ft->dwHighDateTime;
+  if (t.QuadPart < 116444736000000000ULL) {
+    return 0;
+  }
+  return (t.QuadPart - 116444736000000000ULL) / 10ULL;
+}
+#endif
+
+static void turbo_fs_stat_from_native(const fs_stat_t *st, turbo_fs_stat_t *out) {
+  out->size = (uint64_t)st->st_size;
+  out->mode = (int)st->st_mode;
+  out->is_file = S_ISREG(st->st_mode) ? true : false;
+  out->is_directory = S_ISDIR(st->st_mode) ? true : false;
+  out->is_symlink = S_ISLNK(st->st_mode) ? true : false;
+
+#ifdef _WIN32
+  out->atime = (uint64_t)st->st_atime * 1000000ULL;
+  out->mtime = (uint64_t)st->st_mtime * 1000000ULL;
+  out->ctime = (uint64_t)st->st_ctime * 1000000ULL;
+#else
+  out->atime = (uint64_t)FS_ST_ATIME_SEC(*st) * 1000000ULL + (uint64_t)FS_ST_ATIME_NSEC(*st) / 1000;
+  out->mtime = (uint64_t)FS_ST_MTIME_SEC(*st) * 1000000ULL + (uint64_t)FS_ST_MTIME_NSEC(*st) / 1000;
+  out->ctime = (uint64_t)FS_ST_CTIME_SEC(*st) * 1000000ULL + (uint64_t)FS_ST_CTIME_NSEC(*st) / 1000;
+#endif
+}
+
+#ifdef _WIN32
+static int turbo_fs_lstat_win32(const char *path, turbo_fs_stat_t *out) {
+  WIN32_FIND_DATAA data;
+  HANDLE find = FindFirstFileA(path, &data);
+  if (find == INVALID_HANDLE_VALUE) {
+    return err_from_win32(GetLastError());
+  }
+  FindClose(find);
+
+  memset(out, 0, sizeof(*out));
+  out->size = ((uint64_t)data.nFileSizeHigh << 32) | (uint64_t)data.nFileSizeLow;
+  out->is_directory = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  out->is_file = !out->is_directory;
+  out->is_symlink = (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+                    data.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
+  out->mode = out->is_directory ? _S_IFDIR : _S_IFREG;
+  out->mode |= _S_IREAD;
+  if ((data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0) {
+    out->mode |= _S_IWRITE;
+  }
+  out->atime = filetime_to_unix_us(&data.ftLastAccessTime);
+  out->mtime = filetime_to_unix_us(&data.ftLastWriteTime);
+  out->ctime = filetime_to_unix_us(&data.ftCreationTime);
+  return 0;
+}
+#endif
+
+#ifdef _WIN32
+static SRWLOCK g_turbo_fs_position_lock = SRWLOCK_INIT;
+
+static inline void turbo_fs_lock_position(void) { AcquireSRWLockExclusive(&g_turbo_fs_position_lock); }
+static inline void turbo_fs_unlock_position(void) { ReleaseSRWLockExclusive(&g_turbo_fs_position_lock); }
+#endif
+
+static inline size_t turbo_fs_io_chunk(size_t len) {
+  return len > (size_t)INT_MAX ? (size_t)INT_MAX : len;
+}
+
+static inline int turbo_fs_stream_len_ok(size_t len) {
+  return len > (size_t)INT_MAX ? -EOVERFLOW : 0;
+}
+
+static ssize_t turbo_fs_read_once(turbo_file_t fd, char *buf, size_t len) {
+  size_t chunk = turbo_fs_io_chunk(len);
+  for (;;) {
+#ifdef _WIN32
+    turbo_fs_lock_position();
+    ssize_t n = fs_read(fd, buf, (unsigned int)chunk);
+    int e = errno;
+    turbo_fs_unlock_position();
+    errno = e;
+#else
+    ssize_t n = fs_read(fd, buf, chunk);
+#endif
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+    return n;
+  }
+}
+
+static ssize_t turbo_fs_write_once(turbo_file_t fd, const char *data, size_t len) {
+  size_t chunk = turbo_fs_io_chunk(len);
+  for (;;) {
+#ifdef _WIN32
+    turbo_fs_lock_position();
+    ssize_t n = fs_write(fd, data, (unsigned int)chunk);
+    int e = errno;
+    turbo_fs_unlock_position();
+    errno = e;
+#else
+    ssize_t n = fs_write(fd, data, chunk);
+#endif
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+    return n;
+  }
+}
+
+static int turbo_fs_read_exact(turbo_file_t fd, char *buf, size_t len, size_t *read_out) {
+  size_t total = 0;
+  while (total < len) {
+    ssize_t n = turbo_fs_read_once(fd, buf + total, len - total);
+    if (n < 0) {
+      if (read_out) *read_out = total;
+      return err_from_errno();
+    }
+    if (n == 0) {
+      if (read_out) *read_out = total;
+      return -EIO;
+    }
+    total += (size_t)n;
+  }
+  if (read_out) *read_out = total;
+  return 0;
+}
+
+static int turbo_fs_write_all(turbo_file_t fd, const char *data, size_t len) {
+  size_t total = 0;
+  while (total < len) {
+    ssize_t n = turbo_fs_write_once(fd, data + total, len - total);
+    if (n < 0) {
+      return err_from_errno();
+    }
+    if (n == 0) {
+      return -EIO;
+    }
+    total += (size_t)n;
+  }
+  return 0;
+}
+
+static int turbo_fs_offset_ok(int64_t offset, size_t len) {
+  if (offset < 0) {
+    return -EINVAL;
+  }
+  if (len > (size_t)(INT64_MAX - offset)) {
+    return -EOVERFLOW;
+  }
+  return 0;
+}
+
+#ifndef _WIN32
+static int turbo_fs_offset_to_off_t(int64_t offset, off_t *out) {
+  off_t converted = (off_t)offset;
+  if ((int64_t)converted != offset) {
+    return -EOVERFLOW;
+  }
+  *out = converted;
+  return 0;
+}
+#endif
+
+static ssize_t turbo_fs_pread_once(turbo_file_t fd, char *buf, size_t len, int64_t offset) {
+  size_t chunk = turbo_fs_io_chunk(len);
+#ifdef _WIN32
+  turbo_fs_lock_position();
+  int64_t saved = _lseeki64(fd, 0, SEEK_CUR);
+  if (saved < 0) {
+    int e = errno;
+    turbo_fs_unlock_position();
+    errno = e;
+    return -1;
+  }
+  if (_lseeki64(fd, offset, SEEK_SET) < 0) {
+    int e = errno;
+    _lseeki64(fd, saved, SEEK_SET);
+    turbo_fs_unlock_position();
+    errno = e;
+    return -1;
+  }
+  ssize_t n = fs_read(fd, buf, (unsigned int)chunk);
+  int e = errno;
+  if (_lseeki64(fd, saved, SEEK_SET) < 0 && n >= 0) {
+    e = errno;
+    n = -1;
+  }
+  turbo_fs_unlock_position();
+  errno = e;
+  return n;
+#else
+  off_t pos;
+  int rc = turbo_fs_offset_to_off_t(offset, &pos);
+  if (rc != 0) {
+    errno = -rc;
+    return -1;
+  }
+  for (;;) {
+    ssize_t n = pread(fd, buf, chunk, pos);
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+    return n;
+  }
+#endif
+}
+
+static ssize_t turbo_fs_pwrite_once(turbo_file_t fd, const char *data, size_t len,
+                                    int64_t offset) {
+  size_t chunk = turbo_fs_io_chunk(len);
+#ifdef _WIN32
+  turbo_fs_lock_position();
+  int64_t saved = _lseeki64(fd, 0, SEEK_CUR);
+  if (saved < 0) {
+    int e = errno;
+    turbo_fs_unlock_position();
+    errno = e;
+    return -1;
+  }
+  if (_lseeki64(fd, offset, SEEK_SET) < 0) {
+    int e = errno;
+    _lseeki64(fd, saved, SEEK_SET);
+    turbo_fs_unlock_position();
+    errno = e;
+    return -1;
+  }
+  ssize_t n = fs_write(fd, data, (unsigned int)chunk);
+  int e = errno;
+  if (_lseeki64(fd, saved, SEEK_SET) < 0 && n >= 0) {
+    e = errno;
+    n = -1;
+  }
+  turbo_fs_unlock_position();
+  errno = e;
+  return n;
+#else
+  off_t pos;
+  int rc = turbo_fs_offset_to_off_t(offset, &pos);
+  if (rc != 0) {
+    errno = -rc;
+    return -1;
+  }
+  for (;;) {
+    ssize_t n = pwrite(fd, data, chunk, pos);
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+    return n;
+  }
+#endif
+}
+
+static int turbo_fs_pwrite_all(turbo_file_t fd, const char *data, size_t len, int64_t offset) {
+  size_t total = 0;
+  int rc = turbo_fs_offset_ok(offset, len);
+  if (rc != 0) {
+    return rc;
+  }
+  while (total < len) {
+    ssize_t n = turbo_fs_pwrite_once(fd, data + total, len - total, offset + (int64_t)total);
+    if (n < 0) {
+      return err_from_errno();
+    }
+    if (n == 0) {
+      return -EIO;
+    }
+    total += (size_t)n;
+  }
+  return 0;
+}
 
 /* ── Flag translation: TURBO_FS_O_* → native O_* ─────────────────────────── */
 static int turbo_fs_flags_to_native(int flags) {
@@ -125,6 +434,9 @@ int turbo_fs_read_file(const char *path, turbo_fs_buf_t *buf) {
     return e;
   }
 
+  if (st.st_size < 0 || (uint64_t)st.st_size > (uint64_t)SIZE_MAX - 1) {
+    return -EOVERFLOW;
+  }
   size_t file_size = (size_t)st.st_size;
 
   /* open */
@@ -140,34 +452,36 @@ int turbo_fs_read_file(const char *path, turbo_fs_buf_t *buf) {
   }
 
   /* allocate */
-  buf->base = malloc(file_size + 1);
-  if (!buf->base) {
+  char *base = (char *)malloc(file_size + 1);
+  if (!base) {
     fs_close(fd);
     return -ENOMEM;
   }
-  buf->len = file_size;
 
   /* read */
-  ssize_t n = fs_read(fd, buf->base, (unsigned int)file_size);
-  fs_close(fd);
-
-  if (n < 0) {
+  size_t bytes_read = 0;
+  int rc = turbo_fs_read_exact(fd, base, file_size, &bytes_read);
+  int close_rc = fs_close(fd);
+  if (rc != 0) {
+    TLOG_ERROR("Failed to read file {}: {}", path, strerror(-rc));
+    free(base);
+    return rc;
+  }
+  if (close_rc != 0) {
     int e = err_from_errno();
-    TLOG_ERROR("Failed to read file {}: {}", path, strerror(-e));
-    free(buf->base);
-    buf->base = NULL;
-    buf->len  = 0;
+    free(base);
     return e;
   }
 
-  buf->len         = (size_t)n;
-  buf->base[n]     = '\0';
+  buf->base = base;
+  buf->len = bytes_read;
+  buf->base[bytes_read] = '\0';
   TLOG_DEBUG("Read file {}: {} bytes", path, buf->len);
   return 0;
 }
 
 int turbo_fs_write_file(const char *path, const turbo_fs_buf_t *buf) {
-  if (!path || !buf || !buf->base) {
+  if (!path || !buf || (!buf->base && buf->len > 0)) {
     return -EINVAL;
   }
 
@@ -182,13 +496,14 @@ int turbo_fs_write_file(const char *path, const turbo_fs_buf_t *buf) {
     return e;
   }
 
-  ssize_t n = fs_write(fd, buf->base, (unsigned int)buf->len);
-  fs_close(fd);
-
-  if (n < 0) {
-    int e = err_from_errno();
-    TLOG_ERROR("Failed to write file {}: {}", path, strerror(-e));
-    return e;
+  int rc = turbo_fs_write_all(fd, buf->base, buf->len);
+  int close_rc = fs_close(fd);
+  if (rc != 0) {
+    TLOG_ERROR("Failed to write file {}: {}", path, strerror(-rc));
+    return rc;
+  }
+  if (close_rc != 0) {
+    return err_from_errno();
   }
 
   TLOG_DEBUG("Wrote file {}: {} bytes", path, buf->len);
@@ -211,25 +526,136 @@ int turbo_fs_stat(const char *path, turbo_fs_stat_t *stat_out) {
     return e;
   }
 
-  stat_out->size        = (uint64_t)st.st_size;
-  stat_out->mode        = (int)st.st_mode;
-  stat_out->is_file      = S_ISREG(st.st_mode)  ? true : false;
-  stat_out->is_directory = S_ISDIR(st.st_mode)  ? true : false;
-  stat_out->is_symlink   = S_ISLNK(st.st_mode)  ? true : false;
-
-#ifdef _WIN32
-  /* MSVC: only second-resolution; no nanosecond field */
-  stat_out->atime = (uint64_t)st.st_atime * 1000000ULL;
-  stat_out->mtime = (uint64_t)st.st_mtime * 1000000ULL;
-  stat_out->ctime = (uint64_t)st.st_ctime * 1000000ULL;
-#else
-  stat_out->atime = (uint64_t)FS_ST_ATIME_SEC(st) * 1000000ULL + (uint64_t)FS_ST_ATIME_NSEC(st) / 1000;
-  stat_out->mtime = (uint64_t)FS_ST_MTIME_SEC(st) * 1000000ULL + (uint64_t)FS_ST_MTIME_NSEC(st) / 1000;
-  stat_out->ctime = (uint64_t)FS_ST_CTIME_SEC(st) * 1000000ULL + (uint64_t)FS_ST_CTIME_NSEC(st) / 1000;
-#endif
+  turbo_fs_stat_from_native(&st, stat_out);
 
   TLOG_DEBUG("Stat completed for: {}", path);
   return 0;
+}
+
+int turbo_fs_lstat(const char *path, turbo_fs_stat_t *stat_out) {
+  if (!path || !stat_out) {
+    return -EINVAL;
+  }
+
+#ifdef _WIN32
+  int rc = turbo_fs_lstat_win32(path, stat_out);
+  if (rc != 0) {
+    TLOG_ERROR("Lstat failed for {}: {}", path, strerror(-rc));
+    return rc;
+  }
+#else
+  fs_stat_t st;
+  if (lstat(path, &st) != 0) {
+    int e = err_from_errno();
+    TLOG_ERROR("Lstat failed for {}: {}", path, strerror(-e));
+    return e;
+  }
+  turbo_fs_stat_from_native(&st, stat_out);
+#endif
+
+  TLOG_DEBUG("Lstat completed for: {}", path);
+  return 0;
+}
+
+int turbo_fs_chmod(const char *path, int mode) {
+  if (!path) {
+    return -EINVAL;
+  }
+  if (fs_chmod(path, mode) != 0) {
+    return err_from_errno();
+  }
+  return 0;
+}
+
+int turbo_fs_access(const char *path, int mode) {
+  if (!path) {
+    return -EINVAL;
+  }
+
+#ifdef _WIN32
+  int native = 0;
+  if (mode & TURBO_FS_ACCESS_READ) native |= 4;
+  if (mode & TURBO_FS_ACCESS_WRITE) native |= 2;
+  if ((mode & ~(TURBO_FS_ACCESS_READ | TURBO_FS_ACCESS_WRITE | TURBO_FS_ACCESS_EXEC)) != 0) {
+    return -EINVAL;
+  }
+#else
+  int native = F_OK;
+  if ((mode & ~(TURBO_FS_ACCESS_READ | TURBO_FS_ACCESS_WRITE | TURBO_FS_ACCESS_EXEC)) != 0) {
+    return -EINVAL;
+  }
+  if (mode != TURBO_FS_ACCESS_EXISTS) {
+    native = 0;
+    if (mode & TURBO_FS_ACCESS_READ) native |= R_OK;
+    if (mode & TURBO_FS_ACCESS_WRITE) native |= W_OK;
+    if (mode & TURBO_FS_ACCESS_EXEC) native |= X_OK;
+  }
+#endif
+
+  if (fs_access(path, native) != 0) {
+    return err_from_errno();
+  }
+  return 0;
+}
+
+int turbo_fs_symlink(const char *target, const char *link_path, int is_directory) {
+  if (!target || !link_path) {
+    return -EINVAL;
+  }
+
+#ifdef _WIN32
+  DWORD flags = is_directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+  flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+  if (!CreateSymbolicLinkA(link_path, target, flags)) {
+    return err_from_win32(GetLastError());
+  }
+  return 0;
+#else
+  UNUSED(is_directory);
+  if (symlink(target, link_path) != 0) {
+    return err_from_errno();
+  }
+  return 0;
+#endif
+}
+
+int turbo_fs_readlink(const char *path, char *buffer, size_t buffer_size) {
+  if (!path || !buffer || buffer_size == 0) {
+    return -EINVAL;
+  }
+
+#ifdef _WIN32
+  HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (h == INVALID_HANDLE_VALUE) {
+    return err_from_win32(GetLastError());
+  }
+
+  DWORD cap = buffer_size > (size_t)0xffffffffu ? 0xffffffffu : (DWORD)buffer_size;
+  DWORD n = GetFinalPathNameByHandleA(h, buffer, cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  DWORD err = GetLastError();
+  CloseHandle(h);
+  if (n == 0) {
+    return err_from_win32(err);
+  }
+  if ((size_t)n >= buffer_size) {
+    buffer[0] = '\0';
+    return -ENAMETOOLONG;
+  }
+  buffer[n] = '\0';
+  return (int)n;
+#else
+  ssize_t n = readlink(path, buffer, buffer_size - 1);
+  if (n < 0) {
+    return err_from_errno();
+  }
+  if ((size_t)n >= buffer_size - 1) {
+    buffer[0] = '\0';
+    return -ENAMETOOLONG;
+  }
+  buffer[n] = '\0';
+  return (int)n;
+#endif
 }
 
 int turbo_fs_mkdir(const char *path, int mode) {
@@ -279,7 +705,7 @@ int turbo_fs_unlink(const char *path) {
     return -EINVAL;
   }
 
-  if (remove(path) != 0) {
+  if (fs_unlink(path) != 0) {
     int e = err_from_errno();
     TLOG_ERROR("Failed to remove file {}: {}", path, strerror(-e));
     return e;
@@ -492,8 +918,12 @@ int turbo_fs_read(turbo_file_t fd, char *buf, size_t len) {
   if (fd == TURBO_INVALID_FILE || !buf) {
     return -EINVAL;
   }
+  int rc = turbo_fs_stream_len_ok(len);
+  if (rc != 0) {
+    return rc;
+  }
 
-  ssize_t n = fs_read(fd, buf, (unsigned int)len);
+  ssize_t n = turbo_fs_read_once(fd, buf, len);
   if (n < 0) {
     return err_from_errno();
   }
@@ -504,18 +934,12 @@ int turbo_fs_pread(turbo_file_t fd, char *buf, size_t len, int64_t offset) {
   if (fd == TURBO_INVALID_FILE || !buf) {
     return -EINVAL;
   }
+  int rc = turbo_fs_stream_len_ok(len);
+  if (rc != 0) return rc;
+  rc = turbo_fs_offset_ok(offset, len);
+  if (rc != 0) return rc;
 
-#ifdef _WIN32
-  /* pread emulation: save position, seek, read, restore */
-  int64_t saved = _lseeki64(fd, 0, SEEK_CUR);
-  if (saved < 0) return err_from_errno();
-  if (_lseeki64(fd, offset, SEEK_SET) < 0) return err_from_errno();
-  ssize_t n = _read(fd, buf, (unsigned int)len);
-  _lseeki64(fd, saved, SEEK_SET);
-#else
-  ssize_t n = pread(fd, buf, len, (off_t)offset);
-#endif
-
+  ssize_t n = turbo_fs_pread_once(fd, buf, len, offset);
   if (n < 0) return err_from_errno();
   return (int)n;
 }
@@ -524,29 +948,24 @@ int turbo_fs_pwrite(turbo_file_t fd, const char *data, size_t len, int64_t offse
   if (fd == TURBO_INVALID_FILE || !data) {
     return -EINVAL;
   }
+  int rc = turbo_fs_stream_len_ok(len);
+  if (rc != 0) return rc;
 
-#ifdef _WIN32
-  int64_t saved = _lseeki64(fd, 0, SEEK_CUR);
-  if (saved < 0) return err_from_errno();
-  if (_lseeki64(fd, offset, SEEK_SET) < 0) return err_from_errno();
-  ssize_t n = _write(fd, data, (unsigned int)len);
-  _lseeki64(fd, saved, SEEK_SET);
-#else
-  ssize_t n = pwrite(fd, data, len, (off_t)offset);
-#endif
-
-  if (n < 0) return err_from_errno();
-  return (int)n;
+  rc = turbo_fs_pwrite_all(fd, data, len, offset);
+  if (rc != 0) return rc;
+  return (int)len;
 }
 
 int turbo_fs_write(turbo_file_t fd, const char *data, size_t len) {
   if (fd == TURBO_INVALID_FILE || !data) {
     return -EINVAL;
   }
+  int rc = turbo_fs_stream_len_ok(len);
+  if (rc != 0) return rc;
 
-  ssize_t n = fs_write(fd, data, (unsigned int)len);
-  if (n < 0) return err_from_errno();
-  return (int)n;
+  rc = turbo_fs_write_all(fd, data, len);
+  if (rc != 0) return rc;
+  return (int)len;
 }
 
 int turbo_fs_close(turbo_file_t fd) {
@@ -571,6 +990,104 @@ int turbo_fs_fsync(turbo_file_t fd) {
   return 0;
 }
 
+int turbo_fs_lock(turbo_file_t fd, int flags, int64_t offset, uint64_t len) {
+  if (fd == TURBO_INVALID_FILE || offset < 0) {
+    return -EINVAL;
+  }
+  bool shared = (flags & TURBO_FS_LOCK_SHARED) != 0;
+  bool exclusive = (flags & TURBO_FS_LOCK_EXCLUSIVE) != 0;
+  if (shared == exclusive || (flags & ~(TURBO_FS_LOCK_SHARED | TURBO_FS_LOCK_EXCLUSIVE |
+                                        TURBO_FS_LOCK_NONBLOCK)) != 0) {
+    return -EINVAL;
+  }
+
+#ifdef _WIN32
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) {
+    return -EBADF;
+  }
+  OVERLAPPED ov;
+  memset(&ov, 0, sizeof(ov));
+  uint64_t uoffset = (uint64_t)offset;
+  ov.Offset = (DWORD)(uoffset & 0xffffffffu);
+  ov.OffsetHigh = (DWORD)(uoffset >> 32);
+
+  uint64_t lock_len = len == 0 ? UINT64_MAX : len;
+  DWORD low = (DWORD)(lock_len & 0xffffffffu);
+  DWORD high = (DWORD)(lock_len >> 32);
+  DWORD lock_flags = 0;
+  if (exclusive) lock_flags |= LOCKFILE_EXCLUSIVE_LOCK;
+  if (flags & TURBO_FS_LOCK_NONBLOCK) lock_flags |= LOCKFILE_FAIL_IMMEDIATELY;
+
+  if (!LockFileEx((HANDLE)os_handle, lock_flags, 0, low, high, &ov)) {
+    return err_from_win32(GetLastError());
+  }
+  return 0;
+#else
+  struct flock fl;
+  memset(&fl, 0, sizeof(fl));
+  fl.l_type = shared ? F_RDLCK : F_WRLCK;
+  fl.l_whence = SEEK_SET;
+  int rc = turbo_fs_offset_to_off_t(offset, &fl.l_start);
+  if (rc != 0) return rc;
+  if (len == 0) {
+    fl.l_len = 0;
+  } else if (len > (uint64_t)INT64_MAX || (uint64_t)(off_t)len != len) {
+    return -EOVERFLOW;
+  } else {
+    fl.l_len = (off_t)len;
+  }
+  if (fcntl(fd, (flags & TURBO_FS_LOCK_NONBLOCK) ? F_SETLK : F_SETLKW, &fl) != 0) {
+    return err_from_errno();
+  }
+  return 0;
+#endif
+}
+
+int turbo_fs_unlock(turbo_file_t fd, int64_t offset, uint64_t len) {
+  if (fd == TURBO_INVALID_FILE || offset < 0) {
+    return -EINVAL;
+  }
+
+#ifdef _WIN32
+  intptr_t os_handle = _get_osfhandle(fd);
+  if (os_handle == -1) {
+    return -EBADF;
+  }
+  OVERLAPPED ov;
+  memset(&ov, 0, sizeof(ov));
+  uint64_t uoffset = (uint64_t)offset;
+  ov.Offset = (DWORD)(uoffset & 0xffffffffu);
+  ov.OffsetHigh = (DWORD)(uoffset >> 32);
+
+  uint64_t lock_len = len == 0 ? UINT64_MAX : len;
+  DWORD low = (DWORD)(lock_len & 0xffffffffu);
+  DWORD high = (DWORD)(lock_len >> 32);
+  if (!UnlockFileEx((HANDLE)os_handle, 0, low, high, &ov)) {
+    return err_from_win32(GetLastError());
+  }
+  return 0;
+#else
+  struct flock fl;
+  memset(&fl, 0, sizeof(fl));
+  fl.l_type = F_UNLCK;
+  fl.l_whence = SEEK_SET;
+  int rc = turbo_fs_offset_to_off_t(offset, &fl.l_start);
+  if (rc != 0) return rc;
+  if (len == 0) {
+    fl.l_len = 0;
+  } else if (len > (uint64_t)INT64_MAX || (uint64_t)(off_t)len != len) {
+    return -EOVERFLOW;
+  } else {
+    fl.l_len = (off_t)len;
+  }
+  if (fcntl(fd, F_SETLK, &fl) != 0) {
+    return err_from_errno();
+  }
+  return 0;
+#endif
+}
+
 int turbo_fs_rename(const char *old_path, const char *new_path) {
   if (!old_path || !new_path) {
     return -EINVAL;
@@ -587,7 +1104,15 @@ int64_t turbo_fs_tell(turbo_file_t fd) {
     return -EINVAL;
   }
 
+#ifdef _WIN32
+  turbo_fs_lock_position();
+#endif
   int64_t pos = fs_lseek(fd, 0, SEEK_CUR);
+  int e = errno;
+#ifdef _WIN32
+  turbo_fs_unlock_position();
+#endif
+  errno = e;
   if (pos < 0) return err_from_errno();
   return pos;
 }
@@ -597,7 +1122,15 @@ int64_t turbo_fs_seek(turbo_file_t fd, int64_t offset, int whence) {
     return -EINVAL;
   }
 
+#ifdef _WIN32
+  turbo_fs_lock_position();
+#endif
   int64_t pos = fs_lseek(fd, offset, whence);
+  int e = errno;
+#ifdef _WIN32
+  turbo_fs_unlock_position();
+#endif
+  errno = e;
   if (pos < 0) return err_from_errno();
   return pos;
 }

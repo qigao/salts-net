@@ -33,7 +33,6 @@ const coro_transport_ops_t *transport_ops_table[TURBO_TRANSPORT_MAX] = {
 
 /* ── Forward declarations ─────────────────────────────────── */
 static void socket_record_error(coro_context_t *ctx, int err);
-static int socket_type_is_valid(coro_socket_type_t type);
 static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t transport,
                                             int connected);
 static void socket_destroy_shell(coro_socket_t *s);
@@ -154,21 +153,6 @@ static int socket_last_error_or(coro_socket_t *s, int fallback) {
   return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
 }
 
-static int socket_type_is_valid(coro_socket_type_t type) {
-  switch (type) {
-  case CORO_SOCKET_TCP_V4:
-  case CORO_SOCKET_TCP_V6:
-  case CORO_SOCKET_TLS:
-  case CORO_SOCKET_UDP_V4:
-  case CORO_SOCKET_UDP_V6:
-  case CORO_SOCKET_KCP:
-  case CORO_SOCKET_PIPE:
-    return 1;
-  default:
-    return 0;
-  }
-}
-
 static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t transport,
                                             int connected) {
   if (!s) return;
@@ -178,19 +162,6 @@ static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t 
       (transport >= 0 && transport < TURBO_TRANSPORT_MAX) ? transport_ops_table[transport] : NULL;
   s->connected = connected ? 1 : 0;
   s->status = 0;
-}
-
-static turbo_dns_pref_t socket_type_to_dns_pref(coro_socket_type_t type) {
-  switch (type) {
-  case CORO_SOCKET_TCP_V4:
-  case CORO_SOCKET_UDP_V4:
-    return TURBO_DNS_IPV4_ONLY;
-  case CORO_SOCKET_TCP_V6:
-  case CORO_SOCKET_UDP_V6:
-    return TURBO_DNS_IPV6_ONLY;
-  default:
-    return TURBO_DNS_ANY;
-  }
 }
 
 static void socket_destroy_shell(coro_socket_t *s) {
@@ -692,6 +663,62 @@ static int coro_socket_connect_resolved(coro_socket_t *s, const char *host, int 
 
 /* ── Socket Creation ──────────────────────────────────────── */
 
+typedef int (*coro_socket_protocol_init_fn)(coro_socket_t *s, coro_socket_type_t type);
+
+typedef struct coro_socket_protocol_desc_s {
+  coro_socket_type_t type;
+  turbo_transport_t transport;
+  const coro_transport_ops_t *ops;
+  turbo_dns_pref_t dns_pref;
+  int owns_handle;
+  coro_socket_protocol_init_fn init;
+} coro_socket_protocol_desc_t;
+
+static int socket_init_pipe(coro_socket_t *s, coro_socket_type_t type) {
+  UNUSED(type);
+
+  s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_PIPE);
+  if (!s->handle.stream) {
+    return socket_last_error_or(s, TURBO_ENOMEM);
+  }
+  turbo_stream_set_user_data(s->handle.stream, s);
+  s->handle.stream->managed = 1;
+  return 0;
+}
+
+static int socket_init_udp(coro_socket_t *s, coro_socket_type_t type) {
+  turbo_datagram_kind_t kind;
+
+  kind = (type == CORO_SOCKET_UDP_V6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
+  s->handle.datagram = turbo_datagram_create(s->ctx, kind);
+  if (!s->handle.datagram) {
+    return socket_last_error_or(s, TURBO_ENOMEM);
+  }
+  turbo_datagram_set_user_data(s->handle.datagram, s);
+  return 0;
+}
+
+static const coro_socket_protocol_desc_t g_socket_protocols[] = {
+    {CORO_SOCKET_TCP_V4, TURBO_TCP, &transport_ops_tcp, TURBO_DNS_IPV4_ONLY, 1, NULL},
+    {CORO_SOCKET_TCP_V6, TURBO_TCP, &transport_ops_tcp, TURBO_DNS_IPV6_ONLY, 1, NULL},
+    {CORO_SOCKET_TLS, TURBO_TLS, &transport_ops_tls, TURBO_DNS_ANY, 1, NULL},
+    {CORO_SOCKET_UDP_V4, TURBO_UDP, &udp_client_ops, TURBO_DNS_IPV4_ONLY, 1, socket_init_udp},
+    {CORO_SOCKET_UDP_V6, TURBO_UDP, &udp_client_ops, TURBO_DNS_IPV6_ONLY, 1, socket_init_udp},
+    {CORO_SOCKET_KCP, TURBO_KCP, &transport_ops_kcp, TURBO_DNS_ANY, 1, NULL},
+    {CORO_SOCKET_PIPE, TURBO_PIPE, &transport_ops_pipe, TURBO_DNS_ANY, 1, socket_init_pipe},
+};
+
+static const coro_socket_protocol_desc_t *socket_protocol_desc(coro_socket_type_t type) {
+  size_t i;
+
+  for (i = 0; i < sizeof(g_socket_protocols) / sizeof(g_socket_protocols[0]); ++i) {
+    if (g_socket_protocols[i].type == type) {
+      return &g_socket_protocols[i];
+    }
+  }
+  return NULL;
+}
+
 coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t transport,
                                         const coro_transport_ops_t *ops) {
   coro_socket_t *s;
@@ -724,76 +751,39 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
 }
 
 coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type) {
+  const coro_socket_protocol_desc_t *desc;
+  coro_socket_t *s;
+  int rc;
+
   /* Always use context's arena - no fallback to global pool.
      Good taste: eliminate special cases, context is always required. */
   if (!ctx || !ctx->arena) {
     socket_record_error(ctx, TURBO_EINVAL);
     return NULL; /* Fail fast: context with arena is mandatory */
   }
-  if (!socket_type_is_valid(type)) {
+
+  desc = socket_protocol_desc(type);
+  if (!desc) {
     socket_record_error(ctx, TURBO_EPROTONOSUPPORT);
     return NULL;
   }
 
-  coro_socket_t *s = coro_socket_create_shell(ctx, TURBO_TCP, &transport_ops_tcp);
+  s = coro_socket_create_shell(ctx, desc->transport, desc->ops);
   if (!s) {
     socket_record_error(ctx, TURBO_ENOMEM);
     return NULL;
   }
-  s->dns_pref = socket_type_to_dns_pref(type);
 
-  switch (type) {
-  case CORO_SOCKET_TCP_V4:
-  case CORO_SOCKET_TCP_V6:
-    s->transport = TURBO_TCP;
-    s->ops = &transport_ops_tcp;
-    s->owns_handle = 1;
-    break;
+  s->dns_pref = desc->dns_pref;
+  s->owns_handle = desc->owns_handle ? 1 : 0;
 
-  case CORO_SOCKET_TLS:
-    s->transport = TURBO_TLS;
-    s->ops = &transport_ops_tls;
-    s->owns_handle = 1;
-    break;
-
-  case CORO_SOCKET_KCP:
-    s->transport = TURBO_KCP;
-    s->ops = &transport_ops_kcp;
-    s->owns_handle = 1;
-    break;
-
-  case CORO_SOCKET_PIPE:
-    s->transport = TURBO_PIPE;
-    s->ops = &transport_ops_pipe;
-    s->handle.stream = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
-    if (!s->handle.stream) {
+  if (desc->init) {
+    rc = desc->init(s, type);
+    if (rc != 0) {
+      socket_record_error(ctx, rc);
       socket_destroy_shell(s);
       return NULL;
     }
-    turbo_stream_set_user_data(s->handle.stream, s);
-    s->handle.stream->managed = 1;
-    s->owns_handle = 1;
-    break;
-
-  case CORO_SOCKET_UDP_V4:
-  case CORO_SOCKET_UDP_V6:
-    s->transport = TURBO_UDP;
-    s->ops = &udp_client_ops;
-    turbo_datagram_kind_t kind =
-        (type == CORO_SOCKET_UDP_V6) ? TURBO_DATAGRAM_UDP6 : TURBO_DATAGRAM_UDP4;
-    s->handle.datagram = turbo_datagram_create(ctx, kind);
-    if (!s->handle.datagram) {
-      socket_destroy_shell(s);
-      return NULL;
-    }
-    turbo_datagram_set_user_data(s->handle.datagram, s);
-    s->owns_handle = 1;
-    break;
-
-  default:
-    socket_record_error(ctx, TURBO_EPROTONOSUPPORT);
-    socket_destroy_shell(s);
-    return NULL;
   }
 
   /* Initial reference is held by the caller. */
@@ -802,25 +792,6 @@ coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type) 
 }
 
 /* ── Socket Connect ───────────────────────────────────────── */
-
-static turbo_transport_t socket_type_to_transport(coro_socket_type_t type) {
-  switch (type) {
-  case CORO_SOCKET_TCP_V4:
-  case CORO_SOCKET_TCP_V6:
-    return TURBO_TCP;
-  case CORO_SOCKET_TLS:
-    return TURBO_TLS;
-  case CORO_SOCKET_UDP_V4:
-  case CORO_SOCKET_UDP_V6:
-    return TURBO_UDP;
-  case CORO_SOCKET_KCP:
-    return TURBO_KCP;
-  case CORO_SOCKET_PIPE:
-    return TURBO_PIPE;
-  default:
-    return TURBO_TCP;
-  }
-}
 
 static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_host, int port,
                                          const char *request_host) {
@@ -1340,11 +1311,15 @@ void coro_socket_set_timeout(coro_socket_t *s, uint64_t t) {
   }
 }
 
-coro_context_t *coro_socket_get_context(coro_socket_t *s) { return s->ctx; }
+coro_context_t *coro_socket_get_context(coro_socket_t *s) { return s ? s->ctx : NULL; }
 
-void coro_socket_set_user_data(coro_socket_t *s, void *d) { s->user_data = d; }
+void coro_socket_set_user_data(coro_socket_t *s, void *d) {
+  if (s) {
+    s->user_data = d;
+  }
+}
 
-void *coro_socket_get_user_data(coro_socket_t *s) { return s->user_data; }
+void *coro_socket_get_user_data(coro_socket_t *s) { return s ? s->user_data : NULL; }
 
 turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *s) {
   if (s && s->transport == TURBO_TCP && s->ctx) {
@@ -1387,5 +1362,11 @@ turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s) {
 }
 
 int coro_socket_get_local_address(coro_socket_t *s, struct sockaddr_storage *a) {
+  if (!s || !a) {
+    return TURBO_EINVAL;
+  }
+  if (!s->ops) {
+    return TURBO_ENOSYS;
+  }
   return s->ops->get_local_addr ? s->ops->get_local_addr(s, a) : TURBO_ENOSYS;
 }

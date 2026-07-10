@@ -5,14 +5,20 @@
 #include "tinytest.h"
 #include "turbo_fs.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifndef EOVERFLOW
+  #define EOVERFLOW ERANGE
+#endif
 
 /* ── shared test state ────────────────────────────────────────────────────── */
 
 static char g_file[1024];
 static char g_dir[1024];
 static char g_file2[1024]; /* rename target */
+static char g_link[1024];  /* symlink path */
 
 spec("Turbo FS Tests") {
 
@@ -20,13 +26,16 @@ spec("Turbo FS Tests") {
     strncpy(g_file,  "turbo_fs_test.txt",    sizeof(g_file));
     strncpy(g_dir,   "turbo_fs_test_dir",    sizeof(g_dir));
     strncpy(g_file2, "turbo_fs_renamed.txt", sizeof(g_file2));
+    strncpy(g_link,  "turbo_fs_link.txt",    sizeof(g_link));
     /* clean slate */
+    turbo_fs_unlink(g_link);
     turbo_fs_unlink(g_file);
     turbo_fs_unlink(g_file2);
     turbo_fs_rmdir(g_dir);
   }
 
   after_all() {
+    turbo_fs_unlink(g_link);
     turbo_fs_unlink(g_file);
     turbo_fs_unlink(g_file2);
     turbo_fs_rmdir(g_dir);
@@ -78,6 +87,43 @@ spec("Turbo FS Tests") {
       turbo_fs_stat_t st = {0};
       check_int_lt(turbo_fs_stat("__ghost__", &st), 0);
     }
+
+    it("chmod and access expose basic permission controls") {
+      turbo_fs_buf_t wb = turbo_fs_buf_init((char *)"perm", 4);
+      check_int_eq(turbo_fs_write_file(g_file, &wb), 0);
+
+      check_int_eq(turbo_fs_access(g_file, TURBO_FS_ACCESS_EXISTS), 0);
+      check_int_eq(turbo_fs_access(g_file, TURBO_FS_ACCESS_READ), 0);
+      check_int_eq(turbo_fs_chmod(g_file, 0444), 0);
+      check_int_eq(turbo_fs_access(g_file, TURBO_FS_ACCESS_READ), 0);
+      check_int_eq(turbo_fs_chmod(g_file, 0644), 0);
+    }
+  }
+
+  describe("symlink") {
+    it("creates and inspects symlinks when the platform permits it") {
+      turbo_fs_unlink(g_link);
+      turbo_fs_buf_t wb = turbo_fs_buf_init((char *)"linked", 6);
+      check_int_eq(turbo_fs_write_file(g_file, &wb), 0);
+
+      int rc = turbo_fs_symlink(g_file, g_link, 0);
+      if (rc == 0) {
+        turbo_fs_stat_t st = {0};
+        check_int_eq(turbo_fs_lstat(g_link, &st), 0);
+        check_int_eq((int)st.is_symlink, 1);
+
+        char target[1024] = {0};
+        int n = turbo_fs_readlink(g_link, target, sizeof(target));
+        check_int_gt(n, 0);
+#ifndef _WIN32
+        check_str_eq(target, g_file);
+#endif
+
+        check_int_eq(turbo_fs_unlink(g_link), 0);
+      } else {
+        check_int_lt(rc, 0);
+      }
+    }
   }
 
   /* ── mkdir / rmdir / unlink ─────────────────────────────────────────────── */
@@ -103,6 +149,17 @@ spec("Turbo FS Tests") {
 
       turbo_fs_stat_t st = {0};
       check_int_lt(turbo_fs_stat(g_file, &st), 0);
+    }
+
+    it("unlink rejects directories and leaves them intact") {
+      turbo_fs_rmdir(g_dir);
+      check_int_eq(turbo_fs_mkdir(g_dir, 0755), 0);
+      check_int_lt(turbo_fs_unlink(g_dir), 0);
+
+      turbo_fs_stat_t st = {0};
+      check_int_eq(turbo_fs_stat(g_dir, &st), 0);
+      check_int_eq((int)st.is_directory, 1);
+      check_int_eq(turbo_fs_rmdir(g_dir), 0);
     }
   }
 
@@ -170,6 +227,69 @@ spec("Turbo FS Tests") {
       check_int_eq(turbo_fs_pread(fd, buf, 5, 5), 5);
       check_str_eq(buf, "BBBBB");
 
+      check_int_eq(turbo_fs_close(fd), 0);
+    }
+
+    it("pread and pwrite preserve the current file position") {
+      turbo_file_t fd = turbo_fs_open(g_file,
+          TURBO_FS_O_RDWR | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
+      check_int_ne(fd, TURBO_INVALID_FILE);
+      check_int_eq(turbo_fs_write(fd, "abcdef", 6), 6);
+      check_int_eq((int)turbo_fs_seek(fd, 3, SEEK_SET), 3);
+
+      char ch = 0;
+      check_int_eq(turbo_fs_pread(fd, &ch, 1, 0), 1);
+      check_int_eq(ch, 'a');
+      check_int_eq((int)turbo_fs_tell(fd), 3);
+
+      check_int_eq(turbo_fs_pwrite(fd, "Z", 1, 1), 1);
+      check_int_eq((int)turbo_fs_tell(fd), 3);
+      check_int_eq(turbo_fs_close(fd), 0);
+
+      turbo_fs_buf_t rb = {0};
+      check_int_eq(turbo_fs_read_file(g_file, &rb), 0);
+      check_str_eq(rb.base, "aZcdef");
+      turbo_fs_buf_free(&rb);
+    }
+  }
+
+  describe("streaming bounds") {
+    it("rejects lengths that cannot be represented by the int return type") {
+      turbo_file_t fd = turbo_fs_open(g_file,
+          TURBO_FS_O_RDWR | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
+      check_int_ne(fd, TURBO_INVALID_FILE);
+
+      char byte = 'x';
+      size_t too_large = (size_t)INT_MAX + 1u;
+      check_int_eq(turbo_fs_write(fd, &byte, too_large), -EOVERFLOW);
+      check_int_eq(turbo_fs_pwrite(fd, &byte, too_large, 0), -EOVERFLOW);
+      check_int_eq(turbo_fs_read(fd, &byte, too_large), -EOVERFLOW);
+      check_int_eq(turbo_fs_pread(fd, &byte, too_large, 0), -EOVERFLOW);
+
+      check_int_eq(turbo_fs_close(fd), 0);
+    }
+  }
+
+  describe("file locks") {
+    it("locks and unlocks a byte range") {
+      turbo_fs_buf_t wb = turbo_fs_buf_init((char *)"lock-data", 9);
+      check_int_eq(turbo_fs_write_file(g_file, &wb), 0);
+
+      turbo_file_t fd = turbo_fs_open(g_file, TURBO_FS_O_RDWR, 0);
+      check_int_ne(fd, TURBO_INVALID_FILE);
+      check_int_eq(turbo_fs_lock(fd, TURBO_FS_LOCK_EXCLUSIVE, 0, 0), 0);
+      check_int_eq(turbo_fs_unlock(fd, 0, 0), 0);
+      check_int_eq(turbo_fs_close(fd), 0);
+    }
+
+    it("rejects invalid lock arguments") {
+      turbo_file_t fd = turbo_fs_open(g_file,
+          TURBO_FS_O_RDWR | TURBO_FS_O_CREAT | TURBO_FS_O_TRUNC, 0644);
+      check_int_ne(fd, TURBO_INVALID_FILE);
+      check_int_eq(turbo_fs_lock(fd, TURBO_FS_LOCK_SHARED | TURBO_FS_LOCK_EXCLUSIVE, 0, 1),
+                   -EINVAL);
+      check_int_eq(turbo_fs_lock(fd, 0, 0, 1), -EINVAL);
+      check_int_eq(turbo_fs_lock(fd, TURBO_FS_LOCK_SHARED, -1, 1), -EINVAL);
       check_int_eq(turbo_fs_close(fd), 0);
     }
   }

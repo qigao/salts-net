@@ -13,6 +13,7 @@
 #include "turbo_thread.h"
 #include "tlog.h"
 #include <ares.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sds.h"
@@ -47,6 +48,11 @@
 #define DNS_TIMEOUT_MS 5000
 #define DNS_TRIES 2
 #define DNS_TRY_TIMEOUT_MS ((DNS_TIMEOUT_MS - 1000) / DNS_TRIES)
+#define DNS_CACHE_CAPACITY 128
+#define DNS_CACHE_TTL_MS (300ULL * 1000ULL)
+#define DNS_ARES_QCACHE_MAX_TTL_SECONDS 300
+#define DNS_CACHE_MAX_HOSTNAME 256
+#define DNS_CACHE_MAX_RESULTS (TURBO_DNS_MAX_RESULTS * 2)
 
 // =============================================================================
 // Internal Types
@@ -96,6 +102,16 @@ typedef struct {
   int family;
 } turbo_dns_child_query_t;
 
+typedef struct {
+  int in_use;
+  char hostname[DNS_CACHE_MAX_HOSTNAME];
+  turbo_dns_pref_t pref;
+  uint64_t expires_at_ms;
+  uint64_t last_used_ms;
+  size_t count;
+  turbo_dns_result_t results[DNS_CACHE_MAX_RESULTS];
+} turbo_dns_cache_entry_t;
+
 /* Sync resolution state */
 typedef struct {
   int port;
@@ -119,8 +135,116 @@ static turbo_once_t  g_dns_init_once       = TURBO_ONCE_INIT;
 static turbo_mutex_t g_dns_lock;
 static int           g_dns_lock_initialized = 0;
 static int           g_dns_refcount         = 0;
+static turbo_dns_cache_entry_t g_dns_cache[DNS_CACHE_CAPACITY];
 
 static void destroy_ares_context(turbo_ares_t *ctx);
+
+// =============================================================================
+// DNS cache
+// =============================================================================
+
+static int dns_cache_make_key(const char *hostname,
+                              char out[DNS_CACHE_MAX_HOSTNAME]) {
+  size_t len;
+
+  if (!hostname || !out) return TURBO_EINVAL;
+  len = strlen(hostname);
+  if (len == 0 || len >= DNS_CACHE_MAX_HOSTNAME) return TURBO_EINVAL;
+
+  for (size_t i = 0; i < len; i++) {
+    out[i] = (char)tolower((unsigned char)hostname[i]);
+  }
+  out[len] = '\0';
+  return 0;
+}
+
+static void dns_cache_clear_locked(void) {
+  memset(g_dns_cache, 0, sizeof(g_dns_cache));
+}
+
+static int dns_cache_lookup(const char *hostname,
+                            turbo_dns_pref_t pref,
+                            turbo_dns_result_t results[DNS_CACHE_MAX_RESULTS],
+                            size_t *count) {
+  char key[DNS_CACHE_MAX_HOSTNAME];
+  uint64_t now_ms;
+
+  if (!results || !count) return 0;
+  *count = 0;
+  if (!g_dns_lock_initialized) return 0;
+  if (dns_cache_make_key(hostname, key) != 0) return 0;
+
+  now_ms = turbo_monotonic_ms();
+  turbo_mutex_lock(&g_dns_lock);
+  for (int i = 0; i < DNS_CACHE_CAPACITY; i++) {
+    turbo_dns_cache_entry_t *entry = &g_dns_cache[i];
+    if (!entry->in_use || entry->pref != pref) continue;
+    if (strcmp(entry->hostname, key) != 0) continue;
+
+    if (entry->expires_at_ms <= now_ms) {
+      memset(entry, 0, sizeof(*entry));
+      turbo_mutex_unlock(&g_dns_lock);
+      return 0;
+    }
+
+    memcpy(results, entry->results, entry->count * sizeof(entry->results[0]));
+    *count = entry->count;
+    entry->last_used_ms = now_ms;
+    turbo_mutex_unlock(&g_dns_lock);
+    return 1;
+  }
+  turbo_mutex_unlock(&g_dns_lock);
+  return 0;
+}
+
+static void dns_cache_store(const char *hostname,
+                            turbo_dns_pref_t pref,
+                            const turbo_dns_result_t *results,
+                            size_t count) {
+  char key[DNS_CACHE_MAX_HOSTNAME];
+  uint64_t now_ms;
+  int slot = -1;
+
+  if (!results || count == 0 || !g_dns_lock_initialized) return;
+  if (count > DNS_CACHE_MAX_RESULTS) count = DNS_CACHE_MAX_RESULTS;
+  if (dns_cache_make_key(hostname, key) != 0) return;
+
+  now_ms = turbo_monotonic_ms();
+  turbo_mutex_lock(&g_dns_lock);
+  for (int i = 0; i < DNS_CACHE_CAPACITY; i++) {
+    turbo_dns_cache_entry_t *entry = &g_dns_cache[i];
+    if (entry->in_use && entry->pref == pref &&
+        strcmp(entry->hostname, key) == 0) {
+      slot = i;
+      break;
+    }
+    if (slot < 0 && (!entry->in_use || entry->expires_at_ms <= now_ms)) {
+      slot = i;
+    }
+  }
+
+  if (slot < 0) {
+    uint64_t oldest_ms = g_dns_cache[0].last_used_ms;
+    slot = 0;
+    for (int i = 1; i < DNS_CACHE_CAPACITY; i++) {
+      if (g_dns_cache[i].last_used_ms < oldest_ms) {
+        oldest_ms = g_dns_cache[i].last_used_ms;
+        slot = i;
+      }
+    }
+  }
+
+  turbo_dns_cache_entry_t *entry = &g_dns_cache[slot];
+  memset(entry, 0, sizeof(*entry));
+  entry->in_use = 1;
+  strcpy(entry->hostname, key);
+  entry->pref = pref;
+  entry->expires_at_ms = now_ms + DNS_CACHE_TTL_MS;
+  entry->last_used_ms = now_ms;
+  entry->count = count;
+  memcpy(entry->results, results, count * sizeof(results[0]));
+  turbo_mutex_unlock(&g_dns_lock);
+}
 
 // =============================================================================
 // Address helpers (no libuv)
@@ -374,6 +498,10 @@ static int init_ares_context(turbo_ares_t **out_ctx) {
   options.timeout            = DNS_TRY_TIMEOUT_MS;
   options.tries              = DNS_TRIES;
   int init_flags = ARES_OPT_SOCK_STATE_CB | ARES_OPT_TIMEOUTMS | ARES_OPT_TRIES;
+#ifdef ARES_OPT_QUERY_CACHE
+  options.qcache_max_ttl = DNS_ARES_QCACHE_MAX_TTL_SECONDS;
+  init_flags |= ARES_OPT_QUERY_CACHE;
+#endif
 
   if (valid_dns > 0) {
     options.servers  = dns_addrs;
@@ -449,6 +577,7 @@ static void release_parent_ref(turbo_dns_parent_query_t *parent) {
     }
 
     if (count > 0) {
+      dns_cache_store(parent->hostname, parent->pref, ordered, count);
       parent->results_callback(parent->hostname, ordered, count, 0, parent->user_data);
     } else {
       int err = (parent->status_v4 != ARES_SUCCESS && parent->status_v4 != 0) ? parent->status_v4 :
@@ -646,7 +775,12 @@ int turbo_dns_init(void) {
 void turbo_dns_cleanup(void) {
   if (!g_dns_lock_initialized) return;
   turbo_mutex_lock(&g_dns_lock);
-  if (g_dns_refcount > 0) g_dns_refcount--;
+  if (g_dns_refcount > 0) {
+    g_dns_refcount--;
+    if (g_dns_refcount == 0) {
+      dns_cache_clear_locked();
+    }
+  }
   turbo_mutex_unlock(&g_dns_lock);
 }
 
@@ -654,17 +788,20 @@ void turbo_dns_cleanup(void) {
 // Public API: Synchronous Resolution
 // =============================================================================
 
-static void sync_dns_callback(const char *hostname, const char *ip,
-                               int status, void *user_data) {
+static void sync_dns_results_callback(const char *hostname,
+                                      const turbo_dns_result_t *results,
+                                      size_t count,
+                                      int status,
+                                      void *user_data) {
   (void)hostname;
   turbo_dns_sync_state_t *state = (turbo_dns_sync_state_t *)user_data;
 
   turbo_mutex_lock(&state->mu);
   if (!state->done) {
-    if (status == 0 && ip) {
+    if (status == 0 && results && count > 0) {
       struct sockaddr_storage addr;
       int addr_len = 0;
-      if (dns_parse_ip_address(ip, state->port, &addr, &addr_len) == 0) {
+      if (dns_parse_ip_address(results[0].ip, state->port, &addr, &addr_len) == 0) {
         memcpy(state->result_addr, &addr, sizeof(addr));
         *state->result_len = addr_len;
         state->error = 0;
@@ -691,6 +828,13 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
 
   turbo_once(&g_dns_init_once, dns_init_once);
 
+  turbo_dns_result_t cached_results[DNS_CACHE_MAX_RESULTS];
+  size_t cached_count = 0;
+  if (dns_cache_lookup(host, TURBO_DNS_ANY, cached_results, &cached_count) &&
+      cached_count > 0) {
+    return dns_parse_ip_address(cached_results[0].ip, port, out, out_len);
+  }
+
   turbo_ares_t *ares_ctx = NULL;
   int err = init_ares_context(&ares_ctx);
   if (err != 0) return err;
@@ -712,12 +856,12 @@ int turbo_dns_resolve(void *loop_unused, const char *host, int port,
   }
 
   parent->hostname  = tstr_dup(host);
-  parent->callback  = sync_dns_callback;
+  parent->results_callback = sync_dns_results_callback;
   parent->user_data = &state;
   parent->pref      = TURBO_DNS_ANY;
   parent->ares      = ares_ctx;
   atomic_init(&parent->ref_count, 1);
-  atomic_init(&parent->delivered, 0);
+  atomic_init(&parent->delivered, 1);
 
   if (!parent->hostname) {
     free(parent);
@@ -858,6 +1002,14 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
 
   turbo_once(&g_dns_init_once, dns_init_once);
 
+  turbo_dns_result_t cached_results[DNS_CACHE_MAX_RESULTS];
+  size_t cached_count = 0;
+  if (dns_cache_lookup(hostname, pref, cached_results, &cached_count) &&
+      cached_count > 0) {
+    callback(hostname, cached_results[0].ip, 0, user_data);
+    return 0;
+  }
+
   turbo_ares_t *ares_ctx = NULL;
   int err = init_ares_context(&ares_ctx);
   if (err != 0) return err;
@@ -947,6 +1099,14 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
   }
 
   turbo_once(&g_dns_init_once, dns_init_once);
+
+  turbo_dns_result_t cached_results[DNS_CACHE_MAX_RESULTS];
+  size_t cached_count = 0;
+  if (dns_cache_lookup(hostname, pref, cached_results, &cached_count) &&
+      cached_count > 0) {
+    callback(hostname, cached_results, cached_count, 0, user_data);
+    return 0;
+  }
 
   turbo_ares_t *ares_ctx = NULL;
   int err = init_ares_context(&ares_ctx);
@@ -1053,6 +1213,7 @@ int turbo_dns_set_servers(const char *servers[], int count) {
     TLOG_INFO("Added DNS server[{}]: {}", g_dns_count - 1, servers[i]);
   }
   int final_count = g_dns_count;
+  dns_cache_clear_locked();
   turbo_mutex_unlock(&g_dns_lock);
 
   TLOG_INFO("Configured {} DNS servers", final_count);

@@ -3,11 +3,20 @@
 #include "tinytest.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
+#include "turbo_thread.h"
  
 static int callback_count = 0;
 static const char *callback_file = NULL;
 static int callback_line = 0;
+static char callback_message[256];
+static void *callback_user_data = NULL;
+static int custom_write_count = 0;
+static int custom_flush_count = 0;
+static int custom_destroy_count = 0;
+static atomic_int blocking_callback_entered;
+static atomic_int blocking_callback_release;
 
 static void test_callback(const turbo_log_entry_t *entry, void *user_data) {
   (void)user_data;
@@ -27,6 +36,42 @@ static void count_only_callback(const turbo_log_entry_t *entry, void *user_data)
   (void)entry;
   (void)user_data;
   callback_count++;
+}
+
+static void capture_message_callback(const turbo_log_entry_t *entry, void *user_data) {
+  callback_user_data = user_data;
+  snprintf(callback_message, sizeof(callback_message), "%s", entry->message);
+  callback_count++;
+}
+
+static int component_predicate(const turbo_log_entry_t *entry, void *user_data) {
+  const char *required = (const char *)user_data;
+  return entry->component && required && strcmp(entry->component, required) == 0;
+}
+
+static void custom_sink_write_callback(const turbo_log_entry_t *entry, void *user_data) {
+  callback_user_data = user_data;
+  snprintf(callback_message, sizeof(callback_message), "%s", entry->message);
+  custom_write_count++;
+}
+
+static void custom_sink_flush_callback(void *user_data) {
+  callback_user_data = user_data;
+  custom_flush_count++;
+}
+
+static void custom_sink_destroy_callback(void *user_data) {
+  callback_user_data = user_data;
+  custom_destroy_count++;
+}
+
+static void blocking_callback(const turbo_log_entry_t *entry, void *user_data) {
+  (void)entry;
+  (void)user_data;
+  atomic_store(&blocking_callback_entered, 1);
+  while (!atomic_load(&blocking_callback_release)) {
+    turbo_thread_yield();
+  }
 }
 
 typedef enum {
@@ -118,11 +163,23 @@ spec("TLog Tests") {
 
     tlog_set_level(logger, TURBO_LOG_LEVEL_WARN);
     check_int_eq(tlog_get_level(logger), TURBO_LOG_LEVEL_WARN);
+    check_int_eq(tlog_set_level_ex(logger, TURBO_LOG_LEVEL_ERROR), 0);
+    check_int_eq(tlog_get_level(logger), TURBO_LOG_LEVEL_ERROR);
+    check_int_eq(tlog_set_level_ex(logger, (turbo_log_level_t)-1), -1);
+    check_int_eq(tlog_get_level(logger), TURBO_LOG_LEVEL_ERROR);
+    tlog_set_level(logger, (turbo_log_level_t)(TURBO_LOG_LEVEL_FATAL + 1));
+    check_int_eq(tlog_get_level(logger), TURBO_LOG_LEVEL_ERROR);
+    tlog_set_level(logger, TURBO_LOG_LEVEL_WARN);
 
     TURBO_LOG_INFO(logger, "test", "Info (should not appear)");
     TURBO_LOG_WARN(logger, "test", "Warning (should appear)");
 
     tlog_destroy(logger);
+  }
+
+  it("should reject invalid logger configuration") {
+    tlog_config_t config = {.min_level = (turbo_log_level_t)(TURBO_LOG_LEVEL_FATAL + 1)};
+    check_null(tlog_create(&config));
   }
 
   it("should return correct level names") {
@@ -187,6 +244,41 @@ spec("TLog Tests") {
     tlog_destroy(custom_logger);
   }
 
+  it("should recreate default logger after default destruction") {
+    tlog_t *default_logger = tlog_get_default();
+    check_not_null(default_logger);
+    tlog_destroy(default_logger);
+
+    tlog_t *recreated = tlog_get_default();
+    check_not_null(recreated);
+    TLOG_INFO("Default logger recreated after destruction");
+    tlog_destroy(recreated);
+  }
+
+  it("should report async queue size while a sink is blocked") {
+    atomic_store(&blocking_callback_entered, 0);
+    atomic_store(&blocking_callback_release, 0);
+
+    tlog_t *logger = tlog_create(NULL);
+    check_not_null(logger);
+
+    turbo_log_sink_t *cb_sink = turbo_sink_callback_create(blocking_callback, NULL);
+    check_not_null(cb_sink);
+    tlog_add_sink(logger, cb_sink);
+
+    TURBO_LOG_INFO(logger, "queue", "blocked queue-size sample");
+    while (!atomic_load(&blocking_callback_entered)) {
+      turbo_thread_yield();
+    }
+
+    check(tlog_get_queue_size(logger) > 0);
+    atomic_store(&blocking_callback_release, 1);
+    tlog_flush(logger);
+    check_int_eq(tlog_get_queue_size(logger), 0);
+
+    tlog_destroy(logger);
+  }
+
   it("should handle callback sinks") {
     callback_count = 0;
 
@@ -205,6 +297,220 @@ spec("TLog Tests") {
     check_int_eq(callback_count, 3);
 
     tlog_destroy(logger);
+  }
+
+  it("should decorate a sink with metrics") {
+    callback_count = 0;
+
+    tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+    tlog_t *logger = tlog_create(&config);
+    check_not_null(logger);
+
+    turbo_log_sink_t *inner = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(inner);
+    turbo_log_sink_t *metrics = turbo_sink_metrics_create(inner, TURBO_SINK_OWNED);
+    check_not_null(metrics);
+    tlog_add_sink(logger, metrics);
+
+    TURBO_LOG_INFO(logger, "decorator", "decorated message one");
+    TURBO_LOG_WARN(logger, "decorator", "decorated message two");
+    tlog_flush(logger);
+
+    turbo_sink_metrics_t stats = {0};
+    check_int_eq(turbo_sink_metrics_snapshot(metrics, &stats), 0);
+    check_int_eq(callback_count, 2);
+    check_size_eq((size_t)stats.entries_seen, 2);
+    check_size_eq((size_t)stats.entries_forwarded, 2);
+    check_size_eq((size_t)stats.entries_filtered, 0);
+    check(stats.bytes_forwarded > 0);
+
+    tlog_destroy(logger);
+  }
+
+  it("should reject metrics snapshots for non-metrics sinks") {
+    turbo_log_sink_t *sink = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(sink);
+
+    turbo_sink_metrics_t stats = {0};
+    check_int_eq(turbo_sink_metrics_snapshot(sink, &stats), -1);
+    check_int_eq(turbo_sink_metrics_snapshot(NULL, &stats), -1);
+    check_int_eq(turbo_sink_metrics_snapshot(sink, NULL), -1);
+
+    turbo_sink_destroy(sink);
+  }
+
+  it("should let a metrics decorator filter before forwarding") {
+    callback_count = 0;
+
+    tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+    tlog_t *logger = tlog_create(&config);
+    check_not_null(logger);
+
+    turbo_log_sink_t *inner = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(inner);
+    turbo_log_sink_t *metrics = turbo_sink_metrics_create(inner, TURBO_SINK_OWNED);
+    check_not_null(metrics);
+    check_int_eq(turbo_sink_set_min_level(metrics, TURBO_LOG_LEVEL_WARN), 0);
+    check_int_eq(turbo_sink_get_min_level(metrics), TURBO_LOG_LEVEL_WARN);
+    tlog_add_sink(logger, metrics);
+
+    TURBO_LOG_DEBUG(logger, "decorator", "filtered debug message");
+    TURBO_LOG_ERROR(logger, "decorator", "forwarded error message");
+    tlog_flush(logger);
+
+    turbo_sink_metrics_t stats = {0};
+    check_int_eq(turbo_sink_metrics_snapshot(metrics, &stats), 0);
+    check_int_eq(callback_count, 1);
+    check_size_eq((size_t)stats.entries_seen, 2);
+    check_size_eq((size_t)stats.entries_forwarded, 1);
+    check_size_eq((size_t)stats.entries_filtered, 1);
+
+    tlog_destroy(logger);
+  }
+
+  it("should expose sink attributes through accessors") {
+    int marker = 7;
+    turbo_log_sink_t *sink = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(sink);
+
+    check_int_eq(turbo_sink_set_min_level(sink, TURBO_LOG_LEVEL_ERROR), 0);
+    check_int_eq(turbo_sink_get_min_level(sink), TURBO_LOG_LEVEL_ERROR);
+    check_int_eq(turbo_sink_set_min_level(sink, (turbo_log_level_t)-1), -1);
+    check_int_eq(turbo_sink_set_min_level(sink, (turbo_log_level_t)(TURBO_LOG_LEVEL_FATAL + 1)), -1);
+    check_int_eq(turbo_sink_set_user_data(sink, &marker), 0);
+    check(turbo_sink_get_user_data(sink) == &marker);
+
+    turbo_sink_destroy(sink);
+  }
+
+  it("should keep ownership with caller when sink attach or decorator creation fails") {
+    custom_destroy_count = 0;
+
+    turbo_sink_custom_opts_t custom_opts = {
+        .write = custom_sink_write_callback,
+        .flush = NULL,
+        .destroy = custom_sink_destroy_callback,
+        .user_data = NULL
+    };
+    turbo_log_sink_t *inner = turbo_sink_custom_create(&custom_opts);
+    check_not_null(inner);
+
+    turbo_sink_filter_opts_t filter_opts = TURBO_SINK_FILTER_OPTS_DEFAULT;
+    filter_opts.min_level = TURBO_LOG_LEVEL_ERROR;
+    filter_opts.max_level = TURBO_LOG_LEVEL_INFO;
+    check_null(turbo_sink_filter_create(inner, TURBO_SINK_OWNED, &filter_opts));
+    check_int_eq(custom_destroy_count, 0);
+
+    check_int_eq(tlog_add_sink(NULL, inner), -1);
+    check_int_eq(custom_destroy_count, 0);
+    turbo_sink_destroy(inner);
+    check_int_eq(custom_destroy_count, 1);
+  }
+
+  it("should decorate a sink with a filter") {
+    callback_count = 0;
+
+    tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_DEBUG};
+    tlog_t *logger = tlog_create(&config);
+    check_not_null(logger);
+
+    turbo_log_sink_t *inner = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(inner);
+    turbo_sink_filter_opts_t opts = TURBO_SINK_FILTER_OPTS_DEFAULT;
+    opts.min_level = TURBO_LOG_LEVEL_INFO;
+    opts.max_level = TURBO_LOG_LEVEL_ERROR;
+    opts.predicate = component_predicate;
+    opts.predicate_user_data = "allowed";
+    turbo_log_sink_t *filter = turbo_sink_filter_create(inner, TURBO_SINK_OWNED, &opts);
+    check_not_null(filter);
+    tlog_add_sink(logger, filter);
+
+    TURBO_LOG_DEBUG(logger, "allowed", "filtered by level");
+    TURBO_LOG_INFO(logger, "blocked", "filtered by predicate");
+    TURBO_LOG_WARN(logger, "allowed", "forwarded warning");
+    TURBO_LOG_FATAL(logger, "allowed", "filtered by max level");
+    tlog_flush(logger);
+
+    check_int_eq(callback_count, 1);
+
+    tlog_destroy(logger);
+  }
+
+  it("should decorate a sink with formatting") {
+    callback_count = 0;
+    callback_message[0] = '\0';
+    callback_user_data = NULL;
+
+    tlog_t *logger = tlog_create(NULL);
+    check_not_null(logger);
+
+    int marker = 11;
+    turbo_log_sink_t *inner = turbo_sink_callback_create(capture_message_callback, &marker);
+    check_not_null(inner);
+    turbo_log_sink_t *format =
+        turbo_sink_format_create(inner, TURBO_SINK_OWNED, "[{level}] {component}: {message}");
+    check_not_null(format);
+    tlog_add_sink(logger, format);
+
+    TURBO_LOG_INFO(logger, "fmt", "hello");
+    tlog_flush(logger);
+
+    check_int_eq(callback_count, 1);
+    check(callback_user_data == &marker);
+    check_str_eq(callback_message, "[INFO] fmt: hello");
+
+    tlog_destroy(logger);
+  }
+
+  it("should fail fast on oversized format patterns") {
+    turbo_console_sink_opts_t console_opts = {
+        .output = stdout,
+        .use_colors = 0,
+        .pattern = "{message}{message}{message}{message}{message}{message}{message}{message}"
+                   "{message}{message}{message}{message}{message}{message}{message}{message}"
+                   "{message}"
+    };
+    check_null(turbo_sink_console_create(&console_opts));
+
+    turbo_log_sink_t *inner = turbo_sink_callback_create(count_only_callback, NULL);
+    check_not_null(inner);
+    turbo_log_sink_t *format =
+        turbo_sink_format_create(inner, TURBO_SINK_OWNED, console_opts.pattern);
+    check_null(format);
+    turbo_sink_destroy(inner);
+  }
+
+  it("should support opaque custom sinks") {
+    custom_write_count = 0;
+    custom_flush_count = 0;
+    custom_destroy_count = 0;
+    callback_message[0] = '\0';
+    callback_user_data = NULL;
+
+    tlog_t *logger = tlog_create(NULL);
+    check_not_null(logger);
+
+    int marker = 17;
+    turbo_sink_custom_opts_t opts = {
+        .write = custom_sink_write_callback,
+        .flush = custom_sink_flush_callback,
+        .destroy = custom_sink_destroy_callback,
+        .user_data = &marker
+    };
+    turbo_log_sink_t *sink = turbo_sink_custom_create(&opts);
+    check_not_null(sink);
+    tlog_add_sink(logger, sink);
+
+    TURBO_LOG_INFO(logger, "custom", "custom sink message");
+    tlog_flush(logger);
+    check_int_eq(custom_write_count, 1);
+    check_int_eq(custom_flush_count, 1);
+    check(callback_user_data == &marker);
+    check_str_eq(callback_message, "custom sink message");
+
+    tlog_destroy(logger);
+    check_int_eq(custom_destroy_count, 1);
+    check(callback_user_data == &marker);
   }
 
   it("should capture source only for debug builds by default") {

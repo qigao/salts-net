@@ -53,4 +53,22 @@ spec("base64_utils") {
     check_int_eq(tn_base64_decode("Zg==", NULL, &decoded_len), -1);
     check_int_eq(tn_base64_decode("Zg==", &decoded, NULL), -1);
   }
+
+  it("should expose result-style encode errors") {
+    tn_base64_string_result_t result = tn_base64_encode_ex(NULL, 4);
+    check(!result.ok);
+    check_int_eq(result.error, TN_BASE64_ERR_INVALID_ARG);
+  }
+
+  it("should expose result-style decode errors") {
+    tn_base64_bytes_result_t result = tn_base64_decode_ex("not valid base64!");
+    check(!result.ok);
+    check_int_eq(result.error, TN_BASE64_ERR_INVALID_INPUT);
+  }
+
+  it("should expose buffer-too-small separately") {
+    char out[4];
+    tn_base64_error_t err = tn_base64_encode_buf_ex((const uint8_t *)"data", 4, out, sizeof(out));
+    check_int_eq(err, TN_BASE64_ERR_BUFFER_TOO_SMALL);
+  }
 }

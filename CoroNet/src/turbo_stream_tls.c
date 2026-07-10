@@ -53,9 +53,11 @@ static int s_ca_configured = 0;
 static int s_server_configured = 0;
 static SSL_SESSION *s_cached_client_session = NULL;
 static char s_cached_client_session_host[256] = {0};
-static turbo_tls_protocol_mode_t s_tls_protocol_mode = TURBO_TLS_PROTOCOL_DEFAULT;
+static atomic_int s_tls_protocol_mode;
 static turbo_once_t s_tls_cleanup_once = TURBO_ONCE_INIT;
+static turbo_once_t s_tls_global_lock_once = TURBO_ONCE_INIT;
 static turbo_once_t s_tls_server_ctx_once = TURBO_ONCE_INIT;
+static turbo_mutex_t s_tls_global_mutex;
 static turbo_mutex_t s_tls_server_ctx_mutex;
 static atomic_int s_tls_cleanup_done;
 static struct {
@@ -111,6 +113,19 @@ static unsigned long long tls_metric_load(const atomic_ullong *counter) {
   return atomic_load_explicit(counter, memory_order_relaxed);
 }
 
+static void tls_global_lock_init(void) {
+  turbo_mutex_init(&s_tls_global_mutex);
+}
+
+static void tls_global_lock(void) {
+  turbo_once(&s_tls_global_lock_once, tls_global_lock_init);
+  turbo_mutex_lock(&s_tls_global_mutex);
+}
+
+static void tls_global_unlock(void) {
+  turbo_mutex_unlock(&s_tls_global_mutex);
+}
+
 static void tls_server_ctx_lock_init(void) {
   turbo_mutex_init(&s_tls_server_ctx_mutex);
 }
@@ -142,9 +157,11 @@ static void tls_store_client_session_for_host(const char *hostname, SSL_SESSION 
     SSL_SESSION_up_ref(session);
   }
 
+  tls_global_lock();
   if (session == s_cached_client_session &&
       strcmp(hostname, s_cached_client_session_host) == 0) {
     SSL_SESSION_free(session);
+    tls_global_unlock();
     return;
   }
 
@@ -152,6 +169,7 @@ static void tls_store_client_session_for_host(const char *hostname, SSL_SESSION 
   s_cached_client_session = session;
   strncpy(s_cached_client_session_host, hostname, sizeof(s_cached_client_session_host) - 1);
   s_cached_client_session_host[sizeof(s_cached_client_session_host) - 1] = '\0';
+  tls_global_unlock();
   tls_metric_inc(&s_tls_metrics.client_session_stores);
 }
 
@@ -160,6 +178,7 @@ static void tls_global_cleanup(void) {
     return;
   }
 
+  tls_global_lock();
   tls_reset_client_session_cache_internal();
 
   if (s_default_ctx) {
@@ -167,6 +186,7 @@ static void tls_global_cleanup(void) {
     s_default_ctx = NULL;
   }
   s_ca_configured = 0;
+  tls_global_unlock();
 
   tls_server_ctx_lock();
   if (s_server_ctx) {
@@ -348,11 +368,16 @@ static int configure_server_ctx_from_env_unlocked(void) {
 }
 
 static int tls_apply_protocol_mode_to_ctx(SSL_CTX *ctx) {
+  turbo_tls_protocol_mode_t protocol_mode;
+
   if (!ctx) {
     return TURBO_EINVAL;
   }
 
-  switch (s_tls_protocol_mode) {
+  protocol_mode =
+      (turbo_tls_protocol_mode_t)atomic_load_explicit(&s_tls_protocol_mode, memory_order_acquire);
+
+  switch (protocol_mode) {
     case TURBO_TLS_PROTOCOL_DEFAULT:
       if (SSL_CTX_set_min_proto_version(ctx, 0) != 1) {
         return TURBO_EIO;
@@ -1100,14 +1125,19 @@ static void tls_apply_cached_client_session(tls_state_t *st) {
   if (!st || st->server_mode || !st->ssl) {
     return;
   }
+
+  tls_global_lock();
   if (!s_cached_client_session || st->hostname[0] == '\0') {
+    tls_global_unlock();
     return;
   }
   if (strcmp(st->hostname, s_cached_client_session_host) != 0) {
+    tls_global_unlock();
     return;
   }
   tls_metric_inc(&s_tls_metrics.client_session_cache_attempts);
   rc = SSL_set_session(st->ssl, s_cached_client_session);
+  tls_global_unlock();
   if (rc != 1) {
     ERR_clear_error();
   }
@@ -1262,14 +1292,20 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 /* ── Initialization ───────────────────────────────────────── */
 
 static SSL_CTX *get_default_tls_ctx(void) {
+  SSL_CTX *ctx;
+
   turbo_once(&s_tls_cleanup_once, tls_register_global_cleanup);
 
+  tls_global_lock();
   if (s_default_ctx) {
     if (tls_apply_protocol_mode_to_ctx(s_default_ctx) != 0) {
+      tls_global_unlock();
       return NULL;
     }
     configure_ca_from_env();
-    return s_default_ctx;
+    ctx = s_default_ctx;
+    tls_global_unlock();
+    return ctx;
   }
   /* Auto-init for older OpenSSL just in case, modern ignores it */
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
@@ -1287,6 +1323,7 @@ static SSL_CTX *get_default_tls_ctx(void) {
     if (tls_apply_protocol_mode_to_ctx(s_default_ctx) != 0) {
       SSL_CTX_free(s_default_ctx);
       s_default_ctx = NULL;
+      tls_global_unlock();
       return NULL;
     }
     configure_ca_from_env();
@@ -1294,7 +1331,9 @@ static SSL_CTX *get_default_tls_ctx(void) {
     configure_ca_from_windows_store();
 #endif
   }
-  return s_default_ctx;
+  ctx = s_default_ctx;
+  tls_global_unlock();
+  return ctx;
 }
 
 static SSL_CTX *get_default_tls_server_ctx(void) {
@@ -2102,15 +2141,19 @@ CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode)
     return TURBO_EINVAL;
   }
 
-  s_tls_protocol_mode = mode;
+  tls_global_lock();
+  atomic_store_explicit(&s_tls_protocol_mode, mode, memory_order_release);
   tls_reset_client_session_cache_internal();
 
   if (s_default_ctx) {
     rc = tls_apply_protocol_mode_to_ctx(s_default_ctx);
     if (rc != 0) {
+      tls_global_unlock();
       return rc;
     }
   }
+  tls_global_unlock();
+
   tls_server_ctx_lock();
   if (s_server_ctx) {
     rc = tls_apply_protocol_mode_to_ctx(s_server_ctx);
@@ -2125,11 +2168,14 @@ CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode)
 }
 
 CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void) {
-  return s_tls_protocol_mode;
+  return (turbo_tls_protocol_mode_t)atomic_load_explicit(&s_tls_protocol_mode,
+                                                        memory_order_acquire);
 }
 
 CXX_C_API void turbo_stream_tls_reset_client_session_cache(void) {
+  tls_global_lock();
   tls_reset_client_session_cache_internal();
+  tls_global_unlock();
 }
 
 CXX_C_API void turbo_stream_tls_thread_cleanup(void) {

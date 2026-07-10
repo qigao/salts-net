@@ -106,9 +106,63 @@ typedef struct {
 } compiled_pattern_t;
 
 static tlog_t *g_default_logger = NULL;
-static turbo_once_t g_default_logger_once = TURBO_ONCE_INIT;
+static turbo_once_t g_default_logger_mutex_once = TURBO_ONCE_INIT;
 static turbo_mutex_t g_default_logger_mutex;
 static int g_default_logger_mutex_init = 0;
+
+typedef enum {
+  SINK_KIND_CONSOLE = 1,
+  SINK_KIND_FILE,
+  SINK_KIND_CALLBACK,
+  SINK_KIND_CUSTOM,
+  SINK_KIND_FILTER,
+  SINK_KIND_FORMAT,
+  SINK_KIND_METRICS
+} sink_kind_t;
+
+struct turbo_log_sink_s {
+  turbo_sink_write_fn write;
+  turbo_sink_flush_fn flush;
+  turbo_sink_destroy_fn destroy;
+  sink_kind_t kind;
+  _Atomic int min_level;
+  _Atomic uintptr_t user_data;
+};
+
+static void sink_base_init(turbo_log_sink_t *sink, turbo_sink_write_fn write,
+                           turbo_sink_flush_fn flush, turbo_sink_destroy_fn destroy,
+                           sink_kind_t kind) {
+  sink->write = write;
+  sink->flush = flush;
+  sink->destroy = destroy;
+  sink->kind = kind;
+  atomic_init(&sink->min_level, (int)TURBO_LOG_LEVEL_DEBUG);
+  atomic_init(&sink->user_data, (uintptr_t)NULL);
+}
+
+static int sink_accepts_level(const turbo_log_sink_t *sink, turbo_log_level_t level) {
+  return level >= (turbo_log_level_t)atomic_load_explicit(&sink->min_level, memory_order_relaxed);
+}
+
+static int log_level_is_valid(turbo_log_level_t level) {
+  return level >= TURBO_LOG_LEVEL_DEBUG && level <= TURBO_LOG_LEVEL_FATAL;
+}
+
+static void *sink_user_data(const turbo_log_sink_t *sink) {
+  return (void *)atomic_load_explicit(&sink->user_data, memory_order_relaxed);
+}
+
+static void sink_write_entry(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
+  if (sink && sink->write) {
+    sink->write(sink, entry);
+  }
+}
+
+static void sink_flush_inner(turbo_log_sink_t *sink) {
+  if (sink && sink->flush) {
+    sink->flush(sink);
+  }
+}
 
 typedef struct {
   uint64_t last_sec;
@@ -138,6 +192,8 @@ static void init_tlog_globals(void) {
   g_default_logger_mutex_init = 1;
 }
 
+static void pattern_free(compiled_pattern_t *cp);
+
 static void get_cached_time(uint64_t ts_ms, char *buf, int *written) {
   uint64_t sec = ts_ms / 1000;
 
@@ -162,9 +218,10 @@ static void get_cached_time(uint64_t ts_ms, char *buf, int *written) {
   *written = len;
 }
 
-static void pattern_compile(const char *pattern, compiled_pattern_t *cp) {
-  if (!pattern)
-    return;
+static int pattern_compile(const char *pattern, compiled_pattern_t *cp) {
+  if (!pattern || !cp) {
+    return -1;
+  }
   const char *cursor = pattern;
   const char *token_start;
   size_t token_len;
@@ -176,16 +233,25 @@ static void pattern_compile(const char *pattern, compiled_pattern_t *cp) {
     ct->type = token;
     if (token == LOG_TOKEN_TEXT || token == LOG_TOKEN_UNKNOWN) {
       ct->text = malloc(token_len + 1);
-      if (ct->text) {
-        memcpy(ct->text, token_start, token_len);
-        ct->text[token_len] = '\0';
-        ct->len = token_len;
+      if (!ct->text) {
+        pattern_free(cp);
+        cp->count = 0;
+        return -1;
       }
+      memcpy(ct->text, token_start, token_len);
+      ct->text[token_len] = '\0';
+      ct->len = token_len;
     } else {
       ct->text = NULL;
       ct->len = 0;
     }
   }
+  if (token != LOG_TOKEN_END) {
+    pattern_free(cp);
+    cp->count = 0;
+    return -1;
+  }
+  return cp->count > 0 ? 0 : -1;
 }
 
 static void pattern_free(compiled_pattern_t *cp) {
@@ -193,6 +259,22 @@ static void pattern_free(compiled_pattern_t *cp) {
     if (cp->tokens[i].text)
       free(cp->tokens[i].text);
   }
+}
+
+static char *tlog_strdup_local(const char *s) {
+  size_t len;
+  char *copy;
+
+  if (!s) {
+    return NULL;
+  }
+  len = strlen(s) + 1U;
+  copy = malloc(len);
+  if (!copy) {
+    return NULL;
+  }
+  memcpy(copy, s, len);
+  return copy;
 }
 
 // =============================================================================
@@ -397,7 +479,7 @@ static int format_with_pattern(char *buf, size_t buf_size, const compiled_patter
 
 static void console_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
   console_sink_t *cs = (console_sink_t *)sink;
-  if (entry->level < sink->min_level)
+  if (!sink_accepts_level(sink, entry->level))
     return;
 
   char formatted[MAX_MESSAGE_SIZE];
@@ -439,23 +521,26 @@ turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opt
 
   turbo_mutex_init(&sink->write_mutex);
 
-  sink->base.write = console_sink_write;
-  sink->base.flush = console_sink_flush;
-  sink->base.destroy = console_sink_destroy;
-  sink->base.min_level = TURBO_LOG_LEVEL_DEBUG;
+  sink_base_init(&sink->base, console_sink_write, console_sink_flush, console_sink_destroy,
+                 SINK_KIND_CONSOLE);
 
   if (opts) {
     sink->output = opts->output ? opts->output : stdout;
     sink->use_colors = opts->use_colors;
-    if (opts->pattern) {
-      pattern_compile(opts->pattern, &sink->pattern);
-    } else {
-      pattern_compile(TURBO_LOG_DEFAULT_PATTERN, &sink->pattern);
+    if (pattern_compile(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN,
+                        &sink->pattern) != 0) {
+      turbo_mutex_destroy(&sink->write_mutex);
+      free(sink);
+      return NULL;
     }
   } else {
     sink->output = stdout;
     sink->use_colors = 1;
-    pattern_compile(TURBO_LOG_DEFAULT_PATTERN, &sink->pattern);
+    if (pattern_compile(TURBO_LOG_DEFAULT_PATTERN, &sink->pattern) != 0) {
+      turbo_mutex_destroy(&sink->write_mutex);
+      free(sink);
+      return NULL;
+    }
   }
 
   return &sink->base;
@@ -517,7 +602,7 @@ static void file_sink_rotate(file_sink_t *fs) {
 
 static void file_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
   file_sink_t *fs = (file_sink_t *)sink;
-  if (entry->level < sink->min_level)
+  if (!sink_accepts_level(sink, entry->level))
     return;
 
   char line[MAX_MESSAGE_SIZE];
@@ -580,13 +665,17 @@ turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts) {
 
   turbo_mutex_init(&sink->rotate_mutex);
 
-  sink->base.write = file_sink_write;
-  sink->base.flush = file_sink_flush;
-  sink->base.destroy = file_sink_destroy;
-  sink->base.min_level = TURBO_LOG_LEVEL_DEBUG;
+  sink_base_init(&sink->base, file_sink_write, file_sink_flush, file_sink_destroy, SINK_KIND_FILE);
 
   sink->path = tstr_dup(opts->path);
-  pattern_compile(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN, &sink->pattern);
+  if (!sink->path ||
+      pattern_compile(opts->pattern ? opts->pattern : TURBO_LOG_DEFAULT_PATTERN,
+                      &sink->pattern) != 0) {
+    turbo_mutex_destroy(&sink->rotate_mutex);
+    sdsfree(sink->path);
+    free(sink);
+    return NULL;
+  }
   sink->max_size = opts->max_size;
   sink->max_files = opts->max_files;
 
@@ -628,10 +717,10 @@ typedef struct {
 
 static void callback_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
   callback_sink_t *cs = (callback_sink_t *)sink;
-  if (entry->level < sink->min_level)
+  if (!sink_accepts_level(sink, entry->level))
     return;
   if (cs->callback) {
-    cs->callback(entry, sink->user_data);
+    cs->callback(entry, sink_user_data(sink));
   }
 }
 
@@ -646,14 +735,332 @@ turbo_log_sink_t *turbo_sink_callback_create(turbo_log_callback_fn callback, voi
   if (!sink)
     return NULL;
 
-  sink->base.write = callback_sink_write;
-  sink->base.flush = callback_sink_flush;
-  sink->base.destroy = callback_sink_destroy;
-  sink->base.min_level = TURBO_LOG_LEVEL_DEBUG;
-  sink->base.user_data = user_data;
+  sink_base_init(&sink->base, callback_sink_write, callback_sink_flush, callback_sink_destroy,
+                 SINK_KIND_CALLBACK);
+  atomic_store_explicit(&sink->base.user_data, (uintptr_t)user_data, memory_order_relaxed);
   sink->callback = callback;
 
   return &sink->base;
+}
+
+// =============================================================================
+// Custom Sink
+// =============================================================================
+
+typedef struct {
+  turbo_log_sink_t base;
+  turbo_sink_custom_write_fn write;
+  turbo_sink_custom_flush_fn flush;
+  turbo_sink_custom_destroy_fn destroy;
+} custom_sink_t;
+
+static void custom_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
+  custom_sink_t *cs = (custom_sink_t *)sink;
+  if (!sink_accepts_level(sink, entry->level)) {
+    return;
+  }
+  cs->write(entry, sink_user_data(sink));
+}
+
+static void custom_sink_flush(turbo_log_sink_t *sink) {
+  custom_sink_t *cs = (custom_sink_t *)sink;
+  if (cs->flush) {
+    cs->flush(sink_user_data(sink));
+  }
+}
+
+static void custom_sink_destroy(turbo_log_sink_t *sink) {
+  custom_sink_t *cs = (custom_sink_t *)sink;
+  if (cs->destroy) {
+    cs->destroy(sink_user_data(sink));
+  }
+  free(cs);
+}
+
+turbo_log_sink_t *turbo_sink_custom_create(const turbo_sink_custom_opts_t *opts) {
+  if (!opts || !opts->write) {
+    return NULL;
+  }
+
+  custom_sink_t *sink = calloc(1, sizeof(custom_sink_t));
+  if (!sink) {
+    return NULL;
+  }
+
+  sink_base_init(&sink->base, custom_sink_write, custom_sink_flush, custom_sink_destroy,
+                 SINK_KIND_CUSTOM);
+  atomic_store_explicit(&sink->base.user_data, (uintptr_t)opts->user_data, memory_order_relaxed);
+  sink->write = opts->write;
+  sink->flush = opts->flush;
+  sink->destroy = opts->destroy;
+
+  return &sink->base;
+}
+
+// =============================================================================
+// Sink Accessors
+// =============================================================================
+
+int turbo_sink_set_min_level(turbo_log_sink_t *sink, turbo_log_level_t level) {
+  if (!sink || !log_level_is_valid(level)) {
+    return -1;
+  }
+  atomic_store_explicit(&sink->min_level, (int)level, memory_order_relaxed);
+  return 0;
+}
+
+turbo_log_level_t turbo_sink_get_min_level(const turbo_log_sink_t *sink) {
+  return sink ? (turbo_log_level_t)atomic_load_explicit(&sink->min_level, memory_order_relaxed)
+              : TURBO_LOG_LEVEL_INFO;
+}
+
+int turbo_sink_set_user_data(turbo_log_sink_t *sink, void *user_data) {
+  if (!sink) {
+    return -1;
+  }
+  atomic_store_explicit(&sink->user_data, (uintptr_t)user_data, memory_order_relaxed);
+  return 0;
+}
+
+void *turbo_sink_get_user_data(const turbo_log_sink_t *sink) {
+  return sink ? sink_user_data(sink) : NULL;
+}
+
+// =============================================================================
+// Filter Sink Decorator
+// =============================================================================
+
+typedef struct {
+  turbo_log_sink_t base;
+  turbo_log_sink_t *inner;
+  int owns_inner;
+  turbo_log_level_t min_level;
+  turbo_log_level_t max_level;
+  char *component;
+  turbo_sink_filter_fn predicate;
+  void *predicate_user_data;
+} filter_sink_t;
+
+static int filter_sink_allows(filter_sink_t *fs, const turbo_log_entry_t *entry) {
+  if (!sink_accepts_level(&fs->base, entry->level) || entry->level < fs->min_level ||
+      entry->level > fs->max_level) {
+    return 0;
+  }
+  if (fs->component != NULL) {
+    if (entry->component == NULL || strcmp(entry->component, fs->component) != 0) {
+      return 0;
+    }
+  }
+  if (fs->predicate != NULL && !fs->predicate(entry, fs->predicate_user_data)) {
+    return 0;
+  }
+  return 1;
+}
+
+static void filter_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
+  filter_sink_t *fs = (filter_sink_t *)sink;
+  if (!filter_sink_allows(fs, entry)) {
+    return;
+  }
+  sink_write_entry(fs->inner, entry);
+}
+
+static void filter_sink_flush(turbo_log_sink_t *sink) {
+  filter_sink_t *fs = (filter_sink_t *)sink;
+  sink_flush_inner(fs->inner);
+}
+
+static void filter_sink_destroy(turbo_log_sink_t *sink) {
+  filter_sink_t *fs = (filter_sink_t *)sink;
+  if (fs->owns_inner && fs->inner) {
+    turbo_sink_destroy(fs->inner);
+  }
+  free(fs->component);
+  free(fs);
+}
+
+turbo_log_sink_t *turbo_sink_filter_create(turbo_log_sink_t *inner,
+                                           turbo_sink_ownership_t ownership,
+                                           const turbo_sink_filter_opts_t *opts) {
+  if (!inner) {
+    return NULL;
+  }
+
+  filter_sink_t *sink = calloc(1, sizeof(filter_sink_t));
+  if (!sink) {
+    return NULL;
+  }
+
+  sink_base_init(&sink->base, filter_sink_write, filter_sink_flush, filter_sink_destroy,
+                 SINK_KIND_FILTER);
+  sink->inner = inner;
+  sink->owns_inner = ownership == TURBO_SINK_OWNED;
+  sink->min_level = opts ? opts->min_level : TURBO_LOG_LEVEL_DEBUG;
+  sink->max_level = opts ? opts->max_level : TURBO_LOG_LEVEL_FATAL;
+  sink->predicate = opts ? opts->predicate : NULL;
+  sink->predicate_user_data = opts ? opts->predicate_user_data : NULL;
+
+  if (sink->min_level < TURBO_LOG_LEVEL_DEBUG || sink->min_level > TURBO_LOG_LEVEL_FATAL ||
+      sink->max_level < TURBO_LOG_LEVEL_DEBUG || sink->max_level > TURBO_LOG_LEVEL_FATAL ||
+      sink->min_level > sink->max_level) {
+    free(sink);
+    return NULL;
+  }
+
+  if (opts && opts->component) {
+    sink->component = tlog_strdup_local(opts->component);
+    if (!sink->component) {
+      free(sink);
+      return NULL;
+    }
+  }
+
+  return &sink->base;
+}
+
+// =============================================================================
+// Formatting Sink Decorator
+// =============================================================================
+
+typedef struct {
+  turbo_log_sink_t base;
+  turbo_log_sink_t *inner;
+  int owns_inner;
+  compiled_pattern_t pattern;
+} format_sink_t;
+
+static void format_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
+  format_sink_t *fs = (format_sink_t *)sink;
+  char formatted[MAX_MESSAGE_SIZE];
+  turbo_log_entry_t formatted_entry;
+  int len;
+
+  if (!sink_accepts_level(sink, entry->level) || fs->inner == NULL) {
+    return;
+  }
+
+  len = format_with_pattern(formatted, sizeof(formatted), &fs->pattern, entry);
+  if (len <= 0) {
+    return;
+  }
+
+  formatted_entry = *entry;
+  formatted_entry.message = formatted;
+  formatted_entry.message_len = (size_t)len;
+  sink_write_entry(fs->inner, &formatted_entry);
+}
+
+static void format_sink_flush(turbo_log_sink_t *sink) {
+  format_sink_t *fs = (format_sink_t *)sink;
+  sink_flush_inner(fs->inner);
+}
+
+static void format_sink_destroy(turbo_log_sink_t *sink) {
+  format_sink_t *fs = (format_sink_t *)sink;
+  if (fs->owns_inner && fs->inner) {
+    turbo_sink_destroy(fs->inner);
+  }
+  pattern_free(&fs->pattern);
+  free(fs);
+}
+
+turbo_log_sink_t *turbo_sink_format_create(turbo_log_sink_t *inner,
+                                           turbo_sink_ownership_t ownership,
+                                           const char *pattern) {
+  if (!inner) {
+    return NULL;
+  }
+
+  format_sink_t *sink = calloc(1, sizeof(format_sink_t));
+  if (!sink) {
+    return NULL;
+  }
+
+  sink_base_init(&sink->base, format_sink_write, format_sink_flush, format_sink_destroy,
+                 SINK_KIND_FORMAT);
+  sink->inner = inner;
+  sink->owns_inner = ownership == TURBO_SINK_OWNED;
+  if (pattern_compile(pattern ? pattern : "{message}", &sink->pattern) != 0) {
+    free(sink);
+    return NULL;
+  }
+
+  return &sink->base;
+}
+
+// =============================================================================
+// Metrics Sink Decorator
+// =============================================================================
+
+typedef struct {
+  turbo_log_sink_t base;
+  turbo_log_sink_t *inner;
+  int owns_inner;
+  _Atomic uint64_t entries_seen;
+  _Atomic uint64_t entries_forwarded;
+  _Atomic uint64_t entries_filtered;
+  _Atomic uint64_t bytes_forwarded;
+} metrics_sink_t;
+
+static void metrics_sink_write(turbo_log_sink_t *sink, const turbo_log_entry_t *entry) {
+  metrics_sink_t *ms = (metrics_sink_t *)sink;
+
+  atomic_fetch_add(&ms->entries_seen, 1);
+  if (!sink_accepts_level(sink, entry->level) || ms->inner == NULL) {
+    atomic_fetch_add(&ms->entries_filtered, 1);
+    return;
+  }
+
+  atomic_fetch_add(&ms->entries_forwarded, 1);
+  atomic_fetch_add(&ms->bytes_forwarded, entry->message_len);
+  sink_write_entry(ms->inner, entry);
+}
+
+static void metrics_sink_flush(turbo_log_sink_t *sink) {
+  metrics_sink_t *ms = (metrics_sink_t *)sink;
+  sink_flush_inner(ms->inner);
+}
+
+static void metrics_sink_destroy(turbo_log_sink_t *sink) {
+  metrics_sink_t *ms = (metrics_sink_t *)sink;
+  if (ms->owns_inner && ms->inner) {
+    turbo_sink_destroy(ms->inner);
+  }
+  free(ms);
+}
+
+turbo_log_sink_t *turbo_sink_metrics_create(turbo_log_sink_t *inner,
+                                            turbo_sink_ownership_t ownership) {
+  if (!inner) {
+    return NULL;
+  }
+
+  metrics_sink_t *sink = calloc(1, sizeof(metrics_sink_t));
+  if (!sink) {
+    return NULL;
+  }
+
+  sink_base_init(&sink->base, metrics_sink_write, metrics_sink_flush, metrics_sink_destroy,
+                 SINK_KIND_METRICS);
+  sink->inner = inner;
+  sink->owns_inner = ownership == TURBO_SINK_OWNED;
+
+  return &sink->base;
+}
+
+int turbo_sink_metrics_snapshot(turbo_log_sink_t *sink, turbo_sink_metrics_t *out) {
+  metrics_sink_t *ms;
+
+  if (!sink || !out || sink->kind != SINK_KIND_METRICS) {
+    return -1;
+  }
+
+  ms = (metrics_sink_t *)sink;
+  out->entries_seen = atomic_load(&ms->entries_seen);
+  out->entries_forwarded = atomic_load(&ms->entries_forwarded);
+  out->entries_filtered = atomic_load(&ms->entries_filtered);
+  out->bytes_forwarded = atomic_load(&ms->bytes_forwarded);
+  return 0;
 }
 
 // =============================================================================
@@ -678,7 +1085,7 @@ struct tlog_s {
   // ---------------------------------------------------------------------------
   // Configuration (Read-Only)
   // ---------------------------------------------------------------------------
-  turbo_log_level_t min_level;
+  _Atomic int min_level;
   turbo_log_sink_t *sinks[MAX_SINKS];
   int sink_count;
   turbo_mutex_t sink_mutex;
@@ -898,11 +1305,15 @@ static int logger_publish_entry(tlog_t *logger, mem_buffer_t *buffer) {
 // =============================================================================
 
 tlog_t *tlog_create(const tlog_config_t *config) {
+  if (config && !log_level_is_valid(config->min_level)) {
+    return NULL;
+  }
+
   tlog_t *logger = calloc(1, sizeof(tlog_t));
   if (!logger)
     return NULL;
 
-  logger->min_level = config ? config->min_level : TURBO_LOG_LEVEL_INFO;
+  atomic_init(&logger->min_level, (int)(config ? config->min_level : TURBO_LOG_LEVEL_INFO));
 
   turbo_mutex_init(&logger->sink_mutex);
   turbo_mutex_init(&logger->wake_mutex);
@@ -967,9 +1378,7 @@ void tlog_destroy(tlog_t *logger) {
 
   // Flush and destroy sinks
   for (int i = 0; i < logger->sink_count; i++) {
-    if (logger->sinks[i]->flush) {
-      logger->sinks[i]->flush(logger->sinks[i]);
-    }
+    sink_flush_inner(logger->sinks[i]);
     turbo_sink_destroy(logger->sinks[i]);
   }
 
@@ -977,15 +1386,14 @@ void tlog_destroy(tlog_t *logger) {
   turbo_cond_destroy(&logger->wake_cond);
   turbo_mutex_destroy(&logger->wake_mutex);
 
-  // Clear default logger reference BEFORE freeing memory
-  if (g_default_logger == logger) {
-    if (g_default_logger_mutex_init) {
-      turbo_mutex_lock(&g_default_logger_mutex);
-      if (g_default_logger == logger) {
-        g_default_logger = NULL;
-      }
-      turbo_mutex_unlock(&g_default_logger_mutex);
+  // Clear default logger reference before freeing memory.
+  turbo_once(&g_default_logger_mutex_once, init_tlog_globals);
+  if (g_default_logger_mutex_init) {
+    turbo_mutex_lock(&g_default_logger_mutex);
+    if (g_default_logger == logger) {
+      g_default_logger = NULL;
     }
+    turbo_mutex_unlock(&g_default_logger_mutex);
   }
 
   free(logger);
@@ -1031,7 +1439,7 @@ void tlog_flush(tlog_t *logger) {
   // Async stress tests can legitimately take longer than a fixed heuristic
   // budget under scheduler pressure. Returning early here violates the flush
   // contract and makes callback/file sinks observe partial output.
-  uint64_t published = atomic_load(&logger->logs_published);
+  int64_t published = atomic_load(&logger->logs_published);
   while (atomic_load(&logger->logs_written) < published) {
     turbo_sleep_ms(1);
   }
@@ -1039,9 +1447,7 @@ void tlog_flush(tlog_t *logger) {
   // Flush all sinks
   turbo_mutex_lock(&logger->sink_mutex);
   for (int i = 0; i < logger->sink_count; i++) {
-    if (logger->sinks[i]->flush) {
-      logger->sinks[i]->flush(logger->sinks[i]);
-    }
+    sink_flush_inner(logger->sinks[i]);
   }
   turbo_mutex_unlock(&logger->sink_mutex);
 }
@@ -1053,7 +1459,7 @@ void tlog_flush(tlog_t *logger) {
 static void logger_write_to_sinks(tlog_t *logger, const turbo_log_entry_t *entry) {
   turbo_mutex_lock(&logger->sink_mutex);
   for (int i = 0; i < logger->sink_count; i++) {
-    logger->sinks[i]->write(logger->sinks[i], entry);
+    sink_write_entry(logger->sinks[i], entry);
   }
   turbo_mutex_unlock(&logger->sink_mutex);
 }
@@ -1063,7 +1469,7 @@ void turbo_log_typed(tlog_t *logger, turbo_log_level_t level, const char *compon
                      size_t arg_count) {
   if (!logger || !fmt)
     return;
-  if (level < logger->min_level)
+  if (level < (turbo_log_level_t)atomic_load_explicit(&logger->min_level, memory_order_relaxed))
     return;
 
   if (arg_count == 0) {
@@ -1100,7 +1506,7 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
                    int line, const char *message, size_t message_len) {
   if (!logger || !message)
     return;
-  if (level < logger->min_level)
+  if (level < (turbo_log_level_t)atomic_load_explicit(&logger->min_level, memory_order_relaxed))
     return;
 
   turbo_log_entry_t entry = {.level = level,
@@ -1125,14 +1531,21 @@ void turbo_log_str(tlog_t *logger, turbo_log_level_t level, const char *componen
 // Level Control
 // =============================================================================
 
-void tlog_set_level(tlog_t *logger, turbo_log_level_t level) {
-  if (logger) {
-    logger->min_level = level;
+int tlog_set_level_ex(tlog_t *logger, turbo_log_level_t level) {
+  if (!logger || !log_level_is_valid(level)) {
+    return -1;
   }
+  atomic_store_explicit(&logger->min_level, (int)level, memory_order_relaxed);
+  return 0;
+}
+
+void tlog_set_level(tlog_t *logger, turbo_log_level_t level) {
+  (void)tlog_set_level_ex(logger, level);
 }
 
 turbo_log_level_t tlog_get_level(const tlog_t *logger) {
-  return logger ? logger->min_level : TURBO_LOG_LEVEL_INFO;
+  return logger ? (turbo_log_level_t)atomic_load_explicit(&logger->min_level, memory_order_relaxed)
+                : TURBO_LOG_LEVEL_INFO;
 }
 
 // =============================================================================
@@ -1148,35 +1561,47 @@ uint64_t tlog_get_dropped(const tlog_t *logger) {
 }
 
 int tlog_get_queue_size(const tlog_t *logger) {
-  // Disruptor doesn't expose queue size directly
-  // Return 0 for now (could be enhanced if needed)
-  return 0;
+  int64_t published;
+  int64_t written;
+  int64_t pending;
+
+  if (!logger) {
+    return 0;
+  }
+
+  published = atomic_load(&((tlog_t *)logger)->logs_published);
+  written = atomic_load(&((tlog_t *)logger)->logs_written);
+  pending = published - written;
+  if (pending <= 0) {
+    return 0;
+  }
+  if (pending > INT32_MAX) {
+    return INT32_MAX;
+  }
+  return (int)pending;
 }
 
 // =============================================================================
 // Default Logger (Thread-Safe)
 // =============================================================================
 
-static void create_default_logger(void) {
-  init_tlog_globals();
-  if (!g_default_logger_mutex_init)
-    return;
-
+static tlog_t *create_default_logger(void) {
   tlog_config_t config = {.min_level = TURBO_LOG_LEVEL_INFO,
                           .pool_size = DEFAULT_POOL_SIZE,
                           .buffer_size = 0};
 
-  g_default_logger = tlog_create(&config);
-  if (g_default_logger) {
+  tlog_t *logger = tlog_create(&config);
+  if (logger) {
     turbo_log_sink_t *console = turbo_sink_console_create(NULL);
     if (console) {
-      tlog_add_sink(g_default_logger, console);
+      tlog_add_sink(logger, console);
     }
   }
+  return logger;
 }
 
 void tlog_set_default(tlog_t *logger) {
-  turbo_once(&g_default_logger_once, init_tlog_globals);
+  turbo_once(&g_default_logger_mutex_once, init_tlog_globals);
   if (g_default_logger_mutex_init) {
     turbo_mutex_lock(&g_default_logger_mutex);
     g_default_logger = logger;
@@ -1185,12 +1610,52 @@ void tlog_set_default(tlog_t *logger) {
 }
 
 tlog_t *tlog_get_default(void) {
-  turbo_once(&g_default_logger_once, create_default_logger);
-  return g_default_logger;
+  tlog_t *logger = NULL;
+  tlog_t *created = NULL;
+
+  turbo_once(&g_default_logger_mutex_once, init_tlog_globals);
+  if (!g_default_logger_mutex_init) {
+    return NULL;
+  }
+
+  turbo_mutex_lock(&g_default_logger_mutex);
+  logger = g_default_logger;
+  turbo_mutex_unlock(&g_default_logger_mutex);
+  if (logger) {
+    return logger;
+  }
+
+  created = create_default_logger();
+  if (!created) {
+    return NULL;
+  }
+
+  turbo_mutex_lock(&g_default_logger_mutex);
+  if (g_default_logger == NULL) {
+    g_default_logger = created;
+    logger = created;
+    created = NULL;
+  } else {
+    logger = g_default_logger;
+  }
+  turbo_mutex_unlock(&g_default_logger_mutex);
+
+  if (created) {
+    tlog_destroy(created);
+  }
+  return logger;
 }
 
 tlog_t *tlog_peek_default(void) {
-  return g_default_logger;
+  tlog_t *logger = NULL;
+  turbo_once(&g_default_logger_mutex_once, init_tlog_globals);
+  if (!g_default_logger_mutex_init) {
+    return NULL;
+  }
+  turbo_mutex_lock(&g_default_logger_mutex);
+  logger = g_default_logger;
+  turbo_mutex_unlock(&g_default_logger_mutex);
+  return logger;
 }
 
 // =============================================================================

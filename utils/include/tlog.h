@@ -58,17 +58,26 @@ typedef struct {
 
 typedef struct turbo_log_sink_s turbo_log_sink_t;
 
+/* Low-level sink vtable callbacks are kept for ABI/source compatibility.
+ * New custom sinks should use turbo_sink_custom_create().
+ */
 typedef void (*turbo_sink_write_fn)(turbo_log_sink_t *sink, const turbo_log_entry_t *entry);
 typedef void (*turbo_sink_flush_fn)(turbo_log_sink_t *sink);
 typedef void (*turbo_sink_destroy_fn)(turbo_log_sink_t *sink);
+typedef int (*turbo_sink_filter_fn)(const turbo_log_entry_t *entry, void *user_data);
+typedef void (*turbo_sink_custom_write_fn)(const turbo_log_entry_t *entry, void *user_data);
+typedef void (*turbo_sink_custom_flush_fn)(void *user_data);
+typedef void (*turbo_sink_custom_destroy_fn)(void *user_data);
 
-struct turbo_log_sink_s {
-  turbo_sink_write_fn write;
-  turbo_sink_flush_fn flush;
-  turbo_sink_destroy_fn destroy;
-  turbo_log_level_t min_level; // Per-sink filtering
-  void *user_data;
-};
+typedef enum {
+  TURBO_SINK_BORROWED = 0,
+  TURBO_SINK_OWNED = 1
+} turbo_sink_ownership_t;
+
+CXX_C_API int turbo_sink_set_min_level(turbo_log_sink_t *sink, turbo_log_level_t level);
+CXX_C_API turbo_log_level_t turbo_sink_get_min_level(const turbo_log_sink_t *sink);
+CXX_C_API int turbo_sink_set_user_data(turbo_log_sink_t *sink, void *user_data);
+CXX_C_API void *turbo_sink_get_user_data(const turbo_log_sink_t *sink);
 
 // =============================================================================
 // Built-in Sinks
@@ -136,18 +145,26 @@ typedef struct {
  */
 typedef void (*turbo_log_callback_fn)(const turbo_log_entry_t *entry, void *user_data);
 
+typedef struct {
+  turbo_sink_custom_write_fn write;
+  turbo_sink_custom_flush_fn flush;
+  turbo_sink_custom_destroy_fn destroy;
+  void *user_data;
+} turbo_sink_custom_opts_t;
+
 /**
  * @brief Create console sink (stdout/stderr with optional colors)
  */
 CXX_C_API turbo_log_sink_t *turbo_sink_console_create(const turbo_console_sink_opts_t *opts);
 
 /**
- * @brief Create file sink with optional rotation (lock-free pwrite)
+ * @brief Create file sink with optional rotation
  *
  * Uses turbo_fs_pwrite for atomic append operations without mutex locks
- * on the write path. Rotation is protected by mutex but happens rarely.
+ * on the POSIX write path. Windows uses serialized positional I/O behind
+ * turbo_fs_pwrite to preserve the same offset semantics with CRT file handles.
+ * Rotation is protected by mutex but happens rarely.
  *
- * Performance: ~9M ops/s (single-thread), ~9M ops/s (4-thread)
  * Best for: All file logging scenarios, especially high-concurrency
  */
 CXX_C_API turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t *opts);
@@ -157,6 +174,70 @@ CXX_C_API turbo_log_sink_t *turbo_sink_file_create(const turbo_file_sink_opts_t 
  */
 CXX_C_API turbo_log_sink_t *turbo_sink_callback_create(turbo_log_callback_fn callback,
                                                        void *user_data);
+
+/**
+ * @brief Create an opaque custom sink with optional flush/destroy callbacks.
+ *
+ * Ownership of opts->user_data remains with the returned sink only after this
+ * function succeeds. On failure, the caller still owns opts->user_data.
+ */
+CXX_C_API turbo_log_sink_t *turbo_sink_custom_create(const turbo_sink_custom_opts_t *opts);
+
+typedef struct {
+  turbo_log_level_t min_level;
+  turbo_log_level_t max_level;
+  const char *component;            // Optional exact component match
+  turbo_sink_filter_fn predicate;   // Optional extra predicate, non-zero means allow
+  void *predicate_user_data;
+} turbo_sink_filter_opts_t;
+
+#define TURBO_SINK_FILTER_OPTS_DEFAULT \
+  { TURBO_LOG_LEVEL_DEBUG, TURBO_LOG_LEVEL_FATAL, NULL, NULL, NULL }
+
+/**
+ * @brief Create a decorator sink that filters entries before forwarding to inner.
+ *
+ * Pass NULL for default DEBUG..FATAL filtering, or initialize opts with
+ * TURBO_SINK_FILTER_OPTS_DEFAULT before overriding selected fields.
+ * Ownership of inner is transferred only after this function succeeds.
+ */
+CXX_C_API turbo_log_sink_t *turbo_sink_filter_create(turbo_log_sink_t *inner,
+                                                     turbo_sink_ownership_t ownership,
+                                                     const turbo_sink_filter_opts_t *opts);
+
+/**
+ * @brief Create a decorator sink that formats entries before forwarding to inner.
+ *
+ * The inner sink receives an entry whose message points to a decorator-owned
+ * stack buffer valid only for the duration of the inner write call.
+ * Ownership of inner is transferred only after this function succeeds.
+ */
+CXX_C_API turbo_log_sink_t *turbo_sink_format_create(turbo_log_sink_t *inner,
+                                                     turbo_sink_ownership_t ownership,
+                                                     const char *pattern);
+
+typedef struct {
+  uint64_t entries_seen;
+  uint64_t entries_forwarded;
+  uint64_t entries_filtered;
+  uint64_t bytes_forwarded;
+} turbo_sink_metrics_t;
+
+/**
+ * @brief Create a decorator sink that records metrics and forwards to inner.
+ *
+ * The returned sink may be added to a logger like any other sink. When ownership
+ * is TURBO_SINK_OWNED, destroying the decorator also destroys inner.
+ * Ownership of inner is transferred only after this function succeeds.
+ */
+CXX_C_API turbo_log_sink_t *turbo_sink_metrics_create(turbo_log_sink_t *inner,
+                                                      turbo_sink_ownership_t ownership);
+
+/**
+ * @brief Read metrics from a sink created by turbo_sink_metrics_create.
+ * @return 0 on success, -1 if sink is not a metrics decorator or args are invalid.
+ */
+CXX_C_API int turbo_sink_metrics_snapshot(turbo_log_sink_t *sink, turbo_sink_metrics_t *out);
 
 /**
  * @brief Destroy a sink
@@ -190,12 +271,18 @@ CXX_C_API void tlog_destroy(tlog_t *logger);
 
 /**
  * @brief Add sink to logger (takes ownership)
+ *
+ * Ownership is transferred only on success. If this function returns -1, caller
+ * is still responsible for destroying sink.
  * @return 0 on success, -1 on failure
  */
 CXX_C_API int tlog_add_sink(tlog_t *logger, turbo_log_sink_t *sink);
 
 /**
- * @brief Remove sink from logger
+ * @brief Remove sink from logger without destroying it
+ *
+ * Call tlog_flush(logger) before removing when logs already published before
+ * removal must still be delivered to this sink.
  */
 CXX_C_API void tlog_remove_sink(tlog_t *logger, turbo_log_sink_t *sink);
 
@@ -225,6 +312,15 @@ CXX_C_API void turbo_log_typed(tlog_t *logger, turbo_log_level_t level,
 // Level Control
 // =============================================================================
 
+/**
+ * @brief Set logger minimum level.
+ * @return 0 on success, -1 if logger is NULL or level is invalid.
+ */
+CXX_C_API int tlog_set_level_ex(tlog_t *logger, turbo_log_level_t level);
+
+/**
+ * @brief Backward-compatible level setter. Invalid inputs are ignored.
+ */
 CXX_C_API void tlog_set_level(tlog_t *logger, turbo_log_level_t level);
 CXX_C_API turbo_log_level_t tlog_get_level(const tlog_t *logger);
 

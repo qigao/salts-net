@@ -712,10 +712,10 @@ static int ws_process_handshake(ws_state_t *st) {
 
 /* ── Frame dispatch ───────────────────────────────────────── */
 
-static void ws_deliver(ws_state_t *st, const uint8_t *data, size_t len) {
+static void ws_deliver(ws_state_t *st, uint8_t opcode, const uint8_t *data, size_t len) {
   if (!st || !st->outer || !st->outer->on_recv || len == 0) return;
   mem_slice_t sl = { .data = (char *)data, .length = len, .buffer = NULL };
-  int close_req = st->outer->on_recv(st->outer, &sl, NULL);
+  int close_req = st->outer->on_recv(st->outer, &sl, (void *)(uintptr_t)opcode);
   if (close_req) turbo_stream_close(st->outer);
 }
 
@@ -809,7 +809,7 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
       case WS_OPCODE_TEXT:
       case WS_OPCODE_BINARY:
         if (frame.fin) {
-          ws_deliver(st, frame.payload, (size_t)frame.payload_len);
+          ws_deliver(st, frame.opcode, frame.payload, (size_t)frame.payload_len);
         } else {
           /* First fragment */
           st->frag_opcode     = frame.opcode;
@@ -848,7 +848,7 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
 
           if (frame.fin) {
             st->expecting_cont = 0;
-            ws_deliver(st, (const uint8_t *)st->frag_buf->data, st->frag_len);
+            ws_deliver(st, st->frag_opcode, (const uint8_t *)st->frag_buf->data, st->frag_len);
             st->frag_len = 0;
             mem_set_used(st->frag_buf, 0);
           }
@@ -1124,6 +1124,15 @@ static int ws_send(turbo_stream_t *s, const char *data, size_t len) {
   ws_state_t *st = (ws_state_t *)s->backend_data;
   if (!st || st->state != WS_ST_OPEN) return TURBO_ENOTCONN;
   return ws_send_frame(st, WS_OPCODE_BINARY, (const uint8_t *)data, len);
+}
+
+int turbo_stream_ws_send_text(turbo_stream_t *ws_stream, const char *data, size_t len) {
+  ws_state_t *st;
+
+  if (!ws_stream || !data || len == 0) return TURBO_EINVAL;
+  st = (ws_state_t *)ws_stream->backend_data;
+  if (!st || st->state != WS_ST_OPEN) return TURBO_ENOTCONN;
+  return ws_send_frame(st, WS_OPCODE_TEXT, (const uint8_t *)data, len);
 }
 
 static int ws_flush(turbo_stream_t *s) {

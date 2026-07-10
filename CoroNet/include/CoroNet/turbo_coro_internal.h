@@ -282,6 +282,7 @@ struct coro_socket_s {
   char *recv_data;     /**< Received data buffer (caller frees via
                             coro_socket_free_recv) */
   size_t recv_len;     /**< Length of received data */
+  uint8_t recv_ws_opcode; /**< Opcode for the pending WebSocket message */
 
   /* ── UDP peer address ──────────────────────────────────── */
   struct sockaddr_storage peer_addr; /**< Sender address from recvfrom */

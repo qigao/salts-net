@@ -10,6 +10,7 @@
 #include "CoroNet/turbo_coro_internal.h"
 #include "turbo_error.h"
 #include "turbo_stream_internal.h"
+#include "websocket_frame_parser.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -153,10 +154,10 @@ static turbo_stream_kind_t ws_stream_kind(const ws_connect_state_t *cfg) {
 }
 
 static int on_ws_recv(void *handle, const mem_slice_t *slice, void *peer) {
-  UNUSED(peer);
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
   retain_client(s);
+  s->recv_ws_opcode = (uint8_t)(uintptr_t)peer;
   coro_socket_handle_transport_recv(s, slice);
   release_client(s);
   return 0;
@@ -364,6 +365,39 @@ static int ws_send(coro_socket_t *s, const char *data, size_t len) {
   }
   rc = turbo_stream_send(s->handle.stream, data, len);
   return ws_finish_write_wait(s, rc, scheduled_state);
+}
+
+int coro_socket_send_ws_text(coro_socket_t *s, const char *text, size_t len) {
+  int scheduled_state = 0;
+  int rc;
+
+  if (!s || !text || len == 0) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  if (s->transport != TURBO_WEBSOCKET || !s->handle.stream) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
+
+  rc = ws_begin_write_wait(s, &scheduled_state);
+  if (rc != 0) {
+    return socket_return_error(s, rc);
+  }
+  rc = turbo_stream_ws_send_text(s->handle.stream, text, len);
+  return socket_return_error(s, ws_finish_write_wait(s, rc, scheduled_state));
+}
+
+int coro_socket_recv_ws(coro_socket_t *s, char **data, size_t *len, int *is_text) {
+  int rc;
+
+  if (!s || s->transport != TURBO_WEBSOCKET) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
+
+  rc = coro_socket_recv(s, data, len);
+  if (rc == 0 && is_text) {
+    *is_text = (s->recv_ws_opcode == WS_OPCODE_TEXT);
+  }
+  return socket_return_error(s, rc);
 }
 
 static int ws_send_owned_recv(coro_socket_t *s, char *data, size_t len) {

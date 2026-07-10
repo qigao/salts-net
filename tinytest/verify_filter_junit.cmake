@@ -8,6 +8,21 @@ endif()
 
 file(REMOVE "${JUNIT_FILE}")
 
+get_filename_component(JUNIT_DIR "${JUNIT_FILE}" DIRECTORY)
+execute_process(
+  COMMAND "${TEST_EXE}" --junit "${JUNIT_DIR}" --filter keep
+  RESULT_VARIABLE bad_rc
+  OUTPUT_VARIABLE bad_out
+  ERROR_VARIABLE bad_err)
+
+if(NOT bad_rc EQUAL 1)
+  message(FATAL_ERROR "unwritable JUnit path should fail with rc=1, got ${bad_rc}\nstdout:\n${bad_out}\nstderr:\n${bad_err}")
+endif()
+
+if(NOT bad_err MATCHES "could not open JUnit output file")
+  message(FATAL_ERROR "unwritable JUnit error message missing:\nstdout:\n${bad_out}\nstderr:\n${bad_err}")
+endif()
+
 execute_process(
   COMMAND "${TEST_EXE}" --junit "${JUNIT_FILE}" --filter keep
   RESULT_VARIABLE rc

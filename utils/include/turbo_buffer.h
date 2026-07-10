@@ -176,6 +176,16 @@ CXX_C_API mem_buffer_t *mem_wrap_external(void *data, size_t size,
  */
 CXX_C_API int mem_is_external(const mem_buffer_t *buffer);
 
+CXX_C_API size_t mem_pool_total_allocated(const mem_pool_t *pool);
+CXX_C_API size_t mem_pool_total_used(const mem_pool_t *pool);
+CXX_C_API size_t mem_pool_recycle_count(const mem_pool_t *pool);
+CXX_C_API char *mem_buffer_data(mem_buffer_t *buffer);
+CXX_C_API const char *mem_buffer_const_data(const mem_buffer_t *buffer);
+CXX_C_API size_t mem_buffer_capacity(const mem_buffer_t *buffer);
+CXX_C_API size_t mem_buffer_used(const mem_buffer_t *buffer);
+CXX_C_API uint32_t mem_buffer_ref_count(const mem_buffer_t *buffer);
+CXX_C_API const mem_pool_t *mem_buffer_pool(const mem_buffer_t *buffer);
+
 /**
  * @brief Create zero-copy slice from buffer
  * @param buffer Source buffer

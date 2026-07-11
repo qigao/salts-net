@@ -137,6 +137,14 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
   endif()
 endforeach()
 
+# Install
+install(
+  TARGETS ${TARGET_NAME}
+  EXPORT TurboNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+
 # Install headers
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet.h DESTINATION include)
 cmake_install_headers(

@@ -501,6 +501,66 @@ void test_get_error_valid_client(void) {
     redis_client_destroy(client);
 }
 
+void test_ext_commands_not_connected(void) {
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    TEST_ASSERT_NOT_NULL(client);
+
+    TEST_ASSERT_EQUAL(-1, redis_mget(client, 1, (const char*[]){"k"}, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_setnx(client, "k", "v", NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_setex(client, "k", 10, "v", NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_incrby(client, "k", 5, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_lrange(client, "k", 0, -1, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_hgetall(client, "k", NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_sismember(client, "k", "m", NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_zcard(client, "k", NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_ttl(client, "k", NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_select(client, 1, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_multi(client, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_eval(client, "return nil", 0, NULL, 0, NULL, NULL, NULL));
+
+    // HyperLogLog
+    TEST_ASSERT_EQUAL(-1, redis_pfadd(client, "hll", 1, (const char*[]){"e"}, NULL, NULL));
+    // Geo
+    TEST_ASSERT_EQUAL(-1, redis_geodist(client, "geo", "m1", "m2", "km", NULL, NULL));
+    // Bitmaps
+    TEST_ASSERT_EQUAL(-1, redis_getbit(client, "bitmap", 10, NULL, NULL));
+    // Client/Connection
+    TEST_ASSERT_EQUAL(-1, redis_auth(client, "user", "pass", NULL, NULL));
+
+    redis_client_destroy(client);
+}
+
+void test_ext_commands_null_params(void) {
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    TEST_ASSERT_NOT_NULL(client);
+
+    TEST_ASSERT_EQUAL(-1, redis_mset(NULL, 1, NULL, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_mset(client, 0, NULL, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_mget(client, 0, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_lmove(client, NULL, NULL, NULL, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_hmset(client, "k", 0, NULL, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_zadd(client, "k", 0, NULL, NULL, NULL, NULL));
+
+    TEST_ASSERT_EQUAL(-1, redis_xrange(client, NULL, NULL, NULL, 0, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_xrevrange(client, NULL, NULL, NULL, 0, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_xpending(client, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_xclaim(client, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_xautoclaim(client, NULL, NULL, NULL, 0, NULL, 0, NULL, NULL));
+    TEST_ASSERT_EQUAL(-1, redis_xgroup_setid(client, NULL, NULL, NULL, NULL, NULL));
+
+    // HyperLogLog
+    TEST_ASSERT_EQUAL(-1, redis_pfadd(client, NULL, 0, NULL, NULL, NULL));
+    // Geo
+    TEST_ASSERT_EQUAL(-1, redis_geoadd(client, "geo", 0, NULL, NULL, NULL, NULL, NULL));
+    // Bitmaps
+    TEST_ASSERT_EQUAL(-1, redis_bitop(client, NULL, NULL, 0, NULL, NULL, NULL));
+    // Client/Connection
+    TEST_ASSERT_EQUAL(-1, redis_auth(client, NULL, NULL, NULL, NULL));
+
+    redis_client_destroy(client);
+}
+
+
 suite("redis_client") {
     before_each() {
         setUp();
@@ -579,5 +639,10 @@ suite("redis_client") {
     group("Error Messages") {
         REDIS_RUN_TEST(test_get_error_null_client, "should return invalid client for null error query");
         REDIS_RUN_TEST(test_get_error_valid_client, "should return error string for valid client");
+    }
+
+    group("Extended Commands") {
+        REDIS_RUN_TEST(test_ext_commands_not_connected, "should reject extended commands when not connected");
+        REDIS_RUN_TEST(test_ext_commands_null_params, "should validate extended command parameters");
     }
 }

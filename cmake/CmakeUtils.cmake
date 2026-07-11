@@ -1,90 +1,85 @@
 # TurboNet CMake Utilities
 
 function(cmake_config_target target_name)
-    set(options NO_INSTALL)
-    set(oneValueArgs FOLDER VERSION SOVERSION EXPORT_NAME ALIAS)
-    set(multiValueArgs)
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  set(options NO_INSTALL)
+  set(oneValueArgs FOLDER VERSION SOVERSION EXPORT_NAME ALIAS)
+  set(multiValueArgs)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
 
-    if(ARG_ALIAS)
-        add_library(${ARG_ALIAS} ALIAS ${target_name})
+  if(ARG_ALIAS)
+    add_library(${ARG_ALIAS} ALIAS ${target_name})
+  endif()
+
+  if(ARG_FOLDER)
+    set_target_properties(${target_name} PROPERTIES FOLDER ${ARG_FOLDER})
+  endif()
+
+  if(ARG_EXPORT_NAME)
+    set_target_properties(${target_name} PROPERTIES EXPORT_NAME
+                                                    ${ARG_EXPORT_NAME})
+  endif()
+
+  get_target_property(target_type ${target_name} TYPE)
+  if(target_type STREQUAL "SHARED_LIBRARY" OR target_type STREQUAL
+                                              "STATIC_LIBRARY")
+    if(NOT ARG_VERSION AND PROJECT_VERSION)
+      set(ARG_VERSION ${PROJECT_VERSION})
+    endif()
+    if(NOT ARG_SOVERSION AND PROJECT_VERSION_MAJOR)
+      set(ARG_SOVERSION ${PROJECT_VERSION_MAJOR})
     endif()
 
-    if(ARG_FOLDER)
-        set_target_properties(${target_name} PROPERTIES FOLDER ${ARG_FOLDER})
+    if(ARG_VERSION)
+      set_target_properties(${target_name} PROPERTIES VERSION ${ARG_VERSION})
+    endif()
+    if(ARG_SOVERSION)
+      set_target_properties(${target_name} PROPERTIES SOVERSION
+                                                      ${ARG_SOVERSION})
     endif()
 
-    if(ARG_EXPORT_NAME)
-        set_target_properties(${target_name} PROPERTIES EXPORT_NAME ${ARG_EXPORT_NAME})
-    endif()
+  endif()
 
-    get_target_property(target_type ${target_name} TYPE)
-    if(target_type STREQUAL "SHARED_LIBRARY" OR target_type STREQUAL "STATIC_LIBRARY")
-        if(NOT ARG_VERSION AND PROJECT_VERSION)
-            set(ARG_VERSION ${PROJECT_VERSION})
-        endif()
-        if(NOT ARG_SOVERSION AND PROJECT_VERSION_MAJOR)
-            set(ARG_SOVERSION ${PROJECT_VERSION_MAJOR})
-        endif()
-        
-        if(ARG_VERSION)
-          set_target_properties(${target_name} PROPERTIES VERSION ${ARG_VERSION})
-        endif()
-        if(ARG_SOVERSION)
-          set_target_properties(${target_name} PROPERTIES SOVERSION ${ARG_SOVERSION})
-        endif()
-    endif()
-
-    if(NOT ARG_NO_INSTALL)
-        # Standard installation logic
-        if(target_type STREQUAL "INTERFACE_LIBRARY")
-            install(TARGETS ${target_name}
-                EXPORT TurboNetTargets)
-        else()
-            install(TARGETS ${target_name}
-                EXPORT TurboNetTargets
-                LIBRARY DESTINATION lib
-                ARCHIVE DESTINATION lib
-                RUNTIME DESTINATION bin)
-        endif()
-    endif()
 endfunction()
 
 function(cmake_install_headers)
-    set(options)
-    set(oneValueArgs DIRECTORY DESTINATION)
-    set(multiValueArgs PATTERNS EXCLUDES)
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  set(options)
+  set(oneValueArgs DIRECTORY DESTINATION)
+  set(multiValueArgs PATTERNS EXCLUDES)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
 
-    if(ARG_DIRECTORY)
-        set(match_args FILES_MATCHING PATTERN "*.h")
-        foreach(p ${ARG_PATTERNS})
-            list(APPEND match_args PATTERN "${p}")
-        endforeach()
-        foreach(e ${ARG_EXCLUDES})
-            list(APPEND match_args PATTERN "${e}" EXCLUDE)
-        endforeach()
+  if(ARG_DIRECTORY)
+    set(match_args FILES_MATCHING PATTERN "*.h")
+    foreach(p ${ARG_PATTERNS})
+      list(APPEND match_args PATTERN "${p}")
+    endforeach()
+    foreach(e ${ARG_EXCLUDES})
+      list(APPEND match_args PATTERN "${e}" EXCLUDE)
+    endforeach()
 
-        if(NOT ARG_DESTINATION)
-            set(ARG_DESTINATION "include")
-        endif()
-
-        install(DIRECTORY ${ARG_DIRECTORY}
-            DESTINATION ${ARG_DESTINATION}
-            ${match_args}
-        )
+    if(NOT ARG_DESTINATION)
+      set(ARG_DESTINATION "include")
     endif()
+
+    install(
+      DIRECTORY ${ARG_DIRECTORY}
+      DESTINATION ${ARG_DESTINATION}
+      ${match_args})
+  endif()
 endfunction()
 
 function(cmake_add_grammar TARGET_NAME)
   set(options)
   set(oneValueArgs LEXER_RE GRAMMAR_Y FOLDER)
   set(multiValueArgs)
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
   string(TOLOWER "${TARGET_NAME}" target_name_lower)
 
   if(ARG_LEXER_RE)
-    set(LEXER_GEN "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_lexer_gen.c")
+    set(LEXER_GEN
+        "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_lexer_gen.c")
     add_custom_command(
       OUTPUT ${LEXER_GEN}
       COMMAND ${RE2C_EXECUTABLE} -o ${LEXER_GEN} ${ARG_LEXER_RE}
@@ -96,14 +91,21 @@ function(cmake_add_grammar TARGET_NAME)
     if(ARG_FOLDER)
       set_target_properties(${LEXER_TARGET} PROPERTIES FOLDER ${ARG_FOLDER})
     endif()
-    set(${TARGET_NAME}_LEXER_GEN ${LEXER_GEN} PARENT_SCOPE)
-    set(${TARGET_NAME}_LEXER_TARGET ${LEXER_TARGET} PARENT_SCOPE)
+    set(${TARGET_NAME}_LEXER_GEN
+        ${LEXER_GEN}
+        PARENT_SCOPE)
+    set(${TARGET_NAME}_LEXER_TARGET
+        ${LEXER_TARGET}
+        PARENT_SCOPE)
   endif()
 
   if(ARG_GRAMMAR_Y)
-    set(GRAMMAR_GEN "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.c")
-    set(GRAMMAR_H "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.h")
-    set(GRAMMAR_Y_GEN "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.y")
+    set(GRAMMAR_GEN
+        "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.c")
+    set(GRAMMAR_H
+        "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.h")
+    set(GRAMMAR_Y_GEN
+        "${CMAKE_CURRENT_BINARY_DIR}/${target_name_lower}_grammar_gen.y")
     add_custom_command(
       OUTPUT ${GRAMMAR_GEN} ${GRAMMAR_H}
       COMMAND ${CMAKE_COMMAND} -E copy ${ARG_GRAMMAR_Y} ${GRAMMAR_Y_GEN}
@@ -116,9 +118,15 @@ function(cmake_add_grammar TARGET_NAME)
     if(ARG_FOLDER)
       set_target_properties(${GRAMMAR_TARGET} PROPERTIES FOLDER ${ARG_FOLDER})
     endif()
-    set(${TARGET_NAME}_GRAMMAR_GEN ${GRAMMAR_GEN} PARENT_SCOPE)
-    set(${TARGET_NAME}_GRAMMAR_H ${GRAMMAR_H} PARENT_SCOPE)
-    set(${TARGET_NAME}_GRAMMAR_TARGET ${GRAMMAR_TARGET} PARENT_SCOPE)
+    set(${TARGET_NAME}_GRAMMAR_GEN
+        ${GRAMMAR_GEN}
+        PARENT_SCOPE)
+    set(${TARGET_NAME}_GRAMMAR_H
+        ${GRAMMAR_H}
+        PARENT_SCOPE)
+    set(${TARGET_NAME}_GRAMMAR_TARGET
+        ${GRAMMAR_TARGET}
+        PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -126,7 +134,8 @@ function(cmake_add_source VAR)
   set(options RECURSE)
   set(oneValueArgs)
   set(multiValueArgs DIRS EXCLUDES PATTERNS)
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
 
   set(glob_mode GLOB)
   if(ARG_RECURSE)
@@ -134,7 +143,8 @@ function(cmake_add_source VAR)
   endif()
 
   if(NOT ARG_DIRS)
-    set(ARG_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    set(ARG_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/include")
   endif()
 
   if(NOT ARG_PATTERNS)
@@ -154,14 +164,17 @@ function(cmake_add_source VAR)
     list(REMOVE_ITEM collected ${ARG_EXCLUDES})
   endif()
 
-  set(${VAR} ${collected} PARENT_SCOPE)
+  set(${VAR}
+      ${collected}
+      PARENT_SCOPE)
 endfunction()
 
 function(cmake_add_test)
   set(options)
   set(oneValueArgs FOLDER)
   set(multiValueArgs SOURCES LIBS DEFS INCLUDES)
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
 
   foreach(src ${ARG_SOURCES})
     get_filename_component(name ${src} NAME_WE)
@@ -171,11 +184,11 @@ function(cmake_add_test)
       target_compile_definitions(${name} PRIVATE ${ARG_DEFS})
       target_include_directories(${name} PRIVATE ${ARG_INCLUDES})
       add_test(NAME ${name} COMMAND ${name})
-      
+
       if(ARG_FOLDER)
         set_target_properties(${name} PROPERTIES FOLDER ${ARG_FOLDER})
       endif()
-      
+
     endif()
   endforeach()
 endfunction()
@@ -184,7 +197,8 @@ function(cmake_add_benchmark)
   set(options)
   set(oneValueArgs FOLDER)
   set(multiValueArgs SOURCES LIBS DEFS INCLUDES)
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
+                        ${ARGN})
 
   foreach(src ${ARG_SOURCES})
     get_filename_component(name ${src} NAME_WE)

@@ -1079,6 +1079,353 @@ void redis_stream_result_free(redis_stream_result_t *results, size_t count) {
   free(results);
 }
 
+/* ---------------------------------------------------------------------------
+ * Helper: wrap a single-stream RESP array (as returned by XRANGE/XREVRANGE/
+ * XCLAIM) in a synthetic redis_stream_result_t so callers always receive the
+ * same redis_stream_cb_t interface.
+ * ---------------------------------------------------------------------------
+ */
+static void on_single_stream_reply(redis_client_t *client, redis_reply_t *reply,
+                                   void *user_data) {
+  redis_stream_cb_ctx_t *ctx = (redis_stream_cb_ctx_t *)user_data;
+
+  if (!ctx || !ctx->callback) {
+    free(ctx);
+    return;
+  }
+
+  if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->element_count == 0) {
+    ctx->callback(client, NULL, 0, ctx->user_data);
+    free(ctx);
+    return;
+  }
+
+  /* Synthesise a single-element result_count=1 wrapper. */
+  redis_stream_result_t result;
+  memset(&result, 0, sizeof(result));
+  result.entry_count = reply->element_count;
+  result.entries     = calloc(result.entry_count, sizeof(redis_stream_entry_t));
+  if (!result.entries) {
+    ctx->callback(client, NULL, 0, ctx->user_data);
+    free(ctx);
+    return;
+  }
+
+  for (size_t j = 0; j < reply->element_count; j++) {
+    redis_reply_t *entry = reply->elements[j];
+    if (!entry || entry->type != REDIS_REPLY_ARRAY || entry->element_count < 2)
+      continue;
+
+    if (entry->elements[0]->type == REDIS_REPLY_BULK_STRING)
+      result.entries[j].id = tstr_dup(entry->elements[0]->str);
+
+    redis_reply_t *fields = entry->elements[1];
+    if (fields->type == REDIS_REPLY_ARRAY && fields->element_count >= 2) {
+      size_t fc = fields->element_count / 2;
+      result.entries[j].field_count = fc;
+      result.entries[j].fields     = calloc(fc, sizeof(char *));
+      result.entries[j].values     = calloc(fc, sizeof(char *));
+      result.entries[j].value_lens = calloc(fc, sizeof(size_t));
+
+      for (size_t k = 0; k < fc; k++) {
+        redis_reply_t *f = fields->elements[k * 2];
+        redis_reply_t *v = fields->elements[k * 2 + 1];
+        if (f->type == REDIS_REPLY_BULK_STRING)
+          result.entries[j].fields[k] = tstr_dup(f->str);
+        if (v->type == REDIS_REPLY_BULK_STRING) {
+          result.entries[j].values[k] = malloc(v->len + 1);
+          memcpy(result.entries[j].values[k], v->str, v->len);
+          result.entries[j].values[k][v->len] = '\0';
+          result.entries[j].value_lens[k] = v->len;
+        }
+      }
+    }
+  }
+
+  ctx->callback(client, &result, 1, ctx->user_data);
+  redis_stream_result_free(&result, 1);  /* frees entries[] but not &result */
+  free(ctx);
+}
+
+/* ---------------------------------------------------------------------------
+ * XRANGE key start end [COUNT count]
+ * ---------------------------------------------------------------------------
+ */
+int redis_xrange(redis_client_t *client, const char *key,
+                 const char *start, const char *end, size_t count,
+                 redis_stream_cb_t callback, void *user_data) {
+  if (!client || !key || !start || !end)
+    return -1;
+
+  char count_str[32];
+  size_t argc = count > 0 ? 6 : 4;
+  const char *argv_static[6];
+  size_t idx = 0;
+
+  argv_static[idx++] = "XRANGE";
+  argv_static[idx++] = key;
+  argv_static[idx++] = start;
+  argv_static[idx++] = end;
+  if (count > 0) {
+    argv_static[idx++] = "COUNT";
+    fmt(count_str, sizeof(count_str), "{}", count);
+    argv_static[idx++] = count_str;
+  }
+
+  redis_stream_cb_ctx_t *ctx = malloc(sizeof(redis_stream_cb_ctx_t));
+  if (!ctx) return -1;
+  ctx->callback  = callback;
+  ctx->user_data = user_data;
+
+  int result = redis_commandv(client, (int)argc, argv_static, NULL,
+                              on_single_stream_reply, ctx);
+  if (result != 0) free(ctx);
+  return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * XREVRANGE key end start [COUNT count]
+ * ---------------------------------------------------------------------------
+ */
+int redis_xrevrange(redis_client_t *client, const char *key,
+                    const char *end, const char *start, size_t count,
+                    redis_stream_cb_t callback, void *user_data) {
+  if (!client || !key || !end || !start)
+    return -1;
+
+  char count_str[32];
+  size_t argc = count > 0 ? 6 : 4;
+  const char *argv_static[6];
+  size_t idx = 0;
+
+  argv_static[idx++] = "XREVRANGE";
+  argv_static[idx++] = key;
+  argv_static[idx++] = end;
+  argv_static[idx++] = start;
+  if (count > 0) {
+    argv_static[idx++] = "COUNT";
+    fmt(count_str, sizeof(count_str), "{}", count);
+    argv_static[idx++] = count_str;
+  }
+
+  redis_stream_cb_ctx_t *ctx = malloc(sizeof(redis_stream_cb_ctx_t));
+  if (!ctx) return -1;
+  ctx->callback  = callback;
+  ctx->user_data = user_data;
+
+  int result = redis_commandv(client, (int)argc, argv_static, NULL,
+                              on_single_stream_reply, ctx);
+  if (result != 0) free(ctx);
+  return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * XPENDING key group [start end count [consumer]]
+ *
+ * When start == NULL → summary form (2 args: XPENDING key group).
+ * When start != NULL → detail form  (4–5 args).
+ * The raw RESP reply is forwarded to the generic command callback; callers
+ * parse it themselves or use redis_xpending_entry_t as a guide.
+ * ---------------------------------------------------------------------------
+ */
+int redis_xpending(redis_client_t *client, const char *key,
+                   const char *group,
+                   const char *start, const char *end, size_t count,
+                   const char *consumer,
+                   redis_command_cb_t callback, void *user_data) {
+  if (!client || !key || !group)
+    return -1;
+
+  if (!start) {
+    /* Summary form: XPENDING key group */
+    const char *argv[] = {"XPENDING", key, group};
+    return redis_commandv(client, 3, argv, NULL, callback, user_data);
+  }
+
+  /* Detail form: XPENDING key group start end count [consumer] */
+  char count_str[32];
+  fmt(count_str, sizeof(count_str), "{}", count);
+
+  size_t argc = consumer ? 7 : 6;
+  const char **argv = malloc(argc * sizeof(char *));
+  if (!argv) return -1;
+
+  size_t idx = 0;
+  argv[idx++] = "XPENDING";
+  argv[idx++] = key;
+  argv[idx++] = group;
+  argv[idx++] = start;
+  argv[idx++] = end;
+  argv[idx++] = count_str;
+  if (consumer) argv[idx++] = consumer;
+
+  int result = redis_commandv(client, (int)argc, argv, NULL, callback, user_data);
+  free(argv);
+  return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * XCLAIM key group consumer min-idle-time id [id ...]
+ * ---------------------------------------------------------------------------
+ */
+int redis_xclaim(redis_client_t *client, const char *key,
+                 const char *group, const char *consumer,
+                 int64_t min_idle_ms,
+                 size_t id_count, const char **ids,
+                 redis_stream_cb_t callback, void *user_data) {
+  if (!client || !key || !group || !consumer || !ids || id_count == 0)
+    return -1;
+
+  char idle_str[32];
+  fmt(idle_str, sizeof(idle_str), "{}", min_idle_ms);
+
+  /* XCLAIM key group consumer idle id [id ...] */
+  size_t argc = 5 + id_count;
+  const char **argv = malloc(argc * sizeof(char *));
+  if (!argv) return -1;
+
+  size_t idx = 0;
+  argv[idx++] = "XCLAIM";
+  argv[idx++] = key;
+  argv[idx++] = group;
+  argv[idx++] = consumer;
+  argv[idx++] = idle_str;
+  for (size_t i = 0; i < id_count; i++)
+    argv[idx++] = ids[i];
+
+  redis_stream_cb_ctx_t *ctx = malloc(sizeof(redis_stream_cb_ctx_t));
+  if (!ctx) { free(argv); return -1; }
+  ctx->callback  = callback;
+  ctx->user_data = user_data;
+
+  int result = redis_commandv(client, (int)argc, argv, NULL,
+                              on_single_stream_reply, ctx);
+  free(argv);
+  if (result != 0) free(ctx);
+  return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * XAUTOCLAIM key group consumer min-idle-time start [COUNT count]
+ *
+ * Redis 6.2+ reply: [next-id, [[id,[f,v,...]], ...], [deleted-ids]]
+ * The middle element (index 1) is forwarded via on_single_stream_reply.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Intermediate ctx to peel the [next-id, entries, deleted] wrapper. */
+typedef struct {
+  redis_stream_cb_t callback;
+  void             *user_data;
+} redis_xautoclaim_ctx_t;
+
+static void on_xautoclaim_reply(redis_client_t *client, redis_reply_t *reply,
+                                void *user_data) {
+  redis_xautoclaim_ctx_t *ctx = (redis_xautoclaim_ctx_t *)user_data;
+
+  if (!ctx || !ctx->callback) { free(ctx); return; }
+
+  /* Redis reply: *3 [next-id, entries-array, deleted-ids-array] */
+  if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->element_count < 2) {
+    ctx->callback(client, NULL, 0, ctx->user_data);
+    free(ctx);
+    return;
+  }
+
+  /* on_single_stream_reply takes ownership of and free()s its ctx arg.
+   * Allocate a heap copy so we never call free() on a stack pointer. */
+  redis_stream_cb_ctx_t *inner = malloc(sizeof(redis_stream_cb_ctx_t));
+  if (!inner) {
+    ctx->callback(client, NULL, 0, ctx->user_data);
+    free(ctx);
+    return;
+  }
+  inner->callback  = ctx->callback;
+  inner->user_data = ctx->user_data;
+  free(ctx);
+
+  on_single_stream_reply(client, reply->elements[1], inner);
+  /* inner is freed inside on_single_stream_reply */
+}
+
+int redis_xautoclaim(redis_client_t *client, const char *key,
+                     const char *group, const char *consumer,
+                     int64_t min_idle_ms, const char *start, size_t count,
+                     redis_stream_cb_t callback, void *user_data) {
+  if (!client || !key || !group || !consumer || !start)
+    return -1;
+
+  char idle_str[32], count_str[32];
+  fmt(idle_str, sizeof(idle_str), "{}", min_idle_ms);
+
+  size_t argc = count > 0 ? 8 : 6;
+  const char *argv_static[8];
+  size_t idx = 0;
+
+  argv_static[idx++] = "XAUTOCLAIM";
+  argv_static[idx++] = key;
+  argv_static[idx++] = group;
+  argv_static[idx++] = consumer;
+  argv_static[idx++] = idle_str;
+  argv_static[idx++] = start;
+  if (count > 0) {
+    argv_static[idx++] = "COUNT";
+    fmt(count_str, sizeof(count_str), "{}", count);
+    argv_static[idx++] = count_str;
+  }
+
+  redis_xautoclaim_ctx_t *actx = malloc(sizeof(redis_xautoclaim_ctx_t));
+  if (!actx) return -1;
+  actx->callback  = callback;
+  actx->user_data = user_data;
+
+  int result = redis_commandv(client, (int)argc, argv_static, NULL,
+                              on_xautoclaim_reply, actx);
+  if (result != 0) free(actx);
+  return result;
+}
+
+/* ---------------------------------------------------------------------------
+ * XGROUP sub-commands
+ * ---------------------------------------------------------------------------
+ */
+
+int redis_xgroup_setid(redis_client_t *client, const char *key,
+                       const char *group, const char *id,
+                       redis_command_cb_t callback, void *user_data) {
+  if (!client || !key || !group || !id)
+    return -1;
+  const char *argv[] = {"XGROUP", "SETID", key, group, id};
+  return redis_commandv(client, 5, argv, NULL, callback, user_data);
+}
+
+int redis_xgroup_destroy(redis_client_t *client, const char *key,
+                         const char *group,
+                         redis_command_cb_t callback, void *user_data) {
+  if (!client || !key || !group)
+    return -1;
+  const char *argv[] = {"XGROUP", "DESTROY", key, group};
+  return redis_commandv(client, 4, argv, NULL, callback, user_data);
+}
+
+int redis_xgroup_createconsumer(redis_client_t *client, const char *key,
+                                const char *group, const char *consumer,
+                                redis_command_cb_t callback, void *user_data) {
+  if (!client || !key || !group || !consumer)
+    return -1;
+  const char *argv[] = {"XGROUP", "CREATECONSUMER", key, group, consumer};
+  return redis_commandv(client, 5, argv, NULL, callback, user_data);
+}
+
+int redis_xgroup_delconsumer(redis_client_t *client, const char *key,
+                             const char *group, const char *consumer,
+                             redis_command_cb_t callback, void *user_data) {
+  if (!client || !key || !group || !consumer)
+    return -1;
+  const char *argv[] = {"XGROUP", "DELCONSUMER", key, group, consumer};
+  return redis_commandv(client, 5, argv, NULL, callback, user_data);
+}
+
 /* =============================================================================
  * Redis Pub/Sub Implementation
  * =============================================================================

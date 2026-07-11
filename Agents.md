@@ -6,23 +6,23 @@
 目标只有三端：
 
 - 先理解上下文，再动代码
-- 先保住现有行为，再谈改进
+- 先保住现有行为，再谈改
 - 先给出可复验结果，再宣称完成
 
 ## 专项技能参考
 
-本文件保留核心约束与原则。详细技术规范已拆分为独立 skills，按需激活：
+本文件保留核心约束与原则。详细技术规范已迁移为全局skills，按需激活：
 
-- **`skills/turbonet_utils.md`** - TurboNet Utils 完整 API 参考（内存管理、字符串、文件、日志、并发、无锁数据结构）
-- **`skills/coronet.md`** - CoroNet 协程网络开发指南（coroutine、TCP/TLS/UDP/KCP/Pipe/WebSocket、SOCKS5/TProxy 边界）
-- **`skills/cmake_presets.md`** - CMake Presets 构建测试指南（configure/build/test preset、target 构建、build tree 恢复）
-- **`skills/c_design_patterns.md`** - C 语言设计模式实现指南（12 种模式、SOLID 原则、反模式警告）
-- **`skills/performance_optimization.md`** - 性能优化专项指南（热路径识别、SIMD、缓存优化、性能测试）
-- **`skills/logging_guide.md`** - 日志系统最佳实践（数量约束、质量规范、文件管理、生产配置）
-- **`skills/plugin_system.md`** - 插件系统开发规范（架构设计、隔离机制、热重载、安全）
-- **`skills/tinytest.md`** - TinyTest 测试框架指南（C/C++ 测试结构、断言、fixture、JUnit/TAP、benchmark）
+- **`turboutils`** - TurboUtils 完整 API 参考（内存管理、字符串、文件、日志、并发、无锁数据结构）
+- **`coronet`** - CoroNet 协程网络开发指南（coroutine、TCP/TLS/UDP/KCP/Pipe/WebSocket、DNS/mDNS、连接池、后端与关闭路径）
+- **`cmake-presets`** - CMake Presets 构建测试指南（configure/build/test preset、target 构建、build tree 恢复）
+- **`c-design-patterns`** - C 语言设计模式实现指南（12 种模式、SOLID 原则、反模式警告）
+- **`performance-optimization`** - 性能优化专项指南（热路径识别、SIMD、缓存优化、性能测试）
+- **`logging-guide`** - 日志系统最佳实践（数量约束、质量规范、文件管理、生产配置）
+- **`plugin-system`** - 插件系统开发规范（架构设计、隔离机制、热重载、安全）
+- **`tinytest`** - TinyTest 测试框架指南（C/C++ 测试结构、断言、fixture、JUnit/TAP、benchmark）
 
-激活方式：在 Kiro 中使用 `#` 引用 skill 文件（如 `#skills/turbonet_utils.md`），或查看 `skills/README.md` 了解详细使用说明。
+激活方式：在任务中涉及对应主题时使用相应全局 skill；需要显式指定时使用 `$turboutils`、`$coronet`、`$cmake-presets`、`$c-design-patterns`、`$performance-optimization`、`$logging-guide`、`$plugin-system` 或 `$tinytest`。
 
 ---
 
@@ -137,7 +137,7 @@
 - 中间层若不能恢复、重试、补偿或转换错误，应直接返回错误码或 Result 向上传播；禁止仅记录日志后返回成功
 - 资源释放依靠清晰的 cleanup 路径或 goto cleanup 惯用法，不在多个错误分支重复清理逻辑
 - 可预期失败优先使用项目既有错误码、返回值（-1/NULL/错误码枚举）或 Result 结构表达
-- Result 设计以 `skills/c_design_patterns.md` 的“错误处理（Result 模式）”为准；`AGENTS.md` 只规定适用边界，不重复定义结构体样式
+- Result 设计以全局 skill `c-design-patterns` 的“错误处理（Result 模式）”为准；`AGENTS.md` 只规定适用边界，不重复定义结构体样式
 - 调用方必须检查错误码、NULL 或 Result 的失败状态；禁止忽略失败后继续使用未验证输出
 - 日志归属应集中在错误被消费或转换的边界，避免每层重复记录同一错误
 
@@ -184,7 +184,7 @@
 
 ### 插件系统设计规范
 
-> **详细规范参见**: `skills/plugin_system.md`
+> **详细规范参见**: 全局 skill `plugin-system`
 
 插件系统核心约束：
 - 稳定 ABI：纯 C 接口、opaque 指针、禁止跨边界传递复杂结构
@@ -195,7 +195,7 @@
 
 ### 设计模式应用指导
 
-> **详细模式实现参见**: `skills/c_design_patterns.md`
+> **详细模式实现参见**: 全局 skill `c-design-patterns`
 
 模式选择原则：
 - 创建型（工厂、建造者、单例）：对象创建逻辑复杂、延迟初始化、配置驱动
@@ -205,21 +205,21 @@
 
 ### 标准库与成熟算法优先
 
-> **详细 API 参见**: `skills/turbonet_utils.md`
+> **详细 API 参见**: 全局 skill `turboutils`
 
 #### 库优先级顺序（从高到低）
 
-1. **TurboNet Utils**（通过 `TURBONET_ROOT` 或项目构建配置定位，例如 `%TURBONET_ROOT%/turbonet/utils/include/`）— 最优先
+1. **TurboUtils**（仓库 `utils/` 模块；构建时优先通过 CMake target `TurboUtils::Core` 使用）— 最优先
 2. **项目内模块**（`exprtk/`、`plugins/` 等）
 3. **vendor/ 库**（sds、croar、mir、monocypher、sha2、uuid、miniblas）
 4. **vcpkg 依赖**（xxhash、sqlite3、zstd、openssl、c-ares、aklomp-base64、simde）
 5. **C 标准库**（libc：`string.h`、`stdlib.h`、`stdio.h`）
-6. **底层系统 API**（仅允许封装在 TurboNet util/coro 或项目适配层之后使用）
+6. **底层系统 API**（仅允许封装在 TurboUtils 平台/协程适配层或项目适配层之后使用）
 
 #### 手写实现触发条件（严格约束）
 
 允许手写实现的前提：
-1. **TurboNet Utils/vendor/vcpkg 无对应功能**，且项目内没有稳定复用点；或现有库无法满足接口/平台/许可约束
+1. **TurboUtils/vendor/vcpkg 无对应功能**，且项目内没有稳定复用点；或现有库无法满足接口/平台/许可约束
 2. 若是为了替换现有库或优化成熟通用能力，必须有 profiling 证明现有路径是瓶颈（≥20% 总耗时）
 3. 若是因为特殊约束（嵌入式、实时性、代码体积 <50KB），必须说明约束来源
 4. 高风险基础设施必须提供 Benchmark 对比、测试覆盖率目标和文档化理由
@@ -227,14 +227,14 @@
 #### 避免重复造轮子（强制规则）
 
 - ❌ **禁止手写**：动态数组 → 用 `turbo_vec_t` / `TURBO_VEC_DEFINE`，临时数组可用 `mem_pool_t`
-- ❌ **禁止手写**：字符串拼接 → 用 `tstr_t`（TurboNet）或 `sds`（vendor）
+- ❌ **禁止手写**：字符串拼接 → 用 `tstr_t`（TurboUtils）或 `sds`（vendor）
 - ❌ **禁止手写**：哈希表/集合 → 用 `turbo_hash_map_t` / `TURBO_HASH_MAP_DEFINE` 或 `turbo_set_t` / `TURBO_SET_DEFINE`
 - ❌ **禁止手写**：双端队列 → 用 `turbo_deque_t` / `TURBO_DEQUE_DEFINE`
-- ❌ **禁止手写**：文件读写 → 用 `turbo_fs`（TurboNet）
-- ❌ **禁止手写**：日志系统 → 用 `tlog`（TurboNet）
-- ❌ **禁止手写**：线程池 → 用 `turbo_threadpool`（TurboNet）
-- ❌ **禁止手写**：无锁队列 → 用 `disruptor` 或 `ring_buffer_spsc`（TurboNet）
-- ❌ **禁止手写**：内存池 → 用 `mem_pool_t` 或 `object_pool_t`（TurboNet）
+- ❌ **禁止手写**：文件读写 → 用 `turbo_fs`（TurboUtils）
+- ❌ **禁止手写**：日志系统 → 用 `tlog`（TurboUtils）
+- ❌ **禁止手写**：线程池 → 用 `turbo_threadpool`（TurboUtils）
+- ❌ **禁止手写**：无锁队列 → 用 `disruptor` 或 `ring_buffer_spsc`（TurboUtils）
+- ❌ **禁止手写**：内存池 → 用 `mem_pool_t` 或 `object_pool_t`（TurboUtils）
 
 ### 依赖管理与接口设计
 
@@ -322,7 +322,7 @@
 
 ## 性能与资源约束
 
-> **详细优化指南参见**: `skills/performance_optimization.md`
+> **详细优化指南参见**: 全局 skill `performance-optimization`
 
 - 热路径识别：每秒 >1000 次或占比 >20%（以 profiling 为准）
 - 热路径禁止：动态分配、函数指针间接调用、字符串拷贝
@@ -335,7 +335,7 @@
 
 ## 可观测性与诊断
 
-> **详细日志规范参见**: `skills/logging_guide.md`
+> **详细日志规范参见**: 全局 skill `logging-guide`
 
 - 错误上下文传播：错误必须携带操作类型、输入摘要、失败阶段、错误码
 - 日志分级：ERROR（用户可见失败）、WARN（降级/重试）、INFO（里程碑）、DEBUG（详细流程）
@@ -375,7 +375,7 @@
 
 ## 测试与验证
 
-> **TinyTest 使用指南参见**: `skills/tinytest.md`
+> **TinyTest 使用指南参见**: 全局 skill `tinytest`
 
 - 每次改动都应给出可重复的本地验证步骤
 - 验证顺序默认遵循：先最小相关测试，再相邻回归，最后按需扩大范围

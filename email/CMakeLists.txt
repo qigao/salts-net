@@ -28,6 +28,10 @@ target_include_directories(${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>)
 
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/email
+        DESTINATION include
+        FILES_MATCHING PATTERN "*.h")
+
 # ── Tests ──────────────────────────────────────────────────────────────
 cmake_add_test(
   SOURCES

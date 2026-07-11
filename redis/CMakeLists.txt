@@ -2,7 +2,7 @@
 
 set(REDIS_HEADERS redis_client.h redis_pool.h redis_cluster.h)
 
-add_library(tedis SHARED redis_client.c redis_pool.c redis_cluster.c
+add_library(tedis SHARED redis_client.c redis_ext.c redis_pool.c redis_cluster.c
                          ${REDIS_HEADERS})
 
 cmake_config_target(

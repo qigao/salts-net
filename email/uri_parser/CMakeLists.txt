@@ -3,7 +3,7 @@ set(TARGET_NAME uri_parser)
 # Generated files
 cmake_add_grammar(URI
   LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/uri_lexer.re
-  FOLDER "parser/${TARGET_NAME}")
+  FOLDER "email/${TARGET_NAME}")
 
 # Library
 cmake_add_source(SOURCE_FILES DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -12,12 +12,13 @@ add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${URI_LEXER_GEN})
 
 cmake_config_target(${TARGET_NAME}
   ALIAS TurboNet::UriParser
-  FOLDER "parser/${TARGET_NAME}"
+  FOLDER "email/${TARGET_NAME}"
   EXPORT_NAME UriParser)
 
 target_include_directories(
   ${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR})
 
 # Tests

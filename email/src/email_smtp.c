@@ -2,6 +2,7 @@
 #include "CoroNet.h"
 #include "base64_utils.h"
 #include <fmt.h>
+#include "turbo_thread.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,12 +14,28 @@ struct smtp_client_s {
   coro_context_t *ctx;
   smtp_config_t config;
   coro_socket_t *socket;
+  turbo_mutex_t socket_mutex;
   char error_msg[512];
   int last_code;
   char read_buffer[4096];
   char response_buffer[4096];
   size_t read_buffer_len;
 };
+
+static void smtp_socket_publish(smtp_client_t *client, coro_socket_t *socket) {
+  turbo_mutex_lock(&client->socket_mutex);
+  client->socket = socket;
+  turbo_mutex_unlock(&client->socket_mutex);
+}
+
+static coro_socket_t *smtp_socket_take(smtp_client_t *client) {
+  coro_socket_t *socket;
+  turbo_mutex_lock(&client->socket_mutex);
+  socket = client->socket;
+  client->socket = NULL;
+  turbo_mutex_unlock(&client->socket_mutex);
+  return socket;
+}
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -179,6 +196,7 @@ smtp_client_t *smtp_client_create(coro_context_t *ctx,
   if (!client) return NULL;
 
   client->ctx = ctx;
+  turbo_mutex_init(&client->socket_mutex);
   client->config = *config;
 
   if (config->host) client->config.host = strdup(config->host);
@@ -195,13 +213,15 @@ smtp_client_t *smtp_client_create(coro_context_t *ctx,
 void smtp_client_free(smtp_client_t *client) {
   if (!client) return;
 
-  if (client->socket) {
-    coro_socket_destroy(client->socket);
+  {
+    coro_socket_t *socket = smtp_socket_take(client);
+    if (socket) coro_socket_destroy(socket);
   }
 
   free(client->config.host);
   free(client->config.username);
   free(client->config.password);
+  turbo_mutex_destroy(&client->socket_mutex);
   free(client);
 }
 
@@ -214,7 +234,10 @@ int smtp_connect(smtp_client_t *client) {
 
   // Create socket
   socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
-  client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
+  {
+    coro_socket_t *socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
+    if (socket) smtp_socket_publish(client, socket);
+  }
   if (!client->socket) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
@@ -224,8 +247,8 @@ int smtp_connect(smtp_client_t *client) {
                           client->config.port) != 0) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to connect to {}:{}", client->config.host,
         client->config.port);
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
+    coro_socket_t *socket = smtp_socket_take(client);
+    if (socket) coro_socket_destroy(socket);
     return -1;
   }
 
@@ -400,8 +423,19 @@ void smtp_disconnect(smtp_client_t *client) {
     client->error_msg[sizeof(client->error_msg) - 1] = '\0';
   }
 
-  coro_socket_destroy(client->socket);
-  client->socket = NULL;
+  {
+    coro_socket_t *socket = smtp_socket_take(client);
+    if (socket) coro_socket_destroy(socket);
+  }
+}
+
+int smtp_interrupt(smtp_client_t *client, int status) {
+  int rc;
+  if (!client) return TURBO_EINVAL;
+  turbo_mutex_lock(&client->socket_mutex);
+  rc = client->socket ? coro_socket_interrupt_wait(client->socket, status) : TURBO_ENOTCONN;
+  turbo_mutex_unlock(&client->socket_mutex);
+  return rc;
 }
 
 /* ── Send Email ────────────────────────────────────────────────────── */

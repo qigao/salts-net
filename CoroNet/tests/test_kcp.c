@@ -28,13 +28,13 @@ static void on_kcp_connect(void *handle, int status, void *peer) {
 
 typedef struct {
     int count;
-    char payloads[4][32];
-    size_t lens[4];
+    char payloads[8][32];
+    size_t lens[8];
 } fec_deliver_capture_t;
 
 static int on_fec_deliver(void *user, const char *data, size_t len) {
     fec_deliver_capture_t *cap = (fec_deliver_capture_t *)user;
-    if (!cap || !data || len == 0 || cap->count >= 4 || len >= sizeof(cap->payloads[0])) {
+    if (!cap || !data || len == 0 || cap->count >= 8 || len >= sizeof(cap->payloads[0])) {
         return TURBO_EINVAL;
     }
 
@@ -150,7 +150,6 @@ spec("KCP Transport") {
         coro_context_t *ctx = coro_context_create(NULL);
         turbo_kcp_fec_config_t cfg;
         turbo_kcp_t *kcp;
-        int rc;
 
         check(ctx != NULL);
         kcp = turbo_kcp_create(ctx);
@@ -164,20 +163,15 @@ spec("KCP Transport") {
 
         turbo_kcp_fec_config_default(&cfg);
         cfg.enabled = 1;
-        cfg.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
-        rc = turbo_kcp_set_fec(kcp, &cfg);
-        if (turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
-            check_int_eq(rc, 0);
-        } else {
-            check_int_eq(rc, TURBO_ENOTSUP);
-            check_int_eq(coro_context_get_last_error(ctx), TURBO_ENOTSUP);
-        }
+        cfg.backend = TURBO_KCP_FEC_BACKEND_REED_SOLOMON;
+        check_int_eq(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_REED_SOLOMON), 1);
+        check_int_eq(turbo_kcp_set_fec(kcp, &cfg), 0);
 
         turbo_kcp_destroy(kcp);
         kcp_test_destroy_context_robust(ctx);
     }
 
-    it("should recover a missing data shard through Wirehair FEC when available") {
+    it("should recover a missing data shard through Reed-Solomon FEC") {
         turbo_kcp_fec_config_t cfg;
         turbo_kcp_fec_state_t *fec;
         mem_buffer_t *data_frame = NULL;
@@ -187,15 +181,10 @@ spec("KCP Transport") {
         const size_t packet_lens[2] = { 5, 5 };
         fec_deliver_capture_t cap;
 
-        if (!turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
-            check_int_eq(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR), 0);
-            return;
-        }
-
         memset(&cap, 0, sizeof(cap));
         turbo_kcp_fec_config_default(&cfg);
         cfg.enabled = 1;
-        cfg.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+        cfg.backend = TURBO_KCP_FEC_BACKEND_REED_SOLOMON;
         cfg.data_shards = 2;
         cfg.parity_shards = 1;
         cfg.max_payload_size = 32;
@@ -204,7 +193,7 @@ spec("KCP Transport") {
         check_not_null(fec);
         check_int_eq(turbo_kcp_fec_build_data_frame_for_test(&cfg, 7, 1, packets[1], packet_lens[1], &data_frame), 0);
         check_int_eq(
-            turbo_kcp_fec_build_wirehair_parity_frame_for_test(&cfg, 7, 0, packets, packet_lens, 2, &parity_frame), 0);
+            turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(&cfg, 7, 0, packets, packet_lens, 2, &parity_frame), 0);
 
         memset(&slice, 0, sizeof(slice));
         slice.data = data_frame->data;
@@ -226,6 +215,55 @@ spec("KCP Transport") {
 
         mem_unref(parity_frame);
         mem_unref(data_frame);
+        turbo_kcp_fec_close(fec);
+    }
+
+    it("should recover two missing data shards from a 5+3 group") {
+        turbo_kcp_fec_config_t cfg;
+        turbo_kcp_fec_state_t *fec = NULL;
+        mem_buffer_t *frames[5] = { NULL, NULL, NULL, NULL, NULL };
+        mem_slice_t slice;
+        const char *packets[5] = { "zero", "one", "two", "three", "four" };
+        const size_t packet_lens[5] = { 4, 3, 3, 5, 4 };
+        fec_deliver_capture_t cap;
+        int i;
+
+        memset(&cap, 0, sizeof(cap));
+        turbo_kcp_fec_config_default(&cfg);
+        cfg.enabled = 1;
+        cfg.backend = TURBO_KCP_FEC_BACKEND_REED_SOLOMON;
+        cfg.data_shards = 5;
+        cfg.parity_shards = 3;
+        cfg.max_payload_size = 32;
+
+        check_int_eq(turbo_kcp_fec_open(&cfg, &fec), 0);
+        check_not_null(fec);
+        for (i = 0; i < 3; ++i) {
+            check_int_eq(turbo_kcp_fec_build_data_frame_for_test(
+                             &cfg, 11, (uint16_t)(i + 2), packets[i + 2],
+                             packet_lens[i + 2], &frames[i]), 0);
+        }
+        check_int_eq(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
+                         &cfg, 11, 1, packets, packet_lens, 5, &frames[3]), 0);
+        check_int_eq(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
+                         &cfg, 11, 2, packets, packet_lens, 5, &frames[4]), 0);
+
+        for (i = 0; i < 5; ++i) {
+            memset(&slice, 0, sizeof(slice));
+            slice.data = frames[i]->data;
+            slice.length = frames[i]->used;
+            slice.buffer = frames[i];
+            check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice,
+                                                     on_fec_deliver, &cap), 0);
+        }
+        check_int_eq(cap.count, 5);
+        check_str_eq(cap.payloads[0], "two");
+        check_str_eq(cap.payloads[1], "three");
+        check_str_eq(cap.payloads[2], "four");
+        check_str_eq(cap.payloads[3], "zero");
+        check_str_eq(cap.payloads[4], "one");
+
+        for (i = 0; i < 5; ++i) mem_unref(frames[i]);
         turbo_kcp_fec_close(fec);
     }
 
@@ -315,7 +353,7 @@ spec("KCP Transport") {
         coro_context_destroy(ctx);
     }
 
-    it("should send and receive data over KCP with FEC when available") {
+    it("should send and receive data over KCP with FEC") {
         coro_context_t *ctx = coro_context_create(NULL);
         turbo_kcp_t *server;
         turbo_kcp_t *client;
@@ -327,12 +365,6 @@ spec("KCP Transport") {
         uint64_t start;
 
         check(ctx != NULL);
-        if (!turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR)) {
-            check_int_eq(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_WIREHAIR), 0);
-            coro_context_destroy(ctx);
-            return;
-        }
-
         server = turbo_kcp_create(ctx);
         client = turbo_kcp_create(ctx);
         check(server != NULL);
@@ -340,7 +372,7 @@ spec("KCP Transport") {
 
         turbo_kcp_fec_config_default(&fec);
         fec.enabled = 1;
-        fec.backend = TURBO_KCP_FEC_BACKEND_WIREHAIR;
+        fec.backend = TURBO_KCP_FEC_BACKEND_REED_SOLOMON;
         check_int_eq(turbo_kcp_set_fec(server, &fec), 0);
         check_int_eq(turbo_kcp_set_fec(client, &fec), 0);
 

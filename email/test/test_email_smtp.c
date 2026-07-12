@@ -5,6 +5,7 @@
 
 #include "email/email_smtp.h"
 #include "tinytest.h"
+#include "turbo_error.h"
 #include <string.h>
 
 spec("email_smtp") {
@@ -58,6 +59,21 @@ spec("email_smtp") {
     it("should return zero code for NULL client") {
       int code = smtp_get_last_code(NULL);
       check(code == 0);
+    }
+
+    it("should reject interrupt without an active socket") {
+      smtp_config_t config = {0};
+      coro_context_t *ctx = coro_context_create(NULL);
+      smtp_client_t *client;
+      config.host = "127.0.0.1";
+      config.port = 25;
+      check_not_null(ctx);
+      client = smtp_client_create(ctx, &config);
+      check_not_null(client);
+      check_int_eq(smtp_interrupt(NULL, TURBO_ESHUTDOWN), TURBO_EINVAL);
+      check_int_eq(smtp_interrupt(client, TURBO_ESHUTDOWN), TURBO_ENOTCONN);
+      smtp_client_free(client);
+      coro_context_destroy(ctx);
     }
   }
 }

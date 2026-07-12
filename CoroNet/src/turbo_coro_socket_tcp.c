@@ -133,6 +133,13 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
     turbo_stream_set_user_data(s->handle.stream, s);
     turbo_stream_set_write_cb(s->handle.stream, on_tcp_write_complete);
     s->handle.stream->managed = 1;
+    {
+      int rc = coro_socket_apply_stream_options(s);
+      if (rc != 0) {
+        tcp_discard_stream(s);
+        return rc;
+      }
+    }
   }
 
   retain_client(s);
@@ -233,6 +240,15 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle,
   stream->on_close = on_tcp_close;
   stream->on_write_complete = on_tcp_write_complete;
   child->connected = 1;
+  {
+    int rc = coro_socket_inherit_stream_options(child, ls->server_coro);
+    if (rc != 0) {
+      coro_socket_destroy(child);
+      free(node);
+      tcp_listener_fail(ls->server_coro, rc);
+      return;
+    }
+  }
 
   if (!ls->server_coro->accept_prestart_recv_disabled) {
     int rc = tcp_recv_start(child);
@@ -304,6 +320,16 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
   if (!ls->listener) {
     int rc = coro_context_get_last_error(s->ctx);
     return rc != 0 ? rc : TURBO_EIO;
+  }
+  if (s->tcp_keepalive_configured) {
+    (void)turbo_stream_listener_set_child_tcp_keepalive(ls->listener,
+                                                        &s->tcp_keepalive_config);
+  }
+  if (s->linger_configured) {
+    (void)turbo_stream_listener_set_child_linger(ls->listener, &s->linger_config);
+  }
+  if (s->send_hwm_bytes) {
+    (void)turbo_stream_listener_set_child_send_hwm(ls->listener, s->send_hwm_bytes);
   }
   return 0;
 }

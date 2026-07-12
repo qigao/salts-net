@@ -89,6 +89,23 @@ CXX_C_API int coro_socket_accept(coro_socket_t *socket, coro_socket_t **accepted
 CXX_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
 
 /**
+ * @brief Configure OS TCP keepalive for TCP/TLS/WS/WSS sockets.
+ */
+CXX_C_API int coro_socket_set_tcp_keepalive(coro_socket_t *socket,
+                                            const turbo_tcp_keepalive_config_t *config);
+
+/**
+ * @brief Configure OS SO_LINGER for TCP/TLS/WS/WSS sockets.
+ */
+CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
+                                     const turbo_socket_linger_config_t *config);
+
+/**
+ * @brief Limit bytes queued in the socket send path. 0 disables the limit.
+ */
+CXX_C_API int coro_socket_set_send_hwm(coro_socket_t *socket, size_t bytes);
+
+/**
  * @brief Configure optional FEC for a KCP socket before bind/connect.
  */
 CXX_C_API int coro_socket_set_kcp_fec(coro_socket_t *socket,
@@ -208,8 +225,21 @@ CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *
 
 /**
  * @brief Send data through the socket.
+ *
+ * If compression is enabled via `coro_socket_set_compression_level()`, the
+ * payload is sent as a zstd-compressed frame.
  */
 CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);
+
+/**
+ * @brief Send data through the socket using zstd compression.
+ *
+ * @param socket Socket handle
+ * @param data  Uncompressed payload to compress and send
+ * @param len   Payload length
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int coro_socket_send_compressed(coro_socket_t *socket, const char *data, size_t len);
 
 /**
  * @brief Send a WebSocket text message.
@@ -244,13 +274,45 @@ CXX_C_API int coro_socket_send_buffer(coro_socket_t *socket, mem_buffer_t *buffe
 
 /**
  * @brief Receive data from the socket.
+ *
+ * If compression is enabled via `coro_socket_set_compression_level()`, this
+ * decodes a complete compressed frame and returns the decompressed payload.
  */
 CXX_C_API int coro_socket_recv(coro_socket_t *socket, char **data, size_t *len);
+
+/**
+ * @brief Receive one compressed frame and return decompressed payload.
+ *
+ * The API accumulates protocol frames across transport receives so that the
+ * returned payload is a single complete compressed message body.
+ *
+ * @param socket Socket handle
+ * @param data Output buffer pointer (caller must free with coro_socket_free_recv)
+ * @param len Output payload length
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int coro_socket_recv_compressed(coro_socket_t *socket, char **data, size_t *len);
 
 /**
  * @brief Receive a WebSocket message and report whether it was a text frame.
  */
 CXX_C_API int coro_socket_recv_ws(coro_socket_t *socket, char **data, size_t *len, int *is_text);
+
+/**
+ * @brief Configure zstd compression behavior.
+ *
+ * The configured level is always used by `coro_socket_send_compressed()` and
+ * `coro_socket_recv_compressed()`.
+ *
+ * For the regular `coro_socket_send()`/`coro_socket_recv()`, a positive level
+ * also enables automatic compression/decoding on that connection.
+ *
+ * @param socket Socket handle
+ * @param level Compression level (1..22 in zstd). Use 0 to disable compression behavior
+ *        and disable automatic behavior for send/recv.
+ * @return 0 on success, negative error code on failure
+ */
+CXX_C_API int coro_socket_set_compression_level(coro_socket_t *socket, int level);
 
 /**
  * @brief Interrupt a pending `coro_socket_recv()` wait from any thread.

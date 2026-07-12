@@ -5,6 +5,7 @@
 
 #include "mime_mhtml.h"
 #include "tinytest.h"
+#include <stdlib.h>
 #include <string.h>
 
 spec("mime_mhtml") {
@@ -138,12 +139,39 @@ spec("mime_mhtml") {
       mime_mhtml_document_t *doc = mime_mhtml_document_create(&pool);
       const char *data = "PNG_DATA_HERE";
 
-      int ret = mime_mhtml_add_resource(doc, "image/png", "image.png",
-                                        "photo@example.com", data, strlen(data), 1);
+      int ret = mime_mhtml_add_resource(doc, "image/png", "image.png", "photo@example.com", data,
+                                        strlen(data), 1);
       check(ret == 0);
       check(doc->resource_count == 1);
       check(doc->resources != NULL);
 
+      mime_mhtml_document_free(doc);
+      mem_destroy(&pool);
+    }
+
+    it("should serialize a complete MHTML document with encoded resources") {
+      mem_pool_t pool;
+      mime_mhtml_document_t *doc;
+      char *serialized;
+      size_t serialized_len = 0;
+      const unsigned char resource[] = {0x00u, 0x01u, 0xfeu, 0xffu};
+      mem_init(&pool, 4096);
+      doc = mime_mhtml_document_create(&pool);
+      check_not_null(doc);
+      check_int_eq(mime_mhtml_set_html(doc, "<p>page</p>", 11, "utf-8"), 0);
+      check_int_eq(mime_mhtml_add_resource(doc, "application/octet-stream", "item.bin", NULL,
+                                           (const char *)resource, sizeof(resource), 1),
+                   0);
+
+      serialized = mime_mhtml_serialize(doc, &serialized_len);
+      check_not_null(serialized);
+      check_uint_eq(serialized_len, strlen(serialized));
+      check_str_contains(serialized, "MIME-Version: 1.0\r\n");
+      check_str_contains(serialized, "Content-Type: multipart/related;");
+      check_str_contains(serialized, "Content-Transfer-Encoding: 8bit\r\n");
+      check_str_contains(serialized, "Content-Location: item.bin\r\n");
+      check_str_contains(serialized, "AAH+/w==\r\n");
+      free(serialized);
       mime_mhtml_document_free(doc);
       mem_destroy(&pool);
     }

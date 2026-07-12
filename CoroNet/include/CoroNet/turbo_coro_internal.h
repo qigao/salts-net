@@ -12,7 +12,6 @@
 #ifndef CORO_INTERNAL_H
 #define CORO_INTERNAL_H
 
-#include "turbo_build_config_internal.h"
 #include "internal.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
@@ -172,7 +171,7 @@ struct coro_context_s {
   /* Explicit stop flag — set by coro_context_stop().
      Allows context_run(DEFAULT) to exit even when uv handles are still alive
      (e.g. a listening server), as long as no coroutines are running. */
-  int stop_requested;
+  atomic_int stop_requested;
 
   /* Coroutine object pool handle */
   struct coro_object_pool_s *pool;
@@ -259,6 +258,11 @@ struct coro_socket_s {
   coro_handler_closed_fn handler_closed;             /**< Accepted-socket close completion callback */
   void *handler_closed_arg;                          /**< User data for handler_closed */
   int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
+  turbo_tcp_keepalive_config_t tcp_keepalive_config; /**< TCP keepalive options for TCP-backed sockets */
+  int tcp_keepalive_configured;                      /**< 1 = apply tcp_keepalive_config */
+  turbo_socket_linger_config_t linger_config;        /**< OS SO_LINGER options for TCP-backed sockets */
+  int linger_configured;                             /**< 1 = apply linger_config */
+  size_t send_hwm_bytes;                             /**< 0 = no socket send queue HWM */
   int accept_prestart_recv_disabled;                 /**< Listener: 1 = accepted raw TCP must not pre-read wrapper handshakes */
   int kcp_fec_configured;                            /**< 1 = KCP FEC config should be applied */
   turbo_kcp_fec_config_t kcp_fec_config;             /**< Pending KCP FEC config */
@@ -283,6 +287,13 @@ struct coro_socket_s {
                             coro_socket_free_recv) */
   size_t recv_len;     /**< Length of received data */
   uint8_t recv_ws_opcode; /**< Opcode for the pending WebSocket message */
+  int recv_compression_level; /**< Zstd level used by compressed send/recv APIs and auto mode. 0 disables compression behavior. */
+  int recv_compression_auto; /**< Non-zero enables zstd framing automatically in send()/recv(). */
+  char *recv_compression_cache; /**< Buffered compressed bytes for recv_compressed() parsing */
+  size_t recv_compression_cache_len; /**< bytes in recv_compression_cache */
+  size_t recv_compression_header_len; /**< header bytes accumulated so far (0..CORO_ZSTD_FRAME_HEADER_LEN) */
+  size_t recv_compression_expected_compressed_len; /**< payload bytes expected from frame header */
+  size_t recv_compression_expected_uncompressed_len; /**< uncompressed size from frame header */
 
   /* ── UDP peer address ──────────────────────────────────── */
   struct sockaddr_storage peer_addr; /**< Sender address from recvfrom */
@@ -524,6 +535,8 @@ void start_timeout_timer(coro_socket_t *s);
 void stop_timeout_timer(coro_socket_t *s);
 void coro_socket_release_destroy_wait_handoff(coro_socket_t *s);
 void coro_socket_release_destroy_wait_guard(coro_socket_t *s);
+int coro_socket_apply_stream_options(coro_socket_t *s);
+int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t *parent);
 
 /**
  * @brief Resume a specific coroutine in the given context.

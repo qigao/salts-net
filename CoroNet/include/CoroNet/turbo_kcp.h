@@ -14,7 +14,9 @@ typedef struct turbo_kcp_server_s turbo_kcp_server_t;
 
 typedef enum turbo_kcp_fec_backend_e {
   TURBO_KCP_FEC_BACKEND_NONE = 0,
-  TURBO_KCP_FEC_BACKEND_WIREHAIR = 1
+  TURBO_KCP_FEC_BACKEND_REED_SOLOMON = 1,
+  /** @deprecated Use TURBO_KCP_FEC_BACKEND_REED_SOLOMON. */
+  TURBO_KCP_FEC_BACKEND_WIREHAIR = TURBO_KCP_FEC_BACKEND_REED_SOLOMON
 } turbo_kcp_fec_backend_t;
 
 typedef struct turbo_kcp_fec_config_s {
@@ -31,14 +33,14 @@ typedef struct turbo_kcp_fec_config_s {
  * @param ctx The coroutine context.
  * @return turbo_kcp_t* 
  */
-turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx);
+CXX_C_API turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx);
 
 /**
  * @brief Destroy a KCP client context.
  * 
  * @param kcp The KCP context.
  */
-void turbo_kcp_destroy(turbo_kcp_t* kcp);
+CXX_C_API void turbo_kcp_destroy(turbo_kcp_t* kcp);
 
 /**
  * @brief Bind a KCP context to a local address (server mode).
@@ -49,13 +51,13 @@ void turbo_kcp_destroy(turbo_kcp_t* kcp);
  * @param on_recv Receive callback.
  * @return int 0 on success.
  */
-int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
-                   turbo_recv_cb on_recv);
+CXX_C_API int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
+                             turbo_recv_cb on_recv);
 
 /**
  * @brief Enable or disable SO_REUSEPORT for future bind calls on this KCP handle.
  */
-void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
+CXX_C_API void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
 
 /**
  * @brief Fill a KCP FEC config with safe defaults.
@@ -63,12 +65,12 @@ void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
  * Defaults keep FEC disabled. Callers must explicitly enable it before bind
  * or connect. Enabling an unavailable backend returns TURBO_ENOTSUP.
  */
-void turbo_kcp_fec_config_default(turbo_kcp_fec_config_t* config);
+CXX_C_API void turbo_kcp_fec_config_default(turbo_kcp_fec_config_t* config);
 
 /**
  * @brief Return non-zero if a KCP FEC backend is compiled in.
  */
-int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
+CXX_C_API int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
 
 /**
  * @brief Configure optional packet-erasure FEC for this KCP handle.
@@ -76,12 +78,12 @@ int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
  * FEC is off by default and must be configured before bind/connect so both
  * peers agree on packet framing. Passing a disabled config turns FEC off.
  */
-int turbo_kcp_set_fec(turbo_kcp_t* kcp, const turbo_kcp_fec_config_t* config);
+CXX_C_API int turbo_kcp_set_fec(turbo_kcp_t* kcp, const turbo_kcp_fec_config_t* config);
 
 /**
  * @brief Read the current KCP FEC config.
  */
-int turbo_kcp_get_fec(turbo_kcp_t* kcp, turbo_kcp_fec_config_t* config);
+CXX_C_API int turbo_kcp_get_fec(turbo_kcp_t* kcp, turbo_kcp_fec_config_t* config);
 
 /**
  * @brief Connect to a remote KCP server.
@@ -93,8 +95,8 @@ int turbo_kcp_get_fec(turbo_kcp_t* kcp, turbo_kcp_fec_config_t* config);
  * @param on_recv Receive callback.
  * @return int 0 on success.
  */
-int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
-                      turbo_connect_cb on_connect, turbo_recv_cb on_recv);
+CXX_C_API int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
+                                turbo_connect_cb on_connect, turbo_recv_cb on_recv);
 
 /**
  * @brief Send data over KCP.
@@ -104,29 +106,29 @@ int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
  * @param len The length of the data.
  * @return int 0 on success.
  */
-int turbo_kcp_send(turbo_kcp_t* kcp, const char* data, size_t len);
+CXX_C_API int turbo_kcp_send(turbo_kcp_t* kcp, const char* data, size_t len);
 
 /**
  * @brief Close the KCP connection.
  * 
  * @param kcp The KCP context.
  */
-void turbo_kcp_close(turbo_kcp_t* kcp);
+CXX_C_API void turbo_kcp_close(turbo_kcp_t* kcp);
 
 /**
  * @brief Set user data for the KCP context.
  */
-void turbo_kcp_set_user_data(turbo_kcp_t* kcp, void* user_data);
+CXX_C_API void turbo_kcp_set_user_data(turbo_kcp_t* kcp, void* user_data);
 
 /**
  * @brief Get user data for the KCP context.
  */
-void* turbo_kcp_get_user_data(turbo_kcp_t* kcp);
+CXX_C_API void* turbo_kcp_get_user_data(turbo_kcp_t* kcp);
 
 /**
  * @brief Get the underlying UDP datagram handle.
  */
-turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
+CXX_C_API turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
 
 /**
  * @brief Reset the locked peer address on a server-side KCP socket.
@@ -137,7 +139,7 @@ turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
  *
  * @param kcp The KCP context (must be server-side / bound, not connected).
  */
-void turbo_kcp_reset_peer(turbo_kcp_t* kcp);
+CXX_C_API void turbo_kcp_reset_peer(turbo_kcp_t* kcp);
 
 #ifdef __cplusplus
 }

@@ -302,6 +302,13 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
     if (!s->handle.stream) {
       return socket_ctx_error(s, TURBO_EIO);
     }
+    {
+      int rc = coro_socket_apply_stream_options(s);
+      if (rc != 0) {
+        ws_discard_stream(s);
+        return rc;
+      }
+    }
 
     if (cfg->is_tls && s->tls_client_configured) {
       memset(&tls_config, 0, sizeof(tls_config));
@@ -616,6 +623,16 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
   turbo_stream_set_user_data(ws_stream, s);
   turbo_stream_set_write_cb(ws_stream, on_ws_write_complete);
   ws_stream->managed = 1;
+  {
+    rc = coro_socket_apply_stream_options(s);
+    if (rc != 0) {
+      turbo_stream_set_user_data(ws_stream, NULL);
+      s->handle.stream = NULL;
+      s->connected = 0;
+      turbo_stream_destroy(ws_stream);
+      return rc;
+    }
+  }
 
   rc = turbo_stream_recv_start(ws_stream, on_ws_recv);
   if (rc != 0 && rc != TURBO_EALREADY) {

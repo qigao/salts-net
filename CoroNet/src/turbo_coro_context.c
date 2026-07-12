@@ -6,7 +6,6 @@
  */
 
 #include "turbo_coro_context.h"
-#include "turbo_build_config_internal.h"
 #include "CoroNet/turbo_coro_object_pool.h"
 #include "platform.h"
 #include "tlog.h"
@@ -114,6 +113,7 @@ static void coro_context_cleanup_create_failure(coro_context_t *ctx) {
 coro_context_t *coro_context_create(void *loop) {
   coro_context_t *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return NULL;
+  atomic_init(&ctx->stop_requested, 0);
 
   if (loop) {
     ctx->loop = (turbo_loop_t *)loop;
@@ -184,7 +184,7 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
   /* stop_requested is a one-shot signal for the current run() call.
    * If we keep it sticky, the next sync API invocation can return
    * immediately without actually draining its work. */
-  ctx->stop_requested = 0;
+  atomic_store_explicit(&ctx->stop_requested, 0, memory_order_release);
 
   int r = 0;
 
@@ -192,16 +192,18 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
     while (1) {
       int has_ready = coro_scheduler_has_ready(ctx->scheduler);
 
-      if (ctx->stop_requested ||
-          (!context_loop_alive(ctx) &&
+      int stop_requested =
+          atomic_load_explicit(&ctx->stop_requested, memory_order_acquire);
+
+      if (!stop_requested && !context_loop_alive(ctx) &&
            !coro_scheduler_count(ctx->scheduler) &&
            atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
-           post_queue_empty(ctx))) {
+           post_queue_empty(ctx)) {
         break;
       }
 
       /* If we have ready coros, don't block. If not, wait for wake. */
-      if (has_ready) {
+      if (stop_requested || has_ready) {
         turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
       } else {
         turbo_loop_poll(ctx->loop, -1, 1); /* block until wake */
@@ -214,7 +216,8 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
       }
       cleanup_done_tasks(ctx);
 
-      if (ctx->stop_requested ||
+      stop_requested = atomic_load_explicit(&ctx->stop_requested, memory_order_acquire);
+      if ((stop_requested && post_queue_empty(ctx)) ||
           (!context_loop_alive(ctx) &&
            !coro_scheduler_count(ctx->scheduler) &&
            atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
@@ -250,8 +253,9 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
 
 void coro_context_stop(coro_context_t *ctx) {
   if (!ctx) return;
-  ctx->stop_requested = 1;
+  atomic_store_explicit(&ctx->stop_requested, 1, memory_order_release);
   turbo_loop_stop(ctx->loop);
+  turbo_loop_wake(ctx->loop);
 }
 
 int coro_context_alive(coro_context_t *ctx) {
@@ -814,85 +818,164 @@ int coro_when_any(coro_context_t *ctx, coro_task_t **tasks, int count) {
 
 /* ── Coroutine Sleep ──────────────────────────────────────────── */
 
-typedef struct {
+enum { CORO_WAIT_IDLE = 0, CORO_WAIT_ACTIVE, CORO_WAIT_COMPLETING };
+
+struct coro_wait_s {
   coro_t *co;
   int co_is_scheduled;
   coro_context_t *ctx;
   turbo_timer_t *timer;
-} sleep_ctx_t;
+  turbo_mutex_t mutex;
+  atomic_int state;
+  atomic_int status;
+};
 
-static void on_sleep_timer_bounce(void *arg1, void *arg2) {
+static void coro_wait_complete_on_context(void *arg1, void *arg2) {
   (void)arg2;
-  sleep_ctx_t *sctx = (sleep_ctx_t *)arg1;
+  coro_wait_t *wait = (coro_wait_t *)arg1;
+  coro_t *co = wait->co;
+  int co_is_scheduled = wait->co_is_scheduled;
 
-  if (sctx->co_is_scheduled) {
-    coro_set_waiting_for_io(sctx->co, 0);
+  turbo_timer_destroy(wait->timer);
+  wait->timer = NULL;
+  wait->co = NULL;
+  wait->co_is_scheduled = 0;
+  coro_context_release_external(wait->ctx);
+
+  if (co_is_scheduled) {
+    coro_set_waiting_for_io(co, 0);
   } else {
-    coro_resume(sctx->co);
+    coro_resume(co);
   }
-
-  turbo_timer_destroy(sctx->timer);
-  coro_context_release_external(sctx->ctx);
-  free(sctx);
 }
 
-static void on_sleep_timer(turbo_timer_t *timer) {
-  sleep_ctx_t *sctx = (sleep_ctx_t *)turbo_timer_get_data(timer);
+static int coro_wait_claim_completion(coro_wait_t *wait, int status) {
+  int expected = CORO_WAIT_ACTIVE;
+
+  if (!atomic_compare_exchange_strong_explicit(&wait->state, &expected, CORO_WAIT_COMPLETING,
+                                               memory_order_acq_rel, memory_order_acquire)) {
+    return TURBO_EALREADY;
+  }
+  atomic_store_explicit(&wait->status, status, memory_order_release);
+  return TURBO_OK;
+}
+
+static void coro_wait_post_completion(coro_wait_t *wait) {
   int rc;
 
-  if (!sctx) {
-    return;
-  }
-
-  rc = coro_post(sctx->ctx, on_sleep_timer_bounce, sctx, NULL);
-  if (rc != 0) {
-    on_sleep_timer_bounce(sctx, NULL);
+  rc = coro_post(wait->ctx, coro_wait_complete_on_context, wait, NULL);
+  while (rc == TURBO_ENOMEM) {
+    turbo_thread_yield();
+    rc = coro_post(wait->ctx, coro_wait_complete_on_context, wait, NULL);
   }
 }
 
-void coro_sleep(coro_context_t *ctx, uint64_t ms) {
-  if (!ctx) return;
+static void on_coro_wait_timer(turbo_timer_t *timer) {
+  coro_wait_t *wait = (coro_wait_t *)turbo_timer_get_data(timer);
+  if (wait && coro_wait_claim_completion(wait, TURBO_OK) == TURBO_OK) {
+    coro_wait_post_completion(wait);
+  }
+}
+
+coro_wait_t *coro_wait_create(coro_context_t *ctx) {
+  coro_wait_t *wait;
+  if (!ctx) return NULL;
+  wait = (coro_wait_t *)calloc(1, sizeof(*wait));
+  if (!wait) return NULL;
+  wait->ctx = ctx;
+  turbo_mutex_init(&wait->mutex);
+  atomic_init(&wait->state, CORO_WAIT_IDLE);
+  atomic_init(&wait->status, TURBO_OK);
+  return wait;
+}
+
+int coro_wait_destroy(coro_wait_t *wait) {
+  if (!wait) return TURBO_EINVAL;
+  if (atomic_load_explicit(&wait->state, memory_order_acquire) != CORO_WAIT_IDLE) {
+    return TURBO_EBUSY;
+  }
+  turbo_mutex_destroy(&wait->mutex);
+  free(wait);
+  return TURBO_OK;
+}
+
+int coro_wait_for(coro_wait_t *wait, uint64_t ms) {
+  int rc;
+  if (!wait || !wait->ctx) return TURBO_EINVAL;
 
   ASSERT_IN_CORO();
 
-  coro_t *co = coro_running();
-  if (!co) return;
+  if (!coro_running()) return TURBO_EINVAL;
 
-  /* 0ms = just yield to scheduler */
   if (ms == 0) {
     coro_yield();
-    return;
+    return TURBO_OK;
   }
 
-  sleep_ctx_t *sctx = malloc(sizeof(sleep_ctx_t));
-  if (!sctx) return;
-
-  sctx->co = co;
-  sctx->co_is_scheduled = coro_is_scheduled(co);
-  sctx->ctx = ctx;
-  sctx->timer = turbo_timer_create(NULL);
-  if (!sctx->timer) {
-    free(sctx);
-    return;
+  turbo_mutex_lock(&wait->mutex);
+  if (atomic_load_explicit(&wait->state, memory_order_acquire) != CORO_WAIT_IDLE) {
+    turbo_mutex_unlock(&wait->mutex);
+    return TURBO_EBUSY;
+  }
+  wait->co = coro_running();
+  atomic_store_explicit(&wait->status, TURBO_OK, memory_order_release);
+  wait->co_is_scheduled = coro_is_scheduled(wait->co);
+  wait->timer = turbo_timer_create(NULL);
+  if (!wait->timer) {
+    wait->co = NULL;
+    wait->co_is_scheduled = 0;
+    turbo_mutex_unlock(&wait->mutex);
+    return TURBO_ENOMEM;
   }
 
-  turbo_timer_set_data(sctx->timer, sctx);
+  turbo_timer_set_data(wait->timer, wait);
 
-  if (sctx->co_is_scheduled) {
-    coro_set_waiting_for_io(co, 1);
+  if (wait->co_is_scheduled) {
+    coro_set_waiting_for_io(wait->co, 1);
   }
 
-  coro_context_acquire_external(ctx);
-  if (turbo_timer_start(sctx->timer, on_sleep_timer, ms, 0) != 0) {
-    if (sctx->co_is_scheduled) {
-      coro_set_waiting_for_io(co, 0);
+  coro_context_acquire_external(wait->ctx);
+  atomic_store_explicit(&wait->state, CORO_WAIT_ACTIVE, memory_order_release);
+  rc = turbo_timer_start(wait->timer, on_coro_wait_timer, ms, 0);
+  if (rc != TURBO_OK) {
+    if (wait->co_is_scheduled) {
+      coro_set_waiting_for_io(wait->co, 0);
     }
-    coro_context_release_external(ctx);
-    turbo_timer_destroy(sctx->timer);
-    free(sctx);
-    return;
+    coro_context_release_external(wait->ctx);
+    turbo_timer_destroy(wait->timer);
+    wait->timer = NULL;
+    wait->co = NULL;
+    wait->co_is_scheduled = 0;
+    atomic_store_explicit(&wait->state, CORO_WAIT_IDLE, memory_order_release);
+    turbo_mutex_unlock(&wait->mutex);
+    return TURBO_EIO;
   }
+  turbo_mutex_unlock(&wait->mutex);
   coro_yield();
+  rc = atomic_load_explicit(&wait->status, memory_order_acquire);
+  atomic_store_explicit(&wait->state, CORO_WAIT_IDLE, memory_order_release);
+  return rc;
+}
+
+int coro_wait_interrupt(coro_wait_t *wait, int status) {
+  int rc;
+  if (!wait || status == TURBO_OK) return TURBO_EINVAL;
+  turbo_mutex_lock(&wait->mutex);
+  rc = coro_wait_claim_completion(wait, status);
+  if (rc == TURBO_OK) (void)turbo_timer_stop(wait->timer);
+  turbo_mutex_unlock(&wait->mutex);
+  if (rc != TURBO_OK) return rc;
+  coro_wait_post_completion(wait);
+  return TURBO_OK;
+}
+
+void coro_sleep(coro_context_t *ctx, uint64_t ms) {
+  coro_wait_t *wait;
+  if (!ctx) return;
+  wait = coro_wait_create(ctx);
+  if (!wait) return;
+  (void)coro_wait_for(wait, ms);
+  (void)coro_wait_destroy(wait);
 }
 
 #ifndef _WIN32

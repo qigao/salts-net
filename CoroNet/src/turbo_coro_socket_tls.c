@@ -149,6 +149,13 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
   if (!s->handle.stream) {
     s->handle.stream = turbo_stream_create(s->ctx, TURBO_STREAM_TLS);
     if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
+    {
+      int rc = coro_socket_apply_stream_options(s);
+      if (rc != 0) {
+        tls_discard_stream(s);
+        return rc;
+      }
+    }
 
     if (s->tls_client_configured) {
       memset(&tls_config, 0, sizeof(tls_config));
@@ -247,6 +254,18 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
 
   turbo_stream_set_user_data(tls_stream, s);
   tls_stream->managed = 1;
+  {
+    turbo_stream_t *saved = s->handle.stream;
+    s->handle.stream = tls_stream;
+    rc = coro_socket_apply_stream_options(s);
+    s->handle.stream = saved;
+    if (rc != 0) {
+      turbo_stream_set_user_data(tls_stream, NULL);
+      tls_stream->managed = 0;
+      turbo_stream_destroy(tls_stream);
+      return rc;
+    }
+  }
 
   retain_client(s);
   {

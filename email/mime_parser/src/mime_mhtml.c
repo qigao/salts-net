@@ -1,13 +1,14 @@
 #include "mime_mhtml.h"
+#include "base64_utils.h"
 #include "mime_parser.h"
 #include "mime_utils.h"
+#include "turbo_buffer.h"
 #include "turbo_simd_scan.h"
 #include "turbo_str.h"
-#include "turbo_buffer.h"
 #include "uri_parser.h"
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 typedef struct {
@@ -27,7 +28,8 @@ int mime_is_mhtml(const char *content_type, size_t len) {
   const char *type_param = turbo_scan_mem(content_type, len, "type=", 5);
   if (!type_param) return 0;
 
-  return turbo_scan_mem(type_param, (size_t)(content_type + len - type_param), "text/html", 9) != NULL;
+  return turbo_scan_mem(type_param, (size_t)(content_type + len - type_param), "text/html", 9) !=
+         NULL;
 }
 
 static void skip_whitespace(const char **ptr, const char *end) {
@@ -164,9 +166,8 @@ char *mime_mhtml_resolve_url(mem_pool_t *pool, const char *relative_url, const c
   int pos = snprintf(result, needed, "%s://%s", base_uri.scheme, base_uri.host);
 
   // Add port if non-default
-  if (base_uri.port > 0 &&
-      !((strcmp(base_uri.scheme, "http") == 0 && base_uri.port == 80) ||
-        (strcmp(base_uri.scheme, "https") == 0 && base_uri.port == 443))) {
+  if (base_uri.port > 0 && !((strcmp(base_uri.scheme, "http") == 0 && base_uri.port == 80) ||
+                             (strcmp(base_uri.scheme, "https") == 0 && base_uri.port == 443))) {
     pos += snprintf(result + pos, needed - pos, ":%d", base_uri.port);
   }
 
@@ -198,8 +199,7 @@ mime_mhtml_document_t *mime_mhtml_document_create(mem_pool_t *pool) {
   // Generate boundary
   doc->boundary = mem_alloc(pool, 64);
   if (doc->boundary) {
-    snprintf(doc->boundary, 64, "----=_NextPart_%08x%08x",
-             (unsigned)time(NULL), (unsigned)rand());
+    snprintf(doc->boundary, 64, "----=_NextPart_%08x%08x", (unsigned)time(NULL), (unsigned)rand());
   }
 
   return doc;
@@ -281,8 +281,8 @@ static void mime_mhtml_resource_free(mime_mhtml_resource_t *res) {
 }
 
 int mime_mhtml_add_resource(mime_mhtml_document_t *doc, const char *content_type,
-                            const char *content_location, const char *content_id,
-                            const char *data, size_t data_len, int copy_data) {
+                            const char *content_location, const char *content_id, const char *data,
+                            size_t data_len, int copy_data) {
   if (!doc || !data) return -1;
 
   mime_mhtml_resource_node_t *node =
@@ -293,8 +293,7 @@ int mime_mhtml_add_resource(mime_mhtml_document_t *doc, const char *content_type
   if (content_type) res->content_type = strdup(content_type);
   if (content_location) res->content_location = strdup(content_location);
   if (content_id) res->content_id = strdup(content_id);
-  if ((content_type && !res->content_type) ||
-      (content_location && !res->content_location) ||
+  if ((content_type && !res->content_type) || (content_location && !res->content_location) ||
       (content_id && !res->content_id)) {
     mime_mhtml_resource_free(res);
     return -1;
@@ -325,7 +324,7 @@ int mime_mhtml_add_resource(mime_mhtml_document_t *doc, const char *content_type
 /* ── Resource lookup ───────────────────────────────────────────────── */
 
 mime_mhtml_resource_t *mime_mhtml_find_by_location(mime_mhtml_document_t *doc,
-                                                    const char *location) {
+                                                   const char *location) {
   if (!doc || !location) return NULL;
 
   mime_mhtml_resource_t *res = doc->resources;
@@ -362,74 +361,63 @@ mime_mhtml_resource_t *mime_mhtml_find_by_cid(mime_mhtml_document_t *doc, const 
 /* ── Serialization ─────────────────────────────────────────────────── */
 
 char *mime_mhtml_serialize(mime_mhtml_document_t *doc, size_t *output_len) {
-  if (!doc || !output_len) return NULL;
+  static const size_t MIME_BASE64_LINE_LENGTH = 76u;
+  mime_mhtml_resource_t *res;
+  tstr_t result;
+  char *output;
 
-  // Calculate total size (rough estimate)
-  size_t total_size = 1024 + doc->html_len;
-  mime_mhtml_resource_t *res = doc->resources;
-  while (res) {
-    total_size += 512 + res->data_len * 2; // *2 for base64 encoding
-    res = res->next;
-  }
+  if (!doc || !output_len || !doc->boundary || !doc->html_content) return NULL;
+  *output_len = 0;
+  result = tstr_new();
+  if (!result) return NULL;
 
-  char *output = (char *)malloc(total_size);
-  if (!output) return NULL;
+  result = tstr_cat(result, "MIME-Version: 1.0\r\n");
+  result = tstr_cat_fmt(result,
+                        "Content-Type: multipart/related; type=\"text/html\"; boundary=\"%s\"\r\n"
+                        "\r\n"
+                        "--%s\r\n"
+                        "Content-Type: %s\r\n"
+                        "Content-Transfer-Encoding: 8bit\r\n"
+                        "\r\n",
+                        doc->boundary, doc->boundary,
+                        doc->html_content_type ? doc->html_content_type : "text/html");
+  result = tstr_cat_len(result, doc->html_content, doc->html_len);
+  result = tstr_cat(result, "\r\n");
+  if (!result) return NULL;
 
-  size_t pos = 0;
-
-  // Write root HTML part
-  pos += snprintf(output + pos, total_size - pos,
-                  "--%s\r\n"
-                  "Content-Type: %s\r\n"
-                  "Content-Transfer-Encoding: quoted-printable\r\n"
-                  "\r\n",
-                  doc->boundary,
-                  doc->html_content_type ? doc->html_content_type : "text/html");
-
-  if (pos + doc->html_len < total_size) {
-    memcpy(output + pos, doc->html_content, doc->html_len);
-    pos += doc->html_len;
-  }
-
-  pos += snprintf(output + pos, total_size - pos, "\r\n");
-
-  // Write resources
-  res = doc->resources;
-  while (res && pos < total_size) {
-    pos += snprintf(output + pos, total_size - pos,
-                    "--%s\r\n"
-                    "Content-Type: %s\r\n",
-                    doc->boundary,
-                    res->content_type ? res->content_type : "application/octet-stream");
-
+  for (res = doc->resources; res; res = res->next) {
+    char *encoded = NULL;
+    size_t encoded_len;
+    size_t offset;
+    if (tn_base64_encode((const uint8_t *)res->data, res->data_len, &encoded) != 0) {
+      tstr_free(result);
+      return NULL;
+    }
+    result = tstr_cat_fmt(result, "--%s\r\nContent-Type: %s\r\n", doc->boundary,
+                          res->content_type ? res->content_type : "application/octet-stream");
     if (res->content_location) {
-      pos += snprintf(output + pos, total_size - pos,
-                      "Content-Location: %s\r\n", res->content_location);
+      result = tstr_cat_fmt(result, "Content-Location: %s\r\n", res->content_location);
     }
-
     if (res->content_id) {
-      pos += snprintf(output + pos, total_size - pos,
-                      "Content-ID: <%s>\r\n", res->content_id);
+      result = tstr_cat_fmt(result, "Content-ID: <%s>\r\n", res->content_id);
     }
-
-    pos += snprintf(output + pos, total_size - pos,
-                    "Content-Transfer-Encoding: base64\r\n\r\n");
-
-    // TODO: Base64 encode res->data
-    // For now, just copy raw data
-    if (pos + res->data_len < total_size) {
-      memcpy(output + pos, res->data, res->data_len);
-      pos += res->data_len;
+    result = tstr_cat(result, "Content-Transfer-Encoding: base64\r\n\r\n");
+    encoded_len = strlen(encoded);
+    for (offset = 0; offset < encoded_len; offset += MIME_BASE64_LINE_LENGTH) {
+      size_t chunk = encoded_len - offset;
+      if (chunk > MIME_BASE64_LINE_LENGTH) chunk = MIME_BASE64_LINE_LENGTH;
+      result = tstr_cat_len(result, encoded + offset, chunk);
+      result = tstr_cat(result, "\r\n");
     }
-
-    pos += snprintf(output + pos, total_size - pos, "\r\n");
-    res = res->next;
+    free(encoded);
+    if (!result) return NULL;
   }
 
-  // Write final boundary
-  pos += snprintf(output + pos, total_size - pos, "--%s--\r\n", doc->boundary);
-
-  *output_len = pos;
+  result = tstr_cat_fmt(result, "--%s--\r\n", doc->boundary);
+  if (!result) return NULL;
+  *output_len = tstr_len(result);
+  output = tstr_to_cstr(result);
+  tstr_free(result);
   return output;
 }
 

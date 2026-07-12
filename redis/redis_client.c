@@ -24,6 +24,9 @@ static char *build_resp_command(int argc, const char **argv, const size_t *argvl
                                 size_t *out_len);
 static void reset_command_queue_state(redis_client_t *client);
 static int append_recv_data(redis_client_t *client, const char *data, size_t len);
+static void redis_client_socket_publish(redis_client_t *client, coro_socket_t *socket,
+                                        int owned, int connected);
+static coro_socket_t *redis_client_socket_take(redis_client_t *client, int *owned);
 
 static void reset_command_queue_state(redis_client_t *client) {
   if (!client) return;
@@ -79,6 +82,7 @@ redis_client_t *redis_client_create_with_config(const redis_config_t *config) {
   redis_client_t *client = calloc(1, sizeof(redis_client_t));
   if (!client)
     return NULL;
+  turbo_mutex_init(&client->socket_mutex);
 
   /* Copy configuration */
   client->config = *config;
@@ -95,6 +99,7 @@ redis_client_t *redis_client_create_with_config(const redis_config_t *config) {
   if (!client->recv_buffer) {
     tstr_free((tstr_t)client->config.host);
     tstr_free((tstr_t)client->config.password);
+    turbo_mutex_destroy(&client->socket_mutex);
     free(client);
     return NULL;
   }
@@ -114,23 +119,15 @@ int redis_client_attach_socket(redis_client_t *client,
   reset_command_queue_state(client);
   client->recv_buffer_used = 0;
   client->ctx = ctx;
-  client->socket = socket;
-  client->owns_socket = take_ownership ? 1 : 0;
-  client->is_connected = 1;
+  redis_client_socket_publish(client, socket, take_ownership ? 1 : 0, 1);
   return 0;
 }
 
 coro_socket_t *redis_client_detach_socket(redis_client_t *client) {
   coro_socket_t *socket;
 
-  if (!client || !client->socket) {
-    return NULL;
-  }
-
-  socket = client->socket;
-  client->socket = NULL;
-  client->owns_socket = 0;
-  client->is_connected = 0;
+  if (!client) return NULL;
+  socket = redis_client_socket_take(client, NULL);
   return socket;
 }
 
@@ -155,7 +152,10 @@ int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, vo
     return -1;
   }
 
-  client->socket = coro_socket_create_tcpv4(client->ctx);
+  {
+    coro_socket_t *socket = coro_socket_create_tcpv4(client->ctx);
+    if (socket) redis_client_socket_publish(client, socket, 1, 0);
+  }
   if (!client->socket) {
     if (client->connect_cb) {
       client->connect_cb(client, -1, client->connect_user_data);
@@ -163,20 +163,21 @@ int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, vo
     return -1;
   }
 
-  client->owns_socket = 1;
   coro_socket_set_timeout(client->socket, client->config.timeout_ms);
   status = coro_socket_connect(client->socket, client->config.host, (int)client->config.port);
   if (status != 0) {
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
-    client->owns_socket = 0;
+    int owned = 0;
+    coro_socket_t *socket = redis_client_socket_take(client, &owned);
+    if (socket && owned) coro_socket_destroy(socket);
     if (client->connect_cb) {
       client->connect_cb(client, -1, client->connect_user_data);
     }
     return -1;
   }
 
+  turbo_mutex_lock(&client->socket_mutex);
   client->is_connected = 1;
+  turbo_mutex_unlock(&client->socket_mutex);
   if (client->connect_cb) {
     client->connect_cb(client, 0, client->connect_user_data);
   }
@@ -495,14 +496,20 @@ int redis_command(redis_client_t *client, redis_command_cb_t callback, void *use
 }
 
 void redis_client_disconnect(redis_client_t *client) {
-  if (client && client->socket) {
-    client->is_connected = 0;
-    if (client->owns_socket) {
-      coro_socket_destroy(client->socket);
-    }
-    client->socket = NULL;
-    client->owns_socket = 0;
-  }
+  int owned = 0;
+  coro_socket_t *socket;
+  if (!client) return;
+  socket = redis_client_socket_take(client, &owned);
+  if (socket && owned) coro_socket_destroy(socket);
+}
+
+int redis_client_interrupt(redis_client_t *client, int status) {
+  int rc;
+  if (!client) return TURBO_EINVAL;
+  turbo_mutex_lock(&client->socket_mutex);
+  rc = client->socket ? coro_socket_interrupt_wait(client->socket, status) : TURBO_ENOTCONN;
+  turbo_mutex_unlock(&client->socket_mutex);
+  return rc;
 }
 
 void redis_client_destroy(redis_client_t *client) {
@@ -516,6 +523,7 @@ void redis_client_destroy(redis_client_t *client) {
   free(client->recv_buffer);
   tstr_free((tstr_t)client->config.host);
   tstr_free((tstr_t)client->config.password);
+  turbo_mutex_destroy(&client->socket_mutex);
   free(client);
 }
 
@@ -1548,4 +1556,24 @@ int redis_punsubscribe(redis_client_t *client, size_t pattern_count,
   int result = redis_commandv(client, (int)argc, argv, NULL, NULL, NULL);
   free(argv);
   return result;
+}
+static void redis_client_socket_publish(redis_client_t *client, coro_socket_t *socket,
+                                        int owned, int connected) {
+  turbo_mutex_lock(&client->socket_mutex);
+  client->socket = socket;
+  client->owns_socket = owned;
+  client->is_connected = connected;
+  turbo_mutex_unlock(&client->socket_mutex);
+}
+
+static coro_socket_t *redis_client_socket_take(redis_client_t *client, int *owned) {
+  coro_socket_t *socket;
+  turbo_mutex_lock(&client->socket_mutex);
+  socket = client->socket;
+  if (owned) *owned = client->owns_socket;
+  client->socket = NULL;
+  client->owns_socket = 0;
+  client->is_connected = 0;
+  turbo_mutex_unlock(&client->socket_mutex);
+  return socket;
 }

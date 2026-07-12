@@ -61,6 +61,7 @@ static turbo_stream_t *s_accepted_clients[32];
 static int s_recv_hit = 0;
 static char s_recv_data[64];
 static size_t s_recv_len = 0;
+static const char g_zstd_payload[] = "zstd tcp payload";
 
 static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg) {
     size_t copy_len;
@@ -141,6 +142,31 @@ static void stream_test_destroy_context_robust(coro_context_t *ctx) {
 static int stream_test_flag_is_pending(void *arg) {
     int *flag = (int *)arg;
     return flag && *flag == -1;
+}
+
+typedef struct stream_write_interrupt_state_s {
+    coro_socket_t *socket;
+    int waiting;
+    int done;
+    int status;
+} stream_write_interrupt_state_t;
+
+static void stream_write_interrupt_task(coro_t *co, void *arg) {
+    stream_write_interrupt_state_t *state = (stream_write_interrupt_state_t *)arg;
+
+    if (!state || !state->socket) {
+        return;
+    }
+
+    state->socket->write_status = 0;
+    state->socket->co_write_wait = co;
+    if (coro_is_scheduled(co)) {
+        coro_set_waiting_for_io(co, 1);
+    }
+    state->waiting = 1;
+    coro_yield();
+    state->status = state->socket->write_status;
+    state->done = 1;
 }
 
 #ifdef _WIN32
@@ -277,6 +303,246 @@ static void stream_coro_recv_timeout_then_close_handler(coro_socket_t *client, v
         coro_socket_free_recv(data);
     }
 }
+
+#if defined(TURBO_HAS_ZSTD)
+typedef struct stream_zstd_echo_state_s {
+    coro_context_t *ctx;
+    unsigned short port;
+    int handler_done;
+    int client_done;
+    int handler_rc;
+    int client_rc;
+    int zstd_disabled_send_rc;
+    int zstd_level_set_rc;
+    int client_recv_rc;
+    char recv_data[128];
+    size_t recv_len;
+} stream_zstd_echo_state_t;
+
+static int stream_test_zstd_echo_pending(void *arg) {
+    stream_zstd_echo_state_t *state = (stream_zstd_echo_state_t *)arg;
+    if (!state) return 1;
+    return !(state->handler_done && state->client_done);
+}
+
+static void stream_zstd_echo_server_handler(coro_socket_t *client, void *arg) {
+    stream_zstd_echo_state_t *state = (stream_zstd_echo_state_t *)arg;
+    char *data = NULL;
+    size_t len = 0U;
+    int rc;
+
+    if (!client) {
+        return;
+    }
+
+    if (!state) {
+        coro_socket_destroy(client);
+        return;
+    }
+
+    rc = coro_socket_recv_compressed(client, &data, &len);
+    if (rc == 0 && data != NULL) {
+        state->handler_rc = coro_socket_send_compressed(client, data, len);
+    } else {
+        state->handler_rc = rc;
+    }
+
+    if (data != NULL) {
+        coro_socket_free_recv(data);
+    }
+
+    state->handler_done = 1;
+    coro_socket_destroy(client);
+}
+
+static void stream_zstd_echo_client_task(coro_t *co, void *arg) {
+    stream_zstd_echo_state_t *state = (stream_zstd_echo_state_t *)arg;
+    coro_socket_t *client = NULL;
+    char *data = NULL;
+    size_t len = 0U;
+    int rc;
+    (void)co;
+
+    if (!state || !state->ctx) {
+        return;
+    }
+
+    client = coro_socket_create(state->ctx, CORO_SOCKET_TCP_V4);
+    if (!client) {
+        state->client_rc = TURBO_ENOMEM;
+        state->client_done = 1;
+        return;
+    }
+
+    rc = coro_socket_connect(client, "127.0.0.1", state->port);
+    if (rc != 0) {
+        state->client_rc = rc;
+        coro_socket_destroy(client);
+        state->client_done = 1;
+        return;
+    }
+
+    state->zstd_level_set_rc = coro_socket_set_compression_level(client, 0);
+    if (state->zstd_level_set_rc == 0) {
+        state->zstd_disabled_send_rc = coro_socket_send_compressed(client, g_zstd_payload,
+                                                                  sizeof(g_zstd_payload) - 1U);
+    } else {
+        state->zstd_disabled_send_rc = state->zstd_level_set_rc;
+    }
+    if (state->zstd_level_set_rc == 0) {
+        state->zstd_level_set_rc = coro_socket_set_compression_level(client, 1);
+    }
+    if (state->zstd_level_set_rc != 0) {
+        state->client_rc = state->zstd_level_set_rc;
+        state->client_done = 1;
+        coro_socket_destroy(client);
+        return;
+    }
+
+    rc = coro_socket_send_compressed(client, g_zstd_payload, sizeof(g_zstd_payload) - 1U);
+    if (rc != 0) {
+        state->client_rc = rc;
+        coro_socket_destroy(client);
+        state->client_done = 1;
+        return;
+    }
+
+    state->client_recv_rc = coro_socket_recv_compressed(client, &data, &len);
+    if (state->client_recv_rc == 0 && data != NULL && len > 0U) {
+        size_t copy_len = (len < (sizeof(state->recv_data) - 1U)) ? len
+                                                                : (sizeof(state->recv_data) - 1U);
+        memcpy(state->recv_data, data, copy_len);
+        state->recv_data[copy_len] = '\0';
+        state->recv_len = copy_len;
+    }
+    state->client_rc = state->client_recv_rc;
+
+    if (data != NULL) {
+        coro_socket_free_recv(data);
+    }
+    state->client_done = 1;
+    coro_socket_destroy(client);
+}
+#endif
+
+#if defined(TURBO_HAS_ZSTD)
+typedef struct stream_zstd_auto_echo_state_s {
+    coro_context_t *ctx;
+    unsigned short port;
+    int handler_done;
+    int client_done;
+    int handler_rc;
+    int client_rc;
+    int client_set_level_rc;
+    char recv_data[128];
+    size_t recv_len;
+} stream_zstd_auto_echo_state_t;
+
+static int stream_zstd_auto_echo_pending(void *arg) {
+    stream_zstd_auto_echo_state_t *state = (stream_zstd_auto_echo_state_t *)arg;
+    if (!state) return 1;
+    return !(state->handler_done && state->client_done);
+}
+
+static void stream_zstd_auto_echo_server_handler(coro_socket_t *client, void *arg) {
+    stream_zstd_auto_echo_state_t *state = (stream_zstd_auto_echo_state_t *)arg;
+    char *data = NULL;
+    size_t len = 0U;
+    int rc;
+
+    if (!client) {
+        return;
+    }
+
+    if (!state) {
+        coro_socket_destroy(client);
+        return;
+    }
+
+    rc = coro_socket_set_compression_level(client, 1);
+    if (rc == 0) {
+        rc = coro_socket_recv(client, &data, &len);
+    } else {
+        state->handler_rc = rc;
+    }
+
+    if (rc == 0 && data != NULL) {
+        state->handler_rc = coro_socket_send(client, data, len);
+    } else if (rc == 0) {
+        state->handler_rc = 0;
+    } else {
+        state->handler_rc = rc;
+    }
+
+    if (data != NULL) {
+        coro_socket_free_recv(data);
+    }
+
+    state->handler_done = 1;
+    coro_socket_destroy(client);
+}
+
+static void stream_zstd_auto_echo_client_task(coro_t *co, void *arg) {
+    stream_zstd_auto_echo_state_t *state = (stream_zstd_auto_echo_state_t *)arg;
+    coro_socket_t *client = NULL;
+    char *data = NULL;
+    size_t len = 0U;
+    int rc;
+    (void)co;
+
+    if (!state || !state->ctx) {
+        return;
+    }
+
+    client = coro_socket_create(state->ctx, CORO_SOCKET_TCP_V4);
+    if (!client) {
+        state->client_rc = TURBO_ENOMEM;
+        state->client_done = 1;
+        return;
+    }
+
+    rc = coro_socket_connect(client, "127.0.0.1", state->port);
+    if (rc != 0) {
+        state->client_rc = rc;
+        coro_socket_destroy(client);
+        state->client_done = 1;
+        return;
+    }
+
+    state->client_set_level_rc = coro_socket_set_compression_level(client, 1);
+    if (state->client_set_level_rc != 0) {
+        state->client_rc = state->client_set_level_rc;
+        state->client_done = 1;
+        coro_socket_destroy(client);
+        return;
+    }
+
+    rc = coro_socket_send(client, g_zstd_payload, sizeof(g_zstd_payload) - 1U);
+    if (rc != 0) {
+        state->client_rc = rc;
+        coro_socket_destroy(client);
+        state->client_done = 1;
+        return;
+    }
+
+    rc = coro_socket_recv(client, &data, &len);
+    if (rc == 0 && data != NULL && len > 0U) {
+        size_t copy_len = (len < (sizeof(state->recv_data) - 1U)) ? len
+                                                                : (sizeof(state->recv_data) - 1U);
+        memcpy(state->recv_data, data, copy_len);
+        state->recv_data[copy_len] = '\0';
+        state->recv_len = copy_len;
+    }
+    state->client_rc = rc;
+
+    if (data != NULL) {
+        coro_socket_free_recv(data);
+    }
+
+    state->client_done = 1;
+    coro_socket_destroy(client);
+}
+#endif
 
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
 static void stream_coro_recv_timeout_loop_handler(coro_socket_t *client, void *arg) {
@@ -645,6 +911,29 @@ static int stream_test_raw_connect_send(unsigned short port, const char *payload
 #endif
 
 spec("Stream") {
+    it("should interrupt a pending coroutine write wait") {
+        stream_write_interrupt_state_t state;
+        coro_context_t *ctx = coro_context_create(NULL);
+
+        memset(&state, 0, sizeof(state));
+        check_not_null(ctx);
+        state.socket = coro_socket_create_tcpv4(ctx);
+        check_not_null(state.socket);
+
+        check_int_eq(coro_context_spawn(ctx, stream_write_interrupt_task, &state), 0);
+        check_int_eq(stream_test_run_until(ctx, &state.waiting, 1, 1000), 0);
+        check_null(state.socket->co_wait);
+        check_not_null(state.socket->co_write_wait);
+
+        check_int_eq(coro_socket_interrupt_wait(state.socket, TURBO_ECANCELED), 0);
+        check_int_eq(stream_test_run_until(ctx, &state.done, 1, 1000), 0);
+        check_int_eq(state.status, TURBO_ECANCELED);
+        check_null(state.socket->co_write_wait);
+
+        coro_socket_destroy(state.socket);
+        stream_test_destroy_context_robust(ctx);
+    }
+
     it("should create and destroy stream") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);
@@ -653,6 +942,47 @@ spec("Stream") {
         check(stream != NULL);
 
         turbo_stream_destroy(stream);
+        coro_context_destroy(ctx);
+    }
+
+    it("should expose TCP keepalive linger and send HWM socket options") {
+        turbo_tcp_keepalive_config_t keepalive;
+        turbo_socket_linger_config_t linger;
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_stream_t *stream = NULL;
+        coro_socket_t *tcp = NULL;
+        coro_socket_t *udp = NULL;
+
+        memset(&keepalive, 0, sizeof(keepalive));
+        memset(&linger, 0, sizeof(linger));
+        check(ctx != NULL);
+
+        stream = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+        check(stream != NULL);
+        check_int_eq(turbo_stream_set_send_hwm(stream, 4), 0);
+        check_int_eq(turbo_stream_send(stream, "abcde", 5), TURBO_ENOBUFS);
+        keepalive.enabled = 1;
+        keepalive.idle_ms = 1000;
+        keepalive.interval_ms = 1000;
+        keepalive.count = 3;
+        check_int_eq(turbo_stream_set_tcp_keepalive(stream, &keepalive), 0);
+        linger.enabled = 1;
+        linger.timeout_ms = 1000;
+        check_int_eq(turbo_stream_set_linger(stream, &linger), 0);
+        turbo_stream_destroy(stream);
+
+        tcp = coro_socket_create_tcpv4(ctx);
+        udp = coro_socket_create_udpv4(ctx);
+        check(tcp != NULL);
+        check(udp != NULL);
+        check_int_eq(coro_socket_set_tcp_keepalive(tcp, &keepalive), 0);
+        check_int_eq(coro_socket_set_linger(tcp, &linger), 0);
+        check_int_eq(coro_socket_set_send_hwm(tcp, 4), 0);
+        check_int_eq(coro_socket_set_tcp_keepalive(udp, &keepalive), TURBO_ENOTSUP);
+        check_int_eq(coro_socket_set_linger(udp, &linger), TURBO_ENOTSUP);
+        check_int_eq(coro_socket_set_send_hwm(udp, 4), TURBO_ENOTSUP);
+        coro_socket_destroy(tcp);
+        coro_socket_destroy(udp);
         coro_context_destroy(ctx);
     }
 
@@ -1041,6 +1371,100 @@ spec("Stream") {
         check_int_eq(coro_socket_get_local_address(NULL, &addr), TURBO_EINVAL);
         check_int_eq(coro_socket_get_local_address((coro_socket_t *)1, NULL), TURBO_EINVAL);
     }
+
+#if defined(TURBO_HAS_ZSTD)
+    it("should send and receive compressed frames") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        stream_zstd_echo_state_t state;
+        unsigned short port;
+        coro_socket_t *server = NULL;
+
+        check(ctx != NULL);
+
+        memset(&state, 0, sizeof(state));
+        state.ctx = ctx;
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+        state.port = port;
+
+        server = coro_socket_create_tcpv4(ctx);
+        check_not_null(server);
+        check_int_eq(
+            coro_socket_listen_on(server, "127.0.0.1", state.port, stream_zstd_echo_server_handler, &state),
+            0);
+
+        check_int_eq(coro_context_spawn(ctx, stream_zstd_echo_client_task, &state), 0);
+        stream_test_run_while(ctx, stream_test_zstd_echo_pending, &state, 5000);
+
+        check_int_eq(state.handler_done, 1);
+        check_int_eq(state.client_done, 1);
+        check_int_eq(state.zstd_level_set_rc, 0);
+        check_int_eq(state.zstd_disabled_send_rc, TURBO_ENOTSUP);
+        check_int_eq(state.client_rc, 0);
+        check_int_eq(state.client_recv_rc, 0);
+        check_int_eq(state.handler_rc, 0);
+        check_str_eq(state.recv_data, g_zstd_payload);
+
+        if (server != NULL) {
+            coro_socket_destroy(server);
+        }
+        coro_context_destroy(ctx);
+    }
+
+    it("should auto-compress in send/recv when compression level is set") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        stream_zstd_auto_echo_state_t state;
+        unsigned short port;
+        coro_socket_t *server = NULL;
+
+        check(ctx != NULL);
+
+        memset(&state, 0, sizeof(state));
+        state.ctx = ctx;
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+        state.port = port;
+
+        server = coro_socket_create_tcpv4(ctx);
+        check_not_null(server);
+        check_int_eq(
+            coro_socket_listen_on(server, "127.0.0.1", state.port, stream_zstd_auto_echo_server_handler, &state),
+            0);
+
+        check_int_eq(coro_context_spawn(ctx, stream_zstd_auto_echo_client_task, &state), 0);
+        stream_test_run_while(ctx, stream_zstd_auto_echo_pending, &state, 5000);
+
+        check_int_eq(state.handler_done, 1);
+        check_int_eq(state.client_done, 1);
+        check_int_eq(state.client_set_level_rc, 0);
+        check_int_eq(state.client_rc, 0);
+        check_int_eq(state.handler_rc, 0);
+        check_str_eq(state.recv_data, g_zstd_payload);
+
+        if (server != NULL) {
+            coro_socket_destroy(server);
+        }
+        coro_context_destroy(ctx);
+    }
+#else
+    it("should return ENOTSUP for compressed APIs when zstd is unavailable") {
+        char *data = NULL;
+        size_t len = 0;
+        char payload[] = "uncompressed payload";
+        coro_context_t *ctx = coro_context_create(NULL);
+        check(ctx != NULL);
+
+        coro_socket_t *sock = coro_socket_create_tcpv4(ctx);
+        check_not_null(sock);
+
+        check_int_eq(coro_socket_set_compression_level(sock, 1), TURBO_ENOTSUP);
+        check_int_eq(coro_socket_send_compressed(sock, payload, sizeof(payload) - 1U), TURBO_ENOTSUP);
+        check_int_eq(coro_socket_recv_compressed(sock, &data, &len), TURBO_ENOTSUP);
+
+        coro_socket_destroy(sock);
+        coro_context_destroy(ctx);
+    }
+#endif
 
     it("should honor reuse_port for tcp listeners") {
         coro_context_t *ctx = coro_context_create(NULL);

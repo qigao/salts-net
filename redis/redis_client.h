@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "platform.h"
+#include "turbo_thread.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,6 +95,9 @@ struct redis_client_s {
 
     /* User data */
     void *user_data;
+
+    /* Serializes cross-thread wait interruption with socket publish/take. */
+    turbo_mutex_t socket_mutex;
 };
 
 /* API Functions */
@@ -170,6 +174,14 @@ CXX_C_API int redis_commandv(redis_client_t *client, int argc, const char **argv
  * @param client Redis client
  */
 CXX_C_API void redis_client_disconnect(redis_client_t *client);
+
+/**
+ * Interrupt the current CoroNet socket wait from another thread.
+ *
+ * Socket ownership remains with the Redis client. Returns TURBO_ENOTCONN when
+ * no socket is currently published.
+ */
+CXX_C_API int redis_client_interrupt(redis_client_t *client, int status);
 
 /**
  * Destroy Redis client

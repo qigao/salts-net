@@ -1838,6 +1838,27 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   st->tcp->user_data = st;
   st->tcp->managed   = 1; /* Owned by tls_state_t */
   st->tcp->on_write_complete = tls_on_tcp_write_complete;
+  if (s->send_hwm_bytes) {
+    int rc = turbo_stream_set_send_hwm(st->tcp, s->send_hwm_bytes);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+      return rc;
+    }
+  }
+  if (s->tcp_keepalive_configured) {
+    int rc = turbo_stream_set_tcp_keepalive(st->tcp, &s->tcp_keepalive_config);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+      return rc;
+    }
+  }
+  if (s->linger_configured) {
+    int rc = turbo_stream_set_linger(st->tcp, &s->linger_config);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+      return rc;
+    }
+  }
 
   /* Inform OpenSSL of the hostname for SNI Extension, only if not already set */
   if (st->hostname[0] == '\0') {

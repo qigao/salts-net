@@ -10,13 +10,42 @@
  */
 
 #include "CoroNet/turbo_coro_internal.h"
-#include "turbo_build_config_internal.h"
 #include "CoroNet/turbo_kcp.h"
 #include "tlog.h"
 #include "turbo_error.h"
 #include "turbo_stream_internal.h"
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(TURBO_HAS_ZSTD)
+#include <zstd.h>
+#endif
+
+#if defined(TURBO_HAS_ZSTD)
+#define CORO_ZSTD_FRAME_MAGIC 0x5A535443U /* 'ZSTC' */
+#define CORO_ZSTD_FRAME_HEADER_LEN 12U
+#define CORO_ZSTD_DEFAULT_LEVEL ZSTD_CLEVEL_DEFAULT
+#define CORO_ZSTD_MAX_FRAME_DATA_LEN ((size_t)UINT32_MAX)
+
+static void zstd_store_u32_be(char *p, uint32_t v) {
+  p[0] = (char)((v >> 24) & 0xffU);
+  p[1] = (char)((v >> 16) & 0xffU);
+  p[2] = (char)((v >> 8) & 0xffU);
+  p[3] = (char)(v & 0xffU);
+}
+
+static uint32_t zstd_load_u32_be(const char *p) {
+  return ((uint32_t)(unsigned char)p[0] << 24) |
+         ((uint32_t)(unsigned char)p[1] << 16) |
+         ((uint32_t)(unsigned char)p[2] << 8) |
+         (uint32_t)(unsigned char)p[3];
+}
+
+static int zstd_error_code(void) {
+  return TURBO_EIO;
+}
+#endif
+
 /* ── External transport ops (defined in separate files) ────── */
 extern const coro_transport_ops_t transport_ops_tcp;
 extern const coro_transport_ops_t transport_ops_pipe;
@@ -37,6 +66,8 @@ static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t 
                                             int connected);
 static void socket_destroy_shell(coro_socket_t *s);
 static turbo_datagram_t *coro_socket_multicast_datagram(coro_socket_t *s);
+static void coro_socket_reset_recv_compression_state(coro_socket_t *s);
+static int coro_socket_recv_raw(coro_socket_t *s, char **data, size_t *len);
 
 static void socket_record_error(coro_context_t *ctx, int err) {
   if (ctx) {
@@ -47,6 +78,16 @@ static void socket_record_error(coro_context_t *ctx, int err) {
 static int socket_return_error(coro_socket_t *s, int err) {
   socket_record_error(s ? s->ctx : NULL, err);
   return err;
+}
+
+static int socket_is_tcp_backed(const coro_socket_t *s) {
+  return s && (s->transport == TURBO_TCP || s->transport == TURBO_TLS ||
+               s->transport == TURBO_WEBSOCKET);
+}
+
+static int socket_is_stream_backed(const coro_socket_t *s) {
+  return s && (s->transport == TURBO_TCP || s->transport == TURBO_TLS ||
+               s->transport == TURBO_WEBSOCKET || s->transport == TURBO_PIPE);
 }
 
 static mem_buffer_t *socket_return_buffer_error(coro_socket_t *s, int err) {
@@ -173,6 +214,7 @@ static void socket_destroy_shell(coro_socket_t *s) {
     s->timer = NULL;
   }
 
+  coro_socket_reset_recv_compression_state(s);
   socket_clear_tls_client_config(s);
   free(s);
 }
@@ -188,8 +230,20 @@ static void coro_socket_cleanup_create_failure(coro_socket_t *s) {
     s->timer = NULL;
   }
 
+  coro_socket_reset_recv_compression_state(s);
   socket_clear_tls_client_config(s);
   free(s);
+}
+
+static void coro_socket_reset_recv_compression_state(coro_socket_t *s) {
+  if (!s) return;
+
+  free(s->recv_compression_cache);
+  s->recv_compression_cache = NULL;
+  s->recv_compression_cache_len = 0U;
+  s->recv_compression_header_len = 0U;
+  s->recv_compression_expected_compressed_len = 0U;
+  s->recv_compression_expected_uncompressed_len = 0U;
 }
 
 /* ── Reference Counting ───────────────────────────────────── */
@@ -237,6 +291,8 @@ void release_client(coro_socket_t *client) {
       turbo_kcp_destroy(client->handle.kcp);
       client->handle.kcp = NULL;
     }
+
+    coro_socket_reset_recv_compression_state(client);
 
     /* Free TCP listener state */
     if ((client->transport == TURBO_TCP || client->transport == TURBO_WEBSOCKET) &&
@@ -740,6 +796,10 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
   s->ops = ops;
   s->owns_handle = 0;
   s->dns_pref = TURBO_DNS_ANY;
+#if defined(TURBO_HAS_ZSTD)
+  s->recv_compression_level = CORO_ZSTD_DEFAULT_LEVEL;
+  s->recv_compression_auto = 0;
+#endif
 
   s->timer = turbo_timer_create(NULL);
   if (!s->timer) {
@@ -918,11 +978,321 @@ int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_c
 
 /* ── Socket I/O ───────────────────────────────────────────── */
 
+#if defined(TURBO_HAS_ZSTD)
+static int coro_socket_recv_compression_append(coro_socket_t *s, const char *chunk, size_t chunk_len) {
+  size_t new_len;
+  char *new_cache;
+
+  if (!s || !chunk || chunk_len == 0U) {
+    return 0;
+  }
+
+  if (s->recv_compression_cache_len > (SIZE_MAX - chunk_len)) {
+    return TURBO_ENOMEM;
+  }
+
+  new_len = s->recv_compression_cache_len + chunk_len;
+  if (s->recv_compression_cache == NULL) {
+    new_cache = (char *)malloc(new_len);
+  } else {
+    new_cache = (char *)realloc(s->recv_compression_cache, new_len);
+  }
+  if (!new_cache) {
+    return TURBO_ENOMEM;
+  }
+
+  memcpy(new_cache + s->recv_compression_cache_len, chunk, chunk_len);
+  s->recv_compression_cache = new_cache;
+  s->recv_compression_cache_len = new_len;
+  s->recv_compression_header_len =
+      (new_len >= CORO_ZSTD_FRAME_HEADER_LEN) ? CORO_ZSTD_FRAME_HEADER_LEN : new_len;
+  return 0;
+}
+
+static void coro_socket_compact_recv_cache(coro_socket_t *s, size_t consumed) {
+  size_t remaining;
+
+  if (!s || consumed == 0U || s->recv_compression_cache == NULL) {
+    return;
+  }
+
+  if (consumed >= s->recv_compression_cache_len) {
+    free(s->recv_compression_cache);
+    s->recv_compression_cache = NULL;
+    s->recv_compression_cache_len = 0U;
+    s->recv_compression_header_len = 0U;
+    return;
+  }
+
+  remaining = s->recv_compression_cache_len - consumed;
+  memmove(s->recv_compression_cache, s->recv_compression_cache + consumed, remaining);
+  s->recv_compression_cache_len = remaining;
+  s->recv_compression_header_len = 0U;
+}
+
+static int coro_socket_recv_compressed_payload(coro_socket_t *s, char **data, size_t *len) {
+  uint32_t magic;
+  uint32_t compressed_len_u32;
+  uint32_t uncompressed_len_u32;
+  size_t payload_len_needed;
+  size_t decompressed_len;
+  size_t compressed_len;
+
+  if (!s || !data || !len || !s->recv_compression_cache) {
+    return 0;
+  }
+
+  if (s->recv_compression_cache_len < CORO_ZSTD_FRAME_HEADER_LEN) {
+    return 0;
+  }
+
+  magic = zstd_load_u32_be(s->recv_compression_cache);
+  if (magic != CORO_ZSTD_FRAME_MAGIC) {
+    coro_socket_reset_recv_compression_state(s);
+    return TURBO_EPROTO;
+  }
+
+  compressed_len_u32 = zstd_load_u32_be(s->recv_compression_cache + 4);
+  uncompressed_len_u32 = zstd_load_u32_be(s->recv_compression_cache + 8);
+  compressed_len = (size_t)compressed_len_u32;
+  decompressed_len = (size_t)uncompressed_len_u32;
+
+  if (compressed_len_u32 > CORO_ZSTD_MAX_FRAME_DATA_LEN) {
+    coro_socket_reset_recv_compression_state(s);
+    return TURBO_EPROTO;
+  }
+  if (decompressed_len > CORO_ZSTD_MAX_FRAME_DATA_LEN) {
+    coro_socket_reset_recv_compression_state(s);
+    return TURBO_EPROTO;
+  }
+
+  payload_len_needed = CORO_ZSTD_FRAME_HEADER_LEN + compressed_len;
+  if (s->recv_compression_cache_len < payload_len_needed) {
+    s->recv_compression_expected_compressed_len = compressed_len;
+    s->recv_compression_expected_uncompressed_len = decompressed_len;
+    s->recv_compression_header_len = CORO_ZSTD_FRAME_HEADER_LEN;
+    return 0;
+  }
+
+  if (decompressed_len > 0U) {
+    size_t decompressed;
+    char *payload = s->recv_compression_cache + CORO_ZSTD_FRAME_HEADER_LEN;
+    size_t frame_total = payload_len_needed;
+    size_t out_capacity = decompressed_len;
+    char *frame_base;
+
+    frame_base = (char *)malloc(sizeof(coro_recv_header_t) + out_capacity);
+    if (!frame_base) {
+      return TURBO_ENOMEM;
+    }
+
+    decompressed = ZSTD_decompress(frame_base + sizeof(coro_recv_header_t), decompressed_len, payload,
+                                   compressed_len);
+    if (ZSTD_isError(decompressed)) {
+      free(frame_base);
+      coro_socket_reset_recv_compression_state(s);
+      return zstd_error_code();
+    }
+    if (decompressed != decompressed_len) {
+      free(frame_base);
+      coro_socket_reset_recv_compression_state(s);
+      return TURBO_EPROTO;
+    }
+
+    coro_socket_compact_recv_cache(s, frame_total);
+    s->recv_compression_expected_compressed_len = 0U;
+    s->recv_compression_expected_uncompressed_len = 0U;
+    coro_recv_header_store_before_data(frame_base + sizeof(coro_recv_header_t), 0U, out_capacity, NULL);
+    *data = frame_base + sizeof(coro_recv_header_t);
+    *len = out_capacity;
+    return 1;
+  }
+
+  if (compressed_len != 0U) {
+    coro_socket_reset_recv_compression_state(s);
+    return TURBO_EPROTO;
+  }
+
+  *data = (char *)malloc(sizeof(coro_recv_header_t));
+  if (!*data) {
+    return TURBO_ENOMEM;
+  }
+  coro_recv_header_store_before_data(*data + sizeof(coro_recv_header_t), 0U, 0U,
+                                    NULL);
+  *data += sizeof(coro_recv_header_t);
+  *len = 0U;
+  coro_socket_compact_recv_cache(s, payload_len_needed);
+  s->recv_compression_expected_compressed_len = 0U;
+  s->recv_compression_expected_uncompressed_len = 0U;
+  return 1;
+}
+
+static int coro_socket_send_compressed_internal(coro_socket_t *s, const char *d, size_t l,
+                                              int level) {
+  size_t expected_len;
+  size_t compressed_cap;
+  size_t compressed_len;
+  char *frame;
+  char *payload;
+  int rc;
+  size_t frame_cap;
+  uint32_t uncompressed_u32;
+  uint32_t compressed_u32;
+
+  if (l > (size_t)UINT32_MAX) {
+    return TURBO_EPROTO;
+  }
+  uncompressed_u32 = (uint32_t)l;
+
+  compressed_cap = (size_t)ZSTD_compressBound(l);
+  if (compressed_cap < l) {
+    return TURBO_ENOMEM;
+  }
+
+  if (compressed_cap > (size_t)(UINT32_MAX - CORO_ZSTD_FRAME_HEADER_LEN)) {
+    return TURBO_EPROTO;
+  }
+
+  frame_cap = compressed_cap + CORO_ZSTD_FRAME_HEADER_LEN;
+  frame = (char *)malloc(frame_cap);
+  if (!frame) {
+    return TURBO_ENOMEM;
+  }
+
+  payload = frame + CORO_ZSTD_FRAME_HEADER_LEN;
+  compressed_len = ZSTD_compress(payload, compressed_cap, d, l, level);
+  if (ZSTD_isError(compressed_len)) {
+    free(frame);
+    return zstd_error_code();
+  }
+  if (compressed_len > (size_t)UINT32_MAX) {
+    free(frame);
+    return TURBO_EPROTO;
+  }
+  compressed_u32 = (uint32_t)compressed_len;
+
+  expected_len = CORO_ZSTD_FRAME_HEADER_LEN + compressed_len;
+  zstd_store_u32_be(frame, CORO_ZSTD_FRAME_MAGIC);
+  zstd_store_u32_be(frame + 4, compressed_u32);
+  zstd_store_u32_be(frame + 8, uncompressed_u32);
+
+  rc = s->ops->send(s, frame, expected_len);
+  free(frame);
+  return rc;
+}
+#endif
+
 int coro_socket_send(coro_socket_t *s, const char *d, size_t l) {
   if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
+#if defined(TURBO_HAS_ZSTD)
+  if (s->recv_compression_auto && s->recv_compression_level > 0) {
+    return socket_return_error(s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
+  }
+#endif
   return s->ops->send(s, d, l);
 }
+
+#if defined(TURBO_HAS_ZSTD)
+int coro_socket_send_compressed(coro_socket_t *s, const char *d, size_t l) {
+  if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
+  if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
+  if (s->recv_compression_level <= 0) return socket_return_error(s, TURBO_ENOTSUP);
+  return socket_return_error(s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
+}
+
+int coro_socket_recv_compressed(coro_socket_t *s, char **data, size_t *len) {
+  if (!s || !data || !len) return socket_return_error(s, TURBO_EINVAL);
+  if (!s->ops || !s->ops->recv_start) return socket_return_error(s, TURBO_ENOTSUP);
+  if (s->recv_compression_level <= 0) return socket_return_error(s, TURBO_ENOTSUP);
+
+  *data = NULL;
+  *len = 0U;
+
+  for (;;) {
+    int parsed = coro_socket_recv_compressed_payload(s, data, len);
+    if (parsed != 0) {
+      return socket_return_error(s, parsed < 0 ? parsed : 0);
+    }
+
+    {
+      char *chunk = NULL;
+      size_t chunk_len = 0U;
+      int rc = coro_socket_recv_raw(s, &chunk, &chunk_len);
+
+      if (rc != 0) {
+        if (chunk) {
+          coro_socket_free_recv(chunk);
+        }
+        return socket_return_error(s, rc);
+      }
+
+      if (chunk == NULL) {
+        if (s->recv_compression_cache_len > 0U) {
+          coro_socket_reset_recv_compression_state(s);
+          return socket_return_error(s, TURBO_EPROTO);
+        }
+        return 0;
+      }
+
+      rc = coro_socket_recv_compression_append(s, chunk, chunk_len);
+      coro_socket_free_recv(chunk);
+      if (rc != 0) {
+        return socket_return_error(s, rc);
+      }
+    }
+  }
+}
+
+int coro_socket_set_compression_level(coro_socket_t *s, int level) {
+  if (!s) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+
+  if (level < 0) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  if (level > 0) {
+    int min_level = ZSTD_minCLevel();
+    int max_level = ZSTD_maxCLevel();
+    if (level < min_level || level > max_level) {
+      return socket_return_error(s, TURBO_EINVAL);
+    }
+  }
+
+  if (s->recv_compression_level != level) {
+    if (s->recv_compression_cache != NULL) {
+      coro_socket_reset_recv_compression_state(s);
+    }
+    s->recv_compression_level = level;
+  }
+  s->recv_compression_auto = level > 0 ? 1 : 0;
+
+  return 0;
+}
+#else
+int coro_socket_send_compressed(coro_socket_t *s, const char *d, size_t l) {
+  (void)s;
+  (void)d;
+  (void)l;
+  return socket_return_error(s, TURBO_ENOTSUP);
+}
+
+int coro_socket_recv_compressed(coro_socket_t *s, char **data, size_t *len) {
+  if (data) {
+    *data = NULL;
+  }
+  if (len) {
+    *len = 0U;
+  }
+  return socket_return_error(s, TURBO_ENOTSUP);
+}
+
+int coro_socket_set_compression_level(coro_socket_t *s, int level) {
+  (void)level;
+  return socket_return_error(s, TURBO_ENOTSUP);
+}
+#endif
 
 int coro_socket_send_owned_recv(coro_socket_t *s, char *d, size_t l) {
   int rc;
@@ -957,6 +1327,15 @@ int coro_socket_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) 
 }
 
 int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
+#if defined(TURBO_HAS_ZSTD)
+  if (s && s->recv_compression_auto && s->recv_compression_level > 0) {
+    return coro_socket_recv_compressed(s, data, len);
+  }
+#endif
+  return coro_socket_recv_raw(s, data, len);
+}
+
+static int coro_socket_recv_raw(coro_socket_t *s, char **data, size_t *len) {
   if (!s || !data || !len) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->recv_start) return socket_return_error(s, TURBO_ENOTSUP);
   /* Return buffered data if available */
@@ -1056,23 +1435,28 @@ static void coro_socket_interrupt_wait_cb(void *arg1, void *arg2) {
     return;
   }
 
-  if (!s->co_wait) {
-    release_client(s);
-    return;
+  if (s->co_wait) {
+    stop_timeout_timer(s);
+    s->timed_out = 0;
+    if (status != 0 || s->status == 0) {
+      s->status = status;
+    }
+
+    coro_resume_waiter_with_handoff(s);
+
+    /* Drop the pending recv reference unless it was handed to the waiter. */
+    if (!s->destroy_wait_handoff) {
+      release_client(s);
+    }
   }
 
-  stop_timeout_timer(s);
-  s->timed_out = 0;
-  if (status != 0 || s->status == 0) {
-    s->status = status;
+  if (s->co_write_wait) {
+    coro_t *co = s->co_write_wait;
+    s->write_status = status;
+    s->co_write_wait = NULL;
+    coro_resume_co(s->ctx, co);
   }
 
-  coro_resume_waiter_with_handoff(s);
-
-  /* Drop the pending recv reference unless it was handed to the waiter. */
-  if (!s->destroy_wait_handoff) {
-    release_client(s);
-  }
   release_client(s);
 }
 
@@ -1220,6 +1604,73 @@ void coro_socket_set_reuse_port(coro_socket_t *s, int enable) {
   }
 
   s->reuse_port = enable ? 1 : 0;
+}
+
+int coro_socket_apply_stream_options(coro_socket_t *s) {
+  int rc;
+  if (!s || !s->handle.stream) return TURBO_EINVAL;
+  if (s->send_hwm_bytes) {
+    rc = turbo_stream_set_send_hwm(s->handle.stream, s->send_hwm_bytes);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  if (s->tcp_keepalive_configured) {
+    rc = turbo_stream_set_tcp_keepalive(s->handle.stream, &s->tcp_keepalive_config);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  if (s->linger_configured) {
+    rc = turbo_stream_set_linger(s->handle.stream, &s->linger_config);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  return 0;
+}
+
+int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t *parent) {
+  if (!child || !parent) return TURBO_EINVAL;
+  child->send_hwm_bytes = parent->send_hwm_bytes;
+  child->tcp_keepalive_config = parent->tcp_keepalive_config;
+  child->tcp_keepalive_configured = parent->tcp_keepalive_configured;
+  child->linger_config = parent->linger_config;
+  child->linger_configured = parent->linger_configured;
+  return coro_socket_apply_stream_options(child);
+}
+
+int coro_socket_set_tcp_keepalive(coro_socket_t *s,
+                                  const turbo_tcp_keepalive_config_t *config) {
+  int rc;
+  if (!s || !config) return socket_return_error(s, TURBO_EINVAL);
+  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  s->tcp_keepalive_config = *config;
+  s->tcp_keepalive_configured = 1;
+  if (s->handle.stream) {
+    rc = turbo_stream_set_tcp_keepalive(s->handle.stream, config);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  return 0;
+}
+
+int coro_socket_set_linger(coro_socket_t *s, const turbo_socket_linger_config_t *config) {
+  int rc;
+  if (!s || !config) return socket_return_error(s, TURBO_EINVAL);
+  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  s->linger_config = *config;
+  s->linger_configured = 1;
+  if (s->handle.stream) {
+    rc = turbo_stream_set_linger(s->handle.stream, config);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  return 0;
+}
+
+int coro_socket_set_send_hwm(coro_socket_t *s, size_t bytes) {
+  int rc;
+  if (!s) return socket_return_error(s, TURBO_EINVAL);
+  if (!socket_is_stream_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  s->send_hwm_bytes = bytes;
+  if (s->handle.stream) {
+    rc = turbo_stream_set_send_hwm(s->handle.stream, bytes);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  return 0;
 }
 
 /* ── Socket Cleanup ───────────────────────────────────────── */

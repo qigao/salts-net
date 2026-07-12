@@ -21,17 +21,16 @@
     {
       "name": "openssl",
       "version>=": "3.2.0"
-    },
-    {
-      "name": "aklomp-base64",
-      "version>=": "0.5.2"
-    },
+    }, 
     {
       "name": "pkgconf"
     },
     {
       "name": "zstd"
     }, 
+    {
+      "name": "simde"
+    },
     {
       "name": "liburing",
       "platform": "linux & !android"

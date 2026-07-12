@@ -1,6 +1,7 @@
 #include "email/email_pop3.h"
 #include "CoroNet.h"
 #include <fmt.h>
+#include "turbo_thread.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,11 +11,27 @@ struct pop3_client_s {
   coro_context_t *ctx;
   pop3_config_t config;
   coro_socket_t *socket;
+  turbo_mutex_t socket_mutex;
   char error_msg[512];
   char read_buffer[8192];
   char line_buffer[8192];
   size_t read_buffer_len;
 };
+
+static void pop3_socket_publish(pop3_client_t *client, coro_socket_t *socket) {
+  turbo_mutex_lock(&client->socket_mutex);
+  client->socket = socket;
+  turbo_mutex_unlock(&client->socket_mutex);
+}
+
+static coro_socket_t *pop3_socket_take(pop3_client_t *client) {
+  coro_socket_t *socket;
+  turbo_mutex_lock(&client->socket_mutex);
+  socket = client->socket;
+  client->socket = NULL;
+  turbo_mutex_unlock(&client->socket_mutex);
+  return socket;
+}
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -200,6 +217,7 @@ pop3_client_t *pop3_client_create(coro_context_t *ctx,
   if (!client) return NULL;
 
   client->ctx = ctx;
+  turbo_mutex_init(&client->socket_mutex);
   client->config = *config;
 
   if (config->host) client->config.host = strdup(config->host);
@@ -216,11 +234,15 @@ pop3_client_t *pop3_client_create(coro_context_t *ctx,
 void pop3_client_free(pop3_client_t *client) {
   if (!client) return;
 
-  if (client->socket) coro_socket_destroy(client->socket);
+  {
+    coro_socket_t *socket = pop3_socket_take(client);
+    if (socket) coro_socket_destroy(socket);
+  }
 
   free(client->config.host);
   free(client->config.username);
   free(client->config.password);
+  turbo_mutex_destroy(&client->socket_mutex);
   free(client);
 }
 
@@ -233,7 +255,10 @@ int pop3_connect(pop3_client_t *client) {
 
   // Create socket
   socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
-  client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
+  {
+    coro_socket_t *socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
+    if (socket) pop3_socket_publish(client, socket);
+  }
   if (!client->socket) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
@@ -243,8 +268,8 @@ int pop3_connect(pop3_client_t *client) {
                           client->config.port) != 0) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to connect to {}:{}", client->config.host,
         client->config.port);
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
+    coro_socket_t *socket = pop3_socket_take(client);
+    if (socket) coro_socket_destroy(socket);
     return -1;
   }
 
@@ -296,8 +321,19 @@ void pop3_disconnect(pop3_client_t *client) {
   // Send QUIT
   pop3_send_command(client, "QUIT");
 
-  coro_socket_destroy(client->socket);
-  client->socket = NULL;
+  {
+    coro_socket_t *socket = pop3_socket_take(client);
+    if (socket) coro_socket_destroy(socket);
+  }
+}
+
+int pop3_interrupt(pop3_client_t *client, int status) {
+  int rc;
+  if (!client) return TURBO_EINVAL;
+  turbo_mutex_lock(&client->socket_mutex);
+  rc = client->socket ? coro_socket_interrupt_wait(client->socket, status) : TURBO_ENOTCONN;
+  turbo_mutex_unlock(&client->socket_mutex);
+  return rc;
 }
 
 /* ── Mailbox Operations ────────────────────────────────────────────── */
@@ -399,17 +435,29 @@ char **pop3_uidl(pop3_client_t *client, int *count) {
 
 /* ── Message Operations ────────────────────────────────────────────── */
 
+int pop3_retrieve_raw(pop3_client_t *client, int msg_num,
+                      char **data, size_t *len) {
+  char retr_cmd[64];
+  char *raw_msg;
+  size_t msg_len = 0;
+  if (!client || !data || msg_num <= 0) return TURBO_EINVAL;
+  *data = NULL;
+  if (len) *len = 0;
+  fmt(retr_cmd, sizeof(retr_cmd), "RETR {}", msg_num);
+  if (pop3_send_command(client, retr_cmd) != 0) return TURBO_EIO;
+  raw_msg = pop3_read_multiline(client, &msg_len);
+  if (!raw_msg) return TURBO_EIO;
+  *data = raw_msg;
+  if (len) *len = msg_len;
+  return TURBO_OK;
+}
+
 email_message_t *pop3_retrieve_message(pop3_client_t *client, int msg_num) {
   if (!client) return NULL;
 
-  char retr_cmd[64];
-  fmt(retr_cmd, sizeof(retr_cmd), "RETR {}", msg_num);
-
-  if (pop3_send_command(client, retr_cmd) != 0) return NULL;
-
-  size_t msg_len;
-  char *raw_msg = pop3_read_multiline(client, &msg_len);
-  if (!raw_msg) return NULL;
+  size_t msg_len = 0;
+  char *raw_msg = NULL;
+  if (pop3_retrieve_raw(client, msg_num, &raw_msg, &msg_len) != TURBO_OK) return NULL;
 
   // Parse message
   mem_pool_t pool;

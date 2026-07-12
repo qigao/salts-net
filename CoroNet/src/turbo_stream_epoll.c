@@ -585,7 +585,9 @@ static void stream_epoll_handle_listener_event(stream_epoll_state_t *st) {
         turbo_stream_t *child = turbo_stream_create(l->ctx, l->kind);
         if (child) {
             extern int epoll_init_with_socket(turbo_stream_t *s, int existing);
-            if (epoll_init_with_socket(child, client_fd) == 0) {
+            if (epoll_init_with_socket(child, client_fd) == 0 &&
+                turbo_stream_listener_configure_child(l, child) == 0 &&
+                turbo_stream_apply_native_socket_options(child, client_fd) == 0) {
                 child->connected = 1;
                 child->listener = l;
                 l->active_connections++;
@@ -952,6 +954,12 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
     st->fd = socket(a->sa_family, SOCK_STREAM, 0);
     if (st->fd < 0) return -errno;
     set_nonblocking(st->fd);
+    rc = turbo_stream_apply_native_socket_options(s, st->fd);
+    if (rc != 0) {
+        close(st->fd);
+        st->fd = -1;
+        return rc;
+    }
     socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
                          (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
                                                       sizeof(struct sockaddr_in);
@@ -994,6 +1002,10 @@ static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
         return TURBO_EINVAL;
     }
     st = (stream_epoll_state_t *)s->backend_data;
+    rc = turbo_stream_send_hwm_check(s, l, ring_spsc_read_available(&st->write_ring));
+    if (rc != 0) {
+        return rc;
+    }
     rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
     if (rc != 0) {
         return rc;

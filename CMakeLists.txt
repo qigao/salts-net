@@ -51,7 +51,6 @@ find_package(kcp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(c-ares CONFIG REQUIRED)
-find_package(base64 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
 

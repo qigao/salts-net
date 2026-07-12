@@ -71,6 +71,15 @@ CXX_C_API int smtp_connect(smtp_client_t *client);
  */
 CXX_C_API void smtp_disconnect(smtp_client_t *client);
 
+/**
+ * Interrupt the client's current CoroNet socket wait from another thread.
+ *
+ * The client remains owned by its caller. The coroutine performing connect,
+ * receive, send, TLS upgrade, or disconnect observes `status` and completes
+ * its normal cleanup before the caller may free the client.
+ */
+CXX_C_API int smtp_interrupt(smtp_client_t *client, int status);
+
 /* ── Send Email ────────────────────────────────────────────────────── */
 
 /**

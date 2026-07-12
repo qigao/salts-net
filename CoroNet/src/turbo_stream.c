@@ -7,12 +7,12 @@
  */
 
 #include "turbo_stream_internal.h"
-#include "turbo_build_config_internal.h"
 #include "turbo_coro_internal.h"
 #include "turbo_buffer.h"
 #include "internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_internal.h"
+#include "turbo_error.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -265,6 +265,14 @@ void turbo_stream_enqueue_buffer(turbo_stream_t *s, mem_buffer_t *buf) {
   }
   s->send_tail = buf;
   s->send_queued += buf->used;
+}
+
+int turbo_stream_send_hwm_check(const turbo_stream_t *s, size_t add_bytes,
+                                size_t pending_bytes) {
+  if (!s || add_bytes == 0 || s->send_hwm_bytes == 0) return 0;
+  if (add_bytes > s->send_hwm_bytes) return TURBO_ENOBUFS;
+  if (pending_bytes > s->send_hwm_bytes - add_bytes) return TURBO_ENOBUFS;
+  return 0;
 }
 
 static void drain_send_queue(turbo_stream_t *s) {
@@ -544,10 +552,40 @@ int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
   return rc;
 }
 
+int turbo_stream_set_tcp_keepalive(turbo_stream_t *s,
+                                   const turbo_tcp_keepalive_config_t *config) {
+  if (!s || !config) return TURBO_EINVAL;
+  if (config->idle_ms > INT32_MAX || config->interval_ms > INT32_MAX ||
+      config->count > INT32_MAX) {
+    return TURBO_ERANGE;
+  }
+  s->tcp_keepalive_config = *config;
+  s->tcp_keepalive_configured = 1;
+  return 0;
+}
+
+int turbo_stream_set_linger(turbo_stream_t *s, const turbo_socket_linger_config_t *config) {
+  if (!s || !config) return TURBO_EINVAL;
+  if (config->timeout_ms > (uint32_t)INT32_MAX) return TURBO_ERANGE;
+  s->linger_config = *config;
+  s->linger_configured = 1;
+  return 0;
+}
+
+int turbo_stream_set_send_hwm(turbo_stream_t *s, size_t bytes) {
+  if (!s) return TURBO_EINVAL;
+  s->send_hwm_bytes = bytes;
+  return 0;
+}
+
 /* ── Public API: Send ─────────────────────────────────────── */
 
 int turbo_stream_send(turbo_stream_t *s, const char *data, size_t len) {
   if (!s || !data || len == 0) return TURBO_EINVAL;
+  {
+    int rc = turbo_stream_send_hwm_check(s, len, s->send_queued);
+    if (rc != 0) return rc;
+  }
 
   if (s->ops->send) {
     return s->ops->send(s, data, len);
@@ -574,6 +612,10 @@ int turbo_stream_send_buffer(turbo_stream_t *s, mem_buffer_t *buf,
                               size_t len) {
   if (!s || !buf) return TURBO_EINVAL;
   if (s->closing || s->finalized) return TURBO_ECANCELED;
+  {
+    int rc = turbo_stream_send_hwm_check(s, len, s->send_queued);
+    if (rc != 0) return rc;
+  }
   mem_set_used(buf, len);
   turbo_stream_enqueue_buffer(s, buf);
   return turbo_stream_flush(s);
@@ -792,6 +834,46 @@ void turbo_stream_set_user_data(turbo_stream_t *s, void *data) {
 
 void *turbo_stream_get_user_data(turbo_stream_t *s) {
   return s ? s->user_data : NULL;
+}
+
+int turbo_stream_listener_set_child_tcp_keepalive(turbo_stream_listener_t *l,
+                                                  const turbo_tcp_keepalive_config_t *config) {
+  if (!l || !config) return TURBO_EINVAL;
+  l->child_tcp_keepalive_config = *config;
+  l->child_tcp_keepalive_configured = 1;
+  return 0;
+}
+
+int turbo_stream_listener_set_child_linger(turbo_stream_listener_t *l,
+                                           const turbo_socket_linger_config_t *config) {
+  if (!l || !config) return TURBO_EINVAL;
+  l->child_linger_config = *config;
+  l->child_linger_configured = 1;
+  return 0;
+}
+
+int turbo_stream_listener_set_child_send_hwm(turbo_stream_listener_t *l, size_t bytes) {
+  if (!l) return TURBO_EINVAL;
+  l->child_send_hwm_bytes = bytes;
+  return 0;
+}
+
+int turbo_stream_listener_configure_child(turbo_stream_listener_t *l, turbo_stream_t *child) {
+  int rc;
+  if (!l || !child) return TURBO_EINVAL;
+  if (l->child_send_hwm_bytes) {
+    rc = turbo_stream_set_send_hwm(child, l->child_send_hwm_bytes);
+    if (rc != 0) return rc;
+  }
+  if (l->child_tcp_keepalive_configured) {
+    rc = turbo_stream_set_tcp_keepalive(child, &l->child_tcp_keepalive_config);
+    if (rc != 0) return rc;
+  }
+  if (l->child_linger_configured) {
+    rc = turbo_stream_set_linger(child, &l->child_linger_config);
+    if (rc != 0) return rc;
+  }
+  return 0;
 }
 
 void turbo_stream_set_write_cb(turbo_stream_t *s,

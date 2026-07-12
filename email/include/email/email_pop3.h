@@ -70,6 +70,15 @@ CXX_C_API int pop3_connect(pop3_client_t *client);
  */
 CXX_C_API void pop3_disconnect(pop3_client_t *client);
 
+/**
+ * Interrupt the client's current CoroNet socket wait from another thread.
+ *
+ * The socket remains owned by the POP3 coroutine and is destroyed by the
+ * normal disconnect/free path. Returns TURBO_ENOTCONN when no socket is
+ * currently published.
+ */
+CXX_C_API int pop3_interrupt(pop3_client_t *client, int status);
+
 /* ── Mailbox Operations ────────────────────────────────────────────── */
 
 /**
@@ -91,6 +100,15 @@ CXX_C_API pop3_message_info_t *pop3_list(pop3_client_t *client, int *count);
 CXX_C_API char **pop3_uidl(pop3_client_t *client, int *count);
 
 /* ── Message Operations ────────────────────────────────────────────── */
+
+/**
+ * Retrieve the raw RFC message by number.
+ *
+ * On success, `*data` is NUL-terminated, `*len` excludes that terminator,
+ * and the caller owns the buffer and must release it with free().
+ */
+CXX_C_API int pop3_retrieve_raw(pop3_client_t *client, int msg_num,
+                                char **data, size_t *len);
 
 /**
  * Retrieve message by number

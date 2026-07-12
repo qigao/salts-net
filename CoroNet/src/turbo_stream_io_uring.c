@@ -888,7 +888,9 @@ static void stream_uring_handle_accept(stream_uring_op_t *op) {
 
   if (client_fd >= 0) {
     turbo_stream_t *child = turbo_stream_create(l->ctx, l->kind);
-    if (child && stream_uring_init_with_socket(child, client_fd) == 0) {
+    if (child && stream_uring_init_with_socket(child, client_fd) == 0 &&
+        turbo_stream_listener_configure_child(l, child) == 0 &&
+        turbo_stream_apply_native_socket_options(child, client_fd) == 0) {
       child->connected = 1;
       child->listener = l;
       l->active_connections++;
@@ -1013,6 +1015,12 @@ static int uring_connect(turbo_stream_t *s, const struct sockaddr *addr) {
       return -errno;
     }
     rc = set_nonblocking_cloexec(st->base.fd);
+    if (rc != 0) {
+      close(st->base.fd);
+      st->base.fd = -1;
+      return rc;
+    }
+    rc = turbo_stream_apply_native_socket_options(s, st->base.fd);
     if (rc != 0) {
       close(st->base.fd);
       st->base.fd = -1;

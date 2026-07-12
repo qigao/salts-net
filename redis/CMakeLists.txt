@@ -25,6 +25,13 @@ target_include_directories(
 
 target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboUtils::Core)
 
+install(
+  TARGETS tedis
+  EXPORT TurboNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+
 # Platform-specific settings
 if(WIN32)
   target_compile_definitions(tedis PRIVATE _CRT_SECURE_NO_WARNINGS

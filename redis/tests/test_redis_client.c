@@ -5,6 +5,7 @@
 
 #include "../redis_client.h"
 #include "tinytest.h"
+#include "turbo_error.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -89,6 +90,14 @@ void test_disconnect_null_client(void) {
     /* Should not crash */
     redis_client_disconnect(NULL);
     TEST_PASS();
+}
+
+void test_interrupt_without_connection(void) {
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    TEST_ASSERT_NOT_NULL(client);
+    TEST_ASSERT_EQUAL(TURBO_EINVAL, redis_client_interrupt(NULL, TURBO_ESHUTDOWN));
+    TEST_ASSERT_EQUAL(TURBO_ENOTCONN, redis_client_interrupt(client, TURBO_ESHUTDOWN));
+    redis_client_destroy(client);
 }
 
 // =============================================================================
@@ -576,6 +585,7 @@ suite("redis_client") {
         REDIS_RUN_TEST(test_create_client_null_host, "should handle null host");
         REDIS_RUN_TEST(test_destroy_null_client, "should destroy null client safely");
         REDIS_RUN_TEST(test_disconnect_null_client, "should disconnect null client safely");
+        REDIS_RUN_TEST(test_interrupt_without_connection, "should report absent socket on interrupt");
     }
 
     group("Initial State") {

@@ -1063,6 +1063,27 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   st->tcp->user_data = st;
   st->tcp->managed   = 1;   /* ws_state_t owns this stream */
   st->tcp->on_write_complete = ws_on_tcp_write_complete;
+  if (s->send_hwm_bytes) {
+    int rc = turbo_stream_set_send_hwm(st->tcp, s->send_hwm_bytes);
+    if (rc != 0) {
+      ws_drop_inner_tcp(st);
+      return rc;
+    }
+  }
+  if (s->tcp_keepalive_configured) {
+    int rc = turbo_stream_set_tcp_keepalive(st->tcp, &s->tcp_keepalive_config);
+    if (rc != 0) {
+      ws_drop_inner_tcp(st);
+      return rc;
+    }
+  }
+  if (s->linger_configured) {
+    int rc = turbo_stream_set_linger(st->tcp, &s->linger_config);
+    if (rc != 0) {
+      ws_drop_inner_tcp(st);
+      return rc;
+    }
+  }
 
   if (s->kind == TURBO_STREAM_WSS && st->tls_client_configured) {
     turbo_tls_client_config_t tls_config;

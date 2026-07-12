@@ -25,6 +25,13 @@ target_include_directories(${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>)
 
+install(
+  TARGETS ${TARGET_NAME}
+  EXPORT TurboNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION include
         FILES_MATCHING PATTERN "*.h")

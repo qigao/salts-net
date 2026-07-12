@@ -23,6 +23,9 @@ extern "C" {
 /** Opaque event-loop context (wraps the active native event loop plus a thread-safe post queue) */
 typedef struct coro_context_s coro_context_t;
 
+/** Opaque reusable coroutine-aware timed wait handle. */
+typedef struct coro_wait_s coro_wait_t;
+
 /** Shorter alias for coro_context_t */
 typedef struct coro_context_s coro_context;
 
@@ -418,6 +421,24 @@ CXX_C_API int coro_when_any(coro_context_t *ctx,
 // =============================================================================
 // Coroutine Sleep
 // =============================================================================
+
+/** Create a reusable wait bound to @p ctx. One handle supports one active waiter. */
+CXX_C_API coro_wait_t *coro_wait_create(coro_context_t *ctx);
+
+/** Destroy an idle wait. Returns TURBO_EBUSY while a wait is active. */
+CXX_C_API int coro_wait_destroy(coro_wait_t *wait);
+
+/**
+ * Suspend the current coroutine without blocking the event loop.
+ * Returns TURBO_OK after @p ms, or the status passed to coro_wait_interrupt().
+ */
+CXX_C_API int coro_wait_for(coro_wait_t *wait, uint64_t ms);
+
+/**
+ * Interrupt an active wait from any thread. Exactly one timer or interrupt
+ * completion resumes the waiter. @p status must be a non-zero Turbo error.
+ */
+CXX_C_API int coro_wait_interrupt(coro_wait_t *wait, int status);
 
 /**
  * @brief Sleep for specified milliseconds (coroutine-aware).

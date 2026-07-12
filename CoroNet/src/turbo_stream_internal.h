@@ -12,6 +12,13 @@
 #include "CoroNet/turbo_coro_context.h"
 #include "turbo_buffer.h"
 
+#ifdef _WIN32
+  #include <winsock2.h>
+typedef SOCKET turbo_stream_native_socket_t;
+#else
+typedef int turbo_stream_native_socket_t;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -54,6 +61,11 @@ struct turbo_stream_s {
   mem_buffer_t *send_head;
   mem_buffer_t *send_tail;
   size_t send_queued;
+  size_t send_hwm_bytes;
+  turbo_tcp_keepalive_config_t tcp_keepalive_config;
+  int tcp_keepalive_configured;
+  turbo_socket_linger_config_t linger_config;
+  int linger_configured;
 
   /* Callbacks */
   turbo_recv_cb on_recv;
@@ -88,6 +100,11 @@ struct turbo_stream_listener_s {
   int closing;
   int finalized;
   int reuse_port;
+  size_t child_send_hwm_bytes;
+  turbo_tcp_keepalive_config_t child_tcp_keepalive_config;
+  int child_tcp_keepalive_configured;
+  turbo_socket_linger_config_t child_linger_config;
+  int child_linger_configured;
   void *user_data;
   void *backend_data;
 };
@@ -132,6 +149,17 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
                                  turbo_close_cb on_close);
 int turbo_stream_ws_send_text(turbo_stream_t *ws_stream, const char *data, size_t len);
 int turbo_stream_ws_send_owned_recv(turbo_stream_t *ws_stream, char *data, size_t len);
+
+int turbo_stream_send_hwm_check(const turbo_stream_t *s, size_t add_bytes,
+                                size_t pending_bytes);
+int turbo_stream_apply_native_socket_options(turbo_stream_t *s,
+                                             turbo_stream_native_socket_t socket);
+int turbo_stream_listener_configure_child(turbo_stream_listener_t *l, turbo_stream_t *child);
+int turbo_stream_listener_set_child_tcp_keepalive(turbo_stream_listener_t *l,
+                                                  const turbo_tcp_keepalive_config_t *config);
+int turbo_stream_listener_set_child_linger(turbo_stream_listener_t *l,
+                                           const turbo_socket_linger_config_t *config);
+int turbo_stream_listener_set_child_send_hwm(turbo_stream_listener_t *l, size_t bytes);
 
 /* ── Shared helpers ───────────────────────────────────────── */
 

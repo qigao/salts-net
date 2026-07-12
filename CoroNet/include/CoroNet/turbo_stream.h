@@ -57,6 +57,18 @@ typedef struct turbo_tls_client_config_s {
   int verify_peer;
 } turbo_tls_client_config_t;
 
+typedef struct turbo_tcp_keepalive_config_s {
+  int enabled;
+  uint32_t idle_ms;
+  uint32_t interval_ms;
+  uint32_t count;
+} turbo_tcp_keepalive_config_t;
+
+typedef struct turbo_socket_linger_config_s {
+  int enabled;
+  uint32_t timeout_ms;
+} turbo_socket_linger_config_t;
+
 typedef struct turbo_tls_metrics_s {
   uint64_t client_handshakes_started;
   uint64_t client_handshakes_completed;
@@ -143,6 +155,23 @@ CXX_C_API int turbo_stream_connect_addr(turbo_stream_t *s,
 CXX_C_API int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
                                          turbo_connect_cb on_connect,
                                          turbo_close_cb on_close);
+
+/**
+ * @brief Configure OS TCP keepalive for TCP-backed streams.
+ */
+CXX_C_API int turbo_stream_set_tcp_keepalive(turbo_stream_t *s,
+                                             const turbo_tcp_keepalive_config_t *config);
+
+/**
+ * @brief Configure OS SO_LINGER for TCP-backed streams.
+ */
+CXX_C_API int turbo_stream_set_linger(turbo_stream_t *s,
+                                      const turbo_socket_linger_config_t *config);
+
+/**
+ * @brief Limit bytes queued in the stream send path. 0 disables the limit.
+ */
+CXX_C_API int turbo_stream_set_send_hwm(turbo_stream_t *s, size_t bytes);
 
 /* ── Send ─────────────────────────────────────────────────── */
 

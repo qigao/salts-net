@@ -274,7 +274,9 @@ static void* stream_kqueue_worker(void* arg) {
                         turbo_stream_t *child = turbo_stream_create(l->ctx, l->kind);
                         if (child) {
                             extern int kqueue_init_with_socket(turbo_stream_t *s, int existing);
-                            if (kqueue_init_with_socket(child, client_fd) == 0) {
+                            if (kqueue_init_with_socket(child, client_fd) == 0 &&
+                                turbo_stream_listener_configure_child(l, child) == 0 &&
+                                turbo_stream_apply_native_socket_options(child, client_fd) == 0) {
                                 child->connected = 1;
                                 child->listener = l;
                                 l->active_connections++;
@@ -427,6 +429,12 @@ static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a) {
     st->fd = socket(a->sa_family, SOCK_STREAM, 0);
     if (st->fd < 0) return -errno;
     set_nonblocking(st->fd);
+    rc = turbo_stream_apply_native_socket_options(s, st->fd);
+    if (rc != 0) {
+        close(st->fd);
+        st->fd = -1;
+        return rc;
+    }
     struct kevent evs[2];
     EV_SET(&evs[0], st->fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
     EV_SET(&evs[1], st->fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, NULL);
@@ -457,6 +465,10 @@ static int kqueue_connect_pipe(turbo_stream_t *s, const char *n) {
 
 static int kqueue_send(turbo_stream_t *s, const char *d, size_t l) {
     stream_kqueue_state_t *st = (stream_kqueue_state_t *)s->backend_data;
+    int rc;
+    if (!st || !d || l == 0) return TURBO_EINVAL;
+    rc = turbo_stream_send_hwm_check(s, l, ring_spsc_read_available(&st->write_ring));
+    if (rc != 0) return rc;
     uint8_t *dest = wait_ring_write(st, &st->write_ring, l);
     memcpy(dest, d, l);
     ring_spsc_write_release(&st->write_ring, l);

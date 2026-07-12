@@ -349,6 +349,8 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
     turbo_stream_t *s = turbo_stream_create(l->ctx, l->kind);
     if (s) {
       int rc = iocp_init_with_socket(s, client_socket);
+      if (rc == 0) rc = turbo_stream_listener_configure_child(l, s);
+      if (rc == 0) rc = turbo_stream_apply_native_socket_options(s, client_socket);
       if (rc == 0) {
         s->connected = 1;
         s->listener = l;
@@ -545,6 +547,10 @@ static int iocp_setup_socket(turbo_stream_t *s, stream_iocp_state_t *st, SOCKET 
 
   int yes = 1;
   setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&yes, sizeof(yes));
+  {
+    int rc = turbo_stream_apply_native_socket_options(s, sock);
+    if (rc != 0) return rc;
+  }
   st->socket = sock;
   return 0;
 }

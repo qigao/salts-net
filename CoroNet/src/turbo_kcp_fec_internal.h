@@ -38,7 +38,7 @@ int turbo_kcp_fec_build_data_frame_for_test(const turbo_kcp_fec_config_t *config
                                             const char *payload,
                                             size_t payload_len,
                                             mem_buffer_t **out);
-int turbo_kcp_fec_build_wirehair_parity_frame_for_test(
+int turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
     const turbo_kcp_fec_config_t *config,
     uint32_t group_id,
     uint16_t parity_index,

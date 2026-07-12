@@ -7,7 +7,6 @@
  */
 
 #include "turbo_datagram_internal.h"
-#include "turbo_build_config_internal.h"
 #include "turbo_buffer.h"
 #include "internal.h"
 #include "CoroNet/turbo_coro_context.h"

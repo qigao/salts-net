@@ -4,26 +4,28 @@ add_subdirectory(parser)
 
 set(TURBO_HAS_IO_URING OFF)
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+set(TURBO_IO_URING_MIN_KERNEL_VERSION 5.1)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND
+   NOT CMAKE_SYSTEM_VERSION VERSION_LESS TURBO_IO_URING_MIN_KERNEL_VERSION)
   pkg_check_modules(TURBO_IO_URING QUIET IMPORTED_TARGET liburing)
   if(TURBO_IO_URING_FOUND)
     set(TURBO_HAS_IO_URING ON)
-    add_compile_definitions(TURBO_HAS_IO_URING=1)
   endif()
 endif()
 
-find_path(TURBO_WIREHAIR_INCLUDE_DIR NAMES wirehair/wirehair.h)
-find_library(TURBO_WIREHAIR_LIBRARY NAMES wirehair)
-if(TURBO_WIREHAIR_INCLUDE_DIR AND TURBO_WIREHAIR_LIBRARY)
-  set(TURBO_HAS_WIREHAIR ON)
+find_package(zstd CONFIG REQUIRED)
+if(TARGET zstd::libzstd_static)
+  set(TURBO_ZSTD_TARGET zstd::libzstd_static)
+elseif(TARGET zstd::libzstd)
+  set(TURBO_ZSTD_TARGET zstd::libzstd)
 else()
-  set(TURBO_HAS_WIREHAIR OFF)
+  message(FATAL_ERROR "zstd was found but did not provide a supported CMake target")
 endif()
 
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/turbo_build_config_internal.h.in
-  ${CMAKE_CURRENT_BINARY_DIR}/generated/include/turbo_build_config_internal.h
-  @ONLY)
+add_compile_definitions(TURBO_HAS_ZSTD=1)
+if(TURBO_HAS_IO_URING)
+  add_compile_definitions(TURBO_HAS_IO_URING=1)
+endif()
 
 # Platform-specific backend mapping
 set(BACKEND_FILES_IOCP
@@ -111,7 +113,6 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     ${tgt}
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet>
-           $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
            $<INSTALL_INTERFACE:include>
            $<INSTALL_INTERFACE:include/CoroNet>
     PRIVATE ${WEBSOCKET_PARSER_INCLUDE_DIRS})
@@ -120,7 +121,9 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     ${tgt}
     PUBLIC TurboUtils::Core TurboUtils::Parser Threads::Threads
     PRIVATE kcp::kcp c-ares::cares OpenSSL::SSL OpenSSL::Crypto
-            TurboNet::WebSocketParser)
+            TurboNet::WebSocketParser reed)
+
+  target_link_libraries(${tgt} PRIVATE ${TURBO_ZSTD_TARGET})
 
   if(WIN32)
     target_link_libraries(${tgt} PRIVATE ws2_32 mswsock crypt32)
@@ -130,11 +133,6 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     target_link_libraries(${tgt} PRIVATE PkgConfig::TURBO_IO_URING)
   endif()
 
-  if(TURBO_HAS_WIREHAIR)
-    target_compile_definitions(${tgt} PRIVATE TURBO_HAS_WIREHAIR=1)
-    target_include_directories(${tgt} PRIVATE ${TURBO_WIREHAIR_INCLUDE_DIR})
-    target_link_libraries(${tgt} PRIVATE ${TURBO_WIREHAIR_LIBRARY})
-  endif()
 endforeach()
 
 # Install

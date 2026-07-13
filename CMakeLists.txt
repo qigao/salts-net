@@ -60,6 +60,7 @@ include(FindTools)
 add_subdirectory(vendor)
 
 add_subdirectory(CoroNet)
+add_subdirectory(ice)
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 add_subdirectory(email)

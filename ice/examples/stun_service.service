@@ -1,0 +1,14 @@
+[Unit]
+Description=TurboNet STUN Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/turbonet/bin/stun_service 0.0.0.0 3479
+Environment=LD_LIBRARY_PATH=/opt/turbonet/lib
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

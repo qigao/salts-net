@@ -64,6 +64,7 @@ typedef struct stream_epoll_state_s {
     int fd;
     int fd_armed;
     int connected;
+    int connect_event_posted; /* Connect completion is one-shot even if a terminal event follows. */
     int send_pending;
     int event_write_lock;
     int event_post_pending;
@@ -636,11 +637,14 @@ static void stream_epoll_handle_stream_event(stream_epoll_state_t *st, uint32_t 
     }
 
     if (evmask & EPOLLOUT) {
-        if (!st->connected) {
+        if (!st->connect_event_posted) {
             int err = 0;
             socklen_t len = sizeof(err);
-            getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len);
-            st->connected = 1;
+            if (getsockopt(st->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) {
+                err = errno;
+            }
+            st->connect_event_posted = 1;
+            st->connected = (err == 0);
             post_event(st, SEP_OP_CONNECT, (err == 0) ? 0 : -err, NULL, NULL, 0);
         }
         try_flush_write_ring(st);
@@ -964,6 +968,7 @@ int epoll_init_with_socket(turbo_stream_t *s, int existing) {
     }
     st->fd = existing;
     st->connected = 1;
+    st->connect_event_posted = 1;
     return 0;
 }
 
@@ -996,6 +1001,11 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
         return err;
     }
 
+    if (connect_rc == 0) {
+        st->connected = 1;
+        st->connect_event_posted = 1;
+    }
+
     rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
     if (rc != 0) {
         close(st->fd);
@@ -1004,7 +1014,6 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
     }
 
     if (connect_rc == 0) {
-        st->connected = 1;
         TLOG_DEBUG("epoll[{:p}] connect-immediate fd={:d}", (void *)st, st->fd);
         post_event(st, SEP_OP_CONNECT, 0, NULL, NULL, 0);
     }

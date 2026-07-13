@@ -887,6 +887,9 @@ static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_h
     /* Already an IP address */
     strncpy(s->resolved_ip, connect_host, sizeof(s->resolved_ip) - 1);
     s->resolved_ip[sizeof(s->resolved_ip) - 1] = '\0';
+    strncpy(s->resolved_ips[0], connect_host, sizeof(s->resolved_ips[0]) - 1);
+    s->resolved_ips[0][sizeof(s->resolved_ips[0]) - 1] = '\0';
+    s->resolved_ip_count = 1;
   } else {
     /* Need DNS resolution */
     int r;
@@ -918,7 +921,29 @@ static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_h
     }
   }
 
+  if (s->connect_policy) {
+    turbo_dns_result_t results[TURBO_DNS_MAX_RESULTS];
+    size_t i;
+    int policy_rc;
+    memset(results, 0, sizeof(results));
+    for (i = 0; i < s->resolved_ip_count; ++i) {
+      strncpy(results[i].ip, s->resolved_ips[i], sizeof(results[i].ip) - 1);
+      results[i].family = strchr(results[i].ip, ':') ? AF_INET6 : AF_INET;
+    }
+    policy_rc = s->connect_policy(connect_host, port, results, s->resolved_ip_count,
+                                  s->connect_policy_user_data);
+    if (policy_rc != 0) return policy_rc;
+  }
+
   return coro_socket_connect_resolved(s, target_host, port, deadline_ms);
+}
+
+int coro_socket_set_connect_policy(coro_socket_t *s, coro_socket_connect_policy_fn policy,
+                                   void *user_data) {
+  if (!s || (policy && (s->co_wait || s->connected))) return TURBO_EINVAL;
+  s->connect_policy = policy;
+  s->connect_policy_user_data = user_data;
+  return 0;
 }
 
 int coro_socket_connect_host_ex(coro_socket_t *s, const char *connect_host, int port,

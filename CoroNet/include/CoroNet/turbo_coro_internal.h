@@ -305,6 +305,8 @@ struct coro_socket_s {
   turbo_dns_query_t *dns_query; /**< In-flight DNS query */
   int dns_initialized;          /**< 1 = DNS resolver is ready */
   turbo_dns_pref_t dns_pref;    /**< Address-family preference for hostname resolution */
+  coro_socket_connect_policy_fn connect_policy;
+  void *connect_policy_user_data;
 
   /* ── Timeout ───────────────────────────────────────────── */
   turbo_timer_t *timer;  /**< Timeout timer handle */

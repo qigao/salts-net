@@ -13,6 +13,7 @@
 #include "turbo_kcp.h"
 #include "turbo_stream.h"
 #include "turbo_backend.h"
+#include "turbo_dns.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -22,6 +23,19 @@ extern "C" {
 
 /** Opaque coroutine socket handle */
 typedef struct coro_socket_s coro_socket_t;
+
+/**
+ * @brief Validate every DNS result before a connection attempt starts.
+ *
+ * The callback runs on the socket's coroutine/event-loop thread after DNS
+ * resolution and before any backend connect call. Returning nonzero rejects
+ * the entire connection; callers that need SSRF protection should reject the
+ * result set when any address is forbidden.
+ */
+typedef int (*coro_socket_connect_policy_fn)(const char *hostname, int port,
+                                             const turbo_dns_result_t *results,
+                                             size_t result_count,
+                                             void *user_data);
 
 /** Socket types */
 typedef enum {
@@ -124,6 +138,11 @@ CXX_C_API int coro_socket_get_kcp_fec(coro_socket_t *socket,
  * For WebSocket, use coro_socket_connect_ws instead.
  */
 CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
+
+/** Configure or clear the pre-connect resolved-address policy callback. */
+CXX_C_API int coro_socket_set_connect_policy(coro_socket_t *socket,
+                                              coro_socket_connect_policy_fn policy,
+                                              void *user_data);
 
 /**
  * @brief Connect to one host while preserving a different host context.

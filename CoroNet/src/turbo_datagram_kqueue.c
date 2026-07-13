@@ -6,6 +6,7 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 
 #include "turbo_datagram_internal.h"
+#include "turbo_datagram_multicast_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "ring_buffer_spsc.h"
 #include "turbo_error.h"
@@ -452,36 +453,54 @@ static int dg_kqueue_get_local_addr(turbo_datagram_t *d, struct sockaddr_storage
 
 static int dg_kqueue_join_multicast(turbo_datagram_t *d, const char *group, const char *iface) {
   dg_kqueue_state_t *st;
-  struct ip_mreq mreq;
+  int rc;
 
   if (!d || !d->backend_data || !group) {
     return TURBO_EINVAL;
   }
 
   st = (dg_kqueue_state_t *)d->backend_data;
-  memset(&mreq, 0, sizeof(mreq));
-  mreq.imr_multiaddr.s_addr = inet_addr(group);
-  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    struct ipv6_mreq mreq6;
+    rc = turbo_datagram_prepare_ipv6_membership(group, iface, &mreq6);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq6, sizeof(mreq6)) < 0) {
+      return -errno;
+    }
+  } else {
+    struct ip_mreq mreq4;
+    rc = turbo_datagram_prepare_ipv4_membership(group, iface, &mreq4);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq4, sizeof(mreq4)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
 
 static int dg_kqueue_leave_multicast(turbo_datagram_t *d, const char *group, const char *iface) {
   dg_kqueue_state_t *st;
-  struct ip_mreq mreq;
+  int rc;
 
   if (!d || !d->backend_data || !group) {
     return TURBO_EINVAL;
   }
 
   st = (dg_kqueue_state_t *)d->backend_data;
-  memset(&mreq, 0, sizeof(mreq));
-  mreq.imr_multiaddr.s_addr = inet_addr(group);
-  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    struct ipv6_mreq mreq6;
+    rc = turbo_datagram_prepare_ipv6_membership(group, iface, &mreq6);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq6, sizeof(mreq6)) < 0) {
+      return -errno;
+    }
+  } else {
+    struct ip_mreq mreq4;
+    rc = turbo_datagram_prepare_ipv4_membership(group, iface, &mreq4);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq4, sizeof(mreq4)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
@@ -495,9 +514,16 @@ static int dg_kqueue_set_multicast_loop(turbo_datagram_t *d, int on) {
   }
 
   st = (dg_kqueue_state_t *)d->backend_data;
-  value = on ? 1U : 0U;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    unsigned int value6 = on ? 1U : 0U;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &value6, sizeof(value6)) < 0) {
+      return -errno;
+    }
+  } else {
+    value = on ? 1U : 0U;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
@@ -511,9 +537,16 @@ static int dg_kqueue_set_multicast_ttl(turbo_datagram_t *d, int ttl) {
   }
 
   st = (dg_kqueue_state_t *)d->backend_data;
-  value = (unsigned char)ttl;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    int value6 = ttl;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &value6, sizeof(value6)) < 0) {
+      return -errno;
+    }
+  } else {
+    value = (unsigned char)ttl;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }

@@ -132,14 +132,35 @@ CXX_C_API void turbo_datagram_close(turbo_datagram_t *d);
 
 /* ── Multicast / Broadcast ────────────────────────────────── */
 
+/**
+ * @brief Join an IPv4 or IPv6 multicast group after binding the datagram.
+ *
+ * The group address family must match the datagram kind. For UDP4, @p iface
+ * is a local IPv4 address. For UDP6, @p iface is a decimal interface index.
+ * Pass NULL or an empty string to use the default interface.
+ */
 CXX_C_API int turbo_datagram_join_multicast(turbo_datagram_t *d,
                                              const char *group,
                                              const char *iface);
+/**
+ * @brief Leave a multicast group previously joined with the same interface.
+ */
 CXX_C_API int turbo_datagram_leave_multicast(turbo_datagram_t *d,
                                               const char *group,
                                               const char *iface);
+/**
+ * @brief Enable or disable multicast loopback after binding the datagram.
+ */
 CXX_C_API int turbo_datagram_set_multicast_loop(turbo_datagram_t *d, int on);
+/**
+ * @brief Set IPv4 multicast TTL or IPv6 multicast hop limit in [0, 255].
+ */
 CXX_C_API int turbo_datagram_set_multicast_ttl(turbo_datagram_t *d, int ttl);
+/**
+ * @brief Enable or disable IPv4 UDP broadcast after binding the datagram.
+ *
+ * IPv6 has no broadcast and returns TURBO_ENOTSUP.
+ */
 CXX_C_API int turbo_datagram_set_broadcast(turbo_datagram_t *d, int on);
 
 /* ── Query ────────────────────────────────────────────────── */

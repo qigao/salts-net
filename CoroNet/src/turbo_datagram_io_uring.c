@@ -6,6 +6,7 @@
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
 
 #include "turbo_datagram_internal.h"
+#include "turbo_datagram_multicast_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_internal.h"
 #include "internal.h"
@@ -29,7 +30,6 @@
 
 typedef enum dg_uring_op_kind_e {
   DG_URING_OP_WAKE = 1,
-  DG_URING_OP_SEND,
   DG_URING_OP_RECV,
   DG_URING_OP_CLOSE
 } dg_uring_op_kind_t;
@@ -39,8 +39,6 @@ typedef struct dg_uring_op_s {
   struct dg_uring_op_s *next_inflight;
   turbo_datagram_t *dg;
   mem_buffer_t *buffer;
-  int owns_buffer;
-  size_t length;
   ssize_t result;
   struct sockaddr_storage addr;
   socklen_t addr_len;
@@ -120,9 +118,6 @@ static void dg_uring_free_inflight(dg_uring_state_t *st) {
   op = st->inflight_head;
   while (op) {
     next = op->next_inflight;
-    if (op->buffer && op->owns_buffer) {
-      mem_unref(op->buffer);
-    }
     free(op);
     op = next;
   }
@@ -273,19 +268,6 @@ static int dg_submit_command(dg_uring_state_t *st, dg_uring_op_t *op) {
   struct io_uring_sqe *sqe;
 
   switch (op->kind) {
-  case DG_URING_OP_SEND:
-    sqe = dg_get_sqe(st);
-    if (!sqe) return TURBO_ENOMEM;
-    if (op->addr_len > 0) {
-      io_uring_prep_sendto(sqe, st->fd, op->buffer->data, op->length, 0,
-                           (struct sockaddr *)&op->addr, op->addr_len);
-    } else {
-      io_uring_prep_send(sqe, st->fd, op->buffer->data, op->length, 0);
-    }
-    io_uring_sqe_set_data(sqe, op);
-    dg_uring_track_inflight(st, op);
-    return 0;
-
   case DG_URING_OP_RECV:
     sqe = dg_get_sqe(st);
     if (!sqe) return TURBO_ENOMEM;
@@ -316,7 +298,6 @@ static int dg_submit_command(dg_uring_state_t *st, dg_uring_op_t *op) {
     return 0;
 
   default:
-    free(op);
     return TURBO_EINVAL;
   }
 }
@@ -325,13 +306,39 @@ static void dg_drain_commands(dg_uring_state_t *st) {
   dg_uring_op_t *op;
 
   while ((op = dg_queue_pop(st)) != NULL) {
-    if (dg_submit_command(st, op) != 0) {
-      if (op->buffer && op->owns_buffer) {
-        mem_unref(op->buffer);
-      }
-      free(op);
+    int rc = dg_submit_command(st, op);
+    if (rc != 0) {
+      op->result = rc;
+      (void)dg_uring_post_wait(st, dg_uring_handle_completion, op, NULL);
     }
   }
+}
+
+static void dg_uring_process_cqe(dg_uring_state_t *st,
+                                 struct io_uring_cqe *cqe) {
+  dg_uring_op_t *op;
+
+  op = (dg_uring_op_t *)io_uring_cqe_get_data(cqe);
+  if (!op) {
+    io_uring_cqe_seen(&st->ring, cqe);
+    return;
+  }
+
+  op->result = cqe->res;
+  io_uring_cqe_seen(&st->ring, cqe);
+  dg_uring_untrack_inflight(st, op);
+
+  if (op->kind == DG_URING_OP_WAKE) {
+    free(op);
+    dg_drain_commands(st);
+    if (!st->stopping && st->wake_fd >= 0) {
+      (void)dg_submit_wake(st);
+      (void)io_uring_submit(&st->ring);
+    }
+    return;
+  }
+
+  (void)dg_uring_post_wait(st, dg_uring_handle_completion, op, NULL);
 }
 
 static void dg_uring_worker(void *arg) {
@@ -347,7 +354,6 @@ static void dg_uring_worker(void *arg) {
 
   for (;;) {
     struct io_uring_cqe *cqe;
-    dg_uring_op_t *op;
     int rc;
 
     dg_drain_commands(st);
@@ -365,27 +371,10 @@ static void dg_uring_worker(void *arg) {
       continue;
     }
 
-    op = (dg_uring_op_t *)io_uring_cqe_get_data(cqe);
-    if (!op) {
-      io_uring_cqe_seen(&st->ring, cqe);
-      continue;
+    dg_uring_process_cqe(st, cqe);
+    while (io_uring_peek_cqe(&st->ring, &cqe) == 0) {
+      dg_uring_process_cqe(st, cqe);
     }
-
-    op->result = cqe->res;
-    io_uring_cqe_seen(&st->ring, cqe);
-    dg_uring_untrack_inflight(st, op);
-
-    if (op->kind == DG_URING_OP_WAKE) {
-      free(op);
-      dg_drain_commands(st);
-      if (!st->stopping && st->wake_fd >= 0) {
-        dg_submit_wake(st);
-        io_uring_submit(&st->ring);
-      }
-      continue;
-    }
-
-    (void)dg_uring_post_wait(st, dg_uring_handle_completion, op, NULL);
   }
 
   (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, st->dg);
@@ -528,38 +517,24 @@ static int dg_iouring_connect(turbo_datagram_t *d, const char *host,
 static int dg_iouring_send_buffer(turbo_datagram_t *d, const struct sockaddr *dest,
                                   mem_buffer_t *buf, size_t len) {
   dg_uring_state_t *st;
-  dg_uring_op_t *op;
-  int rc;
+  ssize_t sent;
 
   st = (dg_uring_state_t *)d->backend_data;
   if (!st || !buf) {
     return TURBO_EINVAL;
   }
 
-  op = (dg_uring_op_t *)calloc(1, sizeof(*op));
-  if (!op) {
-    return TURBO_ENOMEM;
-  }
-
-  op->kind = DG_URING_OP_SEND;
-  op->dg = d;
-  op->buffer = buf;
-  op->owns_buffer = 1;
-  op->length = len;
-  mem_ref(buf);
-
   if (dest) {
-    op->addr_len = (dest->sa_family == AF_INET6)
-                       ? (socklen_t)sizeof(struct sockaddr_in6)
-                       : (socklen_t)sizeof(struct sockaddr_in);
-    memcpy(&op->addr, dest, op->addr_len);
+    socklen_t addr_len = (dest->sa_family == AF_INET6)
+                             ? (socklen_t)sizeof(struct sockaddr_in6)
+                             : (socklen_t)sizeof(struct sockaddr_in);
+    sent = sendto(st->fd, buf->data, len, 0, dest, addr_len);
+  } else {
+    sent = send(st->fd, buf->data, len, 0);
   }
 
-  rc = dg_queue_push(st, op);
-  if (rc != 0) {
-    mem_unref(buf);
-    free(op);
-    return rc;
+  if (sent < 0) {
+    return -errno;
   }
   return 0;
 }
@@ -676,18 +651,27 @@ static int dg_iouring_get_local_addr(turbo_datagram_t *d,
 static int dg_iouring_join_multicast(turbo_datagram_t *d, const char *group,
                                      const char *iface) {
   dg_uring_state_t *st;
-  struct ip_mreq mreq;
+  int rc;
 
   st = (dg_uring_state_t *)d->backend_data;
   if (!st || !group) {
     return TURBO_EINVAL;
   }
 
-  memset(&mreq, 0, sizeof(mreq));
-  mreq.imr_multiaddr.s_addr = inet_addr(group);
-  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    struct ipv6_mreq mreq6;
+    rc = turbo_datagram_prepare_ipv6_membership(group, iface, &mreq6);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq6, sizeof(mreq6)) < 0) {
+      return -errno;
+    }
+  } else {
+    struct ip_mreq mreq4;
+    rc = turbo_datagram_prepare_ipv4_membership(group, iface, &mreq4);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq4, sizeof(mreq4)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
@@ -695,18 +679,27 @@ static int dg_iouring_join_multicast(turbo_datagram_t *d, const char *group,
 static int dg_iouring_leave_multicast(turbo_datagram_t *d, const char *group,
                                       const char *iface) {
   dg_uring_state_t *st;
-  struct ip_mreq mreq;
+  int rc;
 
   st = (dg_uring_state_t *)d->backend_data;
   if (!st || !group) {
     return TURBO_EINVAL;
   }
 
-  memset(&mreq, 0, sizeof(mreq));
-  mreq.imr_multiaddr.s_addr = inet_addr(group);
-  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    struct ipv6_mreq mreq6;
+    rc = turbo_datagram_prepare_ipv6_membership(group, iface, &mreq6);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq6, sizeof(mreq6)) < 0) {
+      return -errno;
+    }
+  } else {
+    struct ip_mreq mreq4;
+    rc = turbo_datagram_prepare_ipv4_membership(group, iface, &mreq4);
+    if (rc != 0) return rc;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq4, sizeof(mreq4)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
@@ -720,9 +713,16 @@ static int dg_iouring_set_multicast_loop(turbo_datagram_t *d, int on) {
     return TURBO_EINVAL;
   }
 
-  value = on ? 1U : 0U;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    unsigned int value6 = on ? 1U : 0U;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &value6, sizeof(value6)) < 0) {
+      return -errno;
+    }
+  } else {
+    value = on ? 1U : 0U;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_LOOP, &value, sizeof(value)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
@@ -736,9 +736,16 @@ static int dg_iouring_set_multicast_ttl(turbo_datagram_t *d, int ttl) {
     return TURBO_EINVAL;
   }
 
-  value = (unsigned char)ttl;
-  if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value)) < 0) {
-    return -errno;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    int value6 = ttl;
+    if (setsockopt(st->fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &value6, sizeof(value6)) < 0) {
+      return -errno;
+    }
+  } else {
+    value = (unsigned char)ttl;
+    if (setsockopt(st->fd, IPPROTO_IP, IP_MULTICAST_TTL, &value, sizeof(value)) < 0) {
+      return -errno;
+    }
   }
   return 0;
 }
@@ -823,13 +830,6 @@ static void dg_uring_handle_completion(void *arg1, void *arg2) {
   st = (dg_uring_state_t *)op->dg->backend_data;
 
   switch (op->kind) {
-  case DG_URING_OP_SEND:
-    if (op->buffer && op->owns_buffer) {
-      mem_unref(op->buffer);
-    }
-    free(op);
-    break;
-
   case DG_URING_OP_RECV:
     dg_uring_handle_recv(op);
     break;

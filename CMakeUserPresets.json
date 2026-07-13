@@ -32,7 +32,8 @@
             "cacheVariables": {
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "VCPKG_MANIFEST_MODE": "ON",
-                "CMAKE_INSTALL_PREFIX": "/opt/turbonet",
+                "TURBO_UTILS_ROOT": "/root/dev/release",
+                "CMAKE_INSTALL_PREFIX": "/root/dev/release",
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja"
             },
             "environment": {
@@ -72,7 +73,7 @@
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux/"
+                "CMAKE_PREFIX_PATH": "/root/dev/release;${sourceDir}/vcpkg_installed/x64-linux/"
             },
             "inherits": [
                 "base-linux-dev-user",
@@ -84,7 +85,7 @@
             "displayName": "Release Build (Linux, User)",
             "cacheVariables": {
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux"
+                "CMAKE_PREFIX_PATH": "/root/dev/release;${sourceDir}/vcpkg_installed/x64-linux"
             },
             "inherits": [
                 "release-linux-ninja",
@@ -97,7 +98,7 @@
             "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
             "cacheVariables": {
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-linux",
+                "CMAKE_PREFIX_PATH": "/root/dev/release;${sourceDir}/vcpkg_installed/x64-linux",
                 "BUILD_EXAMPLES": "OFF",
                 "BUILD_TESTS": "OFF"
             },

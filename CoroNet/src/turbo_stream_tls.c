@@ -147,14 +147,9 @@ static void tls_reset_client_session_cache_internal(void) {
   s_cached_client_session_host[0] = '\0';
 }
 
-static void tls_store_client_session_for_host(const char *hostname, SSL_SESSION *session,
-                                              int retain_session) {
+static void tls_store_client_session_for_host(const char *hostname, SSL_SESSION *session) {
   if (!hostname || hostname[0] == '\0' || !session) {
     return;
-  }
-
-  if (retain_session) {
-    SSL_SESSION_up_ref(session);
   }
 
   tls_global_lock();
@@ -1154,7 +1149,7 @@ static void tls_cache_client_session(tls_state_t *st) {
     return;
   }
 
-  tls_store_client_session_for_host(st->hostname, session, 0);
+  tls_store_client_session_for_host(st->hostname, session);
 }
 
 static void tls_mark_client_handshake_start(tls_state_t *st) {
@@ -1182,7 +1177,8 @@ static int tls_on_new_client_session(SSL *ssl, SSL_SESSION *session) {
     return 1;
   }
 
-  tls_store_client_session_for_host(st->hostname, session, 1);
+  /* OpenSSL supplies the callback with one reference owned by the application. */
+  tls_store_client_session_for_host(st->hostname, session);
   return 1;
 }
 

@@ -296,7 +296,12 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
   }
 
   if (!s->co_wait) {
-    return s->status;
+    int status = s->status;
+    if (s->destroy_wait_handoff) {
+      s->destroy_wait_handoff = 0;
+      release_client(s);
+    }
+    return status;
   }
 
   coro_yield();

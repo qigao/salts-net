@@ -251,6 +251,59 @@ spec("Datagram") {
         datagram_test_destroy_context_robust(ctx);
     }
 
+    it("should configure IPv4 multicast and broadcast options") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_datagram_t *dg;
+
+        check_not_null(ctx);
+        dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
+        check_not_null(dg);
+        check_int_eq(turbo_datagram_bind(dg, "0.0.0.0", 0), 0);
+
+        check_int_eq(turbo_datagram_set_multicast_loop(dg, 0), 0);
+        check_int_eq(turbo_datagram_set_multicast_loop(dg, 1), 0);
+        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 0), 0);
+        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 255), 0);
+        check_int_eq(turbo_datagram_set_multicast_ttl(dg, -1), TURBO_ERANGE);
+        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 256), TURBO_ERANGE);
+        check_int_eq(turbo_datagram_set_broadcast(dg, 1), 0);
+        check_int_eq(turbo_datagram_set_broadcast(dg, 0), 0);
+
+        check_int_eq(turbo_datagram_join_multicast(dg, "invalid", NULL), TURBO_EINVAL);
+        check_int_eq(turbo_datagram_join_multicast(dg, "127.0.0.1", NULL), TURBO_EINVAL);
+        check_int_eq(turbo_datagram_join_multicast(dg, "239.255.0.1", "invalid"),
+                     TURBO_EINVAL);
+        check_int_eq(turbo_datagram_leave_multicast(dg, "invalid", NULL), TURBO_EINVAL);
+
+        turbo_datagram_destroy(dg);
+        datagram_test_destroy_context_robust(ctx);
+    }
+
+    it("should configure IPv6 multicast options") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_datagram_t *dg;
+
+        check_not_null(ctx);
+        dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP6);
+        check_not_null(dg);
+        check_int_eq(turbo_datagram_bind(dg, "::1", 0), 0);
+
+        check_int_eq(turbo_datagram_set_multicast_loop(dg, 0), 0);
+        check_int_eq(turbo_datagram_set_multicast_loop(dg, 1), 0);
+        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 1), 0);
+        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 256), TURBO_ERANGE);
+        check_int_eq(turbo_datagram_set_broadcast(dg, 1), TURBO_ENOTSUP);
+
+        check_int_eq(turbo_datagram_join_multicast(dg, "127.0.0.1", NULL), TURBO_EINVAL);
+        check_int_eq(turbo_datagram_join_multicast(dg, "::1", NULL), TURBO_EINVAL);
+        check_int_eq(turbo_datagram_join_multicast(dg, "ff02::1", "not-an-index"),
+                     TURBO_EINVAL);
+        check_int_eq(turbo_datagram_leave_multicast(dg, "invalid", NULL), TURBO_EINVAL);
+
+        turbo_datagram_destroy(dg);
+        datagram_test_destroy_context_robust(ctx);
+    }
+
     it("should honor reuse_port for udp listener binds") {
         coro_context_t *ctx = coro_context_create(NULL);
         coro_socket_t *server1 = NULL;
@@ -534,7 +587,9 @@ spec("Datagram") {
 
         done_flags[0] = &left_recv.done;
         done_flags[1] = &right_recv.done;
-        check_int_eq(datagram_test_run_until_all(ctx, done_flags, 2, 3000), 0);
+        (void)datagram_test_run_until_all(ctx, done_flags, 2, 3000);
+        check_int_eq(left_recv.done, 1);
+        check_int_eq(right_recv.done, 1);
 
         check_int_eq(left_recv.rc, 0);
         check_int_eq(right_recv.rc, 0);
@@ -610,7 +665,11 @@ spec("Datagram") {
         done_flags[1] = &right_recv.done;
         done_flags[2] = &left_send.done;
         done_flags[3] = &right_send.done;
-        check_int_eq(datagram_test_run_until_all(ctx, done_flags, 4, 3000), 0);
+        (void)datagram_test_run_until_all(ctx, done_flags, 4, 3000);
+        check_int_eq(left_send.done, 1);
+        check_int_eq(right_send.done, 1);
+        check_int_eq(left_recv.done, 1);
+        check_int_eq(right_recv.done, 1);
 
         check_int_eq(left_send.rc, 0);
         check_int_eq(right_send.rc, 0);

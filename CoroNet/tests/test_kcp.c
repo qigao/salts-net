@@ -489,7 +489,7 @@ spec("KCP Transport") {
         check_int_eq(state.ok, 1);
 
         coro_socket_destroy(server);
-        coro_context_destroy(ctx);
+        kcp_test_destroy_context_robust(ctx);
     }
 
     it("should propagate invalid udp backend through kcp socket bind") {

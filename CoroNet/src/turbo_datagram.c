@@ -336,28 +336,35 @@ void turbo_datagram_close(turbo_datagram_t *d) {
 
 int turbo_datagram_join_multicast(turbo_datagram_t *d, const char *group,
                                    const char *iface) {
-  if (!d) return TURBO_EINVAL;
+  if (!d || !group || group[0] == '\0') return TURBO_EINVAL;
+  if (!d->ops->join_multicast) return TURBO_ENOTSUP;
   return d->ops->join_multicast(d, group, iface);
 }
 
 int turbo_datagram_leave_multicast(turbo_datagram_t *d, const char *group,
                                     const char *iface) {
-  if (!d) return TURBO_EINVAL;
+  if (!d || !group || group[0] == '\0') return TURBO_EINVAL;
+  if (!d->ops->leave_multicast) return TURBO_ENOTSUP;
   return d->ops->leave_multicast(d, group, iface);
 }
 
 int turbo_datagram_set_multicast_loop(turbo_datagram_t *d, int on) {
   if (!d) return TURBO_EINVAL;
+  if (!d->ops->set_multicast_loop) return TURBO_ENOTSUP;
   return d->ops->set_multicast_loop(d, on);
 }
 
 int turbo_datagram_set_multicast_ttl(turbo_datagram_t *d, int ttl) {
   if (!d) return TURBO_EINVAL;
+  if (ttl < 0 || ttl > 255) return TURBO_ERANGE;
+  if (!d->ops->set_multicast_ttl) return TURBO_ENOTSUP;
   return d->ops->set_multicast_ttl(d, ttl);
 }
 
 int turbo_datagram_set_broadcast(turbo_datagram_t *d, int on) {
   if (!d) return TURBO_EINVAL;
+  if (d->kind == TURBO_DATAGRAM_UDP6) return TURBO_ENOTSUP;
+  if (!d->ops->set_broadcast) return TURBO_ENOTSUP;
   return d->ops->set_broadcast(d, on);
 }
 

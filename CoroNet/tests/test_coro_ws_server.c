@@ -709,6 +709,12 @@ spec("Coro WebSocket Server") {
   }
 #endif
 
+  after_all() {
+    turbo_stream_tls_reset_client_session_cache();
+    turbo_stream_tls_global_cleanup();
+    turbo_stream_tls_thread_cleanup();
+  }
+
   it("should hand handlers a fully-open WebSocket socket") {
     ws_server_run_case(0, NULL);
   }

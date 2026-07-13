@@ -393,13 +393,16 @@ CXX_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *l
                                    struct sockaddr_storage *addr);
 
 /**
- * @brief Join an IPv4 multicast group on a UDP socket or UDP listener.
+ * @brief Join an IPv4 or IPv6 multicast group on a bound UDP socket or listener.
+ *
+ * For IPv4, iface is a local address. For IPv6, iface is a decimal interface
+ * index. Pass NULL or an empty string to use the default interface.
  */
 CXX_C_API int coro_socket_join_multicast(coro_socket_t *socket, const char *group,
                                          const char *iface);
 
 /**
- * @brief Leave an IPv4 multicast group on a UDP socket or UDP listener.
+ * @brief Leave an IPv4 or IPv6 multicast group on a UDP socket or listener.
  */
 CXX_C_API int coro_socket_leave_multicast(coro_socket_t *socket, const char *group,
                                           const char *iface);
@@ -410,12 +413,14 @@ CXX_C_API int coro_socket_leave_multicast(coro_socket_t *socket, const char *gro
 CXX_C_API int coro_socket_set_multicast_loop(coro_socket_t *socket, int on);
 
 /**
- * @brief Set multicast TTL on a UDP socket or UDP listener.
+ * @brief Set IPv4 multicast TTL or IPv6 hop limit in [0, 255].
  */
 CXX_C_API int coro_socket_set_multicast_ttl(coro_socket_t *socket, int ttl);
 
 /**
- * @brief Enable or disable UDP broadcast on a UDP socket or UDP listener.
+ * @brief Enable or disable IPv4 UDP broadcast on a UDP socket or listener.
+ *
+ * IPv6 has no broadcast and returns TURBO_ENOTSUP.
  */
 CXX_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
 

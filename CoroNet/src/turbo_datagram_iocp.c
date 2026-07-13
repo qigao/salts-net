@@ -8,6 +8,7 @@
 #ifdef _WIN32
 
 #include "turbo_datagram_internal.h"
+#include "turbo_datagram_multicast_internal.h"
 #include "turbo_iocp_pool.h"
 #include "turbo_coro_internal.h"
 #include "turbo_thread.h"
@@ -345,26 +346,44 @@ static int dg_iocp_get_local_addr(turbo_datagram_t *d, struct sockaddr_storage *
 static int dg_iocp_join_multicast(turbo_datagram_t *d, const char *group, const char *iface) {
   if (!d || !d->backend_data || !group) return TURBO_EINVAL;
   dg_iocp_state_t *st = (dg_iocp_state_t *)d->backend_data;
-  struct ip_mreq mreq;
-  memset(&mreq, 0, sizeof(mreq));
-  mreq.imr_multiaddr.s_addr = inet_addr(group);
-  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
-  if (setsockopt(st->socket, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-                 (const char *)&mreq, sizeof(mreq)) == SOCKET_ERROR)
-    return -(int)WSAGetLastError();
+  int rc;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    struct ipv6_mreq mreq6;
+    rc = turbo_datagram_prepare_ipv6_membership(group, iface, &mreq6);
+    if (rc != 0) return rc;
+    if (setsockopt(st->socket, IPPROTO_IPV6, IPV6_JOIN_GROUP,
+                   (const char *)&mreq6, sizeof(mreq6)) == SOCKET_ERROR)
+      return -(int)WSAGetLastError();
+  } else {
+    struct ip_mreq mreq4;
+    rc = turbo_datagram_prepare_ipv4_membership(group, iface, &mreq4);
+    if (rc != 0) return rc;
+    if (setsockopt(st->socket, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+                   (const char *)&mreq4, sizeof(mreq4)) == SOCKET_ERROR)
+      return -(int)WSAGetLastError();
+  }
   return 0;
 }
 
 static int dg_iocp_leave_multicast(turbo_datagram_t *d, const char *group, const char *iface) {
   if (!d || !d->backend_data || !group) return TURBO_EINVAL;
   dg_iocp_state_t *st = (dg_iocp_state_t *)d->backend_data;
-  struct ip_mreq mreq;
-  memset(&mreq, 0, sizeof(mreq));
-  mreq.imr_multiaddr.s_addr = inet_addr(group);
-  mreq.imr_interface.s_addr = (iface && iface[0]) ? inet_addr(iface) : INADDR_ANY;
-  if (setsockopt(st->socket, IPPROTO_IP, IP_DROP_MEMBERSHIP,
-                 (const char *)&mreq, sizeof(mreq)) == SOCKET_ERROR)
-    return -(int)WSAGetLastError();
+  int rc;
+  if (d->kind == TURBO_DATAGRAM_UDP6) {
+    struct ipv6_mreq mreq6;
+    rc = turbo_datagram_prepare_ipv6_membership(group, iface, &mreq6);
+    if (rc != 0) return rc;
+    if (setsockopt(st->socket, IPPROTO_IPV6, IPV6_LEAVE_GROUP,
+                   (const char *)&mreq6, sizeof(mreq6)) == SOCKET_ERROR)
+      return -(int)WSAGetLastError();
+  } else {
+    struct ip_mreq mreq4;
+    rc = turbo_datagram_prepare_ipv4_membership(group, iface, &mreq4);
+    if (rc != 0) return rc;
+    if (setsockopt(st->socket, IPPROTO_IP, IP_DROP_MEMBERSHIP,
+                   (const char *)&mreq4, sizeof(mreq4)) == SOCKET_ERROR)
+      return -(int)WSAGetLastError();
+  }
   return 0;
 }
 
@@ -372,8 +391,9 @@ static int dg_iocp_set_multicast_loop(turbo_datagram_t *d, int on) {
   if (!d || !d->backend_data) return TURBO_EINVAL;
   dg_iocp_state_t *st = (dg_iocp_state_t *)d->backend_data;
   DWORD val = on ? 1 : 0;
-  if (setsockopt(st->socket, IPPROTO_IP, IP_MULTICAST_LOOP,
-                 (const char *)&val, sizeof(val)) == SOCKET_ERROR)
+  int level = d->kind == TURBO_DATAGRAM_UDP6 ? IPPROTO_IPV6 : IPPROTO_IP;
+  int option = d->kind == TURBO_DATAGRAM_UDP6 ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP;
+  if (setsockopt(st->socket, level, option, (const char *)&val, sizeof(val)) == SOCKET_ERROR)
     return -(int)WSAGetLastError();
   return 0;
 }
@@ -382,8 +402,9 @@ static int dg_iocp_set_multicast_ttl(turbo_datagram_t *d, int ttl) {
   if (!d || !d->backend_data) return TURBO_EINVAL;
   dg_iocp_state_t *st = (dg_iocp_state_t *)d->backend_data;
   DWORD val = (DWORD)ttl;
-  if (setsockopt(st->socket, IPPROTO_IP, IP_MULTICAST_TTL,
-                 (const char *)&val, sizeof(val)) == SOCKET_ERROR)
+  int level = d->kind == TURBO_DATAGRAM_UDP6 ? IPPROTO_IPV6 : IPPROTO_IP;
+  int option = d->kind == TURBO_DATAGRAM_UDP6 ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL;
+  if (setsockopt(st->socket, level, option, (const char *)&val, sizeof(val)) == SOCKET_ERROR)
     return -(int)WSAGetLastError();
   return 0;
 }

@@ -58,7 +58,7 @@ typedef struct {
 
 #include <sys/eventfd.h>
 
-typedef struct {
+typedef struct stream_epoll_state_s {
     void *owner;         /* turbo_stream_t or turbo_stream_listener_t */
     coro_context_t *ctx;
     int fd;
@@ -74,6 +74,7 @@ typedef struct {
     int cleanup_posted;
     int close_fd_on_cleanup;
     int ctx_ref_acquired;
+    struct stream_epoll_state_s *reactor_free_next;
     
     /* Event Notification Ring (SPSC from worker to main) */
     ring_spsc_t event_ring;
@@ -113,6 +114,7 @@ typedef struct {
     reactor_cmd_t cmds[4096];
     size_t cmd_head;
     size_t cmd_tail;
+    stream_epoll_state_t *deferred_free_head;
 } stream_epoll_reactor_t;
 
 static stream_epoll_reactor_t g_reactor;
@@ -495,6 +497,26 @@ static void epoll_reactor_close_fd(stream_epoll_state_t *st) {
     }
 }
 
+static void epoll_reactor_defer_free(stream_epoll_state_t *st) {
+    if (!st) {
+        return;
+    }
+    st->reactor_free_next = g_reactor.deferred_free_head;
+    g_reactor.deferred_free_head = st;
+}
+
+static void epoll_reactor_drain_deferred_frees(void) {
+    stream_epoll_state_t *st = g_reactor.deferred_free_head;
+
+    g_reactor.deferred_free_head = NULL;
+    while (st) {
+        stream_epoll_state_t *next = st->reactor_free_next;
+        st->reactor_free_next = NULL;
+        epoll_destroy_state(st);
+        st = next;
+    }
+}
+
 static void epoll_reactor_process_commands(void) {
     reactor_cmd_t cmd;
 
@@ -554,7 +576,7 @@ static void epoll_reactor_process_commands(void) {
                 break;
 
             case REACTOR_CMD_FREE:
-                epoll_destroy_state(st);
+                epoll_reactor_defer_free(st);
                 break;
 
             default:
@@ -704,7 +726,10 @@ static void stream_epoll_reactor_worker(void *arg) {
                 stream_epoll_handle_stream_event(st, events[i].events);
             }
         }
+        /* epoll may return the same state more than once in one event batch. */
+        epoll_reactor_drain_deferred_frees();
     }
+    epoll_reactor_drain_deferred_frees();
 }
 
 static void epoll_reactor_init_once(void) {
@@ -907,7 +932,7 @@ static void epoll_stream_cleanup_task(void *arg1, void *arg2) {
     if (s) s->backend_data = NULL;
     if (s) turbo_stream_finalize_close(s);
     epoll_release_context_ref(st);
-    epoll_destroy_state(st);
+    epoll_reactor_free_state(st);
 }
 
 static void epoll_listener_cleanup_task(void *arg1, void *arg2) {
@@ -915,7 +940,7 @@ static void epoll_listener_cleanup_task(void *arg1, void *arg2) {
     turbo_stream_listener_t *l = (turbo_stream_listener_t *)arg2;
     if (l) turbo_stream_listener_notify_backend_released(l);
     epoll_release_context_ref(st);
-    epoll_destroy_state(st);
+    epoll_reactor_free_state(st);
 }
 
 static int epoll_init(turbo_stream_t *s) {

@@ -227,6 +227,22 @@ struct coro_transport_ops_s {
 typedef struct turbo_tls_context_s turbo_tls_context_t;
 typedef struct turbo_udp_s turbo_udp_t;
 typedef struct turbo_tls_client_s turbo_tls_client_t;
+typedef struct coro_server_task_s coro_server_task_t;
+
+enum {
+  CORO_PROXY_HOST_CAPACITY = 256,
+  CORO_PROXY_USERNAME_CAPACITY = 256,
+  CORO_PROXY_PASSWORD_CAPACITY = 256,
+};
+
+typedef struct coro_proxy_settings_s {
+  coro_proxy_type_t type;
+  uint16_t port;
+  int auth_enabled;
+  char host[CORO_PROXY_HOST_CAPACITY];
+  char username[CORO_PROXY_USERNAME_CAPACITY];
+  char password[CORO_PROXY_PASSWORD_CAPACITY];
+} coro_proxy_settings_t;
 
 struct coro_socket_s {
   /* ── Core ──────────────────────────────────────────────── */
@@ -250,6 +266,7 @@ struct coro_socket_s {
   char *tls_key_file;             /**< Optional client private key */
   char *tls_key_password;         /**< Optional client key password */
   char *tls_cipher_list;          /**< Optional OpenSSL cipher list */
+  coro_proxy_settings_t proxy;   /**< Copied outbound proxy configuration */
 
   /* ── Server fields (for listening sockets) ────────────── */
   coro_socket_t *listener;                           /**< Listening socket (server mode) */
@@ -257,6 +274,10 @@ struct coro_socket_s {
   void *handler_arg;                                 /**< Handler argument */
   coro_handler_closed_fn handler_closed;             /**< Accepted-socket close completion callback */
   void *handler_closed_arg;                          /**< User data for handler_closed */
+  coro_server_task_t *server_tasks;                   /**< Accepted tasks owned by this server */
+  size_t server_task_count;                          /**< Number of accepted tasks still running */
+  int accept_loop_active;                            /**< 1 while the managed accept coroutine runs */
+  int server_stopping;                               /**< 1 after server stop begins */
   int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
   turbo_tcp_keepalive_config_t tcp_keepalive_config; /**< TCP keepalive options for TCP-backed sockets */
   int tcp_keepalive_configured;                      /**< 1 = apply tcp_keepalive_config */
@@ -539,6 +560,16 @@ void coro_socket_release_destroy_wait_handoff(coro_socket_t *s);
 void coro_socket_release_destroy_wait_guard(coro_socket_t *s);
 int coro_socket_apply_stream_options(coro_socket_t *s);
 int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t *parent);
+void coro_socket_configure_transport_internal(coro_socket_t *s, turbo_transport_t transport,
+                                              int connected);
+int coro_socket_connect_direct_internal(coro_socket_t *s, const char *connect_host, int port,
+                                        const char *request_host);
+int coro_socket_send_raw_internal(coro_socket_t *s, const char *data, size_t len);
+int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len);
+int coro_socket_proxy_connect_internal(coro_socket_t *s, const char *connect_host, int port,
+                                       const char *request_host);
+int coro_proxy_settings_copy(coro_proxy_settings_t *out,
+                             const coro_proxy_config_t *config);
 
 /**
  * @brief Resume a specific coroutine in the given context.

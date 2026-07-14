@@ -13,6 +13,7 @@
 #include <unistd.h>
 #endif
 #include "ice/turbo_stun.h"
+#include <platform.h>
 
 #include <fmt.h>
 #include <stdio.h>
@@ -49,6 +50,29 @@ static uint32_t read_u32_be(const uint8_t *buf) {
   return (uint32_t)((buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]);
 }
 
+static int stun_attribute_next(const uint8_t **attr_ptr, size_t *remaining,
+                               uint16_t *type, const uint8_t **value, uint16_t *length) {
+  size_t padded_length;
+
+  if (!attr_ptr || !*attr_ptr || !remaining || !type || !value || !length)
+    return -1;
+  if (*remaining == 0)
+    return 0;
+  if (*remaining < 4)
+    return -1;
+
+  *type = read_u16_be(*attr_ptr);
+  *length = read_u16_be(*attr_ptr + 2);
+  padded_length = ((size_t)*length + 3u) & ~(size_t)3u;
+  if (*remaining < 4u + padded_length)
+    return -1;
+
+  *value = *attr_ptr + 4;
+  *attr_ptr += 4u + padded_length;
+  *remaining -= 4u + padded_length;
+  return 1;
+}
+
 static uint32_t stun_crc32(const uint8_t *data, size_t len) {
   uint32_t crc = 0xFFFFFFFFu;
 
@@ -67,10 +91,10 @@ static uint32_t stun_crc32(const uint8_t *data, size_t len) {
  * Transaction ID
  * ============================================================================ */
 
-void stun_generate_transaction_id(stun_transaction_id_t *txn_id) {
-  for (int i = 0; i < STUN_TRANSACTION_ID_LEN; i++) {
-    txn_id->id[i] = (uint8_t)(rand() & 0xFF);
-  }
+int stun_generate_transaction_id(stun_transaction_id_t *txn_id) {
+  if (!txn_id)
+    return -1;
+  return turbo_secure_random(txn_id->id, sizeof(txn_id->id));
 }
 
 static int txn_id_matches(const stun_transaction_id_t *a, const stun_transaction_id_t *b) {
@@ -82,7 +106,19 @@ static int txn_id_matches(const stun_transaction_id_t *a, const stun_transaction
  * ============================================================================ */
 
 size_t stun_build_binding_request(uint8_t *buffer, const stun_transaction_id_t *txn_id) {
+  if (!buffer || !txn_id)
+    return 0;
   write_u16_be(buffer, STUN_MSG_BINDING_REQUEST);
+  write_u16_be(buffer + 2, 0);
+  write_u32_be(buffer + 4, STUN_MAGIC_COOKIE);
+  memcpy(buffer + 8, txn_id->id, STUN_TRANSACTION_ID_LEN);
+  return STUN_HEADER_SIZE;
+}
+
+size_t stun_build_binding_indication(uint8_t *buffer, const stun_transaction_id_t *txn_id) {
+  if (!buffer || !txn_id)
+    return 0;
+  write_u16_be(buffer, STUN_MSG_BINDING_INDICATION);
   write_u16_be(buffer + 2, 0);
   write_u32_be(buffer + 4, STUN_MAGIC_COOKIE);
   memcpy(buffer + 8, txn_id->id, STUN_TRANSACTION_ID_LEN);
@@ -122,12 +158,17 @@ size_t stun_build_binding_response(uint8_t *buffer, const stun_transaction_id_t 
  * ============================================================================ */
 
 int stun_is_stun_message(const uint8_t *data, size_t len) {
-  if (len < STUN_HEADER_SIZE)
+  uint16_t message_length;
+
+  if (!data || len < STUN_HEADER_SIZE)
     return 0;
   uint32_t cookie = read_u32_be(data + 4);
   if (cookie != STUN_MAGIC_COOKIE)
     return 0;
   if ((data[0] & 0xC0) != 0)
+    return 0;
+  message_length = read_u16_be(data + 2);
+  if ((message_length & 3u) != 0 || len < STUN_HEADER_SIZE + (size_t)message_length)
     return 0;
   return 1;
 }
@@ -160,21 +201,22 @@ int stun_parse_binding_response(const uint8_t *data, size_t len,
       return -6;
   }
 
-  if (len < (size_t)(STUN_HEADER_SIZE + msg_len))
+  if ((msg_len & 3u) != 0 || len < (size_t)(STUN_HEADER_SIZE + msg_len))
     return -7;
 
   const uint8_t *attr_ptr = data + STUN_HEADER_SIZE;
   size_t remaining = msg_len;
   int found_mapped = 0;
 
-  while (remaining >= 4) {
-    uint16_t attr_type = read_u16_be(attr_ptr);
-    uint16_t attr_len = read_u16_be(attr_ptr + 2);
-
-    if (remaining < (size_t)(4 + attr_len))
+  for (;;) {
+    uint16_t attr_type;
+    uint16_t attr_len;
+    const uint8_t *attr_value;
+    int next = stun_attribute_next(&attr_ptr, &remaining, &attr_type, &attr_value, &attr_len);
+    if (next == 0)
       break;
-
-    const uint8_t *attr_value = attr_ptr + 4;
+    if (next < 0)
+      return -7;
 
     if (attr_type == STUN_ATTR_XOR_MAPPED_ADDRESS && attr_len >= 8) {
       uint8_t family = attr_value[1];
@@ -220,9 +262,6 @@ int stun_parse_binding_response(const uint8_t *data, size_t len,
       }
     }
 
-    size_t padded_len = (attr_len + 3) & ~3;
-    attr_ptr += 4 + padded_len;
-    remaining -= 4 + padded_len;
   }
 
   return found_mapped ? 0 : -8;
@@ -258,7 +297,10 @@ int stun_binding_request(coro_context_t *ctx,
 
   for (int attempt = 0; attempt < retries; attempt++) {
     stun_transaction_id_t txn_id;
-    stun_generate_transaction_id(&txn_id);
+    if (stun_generate_transaction_id(&txn_id) != 0) {
+      result = -5;
+      break;
+    }
 
     uint8_t buffer[STUN_HEADER_SIZE];
     size_t len = stun_build_binding_request(buffer, &txn_id);
@@ -449,29 +491,29 @@ int stun_validate_message_integrity(const uint8_t *data, size_t len, const char 
     return -1;
 
   uint16_t msg_len = read_u16_be(data + 2);
-  if (len < (size_t)(STUN_HEADER_SIZE + msg_len))
+  if ((msg_len & 3u) != 0 || len < (size_t)(STUN_HEADER_SIZE + msg_len))
     return -2;
 
   const uint8_t *attr_ptr = data + STUN_HEADER_SIZE;
   size_t remaining = msg_len;
   const uint8_t *mi_attr = NULL;
 
-  while (remaining >= 4) {
-    uint16_t attr_type = read_u16_be(attr_ptr);
-    uint16_t attr_len = read_u16_be(attr_ptr + 2);
-    size_t padded_len = (attr_len + 3) & ~3;
+  for (;;) {
+    uint16_t attr_type;
+    uint16_t attr_len;
+    const uint8_t *attr_value;
+    int next = stun_attribute_next(&attr_ptr, &remaining, &attr_type, &attr_value, &attr_len);
+    if (next == 0)
+      break;
+    if (next < 0)
+      return -3;
 
     if (attr_type == STUN_ATTR_MESSAGE_INTEGRITY) {
       if (attr_len != STUN_MESSAGE_INTEGRITY_LEN)
         return -3;
-      mi_attr = attr_ptr + 4;
+      mi_attr = attr_value;
       break;
     }
-
-    if (remaining < 4 + padded_len)
-      break;
-    attr_ptr += 4 + padded_len;
-    remaining -= 4 + padded_len;
   }
 
   if (!mi_attr)
@@ -506,7 +548,10 @@ int stun_validate_message_integrity(const uint8_t *data, size_t len, const char 
 
 int stun_parse_ice_request(const uint8_t *data, size_t len, char *username_out,
                            uint32_t *priority_out, int *use_candidate_out) {
-  if (!data || len < STUN_HEADER_SIZE)
+  int username_found = 0;
+  int priority_found = 0;
+
+  if (!data || !stun_is_stun_message(data, len))
     return -1;
 
   uint16_t msg_type = read_u16_be(data);
@@ -514,7 +559,7 @@ int stun_parse_ice_request(const uint8_t *data, size_t len, char *username_out,
     return -2;
 
   uint16_t msg_len = read_u16_be(data + 2);
-  if (len < (size_t)(STUN_HEADER_SIZE + msg_len))
+  if ((msg_len & 3u) != 0 || len < (size_t)(STUN_HEADER_SIZE + msg_len))
     return -3;
 
   if (username_out)
@@ -527,46 +572,50 @@ int stun_parse_ice_request(const uint8_t *data, size_t len, char *username_out,
   const uint8_t *attr_ptr = data + STUN_HEADER_SIZE;
   size_t remaining = msg_len;
 
-  while (remaining >= 4) {
-    uint16_t attr_type = read_u16_be(attr_ptr);
-    uint16_t attr_len = read_u16_be(attr_ptr + 2);
-    size_t padded_len = (attr_len + 3) & ~3;
-
-    if (remaining < 4 + padded_len)
+  for (;;) {
+    uint16_t attr_type;
+    uint16_t attr_len;
+    const uint8_t *attr_value;
+    int next = stun_attribute_next(&attr_ptr, &remaining, &attr_type, &attr_value, &attr_len);
+    if (next == 0)
       break;
-
-    const uint8_t *attr_value = attr_ptr + 4;
+    if (next < 0)
+      return -3;
 
     switch (attr_type) {
     case STUN_ATTR_USERNAME:
-      if (username_out && attr_len < 256) {
-        memcpy(username_out, attr_value, attr_len);
-        username_out[attr_len] = '\0';
+      if (attr_len == 0 || attr_len >= 256)
+        return -4;
+      username_found = 1;
+      if (username_out) {
+          memcpy(username_out, attr_value, attr_len);
+          username_out[attr_len] = '\0';
       }
       break;
     case STUN_ATTR_PRIORITY:
-      if (priority_out && attr_len >= 4)
-        *priority_out = read_u32_be(attr_value);
+      if (attr_len != 4)
+        return -4;
+      priority_found = 1;
+      if (priority_out)
+          *priority_out = read_u32_be(attr_value);
       break;
     case STUN_ATTR_USE_CANDIDATE:
       if (use_candidate_out)
         *use_candidate_out = 1;
       break;
     case STUN_ATTR_MESSAGE_INTEGRITY:
-      return 0;
+      return username_found && priority_found ? 0 : -4;
     default:
       break;
     }
 
-    attr_ptr += 4 + padded_len;
-    remaining -= 4 + padded_len;
   }
 
-  return 0;
+  return -4;
 }
 
 int stun_get_error_code(const uint8_t *data, size_t len) {
-  if (!data || len < STUN_HEADER_SIZE)
+  if (!data || !stun_is_stun_message(data, len))
     return 0;
 
   uint16_t msg_type = read_u16_be(data);
@@ -574,27 +623,25 @@ int stun_get_error_code(const uint8_t *data, size_t len) {
     return 0;
 
   uint16_t msg_len = read_u16_be(data + 2);
-  if (len < (size_t)(STUN_HEADER_SIZE + msg_len))
+  if ((msg_len & 3u) != 0 || len < (size_t)(STUN_HEADER_SIZE + msg_len))
     return 0;
 
   const uint8_t *attr_ptr = data + STUN_HEADER_SIZE;
   size_t remaining = msg_len;
 
-  while (remaining >= 4) {
-    uint16_t attr_type = read_u16_be(attr_ptr);
-    uint16_t attr_len = read_u16_be(attr_ptr + 2);
-    size_t padded_len = (attr_len + 3) & ~3;
+  for (;;) {
+    uint16_t attr_type;
+    uint16_t attr_len;
+    const uint8_t *attr_value;
+    int next = stun_attribute_next(&attr_ptr, &remaining, &attr_type, &attr_value, &attr_len);
+    if (next <= 0)
+      break;
 
     if (attr_type == STUN_ATTR_ERROR_CODE && attr_len >= 4) {
-      int error_class = attr_ptr[6] & 0x07;
-      int error_number = attr_ptr[7];
+      int error_class = attr_value[2] & 0x07;
+      int error_number = attr_value[3];
       return error_class * 100 + error_number;
     }
-
-    if (remaining < 4 + padded_len)
-      break;
-    attr_ptr += 4 + padded_len;
-    remaining -= 4 + padded_len;
   }
 
   return 0;

@@ -58,6 +58,16 @@ void *coro_context_native_loop(const coro_context_t *ctx) { return ctx ? (void *
 
 /* ── Forward declarations ───────────────────────────────────── */
 static void cleanup_done_tasks(coro_context_t *ctx);
+
+static void drain_platform_completions(coro_context_t *ctx) {
+#ifdef _WIN32
+  if (ctx && ctx->iocp_pool) {
+    (void)iocp_pool_drain(ctx->iocp_pool);
+  }
+#else
+  (void)ctx;
+#endif
+}
 static void remove_task_from_context(coro_context_t *ctx, coro_task_t *task);
 static int register_task_with_context(coro_context_t *ctx, coro_task_t *task);
 static void destroy_task_now(coro_task_t *task);
@@ -202,13 +212,15 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
         break;
       }
 
-      /* If we have ready coros, don't block. If not, wait for wake. */
-      if (stop_requested || has_ready) {
+      /* A post may arrive before run() enters poll, so the wake alone cannot
+       * guarantee progress. Observe the queue before choosing an infinite wait. */
+      if (stop_requested || has_ready || !post_queue_empty(ctx)) {
         turbo_loop_poll(ctx->loop, 2, 0); /* NOWAIT */
       } else {
         turbo_loop_poll(ctx->loop, -1, 1); /* block until wake */
       }
 
+      drain_platform_completions(ctx);
       drain_post_queue(ctx);
 
       if (ctx->scheduler) {
@@ -239,6 +251,7 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
       turbo_loop_poll(ctx->loop, 1, 1); /* idle ONCE: wait briefly for posted I/O */
     }
 
+    drain_platform_completions(ctx);
     drain_post_queue(ctx);
 
     if (ctx->scheduler) {

@@ -11,8 +11,8 @@ spec("stun") {
     it("should generate unique transaction IDs") {
         stun_transaction_id_t id1, id2;
 
-        stun_generate_transaction_id(&id1);
-        stun_generate_transaction_id(&id2);
+        check_int_eq(stun_generate_transaction_id(&id1), 0);
+        check_int_eq(stun_generate_transaction_id(&id2), 0);
 
         /* IDs should be different across calls */
         check(memcmp(id1.id, id2.id, STUN_TRANSACTION_ID_LEN) != 0);
@@ -115,6 +115,29 @@ spec("stun") {
   }
 
   describe("STUN Response Parsing") {
+    it("should reject an attribute whose padded value exceeds the packet") {
+        uint8_t response[25] = {
+            0x01, 0x01, 0x00, 0x08, 0x21, 0x12, 0xA4, 0x42,
+            0,0,0,0,0,0,0,0,0,0,0,0,
+            0x00, 0x20, 0x00, 0x01, 0x00
+        };
+        stun_transaction_id_t txn = {{0}};
+        stun_mapped_address_t mapped;
+
+        check(!stun_is_stun_message(response, sizeof(response)));
+        check(stun_parse_binding_response(response, sizeof(response), &txn, &mapped) != 0);
+    }
+
+    it("should reject truncated MESSAGE-INTEGRITY attributes") {
+        uint8_t request[28] = {
+            0x00, 0x01, 0x00, 0x18, 0x21, 0x12, 0xA4, 0x42,
+            0,0,0,0,0,0,0,0,0,0,0,0,
+            0x00, 0x08, 0x00, 0x14, 0,0,0,0
+        };
+        check(!stun_is_stun_message(request, sizeof(request)));
+        check(stun_validate_message_integrity(request, sizeof(request), "secret") != 0);
+    }
+
     it("should parse an IPv4 XOR-MAPPED-ADDRESS") {
         /* Simulated response: port 54321, ip 203.0.113.1 */
         /* Cookie: 0x2112A442 */
@@ -147,7 +170,7 @@ spec("stun") {
     }
 
     it("should handle transaction ID mismatch") {
-        uint8_t response[20] = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
+        uint8_t response[20] = {1, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
         stun_transaction_id_t expected, actual;
         memset(expected.id, 0xAA, 12);
         memset(actual.id, 0xBB, 12);
@@ -155,7 +178,7 @@ spec("stun") {
 
         stun_mapped_address_t mapped;
         int rc = stun_parse_binding_response(response, 20, &expected, &mapped);
-        check_int_eq(rc, -5); /* Transaction ID mismatch */
+        check_int_eq(rc, -6); /* Transaction ID mismatch */
     }
   }
 
@@ -222,6 +245,22 @@ spec("stun") {
         check_str_eq(username, "remote:local");
         check_int_eq(priority, 888);
         check_int_eq(use_candidate, 1);
+    }
+
+    it("should reject ICE requests without PRIORITY") {
+        uint8_t request[52] = {
+            0x00, 0x01, 0x00, 0x20, 0x21, 0x12, 0xA4, 0x42,
+            0,0,0,0,0,0,0,0,0,0,0,0,
+            0x00, 0x06, 0x00, 0x03, 'a', ':', 'b', 0,
+            0x00, 0x08, 0x00, 0x14,
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+        };
+        char username[256];
+        uint32_t priority;
+        int use_candidate;
+
+        check(stun_parse_ice_request(request, sizeof(request), username,
+                                     &priority, &use_candidate) != 0);
     }
   }
 

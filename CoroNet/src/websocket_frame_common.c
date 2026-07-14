@@ -2,8 +2,8 @@
 // WebSocket Common Frame Utilities
 // ============================================================================
 
-#include "websocket_crypto.h"
 #include "websocket_message.h"
+#include <platform.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -66,11 +66,11 @@ size_t websocket_build_frame_header(uint8_t *header, size_t header_max,
 
 // Generate masking key (client-side)
 int websocket_generate_masking_key(uint8_t *key) {
+  int rc;
+
   // RFC 6455: Masking key MUST be unpredictable
-  if (secure_random(key, 4) != 0) {
-    return -1; // Failed to generate secure random key
-  }
-  return 0;
+  rc = turbo_secure_random(key, 4);
+  return rc;
 }
 
 // Apply masking to payload

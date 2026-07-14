@@ -5,7 +5,12 @@
 #include "ice/turbo_ice.h"
 #include "ice/turbo_stun.h"
 #include "tinytest.h"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#endif
 #include <string.h>
 
 typedef struct {
@@ -60,6 +65,29 @@ typedef struct {
     int rc;
     int done;
 } ice_udp_sendto_state_t;
+
+typedef struct {
+    int state_change_count;
+    ice_state_t last_old_state;
+    ice_state_t last_new_state;
+    ice_state_t close_on_state;
+} ice_lifecycle_observer_t;
+
+static void on_lifecycle_state_change(turbo_ice_agent_t *agent, ice_state_t old_state,
+                                      ice_state_t new_state, void *user_data) {
+    ice_lifecycle_observer_t *observer = (ice_lifecycle_observer_t *)user_data;
+
+    if (!observer) {
+        return;
+    }
+
+    observer->state_change_count++;
+    observer->last_old_state = old_state;
+    observer->last_new_state = new_state;
+    if (new_state == observer->close_on_state) {
+        ice_agent_close(agent);
+    }
+}
 
 static void init_local_host_candidate(ice_candidate_t *candidate, const char *ip, uint16_t port,
                                       int component_id, int local_preference) {
@@ -642,7 +670,7 @@ spec("ice") {
         ice_agent_destroy(agent);
     }
 
-    it("should prefer public-capable pairs over private-host to public-remote pairs") {
+    it("should preserve every RFC-compatible pair regardless of address scope") {
         static const char *remote_public_candidate =
             "candidate:9 1 UDP 1694498815 161.97.65.129 53578 typ srflx raddr 172.17.0.1 rport 41066";
         ice_config_t config = ice_default_config();
@@ -659,11 +687,17 @@ spec("ice") {
 
         check_int_eq(ice_agent_add_remote_candidate(agent, remote_public_candidate), 0);
         check_int_eq(view->remote_candidate_count, 1);
-        check_int_eq(view->pair_count, 1);
-        check_ptr_eq(view->pairs[0].local, &view->local_candidates[1]);
-        check_ptr_eq(view->pairs[0].remote, &view->remote_candidates[0]);
-        check_int_eq(view->pairs[0].local->type, ICE_CANDIDATE_TYPE_SRFLX);
-        check_str_eq(view->pairs[0].local->ip, "161.97.65.129");
+        check_int_eq(view->pair_count, 2);
+        int found_existing = 0;
+        int found_new = 0;
+        for (int i = 0; i < view->pair_count; ++i) {
+            check_ptr_eq(view->pairs[i].remote, &view->remote_candidates[0]);
+            found_existing |= view->pairs[i].local == &view->local_candidates[0];
+            found_new |= view->pairs[i].local == &view->local_candidates[1];
+        }
+        check(found_existing);
+        check(found_new);
+        check_str_eq(view->pairs[0].local->ip, "172.17.0.1");
         check_str_eq(view->pairs[0].remote->ip, "161.97.65.129");
 
         view->local_candidates[0].socket = NULL;
@@ -671,7 +705,7 @@ spec("ice") {
         ice_agent_destroy(agent);
     }
 
-    it("should prune stale private-host to public-remote pairs after rebuild") {
+    it("should retain an existing compatible pair when rebuilding") {
         static const char *remote_public_candidate =
             "candidate:9 1 UDP 1694498815 161.97.65.129 53578 typ srflx raddr 172.17.0.1 rport 41066";
         ice_config_t config = ice_default_config();
@@ -695,14 +729,33 @@ spec("ice") {
 
         check_int_eq(ice_agent_add_remote_candidate(agent, remote_public_candidate), 0);
         check_int_eq(view->remote_candidate_count, 1);
-        check_int_eq(view->pair_count, 1);
-        check_ptr_eq(view->pairs[0].local, &view->local_candidates[1]);
-        check_ptr_eq(view->pairs[0].remote, &view->remote_candidates[0]);
-        check_int_eq(view->pairs[0].local->type, ICE_CANDIDATE_TYPE_SRFLX);
+        check_int_eq(view->pair_count, 2);
+        int found_existing = 0;
+        int found_new = 0;
+        for (int i = 0; i < view->pair_count; ++i) {
+            check_ptr_eq(view->pairs[i].remote, &view->remote_candidates[0]);
+            found_existing |= view->pairs[i].local == &view->local_candidates[0];
+            found_new |= view->pairs[i].local == &view->local_candidates[1];
+        }
+        check(found_existing);
+        check(found_new);
 
         view->local_candidates[0].socket = NULL;
         view->local_candidates[1].socket = NULL;
         ice_agent_destroy(agent);
+    }
+
+    it("should require a coroutine context when mDNS candidates are enabled") {
+        ice_config_t config = ice_default_config();
+        config.use_mdns_candidates = 1;
+        check_null(ice_agent_create(NULL, &config));
+
+        coro_context_t *ctx = coro_context_create(NULL);
+        check_not_null(ctx);
+        turbo_ice_agent_t *agent = ice_agent_create(ctx, &config);
+        check_not_null(agent);
+        ice_agent_destroy(agent);
+        coro_context_destroy(ctx);
     }
   }
 
@@ -723,6 +776,77 @@ spec("ice") {
         int result = ice_agent_get_selected_pair(agent, &local, &remote);
         check_int_eq(result, -1); /* No pair selected yet */
 
+        ice_agent_destroy(agent);
+    }
+
+    it("should make close before start idempotent and terminal") {
+        static const char *candidate =
+            "candidate:1 1 UDP 2130706431 192.0.2.10 40000 typ host";
+        ice_config_t config = ice_default_config();
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
+        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        ice_callbacks_t callbacks;
+        ice_lifecycle_observer_t observer;
+        unsigned char payload = 1;
+
+        check_not_null(agent);
+        memset(&callbacks, 0, sizeof(callbacks));
+        memset(&observer, 0, sizeof(observer));
+        observer.close_on_state = ICE_STATE_NEW;
+        callbacks.on_state_change = on_lifecycle_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        ice_agent_close(NULL);
+        ice_agent_close(agent);
+        check_int_eq(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_int_eq(observer.state_change_count, 1);
+        check_int_eq(observer.last_old_state, ICE_STATE_NEW);
+        check_int_eq(observer.last_new_state, ICE_STATE_CLOSED);
+
+        ice_agent_close(agent);
+        check_int_eq(observer.state_change_count, 1);
+        check_int_eq(ice_agent_set_role(agent, 0), ICE_AGENT_ERROR_CLOSED);
+        check_int_eq(ice_agent_set_remote_credentials(agent, "remote", "password"),
+                     ICE_AGENT_ERROR_CLOSED);
+        check_int_eq(ice_agent_gather_candidates(agent), ICE_AGENT_ERROR_CLOSED);
+        check_int_eq(ice_agent_add_remote_candidate(agent, candidate), ICE_AGENT_ERROR_CLOSED);
+        check_int_eq(ice_agent_start_checks(agent), ICE_AGENT_ERROR_CLOSED);
+        check_int_eq(ice_agent_send(agent, &payload, sizeof(payload)), ICE_AGENT_ERROR_CLOSED);
+
+        ice_agent_set_allow_loopback(agent, 1);
+        check_int_eq(view->config.allow_loopback, 0);
+        ice_agent_end_of_candidates(agent);
+
+        memset(&callbacks, 0, sizeof(callbacks));
+        ice_agent_set_callbacks(agent, &callbacks);
+        ice_agent_destroy(agent);
+        ice_agent_destroy(NULL);
+    }
+
+    it("should stop gathering when a synchronous callback closes the agent") {
+        ice_config_t config = ice_default_config();
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
+        ice_callbacks_t callbacks;
+        ice_lifecycle_observer_t observer;
+
+        check_not_null(agent);
+        memset(&callbacks, 0, sizeof(callbacks));
+        memset(&observer, 0, sizeof(observer));
+        observer.close_on_state = ICE_STATE_GATHERING;
+        callbacks.on_state_change = on_lifecycle_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        check_int_eq(ice_agent_gather_candidates(agent), ICE_AGENT_ERROR_CLOSED);
+        check_int_eq(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_int_eq(ice_agent_get_gathering_state(agent), ICE_GATHERING_NEW);
+        check_int_eq(observer.state_change_count, 2);
+        check_int_eq(observer.last_old_state, ICE_STATE_GATHERING);
+        check_int_eq(observer.last_new_state, ICE_STATE_CLOSED);
+
+        memset(&callbacks, 0, sizeof(callbacks));
+        ice_agent_set_callbacks(agent, &callbacks);
         ice_agent_destroy(agent);
     }
   }
@@ -840,6 +964,9 @@ spec("ice") {
 
         ice_agent_destroy(right);
         ice_agent_destroy(left);
+        for (int i = 0; i < 4; ++i) {
+            coro_context_run(ctx, TURBO_RUN_NOWAIT);
+        }
         coro_context_destroy(ctx);
     }
 

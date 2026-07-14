@@ -65,6 +65,7 @@ struct coro_pool_s {
   coro_socket_type_t socket_type;
   pool_endpoint_kind_t endpoint_kind;
   int ws_is_tls;
+  coro_proxy_settings_t proxy;
 
   /* Waiter list — coroutines blocked waiting for a free slot */
   pool_waiter_t *waiter_head;
@@ -154,6 +155,20 @@ coro_pool_t *coro_pool_create(coro_context_t *ctx, const coro_pool_config_t *con
  
 
   return pool;
+}
+
+int coro_pool_set_proxy(coro_pool_t *pool, const coro_proxy_config_t *config) {
+  coro_proxy_settings_t next;
+  int rc;
+
+  if (!pool) return TURBO_EINVAL;
+  if (pool->closed || pool->host[0] != '\0' || pool->alive_count != 0U) {
+    return TURBO_EALREADY;
+  }
+  rc = coro_proxy_settings_copy(&next, config);
+  if (rc != 0) return rc;
+  pool->proxy = next;
+  return 0;
 }
 
 int coro_pool_open(coro_pool_t *pool, const char *host, int port, coro_socket_type_t socket_type) {
@@ -580,6 +595,25 @@ static int pool_open_configure_ws(coro_pool_t *pool, const char *connect_host, i
 static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial_state) {
   coro_socket_t *c = coro_socket_create(pool->ctx, pool->socket_type);
   if (!c) return TURBO_ENOMEM;
+
+  if (pool->proxy.type != CORO_PROXY_DIRECT) {
+    coro_proxy_config_t proxy_config;
+    int proxy_rc;
+
+    memset(&proxy_config, 0, sizeof(proxy_config));
+    proxy_config.type = pool->proxy.type;
+    proxy_config.host = pool->proxy.host;
+    proxy_config.port = pool->proxy.port;
+    if (pool->proxy.auth_enabled) {
+      proxy_config.username = pool->proxy.username;
+      proxy_config.password = pool->proxy.password;
+    }
+    proxy_rc = coro_socket_set_proxy(c, &proxy_config);
+    if (proxy_rc != 0) {
+      coro_socket_destroy(c);
+      return proxy_rc;
+    }
+  }
 
   if (pool->config.connect_timeout_ms > 0)
     coro_socket_set_timeout(c, pool->config.connect_timeout_ms);

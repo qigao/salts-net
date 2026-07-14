@@ -48,6 +48,30 @@ typedef enum {
   CORO_SOCKET_PIPE
 } coro_socket_type_t;
 
+/** Outbound stream proxy type. DIRECT is the default. */
+typedef enum {
+  CORO_PROXY_DIRECT = 0,
+  CORO_PROXY_SOCKS5,
+  CORO_PROXY_HTTP_CONNECT
+} coro_proxy_type_t;
+
+/**
+ * @brief Outbound proxy configuration copied by coro_socket_set_proxy().
+ *
+ * SOCKS5 uses proxy-side DNS for host names. Supplying both username and
+ * password requires RFC 1929 username/password authentication. HTTP CONNECT
+ * sends preemptive Basic proxy authorization when credentials are supplied.
+ */
+typedef struct coro_proxy_config_s {
+  coro_proxy_type_t type; /**< DIRECT, SOCKS5, or HTTP CONNECT */
+  const char *host;       /**< Proxy hostname or numeric address */
+  uint16_t port;          /**< Proxy TCP port */
+  const char *username;   /**< Optional proxy username */
+  const char *password;   /**< Optional proxy password */
+} coro_proxy_config_t;
+
+#define CORO_PROXY_CONFIG_DEFAULT { CORO_PROXY_DIRECT, NULL, 0, NULL, NULL }
+
 /**
  * @brief Create a new coroutine-aware socket.
  * @param ctx   Event-loop context
@@ -104,18 +128,27 @@ CXX_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
 
 /**
  * @brief Configure OS TCP keepalive for TCP/TLS/WS/WSS sockets.
+ *
+ * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
+ * this policy.
  */
 CXX_C_API int coro_socket_set_tcp_keepalive(coro_socket_t *socket,
                                             const turbo_tcp_keepalive_config_t *config);
 
 /**
  * @brief Configure OS SO_LINGER for TCP/TLS/WS/WSS sockets.
+ *
+ * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
+ * this policy.
  */
 CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
                                      const turbo_socket_linger_config_t *config);
 
 /**
  * @brief Limit bytes queued in the socket send path. 0 disables the limit.
+ *
+ * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
+ * this policy.
  */
 CXX_C_API int coro_socket_set_send_hwm(coro_socket_t *socket, size_t bytes);
 
@@ -138,6 +171,23 @@ CXX_C_API int coro_socket_get_kcp_fec(coro_socket_t *socket,
  * For WebSocket, use coro_socket_connect_ws instead.
  */
 CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
+
+/**
+ * @brief Configure outbound proxying for future stream connects.
+ *
+ * The configuration is copied and must be set before connect. Passing NULL
+ * or CORO_PROXY_DIRECT clears the proxy. TCP and TLS connects are supported;
+ * WebSocket helpers inherit the same tunnel. Datagram, KCP, pipe, bind, and
+ * listen operations do not use this setting.
+ *
+ * @return 0 on success, TURBO_EINVAL for invalid configuration/state, or
+ *         TURBO_ENOTSUP for a non-TCP-backed socket.
+ */
+CXX_C_API int coro_socket_set_proxy(coro_socket_t *socket,
+                                    const coro_proxy_config_t *config);
+
+/** Clear a previously configured outbound proxy before connect. */
+CXX_C_API int coro_socket_clear_proxy(coro_socket_t *socket);
 
 /** Configure or clear the pre-connect resolved-address policy callback. */
 CXX_C_API int coro_socket_set_connect_policy(coro_socket_t *socket,
@@ -356,6 +406,10 @@ CXX_C_API void coro_socket_free_recv(void *data);
 
 /**
  * @brief Set operation timeout.
+ *
+ * When set on a TCP/TLS/WS server before listen, the timeout is inherited by
+ * accepted sockets and bounds TLS/WebSocket server handshakes as well as later
+ * socket operations.
  */
 CXX_C_API void coro_socket_set_timeout(coro_socket_t *socket, uint64_t timeout_ms);
 
@@ -514,6 +568,23 @@ CXX_C_API int coro_socket_listen_ws_ex(coro_socket_t *socket, const char *host, 
                                        int is_tls, coro_handler_fn handler, void *arg,
                                        coro_handler_closed_fn handler_closed,
                                        void *handler_closed_arg);
+
+/**
+ * @brief Stop accepting and cancel all accepted connection tasks.
+ *
+ * This operation is asynchronous. Drive the socket's coroutine context until
+ * coro_socket_server_is_stopped() returns non-zero before releasing handler
+ * arguments or other state shared with connection handlers. Call this function
+ * on the socket's owning context thread.
+ *
+ * @return 0 on success, TURBO_EINVAL for a NULL socket.
+ */
+CXX_C_API int coro_socket_server_stop(coro_socket_t *socket);
+
+/**
+ * @brief Return non-zero after the accept loop and all accepted tasks exit.
+ */
+CXX_C_API int coro_socket_server_is_stopped(const coro_socket_t *socket);
 
 /**
  * @brief Send datagram from server socket (UDP).

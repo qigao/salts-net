@@ -16,6 +16,7 @@
 #include "ice/turbo_stun.h"
 #include "ice/turbo_turn.h"
 #include <platform.h>
+#include <turbo_uuid.h>
 #include "CoroNet/turbo_coro_socket.h"
 
 #include "turbo_dns.h"
@@ -28,7 +29,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #ifdef _WIN32
   #include <iphlpapi.h>
   #include <process.h>
@@ -45,11 +45,6 @@
   #include <strings.h>
   #include <unistd.h>
 #endif
-
-/* Thread-safe random seeding using atomic CAS */
-#include <stdatomic.h>
-
-static atomic_int g_random_seeded = 0;
 
 static void ice_tracef(const char *fmt, ...) {
   const char *path = getenv("TURBO_ICE_TRACE");
@@ -72,37 +67,10 @@ static void ice_tracef(const char *fmt, ...) {
   fclose(fp);
 }
 
-static void ensure_random_seeded(void) {
-  if (atomic_load_explicit(&g_random_seeded, memory_order_acquire) == 0) {
-    int expected = 0;
-    if (atomic_compare_exchange_strong(&g_random_seeded, &expected, 1)) {
-      srand((unsigned int)time(NULL) ^ (unsigned int)turbo_getpid());
-    }
-  }
-}
-
-/* Generate 64-bit random value with better entropy.
- * Combines multiple rand() calls with time-based entropy to improve randomness.
- * Note: For cryptographic use, replace with OS-specific secure random. */
-static uint64_t generate_random_u64(void) {
-  ensure_random_seeded();
-  uint64_t r = 0;
-  /* Use 4 rand() calls to fill 64 bits (rand() typically gives 15-31 bits) */
-  for (int i = 0; i < 4; i++) {
-    r = (r << 16) ^ (uint64_t)rand();
-  }
-  /* Mix in additional entropy from high-resolution time */
-  r ^= (uint64_t)time(NULL);
-#ifdef _WIN32
-  LARGE_INTEGER perf;
-  QueryPerformanceCounter(&perf);
-  r ^= (uint64_t)perf.QuadPart;
-#else
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  r ^= (uint64_t)ts.tv_nsec;
-#endif
-  return r;
+static int generate_random_u64(uint64_t *value) {
+  if (!value)
+    return -1;
+  return turbo_secure_random(value, sizeof(*value));
 }
 
 static int resolve_mdns_hostname(ice_candidate_t *candidate) {
@@ -164,34 +132,34 @@ static int resolve_mdns_hostname(ice_candidate_t *candidate) {
 
 /* Generate UUID-style mDNS hostname for privacy (e.g.,
  * "a1b2c3d4-e5f6-7890-abcd-ef1234567890.local") */
-static void generate_mdns_hostname(char *buf, size_t buf_len) {
-  static const char hex[] = "0123456789abcdef";
-  char uuid[37]; /* 36 chars + null */
+static int generate_mdns_hostname(char *buf, size_t buf_len) {
+  turbo_uuid_t uuid;
+  char uuid_text[TURBO_UUID_STRING_SIZE];
 
-  for (int i = 0; i < 36; i++) {
-    if (i == 8 || i == 13 || i == 18 || i == 23) {
-      uuid[i] = '-';
-    } else {
-      uuid[i] = hex[rand() % 16];
-    }
-  }
-  uuid[36] = '\0';
-
-  fmt(buf, buf_len, "{}.local", uuid);
+  if (!buf || buf_len < TURBO_UUID_STRING_LENGTH + sizeof(".local"))
+    return -1;
+  if (turbo_uuid_v4_generate(&uuid) != 0 ||
+      turbo_uuid_format(&uuid, uuid_text, sizeof(uuid_text)) != 0)
+    return -1;
+  memcpy(buf, uuid_text, TURBO_UUID_STRING_LENGTH);
+  memcpy(buf + TURBO_UUID_STRING_LENGTH, ".local", sizeof(".local"));
+  return 0;
 }
 
 static inline uint16_t read_u16_be(const uint8_t *ptr) {
   return (uint16_t)((ptr[0] << 8) | ptr[1]);
 }
 
-static inline uint32_t read_u32_be(const uint8_t *ptr) {
-  return (uint32_t)((ptr[0] << 24) | (ptr[1] << 16) | (ptr[2] << 8) | ptr[3]);
-}
-
 /* ============================================================================
  * Internal Structures
  * ============================================================================ */
 
+
+typedef struct {
+  ice_candidate_t *local;
+  ice_candidate_t *remote;
+  int received_nomination;
+} ice_triggered_check_t;
 
 struct turbo_ice_agent_s {
   ice_config_t config;
@@ -248,6 +216,13 @@ struct turbo_ice_agent_s {
   int remote_candidates_complete;
   int nomination_started;
   int selected_pair_io_running;
+  int current_check_nominating;
+  int current_check_select_on_success;
+  ice_triggered_check_t triggered_checks[ICE_MAX_CANDIDATE_PAIRS];
+  int triggered_check_head;
+  int triggered_check_count;
+  int destroy_requested;
+  uint64_t last_keepalive_ms;
 };
 
 
@@ -255,22 +230,83 @@ struct turbo_ice_agent_s {
  * Internal Helpers
  * ============================================================================ */
 
-static void generate_random_string(char *buf, size_t len) {
+static int generate_random_string(char *buf, size_t len) {
   static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  for (size_t i = 0; i < len - 1; i++) {
-    buf[i] = charset[rand() % (sizeof(charset) - 1)];
+  const size_t charset_len = sizeof(charset) - 1;
+  const uint8_t uniform_limit = (uint8_t)(256u - (256u % charset_len));
+  size_t i = 0;
+
+  if (!buf || len == 0)
+    return -1;
+
+  while (i + 1 < len) {
+    uint8_t random_byte;
+    if (turbo_secure_random(&random_byte, sizeof(random_byte)) != 0)
+      return -1;
+    if (random_byte >= uniform_limit)
+      continue;
+    buf[i++] = charset[random_byte % charset_len];
   }
   buf[len - 1] = '\0';
+  return 0;
 }
 
-static void generate_candidate_id(char *id) {
-  generate_random_string(id, ICE_CANDIDATE_ID_LEN + 1);
+static int generate_candidate_id(char *id) {
+  return generate_random_string(id, ICE_CANDIDATE_ID_LEN + 1);
+}
+
+static int initialize_candidate_identity(turbo_ice_agent_t *agent, ice_candidate_t *candidate) {
+  if (!agent || !candidate)
+    return -1;
+
+  snprintf(candidate->foundation, sizeof(candidate->foundation), "%d",
+           ++agent->foundation_counter);
+  if (generate_candidate_id(candidate->id) != 0)
+    return -1;
+  if (candidate->type == ICE_CANDIDATE_TYPE_HOST && agent->config.use_mdns_candidates &&
+      generate_mdns_hostname(candidate->mdns_name, sizeof(candidate->mdns_name)) != 0)
+    return -1;
+  return 0;
+}
+
+#define ICE_MDNS_SERVICE_TYPE "_ice._udp"
+#define ICE_MDNS_TTL_SECONDS  120u
+
+static int publish_mdns_candidate(turbo_ice_agent_t *agent, const ice_candidate_t *candidate) {
+  mdns_service_t service;
+  size_t hostname_len;
+
+  if (!agent || !candidate || !agent->config.use_mdns_candidates)
+    return 0;
+  if (!agent->mdns_ctx || candidate->mdns_name[0] == '\0')
+    return -1;
+
+  memset(&service, 0, sizeof(service));
+  strncpy(service.instance, candidate->id, sizeof(service.instance) - 1);
+  strncpy(service.service_type, ICE_MDNS_SERVICE_TYPE, sizeof(service.service_type) - 1);
+  strncpy(service.hostname, candidate->mdns_name, sizeof(service.hostname) - 1);
+  hostname_len = strlen(service.hostname);
+  if (hostname_len > 6 && strcmp(service.hostname + hostname_len - 6, ".local") == 0)
+    service.hostname[hostname_len - 6] = '\0';
+  strncpy(service.ip, candidate->ip, sizeof(service.ip) - 1);
+  service.port = candidate->port;
+  service.ttl = ICE_MDNS_TTL_SECONDS;
+  return mdns_publish(agent->mdns_ctx, &service);
 }
 
 static void rebuild_candidate_pairs(turbo_ice_agent_t *agent);
 static int ice_candidates_equivalent(const ice_candidate_t *a, const ice_candidate_t *b);
 static void selected_pair_io_task(coro_t *co, void *arg);
+static void ice_agent_quiesce_transports(turbo_ice_agent_t *agent);
+static void ice_agent_release(turbo_ice_agent_t *agent);
+
+static int ice_agent_is_closed(const turbo_ice_agent_t *agent) {
+  return agent && agent->state == ICE_STATE_CLOSED;
+}
+
 static void set_state(turbo_ice_agent_t *agent, ice_state_t new_state) {
+  if (!agent || (ice_agent_is_closed(agent) && new_state != ICE_STATE_CLOSED))
+    return;
   if (agent->state != new_state) {
     ice_state_t old_state = agent->state;
     agent->state = new_state;
@@ -291,6 +327,8 @@ static void set_state(turbo_ice_agent_t *agent, ice_state_t new_state) {
 }
 
 static void set_gathering_state(turbo_ice_agent_t *agent, ice_gathering_state_t new_state) {
+  if (!agent || ice_agent_is_closed(agent))
+    return;
   if (agent->gathering_state != new_state) {
     agent->gathering_state = new_state;
     if (agent->callbacks.on_gathering_change) {
@@ -362,12 +400,6 @@ static int ice_ip_is_loopback(const char *ip) {
   return 0;
 }
 
-static int ice_pair_is_loopback(const ice_candidate_pair_t *pair) {
-  return pair && pair->local && pair->remote &&
-         ice_ip_is_loopback(pair->local->ip) &&
-         ice_ip_is_loopback(pair->remote->ip);
-}
-
 /* Forward declarations for connectivity check functions */
 static int send_connectivity_check(turbo_ice_agent_t *agent, ice_candidate_pair_t *pair,
                                    int nominate);
@@ -377,8 +409,10 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
 static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, size_t len,
                                  const struct sockaddr *from);
 static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, const char *local_ip,
-                                                    uint16_t local_port, const char *remote_ip,
-                                                    uint16_t remote_port);
+                                                     uint16_t local_port, const char *remote_ip,
+                                                     uint16_t remote_port);
+static int find_pair_index_by_candidates(turbo_ice_agent_t *agent, ice_candidate_t *local,
+                                         ice_candidate_t *remote);
 static void service_udp_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *local_cand,
                                          uint64_t timeout_ms, int allow_data);
 static void service_turn_candidate_socket(turbo_ice_agent_t *agent, ice_candidate_t *local_cand,
@@ -487,7 +521,10 @@ static int create_srflx_socket(coro_context_t *ctx, const ice_candidate_t *base,
     struct sockaddr_storage from;
     int rc;
 
-    stun_generate_transaction_id(&txn_id);
+    if (stun_generate_transaction_id(&txn_id) != 0) {
+      coro_socket_destroy(socket);
+      return -5;
+    }
     len = stun_build_binding_request(buffer, &txn_id);
 
     rc = coro_socket_send(socket, (const char *)buffer, len);
@@ -585,16 +622,19 @@ static int gather_host_candidates_win32(turbo_ice_agent_t *agent) {
         cand->port = 0; /* Will be assigned when socket is created */
         cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
         cand->is_local = 1;
-        snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
-        generate_candidate_id(cand->id);
-
-        /* Generate mDNS hostname for privacy if enabled */
-        if (agent->config.use_mdns_candidates) {
-          generate_mdns_hostname(cand->mdns_name, sizeof(cand->mdns_name));
+        if (initialize_candidate_identity(agent, cand) != 0) {
+          free(addresses);
+          return -2;
         }
 
         /* Create socket for this candidate */
         if (create_candidate_socket(agent, cand) == 0) {
+          if (publish_mdns_candidate(agent, cand) != 0) {
+            coro_socket_destroy((coro_socket_t *)cand->socket);
+            cand->socket = NULL;
+            free(addresses);
+            return -3;
+          }
           agent->local_candidate_count++;
         }
       }
@@ -644,16 +684,19 @@ static int gather_host_candidates_unix(turbo_ice_agent_t *agent) {
       cand->port = 0;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
       cand->is_local = 1;
-      snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
-      generate_candidate_id(cand->id);
-
-      /* Generate mDNS hostname for privacy if enabled */
-      if (agent->config.use_mdns_candidates) {
-        generate_mdns_hostname(cand->mdns_name, sizeof(cand->mdns_name));
+      if (initialize_candidate_identity(agent, cand) != 0) {
+        freeifaddrs(ifaddr);
+        return -2;
       }
 
       /* Create socket for this candidate */
       if (create_candidate_socket(agent, cand) == 0) {
+        if (publish_mdns_candidate(agent, cand) != 0) {
+          coro_socket_destroy((coro_socket_t *)cand->socket);
+          cand->socket = NULL;
+          freeifaddrs(ifaddr);
+          return -3;
+        }
         agent->local_candidate_count++;
       }
     }
@@ -742,8 +785,10 @@ static void gather_srflx_candidates(turbo_ice_agent_t *agent) {
       cand->port = mapped.port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX, 65534, 1);
       cand->is_local = 1;
-      snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
-      generate_candidate_id(cand->id);
+      if (initialize_candidate_identity(agent, cand) != 0) {
+        coro_socket_destroy(srflx_socket);
+        return;
+      }
 
       strncpy(cand->related_ip, related_ip[0] ? related_ip : base->ip,
               sizeof(cand->related_ip) - 1);
@@ -833,8 +878,9 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
       cand->port = alloc.relayed_port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_RELAY, 65533, 1);
       cand->is_local = 1;
-      snprintf(cand->foundation, sizeof(cand->foundation), "%d", ++agent->foundation_counter);
-      generate_candidate_id(cand->id);
+      if (initialize_candidate_identity(agent, cand) != 0) {
+        return;
+      }
 
       strncpy(cand->related_ip, alloc.mapped_ip, sizeof(cand->related_ip) - 1);
       cand->related_port = alloc.mapped_port;
@@ -878,6 +924,8 @@ ice_config_t ice_default_config(void) {
 int ice_agent_set_role(turbo_ice_agent_t *agent, int is_controlling) {
   if (!agent)
     return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
   if (agent->state != ICE_STATE_NEW && agent->state != ICE_STATE_GATHERING)
     return -2;
 
@@ -890,7 +938,6 @@ int ice_agent_set_role(turbo_ice_agent_t *agent, int is_controlling) {
 turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *config) {
   if (!config)
     return NULL;
-  ensure_random_seeded();
 
   turbo_ice_agent_t *agent = calloc(1, sizeof(turbo_ice_agent_t));
   if (!agent)
@@ -902,15 +949,19 @@ turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *con
   agent->state = ICE_STATE_NEW;
   agent->gathering_state = ICE_GATHERING_NEW;
   agent->role = config->is_controlling ? ICE_ROLE_CONTROLLING : ICE_ROLE_CONTROLLED;
-  agent->tie_breaker = generate_random_u64();
-
-  /* Generate local credentials */
-  generate_random_string(agent->local_ufrag, 8);
-  generate_random_string(agent->local_pwd, 24);
+  if (generate_random_u64(&agent->tie_breaker) != 0 ||
+      generate_random_string(agent->local_ufrag, 8) != 0 ||
+      generate_random_string(agent->local_pwd, 24) != 0) {
+    free(agent);
+    return NULL;
+  }
 
   /* Initialize mDNS context if privacy mode enabled */
   if (config->use_mdns_candidates) {
-    agent->mdns_ctx = mdns_create(NULL);
+    if (!ctx || !(agent->mdns_ctx = mdns_create(ctx))) {
+      free(agent);
+      return NULL;
+    }
   }
 
   return agent;
@@ -920,6 +971,9 @@ turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *con
 
 
 static void ice_agent_quiesce_transports(turbo_ice_agent_t *agent) {
+  coro_socket_t *destroyed_sockets[ICE_MAX_CANDIDATES];
+  int destroyed_socket_count = 0;
+
   if (!agent) {
     return;
   }
@@ -933,50 +987,71 @@ static void ice_agent_quiesce_transports(turbo_ice_agent_t *agent) {
 
   for (int i = 0; i < agent->local_candidate_count; i++) {
     ice_candidate_t *cand = &agent->local_candidates[i];
+    cand->turn_client = NULL;
     if (cand->socket) {
       int already_destroyed = 0;
-      for (int j = 0; j < i; j++) {
-        if (agent->local_candidates[j].socket == cand->socket) {
+      for (int j = 0; j < destroyed_socket_count; j++) {
+        if (destroyed_sockets[j] == cand->socket) {
           already_destroyed = 1;
           break;
         }
       }
       if (!already_destroyed) {
         coro_socket_destroy((coro_socket_t *)cand->socket);
+        destroyed_sockets[destroyed_socket_count++] = (coro_socket_t *)cand->socket;
       }
       cand->socket = NULL;
     }
   }
 }
 
-static void ice_agent_drain_context(coro_context_t *ctx, uint64_t drain_ms) {
-  uint64_t deadline_ms;
-
-  if (!ctx || drain_ms == 0) {
+static void ice_agent_interrupt_waits(turbo_ice_agent_t *agent) {
+  if (!agent)
     return;
+  for (int i = 0; i < ICE_MAX_TURN_SERVERS; ++i) {
+    if (agent->turn_clients[i] && agent->turn_clients[i]->client)
+      coro_socket_interrupt_wait(agent->turn_clients[i]->client, TURBO_ECANCELED);
   }
-
-  deadline_ms = turbo_monotonic_ms() + drain_ms;
-  do {
-    coro_context_run(ctx, TURBO_RUN_ONCE);
-  } while (turbo_monotonic_ms() < deadline_ms);
+  for (int i = 0; i < agent->local_candidate_count; ++i) {
+    coro_socket_t *socket = (coro_socket_t *)agent->local_candidates[i].socket;
+    int duplicate = 0;
+    if (!socket)
+      continue;
+    for (int j = 0; j < i; ++j) {
+      if (agent->local_candidates[j].socket == socket) {
+        duplicate = 1;
+        break;
+      }
+    }
+    if (!duplicate)
+      coro_socket_interrupt_wait(socket, TURBO_ECANCELED);
+  }
 }
 
-void ice_agent_destroy(turbo_ice_agent_t *agent) {
-  coro_context_t *ctx;
-
-  if (!agent) return;
-
-  ctx = agent->ctx;
+static void ice_agent_release(turbo_ice_agent_t *agent) {
+  if (!agent)
+    return;
   ice_agent_quiesce_transports(agent);
-  ice_agent_drain_context(ctx, 50);
-
   if (agent->mdns_ctx) {
     mdns_destroy(agent->mdns_ctx);
     agent->mdns_ctx = NULL;
   }
-
   free(agent);
+}
+
+void ice_agent_destroy(turbo_ice_agent_t *agent) {
+  if (!agent) return;
+
+  ice_agent_close(agent);
+  if (agent->ctx) {
+    for (int i = 0; i < 8 && agent->selected_pair_io_running; ++i)
+      coro_context_run(agent->ctx, TURBO_RUN_NOWAIT);
+  }
+  if (agent->selected_pair_io_running) {
+    agent->destroy_requested = 1;
+    return;
+  }
+  ice_agent_release(agent);
 }
 
 
@@ -1001,7 +1076,11 @@ void ice_agent_get_local_credentials(turbo_ice_agent_t *agent, char *ufrag, size
 }
 
 int ice_agent_set_remote_credentials(turbo_ice_agent_t *agent, const char *ufrag, const char *pwd) {
-  if (!agent || !ufrag || !pwd)
+  if (!agent)
+    return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
+  if (!ufrag || !pwd)
     return -1;
 
   strncpy(agent->remote_ufrag, ufrag, sizeof(agent->remote_ufrag) - 1);
@@ -1012,45 +1091,73 @@ int ice_agent_set_remote_credentials(turbo_ice_agent_t *agent, const char *ufrag
 }
 
 int ice_agent_gather_candidates(turbo_ice_agent_t *agent) {
+  int rc;
+
   if (!agent)
     return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
 
   if (agent->state != ICE_STATE_NEW)
     return -2;
 
   set_state(agent, ICE_STATE_GATHERING);
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
   set_gathering_state(agent, ICE_GATHERING_GATHERING);
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
 
   /* 1. Gather host candidates */
-  gather_host_candidates(agent);
+  rc = gather_host_candidates(agent);
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
+  if (rc != 0) {
+    set_gathering_state(agent, ICE_GATHERING_COMPLETE);
+    set_state(agent, ICE_STATE_FAILED);
+    return -3;
+  }
 
   /* Notify host candidates */
   for (int i = 0; i < agent->local_candidate_count; i++) {
     if (agent->callbacks.on_candidate) {
       agent->callbacks.on_candidate(agent, &agent->local_candidates[i], agent->callbacks.user_data);
+      if (ice_agent_is_closed(agent))
+        return ICE_AGENT_ERROR_CLOSED;
     }
   }
 
   /* 2. Gather server-reflexive candidates via STUN */
   if (agent->config.stun_server_count > 0) {
     gather_srflx_candidates(agent);
+    if (ice_agent_is_closed(agent))
+      return ICE_AGENT_ERROR_CLOSED;
   }
 
   /* 3. Gather relay candidates via TURN */
   if (agent->config.turn_server_count > 0) {
     gather_relay_candidates(agent);
+    if (ice_agent_is_closed(agent))
+      return ICE_AGENT_ERROR_CLOSED;
   }
 
   /* Gathering is synchronous in coro — complete immediately */
   set_gathering_state(agent, ICE_GATHERING_COMPLETE);
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
 
   return 0;
 }
 
 int ice_agent_add_remote_candidate(turbo_ice_agent_t *agent, const char *candidate_str) {
   ice_candidate_t parsed;
+  int rc;
 
-  if (!agent || !candidate_str)
+  if (!agent)
+    return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
+  if (!candidate_str)
     return -1;
 
   if (agent->remote_candidate_count >= ICE_MAX_CANDIDATES)
@@ -1064,7 +1171,10 @@ int ice_agent_add_remote_candidate(turbo_ice_agent_t *agent, const char *candida
     return -3;
   }
 
-  if (parsed.mdns_name[0] != '\0' && resolve_mdns_hostname(&parsed) != 0) {
+  rc = parsed.mdns_name[0] != '\0' ? resolve_mdns_hostname(&parsed) : 0;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
+  if (rc != 0) {
     ice_tracef("ice_agent_add_remote_candidate mdns_resolve_failed current_remote=%d candidate=%s",
                agent->remote_candidate_count, candidate_str);
     return -4;
@@ -1098,7 +1208,7 @@ int ice_agent_add_remote_candidate(turbo_ice_agent_t *agent, const char *candida
 }
 
 void ice_agent_end_of_candidates(turbo_ice_agent_t *agent) {
-  if (agent) {
+  if (agent && !ice_agent_is_closed(agent)) {
     agent->remote_candidates_complete = 1;
     ice_tracef("ice_agent_end_of_candidates remote=%d state=%d",
                agent->remote_candidate_count, (int)agent->state);
@@ -1122,6 +1232,46 @@ static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, co
   return NULL;
 }
 
+static int enqueue_triggered_check(turbo_ice_agent_t *agent, ice_candidate_t *local,
+                                   ice_candidate_t *remote, int received_nomination) {
+  int tail;
+
+  if (!agent || !local || !remote)
+    return -1;
+  for (int i = 0; i < agent->triggered_check_count; ++i) {
+    int index = (agent->triggered_check_head + i) % ICE_MAX_CANDIDATE_PAIRS;
+    ice_triggered_check_t *entry = &agent->triggered_checks[index];
+    if (entry->local == local && entry->remote == remote) {
+      entry->received_nomination |= received_nomination;
+      return 0;
+    }
+  }
+  if (agent->triggered_check_count >= ICE_MAX_CANDIDATE_PAIRS)
+    return -1;
+
+  tail = (agent->triggered_check_head + agent->triggered_check_count) % ICE_MAX_CANDIDATE_PAIRS;
+  agent->triggered_checks[tail].local = local;
+  agent->triggered_checks[tail].remote = remote;
+  agent->triggered_checks[tail].received_nomination = received_nomination;
+  agent->triggered_check_count++;
+  return 0;
+}
+
+static int dequeue_triggered_check(turbo_ice_agent_t *agent, int *pair_index,
+                                   int *received_nomination) {
+  while (agent && agent->triggered_check_count > 0) {
+    ice_triggered_check_t entry = agent->triggered_checks[agent->triggered_check_head];
+    agent->triggered_check_head = (agent->triggered_check_head + 1) % ICE_MAX_CANDIDATE_PAIRS;
+    agent->triggered_check_count--;
+    *pair_index = find_pair_index_by_candidates(agent, entry.local, entry.remote);
+    if (*pair_index >= 0) {
+      *received_nomination = entry.received_nomination;
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static int send_connectivity_check_internal(turbo_ice_agent_t *agent, ice_candidate_pair_t *pair,
                                             int nominate, int track_transaction) {
   if (!agent || !pair || !pair->local || !pair->remote)
@@ -1135,12 +1285,16 @@ static int send_connectivity_check_internal(turbo_ice_agent_t *agent, ice_candid
   }
 
   /* Generate transaction ID */
-  stun_generate_transaction_id(active_txn);
+  if (stun_generate_transaction_id(active_txn) != 0)
+    return -1;
 
   /* Build ICE STUN request */
   uint8_t stun_buf[STUN_MAX_MESSAGE_SIZE];
+  int local_preference = (int)((pair->local->priority >> 8) & 0xffffu);
+  uint32_t peer_reflexive_priority = ice_calculate_priority(
+      ICE_CANDIDATE_TYPE_PRFLX, local_preference, pair->local->component_id);
   int len = stun_build_ice_request(stun_buf, active_txn, agent->local_ufrag, agent->remote_ufrag,
-                                   agent->remote_pwd, (uint32_t)pair->priority,
+                                   agent->remote_pwd, peer_reflexive_priority,
                                    agent->role == ICE_ROLE_CONTROLLING, agent->tie_breaker,
                                    nominate);
 
@@ -1175,6 +1329,7 @@ static int send_connectivity_check_internal(turbo_ice_agent_t *agent, ice_candid
       pair->state = ICE_PAIR_STATE_IN_PROGRESS;
       pair->check_count++;
       pair->last_check_time = turbo_monotonic_ms();
+      agent->current_check_nominating = nominate;
     }
     TLOG_INFO("ICE check sent {}:{} -> {}:{} nominate={} pair_state={}",
               pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port,
@@ -1195,16 +1350,65 @@ static int send_connectivity_check(turbo_ice_agent_t *agent, ice_candidate_pair_
   return send_connectivity_check_internal(agent, pair, nominate, 1);
 }
 
-static int send_connectivity_check_untracked(turbo_ice_agent_t *agent, ice_candidate_pair_t *pair,
-                                             int nominate) {
-  return send_connectivity_check_internal(agent, pair, nominate, 0);
+static ice_candidate_pair_t *ensure_peer_reflexive_pair(turbo_ice_agent_t *agent,
+                                                        ice_candidate_t *local_cand,
+                                                        const char *remote_ip,
+                                                        uint16_t remote_port,
+                                                        uint32_t priority) {
+  ice_candidate_t *remote = NULL;
+  ice_candidate_pair_t *pair;
+
+  pair = find_pair_by_addresses(agent, local_cand->ip, local_cand->port,
+                                remote_ip, remote_port);
+  if (pair)
+    return pair;
+
+  for (int i = 0; i < agent->remote_candidate_count; ++i) {
+    ice_candidate_t *candidate = &agent->remote_candidates[i];
+    if (candidate->component_id == local_cand->component_id &&
+        candidate->transport == local_cand->transport &&
+        candidate->port == remote_port && strcmp(candidate->ip, remote_ip) == 0) {
+      remote = candidate;
+      break;
+    }
+  }
+
+  if (!remote) {
+    if (agent->remote_candidate_count >= ICE_MAX_CANDIDATES)
+      return NULL;
+    remote = &agent->remote_candidates[agent->remote_candidate_count];
+    memset(remote, 0, sizeof(*remote));
+    remote->type = ICE_CANDIDATE_TYPE_PRFLX;
+    remote->transport = local_cand->transport;
+    remote->component_id = local_cand->component_id;
+    remote->family = local_cand->family;
+    remote->priority = priority;
+    remote->port = remote_port;
+    strncpy(remote->ip, remote_ip, sizeof(remote->ip) - 1);
+    if (initialize_candidate_identity(agent, remote) != 0) {
+      memset(remote, 0, sizeof(*remote));
+      return NULL;
+    }
+    agent->remote_candidate_count++;
+  }
+
+  if (agent->pair_count >= ICE_MAX_CANDIDATE_PAIRS)
+    return NULL;
+  pair = &agent->pairs[agent->pair_count++];
+  memset(pair, 0, sizeof(*pair));
+  pair->local = local_cand;
+  pair->remote = remote;
+  pair->state = ICE_PAIR_STATE_WAITING;
+  pair->priority = calculate_pair_priority(local_cand->priority, remote->priority,
+                                           agent->role == ICE_ROLE_CONTROLLING);
+  return pair;
 }
 
 
 static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, size_t len,
                                 const struct sockaddr *from, const char *peer_ip_override,
                                 uint16_t peer_port_override, ice_candidate_t *local_cand) {
-  if (!agent || !data || !local_cand)
+  if (!agent || !data || len < STUN_HEADER_SIZE || !local_cand)
     return;
 
   /* Parse the request */
@@ -1287,62 +1491,39 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
   }
 
 
-  /* Find or create the pair for this check */
-  ice_candidate_pair_t *pair =
-      find_pair_by_addresses(agent, local_cand->ip, local_cand->port, remote_ip, remote_port);
+  /* An authenticated inbound request discovers a peer-reflexive candidate, but
+   * the pair becomes valid only after our triggered check succeeds. */
+  ice_candidate_pair_t *pair = ensure_peer_reflexive_pair(agent, local_cand, remote_ip,
+                                                          remote_port, priority);
+  if (!pair)
+    return;
 
-  if (pair) {
-    if (pair->state != ICE_PAIR_STATE_SUCCEEDED) {
-      pair->state = ICE_PAIR_STATE_SUCCEEDED;
-      agent->valid_pairs_count++;
-      TLOG_INFO("Validated pair from inbound request {}:{} <-> {}:{}",
-                pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port);
-    }
-
-    if (agent->checks_in_progress &&
-        agent->current_check_pair >= 0 &&
-        agent->current_check_pair < agent->pair_count &&
-        &agent->pairs[agent->current_check_pair] == pair) {
-      agent->checks_in_progress = 0;
-    }
-
-    if (agent->role == ICE_ROLE_CONTROLLING &&
-        (agent->config.aggressive_nomination || !agent->nomination_started) &&
-        !pair->nominated &&
-        ice_pair_is_loopback(pair)) {
-      TLOG_INFO("Triggering immediate nomination for {}:{} -> {}:{}",
-                pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port);
-      send_connectivity_check(agent, pair, 1);
-      pair->nominated = 1;
-      agent->nomination_started = 1;
-      agent->selected_pair = pair;
-      set_state(agent, ICE_STATE_COMPLETED);
-    }
-
-    /* If we received USE-CANDIDATE and we're controlled, mark as nominated */
+  if (pair->state == ICE_PAIR_STATE_SUCCEEDED) {
     if (use_candidate && agent->role == ICE_ROLE_CONTROLLED) {
       pair->nominated = 1;
       agent->selected_pair = pair;
       set_state(agent, ICE_STATE_COMPLETED);
-    } else if (agent->role == ICE_ROLE_CONTROLLED &&
-               agent->config.allow_loopback &&
-               !agent->selected_pair &&
-               ice_pair_is_loopback(pair)) {
-      pair->nominated = 1;
-      agent->selected_pair = pair;
-      set_state(agent, ICE_STATE_COMPLETED);
     }
+    return;
   }
 
-  /* Trigger a check back (triggered check) if we're not already checking this pair */
-  if (pair && pair->state == ICE_PAIR_STATE_FROZEN) {
-    pair->state = ICE_PAIR_STATE_WAITING;
+  if (agent->checks_in_progress && agent->current_check_pair >= 0 &&
+      agent->current_check_pair < agent->pair_count &&
+      &agent->pairs[agent->current_check_pair] == pair) {
+    if (use_candidate && agent->role == ICE_ROLE_CONTROLLED)
+      agent->current_check_select_on_success = 1;
+    return;
+  }
+  pair->state = ICE_PAIR_STATE_WAITING;
+  if (enqueue_triggered_check(agent, pair->local, pair->remote,
+                              use_candidate && agent->role == ICE_ROLE_CONTROLLED) != 0) {
+    pair->state = ICE_PAIR_STATE_FAILED;
   }
 }
 
 static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, size_t len,
                                  const struct sockaddr *from) {
-  if (!agent || !data)
+  if (!agent || !data || len < STUN_HEADER_SIZE || !stun_is_stun_message(data, len))
     return;
   (void)from;
 
@@ -1361,7 +1542,11 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
    * original connectivity check request. */
   if (stun_validate_message_integrity(data, len, agent->remote_pwd) != 0) {
     TLOG_WARN("%s", "STUN response integrity validation failed");
+    if (agent->current_check_pair >= 0 && agent->current_check_pair < agent->pair_count)
+      agent->pairs[agent->current_check_pair].state = ICE_PAIR_STATE_FAILED;
     agent->checks_in_progress = 0;
+    agent->current_check_nominating = 0;
+    agent->current_check_select_on_success = 0;
     return; /* Invalid authentication */
   }
 
@@ -1376,8 +1561,13 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
       agent->role = ICE_ROLE_CONTROLLING;
     }
     /* Regenerate tie-breaker and restart checks */
-    agent->tie_breaker = generate_random_u64();
+    if (generate_random_u64(&agent->tie_breaker) != 0) {
+      set_state(agent, ICE_STATE_FAILED);
+      return;
+    }
     agent->checks_in_progress = 0; /* Reset state so timer can restart */
+    agent->current_check_nominating = 0;
+    agent->current_check_select_on_success = 0;
     return;
   }
 
@@ -1388,6 +1578,8 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
       agent->pairs[agent->current_check_pair].state = ICE_PAIR_STATE_FAILED;
     }
     agent->checks_in_progress = 0;
+    agent->current_check_nominating = 0;
+    agent->current_check_select_on_success = 0;
     return;
   }
 
@@ -1403,45 +1595,19 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
       agent->valid_pairs_count++;
     }
 
-    /* If controlling and using aggressive nomination, nominate this pair if not already nominated
-     */
-    if (agent->role == ICE_ROLE_CONTROLLING) {
-      if ((agent->config.aggressive_nomination || !agent->nomination_started) && !pair->nominated) {
-        /* Send a check with USE-CANDIDATE */
-        TLOG_DEBUG("Nominating pair {} (aggressive)", agent->current_check_pair);
-        send_connectivity_check(agent, pair, 1);
-        pair->nominated = 1;
-        agent->nomination_started = 1;
-        if (!agent->selected_pair && ice_pair_is_loopback(pair)) {
-          agent->selected_pair = pair;
-          set_state(agent, ICE_STATE_COMPLETED);
-        }
-      }
-    }
-
-    /* If this pair is nominated (either by us or by peer), select it */
-    if (pair->nominated) {
+    /* Nomination is committed only after the corresponding outbound check
+     * succeeds; an inbound request alone is not a valid-pair proof. */
+    if ((agent->role == ICE_ROLE_CONTROLLING && agent->current_check_nominating) ||
+        (agent->role == ICE_ROLE_CONTROLLED && agent->current_check_select_on_success)) {
+      pair->nominated = 1;
       agent->selected_pair = pair;
       set_state(agent, ICE_STATE_COMPLETED);
     }
   }
 
   agent->checks_in_progress = 0;
-}
-
-static int ice_ip_is_private_v4(const char *ip) {
-  unsigned int a, b, c, d;
-
-  if (!ip || sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4 ||
-      a > 255 || b > 255 || c > 255 || d > 255) {
-    return 0;
-  }
-
-  return (a == 10) ||
-         (a == 172 && b >= 16 && b <= 31) ||
-         (a == 192 && b == 168) ||
-         (a == 127) ||
-         (a == 169 && b == 254);
+  agent->current_check_nominating = 0;
+  agent->current_check_select_on_success = 0;
 }
 
 static int find_pair_index_by_candidates(turbo_ice_agent_t *agent, ice_candidate_t *local,
@@ -1475,12 +1641,9 @@ static int ice_candidates_equivalent(const ice_candidate_t *a, const ice_candida
 }
 
 static int ice_pair_allowed_for_checklist(turbo_ice_agent_t *agent, ice_candidate_t *local,
-                                          ice_candidate_t *remote, int has_local_public,
-                                          int has_remote_public) {
+                                          ice_candidate_t *remote) {
   int local_is_loopback;
   int remote_is_loopback;
-  int local_is_private;
-  int remote_is_private;
 
   if (!agent || !local || !remote) {
     return 0;
@@ -1504,30 +1667,10 @@ static int ice_pair_allowed_for_checklist(turbo_ice_agent_t *agent, ice_candidat
 
   local_is_loopback = ice_ip_is_loopback(local->ip);
   remote_is_loopback = ice_ip_is_loopback(remote->ip);
-  local_is_private = strchr(local->ip, '.') && ice_ip_is_private_v4(local->ip);
-  remote_is_private = strchr(remote->ip, '.') && ice_ip_is_private_v4(remote->ip);
 
   if (local->type == ICE_CANDIDATE_TYPE_HOST &&
       remote->type == ICE_CANDIDATE_TYPE_HOST &&
       local_is_loopback != remote_is_loopback) {
-    return 0;
-  }
-
-  if (has_remote_public && remote_is_private &&
-      !(agent->config.allow_loopback && local_is_loopback && remote_is_loopback)) {
-    return 0;
-  }
-
-  if (has_local_public && has_remote_public &&
-      local->type == ICE_CANDIDATE_TYPE_HOST &&
-      local_is_private && !remote_is_private &&
-      !(agent->config.allow_loopback && local_is_loopback && remote_is_loopback)) {
-    /*
-     * Once both peers already have public reachability, a private host ->
-     * public pair only drags the checklist toward asymmetric fallback
-     * paths. Prefer the public/srflx pair instead of racing RFC1918 host
-     * candidates against a public remote.
-     */
     return 0;
   }
 
@@ -1539,10 +1682,6 @@ static void rebuild_candidate_pairs(turbo_ice_agent_t *agent) {
     return;
 
   int new_pairs_added = 0;
-  int has_local_public = 0;
-  int has_local_relay = 0;
-  int has_remote_public = 0;
-  int has_remote_relay = 0;
   ice_candidate_t *selected_local = NULL;
   ice_candidate_t *selected_remote = NULL;
   ice_candidate_t *current_local = NULL;
@@ -1557,34 +1696,13 @@ static void rebuild_candidate_pairs(turbo_ice_agent_t *agent) {
     current_remote = agent->pairs[agent->current_check_pair].remote;
   }
 
-  for (int i = 0; i < agent->local_candidate_count; i++) {
-    if (agent->local_candidates[i].type == ICE_CANDIDATE_TYPE_RELAY) {
-      has_local_relay = 1;
-    }
-    if (strchr(agent->local_candidates[i].ip, '.') &&
-        !ice_ip_is_private_v4(agent->local_candidates[i].ip)) {
-      has_local_public = 1;
-    }
-  }
-
-  for (int j = 0; j < agent->remote_candidate_count; j++) {
-    if (agent->remote_candidates[j].type == ICE_CANDIDATE_TYPE_RELAY) {
-      has_remote_relay = 1;
-    }
-    if (strchr(agent->remote_candidates[j].ip, '.') &&
-        !ice_ip_is_private_v4(agent->remote_candidates[j].ip)) {
-      has_remote_public = 1;
-    }
-  }
-
   if (agent->pair_count > 0) {
     int write_index = 0;
 
     for (int i = 0; i < agent->pair_count; i++) {
       ice_candidate_pair_t pair = agent->pairs[i];
 
-      if (!ice_pair_allowed_for_checklist(agent, pair.local, pair.remote,
-                                          has_local_public, has_remote_public)) {
+      if (!ice_pair_allowed_for_checklist(agent, pair.local, pair.remote)) {
         continue;
       }
 
@@ -1601,11 +1719,7 @@ static void rebuild_candidate_pairs(turbo_ice_agent_t *agent) {
     for (int j = 0; j < agent->remote_candidate_count; j++) {
       ice_candidate_t *local = &agent->local_candidates[i];
       ice_candidate_t *remote = &agent->remote_candidates[j];
-      int local_is_loopback = ice_ip_is_loopback(local->ip);
-      int remote_is_loopback = ice_ip_is_loopback(remote->ip);
-
-      if (!ice_pair_allowed_for_checklist(agent, local, remote,
-                                          has_local_public, has_remote_public)) {
+      if (!ice_pair_allowed_for_checklist(agent, local, remote)) {
         continue;
       }
       /* Check if pair already exists */
@@ -1625,32 +1739,6 @@ static void rebuild_candidate_pairs(turbo_ice_agent_t *agent) {
         pair->state = ICE_PAIR_STATE_WAITING; /* Unfreeze immediately for simplicity */
         pair->priority = calculate_pair_priority(local->priority, remote->priority,
                                                  agent->role == ICE_ROLE_CONTROLLING);
-        if (has_local_relay && has_remote_relay &&
-            local->type == ICE_CANDIDATE_TYPE_RELAY &&
-            remote->type == ICE_CANDIDATE_TYPE_RELAY) {
-          pair->priority |= (1ULL << 63);
-        } else if (agent->config.allow_loopback &&
-                   local->type == ICE_CANDIDATE_TYPE_HOST &&
-                   remote->type == ICE_CANDIDATE_TYPE_HOST &&
-                   local_is_loopback && remote_is_loopback) {
-          /*
-           * When both peers run on the same host, loopback host pairs are the
-           * only direct path that is guaranteed to work. Prefer them over
-           * public/private host pairs that depend on hairpin routing.
-           */
-          pair->priority |= (1ULL << 62);
-        } else if (has_local_relay && has_remote_relay &&
-                   (local->type == ICE_CANDIDATE_TYPE_RELAY ||
-                    remote->type == ICE_CANDIDATE_TYPE_RELAY)) {
-          pair->priority |= (1ULL << 61);
-        } else if (local->type == ICE_CANDIDATE_TYPE_HOST &&
-                   remote->type == ICE_CANDIDATE_TYPE_HOST &&
-                   !local_is_loopback && !remote_is_loopback) {
-          /* When both host and loopback host pairs exist on the same machine,
-           * prefer routable/private interfaces first so both peers converge on
-           * the same candidate family instead of racing host vs loopback. */
-          pair->priority |= (1ULL << 60);
-        }
         pair->nominated = 0;
         pair->check_count = 0;
         pair->last_check_time = 0;
@@ -1890,6 +1978,33 @@ static void service_turn_candidate_socket(turbo_ice_agent_t *agent, ice_candidat
 static void run_selected_pair_io(turbo_ice_agent_t *agent) {
   while (agent && (agent->state == ICE_STATE_CONNECTED || agent->state == ICE_STATE_COMPLETED)) {
     if (agent->selected_pair && agent->selected_pair->local) {
+      uint64_t now = turbo_monotonic_ms();
+      uint64_t keepalive_interval = agent->config.keepalive_interval_ms > 0
+                                        ? (uint64_t)agent->config.keepalive_interval_ms
+                                        : (uint64_t)ICE_DEFAULT_KEEPALIVE_INTERVAL;
+      if (agent->last_keepalive_ms == 0 || now - agent->last_keepalive_ms >= keepalive_interval) {
+        uint8_t indication[STUN_HEADER_SIZE];
+        stun_transaction_id_t txn_id;
+        int rc = -1;
+        if (stun_generate_transaction_id(&txn_id) == 0 &&
+            stun_build_binding_indication(indication, &txn_id) == sizeof(indication)) {
+          if (agent->selected_pair->local->type == ICE_CANDIDATE_TYPE_RELAY &&
+              agent->selected_pair->local->turn_client) {
+            rc = turn_client_send((turbo_turn_client_t *)agent->selected_pair->local->turn_client,
+                                  agent->selected_pair->remote->ip,
+                                  agent->selected_pair->remote->port,
+                                  indication, sizeof(indication));
+          } else if (agent->selected_pair->local->socket) {
+            rc = send_udp_to_remote((coro_socket_t *)agent->selected_pair->local->socket,
+                                    agent->selected_pair->remote->ip,
+                                    agent->selected_pair->remote->port,
+                                    indication, sizeof(indication));
+          }
+        }
+        agent->last_keepalive_ms = now;
+        if (rc != 0)
+          TLOG_WARN("ICE keepalive failed rc={}", rc);
+      }
       if (agent->selected_pair->local->type == ICE_CANDIDATE_TYPE_RELAY) {
         service_turn_candidate_socket(agent, agent->selected_pair->local, 1, 1);
       } else {
@@ -1904,12 +2019,16 @@ static void run_selected_pair_io(turbo_ice_agent_t *agent) {
 
 static void selected_pair_io_task(coro_t *co, void *arg) {
   turbo_ice_agent_t *agent = (turbo_ice_agent_t *)arg;
+  int release_after_stop;
   (void)co;
 
   run_selected_pair_io(agent);
-  if (agent) {
-    agent->selected_pair_io_running = 0;
-  }
+  if (!agent)
+    return;
+  agent->selected_pair_io_running = 0;
+  release_after_stop = agent->destroy_requested;
+  if (release_after_stop)
+    ice_agent_release(agent);
 }
 
 static void service_connectivity_check_io(turbo_ice_agent_t *agent, uint64_t timeout_ms) {
@@ -1956,20 +2075,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
     /* Check for overall timeout */
     if (elapsed > (uint64_t)agent->config.connectivity_timeout_ms) {
       TLOG_INFO("%s", "Connectivity check timeout elapsed");
-      if (agent->valid_pairs_count > 0) {
-        if (!agent->selected_pair) {
-          for (int i = 0; i < agent->pair_count; i++) {
-            if (agent->pairs[i].state == ICE_PAIR_STATE_SUCCEEDED) {
-              agent->selected_pair = &agent->pairs[i];
-              TLOG_INFO("No pair nominated, picking pair %d as fallback", i);
-              break;
-            }
-          }
-        }
-        set_state(agent, agent->selected_pair ? ICE_STATE_COMPLETED : ICE_STATE_FAILED);
-      } else {
-        set_state(agent, ICE_STATE_FAILED);
-      }
+      set_state(agent, agent->selected_pair ? ICE_STATE_COMPLETED : ICE_STATE_FAILED);
       return;
     }
 
@@ -1981,10 +2087,13 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
         /* Per-check timeout (3 seconds) */
         if (pair->last_check_time > 0 && now - pair->last_check_time > 3000) {
           if (pair->check_count < 3) {
-            send_connectivity_check(agent, pair, 0);
+            if (send_connectivity_check(agent, pair, agent->current_check_nominating) != 0)
+              agent->checks_in_progress = 0;
           } else {
             pair->state = ICE_PAIR_STATE_FAILED;
             agent->checks_in_progress = 0;
+            agent->current_check_nominating = 0;
+            agent->current_check_select_on_success = 0;
           }
         }
       }
@@ -1999,10 +2108,13 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
         if (agent->pairs[i].state == ICE_PAIR_STATE_SUCCEEDED && !agent->pairs[i].nominated) {
           agent->current_check_pair = i;
           agent->checks_in_progress = 1;
-          send_connectivity_check(agent, &agent->pairs[i], 1);
-          agent->pairs[i].nominated = 1;
-          agent->nomination_started = 1;
-          found = 1;
+          agent->current_check_select_on_success = 0;
+          if (send_connectivity_check(agent, &agent->pairs[i], 1) == 0) {
+            agent->nomination_started = 1;
+            found = 1;
+          } else {
+            agent->checks_in_progress = 0;
+          }
           break;
         }
       }
@@ -2012,23 +2124,31 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
       }
     }
 
-    /* Find next pair to check */
-    found = 0;
-    if (agent->config.allow_loopback) {
-      for (int i = 0; i < agent->pair_count; i++) {
-        ice_candidate_pair_t *pair = &agent->pairs[i];
-        if (pair->state != ICE_PAIR_STATE_WAITING) {
-          continue;
-        }
-        if (ice_pair_is_loopback(pair)) {
-          agent->current_check_pair = i;
-          agent->checks_in_progress = 1;
-          send_connectivity_check(agent, pair, 0);
+    {
+      int triggered_pair_index = -1;
+      int received_nomination = 0;
+      if (dequeue_triggered_check(agent, &triggered_pair_index, &received_nomination)) {
+        ice_candidate_pair_t *pair = &agent->pairs[triggered_pair_index];
+        int nominate = agent->role == ICE_ROLE_CONTROLLING && agent->config.aggressive_nomination;
+        agent->current_check_pair = triggered_pair_index;
+        agent->checks_in_progress = 1;
+        agent->current_check_select_on_success = 0;
+        if (send_connectivity_check(agent, pair, nominate) == 0) {
+          agent->current_check_select_on_success =
+              agent->role == ICE_ROLE_CONTROLLED && received_nomination;
           found = 1;
-          break;
+        } else {
+          agent->checks_in_progress = 0;
         }
       }
     }
+    if (found) {
+      coro_sleep(agent->ctx, ICE_DEFAULT_TA_INTERVAL);
+      continue;
+    }
+
+    /* Find next pair to check */
+    found = 0;
     for (int i = 0; i < agent->pair_count; i++) {
       if (found) {
         break;
@@ -2037,8 +2157,13 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
       if (pair->state == ICE_PAIR_STATE_WAITING) {
         agent->current_check_pair = i;
         agent->checks_in_progress = 1;
-        send_connectivity_check(agent, pair, 0);
-        found = 1;
+        agent->current_check_select_on_success = 0;
+        int nominate = agent->role == ICE_ROLE_CONTROLLING && agent->config.aggressive_nomination;
+        if (send_connectivity_check(agent, pair, nominate) == 0) {
+          found = 1;
+        } else {
+          agent->checks_in_progress = 0;
+        }
         break;
       }
     }
@@ -2074,6 +2199,8 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
 int ice_agent_start_checks(turbo_ice_agent_t *agent) {
   if (!agent)
     return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
 
   if (agent->gathering_state != ICE_GATHERING_COMPLETE)
     return -2;
@@ -2116,10 +2243,14 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
   agent->check_start_time = turbo_monotonic_ms();
 
   set_state(agent, ICE_STATE_CONNECTING);
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
   ice_tracef("ice_agent_start_checks entering_connectivity_loop");
 
   /* Run connectivity checks synchronously (coro-based) */
   run_connectivity_checks(agent);
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
   ice_tracef("ice_agent_start_checks connectivity_loop_done state=%d selected=%p", (int)agent->state,
              (void *)agent->selected_pair);
 
@@ -2152,7 +2283,13 @@ void ice_agent_poll_selected_pair(turbo_ice_agent_t *agent, uint64_t timeout_ms)
 
 
 int ice_agent_send(turbo_ice_agent_t *agent, const void *data, size_t len) {
-  if (!agent || !data || len == 0)
+  int rc;
+
+  if (!agent)
+    return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
+  if (!data || len == 0)
     return -1;
 
   if (agent->state != ICE_STATE_CONNECTED && agent->state != ICE_STATE_COMPLETED)
@@ -2168,13 +2305,16 @@ int ice_agent_send(turbo_ice_agent_t *agent, const void *data, size_t len) {
     if (!local->socket)
       return -4;
     coro_socket_t *client = (coro_socket_t *)local->socket;
-    return send_udp_to_remote(client, remote->ip, remote->port, data, len);
+    rc = send_udp_to_remote(client, remote->ip, remote->port, data, len);
   } else if (local->type == ICE_CANDIDATE_TYPE_RELAY) {
     if (!local->turn_client) return -5;
-    return turn_client_send((turbo_turn_client_t *)local->turn_client, remote->ip, remote->port, data, len);
+    rc = turn_client_send((turbo_turn_client_t *)local->turn_client, remote->ip, remote->port,
+                          data, len);
+  } else {
+    return -6;
   }
 
-  return -6;
+  return ice_agent_is_closed(agent) ? ICE_AGENT_ERROR_CLOSED : rc;
 }
 
 
@@ -2222,7 +2362,7 @@ int ice_agent_get_local_candidate(turbo_ice_agent_t *agent, int index, ice_candi
 }
 
 void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow) {
-  if (agent) {
+  if (agent && !ice_agent_is_closed(agent)) {
     agent->config.allow_loopback = allow;
   }
 }
@@ -2232,7 +2372,7 @@ void ice_agent_close(turbo_ice_agent_t *agent) {
     agent->checks_in_progress = 0;
     agent->current_check_pair = -1;
     set_state(agent, ICE_STATE_CLOSED);
-    ice_agent_quiesce_transports(agent);
+    ice_agent_interrupt_waits(agent);
   }
 }
 

@@ -145,9 +145,12 @@ CXX_C_API int stun_binding_request(coro_context_t *ctx,
  * Low-level STUN message functions
  * ============================================================================ */
 
-CXX_C_API void stun_generate_transaction_id(stun_transaction_id_t *txn_id);
+CXX_C_API int stun_generate_transaction_id(stun_transaction_id_t *txn_id);
 
 CXX_C_API size_t stun_build_binding_request(
+    uint8_t *buffer, const stun_transaction_id_t *txn_id);
+
+CXX_C_API size_t stun_build_binding_indication(
     uint8_t *buffer, const stun_transaction_id_t *txn_id);
 
 CXX_C_API size_t stun_build_binding_response(

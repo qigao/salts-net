@@ -23,6 +23,7 @@ set(TLS_LSAN_SUPPRESSIONS
     "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/openssl_tls_handshake.lsan:print_suppressions=1"
 )
 set(CORONET_SHUTDOWN_TEST_TARGETS
+    test_coro_server_lifecycle
     test_stream
     test_stream_pipe
     test_datagram
@@ -40,6 +41,7 @@ set_tests_properties(test_stream_ws PROPERTIES ENVIRONMENT
 
 add_custom_target(
   coronet_shutdown_regressions
+  COMMAND $<TARGET_FILE:test_coro_server_lifecycle>
   COMMAND $<TARGET_FILE:test_stream> --filter "without use-after-free"
   COMMAND $<TARGET_FILE:test_stream_pipe> --filter "without use-after-free"
   COMMAND $<TARGET_FILE:test_datagram> --filter "without use-after-free"

@@ -46,6 +46,25 @@ static int socket_return_error(coro_socket_t *s, int err) {
   return err;
 }
 
+static uint64_t ws_connect_deadline(coro_socket_t *s, uint64_t timeout_ms) {
+  uint64_t now;
+
+  if (!s || !s->loop || timeout_ms == 0U) return 0U;
+  now = turbo_loop_now(s->loop);
+  if (UINT64_MAX - now < timeout_ms) return UINT64_MAX;
+  return now + timeout_ms;
+}
+
+static int ws_apply_connect_deadline(coro_socket_t *s, uint64_t deadline_ms) {
+  uint64_t now;
+
+  if (!s || deadline_ms == 0U) return 0;
+  now = turbo_loop_now(s->loop);
+  if (now >= deadline_ms) return TURBO_ETIMEDOUT;
+  s->timeout_ms = deadline_ms - now;
+  return 0;
+}
+
 static ws_connect_state_t *ws_state(coro_socket_t *s) {
   return (ws_connect_state_t *)(s ? s->native_tcp_state : NULL);
 }
@@ -495,6 +514,7 @@ int coro_socket_connect_ws_ex(coro_socket_t *s, const char *host, int port, cons
 int coro_socket_connect_ws_host_ex(coro_socket_t *s, const char *connect_host, int port,
                                    const char *request_host, const char *path, int is_tls,
                                    const char *subprotocol) {
+  const char *actual_request_host;
   if (!s || !connect_host) {
     return socket_return_error(s, TURBO_EINVAL);
   }
@@ -503,13 +523,33 @@ int coro_socket_connect_ws_host_ex(coro_socket_t *s, const char *connect_host, i
     return socket_return_error(s, TURBO_EALREADY);
   }
 
+  actual_request_host =
+      (request_host && request_host[0] != '\0') ? request_host : connect_host;
   {
     int rc = ws_store_config(s,
-                             (request_host && request_host[0] != '\0') ? request_host : connect_host,
-                             path, is_tls, subprotocol);
+                             actual_request_host, path, is_tls, subprotocol);
     if (rc != 0) {
       return rc;
     }
+  }
+
+  if (s->proxy.type != CORO_PROXY_DIRECT) {
+    uint64_t saved_timeout = s->timeout_ms;
+    uint64_t deadline_ms = ws_connect_deadline(s, saved_timeout);
+    int rc;
+
+    coro_socket_configure_transport_internal(s, TURBO_TCP, 0);
+    rc = coro_socket_connect_host_ex(s, connect_host, port, actual_request_host);
+    if (rc == 0 && is_tls) {
+      rc = ws_apply_connect_deadline(s, deadline_ms);
+      if (rc == 0) rc = coro_socket_upgrade_tls(s, actual_request_host);
+    }
+    if (rc == 0) {
+      rc = ws_apply_connect_deadline(s, deadline_ms);
+      if (rc == 0) rc = coro_socket_upgrade_ws_ex(s, actual_request_host, path, subprotocol);
+    }
+    s->timeout_ms = saved_timeout;
+    return rc;
   }
 
   ws_configure_socket(s);

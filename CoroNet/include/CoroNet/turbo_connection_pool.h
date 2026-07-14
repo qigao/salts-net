@@ -48,6 +48,14 @@ CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
                                                       const coro_pool_config_t *config);
 
 /**
+ * @brief Configure the outbound proxy copied to every connection in the pool.
+ *
+ * Must be called before coro_pool_open(). Passing NULL or DIRECT clears it.
+ */
+CXX_C_API int coro_pool_set_proxy(coro_pool_t *pool,
+                                  const coro_proxy_config_t *config);
+
+/**
  * @brief Open the pool and pre-connect min_size connections.
  *
  * Must be called from a coroutine (connect suspends).

@@ -29,6 +29,9 @@ extern "C" {
 #define TURN_CHANNEL_MIN            0x4000
 #define TURN_CHANNEL_MAX            0x7FFF
 #define TURN_CHANNEL_HEADER_SIZE    4
+#define TURN_MAX_MESSAGE_SIZE        2048
+#define TURN_PERMISSION_LIFETIME     300
+#define TURN_CHANNEL_LIFETIME        600
 
 /* TURN Message Types */
 #define TURN_MSG_ALLOCATE_REQUEST           0x0003
@@ -65,6 +68,7 @@ extern "C" {
 /* TURN Error Codes */
 #define TURN_ERROR_FORBIDDEN                403
 #define TURN_ERROR_ALLOCATION_MISMATCH      437
+#define TURN_ERROR_STALE_NONCE              438
 #define TURN_ERROR_WRONG_CREDENTIALS        441
 #define TURN_ERROR_UNSUPPORTED_TRANSPORT    442
 #define TURN_ERROR_ALLOCATION_QUOTA_REACHED 486
@@ -163,6 +167,11 @@ struct turbo_turn_client_s {
     /* Buffered relay packet received while a TURN request awaited its response */
     void *pending_buf;
     size_t pending_len;
+
+    /* Appended maintenance state preserves the offsets of existing public fields. */
+    uint64_t allocation_expires_at_ms;
+    uint64_t permission_expires_at_ms[16];
+    uint64_t channel_expires_at_ms[16];
 };
 
 /* ============================================================================
@@ -195,6 +204,9 @@ CXX_C_API int turn_client_allocate(
  * Refresh allocation (extend lifetime).
  */
 CXX_C_API int turn_client_refresh(turbo_turn_client_t *client);
+
+/** Refresh allocations, permissions, and channels that are nearing expiry. */
+CXX_C_API int turn_client_maintain(turbo_turn_client_t *client);
 
 /**
  * Create permission for peer.
@@ -244,20 +256,44 @@ CXX_C_API int turn_client_get_allocation(
  * TURN Message Building (Low-level)
  * ============================================================================ */
 
+/* Legacy builders require a buffer of at least 512 bytes. New code should use
+ * the capacity-aware _ex variants. */
+
+CXX_C_API int turn_build_allocate_request_ex(
+    uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
+    const char *username, const char *realm, const char *nonce,
+    const char *password, int transport);
+
 CXX_C_API int turn_build_allocate_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, int transport);
+
+CXX_C_API int turn_build_refresh_request_ex(
+    uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
+    const char *username, const char *realm, const char *nonce,
+    const char *password, uint32_t lifetime);
 
 CXX_C_API int turn_build_refresh_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, uint32_t lifetime);
 
+CXX_C_API int turn_build_create_permission_request_ex(
+    uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
+    const char *username, const char *realm, const char *nonce,
+    const char *password, const char *peer_ip, uint16_t peer_port);
+
 CXX_C_API int turn_build_create_permission_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, const char *peer_ip, uint16_t peer_port);
+
+CXX_C_API int turn_build_channel_bind_request_ex(
+    uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
+    const char *username, const char *realm, const char *nonce,
+    const char *password, uint16_t channel_number,
+    const char *peer_ip, uint16_t peer_port);
 
 CXX_C_API int turn_build_channel_bind_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
@@ -265,8 +301,16 @@ CXX_C_API int turn_build_channel_bind_request(
     const char *password, uint16_t channel_number,
     const char *peer_ip, uint16_t peer_port);
 
+CXX_C_API int turn_build_send_indication_ex(
+    uint8_t *buffer, size_t buffer_capacity, const char *peer_ip, uint16_t peer_port,
+    const void *data, size_t data_len);
+
 CXX_C_API int turn_build_send_indication(
     uint8_t *buffer, const char *peer_ip, uint16_t peer_port,
+    const void *data, size_t data_len);
+
+CXX_C_API int turn_build_channel_data_ex(
+    uint8_t *buffer, size_t buffer_capacity, uint16_t channel_number,
     const void *data, size_t data_len);
 
 CXX_C_API int turn_build_channel_data(

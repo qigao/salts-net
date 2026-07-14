@@ -47,12 +47,18 @@ if(BUILD_TESTS)
   add_test(NAME stun COMMAND test_stun)
   set_target_properties(test_stun PROPERTIES FOLDER ice/tests)
 
-  if(NOT WIN32)
-    add_executable(test_ice tests/test_ice.c)
-    target_link_libraries(test_ice PRIVATE turbo_ice TurboUtils::TinyTest)
-    add_test(NAME ice COMMAND test_ice)
-    set_target_properties(test_ice PROPERTIES FOLDER ice/tests)
+  add_executable(test_turn tests/test_turn.c)
+  target_link_libraries(test_turn PRIVATE turbo_ice TurboUtils::TinyTest)
+  add_test(NAME turn COMMAND test_turn)
+  set_target_properties(test_turn PROPERTIES FOLDER ice/tests)
+
+  add_executable(test_ice tests/test_ice.c)
+  target_link_libraries(test_ice PRIVATE turbo_ice TurboUtils::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_ice PRIVATE ws2_32)
   endif()
+  add_test(NAME ice COMMAND test_ice)
+  set_target_properties(test_ice PROPERTIES FOLDER ice/tests)
 endif()
 
 # ============================================================================
@@ -70,6 +76,9 @@ if(BUILD_EXAMPLES)
 
   add_executable(stun_service examples/stun_service.c)
   target_link_libraries(stun_service PRIVATE turbo_ice)
+  if(WIN32)
+    target_link_libraries(stun_service PRIVATE ws2_32)
+  endif()
   set_target_properties(stun_service PROPERTIES FOLDER ice/examples)
 
   add_executable(turn_test examples/turn_test.c)

@@ -38,6 +38,15 @@ static void coro_wait_interrupt_and_stop(void *arg1, void *arg2) {
   coro_context_stop(state->ctx);
 }
 
+static void coro_wait_stop_persistent_context(void *arg1, void *arg2) {
+  coro_wait_test_state_t *state = (coro_wait_test_state_t *)arg1;
+  (void)arg2;
+
+  atomic_store_explicit(&state->companion_ran, 1, memory_order_release);
+  coro_context_set_persistent(state->ctx, 0);
+  coro_context_stop(state->ctx);
+}
+
 static void coro_wait_companion_task(coro_t *co, void *arg) {
   coro_wait_test_state_t *state = (coro_wait_test_state_t *)arg;
   (void)co;
@@ -148,6 +157,21 @@ spec("coro_wait") {
     (void)coro_context_run(ctx, TURBO_RUN_DEFAULT);
     check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ESHUTDOWN);
     check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+    coro_context_destroy(ctx);
+  }
+
+  it("drains posts queued before a persistent default run starts") {
+    coro_context_t *ctx = coro_context_create(NULL);
+    coro_wait_test_state_t state;
+    check_not_null(ctx);
+    state.ctx = ctx;
+    atomic_init(&state.companion_ran, 0);
+
+    coro_context_set_persistent(ctx, 1);
+    check_int_eq(coro_post(ctx, coro_wait_stop_persistent_context, &state, NULL), TURBO_OK);
+    (void)coro_context_run(ctx, TURBO_RUN_DEFAULT);
+
+    check_int_eq(atomic_load_explicit(&state.companion_ran, memory_order_acquire), 1);
     coro_context_destroy(ctx);
   }
 }

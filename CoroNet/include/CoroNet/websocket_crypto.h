@@ -20,8 +20,8 @@ typedef struct {
  void sha1_update(sha1_context_t *ctx, const uint8_t *data, size_t len);
  void sha1_final(sha1_context_t *ctx, uint8_t digest[20]);
 
-/* Cryptographically Secure Random */
- int secure_random(uint8_t *buffer, size_t length);
+/* Compatibility wrapper; new code should call turbo_secure_random(). */
+CXX_C_API int secure_random(uint8_t *buffer, size_t length);
 
 /* UTF-8 Validation */
  int validate_utf8(const uint8_t *data, size_t len);

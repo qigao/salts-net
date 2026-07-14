@@ -8,6 +8,7 @@
 #include "websocket_handshake_parser.h"
 #include "base64_utils.h"
 #include <fmt.h>
+#include <platform.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -591,8 +592,11 @@ static int ws_prepare_client_key(ws_state_t *st) {
     return TURBO_EINVAL;
   }
 
-  if (secure_random(raw, 16) != 0) {
-    return TURBO_EINVAL;
+  {
+    int rc = turbo_secure_random(raw, sizeof(raw));
+    if (rc != 0) {
+      return rc;
+    }
   }
   if (tn_base64_encode_buf(raw, 16, b64, sizeof(b64)) != 0) {
     return TURBO_EINVAL;
@@ -921,7 +925,8 @@ static int ws_send_frame(ws_state_t *st, uint8_t opcode,
   int masked = st->server_mode ? 0 : 1;
 
   if (masked) {
-    secure_random(mask, 4);
+    int rc = turbo_secure_random(mask, sizeof(mask));
+    if (rc != 0) return rc;
   }
 
   uint8_t hdr[14];
@@ -1119,9 +1124,12 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
     turbo_stream_tls_set_sni(st->tcp, st->host);
   }
 
-  if (ws_prepare_client_key(st) != 0) {
-    ws_drop_inner_tcp(st);
-    return TURBO_EINVAL;
+  {
+    int rc = ws_prepare_client_key(st);
+    if (rc != 0) {
+      ws_drop_inner_tcp(st);
+      return rc;
+    }
   }
 
   st->state = WS_ST_CONNECTING;

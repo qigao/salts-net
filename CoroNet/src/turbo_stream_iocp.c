@@ -19,6 +19,10 @@
 #include <ws2tcpip.h>
 
 #define STREAM_IOCP_ACCEPT_DEPTH 8
+/* Completion callbacks are serialized by the owning event loop. A single
+ * dequeue worker preserves completion order without reducing callback
+ * parallelism. */
+#define STREAM_IOCP_COMPLETION_WORKERS 1
 
 void turbo_stream_tls_note_iocp_timing(turbo_stream_t *s, uint64_t iocp_post_ns,
                                        uint64_t post_drain_ns);
@@ -31,6 +35,7 @@ typedef struct stream_iocp_state_s {
   LPFN_CONNECTEX connect_ex;
   volatile LONG inflight_count;
   int recv_started;
+  int recv_inflight;
   int closing;
   int connect_pending;
   int connect_reported;
@@ -246,6 +251,8 @@ void stream_iocp_handle_recv_op(iocp_op_t *op) {
   DWORD bytes = op->bytes_transferred;
   uint64_t handler_entry_ns = turbo_hrtime();
 
+  st->recv_inflight = 0;
+
   if (op->completed_ns != 0) {
     uint64_t iocp_post_ns = 0;
     uint64_t post_drain_ns;
@@ -385,6 +392,8 @@ void stream_iocp_handle_accept_op(iocp_op_t *op) {
 static int stream_iocp_submit_recv(turbo_stream_t *s) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
 
+  if (!st || st->recv_inflight || st->closing || s->closing) return 0;
+
   iocp_op_t *op = &st->recv_op;
   memset(&op->overlapped, 0, sizeof(OVERLAPPED));
   op->kind = IOCP_OP_STREAM_RECV;
@@ -395,12 +404,14 @@ static int stream_iocp_submit_recv(turbo_stream_t *s) {
   op->wsabuf.len = (ULONG)buf->capacity;
   op->flags = 0;
 
+  st->recv_inflight = 1;
   InterlockedIncrement(&st->inflight_count);
   iocp_pool_inflight_inc(s->ctx->iocp_pool);
   
   if (WSARecv(st->socket, &op->wsabuf, 1, NULL, &op->flags, &op->overlapped, NULL) == SOCKET_ERROR) {
     int err = WSAGetLastError();
     if (err != WSA_IO_PENDING) {
+      st->recv_inflight = 0;
       InterlockedDecrement(&st->inflight_count);
       iocp_pool_inflight_dec(s->ctx->iocp_pool);
       return -(int)err;
@@ -525,7 +536,7 @@ static int stream_iocp_submit_accept(turbo_stream_listener_t *l) {
 
 static int lazy_pool_init(coro_context_t *ctx) {
   if (!ctx->iocp_pool) {
-    ctx->iocp_pool = iocp_pool_create(ctx, 0); /* 0 = num_cpu */
+    ctx->iocp_pool = iocp_pool_create(ctx, STREAM_IOCP_COMPLETION_WORKERS);
     if (!ctx->iocp_pool) return TURBO_ENOMEM;
   }
   return 0;

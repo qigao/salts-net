@@ -38,6 +38,7 @@
 // =============================================================================
 
 #define DNS_TYPE_A   1
+#define DNS_TYPE_ANY 255
 #define DNS_TYPE_PTR 12
 #define DNS_TYPE_TXT 16
 #define DNS_TYPE_SRV 33
@@ -282,11 +283,18 @@ static int mdns_send_service_packet(mdns_ctx_t *ctx, const mdns_service_t *servi
 static int mdns_service_matches_query(const mdns_service_t *service,
                                       const char *query_name, uint16_t qtype) {
   char our_service[MDNS_MAX_NAME_LEN];
+  char our_hostname[MDNS_MAX_NAME_LEN];
 
-  if (!service || !query_name || qtype != DNS_TYPE_PTR) return 0;
+  if (!service || !query_name) return 0;
 
   fmt(our_service, sizeof(our_service), "{}.local", service->service_type);
-  return strcmp(query_name, our_service) == 0;
+  fmt(our_hostname, sizeof(our_hostname), "{}.local", service->hostname);
+  if ((qtype == DNS_TYPE_PTR || qtype == DNS_TYPE_ANY) &&
+      strcmp(query_name, our_service) == 0) {
+    return 1;
+  }
+  return (qtype == DNS_TYPE_A || qtype == DNS_TYPE_ANY) &&
+         strcmp(query_name, our_hostname) == 0;
 }
 
 static void mdns_clear_discovery_targets(mdns_ctx_t *ctx) {

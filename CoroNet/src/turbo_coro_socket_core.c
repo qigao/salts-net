@@ -62,12 +62,9 @@ const coro_transport_ops_t *transport_ops_table[TURBO_TRANSPORT_MAX] = {
 
 /* ── Forward declarations ─────────────────────────────────── */
 static void socket_record_error(coro_context_t *ctx, int err);
-static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t transport,
-                                            int connected);
 static void socket_destroy_shell(coro_socket_t *s);
 static turbo_datagram_t *coro_socket_multicast_datagram(coro_socket_t *s);
 static void coro_socket_reset_recv_compression_state(coro_socket_t *s);
-static int coro_socket_recv_raw(coro_socket_t *s, char **data, size_t *len);
 
 static void socket_record_error(coro_context_t *ctx, int err) {
   if (ctx) {
@@ -194,8 +191,8 @@ static int socket_last_error_or(coro_socket_t *s, int fallback) {
   return (s && s->ctx && s->ctx->last_error != 0) ? s->ctx->last_error : fallback;
 }
 
-static void coro_socket_configure_transport(coro_socket_t *s, turbo_transport_t transport,
-                                            int connected) {
+void coro_socket_configure_transport_internal(coro_socket_t *s, turbo_transport_t transport,
+                                              int connected) {
   if (!s) return;
 
   s->transport = transport;
@@ -853,8 +850,8 @@ coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type) 
 
 /* ── Socket Connect ───────────────────────────────────────── */
 
-static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_host, int port,
-                                         const char *request_host) {
+int coro_socket_connect_direct_internal(coro_socket_t *s, const char *connect_host, int port,
+                                        const char *request_host) {
   uint64_t deadline_ms;
   const char *target_host;
 
@@ -872,7 +869,7 @@ static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_h
     return TURBO_EPROTONOSUPPORT;
   }
 
-  coro_socket_configure_transport(s, transport, 0);
+  coro_socket_configure_transport_internal(s, transport, 0);
   s->resolved_ip_count = 0;
   s->resolved_ip[0] = '\0';
   deadline_ms = coro_socket_connect_deadline_ms(s);
@@ -938,6 +935,14 @@ static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_h
   return coro_socket_connect_resolved(s, target_host, port, deadline_ms);
 }
 
+static int coro_socket_connect_host_impl(coro_socket_t *s, const char *connect_host, int port,
+                                         const char *request_host) {
+  if (s && s->proxy.type != CORO_PROXY_DIRECT) {
+    return coro_socket_proxy_connect_internal(s, connect_host, port, request_host);
+  }
+  return coro_socket_connect_direct_internal(s, connect_host, port, request_host);
+}
+
 int coro_socket_set_connect_policy(coro_socket_t *s, coro_socket_connect_policy_fn policy,
                                    void *user_data) {
   if (!s || (policy && (s->co_wait || s->connected))) return TURBO_EINVAL;
@@ -958,7 +963,7 @@ int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
 int coro_socket_connect_pipe(coro_socket_t *s, const char *path) {
   if (!s || !path) return socket_return_error(s, TURBO_EINVAL);
 
-  coro_socket_configure_transport(s, TURBO_PIPE, 0);
+  coro_socket_configure_transport_internal(s, TURBO_PIPE, 0);
   if (!s->ops || !s->ops->connect) {
     return socket_return_error(s, TURBO_ENOTSUP);
   }
@@ -1215,6 +1220,12 @@ int coro_socket_send(coro_socket_t *s, const char *d, size_t l) {
     return socket_return_error(s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
   }
 #endif
+  return coro_socket_send_raw_internal(s, d, l);
+}
+
+int coro_socket_send_raw_internal(coro_socket_t *s, const char *d, size_t l) {
+  if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
+  if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
   return s->ops->send(s, d, l);
 }
 
@@ -1243,7 +1254,7 @@ int coro_socket_recv_compressed(coro_socket_t *s, char **data, size_t *len) {
     {
       char *chunk = NULL;
       size_t chunk_len = 0U;
-      int rc = coro_socket_recv_raw(s, &chunk, &chunk_len);
+      int rc = coro_socket_recv_raw_internal(s, &chunk, &chunk_len);
 
       if (rc != 0) {
         if (chunk) {
@@ -1357,10 +1368,10 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
     return coro_socket_recv_compressed(s, data, len);
   }
 #endif
-  return coro_socket_recv_raw(s, data, len);
+  return coro_socket_recv_raw_internal(s, data, len);
 }
 
-static int coro_socket_recv_raw(coro_socket_t *s, char **data, size_t *len) {
+int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
   if (!s || !data || !len) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->recv_start) return socket_return_error(s, TURBO_ENOTSUP);
   /* Return buffered data if available */
@@ -1656,7 +1667,7 @@ int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t
   child->tcp_keepalive_configured = parent->tcp_keepalive_configured;
   child->linger_config = parent->linger_config;
   child->linger_configured = parent->linger_configured;
-  return coro_socket_apply_stream_options(child);
+  return child->handle.stream ? coro_socket_apply_stream_options(child) : 0;
 }
 
 int coro_socket_set_tcp_keepalive(coro_socket_t *s,
@@ -1732,11 +1743,9 @@ void coro_socket_destroy(coro_socket_t *s) {
 
   /* Close WebSocket server */
 
-  /* Destroy listener */
-  if (s->listener) {
-    coro_socket_t *l = s->listener;
-    s->listener = NULL;
-    coro_socket_destroy(l);
+  /* Stop server admission and accepted tasks before releasing the owner. */
+  if (s->listener || s->accept_loop_active || s->server_tasks) {
+    (void)coro_socket_server_stop(s);
   }
 
   /* Close timer */

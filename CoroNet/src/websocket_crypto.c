@@ -1,16 +1,6 @@
 #include "websocket_crypto.h"
+#include <platform.h>
 #include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-
-#ifdef _WIN32
-#  include <windows.h>
-#  include <bcrypt.h>
-#  pragma comment(lib, "bcrypt.lib")
-#else
-#  include <fcntl.h>
-#  include <unistd.h>
-#endif
 
 /* ============================================================================
  * SHA-1 Implementation (for handshake validation)
@@ -165,26 +155,8 @@ void sha1_final(sha1_context_t* ctx, uint8_t digest[20]) {
  * Cryptographically Secure Random
  * ========================================================================= */
 
-/**
- * @brief Generate cryptographically secure random bytes.
- *
- * Windows: BCryptGenRandom (CNG, stateless — no CSP acquire/release per call).
- * POSIX:   /dev/urandom.
- */
 int secure_random(uint8_t* buffer, size_t length) {
-#ifdef _WIN32
-    NTSTATUS st = BCryptGenRandom(NULL, buffer, (ULONG)length,
-                                  BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-    return BCRYPT_SUCCESS(st) ? 0 : -1;
-#else
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd < 0) {
-        return -1;
-    }
-    ssize_t result = read(fd, buffer, length);
-    close(fd);
-    return (result == (ssize_t)length) ? 0 : -1;
-#endif
+    return turbo_secure_random(buffer, length);
 }
 
 /* ============================================================================

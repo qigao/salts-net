@@ -104,6 +104,12 @@ typedef enum {
 } ice_state_t;
 
 /**
+ * Returned by state-changing ICE agent APIs after the agent is closed.
+ * This value is reserved across all int-returning ice_agent_* operations.
+ */
+#define ICE_AGENT_ERROR_CLOSED (-100)
+
+/**
  * @brief Convert ice_state_t to string.
  */
 CXX_C_API const char *ice_state_name(ice_state_t state);
@@ -281,6 +287,22 @@ typedef struct {
  * ============================================================================ */
 
 /**
+ * Agent lifecycle and threading contract:
+ *
+ * - ICE_STATE_CLOSED is terminal. After close, state-changing operations with
+ *   an int result return ICE_AGENT_ERROR_CLOSED and void mutators are no-ops.
+ * - Read-only queries, callback replacement/detachment, repeated close, and
+ *   destroy remain valid while the agent object is alive.
+ * - Agent operations and callbacks run on the owning coroutine-context thread.
+ *   Use coro_post() to request close from another thread.
+ * - Callbacks are synchronous. They may call ice_agent_close(), but must not
+ *   call ice_agent_destroy(); destroy the agent after the initiating API
+ *   returns instead.
+ * - No API may be called after ice_agent_destroy(). The coroutine context must
+ *   outlive the agent and any deferred shutdown work.
+ */
+
+/**
  * Create ICE agent
  *
  * @param ctx    Coroutine context (must outlive the agent)
@@ -290,11 +312,16 @@ CXX_C_API turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_con
 
 /**
  * Destroy ICE agent
+ *
+ * Safe for NULL and for an agent that was never started or was already closed.
  */
 CXX_C_API void ice_agent_destroy(turbo_ice_agent_t *agent);
 
 /**
  * Set callbacks
+ *
+ * This remains valid after close so callback-owned context can be detached
+ * before destroy.
  */
 CXX_C_API void ice_agent_set_callbacks(turbo_ice_agent_t *agent, const ice_callbacks_t *callbacks);
 
@@ -424,7 +451,7 @@ CXX_C_API int ice_candidate_to_sdp(const ice_candidate_t *candidate, char *buf, 
 /**
  * Calculate candidate priority (RFC 8445)
  */
-uint32_t ice_calculate_priority(
+CXX_C_API uint32_t ice_calculate_priority(
     ice_candidate_type_t type,
     int local_preference,
     int component_id
@@ -437,6 +464,9 @@ CXX_C_API void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow)
 
 /**
  * Close an ICE agent and stop any active check/data loop.
+ *
+ * Safe for NULL, an agent that has not started, and repeated calls. Closing is
+ * terminal; create a new agent for another ICE session.
  */
 CXX_C_API void ice_agent_close(turbo_ice_agent_t *agent);
 

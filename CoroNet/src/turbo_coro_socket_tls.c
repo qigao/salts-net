@@ -366,6 +366,28 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
   }
 }
 
+int coro_socket_tls_export_channel_binding(
+    const coro_socket_t *s,
+    uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]) {
+  if (!output) {
+    return TURBO_EINVAL;
+  }
+  memset(output, 0, CORO_TLS_CHANNEL_BINDING_SIZE);
+
+  if (!s) {
+    return TURBO_EINVAL;
+  }
+  if (s->transport != TURBO_TLS) {
+    return TURBO_ENOTSUP;
+  }
+  if (!s->handle.stream) {
+    return TURBO_ENOTCONN;
+  }
+
+  return turbo_stream_tls_export_channel_binding_internal(
+      s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
+}
+
 /* ── Send/Recv ────────────────────────────────────────────── */
 
 static int tls_send(coro_socket_t *s, const char *data, size_t len) {

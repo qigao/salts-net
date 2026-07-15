@@ -855,7 +855,10 @@ static void register_conn_wrapper(redis_pool_t *pool, redis_pool_conn_t *conn) {
 
 static int reconfigure_pooled_client(redis_pool_conn_t *conn, const redis_config_t *config) {
     tstr_t new_host = NULL;
+    tstr_t new_username = NULL;
     tstr_t new_password = NULL;
+    int replace_username;
+    int replace_password;
 
     if (!conn || !config) {
         return -1;
@@ -873,10 +876,21 @@ static int reconfigure_pooled_client(redis_pool_conn_t *conn, const redis_config
         }
     }
 
-    if (!redis_pool_strings_equal(conn->client->config.password, config->password)) {
+    replace_username = !redis_pool_strings_equal(conn->client->config.username, config->username);
+    if (replace_username && config->username) {
+        new_username = tstr_dup(config->username);
+        if (!new_username) {
+            tstr_free(new_host);
+            return -1;
+        }
+    }
+
+    replace_password = !redis_pool_strings_equal(conn->client->config.password, config->password);
+    if (replace_password && config->password) {
         new_password = tstr_dup(config->password);
         if (!new_password) {
             tstr_free(new_host);
+            tstr_free(new_username);
             return -1;
         }
     }
@@ -886,7 +900,12 @@ static int reconfigure_pooled_client(redis_pool_conn_t *conn, const redis_config
         conn->client->config.host = new_host;
     }
 
-    if (new_password) {
+    if (replace_username) {
+        tstr_free((tstr_t)conn->client->config.username);
+        conn->client->config.username = new_username;
+    }
+
+    if (replace_password) {
         tstr_free((tstr_t)conn->client->config.password);
         conn->client->config.password = new_password;
     }
@@ -896,6 +915,7 @@ static int reconfigure_pooled_client(redis_pool_conn_t *conn, const redis_config
     conn->client->config.timeout_ms = config->timeout_ms;
     conn->client->config.command_timeout_ms = config->command_timeout_ms;
     conn->client->config.max_pipeline = config->max_pipeline;
+    conn->client->config.cluster_readonly = config->cluster_readonly;
     return 0;
 }
 
@@ -958,6 +978,7 @@ static void free_config_copy(redis_pool_t *pool) {
     }
 
     tstr_free((tstr_t)pool->config.master_host);
+    tstr_free((tstr_t)pool->config.username);
     tstr_free((tstr_t)pool->config.password);
 
     if (pool->config.replica_hosts) {
@@ -969,6 +990,7 @@ static void free_config_copy(redis_pool_t *pool) {
 
     free(pool->config.replica_ports);
     pool->config.master_host = NULL;
+    pool->config.username = NULL;
     pool->config.password = NULL;
     pool->config.replica_hosts = NULL;
     pool->config.replica_ports = NULL;
@@ -982,10 +1004,38 @@ static int build_pool_url(char *buffer, size_t size, const char *host, uint16_t 
     return fmt(buffer, size, "tcp://{}:{}", host, (unsigned int)port) > 0 ? 0 : -1;
 }
 
-static coro_pool_t *create_coro_pool(coro_context_t *ctx, const redis_pool_config_t *config) {
-    coro_pool_config_t pool_config = CORO_POOL_CONFIG_DEFAULT;
+static int redis_pool_initialize_connection(coro_socket_t *socket, void *user_data) {
+    redis_pool_t *pool = (redis_pool_t *)user_data;
+    redis_client_t *client = NULL;
+    redis_config_t config;
+    int rc;
 
-    if (!ctx || !config) {
+    if (!socket || !pool || !pool->ctx) return TURBO_EINVAL;
+    memset(&config, 0, sizeof(config));
+    config.host = pool->config.master_host;
+    config.port = pool->config.master_port;
+    config.username = pool->config.username;
+    config.password = pool->config.password;
+    config.database = pool->config.database;
+    config.timeout_ms = pool->config.connect_timeout_ms;
+    config.command_timeout_ms = pool->config.command_timeout_ms;
+    config.max_pipeline = pool->config.pipeline_max;
+    config.cluster_readonly = pool->config.cluster_readonly;
+    client = redis_client_create_with_config(&config);
+    if (!client) return TURBO_ENOMEM;
+    rc = redis_client_attach_socket(client, pool->ctx, socket, 0);
+    if (rc == TURBO_OK) rc = redis_client_prepare(client);
+    (void)redis_client_detach_socket(client);
+    redis_client_destroy(client);
+    return rc;
+}
+
+static coro_pool_t *create_coro_pool(redis_pool_t *pool,
+                                     const redis_pool_config_t *config) {
+    coro_pool_config_t pool_config = CORO_POOL_CONFIG_DEFAULT;
+    coro_pool_t *result;
+
+    if (!pool || !pool->ctx || !config) {
         return NULL;
     }
 
@@ -993,7 +1043,14 @@ static coro_pool_t *create_coro_pool(coro_context_t *ctx, const redis_pool_confi
     pool_config.max_size = config->max_connections;
     pool_config.connect_timeout_ms = config->connect_timeout_ms;
     pool_config.idle_timeout_ms = config->idle_timeout_ms;
-    return coro_pool_create(ctx, &pool_config);
+    result = coro_pool_create(pool->ctx, &pool_config);
+    if (!result) return NULL;
+    if (coro_pool_set_connection_initializer(result, redis_pool_initialize_connection,
+                                             pool) != TURBO_OK) {
+        coro_pool_destroy(result);
+        return NULL;
+    }
+    return result;
 }
 
 static void destroy_replica_pools(redis_pool_t *pool) {
@@ -1032,13 +1089,16 @@ static redis_pool_conn_t *wrap_borrowed_socket(redis_pool_t *pool,
     }
     register_conn_wrapper(pool, conn);
 
+    memset(&config, 0, sizeof(config));
     config.host = host;
     config.port = port;
+    config.username = pool->config.username;
     config.password = pool->config.password;
     config.database = pool->config.database;
     config.timeout_ms = pool->config.connect_timeout_ms;
-    config.command_timeout_ms = pool->config.connect_timeout_ms;
+    config.command_timeout_ms = pool->config.command_timeout_ms;
     config.max_pipeline = pool->config.pipeline_max;
+    config.cluster_readonly = pool->config.cluster_readonly;
 
     if (reconfigure_pooled_client(conn, &config) != 0) {
         coro_pool_return(owner_pool, socket);
@@ -1051,6 +1111,9 @@ static redis_pool_conn_t *wrap_borrowed_socket(redis_pool_t *pool,
         object_pool_free(pool->conn_wrapper_pool, conn);
         return NULL;
     }
+    conn->client->is_authenticated = pool->config.password ? 1 : 0;
+    conn->client->selected_db = pool->config.database;
+    conn->client->is_cluster_readonly = pool->config.cluster_readonly ? 1 : 0;
 
     conn->socket = socket;
     conn->owner_pool = owner_pool;
@@ -1077,17 +1140,23 @@ static void destroy_pool_conn(redis_pool_t *pool, redis_pool_conn_t *conn) {
 static int pool_release_conn(redis_pool_t *pool, redis_pool_conn_t *conn) {
     coro_pool_t *owner_pool;
     coro_socket_t *socket;
+    int reusable;
 
     if (!pool || !conn) {
         return -1;
     }
 
     owner_pool = conn->owner_pool;
+    reusable = conn->client && conn->client->is_connected;
     socket = redis_client_detach_socket(conn->client);
     destroy_pool_conn(pool, conn);
 
     if (socket && owner_pool) {
-        coro_pool_return(owner_pool, socket);
+        if (reusable) {
+            coro_pool_return(owner_pool, socket);
+        } else {
+            (void)coro_pool_discard(owner_pool, socket);
+        }
     }
 
     refresh_pool_stats(pool);
@@ -1175,8 +1244,16 @@ static int finish_stream_submit(redis_pool_t *pool, redis_pool_conn_t *conn,
 redis_pool_t *redis_pool_create(const redis_pool_config_t *config) {
     redis_pool_t *pool;
 
-    if (!config || !config->master_host) {
+    if (!config || !config->master_host || !config->master_host[0] ||
+        config->master_port == 0 || config->database < 0 || config->database > 15 ||
+        (config->username && !config->password) ||
+        (config->replica_count > 0 && (!config->replica_hosts || !config->replica_ports))) {
         return NULL;
+    }
+    for (size_t i = 0; i < config->replica_count; ++i) {
+        if (!config->replica_hosts[i] || !config->replica_hosts[i][0] ||
+            config->replica_ports[i] == 0)
+            return NULL;
     }
 
     pool = calloc(1, sizeof(*pool));
@@ -1185,12 +1262,20 @@ redis_pool_t *redis_pool_create(const redis_pool_config_t *config) {
     }
 
     pool->config = *config;
+    pool->config.master_host = NULL;
+    pool->config.username = NULL;
+    pool->config.password = NULL;
+    pool->config.replica_hosts = NULL;
+    pool->config.replica_ports = NULL;
+    pool->config.replica_count = 0;
     if (pool->config.min_connections == 0) pool->config.min_connections = 2;
     if (pool->config.max_connections == 0) pool->config.max_connections = 10;
     if (pool->config.min_connections > pool->config.max_connections) {
         pool->config.min_connections = pool->config.max_connections;
     }
     if (pool->config.connect_timeout_ms == 0) pool->config.connect_timeout_ms = 5000;
+    if (pool->config.command_timeout_ms == 0)
+        pool->config.command_timeout_ms = pool->config.connect_timeout_ms;
     if (pool->config.idle_timeout_ms == 0) pool->config.idle_timeout_ms = 60000;
     if (pool->config.health_check_ms == 0) pool->config.health_check_ms = 30000;
     if (pool->config.pipeline_max == 0) pool->config.pipeline_max = 100;
@@ -1201,6 +1286,14 @@ redis_pool_t *redis_pool_create(const redis_pool_config_t *config) {
         return NULL;
     }
 
+    if (config->username) {
+        pool->config.username = tstr_dup(config->username);
+        if (!pool->config.username) {
+            redis_pool_destroy(pool);
+            return NULL;
+        }
+    }
+
     if (config->password) {
         pool->config.password = tstr_dup(config->password);
         if (!pool->config.password) {
@@ -1209,7 +1302,7 @@ redis_pool_t *redis_pool_create(const redis_pool_config_t *config) {
         }
     }
 
-    if (config->replica_count > 0 && config->replica_hosts && config->replica_ports) {
+    if (config->replica_count > 0) {
         char **hosts = calloc(config->replica_count, sizeof(*hosts));
         uint16_t *ports = calloc(config->replica_count, sizeof(*ports));
         if (!hosts || !ports) {
@@ -1249,19 +1342,21 @@ redis_pool_t *redis_pool_create(const redis_pool_config_t *config) {
 }
 
 int redis_pool_start(redis_pool_t *pool) {
+    coro_context_t *ctx;
 
     if (!pool) {
         return -1;
     }
 
-    pool->ctx = coro_context_current();
-    if (!pool->ctx) {
+    ctx = coro_context_current();
+    if (!ctx) {
         return -1;
     }
 
     redis_pool_stop(pool);
+    pool->ctx = ctx;
 
-    pool->master_pool = create_coro_pool(pool->ctx, &pool->config);
+    pool->master_pool = create_coro_pool(pool, &pool->config);
     if (!pool->master_pool) {
         return -1;
     }
@@ -1280,7 +1375,7 @@ int redis_pool_start(redis_pool_t *pool) {
         }
 
         for (size_t i = 0; i < pool->config.replica_count; i++) {
-            pool->replica_pools[i] = create_coro_pool(pool->ctx, &pool->config);
+            pool->replica_pools[i] = create_coro_pool(pool, &pool->config);
             if (!pool->replica_pools[i]) {
                 continue;
             }
@@ -1331,12 +1426,16 @@ void redis_pool_destroy(redis_pool_t *pool) {
     free(pool);
 }
 
-redis_pool_conn_t *redis_pool_acquire(redis_pool_t *pool, int read_only) {
+static int redis_pool_acquire_ex(redis_pool_t *pool, int read_only,
+                                 redis_pool_conn_t **out) {
     coro_socket_t *socket = NULL;
+    redis_pool_conn_t *conn;
     int rc;
 
+    if (!out) return TURBO_EINVAL;
+    *out = NULL;
     if (!pool || !pool->running || !pool->master_pool) {
-        return NULL;
+        return TURBO_ENOTCONN;
     }
 
     if (read_only && pool->replica_pools) {
@@ -1349,12 +1448,12 @@ redis_pool_conn_t *redis_pool_acquire(redis_pool_t *pool, int read_only) {
             if (rc == 0) {
                 pool->next_replica = idx + 1;
                 refresh_pool_stats(pool);
-                return wrap_borrowed_socket(pool,
-                                            pool->replica_pools[idx],
-                                            socket,
+                conn = wrap_borrowed_socket(pool, pool->replica_pools[idx], socket,
                                             pool->config.replica_hosts[idx],
-                                            pool->config.replica_ports[idx],
-                                            1);
+                                            pool->config.replica_ports[idx], 1);
+                if (!conn) return TURBO_ENOMEM;
+                *out = conn;
+                return TURBO_OK;
             }
         }
     }
@@ -1363,16 +1462,20 @@ redis_pool_conn_t *redis_pool_acquire(redis_pool_t *pool, int read_only) {
     if (rc != 0) {
         pool->stats.waiting_requests++;
         refresh_pool_stats(pool);
-        return NULL;
+        return rc;
     }
 
     refresh_pool_stats(pool);
-    return wrap_borrowed_socket(pool,
-                                pool->master_pool,
-                                socket,
-                                pool->config.master_host,
-                                pool->config.master_port,
-                                0);
+    conn = wrap_borrowed_socket(pool, pool->master_pool, socket,
+                                pool->config.master_host, pool->config.master_port, 0);
+    if (!conn) return TURBO_ENOMEM;
+    *out = conn;
+    return TURBO_OK;
+}
+
+redis_pool_conn_t *redis_pool_acquire(redis_pool_t *pool, int read_only) {
+    redis_pool_conn_t *conn = NULL;
+    return redis_pool_acquire_ex(pool, read_only, &conn) == TURBO_OK ? conn : NULL;
 }
 
 void redis_pool_release(redis_pool_t *pool, redis_pool_conn_t *conn) {
@@ -1473,6 +1576,36 @@ int redis_pool_commandv(redis_pool_t *pool, int argc, const char **argv,
 
     result = redis_commandv(conn->client, argc, argv, argvlen, on_pool_command_done, ctx);
     return finish_cmd_submit(pool, conn, ctx, result);
+}
+
+int redis_pool_commandv_result(redis_pool_t *pool, int read_only,
+                               int argc, const char **argv,
+                               const size_t *argvlen,
+                               redis_command_result_t *out) {
+    redis_pool_conn_t *conn;
+    int rc;
+
+    if (!out) return TURBO_EINVAL;
+    *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+    if (!pool || !argv || argc <= 0) {
+        out->status = TURBO_EINVAL;
+        return out->status;
+    }
+    if (!pool->running) {
+        out->status = TURBO_ENOTCONN;
+        return out->status;
+    }
+    rc = redis_pool_acquire_ex(pool, read_only ? 1 : 0, &conn);
+    if (rc != TURBO_OK) {
+        out->status = rc;
+        pool->stats.commands_failed++;
+        return out->status;
+    }
+    rc = redis_commandv_result(conn->client, argc, argv, argvlen, out);
+    if (out->outcome == REDIS_COMMAND_REPLIED) pool->stats.commands_sent++;
+    if (rc != TURBO_OK) pool->stats.commands_failed++;
+    pool_release_conn(pool, conn);
+    return rc;
 }
 
 int redis_pool_read_command(redis_pool_t *pool, redis_command_cb_t callback,

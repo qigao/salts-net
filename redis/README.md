@@ -10,8 +10,9 @@ Async Redis client implementing the RESP (REdis Serialization Protocol) protocol
 - **Redis Streams**: XADD, XREAD, XREADGROUP, XACK for reliable messaging
 - **Pub/Sub**: PUBLISH, SUBSCRIBE, PSUBSCRIBE for real-time broadcast
 - **Common Commands**: Built-in support for GET, SET, LPUSH, HSET, SADD, and more
-- **Authentication**: Password-based authentication support
+- **Authentication**: Password and Redis ACL username/password authentication
 - **Database Selection**: Select different Redis databases (0-15)
+- **Explicit Outcomes**: Distinguishes not-sent, uncertain-send, lost-reply, and replied commands
 - **Zero External Dependencies**: Pure RESP implementation
 
 
@@ -61,6 +62,7 @@ int main() {
 redis_config_t config = {
     .host = "redis.example.com",
     .port = 6379,
+    .username = "worker",  // optional Redis ACL username
     .password = "secret",
     .database = 1,
     .timeout_ms = 5000,
@@ -333,20 +335,25 @@ typedef struct {
 ## Error Handling
 
 ```c
-void on_reply(redis_client_t *client, redis_reply_t *reply, void *data) {
-    if (!reply) {
-        fprintf(stderr, "Connection error\n");
-        return;
-    }
+redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+const char *argv[] = {"SET", "job:42", "done"};
+int rc = redis_commandv_result(client, 3, argv, NULL, &result);
 
-    if (reply->type == REDIS_REPLY_ERROR) {
-        fprintf(stderr, "Redis error: %s\n", reply->str);
-        return;
-    }
-
-    // Process successful reply
+if (rc == TURBO_EIO && result.server_error != REDIS_SERVER_ERROR_NONE) {
+    /* Redis replied with an application/server error. */
+} else if (result.outcome == REDIS_COMMAND_SEND_UNCERTAIN ||
+           result.outcome == REDIS_COMMAND_REPLY_UNKNOWN) {
+    /* The write may have committed. Reconcile before retrying. */
+} else if (rc == TURBO_OK) {
+    /* Consume result.reply while result remains alive. */
 }
+redis_command_result_clear(&result);
 ```
+
+`redis_client_connect()` performs configured AUTH and SELECT before reporting a
+ready connection. A Redis error reply is returned as `TURBO_EIO`, retained in
+`result.reply`, and classified in `result.server_error`; it is not logged by the
+RESP parser or converted into an empty Stream result.
 
 ## Streams vs Pub/Sub
 
@@ -382,6 +389,7 @@ Connection pooling for high-throughput scenarios with read/write splitting.
 - Configurable min/max connections
 - Read/write splitting (master + replicas)
 - Automatic connection acquisition/release
+- AUTH/ACL and SELECT initialization once per physical connection
 - Pipeline batching support
 - Health monitoring and statistics
 
@@ -393,8 +401,12 @@ Connection pooling for high-throughput scenarios with read/write splitting.
 redis_pool_config_t config = REDIS_POOL_CONFIG_DEFAULT;
 config.master_host = "redis-master";
 config.master_port = 6379;
+config.username = "worker";       /* Optional Redis ACL user */
+config.password = "secret";
+config.database = 4;
 config.min_connections = 5;
 config.max_connections = 20;
+config.command_timeout_ms = 3000;
 
 redis_pool_t *pool = redis_pool_create(&config);
 redis_pool_start(pool);
@@ -404,6 +416,30 @@ redis_pool_set(pool, "key", "value", callback, ctx);
 redis_pool_get(pool, "key", callback, ctx);
 
 redis_pool_destroy(pool);
+```
+
+`redis_pool_start()` must run inside a CoroNet coroutine. Opening the pool
+connects its minimum physical connections and completes configured AUTH and
+SELECT before any connection can be borrowed. A connection whose RESP stream
+becomes invalid is discarded instead of being returned to the idle pool.
+`cluster_readonly` additionally sends and validates `READONLY` once for every
+new physical connection; Redis Cluster uses this when constructing replica
+pools.
+
+For code that needs exact retry semantics, use the owned result API:
+
+```c
+redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+const char *argv[] = {"SET", "job:42", "done"};
+int rc = redis_pool_commandv_result(pool, 0, 3, argv, NULL, &result);
+
+if (result.outcome == REDIS_COMMAND_SEND_UNCERTAIN ||
+    result.outcome == REDIS_COMMAND_REPLY_UNKNOWN) {
+    /* Reconcile the write; do not retry blindly. */
+} else if (rc == TURBO_OK) {
+    /* Consume result.reply. */
+}
+redis_command_result_clear(&result);
 ```
 
 ### Read Replicas
@@ -498,6 +534,16 @@ Horizontal scaling across multiple masters with automatic slot routing.
 - MOVED/ASK redirection handling
 - Automatic topology discovery
 
+Topology discovery and refresh use `CLUSTER SHARDS`. `CLUSTER SLOTS` is used
+only when the server explicitly reports SHARDS as an unsupported command/subcommand (Redis
+before 7); parse errors, ACL failures, and other server errors never trigger a
+fallback. A candidate topology is accepted only when its RESP structure is
+valid, every slot is covered, all master pools are ready, and—when replica
+routing is enabled—every serving shard has at least one online replica whose
+pool completed `READONLY`. Only then does it atomically replace the previous
+topology. See the [Redis CLUSTER SHARDS contract](https://redis.io/docs/latest/commands/cluster-shards/)
+and [READONLY contract](https://redis.io/docs/latest/commands/readonly/).
+
 ### Basic Usage
 
 ```c
@@ -513,6 +559,7 @@ config.seed_count = 3;
 config.connections_per_node = 10;
 
 redis_cluster_t *cluster = redis_cluster_create(&config);
+// Must run inside a CoroNet coroutine.
 redis_cluster_connect(cluster);
 
 // Keys auto-route to correct master
@@ -573,6 +620,9 @@ printf("Commands: %llu, Redirections: %llu\n",
 | `redis_cluster_refresh(cluster)` | Refresh cluster topology |
 | `redis_cluster_command(...)` | Execute command (auto-route) |
 | `redis_cluster_command_key(...)` | Execute with explicit key |
+| `redis_cluster_commandv_result(...)` | Binary-safe command with exact outcome |
+| `redis_cluster_read_commandv(...)` | Declare a binary-safe command read-only |
+| `redis_cluster_read_commandv_result(...)` | Read-only command with exact outcome |
 | `redis_cluster_set/get/del/hset/hget(...)` | Convenience functions |
 | `redis_cluster_keyslot(key, len)` | Calculate hash slot |
 | `redis_cluster_get_node(cluster, slot)` | Get node for slot |
@@ -585,12 +635,27 @@ printf("Commands: %llu, Redirections: %llu\n",
 |--------|---------|-------------|
 | `seed_hosts/ports` | (required) | Initial nodes to connect |
 | `seed_count` | (required) | Number of seed nodes |
+| `username` | NULL | Optional Redis ACL username; requires `password` |
 | `password` | NULL | Authentication password |
-| `connections_per_node` | 5 | Pool size per master |
+| `connections_per_node` | 5 | Pool size per routable node |
 | `connect_timeout_ms` | 5000 | Connection timeout |
 | `command_timeout_ms` | 5000 | Command timeout |
 | `topology_refresh_ms` | 30000 | Topology refresh interval |
 | `max_redirections` | 5 | Max MOVED/ASK follows |
+| `route_reads_to_replicas` | 0 | Route declared read-only commands to online replicas |
+
+MOVED is retried only after a complete Redis error reply and updates the
+reported slot. ASK sends `ASKING` and the redirected command on the same
+physical connection without changing the cached owner. An uncertain send or
+unknown reply is never retried automatically; callers that need this distinction
+should use `redis_cluster_commandv_result()`.
+
+Generic command APIs remain master-routed because the client cannot safely
+infer whether module/custom commands mutate state. Convenience reads (`GET`,
+`HGET`, `MGET`, `XREAD`) and the explicit `redis_cluster_read_commandv*()` APIs
+are replica-eligible. Enabling replica routing is strict: a shard without an
+online replica makes topology connection/refresh fail instead of silently
+falling back to its master. Replica reads may be stale by Redis design.
 
 ## Pool vs Cluster
 

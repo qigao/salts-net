@@ -44,6 +44,50 @@ struct redis_reply_s {
     size_t element_count;      /* Number of array elements */
 };
 
+/** Redis command transport/application completion state. */
+typedef enum {
+    REDIS_COMMAND_NOT_SENT,
+    REDIS_COMMAND_SEND_UNCERTAIN,
+    REDIS_COMMAND_REPLY_UNKNOWN,
+    REDIS_COMMAND_REPLIED
+} redis_command_outcome_t;
+
+/** Stable classification of the first token in a Redis error reply. */
+typedef enum {
+    REDIS_SERVER_ERROR_NONE,
+    REDIS_SERVER_ERROR_ERR,
+    REDIS_SERVER_ERROR_BUSY_GROUP,
+    REDIS_SERVER_ERROR_NO_GROUP,
+    REDIS_SERVER_ERROR_WRONG_TYPE,
+    REDIS_SERVER_ERROR_NO_AUTH,
+    REDIS_SERVER_ERROR_MOVED,
+    REDIS_SERVER_ERROR_ASK,
+    REDIS_SERVER_ERROR_TRY_AGAIN,
+    REDIS_SERVER_ERROR_CLUSTER_DOWN,
+    REDIS_SERVER_ERROR_READ_ONLY,
+    REDIS_SERVER_ERROR_NO_SCRIPT,
+    REDIS_SERVER_ERROR_LOADING,
+    REDIS_SERVER_ERROR_OOM,
+    REDIS_SERVER_ERROR_EXEC_ABORT,
+    REDIS_SERVER_ERROR_MASTER_DOWN,
+    REDIS_SERVER_ERROR_MISCONF,
+    REDIS_SERVER_ERROR_UNKNOWN
+} redis_server_error_t;
+
+/**
+ * Owned result of one command. `reply` must be released with
+ * redis_command_result_clear().
+ */
+typedef struct {
+    int status;
+    redis_command_outcome_t outcome;
+    redis_server_error_t server_error;
+    redis_reply_t *reply;
+} redis_command_result_t;
+
+#define REDIS_COMMAND_RESULT_INIT \
+    { 0, REDIS_COMMAND_NOT_SENT, REDIS_SERVER_ERROR_NONE, NULL }
+
 /* Command callback */
 typedef void (*redis_command_cb_t)(redis_client_t *client, redis_reply_t *reply, void *user_data);
 
@@ -54,11 +98,13 @@ typedef void (*redis_connect_cb_t)(redis_client_t *client, int status, void *use
 typedef struct {
     const char *host;
     uint16_t port;
+    const char *username;      /* Optional ACL username; requires password */
     const char *password;      /* Optional auth password */
     int database;              /* Database number (0-15) */
     uint32_t timeout_ms;       /* Connection timeout */
     uint32_t command_timeout_ms; /* Command timeout */
     size_t max_pipeline;       /* Max pipelined commands */
+    int cluster_readonly;      /* Send READONLY when preparing this connection */
 } redis_config_t;
 
 /* Redis client structure */
@@ -72,6 +118,7 @@ struct redis_client_s {
     int is_connected;
     int is_authenticated;
     int selected_db;
+    int is_cluster_readonly;
 
     /* Compatibility-only queue state retained for public struct stability. */
     redis_command_t *command_queue;
@@ -127,6 +174,15 @@ CXX_C_API redis_client_t* redis_client_create_with_config(const redis_config_t *
 CXX_C_API int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, void *user_data);
 
 /**
+ * Complete configured AUTH/SELECT setup on an already connected socket.
+ *
+ * This is used by protocol-aware connection pools after transport connect.
+ * It is idempotent for the state tracked by `client` and returns a Redis,
+ * protocol, or transport error without hiding an uncertain command outcome.
+ */
+CXX_C_API int redis_client_prepare(redis_client_t *client);
+
+/**
  * Attach an externally-owned CoroNet socket to a Redis client.
  *
  * The client will use the socket for command I/O. Ownership remains with the
@@ -168,6 +224,32 @@ CXX_C_API int redis_command(redis_client_t *client, redis_command_cb_t callback,
  */
 CXX_C_API int redis_commandv(redis_client_t *client, int argc, const char **argv, 
                    const size_t *argvlen, redis_command_cb_t callback, void *user_data);
+
+/**
+ * Execute one command and retain its exact completion state.
+ *
+ * On return, `out` owns `out->reply`. Call redis_command_result_clear() even
+ * after failure. REDIS_COMMAND_SEND_UNCERTAIN and
+ * REDIS_COMMAND_REPLY_UNKNOWN mean that a mutating command must not be retried
+ * blindly. The call suspends the current coroutine while waiting for I/O.
+ *
+ * @param client Connected Redis client
+ * @param argc Number of command arguments
+ * @param argv Argument byte strings
+ * @param argvlen Optional lengths; NULL treats arguments as null-terminated
+ * @param out Required owned result initialized by this function
+ * @return TURBO_OK for a non-error reply, TURBO_EIO for a Redis error reply,
+ *         or a transport/validation error
+ */
+CXX_C_API int redis_commandv_result(redis_client_t *client, int argc,
+                                    const char **argv, const size_t *argvlen,
+                                    redis_command_result_t *out);
+
+/** Release an owned command reply and reset the result to NOT_SENT. */
+CXX_C_API void redis_command_result_clear(redis_command_result_t *result);
+
+/** Classify a RESP error by its stable leading token; non-errors return NONE. */
+CXX_C_API redis_server_error_t redis_server_error_classify(const redis_reply_t *reply);
 
 /**
  * Disconnect from Redis server
@@ -347,6 +429,16 @@ typedef struct {
     size_t entry_count;
 } redis_stream_result_t;
 
+/** Owned result of XREAD/XREADGROUP. */
+typedef struct {
+    redis_command_result_t command;
+    redis_stream_result_t *streams;
+    size_t stream_count;
+} redis_stream_read_result_t;
+
+#define REDIS_STREAM_READ_RESULT_INIT \
+    { REDIS_COMMAND_RESULT_INIT, NULL, 0u }
+
 /**
  * Stream message callback
  */
@@ -375,6 +467,12 @@ CXX_C_API int redis_xadd(redis_client_t *client, const char *key, size_t maxlen,
                const char **values, const size_t *value_lens,
                redis_command_cb_t callback, void *user_data);
 
+/** Owned-result variant of redis_xadd(); clear `out` after use. */
+CXX_C_API int redis_xadd_result(redis_client_t *client, const char *key, size_t maxlen,
+                                size_t field_count, const char **fields,
+                                const char **values, const size_t *value_lens,
+                                redis_command_result_t *out);
+
 /**
  * XREAD [COUNT count] [BLOCK ms] STREAMS key [key ...] id [id ...]
  * Read from streams
@@ -393,6 +491,11 @@ CXX_C_API int redis_xread(redis_client_t *client, size_t count, int block_ms,
                 size_t stream_count, const char **keys, const char **ids,
                 redis_stream_cb_t callback, void *user_data);
 
+/** Owned-result variant of redis_xread(); clear `out` after use. */
+CXX_C_API int redis_xread_result(redis_client_t *client, size_t count, int block_ms,
+                                 size_t stream_count, const char **keys,
+                                 const char **ids, redis_stream_read_result_t *out);
+
 /**
  * XGROUP CREATE key group id [MKSTREAM]
  * Create consumer group
@@ -409,6 +512,11 @@ CXX_C_API int redis_xread(redis_client_t *client, size_t count, int block_ms,
 CXX_C_API int redis_xgroup_create(redis_client_t *client, const char *key,
                         const char *group, const char *id, int mkstream,
                         redis_command_cb_t callback, void *user_data);
+
+/** Owned-result variant of redis_xgroup_create(); clear `out` after use. */
+CXX_C_API int redis_xgroup_create_result(redis_client_t *client, const char *key,
+                                         const char *group, const char *id,
+                                         int mkstream, redis_command_result_t *out);
 
 /**
  * XREADGROUP GROUP group consumer [COUNT count] [BLOCK ms] STREAMS key [key ...] id [id ...]
@@ -431,6 +539,16 @@ CXX_C_API int redis_xreadgroup(redis_client_t *client, const char *group, const 
                      size_t stream_count, const char **keys, const char **ids,
                      redis_stream_cb_t callback, void *user_data);
 
+/** Owned-result variant of redis_xreadgroup(); clear `out` after use. */
+CXX_C_API int redis_xreadgroup_result(redis_client_t *client, const char *group,
+                                      const char *consumer, size_t count,
+                                      int block_ms, size_t stream_count,
+                                      const char **keys, const char **ids,
+                                      redis_stream_read_result_t *out);
+
+/** Release all owned stream entries plus the underlying command reply. */
+CXX_C_API void redis_stream_read_result_clear(redis_stream_read_result_t *result);
+
 /**
  * XACK key group id [id ...]
  * Acknowledge processed messages
@@ -447,6 +565,11 @@ CXX_C_API int redis_xreadgroup(redis_client_t *client, const char *group, const 
 CXX_C_API int redis_xack(redis_client_t *client, const char *key, const char *group,
                size_t id_count, const char **ids,
                redis_command_cb_t callback, void *user_data);
+
+/** Owned-result variant of redis_xack(); clear `out` after use. */
+CXX_C_API int redis_xack_result(redis_client_t *client, const char *key,
+                                const char *group, size_t id_count,
+                                const char **ids, redis_command_result_t *out);
 
 /**
  * XDEL key id [id ...]
@@ -479,6 +602,21 @@ CXX_C_API void redis_stream_entry_free(redis_stream_entry_t *entry);
  * Free stream result
  */
 CXX_C_API void redis_stream_result_free(redis_stream_result_t *result, size_t count);
+
+/**
+ * Decode an owned RESP XREAD/XREADGROUP reply into typed Stream results.
+ *
+ * The returned array is independent of `reply` and must be released with
+ * redis_stream_result_free(). A NULL Redis reply decodes as an empty result.
+ *
+ * @param reply RESP reply to decode
+ * @param out Receives an owned result array
+ * @param out_count Receives the number of stream results
+ * @return TURBO_OK on success or a validation/allocation/protocol error
+ */
+CXX_C_API int redis_stream_reply_decode(const redis_reply_t *reply,
+                                        redis_stream_result_t **out,
+                                        size_t *out_count);
 
 /**
  * XRANGE key start end [COUNT count]

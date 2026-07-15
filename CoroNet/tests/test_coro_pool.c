@@ -75,6 +75,7 @@ typedef struct {
   coro_socket_t *server;
   int port;
   int test_result;
+  int initializer_calls;
 } test_ctx_t;
 
 static int next_test_port = TEST_PORT_BASE;
@@ -243,6 +244,20 @@ static void test_cleanup_pool(test_ctx_t *t, coro_pool_t *pool) {
   }
 }
 
+static int count_connection_initializer(coro_socket_t *socket, void *user_data) {
+  test_ctx_t *t = (test_ctx_t *)user_data;
+  if (!socket || !t) return TURBO_EINVAL;
+  t->initializer_calls++;
+  return TURBO_OK;
+}
+
+static int reject_connection_initializer(coro_socket_t *socket, void *user_data) {
+  test_ctx_t *t = (test_ctx_t *)user_data;
+  if (!socket || !t) return TURBO_EINVAL;
+  t->initializer_calls++;
+  return TURBO_EIO;
+}
+
 static int run_pool_test_case(coro_fn fn) {
   test_ctx_t ctx = {0};
   int result = 0;
@@ -307,6 +322,59 @@ static void test_open_close(coro_t *co, void *arg) {
   coro_sleep(t->ctx, 50);
 
 done:
+  test_cleanup_pool(t, pool);
+}
+
+static void test_connection_initializer_runs_once_per_socket(coro_t *co, void *arg) {
+  test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *clients[3] = {NULL, NULL, NULL};
+  (void)co;
+
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != TURBO_OK) goto done;
+  cfg.min_size = 2u;
+  cfg.max_size = 3u;
+  pool = coro_pool_create(t->ctx, &cfg);
+  if (!pool) goto done;
+  if (coro_pool_set_connection_initializer(pool, count_connection_initializer, t) != TURBO_OK)
+    goto done;
+  if (coro_pool_open(pool, TEST_HOST, t->port, CORO_SOCKET_TCP_V4) != TURBO_OK) goto done;
+  if (t->initializer_calls != 2) goto done;
+  for (size_t i = 0; i < 3u; ++i) {
+    if (coro_pool_borrow(pool, &clients[i]) != TURBO_OK || !clients[i]) goto done;
+  }
+  t->test_result = t->initializer_calls == 3 ? 1 : 0;
+
+done:
+  for (size_t i = 0; i < 3u; ++i) {
+    if (clients[i] && pool) coro_pool_return(pool, clients[i]);
+  }
+  coro_sleep(t->ctx, 50);
+  test_cleanup_pool(t, pool);
+}
+
+static void test_connection_initializer_rejects_socket(coro_t *co, void *arg) {
+  test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_config_t cfg = CORO_POOL_CONFIG_DEFAULT;
+  coro_pool_t *pool = NULL;
+  int rc;
+  (void)co;
+
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != TURBO_OK) goto done;
+  cfg.min_size = 1u;
+  cfg.max_size = 1u;
+  pool = coro_pool_create(t->ctx, &cfg);
+  if (!pool) goto done;
+  if (coro_pool_set_connection_initializer(pool, reject_connection_initializer, t) != TURBO_OK)
+    goto done;
+  rc = coro_pool_open(pool, TEST_HOST, t->port, CORO_SOCKET_TCP_V4);
+  t->test_result = rc == TURBO_EIO && t->initializer_calls == 1 && coro_pool_size(pool) == 0u;
+
+done:
+  coro_sleep(t->ctx, 50);
   test_cleanup_pool(t, pool);
 }
 
@@ -494,6 +562,31 @@ done:
   test_cleanup_pool(t, pool);
 }
 
+static void test_discard_replaces_broken_connection(coro_t *co, void *arg) {
+  test_ctx_t *t = (test_ctx_t *)arg;
+  coro_pool_t *pool = NULL;
+  coro_socket_t *client = NULL;
+  coro_socket_t *replacement = NULL;
+  (void)co;
+
+  t->test_result = 0;
+  if (test_start_server(t, dummy_handler, 0) != TURBO_OK) goto done;
+  pool = test_open_pool(t, 1u, 1u, 0);
+  if (!pool) goto done;
+  if (coro_pool_borrow(pool, &client) != TURBO_OK || !client) goto done;
+  if (coro_pool_discard(pool, client) != TURBO_OK) goto done;
+  client = NULL;
+  if (coro_pool_size(pool) != 0u) goto done;
+  if (coro_pool_borrow(pool, &replacement) != TURBO_OK || !replacement) goto done;
+  t->test_result = coro_pool_size(pool) == 1u ? 1 : 0;
+
+done:
+  if (client && pool) coro_pool_return(pool, client);
+  if (replacement && pool) coro_pool_return(pool, replacement);
+  coro_sleep(t->ctx, 50);
+  test_cleanup_pool(t, pool);
+}
+
 /* ── Test: query counts ────────────────────────────────────── */
 
 static void test_query_counts(coro_t *co, void *arg) {
@@ -653,6 +746,14 @@ spec("coro_pool") {
     it("should open with min_size pre-connected") {
       check_int_eq(run_pool_test_case(test_open_close), 1);
     }
+
+    it("should initialize each physical connection exactly once") {
+      check_int_eq(run_pool_test_case(test_connection_initializer_runs_once_per_socket), 1);
+    }
+
+    it("should reject a connection when protocol initialization fails") {
+      check_int_eq(run_pool_test_case(test_connection_initializer_rejects_socket), 1);
+    }
   }
 
   describe("Borrow/Return") {
@@ -666,6 +767,10 @@ spec("coro_pool") {
 
     it("should grow pool on demand up to max_size") {
       check_int_eq(run_pool_test_case(test_borrow_grows), 1);
+    }
+
+    it("should replace a connection discarded by the protocol layer") {
+      check_int_eq(run_pool_test_case(test_discard_replaces_broken_connection), 1);
     }
 
     it("should time out blocked borrowers") {

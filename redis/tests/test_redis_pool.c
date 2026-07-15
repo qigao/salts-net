@@ -4,7 +4,9 @@
  */
 
 #include "../redis_pool.h"
+#include "CoroNet/turbo_coro_context.h"
 #include "tinytest.h"
+#include "turbo_error.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,11 +94,13 @@ void test_pool_create_custom(void) {
     redis_pool_config_t config = {
         .master_host = "redis.example.com",
         .master_port = 6380,
+        .username = "worker",
         .password = "secret123",
         .database = 5,
         .min_connections = 5,
         .max_connections = 20,
         .connect_timeout_ms = 10000,
+        .command_timeout_ms = 8000,
         .idle_timeout_ms = 120000,
         .health_check_ms = 60000,
         .pipeline_max = 200,
@@ -106,6 +110,18 @@ void test_pool_create_custom(void) {
     redis_pool_t *pool = redis_pool_create(&config);
     TEST_ASSERT_NOT_NULL(pool);
     redis_pool_destroy(pool);
+}
+
+void test_pool_rejects_username_without_password(void) {
+    redis_pool_config_t config = REDIS_POOL_CONFIG_DEFAULT;
+    config.username = "worker";
+    TEST_ASSERT_NULL(redis_pool_create(&config));
+}
+
+void test_pool_rejects_invalid_database(void) {
+    redis_pool_config_t config = REDIS_POOL_CONFIG_DEFAULT;
+    config.database = 16;
+    TEST_ASSERT_NULL(redis_pool_create(&config));
 }
 
 void test_pool_create_null_config(void) {
@@ -247,6 +263,19 @@ void test_pool_commandv_zero_argc(void) {
     int result = redis_pool_commandv(pool, 0, argv, NULL, NULL, NULL);
     TEST_ASSERT_EQUAL(-1, result);
 
+    redis_pool_destroy(pool);
+}
+
+void test_pool_command_result_reports_not_connected(void) {
+    redis_pool_config_t config = REDIS_POOL_CONFIG_DEFAULT;
+    redis_pool_t *pool = redis_pool_create(&config);
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    const char *argv[] = {"PING"};
+    TEST_ASSERT_NOT_NULL(pool);
+    TEST_ASSERT_EQUAL(TURBO_ENOTCONN,
+                      redis_pool_commandv_result(pool, 0, 1, argv, NULL, &result));
+    TEST_ASSERT_EQUAL(REDIS_COMMAND_NOT_SENT, result.outcome);
+    redis_command_result_clear(&result);
     redis_pool_destroy(pool);
 }
 
@@ -691,10 +720,132 @@ void test_pool_replica_hosts_null_with_count(void) {
     config.replica_hosts = NULL;
     config.replica_count = 2;  /* Count but no hosts */
 
-    redis_pool_t *pool = redis_pool_create(&config);
-    TEST_ASSERT_NOT_NULL(pool);  /* Should still create, just no replicas */
+    TEST_ASSERT_NULL(redis_pool_create(&config));
+}
 
+// =============================================================================
+// Live Redis Contract Tests
+// =============================================================================
+
+#define REDIS_POOL_LIVE_DATABASE 14
+#define REDIS_POOL_LIVE_KEY "turbonet:test:pool:selected-db"
+#define REDIS_POOL_LIVE_VALUE "pool-select-ok"
+
+typedef struct {
+    int status;
+    const char *stage;
+} redis_pool_live_case_t;
+
+static int live_reply_equals(const redis_reply_t *reply,
+                             redis_reply_type_t type,
+                             const char *expected) {
+    size_t expected_len = strlen(expected);
+    return reply != NULL && reply->str != NULL && reply->type == type &&
+           reply->len == expected_len &&
+           memcmp(reply->str, expected, expected_len) == 0;
+}
+
+static void run_pool_selected_db_contract(coro_t *co, void *arg) {
+    redis_pool_live_case_t *test_case = (redis_pool_live_case_t *)arg;
+    redis_pool_config_t pool_config = REDIS_POOL_CONFIG_DEFAULT;
+    redis_pool_t *pool = NULL;
+    redis_client_t *db0 = NULL;
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    const char *del_argv[] = {"DEL", REDIS_POOL_LIVE_KEY};
+    const char *set_argv[] = {"SET", REDIS_POOL_LIVE_KEY, REDIS_POOL_LIVE_VALUE};
+    const char *get_argv[] = {"GET", REDIS_POOL_LIVE_KEY};
+    int status;
+
+    (void)co;
+    test_case->status = TURBO_EIO;
+    test_case->stage = "create pool";
+
+    pool_config.database = REDIS_POOL_LIVE_DATABASE;
+    pool_config.min_connections = 1;
+    pool_config.max_connections = 2;
+    pool_config.connect_timeout_ms = 2000;
+    pool_config.command_timeout_ms = 2000;
+
+    pool = redis_pool_create(&pool_config);
+    if (!pool) goto cleanup;
+
+    test_case->stage = "start pool";
+    if (redis_pool_start(pool) != TURBO_OK) goto cleanup;
+
+    test_case->stage = "connect db0 client";
+    db0 = redis_client_create("127.0.0.1", 6379);
+    if (!db0 || redis_client_connect(db0, NULL, NULL) != TURBO_OK) goto cleanup;
+
+    test_case->stage = "clear db0 key";
+    status = redis_commandv_result(db0, 2, del_argv, NULL, &result);
+    redis_command_result_clear(&result);
+    if (status != TURBO_OK) goto cleanup;
+
+    test_case->stage = "set through selected pool database";
+    status = redis_pool_commandv_result(pool, 0, 3, set_argv, NULL, &result);
+    if (status != TURBO_OK ||
+        !live_reply_equals(result.reply, REDIS_REPLY_STRING, "OK")) {
+        redis_command_result_clear(&result);
+        goto cleanup;
+    }
+    redis_command_result_clear(&result);
+
+    test_case->stage = "get through selected pool database";
+    status = redis_pool_commandv_result(pool, 1, 2, get_argv, NULL, &result);
+    if (status != TURBO_OK ||
+        !live_reply_equals(result.reply, REDIS_REPLY_BULK_STRING,
+                           REDIS_POOL_LIVE_VALUE)) {
+        redis_command_result_clear(&result);
+        goto cleanup;
+    }
+    redis_command_result_clear(&result);
+
+    test_case->stage = "verify db0 isolation";
+    status = redis_commandv_result(db0, 2, get_argv, NULL, &result);
+    if (status != TURBO_OK || !result.reply ||
+        result.reply->type != REDIS_REPLY_NULL) {
+        redis_command_result_clear(&result);
+        goto cleanup;
+    }
+    redis_command_result_clear(&result);
+
+    test_case->stage = "delete selected database key";
+    status = redis_pool_commandv_result(pool, 0, 2, del_argv, NULL, &result);
+    redis_command_result_clear(&result);
+    if (status != TURBO_OK) goto cleanup;
+
+    test_case->stage = "complete";
+    test_case->status = TURBO_OK;
+
+cleanup:
+    redis_command_result_clear(&result);
+    redis_client_destroy(db0);
+    redis_pool_stop(pool);
     redis_pool_destroy(pool);
+}
+
+void test_pool_live_applies_selected_database(void) {
+    const char *enabled = getenv("TURBONET_REDIS_LIVE");
+    redis_pool_live_case_t test_case = {TURBO_EIO, "create context"};
+    coro_context_t *ctx;
+
+    if (!enabled || strcmp(enabled, "1") != 0) {
+        TEST_PASS();
+    }
+
+    ctx = coro_context_create(NULL);
+    TEST_ASSERT_NOT_NULL(ctx);
+    TEST_ASSERT_EQUAL(TURBO_OK,
+                      coro_context_spawn(ctx, run_pool_selected_db_contract,
+                                         &test_case));
+    coro_context_run(ctx, TURBO_RUN_DEFAULT);
+    coro_context_destroy(ctx);
+
+    if (test_case.status != TURBO_OK) {
+        fprintf(stderr, "live Redis pool contract failed at stage: %s\n",
+                test_case.stage);
+    }
+    TEST_ASSERT_EQUAL(TURBO_OK, test_case.status);
 }
 
 suite("redis_pool") {
@@ -711,6 +862,8 @@ suite("redis_pool") {
         REDIS_RUN_TEST(test_pool_create_custom, "should create custom pool");
         REDIS_RUN_TEST(test_pool_create_null_config, "should reject null config");
         REDIS_RUN_TEST(test_pool_create_null_host, "should reject null host");
+        REDIS_RUN_TEST(test_pool_rejects_username_without_password, "should reject ACL username without password");
+        REDIS_RUN_TEST(test_pool_rejects_invalid_database, "should reject invalid database");
         REDIS_RUN_TEST(test_pool_destroy_null, "should destroy null pool safely");
     }
 
@@ -734,6 +887,7 @@ suite("redis_pool") {
         REDIS_RUN_TEST(test_pool_commandv_null, "should reject null pool commandv");
         REDIS_RUN_TEST(test_pool_commandv_null_argv, "should reject null argv");
         REDIS_RUN_TEST(test_pool_commandv_zero_argc, "should reject zero argc");
+        REDIS_RUN_TEST(test_pool_command_result_reports_not_connected, "should report a result rejected before pool acquisition");
         REDIS_RUN_TEST(test_pool_read_command_null, "should reject null read command");
     }
 
@@ -785,6 +939,11 @@ suite("redis_pool") {
 
     group("Replicas") {
         REDIS_RUN_TEST(test_pool_with_replicas, "should create pool with replicas");
-        REDIS_RUN_TEST(test_pool_replica_hosts_null_with_count, "should ignore replica count without hosts");
+        REDIS_RUN_TEST(test_pool_replica_hosts_null_with_count, "should reject replica count without endpoints");
+    }
+
+    group("Live Contract") {
+        REDIS_RUN_TEST(test_pool_live_applies_selected_database,
+                       "should initialize every physical connection with the selected database");
     }
 }

@@ -3,6 +3,7 @@
 #include "CoroNet/turbo_coro_socket.h"
 #include "turbo_str.h"
 #include <fmt.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,12 +12,14 @@
 
 /* Default configuration */
 static redis_config_t default_config = {.host = "127.0.0.1",
-                                        .port = 6379,
+                                         .port = 6379,
+                                        .username = NULL,
                                         .password = NULL,
                                         .database = 0,
                                         .timeout_ms = 5000,
                                         .command_timeout_ms = 5000,
-                                        .max_pipeline = 100};
+                                        .max_pipeline = 100,
+                                        .cluster_readonly = 0};
 
 /* Forward declarations */
 static int parse_resp_reply(redis_client_t *client, redis_reply_t **reply);
@@ -39,6 +42,7 @@ static void reset_command_queue_state(redis_client_t *client) {
 static int append_recv_data(redis_client_t *client, const char *data, size_t len) {
   char *new_buffer;
   size_t new_size;
+  size_t required;
 
   if (!client || (!data && len != 0)) {
     return -1;
@@ -47,17 +51,20 @@ static int append_recv_data(redis_client_t *client, const char *data, size_t len
   if (len == 0) {
     return 0;
   }
+  if (len > SIZE_MAX - client->recv_buffer_used) return -1;
+  required = client->recv_buffer_used + len;
 
-  if (client->recv_buffer_used + len <= client->recv_buffer_size) {
+  if (required <= client->recv_buffer_size) {
     memcpy(client->recv_buffer + client->recv_buffer_used, data, len);
     client->recv_buffer_used += len;
     return 0;
   }
 
   new_size = client->recv_buffer_size ? client->recv_buffer_size : 16384;
-  while (new_size < client->recv_buffer_used + len) {
+  while (new_size < required && new_size <= SIZE_MAX / 2u) {
     new_size *= 2;
   }
+  if (new_size < required) new_size = required;
 
   new_buffer = realloc(client->recv_buffer, new_size);
   if (!new_buffer) {
@@ -79,18 +86,36 @@ redis_client_t *redis_client_create(const char *host, uint16_t port) {
 }
 
 redis_client_t *redis_client_create_with_config(const redis_config_t *config) {
+  redis_config_t normalized;
+  if (!config || !config->host || !config->host[0] || config->port == 0 ||
+      config->database < 0 || config->database > 15 ||
+      (config->username && !config->password))
+    return NULL;
+
+  normalized = *config;
+  if (normalized.timeout_ms == 0) normalized.timeout_ms = default_config.timeout_ms;
+  if (normalized.command_timeout_ms == 0)
+    normalized.command_timeout_ms = normalized.timeout_ms;
+  if (normalized.max_pipeline == 0) normalized.max_pipeline = default_config.max_pipeline;
+
   redis_client_t *client = calloc(1, sizeof(redis_client_t));
   if (!client)
     return NULL;
   turbo_mutex_init(&client->socket_mutex);
 
   /* Copy configuration */
-  client->config = *config;
-  if (config->host) {
-    client->config.host = tstr_dup(config->host);
-  }
-  if (config->password) {
-    client->config.password = tstr_dup(config->password);
+  client->config = normalized;
+  client->config.host = tstr_dup(normalized.host);
+  client->config.username = normalized.username ? tstr_dup(normalized.username) : NULL;
+  client->config.password = normalized.password ? tstr_dup(normalized.password) : NULL;
+  if (!client->config.host || (normalized.username && !client->config.username) ||
+      (normalized.password && !client->config.password)) {
+    tstr_free((tstr_t)client->config.host);
+    tstr_free((tstr_t)client->config.username);
+    tstr_free((tstr_t)client->config.password);
+    turbo_mutex_destroy(&client->socket_mutex);
+    free(client);
+    return NULL;
   }
 
   /* Allocate receive buffer */
@@ -98,6 +123,7 @@ redis_client_t *redis_client_create_with_config(const redis_config_t *config) {
   client->recv_buffer = malloc(client->recv_buffer_size);
   if (!client->recv_buffer) {
     tstr_free((tstr_t)client->config.host);
+    tstr_free((tstr_t)client->config.username);
     tstr_free((tstr_t)client->config.password);
     turbo_mutex_destroy(&client->socket_mutex);
     free(client);
@@ -120,6 +146,7 @@ int redis_client_attach_socket(redis_client_t *client,
   client->recv_buffer_used = 0;
   client->ctx = ctx;
   redis_client_socket_publish(client, socket, take_ownership ? 1 : 0, 1);
+  coro_socket_set_timeout(socket, client->config.command_timeout_ms);
   return 0;
 }
 
@@ -131,11 +158,59 @@ coro_socket_t *redis_client_detach_socket(redis_client_t *client) {
   return socket;
 }
 
+static int redis_reply_is_ok(const redis_reply_t *reply) {
+  return reply && reply->type == REDIS_REPLY_STRING && reply->str &&
+         reply->len == 2u && memcmp(reply->str, "OK", 2u) == 0;
+}
+
+int redis_client_prepare(redis_client_t *client) {
+  redis_command_result_t command = REDIS_COMMAND_RESULT_INIT;
+  int status = TURBO_OK;
+
+  if (!client) return TURBO_EINVAL;
+  if (!client->is_connected || !client->socket) return TURBO_ENOTCONN;
+
+  if (client->config.password && !client->is_authenticated) {
+    const char *auth2[] = {"AUTH", client->config.password};
+    const char *auth3[] = {"AUTH", client->config.username, client->config.password};
+    status = redis_commandv_result(client, client->config.username ? 3 : 2,
+                                   client->config.username ? auth3 : auth2,
+                                   NULL, &command);
+    if (status == TURBO_OK && !redis_reply_is_ok(command.reply)) status = TURBO_EPROTO;
+    redis_command_result_clear(&command);
+    if (status != TURBO_OK) return status;
+    client->is_authenticated = 1;
+  }
+
+  if (client->selected_db != client->config.database) {
+    char database[16];
+    const char *select_argv[] = {"SELECT", database};
+    if (fmt(database, sizeof(database), "{}", client->config.database) < 0)
+      return TURBO_EIO;
+    status = redis_commandv_result(client, 2, select_argv, NULL, &command);
+    if (status == TURBO_OK && !redis_reply_is_ok(command.reply)) status = TURBO_EPROTO;
+    redis_command_result_clear(&command);
+    if (status != TURBO_OK) return status;
+    client->selected_db = client->config.database;
+  }
+
+  if (client->config.cluster_readonly && !client->is_cluster_readonly) {
+    const char *readonly_argv[] = {"READONLY"};
+    status = redis_commandv_result(client, 1, readonly_argv, NULL, &command);
+    if (status == TURBO_OK && !redis_reply_is_ok(command.reply)) status = TURBO_EPROTO;
+    redis_command_result_clear(&command);
+    if (status != TURBO_OK) return status;
+    client->is_cluster_readonly = 1;
+  }
+
+  return TURBO_OK;
+}
+
 int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, void *user_data) {
   int status;
 
   if (!client)
-    return -1;
+    return TURBO_EINVAL;
 
   redis_client_disconnect(client);
   reset_command_queue_state(client);
@@ -144,12 +219,15 @@ int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, vo
   client->connect_cb = callback;
   client->connect_user_data = user_data;
   client->is_connected = 0;
+  client->is_authenticated = 0;
+  client->selected_db = 0;
+  client->is_cluster_readonly = 0;
 
   if (!client->ctx) {
     if (client->connect_cb) {
-      client->connect_cb(client, -1, client->connect_user_data);
+      client->connect_cb(client, TURBO_EINVAL, client->connect_user_data);
     }
-    return -1;
+    return TURBO_EINVAL;
   }
 
   {
@@ -158,9 +236,9 @@ int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, vo
   }
   if (!client->socket) {
     if (client->connect_cb) {
-      client->connect_cb(client, -1, client->connect_user_data);
+      client->connect_cb(client, TURBO_ENOMEM, client->connect_user_data);
     }
-    return -1;
+    return TURBO_ENOMEM;
   }
 
   coro_socket_set_timeout(client->socket, client->config.timeout_ms);
@@ -170,19 +248,29 @@ int redis_client_connect(redis_client_t *client, redis_connect_cb_t callback, vo
     coro_socket_t *socket = redis_client_socket_take(client, &owned);
     if (socket && owned) coro_socket_destroy(socket);
     if (client->connect_cb) {
-      client->connect_cb(client, -1, client->connect_user_data);
+      client->connect_cb(client, status, client->connect_user_data);
     }
-    return -1;
+    return status;
   }
 
   turbo_mutex_lock(&client->socket_mutex);
   client->is_connected = 1;
   turbo_mutex_unlock(&client->socket_mutex);
+  coro_socket_set_timeout(client->socket, client->config.command_timeout_ms);
+  status = redis_client_prepare(client);
+  if (status != TURBO_OK) goto handshake_failed;
+
   if (client->connect_cb) {
-    client->connect_cb(client, 0, client->connect_user_data);
+    client->connect_cb(client, TURBO_OK, client->connect_user_data);
   }
 
-  return 0;
+  return TURBO_OK;
+
+handshake_failed:
+  redis_client_disconnect(client);
+  if (client->connect_cb)
+    client->connect_cb(client, status, client->connect_user_data);
+  return status;
 }
 
 /* RESP parser */
@@ -230,7 +318,6 @@ static int parse_resp_reply(redis_client_t *client, redis_reply_t **reply) {
       return -1;
     }
     parsed->len = line_len;
-    TLOG_WARN("Redis error reply: {:s}", parsed->str);
     *reply = parsed;
     return (end - buf) + 1;
 
@@ -336,6 +423,41 @@ void redis_reply_free(redis_reply_t *reply) {
   free(reply);
 }
 
+void redis_command_result_clear(redis_command_result_t *result) {
+  if (!result) return;
+  redis_reply_free(result->reply);
+  *result = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+}
+
+static int redis_error_token_is(const redis_reply_t *reply, const char *token) {
+  size_t token_len;
+  if (!reply || reply->type != REDIS_REPLY_ERROR || !reply->str || !token) return 0;
+  token_len = strlen(token);
+  return reply->len >= token_len && memcmp(reply->str, token, token_len) == 0 &&
+         (reply->len == token_len || reply->str[token_len] == ' ');
+}
+
+redis_server_error_t redis_server_error_classify(const redis_reply_t *reply) {
+  if (!reply || reply->type != REDIS_REPLY_ERROR) return REDIS_SERVER_ERROR_NONE;
+  if (redis_error_token_is(reply, "ERR")) return REDIS_SERVER_ERROR_ERR;
+  if (redis_error_token_is(reply, "BUSYGROUP")) return REDIS_SERVER_ERROR_BUSY_GROUP;
+  if (redis_error_token_is(reply, "NOGROUP")) return REDIS_SERVER_ERROR_NO_GROUP;
+  if (redis_error_token_is(reply, "WRONGTYPE")) return REDIS_SERVER_ERROR_WRONG_TYPE;
+  if (redis_error_token_is(reply, "NOAUTH")) return REDIS_SERVER_ERROR_NO_AUTH;
+  if (redis_error_token_is(reply, "MOVED")) return REDIS_SERVER_ERROR_MOVED;
+  if (redis_error_token_is(reply, "ASK")) return REDIS_SERVER_ERROR_ASK;
+  if (redis_error_token_is(reply, "TRYAGAIN")) return REDIS_SERVER_ERROR_TRY_AGAIN;
+  if (redis_error_token_is(reply, "CLUSTERDOWN")) return REDIS_SERVER_ERROR_CLUSTER_DOWN;
+  if (redis_error_token_is(reply, "READONLY")) return REDIS_SERVER_ERROR_READ_ONLY;
+  if (redis_error_token_is(reply, "NOSCRIPT")) return REDIS_SERVER_ERROR_NO_SCRIPT;
+  if (redis_error_token_is(reply, "LOADING")) return REDIS_SERVER_ERROR_LOADING;
+  if (redis_error_token_is(reply, "OOM")) return REDIS_SERVER_ERROR_OOM;
+  if (redis_error_token_is(reply, "EXECABORT")) return REDIS_SERVER_ERROR_EXEC_ABORT;
+  if (redis_error_token_is(reply, "MASTERDOWN")) return REDIS_SERVER_ERROR_MASTER_DOWN;
+  if (redis_error_token_is(reply, "MISCONF")) return REDIS_SERVER_ERROR_MISCONF;
+  return REDIS_SERVER_ERROR_UNKNOWN;
+}
+
 /* Build RESP command */
 static char *build_resp_command(int argc, const char **argv, const size_t *argvlen,
                                 size_t *out_len) {
@@ -344,13 +466,13 @@ static char *build_resp_command(int argc, const char **argv, const size_t *argvl
   }
 
   /* Calculate total size */
-  size_t total = 0;
-  total += 1 + 20 + 2; /* *<count>\r\n */
+  size_t total = 1u + 20u + 2u; /* *<count>\r\n */
 
   for (int i = 0; i < argc; i++) {
     size_t len = argvlen ? argvlen[i] : strlen(argv[i]);
-    total += 1 + 20 + 2; /* $<len>\r\n */
-    total += len + 2;    /* <data>\r\n */
+    const size_t framing = 1u + 20u + 2u + 2u; /* $<len>\r\n<data>\r\n */
+    if (len > SIZE_MAX - framing || total > SIZE_MAX - framing - len) return NULL;
+    total += framing + len;
   }
 
   char *cmd = malloc(total);
@@ -388,22 +510,43 @@ static char *build_resp_command(int argc, const char **argv, const size_t *argvl
   return cmd;
 }
 
-int redis_commandv(redis_client_t *client, int argc, const char **argv, const size_t *argvlen,
-                   redis_command_cb_t callback, void *user_data) {
+int redis_commandv_result(redis_client_t *client, int argc, const char **argv,
+                          const size_t *argvlen, redis_command_result_t *out) {
   size_t cmd_len;
   char *cmd_str;
+  int rc;
 
-  if (!client || !client->is_connected || argc <= 0 || !argv || !client->socket)
-    return -1;
+  if (!out) return TURBO_EINVAL;
+  *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+
+  if (!client || argc <= 0 || !argv) {
+    out->status = TURBO_EINVAL;
+    return out->status;
+  }
+  if (!client->is_connected || !client->socket) {
+    out->status = TURBO_ENOTCONN;
+    return out->status;
+  }
+  for (int i = 0; i < argc; ++i) {
+    if (!argv[i]) {
+      out->status = TURBO_EINVAL;
+      return out->status;
+    }
+  }
 
   cmd_str = build_resp_command(argc, argv, argvlen, &cmd_len);
-  if (!cmd_str)
-    return -1;
+  if (!cmd_str) {
+    out->status = TURBO_ENOMEM;
+    return out->status;
+  }
 
-  if (coro_socket_send(client->socket, cmd_str, cmd_len) != 0) {
+  rc = coro_socket_send(client->socket, cmd_str, cmd_len);
+  if (rc != 0) {
     free(cmd_str);
     client->is_connected = 0;
-    return -1;
+    out->status = rc;
+    out->outcome = REDIS_COMMAND_SEND_UNCERTAIN;
+    return out->status;
   }
   free(cmd_str);
 
@@ -411,17 +554,20 @@ int redis_commandv(redis_client_t *client, int argc, const char **argv, const si
     redis_reply_t *reply = NULL;
     int parsed = parse_resp_reply(client, &reply);
     if (parsed < 0) {
-      return -1;
+      client->is_connected = 0;
+      out->status = TURBO_EPROTO;
+      out->outcome = REDIS_COMMAND_REPLY_UNKNOWN;
+      return out->status;
     }
     if (parsed > 0) {
       memmove(client->recv_buffer, client->recv_buffer + parsed,
               client->recv_buffer_used - (size_t)parsed);
       client->recv_buffer_used -= (size_t)parsed;
-      if (callback) {
-        callback(client, reply, user_data);
-      }
-      redis_reply_free(reply);
-      return 0;
+      out->reply = reply;
+      out->outcome = REDIS_COMMAND_REPLIED;
+      out->server_error = redis_server_error_classify(reply);
+      out->status = out->server_error == REDIS_SERVER_ERROR_NONE ? TURBO_OK : TURBO_EIO;
+      return out->status;
     }
 
     char *data = NULL;
@@ -435,15 +581,31 @@ int redis_commandv(redis_client_t *client, int argc, const char **argv, const si
         coro_socket_free_recv(data);
       }
       client->is_connected = 0;
-      return -1;
+      out->status = recv_rc;
+      out->outcome = REDIS_COMMAND_REPLY_UNKNOWN;
+      return out->status;
     }
 
     if (append_recv_data(client, data, len) != 0) {
       coro_socket_free_recv(data);
-      return -1;
+      client->is_connected = 0;
+      out->status = TURBO_ENOMEM;
+      out->outcome = REDIS_COMMAND_REPLY_UNKNOWN;
+      return out->status;
     }
     coro_socket_free_recv(data);
   }
+}
+
+int redis_commandv(redis_client_t *client, int argc, const char **argv, const size_t *argvlen,
+                   redis_command_cb_t callback, void *user_data) {
+  redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+  int rc = redis_commandv_result(client, argc, argv, argvlen, &result);
+  if (result.outcome == REDIS_COMMAND_REPLIED && callback)
+    callback(client, result.reply, user_data);
+  rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+  redis_command_result_clear(&result);
+  return rc;
 }
 
 int redis_command(redis_client_t *client, redis_command_cb_t callback, void *user_data,
@@ -522,6 +684,7 @@ void redis_client_destroy(redis_client_t *client) {
 
   free(client->recv_buffer);
   tstr_free((tstr_t)client->config.host);
+  tstr_free((tstr_t)client->config.username);
   tstr_free((tstr_t)client->config.password);
   turbo_mutex_destroy(&client->socket_mutex);
   free(client);
@@ -728,12 +891,24 @@ int redis_bf_madd(redis_client_t *client, const char *key, int item_count, const
  * =============================================================================
  */
 
-int redis_xadd(redis_client_t *client, const char *key, size_t maxlen,
-               size_t field_count, const char **fields,
-               const char **values, const size_t *value_lens,
-               redis_command_cb_t callback, void *user_data) {
-  if (!client || !key || !fields || !values || field_count == 0)
-    return -1;
+int redis_xadd_result(redis_client_t *client, const char *key, size_t maxlen,
+                      size_t field_count, const char **fields,
+                      const char **values, const size_t *value_lens,
+                      redis_command_result_t *out) {
+  if (!out) return TURBO_EINVAL;
+  *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+  if (!client || !key || !fields || !values || field_count == 0 ||
+      field_count > (SIZE_MAX - 6u) / 2u ||
+      field_count > ((size_t)INT_MAX - 6u) / 2u) {
+    out->status = TURBO_EINVAL;
+    return out->status;
+  }
+  for (size_t i = 0; i < field_count; ++i) {
+    if (!fields[i] || !values[i]) {
+      out->status = TURBO_EINVAL;
+      return out->status;
+    }
+  }
 
   /* Calculate argc: XADD key [MAXLEN ~ count] * field value [...] */
   size_t argc = 3 + field_count * 2;  /* XADD key * + pairs */
@@ -744,7 +919,8 @@ int redis_xadd(redis_client_t *client, const char *key, size_t maxlen,
   if (!argv || !argvlen) {
     free(argv);
     free(argvlen);
-    return -1;
+    out->status = TURBO_ENOMEM;
+    return out->status;
   }
 
   char maxlen_str[32];
@@ -776,104 +952,151 @@ int redis_xadd(redis_client_t *client, const char *key, size_t maxlen,
     argvlen[idx++] = value_lens ? value_lens[i] : strlen(values[i]);
   }
 
-  int result = redis_commandv(client, (int)idx, argv, argvlen, callback, user_data);
+  int result = redis_commandv_result(client, (int)idx, argv, argvlen, out);
 
   free(argv);
   free(argvlen);
   return result;
 }
 
-/* Stream callback context */
+int redis_xadd(redis_client_t *client, const char *key, size_t maxlen,
+               size_t field_count, const char **fields,
+               const char **values, const size_t *value_lens,
+               redis_command_cb_t callback, void *user_data) {
+  redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+  int rc = redis_xadd_result(client, key, maxlen, field_count, fields, values,
+                             value_lens, &result);
+  if (result.outcome == REDIS_COMMAND_REPLIED && callback)
+    callback(client, result.reply, user_data);
+  rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+  redis_command_result_clear(&result);
+  return rc;
+}
+
 typedef struct {
   redis_stream_cb_t callback;
   void *user_data;
 } redis_stream_cb_ctx_t;
 
-/* Parse stream reply into result structure */
-static void on_stream_reply(redis_client_t *client, redis_reply_t *reply, void *user_data) {
-  redis_stream_cb_ctx_t *ctx = (redis_stream_cb_ctx_t *)user_data;
+int redis_stream_reply_decode(const redis_reply_t *reply,
+                              redis_stream_result_t **out,
+                              size_t *out_count) {
+  redis_stream_result_t *results = NULL;
+  size_t result_count;
+  int rc = TURBO_EPROTO;
 
-  if (!ctx || !ctx->callback) {
-    free(ctx);
-    return;
-  }
+  if (!out || !out_count) return TURBO_EINVAL;
+  *out = NULL;
+  *out_count = 0u;
+  if (!reply || reply->type == REDIS_REPLY_NULL) return TURBO_OK;
+  if (reply->type != REDIS_REPLY_ARRAY) return TURBO_EPROTO;
+  result_count = reply->element_count;
+  if (result_count == 0u) return TURBO_OK;
+  if (result_count > SIZE_MAX / sizeof(*results)) return TURBO_ERANGE;
+  results = calloc(result_count, sizeof(*results));
+  if (!results) return TURBO_ENOMEM;
 
-  if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->element_count == 0) {
-    ctx->callback(client, NULL, 0, ctx->user_data);
-    free(ctx);
-    return;
-  }
+  for (size_t i = 0; i < result_count; ++i) {
+    const redis_reply_t *stream = reply->elements[i];
+    const redis_reply_t *entries;
+    if (!stream || stream->type != REDIS_REPLY_ARRAY || stream->element_count != 2u ||
+        !stream->elements[0] || stream->elements[0]->type != REDIS_REPLY_BULK_STRING ||
+        !stream->elements[1] || stream->elements[1]->type != REDIS_REPLY_ARRAY)
+      goto cleanup;
 
-  /* Parse: [[stream_name, [[id, [field, value, ...]], ...]], ...] */
-  size_t result_count = reply->element_count;
-  redis_stream_result_t *results = calloc(result_count, sizeof(redis_stream_result_t));
-
-  for (size_t i = 0; i < result_count; i++) {
-    redis_reply_t *stream_reply = reply->elements[i];
-    if (!stream_reply || stream_reply->type != REDIS_REPLY_ARRAY ||
-        stream_reply->element_count < 2)
-      continue;
-
-    /* Stream name */
-    if (stream_reply->elements[0]->type == REDIS_REPLY_BULK_STRING) {
-      results[i].stream_name = tstr_dup(stream_reply->elements[0]->str);
+    results[i].stream_name = tstr_new_len(stream->elements[0]->str,
+                                           stream->elements[0]->len);
+    if (!results[i].stream_name) {
+      rc = TURBO_ENOMEM;
+      goto cleanup;
+    }
+    entries = stream->elements[1];
+    results[i].entry_count = entries->element_count;
+    if (results[i].entry_count == 0u) continue;
+    if (results[i].entry_count > SIZE_MAX / sizeof(*results[i].entries)) {
+      rc = TURBO_ERANGE;
+      goto cleanup;
+    }
+    results[i].entries = calloc(results[i].entry_count, sizeof(*results[i].entries));
+    if (!results[i].entries) {
+      rc = TURBO_ENOMEM;
+      goto cleanup;
     }
 
-    /* Entries */
-    redis_reply_t *entries_reply = stream_reply->elements[1];
-    if (entries_reply->type != REDIS_REPLY_ARRAY)
-      continue;
-
-    results[i].entry_count = entries_reply->element_count;
-    results[i].entries = calloc(results[i].entry_count, sizeof(redis_stream_entry_t));
-
-    for (size_t j = 0; j < entries_reply->element_count; j++) {
-      redis_reply_t *entry = entries_reply->elements[j];
-      if (!entry || entry->type != REDIS_REPLY_ARRAY || entry->element_count < 2)
-        continue;
-
-      /* Entry ID */
-      if (entry->elements[0]->type == REDIS_REPLY_BULK_STRING) {
-        results[i].entries[j].id = tstr_dup(entry->elements[0]->str);
+    for (size_t j = 0; j < results[i].entry_count; ++j) {
+      const redis_reply_t *entry = entries->elements[j];
+      const redis_reply_t *fields;
+      redis_stream_entry_t *target = &results[i].entries[j];
+      if (!entry || entry->type != REDIS_REPLY_ARRAY || entry->element_count != 2u ||
+          !entry->elements[0] || entry->elements[0]->type != REDIS_REPLY_BULK_STRING ||
+          !entry->elements[1] || entry->elements[1]->type != REDIS_REPLY_ARRAY)
+        goto cleanup;
+      fields = entry->elements[1];
+      if ((fields->element_count & 1u) != 0u) goto cleanup;
+      target->id = tstr_new_len(entry->elements[0]->str, entry->elements[0]->len);
+      if (!target->id) {
+        rc = TURBO_ENOMEM;
+        goto cleanup;
       }
-
-      /* Fields */
-      redis_reply_t *fields = entry->elements[1];
-      if (fields->type == REDIS_REPLY_ARRAY && fields->element_count >= 2) {
-        size_t fc = fields->element_count / 2;
-        results[i].entries[j].field_count = fc;
-        results[i].entries[j].fields = calloc(fc, sizeof(char *));
-        results[i].entries[j].values = calloc(fc, sizeof(char *));
-        results[i].entries[j].value_lens = calloc(fc, sizeof(size_t));
-
-        for (size_t k = 0; k < fc; k++) {
-          redis_reply_t *f = fields->elements[k * 2];
-          redis_reply_t *v = fields->elements[k * 2 + 1];
-
-          if (f->type == REDIS_REPLY_BULK_STRING) {
-            results[i].entries[j].fields[k] = tstr_dup(f->str);
-          }
-          if (v->type == REDIS_REPLY_BULK_STRING) {
-            results[i].entries[j].values[k] = malloc(v->len + 1);
-            memcpy(results[i].entries[j].values[k], v->str, v->len);
-            results[i].entries[j].values[k][v->len] = '\0';
-            results[i].entries[j].value_lens[k] = v->len;
-          }
+      target->field_count = fields->element_count / 2u;
+      if (target->field_count == 0u) continue;
+      if (target->field_count > SIZE_MAX / sizeof(*target->fields)) {
+        rc = TURBO_ERANGE;
+        goto cleanup;
+      }
+      target->fields = calloc(target->field_count, sizeof(*target->fields));
+      target->values = calloc(target->field_count, sizeof(*target->values));
+      target->value_lens = calloc(target->field_count, sizeof(*target->value_lens));
+      if (!target->fields || !target->values || !target->value_lens) {
+        rc = TURBO_ENOMEM;
+        goto cleanup;
+      }
+      for (size_t k = 0; k < target->field_count; ++k) {
+        const redis_reply_t *field = fields->elements[k * 2u];
+        const redis_reply_t *value = fields->elements[k * 2u + 1u];
+        if (!field || field->type != REDIS_REPLY_BULK_STRING || !value ||
+            value->type != REDIS_REPLY_BULK_STRING || value->len == SIZE_MAX)
+          goto cleanup;
+        target->fields[k] = tstr_new_len(field->str, field->len);
+        target->values[k] = malloc(value->len + 1u);
+        if (!target->fields[k] || !target->values[k]) {
+          rc = TURBO_ENOMEM;
+          goto cleanup;
         }
+        if (value->len > 0u) memcpy(target->values[k], value->str, value->len);
+        target->values[k][value->len] = '\0';
+        target->value_lens[k] = value->len;
       }
     }
   }
 
-  ctx->callback(client, results, result_count, ctx->user_data);
+  *out = results;
+  *out_count = result_count;
+  return TURBO_OK;
+
+cleanup:
   redis_stream_result_free(results, result_count);
-  free(ctx);
+  return rc;
 }
 
-int redis_xread(redis_client_t *client, size_t count, int block_ms,
-                size_t stream_count, const char **keys, const char **ids,
-                redis_stream_cb_t callback, void *user_data) {
-  if (!client || !keys || !ids || stream_count == 0)
-    return -1;
+void redis_stream_read_result_clear(redis_stream_read_result_t *result) {
+  if (!result) return;
+  redis_stream_result_free(result->streams, result->stream_count);
+  redis_command_result_clear(&result->command);
+  *result = (redis_stream_read_result_t)REDIS_STREAM_READ_RESULT_INIT;
+}
+
+int redis_xread_result(redis_client_t *client, size_t count, int block_ms,
+                       size_t stream_count, const char **keys, const char **ids,
+                       redis_stream_read_result_t *out) {
+  if (!out) return TURBO_EINVAL;
+  *out = (redis_stream_read_result_t)REDIS_STREAM_READ_RESULT_INIT;
+  if (!client || !keys || !ids || stream_count == 0 ||
+      stream_count > (SIZE_MAX - 4u) / 2u ||
+      stream_count > ((size_t)INT_MAX - 4u) / 2u) {
+    out->command.status = TURBO_EINVAL;
+    return out->command.status;
+  }
 
   /* XREAD [COUNT count] [BLOCK ms] STREAMS key [key ...] id [id ...] */
   size_t argc = 1 + 1 + stream_count * 2;  /* XREAD STREAMS keys ids */
@@ -881,7 +1104,10 @@ int redis_xread(redis_client_t *client, size_t count, int block_ms,
   if (block_ms >= 0) argc += 2;             /* BLOCK ms */
 
   const char **argv = malloc(argc * sizeof(char *));
-  if (!argv) return -1;
+  if (!argv) {
+    out->command.status = TURBO_ENOMEM;
+    return out->command.status;
+  }
 
   char count_str[32], block_str[32];
   size_t idx = 0;
@@ -909,44 +1135,70 @@ int redis_xread(redis_client_t *client, size_t count, int block_ms,
     argv[idx++] = ids[i];
   }
 
-  redis_stream_cb_ctx_t *ctx = malloc(sizeof(redis_stream_cb_ctx_t));
-  if (!ctx) {
-    free(argv);
-    return -1;
-  }
-  ctx->callback = callback;
-  ctx->user_data = user_data;
-
-  int result = redis_commandv(client, (int)idx, argv, NULL,
-                               (redis_command_cb_t)on_stream_reply, ctx);
+  int result = redis_commandv_result(client, (int)idx, argv, NULL, &out->command);
   free(argv);
-  if (result != 0) {
-    free(ctx);
+  if (result == TURBO_OK) {
+    result = redis_stream_reply_decode(out->command.reply, &out->streams,
+                                       &out->stream_count);
+    if (result != TURBO_OK) out->command.status = result;
   }
   return result;
+}
+
+int redis_xread(redis_client_t *client, size_t count, int block_ms,
+                size_t stream_count, const char **keys, const char **ids,
+                redis_stream_cb_t callback, void *user_data) {
+  redis_stream_read_result_t result = REDIS_STREAM_READ_RESULT_INIT;
+  int rc = redis_xread_result(client, count, block_ms, stream_count, keys, ids, &result);
+  if (rc == TURBO_OK && callback)
+    callback(client, result.streams, result.stream_count, user_data);
+  redis_stream_read_result_clear(&result);
+  return rc == TURBO_OK ? 0 : -1;
+}
+
+int redis_xgroup_create_result(redis_client_t *client, const char *key,
+                               const char *group, const char *id, int mkstream,
+                               redis_command_result_t *out) {
+  if (!out) return TURBO_EINVAL;
+  *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+  if (!client || !key || !group || !id) {
+    out->status = TURBO_EINVAL;
+    return out->status;
+  }
+
+  if (mkstream) {
+    const char *argv[] = {"XGROUP", "CREATE", key, group, id, "MKSTREAM"};
+    return redis_commandv_result(client, 6, argv, NULL, out);
+  } else {
+    const char *argv[] = {"XGROUP", "CREATE", key, group, id};
+    return redis_commandv_result(client, 5, argv, NULL, out);
+  }
 }
 
 int redis_xgroup_create(redis_client_t *client, const char *key,
                         const char *group, const char *id, int mkstream,
                         redis_command_cb_t callback, void *user_data) {
-  if (!client || !key || !group || !id)
-    return -1;
-
-  if (mkstream) {
-    const char *argv[] = {"XGROUP", "CREATE", key, group, id, "MKSTREAM"};
-    return redis_commandv(client, 6, argv, NULL, callback, user_data);
-  } else {
-    const char *argv[] = {"XGROUP", "CREATE", key, group, id};
-    return redis_commandv(client, 5, argv, NULL, callback, user_data);
-  }
+  redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+  int rc = redis_xgroup_create_result(client, key, group, id, mkstream, &result);
+  if (result.outcome == REDIS_COMMAND_REPLIED && callback)
+    callback(client, result.reply, user_data);
+  rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+  redis_command_result_clear(&result);
+  return rc;
 }
 
-int redis_xreadgroup(redis_client_t *client, const char *group, const char *consumer,
-                     size_t count, int block_ms,
-                     size_t stream_count, const char **keys, const char **ids,
-                     redis_stream_cb_t callback, void *user_data) {
-  if (!client || !group || !consumer || !keys || !ids || stream_count == 0)
-    return -1;
+int redis_xreadgroup_result(redis_client_t *client, const char *group,
+                            const char *consumer, size_t count, int block_ms,
+                            size_t stream_count, const char **keys,
+                            const char **ids, redis_stream_read_result_t *out) {
+  if (!out) return TURBO_EINVAL;
+  *out = (redis_stream_read_result_t)REDIS_STREAM_READ_RESULT_INIT;
+  if (!client || !group || !consumer || !keys || !ids || stream_count == 0 ||
+      stream_count > (SIZE_MAX - 9u) / 2u ||
+      stream_count > ((size_t)INT_MAX - 9u) / 2u) {
+    out->command.status = TURBO_EINVAL;
+    return out->command.status;
+  }
 
   /* XREADGROUP GROUP group consumer [COUNT count] [BLOCK ms] STREAMS key [key ...] id [...] */
   size_t argc = 5 + 1 + stream_count * 2;  /* XREADGROUP GROUP g c STREAMS keys ids */
@@ -954,7 +1206,10 @@ int redis_xreadgroup(redis_client_t *client, const char *group, const char *cons
   if (block_ms >= 0) argc += 2;
 
   const char **argv = malloc(argc * sizeof(char *));
-  if (!argv) return -1;
+  if (!argv) {
+    out->command.status = TURBO_ENOMEM;
+    return out->command.status;
+  }
 
   char count_str[32], block_str[32];
   size_t idx = 0;
@@ -985,32 +1240,46 @@ int redis_xreadgroup(redis_client_t *client, const char *group, const char *cons
     argv[idx++] = ids[i];
   }
 
-  redis_stream_cb_ctx_t *ctx = malloc(sizeof(redis_stream_cb_ctx_t));
-  if (!ctx) {
-    free(argv);
-    return -1;
-  }
-  ctx->callback = callback;
-  ctx->user_data = user_data;
-
-  int result = redis_commandv(client, (int)idx, argv, NULL,
-                               (redis_command_cb_t)on_stream_reply, ctx);
+  int result = redis_commandv_result(client, (int)idx, argv, NULL, &out->command);
   free(argv);
-  if (result != 0) {
-    free(ctx);
+  if (result == TURBO_OK) {
+    result = redis_stream_reply_decode(out->command.reply, &out->streams,
+                                       &out->stream_count);
+    if (result != TURBO_OK) out->command.status = result;
   }
   return result;
 }
 
-int redis_xack(redis_client_t *client, const char *key, const char *group,
-               size_t id_count, const char **ids,
-               redis_command_cb_t callback, void *user_data) {
-  if (!client || !key || !group || !ids || id_count == 0)
-    return -1;
+int redis_xreadgroup(redis_client_t *client, const char *group, const char *consumer,
+                     size_t count, int block_ms,
+                     size_t stream_count, const char **keys, const char **ids,
+                     redis_stream_cb_t callback, void *user_data) {
+  redis_stream_read_result_t result = REDIS_STREAM_READ_RESULT_INIT;
+  int rc = redis_xreadgroup_result(client, group, consumer, count, block_ms,
+                                   stream_count, keys, ids, &result);
+  if (rc == TURBO_OK && callback)
+    callback(client, result.streams, result.stream_count, user_data);
+  redis_stream_read_result_clear(&result);
+  return rc == TURBO_OK ? 0 : -1;
+}
+
+int redis_xack_result(redis_client_t *client, const char *key, const char *group,
+                      size_t id_count, const char **ids,
+                      redis_command_result_t *out) {
+  if (!out) return TURBO_EINVAL;
+  *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+  if (!client || !key || !group || !ids || id_count == 0 ||
+      id_count > SIZE_MAX - 3u || id_count > (size_t)INT_MAX - 3u) {
+    out->status = TURBO_EINVAL;
+    return out->status;
+  }
 
   size_t argc = 3 + id_count;
   const char **argv = malloc(argc * sizeof(char *));
-  if (!argv) return -1;
+  if (!argv) {
+    out->status = TURBO_ENOMEM;
+    return out->status;
+  }
 
   argv[0] = "XACK";
   argv[1] = key;
@@ -1019,9 +1288,21 @@ int redis_xack(redis_client_t *client, const char *key, const char *group,
     argv[3 + i] = ids[i];
   }
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, callback, user_data);
+  int result = redis_commandv_result(client, (int)argc, argv, NULL, out);
   free(argv);
   return result;
+}
+
+int redis_xack(redis_client_t *client, const char *key, const char *group,
+               size_t id_count, const char **ids,
+               redis_command_cb_t callback, void *user_data) {
+  redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+  int rc = redis_xack_result(client, key, group, id_count, ids, &result);
+  if (result.outcome == REDIS_COMMAND_REPLIED && callback)
+    callback(client, result.reply, user_data);
+  rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+  redis_command_result_clear(&result);
+  return rc;
 }
 
 int redis_xdel(redis_client_t *client, const char *key,
@@ -1063,15 +1344,15 @@ void redis_stream_entry_free(redis_stream_entry_t *entry) {
   if (!entry) return;
 
   tstr_free((tstr_t)entry->id);
-  if (entry->fields) {
-    for (size_t i = 0; i < entry->field_count; i++) {
+  for (size_t i = 0; i < entry->field_count; i++) {
+    if (entry->fields)
       tstr_free((tstr_t)entry->fields[i]);
+    if (entry->values)
       free(entry->values[i]);
-    }
-    free(entry->fields);
-    free(entry->values);
-    free(entry->value_lens);
   }
+  free(entry->fields);
+  free(entry->values);
+  free(entry->value_lens);
 }
 
 void redis_stream_result_free(redis_stream_result_t *results, size_t count) {
@@ -1574,6 +1855,9 @@ static coro_socket_t *redis_client_socket_take(redis_client_t *client, int *owne
   client->socket = NULL;
   client->owns_socket = 0;
   client->is_connected = 0;
+  client->is_authenticated = 0;
+  client->selected_db = 0;
+  client->is_cluster_readonly = 0;
   turbo_mutex_unlock(&client->socket_mutex);
   return socket;
 }

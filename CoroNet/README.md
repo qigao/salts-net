@@ -145,6 +145,24 @@ void worker(coro_t *co, void *arg) {
 }
 ```
 
+Protocol-aware pools can register a connection initializer before
+`coro_pool_open()`. The initializer runs exactly once after each new transport
+connection is established, so protocols can complete handshakes such as
+AUTH/SELECT before the socket becomes borrowable. Borrowers must call
+`coro_pool_discard()` instead of `coro_pool_return()` when framing or protocol
+state is no longer reusable.
+
+### TLS Channel Binding
+
+`coro_socket_tls_export_channel_binding()` returns the 32-byte
+[`tls-exporter` channel binding defined by RFC 9266](https://www.rfc-editor.org/rfc/rfc9266.html)
+for a fully-open TLS 1.3 socket. It works for outbound clients and accepted
+server sockets, is read-only, and clears the caller's output buffer on failure.
+The binding identifies the current TLS connection but is not secret and must
+not be used as encryption key material. Calls on raw TCP, an incomplete TLS
+handshake, a non-TLS-1.3 connection, or a client connection without successful
+peer-certificate verification fail explicitly.
+
 ## Supported URL Formats
 
 | Protocol   | URL Format                  | Example                         | Description                    |

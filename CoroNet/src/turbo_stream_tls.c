@@ -1975,6 +1975,44 @@ int turbo_stream_tls_set_client_config_internal(turbo_stream_t *s,
   return tls_prepare_client_ssl(st);
 }
 
+int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *stream,
+                                                      uint8_t *output,
+                                                      size_t output_len) {
+  static const char exporter_label[] = "EXPORTER-Channel-Binding";
+  static const size_t channel_binding_size = 32U;
+  tls_state_t *st;
+
+  if (!output || output_len != channel_binding_size) {
+    return TURBO_EINVAL;
+  }
+  memset(output, 0, output_len);
+
+  if (!stream || stream->kind != TURBO_STREAM_TLS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)stream->backend_data;
+  if (!st || !st->ssl || st->state != TLS_ST_OPEN) {
+    return TURBO_ENOTCONN;
+  }
+  if (SSL_version(st->ssl) != TLS1_3_VERSION) {
+    return TURBO_EPROTONOSUPPORT;
+  }
+  if (!st->server_mode &&
+      (!st->client_verify_peer || SSL_get_verify_result(st->ssl) != X509_V_OK)) {
+    return TURBO_EPERM;
+  }
+
+  if (SSL_export_keying_material(st->ssl, output, output_len,
+                                 exporter_label, sizeof(exporter_label) - 1U,
+                                 NULL, 0U, 1) != 1) {
+    memset(output, 0, output_len);
+    return TURBO_EIO;
+  }
+
+  return 0;
+}
+
 static int tls_connect_pipe(turbo_stream_t *s, const char *name) {
   UNUSED(s); UNUSED(name);
   return TURBO_EINVAL; /* TLS over pipe is theoretically possible, but API expects INET */

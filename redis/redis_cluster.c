@@ -5,16 +5,15 @@
 
 #include "redis_cluster.h"
 #include "redis_pool.h"
+#include "turbo_error.h"
 #include "turbo_str.h"
 #include <fmt.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
-
-#ifdef _WIN32
-#define strtok_r strtok_s
-#endif
 
 /* =============================================================================
  * CRC16 Implementation (XMODEM)
@@ -72,6 +71,11 @@ static uint16_t crc16(const char *buf, size_t len) {
 typedef struct cluster_node_s {
     redis_cluster_node_t info;
     redis_pool_t *pool;
+    int pool_started;
+    struct cluster_node_s *master;
+    struct cluster_node_s *replica_head;
+    struct cluster_node_s *replica_next;
+    struct cluster_node_s *next_read_replica;
     struct cluster_node_s *next;
 } cluster_node_t;
 
@@ -87,6 +91,7 @@ struct redis_cluster_s {
 
     /* State */
     int connected;
+    uint64_t last_topology_refresh_ns;
 
     /* Statistics */
     redis_cluster_stats_t stats;
@@ -134,12 +139,19 @@ static cluster_node_t *find_node(redis_cluster_t *cluster,
 static cluster_node_t *create_node(redis_cluster_t *cluster,
                                     const char *host, uint16_t port,
                                     const char *node_id, int is_master) {
+    if (!cluster || !host || !host[0] || host[0] == '?' || port == 0) return NULL;
     cluster_node_t *node = calloc(1, sizeof(cluster_node_t));
     if (!node) return NULL;
 
     node->info.host = tstr_dup(host);
     node->info.port = port;
     node->info.node_id = node_id ? tstr_dup(node_id) : NULL;
+    if (!node->info.host || (node_id && !node->info.node_id)) {
+        tstr_free((tstr_t)node->info.host);
+        tstr_free((tstr_t)node->info.node_id);
+        free(node);
+        return NULL;
+    }
     node->info.is_master = is_master;
     node->info.slot_start = -1;
     node->info.slot_end = -1;
@@ -148,13 +160,16 @@ static cluster_node_t *create_node(redis_cluster_t *cluster,
     redis_pool_config_t pool_config = {
         .master_host = host,
         .master_port = port,
+        .username = cluster->config.username,
         .password = cluster->config.password,
         .database = 0,
         .min_connections = 1,
         .max_connections = cluster->config.connections_per_node,
         .connect_timeout_ms = cluster->config.connect_timeout_ms,
+        .command_timeout_ms = cluster->config.command_timeout_ms,
         .idle_timeout_ms = 60000,
-        .health_check_ms = 30000
+        .health_check_ms = 30000,
+        .cluster_readonly = !is_master && cluster->config.route_reads_to_replicas
     };
 
     node->pool = redis_pool_create(&pool_config);
@@ -168,6 +183,16 @@ static cluster_node_t *create_node(redis_cluster_t *cluster,
     return node;
 }
 
+static int start_node_pool(cluster_node_t *node) {
+    int rc;
+    if (!node || !node->pool) return TURBO_EINVAL;
+    if (node->pool_started) return TURBO_OK;
+    rc = redis_pool_start(node->pool);
+    if (rc != TURBO_OK) return rc;
+    node->pool_started = 1;
+    return TURBO_OK;
+}
+
 static void destroy_node(cluster_node_t *node) {
     if (!node) return;
     if (node->pool) {
@@ -176,6 +201,34 @@ static void destroy_node(cluster_node_t *node) {
     tstr_free((tstr_t)node->info.host);
     tstr_free((tstr_t)node->info.node_id);
     free(node);
+}
+
+static void recount_nodes(redis_cluster_t *cluster) {
+    cluster_node_t *node;
+    if (!cluster) return;
+    cluster->stats.master_count = 0;
+    cluster->stats.replica_count = 0;
+    for (node = cluster->nodes; node; node = node->next) {
+        if (node->info.is_master) cluster->stats.master_count++;
+        else cluster->stats.replica_count++;
+    }
+}
+
+static void recompute_master_slot_bounds(redis_cluster_t *cluster) {
+    cluster_node_t *node;
+    if (!cluster) return;
+    for (node = cluster->nodes; node; node = node->next) {
+        if (node->info.is_master) {
+            node->info.slot_start = -1;
+            node->info.slot_end = -1;
+        }
+    }
+    for (int slot = 0; slot < REDIS_CLUSTER_SLOTS; ++slot) {
+        node = cluster->slots[slot];
+        if (!node) continue;
+        if (node->info.slot_start < 0) node->info.slot_start = slot;
+        node->info.slot_end = slot;
+    }
 }
 
 static void clear_nodes(redis_cluster_t *cluster) {
@@ -191,149 +244,413 @@ static void clear_nodes(redis_cluster_t *cluster) {
     memset(cluster->slots, 0, sizeof(cluster->slots));
 }
 
+static int attach_replica(cluster_node_t *master, cluster_node_t *replica) {
+    cluster_node_t *current;
+    if (!master || !replica || master == replica || !master->info.is_master)
+        return TURBO_EPROTO;
+    if (replica->master && replica->master != master) return TURBO_EPROTO;
+    if (replica->master == master) return TURBO_OK;
+
+    replica->master = master;
+    for (current = master->replica_head; current; current = current->replica_next)
+        if (current == replica) return TURBO_OK;
+    replica->replica_next = master->replica_head;
+    master->replica_head = replica;
+    if (!master->next_read_replica) master->next_read_replica = replica;
+    return TURBO_OK;
+}
+
+static int assign_slot_range(redis_cluster_t *cluster, cluster_node_t *master,
+                             int start, int end) {
+    if (!cluster || !master || !master->info.is_master || start < 0 ||
+        end < start || end >= REDIS_CLUSTER_SLOTS)
+        return TURBO_EPROTO;
+    for (int slot = start; slot <= end; ++slot) {
+        if (cluster->slots[slot] && cluster->slots[slot] != master)
+            return TURBO_EPROTO;
+        cluster->slots[slot] = master;
+    }
+    if (master->info.slot_start < 0 || start < master->info.slot_start)
+        master->info.slot_start = start;
+    if (end > master->info.slot_end) master->info.slot_end = end;
+    return TURBO_OK;
+}
+
 /* =============================================================================
  * Topology Discovery
  * =============================================================================
  */
 
-typedef struct {
-    redis_cluster_t *cluster;
-    int success;
-    int pending;
-} topology_ctx_t;
+static const char *topology_endpoint(const redis_reply_t *reply,
+                                     const char *source_host) {
+    if (!reply || !source_host) return NULL;
+    if (reply->type == REDIS_REPLY_NULL) return source_host;
+    if ((reply->type != REDIS_REPLY_BULK_STRING &&
+         reply->type != REDIS_REPLY_STRING) || !reply->str)
+        return NULL;
+    if (reply->len == 0) return source_host;
+    if (reply->len == 1 && reply->str[0] == '?') return NULL;
+    return reply->str;
+}
 
-static void parse_cluster_slots(redis_cluster_t *cluster, redis_reply_t *reply) {
-    if (!reply || reply->type != REDIS_REPLY_ARRAY) return;
+static int parse_cluster_slots(redis_cluster_t *cluster,
+                               const redis_reply_t *reply,
+                               const char *source_host) {
+    if (!cluster || !reply || reply->type != REDIS_REPLY_ARRAY ||
+        reply->element_count == 0 || !source_host) {
+        return TURBO_EPROTO;
+    }
 
     /* CLUSTER SLOTS returns:
      * [[start, end, [master_ip, master_port, node_id], [replica...]], ...] */
 
     for (size_t i = 0; i < reply->element_count; i++) {
-        redis_reply_t *slot_range = reply->elements[i];
+        const redis_reply_t *slot_range = reply->elements[i];
         if (!slot_range || slot_range->type != REDIS_REPLY_ARRAY ||
             slot_range->element_count < 3) {
-            continue;
+            return TURBO_EPROTO;
         }
 
-        /* Get slot range */
+        if (!slot_range->elements[0] || !slot_range->elements[1] ||
+            slot_range->elements[0]->type != REDIS_REPLY_INTEGER ||
+            slot_range->elements[1]->type != REDIS_REPLY_INTEGER) {
+            return TURBO_EPROTO;
+        }
+        if (slot_range->elements[0]->integer < 0 ||
+            slot_range->elements[0]->integer >= REDIS_CLUSTER_SLOTS ||
+            slot_range->elements[1]->integer < slot_range->elements[0]->integer ||
+            slot_range->elements[1]->integer >= REDIS_CLUSTER_SLOTS) {
+            return TURBO_EPROTO;
+        }
         int start = (int)slot_range->elements[0]->integer;
         int end = (int)slot_range->elements[1]->integer;
 
-        /* Get master info */
-        redis_reply_t *master_info = slot_range->elements[2];
+        const redis_reply_t *master_info = slot_range->elements[2];
         if (!master_info || master_info->type != REDIS_REPLY_ARRAY ||
-            master_info->element_count < 2) {
-            continue;
+            master_info->element_count < 2 || !master_info->elements[1] ||
+            master_info->elements[1]->type != REDIS_REPLY_INTEGER ||
+            master_info->elements[1]->integer <= 0 ||
+            master_info->elements[1]->integer > UINT16_MAX) {
+            return TURBO_EPROTO;
         }
 
-        const char *host = master_info->elements[0]->str;
+        const char *host = topology_endpoint(master_info->elements[0], source_host);
         int port = (int)master_info->elements[1]->integer;
-        const char *node_id = (master_info->element_count > 2) ?
-                               master_info->elements[2]->str : NULL;
+        const char *node_id = NULL;
+        if (!host) return TURBO_EPROTO;
+        if (master_info->element_count > 2 && master_info->elements[2] &&
+            master_info->elements[2]->type == REDIS_REPLY_BULK_STRING) {
+            node_id = master_info->elements[2]->str;
+        }
 
-        /* Find or create node */
         cluster_node_t *node = find_node(cluster, host, (uint16_t)port);
+        if (node && !node->info.is_master) return TURBO_EPROTO;
         if (!node) {
             node = create_node(cluster, host, (uint16_t)port, node_id, 1);
-            if (node) {
-                node->next = cluster->nodes;
-                cluster->nodes = node;
-                cluster->node_count++;
-            }
+            if (!node) return TURBO_ENOMEM;
+            node->next = cluster->nodes;
+            cluster->nodes = node;
+            cluster->node_count++;
         }
 
-        if (node) {
-            node->info.slot_start = start;
-            node->info.slot_end = end;
-            node->info.is_master = 1;
+        node->info.is_master = 1;
+        if (assign_slot_range(cluster, node, start, end) != TURBO_OK)
+            return TURBO_EPROTO;
 
-            /* Map slots to this node */
-            for (int s = start; s <= end && s < REDIS_CLUSTER_SLOTS; s++) {
-                cluster->slots[s] = node;
-            }
-        }
-
-        /* Process replicas (elements 3+) */
         for (size_t r = 3; r < slot_range->element_count; r++) {
-            redis_reply_t *replica_info = slot_range->elements[r];
+            const redis_reply_t *replica_info = slot_range->elements[r];
             if (!replica_info || replica_info->type != REDIS_REPLY_ARRAY ||
-                replica_info->element_count < 2) {
-                continue;
+                replica_info->element_count < 2 || !replica_info->elements[1] ||
+                replica_info->elements[1]->type != REDIS_REPLY_INTEGER ||
+                replica_info->elements[1]->integer <= 0 ||
+                replica_info->elements[1]->integer > UINT16_MAX) {
+                return TURBO_EPROTO;
             }
 
-            const char *r_host = replica_info->elements[0]->str;
+            const char *r_host = topology_endpoint(replica_info->elements[0], source_host);
             int r_port = (int)replica_info->elements[1]->integer;
-            const char *r_node_id = (replica_info->element_count > 2) ?
-                                     replica_info->elements[2]->str : NULL;
+            const char *r_node_id = NULL;
+            if (!r_host) return TURBO_EPROTO;
+            if (replica_info->element_count > 2 && replica_info->elements[2] &&
+                replica_info->elements[2]->type == REDIS_REPLY_BULK_STRING) {
+                r_node_id = replica_info->elements[2]->str;
+            }
 
             cluster_node_t *replica = find_node(cluster, r_host, (uint16_t)r_port);
             if (!replica) {
                 replica = create_node(cluster, r_host, (uint16_t)r_port, r_node_id, 0);
-                if (replica) {
-                    replica->next = cluster->nodes;
-                    cluster->nodes = replica;
-                    cluster->node_count++;
-                }
+                if (!replica) return TURBO_ENOMEM;
+                replica->next = cluster->nodes;
+                cluster->nodes = replica;
+                cluster->node_count++;
             }
+            if (replica->info.is_master || attach_replica(node, replica) != TURBO_OK)
+                return TURBO_EPROTO;
         }
     }
+
+    for (int slot = 0; slot < REDIS_CLUSTER_SLOTS; ++slot) {
+        if (!cluster->slots[slot]) return TURBO_EPROTO;
+    }
+    return TURBO_OK;
 }
 
-static void on_cluster_slots_reply(redis_client_t *client, redis_reply_t *reply,
-                                    void *user_data) {
-    topology_ctx_t *ctx = (topology_ctx_t *)user_data;
-    (void)client;
+static int reply_text_equal(const redis_reply_t *reply, const char *text) {
+    size_t len;
+    if (!reply || !text ||
+        (reply->type != REDIS_REPLY_STRING &&
+         reply->type != REDIS_REPLY_BULK_STRING) || !reply->str)
+        return 0;
+    len = strlen(text);
+    return reply->len == len && memcmp(reply->str, text, len) == 0;
+}
 
-    if (reply && reply->type == REDIS_REPLY_ARRAY) {
-        parse_cluster_slots(ctx->cluster, reply);
-        ctx->success = 1;
+static const redis_reply_t *reply_map_value(const redis_reply_t *map,
+                                            const char *key) {
+    if (!map || map->type != REDIS_REPLY_ARRAY ||
+        (map->element_count & 1u) != 0)
+        return NULL;
+    for (size_t i = 0; i < map->element_count; i += 2)
+        if (reply_text_equal(map->elements[i], key)) return map->elements[i + 1];
+    return NULL;
+}
+
+typedef struct {
+    const char *host;
+    const char *node_id;
+    uint16_t port;
+    int is_master;
+    int online;
+} topology_node_view_t;
+
+static int parse_shards_node(const redis_reply_t *reply,
+                             const char *source_host,
+                             topology_node_view_t *view) {
+    const redis_reply_t *endpoint;
+    const redis_reply_t *port;
+    const redis_reply_t *node_id;
+    const redis_reply_t *role;
+    const redis_reply_t *health;
+    if (!reply || !source_host || !view || reply->type != REDIS_REPLY_ARRAY ||
+        (reply->element_count & 1u) != 0)
+        return TURBO_EPROTO;
+
+    memset(view, 0, sizeof(*view));
+    endpoint = reply_map_value(reply, "endpoint");
+    port = reply_map_value(reply, "port");
+    node_id = reply_map_value(reply, "id");
+    role = reply_map_value(reply, "role");
+    health = reply_map_value(reply, "health");
+    if (!endpoint || !port || !node_id || !role || !health ||
+        port->type != REDIS_REPLY_INTEGER || port->integer <= 0 ||
+        port->integer > UINT16_MAX ||
+        (node_id->type != REDIS_REPLY_STRING &&
+         node_id->type != REDIS_REPLY_BULK_STRING) || !node_id->str)
+        return TURBO_EPROTO;
+
+    if (reply_text_equal(role, "master")) view->is_master = 1;
+    else if (!reply_text_equal(role, "replica")) return TURBO_EPROTO;
+    if (reply_text_equal(health, "online")) view->online = 1;
+    else if (!reply_text_equal(health, "failed") &&
+             !reply_text_equal(health, "loading"))
+        return TURBO_EPROTO;
+
+    view->host = topology_endpoint(endpoint, source_host);
+    view->node_id = node_id->str;
+    view->port = (uint16_t)port->integer;
+    return TURBO_OK;
+}
+
+static int parse_cluster_shards(redis_cluster_t *cluster,
+                                const redis_reply_t *reply,
+                                const char *source_host) {
+    if (!cluster || !reply || reply->type != REDIS_REPLY_ARRAY ||
+        reply->element_count == 0 || !source_host)
+        return TURBO_EPROTO;
+
+    for (size_t i = 0; i < reply->element_count; ++i) {
+        const redis_reply_t *shard = reply->elements[i];
+        const redis_reply_t *slot_ranges = reply_map_value(shard, "slots");
+        const redis_reply_t *nodes = reply_map_value(shard, "nodes");
+        cluster_node_t *master = NULL;
+        topology_node_view_t master_view = {0};
+        int master_seen = 0;
+
+        if (!slot_ranges || slot_ranges->type != REDIS_REPLY_ARRAY ||
+            (slot_ranges->element_count & 1u) != 0 || !nodes ||
+            nodes->type != REDIS_REPLY_ARRAY || nodes->element_count == 0)
+            return TURBO_EPROTO;
+
+        for (size_t n = 0; n < nodes->element_count; ++n) {
+            topology_node_view_t view;
+            if (parse_shards_node(nodes->elements[n], source_host, &view) != TURBO_OK)
+                return TURBO_EPROTO;
+            if (!view.is_master || !view.online) continue;
+            if (!view.host || master_seen) return TURBO_EPROTO;
+            master_seen = 1;
+            master_view = view;
+        }
+        if (!master_seen) return TURBO_EPROTO;
+        master = find_node(cluster, master_view.host, master_view.port);
+        if (master && !master->info.is_master) return TURBO_EPROTO;
+        if (!master) {
+            master = create_node(cluster, master_view.host, master_view.port,
+                                 master_view.node_id, 1);
+            if (!master) return TURBO_ENOMEM;
+            master->next = cluster->nodes;
+            cluster->nodes = master;
+            cluster->node_count++;
+        }
+
+        for (size_t s = 0; s < slot_ranges->element_count; s += 2) {
+            const redis_reply_t *start = slot_ranges->elements[s];
+            const redis_reply_t *end = slot_ranges->elements[s + 1];
+            if (!start || !end || start->type != REDIS_REPLY_INTEGER ||
+                end->type != REDIS_REPLY_INTEGER || start->integer < 0 ||
+                start->integer >= REDIS_CLUSTER_SLOTS ||
+                end->integer < start->integer ||
+                end->integer >= REDIS_CLUSTER_SLOTS ||
+                assign_slot_range(cluster, master, (int)start->integer,
+                                  (int)end->integer) != TURBO_OK)
+                return TURBO_EPROTO;
+        }
+
+        for (size_t n = 0; n < nodes->element_count; ++n) {
+            topology_node_view_t view;
+            cluster_node_t *replica;
+            if (parse_shards_node(nodes->elements[n], source_host, &view) != TURBO_OK)
+                return TURBO_EPROTO;
+            if (view.is_master || !view.online || !view.host) continue;
+            replica = find_node(cluster, view.host, view.port);
+            if (!replica) {
+                replica = create_node(cluster, view.host, view.port,
+                                      view.node_id, 0);
+                if (!replica) return TURBO_ENOMEM;
+                replica->next = cluster->nodes;
+                cluster->nodes = replica;
+                cluster->node_count++;
+            }
+            if (replica->info.is_master ||
+                attach_replica(master, replica) != TURBO_OK)
+                return TURBO_EPROTO;
+        }
     }
 
-    ctx->pending--;
+    for (int slot = 0; slot < REDIS_CLUSTER_SLOTS; ++slot)
+        if (!cluster->slots[slot]) return TURBO_EPROTO;
+    return TURBO_OK;
+}
+
+static int shards_command_is_unsupported(const redis_command_result_t *result) {
+    static const char unknown_command[] = "ERR unknown command";
+    static const char unknown_subcommand[] =
+        "ERR Unknown subcommand or wrong number of arguments for 'SHARDS'";
+    if (!result || result->outcome != REDIS_COMMAND_REPLIED ||
+        result->server_error != REDIS_SERVER_ERROR_ERR || !result->reply ||
+        result->reply->type != REDIS_REPLY_ERROR || !result->reply->str)
+        return 0;
+    return (result->reply->len >= sizeof(unknown_command) - 1u &&
+            memcmp(result->reply->str, unknown_command,
+                   sizeof(unknown_command) - 1u) == 0) ||
+           (result->reply->len >= sizeof(unknown_subcommand) - 1u &&
+            memcmp(result->reply->str, unknown_subcommand,
+                   sizeof(unknown_subcommand) - 1u) == 0);
+}
+
+static int query_topology(redis_cluster_t *cluster, const char *host,
+                          uint16_t port, redis_cluster_t *candidate) {
+    redis_config_t config = {
+        .host = host,
+        .port = port,
+        .username = cluster->config.username,
+        .password = cluster->config.password,
+        .database = 0,
+        .timeout_ms = cluster->config.connect_timeout_ms,
+        .command_timeout_ms = cluster->config.command_timeout_ms,
+        .max_pipeline = 1
+    };
+    redis_client_t *client = redis_client_create_with_config(&config);
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    const char *shards_argv[] = {"CLUSTER", "SHARDS"};
+    const char *slots_argv[] = {"CLUSTER", "SLOTS"};
+    int rc;
+
+    if (!client) return TURBO_ENOMEM;
+    rc = redis_client_connect(client, NULL, NULL);
+    if (rc == TURBO_OK)
+        rc = redis_commandv_result(client, 2, shards_argv, NULL, &result);
+    if (rc == TURBO_OK)
+        rc = parse_cluster_shards(candidate, result.reply, host);
+    else if (shards_command_is_unsupported(&result)) {
+        redis_command_result_clear(&result);
+        rc = redis_commandv_result(client, 2, slots_argv, NULL, &result);
+        if (rc == TURBO_OK)
+            rc = parse_cluster_slots(candidate, result.reply, host);
+    }
+    redis_command_result_clear(&result);
+    redis_client_destroy(client);
+    return rc;
+}
+
+static int start_topology(redis_cluster_t *candidate) {
+    for (cluster_node_t *node = candidate->nodes; node; node = node->next) {
+        if (!node->info.is_master || node->info.slot_start < 0) continue;
+        if (start_node_pool(node) != TURBO_OK) return TURBO_ENOTCONN;
+        if (!candidate->config.route_reads_to_replicas) continue;
+        if (!node->replica_head) return TURBO_ENOTCONN;
+        for (cluster_node_t *replica = node->replica_head; replica;
+             replica = replica->replica_next)
+            if (start_node_pool(replica) != TURBO_OK) return TURBO_ENOTCONN;
+    }
+    return TURBO_OK;
+}
+
+static void commit_topology(redis_cluster_t *cluster,
+                            redis_cluster_t *candidate) {
+    redis_cluster_disconnect(cluster);
+    clear_nodes(cluster);
+    cluster->nodes = candidate->nodes;
+    cluster->node_count = candidate->node_count;
+    memcpy(cluster->slots, candidate->slots, sizeof(cluster->slots));
+    candidate->nodes = NULL;
+    candidate->node_count = 0;
+    memset(candidate->slots, 0, sizeof(candidate->slots));
+    cluster->connected = 1;
+    cluster->last_topology_refresh_ns = turbo_hrtime();
+    cluster->stats.topology_refreshes++;
+    recount_nodes(cluster);
+}
+
+static int try_topology_endpoint(redis_cluster_t *cluster, const char *host,
+                                 uint16_t port) {
+    redis_cluster_t *candidate = calloc(1, sizeof(*candidate));
+    int rc;
+    if (!candidate) return TURBO_ENOMEM;
+    candidate->config = cluster->config;
+    rc = query_topology(cluster, host, port, candidate);
+    if (rc == TURBO_OK) rc = start_topology(candidate);
+    if (rc == TURBO_OK) commit_topology(cluster, candidate);
+    clear_nodes(candidate);
+    free(candidate);
+    return rc;
 }
 
 static int discover_topology(redis_cluster_t *cluster) {
-    if (cluster->config.seed_count == 0) return -1;
+    cluster_node_t *node;
+    if (!cluster || cluster->config.seed_count == 0) return TURBO_EINVAL;
 
-    /* Try each seed node until one responds */
+    for (node = cluster->nodes; node; node = node->next) {
+        if (try_topology_endpoint(cluster, node->info.host,
+                                  node->info.port) == TURBO_OK)
+            return TURBO_OK;
+    }
     for (size_t i = 0; i < cluster->config.seed_count; i++) {
-        redis_client_t *client = redis_client_create(
-            cluster->config.seed_hosts[i],
-            cluster->config.seed_ports[i]
-        );
-
-        if (!client) continue;
-
-        /* TODO: Implement synchronous connect and command for topology discovery */
-        /* For now, create nodes from seeds */
-        cluster_node_t *node = create_node(
-            cluster,
-            cluster->config.seed_hosts[i],
-            cluster->config.seed_ports[i],
-            NULL,
-            1
-        );
-
-        if (node) {
-            node->next = cluster->nodes;
-            cluster->nodes = node;
-            cluster->node_count++;
-
-            /* Assign all slots to first seed initially */
-            if (i == 0) {
-                node->info.slot_start = 0;
-                node->info.slot_end = REDIS_CLUSTER_SLOTS - 1;
-                for (int s = 0; s < REDIS_CLUSTER_SLOTS; s++) {
-                    cluster->slots[s] = node;
-                }
-            }
-        }
-
-        redis_client_destroy(client);
+        if (try_topology_endpoint(cluster, cluster->config.seed_hosts[i],
+                                  cluster->config.seed_ports[i]) == TURBO_OK)
+            return TURBO_OK;
     }
 
-    cluster->stats.topology_refreshes++;
-    return cluster->node_count > 0 ? 0 : -1;
+    return TURBO_ENOTCONN;
 }
 
 /* =============================================================================
@@ -342,8 +659,13 @@ static int discover_topology(redis_cluster_t *cluster) {
  */
 
 redis_cluster_t *redis_cluster_create(const redis_cluster_config_t *config) {
-    if (!config || config->seed_count == 0 || !config->seed_hosts) {
+    if (!config || config->seed_count == 0 || !config->seed_hosts || !config->seed_ports ||
+        (config->username && !config->password) || config->max_redirections < 0) {
         return NULL;
+    }
+    for (size_t i = 0; i < config->seed_count; ++i) {
+        if (!config->seed_hosts[i] || !config->seed_hosts[i][0] || config->seed_ports[i] == 0)
+            return NULL;
     }
 
     redis_cluster_t *cluster = calloc(1, sizeof(redis_cluster_t));
@@ -351,10 +673,14 @@ redis_cluster_t *redis_cluster_create(const redis_cluster_config_t *config) {
 
     /* Copy configuration */
     cluster->config = *config;
+    cluster->config.seed_hosts = NULL;
+    cluster->config.seed_ports = NULL;
+    cluster->config.username = NULL;
+    cluster->config.password = NULL;
 
     /* Copy seed hosts */
-    cluster->config.seed_hosts = malloc(config->seed_count * sizeof(char *));
-    cluster->config.seed_ports = malloc(config->seed_count * sizeof(uint16_t));
+    cluster->config.seed_hosts = calloc(config->seed_count, sizeof(char *));
+    cluster->config.seed_ports = calloc(config->seed_count, sizeof(uint16_t));
 
     if (!cluster->config.seed_hosts || !cluster->config.seed_ports) {
         free(cluster->config.seed_hosts);
@@ -365,11 +691,27 @@ redis_cluster_t *redis_cluster_create(const redis_cluster_config_t *config) {
 
     for (size_t i = 0; i < config->seed_count; i++) {
         cluster->config.seed_hosts[i] = tstr_dup(config->seed_hosts[i]);
+        if (!cluster->config.seed_hosts[i]) {
+            redis_cluster_destroy(cluster);
+            return NULL;
+        }
         cluster->config.seed_ports[i] = config->seed_ports[i];
+    }
+
+    if (config->username) {
+        cluster->config.username = tstr_dup(config->username);
+        if (!cluster->config.username) {
+            redis_cluster_destroy(cluster);
+            return NULL;
+        }
     }
 
     if (config->password) {
         cluster->config.password = tstr_dup(config->password);
+        if (!cluster->config.password) {
+            redis_cluster_destroy(cluster);
+            return NULL;
+        }
     }
 
     /* Set defaults */
@@ -394,38 +736,7 @@ redis_cluster_t *redis_cluster_create(const redis_cluster_config_t *config) {
 
 int redis_cluster_connect(redis_cluster_t *cluster) {
     if (!cluster) return -1;
-
-    /* Discover topology */
-    if (discover_topology(cluster) != 0) {
-        return -1;
-    }
-
-    /* Start connection pools for all nodes */
-    cluster_node_t *node = cluster->nodes;
-    int connected = 0;
-
-    while (node) {
-        if (redis_pool_start(node->pool) == 0) {
-            connected++;
-        }
-        node = node->next;
-    }
-
-    cluster->connected = (connected > 0);
-    cluster->stats.master_count = 0;
-    cluster->stats.replica_count = 0;
-
-    node = cluster->nodes;
-    while (node) {
-        if (node->info.is_master) {
-            cluster->stats.master_count++;
-        } else {
-            cluster->stats.replica_count++;
-        }
-        node = node->next;
-    }
-
-    return cluster->connected ? 0 : -1;
+    return discover_topology(cluster) == TURBO_OK ? 0 : -1;
 }
 
 void redis_cluster_disconnect(redis_cluster_t *cluster) {
@@ -435,6 +746,7 @@ void redis_cluster_disconnect(redis_cluster_t *cluster) {
     while (node) {
         if (node->pool) {
             redis_pool_stop(node->pool);
+            node->pool_started = 0;
         }
         node = node->next;
     }
@@ -454,18 +766,15 @@ void redis_cluster_destroy(redis_cluster_t *cluster) {
     }
     free(cluster->config.seed_hosts);
     free(cluster->config.seed_ports);
+    tstr_free((tstr_t)cluster->config.username);
     tstr_free((tstr_t)cluster->config.password);
 
     free(cluster);
 }
 
 int redis_cluster_refresh(redis_cluster_t *cluster) {
-    if (!cluster) return -1;
-
-    /* In production, this would send CLUSTER SLOTS to a connected node
-     * and update the topology. For now, just increment counter. */
-    cluster->stats.topology_refreshes++;
-    return 0;
+    if (!cluster || !cluster->connected) return -1;
+    return discover_topology(cluster) == TURBO_OK ? 0 : -1;
 }
 
 /* =============================================================================
@@ -480,179 +789,446 @@ const redis_cluster_node_t *redis_cluster_get_node(redis_cluster_t *cluster,
     return node ? &node->info : NULL;
 }
 
-static cluster_node_t *get_node_for_key(redis_cluster_t *cluster,
-                                         const char *key) {
-    if (!cluster || !key) return NULL;
-
-    uint16_t slot = redis_cluster_keyslot(key, strlen(key));
-    return cluster->slots[slot];
-}
+typedef enum {
+    CLUSTER_REDIRECT_NONE,
+    CLUSTER_REDIRECT_MOVED,
+    CLUSTER_REDIRECT_ASK
+} cluster_redirect_kind_t;
 
 typedef struct {
-    redis_cluster_t *cluster;
-    redis_command_cb_t user_callback;
-    void *user_data;
-    char *key;
-    int redirections;
-} cluster_cmd_ctx_t;
+    cluster_redirect_kind_t kind;
+    uint16_t slot;
+    tstr_t host;
+    uint16_t port;
+} cluster_redirect_t;
 
-static void on_cluster_command_done(redis_client_t *client, redis_reply_t *reply,
-                                     void *user_data) {
-    cluster_cmd_ctx_t *ctx = (cluster_cmd_ctx_t *)user_data;
-    (void)client;
+static void cluster_redirect_clear(cluster_redirect_t *redirect) {
+    if (!redirect) return;
+    tstr_free(redirect->host);
+    memset(redirect, 0, sizeof(*redirect));
+}
 
-    /* Check for MOVED/ASK redirections */
-    if (reply && reply->type == REDIS_REPLY_ERROR && reply->str) {
-        if (strncmp(reply->str, "MOVED ", 6) == 0 ||
-            strncmp(reply->str, "ASK ", 4) == 0) {
+static int parse_redirection(const redis_command_result_t *result,
+                             const char *source_host,
+                             cluster_redirect_t *redirect) {
+    const char *text;
+    const char *cursor;
+    const char *endpoint;
+    const char *colon;
+    char *endptr;
+    long slot;
+    long port;
+    size_t host_len;
 
-            ctx->cluster->stats.redirections++;
+    if (!result || !source_host || !redirect || !result->reply ||
+        result->reply->type != REDIS_REPLY_ERROR || !result->reply->str)
+        return TURBO_EINVAL;
+    memset(redirect, 0, sizeof(*redirect));
+    text = result->reply->str;
+    if (result->server_error == REDIS_SERVER_ERROR_MOVED) {
+        redirect->kind = CLUSTER_REDIRECT_MOVED;
+        cursor = text + 6;
+    } else if (result->server_error == REDIS_SERVER_ERROR_ASK) {
+        redirect->kind = CLUSTER_REDIRECT_ASK;
+        cursor = text + 4;
+    } else {
+        return TURBO_EINVAL;
+    }
 
-            if (ctx->redirections < ctx->cluster->config.max_redirections) {
-                /* Parse redirection: "MOVED slot host:port" */
-                /* TODO: Implement redirection following */
-            }
+    errno = 0;
+    slot = strtol(cursor, &endptr, 10);
+    if (errno || endptr == cursor || *endptr != ' ' || slot < 0 ||
+        slot >= REDIS_CLUSTER_SLOTS)
+        return TURBO_EPROTO;
+    endpoint = endptr + 1;
+    colon = strrchr(endpoint, ':');
+    if (!colon) return TURBO_EPROTO;
+    errno = 0;
+    port = strtol(colon + 1, &endptr, 10);
+    if (errno || endptr == colon + 1 || *endptr != '\0' || port <= 0 ||
+        port > UINT16_MAX)
+        return TURBO_EPROTO;
+
+    host_len = (size_t)(colon - endpoint);
+    if (host_len == 0) {
+        redirect->host = tstr_dup(source_host);
+    } else if (host_len >= 2 && endpoint[0] == '[' &&
+               endpoint[host_len - 1] == ']') {
+        redirect->host = tstr_dup_len(endpoint + 1, host_len - 2);
+    } else {
+        redirect->host = tstr_dup_len(endpoint, host_len);
+    }
+    if (!redirect->host || !redirect->host[0] || redirect->host[0] == '?') {
+        cluster_redirect_clear(redirect);
+        return TURBO_EPROTO;
+    }
+    redirect->slot = (uint16_t)slot;
+    redirect->port = (uint16_t)port;
+    return TURBO_OK;
+}
+
+static cluster_node_t *ensure_redirect_node(redis_cluster_t *cluster,
+                                            const cluster_redirect_t *redirect) {
+    cluster_node_t *node;
+    int created = 0;
+    if (!cluster || !redirect || !redirect->host) return NULL;
+    node = find_node(cluster, redirect->host, redirect->port);
+    if (!node) {
+        node = create_node(cluster, redirect->host, redirect->port, NULL, 1);
+        if (!node) return NULL;
+        created = 1;
+    }
+    if (start_node_pool(node) != TURBO_OK) {
+        if (created) destroy_node(node);
+        return NULL;
+    }
+    if (created) {
+        node->next = cluster->nodes;
+        cluster->nodes = node;
+        cluster->node_count++;
+    }
+    if (redirect->kind == CLUSTER_REDIRECT_MOVED) {
+        node->info.is_master = 1;
+        cluster->slots[redirect->slot] = node;
+        recompute_master_slot_bounds(cluster);
+        recount_nodes(cluster);
+    }
+    return node;
+}
+
+static cluster_node_t *select_command_node(redis_cluster_t *cluster,
+                                           cluster_node_t *master,
+                                           int read_only) {
+    cluster_node_t *replica;
+    if (!cluster || !master) return NULL;
+    if (!read_only || !cluster->config.route_reads_to_replicas) return master;
+    replica = master->next_read_replica ? master->next_read_replica
+                                        : master->replica_head;
+    if (!replica) return NULL;
+    master->next_read_replica = replica->replica_next
+                                    ? replica->replica_next
+                                    : master->replica_head;
+    return replica;
+}
+
+static int cluster_send_commandv(redis_cluster_t *cluster, int argc,
+                                 const char **argv, const size_t *argvlen,
+                                 const char *key, size_t key_len,
+                                 int read_only,
+                                 redis_command_cb_t callback, void *user_data,
+                                 redis_command_result_t *out) {
+    redis_pool_conn_t *conn;
+    redis_client_t *client;
+    cluster_node_t *node;
+    redis_command_result_t asking = REDIS_COMMAND_RESULT_INIT;
+    cluster_redirect_t redirect = {0};
+    const char *asking_argv[] = {"ASKING"};
+    uint16_t slot;
+    int ask = 0;
+    int redirections = 0;
+    int rc;
+
+    if (!out) return TURBO_EINVAL;
+    *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+    if (!cluster || argc <= 0 || !argv || !key) {
+        out->status = TURBO_EINVAL;
+        return out->status;
+    }
+    if (!cluster->connected) {
+        out->status = TURBO_ENOTCONN;
+        return out->status;
+    }
+    for (int i = 0; i < argc; ++i) {
+        if (!argv[i]) {
+            out->status = TURBO_EINVAL;
+            return out->status;
         }
     }
 
-    /* Call user callback */
-    if (ctx->user_callback) {
-        ctx->user_callback(client, reply, ctx->user_data);
+    if (cluster->config.topology_refresh_ms > 0 &&
+        cluster->last_topology_refresh_ns > 0 &&
+        turbo_hrtime() - cluster->last_topology_refresh_ns >=
+            (uint64_t)cluster->config.topology_refresh_ms * UINT64_C(1000000) &&
+        discover_topology(cluster) != TURBO_OK) {
+        out->status = TURBO_ENOTCONN;
+        cluster->stats.commands_failed++;
+        return out->status;
     }
 
-    ctx->cluster->stats.commands_sent++;
-    tstr_free((tstr_t)ctx->key);
-    free(ctx);
+    slot = redis_cluster_keyslot(key, key_len);
+    node = select_command_node(cluster, cluster->slots[slot], read_only);
+    if (!node || !node->pool || !node->pool_started) {
+        out->status = TURBO_ENOTCONN;
+        cluster->stats.commands_failed++;
+        return out->status;
+    }
+
+    for (;;) {
+        conn = redis_pool_acquire(node->pool, 0);
+        if (!conn) {
+            out->status = TURBO_ENOTCONN;
+            cluster->stats.commands_failed++;
+            return out->status;
+        }
+        client = redis_pool_conn_client(conn);
+
+        if (ask) {
+            rc = redis_commandv_result(client, 1, asking_argv, NULL, &asking);
+            if (rc != TURBO_OK || !asking.reply ||
+                asking.reply->type != REDIS_REPLY_STRING ||
+                asking.reply->len != 2 || !asking.reply->str ||
+                memcmp(asking.reply->str, "OK", 2) != 0) {
+                redis_command_result_clear(&asking);
+                redis_pool_release(node->pool, conn);
+                out->status = rc == TURBO_OK ? TURBO_EPROTO : rc;
+                cluster->stats.commands_failed++;
+                return out->status;
+            }
+            redis_command_result_clear(&asking);
+        }
+
+        rc = redis_commandv_result(client, argc, argv, argvlen, out);
+        if (out->server_error != REDIS_SERVER_ERROR_MOVED &&
+            out->server_error != REDIS_SERVER_ERROR_ASK) {
+            if (out->outcome == REDIS_COMMAND_REPLIED && callback)
+                callback(client, out->reply, user_data);
+            redis_pool_release(node->pool, conn);
+            if (out->outcome == REDIS_COMMAND_REPLIED)
+                cluster->stats.commands_sent++;
+            if (rc != TURBO_OK) cluster->stats.commands_failed++;
+            return rc;
+        }
+
+        rc = parse_redirection(out, node->info.host, &redirect);
+        if (rc != TURBO_OK || redirect.slot != slot) {
+            out->status = TURBO_EPROTO;
+            if (callback) callback(client, out->reply, user_data);
+            redis_pool_release(node->pool, conn);
+            cluster->stats.commands_sent++;
+            cluster->stats.commands_failed++;
+            cluster_redirect_clear(&redirect);
+            return out->status;
+        }
+        cluster->stats.redirections++;
+        if (redirections++ >= cluster->config.max_redirections) {
+            out->status = TURBO_ELOOP;
+            if (callback) callback(client, out->reply, user_data);
+            redis_pool_release(node->pool, conn);
+            cluster->stats.commands_sent++;
+            cluster->stats.commands_failed++;
+            cluster_redirect_clear(&redirect);
+            return out->status;
+        }
+
+        cluster_node_t *target = ensure_redirect_node(cluster, &redirect);
+        if (!target) {
+            out->status = TURBO_ENOTCONN;
+            if (callback) callback(client, out->reply, user_data);
+            redis_pool_release(node->pool, conn);
+            cluster->stats.commands_sent++;
+            cluster->stats.commands_failed++;
+            cluster_redirect_clear(&redirect);
+            return out->status;
+        }
+        ask = redirect.kind == CLUSTER_REDIRECT_ASK;
+        cluster_redirect_clear(&redirect);
+        redis_command_result_clear(out);
+        redis_pool_release(node->pool, conn);
+        node = target;
+    }
+}
+
+#define CLUSTER_FORMAT_MAX_ARGS 32
+#define CLUSTER_FORMAT_ARG_SIZE 256
+
+static int cluster_format_argv(const char *format, va_list ap,
+                               const char **argv,
+                               char arg_buf[CLUSTER_FORMAT_MAX_ARGS]
+                                           [CLUSTER_FORMAT_ARG_SIZE]) {
+    int argc = 0;
+    const char *p = format;
+    if (!format || !argv || !arg_buf) return -1;
+
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (argc >= CLUSTER_FORMAT_MAX_ARGS) return -1;
+
+        if (*p == '%') {
+            p++;
+            if (*p == 's') {
+                argv[argc] = va_arg(ap, const char *);
+                if (!argv[argc]) return -1;
+                argc++;
+            } else if (*p == 'd') {
+                int value = va_arg(ap, int);
+                fmt(arg_buf[argc], sizeof(arg_buf[argc]), "{}", value);
+                argv[argc] = arg_buf[argc];
+                argc++;
+            } else {
+                return -1;
+            }
+            p++;
+        } else {
+            const char *start = p;
+            size_t len;
+            while (*p && *p != ' ' && *p != '%') p++;
+            len = (size_t)(p - start);
+            if (len == 0 || len >= CLUSTER_FORMAT_ARG_SIZE) return -1;
+            memcpy(arg_buf[argc], start, len);
+            arg_buf[argc][len] = '\0';
+            argv[argc] = arg_buf[argc];
+            argc++;
+        }
+    }
+    return argc;
+}
+
+static int cluster_command_key_route_v(redis_cluster_t *cluster, const char *key,
+                                       int read_only,
+                                       redis_command_cb_t callback,
+                                       void *user_data, const char *format,
+                                       va_list ap) {
+    const char *argv[CLUSTER_FORMAT_MAX_ARGS];
+    char arg_buf[CLUSTER_FORMAT_MAX_ARGS][CLUSTER_FORMAT_ARG_SIZE];
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    int argc;
+    int rc;
+
+    if (!cluster || !cluster->connected || !key || !format) return -1;
+    argc = cluster_format_argv(format, ap, argv, arg_buf);
+    if (argc <= 0) return -1;
+    rc = cluster_send_commandv(cluster, argc, argv, NULL, key, strlen(key),
+                               read_only, callback, user_data, &result);
+    (void)rc;
+    rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+    redis_command_result_clear(&result);
+    return rc;
+}
+
+static int cluster_command_key_route(redis_cluster_t *cluster, const char *key,
+                                     int read_only,
+                                     redis_command_cb_t callback,
+                                     void *user_data, const char *format, ...) {
+    va_list ap;
+    int rc;
+    va_start(ap, format);
+    rc = cluster_command_key_route_v(cluster, key, read_only, callback,
+                                     user_data, format, ap);
+    va_end(ap);
+    return rc;
 }
 
 int redis_cluster_command_key(redis_cluster_t *cluster, const char *key,
                               redis_command_cb_t callback, void *user_data,
                               const char *format, ...) {
-    if (!cluster || !cluster->connected || !key || !format) return -1;
-
-    cluster_node_t *node = get_node_for_key(cluster, key);
-    if (!node || !node->pool) {
-        cluster->stats.commands_failed++;
-        return -1;
-    }
-
-    cluster_cmd_ctx_t *ctx = malloc(sizeof(cluster_cmd_ctx_t));
-    if (!ctx) return -1;
-
-    ctx->cluster = cluster;
-    ctx->user_callback = callback;
-    ctx->user_data = user_data;
-    ctx->key = tstr_dup(key);
-    ctx->redirections = 0;
-
     va_list ap;
+    int rc;
     va_start(ap, format);
-    tstr_t cmd_buf = tstr_new();
-    if (!cmd_buf) {
-        va_end(ap);
-        tstr_free((tstr_t)ctx->key);
-        free(ctx);
-        cluster->stats.commands_failed++;
-        return -1;
-    }
-    cmd_buf = tstr_cat_vfmt(cmd_buf, format, ap);
+    rc = cluster_command_key_route_v(cluster, key, 0, callback, user_data,
+                                     format, ap);
     va_end(ap);
-    if (!cmd_buf) {
-        tstr_free((tstr_t)ctx->key);
-        free(ctx);
-        cluster->stats.commands_failed++;
-        return -1;
-    }
-
-    int result = redis_pool_command(node->pool, on_cluster_command_done, ctx,
-                                     "%s", cmd_buf);
-    tstr_free(cmd_buf);
-    if (result != 0) {
-        tstr_free((tstr_t)ctx->key);
-        free(ctx);
-        cluster->stats.commands_failed++;
-        return -1;
-    }
-
-    return 0;
+    return rc;
 }
 
 int redis_cluster_command(redis_cluster_t *cluster, redis_command_cb_t callback,
                           void *user_data, const char *format, ...) {
-    if (!cluster || !format) return -1;
-
-    /* Extract first argument as key */
+    const char *argv[CLUSTER_FORMAT_MAX_ARGS];
+    char arg_buf[CLUSTER_FORMAT_MAX_ARGS][CLUSTER_FORMAT_ARG_SIZE];
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
     va_list ap;
+    int argc;
+    int rc;
+
+    if (!cluster || !cluster->connected || !format) return -1;
     va_start(ap, format);
-    tstr_t cmd_buf = tstr_new();
-    if (!cmd_buf) {
-        va_end(ap);
-        return -1;
-    }
-    cmd_buf = tstr_cat_vfmt(cmd_buf, format, ap);
+    argc = cluster_format_argv(format, ap, argv, arg_buf);
     va_end(ap);
-    if (!cmd_buf) {
-        return -1;
-    }
-
-    /* Parse key from command (second word after command name) */
-    char *saveptr;
-    char *cmd_copy = tstr_dup(cmd_buf);
-    char *token = strtok_r(cmd_copy, " ", &saveptr);  /* command */
-    char *key = strtok_r(NULL, " ", &saveptr);        /* key */
-    (void)token;
-
-    if (!key) {
-        tstr_free(cmd_buf);
-        tstr_free((tstr_t)cmd_copy);
-        return -1;
-    }
-
-    char *key_copy = tstr_dup(key);
-    tstr_free((tstr_t)cmd_copy);
-
-    int result = redis_cluster_command_key(cluster, key_copy, callback,
-                                            user_data, "%s", cmd_buf);
-    tstr_free((tstr_t)key_copy);
-    tstr_free(cmd_buf);
-    return result;
+    if (argc < 2) return -1;
+    rc = cluster_send_commandv(cluster, argc, argv, NULL, argv[1],
+                               strlen(argv[1]), 0, callback, user_data, &result);
+    (void)rc;
+    rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+    redis_command_result_clear(&result);
+    return rc;
 }
 
 int redis_cluster_commandv(redis_cluster_t *cluster, int argc, const char **argv,
                            const size_t *argvlen, int key_index,
                            redis_command_cb_t callback, void *user_data) {
-    if (!cluster || !cluster->connected || !argv || argc <= 0) return -1;
-
-    /* Determine key index: default to 1 (first arg after command) */
-    int kidx = (key_index >= 0) ? key_index : 1;
-    if (kidx >= argc) return -1;
-
-    const char *key = argv[kidx];
-    cluster_node_t *node = get_node_for_key(cluster, key);
-    if (!node || !node->pool) {
-        cluster->stats.commands_failed++;
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    int kidx = key_index >= 0 ? key_index : 1;
+    int rc;
+    if (!cluster || !cluster->connected || !argv || argc <= 0 || kidx < 0 ||
+        kidx >= argc || !argv[kidx])
         return -1;
+    rc = cluster_send_commandv(cluster, argc, argv, argvlen, argv[kidx],
+                               argvlen ? argvlen[kidx] : strlen(argv[kidx]),
+                               0, callback, user_data, &result);
+    (void)rc;
+    rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+    redis_command_result_clear(&result);
+    return rc;
+}
+
+int redis_cluster_commandv_result(redis_cluster_t *cluster, int argc,
+                                  const char **argv, const size_t *argvlen,
+                                  int key_index, redis_command_result_t *out) {
+    int kidx = key_index >= 0 ? key_index : 1;
+    if (!out) return TURBO_EINVAL;
+    *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+    if (!cluster || !argv || argc <= 0 || kidx < 0 || kidx >= argc ||
+        !argv[kidx]) {
+        out->status = TURBO_EINVAL;
+        return out->status;
     }
+    if (!cluster->connected) {
+        out->status = TURBO_ENOTCONN;
+        return out->status;
+    }
+    return cluster_send_commandv(cluster, argc, argv, argvlen, argv[kidx],
+                                 argvlen ? argvlen[kidx] : strlen(argv[kidx]),
+                                 0, NULL, NULL, out);
+}
 
-    cluster_cmd_ctx_t *ctx = malloc(sizeof(cluster_cmd_ctx_t));
-    if (!ctx) return -1;
-
-    ctx->cluster = cluster;
-    ctx->user_callback = callback;
-    ctx->user_data = user_data;
-    ctx->key = tstr_dup(key);
-    ctx->redirections = 0;
-
-    int result = redis_pool_commandv(node->pool, argc, argv, argvlen,
-                                      on_cluster_command_done, ctx);
-    if (result != 0) {
-        tstr_free((tstr_t)ctx->key);
-        free(ctx);
-        cluster->stats.commands_failed++;
+int redis_cluster_read_commandv(redis_cluster_t *cluster, int argc,
+                                const char **argv, const size_t *argvlen,
+                                int key_index, redis_command_cb_t callback,
+                                void *user_data) {
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    int kidx = key_index >= 0 ? key_index : 1;
+    int rc;
+    if (!cluster || !cluster->connected || !argv || argc <= 0 || kidx < 0 ||
+        kidx >= argc || !argv[kidx])
         return -1;
-    }
+    rc = cluster_send_commandv(cluster, argc, argv, argvlen, argv[kidx],
+                               argvlen ? argvlen[kidx] : strlen(argv[kidx]),
+                               1, callback, user_data, &result);
+    (void)rc;
+    rc = result.outcome == REDIS_COMMAND_REPLIED ? 0 : -1;
+    redis_command_result_clear(&result);
+    return rc;
+}
 
-    return 0;
+int redis_cluster_read_commandv_result(redis_cluster_t *cluster, int argc,
+                                       const char **argv,
+                                       const size_t *argvlen, int key_index,
+                                       redis_command_result_t *out) {
+    int kidx = key_index >= 0 ? key_index : 1;
+    if (!out) return TURBO_EINVAL;
+    *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
+    if (!cluster || !argv || argc <= 0 || kidx < 0 || kidx >= argc ||
+        !argv[kidx]) {
+        out->status = TURBO_EINVAL;
+        return out->status;
+    }
+    if (!cluster->connected) {
+        out->status = TURBO_ENOTCONN;
+        return out->status;
+    }
+    return cluster_send_commandv(cluster, argc, argv, argvlen, argv[kidx],
+                                 argvlen ? argvlen[kidx] : strlen(argv[kidx]),
+                                 1, NULL, NULL, out);
 }
 
 /* =============================================================================
@@ -668,8 +1244,8 @@ int redis_cluster_set(redis_cluster_t *cluster, const char *key, const char *val
 
 int redis_cluster_get(redis_cluster_t *cluster, const char *key,
                       redis_command_cb_t callback, void *user_data) {
-    return redis_cluster_command_key(cluster, key, callback, user_data,
-                                      "GET %s", key);
+    return cluster_command_key_route(cluster, key, 1, callback, user_data,
+                                     "GET %s", key);
 }
 
 int redis_cluster_del(redis_cluster_t *cluster, const char *key,
@@ -700,8 +1276,8 @@ int redis_cluster_hset(redis_cluster_t *cluster, const char *key,
 int redis_cluster_hget(redis_cluster_t *cluster, const char *key,
                        const char *field, redis_command_cb_t callback,
                        void *user_data) {
-    return redis_cluster_command_key(cluster, key, callback, user_data,
-                                      "HGET %s %s", key, field);
+    return cluster_command_key_route(cluster, key, 1, callback, user_data,
+                                     "HGET %s %s", key, field);
 }
 
 int redis_cluster_hdel(redis_cluster_t *cluster, const char *key,
@@ -715,48 +1291,97 @@ int redis_cluster_xadd(redis_cluster_t *cluster, const char *key, size_t maxlen,
                        size_t field_count, const char **fields,
                        const char **values, const size_t *value_lens,
                        redis_command_cb_t callback, void *user_data) {
-    if (!cluster || !key || !fields || !values || field_count == 0) return -1;
+    const char **argv;
+    size_t *argvlen;
+    char maxlen_str[32];
+    size_t argc;
+    size_t idx = 0;
+    int result;
 
-    cluster_node_t *node = get_node_for_key(cluster, key);
-    if (!node || !node->pool) {
-        cluster->stats.commands_failed++;
+    if (!cluster || !cluster->connected || !key || !fields || !values ||
+        field_count == 0 || field_count > (SIZE_MAX - 6u) / 2u ||
+        field_count > ((size_t)INT_MAX - 6u) / 2u)
+        return -1;
+    for (size_t i = 0; i < field_count; ++i)
+        if (!fields[i] || !values[i]) return -1;
+
+    argc = 3u + field_count * 2u + (maxlen > 0 ? 3u : 0u);
+    argv = malloc(argc * sizeof(*argv));
+    argvlen = malloc(argc * sizeof(*argvlen));
+    if (!argv || !argvlen) {
+        free(argv);
+        free(argvlen);
         return -1;
     }
-
-    redis_pool_conn_t *conn = redis_pool_acquire(node->pool, 0);
-    if (!conn) return -1;
-
-    redis_client_t *client = redis_pool_conn_client(conn);
-    int result = redis_xadd(client, key, maxlen, field_count, fields, values,
-                            value_lens, callback, user_data);
-
-    redis_pool_release(node->pool, conn);
+    argv[idx] = "XADD"; argvlen[idx++] = 4;
+    argv[idx] = key; argvlen[idx++] = strlen(key);
+    if (maxlen > 0) {
+        argv[idx] = "MAXLEN"; argvlen[idx++] = 6;
+        argv[idx] = "~"; argvlen[idx++] = 1;
+        fmt(maxlen_str, sizeof(maxlen_str), "{}", maxlen);
+        argv[idx] = maxlen_str; argvlen[idx++] = strlen(maxlen_str);
+    }
+    argv[idx] = "*"; argvlen[idx++] = 1;
+    for (size_t i = 0; i < field_count; ++i) {
+        argv[idx] = fields[i]; argvlen[idx++] = strlen(fields[i]);
+        argv[idx] = values[i];
+        argvlen[idx++] = value_lens ? value_lens[i] : strlen(values[i]);
+    }
+    result = redis_cluster_commandv(cluster, (int)idx, argv, argvlen, 1,
+                                    callback, user_data);
+    free(argv);
+    free(argvlen);
     return result;
+}
+
+typedef struct {
+    redis_stream_cb_t callback;
+    void *user_data;
+    int decode_status;
+} cluster_stream_callback_t;
+
+static void on_cluster_stream_reply(redis_client_t *client,
+                                    redis_reply_t *reply, void *user_data) {
+    cluster_stream_callback_t *ctx = (cluster_stream_callback_t *)user_data;
+    redis_stream_result_t *streams = NULL;
+    size_t stream_count = 0;
+    ctx->decode_status = redis_stream_reply_decode(reply, &streams, &stream_count);
+    if (ctx->decode_status == TURBO_OK && ctx->callback)
+        ctx->callback(client, streams, stream_count, ctx->user_data);
+    redis_stream_result_free(streams, stream_count);
 }
 
 int redis_cluster_xread(redis_cluster_t *cluster, const char *key,
                         size_t count, int block_ms, const char *last_id,
                         redis_stream_cb_t callback, void *user_data) {
-    if (!cluster || !key) return -1;
+    const char *argv[8];
+    char count_str[32];
+    char block_str[32];
+    size_t idx = 0;
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    cluster_stream_callback_t callback_ctx = {callback, user_data, TURBO_EPROTO};
+    int rc;
 
-    cluster_node_t *node = get_node_for_key(cluster, key);
-    if (!node || !node->pool) {
-        cluster->stats.commands_failed++;
-        return -1;
+    if (!cluster || !cluster->connected || !key) return -1;
+    argv[idx++] = "XREAD";
+    if (count > 0) {
+        argv[idx++] = "COUNT";
+        fmt(count_str, sizeof(count_str), "{}", count);
+        argv[idx++] = count_str;
     }
+    if (block_ms >= 0) {
+        argv[idx++] = "BLOCK";
+        fmt(block_str, sizeof(block_str), "{}", block_ms);
+        argv[idx++] = block_str;
+    }
+    argv[idx++] = "STREAMS";
+    argv[idx++] = key;
+    argv[idx++] = last_id ? last_id : "$";
 
-    redis_pool_conn_t *conn = redis_pool_acquire(node->pool, 0);
-    if (!conn) return -1;
-
-    redis_client_t *client = redis_pool_conn_client(conn);
-    const char *keys[] = {key};
-    const char *ids[] = {last_id ? last_id : "$"};
-
-    int result = redis_xread(client, count, block_ms, 1, keys, ids,
-                              callback, user_data);
-
-    redis_pool_release(node->pool, conn);
-    return result;
+    rc = cluster_send_commandv(cluster, (int)idx, argv, NULL, key, strlen(key),
+                               1, on_cluster_stream_reply, &callback_ctx, &result);
+    redis_command_result_clear(&result);
+    return rc == TURBO_OK && callback_ctx.decode_status == TURBO_OK ? 0 : -1;
 }
 
 /* =============================================================================
@@ -783,6 +1408,8 @@ static int verify_same_slot(redis_cluster_t *cluster, int key_count,
 int redis_cluster_mdelete(redis_cluster_t *cluster, int key_count,
                           const char **keys, redis_command_cb_t callback,
                           void *user_data) {
+    const char **argv;
+    int result;
     if (!cluster || !cluster->connected || key_count <= 0 || !keys) return -1;
 
     int slot = verify_same_slot(cluster, key_count, keys);
@@ -791,24 +1418,22 @@ int redis_cluster_mdelete(redis_cluster_t *cluster, int key_count,
         return -1;
     }
 
-    cluster_node_t *node = cluster->slots[slot];
-    if (!node || !node->pool) return -1;
-
-    /* Build DEL command */
-    tstr_t cmd_buf = tstr_dup("DEL");
-    if (!cmd_buf) return -1;
-    for (int i = 0; i < key_count; i++) {
-        cmd_buf = tstr_cat_fmt(cmd_buf, " %s", keys[i]);
-        if (!cmd_buf) return -1;
-    }
-    int result = redis_pool_command(node->pool, callback, user_data, "%s", cmd_buf);
-    tstr_free(cmd_buf);
+    (void)slot;
+    argv = malloc((size_t)(key_count + 1) * sizeof(*argv));
+    if (!argv) return -1;
+    argv[0] = "DEL";
+    for (int i = 0; i < key_count; i++) argv[i + 1] = keys[i];
+    result = redis_cluster_commandv(cluster, key_count + 1, argv, NULL, 1,
+                                    callback, user_data);
+    free(argv);
     return result;
 }
 
 int redis_cluster_mget(redis_cluster_t *cluster, int key_count,
                        const char **keys, redis_command_cb_t callback,
                        void *user_data) {
+    const char **argv;
+    int result;
     if (!cluster || !cluster->connected || key_count <= 0 || !keys) return -1;
 
     int slot = verify_same_slot(cluster, key_count, keys);
@@ -817,18 +1442,14 @@ int redis_cluster_mget(redis_cluster_t *cluster, int key_count,
         return -1;
     }
 
-    cluster_node_t *node = cluster->slots[slot];
-    if (!node || !node->pool) return -1;
-
-    /* Build MGET command */
-    tstr_t cmd_buf = tstr_dup("MGET");
-    if (!cmd_buf) return -1;
-    for (int i = 0; i < key_count; i++) {
-        cmd_buf = tstr_cat_fmt(cmd_buf, " %s", keys[i]);
-        if (!cmd_buf) return -1;
-    }
-    int result = redis_pool_command(node->pool, callback, user_data, "%s", cmd_buf);
-    tstr_free(cmd_buf);
+    (void)slot;
+    argv = malloc((size_t)(key_count + 1) * sizeof(*argv));
+    if (!argv) return -1;
+    argv[0] = "MGET";
+    for (int i = 0; i < key_count; i++) argv[i + 1] = keys[i];
+    result = redis_cluster_read_commandv(cluster, key_count + 1, argv, NULL, 1,
+                                         callback, user_data);
+    free(argv);
     return result;
 }
 
@@ -869,6 +1490,12 @@ int redis_cluster_is_healthy(redis_cluster_t *cluster) {
     /* Check all slots are covered */
     for (int i = 0; i < REDIS_CLUSTER_SLOTS; i++) {
         if (!cluster->slots[i]) return 0;
+    }
+
+    for (cluster_node_t *node = cluster->nodes; node; node = node->next) {
+        if (node->info.is_master &&
+            (!node->pool_started || !redis_pool_is_healthy(node->pool)))
+            return 0;
     }
 
     return 1;

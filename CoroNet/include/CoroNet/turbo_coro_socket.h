@@ -231,6 +231,32 @@ CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostnam
 CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
                                                 const turbo_tls_client_config_t *config);
 
+/** RFC 9266 tls-exporter channel binding output size. */
+#define CORO_TLS_CHANNEL_BINDING_SIZE 32U
+
+/**
+ * @brief Export the RFC 9266 tls-exporter channel binding for this TLS connection.
+ *
+ * The socket must have completed a TLS 1.3 handshake. The function uses the
+ * fixed `EXPORTER-Channel-Binding` label, an explicit zero-length context, and
+ * writes exactly CORO_TLS_CHANNEL_BINDING_SIZE bytes. The output is connection
+ * specific but is not secret and must not be used as key material.
+ *
+ * This is a read-only query. Call it on the socket's owning event-loop thread
+ * while the connection is open. On every failure, @p output is cleared.
+ *
+ * @param socket Connected TLS socket, including an accepted server socket.
+ * @param output Caller-owned CORO_TLS_CHANNEL_BINDING_SIZE-byte buffer.
+ * @return 0 on success; TURBO_EINVAL for invalid arguments; TURBO_ENOTSUP for
+ *         a non-TLS socket; TURBO_ENOTCONN before/after the open state;
+ *         TURBO_EPROTONOSUPPORT for a negotiated version other than TLS 1.3;
+ *         TURBO_EPERM when a client connection did not verify its peer; or
+ *         TURBO_EIO if OpenSSL cannot export the binding.
+ */
+CXX_C_API int coro_socket_tls_export_channel_binding(
+    const coro_socket_t *socket,
+    uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]);
+
 /**
  * @brief Upgrade an already-connected TCP or TLS socket to WebSocket.
  *

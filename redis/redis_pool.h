@@ -31,6 +31,7 @@ typedef struct {
     /* Master connection */
     const char *master_host;
     uint16_t master_port;
+    const char *username;
     const char *password;
     int database;
 
@@ -38,8 +39,10 @@ typedef struct {
     size_t min_connections;      /**< Minimum idle connections (default: 2) */
     size_t max_connections;      /**< Maximum connections (default: 10) */
     uint32_t connect_timeout_ms; /**< Connection timeout (default: 5000) */
+    uint32_t command_timeout_ms; /**< Command timeout (default: connect timeout) */
     uint32_t idle_timeout_ms;    /**< Close idle connections after (default: 60000) */
     uint32_t health_check_ms;    /**< Health check interval (default: 30000) */
+    int cluster_readonly;        /**< Prepare every physical connection with READONLY */
 
     /* Read replicas (optional) */
     const char **replica_hosts;  /**< Array of replica hostnames */
@@ -57,13 +60,16 @@ typedef struct {
 #define REDIS_POOL_CONFIG_DEFAULT { \
     .master_host = "127.0.0.1", \
     .master_port = 6379, \
+    .username = NULL, \
     .password = NULL, \
     .database = 0, \
     .min_connections = 2, \
     .max_connections = 10, \
     .connect_timeout_ms = 5000, \
+    .command_timeout_ms = 5000, \
     .idle_timeout_ms = 60000, \
     .health_check_ms = 30000, \
+    .cluster_readonly = 0, \
     .replica_hosts = NULL, \
     .replica_ports = NULL, \
     .replica_count = 0, \
@@ -150,6 +156,17 @@ CXX_C_API int redis_pool_command(redis_pool_t *pool, redis_command_cb_t callback
 CXX_C_API int redis_pool_commandv(redis_pool_t *pool, int argc, const char **argv,
                         const size_t *argvlen, redis_command_cb_t callback,
                         void *user_data);
+
+/**
+ * Execute an argv command and retain exact Redis/transport completion state.
+ *
+ * The pool releases its connection before returning. `out` owns the reply and
+ * must be cleared with redis_command_result_clear().
+ */
+CXX_C_API int redis_pool_commandv_result(redis_pool_t *pool, int read_only,
+                                         int argc, const char **argv,
+                                         const size_t *argvlen,
+                                         redis_command_result_t *out);
 
 /**
  * Execute read-only command (may use replica)

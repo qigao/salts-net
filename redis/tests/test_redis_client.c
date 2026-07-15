@@ -49,6 +49,7 @@ void test_create_client_with_config(void) {
     redis_config_t config = {
         .host = "redis.example.com",
         .port = 6380,
+        .username = "worker",
         .password = "secret123",
         .database = 5,
         .timeout_ms = 10000,
@@ -60,6 +61,7 @@ void test_create_client_with_config(void) {
     TEST_ASSERT_NOT_NULL(client);
     TEST_ASSERT_EQUAL_STRING("redis.example.com", client->config.host);
     TEST_ASSERT_EQUAL(6380, client->config.port);
+    TEST_ASSERT_EQUAL_STRING("worker", client->config.username);
     TEST_ASSERT_EQUAL_STRING("secret123", client->config.password);
     TEST_ASSERT_EQUAL(5, client->config.database);
     TEST_ASSERT_EQUAL(10000, client->config.timeout_ms);
@@ -75,9 +77,28 @@ void test_create_client_null_host(void) {
     };
 
     redis_client_t *client = redis_client_create_with_config(&config);
+    TEST_ASSERT_NULL(client);
+}
+
+void test_create_client_normalizes_command_timeout(void) {
+    redis_config_t config = {
+        .host = "127.0.0.1",
+        .port = 6379,
+        .timeout_ms = 2500
+    };
+    redis_client_t *client = redis_client_create_with_config(&config);
     TEST_ASSERT_NOT_NULL(client);
-    /* NULL host should be handled gracefully */
+    TEST_ASSERT_EQUAL(2500, client->config.command_timeout_ms);
     redis_client_destroy(client);
+}
+
+void test_create_client_rejects_username_without_password(void) {
+    redis_config_t config = {
+        .host = "127.0.0.1",
+        .port = 6379,
+        .username = "worker"
+    };
+    TEST_ASSERT_NULL(redis_client_create_with_config(&config));
 }
 
 void test_destroy_null_client(void) {
@@ -135,10 +156,18 @@ void test_client_connect_without_coro_context_fails(void) {
     TEST_ASSERT_NOT_NULL(client);
     result = redis_client_connect(client, on_connect_status, &status);
 
-    TEST_ASSERT_EQUAL(-1, result);
-    TEST_ASSERT_EQUAL(-1, status);
+    TEST_ASSERT_EQUAL(TURBO_EINVAL, result);
+    TEST_ASSERT_EQUAL(TURBO_EINVAL, status);
     TEST_ASSERT_EQUAL(0, client->is_connected);
 
+    redis_client_destroy(client);
+}
+
+void test_client_prepare_requires_connection(void) {
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    TEST_ASSERT_NOT_NULL(client);
+    TEST_ASSERT_EQUAL(TURBO_EINVAL, redis_client_prepare(NULL));
+    TEST_ASSERT_EQUAL(TURBO_ENOTCONN, redis_client_prepare(client));
     redis_client_destroy(client);
 }
 
@@ -168,6 +197,17 @@ void test_reply_type_values(void) {
 void test_stream_entry_free_null(void) {
     /* Should not crash */
     redis_stream_entry_free(NULL);
+    TEST_PASS();
+}
+
+void test_stream_entry_free_partial_allocation(void) {
+    redis_stream_entry_t entry = {0};
+    entry.field_count = 1;
+    entry.fields = calloc(1, sizeof(*entry.fields));
+    TEST_ASSERT_NOT_NULL(entry.fields);
+
+    /* A later allocation may fail while fields already belong to the entry. */
+    redis_stream_entry_free(&entry);
     TEST_PASS();
 }
 
@@ -211,6 +251,38 @@ void test_commandv_null_client(void) {
     const char *argv[] = {"SET", "key", "value"};
     int result = redis_commandv(NULL, 3, argv, NULL, NULL, NULL);
     TEST_ASSERT_EQUAL(-1, result);
+}
+
+void test_command_result_distinguishes_not_sent(void) {
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    const char *argv[] = {"PING"};
+    TEST_ASSERT_NOT_NULL(client);
+    TEST_ASSERT_EQUAL(TURBO_ENOTCONN,
+                      redis_commandv_result(client, 1, argv, NULL, &result));
+    TEST_ASSERT_EQUAL(TURBO_ENOTCONN, result.status);
+    TEST_ASSERT_EQUAL(REDIS_COMMAND_NOT_SENT, result.outcome);
+    TEST_ASSERT_EQUAL(REDIS_SERVER_ERROR_NONE, result.server_error);
+    TEST_ASSERT_NULL(result.reply);
+    redis_command_result_clear(&result);
+    redis_client_destroy(client);
+}
+
+void test_server_error_classification(void) {
+    redis_reply_t reply = {0};
+    reply.type = REDIS_REPLY_ERROR;
+    reply.str = "BUSYGROUP Consumer Group name already exists";
+    reply.len = strlen(reply.str);
+    TEST_ASSERT_EQUAL(REDIS_SERVER_ERROR_BUSY_GROUP,
+                      redis_server_error_classify(&reply));
+    reply.str = "NOGROUP No such key or consumer group";
+    reply.len = strlen(reply.str);
+    TEST_ASSERT_EQUAL(REDIS_SERVER_ERROR_NO_GROUP,
+                      redis_server_error_classify(&reply));
+    reply.str = "some future redis error";
+    reply.len = strlen(reply.str);
+    TEST_ASSERT_EQUAL(REDIS_SERVER_ERROR_UNKNOWN,
+                      redis_server_error_classify(&reply));
 }
 
 // =============================================================================
@@ -583,6 +655,8 @@ suite("redis_client") {
         REDIS_RUN_TEST(test_create_client_default, "should create client with defaults");
         REDIS_RUN_TEST(test_create_client_with_config, "should create client with custom config");
         REDIS_RUN_TEST(test_create_client_null_host, "should handle null host");
+        REDIS_RUN_TEST(test_create_client_normalizes_command_timeout, "should default command timeout to connect timeout");
+        REDIS_RUN_TEST(test_create_client_rejects_username_without_password, "should reject ACL username without password");
         REDIS_RUN_TEST(test_destroy_null_client, "should destroy null client safely");
         REDIS_RUN_TEST(test_disconnect_null_client, "should disconnect null client safely");
         REDIS_RUN_TEST(test_interrupt_without_connection, "should report absent socket on interrupt");
@@ -592,6 +666,7 @@ suite("redis_client") {
         REDIS_RUN_TEST(test_client_initial_state, "should start disconnected with empty compatibility queue state");
         REDIS_RUN_TEST(test_client_recv_buffer_allocated, "should allocate recv buffer");
         REDIS_RUN_TEST(test_client_connect_without_coro_context_fails, "should fail connect without coroutine context");
+        REDIS_RUN_TEST(test_client_prepare_requires_connection, "should prepare only an attached connection");
     }
 
     group("Reply Structure") {
@@ -601,6 +676,7 @@ suite("redis_client") {
 
     group("Stream Structure") {
         REDIS_RUN_TEST(test_stream_entry_free_null, "should free null stream entry safely");
+        REDIS_RUN_TEST(test_stream_entry_free_partial_allocation, "should free partially allocated stream entries safely");
         REDIS_RUN_TEST(test_stream_result_free_null, "should free null stream result safely");
     }
 
@@ -608,6 +684,8 @@ suite("redis_client") {
         REDIS_RUN_TEST(test_command_not_connected, "should reject commands when not connected");
         REDIS_RUN_TEST(test_commandv_not_connected, "should reject argv commands when not connected");
         REDIS_RUN_TEST(test_commandv_null_client, "should reject argv commands for null client");
+        REDIS_RUN_TEST(test_command_result_distinguishes_not_sent, "should report commands rejected before send");
+        REDIS_RUN_TEST(test_server_error_classification, "should classify stable Redis server errors");
     }
 
     group("Stream API") {

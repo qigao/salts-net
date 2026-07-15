@@ -66,6 +66,8 @@ struct coro_pool_s {
   pool_endpoint_kind_t endpoint_kind;
   int ws_is_tls;
   coro_proxy_settings_t proxy;
+  coro_pool_connection_init_fn connection_initializer;
+  void *connection_initializer_data;
 
   /* Waiter list — coroutines blocked waiting for a free slot */
   pool_waiter_t *waiter_head;
@@ -169,6 +171,17 @@ int coro_pool_set_proxy(coro_pool_t *pool, const coro_proxy_config_t *config) {
   if (rc != 0) return rc;
   pool->proxy = next;
   return 0;
+}
+
+int coro_pool_set_connection_initializer(coro_pool_t *pool,
+                                         coro_pool_connection_init_fn initializer,
+                                         void *user_data) {
+  if (!pool) return TURBO_EINVAL;
+  if (pool->closed || pool->host[0] != '\0' || pool->alive_count != 0U)
+    return TURBO_EALREADY;
+  pool->connection_initializer = initializer;
+  pool->connection_initializer_data = user_data;
+  return TURBO_OK;
 }
 
 int coro_pool_open(coro_pool_t *pool, const char *host, int port, coro_socket_type_t socket_type) {
@@ -419,6 +432,19 @@ void coro_pool_return(coro_pool_t *pool, coro_socket_t *client) {
   TLOG_DEBUG("Coro pool return failed — socket not found in pool.");
 }
 
+int coro_pool_discard(coro_pool_t *pool, coro_socket_t *client) {
+  if (!pool || !client) return TURBO_EINVAL;
+  for (size_t i = 0; i < pool->config.max_size; ++i) {
+    if (pool->slots[i].client == client && pool->slots[i].state == POOL_SLOT_BORROWED) {
+      destroy_slot(pool, i);
+      wake_one_waiter(pool, POOL_WAKE_RETRY);
+      finalize_pool_destroy(pool);
+      return TURBO_OK;
+    }
+  }
+  return TURBO_ENOENT;
+}
+
 /* ── Query ────────────────────────────────────────────────── */
 
 size_t coro_pool_idle_count(const coro_pool_t *pool) {
@@ -636,6 +662,14 @@ static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial
 
   /* Reset timeout after connect so subsequent ops use their own timeouts */
   coro_socket_set_timeout(c, 0);
+
+  if (pool->connection_initializer) {
+    rc = pool->connection_initializer(c, pool->connection_initializer_data);
+    if (rc != TURBO_OK) {
+      coro_socket_destroy(c);
+      return rc;
+    }
+  }
 
   pool->slots[idx].client = c;
   pool->slots[idx].state = initial_state;

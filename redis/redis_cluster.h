@@ -4,7 +4,7 @@
  *
  * Features:
  * - Automatic slot routing (CRC16 hash)
- * - Topology discovery via CLUSTER SLOTS
+ * - Topology discovery via CLUSTER SHARDS with Redis < 7 SLOTS compatibility
  * - MOVED/ASK redirection handling
  * - Per-node connection pooling
  * - Automatic failover on node failure
@@ -35,8 +35,8 @@ typedef struct {
     uint16_t port;
     char *node_id;          /**< 40-char node ID */
     int is_master;
-    int slot_start;         /**< First slot (masters only) */
-    int slot_end;           /**< Last slot (masters only) */
+    int slot_start;         /**< Minimum mapped slot, or -1 (masters only) */
+    int slot_end;           /**< Maximum mapped slot, or -1 (masters only) */
 } redis_cluster_node_t;
 
 /**
@@ -49,17 +49,18 @@ typedef struct {
     size_t seed_count;
 
     /* Authentication */
+    const char *username;
     const char *password;
 
     /* Connection settings */
-    size_t connections_per_node;  /**< Pool size per master (default: 5) */
+    size_t connections_per_node;  /**< Pool size per routable node (default: 5) */
     uint32_t connect_timeout_ms;  /**< Connection timeout (default: 5000) */
     uint32_t command_timeout_ms;  /**< Command timeout (default: 5000) */
 
     /* Cluster settings */
     uint32_t topology_refresh_ms; /**< Refresh interval (default: 30000) */
     int max_redirections;         /**< Max MOVED/ASK follows (default: 5) */
-    int route_reads_to_replicas;  /**< Enable read from replicas (default: 0) */
+    int route_reads_to_replicas;  /**< Route declared read-only commands to replicas */
 } redis_cluster_config_t;
 
 /**
@@ -69,6 +70,7 @@ typedef struct {
     .seed_hosts = NULL, \
     .seed_ports = NULL, \
     .seed_count = 0, \
+    .username = NULL, \
     .password = NULL, \
     .connections_per_node = 5, \
     .connect_timeout_ms = 5000, \
@@ -100,7 +102,8 @@ typedef struct {
  * Create cluster client
  *
  * @param config Cluster configuration
- * @return Cluster instance or NULL on failure
+ * @return Cluster instance or NULL for invalid endpoints, invalid authentication
+ *         configuration, or allocation failure
  */
 CXX_C_API redis_cluster_t *redis_cluster_create(const redis_cluster_config_t *config);
 
@@ -181,6 +184,47 @@ CXX_C_API int redis_cluster_commandv(redis_cluster_t *cluster, int argc, const c
                            const size_t *argvlen, int key_index,
                            redis_command_cb_t callback, void *user_data);
 
+/**
+ * Execute a binary-safe cluster command and retain its exact completion state.
+ *
+ * MOVED replies update the reported slot and are retried at the target. ASK
+ * replies issue ASKING and the command on the same physical connection without
+ * changing the cached slot owner. Only explicit MOVED/ASK replies are retried;
+ * uncertain sends and unknown replies are returned to the caller unchanged.
+ * The call suspends the current coroutine while waiting for I/O.
+ *
+ * @param cluster Connected cluster client
+ * @param argc Argument count
+ * @param argv Argument byte strings
+ * @param argvlen Optional lengths; NULL treats arguments as null-terminated
+ * @param key_index Key argument used for routing; -1 selects argv[1]
+ * @param out Required owned result; clear with redis_command_result_clear()
+ * @return TURBO_OK for a non-error final reply, TURBO_EIO for a Redis error,
+ *         TURBO_ELOOP after max redirections, or a transport/validation error
+ */
+CXX_C_API int redis_cluster_commandv_result(redis_cluster_t *cluster, int argc,
+                                  const char **argv, const size_t *argvlen,
+                                  int key_index, redis_command_result_t *out);
+
+/**
+ * Execute a command explicitly declared read-only.
+ *
+ * The authoritative master is used unless route_reads_to_replicas is enabled.
+ * When enabled, every serving shard must have an online replica and each
+ * physical replica connection is prepared with READONLY before entering its
+ * pool. Callers must not pass commands that can mutate Redis state.
+ */
+CXX_C_API int redis_cluster_read_commandv(redis_cluster_t *cluster, int argc,
+                                 const char **argv, const size_t *argvlen,
+                                 int key_index, redis_command_cb_t callback,
+                                 void *user_data);
+
+/** Exact-result variant of redis_cluster_read_commandv(). */
+CXX_C_API int redis_cluster_read_commandv_result(redis_cluster_t *cluster,
+                                        int argc, const char **argv,
+                                        const size_t *argvlen, int key_index,
+                                        redis_command_result_t *out);
+
 /* =============================================================================
  * Convenience Functions (auto-routed by key)
  * =============================================================================
@@ -244,6 +288,9 @@ CXX_C_API uint16_t redis_cluster_keyslot(const char *key, size_t len);
 
 /**
  * Get node responsible for slot
+ *
+ * The returned view is owned by the cluster and remains valid only until the
+ * next successful topology refresh, MOVED update, disconnect, or destroy.
  *
  * @param cluster Cluster instance
  * @param slot Hash slot

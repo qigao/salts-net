@@ -24,6 +24,14 @@ extern "C" {
 /** Opaque connection pool handle */
 typedef struct coro_pool_s coro_pool_t;
 
+/**
+ * Protocol initializer invoked once for every newly connected socket.
+ *
+ * The callback runs inside the borrowing/opening coroutine and may suspend.
+ * Returning an error rejects and destroys that physical connection.
+ */
+typedef int (*coro_pool_connection_init_fn)(coro_socket_t *socket, void *user_data);
+
 /** Pool configuration */
 typedef struct coro_pool_config_s {
   size_t   min_size;           /**< Connections to pre-create on open (default 1) */
@@ -54,6 +62,16 @@ CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
  */
 CXX_C_API int coro_pool_set_proxy(coro_pool_t *pool,
                                   const coro_proxy_config_t *config);
+
+/**
+ * Configure a one-time protocol initializer for newly connected sockets.
+ *
+ * Must be called before opening the pool. The callback and user data are
+ * borrowed and must remain valid until the pool is destroyed.
+ */
+CXX_C_API int coro_pool_set_connection_initializer(coro_pool_t *pool,
+                                                    coro_pool_connection_init_fn initializer,
+                                                    void *user_data);
 
 /**
  * @brief Open the pool and pre-connect min_size connections.
@@ -133,6 +151,14 @@ CXX_C_API int coro_pool_borrow(coro_pool_t *pool, coro_socket_t **out);
  * @param client  Client to return (must have been borrowed from this pool)
  */
 CXX_C_API void coro_pool_return(coro_pool_t *pool, coro_socket_t *client);
+
+/**
+ * Destroy a borrowed connection instead of returning it to the idle set.
+ *
+ * Use this when a protocol parser or handshake determines that the byte stream
+ * is no longer reusable even if the transport still appears connected.
+ */
+CXX_C_API int coro_pool_discard(coro_pool_t *pool, coro_socket_t *client);
 
 /* ── Query ────────────────────────────────────────────────── */
 

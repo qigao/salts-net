@@ -13,15 +13,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND
   endif()
 endif()
 
-find_package(zstd CONFIG REQUIRED)
-if(TARGET zstd::libzstd_static)
-  set(TURBO_ZSTD_TARGET zstd::libzstd_static)
-elseif(TARGET zstd::libzstd)
-  set(TURBO_ZSTD_TARGET zstd::libzstd)
-else()
-  message(FATAL_ERROR "zstd was found but did not provide a supported CMake target")
-endif()
-
 add_compile_definitions(TURBO_HAS_ZSTD=1)
 if(TURBO_HAS_IO_URING)
   add_compile_definitions(TURBO_HAS_IO_URING=1)
@@ -123,7 +114,7 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     PRIVATE kcp::kcp ${TURBONET_CARES_TARGET} OpenSSL::SSL OpenSSL::Crypto
             TurboNet::WebSocketParser reed)
 
-  target_link_libraries(${tgt} PRIVATE ${TURBO_ZSTD_TARGET})
+  target_link_libraries(${tgt} PRIVATE ${TURBONET_ZSTD_TARGET})
 
   if(WIN32)
     target_link_libraries(${tgt} PRIVATE ws2_32 mswsock crypt32)

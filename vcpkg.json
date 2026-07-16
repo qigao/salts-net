@@ -20,9 +20,6 @@
     }, 
     {
       "name": "pkgconf"
-    },
-    {
-      "name": "zstd"
     }, 
     {
       "name": "simde"

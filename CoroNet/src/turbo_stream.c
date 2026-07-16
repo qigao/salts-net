@@ -17,8 +17,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TURBO_STREAM_RECV_BUFFER_SIZE 131072
-
 #ifdef _WIN32
 void turbo_stream_iocp_listener_on_connection_closed(turbo_stream_listener_t *l);
 #endif
@@ -229,8 +227,11 @@ int turbo_stream_init_common(turbo_stream_t *s, coro_context_t *ctx,
   s->arena = (mem_pool_t *)coro_context_get_arena(ctx);
   if (!s->arena) return TURBO_ENOMEM;
 
-  s->recv_buf[0] = mem_get_buffer(s->arena, TURBO_STREAM_RECV_BUFFER_SIZE);
-  s->recv_buf[1] = mem_get_buffer(s->arena, TURBO_STREAM_RECV_BUFFER_SIZE);
+  {
+    const size_t recv_buffer_size = coro_context_get_stream_recv_buffer_size(ctx);
+    s->recv_buf[0] = mem_get_buffer(s->arena, recv_buffer_size);
+    s->recv_buf[1] = mem_get_buffer(s->arena, recv_buffer_size);
+  }
   if (!s->recv_buf[0] || !s->recv_buf[1]) return TURBO_ENOMEM;
 
   coro_context_native_ref(ctx);

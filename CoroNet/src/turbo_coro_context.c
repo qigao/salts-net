@@ -125,7 +125,8 @@ static void coro_context_cleanup_create_failure(coro_context_t *ctx) {
   free(ctx);
 }
 
-coro_context_t *coro_context_create(void *loop) {
+coro_context_t *coro_context_create_ex(
+    void *loop, const struct coro_object_pool_config_s *pool_config) {
   coro_context_t *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return NULL;
   atomic_init(&ctx->stop_requested, 0);
@@ -170,7 +171,7 @@ coro_context_t *coro_context_create(void *loop) {
   }
 
   /* Create coroutine pool with context's arena */
-  ctx->pool = coro_object_pool_create(NULL, ctx);
+  ctx->pool = coro_object_pool_create(pool_config, ctx);
   if (!ctx->pool) {
     coro_context_cleanup_create_failure(ctx);
     return NULL;
@@ -184,9 +185,12 @@ coro_context_t *coro_context_create(void *loop) {
 
   ctx->tcp_backend = turbo_tcp_backend_default();
   ctx->udp_backend = TURBO_UDP_BACKEND_AUTO;
+  ctx->stream_recv_buffer_size = CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE;
 
   return ctx;
 }
+
+coro_context_t *coro_context_create(void *loop) { return coro_context_create_ex(loop, NULL); }
 
 int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
   if (!ctx || !ctx->loop) return 0;
@@ -583,6 +587,16 @@ int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backen
 
 turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx) {
   return ctx ? ctx->udp_backend : TURBO_UDP_BACKEND_AUTO;
+}
+
+int coro_context_set_stream_recv_buffer_size(coro_context_t *ctx, size_t bytes) {
+  if (!ctx || bytes == 0u) return TURBO_EINVAL;
+  ctx->stream_recv_buffer_size = bytes;
+  return TURBO_OK;
+}
+
+size_t coro_context_get_stream_recv_buffer_size(const coro_context_t *ctx) {
+  return ctx ? ctx->stream_recv_buffer_size : CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE;
 }
 
 int coro_context_get_last_error(const coro_context_t *ctx) { return ctx ? ctx->last_error : 0; }

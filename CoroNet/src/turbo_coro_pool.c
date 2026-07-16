@@ -27,6 +27,7 @@ coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *con
 
     if (!config) config = &defaults;
     if (!ctx || !ctx->arena) return NULL;
+    if (config->max_capacity != 0u && config->initial_capacity > config->max_capacity) return NULL;
 
     pool = (coro_object_pool_t *)calloc(1, sizeof(*pool));
     if (!pool) return NULL;

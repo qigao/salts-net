@@ -41,6 +41,33 @@
             }
         },
         {
+            "name": "android-win-paths",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_MAKE_PROGRAM": "C:/Users/lockg/scoop/shims/ninja.exe",
+                "CMAKE_INSTALL_PREFIX": "C:/projects/cpp/external/pkgs/turbonet-android",
+                "LEMON_EXECUTABLE": "${sourceDir}/build/Msvc-Release/bin/lemon.exe",
+                "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe"
+            },
+            "environment": {
+                "VCPKG_ROOT": "C:/tools/vcpkg",
+                "ANDROID_NDK_HOME": "C:/Users/lockg/AppData/Local/Android/Sdk/ndk/28.2.13676358"
+            }
+        },
+        {
+            "name": "android-linux-paths",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_MAKE_PROGRAM": "/usr/bin/ninja",
+                "CMAKE_INSTALL_PREFIX": "/root/dev/release-android",
+                "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-linux/tools/pkgconf/pkgconf"
+            },
+            "environment": {
+                "VCPKG_ROOT": "/opt/vcpkg",
+                "ANDROID_NDK_HOME": "/root/Android/Sdk/ndk/28.2.13676358"
+            }
+        },
+        {
             "name": "win-dev-user",
             "displayName": "Developer Build (Windows, User)",
             "cacheVariables": {
@@ -106,6 +133,62 @@
                 "release-linux-ninja",
                 "linux-paths"
             ]
+        },
+        {
+            "name": "android-arm64-v8a-debug-win",
+            "displayName": "Android arm64-v8a Debug (Windows Host)",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "CMAKE_PREFIX_PATH": "C:/projects/cpp/turbonet/turbo-utils/build/android-arm64-v8a-debug;${sourceDir}/vcpkg_installed/arm64-android/debug",
+                "TURBO_UTILS_ROOT": "C:/projects/cpp/turbonet/turbo-utils/build/android-arm64-v8a-debug",
+                "TurboUtils_DIR": "C:/projects/cpp/turbonet/turbo-utils/build/android-arm64-v8a-debug"
+            },
+            "inherits": [
+                "android-arm64-v8a-debug",
+                "android-win-paths"
+            ]
+        },
+        {
+            "name": "android-arm64-v8a-release-win",
+            "displayName": "Android arm64-v8a Release (Windows Host)",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "CMAKE_PREFIX_PATH": "C:/projects/cpp/turbonet/turbo-utils/build/android-arm64-v8a-release;${sourceDir}/vcpkg_installed/arm64-android",
+                "TURBO_UTILS_ROOT": "C:/projects/cpp/turbonet/turbo-utils/build/android-arm64-v8a-release",
+                "TurboUtils_DIR": "C:/projects/cpp/turbonet/turbo-utils/build/android-arm64-v8a-release"
+            },
+            "inherits": [
+                "android-arm64-v8a-release",
+                "android-win-paths"
+            ]
+        },
+        {
+            "name": "android-x86_64-debug-win",
+            "displayName": "Android x86_64 Debug (Windows Host)",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "CMAKE_PREFIX_PATH": "C:/projects/cpp/turbonet/turbo-utils/build/android-x86_64-debug;${sourceDir}/vcpkg_installed/x64-android/debug",
+                "TURBO_UTILS_ROOT": "C:/projects/cpp/turbonet/turbo-utils/build/android-x86_64-debug",
+                "TurboUtils_DIR": "C:/projects/cpp/turbonet/turbo-utils/build/android-x86_64-debug"
+            },
+            "inherits": [
+                "android-x86_64-debug",
+                "android-win-paths"
+            ]
+        },
+        {
+            "name": "android-x86_64-release-win",
+            "displayName": "Android x86_64 Release (Windows Host)",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "CMAKE_PREFIX_PATH": "C:/projects/cpp/turbonet/turbo-utils/build/android-x86_64-release;${sourceDir}/vcpkg_installed/x64-android",
+                "TURBO_UTILS_ROOT": "C:/projects/cpp/turbonet/turbo-utils/build/android-x86_64-release",
+                "TurboUtils_DIR": "C:/projects/cpp/turbonet/turbo-utils/build/android-x86_64-release"
+            },
+            "inherits": [
+                "android-x86_64-release",
+                "android-win-paths"
+            ]
         }
     ],
     "buildPresets": [
@@ -128,6 +211,32 @@
         {
             "name": "linux-sdk-package",
             "configurePreset": "linux-sdk-package"
+        },
+        {
+            "name": "android-arm64-v8a-debug-win",
+            "configurePreset": "android-arm64-v8a-debug-win"
+        },
+        {
+            "name": "android-arm64-v8a-release-win",
+            "configurePreset": "android-arm64-v8a-release-win"
+        },
+        {
+            "name": "android-x86_64-debug-win",
+            "configurePreset": "android-x86_64-debug-win"
+        },
+        {
+            "name": "android-x86_64-release-win",
+            "configurePreset": "android-x86_64-release-win"
+        },
+        {
+            "name": "install-android-arm64-v8a-debug-win",
+            "configurePreset": "android-arm64-v8a-debug-win",
+            "targets": [ "install" ]
+        },
+        {
+            "name": "install-android-arm64-v8a-release-win",
+            "configurePreset": "android-arm64-v8a-release-win",
+            "targets": [ "install" ]
         }
     ],
     "testPresets": [

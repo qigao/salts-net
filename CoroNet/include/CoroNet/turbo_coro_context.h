@@ -23,11 +23,17 @@ extern "C" {
 /** Opaque event-loop context (wraps the active native event loop plus a thread-safe post queue) */
 typedef struct coro_context_s coro_context_t;
 
+/** Default capacity of each of the two receive buffers owned by a new stream. */
+#define CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE (128u * 1024u)
+
 /** Opaque reusable coroutine-aware timed wait handle. */
 typedef struct coro_wait_s coro_wait_t;
 
 /** Shorter alias for coro_context_t */
 typedef struct coro_context_s coro_context;
+
+/** Pool configuration defined by turbo_coro_object_pool.h. */
+struct coro_object_pool_config_s;
 
 /** Opaque native loop handle (replaces uv_loop_t) */
 typedef struct turbo_loop_s turbo_loop_t;
@@ -68,6 +74,21 @@ CXX_C_API void *coro_context_native_loop(const coro_context_t *ctx);
  * @return Context handle or NULL on failure
  */
 CXX_C_API coro_context_t *coro_context_create(void *loop);
+
+/**
+ * @brief Create an event-loop context with an explicitly sized coroutine pool.
+ *
+ * The configuration is copied while the context is created and applies to the
+ * context-owned scheduler used by coro_context_spawn(), socket listeners, and
+ * task APIs. Include turbo_coro_object_pool.h to construct the configuration.
+ * Passing NULL preserves coro_context_create() defaults.
+ *
+ * @param loop Existing native event-loop pointer, or NULL for an owned loop.
+ * @param pool_config Coroutine pool capacity and stack configuration, or NULL.
+ * @return Context handle or NULL when configuration or allocation fails.
+ */
+CXX_C_API coro_context_t *
+coro_context_create_ex(void *loop, const struct coro_object_pool_config_s *pool_config);
 
 /**
  * @brief Destroy the context and free resources.
@@ -173,6 +194,22 @@ CXX_C_API int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backen
  * @return Preferred backend, or AUTO for NULL
  */
 CXX_C_API turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx);
+
+/**
+ * @brief Set the receive-buffer capacity used by streams created after this call.
+ *
+ * Each stream owns two ping-pong buffers of this capacity. The setting is
+ * context-local and does not resize streams that already exist. Call it from
+ * the context owner lane before creating sockets or streams.
+ *
+ * @param ctx Context to configure.
+ * @param bytes Non-zero capacity of each receive buffer.
+ * @return TURBO_OK or TURBO_EINVAL.
+ */
+CXX_C_API int coro_context_set_stream_recv_buffer_size(coro_context_t *ctx, size_t bytes);
+
+/** @return Configured per-buffer capacity, or the default for a NULL context. */
+CXX_C_API size_t coro_context_get_stream_recv_buffer_size(const coro_context_t *ctx);
 
 /**
  * @brief Get the last synchronous API error recorded on this context.

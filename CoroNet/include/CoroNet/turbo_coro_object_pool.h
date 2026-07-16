@@ -36,10 +36,10 @@ extern "C" {
 typedef struct coro_object_pool_s coro_object_pool_t;
 
 /** Pool configuration */
-typedef struct {
+typedef struct coro_object_pool_config_s {
     size_t initial_capacity;  /**< Initial number of coroutines to pre-allocate */
     size_t max_capacity;      /**< Maximum capacity (0 = unlimited) */
-    size_t stack_size;        /**< Stack size per coroutine (0 = default 56KB) */
+    size_t stack_size;        /**< Stack size per coroutine (0 = default 128KiB) */
 } coro_object_pool_config_t;
 
 /** Default configuration */

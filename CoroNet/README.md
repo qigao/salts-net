@@ -96,6 +96,27 @@ Use `coro_spawn_pooled()` when you already own a long-lived scheduler and need
 to launch many short-lived coroutines. It keeps scheduler semantics but avoids
 the full `coro_create()` / `coro_destroy()` cost on every task.
 
+Servers that use `coro_context_spawn()` or socket listeners should size the
+context-owned pool at creation instead of creating a second pool:
+
+```c
+coro_object_pool_config_t cfg = {
+  .initial_capacity = 16,
+  .max_capacity = 100008,
+  .stack_size = 64 * 1024
+};
+coro_context_t *ctx = coro_context_create_ex(NULL, &cfg);
+```
+
+The legacy `coro_context_create()` remains equivalent to passing a NULL pool
+configuration. Stack size is a resource and safety boundary; reducing it
+requires workload-specific stack-depth testing.
+
+`coro_context_set_stream_recv_buffer_size()` changes the capacity of each of
+the two ping-pong receive buffers allocated by streams created afterward. The
+default remains 128 KiB per buffer; protocol runtimes with their own framing
+and reassembly may select a smaller context-local chunk before creating sockets.
+
 ### Coroutine Server
 
 ```c

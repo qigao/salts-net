@@ -1053,6 +1053,28 @@ spec("Stream") {
         coro_context_destroy(ctx);
     }
 
+    it("should allocate context-sized stream receive buffers") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        mem_pool_t *arena;
+        turbo_stream_t *stream;
+        size_t before;
+        size_t after;
+
+        check_not_null(ctx);
+        check_int_eq(coro_context_set_stream_recv_buffer_size(ctx, 4096u), TURBO_OK);
+        arena = (mem_pool_t *)coro_context_get_arena(ctx);
+        check_not_null(arena);
+        before = mem_pool_total_used(arena);
+        stream = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+        check_not_null(stream);
+        after = mem_pool_total_used(arena);
+        check_size_gt(after, before);
+        check_size_lt(after - before, 64u * 1024u);
+
+        turbo_stream_destroy(stream);
+        coro_context_destroy(ctx);
+    }
+
     it("should expose TCP keepalive linger and send HWM socket options") {
         turbo_tcp_keepalive_config_t keepalive;
         turbo_socket_linger_config_t linger;

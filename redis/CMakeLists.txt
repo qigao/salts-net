@@ -39,6 +39,10 @@ if(WIN32)
 endif()
 
 # Tests
-add_subdirectory(tests)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+else()
+  add_subdirectory(tests EXCLUDE_FROM_ALL)
+endif()
 
 install(FILES ${REDIS_HEADERS} DESTINATION include/redis)

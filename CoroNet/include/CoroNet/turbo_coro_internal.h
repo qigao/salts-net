@@ -196,6 +196,9 @@ struct coro_context_s {
   /** Preferred UDP backend for future sockets created by this context */
   turbo_udp_backend_t udp_backend;
 
+  /** Capacity of each ping-pong receive buffer for future streams. */
+  size_t stream_recv_buffer_size;
+
   /** Last synchronous API error recorded on this context */
   int last_error;
 

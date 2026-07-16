@@ -172,6 +172,43 @@ spec("Coroutine Tests") {
 }
 
 spec("Object Pool Tests") {
+    it("should configure receive buffers for future streams") {
+        coro_context_t *ctx = coro_context_create(NULL);
+
+        check_not_null(ctx);
+        check_size_eq(coro_context_get_stream_recv_buffer_size(ctx),
+                      CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE);
+        check_int_eq(coro_context_set_stream_recv_buffer_size(ctx, 4096u), TURBO_OK);
+        check_size_eq(coro_context_get_stream_recv_buffer_size(ctx), 4096u);
+        check_int_eq(coro_context_set_stream_recv_buffer_size(ctx, 0u), TURBO_EINVAL);
+        check_int_eq(coro_context_set_stream_recv_buffer_size(NULL, 4096u), TURBO_EINVAL);
+        check_size_eq(coro_context_get_stream_recv_buffer_size(NULL),
+                      CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE);
+
+        coro_context_destroy(ctx);
+    }
+
+    it("should configure the context-owned pool at creation") {
+        coro_object_pool_config_t config = {
+            .initial_capacity = 1,
+            .max_capacity = 2,
+            .stack_size = 32u * 1024u
+        };
+        coro_context_t *ctx = coro_context_create_ex(NULL, &config);
+        int counter = 0;
+
+        check_not_null(ctx);
+        check_int_eq(coro_context_spawn(ctx, sched_fast, &counter), 0);
+        check_int_eq(coro_context_spawn(ctx, sched_fast, &counter), 0);
+        check_int_eq(coro_context_spawn(ctx, sched_fast, &counter), TURBO_ENOMEM);
+        while (coro_context_run(ctx, TURBO_RUN_NOWAIT) != 0) {}
+        check_int_eq(counter, 20);
+        coro_context_destroy(ctx);
+
+        config.initial_capacity = 3;
+        check_null(coro_context_create_ex(NULL, &config));
+    }
+
     it("should create and destroy pool") {
         coro_context_t *ctx = coro_context_create(NULL);
         check_not_null(ctx);

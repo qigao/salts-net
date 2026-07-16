@@ -19,7 +19,8 @@
       "version>=": "3.2.0"
     }, 
     {
-      "name": "pkgconf"
+      "name": "pkgconf",
+      "host": true
     }, 
     {
       "name": "simde"

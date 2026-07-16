@@ -12,10 +12,3 @@ set(CARES_BUILD_CONTAINER_TESTS OFF CACHE BOOL
     "Do not build vendored c-ares container tests" FORCE)
 set(CARES_BUILD_TOOLS OFF CACHE BOOL "Do not build vendored c-ares tools" FORCE)
 add_subdirectory(c-ares)
-
-set(ZSTD_BUILD_STATIC ON CACHE BOOL "Build vendored zstd as a static library" FORCE)
-set(ZSTD_BUILD_SHARED OFF CACHE BOOL "Disable the vendored zstd shared library" FORCE)
-set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "Do not build vendored zstd programs" FORCE)
-set(ZSTD_BUILD_TESTS OFF CACHE BOOL "Do not build vendored zstd tests" FORCE)
-set(ZSTD_BUILD_CONTRIB OFF CACHE BOOL "Do not build vendored zstd contrib tools" FORCE)
-add_subdirectory(zstd EXCLUDE_FROM_ALL)

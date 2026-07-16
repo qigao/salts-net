@@ -304,7 +304,6 @@ static void stream_coro_recv_timeout_then_close_handler(coro_socket_t *client, v
     }
 }
 
-#if defined(TURBO_HAS_ZSTD)
 typedef struct stream_zstd_echo_state_s {
     coro_context_t *ctx;
     unsigned short port;
@@ -423,9 +422,7 @@ static void stream_zstd_echo_client_task(coro_t *co, void *arg) {
     state->client_done = 1;
     coro_socket_destroy(client);
 }
-#endif
 
-#if defined(TURBO_HAS_ZSTD)
 typedef struct stream_zstd_auto_echo_state_s {
     coro_context_t *ctx;
     unsigned short port;
@@ -542,7 +539,6 @@ static void stream_zstd_auto_echo_client_task(coro_t *co, void *arg) {
     state->client_done = 1;
     coro_socket_destroy(client);
 }
-#endif
 
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
 static void stream_coro_recv_timeout_loop_handler(coro_socket_t *client, void *arg) {
@@ -1484,7 +1480,6 @@ spec("Stream") {
         check_int_eq(coro_socket_get_local_address((coro_socket_t *)1, NULL), TURBO_EINVAL);
     }
 
-#if defined(TURBO_HAS_ZSTD)
     it("should send and receive compressed frames") {
         coro_context_t *ctx = coro_context_create(NULL);
         stream_zstd_echo_state_t state;
@@ -1558,25 +1553,6 @@ spec("Stream") {
         }
         coro_context_destroy(ctx);
     }
-#else
-    it("should return ENOTSUP for compressed APIs when zstd is unavailable") {
-        char *data = NULL;
-        size_t len = 0;
-        char payload[] = "uncompressed payload";
-        coro_context_t *ctx = coro_context_create(NULL);
-        check(ctx != NULL);
-
-        coro_socket_t *sock = coro_socket_create_tcpv4(ctx);
-        check_not_null(sock);
-
-        check_int_eq(coro_socket_set_compression_level(sock, 1), TURBO_ENOTSUP);
-        check_int_eq(coro_socket_send_compressed(sock, payload, sizeof(payload) - 1U), TURBO_ENOTSUP);
-        check_int_eq(coro_socket_recv_compressed(sock, &data, &len), TURBO_ENOTSUP);
-
-        coro_socket_destroy(sock);
-        coro_context_destroy(ctx);
-    }
-#endif
 
     it("should honor reuse_port for tcp listeners") {
         coro_context_t *ctx = coro_context_create(NULL);

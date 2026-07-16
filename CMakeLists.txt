@@ -63,11 +63,6 @@ if(NOT TARGET c-ares::cares_static)
 endif()
 set(TURBONET_CARES_TARGET c-ares::cares_static)
 
-if(NOT TARGET libzstd_static)
-  message(FATAL_ERROR "The vendored zstd static target is unavailable")
-endif()
-set(TURBONET_ZSTD_TARGET libzstd_static)
-
 add_subdirectory(CoroNet)
 add_subdirectory(ice)
 add_subdirectory(snmp)

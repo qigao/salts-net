@@ -13,7 +13,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND
   endif()
 endif()
 
-add_compile_definitions(TURBO_HAS_ZSTD=1)
 if(TURBO_HAS_IO_URING)
   add_compile_definitions(TURBO_HAS_IO_URING=1)
 endif()
@@ -113,8 +112,6 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     PUBLIC TurboUtils::Core TurboUtils::Parser Threads::Threads
     PRIVATE kcp::kcp ${TURBONET_CARES_TARGET} OpenSSL::SSL OpenSSL::Crypto
             TurboNet::WebSocketParser reed)
-
-  target_link_libraries(${tgt} PRIVATE ${TURBONET_ZSTD_TARGET})
 
   if(WIN32)
     target_link_libraries(${tgt} PRIVATE ws2_32 mswsock crypt32)

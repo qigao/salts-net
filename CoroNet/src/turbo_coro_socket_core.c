@@ -13,18 +13,13 @@
 #include "CoroNet/turbo_kcp.h"
 #include "tlog.h"
 #include "turbo_error.h"
+#include "turbo_zstd.h"
 #include "turbo_stream_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(TURBO_HAS_ZSTD)
-#include <zstd.h>
-#endif
-
-#if defined(TURBO_HAS_ZSTD)
 #define CORO_ZSTD_FRAME_MAGIC 0x5A535443U /* 'ZSTC' */
 #define CORO_ZSTD_FRAME_HEADER_LEN 12U
-#define CORO_ZSTD_DEFAULT_LEVEL ZSTD_CLEVEL_DEFAULT
 #define CORO_ZSTD_MAX_FRAME_DATA_LEN ((size_t)UINT32_MAX)
 
 static void zstd_store_u32_be(char *p, uint32_t v) {
@@ -40,11 +35,6 @@ static uint32_t zstd_load_u32_be(const char *p) {
          ((uint32_t)(unsigned char)p[2] << 8) |
          (uint32_t)(unsigned char)p[3];
 }
-
-static int zstd_error_code(void) {
-  return TURBO_EIO;
-}
-#endif
 
 /* ── External transport ops (defined in separate files) ────── */
 extern const coro_transport_ops_t transport_ops_tcp;
@@ -793,10 +783,8 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
   s->ops = ops;
   s->owns_handle = 0;
   s->dns_pref = TURBO_DNS_ANY;
-#if defined(TURBO_HAS_ZSTD)
-  s->recv_compression_level = CORO_ZSTD_DEFAULT_LEVEL;
+  s->recv_compression_level = turbo_zstd_default_level();
   s->recv_compression_auto = 0;
-#endif
 
   s->timer = turbo_timer_create(NULL);
   if (!s->timer) {
@@ -1008,7 +996,6 @@ int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_c
 
 /* ── Socket I/O ───────────────────────────────────────────── */
 
-#if defined(TURBO_HAS_ZSTD)
 static int coro_socket_recv_compression_append(coro_socket_t *s, const char *chunk, size_t chunk_len) {
   size_t new_len;
   char *new_cache;
@@ -1116,12 +1103,15 @@ static int coro_socket_recv_compressed_payload(coro_socket_t *s, char **data, si
       return TURBO_ENOMEM;
     }
 
-    decompressed = ZSTD_decompress(frame_base + sizeof(coro_recv_header_t), decompressed_len, payload,
-                                   compressed_len);
-    if (ZSTD_isError(decompressed)) {
-      free(frame_base);
-      coro_socket_reset_recv_compression_state(s);
-      return zstd_error_code();
+    {
+      int rc = turbo_zstd_decompress(
+          frame_base + sizeof(coro_recv_header_t), decompressed_len,
+          &decompressed, payload, compressed_len);
+      if (rc != TURBO_OK) {
+        free(frame_base);
+        coro_socket_reset_recv_compression_state(s);
+        return rc;
+      }
     }
     if (decompressed != decompressed_len) {
       free(frame_base);
@@ -1174,9 +1164,9 @@ static int coro_socket_send_compressed_internal(coro_socket_t *s, const char *d,
   }
   uncompressed_u32 = (uint32_t)l;
 
-  compressed_cap = (size_t)ZSTD_compressBound(l);
-  if (compressed_cap < l) {
-    return TURBO_ENOMEM;
+  rc = turbo_zstd_compress_bound(l, &compressed_cap);
+  if (rc != TURBO_OK) {
+    return rc;
   }
 
   if (compressed_cap > (size_t)(UINT32_MAX - CORO_ZSTD_FRAME_HEADER_LEN)) {
@@ -1190,10 +1180,11 @@ static int coro_socket_send_compressed_internal(coro_socket_t *s, const char *d,
   }
 
   payload = frame + CORO_ZSTD_FRAME_HEADER_LEN;
-  compressed_len = ZSTD_compress(payload, compressed_cap, d, l, level);
-  if (ZSTD_isError(compressed_len)) {
+  rc = turbo_zstd_compress(payload, compressed_cap, &compressed_len, d, l,
+                           level);
+  if (rc != TURBO_OK) {
     free(frame);
-    return zstd_error_code();
+    return rc;
   }
   if (compressed_len > (size_t)UINT32_MAX) {
     free(frame);
@@ -1210,16 +1201,13 @@ static int coro_socket_send_compressed_internal(coro_socket_t *s, const char *d,
   free(frame);
   return rc;
 }
-#endif
 
 int coro_socket_send(coro_socket_t *s, const char *d, size_t l) {
   if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
-#if defined(TURBO_HAS_ZSTD)
   if (s->recv_compression_auto && s->recv_compression_level > 0) {
     return socket_return_error(s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
   }
-#endif
   return coro_socket_send_raw_internal(s, d, l);
 }
 
@@ -1229,7 +1217,6 @@ int coro_socket_send_raw_internal(coro_socket_t *s, const char *d, size_t l) {
   return s->ops->send(s, d, l);
 }
 
-#if defined(TURBO_HAS_ZSTD)
 int coro_socket_send_compressed(coro_socket_t *s, const char *d, size_t l) {
   if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
@@ -1289,8 +1276,8 @@ int coro_socket_set_compression_level(coro_socket_t *s, int level) {
     return socket_return_error(s, TURBO_EINVAL);
   }
   if (level > 0) {
-    int min_level = ZSTD_minCLevel();
-    int max_level = ZSTD_maxCLevel();
+    int min_level = turbo_zstd_min_level();
+    int max_level = turbo_zstd_max_level();
     if (level < min_level || level > max_level) {
       return socket_return_error(s, TURBO_EINVAL);
     }
@@ -1306,29 +1293,6 @@ int coro_socket_set_compression_level(coro_socket_t *s, int level) {
 
   return 0;
 }
-#else
-int coro_socket_send_compressed(coro_socket_t *s, const char *d, size_t l) {
-  (void)s;
-  (void)d;
-  (void)l;
-  return socket_return_error(s, TURBO_ENOTSUP);
-}
-
-int coro_socket_recv_compressed(coro_socket_t *s, char **data, size_t *len) {
-  if (data) {
-    *data = NULL;
-  }
-  if (len) {
-    *len = 0U;
-  }
-  return socket_return_error(s, TURBO_ENOTSUP);
-}
-
-int coro_socket_set_compression_level(coro_socket_t *s, int level) {
-  (void)level;
-  return socket_return_error(s, TURBO_ENOTSUP);
-}
-#endif
 
 int coro_socket_send_owned_recv(coro_socket_t *s, char *d, size_t l) {
   int rc;
@@ -1363,11 +1327,9 @@ int coro_socket_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) 
 }
 
 int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
-#if defined(TURBO_HAS_ZSTD)
   if (s && s->recv_compression_auto && s->recv_compression_level > 0) {
     return coro_socket_recv_compressed(s, data, len);
   }
-#endif
   return coro_socket_recv_raw_internal(s, data, len);
 }
 

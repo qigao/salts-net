@@ -253,4 +253,21 @@ spec("Lazy Task API") {
 
         robust_context_destroy(ctx);
     }
+
+    it("should reclaim a started task after its owner releases the handle") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        int counter = 0;
+        check_not_null(ctx);
+
+        coro_task_t *task = coro_task_create(ctx, simple_task, &counter);
+        check_not_null(task);
+        check_int_eq(coro_task_start(task), TURBO_OK);
+
+        coro_task_destroy(task);
+        (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
+
+        check_int_eq(counter, 1);
+        check_size_eq(turbo_vec_size(&ctx->tasks), 0);
+        robust_context_destroy(ctx);
+    }
 }

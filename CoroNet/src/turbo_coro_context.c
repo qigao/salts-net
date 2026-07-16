@@ -5,27 +5,32 @@
  * Uses turbo_loop_t (native IOCP/epoll/kqueue) instead of libuv.
  */
 
+#include "platform.h"
 #include "turbo_coro_context.h"
 #include "CoroNet/turbo_coro_object_pool.h"
-#include "platform.h"
 #include "tlog.h"
 #include "turbo_coro_internal.h"
 #include "turbo_thread.h"
 #include <stdlib.h>
 #ifdef _WIN32
-#include "turbo_iocp_pool.h"
+  #include "turbo_iocp_pool.h"
 #endif
 #ifdef _WIN32
   #include <windows.h>
 #else
   #include <errno.h>
   #include <sched.h>
-#endif 
+#endif
 #ifdef _WIN32
 static __declspec(thread) coro_context_t *tls_current_context = NULL;
 #else
 static __thread coro_context_t *tls_current_context = NULL;
 #endif
+
+enum {
+  CORO_POST_QUEUE_CAPACITY = 16384,
+  CORO_POST_QUEUE_USABLE_CAPACITY = CORO_POST_QUEUE_CAPACITY - 1
+};
 
 int turbo_tcp_backend_is_available(int backend);
 int turbo_udp_backend_is_available(int backend);
@@ -45,14 +50,14 @@ static turbo_tcp_backend_t turbo_tcp_backend_default(void) {
 /* ── coro_task_s definition ───────────────────────────────────── */
 struct coro_task_s {
   coro_context_t *ctx;
-  coro_fn         fn;
-  void           *arg;
-  int             started;
-  int             cancelled;
-  int             done;
-  int             ref_count;
+  coro_fn fn;
+  void *arg;
+  size_t context_index;
+  int ref_count;
+  uint8_t started;
+  uint8_t cancelled;
+  uint8_t done;
 };
-
 
 void *coro_context_native_loop(const coro_context_t *ctx) { return ctx ? (void *)ctx->loop : NULL; }
 
@@ -68,7 +73,7 @@ static void drain_platform_completions(coro_context_t *ctx) {
   (void)ctx;
 #endif
 }
-static void remove_task_from_context(coro_context_t *ctx, coro_task_t *task);
+static int remove_task_from_context(coro_context_t *ctx, coro_task_t *task);
 static int register_task_with_context(coro_context_t *ctx, coro_task_t *task);
 static void destroy_task_now(coro_task_t *task);
 static void pooled_coro_cleanup_callback(coro_t *co, void *arg);
@@ -95,14 +100,14 @@ static void coro_context_cleanup_create_failure(coro_context_t *ctx) {
     ctx->pool = NULL;
   }
 
-  if (ctx->tasks) {
-    free(ctx->tasks);
-    ctx->tasks = NULL;
-  }
+  turbo_vec_destroy(&ctx->tasks);
 
-  if (ctx->post_initialized && ctx->post_ring) {
-    free(ctx->post_ring);
-    ctx->post_ring = NULL;
+  if (ctx->post_queue) {
+    if (ctx->post_initialized) {
+      disruptor_consumer_unregister(ctx->post_queue, &ctx->post_consumer);
+    }
+    disruptor_destroy(ctx->post_queue);
+    ctx->post_queue = NULL;
     ctx->post_initialized = 0;
   }
 
@@ -150,14 +155,12 @@ coro_context_t *coro_context_create(void *loop) {
   }
   ctx->owns_arena = 1;
 
-  /* Initialize lazy task list */
-  ctx->task_capacity = 8;
-  ctx->tasks = (coro_task_t **)calloc(ctx->task_capacity, sizeof(coro_task_t *));
-  if (!ctx->tasks) {
+  /* Initialize lazy task list. Reserve the historical initial capacity. */
+  if (turbo_vec_init(&ctx->tasks, sizeof(coro_task_t *)) != TURBO_OK ||
+      turbo_vec_reserve(&ctx->tasks, 8) != TURBO_OK) {
     coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
-  ctx->task_count = 0;
 
   /* Initialize scheduler for managed coroutines */
   ctx->scheduler = coro_scheduler_create();
@@ -202,13 +205,11 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
     while (1) {
       int has_ready = coro_scheduler_has_ready(ctx->scheduler);
 
-      int stop_requested =
-          atomic_load_explicit(&ctx->stop_requested, memory_order_acquire);
+      int stop_requested = atomic_load_explicit(&ctx->stop_requested, memory_order_acquire);
 
-      if (!stop_requested && !context_loop_alive(ctx) &&
-           !coro_scheduler_count(ctx->scheduler) &&
-           atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
-           post_queue_empty(ctx)) {
+      if (!stop_requested && !context_loop_alive(ctx) && !coro_scheduler_count(ctx->scheduler) &&
+          atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
+          post_queue_empty(ctx)) {
         break;
       }
 
@@ -230,8 +231,7 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
 
       stop_requested = atomic_load_explicit(&ctx->stop_requested, memory_order_acquire);
       if ((stop_requested && post_queue_empty(ctx)) ||
-          (!context_loop_alive(ctx) &&
-           !coro_scheduler_count(ctx->scheduler) &&
+          (!context_loop_alive(ctx) && !coro_scheduler_count(ctx->scheduler) &&
            atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
            post_queue_empty(ctx))) {
         break;
@@ -276,11 +276,7 @@ int coro_context_alive(coro_context_t *ctx) {
   if (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0) return 1;
   if (context_loop_alive(ctx)) return 1;
   if (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) return 1;
-  if (ctx->post_initialized) {
-    int tail = atomic_load_explicit(&ctx->post_tail, memory_order_relaxed);
-    int head = atomic_load_explicit(&ctx->post_head, memory_order_relaxed);
-    if (tail != head) return 1;
-  }
+  if (!post_queue_empty(ctx)) return 1;
   return 0;
 }
 
@@ -295,14 +291,8 @@ uint64_t coro_context_now(coro_context_t *ctx) {
 }
 
 static int post_queue_empty(const coro_context_t *ctx) {
-  int tail;
-  int head;
-
   if (!ctx || !ctx->post_initialized) return 1;
-
-  tail = atomic_load_explicit((atomic_int *)&ctx->post_tail, memory_order_relaxed);
-  head = atomic_load_explicit((atomic_int *)&ctx->post_head, memory_order_relaxed);
-  return tail == head;
+  return atomic_load_explicit((atomic_int *)&ctx->post_count, memory_order_acquire) == 0;
 }
 
 static int context_loop_alive(const coro_context_t *ctx) {
@@ -327,11 +317,10 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
   while (turbo_uptime_ms() < deadline_ms) {
     int waiting_for_shutdown;
 
-    waiting_for_shutdown =
-        atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
-        context_loop_alive(ctx) ||
-        (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
-        !post_queue_empty(ctx);
+    waiting_for_shutdown = atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
+                           context_loop_alive(ctx) ||
+                           (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
+                           !post_queue_empty(ctx);
 
     if (waiting_for_shutdown) {
 #ifdef _WIN32
@@ -352,8 +341,7 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
 
     if (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) == 0 &&
         !context_loop_alive(ctx) &&
-        (!ctx->scheduler || coro_scheduler_count(ctx->scheduler) == 0) &&
-        post_queue_empty(ctx)) {
+        (!ctx->scheduler || coro_scheduler_count(ctx->scheduler) == 0) && post_queue_empty(ctx)) {
       forced_teardown = 0;
       break;
     }
@@ -363,15 +351,13 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
 
   if (forced_teardown &&
       (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
-       context_loop_alive(ctx) ||
-       (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
+       context_loop_alive(ctx) || (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
        !post_queue_empty(ctx))) {
-    TLOG_WARN(
-        "coro_context_destroy: forced teardown with pending loop work "
-        "(ctx={}, external_refs={}, loop_alive={}, coro_count={}, post_empty={})",
-        (void *)ctx, atomic_load_explicit(&ctx->external_refs, memory_order_acquire),
-        turbo_loop_alive(ctx->loop), ctx->scheduler ? coro_scheduler_count(ctx->scheduler) : 0,
-        post_queue_empty(ctx));
+    TLOG_WARN("coro_context_destroy: forced teardown with pending loop work "
+              "(ctx={}, external_refs={}, loop_alive={}, coro_count={}, post_empty={})",
+              (void *)ctx, atomic_load_explicit(&ctx->external_refs, memory_order_acquire),
+              turbo_loop_alive(ctx->loop),
+              ctx->scheduler ? coro_scheduler_count(ctx->scheduler) : 0, post_queue_empty(ctx));
   }
 }
 
@@ -428,17 +414,11 @@ void coro_context_destroy(coro_context_t *ctx) {
   }
 
   /* Free remaining tasks owned by this context. */
-  for (int i = 0; i < ctx->task_count; i++) {
-    destroy_task_now(ctx->tasks[i]);
+  coro_task_t **tasks = (coro_task_t **)turbo_vec_data(&ctx->tasks);
+  for (size_t i = 0; i < turbo_vec_size(&ctx->tasks); ++i) {
+    destroy_task_now(tasks[i]);
   }
-
-  /* Free tasks array */
-  if (ctx->tasks) {
-    free(ctx->tasks);
-    ctx->tasks = NULL;
-  }
-  ctx->task_count = 0;
-  ctx->task_capacity = 0;
+  turbo_vec_destroy(&ctx->tasks);
 
   /* Cleanup arena: destroy and free since each context owns its arena */
   if (ctx->arena && ctx->owns_arena) {
@@ -447,12 +427,13 @@ void coro_context_destroy(coro_context_t *ctx) {
     ctx->arena = NULL;
   }
 
-  /* Free ring buffer */
-  if (ctx->post_initialized) {
-    if (ctx->post_ring) {
-      free(ctx->post_ring);
-      ctx->post_ring = NULL;
+  /* Destroy the post queue after all external producers have stopped. */
+  if (ctx->post_queue) {
+    if (ctx->post_initialized) {
+      disruptor_consumer_unregister(ctx->post_queue, &ctx->post_consumer);
     }
+    disruptor_destroy(ctx->post_queue);
+    ctx->post_queue = NULL;
     ctx->post_initialized = 0;
   }
 
@@ -465,42 +446,59 @@ void coro_context_destroy(coro_context_t *ctx) {
 
 /* ── Post queue: thread-safe callback posting to event loop ── */
 
-/**
- * @brief Drain all pending tasks from the lock-free ring buffer.
- * Good taste: No malloc, no mutex, just atomic reads.
- */
+/** @brief Drain all published callbacks on the event-loop thread. */
 static void drain_post_queue(coro_context_t *ctx) {
   if (!ctx->post_initialized) return;
 
-  int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
+  for (;;) {
+    disruptor_cursor_t available = {ctx->post_consumer_sequence};
 
-  while (1) {
-    int tail = atomic_load_explicit(&ctx->post_tail, memory_order_relaxed);
+    if (!disruptor_consumer_wait_for_nonblocking(ctx->post_queue, &available)) {
+      /* Close the wake-covered interval, then recheck publication. A producer
+       * racing this store either becomes visible here or performs the next wake. */
+      atomic_store_explicit(&ctx->post_wake_pending, 0, memory_order_release);
+      available.sequence = ctx->post_consumer_sequence;
+      if (!disruptor_consumer_wait_for_nonblocking(ctx->post_queue, &available)) return;
+      (void)atomic_exchange_explicit(&ctx->post_wake_pending, 1, memory_order_acq_rel);
+    }
 
-    if (tail == head) break;
+    while (ctx->post_consumer_sequence <= available.sequence) {
+      disruptor_cursor_t current = {ctx->post_consumer_sequence};
+      const coro_post_slot_t *entry =
+          (const coro_post_slot_t *)disruptor_show_entry(ctx->post_queue, &current);
+      coro_post_slot_t slot = *entry;
 
-    coro_post_slot_t slot = ctx->post_ring[tail];
-    atomic_store_explicit(&ctx->post_tail, (tail + 1) & (ctx->post_ring_size - 1),
-                          memory_order_release);
-
-    slot.fn(slot.arg1, slot.arg2);
+      /* Release capacity before invoking user code so a callback may reenter
+       * coro_post() with the same queue-full behavior as the previous ring. */
+      disruptor_consumer_release_entry(ctx->post_queue, &ctx->post_consumer, &current);
+      ctx->post_consumer_sequence++;
+      atomic_fetch_sub_explicit(&ctx->post_count, 1, memory_order_release);
+      slot.fn(slot.arg1, slot.arg2);
+    }
   }
 }
 
-/**
- * @brief Initialize the lock-free post queue.
- */
+/** @brief Initialize the MPSC post queue. */
 static int ensure_post_queue(coro_context_t *ctx) {
+  disruptor_config_t config;
+
   if (ctx->post_initialized) return 0;
 
-  /* Default ring size: 16384 slots (can handle burst of 16383 concurrent posts) */
-  ctx->post_ring_size = 16384;
-  ctx->post_ring = (coro_post_slot_t *)calloc(ctx->post_ring_size, sizeof(coro_post_slot_t));
-  if (!ctx->post_ring) return TURBO_ENOMEM;
+  config.entry_size = sizeof(coro_post_slot_t);
+  config.capacity = CORO_POST_QUEUE_CAPACITY;
+  config.consumer_capacity = 1;
+  config.mode = DISRUPTOR_MODE_BROADCAST;
+  ctx->post_queue = disruptor_create(&config);
+  if (!ctx->post_queue) return TURBO_ENOMEM;
+  if (!disruptor_consumer_try_register(ctx->post_queue, &ctx->post_consumer,
+                                       &ctx->post_consumer_sequence)) {
+    disruptor_destroy(ctx->post_queue);
+    ctx->post_queue = NULL;
+    return TURBO_ENOMEM;
+  }
 
-  atomic_store_explicit(&ctx->post_head, 0, memory_order_relaxed);
-  atomic_store_explicit(&ctx->post_tail, 0, memory_order_relaxed);
-  atomic_store_explicit(&ctx->post_lock, 0, memory_order_relaxed);
+  atomic_store_explicit(&ctx->post_count, 0, memory_order_relaxed);
+  atomic_store_explicit(&ctx->post_wake_pending, 0, memory_order_relaxed);
 
   ctx->post_initialized = 1;
   return 0;
@@ -509,50 +507,36 @@ static int ensure_post_queue(coro_context_t *ctx) {
 /**
  * @brief Post a callback to be executed on the context's event loop thread.
  *
- * Thread-safe, lock-free implementation using ring buffer + atomic operations.
+ * Thread-safe MPSC Disruptor with one event-loop consumer.
  */
 int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2) {
+  disruptor_cursor_t cursor = {0};
+  coro_post_slot_t *entry;
+  int count;
+
   if (!ctx || !fn) return TURBO_EINVAL;
 
   if (!ctx->post_initialized) return TURBO_EINVAL;
 
-  /* Good taste: Check capacity BEFORE acquiring lock (optimistic fast path). */
-  int head = atomic_load_explicit(&ctx->post_head, memory_order_acquire);
-  int tail = atomic_load_explicit(&ctx->post_tail, memory_order_acquire);
-  int next_head = (head + 1) & (ctx->post_ring_size - 1);
+  count = atomic_load_explicit(&ctx->post_count, memory_order_acquire);
+  do {
+    if (count >= CORO_POST_QUEUE_USABLE_CAPACITY) return TURBO_ENOMEM;
+  } while (!atomic_compare_exchange_weak_explicit(&ctx->post_count, &count, count + 1,
+                                                  memory_order_acq_rel, memory_order_acquire));
 
-  if (next_head == tail) {
-    return TURBO_ENOMEM;
+  /* The logical reservation above keeps at least one physical slot unused, so
+   * this blocking claim cannot wait for consumer capacity. */
+  disruptor_publisher_next_entry_blocking(ctx->post_queue, &cursor);
+  entry = (coro_post_slot_t *)disruptor_acquire_entry(ctx->post_queue, &cursor);
+  entry->fn = fn;
+  entry->arg1 = arg1;
+  entry->arg2 = arg2;
+  (void)disruptor_publisher_publish(ctx->post_queue, &cursor);
+
+  if (atomic_exchange_explicit(&ctx->post_wake_pending, 1, memory_order_acq_rel) == 0) {
+    turbo_loop_wake(ctx->loop);
   }
-
-  /* Lock the producer side */
-  while (atomic_exchange_explicit(&ctx->post_lock, 1, memory_order_acquire)) {
-#ifdef _WIN32
-    YieldProcessor();
-#else
-    __asm__ volatile("pause" ::: "memory");
-#endif
-  }
-
-  /* Re-check after acquiring lock (TOCTOU protection) */
-  head = atomic_load_explicit(&ctx->post_head, memory_order_relaxed);
-  tail = atomic_load_explicit(&ctx->post_tail, memory_order_acquire);
-  next_head = (head + 1) & (ctx->post_ring_size - 1);
-
-  if (next_head == tail) {
-    atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
-    return TURBO_ENOMEM;
-  }
-
-  ctx->post_ring[head].fn = fn;
-  ctx->post_ring[head].arg1 = arg1;
-  ctx->post_ring[head].arg2 = arg2;
-
-  atomic_store_explicit(&ctx->post_head, next_head, memory_order_release);
-  atomic_store_explicit(&ctx->post_lock, 0, memory_order_release);
-
-  turbo_loop_wake(ctx->loop);
-  return 0;
+  return TURBO_OK;
 }
 
 void coro_context_set_persistent(coro_context_t *ctx, int persistent) {
@@ -601,9 +585,7 @@ turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx) {
   return ctx ? ctx->udp_backend : TURBO_UDP_BACKEND_AUTO;
 }
 
-int coro_context_get_last_error(const coro_context_t *ctx) {
-  return ctx ? ctx->last_error : 0;
-}
+int coro_context_get_last_error(const coro_context_t *ctx) { return ctx ? ctx->last_error : 0; }
 
 /* ── Keepalive ref management ─────────────────────────────────── */
 
@@ -635,39 +617,48 @@ int coro_context_spawn(coro_context_t *ctx, coro_fn fn, void *arg) {
 
 /* ── Task Management ──────────────────────────────────────────── */
 
-static void remove_task_from_context(coro_context_t *ctx, coro_task_t *task) {
-  for (int i = 0; i < ctx->task_count; i++) {
-    if (ctx->tasks[i] == task) {
-      ctx->tasks[i] = ctx->tasks[ctx->task_count - 1];
-      ctx->task_count--;
-      return;
-    }
-  }
+/* Each task stores its dense-vector index. Swap removal is O(1) time and
+ * updates the moved task so the vector remains the single ownership source. */
+static int remove_task_from_context(coro_context_t *ctx, coro_task_t *task) {
+  coro_task_t **tasks;
+  coro_task_t *moved;
+  size_t count;
+  size_t index;
+
+  if (!ctx || !task) return TURBO_EINVAL;
+
+  count = turbo_vec_size(&ctx->tasks);
+  index = task->context_index;
+  tasks = (coro_task_t **)turbo_vec_data(&ctx->tasks);
+  if (index >= count || !tasks || tasks[index] != task) return TURBO_EINVAL;
+
+  moved = tasks[count - 1];
+  if (turbo_vec_swap_remove(&ctx->tasks, index, NULL) != TURBO_OK) return TURBO_EINVAL;
+  if (moved != task) moved->context_index = index;
+  task->context_index = SIZE_MAX;
+  return TURBO_OK;
 }
 
 static int register_task_with_context(coro_context_t *ctx, coro_task_t *task) {
+  int rc;
+
   if (!ctx || !task) return TURBO_EINVAL;
 
-  if (ctx->task_count >= ctx->task_capacity) {
-    int new_cap = ctx->task_capacity * 2;
-    coro_task_t **new_tasks = realloc(ctx->tasks, new_cap * sizeof(coro_task_t *));
-    if (!new_tasks) {
-      return TURBO_ENOMEM;
-    }
-    ctx->tasks = new_tasks;
-    ctx->task_capacity = new_cap;
-  }
-
-  ctx->tasks[ctx->task_count++] = task;
-  return 0;
+  rc = turbo_vec_push(&ctx->tasks, &task);
+  if (rc != TURBO_OK) return rc;
+  task->context_index = turbo_vec_size(&ctx->tasks) - 1;
+  return TURBO_OK;
 }
 
 static void cleanup_done_tasks(coro_context_t *ctx) {
-  for (int i = ctx->task_count - 1; i >= 0; i--) {
-    coro_task_t *task = ctx->tasks[i];
+  size_t i = turbo_vec_size(&ctx->tasks);
+  while (i > 0) {
+    coro_task_t **tasks = (coro_task_t **)turbo_vec_data(&ctx->tasks);
+    coro_task_t *task = tasks[--i];
     if (coro_task_is_done(task) && task->ref_count == 0) {
-      remove_task_from_context(ctx, task);
-      destroy_task_now(task);
+      if (remove_task_from_context(ctx, task) == TURBO_OK) {
+        destroy_task_now(task);
+      }
     }
   }
 }
@@ -686,12 +677,13 @@ coro_task_t *coro_task_create(coro_context_t *ctx, coro_fn fn, void *arg) {
 
   coro_task_t *task = (coro_task_t *)malloc(sizeof(coro_task_t));
   if (!task) return NULL;
-  task->ctx       = ctx;
-  task->fn        = fn;
-  task->arg       = arg;
-  task->started   = 0;
+  task->ctx = ctx;
+  task->fn = fn;
+  task->arg = arg;
+  task->context_index = SIZE_MAX;
+  task->started = 0;
   task->cancelled = 0;
-  task->done      = 0;
+  task->done = 0;
   task->ref_count = 1;
 
   if (register_task_with_context(ctx, task) != 0) {
@@ -718,10 +710,10 @@ int coro_task_start(coro_task_t *task) {
     task->started = 0;
     return TURBO_ENOMEM;
   }
-  
+
   /* Return pooled coroutine shell after task completion. */
   coro_set_cleanup(co, pooled_coro_cleanup_callback, task->ctx->pool);
-  
+
   coro_scheduler_adopt(task->ctx->scheduler, co);
   return 0;
 }
@@ -735,13 +727,9 @@ int coro_task_cancel(coro_task_t *task) {
   return 0;
 }
 
-int coro_task_is_done(coro_task_t *task) {
-  return task ? task->done : 1;
-}
+int coro_task_is_done(coro_task_t *task) { return task ? task->done : 1; }
 
-static void destroy_task_now(coro_task_t *task) {
-  free(task);
-}
+static void destroy_task_now(coro_task_t *task) { free(task); }
 
 void coro_task_destroy(coro_task_t *task) {
   if (!task) return;
@@ -750,11 +738,10 @@ void coro_task_destroy(coro_task_t *task) {
     task->ref_count--;
   }
 
-  if (task->ref_count == 0 && task->ctx) {
-    remove_task_from_context(task->ctx, task);
-  }
-
   if (task->ref_count == 0 && (task->done || !task->started)) {
+    if (task->ctx && task->context_index != SIZE_MAX) {
+      if (remove_task_from_context(task->ctx, task) != TURBO_OK) return;
+    }
     destroy_task_now(task);
     return;
   }
@@ -992,9 +979,9 @@ void coro_sleep(coro_context_t *ctx, uint64_t ms) {
 }
 
 #ifndef _WIN32
+  #include <fcntl.h>
   #include <poll.h>
   #include <unistd.h>
-  #include <fcntl.h>
   #ifdef __linux__
     #include <sys/eventfd.h>
   #endif
@@ -1026,17 +1013,17 @@ turbo_loop_t *turbo_loop_create(void) {
 #ifdef _WIN32
   loop->wake_event = CreateEvent(NULL, FALSE, FALSE, NULL);
 #else
-#ifdef __linux__
+  #ifdef __linux__
   loop->wake_fds[0] = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
   loop->wake_fds[1] = -1;
-#else
+  #else
   if (pipe(loop->wake_fds) == 0) {
     int f1 = fcntl(loop->wake_fds[0], F_GETFL, 0);
     fcntl(loop->wake_fds[0], F_SETFL, f1 | O_NONBLOCK);
     int f2 = fcntl(loop->wake_fds[1], F_GETFL, 0);
     fcntl(loop->wake_fds[1], F_SETFL, f2 | O_NONBLOCK);
   }
-#endif
+  #endif
 #endif
 
   return loop;
@@ -1076,11 +1063,12 @@ void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block) {
   if (r > 0 && (pfd.revents & POLLIN)) {
     /* Clear wake signal */
     uint64_t val;
-#ifdef __linux__
+  #ifdef __linux__
     read(loop->wake_fds[0], &val, sizeof(val));
-#else
-    while (read(loop->wake_fds[0], &val, sizeof(val)) > 0);
-#endif
+  #else
+    while (read(loop->wake_fds[0], &val, sizeof(val)) > 0)
+      ;
+  #endif
   }
 #endif
 }
@@ -1097,8 +1085,12 @@ uint64_t turbo_loop_now(turbo_loop_t *loop) {
 #endif
 }
 
-void turbo_loop_ref(turbo_loop_t *loop) { if (loop) loop->ref_count++; }
-void turbo_loop_unref(turbo_loop_t *loop) { if (loop && loop->ref_count > 0) loop->ref_count--; }
+void turbo_loop_ref(turbo_loop_t *loop) {
+  if (loop) loop->ref_count++;
+}
+void turbo_loop_unref(turbo_loop_t *loop) {
+  if (loop && loop->ref_count > 0) loop->ref_count--;
+}
 
 void turbo_loop_wake(turbo_loop_t *loop) {
   if (!loop) return;
@@ -1106,75 +1098,69 @@ void turbo_loop_wake(turbo_loop_t *loop) {
   if (loop->wake_event) SetEvent(loop->wake_event);
 #else
   uint64_t val = 1;
-#ifdef __linux__
+  #ifdef __linux__
   if (loop->wake_fds[0] >= 0) {
     ssize_t n;
     do {
       n = write(loop->wake_fds[0], &val, sizeof(val));
     } while (n < 0 && errno == EINTR);
   }
-#else
+  #else
   if (loop->wake_fds[1] >= 0) {
     ssize_t n;
     do {
       n = write(loop->wake_fds[1], &val, sizeof(val));
     } while (n < 0 && errno == EINTR);
   }
-#endif
+  #endif
 #endif
 }
 
 /* ── Context Accessors ── */
-coro_context_t *coro_context_current(void) {
-  return tls_current_context;
-}
-void* coro_get_memory_pool(void) {
-  return tls_current_context ? tls_current_context->arena : NULL;
-}
-void* coro_context_get_arena(coro_context_t *ctx) {
-  return ctx ? ctx->arena : NULL;
-}
+coro_context_t *coro_context_current(void) { return tls_current_context; }
+void *coro_get_memory_pool(void) { return tls_current_context ? tls_current_context->arena : NULL; }
+void *coro_context_get_arena(coro_context_t *ctx) { return ctx ? ctx->arena : NULL; }
 
 /* ── Backend info ── */
 int turbo_tcp_backend_is_available(int backend) {
   switch (backend) {
 #ifdef _WIN32
-    case TURBO_TCP_BACKEND_IOCP:
-      return 1;
+  case TURBO_TCP_BACKEND_IOCP:
+    return 1;
 #elif defined(__linux__) || defined(__ANDROID__)
-#if !defined(__ANDROID__) && TURBO_HAS_IO_URING
-    case TURBO_TCP_BACKEND_IO_URING:
-      return 1;
-#endif
-    case TURBO_TCP_BACKEND_EPOLL:
-      return 1;
+  #if !defined(__ANDROID__) && TURBO_HAS_IO_URING
+  case TURBO_TCP_BACKEND_IO_URING:
+    return 1;
+  #endif
+  case TURBO_TCP_BACKEND_EPOLL:
+    return 1;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    case TURBO_TCP_BACKEND_KQUEUE:
-      return 1;
+  case TURBO_TCP_BACKEND_KQUEUE:
+    return 1;
 #endif
-    default:
-      return 0;
+  default:
+    return 0;
   }
 }
 
 int turbo_udp_backend_is_available(int backend) {
   switch (backend) {
-    case TURBO_UDP_BACKEND_AUTO:
-      return 1;
+  case TURBO_UDP_BACKEND_AUTO:
+    return 1;
 #ifdef _WIN32
-    case TURBO_UDP_BACKEND_IOCP:
-      return 1;
+  case TURBO_UDP_BACKEND_IOCP:
+    return 1;
 #elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
-    case TURBO_UDP_BACKEND_IO_URING:
-      return 1;
+  case TURBO_UDP_BACKEND_IO_URING:
+    return 1;
 #elif defined(__linux__) || defined(__ANDROID__)
-    case TURBO_UDP_BACKEND_EPOLL:
-      return 1;
+  case TURBO_UDP_BACKEND_EPOLL:
+    return 1;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    case TURBO_UDP_BACKEND_KQUEUE:
-      return 1;
+  case TURBO_UDP_BACKEND_KQUEUE:
+    return 1;
 #endif
-    default:
-      return 0;
+  default:
+    return 0;
   }
 }

@@ -3,8 +3,9 @@
  * @brief Linux io_uring backend for turbo_stream_t.
  *
  * Design:
- * - One worker thread owns one io_uring instance.
- * - The loop thread only enqueues commands and handles completions.
+ * - One worker thread and io_uring instance are shared by each coro_context.
+ * - Context callers publish commands through an MPSC Disruptor queue.
+ * - The loop thread handles completions posted by the reactor worker.
  * - No fake fallback: io_uring is used only when explicitly selected.
  */
 
@@ -13,8 +14,8 @@
 #include "turbo_stream_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_internal.h"
+#include "disruptor.h"
 #include "internal.h"
-#include "ring_buffer_spsc.h"
 #include "turbo_thread.h"
 #include "tlog.h"
 
@@ -23,6 +24,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
@@ -30,9 +32,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define STREAM_URING_QUEUE_DEPTH 64
-#define STREAM_URING_CMD_QUEUE_SLOTS 1024
+#define STREAM_URING_QUEUE_DEPTH 1024
+#define STREAM_URING_CMD_QUEUE_SLOTS 4096
 #define STREAM_URING_ACCEPT_DEPTH 8
+
+typedef struct stream_uring_base_s stream_uring_base_t;
+typedef struct stream_uring_reactor_s stream_uring_reactor_t;
 
 typedef enum stream_uring_op_kind_e {
   STREAM_URING_OP_WAKE = 1,
@@ -46,6 +51,7 @@ typedef enum stream_uring_op_kind_e {
 typedef struct stream_uring_op_s {
   stream_uring_op_kind_t kind;
   struct stream_uring_op_s *next_inflight;
+  stream_uring_base_t *base;
   void *owner;
   mem_buffer_t *buffer;
   int owns_buffer;
@@ -58,23 +64,34 @@ typedef struct stream_uring_op_s {
   uint64_t wake_value;
 } stream_uring_op_t;
 
-typedef struct stream_uring_base_s {
+struct stream_uring_base_s {
   void *owner;
+  coro_context_t *ctx;
+  stream_uring_reactor_t *reactor;
+  int fd;
+  int is_listener;
+  volatile int stopping;
+  volatile int cleanup_posted;
+  volatile long pending_count;
+  volatile long inflight_count;
+  stream_uring_op_t *inflight_head;
+};
+
+struct stream_uring_reactor_s {
   coro_context_t *ctx;
   turbo_thread_t worker_thread;
   struct io_uring ring;
   int ring_ready;
-  int fd;
   int wake_fd;
   int worker_started;
-  int is_listener;
   volatile int stopping;
-  volatile long inflight_count;
-  stream_uring_op_t *inflight_head;
-  turbo_mutex_t cmd_lock;
-  ring_spsc_t cmd_queue;
-  uint8_t *cmd_queue_data;
-} stream_uring_base_t;
+  size_t endpoint_refs;
+  disruptor_t *cmd_queue;
+  disruptor_consumer_t cmd_consumer;
+  uint64_t cmd_consumer_sequence;
+  atomic_int wake_pending;
+  stream_uring_op_t *pending_command;
+};
 
 typedef struct stream_uring_state_s {
   stream_uring_base_t base;
@@ -91,11 +108,14 @@ typedef struct stream_uring_server_state_s {
   volatile int accepts_posted;
 } stream_uring_server_state_t;
 
-static void stream_uring_worker(void *arg);
+static void stream_uring_reactor_worker(void *arg);
 static void stream_uring_stream_cleanup_task(void *arg1, void *arg2);
 static void stream_uring_listener_cleanup_task(void *arg1, void *arg2);
-static stream_uring_op_t *stream_uring_queue_pop(stream_uring_base_t *base);
+static stream_uring_op_t *stream_uring_queue_pop(stream_uring_reactor_t *reactor);
 static void stream_uring_handle_completion(void *arg1, void *arg2);
+static void stream_uring_post_completion(stream_uring_base_t *base,
+                                         stream_uring_op_t *op);
+static void stream_uring_maybe_schedule_cleanup(stream_uring_base_t *base);
 static int stream_uring_submit_recv(turbo_stream_t *s);
 static int stream_uring_submit_send(turbo_stream_t *s);
 static int stream_uring_submit_accept(turbo_stream_listener_t *l);
@@ -126,6 +146,19 @@ static void stream_uring_shutdown_fd(int fd) {
   }
 
   (void)shutdown(fd, SHUT_RDWR);
+}
+
+static void stream_uring_force_close(stream_uring_base_t *base) {
+  if (!base) {
+    return;
+  }
+  base->stopping = 1;
+  if (base->fd >= 0) {
+    stream_uring_shutdown_fd(base->fd);
+    close(base->fd);
+    base->fd = -1;
+  }
+  stream_uring_maybe_schedule_cleanup(base);
 }
 
 static void stream_uring_track_inflight(stream_uring_base_t *base,
@@ -208,21 +241,6 @@ static int stream_uring_post_wait(stream_uring_base_t *base,
   }
 }
 
-static int stream_kind_family(turbo_stream_kind_t kind) {
-  switch (kind) {
-  case TURBO_STREAM_TCP6:
-    return AF_INET6;
-  case TURBO_STREAM_PIPE:
-    return AF_UNIX;
-  case TURBO_STREAM_TCP4:
-  case TURBO_STREAM_TLS:
-  case TURBO_STREAM_WS:
-  case TURBO_STREAM_WSS:
-  default:
-    return AF_INET;
-  }
-}
-
 static socklen_t sockaddr_length(const struct sockaddr *addr) {
   if (!addr) {
     return 0;
@@ -260,80 +278,98 @@ static int set_nonblocking_cloexec(int fd) {
 
 static int stream_uring_queue_push(stream_uring_base_t *base,
                                    stream_uring_op_t *op) {
-  uint8_t *slot;
-  uint64_t signal_value;
-  ssize_t written;
+  stream_uring_reactor_t *reactor;
+  disruptor_cursor_t cursor;
+  stream_uring_op_t **entry;
 
-  if (!base || !op) {
+  if (!base || !base->reactor || !op) {
     return TURBO_EINVAL;
   }
+  reactor = base->reactor;
+  op->base = base;
 
-  for (;;) {
-    turbo_mutex_lock(&base->cmd_lock);
-    slot = ring_spsc_write_acquire(&base->cmd_queue, sizeof(void *));
-    if (slot) {
-      memcpy(slot, &op, sizeof(void *));
-      ring_spsc_write_release(&base->cmd_queue, sizeof(void *));
-      turbo_mutex_unlock(&base->cmd_lock);
-      break;
+  while (!disruptor_publisher_try_claim(reactor->cmd_queue, &cursor)) {
+    uint64_t signal_value = 1;
+    if (reactor->stopping) {
+      return TURBO_ECANCELED;
     }
-    turbo_mutex_unlock(&base->cmd_lock);
-
-    signal_value = 1;
-    written = write(base->wake_fd, &signal_value, sizeof(signal_value));
-    (void)written;
-    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(base->ctx));
+    if (atomic_exchange_explicit(&reactor->wake_pending, 1, memory_order_acq_rel) == 0) {
+      (void)write(reactor->wake_fd, &signal_value, sizeof(signal_value));
+    }
     turbo_thread_yield();
   }
 
-  signal_value = 1;
-  written = write(base->wake_fd, &signal_value, sizeof(signal_value));
-  (void)written;
-  return 0;
+  entry = (stream_uring_op_t **)disruptor_acquire_entry(reactor->cmd_queue, &cursor);
+  *entry = op;
+  __atomic_add_fetch(&base->pending_count, 1, __ATOMIC_RELEASE);
+  (void)disruptor_publisher_publish(reactor->cmd_queue, &cursor);
+
+  if (atomic_exchange_explicit(&reactor->wake_pending, 1, memory_order_acq_rel) == 0) {
+    uint64_t signal_value = 1;
+    (void)write(reactor->wake_fd, &signal_value, sizeof(signal_value));
+  }
+  return TURBO_OK;
 }
 
-static stream_uring_op_t *stream_uring_queue_pop(stream_uring_base_t *base) {
-  size_t available;
-  uint8_t *data;
+static stream_uring_op_t *stream_uring_queue_pop(stream_uring_reactor_t *reactor) {
+  disruptor_cursor_t available;
+  disruptor_cursor_t current;
+  stream_uring_op_t *const *entry;
   stream_uring_op_t *op;
 
-  data = ring_spsc_read_acquire(&base->cmd_queue, &available);
-  if (!data || available < sizeof(void *)) {
+  if (!reactor || !reactor->cmd_queue) {
     return NULL;
   }
 
-  memcpy(&op, data, sizeof(void *));
-  ring_spsc_read_release(&base->cmd_queue, sizeof(void *));
+  available.sequence = reactor->cmd_consumer_sequence;
+  if (!disruptor_consumer_wait_for_nonblocking(reactor->cmd_queue, &available)) {
+    return NULL;
+  }
+
+  current.sequence = reactor->cmd_consumer_sequence;
+  entry = (stream_uring_op_t *const *)disruptor_show_entry(reactor->cmd_queue, &current);
+  op = *entry;
+  disruptor_consumer_release_entry(reactor->cmd_queue, &reactor->cmd_consumer, &current);
+  reactor->cmd_consumer_sequence++;
   return op;
 }
 
-static void stream_uring_free_queued_commands(stream_uring_base_t *base) {
+static void stream_uring_free_op(stream_uring_op_t *op) {
+  if (!op) {
+    return;
+  }
+  if (op->kind == STREAM_URING_OP_SEND && op->buffer && op->owns_buffer) {
+    mem_unref(op->buffer);
+  }
+  free(op);
+}
+
+static void stream_uring_free_queued_commands(stream_uring_reactor_t *reactor) {
   stream_uring_op_t *op;
 
-  if (!base) {
+  if (!reactor) {
     return;
   }
 
-  while ((op = stream_uring_queue_pop(base)) != NULL) {
-    if (op->kind == STREAM_URING_OP_SEND && op->buffer && op->owns_buffer) {
-      mem_unref(op->buffer);
-    }
-    free(op);
+  stream_uring_free_op(reactor->pending_command);
+  reactor->pending_command = NULL;
+  while ((op = stream_uring_queue_pop(reactor)) != NULL) {
+    stream_uring_free_op(op);
   }
 }
 
-static struct io_uring_sqe *stream_uring_get_sqe(stream_uring_base_t *base) {
+static struct io_uring_sqe *stream_uring_get_sqe(stream_uring_reactor_t *reactor) {
   struct io_uring_sqe *sqe;
 
-  sqe = io_uring_get_sqe(&base->ring);
+  sqe = io_uring_get_sqe(&reactor->ring);
   if (!sqe) {
-    io_uring_submit(&base->ring);
-    sqe = io_uring_get_sqe(&base->ring);
+    (void)io_uring_submit(&reactor->ring);
+    sqe = io_uring_get_sqe(&reactor->ring);
   }
   return sqe;
 }
 
-static int stream_uring_submit_wake(stream_uring_base_t *base) {
+static int stream_uring_submit_wake(stream_uring_reactor_t *reactor) {
   struct io_uring_sqe *sqe;
   stream_uring_op_t *op;
 
@@ -342,174 +378,26 @@ static int stream_uring_submit_wake(stream_uring_base_t *base) {
     return TURBO_ENOMEM;
   }
 
-  sqe = stream_uring_get_sqe(base);
+  sqe = stream_uring_get_sqe(reactor);
   if (!sqe) {
     free(op);
     return TURBO_ENOMEM;
   }
 
   op->kind = STREAM_URING_OP_WAKE;
-  io_uring_prep_read(sqe, base->wake_fd, &op->wake_value, sizeof(op->wake_value), 0);
+  io_uring_prep_read(sqe, reactor->wake_fd, &op->wake_value, sizeof(op->wake_value), 0);
   io_uring_sqe_set_data(sqe, op);
-  stream_uring_track_inflight(base, op);
-  return 0;
+  return TURBO_OK;
 }
 
-static int stream_uring_submit_command(stream_uring_base_t *base,
-                                       stream_uring_op_t *op) {
-  struct io_uring_sqe *sqe;
-
-  switch (op->kind) {
-  case STREAM_URING_OP_CONNECT:
-    sqe = stream_uring_get_sqe(base);
-    if (!sqe) return TURBO_ENOMEM;
-    io_uring_prep_connect(sqe, base->fd, (struct sockaddr *)&op->addr, op->addr_len);
-    io_uring_sqe_set_data(sqe, op);
-    stream_uring_track_inflight(base, op);
-    return 0;
-
-  case STREAM_URING_OP_SEND:
-    sqe = stream_uring_get_sqe(base);
-    if (!sqe) return TURBO_ENOMEM;
-    io_uring_prep_send(sqe, base->fd, op->buffer->data + op->offset,
-                       op->length - op->offset, MSG_NOSIGNAL);
-    io_uring_sqe_set_data(sqe, op);
-    stream_uring_track_inflight(base, op);
-    return 0;
-
-  case STREAM_URING_OP_RECV:
-    sqe = stream_uring_get_sqe(base);
-    if (!sqe) return TURBO_ENOMEM;
-    io_uring_prep_recv(sqe, base->fd, op->buffer->data, op->buffer->capacity, 0);
-    io_uring_sqe_set_data(sqe, op);
-    stream_uring_track_inflight(base, op);
-    return 0;
-
-  case STREAM_URING_OP_ACCEPT:
-    sqe = stream_uring_get_sqe(base);
-    if (!sqe) return TURBO_ENOMEM;
-    op->addr_len = (socklen_t)sizeof(op->addr);
-    io_uring_prep_accept(sqe, base->fd, (struct sockaddr *)&op->addr,
-                         &op->addr_len, SOCK_CLOEXEC | SOCK_NONBLOCK);
-    io_uring_sqe_set_data(sqe, op);
-    stream_uring_track_inflight(base, op);
-    return 0;
-
-  case STREAM_URING_OP_CLOSE:
-    TLOG_DEBUG("uring[{:p}] close command: fd={:d} wake_fd={:d} inflight={:d}", (void *)base,
-               base->fd, base->wake_fd,
-               (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
-    base->stopping = 1;
-    if (base->fd >= 0) {
-      stream_uring_shutdown_fd(base->fd);
-      close(base->fd);
-      base->fd = -1;
-    }
-    if (base->wake_fd >= 0) {
-      close(base->wake_fd);
-      base->wake_fd = -1;
-    }
-    free(op);
-    return 0;
-
-  default:
-    free(op);
-    return TURBO_EINVAL;
+static void stream_uring_maybe_schedule_cleanup(stream_uring_base_t *base) {
+  if (!base || !base->stopping || base->cleanup_posted ||
+      __atomic_load_n(&base->pending_count, __ATOMIC_ACQUIRE) != 0 ||
+      __atomic_load_n(&base->inflight_count, __ATOMIC_ACQUIRE) != 0) {
+    return;
   }
-}
-
-static void stream_uring_drain_commands(stream_uring_base_t *base) {
-  stream_uring_op_t *op;
-
-  while ((op = stream_uring_queue_pop(base)) != NULL) {
-    if (stream_uring_submit_command(base, op) != 0) {
-      if (op->kind == STREAM_URING_OP_SEND && op->buffer && op->owns_buffer) {
-        mem_unref(op->buffer);
-      }
-      free(op);
-    }
-  }
-}
-
-static void stream_uring_post_completion(stream_uring_base_t *base,
-                                         stream_uring_op_t *op) {
-  (void)stream_uring_post_wait(base, stream_uring_handle_completion, op, NULL);
-}
-
-static void stream_uring_worker(void *arg) {
-  stream_uring_base_t *base;
-  struct __kernel_timespec timeout;
-
-  base = (stream_uring_base_t *)arg;
-  timeout.tv_sec = 0;
-  timeout.tv_nsec = 100000000;
-
-  stream_uring_submit_wake(base);
-  io_uring_submit(&base->ring);
-  TLOG_DEBUG("uring[{:p}] worker-start listener={:d} fd={:d} wake_fd={:d}", (void *)base,
-             base->is_listener, base->fd, base->wake_fd);
-
-  for (;;) {
-    struct io_uring_cqe *cqe;
-    stream_uring_op_t *op;
-    int rc;
-    long inflight;
-
-    stream_uring_drain_commands(base);
-    io_uring_submit(&base->ring);
-
-    inflight = __atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED);
-    if (base->stopping && inflight == 0) {
-      TLOG_DEBUG("uring[{:p}] worker-stop requested inflight drained", (void *)base);
-      break;
-    }
-
-    rc = io_uring_wait_cqe_timeout(&base->ring, &cqe, &timeout);
-    if (rc == -ETIME || rc == -EINTR) {
-      if (base->stopping &&
-          __atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED) == 0) {
-        TLOG_DEBUG("uring[{:p}] worker-stop timeout after inflight drained", (void *)base);
-        break;
-      }
-      continue;
-    }
-    if (rc < 0) {
-      if (base->stopping &&
-          __atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED) == 0) {
-        TLOG_DEBUG("uring[{:p}] worker-stop after wait error with no inflight", (void *)base);
-        break;
-      }
-      continue;
-    }
-
-    op = (stream_uring_op_t *)io_uring_cqe_get_data(cqe);
-    if (!op) {
-      io_uring_cqe_seen(&base->ring, cqe);
-      continue;
-    }
-
-    op->result = cqe->res;
-    io_uring_cqe_seen(&base->ring, cqe);
-
-    if (op->kind == STREAM_URING_OP_WAKE) {
-      stream_uring_untrack_inflight(base, op);
-      free(op);
-      stream_uring_drain_commands(base);
-      if (!base->stopping && base->wake_fd >= 0) {
-        stream_uring_submit_wake(base);
-        io_uring_submit(&base->ring);
-      }
-      continue;
-    }
-
-    if (op->result < 0 || op->kind == STREAM_URING_OP_ACCEPT) {
-      TLOG_DEBUG("uring[{:p}] completion op={:s} result={:d} inflight={:d}", (void *)base,
-                 stream_uring_op_name(op->kind), (int)op->result,
-                 (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
-    }
-
-    stream_uring_untrack_inflight(base, op);
-    stream_uring_post_completion(base, op);
+  if (!__sync_bool_compare_and_swap(&base->cleanup_posted, 0, 1)) {
+    return;
   }
 
   if (base->is_listener) {
@@ -519,90 +407,360 @@ static void stream_uring_worker(void *arg) {
     (void)stream_uring_post_wait(base, stream_uring_stream_cleanup_task,
                                  base, base->owner);
   }
-  TLOG_DEBUG("uring[{:p}] worker-exit listener={:d}", (void *)base, base->is_listener);
 }
 
-static int stream_uring_start_worker(stream_uring_base_t *base) {
-  int rc;
+static int stream_uring_submit_command(stream_uring_reactor_t *reactor,
+                                       stream_uring_op_t *op) {
+  struct io_uring_sqe *sqe;
+  stream_uring_base_t *base;
 
-  if (base->worker_started) {
-    return 0;
+  if (!reactor || !op || !op->base) {
+    return TURBO_EINVAL;
+  }
+  base = op->base;
+
+  if (base->stopping && op->kind != STREAM_URING_OP_CLOSE) {
+    op->result = TURBO_ECANCELED;
+    stream_uring_post_completion(base, op);
+    return TURBO_OK;
   }
 
-  coro_context_acquire_external(base->ctx);
-  rc = turbo_thread_create(&base->worker_thread, stream_uring_worker, base);
-  if (rc != 0) {
-    coro_context_release_external(base->ctx);
+  switch (op->kind) {
+  case STREAM_URING_OP_CONNECT:
+    sqe = stream_uring_get_sqe(reactor);
+    if (!sqe) return TURBO_EBUSY;
+    io_uring_prep_connect(sqe, base->fd, (struct sockaddr *)&op->addr, op->addr_len);
+    io_uring_sqe_set_data(sqe, op);
+    stream_uring_track_inflight(base, op);
+    return 0;
+
+  case STREAM_URING_OP_SEND:
+    sqe = stream_uring_get_sqe(reactor);
+    if (!sqe) return TURBO_EBUSY;
+    io_uring_prep_send(sqe, base->fd, op->buffer->data + op->offset,
+                       op->length - op->offset, MSG_NOSIGNAL);
+    io_uring_sqe_set_data(sqe, op);
+    stream_uring_track_inflight(base, op);
+    return 0;
+
+  case STREAM_URING_OP_RECV:
+    sqe = stream_uring_get_sqe(reactor);
+    if (!sqe) return TURBO_EBUSY;
+    io_uring_prep_recv(sqe, base->fd, op->buffer->data, op->buffer->capacity, 0);
+    io_uring_sqe_set_data(sqe, op);
+    stream_uring_track_inflight(base, op);
+    return 0;
+
+  case STREAM_URING_OP_ACCEPT:
+    sqe = stream_uring_get_sqe(reactor);
+    if (!sqe) return TURBO_EBUSY;
+    op->addr_len = (socklen_t)sizeof(op->addr);
+    io_uring_prep_accept(sqe, base->fd, (struct sockaddr *)&op->addr,
+                         &op->addr_len, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    io_uring_sqe_set_data(sqe, op);
+    stream_uring_track_inflight(base, op);
+    return 0;
+
+  case STREAM_URING_OP_CLOSE:
+    TLOG_DEBUG("uring[{:p}] close command: fd={:d} inflight={:d}", (void *)base,
+               base->fd,
+               (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
+    base->stopping = 1;
+    if (base->fd >= 0) {
+      stream_uring_shutdown_fd(base->fd);
+      close(base->fd);
+      base->fd = -1;
+    }
+    free(op);
+    return TURBO_OK;
+
+  default:
+    return TURBO_EINVAL;
+  }
+}
+
+static void stream_uring_drain_commands(stream_uring_reactor_t *reactor) {
+  stream_uring_op_t *op;
+  int rc;
+
+  for (;;) {
+    op = reactor->pending_command;
+    reactor->pending_command = NULL;
+    if (!op) {
+      op = stream_uring_queue_pop(reactor);
+    }
+
+    while (op) {
+      stream_uring_base_t *base = op->base;
+      rc = stream_uring_submit_command(reactor, op);
+      if (rc == TURBO_EBUSY) {
+        reactor->pending_command = op;
+        return;
+      }
+      if (base) {
+        __atomic_sub_fetch(&base->pending_count, 1, __ATOMIC_RELEASE);
+      }
+      if (rc != TURBO_OK) {
+        op->result = rc;
+        stream_uring_post_completion(base, op);
+      }
+      if (base) {
+        stream_uring_maybe_schedule_cleanup(base);
+      }
+      op = stream_uring_queue_pop(reactor);
+    }
+
+    atomic_store_explicit(&reactor->wake_pending, 0, memory_order_release);
+    op = stream_uring_queue_pop(reactor);
+    if (!op) {
+      return;
+    }
+    (void)atomic_exchange_explicit(&reactor->wake_pending, 1, memory_order_acq_rel);
+    reactor->pending_command = op;
+  }
+}
+
+static void stream_uring_post_completion(stream_uring_base_t *base,
+                                         stream_uring_op_t *op) {
+  (void)stream_uring_post_wait(base, stream_uring_handle_completion, op, NULL);
+}
+
+static void stream_uring_process_cqe(stream_uring_reactor_t *reactor,
+                                     struct io_uring_cqe *cqe) {
+  stream_uring_op_t *op;
+  stream_uring_base_t *base;
+
+  op = (stream_uring_op_t *)io_uring_cqe_get_data(cqe);
+  if (!op) {
+    io_uring_cqe_seen(&reactor->ring, cqe);
+    return;
+  }
+
+  op->result = cqe->res;
+  io_uring_cqe_seen(&reactor->ring, cqe);
+
+  if (op->kind == STREAM_URING_OP_WAKE) {
+    free(op);
+    stream_uring_drain_commands(reactor);
+    if (!reactor->stopping && reactor->wake_fd >= 0) {
+      (void)stream_uring_submit_wake(reactor);
+    }
+    return;
+  }
+
+  base = op->base;
+  if (!base) {
+    stream_uring_free_op(op);
+    return;
+  }
+  if (op->result < 0 || op->kind == STREAM_URING_OP_ACCEPT) {
+    TLOG_DEBUG("uring[{:p}] completion op={:s} result={:d} inflight={:d}", (void *)base,
+               stream_uring_op_name(op->kind), (int)op->result,
+               (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
+  }
+
+  stream_uring_untrack_inflight(base, op);
+  stream_uring_post_completion(base, op);
+  stream_uring_maybe_schedule_cleanup(base);
+}
+
+static void stream_uring_reactor_worker(void *arg) {
+  stream_uring_reactor_t *reactor;
+  struct __kernel_timespec timeout;
+
+  reactor = (stream_uring_reactor_t *)arg;
+  timeout.tv_sec = 0;
+  timeout.tv_nsec = 100000000;
+
+  (void)stream_uring_submit_wake(reactor);
+  (void)io_uring_submit(&reactor->ring);
+  TLOG_DEBUG("uring-reactor[{:p}] worker-start wake_fd={:d}", (void *)reactor,
+             reactor->wake_fd);
+
+  for (;;) {
+    struct io_uring_cqe *cqe;
+    int rc;
+
+    stream_uring_drain_commands(reactor);
+    (void)io_uring_submit(&reactor->ring);
+
+    if (reactor->stopping) {
+      break;
+    }
+
+    rc = io_uring_wait_cqe_timeout(&reactor->ring, &cqe, &timeout);
+    if (rc == -ETIME || rc == -EINTR) {
+      continue;
+    }
+    if (rc < 0) {
+      continue;
+    }
+
+    stream_uring_process_cqe(reactor, cqe);
+    while (io_uring_peek_cqe(&reactor->ring, &cqe) == 0) {
+      stream_uring_process_cqe(reactor, cqe);
+    }
+  }
+
+  TLOG_DEBUG("uring-reactor[{:p}] worker-exit", (void *)reactor);
+}
+
+static int stream_uring_reactor_create(coro_context_t *ctx,
+                                       stream_uring_reactor_t **out) {
+  disruptor_config_t config;
+  stream_uring_reactor_t *reactor;
+  int rc;
+
+  if (!ctx || !out) {
+    return TURBO_EINVAL;
+  }
+  *out = NULL;
+
+  reactor = (stream_uring_reactor_t *)calloc(1, sizeof(*reactor));
+  if (!reactor) {
+    return TURBO_ENOMEM;
+  }
+  reactor->ctx = ctx;
+  reactor->wake_fd = -1;
+
+  if (io_uring_queue_init(STREAM_URING_QUEUE_DEPTH, &reactor->ring, 0) < 0) {
+    free(reactor);
+    return TURBO_ENOTSUP;
+  }
+  reactor->ring_ready = 1;
+
+  reactor->wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (reactor->wake_fd < 0) {
+    rc = -errno;
+    io_uring_queue_exit(&reactor->ring);
+    free(reactor);
     return rc;
   }
 
-  base->worker_started = 1;
-  return 0;
+  memset(&config, 0, sizeof(config));
+  config.entry_size = sizeof(stream_uring_op_t *);
+  config.capacity = STREAM_URING_CMD_QUEUE_SLOTS;
+  config.consumer_capacity = 1;
+  config.mode = DISRUPTOR_MODE_BROADCAST;
+  reactor->cmd_queue = disruptor_create(&config);
+  if (!reactor->cmd_queue ||
+      !disruptor_consumer_try_register(reactor->cmd_queue, &reactor->cmd_consumer,
+                                       &reactor->cmd_consumer_sequence)) {
+    if (reactor->cmd_queue) {
+      disruptor_destroy(reactor->cmd_queue);
+    }
+    close(reactor->wake_fd);
+    io_uring_queue_exit(&reactor->ring);
+    free(reactor);
+    return TURBO_ENOMEM;
+  }
+
+  atomic_init(&reactor->wake_pending, 0);
+  coro_context_acquire_external(ctx);
+  rc = turbo_thread_create(&reactor->worker_thread, stream_uring_reactor_worker, reactor);
+  if (rc != 0) {
+    coro_context_release_external(ctx);
+    disruptor_consumer_unregister(reactor->cmd_queue, &reactor->cmd_consumer);
+    disruptor_destroy(reactor->cmd_queue);
+    close(reactor->wake_fd);
+    io_uring_queue_exit(&reactor->ring);
+    free(reactor);
+    return rc;
+  }
+
+  reactor->worker_started = 1;
+  *out = reactor;
+  return TURBO_OK;
+}
+
+static int stream_uring_reactor_acquire(coro_context_t *ctx,
+                                        stream_uring_reactor_t **out) {
+  stream_uring_reactor_t *reactor;
+  int rc;
+
+  if (!ctx || !out) {
+    return TURBO_EINVAL;
+  }
+
+  reactor = (stream_uring_reactor_t *)ctx->stream_uring_reactor;
+  if (!reactor) {
+    rc = stream_uring_reactor_create(ctx, &reactor);
+    if (rc != TURBO_OK) {
+      return rc;
+    }
+    ctx->stream_uring_reactor = reactor;
+  }
+
+  reactor->endpoint_refs++;
+  *out = reactor;
+  return TURBO_OK;
+}
+
+static void stream_uring_reactor_release(stream_uring_reactor_t *reactor) {
+  uint64_t signal_value;
+
+  if (!reactor || reactor->endpoint_refs == 0) {
+    return;
+  }
+  reactor->endpoint_refs--;
+  if (reactor->endpoint_refs != 0) {
+    return;
+  }
+
+  if (reactor->ctx && reactor->ctx->stream_uring_reactor == reactor) {
+    reactor->ctx->stream_uring_reactor = NULL;
+  }
+  reactor->stopping = 1;
+  signal_value = 1;
+  (void)write(reactor->wake_fd, &signal_value, sizeof(signal_value));
+  if (reactor->worker_started) {
+    (void)turbo_thread_join(&reactor->worker_thread);
+    reactor->worker_started = 0;
+  }
+
+  stream_uring_free_queued_commands(reactor);
+  if (reactor->cmd_queue) {
+    disruptor_consumer_unregister(reactor->cmd_queue, &reactor->cmd_consumer);
+    disruptor_destroy(reactor->cmd_queue);
+    reactor->cmd_queue = NULL;
+  }
+  if (reactor->wake_fd >= 0) {
+    close(reactor->wake_fd);
+    reactor->wake_fd = -1;
+  }
+  if (reactor->ring_ready) {
+    io_uring_queue_exit(&reactor->ring);
+    reactor->ring_ready = 0;
+  }
+  coro_context_release_external(reactor->ctx);
+  free(reactor);
 }
 
 static int stream_uring_init_base(stream_uring_base_t *base, void *owner,
                                   coro_context_t *ctx, int is_listener) {
-  size_t queue_bytes;
+  int rc;
 
   memset(base, 0, sizeof(*base));
   base->owner = owner;
   base->ctx = ctx;
   base->fd = -1;
-  base->wake_fd = -1;
   base->is_listener = is_listener;
 
-  if (io_uring_queue_init(STREAM_URING_QUEUE_DEPTH, &base->ring, 0) < 0) {
-    return TURBO_ENOTSUP;
+  rc = stream_uring_reactor_acquire(ctx, &base->reactor);
+  if (rc != TURBO_OK) {
+    return rc;
   }
-  base->ring_ready = 1;
-
-  base->wake_fd = eventfd(0, EFD_CLOEXEC);
-  if (base->wake_fd < 0) {
-    io_uring_queue_exit(&base->ring);
-    base->ring_ready = 0;
-    return -errno;
-  }
-
-  queue_bytes = STREAM_URING_CMD_QUEUE_SLOTS * sizeof(void *);
-  base->cmd_queue_data = (uint8_t *)calloc(1, queue_bytes);
-  if (!base->cmd_queue_data) {
-    close(base->wake_fd);
-    base->wake_fd = -1;
-    io_uring_queue_exit(&base->ring);
-    base->ring_ready = 0;
-    return TURBO_ENOMEM;
-  }
-
-  ring_spsc_init(&base->cmd_queue, base->cmd_queue_data, queue_bytes);
-  turbo_mutex_init(&base->cmd_lock);
-  return 0;
+  return TURBO_OK;
 }
 
 static void stream_uring_destroy_base(stream_uring_base_t *base) {
-  if (base->worker_started) {
-    turbo_thread_join(&base->worker_thread);
-    base->worker_started = 0;
-  }
-  if (base->wake_fd >= 0) {
-    close(base->wake_fd);
-    base->wake_fd = -1;
-  }
   if (base->fd >= 0) {
     close(base->fd);
     base->fd = -1;
   }
-  if (base->ring_ready) {
-    io_uring_queue_exit(&base->ring);
-    base->ring_ready = 0;
-  }
   stream_uring_free_inflight(base);
-  stream_uring_free_queued_commands(base);
-  if (base->cmd_queue_data) {
-    free(base->cmd_queue_data);
-    base->cmd_queue_data = NULL;
-  }
-  turbo_mutex_destroy(&base->cmd_lock);
-  coro_context_release_external(base->ctx);
+  stream_uring_reactor_release(base->reactor);
+  base->reactor = NULL;
 }
 
 static void stream_uring_stream_cleanup_task(void *arg1, void *arg2) {
@@ -965,14 +1123,7 @@ static int uring_init(turbo_stream_t *s) {
   }
 
   s->backend_data = st;
-  rc = stream_uring_start_worker(&st->base);
-  if (rc != 0) {
-    s->backend_data = NULL;
-    stream_uring_destroy_base(&st->base);
-    free(st);
-    return rc;
-  }
-  return 0;
+  return TURBO_OK;
 }
 
 static int stream_uring_init_with_socket(turbo_stream_t *s, int existing_fd) {
@@ -1127,18 +1278,7 @@ static void uring_close(turbo_stream_t *s) {
 
   op = (stream_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
-    st->base.stopping = 1;
-    if (st->base.fd >= 0) {
-      stream_uring_shutdown_fd(st->base.fd);
-      close(st->base.fd);
-      st->base.fd = -1;
-    }
-    if (st->base.wake_fd >= 0) {
-      close(st->base.wake_fd);
-      st->base.wake_fd = -1;
-    }
-    (void)stream_uring_post_wait(&st->base, stream_uring_stream_cleanup_task,
-                                 st, s);
+    stream_uring_force_close(&st->base);
     return;
   }
 
@@ -1146,18 +1286,7 @@ static void uring_close(turbo_stream_t *s) {
   op->owner = s;
   if (stream_uring_queue_push(&st->base, op) != 0) {
     free(op);
-    st->base.stopping = 1;
-    if (st->base.fd >= 0) {
-      stream_uring_shutdown_fd(st->base.fd);
-      close(st->base.fd);
-      st->base.fd = -1;
-    }
-    if (st->base.wake_fd >= 0) {
-      close(st->base.wake_fd);
-      st->base.wake_fd = -1;
-    }
-    (void)stream_uring_post_wait(&st->base, stream_uring_stream_cleanup_task,
-                                 st, s);
+    stream_uring_force_close(&st->base);
   }
 }
 
@@ -1293,14 +1422,6 @@ static int uring_listen(turbo_stream_listener_t *l, int backlog) {
     return rc;
   }
 
-  rc = stream_uring_start_worker(&st->base);
-  if (rc != 0) {
-    l->backend_data = NULL;
-    stream_uring_destroy_base(&st->base);
-    free(st);
-    return rc;
-  }
-
   while (__atomic_load_n(&st->accepts_posted, __ATOMIC_RELAXED) < st->accept_depth) {
     rc = stream_uring_submit_accept(l);
     if (rc != 0) {
@@ -1332,17 +1453,7 @@ static void uring_listener_close(turbo_stream_listener_t *l) {
 
   op = (stream_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
-    st->base.stopping = 1;
-    if (st->base.fd >= 0) {
-      close(st->base.fd);
-      st->base.fd = -1;
-    }
-    if (st->base.wake_fd >= 0) {
-      close(st->base.wake_fd);
-      st->base.wake_fd = -1;
-    }
-    (void)stream_uring_post_wait(&st->base, stream_uring_listener_cleanup_task,
-                                 st, l);
+    stream_uring_force_close(&st->base);
     return;
   }
 
@@ -1350,17 +1461,7 @@ static void uring_listener_close(turbo_stream_listener_t *l) {
   op->owner = l;
   if (stream_uring_queue_push(&st->base, op) != 0) {
     free(op);
-    st->base.stopping = 1;
-    if (st->base.fd >= 0) {
-      close(st->base.fd);
-      st->base.fd = -1;
-    }
-    if (st->base.wake_fd >= 0) {
-      close(st->base.wake_fd);
-      st->base.wake_fd = -1;
-    }
-    (void)stream_uring_post_wait(&st->base, stream_uring_listener_cleanup_task,
-                                 st, l);
+    stream_uring_force_close(&st->base);
   }
 }
 

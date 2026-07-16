@@ -14,7 +14,7 @@ cmake_add_test(
   ${STATIC_TARGET_NAME}
   TurboUtils::Core
   TurboNet::WebSocketParser
-  $<IF:$<TARGET_EXISTS:c-ares::cares_static>,c-ares::cares_static,c-ares::cares>
+  ${TURBONET_CARES_TARGET}
   INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${WEBSOCKET_PARSER_INCLUDE_DIRS})

@@ -15,10 +15,6 @@
       "version>=": "1.7"
     },
     {
-      "name": "c-ares",
-      "version>=": "1.34.1"
-    },
-    {
       "name": "openssl",
       "version>=": "3.2.0"
     }, 

@@ -120,7 +120,7 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
   target_link_libraries(
     ${tgt}
     PUBLIC TurboUtils::Core TurboUtils::Parser Threads::Threads
-    PRIVATE kcp::kcp c-ares::cares OpenSSL::SSL OpenSSL::Crypto
+    PRIVATE kcp::kcp ${TURBONET_CARES_TARGET} OpenSSL::SSL OpenSSL::Crypto
             TurboNet::WebSocketParser reed)
 
   target_link_libraries(${tgt} PRIVATE ${TURBO_ZSTD_TARGET})

@@ -12,26 +12,28 @@
 #ifndef CORO_INTERNAL_H
 #define CORO_INTERNAL_H
 
+#include "disruptor.h"
 #include "internal.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
 #include "turbo_coro_socket.h"
 #include "turbo_thread.h"
-#include <stddef.h>
+#include "turbo_vec.h"
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h> 
+#include <string.h>
 
 // =============================================================================
 // Transport Dependencies
 // =============================================================================
 
 #include "turbo_buffer.h"
-#include "turbo_dns.h" 
-#include "turbo_stream.h"
-#include "turbo_datagram.h"  
+#include "turbo_datagram.h"
+#include "turbo_dns.h"
 #include "turbo_kcp.h"
+#include "turbo_stream.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,12 +42,12 @@ extern "C" {
 /* ── Transport type enum (was in turbo_url.h, now lives here) ── */
 
 typedef enum turbo_transport_e {
-  TURBO_TCP       = 0,
-  TURBO_TLS       = 1,
-  TURBO_KCP       = 2,
-  TURBO_UDP       = 3,
-  TURBO_PIPE      = 4,
-  TURBO_QUIC      = 5,
+  TURBO_TCP = 0,
+  TURBO_TLS = 1,
+  TURBO_KCP = 2,
+  TURBO_UDP = 3,
+  TURBO_PIPE = 4,
+  TURBO_QUIC = 5,
   TURBO_WEBSOCKET = 6,
   TURBO_TRANSPORT_MAX
 } turbo_transport_t;
@@ -80,8 +82,8 @@ typedef struct {
   mem_buffer_t *owner;
 } coro_recv_header_t;
 
-static inline void coro_recv_header_store_before_data(void *data, uint32_t magic,
-                                                      size_t size, mem_buffer_t *owner) {
+static inline void coro_recv_header_store_before_data(void *data, uint32_t magic, size_t size,
+                                                      mem_buffer_t *owner) {
   coro_recv_header_t hdr;
 
   hdr.magic = magic;
@@ -99,7 +101,8 @@ static inline int coro_recv_header_load_from_data(const void *data, coro_recv_he
   return 1;
 }
 
-static inline int coro_recv_slice_is_pooled_view(const mem_slice_t *slice, coro_recv_header_t *out) {
+static inline int coro_recv_slice_is_pooled_view(const mem_slice_t *slice,
+                                                 coro_recv_header_t *out) {
   size_t offset;
   coro_recv_header_t hdr;
 
@@ -139,11 +142,11 @@ void coro_socket_handle_transport_close(coro_socket_t *s);
 /** @brief TLS handshake instrumentation hooks implemented in turbo_stream_tls.c. */
 void turbo_stream_tls_note_waiter_signal(turbo_stream_t *s, uint64_t value_ns);
 
-/** @brief Slot in the lock-free ring buffer for post queue. */
+/** @brief Slot in the context's MPSC post queue. */
 typedef struct {
-  coro_post_fn fn;  /**< Callback to invoke */
-  void *arg1;       /**< First argument for @p fn */
-  void *arg2;       /**< Second argument for @p fn */
+  coro_post_fn fn; /**< Callback to invoke */
+  void *arg1;      /**< First argument for @p fn */
+  void *arg2;      /**< Second argument for @p fn */
 } coro_post_slot_t;
 
 /** @brief Internal layout of the opaque event-loop context. */
@@ -152,18 +155,16 @@ struct coro_context_s {
   int owns_loop;      /**< 1 = we allocated it, 0 = external */
 
   /* Thread-safe post queue */
-  int post_initialized;            /**< 1 = post queue is initialized */
-  coro_post_slot_t *post_ring;     /**< Ring buffer for posted tasks */
-  int post_ring_size;              /**< Size of ring buffer (power of 2) */
-  atomic_int post_head;    /**< Producer index (write) */
-  atomic_int post_tail;    /**< Consumer index (read) */
-  atomic_int post_lock;    /**< Producer spinlock for MPSC */
-  atomic_int external_refs; /**< Background transport threads holding ctx alive */
+  int post_initialized;               /**< 1 = post queue is initialized */
+  disruptor_t *post_queue;            /**< MPSC queue owned by this context */
+  disruptor_consumer_t post_consumer; /**< Sole event-loop consumer */
+  uint64_t post_consumer_sequence;    /**< Next sequence to consume */
+  atomic_int post_count;              /**< Reserved or published entries */
+  atomic_int post_wake_pending;       /**< 1 while a loop wake covers queued work */
+  atomic_int external_refs;           /**< Background transport threads holding ctx alive */
 
   /* Lazy tasks (deferred execution) */
-  coro_task_t **tasks; /**< Dynamic array of lazy tasks */
-  int task_count;      /**< Number of active tasks */
-  int task_capacity;   /**< Allocated capacity */
+  turbo_vec_t tasks; /**< Dense vector of coro_task_t* owned by this context */
 
   /* Scheduler for managed coroutines */
   coro_scheduler_t *scheduler; /**< Built-in scheduler for spawn/when_all */
@@ -182,7 +183,10 @@ struct coro_context_s {
 
   /** Internal memory arena for small, frequent allocations */
   mem_pool_t *arena;
-  
+
+  /** Linux stream io_uring reactor shared by endpoints owned by this context. */
+  void *stream_uring_reactor;
+
   /** 1 = we allocated arena, 0 = external (for backward compatibility) */
   int owns_arena;
 
@@ -246,7 +250,7 @@ typedef struct coro_proxy_settings_s {
 
 struct coro_socket_s {
   /* ── Core ──────────────────────────────────────────────── */
-  turbo_loop_t *loop;                /**< Borrowed pointer to the event loop */
+  turbo_loop_t *loop;              /**< Borrowed pointer to the event loop */
   coro_context_t *ctx;             /**< Owning context */
   turbo_transport_t transport;     /**< Active transport enum (TCP/TLS/KCP/UDP/WS) */
   const coro_transport_ops_t *ops; /**< Vtable for the active transport */
@@ -254,39 +258,41 @@ struct coro_socket_s {
 
   /* ── Transport handles (only one active at a time) ───── */
   union {
-    turbo_stream_t *stream;        /**< TCP + Pipe (turbo_stream_t) */
-    turbo_datagram_t *datagram;    /**< UDP (turbo_datagram_t) */
-    struct turbo_kcp_s *kcp;       /**< KCP (reliable UDP) */
+    turbo_stream_t *stream;     /**< TCP + Pipe (turbo_stream_t) */
+    turbo_datagram_t *datagram; /**< UDP (turbo_datagram_t) */
+    struct turbo_kcp_s *kcp;    /**< KCP (reliable UDP) */
   } handle;
-  void *native_tcp_state;         /**< Listener state (tcp_listener_state_t / pipe path) */
-  int tls_client_configured;      /**< 1 = use per-socket TLS client settings */
-  int tls_verify_peer;            /**< 1 = verify peer certificate */
-  char *tls_ca_file;              /**< Optional CA bundle file for client verification */
-  char *tls_cert_file;            /**< Optional client certificate */
-  char *tls_key_file;             /**< Optional client private key */
-  char *tls_key_password;         /**< Optional client key password */
-  char *tls_cipher_list;          /**< Optional OpenSSL cipher list */
-  coro_proxy_settings_t proxy;   /**< Copied outbound proxy configuration */
+  void *native_tcp_state;      /**< Listener state (tcp_listener_state_t / pipe path) */
+  int tls_client_configured;   /**< 1 = use per-socket TLS client settings */
+  int tls_verify_peer;         /**< 1 = verify peer certificate */
+  char *tls_ca_file;           /**< Optional CA bundle file for client verification */
+  char *tls_cert_file;         /**< Optional client certificate */
+  char *tls_key_file;          /**< Optional client private key */
+  char *tls_key_password;      /**< Optional client key password */
+  char *tls_cipher_list;       /**< Optional OpenSSL cipher list */
+  coro_proxy_settings_t proxy; /**< Copied outbound proxy configuration */
 
   /* ── Server fields (for listening sockets) ────────────── */
   coro_socket_t *listener;                           /**< Listening socket (server mode) */
   void (*handler)(coro_socket_t *client, void *arg); /**< Connection handler */
   void *handler_arg;                                 /**< Handler argument */
-  coro_handler_closed_fn handler_closed;             /**< Accepted-socket close completion callback */
-  void *handler_closed_arg;                          /**< User data for handler_closed */
-  coro_server_task_t *server_tasks;                   /**< Accepted tasks owned by this server */
-  size_t server_task_count;                          /**< Number of accepted tasks still running */
-  int accept_loop_active;                            /**< 1 while the managed accept coroutine runs */
-  int server_stopping;                               /**< 1 after server stop begins */
-  int reuse_port;                                    /**< 1 = bind listener with SO_REUSEPORT */
-  turbo_tcp_keepalive_config_t tcp_keepalive_config; /**< TCP keepalive options for TCP-backed sockets */
-  int tcp_keepalive_configured;                      /**< 1 = apply tcp_keepalive_config */
-  turbo_socket_linger_config_t linger_config;        /**< OS SO_LINGER options for TCP-backed sockets */
-  int linger_configured;                             /**< 1 = apply linger_config */
-  size_t send_hwm_bytes;                             /**< 0 = no socket send queue HWM */
-  int accept_prestart_recv_disabled;                 /**< Listener: 1 = accepted raw TCP must not pre-read wrapper handshakes */
-  int kcp_fec_configured;                            /**< 1 = KCP FEC config should be applied */
-  turbo_kcp_fec_config_t kcp_fec_config;             /**< Pending KCP FEC config */
+  coro_handler_closed_fn handler_closed; /**< Accepted-socket close completion callback */
+  void *handler_closed_arg;              /**< User data for handler_closed */
+  coro_server_task_t *server_tasks;      /**< Accepted tasks owned by this server */
+  size_t server_task_count;              /**< Number of accepted tasks still running */
+  int accept_loop_active;                /**< 1 while the managed accept coroutine runs */
+  int server_stopping;                   /**< 1 after server stop begins */
+  int reuse_port;                        /**< 1 = bind listener with SO_REUSEPORT */
+  turbo_tcp_keepalive_config_t
+      tcp_keepalive_config;                   /**< TCP keepalive options for TCP-backed sockets */
+  int tcp_keepalive_configured;               /**< 1 = apply tcp_keepalive_config */
+  turbo_socket_linger_config_t linger_config; /**< OS SO_LINGER options for TCP-backed sockets */
+  int linger_configured;                      /**< 1 = apply linger_config */
+  size_t send_hwm_bytes;                      /**< 0 = no socket send queue HWM */
+  int accept_prestart_recv_disabled; /**< Listener: 1 = accepted raw TCP must not pre-read wrapper
+                                        handshakes */
+  int kcp_fec_configured;            /**< 1 = KCP FEC config should be applied */
+  turbo_kcp_fec_config_t kcp_fec_config; /**< Pending KCP FEC config */
 
   /* ── Connection state ──────────────────────────────────── */
   int connected;      /**< 1 = transport is connected */
@@ -299,20 +305,22 @@ struct coro_socket_s {
                           matching the connectionless single-datagram semantics. */
 
   /* ── Coroutine suspend / receive ──────────────────────── */
-  coro_t *co_wait;     /**< Coroutine waiting for I/O completion */
-  int co_is_scheduled; /**< 1 = scheduler-managed, 0 = manually-managed.
-                            Captured at yield time to avoid touching a
-                            potentially dangling pointer in callbacks. */
-  int recv_call_inflight; /**< 1 = coro_socket_recv() has yielded and not finished unwinding */
-  char *recv_data;     /**< Received data buffer (caller frees via
-                            coro_socket_free_recv) */
-  size_t recv_len;     /**< Length of received data */
-  uint8_t recv_ws_opcode; /**< Opcode for the pending WebSocket message */
-  int recv_compression_level; /**< Zstd level used by compressed send/recv APIs and auto mode. 0 disables compression behavior. */
-  int recv_compression_auto; /**< Non-zero enables zstd framing automatically in send()/recv(). */
-  char *recv_compression_cache; /**< Buffered compressed bytes for recv_compressed() parsing */
+  coro_t *co_wait;            /**< Coroutine waiting for I/O completion */
+  int co_is_scheduled;        /**< 1 = scheduler-managed, 0 = manually-managed.
+                                   Captured at yield time to avoid touching a
+                                   potentially dangling pointer in callbacks. */
+  int recv_call_inflight;     /**< 1 = coro_socket_recv() has yielded and not finished unwinding */
+  char *recv_data;            /**< Received data buffer (caller frees via
+                                   coro_socket_free_recv) */
+  size_t recv_len;            /**< Length of received data */
+  uint8_t recv_ws_opcode;     /**< Opcode for the pending WebSocket message */
+  int recv_compression_level; /**< Zstd level used by compressed send/recv APIs and auto mode. 0
+                                 disables compression behavior. */
+  int recv_compression_auto;  /**< Non-zero enables zstd framing automatically in send()/recv(). */
+  char *recv_compression_cache;      /**< Buffered compressed bytes for recv_compressed() parsing */
   size_t recv_compression_cache_len; /**< bytes in recv_compression_cache */
-  size_t recv_compression_header_len; /**< header bytes accumulated so far (0..CORO_ZSTD_FRAME_HEADER_LEN) */
+  size_t recv_compression_header_len;              /**< header bytes accumulated so far
+                                                      (0..CORO_ZSTD_FRAME_HEADER_LEN) */
   size_t recv_compression_expected_compressed_len; /**< payload bytes expected from frame header */
   size_t recv_compression_expected_uncompressed_len; /**< uncompressed size from frame header */
 
@@ -320,7 +328,7 @@ struct coro_socket_s {
   struct sockaddr_storage peer_addr; /**< Sender address from recvfrom */
 
   /* ── DNS ───────────────────────────────────────────────── */
-  char resolved_ip[64];         /**< Resolved IP address string */
+  char resolved_ip[64]; /**< Resolved IP address string */
   char resolved_ips[TURBO_DNS_MAX_RESULTS][INET6_ADDRSTRLEN];
   size_t resolved_ip_count;     /**< Number of resolved addresses available for retry */
   turbo_dns_query_t *dns_query; /**< In-flight DNS query */
@@ -330,17 +338,17 @@ struct coro_socket_s {
   void *connect_policy_user_data;
 
   /* ── Timeout ───────────────────────────────────────────── */
-  turbo_timer_t *timer;  /**< Timeout timer handle */
-  uint64_t timeout_ms;   /**< Timeout duration (0 = no timeout) */
-  int timed_out;         /**< 1 = last op timed out */
-  int timer_active;      /**< 0 idle, 1 armed, 2 timeout posted, 3 posted then canceled */
-  int close_pending;     /**< 1 = transport close was requested and holds a reference */
-  int destroy_wait_handoff; /**< 1 = a resumed waiter still owns the pending wait reference */
-  int destroy_wait_guard_ref; /**< 1 = destroy kept the socket alive until the waiter returns */
+  turbo_timer_t *timer;          /**< Timeout timer handle */
+  uint64_t timeout_ms;           /**< Timeout duration (0 = no timeout) */
+  int timed_out;                 /**< 1 = last op timed out */
+  int timer_active;              /**< 0 idle, 1 armed, 2 timeout posted, 3 posted then canceled */
+  int close_pending;             /**< 1 = transport close was requested and holds a reference */
+  int destroy_wait_handoff;      /**< 1 = a resumed waiter still owns the pending wait reference */
+  int destroy_wait_guard_ref;    /**< 1 = destroy kept the socket alive until the waiter returns */
   int wait_metric_tls_handshake; /**< 1 = current wait should feed TLS handshake timing */
   turbo_stream_t *wait_metric_stream; /**< TLS stream associated with the current wait metric */
-  uint64_t wait_handler_entry_ns; /**< Handler entry timestamp for current wait */
-  uint64_t wait_resume_signal_ns; /**< Scheduler wake timestamp for current wait */
+  uint64_t wait_handler_entry_ns;     /**< Handler entry timestamp for current wait */
+  uint64_t wait_resume_signal_ns;     /**< Scheduler wake timestamp for current wait */
 
   /* ── Lifecycle ─────────────────────────────────────────── */
   atomic_int ref_count;  /**< Reference count for safe destruction */
@@ -453,8 +461,8 @@ static inline void coro_deliver_recv(coro_socket_t *client, const mem_slice_t *s
     /* Single Case */
     if (coro_recv_slice_is_pooled_view(slice, NULL)) {
       mem_ref(slice->buffer);
-      coro_recv_header_store_before_data(slice->data, CORO_RECV_MAGIC_POOLED,
-                                         slice->length, slice->buffer);
+      coro_recv_header_store_before_data(slice->data, CORO_RECV_MAGIC_POOLED, slice->length,
+                                         slice->buffer);
       client->recv_data = slice->data;
       client->recv_len = slice->length;
       client->status = 0;
@@ -568,8 +576,7 @@ int coro_socket_send_raw_internal(coro_socket_t *s, const char *data, size_t len
 int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len);
 int coro_socket_proxy_connect_internal(coro_socket_t *s, const char *connect_host, int port,
                                        const char *request_host);
-int coro_proxy_settings_copy(coro_proxy_settings_t *out,
-                             const coro_proxy_config_t *config);
+int coro_proxy_settings_copy(coro_proxy_settings_t *out, const coro_proxy_config_t *config);
 
 /**
  * @brief Resume a specific coroutine in the given context.

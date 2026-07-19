@@ -202,6 +202,10 @@ struct coro_context_s {
   /** Last synchronous API error recorded on this context */
   int last_error;
 
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  uint64_t send_profile_scheduler_entry_ns;
+#endif
+
 #ifdef _WIN32
   /** Shared IOCP pool for all stream/datagram sockets on this context */
   struct iocp_pool_s *iocp_pool;
@@ -219,6 +223,7 @@ struct coro_transport_ops_s {
   int (*listen)(coro_socket_t *s, int backlog);
   int (*accept)(coro_socket_t *s, coro_socket_t **accepted_socket);
   int (*send)(coro_socket_t *s, const char *data, size_t len);
+  int (*sendv)(coro_socket_t *s, const turbo_iovec_t *iov, size_t iovcnt);
   int (*send_owned_recv)(coro_socket_t *s, char *data, size_t len);
   int (*recv_start)(coro_socket_t *s);
   void (*recv_stop)(coro_socket_t *s);
@@ -361,6 +366,10 @@ struct coro_socket_s {
   int accepted_ref;      /**< 1 = accepted transport close owns an extra reference */
   coro_t *co_write_wait; /**< Coroutine waiting for write completion */
   int write_status;      /**< Status of the last write operation */
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  uint64_t send_profile_resume_signal_ns;
+  int send_profile_active;
+#endif
 
   /* ── User data ─────────────────────────────────────────── */
   void *user_data; /**< Application-supplied opaque pointer */

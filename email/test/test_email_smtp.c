@@ -75,6 +75,20 @@ spec("email_smtp") {
       smtp_client_free(client);
       coro_context_destroy(ctx);
     }
+
+    it("should accept client_hostname in config") {
+      smtp_config_t config = {0};
+      coro_context_t *ctx = coro_context_create(NULL);
+      config.host = "127.0.0.1";
+      config.port = 25;
+      config.client_hostname = "my-client-domain.test";
+
+      smtp_client_t *client = smtp_client_create(ctx, &config);
+      check_not_null(client);
+
+      smtp_client_free(client);
+      coro_context_destroy(ctx);
+    }
   }
 }
 

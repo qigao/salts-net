@@ -245,3 +245,69 @@ char *mime_get_filename_rfc2231(mem_pool_t *pool,
 
   return NULL;
 }
+
+/* ── Encoding (send-side) ───────────────────────────────────────────── */
+
+static int is_rfc2231_attr_char(unsigned char c) {
+  if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+    return 1;
+  }
+  switch (c) {
+    case '!': case '#': case '$': case '&': case '+': case '-': case '.':
+    case '^': case '_': case '`': case '|': case '~':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+char *mime_encode_rfc2231_filename(mem_pool_t *pool, const char *filename, size_t len) {
+  if (!pool || !filename || len == 0) return NULL;
+
+  // Check if we actually need encoding (has non-ASCII)
+  int needs_encoding = 0;
+  for (size_t i = 0; i < len; i++) {
+    if ((unsigned char)filename[i] > 0x7F) {
+      needs_encoding = 1;
+      break;
+    }
+  }
+
+  if (!needs_encoding) {
+    return NULL;
+  }
+
+  // Calculate required buffer size: "UTF-8''" is 7 chars.
+  // Each encoded char takes 3 bytes ('%' + 2 hex). Unencoded takes 1 byte.
+  size_t required_size = 7; // "UTF-8''"
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)filename[i];
+    if (is_rfc2231_attr_char(c)) {
+      required_size += 1;
+    } else {
+      required_size += 3;
+    }
+  }
+  required_size += 1; // Null terminator
+
+  char *output = mem_alloc(pool, required_size);
+  if (!output) return NULL;
+
+  strcpy(output, "UTF-8''");
+  size_t pos = 7;
+  const char *hex = "0123456789ABCDEF";
+
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)filename[i];
+    if (is_rfc2231_attr_char(c)) {
+      output[pos++] = (char)c;
+    } else {
+      output[pos++] = '%';
+      output[pos++] = hex[(c >> 4) & 0x0F];
+      output[pos++] = hex[c & 0x0F];
+    }
+  }
+  output[pos] = '\0';
+
+  return output;
+}

@@ -14,6 +14,7 @@ cmake_add_test(
   ${STATIC_TARGET_NAME}
   TurboUtils::Core
   TurboNet::WebSocketParser
+  OpenSSL::SSL
   ${TURBONET_CARES_TARGET}
   INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/../include

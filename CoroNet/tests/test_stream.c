@@ -540,6 +540,79 @@ static void stream_zstd_auto_echo_client_task(coro_t *co, void *arg) {
     coro_socket_destroy(client);
 }
 
+typedef struct stream_sendv_state_s {
+    coro_context_t *ctx;
+    unsigned short port;
+    int handler_done;
+    int client_done;
+    int handler_rc;
+    int client_rc;
+    const turbo_iovec_t *slices;
+    size_t slice_count;
+    char *received;
+    size_t received_capacity;
+    size_t expected_len;
+    size_t received_len;
+} stream_sendv_state_t;
+
+static int stream_sendv_pending(void *arg) {
+    stream_sendv_state_t *state = (stream_sendv_state_t *)arg;
+    return !state || !(state->handler_done && state->client_done);
+}
+
+static void stream_sendv_server_handler(coro_socket_t *client, void *arg) {
+    stream_sendv_state_t *state = (stream_sendv_state_t *)arg;
+
+    if (!client || !state) {
+        if (client) coro_socket_destroy(client);
+        return;
+    }
+    while (state->received_len < state->expected_len) {
+        char *data = NULL;
+        size_t len = 0U;
+        int rc = coro_socket_recv(client, &data, &len);
+        if (rc != 0) {
+            state->handler_rc = rc;
+            break;
+        }
+        if (len == 0U) {
+            state->handler_rc = TURBO_EOF;
+            if (data) coro_socket_free_recv(data);
+            break;
+        }
+        if (len > state->received_capacity - state->received_len) {
+            state->handler_rc = TURBO_ENOBUFS;
+            coro_socket_free_recv(data);
+            break;
+        }
+        memcpy(state->received + state->received_len, data, len);
+        state->received_len += len;
+        coro_socket_free_recv(data);
+    }
+    state->handler_done = 1;
+    coro_socket_destroy(client);
+}
+
+static void stream_sendv_client_task(coro_t *co, void *arg) {
+    stream_sendv_state_t *state = (stream_sendv_state_t *)arg;
+    coro_socket_t *client;
+    int rc;
+    (void)co;
+
+    if (!state || !state->ctx || !state->slices || state->slice_count == 0U) return;
+    client = coro_socket_create_tcpv4(state->ctx);
+    if (!client) {
+        state->client_rc = TURBO_ENOMEM;
+        state->client_done = 1;
+        return;
+    }
+    rc = coro_socket_connect(client, "127.0.0.1", state->port);
+    if (rc == 0) rc = coro_socket_sendv(client, state->slices, state->slice_count);
+    state->client_rc = rc;
+    state->client_done = 1;
+    coro_socket_destroy(client);
+}
+
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
 static void stream_coro_recv_timeout_loop_handler(coro_socket_t *client, void *arg) {
     stream_coro_close_state_t *state = (stream_coro_close_state_t *)arg;
@@ -1485,10 +1558,12 @@ spec("Stream") {
 
     it("should reject invalid socket helper arguments without crashing") {
         struct sockaddr_storage addr;
+        const turbo_iovec_t iov = {"x", 1U};
 
         check_int_eq(coro_socket_connect_pipe(NULL, "\\\\.\\pipe\\missing"), TURBO_EINVAL);
         check_int_eq(coro_socket_connect_ws(NULL, "127.0.0.1", 80, "/", 0), TURBO_EINVAL);
         check_int_eq(coro_socket_send(NULL, "x", 1), TURBO_EINVAL);
+        check_int_eq(coro_socket_sendv(NULL, &iov, 1U), TURBO_EINVAL);
         check(coro_socket_get_send_buffer(NULL, 16) == NULL);
         check_int_eq(coro_socket_send_buffer(NULL, NULL, 0), TURBO_EINVAL);
         check_int_eq(coro_socket_recv(NULL, NULL, NULL), TURBO_EINVAL);
@@ -1501,6 +1576,99 @@ spec("Stream") {
         check_int_eq(coro_socket_get_local_address(NULL, &addr), TURBO_EINVAL);
         check_int_eq(coro_socket_get_local_address((coro_socket_t *)1, NULL), TURBO_EINVAL);
     }
+
+    it("should concatenate TCP send vectors into one completed write") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        stream_sendv_state_t state;
+        coro_socket_t *server;
+        char received[32];
+        const turbo_iovec_t slices[] = {{"hello", 5U}, {NULL, 0U}, {" ", 1U}, {"world", 5U}};
+
+        check_not_null(ctx);
+        memset(&state, 0, sizeof(state));
+        memset(received, 0, sizeof(received));
+        state.ctx = ctx;
+        state.slices = slices;
+        state.slice_count = sizeof(slices) / sizeof(slices[0]);
+        state.received = received;
+        state.received_capacity = sizeof(received);
+        state.expected_len = 11U;
+        state.port = stream_test_pick_loopback_port();
+        check_int_gt(state.port, 0);
+        server = coro_socket_create_tcpv4(ctx);
+        check_not_null(server);
+        check_int_eq(coro_socket_listen_on(server, "127.0.0.1", state.port,
+                                           stream_sendv_server_handler, &state), 0);
+        check_int_eq(coro_context_spawn(ctx, stream_sendv_client_task, &state), 0);
+        stream_test_run_while(ctx, stream_sendv_pending, &state, 3000U);
+        check_int_eq(state.client_rc, 0);
+        check_int_eq(state.handler_rc, 0);
+        check_true(state.client_done);
+        check_true(state.handler_done);
+        check_size_eq(state.received_len, 11U);
+        check_mem_eq(state.received, "hello world", 11U);
+        coro_socket_destroy(server);
+        stream_test_destroy_context_robust(ctx);
+    }
+
+#ifdef _WIN32
+    it("should preserve large borrowed TCP vectors until IOCP completes") {
+        enum {
+            SENDV_SLICE_COUNT = 32,
+            SENDV_SLICE_BYTES = 4096,
+            SENDV_TOTAL_BYTES = SENDV_SLICE_COUNT * SENDV_SLICE_BYTES
+        };
+        coro_context_t *ctx = coro_context_create(NULL);
+        stream_sendv_state_t state;
+        coro_socket_t *server;
+        turbo_iovec_t *slices = NULL;
+        char *payload = NULL;
+        char *received = NULL;
+
+        check_not_null(ctx);
+        slices = (turbo_iovec_t *)calloc(SENDV_SLICE_COUNT, sizeof(*slices));
+        payload = (char *)malloc(SENDV_TOTAL_BYTES);
+        received = (char *)calloc(SENDV_TOTAL_BYTES, 1U);
+        check_not_null(slices);
+        check_not_null(payload);
+        check_not_null(received);
+        for (size_t i = 0U; i < SENDV_TOTAL_BYTES; ++i) {
+            payload[i] = (char)('A' + (i % 23U));
+        }
+        for (size_t i = 0U; i < SENDV_SLICE_COUNT; ++i) {
+            slices[i].data = payload + i * SENDV_SLICE_BYTES;
+            slices[i].len = SENDV_SLICE_BYTES;
+        }
+
+        memset(&state, 0, sizeof(state));
+        state.ctx = ctx;
+        state.slices = slices;
+        state.slice_count = SENDV_SLICE_COUNT;
+        state.received = received;
+        state.received_capacity = SENDV_TOTAL_BYTES;
+        state.expected_len = SENDV_TOTAL_BYTES;
+        state.port = stream_test_pick_loopback_port();
+        check_int_gt(state.port, 0);
+        server = coro_socket_create_tcpv4(ctx);
+        check_not_null(server);
+        check_int_eq(coro_socket_listen_on(server, "127.0.0.1", state.port,
+                                           stream_sendv_server_handler, &state), 0);
+        check_int_eq(coro_context_spawn(ctx, stream_sendv_client_task, &state), 0);
+        stream_test_run_while(ctx, stream_sendv_pending, &state, 5000U);
+        check_int_eq(state.client_rc, 0);
+        check_int_eq(state.handler_rc, 0);
+        check_true(state.client_done);
+        check_true(state.handler_done);
+        check_size_eq(state.received_len, SENDV_TOTAL_BYTES);
+        check_mem_eq(state.received, payload, SENDV_TOTAL_BYTES);
+
+        coro_socket_destroy(server);
+        stream_test_destroy_context_robust(ctx);
+        free(received);
+        free(payload);
+        free(slices);
+    }
+#endif
 
     it("should send and receive compressed frames") {
         coro_context_t *ctx = coro_context_create(NULL);

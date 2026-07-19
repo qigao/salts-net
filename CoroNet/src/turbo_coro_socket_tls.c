@@ -377,15 +377,23 @@ int coro_socket_tls_export_channel_binding(
   if (!s) {
     return TURBO_EINVAL;
   }
-  if (s->transport != TURBO_TLS) {
-    return TURBO_ENOTSUP;
+  if (s->transport == TURBO_TLS) {
+    if (!s->handle.stream) {
+      return TURBO_ENOTCONN;
+    }
+    return turbo_stream_tls_export_channel_binding_internal(
+        s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
   }
-  if (!s->handle.stream) {
-    return TURBO_ENOTCONN;
+  if (s->transport == TURBO_WEBSOCKET) {
+    if (!s->handle.stream) {
+      return TURBO_ENOTCONN;
+    }
+    if (s->handle.stream->kind == TURBO_STREAM_WSS) {
+      return turbo_stream_wss_export_channel_binding_internal(
+          s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
+    }
   }
-
-  return turbo_stream_tls_export_channel_binding_internal(
-      s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
+  return TURBO_ENOTSUP;
 }
 
 /* ── Send/Recv ────────────────────────────────────────────── */

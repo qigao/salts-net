@@ -17,8 +17,8 @@ struct smtp_client_s {
   turbo_mutex_t socket_mutex;
   char error_msg[512];
   int last_code;
-  char read_buffer[4096];
-  char response_buffer[4096];
+  char read_buffer[4096];      /* raw bytes received but not yet line-split */
+  char response_buffer[4096];  /* last complete SMTP response line (set by smtp_read_response) */
   size_t read_buffer_len;
 };
 
@@ -166,7 +166,10 @@ static int smtp_send_command(smtp_client_t *client, const char *cmd) {
 }
 
 static int smtp_send_hello(smtp_client_t *client, int extended) {
-  tstr_t hello_cmd = tstr_format("{} {}", extended ? "EHLO" : "HELO", client->config.host);
+  const char *ehlo_domain = client->config.client_hostname
+                            ? client->config.client_hostname
+                            : "[127.0.0.1]";
+  tstr_t hello_cmd = tstr_format("{} {}", extended ? "EHLO" : "HELO", ehlo_domain);
   if (!hello_cmd) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to allocate SMTP hello command");
     return -1;
@@ -180,9 +183,61 @@ static int smtp_send_hello(smtp_client_t *client, int extended) {
 static int smtp_expect_code(smtp_client_t *client, int expected) {
   int code = smtp_read_response(client, NULL);
   if (code != expected) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Expected {}, got {}: {}", expected, code, client->read_buffer);
+    fmt(client->error_msg, sizeof(client->error_msg), "Expected {}, got {}: {}", expected, code, client->response_buffer);
     return -1;
   }
+  return 0;
+}
+
+static int smtp_send_dotted_body(smtp_client_t *client, const char *data, size_t len) {
+  if (!client || !client->socket || !data || len == 0) return 0;
+
+  size_t last_pos = 0;
+  size_t i = 0;
+
+  // If the very first character is a dot, escape it
+  if (data[0] == '.') {
+    int rc = coro_socket_send(client->socket, ".", 1);
+    if (rc != 0) {
+      fmt(client->error_msg, sizeof(client->error_msg), "Failed to send dot escape");
+      return -1;
+    }
+  }
+
+  while (i < len) {
+    // Search for "\r\n."
+    if (i + 2 < len && data[i] == '\r' && data[i+1] == '\n' && data[i+2] == '.') {
+      // Send up to and including "\r\n"
+      size_t chunk_len = i + 2 - last_pos;
+      if (chunk_len > 0) {
+        int rc = coro_socket_send(client->socket, data + last_pos, chunk_len);
+        if (rc != 0) {
+          fmt(client->error_msg, sizeof(client->error_msg), "Failed to send chunk");
+          return -1;
+        }
+      }
+      // Send the extra escape dot
+      int rc = coro_socket_send(client->socket, ".", 1);
+      if (rc != 0) {
+        fmt(client->error_msg, sizeof(client->error_msg), "Failed to send dot escape");
+        return -1;
+      }
+      last_pos = i + 2; // Next chunk starts at the original '.'
+      i += 3;
+    } else {
+      i++;
+    }
+  }
+
+  // Send remainder
+  if (len - last_pos > 0) {
+    int rc = coro_socket_send(client->socket, data + last_pos, len - last_pos);
+    if (rc != 0) {
+      fmt(client->error_msg, sizeof(client->error_msg), "Failed to send remainder");
+      return -1;
+    }
+  }
+
   return 0;
 }
 
@@ -202,6 +257,7 @@ smtp_client_t *smtp_client_create(coro_context_t *ctx,
   if (config->host) client->config.host = strdup(config->host);
   if (config->username) client->config.username = strdup(config->username);
   if (config->password) client->config.password = strdup(config->password);
+  if (config->client_hostname) client->config.client_hostname = strdup(config->client_hostname);
 
   if (client->config.timeout_ms == 0) {
     client->config.timeout_ms = 30000;
@@ -221,6 +277,7 @@ void smtp_client_free(smtp_client_t *client) {
   free(client->config.host);
   free(client->config.username);
   free(client->config.password);
+  free(client->config.client_hostname);
   turbo_mutex_destroy(&client->socket_mutex);
   free(client);
 }
@@ -398,6 +455,10 @@ int smtp_connect(smtp_client_t *client) {
         smtp_disconnect(client);
         return -1;
       }
+    } else if (client->config.auth_method == SMTP_AUTH_CRAM_MD5) {
+      fmt(client->error_msg, sizeof(client->error_msg), "CRAM-MD5 authentication is not implemented");
+      smtp_disconnect(client);
+      return -1;
     }
   }
 
@@ -460,7 +521,7 @@ int smtp_send_raw(smtp_client_t *client,
   tstr_free(mail_from);
   if (smtp_expect_code(client, 250) != 0) return -1;
 
-  // RCPT TO (for each recipient)
+  // RCPT TO (for each recipient, accepting 250/251/252)
   for (int i = 0; i < to_count; i++) {
     tstr_t rcpt_to = tstr_format("RCPT TO:<{}>", to_emails[i]);
     if (!rcpt_to) return -1;
@@ -469,16 +530,21 @@ int smtp_send_raw(smtp_client_t *client,
       return -1;
     }
     tstr_free(rcpt_to);
-    if (smtp_expect_code(client, 250) != 0) return -1;
+    
+    int rcpt_code = smtp_read_response(client, NULL);
+    if (rcpt_code != 250 && rcpt_code != 251 && rcpt_code != 252) {
+      fmt(client->error_msg, sizeof(client->error_msg), 
+          "Expected RCPT TO status 250/251/252, got {}: {}", rcpt_code, client->response_buffer);
+      return -1;
+    }
   }
 
   // DATA
   if (smtp_send_command(client, "DATA") != 0) return -1;
   if (smtp_expect_code(client, 354) != 0) return -1;
 
-  // Send message body
-  if (coro_socket_send(client->socket, raw_message, message_len) != 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to send message body");
+  // Send message body with dot escape (DATA transparency)
+  if (smtp_send_dotted_body(client, raw_message, message_len) != 0) {
     return -1;
   }
 

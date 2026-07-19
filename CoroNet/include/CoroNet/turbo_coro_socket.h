@@ -235,7 +235,7 @@ CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
 #define CORO_TLS_CHANNEL_BINDING_SIZE 32U
 
 /**
- * @brief Export the RFC 9266 tls-exporter channel binding for this TLS connection.
+ * @brief Export the RFC 9266 tls-exporter channel binding for this TLS/WSS connection.
  *
  * The socket must have completed a TLS 1.3 handshake. The function uses the
  * fixed `EXPORTER-Channel-Binding` label, an explicit zero-length context, and
@@ -245,10 +245,10 @@ CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
  * This is a read-only query. Call it on the socket's owning event-loop thread
  * while the connection is open. On every failure, @p output is cleared.
  *
- * @param socket Connected TLS socket, including an accepted server socket.
+ * @param socket Connected TLS or WSS socket, including an accepted server socket.
  * @param output Caller-owned CORO_TLS_CHANNEL_BINDING_SIZE-byte buffer.
  * @return 0 on success; TURBO_EINVAL for invalid arguments; TURBO_ENOTSUP for
- *         a non-TLS socket; TURBO_ENOTCONN before/after the open state;
+ *         a non-TLS/WSS socket; TURBO_ENOTCONN before/after the open state;
  *         TURBO_EPROTONOSUPPORT for a negotiated version other than TLS 1.3;
  *         TURBO_EPERM when a client connection did not verify its peer; or
  *         TURBO_EIO if OpenSSL cannot export the binding.
@@ -325,6 +325,23 @@ CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *
  * payload is sent as a zstd-compressed frame.
  */
 CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);
+
+/**
+ * @brief Concatenate and send one bounded vector of byte slices.
+ *
+ * TCP sockets copy the slices into one stream buffer and suspend the current
+ * coroutine until that single write completes. The input slices are borrowed
+ * only for this call. Other transports return TURBO_ENOTSUP.
+ *
+ * @param socket Socket handle.
+ * @param iov    Caller-owned byte slices; zero-length slices are allowed.
+ * @param iovcnt Number of slices; must be greater than zero.
+ * @return 0 on completion, TURBO_EINVAL for invalid input, TURBO_ERANGE when
+ *         the total size overflows size_t, TURBO_ENOTSUP for a non-TCP socket,
+ *         or a transport error.
+ */
+CXX_C_API int coro_socket_sendv(coro_socket_t *socket, const turbo_iovec_t *iov,
+                                size_t iovcnt);
 
 /**
  * @brief Send data through the socket using zstd compression.

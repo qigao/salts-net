@@ -229,6 +229,9 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
       drain_post_queue(ctx);
 
       if (ctx->scheduler) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+        ctx->send_profile_scheduler_entry_ns = turbo_hrtime();
+#endif
         coro_scheduler_tick(ctx->scheduler);
       }
       cleanup_done_tasks(ctx);
@@ -259,6 +262,9 @@ int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode) {
     drain_post_queue(ctx);
 
     if (ctx->scheduler) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+      ctx->send_profile_scheduler_entry_ns = turbo_hrtime();
+#endif
       coro_scheduler_tick(ctx->scheduler);
     }
     cleanup_done_tasks(ctx);
@@ -339,6 +345,9 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
     drain_post_queue(ctx);
 
     if (ctx->scheduler) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+      ctx->send_profile_scheduler_entry_ns = turbo_hrtime();
+#endif
       coro_scheduler_tick(ctx->scheduler);
     }
     cleanup_done_tasks(ctx);

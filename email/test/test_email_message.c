@@ -312,4 +312,145 @@ spec("email_message") {
       mem_destroy(&pool);
     }
   }
+
+  describe("rfc compliance serialization") {
+    it("should encode non-ASCII subject with RFC 2047") {
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_create(&pool);
+      email_message_set_from(msg, "Sender", "sender@example.com");
+      email_message_add_to(msg, "Receiver", "receiver@example.com");
+      email_message_set_subject(msg, "测试邮件");
+      email_message_set_text_body(msg, "Hello");
+
+      tstr_t serialized = email_message_to_string(msg);
+      check(serialized != NULL);
+      check(strstr(serialized, "Subject: =?UTF-8?B?") != NULL);
+
+      tstr_free(serialized);
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should encode non-ASCII display name with RFC 2047") {
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_create(&pool);
+      email_message_set_from(msg, "张三", "zhangsan@example.com");
+      email_message_add_to(msg, "Receiver", "receiver@example.com");
+      email_message_set_subject(msg, "Test");
+      email_message_set_text_body(msg, "Hello");
+
+      tstr_t serialized = email_message_to_string(msg);
+      check(serialized != NULL);
+      check(strstr(serialized, "From: =?UTF-8?B?") != NULL);
+      check(strstr(serialized, "\"=?UTF-8?B?") == NULL);
+
+      tstr_free(serialized);
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should encode non-ASCII filename with RFC 2231") {
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_create(&pool);
+      email_message_set_from(msg, "Sender", "sender@example.com");
+      email_message_add_to(msg, "Receiver", "receiver@example.com");
+      email_message_set_subject(msg, "Test");
+      email_message_add_attachment(msg, "测试.txt", "text/plain", "data", 4);
+
+      tstr_t serialized = email_message_to_string(msg);
+      check(serialized != NULL);
+      check(strstr(serialized, "filename*=UTF-8''") != NULL);
+      check(strstr(serialized, "filename=\"") == NULL);
+
+      tstr_free(serialized);
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should fail serialization if From is missing") {
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_create(&pool);
+      email_message_add_to(msg, "Receiver", "receiver@example.com");
+      email_message_set_subject(msg, "Test");
+      email_message_set_text_body(msg, "Hello");
+
+      tstr_t serialized = email_message_to_string(msg);
+      check(serialized == NULL);
+
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should fold long To header with many recipients (RFC 5322 §2.2.3)") {
+      mem_pool_t pool;
+      mem_init(&pool, 16384);
+
+      email_message_t *msg = email_message_create(&pool);
+      email_message_set_from(msg, "Sender", "sender@example.com");
+      /* Add enough recipients to exceed 78-char soft limit */
+      email_message_add_to(msg, "Alice Smith", "alice.smith@longdomain.example.com");
+      email_message_add_to(msg, "Bob Jones",   "bob.jones@longdomain.example.com");
+      email_message_add_to(msg, "Carol White", "carol.white@longdomain.example.com");
+      email_message_set_subject(msg, "Fold test");
+      email_message_set_text_body(msg, "body");
+
+      tstr_t serialized = email_message_to_string(msg);
+      check(serialized != NULL);
+      /* Folded lines must contain CRLF + WSP between addresses */
+      check(strstr(serialized, "To:") != NULL);
+      check(strstr(serialized, "\r\n\t") != NULL);
+      /* No individual line exceeds 998 characters (hard limit) */
+      const char *p = serialized;
+      while (*p) {
+        const char *nl = strstr(p, "\r\n");
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        check(line_len <= 998);
+        if (!nl) break;
+        p = nl + 2;
+      }
+
+      tstr_free(serialized);
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+
+    it("should fold long ASCII subject (RFC 5322 §2.2.3)") {
+      mem_pool_t pool;
+      mem_init(&pool, 8192);
+
+      email_message_t *msg = email_message_create(&pool);
+      email_message_set_from(msg, "Sender", "sender@example.com");
+      email_message_add_to(msg, "Receiver", "receiver@example.com");
+      /* Subject > 69 pure-ASCII chars triggers folding (9 + len > 78) */
+      email_message_set_subject(msg,
+          "This is a very long subject line that definitely exceeds the "
+          "seventy-eight character soft line length limit from RFC 5322");
+      email_message_set_text_body(msg, "body");
+
+      tstr_t serialized = email_message_to_string(msg);
+      check(serialized != NULL);
+      check(strstr(serialized, "Subject:") != NULL);
+      /* No individual line exceeds 998 characters */
+      const char *p = serialized;
+      while (*p) {
+        const char *nl = strstr(p, "\r\n");
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        check(line_len <= 998);
+        if (!nl) break;
+        p = nl + 2;
+      }
+
+      tstr_free(serialized);
+      email_message_free(msg);
+      mem_destroy(&pool);
+    }
+  }
 }

@@ -10,6 +10,7 @@
 
 #include "CoroNet/turbo_stream.h"
 #include "CoroNet/turbo_coro_context.h"
+#include "CoroNet/turbo_iovec.h"
 #include "turbo_buffer.h"
 
 #ifdef _WIN32
@@ -31,6 +32,8 @@ typedef struct turbo_stream_backend_ops_s {
   int  (*connect)(turbo_stream_t *s, const struct sockaddr *addr);
   int  (*connect_pipe)(turbo_stream_t *s, const char *name);
   int  (*send)(turbo_stream_t *s, const char *data, size_t len);
+  int  (*sendv_borrowed)(turbo_stream_t *s, const turbo_iovec_t *iov, size_t iovcnt,
+                         size_t total_len);
   int  (*flush)(turbo_stream_t *s);
   int  (*recv_start)(turbo_stream_t *s);
   void (*recv_stop)(turbo_stream_t *s);
@@ -150,11 +153,17 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
 int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *stream,
                                                       uint8_t *output,
                                                       size_t output_len);
+int turbo_stream_wss_export_channel_binding_internal(const turbo_stream_t *stream,
+                                                      uint8_t *output,
+                                                      size_t output_len);
 int turbo_stream_ws_send_text(turbo_stream_t *ws_stream, const char *data, size_t len);
 int turbo_stream_ws_send_owned_recv(turbo_stream_t *ws_stream, char *data, size_t len);
 
 int turbo_stream_send_hwm_check(const turbo_stream_t *s, size_t add_bytes,
                                 size_t pending_bytes);
+/* The caller keeps every iovec byte alive until on_write_complete fires. */
+int turbo_stream_sendv_borrowed(turbo_stream_t *s, const turbo_iovec_t *iov, size_t iovcnt,
+                                size_t total_len);
 int turbo_stream_apply_native_socket_options(turbo_stream_t *s,
                                              turbo_stream_native_socket_t socket);
 int turbo_stream_listener_configure_child(turbo_stream_listener_t *l, turbo_stream_t *child);

@@ -102,6 +102,21 @@ CXX_C_API char *mime_get_filename_rfc2231(mem_pool_t *pool,
                                            const char *content_disposition,
                                            size_t len);
 
+/* ── Encoding (send-side) ───────────────────────────────────────────── */
+
+/**
+ * Encode a filename for use in Content-Disposition using RFC 2231.
+ *
+ * Returns a pool-allocated string of the form "UTF-8''%XX%XX..."
+ * when the filename contains non-ASCII characters; returns NULL when
+ * the filename is pure ASCII (caller should fall back to filename="...").
+ *
+ * Only characters that are safe RFC 2231 attr-chars are left unencoded;
+ * all others (including space, quotes, and bytes > 0x7F) are percent-encoded.
+ */
+CXX_C_API char *mime_encode_rfc2231_filename(mem_pool_t *pool,
+                                              const char *filename, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

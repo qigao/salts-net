@@ -9,6 +9,7 @@
 #include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const char *env_or_default(const char *name, const char *fallback) {
   const char *value = getenv(name);
@@ -79,19 +80,27 @@ static void smtp_test_coro(coro_t *co, void *arg) {
     return;
   }
 
-  // Set message content
-  email_message_set_from(msg, "TurboNet SMTP Demo",
+  // Set message content with non-ASCII data to test RFC compliance
+  email_message_set_from(msg, "测试张三",
                          env_or_default("SMTP_FROM", "sender@smtp4dev.local"));
   email_message_add_to(msg, "Local Test Recipient",
                        env_or_default("SMTP_TO", "recipient@smtp4dev.local"));
-  email_message_set_subject(msg, "TurboNet smtp4dev smoke test");
+  email_message_set_subject(msg, "测试 RFC 2047 编码标题");
   email_message_set_text_body(msg,
                               "Hello from TurboNet Email Module!\n\n"
-                              "This message was sent to a local smtp4dev server.");
+                              "This message was sent to a local smtp4dev server.\n"
+                              "It contains dot-leading lines to test DATA transparency:\n"
+                              ".This line starts with a dot.\n"
+                              "..This line starts with two dots.\n"
+                              "End of test.");
   email_message_set_html_body(
       msg,
-      "<html><body><h1>TurboNet smtp4dev smoke test</h1>"
+      "<html><body><h1>测试 RFC 2047 编码标题</h1>"
       "<p>This message was sent to a local smtp4dev server.</p></body></html>");
+
+  // Add an attachment with non-ASCII filename
+  const char *att_data = "Hello, this is a test attachment with non-ASCII filename.";
+  email_message_add_attachment(msg, "测试文档.txt", "text/plain", att_data, strlen(att_data));
 
   // Send message
   printf("Sending email...\n");

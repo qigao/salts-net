@@ -83,6 +83,27 @@ CXX_C_API char *mime_decode_header(mem_pool_t *pool,
 CXX_C_API char *mime_decode_header_auto(mem_pool_t *pool,
                                          const char *header_value);
 
+/* ── Encoding functions (send-side) ────────────────────────────────── */
+
+/**
+ * Encode a header value as RFC 2047 encoded-word(s) when it contains
+ * non-ASCII characters; returns a pool-allocated copy of the plain value
+ * when the input is pure ASCII (zero overhead on the fast path).
+ *
+ * The output is one or more space-separated =?UTF-8?B?...?= words, each
+ * within the 75-character encoded-word length limit (RFC 2047 §2).
+ */
+CXX_C_API char *mime_encode_header_if_needed(mem_pool_t *pool,
+                                              const char *value, size_t len);
+
+/**
+ * Wrap a raw base64 string with RFC 2045 §6.8 line folding:
+ * inserts "\r\n" after every 76 characters.
+ * Returns a pool-allocated string; the trailing "\r\n" is NOT appended.
+ */
+CXX_C_API char *mime_base64_fold(mem_pool_t *pool,
+                                  const char *b64, size_t b64_len);
+
 #ifdef __cplusplus
 }
 #endif

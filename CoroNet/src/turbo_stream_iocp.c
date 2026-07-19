@@ -11,6 +11,7 @@
 #include "turbo_stream_internal.h"
 #include "turbo_iocp_pool.h"
 #include "turbo_coro_internal.h"
+#include "turbo_coro_send_profile_internal.h"
 #include "turbo_thread.h"
 #include "tlog.h"
 #include <mswsock.h>
@@ -47,6 +48,17 @@ typedef struct stream_iocp_state_s {
   int send_inflight;
   WSABUF send_wsabuf;
   struct mem_buffer_s *send_buffer;
+  struct mem_buffer_s *send_iov_buffer;
+  DWORD send_iov_count;
+  DWORD send_iov_index;
+  size_t send_iov_remaining;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  uint64_t profile_send_started_ns;
+  int profile_send_active;
+  uint64_t profile_sendv_started_ns;
+  uint64_t profile_sendv_submitted_ns;
+  int profile_sendv_active;
+#endif
 } stream_iocp_state_t;
 
 typedef struct stream_iocp_server_state_s {
@@ -65,6 +77,7 @@ typedef struct stream_iocp_server_state_s {
 
 static int stream_iocp_submit_recv(turbo_stream_t *s);
 static int stream_iocp_submit_send(turbo_stream_t *s);
+static int stream_iocp_submit_sendv_remaining(turbo_stream_t *s);
 static int stream_iocp_submit_accept(turbo_stream_listener_t *l);
 static int iocp_init_with_socket(turbo_stream_t *s, SOCKET existing);
 
@@ -207,20 +220,76 @@ void stream_iocp_handle_send_op(iocp_op_t *op) {
   turbo_stream_t *s = (turbo_stream_t *)op->owner;
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   int status = op->status;
+  int sendv_active = st->send_iov_buffer != NULL;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  uint64_t profile_started_ns = op->profile_send_started_ns;
+  uint64_t profile_submitted_ns = op->profile_send_submitted_ns;
+  uint64_t profile_completed_ns = op->completed_ns;
+  uint64_t profile_post_requested_ns = op->tick_post_request_ns;
+  uint64_t profile_handler_entry_ns = turbo_hrtime();
+  int profile_active = op->profile_send_active;
 
+  op->profile_send_active = 0;
+#endif
 
-  /* Clear the state tracking the active send buffer */
-  if (st->send_buffer) {
-    mem_unref(st->send_buffer);
-    st->send_buffer = NULL;
-  }
   st->send_inflight = 0;
-
   InterlockedDecrement(&st->inflight_count);
   iocp_pool_inflight_dec(s->ctx->iocp_pool);
   /* no free(op), it is &st->send_op */
 
+  if (sendv_active && status == TURBO_OK && !st->closing) {
+    WSABUF *buffers = (WSABUF *)mem_buffer_data(st->send_iov_buffer);
+    size_t completed = op->bytes_transferred;
+
+    if (completed == 0u) {
+      status = TURBO_EOF;
+    } else if (completed > st->send_iov_remaining) {
+      status = TURBO_EPROTO;
+    } else {
+      st->send_iov_remaining -= completed;
+      while (completed > 0u && st->send_iov_index < st->send_iov_count) {
+        WSABUF *current = &buffers[st->send_iov_index];
+        if (completed < current->len) {
+          current->buf += completed;
+          current->len -= (ULONG)completed;
+          completed = 0u;
+        } else {
+          completed -= current->len;
+          st->send_iov_index += 1u;
+        }
+      }
+      if (completed != 0u) {
+        status = TURBO_EPROTO;
+      } else if (st->send_iov_remaining > 0u) {
+        status = stream_iocp_submit_sendv_remaining(s);
+        if (status == TURBO_OK) return;
+      }
+    }
+  }
+
+  /* Keep descriptor state until every byte is consumed so the caller stays suspended. */
+  if (st->send_buffer) {
+    mem_unref(st->send_buffer);
+    st->send_buffer = NULL;
+  }
+  if (st->send_iov_buffer) {
+    mem_unref(st->send_iov_buffer);
+    st->send_iov_buffer = NULL;
+  }
+  st->send_iov_count = 0u;
+  st->send_iov_index = 0u;
+  st->send_iov_remaining = 0u;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  st->profile_sendv_active = 0;
+#endif
+
   if (st->closing) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    if (profile_active)
+      turbo_coro_send_profile_record_backend(
+          profile_started_ns, profile_submitted_ns, profile_completed_ns,
+          profile_post_requested_ns, profile_handler_entry_ns, turbo_hrtime());
+#endif
     stream_maybe_shutdown(s);
     return;
   }
@@ -229,11 +298,26 @@ void stream_iocp_handle_send_op(iocp_op_t *op) {
     turbo_stream_callback_enter(s);
     s->on_write_complete(s, status);
     turbo_stream_callback_leave(s);
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    if (profile_active) {
+      turbo_coro_send_profile_record_backend(
+          profile_started_ns, profile_submitted_ns, profile_completed_ns,
+          profile_post_requested_ns, profile_handler_entry_ns, turbo_hrtime());
+      profile_active = 0;
+    }
+#endif
     if (s->finalized) {
       turbo_stream_maybe_free(s);
       return;
     }
   }
+
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  if (profile_active)
+    turbo_coro_send_profile_record_backend(
+        profile_started_ns, profile_submitted_ns, profile_completed_ns,
+        profile_post_requested_ns, profile_handler_entry_ns, turbo_hrtime());
+#endif
 
   if (s->send_head && !s->closing) {
     if (stream_iocp_submit_send(s) != 0) {
@@ -441,6 +525,9 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
   st->send_wsabuf.len = (ULONG)buf->used;
 
   if (s->listener != NULL && st->send_wsabuf.len <= 64U) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    st->profile_send_active = 0;
+#endif
     int sync_rc = stream_iocp_send_sync_buffer(s, st, buf);
     st->send_buffer = NULL;
     if (sync_rc != 0) {
@@ -472,6 +559,12 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
   op->buffer = NULL;
   op->owns_buffer = 0;
   op->length = 0;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  op->profile_send_active = st->profile_send_active;
+  op->profile_send_started_ns = st->profile_send_started_ns;
+  op->profile_send_submitted_ns = op->profile_send_active ? turbo_hrtime() : 0u;
+  st->profile_send_active = 0;
+#endif
 
   st->send_inflight = 1;
   InterlockedIncrement(&st->inflight_count);
@@ -488,6 +581,9 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
       InterlockedDecrement(&st->inflight_count);
       iocp_pool_inflight_dec(s->ctx->iocp_pool);
       st->send_inflight = 0;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+      op->profile_send_active = 0;
+#endif
       mem_unref(st->send_buffer);
       st->send_buffer = NULL;
       turbo_stream_close(s);
@@ -674,13 +770,157 @@ static int iocp_connect_pipe(turbo_stream_t *s, const char *name) {
 }
 
 static int iocp_send(turbo_stream_t *s, const char *data, size_t len) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
+  if (st && turbo_coro_send_profile_enabled()) {
+    st->profile_send_started_ns = turbo_hrtime();
+    st->profile_send_active = 1;
+  }
+#endif
   mem_buffer_t *buf = mem_get_buffer(s->arena, len);
-  if (!buf) return TURBO_ENOMEM;
+  if (!buf) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    if (st) st->profile_send_active = 0;
+#endif
+    return TURBO_ENOMEM;
+  }
   memcpy(buf->data, data, len);
   mem_set_used(buf, len);
   turbo_stream_enqueue_buffer(s, buf);
   mem_unref(buf);
   return stream_iocp_submit_send(s);
+}
+
+static int stream_iocp_submit_sendv_remaining(turbo_stream_t *s) {
+  stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
+  WSABUF *buffers;
+  iocp_op_t *op;
+  DWORD remaining_count;
+
+  if (!st || !st->send_iov_buffer || st->send_iov_index >= st->send_iov_count ||
+      st->send_iov_remaining == 0u || st->send_inflight || s->closing || st->closing ||
+      st->socket == INVALID_SOCKET) {
+    return TURBO_ECANCELED;
+  }
+  buffers = (WSABUF *)mem_buffer_data(st->send_iov_buffer);
+  remaining_count = st->send_iov_count - st->send_iov_index;
+  op = &st->send_op;
+  memset(&op->overlapped, 0, sizeof(OVERLAPPED));
+  op->kind = IOCP_OP_STREAM_SEND;
+  op->owner = s;
+  op->buffer = NULL;
+  op->owns_buffer = 0;
+  op->length = 0;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  if (st->profile_sendv_active && st->profile_sendv_submitted_ns == 0u) {
+    st->profile_sendv_submitted_ns = turbo_hrtime();
+  }
+  op->profile_send_active = st->profile_sendv_active;
+  op->profile_send_started_ns = st->profile_sendv_started_ns;
+  op->profile_send_submitted_ns = st->profile_sendv_submitted_ns;
+#endif
+
+  st->send_inflight = 1;
+  InterlockedIncrement(&st->inflight_count);
+  iocp_pool_inflight_inc(s->ctx->iocp_pool);
+  if (WSASend(st->socket, buffers + st->send_iov_index, remaining_count, NULL, 0,
+              &op->overlapped, NULL) == SOCKET_ERROR) {
+    int err = WSAGetLastError();
+    if (err != WSA_IO_PENDING) {
+      InterlockedDecrement(&st->inflight_count);
+      iocp_pool_inflight_dec(s->ctx->iocp_pool);
+      st->send_inflight = 0;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+      op->profile_send_active = 0;
+#endif
+      return -(int)err;
+    }
+  }
+  return TURBO_OK;
+}
+
+static int iocp_sendv_borrowed(turbo_stream_t *s, const turbo_iovec_t *iov, size_t iovcnt,
+                               size_t total_len) {
+  stream_iocp_state_t *st;
+  mem_buffer_t *descriptor_buffer;
+  WSABUF *buffers;
+  size_t descriptor_bytes;
+  size_t measured_total = 0u;
+  DWORD buffer_count = 0u;
+  int rc;
+
+  if (!s || !iov || iovcnt == 0u || total_len == 0u || iovcnt > UINT32_MAX ||
+      iovcnt > SIZE_MAX / sizeof(WSABUF)) {
+    return TURBO_EINVAL;
+  }
+  st = (stream_iocp_state_t *)s->backend_data;
+  if (!st || s->closing || st->closing || st->socket == INVALID_SOCKET) {
+    return TURBO_ECANCELED;
+  }
+  /* The generic queued-buffer path remains the ordering authority whenever another write exists. */
+  if (st->send_inflight || s->send_head) return TURBO_ENOTSUP;
+  rc = turbo_stream_send_hwm_check(s, total_len, s->send_queued);
+  if (rc != TURBO_OK) return rc;
+
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  if (turbo_coro_send_profile_enabled()) {
+    st->profile_sendv_started_ns = turbo_hrtime();
+    st->profile_sendv_submitted_ns = 0u;
+    st->profile_sendv_active = 1;
+  }
+#endif
+  /* O(iovcnt) descriptor setup; payload bytes remain in caller-owned storage. */
+  descriptor_bytes = iovcnt * sizeof(WSABUF);
+  descriptor_buffer = mem_get_buffer(s->arena, descriptor_bytes);
+  if (!descriptor_buffer) {
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    st->profile_sendv_active = 0;
+#endif
+    return TURBO_ENOMEM;
+  }
+  buffers = (WSABUF *)mem_buffer_data(descriptor_buffer);
+  for (size_t i = 0u; i < iovcnt; ++i) {
+    if (iov[i].len == 0u) continue;
+    if (!iov[i].data || iov[i].len > ULONG_MAX || iov[i].len > SIZE_MAX - measured_total) {
+      mem_unref(descriptor_buffer);
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+      st->profile_sendv_active = 0;
+#endif
+      return TURBO_ERANGE;
+    }
+    buffers[buffer_count].buf = (CHAR *)iov[i].data;
+    buffers[buffer_count].len = (ULONG)iov[i].len;
+    measured_total += iov[i].len;
+    buffer_count += 1u;
+  }
+  if (buffer_count == 0u || measured_total != total_len) {
+    mem_unref(descriptor_buffer);
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    st->profile_sendv_active = 0;
+#endif
+    return TURBO_EINVAL;
+  }
+  mem_set_used(descriptor_buffer, descriptor_bytes);
+  st->send_iov_buffer = descriptor_buffer;
+  st->send_iov_count = buffer_count;
+  st->send_iov_index = 0u;
+  st->send_iov_remaining = total_len;
+  rc = stream_iocp_submit_sendv_remaining(s);
+  if (rc != TURBO_OK) {
+    st->send_iov_buffer = NULL;
+    st->send_iov_count = 0u;
+    st->send_iov_remaining = 0u;
+    mem_unref(descriptor_buffer);
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    st->profile_sendv_active = 0;
+#endif
+    if (rc == -(int)WSAEINVAL || rc == -(int)WSAENOBUFS) return TURBO_ENOTSUP;
+    if (rc != TURBO_ECANCELED) {
+      turbo_stream_close(s);
+    }
+    return rc;
+  }
+  return TURBO_OK;
 }
 
 static int iocp_flush(turbo_stream_t *s) { return stream_iocp_submit_send(s); }
@@ -856,6 +1096,7 @@ const turbo_stream_backend_ops_t turbo_stream_iocp_ops = {
     .connect = iocp_connect,
     .connect_pipe = iocp_connect_pipe,
     .send = iocp_send,
+    .sendv_borrowed = iocp_sendv_borrowed,
     .flush = iocp_flush,
     .recv_start = iocp_recv_start,
     .recv_stop = iocp_recv_stop,

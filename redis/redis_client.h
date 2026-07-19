@@ -599,6 +599,40 @@ CXX_C_API int redis_xtrim(redis_client_t *client, const char *key, size_t maxlen
 CXX_C_API void redis_stream_entry_free(redis_stream_entry_t *entry);
 
 /**
+ * @brief Transfer one owned Stream field value out of an entry.
+ *
+ * On success, the selected value is removed from @p entry, so a later
+ * redis_stream_entry_free() or redis_stream_result_free() will not release it.
+ * The caller owns @p out_value and must release it with
+ * redis_stream_value_free(). Binary and empty values are supported.
+ *
+ * @param entry Owned Stream entry to modify
+ * @param index Field value index
+ * @param out_value Receives the transferred value
+ * @param out_len Receives the binary value length
+ * @return TURBO_OK on success, TURBO_EINVAL for invalid arguments,
+ *         TURBO_ERANGE for an invalid index, or TURBO_ENOENT when the value
+ *         is absent or was already transferred
+ *
+ * @code
+ * char *value = NULL;
+ * size_t value_len = 0;
+ * if (redis_stream_entry_take_value(entry, 0, &value, &value_len) == TURBO_OK) {
+ *   consume_binary(value, value_len);
+ *   redis_stream_value_free(value);
+ * }
+ * @endcode
+ */
+CXX_C_API int redis_stream_entry_take_value(redis_stream_entry_t *entry, size_t index,
+                                             char **out_value, size_t *out_len);
+
+/**
+ * @brief Release a value returned by redis_stream_entry_take_value().
+ * @param value Transferred Stream value; NULL is accepted
+ */
+CXX_C_API void redis_stream_value_free(void *value);
+
+/**
  * Free stream result
  */
 CXX_C_API void redis_stream_result_free(redis_stream_result_t *result, size_t count);

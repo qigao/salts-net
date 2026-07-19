@@ -21,6 +21,10 @@ typedef struct ws_server_state_s {
   size_t request_len;
   const uint8_t *reply_data;
   size_t reply_len;
+  int server_binding_rc;
+  int client_binding_rc;
+  uint8_t server_binding[CORO_TLS_CHANNEL_BINDING_SIZE];
+  uint8_t client_binding[CORO_TLS_CHANNEL_BINDING_SIZE];
 } ws_server_state_t;
 
 typedef struct ws_close_state_s {
@@ -136,7 +140,7 @@ static int ws_close_case_done(void *arg) {
 }
 
 static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
-  const ws_server_state_t *state = (const ws_server_state_t *)arg;
+  ws_server_state_t *state = (ws_server_state_t *)arg;
   int rc;
   int roundtrips = (state && state->roundtrips > 0) ? state->roundtrips : 1;
 
@@ -144,7 +148,12 @@ static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
   coro_socket_set_timeout(client, 5000);
 
   rc = 0;
-  for (int i = 0; i < roundtrips; ++i) {
+  if (state && state->secure) {
+    state->server_binding_rc =
+        coro_socket_tls_export_channel_binding(client, state->server_binding);
+    rc = state->server_binding_rc;
+  }
+  for (int i = 0; rc == 0 && i < roundtrips; ++i) {
     char *data = NULL;
     size_t len = 0;
 
@@ -204,6 +213,13 @@ static void ws_server_client_task(coro_t *co, void *arg) {
                                    state->protocol);
   } else {
     rc = coro_socket_connect_ws(client, host, state->port, "/chat", state->secure);
+  }
+  if (rc == 0) {
+    if (state->secure) {
+      state->client_binding_rc =
+          coro_socket_tls_export_channel_binding(client, state->client_binding);
+      rc = state->client_binding_rc;
+    }
   }
   if (rc == 0) {
     for (int i = 0; i < state->roundtrips; ++i) {
@@ -483,6 +499,8 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
   state.request_len = request_len;
   state.reply_data = reply_data;
   state.reply_len = reply_len;
+  state.server_binding_rc = TURBO_EBUSY;
+  state.client_binding_rc = TURBO_EBUSY;
 
   check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
@@ -543,6 +561,12 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
   }
   if (g_ws_server_client_len == reply_len) {
     check_int_eq(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
+  }
+  if (state.secure) {
+    check_int_eq(state.server_binding_rc, 0);
+    check_int_eq(state.client_binding_rc, 0);
+    check_mem_eq(state.server_binding, state.client_binding,
+                 CORO_TLS_CHANNEL_BINDING_SIZE);
   }
 
   coro_socket_destroy(state.server);

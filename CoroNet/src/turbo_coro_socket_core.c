@@ -1312,6 +1312,12 @@ int coro_socket_send_owned_recv(coro_socket_t *s, char *d, size_t l) {
   return socket_return_error(s, rc);
 }
 
+int coro_socket_sendv(coro_socket_t *s, const turbo_iovec_t *iov, size_t iovcnt) {
+  if (!s || !iov || iovcnt == 0u) return socket_return_error(s, TURBO_EINVAL);
+  if (!s->ops || !s->ops->sendv) return socket_return_error(s, TURBO_ENOTSUP);
+  return socket_return_error(s, s->ops->sendv(s, iov, iovcnt));
+}
+
 mem_buffer_t *coro_socket_get_send_buffer(coro_socket_t *s, size_t min_size) {
   if (!s) return NULL;
   if (!s->ops || !s->ops->get_send_buffer) {

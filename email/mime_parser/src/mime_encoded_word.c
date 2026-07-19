@@ -1,5 +1,6 @@
 #include "mime_encoded_word.h"
 #include "mime_utils.h"
+#include "base64_utils.h"
 #include "turbo_simd_scan.h"
 #include "turbo_str.h"
 #include <string.h>
@@ -151,7 +152,7 @@ char *mime_decode_header(mem_pool_t *pool, const char *header_value, size_t len)
         }
         i += ew_len;
 
-        // Skip whitespace between adjacent encoded-words (RFC 2047)
+        // Skip whitespace between adjacent encoded-words (RFC 2047 §5)
         while (i < len && (header_value[i] == ' ' || header_value[i] == '\t')) {
           if (i + 1 < len && mime_is_encoded_word(header_value + i + 1, len - i - 1)) {
             i++; // Skip whitespace
@@ -174,4 +175,118 @@ char *mime_decode_header(mem_pool_t *pool, const char *header_value, size_t len)
 char *mime_decode_header_auto(mem_pool_t *pool, const char *header_value) {
   if (!header_value) return NULL;
   return mime_decode_header(pool, header_value, strlen(header_value));
+}
+
+/* ── Encoding (send-side) ──────────────────────────────────────────── */
+
+/* RFC 2047 §2: encoded-word <= 75 chars total.
+ * "=?UTF-8?B?" = 10 chars, "?=" = 2 chars => max 63 chars of base64 per word.
+ * 63 base64 chars encode floor(63/4)*3 = 45 raw bytes without padding.
+ * Use 45 to guarantee we never exceed 63 base64 chars per chunk. */
+#define RFC2047_B_MAX_INPUT 45
+
+static int header_has_non_ascii(const char *s, size_t len) {
+  size_t i;
+  for (i = 0; i < len; i++) {
+    if ((unsigned char)s[i] > 0x7F) return 1;
+  }
+  return 0;
+}
+
+char *mime_encode_header_if_needed(mem_pool_t *pool,
+                                   const char *value, size_t len) {
+  size_t chunks;
+  size_t out_size;
+  char *out;
+  size_t out_pos;
+  size_t i;
+
+  if (!pool || !value) return NULL;
+
+  if (!header_has_non_ascii(value, len)) {
+    /* Pure ASCII: pool-copy, no encoding */
+    char *copy = mem_alloc(pool, len + 1);
+    if (!copy) return NULL;
+    memcpy(copy, value, len);
+    copy[len] = '\0';
+    return copy;
+  }
+
+  /* Each chunk of up to 45 bytes -> "=?UTF-8?B?" + <=60 b64 chars + "?=" = <=72.
+   * Add 1 space separator between words. Upper bound per chunk = 73 chars. */
+  chunks = (len + RFC2047_B_MAX_INPUT - 1) / RFC2047_B_MAX_INPUT;
+  out_size = chunks * 76 + 1;
+  out = mem_alloc(pool, out_size);
+  if (!out) return NULL;
+
+  out_pos = 0;
+  i = 0;
+  while (i < len) {
+    char *b64 = NULL;
+    size_t b64_len;
+    size_t chunk_len = len - i;
+    if (chunk_len > RFC2047_B_MAX_INPUT) chunk_len = RFC2047_B_MAX_INPUT;
+
+    if (tn_base64_encode((const uint8_t *)(value + i), chunk_len, &b64) != 0 ||
+        !b64) {
+      return NULL;
+    }
+    b64_len = strlen(b64);
+
+    /* Space separator between adjacent encoded-words (RFC 2047 §5) */
+    if (i > 0 && out_pos < out_size - 1) {
+      out[out_pos++] = ' ';
+    }
+
+    /* =?UTF-8?B?<b64>?= */
+    if (out_pos + 10 + b64_len + 2 < out_size) {
+      memcpy(out + out_pos, "=?UTF-8?B?", 10); out_pos += 10;
+      memcpy(out + out_pos, b64, b64_len);      out_pos += b64_len;
+      memcpy(out + out_pos, "?=", 2);           out_pos += 2;
+    }
+
+    free(b64);
+    i += chunk_len;
+  }
+
+  out[out_pos] = '\0';
+  return out;
+}
+
+char *mime_base64_fold(mem_pool_t *pool, const char *b64, size_t b64_len) {
+  /* RFC 2045 §6.8: no encoded line may be more than 76 characters long. */
+  size_t newlines;
+  size_t total_size;
+  char *out;
+  size_t in_pos;
+  size_t out_pos;
+
+  if (!pool || !b64) return NULL;
+  if (b64_len == 0) {
+    char *empty = mem_alloc(pool, 1);
+    if (empty) empty[0] = '\0';
+    return empty;
+  }
+
+  newlines = (b64_len - 1) / 76; /* number of \r\n to insert */
+  total_size = b64_len + newlines * 2 + 1;
+  out = mem_alloc(pool, total_size);
+  if (!out) return NULL;
+
+  in_pos = 0;
+  out_pos = 0;
+  while (in_pos < b64_len) {
+    size_t chunk = b64_len - in_pos;
+    if (chunk > 76) chunk = 76;
+    memcpy(out + out_pos, b64 + in_pos, chunk);
+    out_pos += chunk;
+    in_pos  += chunk;
+    if (in_pos < b64_len) {
+      out[out_pos++] = '\r';
+      out[out_pos++] = '\n';
+    }
+  }
+
+  out[out_pos] = '\0';
+  return out;
 }

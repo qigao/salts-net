@@ -603,6 +603,14 @@ int turbo_stream_send(turbo_stream_t *s, const char *data, size_t len) {
   return rc;
 }
 
+int turbo_stream_sendv_borrowed(turbo_stream_t *s, const turbo_iovec_t *iov, size_t iovcnt,
+                                size_t total_len) {
+  if (!s || !iov || iovcnt == 0u || total_len == 0u) return TURBO_EINVAL;
+  if (s->closing || s->finalized) return TURBO_ECANCELED;
+  if (!s->ops->sendv_borrowed) return TURBO_ENOTSUP;
+  return s->ops->sendv_borrowed(s, iov, iovcnt, total_len);
+}
+
 mem_buffer_t *turbo_stream_get_send_buffer(turbo_stream_t *s,
                                             size_t min_size) {
   if (!s) return NULL;

@@ -68,6 +68,11 @@ typedef struct iocp_op_s {
   WSABUF wsabuf;
   uint64_t completed_ns;
   uint64_t tick_post_request_ns;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  uint64_t profile_send_started_ns;
+  uint64_t profile_send_submitted_ns;
+  int profile_send_active;
+#endif
 
   /* Accept-specific */
   SOCKET client_socket;

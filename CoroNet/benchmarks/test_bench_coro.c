@@ -15,6 +15,7 @@
 #include "platform.h"
 #include "tls_test_support.h"
 #include "tinytest.h"
+#include "turbo_coro_send_profile_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +51,9 @@
 #define BENCH_TRANSPORT_POOL_MAX_SIZE 4
 #ifdef _WIN32
 #define BENCH_PIPE_LISTENER_WAIT_MS 250
+#define BENCH_IOCP_PROFILE_PAYLOAD_SIZE 128
+#define BENCH_IOCP_PROFILE_WARMUP_ROUNDTRIPS 32
+#define BENCH_IOCP_PROFILE_ROUNDTRIPS 2048
 #endif
 
 static volatile int g_bench_sink = 0;
@@ -239,6 +243,39 @@ static double bench_metric_avg_us(uint64_t total_ns, size_t count) {
   }
   return ((double)total_ns / (double)count) / 1000.0;
 }
+
+#ifdef _WIN32
+static uint64_t bench_metric_avg_ns(uint64_t total_ns, uint64_t count) {
+  return count == 0u ? 0u : total_ns / count;
+}
+
+static void bench_print_iocp_send_profile(const turbo_coro_send_profile_snapshot_t *profile) {
+  if (!profile) return;
+  printf("CORONET_SEND_PROFILE backend=iocp samples=%llu resume_samples=%llu"
+         " avg_prepare_submit_ns=%llu avg_kernel_completion_ns=%llu"
+         " avg_completion_publish_ns=%llu avg_post_drain_ns=%llu"
+         " avg_handler_ns=%llu avg_signal_to_scheduler_ns=%llu"
+         " avg_scheduler_dispatch_ns=%llu avg_scheduler_resume_ns=%llu"
+         " avg_total_to_handler_ns=%llu\n",
+         (unsigned long long)profile->samples, (unsigned long long)profile->resume_samples,
+         (unsigned long long)bench_metric_avg_ns(profile->prepare_submit_sum_ns,
+                                                 profile->samples),
+         (unsigned long long)bench_metric_avg_ns(profile->kernel_completion_sum_ns,
+                                                 profile->samples),
+         (unsigned long long)bench_metric_avg_ns(profile->completion_publish_sum_ns,
+                                                 profile->samples),
+         (unsigned long long)bench_metric_avg_ns(profile->post_drain_sum_ns, profile->samples),
+         (unsigned long long)bench_metric_avg_ns(profile->handler_sum_ns, profile->samples),
+         (unsigned long long)bench_metric_avg_ns(profile->signal_to_scheduler_sum_ns,
+                                                 profile->resume_samples),
+         (unsigned long long)bench_metric_avg_ns(profile->scheduler_dispatch_sum_ns,
+                                                 profile->resume_samples),
+         (unsigned long long)bench_metric_avg_ns(profile->scheduler_resume_sum_ns,
+                                                 profile->resume_samples),
+         (unsigned long long)bench_metric_avg_ns(profile->total_to_handler_sum_ns,
+                                                 profile->samples));
+}
+#endif
 
 static double bench_metric_avg_bytes(uint64_t total_bytes, size_t count) {
   if (count == 0) {
@@ -1593,6 +1630,58 @@ spec("coronet_transport_bench") {
       check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
+
+#ifdef _WIN32
+    {
+      char profile_payload[BENCH_IOCP_PROFILE_PAYLOAD_SIZE];
+      int port = next_bench_port();
+      coro_context_t *ctx = coro_context_create(NULL);
+      coro_socket_t *server = coro_socket_create_tcpv4(ctx);
+      coro_socket_t *client;
+      persistent_echo_state_t warmup;
+      turbo_coro_send_profile_snapshot_t profile = TURBO_CORO_SEND_PROFILE_SNAPSHOT_INIT;
+      fill_bench_payload(profile_payload, sizeof(profile_payload));
+      check_not_null(ctx);
+      check_not_null(server);
+      check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port,
+                                         tcp_echo_server_handler, NULL), 0);
+      bench_prime_listener(ctx);
+      client = create_staged_client(ctx, "127.0.0.1", "127.0.0.1", port, 0, 0, 0);
+      check_not_null(client);
+
+      warmup = (persistent_echo_state_t){client, profile_payload, sizeof(profile_payload),
+                                         BENCH_IOCP_PROFILE_WARMUP_ROUNDTRIPS, 0, 0, 0};
+      check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &warmup), 0);
+      check_int_eq(bench_wait_for_flag(ctx, &warmup.done, TURBO_RUN_ONCE,
+                                       BENCH_WAIT_TIMEOUT_MS), 0);
+      check_int_eq(warmup.rc, 0);
+      check_int_eq(warmup.ok, 1);
+
+      turbo_coro_send_profile_reset();
+      turbo_coro_send_profile_set_enabled(1);
+      benchmark_ops("tcp_iocp_128b_2048_persistent_profile", 1,
+                    BENCH_IOCP_PROFILE_ROUNDTRIPS) {
+        persistent_echo_state_t state = {client, profile_payload, sizeof(profile_payload),
+                                         BENCH_IOCP_PROFILE_ROUNDTRIPS, 0, 0, 0};
+        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE,
+                                         BENCH_WAIT_TIMEOUT_MS), 0);
+        check_int_eq(state.rc, 0);
+        check_int_eq(state.ok, 1);
+        g_bench_sink = state.ok;
+      }
+      turbo_coro_send_profile_set_enabled(0);
+      check_int_eq(turbo_coro_send_profile_snapshot(&profile), TURBO_OK);
+      check_uint_eq(profile.samples, (uint64_t)BENCH_IOCP_PROFILE_ROUNDTRIPS * 2u);
+      check_uint_eq(profile.resume_samples, profile.samples);
+      bench_print_iocp_send_profile(&profile);
+
+      coro_socket_destroy(client);
+      coro_socket_destroy(server);
+      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      coro_context_destroy(ctx);
+    }
+#endif
 
     benchmark("tcp_echo_1k_single_exchange_cold", BENCH_TRANSPORT_ITERATIONS, 1) {
       int port = next_bench_port();

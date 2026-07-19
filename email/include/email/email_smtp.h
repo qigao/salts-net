@@ -40,6 +40,7 @@ typedef struct {
   smtp_auth_method_t auth_method;
   char *username;
   char *password;
+  char *client_hostname;    // Client hostname for EHLO (optional)
   int timeout_ms;           // Connection timeout (default 30000)
 } smtp_config_t;
 

@@ -8,6 +8,7 @@
  */
 
 #include "CoroNet/turbo_coro_internal.h"
+#include "turbo_coro_send_profile_internal.h"
 #include "turbo_stream_internal.h"
 #include <stdlib.h>
 #include <string.h>
@@ -54,6 +55,9 @@ static void on_tcp_write_complete(turbo_stream_t *stream, int status) {
   s->write_status = status;
   co = s->co_write_wait;
   s->co_write_wait = NULL;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  if (s->send_profile_active) s->send_profile_resume_signal_ns = turbo_hrtime();
+#endif
   coro_resume_co(s->ctx, co);
   release_client(s);
 }
@@ -383,41 +387,86 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 
 /* ── Send/Recv ────────────────────────────────────────────── */
 
+static int tcp_send_begin(coro_socket_t *s, coro_t **co, int *scheduled) {
+  if (!s || !s->handle.stream || !co || !scheduled) return TURBO_EINVAL;
+  *co = coro_running();
+  *scheduled = *co ? coro_is_scheduled(*co) : 0;
+  if (!*co) return TURBO_OK;
+  s->write_status = 0;
+  s->co_write_wait = *co;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  s->send_profile_active = *scheduled && turbo_coro_send_profile_enabled();
+  s->send_profile_resume_signal_ns = 0u;
+#endif
+  if (*scheduled) coro_set_waiting_for_io(*co, 1);
+  return TURBO_OK;
+}
+
+static int tcp_send_finish(coro_socket_t *s, coro_t *co, int scheduled, int submit_status) {
+  if (!co) return submit_status;
+  if (submit_status != TURBO_OK) {
+    s->co_write_wait = NULL;
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+    s->send_profile_active = 0;
+#endif
+    if (scheduled) coro_set_waiting_for_io(co, 0);
+    return submit_status;
+  }
+  if (s->co_write_wait) coro_yield();
+#ifdef TURBO_CORONET_INTERNAL_PROFILING
+  if (s->send_profile_active && s->send_profile_resume_signal_ns != 0u) {
+    turbo_coro_send_profile_record_resume(s->send_profile_resume_signal_ns,
+                                          s->ctx->send_profile_scheduler_entry_ns,
+                                          turbo_hrtime());
+  }
+  s->send_profile_active = 0;
+#endif
+  return s->write_status;
+}
+
 static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
   coro_t *co;
   int scheduled;
   int rc;
 
-  if (!s || !s->handle.stream) {
-    return TURBO_EINVAL;
-  }
-
-  co = coro_running();
-  if (!co) {
-    return turbo_stream_send(s->handle.stream, data, len);
-  }
-
-  s->write_status = 0;
-  s->co_write_wait = co;
-  scheduled = coro_is_scheduled(co);
-  if (scheduled) {
-    coro_set_waiting_for_io(co, 1);
-  }
-
+  rc = tcp_send_begin(s, &co, &scheduled);
+  if (rc != TURBO_OK) return rc;
   rc = turbo_stream_send(s->handle.stream, data, len);
-  if (rc != 0) {
-    s->co_write_wait = NULL;
-    if (scheduled) {
-      coro_set_waiting_for_io(co, 0);
-    }
-    return rc;
-  }
+  return tcp_send_finish(s, co, scheduled, rc);
+}
 
-  if (s->co_write_wait) {
-    coro_yield();
-  }
+static int tcp_sendv(coro_socket_t *s, const turbo_iovec_t *iov, size_t iovcnt) {
+  mem_buffer_t *buffer = NULL;
+  coro_t *co;
+  size_t total = 0u;
+  size_t offset = 0u;
+  int scheduled;
+  int rc;
 
-  return s->write_status;
+  if (!s || !s->handle.stream || !iov || iovcnt == 0u) return TURBO_EINVAL;
+  for (size_t i = 0u; i < iovcnt; ++i) {
+    if (iov[i].len > 0u && !iov[i].data) return TURBO_EINVAL;
+    if (iov[i].len > SIZE_MAX - total) return TURBO_ERANGE;
+    total += iov[i].len;
+  }
+  if (total == 0u) return TURBO_EINVAL;
+  rc = tcp_send_begin(s, &co, &scheduled);
+  if (rc != TURBO_OK) return rc;
+  if (co) {
+    rc = turbo_stream_sendv_borrowed(s->handle.stream, iov, iovcnt, total);
+    if (rc != TURBO_ENOTSUP) return tcp_send_finish(s, co, scheduled, rc);
+  }
+  buffer = turbo_stream_get_send_buffer(s->handle.stream, total);
+  if (!buffer) return tcp_send_finish(s, co, scheduled, TURBO_ENOMEM);
+  for (size_t i = 0u; i < iovcnt; ++i) {
+    if (iov[i].len == 0u) continue;
+    memcpy((char *)mem_buffer_data(buffer) + offset, iov[i].data, iov[i].len);
+    offset += iov[i].len;
+  }
+  mem_set_used(buffer, total);
+  rc = turbo_stream_send_buffer(s->handle.stream, buffer, total);
+  mem_unref(buffer);
+  return tcp_send_finish(s, co, scheduled, rc);
 }
 
 static mem_buffer_t *tcp_get_send_buffer(coro_socket_t *s, size_t min_size) {
@@ -509,6 +558,7 @@ const coro_transport_ops_t transport_ops_tcp = {
     .listen = tcp_listen,
     .accept = tcp_accept,
     .send = tcp_send,
+    .sendv = tcp_sendv,
     .recv_start = tcp_recv_start,
     .recv_stop = tcp_recv_stop,
     .get_local_addr = tcp_get_local_addr,

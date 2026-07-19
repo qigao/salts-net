@@ -78,6 +78,10 @@ add_library(${STATIC_TARGET_NAME} STATIC ${SOURCE_FILES})
 # Build SHARED library
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
 target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+if(BUILD_BENCHMARKS)
+  target_compile_definitions(${STATIC_TARGET_NAME}
+                             PRIVATE TURBO_CORONET_INTERNAL_PROFILING=1)
+endif()
 
 # Configure targets
 cmake_config_target(${STATIC_TARGET_NAME} ALIAS TurboNet::CoroNet_static FOLDER

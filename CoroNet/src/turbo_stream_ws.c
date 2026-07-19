@@ -1281,6 +1281,21 @@ int turbo_stream_wss_set_client_config_internal(turbo_stream_t *s,
   return ws_copy_tls_client_config(st, config);
 }
 
+int turbo_stream_wss_export_channel_binding_internal(const turbo_stream_t *stream,
+                                                      uint8_t *output,
+                                                      size_t output_len) {
+  ws_state_t *st;
+
+  if (!stream || stream->kind != TURBO_STREAM_WSS || !output) {
+    return TURBO_EINVAL;
+  }
+  st = (ws_state_t *)stream->backend_data;
+  if (!st || !st->tcp) {
+    return TURBO_ENOTCONN;
+  }
+  return turbo_stream_tls_export_channel_binding_internal(st->tcp, output, output_len);
+}
+
 CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host) {
   turbo_stream_ws_set_path_host_protocol(s, path, host, NULL);
 }

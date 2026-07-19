@@ -1355,6 +1355,23 @@ void redis_stream_entry_free(redis_stream_entry_t *entry) {
   free(entry->value_lens);
 }
 
+int redis_stream_entry_take_value(redis_stream_entry_t *entry, size_t index,
+                                  char **out_value, size_t *out_len) {
+  if (out_value) *out_value = NULL;
+  if (out_len) *out_len = 0u;
+  if (!entry || !out_value || !out_len) return TURBO_EINVAL;
+  if (index >= entry->field_count) return TURBO_ERANGE;
+  if (!entry->values || !entry->value_lens || !entry->values[index]) return TURBO_ENOENT;
+
+  *out_value = entry->values[index];
+  *out_len = entry->value_lens[index];
+  entry->values[index] = NULL;
+  entry->value_lens[index] = 0u;
+  return TURBO_OK;
+}
+
+void redis_stream_value_free(void *value) { free(value); }
+
 void redis_stream_result_free(redis_stream_result_t *results, size_t count) {
   if (!results) return;
 

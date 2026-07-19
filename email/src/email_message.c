@@ -342,17 +342,110 @@ int email_message_enable_encryption(email_message_t *msg,
 
 /* ── Serialization ─────────────────────────────────────────────────── */
 
-static void append_address_list(tstr_t *result, mime_address_t *addr) {
-  int first = 1;
-  while (addr) {
-    if (!first) *result = tstr_cat(*result, ", ");
-    first = 0;
+/* RFC 5322 §2.2.3: soft limit 78, hard limit 998 characters per line.
+ * field_offset: length already on the current line before this value starts
+ * (e.g., strlen("Subject: ") == 9). Folds at WSP boundaries. */
+static char *fold_header_value(mem_pool_t *pool, const char *value,
+                               size_t field_offset) {
+  size_t len = strlen(value);
+  /* Fast path: value fits on one line together with the field name. */
+  if (field_offset + len <= 78) {
+    char *copy = mem_alloc(pool, len + 1);
+    if (!copy) return NULL;
+    memcpy(copy, value, len + 1);
+    return copy;
+  }
 
-    if (addr->display_name) {
-      *result = tstr_append_format(*result, "\"{}\" <{}>", addr->display_name, addr->email);
-    } else {
-      *result = tstr_cat(*result, addr->email);
+  /* Worst case: every character plus occasional CRLF+TAB. */
+  char *out = mem_alloc(pool, len * 3 + 4);
+  if (!out) return NULL;
+
+  size_t col = field_offset; /* current column (0-based chars since last \n) */
+  size_t in  = 0;
+  size_t op  = 0;
+
+  while (in < len) {
+    /* Find next WSP-delimited token end */
+    size_t tok_start = in;
+    /* Skip leading WSP (preserve it) */
+    while (in < len && (value[in] == ' ' || value[in] == '\t')) in++;
+    /* Advance to end of token */
+    while (in < len && value[in] != ' ' && value[in] != '\t') in++;
+    size_t tok_len = in - tok_start;
+
+    if (col + tok_len > 78 && col > 0) {
+      /* Fold before this token: emit CRLF + TAB */
+      out[op++] = '\r';
+      out[op++] = '\n';
+      out[op++] = '\t';
+      col = 1; /* TAB counts as 1 */
+      /* Skip the leading space of the token since we replaced it with fold */
+      size_t skip = tok_start;
+      while (skip < in && (value[skip] == ' ' || value[skip] == '\t')) skip++;
+      tok_len = in - skip;
+      tok_start = skip;
     }
+
+    memcpy(out + op, value + tok_start, tok_len);
+    op  += tok_len;
+    col += tok_len;
+  }
+  out[op] = '\0';
+  return out;
+}
+
+/* Append a formatted address to *result, folding at ", " boundaries.
+ * field_len: byte length of "Field: " prefix (used to track column position). */
+static void append_address_list(tstr_t *result, email_message_t *msg,
+                                mime_address_t *addr, size_t field_len) {
+  /* col tracks characters on the current line since (and including) "Field: " */
+  size_t col = field_len;
+  int first = 1;
+
+  while (addr) {
+    /* Build address token */
+    tstr_t tok = tstr_new();
+    if (addr->display_name && addr->display_name[0] != '\0') {
+      char *enc = mime_encode_header_if_needed(
+          msg->pool, addr->display_name, strlen(addr->display_name));
+      if (enc && strncmp(enc, "=?", 2) == 0) {
+        tok = tstr_append_format(tok, "{} <{}>", enc, addr->email);
+      } else {
+        tstr_t escaped = tstr_new();
+        size_t dn_len = strlen(addr->display_name);
+        for (size_t i = 0; i < dn_len; i++) {
+          char c = addr->display_name[i];
+          if (c == '"' || c == '\\') {
+            escaped = tstr_append_format(escaped, "\\{}", c);
+          } else {
+            escaped = tstr_append_format(escaped, "{}", c);
+          }
+        }
+        tok = tstr_append_format(tok, "\"{}\" <{}>", escaped, addr->email);
+        tstr_free(escaped);
+      }
+    } else {
+      tok = tstr_cat(tok, addr->email);
+    }
+
+    size_t tok_len = tstr_len(tok);
+
+    if (!first) {
+      /* Need ", " separator (2 chars). Fold if adding separator + token exceeds limit. */
+      if (col + 2 + tok_len > 78) {
+        /* Fold: emit ",\r\n\t" instead of ", " */
+        *result = tstr_cat(*result, ",\r\n\t");
+        col = 1; /* TAB */
+      } else {
+        *result = tstr_cat(*result, ", ");
+        col += 2;
+      }
+    }
+
+    *result = tstr_cat(*result, tok);
+    col += tok_len;
+    tstr_free(tok);
+    first = 0;
     addr = addr->next;
   }
 }
@@ -373,7 +466,7 @@ static char *format_date_rfc2822(void) {
 }
 
 tstr_t email_message_to_string(email_message_t *msg) {
-  if (!msg) return NULL;
+  if (!msg || !msg->from) return NULL;
 
   tstr_t result = tstr_new();
 
@@ -387,31 +480,37 @@ tstr_t email_message_to_string(email_message_t *msg) {
   result = tstr_cat(result, format_date_rfc2822());
   result = tstr_cat(result, "\r\n");
 
-  // From header
+  // From header ("From: " = 6 chars)
   if (msg->from) {
     result = tstr_cat(result, "From: ");
-    append_address_list(&result, msg->from);
+    append_address_list(&result, msg, msg->from, 6);
     result = tstr_cat(result, "\r\n");
   }
 
-  // To header
+  // To header ("To: " = 4 chars)
   if (msg->to) {
     result = tstr_cat(result, "To: ");
-    append_address_list(&result, msg->to);
+    append_address_list(&result, msg, msg->to, 4);
     result = tstr_cat(result, "\r\n");
   }
 
-  // Cc header
+  // Cc header ("Cc: " = 4 chars)
   if (msg->cc) {
     result = tstr_cat(result, "Cc: ");
-    append_address_list(&result, msg->cc);
+    append_address_list(&result, msg, msg->cc, 4);
     result = tstr_cat(result, "\r\n");
   }
 
-  // Subject header (TODO: encode non-ASCII with RFC 2047)
+  // Subject header (encode non-ASCII with RFC 2047, then fold if needed)
   if (msg->subject) {
     result = tstr_cat(result, "Subject: ");
-    result = tstr_cat(result, msg->subject);
+    char *enc_subj = mime_encode_header_if_needed(
+        msg->pool, msg->subject, strlen(msg->subject));
+    const char *subj_val = enc_subj ? enc_subj : msg->subject;
+    /* encoded-word sequence already has spaces as fold points;
+     * for plain ASCII apply WSP folding ("Subject: " = 9 chars). */
+    char *folded = fold_header_value(msg->pool, subj_val, 9);
+    result = tstr_cat(result, folded ? folded : subj_val);
     result = tstr_cat(result, "\r\n");
   }
 
@@ -422,10 +521,10 @@ tstr_t email_message_to_string(email_message_t *msg) {
     result = tstr_cat(result, "\r\n");
   }
 
-  // Reply-To
+  // Reply-To ("Reply-To: " = 10 chars)
   if (msg->reply_to) {
     result = tstr_cat(result, "Reply-To: ");
-    append_address_list(&result, msg->reply_to);
+    append_address_list(&result, msg, msg->reply_to, 10);
     result = tstr_cat(result, "\r\n");
   }
 
@@ -543,17 +642,23 @@ tstr_t email_message_to_string(email_message_t *msg) {
       }
 
       if (att->filename) {
-        result = tstr_append_format(result, "; filename=\"{}\"", att->filename);
+        char *enc_fn = mime_encode_rfc2231_filename(msg->pool, att->filename, strlen(att->filename));
+        if (enc_fn) {
+          result = tstr_append_format(result, "; filename*={}", enc_fn);
+        } else {
+          result = tstr_append_format(result, "; filename=\"{}\"", att->filename);
+        }
       }
       result = tstr_cat(result, "\r\n");
 
       result = tstr_cat(result, "Content-Transfer-Encoding: base64\r\n");
       result = tstr_cat(result, "\r\n");
 
-      // Base64 encode attachment data
+      // Base64 encode attachment data with line folding
       char *encoded = NULL;
       if (tn_base64_encode((uint8_t *)att->data, att->data_len, &encoded) == 0) {
-        result = tstr_cat(result, encoded);
+        char *folded = mime_base64_fold(msg->pool, encoded, strlen(encoded));
+        result = tstr_cat(result, folded ? folded : encoded);
         free(encoded);
       }
       result = tstr_cat(result, "\r\n");

@@ -211,6 +211,71 @@ void test_stream_entry_free_partial_allocation(void) {
     TEST_PASS();
 }
 
+void test_stream_entry_take_value_transfers_binary_and_empty_values(void) {
+    static const unsigned char binary[] = {0x00u, 0x7fu, 0xffu};
+    redis_stream_entry_t entry = {0};
+    char *binary_value = NULL;
+    char *empty_value = NULL;
+    size_t binary_len = 0;
+    size_t empty_len = 1;
+
+    entry.field_count = 2;
+    entry.values = calloc(entry.field_count, sizeof(*entry.values));
+    entry.value_lens = calloc(entry.field_count, sizeof(*entry.value_lens));
+    TEST_ASSERT_NOT_NULL(entry.values);
+    TEST_ASSERT_NOT_NULL(entry.value_lens);
+    entry.values[0] = malloc(sizeof(binary));
+    entry.values[1] = malloc(1u);
+    TEST_ASSERT_NOT_NULL(entry.values[0]);
+    TEST_ASSERT_NOT_NULL(entry.values[1]);
+    memcpy(entry.values[0], binary, sizeof(binary));
+    entry.values[1][0] = '\0';
+    entry.value_lens[0] = sizeof(binary);
+
+    TEST_ASSERT_EQUAL(TURBO_OK,
+                      redis_stream_entry_take_value(&entry, 0u, &binary_value, &binary_len));
+    TEST_ASSERT_NOT_NULL(binary_value);
+    TEST_ASSERT_EQUAL(sizeof(binary), binary_len);
+    check_mem_eq(binary_value, binary, sizeof(binary));
+    TEST_ASSERT_NULL(entry.values[0]);
+    TEST_ASSERT_EQUAL(0, entry.value_lens[0]);
+
+    TEST_ASSERT_EQUAL(TURBO_OK,
+                      redis_stream_entry_take_value(&entry, 1u, &empty_value, &empty_len));
+    TEST_ASSERT_NOT_NULL(empty_value);
+    TEST_ASSERT_EQUAL(0, empty_len);
+    TEST_ASSERT_NULL(entry.values[1]);
+
+    redis_stream_entry_free(&entry);
+    redis_stream_value_free(binary_value);
+    redis_stream_value_free(empty_value);
+}
+
+void test_stream_entry_take_value_rejects_invalid_or_absent_values(void) {
+    redis_stream_entry_t entry = {0};
+    char *value = (char *)(uintptr_t)1u;
+    size_t value_len = 7u;
+
+    entry.field_count = 1;
+    entry.values = calloc(1u, sizeof(*entry.values));
+    entry.value_lens = calloc(1u, sizeof(*entry.value_lens));
+    TEST_ASSERT_NOT_NULL(entry.values);
+    TEST_ASSERT_NOT_NULL(entry.value_lens);
+
+    TEST_ASSERT_EQUAL(TURBO_EINVAL,
+                      redis_stream_entry_take_value(NULL, 0u, &value, &value_len));
+    TEST_ASSERT_NULL(value);
+    TEST_ASSERT_EQUAL(0, value_len);
+    TEST_ASSERT_EQUAL(TURBO_ERANGE,
+                      redis_stream_entry_take_value(&entry, 1u, &value, &value_len));
+    TEST_ASSERT_EQUAL(TURBO_ENOENT,
+                      redis_stream_entry_take_value(&entry, 0u, &value, &value_len));
+    TEST_ASSERT_EQUAL(TURBO_EINVAL,
+                      redis_stream_entry_take_value(&entry, 0u, NULL, &value_len));
+    redis_stream_value_free(NULL);
+    redis_stream_entry_free(&entry);
+}
+
 void test_stream_result_free_null(void) {
     /* Should not crash */
     redis_stream_result_free(NULL, 0);
@@ -677,6 +742,8 @@ suite("redis_client") {
     group("Stream Structure") {
         REDIS_RUN_TEST(test_stream_entry_free_null, "should free null stream entry safely");
         REDIS_RUN_TEST(test_stream_entry_free_partial_allocation, "should free partially allocated stream entries safely");
+        REDIS_RUN_TEST(test_stream_entry_take_value_transfers_binary_and_empty_values, "should transfer binary and empty stream values independently");
+        REDIS_RUN_TEST(test_stream_entry_take_value_rejects_invalid_or_absent_values, "should reject invalid or already transferred stream values");
         REDIS_RUN_TEST(test_stream_result_free_null, "should free null stream result safely");
     }
 

@@ -173,14 +173,55 @@ AUTH/SELECT before the socket becomes borrowable. Borrowers must call
 `coro_pool_discard()` instead of `coro_pool_return()` when framing or protocol
 state is no longer reusable.
 
-### TLS Channel Binding
+### TLS/WSS Certificates
+
+TLS and WSS listeners load a PEM certificate chain and its matching PEM private
+key from the process environment. Configure these variables before creating the
+listener:
+
+```powershell
+$env:TURBONET_TLS_CERT_FILE = "C:\\certs\\server-chain.pem"
+$env:TURBONET_TLS_KEY_FILE = "C:\\certs\\server-key.pem"
+```
+
+```sh
+export TURBONET_TLS_CERT_FILE=/etc/turbonet/server-chain.pem
+export TURBONET_TLS_KEY_FILE=/etc/turbonet/server-key.pem
+```
+
+Clients verify the peer by default. Set `TURBONET_TLS_CA_FILE` to a PEM CA bundle,
+or `TURBONET_TLS_CA_PATH` to an OpenSSL CA directory, when the certificate is not
+in the platform/default trust store. The hostname passed to the TLS or WSS
+connect helper must match a certificate subject alternative name.
+
+Per-socket client trust and optional client certificates can be configured before
+connect; the strings are copied by `coro_socket_set_tls_client_config()`:
+
+```c
+turbo_tls_client_config_t tls = {0};
+tls.ca_file = "/etc/turbonet/ca.pem";
+tls.cert_file = "/etc/turbonet/client.pem"; /* optional mutual TLS */
+tls.key_file = "/etc/turbonet/client-key.pem";
+tls.verify_peer = 1;
+
+coro_socket_t *socket = coro_socket_create(ctx, CORO_SOCKET_TLS);
+if (!socket || coro_socket_set_tls_client_config(socket, &tls) != 0) {
+  /* fail startup and report the configuration error */
+}
+/* Use coro_socket_connect() for TLS or coro_socket_connect_ws(..., 1) for WSS. */
+```
+
+Missing, unreadable, or mismatched listener certificate/key files fail the TLS or
+WSS setup. Keep private keys out of source control and logs.
+
+### TLS/WSS Channel Binding
 
 `coro_socket_tls_export_channel_binding()` returns the 32-byte
 [`tls-exporter` channel binding defined by RFC 9266](https://www.rfc-editor.org/rfc/rfc9266.html)
-for a fully-open TLS 1.3 socket. It works for outbound clients and accepted
-server sockets, is read-only, and clears the caller's output buffer on failure.
+for a fully-open TLS 1.3 or WSS connection. It works for outbound clients and
+accepted server sockets, is read-only, and clears the caller's output buffer on failure.
 The binding identifies the current TLS connection but is not secret and must
-not be used as encryption key material. Calls on raw TCP, an incomplete TLS
+not be used as encryption key material. Calls on raw TCP/WS, an incomplete TLS
 handshake, a non-TLS-1.3 connection, or a client connection without successful
 peer-certificate verification fail explicitly.
 

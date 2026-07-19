@@ -4,6 +4,7 @@
  */
 
 #include "redis_pool.h"
+#include "redis_internal.h"
 #include "CoroNet/turbo_connection_pool.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_socket.h"
@@ -172,182 +173,9 @@ static void redis_pool_socket_free_recv(void *data) {
     coro_socket_free_recv(data);
 }
 
-static int pipeline_append_recv_data(redis_client_t *client, const char *data, size_t len) {
-    char *new_buffer;
-    size_t new_size;
-
-    if (!client || (!data && len != 0)) {
-        return -1;
-    }
-
-    if (len == 0) {
-        return 0;
-    }
-
-    if (client->recv_buffer_used + len <= client->recv_buffer_size) {
-        memcpy(client->recv_buffer + client->recv_buffer_used, data, len);
-        client->recv_buffer_used += len;
-        return 0;
-    }
-
-    new_size = client->recv_buffer_size ? client->recv_buffer_size : 16384;
-    while (new_size < client->recv_buffer_used + len) {
-        new_size *= 2;
-    }
-
-    new_buffer = realloc(client->recv_buffer, new_size);
-    if (!new_buffer) {
-        return -1;
-    }
-
-    client->recv_buffer = new_buffer;
-    client->recv_buffer_size = new_size;
-    memcpy(client->recv_buffer + client->recv_buffer_used, data, len);
-    client->recv_buffer_used += len;
-    return 0;
-}
-
-static int pipeline_parse_resp_reply(redis_client_t *client, redis_reply_t **reply) {
-    redis_reply_t *parsed;
-    char *buf;
-    char *end;
-    size_t len;
-    size_t line_len;
-    char type;
-
-    if (!client || !reply || client->recv_buffer_used < 1) {
-        return 0;
-    }
-
-    buf = client->recv_buffer;
-    len = client->recv_buffer_used;
-    type = buf[0];
-    *reply = NULL;
-
-    end = memchr(buf + 1, '\n', len - 1);
-    if (!end) {
-        return 0;
-    }
-
-    parsed = calloc(1, sizeof(*parsed));
-    if (!parsed) {
-        return -1;
-    }
-
-    line_len = (size_t)(end - buf - 1);
-    if (line_len > 0 && buf[line_len] == '\r') {
-        line_len--;
-    }
-
-    switch (type) {
-    case '+':
-        parsed->type = REDIS_REPLY_STRING;
-        parsed->str = tstr_dup_len(buf + 1, line_len);
-        if (!parsed->str) {
-            free(parsed);
-            return -1;
-        }
-        parsed->len = line_len;
-        *reply = parsed;
-        return (int)((end - buf) + 1);
-
-    case '-':
-        parsed->type = REDIS_REPLY_ERROR;
-        parsed->str = tstr_dup_len(buf + 1, line_len);
-        if (!parsed->str) {
-            free(parsed);
-            return -1;
-        }
-        parsed->len = line_len;
-        *reply = parsed;
-        return (int)((end - buf) + 1);
-
-    case ':':
-        parsed->type = REDIS_REPLY_INTEGER;
-        parsed->integer = strtoll(buf + 1, NULL, 10);
-        *reply = parsed;
-        return (int)((end - buf) + 1);
-
-    case '$': {
-        int64_t bulk_len = strtoll(buf + 1, NULL, 10);
-        size_t total_needed;
-
-        if (bulk_len == -1) {
-            parsed->type = REDIS_REPLY_NULL;
-            *reply = parsed;
-            return (int)((end - buf) + 1);
-        }
-
-        total_needed = (size_t)((end - buf) + 1) + (size_t)bulk_len + 2;
-        if (len < total_needed) {
-            free(parsed);
-            return 0;
-        }
-
-        parsed->type = REDIS_REPLY_BULK_STRING;
-        parsed->str = tstr_dup_len(end + 1, (size_t)bulk_len);
-        if (!parsed->str) {
-            free(parsed);
-            return -1;
-        }
-        parsed->len = (size_t)bulk_len;
-        *reply = parsed;
-        return (int)total_needed;
-    }
-
-    case '*': {
-        int64_t array_len = strtoll(buf + 1, NULL, 10);
-        size_t consumed;
-
-        if (array_len == -1) {
-            parsed->type = REDIS_REPLY_NULL;
-            *reply = parsed;
-            return (int)((end - buf) + 1);
-        }
-        if (array_len < 0) {
-            free(parsed);
-            return -1;
-        }
-
-        parsed->type = REDIS_REPLY_ARRAY;
-        parsed->element_count = (size_t)array_len;
-        parsed->elements = calloc((size_t)array_len, sizeof(redis_reply_t *));
-        if (!parsed->elements && array_len > 0) {
-            free(parsed);
-            return -1;
-        }
-
-        consumed = (size_t)((end - buf) + 1);
-        for (int64_t i = 0; i < array_len; i++) {
-            int elem_consumed;
-
-            client->recv_buffer += consumed;
-            client->recv_buffer_used -= consumed;
-            elem_consumed = pipeline_parse_resp_reply(client, &parsed->elements[i]);
-            client->recv_buffer -= consumed;
-            client->recv_buffer_used += consumed;
-
-            if (elem_consumed <= 0) {
-                redis_reply_free(parsed);
-                return elem_consumed;
-            }
-
-            consumed += (size_t)elem_consumed;
-        }
-
-        *reply = parsed;
-        return (int)consumed;
-    }
-
-    default:
-        free(parsed);
-        return -1;
-    }
-}
-
 static int pipeline_recv_reply(redis_client_t *client, redis_reply_t **reply) {
     for (;;) {
-        int parsed = pipeline_parse_resp_reply(client, reply);
+        int parsed = redis_parse_resp_reply(client, reply);
         if (parsed < 0) {
             return -1;
         }
@@ -369,7 +197,7 @@ static int pipeline_recv_reply(redis_client_t *client, redis_reply_t **reply) {
             return -1;
         }
 
-        if (pipeline_append_recv_data(client, data, len) != 0) {
+        if (redis_recv_buffer_append(client, data, len) != 0) {
             redis_pool_socket_free_recv(data);
             return -1;
         }

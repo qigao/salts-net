@@ -4,6 +4,8 @@
  */
 
 #include "../redis_client.h"
+#include "../redis_internal.h"
+#include "turbo_str.h"
 #include "tinytest.h"
 #include "turbo_error.h"
 #include <string.h>
@@ -188,6 +190,75 @@ void test_reply_type_values(void) {
     TEST_ASSERT_EQUAL(3, REDIS_REPLY_BULK_STRING);
     TEST_ASSERT_EQUAL(4, REDIS_REPLY_ARRAY);
     TEST_ASSERT_EQUAL(5, REDIS_REPLY_NULL);
+}
+
+static int parse_blob(redis_client_t *client, const void *data, size_t len,
+                      redis_reply_t **reply) {
+    if (redis_recv_buffer_append(client, data, len) != 0) return -1;
+    return redis_parse_resp_reply(client, reply);
+}
+
+void test_resp_parser_parses_nested_binary_reply(void) {
+    static const char reply_data[] =
+        "*3\r\n+OK\r\n$3\r\na\0b\r\n:42\r\n";
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    redis_reply_t *reply = NULL;
+    int consumed;
+
+    TEST_ASSERT_NOT_NULL(client);
+    consumed = parse_blob(client, reply_data, sizeof(reply_data) - 1u, &reply);
+    TEST_ASSERT_EQUAL((int)(sizeof(reply_data) - 1u), consumed);
+    TEST_ASSERT_NOT_NULL(reply);
+    TEST_ASSERT_EQUAL(REDIS_REPLY_ARRAY, reply->type);
+    TEST_ASSERT_EQUAL(3, reply->element_count);
+    TEST_ASSERT_EQUAL_STRING("OK", reply->elements[0]->str);
+    TEST_ASSERT_EQUAL(3, reply->elements[1]->len);
+    TEST_ASSERT_EQUAL(3, tstr_len((tstr_t)reply->elements[1]->str));
+    check_mem_eq(reply->elements[1]->str, "a\0b", 3u);
+    TEST_ASSERT_EQUAL(42, reply->elements[2]->integer);
+
+    redis_reply_free(reply);
+    redis_client_destroy(client);
+}
+
+void test_resp_parser_retries_incomplete_reply(void) {
+    redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+    redis_reply_t *reply = (redis_reply_t *)(uintptr_t)1u;
+    int consumed;
+
+    TEST_ASSERT_NOT_NULL(client);
+    consumed = parse_blob(client, "$5\r\nhe", 6u, &reply);
+    TEST_ASSERT_EQUAL(0, consumed);
+    TEST_ASSERT_NULL(reply);
+    consumed = parse_blob(client, "llo\r\n", 5u, &reply);
+    TEST_ASSERT_EQUAL(11, consumed);
+    TEST_ASSERT_NOT_NULL(reply);
+    TEST_ASSERT_EQUAL(REDIS_REPLY_BULK_STRING, reply->type);
+    TEST_ASSERT_EQUAL_STRING("hello", reply->str);
+
+    redis_reply_free(reply);
+    redis_client_destroy(client);
+}
+
+void test_resp_parser_rejects_malformed_headers(void) {
+    static const char *invalid[] = {
+        ":12x\r\n",
+        ":9223372036854775808\r\n",
+        "$-2\r\n",
+        "*-2\r\n",
+        "+OK\n",
+        "?wat\r\n",
+        "$3\r\nabcXX"
+    };
+
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        redis_client_t *client = redis_client_create("127.0.0.1", 6379);
+        redis_reply_t *reply = NULL;
+        TEST_ASSERT_NOT_NULL(client);
+        TEST_ASSERT_EQUAL(-1, parse_blob(client, invalid[i], strlen(invalid[i]), &reply));
+        TEST_ASSERT_NULL(reply);
+        redis_client_destroy(client);
+    }
 }
 
 // =============================================================================
@@ -737,6 +808,9 @@ suite("redis_client") {
     group("Reply Structure") {
         REDIS_RUN_TEST(test_reply_free_null, "should free null reply safely");
         REDIS_RUN_TEST(test_reply_type_values, "should expose stable reply type values");
+        REDIS_RUN_TEST(test_resp_parser_parses_nested_binary_reply, "should parse nested binary replies with pooled nodes and tstr values");
+        REDIS_RUN_TEST(test_resp_parser_retries_incomplete_reply, "should retry an incomplete RESP reply");
+        REDIS_RUN_TEST(test_resp_parser_rejects_malformed_headers, "should reject malformed RESP headers and framing");
     }
 
     group("Stream Structure") {

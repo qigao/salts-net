@@ -231,8 +231,60 @@ CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostnam
 CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
                                                 const turbo_tls_client_config_t *config);
 
+/**
+ * @brief Configure TLS server credentials and client authentication for a future listener.
+ *
+ * The socket must not be connected or listening. The call validates certificate
+ * files immediately and retains an immutable prepared TLS context, so accepted
+ * connections do not reload certificate files. Passing NULL clears the explicit
+ * context and restores the existing environment-configured TLS server behavior.
+ * This function supports TLS listeners and TCP sockets later used as WSS servers.
+ *
+ * @param socket Server socket to configure.
+ * @param config Configuration copied by the call, or NULL to clear it.
+ * @return 0 on success; TURBO_EINVAL for invalid fields or socket type;
+ *         TURBO_EBUSY after listen/connect starts; TURBO_ENOMEM on allocation
+ *         failure; or TURBO_EIO when certificate/CA/key validation fails.
+ *
+ * @code
+ * turbo_tls_server_config_t tls = {
+ *     sizeof(tls), "server-chain.pem", "server-key.pem", NULL,
+ *     "client-ca.pem", NULL, TURBO_TLS_CLIENT_AUTH_REQUIRED};
+ * coro_socket_t *server = coro_socket_create(ctx, CORO_SOCKET_TLS);
+ * if (coro_socket_set_tls_server_config(server, &tls) != 0) {
+ *   coro_socket_destroy(server);
+ * }
+ * @endcode
+ */
+CXX_C_API int coro_socket_set_tls_server_config(coro_socket_t *socket,
+                                                const turbo_tls_server_config_t *config);
+
 /** RFC 9266 tls-exporter channel binding output size. */
 #define CORO_TLS_CHANNEL_BINDING_SIZE 32U
+
+/** Canonical "sha256:" plus 64 lowercase hex digits and the trailing NUL. */
+#define CORO_TLS_PEER_CERT_SHA256_CAPACITY 72U
+
+/**
+ * @brief Return the verified peer certificate SHA-256 identity for TLS/WSS.
+ *
+ * The output is suitable for exact ACL/auth root bindings. It is produced only
+ * after a successful verified handshake: clients must have peer verification
+ * enabled, and accepted server sockets must use required client-certificate
+ * authentication. The query does not expose an OpenSSL object or certificate
+ * fields with ambiguous canonicalization. On every failure, output is cleared.
+ *
+ * @param socket Connected TLS or WSS socket on its owning event-loop thread.
+ * @param output Caller-owned CORO_TLS_PEER_CERT_SHA256_CAPACITY-byte buffer.
+ * @return 0 on success; TURBO_EINVAL for invalid arguments; TURBO_ENOTSUP for
+ *         a non-TLS/WSS socket; TURBO_ENOTCONN outside the open state;
+ *         TURBO_EPERM when peer verification was not required/successful;
+ *         TURBO_ENOENT when no peer certificate exists; or TURBO_EIO on digest
+ *         failure.
+ */
+CXX_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
+    const coro_socket_t *socket,
+    char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]);
 
 /**
  * @brief Export the RFC 9266 tls-exporter channel binding for this TLS/WSS connection.

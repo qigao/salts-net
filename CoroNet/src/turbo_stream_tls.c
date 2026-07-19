@@ -99,6 +99,12 @@ static struct {
 
 typedef struct tls_state_s tls_state_t;
 
+struct turbo_tls_server_context_s {
+  atomic_int ref_count;
+  SSL_CTX *ctx;
+  turbo_tls_client_auth_t client_auth;
+};
+
 #define TLS_PLAINTEXT_READ_CHUNK_SIZE 16384U
 
 static void tls_metric_inc(atomic_ullong *counter) {
@@ -416,6 +422,7 @@ typedef struct tls_state_s {
 
   tls_state_e     state;
   int             server_mode;
+  turbo_tls_client_auth_t server_client_auth;
   int             client_verify_peer;
   int             client_configured;
   int             client_ctx_owned;
@@ -561,6 +568,112 @@ static int tls_password_cb(char *buf, int size, int rwflag, void *userdata) {
   memcpy(buf, password, length);
   buf[length] = '\0';
   return (int)length;
+}
+
+int turbo_stream_tls_server_context_create_internal(
+    const turbo_tls_server_config_t *config,
+    turbo_tls_server_context_t **output) {
+  turbo_tls_server_context_t *server_context = NULL;
+  SSL_CTX *ctx = NULL;
+  int rc;
+
+  if (!output) {
+    return TURBO_EINVAL;
+  }
+  *output = NULL;
+  if (!config || config->size != sizeof(*config) ||
+      !config->cert_file || config->cert_file[0] == '\0' ||
+      !config->key_file || config->key_file[0] == '\0' ||
+      (config->client_auth != TURBO_TLS_CLIENT_AUTH_NONE &&
+       config->client_auth != TURBO_TLS_CLIENT_AUTH_REQUIRED) ||
+      (config->client_auth == TURBO_TLS_CLIENT_AUTH_REQUIRED &&
+       (!config->ca_file || config->ca_file[0] == '\0'))) {
+    return TURBO_EINVAL;
+  }
+
+  turbo_once(&s_tls_cleanup_once, tls_register_global_cleanup);
+  ctx = SSL_CTX_new(TLS_server_method());
+  if (!ctx) {
+    return TURBO_ENOMEM;
+  }
+
+  SSL_CTX_set_mode(ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+  SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
+  SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER);
+  rc = tls_apply_protocol_mode_to_ctx(ctx);
+  if (rc != 0) {
+    SSL_CTX_free(ctx);
+    return rc;
+  }
+
+  if (config->key_password && config->key_password[0] != '\0') {
+    SSL_CTX_set_default_passwd_cb(ctx, tls_password_cb);
+    SSL_CTX_set_default_passwd_cb_userdata(ctx, (void *)config->key_password);
+  }
+  if (SSL_CTX_use_certificate_chain_file(ctx, config->cert_file) != 1 ||
+      SSL_CTX_use_PrivateKey_file(ctx, config->key_file, SSL_FILETYPE_PEM) != 1 ||
+      SSL_CTX_check_private_key(ctx) != 1) {
+    SSL_CTX_free(ctx);
+    return TURBO_EIO;
+  }
+  SSL_CTX_set_default_passwd_cb(ctx, NULL);
+  SSL_CTX_set_default_passwd_cb_userdata(ctx, NULL);
+
+  if (SSL_CTX_set_cipher_list(
+          ctx, (config->cipher_list && config->cipher_list[0] != '\0')
+                   ? config->cipher_list
+                   : "DEFAULT") != 1) {
+    SSL_CTX_free(ctx);
+    return TURBO_EIO;
+  }
+#ifdef TLS1_3_VERSION
+  if (SSL_CTX_set_ciphersuites(
+          ctx,
+          "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256") != 1) {
+    SSL_CTX_free(ctx);
+    return TURBO_EIO;
+  }
+#endif
+
+  if (config->client_auth == TURBO_TLS_CLIENT_AUTH_REQUIRED) {
+    if (SSL_CTX_load_verify_locations(ctx, config->ca_file, NULL) != 1) {
+      SSL_CTX_free(ctx);
+      return TURBO_EIO;
+    }
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+  } else {
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+  }
+
+  server_context = (turbo_tls_server_context_t *)calloc(1, sizeof(*server_context));
+  if (!server_context) {
+    SSL_CTX_free(ctx);
+    return TURBO_ENOMEM;
+  }
+  atomic_init(&server_context->ref_count, 1);
+  server_context->ctx = ctx;
+  server_context->client_auth = config->client_auth;
+  *output = server_context;
+  return 0;
+}
+
+void turbo_stream_tls_server_context_retain_internal(
+    turbo_tls_server_context_t *context) {
+  if (context) {
+    atomic_fetch_add_explicit(&context->ref_count, 1, memory_order_relaxed);
+  }
+}
+
+void turbo_stream_tls_server_context_release_internal(
+    turbo_tls_server_context_t *context) {
+  if (!context) {
+    return;
+  }
+  if (atomic_fetch_sub_explicit(&context->ref_count, 1, memory_order_acq_rel) == 1) {
+    SSL_CTX_free(context->ctx);
+    context->ctx = NULL;
+    free(context);
+  }
 }
 
 static void tls_release_client_ctx(tls_state_t *st) {
@@ -1902,6 +2015,14 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close) {
+  return turbo_stream_tls_wrap_server_with_context(
+      tls_stream, tcp_stream, NULL, on_connect, on_close);
+}
+
+int turbo_stream_tls_wrap_server_with_context(
+    turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
+    turbo_tls_server_context_t *server_context,
+    turbo_connect_cb on_connect, turbo_close_cb on_close) {
   tls_state_t *st;
   int rc;
 
@@ -1915,11 +2036,21 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
   }
 
   tls_release_client_ctx(st);
-  st->ctx = get_default_tls_server_ctx();
-  if (!st->ctx) {
-    return TURBO_ENOMEM;
+  st->server_client_auth = TURBO_TLS_CLIENT_AUTH_NONE;
+  if (server_context) {
+    if (!server_context->ctx || SSL_CTX_up_ref(server_context->ctx) != 1) {
+      return TURBO_EIO;
+    }
+    st->ctx = server_context->ctx;
+    st->client_ctx_owned = 1;
+    st->server_client_auth = server_context->client_auth;
+  } else {
+    st->ctx = get_default_tls_server_ctx();
+    if (!st->ctx) {
+      return TURBO_ENOMEM;
+    }
+    st->client_ctx_owned = 0;
   }
-  st->client_ctx_owned = 0;
 
   st->ssl = SSL_new(st->ctx);
   if (!st->ssl) {
@@ -2010,6 +2141,54 @@ int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *strea
     return TURBO_EIO;
   }
 
+  return 0;
+}
+
+int turbo_stream_tls_get_verified_peer_certificate_sha256_internal(
+    const turbo_stream_t *stream, char *output, size_t output_len) {
+  static const char hex[] = "0123456789abcdef";
+  tls_state_t *st;
+  X509 *peer;
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
+  size_t i;
+
+  if (!output || output_len != CORO_TLS_PEER_CERT_SHA256_CAPACITY) {
+    return TURBO_EINVAL;
+  }
+  memset(output, 0, output_len);
+  if (!stream || stream->kind != TURBO_STREAM_TLS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)stream->backend_data;
+  if (!st || !st->ssl || st->state != TLS_ST_OPEN) {
+    return TURBO_ENOTCONN;
+  }
+  if ((st->server_mode &&
+       st->server_client_auth != TURBO_TLS_CLIENT_AUTH_REQUIRED) ||
+      (!st->server_mode && !st->client_verify_peer) ||
+      SSL_get_verify_result(st->ssl) != X509_V_OK) {
+    return TURBO_EPERM;
+  }
+
+  peer = SSL_get1_peer_certificate(st->ssl);
+  if (!peer) {
+    return TURBO_ENOENT;
+  }
+  if (X509_digest(peer, EVP_sha256(), digest, &digest_len) != 1 ||
+      digest_len != 32U) {
+    X509_free(peer);
+    return TURBO_EIO;
+  }
+  X509_free(peer);
+
+  memcpy(output, "sha256:", 7U);
+  for (i = 0; i < digest_len; ++i) {
+    output[7U + (i * 2U)] = hex[(digest[i] >> 4) & 0x0fU];
+    output[8U + (i * 2U)] = hex[digest[i] & 0x0fU];
+  }
+  output[CORO_TLS_PEER_CERT_SHA256_CAPACITY - 1U] = '\0';
   return 0;
 }
 

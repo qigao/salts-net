@@ -25,10 +25,18 @@ typedef struct tls_server_state_s {
   coro_socket_t  *server;
   unsigned short  port;
   int disable_client_verify;
+  int explicit_mtls;
   int server_binding_rc;
   int client_binding_rc;
+  int server_peer_rc;
+  int client_peer_rc;
+  const char *ca_file;
+  const char *cert_file;
+  const char *key_file;
   uint8_t server_binding[CORO_TLS_CHANNEL_BINDING_SIZE];
   uint8_t client_binding[CORO_TLS_CHANNEL_BINDING_SIZE];
+  char server_peer[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
+  char client_peer[CORO_TLS_PEER_CERT_SHA256_CAPACITY];
 } tls_server_state_t;
 
 typedef struct tls_close_state_s {
@@ -121,6 +129,8 @@ static void tls_server_banner_handler(coro_socket_t *client, void *arg) {
 
   coro_socket_set_timeout(client, 5000); /* match client timeout */
   g_tls_server_handler_hits++;
+  state->server_peer_rc =
+      coro_socket_tls_get_verified_peer_certificate_sha256(client, state->server_peer);
   state->server_binding_rc =
       coro_socket_tls_export_channel_binding(client, state->server_binding);
   g_tls_server_handler_rc = state->server_binding_rc;
@@ -148,7 +158,19 @@ static void tls_server_client_task(coro_t *co, void *arg) {
   }
 
   coro_socket_set_timeout(client, 5000);
-  if (state->disable_client_verify) {
+  if (state->explicit_mtls) {
+    memset(&tls_config, 0, sizeof(tls_config));
+    tls_config.ca_file = state->ca_file;
+    tls_config.cert_file = state->cert_file;
+    tls_config.key_file = state->key_file;
+    tls_config.verify_peer = 1;
+    rc = coro_socket_set_tls_client_config(client, &tls_config);
+    if (rc != 0) {
+      g_tls_server_client_rc = rc;
+      coro_socket_destroy(client);
+      return;
+    }
+  } else if (state->disable_client_verify) {
     memset(&tls_config, 0, sizeof(tls_config));
     tls_config.verify_peer = 0;
     rc = coro_socket_set_tls_client_config(client, &tls_config);
@@ -159,6 +181,13 @@ static void tls_server_client_task(coro_t *co, void *arg) {
     }
   }
   rc = coro_socket_connect(client, "localhost", state->port);
+  if (rc == 0) {
+    state->client_peer_rc =
+        coro_socket_tls_get_verified_peer_certificate_sha256(client, state->client_peer);
+    if (state->explicit_mtls) {
+      rc = state->client_peer_rc;
+    }
+  }
   if (rc == 0) {
     state->client_binding_rc =
         coro_socket_tls_export_channel_binding(client, state->client_binding);
@@ -306,7 +335,8 @@ static void tls_test_clear_process_env_only(void) {
  */
 static void tls_server_run_case(
     int use_process_env_only,
-    uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE], int disable_client_verify) {
+    uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE], int disable_client_verify,
+    int explicit_mtls) {
   char ca_file[512]   = {0};
   char cert_file[512] = {0};
   char key_file[512]  = {0};
@@ -316,6 +346,7 @@ static void tls_server_run_case(
 
   memset(&state, 0, sizeof(state));
   state.disable_client_verify = disable_client_verify;
+  state.explicit_mtls = explicit_mtls;
 
   /* Reserve an ephemeral port, then close the probe so CoroNet can bind it. */
   check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
@@ -325,20 +356,25 @@ static void tls_server_run_case(
   check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
   check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
+  state.ca_file = ca_file;
+  state.cert_file = cert_file;
+  state.key_file = key_file;
 
+  if (!explicit_mtls) {
 #ifdef _WIN32
-  if (use_process_env_only) {
+    if (use_process_env_only) {
     /* Process-level env (SetEnvironmentVariableA) — separate Win32 code path. */
     check_int_eq(tls_test_set_process_env_only(ca_file, cert_file, key_file), 0);
-  } else {
+    } else {
     check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
     check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
-  }
+    }
 #else
-  (void)use_process_env_only;
-  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    (void)use_process_env_only;
+    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
 #endif
+  }
 
   /* Create context and server socket. */
   state.ctx    = coro_context_create(NULL);
@@ -349,6 +385,16 @@ static void tls_server_run_case(
 
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
   check(state.server != NULL);
+  if (explicit_mtls) {
+    turbo_tls_server_config_t server_config;
+    memset(&server_config, 0, sizeof(server_config));
+    server_config.size = sizeof(server_config);
+    server_config.cert_file = cert_file;
+    server_config.key_file = key_file;
+    server_config.ca_file = ca_file;
+    server_config.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
+    check_int_eq(coro_socket_set_tls_server_config(state.server, &server_config), 0);
+  }
   check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                      tls_server_banner_handler, &state), 0);
   check_int_eq(coro_context_spawn(state.ctx, tls_server_client_task, &state), 0);
@@ -360,6 +406,16 @@ static void tls_server_run_case(
   check_int_eq(g_tls_server_handler_hits, 1);
   check_int_eq(g_tls_server_handler_rc,   0);
   check_int_eq(state.server_binding_rc, 0);
+  if (explicit_mtls) {
+    check_int_eq(state.server_peer_rc, 0);
+    check_int_eq(state.client_peer_rc, 0);
+    check_int_eq((int)strlen(state.server_peer),
+                 CORO_TLS_PEER_CERT_SHA256_CAPACITY - 1);
+    check(strncmp(state.server_peer, "sha256:", 7) == 0);
+    check_str_eq(state.server_peer, state.client_peer);
+  } else {
+    check_int_eq(state.server_peer_rc, TURBO_EPERM);
+  }
   if (disable_client_verify) {
     uint8_t zero[CORO_TLS_CHANNEL_BINDING_SIZE] = {0};
     check_int_eq(g_tls_server_client_rc, TURBO_EPERM);
@@ -392,8 +448,10 @@ static void tls_server_run_case(
     tls_test_clear_process_env_only();
   }
 #endif
-  tls_test_clear_server_env();
-  tls_test_clear_ca_env();
+  if (!explicit_mtls) {
+    tls_test_clear_server_env();
+    tls_test_clear_ca_env();
+  }
   tls_test_remove_file(ca_file);
   tls_test_remove_file(cert_file);
   tls_test_remove_file(key_file);
@@ -497,13 +555,17 @@ spec("Coro TLS Server") {
     uint8_t first[CORO_TLS_CHANNEL_BINDING_SIZE];
     uint8_t second[CORO_TLS_CHANNEL_BINDING_SIZE];
 
-    tls_server_run_case(0, first, 0);
-    tls_server_run_case(0, second, 0);
+    tls_server_run_case(0, first, 0, 0);
+    tls_server_run_case(0, second, 0, 0);
     check(memcmp(first, second, CORO_TLS_CHANNEL_BINDING_SIZE) != 0);
   }
 
   it("should reject channel binding when the TLS client disabled peer verification") {
-    tls_server_run_case(0, NULL, 1);
+    tls_server_run_case(0, NULL, 1, 0);
+  }
+
+  it("should require and expose a verified mTLS client certificate identity") {
+    tls_server_run_case(0, NULL, 0, 1);
   }
 
   it("should reject unavailable channel bindings and clear output") {
@@ -549,7 +611,7 @@ spec("Coro TLS Server") {
 
 #ifdef _WIN32
   it("should read TLS server config from process environment on Windows") {
-    tls_server_run_case(1, NULL, 0);
+    tls_server_run_case(1, NULL, 0, 0);
   }
 #endif
 }

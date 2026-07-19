@@ -119,6 +119,14 @@ static void socket_clear_tls_client_config(coro_socket_t *s) {
   s->tls_verify_peer = 1;
 }
 
+static void socket_clear_tls_server_context(coro_socket_t *s) {
+  if (!s || !s->tls_server_context) {
+    return;
+  }
+  turbo_stream_tls_server_context_release_internal(s->tls_server_context);
+  s->tls_server_context = NULL;
+}
+
 static int socket_copy_tls_client_config(coro_socket_t *s, const turbo_tls_client_config_t *config) {
   char *ca_file = NULL;
   char *cert_file = NULL;
@@ -203,6 +211,7 @@ static void socket_destroy_shell(coro_socket_t *s) {
 
   coro_socket_reset_recv_compression_state(s);
   socket_clear_tls_client_config(s);
+  socket_clear_tls_server_context(s);
   free(s);
 }
 
@@ -219,6 +228,7 @@ static void coro_socket_cleanup_create_failure(coro_socket_t *s) {
 
   coro_socket_reset_recv_compression_state(s);
   socket_clear_tls_client_config(s);
+  socket_clear_tls_server_context(s);
   free(s);
 }
 
@@ -289,6 +299,7 @@ void release_client(coro_socket_t *client) {
     }
 
     socket_clear_tls_client_config(client);
+    socket_clear_tls_server_context(client);
     free(client);
   }
 }
@@ -992,6 +1003,30 @@ int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_c
   }
 
   return socket_return_error(s, rc);
+}
+
+int coro_socket_set_tls_server_config(coro_socket_t *s,
+                                      const turbo_tls_server_config_t *config) {
+  turbo_tls_server_context_t *next = NULL;
+  int rc;
+
+  if (!s || (s->transport != TURBO_TLS && s->transport != TURBO_TCP)) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  if (s->connected || s->co_wait || s->listener || s->handle.stream) {
+    return socket_return_error(s, TURBO_EBUSY);
+  }
+
+  if (config) {
+    rc = turbo_stream_tls_server_context_create_internal(config, &next);
+    if (rc != 0) {
+      return socket_return_error(s, rc);
+    }
+  }
+
+  socket_clear_tls_server_context(s);
+  s->tls_server_context = next;
+  return socket_return_error(s, 0);
 }
 
 /* ── Socket I/O ───────────────────────────────────────────── */

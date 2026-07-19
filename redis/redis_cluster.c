@@ -4,6 +4,7 @@
  */
 
 #include "redis_cluster.h"
+#include "redis_internal.h"
 #include "redis_pool.h"
 #include "turbo_error.h"
 #include "turbo_str.h"
@@ -54,6 +55,9 @@ static const uint16_t crc16_table[256] = {
     0xef1f, 0xff3e, 0xcf5d, 0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8,
     0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0
 };
+
+#define calc_argc_mul_add redis_argc_mul_add
+#define alloc_argv redis_argv_alloc
 
 static uint16_t crc16(const char *buf, size_t len) {
     uint16_t crc = 0;
@@ -1294,22 +1298,28 @@ int redis_cluster_xadd(redis_cluster_t *cluster, const char *key, size_t maxlen,
     const char **argv;
     size_t *argvlen;
     char maxlen_str[32];
-    size_t argc;
+    int argc;
     size_t idx = 0;
     int result;
 
     if (!cluster || !cluster->connected || !key || !fields || !values ||
-        field_count == 0 || field_count > (SIZE_MAX - 6u) / 2u ||
-        field_count > ((size_t)INT_MAX - 6u) / 2u)
+        field_count == 0 || field_count > (size_t)INT_MAX)
         return -1;
     for (size_t i = 0; i < field_count; ++i)
         if (!fields[i] || !values[i]) return -1;
 
-    argc = 3u + field_count * 2u + (maxlen > 0 ? 3u : 0u);
-    argv = malloc(argc * sizeof(*argv));
-    argvlen = malloc(argc * sizeof(*argvlen));
+    if (calc_argc_mul_add(3, (int)field_count, 2, &argc) < 0) return -1;
+    if (maxlen > 0) {
+      if (calc_argc_mul_add(argc, 3, 1, &argc) < 0) return -1;
+    }
+    argv = alloc_argv(argc);
+    if ((size_t)argc > SIZE_MAX / sizeof(size_t)) {
+      redis_argv_free(argv);
+      return -1;
+    }
+    argvlen = malloc((size_t)argc * sizeof(*argvlen));
     if (!argv || !argvlen) {
-        free(argv);
+        redis_argv_free(argv);
         free(argvlen);
         return -1;
     }
@@ -1329,7 +1339,7 @@ int redis_cluster_xadd(redis_cluster_t *cluster, const char *key, size_t maxlen,
     }
     result = redis_cluster_commandv(cluster, (int)idx, argv, argvlen, 1,
                                     callback, user_data);
-    free(argv);
+    redis_argv_free(argv);
     free(argvlen);
     return result;
 }
@@ -1409,6 +1419,7 @@ int redis_cluster_mdelete(redis_cluster_t *cluster, int key_count,
                           const char **keys, redis_command_cb_t callback,
                           void *user_data) {
     const char **argv;
+    int argc;
     int result;
     if (!cluster || !cluster->connected || key_count <= 0 || !keys) return -1;
 
@@ -1419,13 +1430,14 @@ int redis_cluster_mdelete(redis_cluster_t *cluster, int key_count,
     }
 
     (void)slot;
-    argv = malloc((size_t)(key_count + 1) * sizeof(*argv));
+    if (calc_argc_mul_add(1, key_count, 1, &argc) < 0) return -1;
+    argv = alloc_argv(argc);
     if (!argv) return -1;
     argv[0] = "DEL";
     for (int i = 0; i < key_count; i++) argv[i + 1] = keys[i];
-    result = redis_cluster_commandv(cluster, key_count + 1, argv, NULL, 1,
+    result = redis_cluster_commandv(cluster, argc, argv, NULL, 1,
                                     callback, user_data);
-    free(argv);
+    redis_argv_free(argv);
     return result;
 }
 
@@ -1433,6 +1445,7 @@ int redis_cluster_mget(redis_cluster_t *cluster, int key_count,
                        const char **keys, redis_command_cb_t callback,
                        void *user_data) {
     const char **argv;
+    int argc;
     int result;
     if (!cluster || !cluster->connected || key_count <= 0 || !keys) return -1;
 
@@ -1443,13 +1456,14 @@ int redis_cluster_mget(redis_cluster_t *cluster, int key_count,
     }
 
     (void)slot;
-    argv = malloc((size_t)(key_count + 1) * sizeof(*argv));
+    if (calc_argc_mul_add(1, key_count, 1, &argc) < 0) return -1;
+    argv = alloc_argv(argc);
     if (!argv) return -1;
     argv[0] = "MGET";
     for (int i = 0; i < key_count; i++) argv[i + 1] = keys[i];
-    result = redis_cluster_read_commandv(cluster, key_count + 1, argv, NULL, 1,
+    result = redis_cluster_read_commandv(cluster, argc, argv, NULL, 1,
                                          callback, user_data);
-    free(argv);
+    redis_argv_free(argv);
     return result;
 }
 

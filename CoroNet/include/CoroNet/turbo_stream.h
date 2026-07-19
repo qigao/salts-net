@@ -57,6 +57,29 @@ typedef struct turbo_tls_client_config_s {
   int verify_peer;
 } turbo_tls_client_config_t;
 
+typedef enum turbo_tls_client_auth_e {
+  TURBO_TLS_CLIENT_AUTH_NONE = 0,
+  TURBO_TLS_CLIENT_AUTH_REQUIRED = 1,
+} turbo_tls_client_auth_t;
+
+/**
+ * @brief Explicit TLS server configuration for one listener.
+ *
+ * The configuration is validated and copied by
+ * coro_socket_set_tls_server_config(). Client authentication is fail-closed:
+ * TURBO_TLS_CLIENT_AUTH_REQUIRED requires a non-empty CA file and rejects the
+ * handshake unless the peer presents a certificate chaining to that CA.
+ */
+typedef struct turbo_tls_server_config_s {
+  size_t size;                         /**< Must equal sizeof(turbo_tls_server_config_t). */
+  const char *cert_file;               /**< Required PEM server certificate chain. */
+  const char *key_file;                /**< Required PEM private key. */
+  const char *key_password;            /**< Optional private-key password. */
+  const char *ca_file;                 /**< Client CA bundle; required for mTLS. */
+  const char *cipher_list;             /**< Optional OpenSSL pre-TLS-1.3 cipher list. */
+  turbo_tls_client_auth_t client_auth; /**< NONE or REQUIRED. */
+} turbo_tls_server_config_t;
+
 typedef struct turbo_tcp_keepalive_config_s {
   int enabled;
   uint32_t idle_ms;

@@ -1296,6 +1296,21 @@ int turbo_stream_wss_export_channel_binding_internal(const turbo_stream_t *strea
   return turbo_stream_tls_export_channel_binding_internal(st->tcp, output, output_len);
 }
 
+int turbo_stream_wss_get_verified_peer_certificate_sha256_internal(
+    const turbo_stream_t *stream, char *output, size_t output_len) {
+  ws_state_t *st;
+
+  if (!stream || stream->kind != TURBO_STREAM_WSS || !output) {
+    return TURBO_EINVAL;
+  }
+  st = (ws_state_t *)stream->backend_data;
+  if (!st || !st->tcp) {
+    return TURBO_ENOTCONN;
+  }
+  return turbo_stream_tls_get_verified_peer_certificate_sha256_internal(
+      st->tcp, output, output_len);
+}
+
 CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host) {
   turbo_stream_ws_set_path_host_protocol(s, path, host, NULL);
 }

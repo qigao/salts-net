@@ -150,12 +150,28 @@ int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close);
+typedef struct turbo_tls_server_context_s turbo_tls_server_context_t;
+int turbo_stream_tls_server_context_create_internal(
+    const turbo_tls_server_config_t *config,
+    turbo_tls_server_context_t **output);
+void turbo_stream_tls_server_context_retain_internal(
+    turbo_tls_server_context_t *context);
+void turbo_stream_tls_server_context_release_internal(
+    turbo_tls_server_context_t *context);
+int turbo_stream_tls_wrap_server_with_context(
+    turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
+    turbo_tls_server_context_t *server_context,
+    turbo_connect_cb on_connect, turbo_close_cb on_close);
 int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *stream,
                                                       uint8_t *output,
                                                       size_t output_len);
+int turbo_stream_tls_get_verified_peer_certificate_sha256_internal(
+    const turbo_stream_t *stream, char *output, size_t output_len);
 int turbo_stream_wss_export_channel_binding_internal(const turbo_stream_t *stream,
                                                       uint8_t *output,
                                                       size_t output_len);
+int turbo_stream_wss_get_verified_peer_certificate_sha256_internal(
+    const turbo_stream_t *stream, char *output, size_t output_len);
 int turbo_stream_ws_send_text(turbo_stream_t *ws_stream, const char *data, size_t len);
 int turbo_stream_ws_send_owned_recv(turbo_stream_t *ws_stream, char *data, size_t len);
 

@@ -332,7 +332,8 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
 
   retain_client(s);
   coro_set_wait(s);
-  rc = turbo_stream_tls_wrap_server(tls_stream, tcp_stream, on_tls_connect, on_tls_close);
+  rc = turbo_stream_tls_wrap_server_with_context(
+      tls_stream, tcp_stream, s->tls_server_context, on_tls_connect, on_tls_close);
   if (rc != 0) {
     s->co_wait = NULL;
     release_client(s);
@@ -391,6 +392,36 @@ int coro_socket_tls_export_channel_binding(
     if (s->handle.stream->kind == TURBO_STREAM_WSS) {
       return turbo_stream_wss_export_channel_binding_internal(
           s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
+    }
+  }
+  return TURBO_ENOTSUP;
+}
+
+int coro_socket_tls_get_verified_peer_certificate_sha256(
+    const coro_socket_t *s,
+    char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]) {
+  if (!output) {
+    return TURBO_EINVAL;
+  }
+  memset(output, 0, CORO_TLS_PEER_CERT_SHA256_CAPACITY);
+
+  if (!s) {
+    return TURBO_EINVAL;
+  }
+  if (s->transport == TURBO_TLS) {
+    if (!s->handle.stream) {
+      return TURBO_ENOTCONN;
+    }
+    return turbo_stream_tls_get_verified_peer_certificate_sha256_internal(
+        s->handle.stream, output, CORO_TLS_PEER_CERT_SHA256_CAPACITY);
+  }
+  if (s->transport == TURBO_WEBSOCKET) {
+    if (!s->handle.stream) {
+      return TURBO_ENOTCONN;
+    }
+    if (s->handle.stream->kind == TURBO_STREAM_WSS) {
+      return turbo_stream_wss_get_verified_peer_certificate_sha256_internal(
+          s->handle.stream, output, CORO_TLS_PEER_CERT_SHA256_CAPACITY);
     }
   }
   return TURBO_ENOTSUP;

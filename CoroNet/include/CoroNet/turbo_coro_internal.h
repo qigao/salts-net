@@ -237,6 +237,7 @@ struct coro_transport_ops_s {
 
 /** @brief Internal layout of the opaque coroutine client. */
 typedef struct turbo_tls_context_s turbo_tls_context_t;
+typedef struct turbo_tls_server_context_s turbo_tls_server_context_t;
 typedef struct turbo_udp_s turbo_udp_t;
 typedef struct turbo_tls_client_s turbo_tls_client_t;
 typedef struct coro_server_task_s coro_server_task_t;
@@ -278,6 +279,7 @@ struct coro_socket_s {
   char *tls_key_file;          /**< Optional client private key */
   char *tls_key_password;      /**< Optional client key password */
   char *tls_cipher_list;       /**< Optional OpenSSL cipher list */
+  turbo_tls_server_context_t *tls_server_context; /**< Prepared immutable server TLS context */
   coro_proxy_settings_t proxy; /**< Copied outbound proxy configuration */
 
   /* ── Server fields (for listening sockets) ────────────── */

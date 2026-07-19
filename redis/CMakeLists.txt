@@ -2,15 +2,25 @@
 
 set(REDIS_HEADERS redis_client.h redis_pool.h redis_cluster.h)
 
+if(NOT RE2C_EXECUTABLE)
+  message(FATAL_ERROR "Redis RESP parser requires re2c")
+endif()
+
+cmake_add_grammar(
+  REDIS_RESP
+  LEXER_RE ${CMAKE_CURRENT_SOURCE_DIR}/parser/redis_resp_parser.re
+  FOLDER "redis")
+
 add_library(tedis SHARED redis_client.c redis_ext.c redis_pool.c redis_cluster.c
-                         ${REDIS_HEADERS})
+                         redis_parser.c ${REDIS_RESP_LEXER_GEN} ${REDIS_HEADERS})
+add_dependencies(tedis REDIS_RESP_lexer_codegen)
 
 cmake_config_target(
   tedis
   ALIAS
   TurboNet::Redis
   FOLDER
-  tedis
+  redis
   EXPORT_NAME
   Redis)
 
@@ -21,7 +31,8 @@ endif()
 
 target_include_directories(
   tedis PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-               $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/redis>)
+               $<INSTALL_INTERFACE:include> $<INSTALL_INTERFACE:include/redis>
+        PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(tedis PUBLIC TurboNet::CoroNet TurboUtils::Core)
 

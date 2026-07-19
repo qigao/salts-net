@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "turbo_error.h"
+#include "turbo_stream_internal.h"
 #include "tlog.h"
 #ifdef _WIN32
 #include <ws2tcpip.h>
@@ -204,6 +205,10 @@ static void accept_loop_task(coro_t *co, void *arg) {
       int ws_is_tls = 0;
 
       client->timeout_ms = server->timeout_ms;
+      if (server->tls_server_context) {
+        turbo_stream_tls_server_context_retain_internal(server->tls_server_context);
+        client->tls_server_context = server->tls_server_context;
+      }
       if (server->transport == TURBO_WEBSOCKET) {
         ws_server_listener_state_t *ws_state =
             (ws_server_listener_state_t *)server->native_tcp_state;

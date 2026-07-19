@@ -1,4 +1,5 @@
 #include "redis_client.h"
+#include "redis_internal.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "turbo_str.h"
@@ -9,6 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tlog.h"
+
+#define calc_argc_mul_add redis_argc_mul_add
+#define alloc_argv redis_argv_alloc
 
 /* Default configuration */
 static redis_config_t default_config = {.host = "127.0.0.1",
@@ -22,11 +26,9 @@ static redis_config_t default_config = {.host = "127.0.0.1",
                                         .cluster_readonly = 0};
 
 /* Forward declarations */
-static int parse_resp_reply(redis_client_t *client, redis_reply_t **reply);
 static char *build_resp_command(int argc, const char **argv, const size_t *argvlen,
                                 size_t *out_len);
 static void reset_command_queue_state(redis_client_t *client);
-static int append_recv_data(redis_client_t *client, const char *data, size_t len);
 static void redis_client_socket_publish(redis_client_t *client, coro_socket_t *socket,
                                         int owned, int connected);
 static coro_socket_t *redis_client_socket_take(redis_client_t *client, int *owned);
@@ -37,45 +39,6 @@ static void reset_command_queue_state(redis_client_t *client) {
   client->command_queue = NULL;
   client->command_queue_tail = NULL;
   client->queued_commands = 0;
-}
-
-static int append_recv_data(redis_client_t *client, const char *data, size_t len) {
-  char *new_buffer;
-  size_t new_size;
-  size_t required;
-
-  if (!client || (!data && len != 0)) {
-    return -1;
-  }
-
-  if (len == 0) {
-    return 0;
-  }
-  if (len > SIZE_MAX - client->recv_buffer_used) return -1;
-  required = client->recv_buffer_used + len;
-
-  if (required <= client->recv_buffer_size) {
-    memcpy(client->recv_buffer + client->recv_buffer_used, data, len);
-    client->recv_buffer_used += len;
-    return 0;
-  }
-
-  new_size = client->recv_buffer_size ? client->recv_buffer_size : 16384;
-  while (new_size < required && new_size <= SIZE_MAX / 2u) {
-    new_size *= 2;
-  }
-  if (new_size < required) new_size = required;
-
-  new_buffer = realloc(client->recv_buffer, new_size);
-  if (!new_buffer) {
-    return -1;
-  }
-
-  client->recv_buffer = new_buffer;
-  client->recv_buffer_size = new_size;
-  memcpy(client->recv_buffer + client->recv_buffer_used, data, len);
-  client->recv_buffer_used += len;
-  return 0;
 }
 
 redis_client_t *redis_client_create(const char *host, uint16_t port) {
@@ -118,10 +81,7 @@ redis_client_t *redis_client_create_with_config(const redis_config_t *config) {
     return NULL;
   }
 
-  /* Allocate receive buffer */
-  client->recv_buffer_size = 16384; /* 16KB initial buffer */
-  client->recv_buffer = malloc(client->recv_buffer_size);
-  if (!client->recv_buffer) {
+  if (redis_recv_buffer_init(client) != 0) {
     tstr_free((tstr_t)client->config.host);
     tstr_free((tstr_t)client->config.username);
     tstr_free((tstr_t)client->config.password);
@@ -273,156 +233,6 @@ handshake_failed:
   return status;
 }
 
-/* RESP parser */
-static int parse_resp_reply(redis_client_t *client, redis_reply_t **reply) {
-  redis_reply_t *parsed;
-
-  if (client->recv_buffer_used < 1)
-    return 0;
-
-  char *buf = client->recv_buffer;
-  size_t len = client->recv_buffer_used;
-  char type = buf[0];
-  *reply = NULL;
-
-  char *end = memchr(buf + 1, '\n', len - 1);
-  if (!end)
-    return 0; /* Need more data */
-
-  parsed = calloc(1, sizeof(redis_reply_t));
-  if (!parsed)
-    return -1;
-
-  size_t line_len = end - buf - 1;
-  if (line_len > 0 && buf[line_len] == '\r') {
-    line_len--;
-  }
-
-  switch (type) {
-  case '+': /* Simple string */
-    parsed->type = REDIS_REPLY_STRING;
-    parsed->str = tstr_dup_len(buf + 1, line_len);
-    if (!parsed->str) {
-      free(parsed);
-      return -1;
-    }
-    parsed->len = line_len;
-    *reply = parsed;
-    return (end - buf) + 1;
-
-  case '-': /* Error */
-    parsed->type = REDIS_REPLY_ERROR;
-    parsed->str = tstr_dup_len(buf + 1, line_len);
-    if (!parsed->str) {
-      free(parsed);
-      return -1;
-    }
-    parsed->len = line_len;
-    *reply = parsed;
-    return (end - buf) + 1;
-
-  case ':': /* Integer */
-    parsed->type = REDIS_REPLY_INTEGER;
-    parsed->integer = strtoll(buf + 1, NULL, 10);
-    *reply = parsed;
-    return (end - buf) + 1;
-
-  case '$': { /* Bulk string */
-    int64_t bulk_len = strtoll(buf + 1, NULL, 10);
-    if (bulk_len == -1) {
-      parsed->type = REDIS_REPLY_NULL;
-      *reply = parsed;
-      return (end - buf) + 1;
-    }
-
-    size_t total_needed = (end - buf) + 1 + bulk_len + 2;
-    if (len < total_needed) {
-      free(parsed);
-      return 0; /* Need more data */
-    }
-
-    parsed->type = REDIS_REPLY_BULK_STRING;
-    parsed->str = tstr_dup_len(end + 1, (size_t)bulk_len);
-    if (!parsed->str) {
-      free(parsed);
-      return -1;
-    }
-    parsed->len = (size_t)bulk_len;
-    *reply = parsed;
-    return total_needed;
-  }
-
-  case '*': { /* Array */
-    int64_t array_len = strtoll(buf + 1, NULL, 10);
-    if (array_len == -1) {
-      parsed->type = REDIS_REPLY_NULL;
-      *reply = parsed;
-      return (end - buf) + 1;
-    }
-    if (array_len < 0) {
-      free(parsed);
-      return -1;
-    }
-
-    parsed->type = REDIS_REPLY_ARRAY;
-    parsed->element_count = (size_t)array_len;
-    parsed->elements = calloc((size_t)array_len, sizeof(redis_reply_t *));
-    if (!parsed->elements && array_len > 0) {
-      free(parsed);
-      return -1;
-    }
-
-    size_t consumed = (end - buf) + 1;
-
-    /* Parse array elements recursively */
-    for (int i = 0; i < array_len; i++) {
-      /* Temporarily adjust buffer */
-      client->recv_buffer += consumed;
-      client->recv_buffer_used -= consumed;
-
-      int elem_consumed = parse_resp_reply(client, &parsed->elements[i]);
-
-      /* Restore buffer */
-      client->recv_buffer -= consumed;
-      client->recv_buffer_used += consumed;
-
-      if (elem_consumed <= 0) {
-        /* Failed to parse element */
-        redis_reply_free(parsed);
-        return elem_consumed;
-      }
-
-      consumed += elem_consumed;
-    }
-
-    *reply = parsed;
-    return consumed;
-  }
-
-  default:
-    free(parsed);
-    return -1; /* Unknown type */
-  }
-}
-
-void redis_reply_free(redis_reply_t *reply) {
-  if (!reply)
-    return;
-
-  if (reply->str) {
-    tstr_free((tstr_t)reply->str);
-  }
-
-  if (reply->elements) {
-    for (size_t i = 0; i < reply->element_count; i++) {
-      redis_reply_free(reply->elements[i]);
-    }
-    free(reply->elements);
-  }
-
-  free(reply);
-}
-
 void redis_command_result_clear(redis_command_result_t *result) {
   if (!result) return;
   redis_reply_free(result->reply);
@@ -461,6 +271,8 @@ redis_server_error_t redis_server_error_classify(const redis_reply_t *reply) {
 /* Build RESP command */
 static char *build_resp_command(int argc, const char **argv, const size_t *argvlen,
                                 size_t *out_len) {
+  tstr_t command;
+  tstr_t next;
   if (argc <= 0 || !argv || !out_len) {
     return NULL;
   }
@@ -475,39 +287,45 @@ static char *build_resp_command(int argc, const char **argv, const size_t *argvl
     total += framing + len;
   }
 
-  char *cmd = malloc(total);
-  if (!cmd)
+  command = tstr_new();
+  if (!command) return NULL;
+  next = tstr_reserve(command, total);
+  if (!next) {
+    tstr_free(command);
     return NULL;
-
-  char *p = cmd;
-  {
-    int written = fmt(p, total, "*{}\r\n", argc);
-    if (written < 0 || (size_t)written >= total) {
-      free(cmd);
-      return NULL;
-    }
-    p += written;
   }
+  command = next;
+  next = tstr_append_format(command, "*{}\r\n", argc);
+  if (!next) {
+    tstr_free(command);
+    return NULL;
+  }
+  command = next;
 
   for (int i = 0; i < argc; i++) {
     size_t len = argvlen ? argvlen[i] : strlen(argv[i]);
-    {
-      size_t remaining = total - (size_t)(p - cmd);
-      int written = fmt(p, remaining, "${}\r\n", len);
-      if (written < 0 || (size_t)written >= remaining) {
-        free(cmd);
-        return NULL;
-      }
-      p += written;
+    next = tstr_append_format(command, "${}\r\n", len);
+    if (!next) {
+      tstr_free(command);
+      return NULL;
     }
-    memcpy(p, argv[i], len);
-    p += len;
-    *p++ = '\r';
-    *p++ = '\n';
+    command = next;
+    next = tstr_cat_v(command, tstr_v_from_buf(argv[i], len));
+    if (!next) {
+      tstr_free(command);
+      return NULL;
+    }
+    command = next;
+    next = tstr_cat_len(command, "\r\n", 2u);
+    if (!next) {
+      tstr_free(command);
+      return NULL;
+    }
+    command = next;
   }
 
-  *out_len = p - cmd;
-  return cmd;
+  *out_len = tstr_len(command);
+  return command;
 }
 
 int redis_commandv_result(redis_client_t *client, int argc, const char **argv,
@@ -542,17 +360,17 @@ int redis_commandv_result(redis_client_t *client, int argc, const char **argv,
 
   rc = coro_socket_send(client->socket, cmd_str, cmd_len);
   if (rc != 0) {
-    free(cmd_str);
+    tstr_free((tstr_t)cmd_str);
     client->is_connected = 0;
     out->status = rc;
     out->outcome = REDIS_COMMAND_SEND_UNCERTAIN;
     return out->status;
   }
-  free(cmd_str);
+  tstr_free((tstr_t)cmd_str);
 
   for (;;) {
     redis_reply_t *reply = NULL;
-    int parsed = parse_resp_reply(client, &reply);
+    int parsed = redis_parse_resp_reply(client, &reply);
     if (parsed < 0) {
       client->is_connected = 0;
       out->status = TURBO_EPROTO;
@@ -586,7 +404,7 @@ int redis_commandv_result(redis_client_t *client, int argc, const char **argv,
       return out->status;
     }
 
-    if (append_recv_data(client, data, len) != 0) {
+    if (redis_recv_buffer_append(client, data, len) != 0) {
       coro_socket_free_recv(data);
       client->is_connected = 0;
       out->status = TURBO_ENOMEM;
@@ -682,7 +500,7 @@ void redis_client_destroy(redis_client_t *client) {
   redis_client_disconnect(client);
   reset_command_queue_state(client);
 
-  free(client->recv_buffer);
+  redis_recv_buffer_destroy(client);
   tstr_free((tstr_t)client->config.host);
   tstr_free((tstr_t)client->config.username);
   tstr_free((tstr_t)client->config.password);
@@ -714,7 +532,9 @@ int redis_del(redis_client_t *client, int key_count, const char **keys, redis_co
     return -1;
   }
 
-  const char **argv = malloc((key_count + 1) * sizeof(char *));
+  int argc = 0;
+  if (calc_argc_mul_add(1, key_count, 1, &argc) < 0) return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     return -1;
   }
@@ -722,8 +542,8 @@ int redis_del(redis_client_t *client, int key_count, const char **keys, redis_co
   for (int i = 0; i < key_count; i++) {
     argv[i + 1] = keys[i];
   }
-  int result = redis_commandv(client, key_count + 1, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -758,7 +578,9 @@ int redis_lpush(redis_client_t *client, const char *key, int value_count, const 
     return -1;
   }
 
-  const char **argv = malloc((value_count + 2) * sizeof(char *));
+  int argc = 0;
+  if (calc_argc_mul_add(2, value_count, 1, &argc) < 0) return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     return -1;
   }
@@ -767,8 +589,8 @@ int redis_lpush(redis_client_t *client, const char *key, int value_count, const 
   for (int i = 0; i < value_count; i++) {
     argv[i + 2] = values[i];
   }
-  int result = redis_commandv(client, value_count + 2, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -778,7 +600,9 @@ int redis_rpush(redis_client_t *client, const char *key, int value_count, const 
     return -1;
   }
 
-  const char **argv = malloc((value_count + 2) * sizeof(char *));
+  int argc = 0;
+  if (calc_argc_mul_add(2, value_count, 1, &argc) < 0) return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     return -1;
   }
@@ -787,8 +611,8 @@ int redis_rpush(redis_client_t *client, const char *key, int value_count, const 
   for (int i = 0; i < value_count; i++) {
     argv[i + 2] = values[i];
   }
-  int result = redis_commandv(client, value_count + 2, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -822,7 +646,9 @@ int redis_sadd(redis_client_t *client, const char *key, int member_count, const 
     return -1;
   }
 
-  const char **argv = malloc((member_count + 2) * sizeof(char *));
+  int argc = 0;
+  if (calc_argc_mul_add(2, member_count, 1, &argc) < 0) return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     return -1;
   }
@@ -831,8 +657,8 @@ int redis_sadd(redis_client_t *client, const char *key, int member_count, const 
   for (int i = 0; i < member_count; i++) {
     argv[i + 2] = members[i];
   }
-  int result = redis_commandv(client, member_count + 2, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -872,7 +698,10 @@ int redis_bf_exists(redis_client_t *client, const char *key, const char *item,
 
 int redis_bf_madd(redis_client_t *client, const char *key, int item_count, const char **items,
                   redis_command_cb_t callback, void *user_data) {
-  const char **argv = malloc((item_count + 2) * sizeof(char *));
+  if (!client || !key || !items || item_count <= 0) return -1;
+  int argc = 0;
+  if (calc_argc_mul_add(2, item_count, 1, &argc) < 0) return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
   
   argv[0] = "BF.MADD";
@@ -881,8 +710,8 @@ int redis_bf_madd(redis_client_t *client, const char *key, int item_count, const
     argv[i + 2] = items[i];
   }
   
-  int result = redis_commandv(client, item_count + 2, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -898,8 +727,7 @@ int redis_xadd_result(redis_client_t *client, const char *key, size_t maxlen,
   if (!out) return TURBO_EINVAL;
   *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
   if (!client || !key || !fields || !values || field_count == 0 ||
-      field_count > (SIZE_MAX - 6u) / 2u ||
-      field_count > ((size_t)INT_MAX - 6u) / 2u) {
+      field_count > (size_t)INT_MAX) {
     out->status = TURBO_EINVAL;
     return out->status;
   }
@@ -911,13 +739,27 @@ int redis_xadd_result(redis_client_t *client, const char *key, size_t maxlen,
   }
 
   /* Calculate argc: XADD key [MAXLEN ~ count] * field value [...] */
-  size_t argc = 3 + field_count * 2;  /* XADD key * + pairs */
-  if (maxlen > 0) argc += 3;          /* MAXLEN ~ count */
+  int argc;
+  if (calc_argc_mul_add(3, (int)field_count, 2, &argc) < 0) {
+    out->status = TURBO_EINVAL;
+    return out->status;
+  }
+  if (maxlen > 0) {
+    if (calc_argc_mul_add(argc, 3, 1, &argc) < 0) {
+      out->status = TURBO_EINVAL;
+      return out->status;
+    }
+  }
 
-  const char **argv = malloc(argc * sizeof(char *));
+  const char **argv = alloc_argv(argc);
+  if ((size_t)argc > SIZE_MAX / sizeof(size_t)) {
+    redis_argv_free(argv);
+    out->status = TURBO_ENOMEM;
+    return out->status;
+  }
   size_t *argvlen = malloc(argc * sizeof(size_t));
   if (!argv || !argvlen) {
-    free(argv);
+    redis_argv_free(argv);
     free(argvlen);
     out->status = TURBO_ENOMEM;
     return out->status;
@@ -954,7 +796,7 @@ int redis_xadd_result(redis_client_t *client, const char *key, size_t maxlen,
 
   int result = redis_commandv_result(client, (int)idx, argv, argvlen, out);
 
-  free(argv);
+  redis_argv_free(argv);
   free(argvlen);
   return result;
 }
@@ -1092,18 +934,31 @@ int redis_xread_result(redis_client_t *client, size_t count, int block_ms,
   if (!out) return TURBO_EINVAL;
   *out = (redis_stream_read_result_t)REDIS_STREAM_READ_RESULT_INIT;
   if (!client || !keys || !ids || stream_count == 0 ||
-      stream_count > (SIZE_MAX - 4u) / 2u ||
-      stream_count > ((size_t)INT_MAX - 4u) / 2u) {
+      stream_count > (size_t)INT_MAX) {
     out->command.status = TURBO_EINVAL;
     return out->command.status;
   }
 
   /* XREAD [COUNT count] [BLOCK ms] STREAMS key [key ...] id [id ...] */
-  size_t argc = 1 + 1 + stream_count * 2;  /* XREAD STREAMS keys ids */
-  if (count > 0) argc += 2;                 /* COUNT count */
-  if (block_ms >= 0) argc += 2;             /* BLOCK ms */
+  int argc;
+  if (calc_argc_mul_add(2, (int)stream_count, 2, &argc) < 0) {
+    out->command.status = TURBO_EINVAL;
+    return out->command.status;
+  }
+  if (count > 0) {
+    if (calc_argc_mul_add(argc, 2, 1, &argc) < 0) {
+      out->command.status = TURBO_EINVAL;
+      return out->command.status;
+    }
+  }
+  if (block_ms >= 0) {
+    if (calc_argc_mul_add(argc, 2, 1, &argc) < 0) {
+      out->command.status = TURBO_EINVAL;
+      return out->command.status;
+    }
+  }
 
-  const char **argv = malloc(argc * sizeof(char *));
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     out->command.status = TURBO_ENOMEM;
     return out->command.status;
@@ -1136,7 +991,7 @@ int redis_xread_result(redis_client_t *client, size_t count, int block_ms,
   }
 
   int result = redis_commandv_result(client, (int)idx, argv, NULL, &out->command);
-  free(argv);
+  redis_argv_free(argv);
   if (result == TURBO_OK) {
     result = redis_stream_reply_decode(out->command.reply, &out->streams,
                                        &out->stream_count);
@@ -1194,18 +1049,31 @@ int redis_xreadgroup_result(redis_client_t *client, const char *group,
   if (!out) return TURBO_EINVAL;
   *out = (redis_stream_read_result_t)REDIS_STREAM_READ_RESULT_INIT;
   if (!client || !group || !consumer || !keys || !ids || stream_count == 0 ||
-      stream_count > (SIZE_MAX - 9u) / 2u ||
-      stream_count > ((size_t)INT_MAX - 9u) / 2u) {
+      stream_count > (size_t)INT_MAX) {
     out->command.status = TURBO_EINVAL;
     return out->command.status;
   }
 
   /* XREADGROUP GROUP group consumer [COUNT count] [BLOCK ms] STREAMS key [key ...] id [...] */
-  size_t argc = 5 + 1 + stream_count * 2;  /* XREADGROUP GROUP g c STREAMS keys ids */
-  if (count > 0) argc += 2;
-  if (block_ms >= 0) argc += 2;
+  int argc;
+  if (calc_argc_mul_add(6, (int)stream_count, 2, &argc) < 0) {
+    out->command.status = TURBO_EINVAL;
+    return out->command.status;
+  }
+  if (count > 0) {
+    if (calc_argc_mul_add(argc, 2, 1, &argc) < 0) {
+      out->command.status = TURBO_EINVAL;
+      return out->command.status;
+    }
+  }
+  if (block_ms >= 0) {
+    if (calc_argc_mul_add(argc, 2, 1, &argc) < 0) {
+      out->command.status = TURBO_EINVAL;
+      return out->command.status;
+    }
+  }
 
-  const char **argv = malloc(argc * sizeof(char *));
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     out->command.status = TURBO_ENOMEM;
     return out->command.status;
@@ -1241,7 +1109,7 @@ int redis_xreadgroup_result(redis_client_t *client, const char *group,
   }
 
   int result = redis_commandv_result(client, (int)idx, argv, NULL, &out->command);
-  free(argv);
+  redis_argv_free(argv);
   if (result == TURBO_OK) {
     result = redis_stream_reply_decode(out->command.reply, &out->streams,
                                        &out->stream_count);
@@ -1269,13 +1137,17 @@ int redis_xack_result(redis_client_t *client, const char *key, const char *group
   if (!out) return TURBO_EINVAL;
   *out = (redis_command_result_t)REDIS_COMMAND_RESULT_INIT;
   if (!client || !key || !group || !ids || id_count == 0 ||
-      id_count > SIZE_MAX - 3u || id_count > (size_t)INT_MAX - 3u) {
+      id_count > (size_t)INT_MAX) {
     out->status = TURBO_EINVAL;
     return out->status;
   }
 
-  size_t argc = 3 + id_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  int argc;
+  if (calc_argc_mul_add(3, (int)id_count, 1, &argc) < 0) {
+    out->status = TURBO_EINVAL;
+    return out->status;
+  }
+  const char **argv = alloc_argv(argc);
   if (!argv) {
     out->status = TURBO_ENOMEM;
     return out->status;
@@ -1289,7 +1161,7 @@ int redis_xack_result(redis_client_t *client, const char *key, const char *group
   }
 
   int result = redis_commandv_result(client, (int)argc, argv, NULL, out);
-  free(argv);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -1311,8 +1183,14 @@ int redis_xdel(redis_client_t *client, const char *key,
   if (!client || !key || !ids || id_count == 0)
     return -1;
 
-  size_t argc = 2 + id_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  if (id_count > (size_t)INT_MAX)
+    return -1;
+
+  int argc;
+  if (calc_argc_mul_add(2, (int)id_count, 1, &argc) < 0)
+    return -1;
+
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   argv[0] = "XDEL";
@@ -1321,8 +1199,8 @@ int redis_xdel(redis_client_t *client, const char *key,
     argv[2 + i] = ids[i];
   }
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -1552,8 +1430,8 @@ int redis_xpending(redis_client_t *client, const char *key,
   char count_str[32];
   fmt(count_str, sizeof(count_str), "{}", count);
 
-  size_t argc = consumer ? 7 : 6;
-  const char **argv = malloc(argc * sizeof(char *));
+  int argc = consumer ? 7 : 6;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   size_t idx = 0;
@@ -1565,8 +1443,8 @@ int redis_xpending(redis_client_t *client, const char *key,
   argv[idx++] = count_str;
   if (consumer) argv[idx++] = consumer;
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, callback, user_data);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, callback, user_data);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -1585,9 +1463,14 @@ int redis_xclaim(redis_client_t *client, const char *key,
   char idle_str[32];
   fmt(idle_str, sizeof(idle_str), "{}", min_idle_ms);
 
+  if (id_count > (size_t)INT_MAX)
+    return -1;
+
   /* XCLAIM key group consumer idle id [id ...] */
-  size_t argc = 5 + id_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  int argc;
+  if (calc_argc_mul_add(5, (int)id_count, 1, &argc) < 0)
+    return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   size_t idx = 0;
@@ -1600,13 +1483,13 @@ int redis_xclaim(redis_client_t *client, const char *key,
     argv[idx++] = ids[i];
 
   redis_stream_cb_ctx_t *ctx = malloc(sizeof(redis_stream_cb_ctx_t));
-  if (!ctx) { free(argv); return -1; }
+  if (!ctx) { redis_argv_free(argv); return -1; }
   ctx->callback  = callback;
   ctx->user_data = user_data;
 
-  int result = redis_commandv(client, (int)argc, argv, NULL,
+  int result = redis_commandv(client, argc, argv, NULL,
                               on_single_stream_reply, ctx);
-  free(argv);
+  redis_argv_free(argv);
   if (result != 0) free(ctx);
   return result;
 }
@@ -1764,8 +1647,13 @@ int redis_subscribe(redis_client_t *client, size_t channel_count,
   if (!client || !channels || channel_count == 0)
     return -1;
 
-  size_t argc = 1 + channel_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  if (channel_count > (size_t)INT_MAX)
+    return -1;
+
+  int argc;
+  if (calc_argc_mul_add(1, (int)channel_count, 1, &argc) < 0)
+    return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   argv[0] = "SUBSCRIBE";
@@ -1773,8 +1661,8 @@ int redis_subscribe(redis_client_t *client, size_t channel_count,
     argv[i + 1] = channels[i];
   }
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, NULL, NULL);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, NULL, NULL);
+  redis_argv_free(argv);
   if (result == 0) {
     client->is_subscriber = 1;
     client->pubsub_cb = on_message;
@@ -1789,8 +1677,13 @@ int redis_psubscribe(redis_client_t *client, size_t pattern_count,
   if (!client || !patterns || pattern_count == 0)
     return -1;
 
-  size_t argc = 1 + pattern_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  if (pattern_count > (size_t)INT_MAX)
+    return -1;
+
+  int argc;
+  if (calc_argc_mul_add(1, (int)pattern_count, 1, &argc) < 0)
+    return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   argv[0] = "PSUBSCRIBE";
@@ -1798,8 +1691,8 @@ int redis_psubscribe(redis_client_t *client, size_t pattern_count,
     argv[i + 1] = patterns[i];
   }
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, NULL, NULL);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, NULL, NULL);
+  redis_argv_free(argv);
   if (result == 0) {
     client->is_subscriber = 1;
     client->pubsub_cb = on_message;
@@ -1818,8 +1711,13 @@ int redis_unsubscribe(redis_client_t *client, size_t channel_count,
     return redis_commandv(client, 1, argv, NULL, NULL, NULL);
   }
 
-  size_t argc = 1 + channel_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  if (channel_count > (size_t)INT_MAX)
+    return -1;
+
+  int argc;
+  if (calc_argc_mul_add(1, (int)channel_count, 1, &argc) < 0)
+    return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   argv[0] = "UNSUBSCRIBE";
@@ -1827,8 +1725,8 @@ int redis_unsubscribe(redis_client_t *client, size_t channel_count,
     argv[i + 1] = channels[i];
   }
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, NULL, NULL);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, NULL, NULL);
+  redis_argv_free(argv);
   return result;
 }
 
@@ -1842,8 +1740,13 @@ int redis_punsubscribe(redis_client_t *client, size_t pattern_count,
     return redis_commandv(client, 1, argv, NULL, NULL, NULL);
   }
 
-  size_t argc = 1 + pattern_count;
-  const char **argv = malloc(argc * sizeof(char *));
+  if (pattern_count > (size_t)INT_MAX)
+    return -1;
+
+  int argc;
+  if (calc_argc_mul_add(1, (int)pattern_count, 1, &argc) < 0)
+    return -1;
+  const char **argv = alloc_argv(argc);
   if (!argv) return -1;
 
   argv[0] = "PUNSUBSCRIBE";
@@ -1851,8 +1754,8 @@ int redis_punsubscribe(redis_client_t *client, size_t pattern_count,
     argv[i + 1] = patterns[i];
   }
 
-  int result = redis_commandv(client, (int)argc, argv, NULL, NULL, NULL);
-  free(argv);
+  int result = redis_commandv(client, argc, argv, NULL, NULL, NULL);
+  redis_argv_free(argv);
   return result;
 }
 static void redis_client_socket_publish(redis_client_t *client, coro_socket_t *socket,

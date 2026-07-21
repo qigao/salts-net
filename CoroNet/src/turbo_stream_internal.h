@@ -174,6 +174,9 @@ int turbo_stream_wss_get_verified_peer_certificate_sha256_internal(
     const turbo_stream_t *stream, char *output, size_t output_len);
 int turbo_stream_ws_send_text(turbo_stream_t *ws_stream, const char *data, size_t len);
 int turbo_stream_ws_send_owned_recv(turbo_stream_t *ws_stream, char *data, size_t len);
+int turbo_stream_ws_set_server_config_internal(
+    turbo_stream_t *ws_stream, const char *path, const char *subprotocol,
+    size_t max_message_size, int binary_only);
 
 int turbo_stream_send_hwm_check(const turbo_stream_t *s, size_t add_bytes,
                                 size_t pending_bytes);

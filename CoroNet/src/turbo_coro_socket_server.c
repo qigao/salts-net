@@ -82,7 +82,8 @@ static void wait_for_socket_close_completion(coro_socket_t *socket) {
 
 static int server_admission_end_is_expected(const coro_server_task_t *task, int rc) {
   return (task && task->server && task->server->server_stopping) ||
-         rc == TURBO_ECANCELED || rc == TURBO_ETIMEDOUT || rc == TURBO_EOF;
+         rc == TURBO_ECANCELED || rc == TURBO_ETIMEDOUT || rc == TURBO_EOF ||
+         rc == TURBO_EPERM || rc == TURBO_ECONNABORTED;
 }
 
 static void coro_entry_bridge(coro_t *co, void *arg) {
@@ -208,6 +209,15 @@ static void accept_loop_task(coro_t *co, void *arg) {
       if (server->tls_server_context) {
         turbo_stream_tls_server_context_retain_internal(server->tls_server_context);
         client->tls_server_context = server->tls_server_context;
+      }
+      if (server->ws_server_configured) {
+        client->ws_server_configured = 1;
+        memcpy(client->ws_server_path, server->ws_server_path,
+               sizeof(client->ws_server_path));
+        memcpy(client->ws_server_subprotocol, server->ws_server_subprotocol,
+               sizeof(client->ws_server_subprotocol));
+        client->ws_server_max_message_size = server->ws_server_max_message_size;
+        client->ws_server_binary_only = server->ws_server_binary_only;
       }
       if (server->transport == TURBO_WEBSOCKET) {
         ws_server_listener_state_t *ws_state =

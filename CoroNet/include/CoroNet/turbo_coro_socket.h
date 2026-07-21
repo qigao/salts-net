@@ -72,6 +72,18 @@ typedef struct coro_proxy_config_s {
 
 #define CORO_PROXY_CONFIG_DEFAULT { CORO_PROXY_DIRECT, NULL, 0, NULL, NULL }
 
+/** Optional admission and message policy copied by a WebSocket server socket. */
+typedef struct coro_ws_server_config_s {
+  size_t size;             /**< Must be sizeof(coro_ws_server_config_t). */
+  const char *path;        /**< Exact HTTP request target, or NULL for any path. */
+  const char *subprotocol; /**< Required offered token and selected response token. */
+  size_t max_message_size; /**< Maximum complete data message bytes; 0 is unlimited. */
+  int binary_only;         /**< Reject text data messages with close code 1003. */
+} coro_ws_server_config_t;
+
+#define CORO_WS_SERVER_CONFIG_DEFAULT \
+  { sizeof(coro_ws_server_config_t), NULL, NULL, 0, 0 }
+
 /**
  * @brief Create a new coroutine-aware socket.
  * @param ctx   Event-loop context
@@ -258,6 +270,20 @@ CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
  */
 CXX_C_API int coro_socket_set_tls_server_config(coro_socket_t *socket,
                                                 const turbo_tls_server_config_t *config);
+
+/**
+ * @brief Configure strict WebSocket server admission and message limits.
+ *
+ * Call before coro_socket_listen_ws(). The socket copies all values and
+ * accepted sockets inherit that immutable copy. Passing NULL clears the
+ * policy and preserves the general-purpose WebSocket server behavior.
+ *
+ * @return 0 on success, TURBO_EINVAL for invalid values or socket type,
+ *         TURBO_EBUSY after connect/listen starts, or TURBO_ERANGE when a
+ *         string exceeds the implementation limit.
+ */
+CXX_C_API int coro_socket_set_ws_server_config(
+    coro_socket_t *socket, const coro_ws_server_config_t *config);
 
 /** RFC 9266 tls-exporter channel binding output size. */
 #define CORO_TLS_CHANNEL_BINDING_SIZE 32U

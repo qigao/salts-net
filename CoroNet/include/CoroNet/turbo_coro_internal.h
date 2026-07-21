@@ -246,6 +246,8 @@ enum {
   CORO_PROXY_HOST_CAPACITY = 256,
   CORO_PROXY_USERNAME_CAPACITY = 256,
   CORO_PROXY_PASSWORD_CAPACITY = 256,
+  CORO_WS_SERVER_PATH_CAPACITY = 256,
+  CORO_WS_SERVER_SUBPROTOCOL_CAPACITY = 128,
 };
 
 typedef struct coro_proxy_settings_s {
@@ -281,6 +283,11 @@ struct coro_socket_s {
   char *tls_cipher_list;       /**< Optional OpenSSL cipher list */
   turbo_tls_server_context_t *tls_server_context; /**< Prepared immutable server TLS context */
   coro_proxy_settings_t proxy; /**< Copied outbound proxy configuration */
+  int ws_server_configured;    /**< 1 = enforce ws_server_* policy. */
+  char ws_server_path[CORO_WS_SERVER_PATH_CAPACITY];
+  char ws_server_subprotocol[CORO_WS_SERVER_SUBPROTOCOL_CAPACITY];
+  size_t ws_server_max_message_size;
+  int ws_server_binary_only;
 
   /* ── Server fields (for listening sockets) ────────────── */
   coro_socket_t *listener;                           /**< Listening socket (server mode) */

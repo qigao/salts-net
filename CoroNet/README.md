@@ -173,6 +173,33 @@ AUTH/SELECT before the socket becomes borrowable. Borrowers must call
 `coro_pool_discard()` instead of `coro_pool_return()` when framing or protocol
 state is no longer reusable.
 
+### WebSocket Server Policy
+
+Protocol servers can constrain WebSocket admission and message delivery before
+starting the listener:
+
+```c
+coro_ws_server_config_t ws = CORO_WS_SERVER_CONFIG_DEFAULT;
+coro_socket_t *server = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
+
+ws.path = "/mqtt";          /* exact request-target match */
+ws.subprotocol = "mqtt";    /* required offered token and selected token */
+ws.max_message_size = 1024 * 1024;
+ws.binary_only = 1;
+
+if (!server || coro_socket_set_ws_server_config(server, &ws) != 0 ||
+    coro_socket_listen_ws(server, "0.0.0.0", 8080, 0,
+                          on_connection, NULL) != 0) {
+  /* fail startup and report the configuration error */
+}
+```
+
+Set the policy before connect/listen starts. CoroNet copies the strings into the
+listener, and every accepted socket inherits an immutable copy. `max_message_size`
+applies to both one-frame messages and the cumulative size of fragmented messages.
+`binary_only` rejects text data with close code 1003; oversized messages use 1009.
+Leaving a field at its default preserves the general-purpose WebSocket behavior.
+
 ### TLS/WSS Certificates
 
 TLS and WSS listeners load a PEM certificate chain and its matching PEM private

@@ -52,6 +52,11 @@ typedef struct ws_state_s {
   char            path[256];    /* URI path, e.g. "/" */
   char            host[256];    /* Host header value */
   char            protocol[128];/* Optional Sec-WebSocket-Protocol value */
+  char            server_path[256];
+  char            server_protocol[128];
+  size_t          max_message_size;
+  int             binary_only;
+  int             server_configured;
   char           *tls_ca_file;
   char           *tls_cert_file;
   char           *tls_key_file;
@@ -101,6 +106,7 @@ static int ws_copy_tls_client_config(ws_state_t *st, const turbo_tls_client_conf
 
 static int ws_fail(ws_state_t *st, int err);
 static int ws_protocol_error(ws_state_t *st);
+static int ws_close_with_code(ws_state_t *st, uint16_t code, int err);
 
 static uint8_t *ws_find_header_end(uint8_t *data, size_t len) {
   if (!data || len < 4) {
@@ -267,6 +273,10 @@ static int ws_reserve_buffer(ws_state_t *st, mem_buffer_t **buf, size_t needed,
     new_cap = needed;
   }
   while (new_cap < needed) {
+    if (new_cap > SIZE_MAX / 2U) {
+      new_cap = needed;
+      break;
+    }
     new_cap *= 2U;
   }
 
@@ -311,21 +321,45 @@ static int ws_fail(ws_state_t *st, int err) {
   return err;
 }
 
-static int ws_protocol_error(ws_state_t *st) {
-  uint8_t close_payload[2] = { 0x03, 0xEA }; /* 1002 Protocol Error */
+static int ws_close_with_code(ws_state_t *st, uint16_t code, int err) {
+  uint8_t close_payload[2] = {(uint8_t)(code >> 8U),
+                              (uint8_t)(code & 0xffU)};
 
   if (st && st->state == WS_ST_OPEN) {
-    int rc;
-
     st->state = WS_ST_CLOSING;
-    rc = ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
-    if (rc == 0 && st->tcp) {
+    if (ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2) == 0 && st->tcp) {
       (void)turbo_stream_flush(st->tcp);
-      return 0;
     }
   }
+  ws_fail(st, err);
+  return 0;
+}
 
-  ws_fail(st, TURBO_EPROTONOSUPPORT);
+static int ws_protocol_error(ws_state_t *st) {
+  return ws_close_with_code(st, 1002U, TURBO_EPROTONOSUPPORT);
+}
+
+static int ws_header_has_token(const char *header, const char *required) {
+  const char *cursor;
+  size_t required_len;
+
+  if (!header || !required || required[0] == '\0') return 0;
+  required_len = strlen(required);
+  cursor = header;
+  while (*cursor != '\0') {
+    const char *start;
+    const char *end;
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == ',') cursor++;
+    start = cursor;
+    while (*cursor != '\0' && *cursor != ',') cursor++;
+    end = cursor;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    if ((size_t)(end - start) == required_len &&
+        memcmp(start, required, required_len) == 0) {
+      return 1;
+    }
+    if (*cursor == ',') cursor++;
+  }
   return 0;
 }
 
@@ -656,21 +690,46 @@ static int ws_process_handshake(ws_state_t *st) {
   }
   
   int ok = 0;
+  int failure_status = TURBO_EPROTONOSUPPORT;
   if (websocket_handshake_validate(&parser) == 0 &&
       websocket_handshake_is_websocket_request(&parser)) {
     if (st->server_mode) {
       char client_key[96] = {0};
       char accept_key[96] = {0};
+      int path_ok = 1;
+      int protocol_ok = 1;
 
-      if (websocket_handshake_get_key(&parser, client_key, sizeof(client_key)) == 0 &&
+      if (st->server_configured && st->server_path[0] != '\0') {
+        size_t expected_len = strlen(st->server_path);
+        path_ok = parser.path_start != NULL && parser.path_len == expected_len &&
+                  memcmp(parser.path_start, st->server_path, expected_len) == 0;
+      }
+      if (st->server_configured && st->server_protocol[0] != '\0') {
+        protocol_ok = ws_header_has_token(parser.ws_protocol,
+                                          st->server_protocol);
+      }
+      if (!path_ok || !protocol_ok) failure_status = TURBO_EPERM;
+
+      if (path_ok && protocol_ok &&
+          websocket_handshake_get_key(&parser, client_key, sizeof(client_key)) == 0 &&
           ws_build_accept_key(client_key, accept_key, sizeof(accept_key)) == 0 &&
-          ws_send_server_handshake(st, accept_key, parser.ws_protocol) == 0) {
+          ws_send_server_handshake(
+              st, accept_key,
+              (st->server_configured && st->server_protocol[0] != '\0')
+                  ? st->server_protocol
+                  : parser.ws_protocol) == 0) {
         ok = 1;
       }
     } else {
       char accept_val[96] = {0};
       if (websocket_handshake_get_key(&parser, accept_val, sizeof(accept_val)) == 0) {
         ok = (ws_validate_accept_key(st->key_b64, accept_val) == 0);
+        if (ok && st->protocol[0] != '\0') {
+          ok = parser.ws_protocol != NULL &&
+               strcmp(parser.ws_protocol, st->protocol) == 0;
+        } else if (ok && parser.ws_protocol != NULL) {
+          ok = 0;
+        }
       }
     }
   }
@@ -680,7 +739,7 @@ static int ws_process_handshake(ws_state_t *st) {
   if (!ok) {
     st->state = WS_ST_CLOSED;
     if (st->outer->on_connect)
-      st->outer->on_connect(st->outer, TURBO_EPROTONOSUPPORT, NULL);
+      st->outer->on_connect(st->outer, failure_status, NULL);
     st->hs_len = 0;
     mem_set_used(st->hs_buf, 0);
     return -1;
@@ -773,6 +832,19 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
 
     if (pr == WS_PARSE_NEED_MORE) {
       size_t rem = len - consumed;
+      size_t frame_needed = 0;
+      size_t remaining_limit = st->max_message_size;
+      if (st->max_message_size > 0 && st->expecting_cont) {
+        remaining_limit = st->frag_len < st->max_message_size
+                              ? st->max_message_size - st->frag_len
+                              : 0;
+      }
+      if (st->max_message_size > 0 &&
+          ws_frame_peek_size(data + consumed, rem, &frame_needed) == WS_PARSE_OK &&
+          frame_needed > remaining_limit &&
+          frame_needed - remaining_limit > 14U) {
+        return ws_close_with_code(st, 1009U, TURBO_ERANGE);
+      }
       return ws_store_unconsumed(st, data + consumed, rem);
     }
 
@@ -804,6 +876,9 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
         break; /* ignore */
 
       case WS_OPCODE_CLOSE:
+        if (frame.payload_len == 1U) {
+          return ws_protocol_error(st);
+        }
         st->state = WS_ST_CLOSING;
         ws_send_frame(st, WS_OPCODE_CLOSE, frame.payload,
                       (size_t)frame.payload_len);
@@ -812,6 +887,16 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
 
       case WS_OPCODE_TEXT:
       case WS_OPCODE_BINARY:
+        if (st->expecting_cont) {
+          return ws_protocol_error(st);
+        }
+        if (st->binary_only && frame.opcode == WS_OPCODE_TEXT) {
+          return ws_close_with_code(st, 1003U, TURBO_EPROTONOSUPPORT);
+        }
+        if (st->max_message_size > 0 &&
+            frame.payload_len > st->max_message_size) {
+          return ws_close_with_code(st, 1009U, TURBO_ERANGE);
+        }
         if (frame.fin) {
           ws_deliver(st, frame.opcode, frame.payload, (size_t)frame.payload_len);
         } else {
@@ -821,7 +906,7 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
           st->frag_len        = 0;
           /* Grow frag buf if needed */
           size_t need = (size_t)frame.payload_len;
-          if (ws_reserve_buffer(st, &st->frag_buf, need * 2U, need * 2U) != 0) {
+          if (ws_reserve_buffer(st, &st->frag_buf, need, need) != 0) {
             st->rx_len = 0;
             mem_set_used(st->rx_buf, 0);
             return ws_fail(st, TURBO_ENOMEM);
@@ -839,8 +924,16 @@ static int ws_process_frame(ws_state_t *st, const uint8_t *data, size_t len) {
           return ws_protocol_error(st);
         }
         {
-          size_t need = st->frag_len + (size_t)frame.payload_len;
-          if (ws_reserve_buffer(st, &st->frag_buf, need * 2U, need * 2U) != 0) {
+          size_t payload_len = (size_t)frame.payload_len;
+          size_t need;
+          if (payload_len > SIZE_MAX - st->frag_len) {
+            return ws_close_with_code(st, 1009U, TURBO_ERANGE);
+          }
+          need = st->frag_len + payload_len;
+          if (st->max_message_size > 0 && need > st->max_message_size) {
+            return ws_close_with_code(st, 1009U, TURBO_ERANGE);
+          }
+          if (ws_reserve_buffer(st, &st->frag_buf, need, need) != 0) {
             st->rx_len = 0;
             mem_set_used(st->rx_buf, 0);
             return ws_fail(st, TURBO_ENOMEM);
@@ -1334,6 +1427,38 @@ CXX_C_API void turbo_stream_ws_set_path_host_protocol(turbo_stream_t *s, const c
   } else {
     st->protocol[0] = '\0';
   }
+}
+
+int turbo_stream_ws_set_server_config_internal(
+    turbo_stream_t *ws_stream, const char *path, const char *subprotocol,
+    size_t max_message_size, int binary_only) {
+  ws_state_t *st;
+  size_t path_len;
+  size_t protocol_len;
+
+  if (!ws_stream || (ws_stream->kind != TURBO_STREAM_WS &&
+       ws_stream->kind != TURBO_STREAM_WSS)) {
+    return TURBO_EINVAL;
+  }
+  st = (ws_state_t *)ws_stream->backend_data;
+  if (!st || st->state != WS_ST_INIT) return TURBO_EBUSY;
+
+  path_len = path ? strlen(path) : 0;
+  protocol_len = subprotocol ? strlen(subprotocol) : 0;
+  if (path_len >= sizeof(st->server_path) ||
+      protocol_len >= sizeof(st->server_protocol)) {
+    return TURBO_ERANGE;
+  }
+  st->server_path[0] = '\0';
+  st->server_protocol[0] = '\0';
+  if (path_len > 0) memcpy(st->server_path, path, path_len + 1U);
+  if (protocol_len > 0) {
+    memcpy(st->server_protocol, subprotocol, protocol_len + 1U);
+  }
+  st->max_message_size = max_message_size;
+  st->binary_only = binary_only ? 1 : 0;
+  st->server_configured = 1;
+  return 0;
 }
 
 int turbo_stream_ws_wrap_server(turbo_stream_t *ws_stream,

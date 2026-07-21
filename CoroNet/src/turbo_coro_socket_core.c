@@ -1029,6 +1029,59 @@ int coro_socket_set_tls_server_config(coro_socket_t *s,
   return socket_return_error(s, 0);
 }
 
+int coro_socket_set_ws_server_config(coro_socket_t *s,
+                                     const coro_ws_server_config_t *config) {
+  size_t path_len = 0;
+  size_t subprotocol_len = 0;
+
+  if (!s || (s->transport != TURBO_TCP && s->transport != TURBO_TLS)) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  if (s->connected || s->co_wait || s->listener || s->handle.stream) {
+    return socket_return_error(s, TURBO_EBUSY);
+  }
+  if (!config) {
+    s->ws_server_configured = 0;
+    s->ws_server_path[0] = '\0';
+    s->ws_server_subprotocol[0] = '\0';
+    s->ws_server_max_message_size = 0;
+    s->ws_server_binary_only = 0;
+    return socket_return_error(s, 0);
+  }
+  if (config->size != sizeof(*config)) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  if (config->path) {
+    path_len = strlen(config->path);
+    if (path_len == 0 || config->path[0] != '/') {
+      return socket_return_error(s, TURBO_EINVAL);
+    }
+    if (path_len >= sizeof(s->ws_server_path)) {
+      return socket_return_error(s, TURBO_ERANGE);
+    }
+  }
+  if (config->subprotocol) {
+    subprotocol_len = strlen(config->subprotocol);
+    if (subprotocol_len == 0 ||
+        subprotocol_len >= sizeof(s->ws_server_subprotocol)) {
+      return socket_return_error(
+          s, subprotocol_len == 0 ? TURBO_EINVAL : TURBO_ERANGE);
+    }
+  }
+
+  s->ws_server_path[0] = '\0';
+  s->ws_server_subprotocol[0] = '\0';
+  if (path_len > 0) memcpy(s->ws_server_path, config->path, path_len + 1U);
+  if (subprotocol_len > 0) {
+    memcpy(s->ws_server_subprotocol, config->subprotocol,
+           subprotocol_len + 1U);
+  }
+  s->ws_server_max_message_size = config->max_message_size;
+  s->ws_server_binary_only = config->binary_only ? 1 : 0;
+  s->ws_server_configured = 1;
+  return socket_return_error(s, 0);
+}
+
 /* ── Socket I/O ───────────────────────────────────────────── */
 
 static int coro_socket_recv_compression_append(coro_socket_t *s, const char *chunk, size_t chunk_len) {

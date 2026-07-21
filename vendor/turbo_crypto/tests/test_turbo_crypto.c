@@ -257,4 +257,78 @@ spec("turbo crypto") {
     turbo_crypto_wipe(second, sizeof(second));
     check_int_eq(turbo_crypto_random(NULL, 1), TURBO_CRYPTO_ERANDOM);
   }
+
+  it("matches the BLAKE2b standard vector") {
+    static const uint8_t expected[TURBO_CRYPTO_BLAKE2B_MAX_SIZE] = {
+        0xba, 0x80, 0xa5, 0x3f, 0x98, 0x1c, 0x4d, 0x0d, 0x6a, 0x27, 0x97, 0xb6, 0x9f,
+        0x12, 0xf6, 0xe9, 0x4c, 0x21, 0x2f, 0x14, 0x68, 0x5a, 0xc4, 0xb7, 0x4b, 0x12,
+        0xbb, 0x6f, 0xdb, 0xff, 0xa2, 0xd1, 0x7d, 0x87, 0xc5, 0x39, 0x2a, 0xab, 0x79,
+        0x2d, 0xc2, 0x52, 0xd5, 0xde, 0x45, 0x33, 0xcc, 0x95, 0x18, 0xd3, 0x8a, 0xa8,
+        0xdb, 0xf1, 0x92, 0x5a, 0xb9, 0x23, 0x86, 0xed, 0xd4, 0x00, 0x99, 0x23};
+    uint8_t actual[TURBO_CRYPTO_BLAKE2B_MAX_SIZE];
+
+    check_int_eq(turbo_crypto_blake2b(actual, sizeof(actual), "abc", 3U), TURBO_CRYPTO_OK);
+    check_uint8_array_eq(actual, expected, sizeof(expected));
+    check_int_eq(turbo_crypto_blake2b(actual, 0U, "abc", 3U), TURBO_CRYPTO_EINVAL);
+  }
+
+  it("round-trips authenticated encryption and rejects a changed tag") {
+    static const uint8_t plain_text[] = "authenticated payload";
+    static const uint8_t associated_data[] = "header";
+    uint8_t key[TURBO_CRYPTO_AEAD_KEY_SIZE] = {0};
+    uint8_t nonce[TURBO_CRYPTO_AEAD_NONCE_SIZE] = {0};
+    uint8_t mac[TURBO_CRYPTO_AEAD_MAC_SIZE];
+    uint8_t cipher_text[sizeof(plain_text)];
+    uint8_t unlocked[sizeof(plain_text)];
+
+    check_int_eq(turbo_crypto_aead_lock(cipher_text, mac, key, nonce, associated_data,
+                                        sizeof(associated_data) - 1U, plain_text,
+                                        sizeof(plain_text)),
+                 TURBO_CRYPTO_OK);
+    check_int_eq(turbo_crypto_aead_unlock(unlocked, mac, key, nonce, associated_data,
+                                          sizeof(associated_data) - 1U, cipher_text,
+                                          sizeof(cipher_text)),
+                 TURBO_CRYPTO_OK);
+    check_uint8_array_eq(unlocked, plain_text, sizeof(plain_text));
+
+    mac[0] ^= 0x01U;
+    check_int_eq(turbo_crypto_aead_unlock(unlocked, mac, key, nonce, associated_data,
+                                          sizeof(associated_data) - 1U, cipher_text,
+                                          sizeof(cipher_text)),
+                 TURBO_CRYPTO_EVERIFY);
+  }
+
+  it("derives matching X25519 shared secrets") {
+    uint8_t alice_secret[TURBO_CRYPTO_CURVE25519_SIZE] = {8U};
+    uint8_t bob_secret[TURBO_CRYPTO_CURVE25519_SIZE] = {16U};
+    uint8_t alice_public[TURBO_CRYPTO_CURVE25519_SIZE];
+    uint8_t bob_public[TURBO_CRYPTO_CURVE25519_SIZE];
+    uint8_t alice_shared[TURBO_CRYPTO_CURVE25519_SIZE];
+    uint8_t bob_shared[TURBO_CRYPTO_CURVE25519_SIZE];
+
+    check_int_eq(turbo_crypto_x25519_public_key(alice_public, alice_secret), TURBO_CRYPTO_OK);
+    check_int_eq(turbo_crypto_x25519_public_key(bob_public, bob_secret), TURBO_CRYPTO_OK);
+    check_mem_ne(alice_public, bob_public, sizeof(alice_public));
+    check_int_eq(turbo_crypto_x25519(alice_shared, alice_secret, bob_public), TURBO_CRYPTO_OK);
+    check_int_eq(turbo_crypto_x25519(bob_shared, bob_secret, alice_public), TURBO_CRYPTO_OK);
+    check_uint8_array_eq(alice_shared, bob_shared, sizeof(alice_shared));
+  }
+
+  it("signs and verifies with the Monocypher EdDSA adapter") {
+    static const uint8_t message[] = "curve25519 EdDSA";
+    uint8_t seed[TURBO_CRYPTO_CURVE25519_SIZE] = {3U};
+    uint8_t secret_key[TURBO_CRYPTO_EDDSA_SECRET_KEY_SIZE];
+    uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE];
+    uint8_t signature[TURBO_CRYPTO_EDDSA_SIGNATURE_SIZE];
+
+    check_int_eq(turbo_crypto_eddsa_key_pair(secret_key, public_key, seed), TURBO_CRYPTO_OK);
+    check_int_eq(turbo_crypto_eddsa_sign(signature, secret_key, message, sizeof(message) - 1U),
+                 TURBO_CRYPTO_OK);
+    check_int_eq(turbo_crypto_eddsa_check(signature, public_key, message, sizeof(message) - 1U),
+                 TURBO_CRYPTO_OK);
+    signature[0] ^= 0x01U;
+    check_int_eq(turbo_crypto_eddsa_check(signature, public_key, message, sizeof(message) - 1U),
+                 TURBO_CRYPTO_EVERIFY);
+    turbo_crypto_wipe(secret_key, sizeof(secret_key));
+  }
 }

@@ -663,6 +663,25 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
   turbo_stream_set_user_data(ws_stream, s);
   turbo_stream_set_write_cb(ws_stream, on_ws_write_complete);
   ws_stream->managed = 1;
+  if (s->ws_server_configured) {
+    coro_ws_server_config_t config = CORO_WS_SERVER_CONFIG_DEFAULT;
+    config.path = s->ws_server_path[0] ? s->ws_server_path : NULL;
+    config.subprotocol = s->ws_server_subprotocol[0]
+                             ? s->ws_server_subprotocol
+                             : NULL;
+    config.max_message_size = s->ws_server_max_message_size;
+    config.binary_only = s->ws_server_binary_only;
+    rc = turbo_stream_ws_set_server_config_internal(
+        ws_stream, config.path, config.subprotocol, config.max_message_size,
+        config.binary_only);
+    if (rc != 0) {
+      turbo_stream_set_user_data(ws_stream, NULL);
+      s->handle.stream = NULL;
+      s->connected = 0;
+      turbo_stream_destroy(ws_stream);
+      return rc;
+    }
+  }
   {
     rc = coro_socket_apply_stream_options(s);
     if (rc != 0) {

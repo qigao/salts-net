@@ -17,6 +17,23 @@ extern "C" {
 #define TURBO_CRYPTO_ED448_PRIVATE_KEY_SIZE 57U
 #define TURBO_CRYPTO_ED448_PUBLIC_KEY_SIZE 57U
 #define TURBO_CRYPTO_ED448_SIGNATURE_SIZE 114U
+#define TURBO_CRYPTO_BLAKE2B_MAX_SIZE 64U
+#define TURBO_CRYPTO_AEAD_MAC_SIZE 16U
+#define TURBO_CRYPTO_AEAD_KEY_SIZE 32U
+#define TURBO_CRYPTO_AEAD_NONCE_SIZE 24U
+#define TURBO_CRYPTO_CURVE25519_SIZE 32U
+#define TURBO_CRYPTO_EDDSA_SECRET_KEY_SIZE 64U
+#define TURBO_CRYPTO_EDDSA_SIGNATURE_SIZE 64U
+#define TURBO_CRYPTO_CHACHA20_H_INPUT_SIZE 16U
+#define TURBO_CRYPTO_CHACHA20_DJB_NONCE_SIZE 8U
+#define TURBO_CRYPTO_CHACHA20_IETF_NONCE_SIZE 12U
+#define TURBO_CRYPTO_CHACHA20_X_NONCE_SIZE 24U
+#define TURBO_CRYPTO_POLY1305_MAC_SIZE 16U
+#define TURBO_CRYPTO_POLY1305_KEY_SIZE 32U
+
+#define TURBO_CRYPTO_ARGON2_D 0U
+#define TURBO_CRYPTO_ARGON2_I 1U
+#define TURBO_CRYPTO_ARGON2_ID 2U
 
 #define TURBO_CRYPTO_OK 0
 #define TURBO_CRYPTO_EINVAL (-1)
@@ -38,6 +55,27 @@ typedef union turbo_crypto_sha256_ctx_u {
     long double floating_alignment;
     uint8_t bytes[TURBO_CRYPTO_SHA256_CONTEXT_SIZE];
 } turbo_crypto_sha256_ctx_t;
+
+typedef struct turbo_crypto_argon2_config_s {
+  uint32_t algorithm;
+  uint32_t block_count;
+  uint32_t pass_count;
+  uint32_t lane_count;
+} turbo_crypto_argon2_config_t;
+
+typedef struct turbo_crypto_argon2_inputs_s {
+  const uint8_t *password;
+  const uint8_t *salt;
+  uint32_t password_size;
+  uint32_t salt_size;
+} turbo_crypto_argon2_inputs_t;
+
+typedef struct turbo_crypto_argon2_extras_s {
+  const uint8_t *key;
+  const uint8_t *associated_data;
+  uint32_t key_size;
+  uint32_t associated_data_size;
+} turbo_crypto_argon2_extras_t;
 
 /** Time O(len), space O(1). NULL data is valid only when len is zero. */
 int turbo_crypto_sha256(const void* data, size_t len,
@@ -129,14 +167,109 @@ int turbo_crypto_ed448_verify(
     const void* data, size_t data_len,
     const uint8_t signature[TURBO_CRYPTO_ED448_SIGNATURE_SIZE]);
 
+/**
+ * One-shot Monocypher-backed primitives. Input pointers may be NULL only when
+ * their corresponding size is zero. Output, key, nonce, and fixed-size input
+ * pointers are always required. Functions return TURBO_CRYPTO_OK,
+ * TURBO_CRYPTO_EINVAL, TURBO_CRYPTO_EVERIFY for authentication/signature
+ * failures, or TURBO_CRYPTO_ECRYPTO when a mapping operation cannot complete.
+ */
+int turbo_crypto_blake2b(void *out, size_t out_len, const void *data, size_t data_len);
+int turbo_crypto_blake2b_keyed(void *out, size_t out_len, const void *key, size_t key_len,
+                               const void *data, size_t data_len);
+
+int turbo_crypto_aead_lock(void *cipher_text, uint8_t mac[TURBO_CRYPTO_AEAD_MAC_SIZE],
+                           const uint8_t key[TURBO_CRYPTO_AEAD_KEY_SIZE],
+                           const uint8_t nonce[TURBO_CRYPTO_AEAD_NONCE_SIZE],
+                           const void *associated_data, size_t associated_data_len,
+                           const void *plain_text, size_t text_len);
+int turbo_crypto_aead_unlock(void *plain_text, const uint8_t mac[TURBO_CRYPTO_AEAD_MAC_SIZE],
+                             const uint8_t key[TURBO_CRYPTO_AEAD_KEY_SIZE],
+                             const uint8_t nonce[TURBO_CRYPTO_AEAD_NONCE_SIZE],
+                             const void *associated_data, size_t associated_data_len,
+                             const void *cipher_text, size_t text_len);
+
+/**
+ * Argon2 uses caller-owned work memory of block_count * 1024 bytes. The
+ * wrapper is single-threaded and requires block_count >= 8 * lane_count.
+ */
+int turbo_crypto_argon2(void *out, uint32_t out_len, void *work_area,
+                        turbo_crypto_argon2_config_t config, turbo_crypto_argon2_inputs_t inputs,
+                        turbo_crypto_argon2_extras_t extras);
+
+int turbo_crypto_x25519_public_key(uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                                   const uint8_t secret_key[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_x25519(uint8_t shared_secret[TURBO_CRYPTO_CURVE25519_SIZE],
+                        const uint8_t secret_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                        const uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_x25519_to_eddsa(uint8_t eddsa[TURBO_CRYPTO_CURVE25519_SIZE],
+                                 const uint8_t x25519[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_x25519_inverse(uint8_t blind_salt[TURBO_CRYPTO_CURVE25519_SIZE],
+                                const uint8_t private_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                                const uint8_t curve_point[TURBO_CRYPTO_CURVE25519_SIZE]);
+
+/** Dirty public keys are for Elligator use and leak three private-key bits. */
+int turbo_crypto_x25519_dirty_small(uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                                    const uint8_t secret_key[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_x25519_dirty_fast(uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                                   const uint8_t secret_key[TURBO_CRYPTO_CURVE25519_SIZE]);
+
+int turbo_crypto_eddsa_key_pair(uint8_t secret_key[TURBO_CRYPTO_EDDSA_SECRET_KEY_SIZE],
+                                uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                                uint8_t seed[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_eddsa_sign(uint8_t signature[TURBO_CRYPTO_EDDSA_SIGNATURE_SIZE],
+                            const uint8_t secret_key[TURBO_CRYPTO_EDDSA_SECRET_KEY_SIZE],
+                            const void *data, size_t data_len);
+int turbo_crypto_eddsa_check(const uint8_t signature[TURBO_CRYPTO_EDDSA_SIGNATURE_SIZE],
+                             const uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                             const void *data, size_t data_len);
+int turbo_crypto_eddsa_to_x25519(uint8_t x25519[TURBO_CRYPTO_CURVE25519_SIZE],
+                                 const uint8_t eddsa[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_eddsa_trim_scalar(uint8_t out[TURBO_CRYPTO_CURVE25519_SIZE],
+                                   const uint8_t in[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_eddsa_reduce(uint8_t reduced[TURBO_CRYPTO_CURVE25519_SIZE],
+                              const uint8_t expanded[TURBO_CRYPTO_EDDSA_SIGNATURE_SIZE]);
+int turbo_crypto_eddsa_mul_add(uint8_t out[TURBO_CRYPTO_CURVE25519_SIZE],
+                               const uint8_t a[TURBO_CRYPTO_CURVE25519_SIZE],
+                               const uint8_t b[TURBO_CRYPTO_CURVE25519_SIZE],
+                               const uint8_t c[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_eddsa_scalarbase(uint8_t point[TURBO_CRYPTO_CURVE25519_SIZE],
+                                  const uint8_t scalar[TURBO_CRYPTO_CURVE25519_SIZE]);
+
+int turbo_crypto_chacha20_h(uint8_t out[TURBO_CRYPTO_CURVE25519_SIZE],
+                            const uint8_t key[TURBO_CRYPTO_CURVE25519_SIZE],
+                            const uint8_t in[TURBO_CRYPTO_CHACHA20_H_INPUT_SIZE]);
+int turbo_crypto_chacha20_djb(void *cipher_text, const void *plain_text, size_t text_len,
+                              const uint8_t key[TURBO_CRYPTO_CURVE25519_SIZE],
+                              const uint8_t nonce[TURBO_CRYPTO_CHACHA20_DJB_NONCE_SIZE],
+                              uint64_t counter);
+int turbo_crypto_chacha20_ietf(void *cipher_text, const void *plain_text, size_t text_len,
+                               const uint8_t key[TURBO_CRYPTO_CURVE25519_SIZE],
+                               const uint8_t nonce[TURBO_CRYPTO_CHACHA20_IETF_NONCE_SIZE],
+                               uint32_t counter);
+int turbo_crypto_chacha20_x(void *cipher_text, const void *plain_text, size_t text_len,
+                            const uint8_t key[TURBO_CRYPTO_CURVE25519_SIZE],
+                            const uint8_t nonce[TURBO_CRYPTO_CHACHA20_X_NONCE_SIZE],
+                            uint64_t counter);
+
+int turbo_crypto_poly1305(uint8_t mac[TURBO_CRYPTO_POLY1305_MAC_SIZE], const void *data,
+                          size_t data_len, const uint8_t key[TURBO_CRYPTO_POLY1305_KEY_SIZE]);
+int turbo_crypto_elligator_map(uint8_t curve[TURBO_CRYPTO_CURVE25519_SIZE],
+                               const uint8_t hidden[TURBO_CRYPTO_CURVE25519_SIZE]);
+int turbo_crypto_elligator_rev(uint8_t hidden[TURBO_CRYPTO_CURVE25519_SIZE],
+                               const uint8_t curve[TURBO_CRYPTO_CURVE25519_SIZE], uint8_t tweak);
+int turbo_crypto_elligator_key_pair(uint8_t hidden[TURBO_CRYPTO_CURVE25519_SIZE],
+                                    uint8_t secret_key[TURBO_CRYPTO_CURVE25519_SIZE],
+                                    uint8_t seed[TURBO_CRYPTO_CURVE25519_SIZE]);
+
 /** Fill output from the operating-system CSPRNG. */
-int turbo_crypto_random(void* out, size_t len);
+int turbo_crypto_random(void *out, size_t len);
 
 /** Constant-time byte comparison. */
-int turbo_crypto_verify(const void* expected, const void* actual, size_t len);
+int turbo_crypto_verify(const void *expected, const void *actual, size_t len);
 
 /** Erase sensitive memory through Monocypher. */
-void turbo_crypto_wipe(void* secret, size_t len);
+void turbo_crypto_wipe(void *secret, size_t len);
 
 #ifdef __cplusplus
 }

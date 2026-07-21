@@ -5,8 +5,8 @@ authentication code. It combines the repository's vendored SHA-256 implementatio
 Monocypher's verification and secure-wipe primitives, TurboUtils' operating
 system CSPRNG, libecc's Ed448 implementation, and a compact MD5 implementation.
 
-The API intentionally exposes only the algorithms required by current
-protocol adapters:
+The API exposes the algorithms required by current protocol adapters and
+TurboScript while keeping third-party headers and types private:
 
 - SHA-256 and incremental SHA-256 for AWS payload hashing.
 - HMAC-SHA256 for AWS Signature Version 4.
@@ -14,6 +14,8 @@ protocol adapters:
 - Constant-time verification, secure memory wiping, and random bytes.
 - RFC 8032 pure Ed448 key generation, public-key derivation, signing, and
   verification.
+- BLAKE2b, XChaCha20-Poly1305 AEAD, Argon2, X25519, Curve25519 EdDSA,
+  ChaCha20, Poly1305, and Elligator through validated one-shot adapters.
 - MD5 only for S3 fields that explicitly require it, including Content-MD5,
   multipart ETags, and SSE-C key checksums.
 
@@ -22,6 +24,10 @@ sample source code was copied. HMAC follows RFC 2104 and is verified against
 RFC 4231 vectors. SHA-256 and Monocypher are private sources of the exported
 `TurboNet::Crypto` static library. Temporary HMAC key material is erased with
 Monocypher `crypto_wipe()`.
+
+Consumers include only `turbo_crypto.h` and link `TurboNet::Crypto`. All
+adapters use `TURBO_CRYPTO_*` sizes, types, and error codes; no Monocypher
+header or type crosses the package boundary.
 
 libecc is vendored from https://github.com/libecc/libecc at commit
 `6e8f214f41f65d5f30b04da75472f9c24f2100db`. TurboNet selects the upstream

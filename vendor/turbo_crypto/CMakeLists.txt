@@ -25,6 +25,7 @@ set(
 add_library(
   turbo_crypto STATIC
   turbo_crypto.c
+  turbo_crypto_monocypher.c
   turbo_crypto_ed448.c
   turbo_crypto.h
   monocypher/monocypher.c

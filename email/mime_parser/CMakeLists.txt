@@ -19,7 +19,10 @@ target_link_libraries(${TARGET_NAME}
     TurboUtils::Core
     uri_parser
     OpenSSL::SSL
-    OpenSSL::Crypto)
+    OpenSSL::Crypto
+  PRIVATE
+    TurboNet::Asn1Parser
+    $<BUILD_INTERFACE:turbo_crypto>)
 
 target_include_directories(${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

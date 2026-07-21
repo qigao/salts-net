@@ -89,10 +89,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(
-  ${TARGET_NAME}
-  PUBLIC TurboUtils::Core OpenSSL::Crypto
-  PRIVATE monocypher)
+target_link_libraries(${TARGET_NAME} PUBLIC TurboUtils::Core OpenSSL::Crypto)
 
 set_target_properties(
   ${TARGET_NAME}

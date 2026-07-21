@@ -1,5 +1,4 @@
 add_subdirectory(croar) 
-add_subdirectory(monocypher) 
 add_subdirectory(uuid)
 add_subdirectory(reed)
 
@@ -19,3 +18,4 @@ foreach(_cares_target c-ares c-ares_static)
     set_target_properties(${_cares_target} PROPERTIES FOLDER "vendor/c-ares")
   endif()
 endforeach()
+add_subdirectory(turbo_crypto)

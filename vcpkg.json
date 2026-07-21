@@ -15,9 +15,8 @@
       "version>=": "1.7"
     },
     {
-      "name": "openssl",
-      "version>=": "3.2.0"
-    }, 
+      "name": "boringssl"
+    },
     {
       "name": "pkgconf",
       "host": true

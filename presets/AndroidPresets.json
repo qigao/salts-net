@@ -29,12 +29,9 @@
             "inherits": "ISWindows",
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
-                "CMAKE_MAKE_PROGRAM": "$env{SCOOP_SHIMS_ROOT}/ninja.exe",
-                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbonet-android",
-                "CMAKE_PREFIX_PATH": "$env{PROJECT_ROOT}/turbonet/turbo-utils/build/$env{ANDROID_BUILD_VARIANT}",
+                "CMAKE_MAKE_PROGRAM": "$env{NINJA_ROOT}/ninja.exe",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboutils-android",
                 "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe",
-                "TURBO_UTILS_ROOT": "$env{PROJECT_ROOT}/turbonet/turbo-utils/build/$env{ANDROID_BUILD_VARIANT}",
-                "TurboUtils_DIR": "$env{PROJECT_ROOT}/turbonet/turbo-utils/build/$env{ANDROID_BUILD_VARIANT}",
                 "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
             }

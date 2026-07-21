@@ -726,8 +726,7 @@ static int tls_prepare_client_ssl(tls_state_t *st) {
 
     SSL_CTX_set_mode(ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
-    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
-    SSL_CTX_sess_set_new_cb(ctx, tls_on_new_client_session);
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
     SSL_CTX_set_verify(ctx, st->client_verify_peer ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
     if (st->client_verify_peer) {
       SSL_CTX_set_default_verify_paths(ctx);
@@ -1229,7 +1228,7 @@ static int tls_write_plaintext(tls_state_t *st, const char *data, size_t len,
 static void tls_apply_cached_client_session(tls_state_t *st) {
   int rc;
 
-  if (!st || st->server_mode || !st->ssl) {
+  if (!st || st->server_mode || st->client_configured || !st->ssl) {
     return;
   }
 
@@ -1253,7 +1252,8 @@ static void tls_apply_cached_client_session(tls_state_t *st) {
 static void tls_cache_client_session(tls_state_t *st) {
   SSL_SESSION *session;
 
-  if (!st || st->server_mode || !st->ssl || st->hostname[0] == '\0') {
+  if (!st || st->server_mode || st->client_configured || !st->ssl ||
+      st->hostname[0] == '\0') {
     return;
   }
 

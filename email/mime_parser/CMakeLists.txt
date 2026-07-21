@@ -17,12 +17,12 @@ cmake_config_target(${TARGET_NAME}
 target_link_libraries(${TARGET_NAME}
   PUBLIC
     TurboUtils::Core
-    uri_parser
     OpenSSL::SSL
     OpenSSL::Crypto
   PRIVATE
+    uri_parser
     TurboNet::Asn1Parser
-    $<BUILD_INTERFACE:turbo_crypto>)
+    TurboNet::Crypto)
 
 target_include_directories(${TARGET_NAME}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

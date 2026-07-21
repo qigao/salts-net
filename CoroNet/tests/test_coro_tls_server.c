@@ -30,6 +30,7 @@ typedef struct tls_server_state_s {
   int client_binding_rc;
   int server_peer_rc;
   int client_peer_rc;
+  int missing_client_certificate_rc;
   const char *ca_file;
   const char *cert_file;
   const char *key_file;
@@ -204,6 +205,33 @@ static void tls_server_client_task(coro_t *co, void *arg) {
 
   if (data) coro_socket_free_recv(data);
 
+  if (rc == 0 && state->explicit_mtls) {
+    coro_socket_t *missing_certificate_client =
+        coro_socket_create(state->ctx, CORO_SOCKET_TLS);
+    if (!missing_certificate_client) {
+      state->missing_client_certificate_rc = TURBO_ENOMEM;
+    } else {
+      memset(&tls_config, 0, sizeof(tls_config));
+      tls_config.ca_file = state->ca_file;
+      tls_config.verify_peer = 1;
+      coro_socket_set_timeout(missing_certificate_client, 5000);
+      state->missing_client_certificate_rc =
+          coro_socket_set_tls_client_config(missing_certificate_client, &tls_config);
+      if (state->missing_client_certificate_rc == 0) {
+        state->missing_client_certificate_rc =
+            coro_socket_connect(missing_certificate_client, "localhost", state->port);
+      }
+      if (state->missing_client_certificate_rc == 0) {
+        char *unexpected_data = NULL;
+        size_t unexpected_length = 0;
+        state->missing_client_certificate_rc =
+            coro_socket_recv(missing_certificate_client, &unexpected_data, &unexpected_length);
+        if (unexpected_data) coro_socket_free_recv(unexpected_data);
+      }
+      coro_socket_destroy(missing_certificate_client);
+    }
+  }
+
   g_tls_server_client_rc = rc;
   coro_socket_destroy(client);
 }
@@ -345,6 +373,7 @@ static void tls_server_run_case(
   uint64_t deadline;
 
   memset(&state, 0, sizeof(state));
+  state.missing_client_certificate_rc = TURBO_EBUSY;
   state.disable_client_verify = disable_client_verify;
   state.explicit_mtls = explicit_mtls;
 
@@ -413,6 +442,7 @@ static void tls_server_run_case(
                  CORO_TLS_PEER_CERT_SHA256_CAPACITY - 1);
     check(strncmp(state.server_peer, "sha256:", 7) == 0);
     check_str_eq(state.server_peer, state.client_peer);
+    check(state.missing_client_certificate_rc != 0);
   } else {
     check_int_eq(state.server_peer_rc, TURBO_EPERM);
   }

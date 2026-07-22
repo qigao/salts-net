@@ -68,7 +68,7 @@ typedef struct stream_epoll_state_s {
     int send_pending;
     int event_write_lock;
     int event_post_pending;
-    int terminal_posted;
+    atomic_int terminal_posted;
     int is_listener;
     atomic_int stopping;
     int registered;
@@ -135,6 +135,13 @@ static int epoll_is_stopping(stream_epoll_state_t *st) {
     return atomic_load_explicit(&st->stopping, memory_order_acquire) != 0;
 }
 
+static int epoll_terminal_is_posted(stream_epoll_state_t *st) {
+    if (!st) {
+        return 1;
+    }
+    return atomic_load_explicit(&st->terminal_posted, memory_order_acquire) != 0;
+}
+
 static void epoll_request_stop(stream_epoll_state_t *st) {
     if (st) {
         atomic_store_explicit(&st->stopping, 1, memory_order_release);
@@ -185,8 +192,13 @@ static void post_terminal_event(stream_epoll_state_t *st, int status) {
     if (!st || st->is_listener || epoll_is_stopping(st)) {
         return;
     }
-    if (!__sync_bool_compare_and_swap(&st->terminal_posted, 0, 1)) {
-        return;
+    {
+        int expected = 0;
+        if (!atomic_compare_exchange_strong_explicit(&st->terminal_posted, &expected, 1,
+                                                     memory_order_acq_rel,
+                                                     memory_order_acquire)) {
+            return;
+        }
     }
     st->connected = 0;
     epoll_disarm_stream_fd(st);
@@ -197,7 +209,10 @@ static uint8_t *wait_ring_write(stream_epoll_state_t *st, ring_spsc_t *ring, siz
     uint8_t *ptr;
 
     for (;;) {
-        if (epoll_is_stopping(st)) {
+        /* A terminal event disarms the fd, so the reactor can no longer make
+         * room in the write ring.  Let the event-loop thread return and drain
+         * the already-posted terminal event instead of spinning forever. */
+        if (epoll_is_stopping(st) || epoll_terminal_is_posted(st)) {
             return NULL;
         }
         ptr = ring_spsc_write_acquire(ring, size);

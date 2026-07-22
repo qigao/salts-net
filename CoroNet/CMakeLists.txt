@@ -54,6 +54,11 @@ cmake_add_source(
   ${BACKEND_FILES_EPOLL}
   ${BACKEND_FILES_UNIX_GENERIC})
 
+# BoringSSL contains C++ objects even though CoroNet exposes a C API. Keep a
+# C++ translation unit in both CoroNet targets so CMake selects the configured
+# C++ linker/runtime for shared-library linkage and static-library consumers.
+list(APPEND SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/boringssl_linkage.cpp)
+
 # Select and add the appropriate backend
 if(WIN32)
   list(APPEND SOURCE_FILES ${BACKEND_FILES_IOCP})

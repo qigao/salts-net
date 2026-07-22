@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #ifndef _WIN32
+#include <errno.h>
 #include <signal.h>
 #endif
 
@@ -137,6 +138,24 @@ static int ws_close_case_done(void *arg) {
   ws_close_state_t *state = (ws_close_state_t *)arg;
   if (!state) return 1;
   return state->client_rc != TURBO_EBUSY && state->handler_rc != TURBO_EBUSY;
+}
+
+static int ws_close_client_status_expected(int pending_recv, int status) {
+  if (status == TURBO_ECANCELED || status == TURBO_EOF ||
+      status == TURBO_ECONNRESET) {
+    return 1;
+  }
+  if (!pending_recv &&
+      (status == 0 || status == TURBO_EPIPE || status == TURBO_ENOTCONN)) {
+    return 1;
+  }
+#ifndef _WIN32
+  if (status == -ECANCELED || status == -ECONNRESET || status == -ENOTCONN ||
+      (!pending_recv && status == -EPIPE)) {
+    return 1;
+  }
+#endif
+  return 0;
 }
 
 static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
@@ -459,6 +478,7 @@ static void ws_close_client_send_task(coro_t *co, void *arg) {
   coro_socket_set_timeout(client, 5000);
   rc = coro_socket_connect_ws(client, "127.0.0.1", state->port, "/chat", 0);
   if (rc == 0) {
+    state->client_connected = 1;
     for (i = 0; i < 8; ++i) {
       rc = coro_socket_send(client, g_ws_close_send_payload, sizeof(g_ws_close_send_payload));
       if (rc != 0) {
@@ -591,6 +611,7 @@ static void ws_server_run_close_case(int pending_recv) {
   ws_close_state_t state;
   test_socket_t probe = TEST_INVALID_SOCKET;
   uint64_t deadline;
+  int client_rc_expected;
 
   memset(&state, 0, sizeof(state));
   state.client_rc = TURBO_EBUSY;
@@ -618,7 +639,8 @@ static void ws_server_run_close_case(int pending_recv) {
 
   ws_server_run_until(state.ctx, 5000, ws_close_case_done, &state);
 
-  if (state.handler_hits != 1) {
+  client_rc_expected = ws_close_client_status_expected(pending_recv, state.client_rc);
+  if (state.handler_hits != 1 || state.handler_rc != 0 || !client_rc_expected) {
     fprintf(stderr,
             "ws close case state: pending_recv=%d client_connected=%d client_rc=%d "
             "handler_rc=%d handler_hits=%d\n",
@@ -627,16 +649,7 @@ static void ws_server_run_close_case(int pending_recv) {
   }
   check_int_eq(state.handler_hits, 1);
   check_int_eq(state.handler_rc, 0);
-  if (pending_recv) {
-    check(state.client_rc == TURBO_ECANCELED ||
-          state.client_rc == TURBO_EOF ||
-          state.client_rc == TURBO_ECONNRESET);
-  } else {
-    check(state.client_rc == 0 ||
-          state.client_rc == TURBO_ECANCELED ||
-          state.client_rc == TURBO_EPIPE ||
-          state.client_rc == TURBO_ECONNRESET);
-  }
+  check(client_rc_expected);
 
   if (state.client) {
     coro_socket_destroy(state.client);

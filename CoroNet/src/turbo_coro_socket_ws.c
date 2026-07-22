@@ -236,6 +236,9 @@ static int ws_begin_write_wait(coro_socket_t *s, int *scheduled_out) {
   if (!s || !scheduled_out) {
     return TURBO_EINVAL;
   }
+  if (!s->handle.stream || !s->connected) {
+    return TURBO_ENOTCONN;
+  }
 
   co = coro_running();
   if (!co) {

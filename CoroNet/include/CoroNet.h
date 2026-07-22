@@ -3,6 +3,7 @@
 
 #include "CoroNet/turbo_iovec.h"
 #include "CoroNet/turbo_callbacks.h"
+#include "CoroNet/turbo_coro_cancel.h"
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include "CoroNet/turbo_coro_object_pool.h"

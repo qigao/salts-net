@@ -1205,7 +1205,19 @@ static int tls_flush_pending_plaintext(tls_state_t *st) {
 }
 
 static int tls_configure_hostname(tls_state_t *st) {
+  struct in_addr ipv4;
+  struct in6_addr ipv6;
+
   if (!st || !st->ssl || st->hostname[0] == '\0') {
+    return 0;
+  }
+
+  if (inet_pton(AF_INET, st->hostname, &ipv4) == 1 ||
+      inet_pton(AF_INET6, st->hostname, &ipv6) == 1) {
+    X509_VERIFY_PARAM *verify = SSL_get0_param(st->ssl);
+    if (!verify || X509_VERIFY_PARAM_set1_ip_asc(verify, st->hostname) != 1) {
+      return TURBO_EIO;
+    }
     return 0;
   }
 

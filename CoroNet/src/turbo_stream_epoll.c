@@ -68,6 +68,7 @@ typedef struct stream_epoll_state_s {
     int send_pending;
     int event_write_lock;
     int event_post_pending;
+    atomic_int read_event_pending;
     atomic_int terminal_posted;
     int is_listener;
     atomic_int stopping;
@@ -253,13 +254,26 @@ static void post_event(stream_epoll_state_t *st, ep_op_kind_t kind, int status,
                        void *extra, const struct sockaddr *peer_addr,
                        socklen_t peer_addr_len) {
     uint8_t *ptr;
+    int coalesced_read = 0;
 
     if (!st) {
         return;
     }
+    if (kind == SEP_OP_READ && status == 0) {
+        int expected = 0;
+        if (!atomic_compare_exchange_strong_explicit(&st->read_event_pending, &expected, 1,
+                                                     memory_order_acq_rel,
+                                                     memory_order_acquire)) {
+            return;
+        }
+        coalesced_read = 1;
+    }
     epoll_event_write_lock(st);
     for (;;) {
         if (epoll_is_stopping(st)) {
+            if (coalesced_read) {
+                atomic_store_explicit(&st->read_event_pending, 0, memory_order_release);
+            }
             epoll_event_write_unlock(st);
             return;
         }
@@ -295,6 +309,10 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
     size_t bytes = 0;
     uint8_t *data = ring_spsc_read_acquire(&st->read_ring, &bytes);
     int close_requested = 0;
+
+    if (ev->status == 0) {
+        atomic_store_explicit(&st->read_event_pending, 0, memory_order_release);
+    }
 
     if (ev->status != 0) {
         TLOG_DEBUG("epoll[{:p}] read-event stream={:p} status={:d} bytes={:d}", (void *)st,

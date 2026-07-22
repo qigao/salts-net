@@ -76,6 +76,13 @@ typedef struct ws_state_s {
   size_t          frag_len;
   uint8_t         frag_opcode;
   int             expecting_cont;
+
+  /* Protocol close frames must reach the transport before teardown.  The
+   * in-progress/completed pair also covers backends that complete a small
+   * write synchronously from ws_send_frame(). */
+  int             close_after_write;
+  int             close_send_in_progress;
+  int             close_write_completed;
 } ws_state_t;
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -324,15 +331,28 @@ static int ws_fail(ws_state_t *st, int err) {
 static int ws_close_with_code(ws_state_t *st, uint16_t code, int err) {
   uint8_t close_payload[2] = {(uint8_t)(code >> 8U),
                               (uint8_t)(code & 0xffU)};
+  int rc = TURBO_EINVAL;
 
   if (st && st->state == WS_ST_OPEN) {
     st->state = WS_ST_CLOSING;
-    if (ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2) == 0 && st->tcp) {
-      (void)turbo_stream_flush(st->tcp);
+    st->close_after_write = 1;
+    st->close_send_in_progress = 1;
+    st->close_write_completed = 0;
+    rc = ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
+    if (rc == 0 && st->tcp) {
+      rc = turbo_stream_flush(st->tcp);
+    }
+    st->close_send_in_progress = 0;
+
+    if (rc == 0 && st->tcp && !st->close_write_completed) {
+      return 0;
+    }
+    st->close_after_write = 0;
+    if (rc == 0) {
+      return ws_fail(st, err);
     }
   }
-  ws_fail(st, err);
-  return 0;
+  return ws_fail(st, rc != 0 ? rc : err);
 }
 
 static int ws_protocol_error(ws_state_t *st) {
@@ -450,6 +470,15 @@ static void ws_on_tcp_write_complete(turbo_stream_t *tcp, int status) {
     return;
   }
   st = (ws_state_t *)tcp->user_data;
+  if (st && st->close_after_write) {
+    if (st->close_send_in_progress) {
+      st->close_write_completed = 1;
+      return;
+    }
+    st->close_after_write = 0;
+    (void)ws_fail(st, status != 0 ? status : TURBO_EPROTONOSUPPORT);
+    return;
+  }
   if (st && st->outer && st->outer->on_write_complete) {
     st->outer->on_write_complete(st->outer, status);
   }

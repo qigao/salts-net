@@ -449,6 +449,13 @@ typedef struct tls_state_s {
   int             pumping;
   int             close_deferred;
   int             close_requested;
+  int             peer_closed;
+  uint64_t        network_writes_submitted;
+  uint64_t        network_writes_completed;
+  uint64_t        application_write_target;
+  int             application_write_in_progress;
+  int             application_write_pending;
+  int             application_write_status;
 
 } tls_state_t;
 
@@ -1233,7 +1240,7 @@ static int tls_configure_hostname(tls_state_t *st) {
 }
 
 static void tls_pump(tls_state_t *st);
-static void tls_flush_wbio_to_network(tls_state_t *st);
+static int tls_flush_wbio_to_network(tls_state_t *st);
 static int tls_write_plaintext(tls_state_t *st, const char *data, size_t len,
                                int flush_network);
 
@@ -1346,14 +1353,12 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
                                  turbo_close_cb on_close) {
   tls_state_t *st;
 
-  if (!outer || !tcp || tcp->kind == TURBO_STREAM_TLS) {
-    return TURBO_EINVAL;
-  }
+  if (!outer || !tcp) return TURBO_EINVAL;
+  if (tcp->kind == TURBO_STREAM_TLS) return TURBO_EPROTOTYPE;
 
   st = (tls_state_t *)outer->backend_data;
-  if (!st || st->tcp) {
-    return TURBO_EINVAL;
-  }
+  if (!st) return TURBO_EINVAL;
+  if (st->tcp) return TURBO_EBUSY;
 
   if (!tcp->connected) {
     return TURBO_ENOTCONN;
@@ -1502,8 +1507,8 @@ static SSL_CTX *get_default_tls_server_ctx(void) {
 /**
  * @brief Extract encrypted bytes from wbio and send them over tcp.
  */
-static void tls_flush_wbio_to_network(tls_state_t *st) {
-  if (!st->wbio || !st->tcp) return;
+static int tls_flush_wbio_to_network(tls_state_t *st) {
+  if (!st || !st->wbio || !st->tcp) return TURBO_EINVAL;
 
   char buf[MEM_SEND_BUFFER_SIZE];
   int pending;
@@ -1511,11 +1516,17 @@ static void tls_flush_wbio_to_network(tls_state_t *st) {
     size_t chunk_size = ((size_t)pending > sizeof(buf)) ? sizeof(buf) : (size_t)pending;
     mem_buffer_t *send_buf = turbo_stream_get_send_buffer(st->tcp, chunk_size);
     if (send_buf) {
+      int rc;
       int n = BIO_read(st->wbio, send_buf->data, (int)chunk_size);
       if (n > 0) {
         mem_set_used(send_buf, (size_t)n);
-        (void)turbo_stream_send_buffer(st->tcp, send_buf, (size_t)n);
+        st->network_writes_submitted++;
+        rc = turbo_stream_send_buffer(st->tcp, send_buf, (size_t)n);
         mem_unref(send_buf);
+        if (rc != 0) {
+          st->network_writes_submitted--;
+          return rc;
+        }
         continue;
       }
       mem_unref(send_buf);
@@ -1525,12 +1536,19 @@ static void tls_flush_wbio_to_network(tls_state_t *st) {
     {
       int n = BIO_read(st->wbio, buf, (int)chunk_size);
       if (n > 0) {
-        (void)turbo_stream_send(st->tcp, buf, (size_t)n);
+        int rc;
+        st->network_writes_submitted++;
+        rc = turbo_stream_send(st->tcp, buf, (size_t)n);
+        if (rc != 0) {
+          st->network_writes_submitted--;
+          return rc;
+        }
       } else {
         break;
       }
     }
   }
+  return 0;
 }
 
 /**
@@ -1877,6 +1895,17 @@ static void tls_on_tcp_connect(void *handle, int status, void *peer) {
   }
 }
 
+static void tls_finalize_peer_close(tls_state_t *st) {
+  turbo_stream_t *outer;
+
+  if (!st) return;
+  outer = st->outer;
+  if (outer) outer->backend_data = NULL;
+  st->outer = NULL;
+  tls_free_state(st);
+  if (outer) turbo_stream_finalize_close(outer);
+}
+
 static void tls_on_tcp_close(void *handle) {
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   tls_state_t    *st;
@@ -1891,21 +1920,56 @@ static void tls_on_tcp_close(void *handle) {
   if (!st) return;
 
   outer = st->outer;
-  if (outer) outer->backend_data = NULL;
+  if (outer) outer->connected = 0;
   tcp->user_data = NULL;
   st->tcp = NULL;
   st->state = TLS_ST_CLOSED;
+  st->peer_closed = 1;
 
   if (st->pumping > 0) {
     st->close_deferred = 1;
     return;
   }
 
-  st->outer = NULL;
-  tls_free_state(st);
+  if (st->pending_plaintext && st->pending_plaintext->used > 0) {
+    if (!outer || !outer->on_recv) {
+      return;
+    }
+    if (tls_flush_pending_plaintext(st) != 0) {
+      return;
+    }
+    if (st->pending_plaintext && st->pending_plaintext->used > 0) {
+      return;
+    }
+  }
+  tls_finalize_peer_close(st);
+}
 
-  if (outer) {
-    turbo_stream_finalize_close(outer);
+static void tls_try_complete_application_write(tls_state_t *st) {
+  turbo_stream_t *outer;
+  int status;
+
+  if (!st || !st->application_write_pending) {
+    return;
+  }
+  if (st->application_write_status == 0 &&
+      st->network_writes_completed < st->application_write_target) {
+    return;
+  }
+
+  status = st->application_write_status;
+  st->application_write_pending = 0;
+  outer = st->outer;
+  if (outer && outer->on_write_complete) {
+    turbo_stream_callback_enter(outer);
+    outer->on_write_complete(outer, status);
+    if (status == 0 && !outer->closing && !outer->finalized && outer->send_head) {
+      (void)turbo_stream_flush(outer);
+    }
+    turbo_stream_callback_leave(outer);
+  } else if (status == 0 && outer && !outer->closing && !outer->finalized &&
+             outer->send_head) {
+    (void)turbo_stream_flush(outer);
   }
 }
 
@@ -1916,9 +1980,17 @@ static void tls_on_tcp_write_complete(turbo_stream_t *tcp, int status) {
     return;
   }
   st = (tls_state_t *)tcp->user_data;
-  if (st && st->outer && st->outer->on_write_complete) {
-    st->outer->on_write_complete(st->outer, status);
+  if (!st) {
+    return;
   }
+  if (st->network_writes_completed < st->network_writes_submitted) {
+    st->network_writes_completed++;
+  }
+  if (status != 0 &&
+      (st->application_write_in_progress || st->application_write_pending)) {
+    st->application_write_status = status;
+  }
+  tls_try_complete_application_write(st);
 }
 
 /* ── Backend vtable implementation ───────────────────────── */
@@ -2213,10 +2285,50 @@ static int tls_connect_pipe(turbo_stream_t *s, const char *name) {
   return TURBO_EINVAL; /* TLS over pipe is theoretically possible, but API expects INET */
 }
 
+static int tls_application_write_begin(tls_state_t *st) {
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+  if (st->application_write_in_progress || st->application_write_pending) {
+    return TURBO_EBUSY;
+  }
+  st->application_write_in_progress = 1;
+  st->application_write_status = 0;
+  return 0;
+}
+
+static int tls_application_write_end(tls_state_t *st, int status) {
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+  st->application_write_in_progress = 0;
+  if (status != 0) {
+    st->application_write_status = status;
+    return status;
+  }
+
+  st->application_write_target = st->network_writes_submitted;
+  st->application_write_pending = 1;
+  tls_try_complete_application_write(st);
+  return 0;
+}
+
 static int tls_send(turbo_stream_t *s, const char *data, size_t len) {
-  tls_state_t *st = (tls_state_t *)s->backend_data;
-  if (!st || st->state != TLS_ST_OPEN) return TURBO_ENOTCONN;
-  return tls_write_plaintext(st, data, len, 1);
+  mem_buffer_t *buf;
+  int rc;
+
+  if (!s || !data || len == 0) return TURBO_EINVAL;
+  if (!s->backend_data || ((tls_state_t *)s->backend_data)->state != TLS_ST_OPEN) {
+    return TURBO_ENOTCONN;
+  }
+
+  buf = turbo_stream_get_send_buffer(s, len);
+  if (!buf) return TURBO_ENOMEM;
+  memcpy(buf->data, data, len);
+  mem_set_used(buf, len);
+  rc = turbo_stream_send_buffer(s, buf, len);
+  mem_unref(buf);
+  return rc;
 }
 
 static int tls_write_plaintext(tls_state_t *st, const char *data, size_t len,
@@ -2238,12 +2350,16 @@ static int tls_write_plaintext(tls_state_t *st, const char *data, size_t len,
     if (n > 0) {
       offset += (size_t)n;
       if (flush_network) {
-        tls_flush_wbio_to_network(st);
+        int rc = tls_flush_wbio_to_network(st);
+        if (rc != 0) return rc;
       }
       continue;
     }
 
-    tls_flush_wbio_to_network(st);
+    {
+      int rc = tls_flush_wbio_to_network(st);
+      if (rc != 0) return rc;
+    }
 
     {
       int err = SSL_get_error(st->ssl, n);
@@ -2264,13 +2380,21 @@ static int tls_flush(turbo_stream_t *s) {
   int rc;
 
   if (!st || !st->tcp) return 0;
+  /* The public stream API accepts copied sends into a bounded queue.  A TLS
+   * record already awaiting its network completion must not turn the next
+   * accepted send into TURBO_EBUSY; its completion resumes this queue. */
+  if (st->application_write_in_progress || st->application_write_pending) {
+    return 0;
+  }
+  rc = tls_application_write_begin(st);
+  if (rc != 0) return rc;
 
   /* Drain queued plaintext through tls_send() so partial writes and
    * WANT_READ/WANT_WRITE are handled consistently. */
   while ((buf = s->send_head) != NULL) {
     rc = tls_write_plaintext(st, buf->data, buf->used, 0);
     if (rc != 0) {
-      return rc;
+      return tls_application_write_end(st, rc);
     }
 
     s->send_head = buf->next;
@@ -2280,8 +2404,11 @@ static int tls_flush(turbo_stream_t *s) {
     mem_unref(buf);
   }
 
-  tls_flush_wbio_to_network(st);
-  return turbo_stream_flush(st->tcp);
+  rc = tls_flush_wbio_to_network(st);
+  if (rc == 0) {
+    rc = turbo_stream_flush(st->tcp);
+  }
+  return tls_application_write_end(st, rc);
 }
 
 static int tls_recv_start(turbo_stream_t *s) {
@@ -2289,7 +2416,11 @@ static int tls_recv_start(turbo_stream_t *s) {
      during handshake. Nothing more to do. */
   tls_state_t *st = (tls_state_t *)s->backend_data;
   if (st) {
-    return tls_flush_pending_plaintext(st);
+    int rc = tls_flush_pending_plaintext(st);
+    if (rc != 0) return rc;
+    if (st->peer_closed) {
+      tls_finalize_peer_close(st);
+    }
   }
   return 0;
 }

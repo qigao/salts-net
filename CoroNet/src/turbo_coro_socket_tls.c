@@ -88,6 +88,23 @@ static void on_tls_connect(void *handle, int status, void *extra) {
   release_client(s);
 }
 
+static void on_tls_write_complete(turbo_stream_t *stream, int status) {
+  coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
+  coro_t *co;
+
+  retain_client(s);
+  if (!s || !s->co_write_wait) {
+    release_client(s);
+    return;
+  }
+
+  s->write_status = status;
+  co = s->co_write_wait;
+  s->co_write_wait = NULL;
+  coro_resume_co(s->ctx, co);
+  release_client(s);
+}
+
 static void on_tls_close(void *handle) {
   turbo_stream_t *stream = (turbo_stream_t *)handle;
   coro_socket_t *s = (coro_socket_t *)turbo_stream_get_user_data(stream);
@@ -175,6 +192,7 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
     turbo_stream_tls_set_sni(s->handle.stream, host);
 
     turbo_stream_set_user_data(s->handle.stream, s);
+    turbo_stream_set_write_cb(s->handle.stream, on_tls_write_complete);
     s->handle.stream->managed = 1;
   }
 
@@ -224,9 +242,8 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   if (!s || !s->ctx) {
     return TURBO_EINVAL;
   }
-  if (s->transport != TURBO_TCP || !s->handle.stream || !s->connected) {
-    return TURBO_EINVAL;
-  }
+  if (s->transport != TURBO_TCP) return TURBO_ENOTSUP;
+  if (!s->handle.stream || !s->connected) return TURBO_ENOTCONN;
   if (s->co_wait) {
     return TURBO_EBUSY;
   }
@@ -247,12 +264,14 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
     tls_config.verify_peer = s->tls_verify_peer;
     rc = turbo_stream_tls_set_client_config(tls_stream, &tls_config);
     if (rc != 0) {
+      TLOG_ERROR("TLS upgrade client configuration failed rc={}", rc);
       turbo_stream_destroy(tls_stream);
       return rc;
     }
   }
 
   turbo_stream_set_user_data(tls_stream, s);
+  turbo_stream_set_write_cb(tls_stream, on_tls_write_complete);
   tls_stream->managed = 1;
   {
     turbo_stream_t *saved = s->handle.stream;
@@ -260,6 +279,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
     rc = coro_socket_apply_stream_options(s);
     s->handle.stream = saved;
     if (rc != 0) {
+      TLOG_ERROR("TLS upgrade stream option application failed rc={}", rc);
       turbo_stream_set_user_data(tls_stream, NULL);
       tls_stream->managed = 0;
       turbo_stream_destroy(tls_stream);
@@ -268,14 +288,26 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   }
 
   retain_client(s);
+  s->status = 0;
+  s->connected = 0;
+  s->wait_metric_tls_handshake = 1;
+  s->wait_metric_stream = tls_stream;
+  coro_set_wait(s);
+  start_timeout_timer(s);
   {
     uint64_t wrap_start_ns = turbo_hrtime();
-  rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname, on_tls_connect, on_tls_close);
+    rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname, on_tls_connect, on_tls_close);
     if (rc == 0) {
       turbo_stream_tls_note_wrap_client_time(turbo_hrtime() - wrap_start_ns);
+    } else {
+      TLOG_ERROR("TLS upgrade attach failed rc={} tcp_kind={} tcp_connected={}",
+                 rc, (int)tcp_stream->kind, tcp_stream->connected);
     }
   }
   if (rc != 0) {
+    stop_timeout_timer(s);
+    s->co_wait = NULL;
+    s->connected = 1;
     turbo_stream_set_user_data(tls_stream, NULL);
     tls_stream->managed = 0;
     turbo_stream_destroy(tls_stream);
@@ -288,13 +320,9 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   s->handle.stream = tls_stream;
   s->transport = TURBO_TLS;
   s->ops = &transport_ops_tls;
-  s->connected = 0;
-
-  s->wait_metric_tls_handshake = 1;
-  s->wait_metric_stream = tls_stream;
-  coro_set_wait(s);
-  start_timeout_timer(s);
-  coro_yield();
+  if (s->co_wait) {
+    coro_yield();
+  }
   {
     tls_note_wait_resume(s);
     int status = s->status;
@@ -328,6 +356,7 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
   }
 
   turbo_stream_set_user_data(tls_stream, s);
+  turbo_stream_set_write_cb(tls_stream, on_tls_write_complete);
   tls_stream->managed = 1;
 
   retain_client(s);
@@ -429,8 +458,44 @@ int coro_socket_tls_get_verified_peer_certificate_sha256(
 
 /* ── Send/Recv ────────────────────────────────────────────── */
 
+static int tls_begin_write_wait(coro_socket_t *s, coro_t **co_out, int *scheduled_out) {
+  coro_t *co;
+
+  if (!s || !co_out || !scheduled_out) return TURBO_EINVAL;
+  if (!s->handle.stream || !s->connected) return TURBO_ENOTCONN;
+
+  co = coro_running();
+  *co_out = co;
+  *scheduled_out = co ? coro_is_scheduled(co) : 0;
+  if (!co) return TURBO_OK;
+  if (s->co_write_wait) return TURBO_EBUSY;
+
+  s->write_status = 0;
+  s->co_write_wait = co;
+  if (*scheduled_out) coro_set_waiting_for_io(co, 1);
+  return TURBO_OK;
+}
+
+static int tls_finish_write_wait(coro_socket_t *s, coro_t *co, int scheduled,
+                                 int submit_status) {
+  if (!co) return submit_status;
+  if (submit_status != TURBO_OK) {
+    s->co_write_wait = NULL;
+    if (scheduled) coro_set_waiting_for_io(co, 0);
+    return submit_status;
+  }
+
+  while (s->co_write_wait == co) coro_yield();
+  return s->write_status;
+}
+
 static int tls_send(coro_socket_t *s, const char *data, size_t len) {
-  return turbo_stream_send(s->handle.stream, data, len);
+  coro_t *co;
+  int scheduled;
+  int rc = tls_begin_write_wait(s, &co, &scheduled);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_stream_send(s->handle.stream, data, len);
+  return tls_finish_write_wait(s, co, scheduled, rc);
 }
 
 static int tls_recv_start(coro_socket_t *s) {
@@ -449,7 +514,12 @@ static mem_buffer_t *tls_get_send_buffer(coro_socket_t *s, size_t min_size) {
 }
 
 static int tls_send_buffer(coro_socket_t *s, mem_buffer_t *buffer, size_t len) {
-  return turbo_stream_send_buffer(s->handle.stream, buffer, len);
+  coro_t *co;
+  int scheduled;
+  int rc = tls_begin_write_wait(s, &co, &scheduled);
+  if (rc != TURBO_OK) return rc;
+  rc = turbo_stream_send_buffer(s->handle.stream, buffer, len);
+  return tls_finish_write_wait(s, co, scheduled, rc);
 }
 
 static void tls_close(coro_socket_t *s) {

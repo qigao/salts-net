@@ -47,7 +47,10 @@ typedef struct proxy_client_case_s {
   int use_auth;
   int expected_result;
   int result;
+  int connect_result;
+  int recv_result;
   int payload_ok;
+  int eof_result;
   int use_websocket;
   int use_tls;
   const char *ca_file;
@@ -324,11 +327,19 @@ static void proxy_client_coro(coro_t *co, void *arg) {
                             ? coro_socket_connect_ws(client, "example.com", 80, "/chat", 0)
                         : test_case->use_tls ? coro_socket_connect(client, "localhost", 443)
                                              : coro_socket_connect(client, "example.com", 80);
+    test_case->connect_result = test_case->result;
   }
   if (test_case->result == 0 && !test_case->use_websocket) {
     test_case->result = coro_socket_recv(client, &data, &length);
+    test_case->recv_result = test_case->result;
     test_case->payload_ok =
         test_case->result == 0 && length == 5U && data && memcmp(data, "READY", 5U) == 0;
+    if (test_case->result == 0 && test_case->use_tls) {
+      coro_socket_free_recv(data);
+      data = NULL;
+      length = 0U;
+      test_case->eof_result = coro_socket_recv(client, &data, &length);
+    }
   }
   coro_socket_free_recv(data);
   coro_socket_destroy(client);
@@ -414,10 +425,13 @@ static void run_proxy_case(int kind, int require_auth, int reject) {
   coro_context_run(ctx, TURBO_RUN_DEFAULT);
   turbo_thread_join(&thread);
 
+  check_int_eq(test_case.connect_result, test_case.expected_result);
+  if (!reject && !test_case.use_websocket) check_int_eq(test_case.recv_result, 0);
   check_int_eq(test_case.result, test_case.expected_result);
   check_int_eq(atomic_load(&server.failed), 0);
   check_int_eq(atomic_load(&server.handshake_ok), 1);
   if (!reject && !test_case.use_websocket) check_int_eq(test_case.payload_ok, 1);
+  if (!reject && test_case.use_tls) check_int_eq(test_case.eof_result, TURBO_EOF);
   coro_context_destroy(ctx);
   tls_test_remove_file(ca_file);
 }

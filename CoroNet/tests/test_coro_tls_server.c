@@ -52,6 +52,20 @@ typedef struct tls_close_state_s {
   uint64_t hold_ms;
 } tls_close_state_t;
 
+enum { TLS_TINY_WRITE_COUNT = 512 };
+enum { TLS_SERVER_HANDLER_READY_TIMEOUT_MS = 1000 };
+
+typedef struct tls_tiny_write_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int client_rc;
+  int handler_rc;
+  int connected;
+  int sends_completed;
+  size_t received;
+} tls_tiny_write_state_t;
+
 static int  g_tls_server_handler_rc   = TURBO_EBUSY;
 static int  g_tls_server_client_rc    = TURBO_EBUSY;
 static int  g_tls_server_handler_hits = 0;
@@ -116,6 +130,12 @@ static int tls_close_case_done(void *arg) {
   return state->client_rc != TURBO_EBUSY && state->handler_rc != TURBO_EBUSY;
 }
 
+static int tls_tiny_write_case_done(void *arg) {
+  tls_tiny_write_state_t *state = (tls_tiny_write_state_t *)arg;
+  if (!state) return 1;
+  return state->client_rc != TURBO_EBUSY && state->handler_rc != TURBO_EBUSY;
+}
+
 /* ── Handler & client coroutines ──────────────────────────── */
 
 /**
@@ -135,7 +155,7 @@ static void tls_server_banner_handler(coro_socket_t *client, void *arg) {
   state->server_binding_rc =
       coro_socket_tls_export_channel_binding(client, state->server_binding);
   g_tls_server_handler_rc = state->server_binding_rc;
-  if (g_tls_server_handler_rc == 0) {
+  if (g_tls_server_handler_rc == 0 && !state->disable_client_verify) {
     g_tls_server_handler_rc = coro_socket_send(client, banner, sizeof(banner) - 1);
   }
   if (g_tls_server_handler_rc == 0 && state != NULL) {
@@ -182,6 +202,14 @@ static void tls_server_client_task(coro_t *co, void *arg) {
     }
   }
   rc = coro_socket_connect(client, "localhost", state->port);
+  if (rc == 0 && state->disable_client_verify) {
+    uint64_t deadline =
+        turbo_monotonic_ms() + TLS_SERVER_HANDLER_READY_TIMEOUT_MS;
+    while (g_tls_server_handler_hits == 0 &&
+           turbo_monotonic_ms() < deadline) {
+      coro_sleep(state->ctx, 1);
+    }
+  }
   if (rc == 0) {
     state->client_peer_rc =
         coro_socket_tls_get_verified_peer_certificate_sha256(client, state->client_peer);
@@ -331,6 +359,54 @@ static void tls_close_client_send_task(coro_t *co, void *arg) {
     }
   }
 
+  state->client_rc = rc;
+  coro_socket_destroy(client);
+}
+
+static void tls_tiny_write_handler(coro_socket_t *client, void *arg) {
+  tls_tiny_write_state_t *state = (tls_tiny_write_state_t *)arg;
+  int rc = 0;
+
+  coro_socket_set_timeout(client, 5000);
+  while (rc == 0 && state->received < TLS_TINY_WRITE_COUNT) {
+    char *data = NULL;
+    size_t len = 0;
+
+    rc = coro_socket_recv(client, &data, &len);
+    if (rc == 0) {
+      if (!data || len > (size_t)TLS_TINY_WRITE_COUNT - state->received) {
+        rc = TURBO_EPROTO;
+      } else {
+        state->received += len;
+      }
+    }
+    if (data) coro_socket_free_recv(data);
+  }
+  state->handler_rc = rc;
+  coro_socket_destroy(client);
+}
+
+static void tls_tiny_write_client_task(coro_t *co, void *arg) {
+  tls_tiny_write_state_t *state = (tls_tiny_write_state_t *)arg;
+  coro_socket_t *client;
+  int rc;
+  int i;
+  (void)co;
+
+  client = coro_socket_create(state->ctx, CORO_SOCKET_TLS);
+  if (!client) {
+    state->client_rc = TURBO_ENOMEM;
+    return;
+  }
+
+  coro_socket_set_timeout(client, 5000);
+  rc = coro_socket_connect(client, "localhost", state->port);
+  state->connected = (rc == 0);
+  for (i = 0; rc == 0 && i < TLS_TINY_WRITE_COUNT; ++i) {
+    static const char byte = 't';
+    rc = coro_socket_send(client, &byte, 1);
+    if (rc == 0) state->sends_completed++;
+  }
   state->client_rc = rc;
   coro_socket_destroy(client);
 }
@@ -558,6 +634,51 @@ static void tls_server_run_close_case(int pending_recv) {
   tls_test_remove_file(key_file);
 }
 
+static void tls_server_run_tiny_write_case(void) {
+  char ca_file[512] = {0};
+  char cert_file[512] = {0};
+  char key_file[512] = {0};
+  tls_tiny_write_state_t state;
+  test_socket_t probe = TEST_INVALID_SOCKET;
+
+  memset(&state, 0, sizeof(state));
+  state.client_rc = TURBO_EBUSY;
+  state.handler_rc = TURBO_EBUSY;
+
+  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  test_close_socket(probe);
+  check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+                                           key_file, sizeof(key_file)), 0);
+  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+
+  state.ctx = coro_context_create(NULL);
+  check_not_null(state.ctx);
+  state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
+  check_not_null(state.server);
+  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+                                     tls_tiny_write_handler, &state), 0);
+  check_int_eq(coro_context_spawn(state.ctx, tls_tiny_write_client_task, &state), 0);
+
+  tls_server_run_until(state.ctx, 10000, tls_tiny_write_case_done, &state);
+
+  check_int_eq(state.connected, 1);
+  check_int_eq(state.sends_completed, TLS_TINY_WRITE_COUNT);
+  check_int_eq(state.client_rc, 0);
+  check_int_eq(state.handler_rc, 0);
+  check_int_eq((int)state.received, TLS_TINY_WRITE_COUNT);
+
+  coro_socket_destroy(state.server);
+  tls_close_run_until_idle(state.ctx, 1000);
+  coro_context_destroy(state.ctx);
+  tls_test_clear_server_env();
+  tls_test_clear_ca_env();
+  tls_test_remove_file(ca_file);
+  tls_test_remove_file(cert_file);
+  tls_test_remove_file(key_file);
+}
+
 /* ── Test specs ───────────────────────────────────────────── */
 
 spec("Coro TLS Server") {
@@ -637,6 +758,10 @@ spec("Coro TLS Server") {
 
   it("should close coro tls sockets with pending send without use-after-free") {
     tls_server_run_close_case(0);
+  }
+
+  it("should preserve completion ownership across consecutive tiny TLS writes") {
+    tls_server_run_tiny_write_case();
   }
 
 #ifdef _WIN32

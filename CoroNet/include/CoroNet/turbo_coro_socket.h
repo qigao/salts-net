@@ -230,7 +230,10 @@ CXX_C_API int coro_socket_connect_host_ex(coro_socket_t *socket, const char *con
  *
  * @param socket    Connected TCP socket to upgrade in place.
  * @param hostname  Optional server name for SNI / certificate validation context.
- * @return 0 on success, negative error code on failure.
+ * @return 0 on success; TURBO_EINVAL for a NULL/invalid socket;
+ *         TURBO_ENOTSUP for a non-TCP transport; TURBO_ENOTCONN when no
+ *         connected stream exists; TURBO_EBUSY while another wait is active;
+ *         or another negative TLS/transport error.
  */
 CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostname);
 

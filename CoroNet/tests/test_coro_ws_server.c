@@ -80,6 +80,13 @@ static const uint8_t g_ws_server_binary_request[] = {
     0x04, 0x02, 0x00, 0x3C, 0x00, 0x01, 'a'
 };
 static const uint8_t g_ws_server_binary_reply[] = {0x20, 0x02, 0x00, 0x00};
+static const uint8_t g_ws_server_tiny_payload[] = {0x10};
+
+enum {
+  WS_DEFAULT_CASE_TIMEOUT_MS = 3000,
+  WS_DENSE_CASE_TIMEOUT_MS = 15000,
+  WS_DENSE_TINY_ROUNDTRIPS = 512
+};
 
 static int ws_server_case_done(void *arg) {
   (void)arg;
@@ -160,6 +167,8 @@ static int ws_close_client_status_expected(int pending_recv, int status) {
 
 static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
   ws_server_state_t *state = (ws_server_state_t *)arg;
+  size_t expected_payload = 0;
+  size_t received_payload = 0;
   int rc;
   int roundtrips = (state && state->roundtrips > 0) ? state->roundtrips : 1;
 
@@ -172,17 +181,34 @@ static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
         coro_socket_tls_export_channel_binding(client, state->server_binding);
     rc = state->server_binding_rc;
   }
-  for (int i = 0; rc == 0 && i < roundtrips; ++i) {
+  if (state && state->reply_data == NULL) {
+    if (state->request_len > SIZE_MAX / (size_t)roundtrips) {
+      rc = TURBO_ERANGE;
+    } else {
+      expected_payload = state->request_len * (size_t)roundtrips;
+    }
+  }
+  for (int i = 0;
+       rc == 0 && (state->reply_data != NULL ? i < roundtrips
+                                             : received_payload < expected_payload);
+       ++i) {
     char *data = NULL;
     size_t len = 0;
 
     rc = coro_socket_recv(client, &data, &len);
+    if (rc == 0 && state->reply_data == NULL) {
+      if (len > expected_payload - received_payload) {
+        rc = TURBO_EPROTO;
+      } else {
+        received_payload += len;
+      }
+    }
     if (rc == 0 && data != NULL && len <= sizeof(g_ws_server_handler_buf)) {
       memcpy(g_ws_server_handler_buf, data, len);
       g_ws_server_handler_len = len;
     }
 
-    if (rc == 0) {
+    if (rc == 0 && state->reply_data != NULL) {
       rc = coro_socket_send(client,
                             (const char *)state->reply_data,
                             state->reply_len);
@@ -199,7 +225,14 @@ static void ws_server_echo_handler(coro_socket_t *client, void *arg) {
       break;
     }
 
-    g_ws_server_handler_roundtrips++;
+    if (state->reply_data != NULL) {
+      g_ws_server_handler_roundtrips++;
+    }
+  }
+
+  if (rc == 0 && state && state->reply_data == NULL &&
+      received_payload == expected_payload) {
+    g_ws_server_handler_roundtrips = roundtrips;
   }
 
   if (rc == 0 && state != NULL) {
@@ -249,19 +282,21 @@ static void ws_server_client_task(coro_t *co, void *arg) {
         break;
       }
       g_ws_server_client_sends++;
-      rc = coro_socket_recv(client, &data, &len);
-      if (rc != 0) {
-        break;
-      }
+      if (state->reply_data != NULL) {
+        rc = coro_socket_recv(client, &data, &len);
+        if (rc != 0) {
+          break;
+        }
 
-      if (data != NULL && len <= sizeof(g_ws_server_client_buf)) {
-        memcpy(g_ws_server_client_buf, data, len);
-        g_ws_server_client_len = len;
-      }
+        if (data != NULL && len <= sizeof(g_ws_server_client_buf)) {
+          memcpy(g_ws_server_client_buf, data, len);
+          g_ws_server_client_len = len;
+        }
 
-      if (data != NULL) {
-        coro_socket_free_recv(data);
-        data = NULL;
+        if (data != NULL) {
+          coro_socket_free_recv(data);
+          data = NULL;
+        }
       }
 
       g_ws_server_client_roundtrips++;
@@ -556,7 +591,11 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
                0);
   check_int_eq(coro_context_spawn(state.ctx, ws_server_client_task, &state), 0);
 
-  ws_server_run_until(state.ctx, 3000, ws_server_case_done, NULL);
+  ws_server_run_until(state.ctx,
+                      state.roundtrips >= WS_DENSE_TINY_ROUNDTRIPS
+                          ? WS_DENSE_CASE_TIMEOUT_MS
+                          : WS_DEFAULT_CASE_TIMEOUT_MS,
+                      ws_server_case_done, NULL);
 
   if (g_ws_server_handler_hits != 1 || g_ws_server_client_rc != 0 ||
       g_ws_server_handler_rc != 0) {
@@ -572,14 +611,17 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
   check_int_eq(g_ws_server_client_rc, 0);
   check_int_eq(g_ws_server_handler_roundtrips, state.roundtrips);
   check_int_eq(g_ws_server_client_roundtrips, state.roundtrips);
-  check_int_eq(g_ws_server_handler_sends, state.roundtrips);
+  check_int_eq(g_ws_server_handler_sends,
+               state.reply_data != NULL ? state.roundtrips : 0);
   check_int_eq(g_ws_server_client_sends, state.roundtrips);
-  check_int_eq((int)g_ws_server_handler_len, (int)request_len);
+  if (state.reply_data != NULL) {
+    check_int_eq((int)g_ws_server_handler_len, (int)request_len);
+  }
   check_int_eq((int)g_ws_server_client_len, (int)reply_len);
-  if (g_ws_server_handler_len == request_len) {
+  if (state.reply_data != NULL && g_ws_server_handler_len == request_len) {
     check_int_eq(memcmp(g_ws_server_handler_buf, request_data, request_len), 0);
   }
-  if (g_ws_server_client_len == reply_len) {
+  if (state.reply_data != NULL && g_ws_server_client_len == reply_len) {
     check_int_eq(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
   }
   if (state.secure) {
@@ -806,5 +848,22 @@ spec("Coro WebSocket Server") {
                                     g_ws_server_reply,
                                     sizeof(g_ws_server_reply) - 1,
                                     10);
+  }
+
+  it("should preserve write completion ownership across dense Secure WebSocket tiny writes") {
+    ws_server_run_case_with_payload(1, NULL,
+                                    g_ws_server_tiny_payload,
+                                    sizeof(g_ws_server_tiny_payload),
+                                    g_ws_server_tiny_payload,
+                                    sizeof(g_ws_server_tiny_payload),
+                                    WS_DENSE_TINY_ROUNDTRIPS);
+  }
+
+  it("should complete dense Secure WebSocket tiny writes without receive interleaving") {
+    ws_server_run_case_with_payload(1, NULL,
+                                    g_ws_server_tiny_payload,
+                                    sizeof(g_ws_server_tiny_payload),
+                                    NULL, 0,
+                                    WS_DENSE_TINY_ROUNDTRIPS);
   }
 }

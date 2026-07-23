@@ -260,9 +260,12 @@ static int ws_begin_write_wait(coro_socket_t *s, int *scheduled_out) {
 }
 
 static int ws_finish_write_wait(coro_socket_t *s, int rc, int scheduled_state) {
+  coro_t *co;
+
   if (!s || scheduled_state == 0) {
     return rc;
   }
+  co = coro_running();
 
   if (rc != 0) {
     s->co_write_wait = NULL;
@@ -272,7 +275,7 @@ static int ws_finish_write_wait(coro_socket_t *s, int rc, int scheduled_state) {
     return rc;
   }
 
-  if (s->co_write_wait) {
+  while (s->co_write_wait == co) {
     coro_yield();
   }
   return s->write_status;

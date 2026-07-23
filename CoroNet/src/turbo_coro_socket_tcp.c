@@ -15,6 +15,8 @@
 
 extern const coro_transport_ops_t transport_ops_tcp;
 
+#define CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES (64u * 1024u)
+
 static int tcp_recv_start(coro_socket_t *s);
 
 static int socket_ctx_error(coro_socket_t *s, int fallback) {
@@ -412,7 +414,7 @@ static int tcp_send_finish(coro_socket_t *s, coro_t *co, int scheduled, int subm
     if (scheduled) coro_set_waiting_for_io(co, 0);
     return submit_status;
   }
-  if (s->co_write_wait) coro_yield();
+  while (s->co_write_wait == co) coro_yield();
 #ifdef TURBO_CORONET_INTERNAL_PROFILING
   if (s->send_profile_active && s->send_profile_resume_signal_ns != 0u) {
     turbo_coro_send_profile_record_resume(s->send_profile_resume_signal_ns,
@@ -424,7 +426,7 @@ static int tcp_send_finish(coro_socket_t *s, coro_t *co, int scheduled, int subm
   return s->write_status;
 }
 
-static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
+static int tcp_send_one(coro_socket_t *s, const char *data, size_t len) {
   coro_t *co;
   int scheduled;
   int rc;
@@ -433,6 +435,29 @@ static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
   if (rc != TURBO_OK) return rc;
   rc = turbo_stream_send(s->handle.stream, data, len);
   return tcp_send_finish(s, co, scheduled, rc);
+}
+
+static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
+  size_t offset = 0u;
+  int rc;
+
+  if (!s || !data || len == 0u) return TURBO_EINVAL;
+  if (coro_context_get_tcp_backend(s->ctx) != TURBO_TCP_BACKEND_EPOLL ||
+      len <= CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES)
+    return tcp_send_one(s, data, len);
+
+  /* epoll owns a bounded SPSC submission ring.  Limiting one coroutine write
+   * to less than that ring keeps cancellation on the coroutine boundary even
+   * when a peer stops reading a multi-megabyte MQTT packet. */
+  while (offset < len) {
+    size_t chunk = len - offset;
+    if (chunk > CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES)
+      chunk = CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES;
+    rc = tcp_send_one(s, data + offset, chunk);
+    if (rc != TURBO_OK) return rc;
+    offset += chunk;
+  }
+  return TURBO_OK;
 }
 
 static int tcp_sendv(coro_socket_t *s, const turbo_iovec_t *iov, size_t iovcnt) {
@@ -450,6 +475,20 @@ static int tcp_sendv(coro_socket_t *s, const turbo_iovec_t *iov, size_t iovcnt) 
     total += iov[i].len;
   }
   if (total == 0u) return TURBO_EINVAL;
+  if (coro_context_get_tcp_backend(s->ctx) == TURBO_TCP_BACKEND_EPOLL &&
+      total > CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES) {
+    buffer = turbo_stream_get_send_buffer(s->handle.stream, total);
+    if (!buffer) return TURBO_ENOMEM;
+    for (size_t i = 0u; i < iovcnt; ++i) {
+      if (iov[i].len == 0u) continue;
+      memcpy((char *)mem_buffer_data(buffer) + offset, iov[i].data, iov[i].len);
+      offset += iov[i].len;
+    }
+    mem_set_used(buffer, total);
+    rc = tcp_send(s, (const char *)mem_buffer_const_data(buffer), total);
+    mem_unref(buffer);
+    return rc;
+  }
   rc = tcp_send_begin(s, &co, &scheduled);
   if (rc != TURBO_OK) return rc;
   if (co) {

@@ -3,6 +3,7 @@
 #include "turbo_stream.h"
 #include "tinytest.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
 #include <winsock2.h>
@@ -62,6 +63,11 @@ static int s_recv_hit = 0;
 static char s_recv_data[64];
 static size_t s_recv_len = 0;
 static const char g_zstd_payload[] = "zstd tcp payload";
+#if defined(__linux__) || defined(__ANDROID__)
+static size_t s_epoll_large_recv_len = 0;
+static int s_epoll_large_recv_eof = 0;
+static int s_epoll_large_recv_mismatch = 0;
+#endif
 
 static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg) {
     size_t copy_len;
@@ -82,6 +88,26 @@ static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg) {
     s_recv_hit++;
     return 0;
 }
+
+#if defined(__linux__) || defined(__ANDROID__)
+static int on_recv_epoll_large(void *handle, const mem_slice_t *slice, void *arg) {
+    (void)handle;
+    (void)arg;
+    if (!slice || !slice->data) {
+        s_epoll_large_recv_eof = 1;
+        return 0;
+    }
+    for (size_t i = 0u; i < slice->length; ++i) {
+        const unsigned char expected = (unsigned char)((s_epoll_large_recv_len + i) & 0xffu);
+        if ((unsigned char)slice->data[i] != expected) {
+            s_epoll_large_recv_mismatch = 1;
+            break;
+        }
+    }
+    s_epoll_large_recv_len += slice->length;
+    return 0;
+}
+#endif
 
 #define STREAM_TEST_WAIT_ITERS 20000
 
@@ -303,6 +329,66 @@ static void stream_coro_recv_timeout_then_close_handler(coro_socket_t *client, v
         coro_socket_free_recv(data);
     }
 }
+
+#if defined(__linux__) || defined(__ANDROID__)
+typedef struct stream_delayed_recv_eof_state_s {
+    coro_context_t *ctx;
+    unsigned short port;
+    int handler_done;
+    int handler_rc;
+    int client_done;
+    int client_rc;
+} stream_delayed_recv_eof_state_t;
+
+static int stream_delayed_recv_eof_pending(void *arg) {
+    stream_delayed_recv_eof_state_t *state = (stream_delayed_recv_eof_state_t *)arg;
+    return state && !state->client_done;
+}
+
+static void stream_delayed_recv_eof_handler(coro_socket_t *client, void *arg) {
+    stream_delayed_recv_eof_state_t *state = (stream_delayed_recv_eof_state_t *)arg;
+    char *data = NULL;
+    size_t size = 0u;
+    if (!client || !state) return;
+    state->handler_rc = coro_socket_recv(client, &data, &size);
+    if (data) coro_socket_free_recv(data);
+    state->handler_done = 1;
+}
+
+static void stream_delayed_recv_eof_client(coro_t *co, void *arg) {
+    static const char request[] = "close-before-recv";
+    stream_delayed_recv_eof_state_t *state = (stream_delayed_recv_eof_state_t *)arg;
+    coro_socket_t *client = NULL;
+    char *data = NULL;
+    size_t size = 0u;
+    uint64_t deadline;
+    (void)co;
+    if (!state || !state->ctx) return;
+    client = coro_socket_create_tcpv4(state->ctx);
+    if (!client) {
+        state->client_rc = TURBO_ENOMEM;
+        state->client_done = 1;
+        return;
+    }
+    coro_socket_set_timeout(client, 3000u);
+    state->client_rc = coro_socket_connect(client, "127.0.0.1", state->port);
+    if (state->client_rc == TURBO_OK)
+        state->client_rc = coro_socket_send(client, request, sizeof(request) - 1u);
+    deadline = turbo_monotonic_ms() + 1000u;
+    while (state->client_rc == TURBO_OK && !state->handler_done &&
+           turbo_monotonic_ms() < deadline)
+        coro_sleep(state->ctx, 1u);
+    if (state->client_rc == TURBO_OK) {
+        /* Let the peer close and let epoll deliver the terminal event before
+         * coro_socket_recv installs the transport receive callback. */
+        coro_sleep(state->ctx, 20u);
+        state->client_rc = coro_socket_recv(client, &data, &size);
+    }
+    if (data) coro_socket_free_recv(data);
+    coro_socket_destroy(client);
+    state->client_done = 1;
+}
+#endif
 
 typedef struct stream_zstd_echo_state_s {
     coro_context_t *ctx;
@@ -1089,6 +1175,47 @@ static int stream_test_raw_connect_send(unsigned short port, const char *payload
 
     return fd;
 }
+
+static int stream_test_raw_connect(unsigned short port) {
+    struct sockaddr_in addr;
+    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return -1;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    if (connect(fd, (struct sockaddr *)&addr, (socklen_t)sizeof(addr)) != 0) {
+        close(fd);
+        return -2;
+    }
+    return fd;
+}
+
+static int stream_test_raw_send_all(int fd, const uint8_t *payload, size_t payload_size) {
+    size_t offset = 0u;
+    if (fd < 0 || !payload || payload_size == 0u) return -1;
+    while (offset < payload_size) {
+        ssize_t sent = send(fd, payload + offset, payload_size - offset, 0);
+        if (sent <= 0) return -2;
+        offset += (size_t)sent;
+    }
+    return 0;
+}
+
+static int stream_test_raw_connect_send_bytes(unsigned short port, const uint8_t *payload,
+                                              size_t payload_size) {
+    int fd = stream_test_raw_connect(port);
+    if (fd < 0) return fd;
+    if (stream_test_raw_send_all(fd, payload, payload_size) != 0) {
+        close(fd);
+        return -3;
+    }
+    if (shutdown(fd, SHUT_WR) != 0) {
+        close(fd);
+        return -4;
+    }
+    return fd;
+}
 #endif
 
 spec("Stream") {
@@ -1395,6 +1522,174 @@ spec("Stream") {
 #endif
 
 #if defined(__linux__) || defined(__ANDROID__)
+    it("should preserve payloads larger than the epoll read ring before EOF") {
+        enum { STREAM_EPOLL_LARGE_PAYLOAD_BYTES = 512u * 1024u };
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_stream_listener_t *listener;
+        struct sockaddr_in addr;
+        stream_test_counts_t counts;
+        unsigned char *payload;
+        unsigned short port;
+        uint64_t deadline;
+        int fd;
+
+        check_not_null(ctx);
+        check_int_eq(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_EPOLL), 0);
+        payload = (unsigned char *)malloc(STREAM_EPOLL_LARGE_PAYLOAD_BYTES);
+        check_not_null(payload);
+        for (size_t i = 0u; i < STREAM_EPOLL_LARGE_PAYLOAD_BYTES; ++i)
+            payload[i] = (unsigned char)(i & 0xffu);
+
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+        s_accepted_client = NULL;
+        s_accepted_count = 0;
+        s_epoll_large_recv_len = 0u;
+        s_epoll_large_recv_eof = 0;
+        s_epoll_large_recv_mismatch = 0;
+        listener = turbo_stream_listen(ctx, TURBO_STREAM_TCP4, (struct sockaddr *)&addr, 128,
+                                       on_accept_local);
+        check_not_null(listener);
+        fd = stream_test_raw_connect_send_bytes(port, payload,
+                                                STREAM_EPOLL_LARGE_PAYLOAD_BYTES);
+        check_int_gt(fd, -1);
+        counts.connected = NULL;
+        counts.expected_connected = 0;
+        counts.accepted = &s_accepted_count;
+        counts.expected_accepted = 1;
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+        check_int_eq(s_accepted_count, 1);
+        check_not_null(s_accepted_client);
+        check_int_eq(turbo_stream_recv_start(s_accepted_client, on_recv_epoll_large), 0);
+        deadline = turbo_monotonic_ms() + 5000u;
+        while ((!s_epoll_large_recv_eof ||
+                s_epoll_large_recv_len != STREAM_EPOLL_LARGE_PAYLOAD_BYTES) &&
+               turbo_monotonic_ms() < deadline)
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        check_int_eq(s_epoll_large_recv_mismatch, 0);
+        check_size_eq(s_epoll_large_recv_len, STREAM_EPOLL_LARGE_PAYLOAD_BYTES);
+        check_int_eq(s_epoll_large_recv_eof, 1);
+
+        close(fd);
+        free(payload);
+        turbo_stream_destroy(s_accepted_client);
+        turbo_stream_listener_close(listener);
+        stream_test_destroy_context_robust(ctx);
+    }
+
+    it("should continue epoll reads after a full ring without waiting for EOF") {
+        enum {
+            STREAM_EPOLL_OPEN_PAYLOAD_BYTES = 512u * 1024u,
+            STREAM_EPOLL_OPEN_TAIL_BYTES = 257u,
+            STREAM_EPOLL_OPEN_TOTAL_BYTES =
+                STREAM_EPOLL_OPEN_PAYLOAD_BYTES + STREAM_EPOLL_OPEN_TAIL_BYTES
+        };
+        coro_context_t *ctx = coro_context_create(NULL);
+        turbo_stream_listener_t *listener;
+        struct sockaddr_in addr;
+        stream_test_counts_t counts;
+        unsigned char *payload;
+        unsigned short port;
+        uint64_t deadline;
+        int fd;
+
+        check_not_null(ctx);
+        check_int_eq(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_EPOLL), 0);
+        payload = (unsigned char *)malloc(STREAM_EPOLL_OPEN_TOTAL_BYTES);
+        check_not_null(payload);
+        for (size_t i = 0u; i < STREAM_EPOLL_OPEN_TOTAL_BYTES; ++i)
+            payload[i] = (unsigned char)(i & 0xffu);
+
+        port = stream_test_pick_loopback_port();
+        check_int_gt(port, 0);
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+        s_accepted_client = NULL;
+        s_accepted_count = 0;
+        s_epoll_large_recv_len = 0u;
+        s_epoll_large_recv_eof = 0;
+        s_epoll_large_recv_mismatch = 0;
+        listener = turbo_stream_listen(ctx, TURBO_STREAM_TCP4, (struct sockaddr *)&addr, 128,
+                                       on_accept_local);
+        check_not_null(listener);
+        fd = stream_test_raw_connect(port);
+        check_int_gt(fd, -1);
+        check_int_eq(stream_test_raw_send_all(fd, payload, STREAM_EPOLL_OPEN_PAYLOAD_BYTES), 0);
+        counts.connected = NULL;
+        counts.expected_connected = 0;
+        counts.accepted = &s_accepted_count;
+        counts.expected_accepted = 1;
+        stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+        check_int_eq(s_accepted_count, 1);
+        check_not_null(s_accepted_client);
+        check_int_eq(turbo_stream_recv_start(s_accepted_client, on_recv_epoll_large), 0);
+        deadline = turbo_monotonic_ms() + 5000u;
+        while (s_epoll_large_recv_len != STREAM_EPOLL_OPEN_PAYLOAD_BYTES &&
+               turbo_monotonic_ms() < deadline)
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        check_int_eq(s_epoll_large_recv_mismatch, 0);
+        check_size_eq(s_epoll_large_recv_len, STREAM_EPOLL_OPEN_PAYLOAD_BYTES);
+        check_int_eq(s_epoll_large_recv_eof, 0);
+
+        check_int_eq(stream_test_raw_send_all(fd, payload + STREAM_EPOLL_OPEN_PAYLOAD_BYTES,
+                                              STREAM_EPOLL_OPEN_TAIL_BYTES),
+                     0);
+        deadline = turbo_monotonic_ms() + 3000u;
+        while (s_epoll_large_recv_len != STREAM_EPOLL_OPEN_TOTAL_BYTES &&
+               turbo_monotonic_ms() < deadline)
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        check_int_eq(s_epoll_large_recv_mismatch, 0);
+        check_size_eq(s_epoll_large_recv_len, STREAM_EPOLL_OPEN_TOTAL_BYTES);
+        check_int_eq(s_epoll_large_recv_eof, 0);
+
+        check_int_eq(shutdown(fd, SHUT_WR), 0);
+        deadline = turbo_monotonic_ms() + 3000u;
+        while (!s_epoll_large_recv_eof && turbo_monotonic_ms() < deadline)
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        check_int_eq(s_epoll_large_recv_eof, 1);
+
+        close(fd);
+        free(payload);
+        turbo_stream_destroy(s_accepted_client);
+        turbo_stream_listener_close(listener);
+        stream_test_destroy_context_robust(ctx);
+    }
+
+    it("should preserve epoll EOF delivered before recv_start") {
+        stream_delayed_recv_eof_state_t state;
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *server;
+
+        memset(&state, 0, sizeof(state));
+        check_not_null(ctx);
+        check_int_eq(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_EPOLL), 0);
+        state.ctx = ctx;
+        state.port = stream_test_pick_loopback_port();
+        state.handler_rc = TURBO_EBUSY;
+        state.client_rc = TURBO_EBUSY;
+        check_int_gt(state.port, 0);
+        server = coro_socket_create_tcpv4(ctx);
+        check_not_null(server);
+        check_int_eq(coro_socket_listen_on(server, "127.0.0.1", state.port,
+                                           stream_delayed_recv_eof_handler, &state),
+                     0);
+        check_int_eq(coro_context_spawn(ctx, stream_delayed_recv_eof_client, &state), 0);
+        stream_test_run_while(ctx, stream_delayed_recv_eof_pending, &state, 3000u);
+        check_int_eq(state.handler_done, 1);
+        check_int_eq(state.handler_rc, TURBO_OK);
+        check_int_eq(state.client_done, 1);
+        check_int_eq(state.client_rc, TURBO_EOF);
+
+        coro_socket_destroy(server);
+        stream_test_destroy_context_robust(ctx);
+    }
+
     it("should preserve epoll data received before recv_start") {
         static const char payload[] = "epoll-pre-recv";
         coro_context_t *ctx = coro_context_create(NULL);

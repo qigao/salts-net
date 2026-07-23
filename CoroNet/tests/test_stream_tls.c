@@ -5,6 +5,7 @@
 #include "turbo_thread.h"
 
 #include <string.h>
+#include <stdatomic.h>
 #ifndef _WIN32
 #include <signal.h>
 #endif
@@ -18,6 +19,9 @@ typedef struct {
   int saw_request;
   int read_request;
   int send_response;
+  int wait_for_release;
+  atomic_int handshake_complete;
+  atomic_int release_after_handshake;
   uint64_t hold_after_handshake_ms;
 } tls_test_server_t;
 
@@ -26,6 +30,31 @@ static int s_tls_closed = 0;
 static char s_tls_rx_buf[4096];
 static size_t s_tls_rx_len = 0;
 static char s_tls_send_payload[128 * 1024];
+
+enum { TLS_TEST_HANDSHAKE_TIMEOUT_MS = 3000 };
+
+static void tls_test_wait_ms(uint64_t wait_ms);
+
+static void tls_test_server_init(tls_test_server_t *server) {
+  memset(server, 0, sizeof(*server));
+  server->listen_socket = TEST_INVALID_SOCKET;
+  atomic_init(&server->handshake_complete, 0);
+  atomic_init(&server->release_after_handshake, 0);
+}
+
+static int tls_test_wait_for_server_handshake(tls_test_server_t *server) {
+  uint64_t deadline;
+
+  if (!server) return 0;
+  deadline = turbo_monotonic_ms() + TLS_TEST_HANDSHAKE_TIMEOUT_MS;
+  while (atomic_load_explicit(&server->handshake_complete,
+                              memory_order_acquire) == 0 &&
+         turbo_monotonic_ms() < deadline) {
+    tls_test_wait_ms(1);
+  }
+  return atomic_load_explicit(&server->handshake_complete,
+                              memory_order_acquire) != 0;
+}
 
 static void run_ctx_until_not(coro_context_t *ctx, volatile int *flag, int pending,
                               uint64_t timeout_ms) {
@@ -164,9 +193,26 @@ static void tls_test_server_main(void *arg) {
     server->status = -6;
     goto done;
   }
+  atomic_store_explicit(&server->handshake_complete, 1,
+                        memory_order_release);
 
   if (!server->read_request && !server->send_response) {
-    tls_test_wait_ms(server->hold_after_handshake_ms);
+    if (server->wait_for_release) {
+      uint64_t deadline =
+          turbo_monotonic_ms() + server->hold_after_handshake_ms;
+      while (atomic_load_explicit(&server->release_after_handshake,
+                                  memory_order_acquire) == 0 &&
+             turbo_monotonic_ms() < deadline) {
+        tls_test_wait_ms(1);
+      }
+      if (atomic_load_explicit(&server->release_after_handshake,
+                               memory_order_acquire) == 0) {
+        server->status = -13;
+        goto done;
+      }
+    } else {
+      tls_test_wait_ms(server->hold_after_handshake_ms);
+    }
     server->status = 0;
     goto done;
   }
@@ -237,8 +283,7 @@ spec("Stream TLS Client") {
         "Connection: close\r\n"
         "\r\n";
 
-    memset(&server, 0, sizeof(server));
-    server.listen_socket = TEST_INVALID_SOCKET;
+    tls_test_server_init(&server);
     server.read_request = 1;
     server.send_response = 1;
     turbo_stream_tls_reset_client_session_cache();
@@ -318,9 +363,9 @@ spec("Stream TLS Client") {
       tls_test_server_t server;
       struct sockaddr_in addr;
 
-      memset(&server, 0, sizeof(server));
-      server.listen_socket = TEST_INVALID_SOCKET;
-      server.hold_after_handshake_ms = 200;
+      tls_test_server_init(&server);
+      server.wait_for_release = 1;
+      server.hold_after_handshake_ms = 3000;
       turbo_stream_tls_reset_client_session_cache();
 
       check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
@@ -354,10 +399,13 @@ spec("Stream TLS Client") {
       run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
       check_int_eq(s_tls_connected, 0);
 
+      check_int_eq(tls_test_wait_for_server_handshake(&server), 1);
       check_int_eq(turbo_stream_recv_start(s, on_tls_recv), 0);
       tls_test_wait_ms(50);
       turbo_stream_close(s);
       turbo_stream_destroy(s);
+      atomic_store_explicit(&server.release_after_handshake, 1,
+                            memory_order_release);
 
       run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
       check_int_eq(turbo_thread_join(&server.thread), 0);
@@ -388,9 +436,9 @@ spec("Stream TLS Client") {
       struct sockaddr_in addr;
       int j;
 
-      memset(&server, 0, sizeof(server));
-      server.listen_socket = TEST_INVALID_SOCKET;
-      server.hold_after_handshake_ms = 200;
+      tls_test_server_init(&server);
+      server.wait_for_release = 1;
+      server.hold_after_handshake_ms = 3000;
       turbo_stream_tls_reset_client_session_cache();
 
       check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
@@ -424,12 +472,15 @@ spec("Stream TLS Client") {
       run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
       check_int_eq(s_tls_connected, 0);
 
+      check_int_eq(tls_test_wait_for_server_handshake(&server), 1);
       for (j = 0; j < TLS_SEND_BURST; ++j) {
         check_int_eq(turbo_stream_send(s, s_tls_send_payload, sizeof(s_tls_send_payload)), 0);
       }
 
       turbo_stream_close(s);
       turbo_stream_destroy(s);
+      atomic_store_explicit(&server.release_after_handshake, 1,
+                            memory_order_release);
 
       run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
       check_int_eq(turbo_thread_join(&server.thread), 0);

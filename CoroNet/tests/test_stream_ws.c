@@ -11,6 +11,7 @@
 #include <openssl/sha.h>
 
 #include <string.h>
+#include <stdatomic.h>
 
 static const char WS_GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -23,6 +24,8 @@ typedef struct {
   int send_invalid_opcode;
   int saw_echo;
   int saw_close;
+  int wait_for_release;
+  atomic_int release_after_handshake;
   uint64_t hold_after_handshake_ms;
 } wss_test_server_t;
 
@@ -297,7 +300,22 @@ static void wss_test_server_main(void *arg) {
   server->handshake_ok = 1;
 
   if (server->hold_after_handshake_ms != 0) {
-    ws_test_wait_ms(server->hold_after_handshake_ms);
+    if (server->wait_for_release) {
+      uint64_t deadline =
+          turbo_monotonic_ms() + server->hold_after_handshake_ms;
+      while (atomic_load_explicit(&server->release_after_handshake,
+                                  memory_order_acquire) == 0 &&
+             turbo_monotonic_ms() < deadline) {
+        ws_test_wait_ms(1);
+      }
+      if (atomic_load_explicit(&server->release_after_handshake,
+                               memory_order_acquire) == 0) {
+        server->status = -20;
+        goto done;
+      }
+    } else {
+      ws_test_wait_ms(server->hold_after_handshake_ms);
+    }
     server->status = 0;
     goto done;
   }
@@ -571,7 +589,9 @@ spec("Stream WebSocket Client") {
 
       memset(&server, 0, sizeof(server));
       server.listen_socket = TEST_INVALID_SOCKET;
-      server.hold_after_handshake_ms = 200;
+      server.wait_for_release = 1;
+      server.hold_after_handshake_ms = 3000;
+      atomic_init(&server.release_after_handshake, 0);
       turbo_stream_tls_reset_client_session_cache();
 
       check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
@@ -607,6 +627,8 @@ spec("Stream WebSocket Client") {
       check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
       turbo_stream_close(s);
       turbo_stream_destroy(s);
+      atomic_store_explicit(&server.release_after_handshake, 1,
+                            memory_order_release);
 
       ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
       check_int_eq(turbo_thread_join(&server.thread), 0);
@@ -641,7 +663,9 @@ spec("Stream WebSocket Client") {
 
       memset(&server, 0, sizeof(server));
       server.listen_socket = TEST_INVALID_SOCKET;
-      server.hold_after_handshake_ms = 200;
+      server.wait_for_release = 1;
+      server.hold_after_handshake_ms = 3000;
+      atomic_init(&server.release_after_handshake, 0);
       turbo_stream_tls_reset_client_session_cache();
 
       check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
@@ -680,6 +704,8 @@ spec("Stream WebSocket Client") {
 
       turbo_stream_close(s);
       turbo_stream_destroy(s);
+      atomic_store_explicit(&server.release_after_handshake, 1,
+                            memory_order_release);
 
       ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
       check_int_eq(turbo_thread_join(&server.thread), 0);

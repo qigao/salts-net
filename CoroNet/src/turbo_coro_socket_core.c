@@ -517,6 +517,8 @@ void coro_socket_handle_transport_close(coro_socket_t *s) {
     s->status = (s->status == 0) ? TURBO_EOF : s->status;
     coro_resume_waiter_with_handoff(s);
     resumed_waiter = 1;
+  } else {
+    s->peer_eof_pending = 1;
   }
 
   if (s->co_write_wait) {
@@ -661,6 +663,7 @@ static void coro_socket_reset_retry_state(coro_socket_t *s) {
 
   s->connected = 0;
   s->status = 0;
+  s->peer_eof_pending = 0;
   s->timed_out = 0;
   s->co_wait = NULL;
 
@@ -1459,6 +1462,10 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
     return ret;
   }
 
+  if (s->peer_eof_pending) {
+    return TURBO_EOF;
+  }
+
   if (s->recv_call_inflight || (s->co_wait && s->co_wait != coro_running())) {
     return socket_return_error(s, TURBO_EBUSY);
   }
@@ -1466,17 +1473,20 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
   s->recv_call_inflight = 1;
   retain_client(s);
   coro_set_wait(s);
+  start_timeout_timer(s);
 
   int r = s->ops->recv_start(s);
   if (r != 0 && r != TURBO_EALREADY) {
+    stop_timeout_timer(s);
     s->co_wait = NULL;
     s->recv_call_inflight = 0;
     release_client(s);
     return r;
   }
 
-  start_timeout_timer(s);
-  coro_yield();
+  if (s->co_wait) {
+    coro_yield();
+  }
 
   {
     char *recv_data = s->recv_data;

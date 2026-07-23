@@ -69,7 +69,12 @@ typedef struct stream_epoll_state_s {
     int event_write_lock;
     int event_post_pending;
     atomic_int read_event_pending;
+    atomic_int read_retry_pending;
+    atomic_int wake_pending;
+    atomic_int write_submit_active;
+    atomic_int write_completion_pending;
     atomic_int terminal_posted;
+    atomic_int terminal_delivery_status;
     int is_listener;
     atomic_int stopping;
     int registered;
@@ -158,6 +163,7 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
 static void handle_write_event(stream_epoll_state_t *st, stream_epoll_event_t *ev);
 static void flush_write_ring(stream_epoll_state_t *st);
 static void try_flush_write_ring(stream_epoll_state_t *st);
+static void stream_epoll_handle_stream_event(stream_epoll_state_t *st, uint32_t evmask);
 static void epoll_destroy_state(stream_epoll_state_t *st);
 static void epoll_shutdown_state(stream_epoll_state_t *st);
 static void epoll_release_context_ref(stream_epoll_state_t *st);
@@ -202,6 +208,7 @@ static void post_terminal_event(stream_epoll_state_t *st, int status) {
         }
     }
     st->connected = 0;
+    atomic_store_explicit(&st->terminal_delivery_status, status, memory_order_release);
     epoll_disarm_stream_fd(st);
     post_event(st, SEP_OP_READ, status, NULL, NULL, 0);
 }
@@ -309,6 +316,7 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
     size_t bytes = 0;
     uint8_t *data = ring_spsc_read_acquire(&st->read_ring, &bytes);
     int close_requested = 0;
+    int delivered_data = 0;
 
     if (ev->status == 0) {
         atomic_store_explicit(&st->read_event_pending, 0, memory_order_release);
@@ -331,31 +339,94 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
 
     if (data && bytes > 0) {
         mem_slice_t slice;
+        int expected = 0;
 
         slice.buffer = NULL;
         slice.data = (char *)data;
         slice.length = bytes;
         close_requested = s->on_recv(s, &slice, NULL);
         ring_spsc_read_release(&st->read_ring, bytes);
+        delivered_data = 1;
+        /* EPOLLET does not publish a second edge when recv stopped because the
+         * bounded ring was full.  Once the consumer frees space, ask the reactor
+         * to continue draining the same fd; otherwise bytes still in the kernel
+         * receive queue can remain invisible until unrelated socket activity. */
+        if (!close_requested && !s->closing && !s->finalized &&
+            atomic_compare_exchange_strong_explicit(&st->read_retry_pending, &expected, 1,
+                                                     memory_order_acq_rel,
+                                                     memory_order_acquire)) {
+            if (epoll_reactor_wake_state(st) != 0) {
+                atomic_store_explicit(&st->read_retry_pending, 0, memory_order_release);
+            }
+        }
     } else if (ev->status != 0) {
+        atomic_store_explicit(&st->terminal_delivery_status, 0, memory_order_release);
         s->on_recv(s, NULL, NULL);
     }
 
-    if ((ev->status != 0 || close_requested) && !s->closing) {
+    if (close_requested && !s->closing) {
+        turbo_stream_close(s);
+        return;
+    }
+    if (delivered_data) {
+        if (ev->status != 0) {
+            /* A terminal event must remain behind every byte already accepted
+             * into the read ring.  Re-post it until the consumer drains the ring. */
+            post_event(st, SEP_OP_READ, ev->status, NULL, NULL, 0);
+        } else if (ring_spsc_read_available(&st->read_ring) != 0u) {
+            /* A coalesced notification represents all buffered chunks, not only
+             * the first contiguous SPSC view returned above. */
+            post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
+        }
+        return;
+    }
+    if (ev->status != 0 && !s->closing) {
         turbo_stream_close(s);
     }
 }
 
 static void handle_write_event(stream_epoll_state_t *st, stream_epoll_event_t *ev) {
     turbo_stream_t *s = (turbo_stream_t *)st->owner;
-    if (s && !s->closing && !s->finalized && s->on_write_complete) {
+    size_t completions = (size_t)(uintptr_t)ev->extra;
+
+    if (completions == 0u) {
+        completions = 1u;
+    }
+    if (!s || s->closing || s->finalized || !s->on_write_complete) {
+        return;
+    }
+    turbo_stream_callback_enter(s);
+    while (completions-- > 0u && s && !s->closing && !s->finalized &&
+           s->on_write_complete) {
         s->on_write_complete(s, ev->status);
+    }
+    turbo_stream_callback_leave(s);
+    turbo_stream_maybe_free(s);
+}
+
+static void post_write_complete_if_drained(stream_epoll_state_t *st) {
+    int completions;
+
+    if (!st || epoll_is_stopping(st)) {
+        return;
+    }
+    if (atomic_load_explicit(&st->write_submit_active, memory_order_acquire) != 0) {
+        /* The producer publishes the final wake after clearing this flag.  The
+         * reactor must not enqueue work to its own bounded command ring. */
+        return;
+    }
+    if (ring_spsc_read_available(&st->write_ring) != 0) {
+        return;
+    }
+    completions = atomic_exchange_explicit(&st->write_completion_pending, 0,
+                                           memory_order_acq_rel);
+    if (completions > 0) {
+        post_event(st, SEP_OP_WRITE, 0, (void *)(uintptr_t)(unsigned int)completions,
+                   NULL, 0);
     }
 }
 
 static void flush_write_ring(stream_epoll_state_t *st) {
-    int wrote = 0;
-
     while (!epoll_is_stopping(st)) {
         size_t avail = 0;
         uint8_t *data = ring_spsc_read_acquire(&st->write_ring, &avail);
@@ -366,7 +437,6 @@ static void flush_write_ring(stream_epoll_state_t *st) {
         ssize_t sent = send(st->fd, data, avail, MSG_NOSIGNAL);
         if (sent > 0) {
             ring_spsc_read_release(&st->write_ring, (size_t)sent);
-            wrote = 1;
             continue;
         }
 
@@ -382,9 +452,9 @@ static void flush_write_ring(stream_epoll_state_t *st) {
         return;
     }
 
-    if (wrote) {
-        post_event(st, SEP_OP_WRITE, 0, NULL, NULL, 0);
-    }
+    /* An empty retry pass is significant: it may be the handshake that closes
+     * a producer/consumer race after the bytes were drained by an earlier pass. */
+    post_write_complete_if_drained(st);
 }
 
 static void try_flush_write_ring(stream_epoll_state_t *st) {
@@ -595,8 +665,13 @@ static void epoll_reactor_process_commands(void) {
                 break;
 
             case REACTOR_CMD_WAKE:
+                atomic_store_explicit(&st->wake_pending, 0, memory_order_release);
                 if (!epoll_is_stopping(st) && !st->is_listener) {
                     try_flush_write_ring(st);
+                    if (atomic_exchange_explicit(&st->read_retry_pending, 0,
+                                                 memory_order_acq_rel) != 0) {
+                        stream_epoll_handle_stream_event(st, EPOLLIN);
+                    }
                 }
                 break;
 
@@ -662,7 +737,7 @@ static void stream_epoll_handle_listener_event(stream_epoll_state_t *st) {
 }
 
 static void stream_epoll_handle_stream_event(stream_epoll_state_t *st, uint32_t evmask) {
-    uint8_t io_buf[8192];
+    int read_blocked_by_ring = 0;
     int read_terminal_reported = 0;
 
     if (!st || epoll_is_stopping(st)) {
@@ -683,17 +758,27 @@ static void stream_epoll_handle_stream_event(stream_epoll_state_t *st, uint32_t 
         try_flush_write_ring(st);
     }
 
-    if (evmask & EPOLLIN) {
+    /* HUP/RDHUP can be reported without EPOLLIN while final bytes are still
+     * readable.  Drain them before publishing the terminal event so data
+     * accepted by TCP always remains ordered before EOF. */
+    if (evmask & (EPOLLIN | EPOLLHUP | EPOLLRDHUP)) {
         for (;;) {
-            ssize_t n = recv(st->fd, io_buf, sizeof(io_buf), 0);
+            size_t writable = ring_spsc_write_available(&st->read_ring);
+            size_t capacity = writable < 8192u ? writable : 8192u;
+            uint8_t *dest = NULL;
+            ssize_t n;
+
+            while (capacity != 0u && !(dest = ring_spsc_write_acquire(&st->read_ring, capacity))) {
+                capacity /= 2u;
+            }
+            if (!dest || capacity == 0u) {
+                read_blocked_by_ring = 1;
+                post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
+                turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
+                break;
+            }
+            n = recv(st->fd, dest, capacity, 0);
             if (n > 0) {
-                uint8_t *dest = ring_spsc_write_acquire(&st->read_ring, (size_t)n);
-                if (dest == NULL) {
-                    post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
-                    turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
-                    break;
-                }
-                memcpy(dest, io_buf, (size_t)n);
                 ring_spsc_write_release(&st->read_ring, (size_t)n);
                 post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
                 continue;
@@ -715,7 +800,8 @@ static void stream_epoll_handle_stream_event(stream_epoll_state_t *st, uint32_t 
         }
     }
 
-    if ((evmask & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) && !read_terminal_reported) {
+    if ((evmask & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) && !read_terminal_reported &&
+        !read_blocked_by_ring) {
         if (evmask & EPOLLERR) {
             int err = 0;
             socklen_t len = sizeof(err);
@@ -834,11 +920,18 @@ static int epoll_register_state(stream_epoll_state_t *st, uint32_t events) {
 }
 
 static int epoll_reactor_wake_state(stream_epoll_state_t *st) {
+    int expected = 0;
+
     if (!st || epoll_is_stopping(st)) {
         return TURBO_ECANCELED;
     }
     if (epoll_reactor_ensure() != 0) {
         return TURBO_ENOMEM;
+    }
+    if (!atomic_compare_exchange_strong_explicit(&st->wake_pending, &expected, 1,
+                                                  memory_order_acq_rel,
+                                                  memory_order_acquire)) {
+        return 0;
     }
     return epoll_reactor_push(REACTOR_CMD_WAKE, st, 0);
 }
@@ -878,6 +971,7 @@ static int epoll_init_state(stream_epoll_state_t **out, void *owner, coro_contex
     st->fd = -1;
     st->is_listener = is_listener;
     st->close_fd_on_cleanup = 1;
+    atomic_init(&st->wake_pending, 0);
     coro_context_acquire_external(st->ctx);
     st->ctx_ref_acquired = 1;
 
@@ -1078,6 +1172,8 @@ static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
         return rc;
     }
 
+    atomic_store_explicit(&st->write_submit_active, 1, memory_order_release);
+    atomic_fetch_add_explicit(&st->write_completion_pending, 1, memory_order_acq_rel);
     offset = 0;
     while (offset < l) {
         size_t chunk = l - offset;
@@ -1089,6 +1185,9 @@ static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
 
         dest = wait_ring_write(st, &st->write_ring, chunk);
         if (dest == NULL) {
+            atomic_fetch_sub_explicit(&st->write_completion_pending, 1,
+                                      memory_order_acq_rel);
+            atomic_store_explicit(&st->write_submit_active, 0, memory_order_release);
             return TURBO_ECANCELED;
         }
         memcpy(dest, d + offset, chunk);
@@ -1097,11 +1196,15 @@ static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
         (void)epoll_reactor_wake_state(st);
     }
 
+    atomic_store_explicit(&st->write_submit_active, 0, memory_order_release);
+    post_write_complete_if_drained(st);
+    (void)epoll_reactor_wake_state(st);
     return 0;
 }
 
 static int epoll_recv_start(turbo_stream_t *s) {
     stream_epoll_state_t *st = s ? (stream_epoll_state_t *)s->backend_data : NULL;
+    int terminal_status;
     int rc;
 
     if (!st) {
@@ -1115,6 +1218,14 @@ static int epoll_recv_start(turbo_stream_t *s) {
     }
     if (!st->is_listener && ring_spsc_read_available(&st->read_ring) > 0) {
         post_event(st, SEP_OP_READ, 0, NULL, NULL, 0);
+    }
+    terminal_status = atomic_load_explicit(&st->terminal_delivery_status, memory_order_acquire);
+    if (!st->is_listener && terminal_status != 0) {
+        /* A peer may close after a send completes but before the caller starts
+         * its first receive.  Keep EOF/error state until an on_recv consumer is
+         * installed; buffered data was posted immediately above and therefore
+         * remains ordered before this terminal notification. */
+        post_event(st, SEP_OP_READ, terminal_status, NULL, NULL, 0);
     }
     return 0;
 }

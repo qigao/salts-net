@@ -314,6 +314,7 @@ struct coro_socket_s {
   /* ── Connection state ──────────────────────────────────── */
   int connected;      /**< 1 = transport is connected */
   int status;         /**< Last operation status code */
+  int peer_eof_pending; /**< Peer closed after queued data/current operation completed */
   int tls_cb_fired;   /**< TLS handshake callback guard */
   int dgram_consumed; /**< UDP server: datagram already delivered to handler.
                           Set to 1 by udp_server_recv_start on first call so

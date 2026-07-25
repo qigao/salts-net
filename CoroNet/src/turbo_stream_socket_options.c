@@ -2,6 +2,8 @@
 
 #include "turbo_error.h"
 
+#include <limits.h>
+
 #ifdef _WIN32
   #include <mstcpip.h>
 #else
@@ -90,11 +92,36 @@ static int stream_apply_tcp_keepalive(turbo_stream_native_socket_t socket,
   return 0;
 }
 
+static int stream_apply_socket_buffer(turbo_stream_native_socket_t socket, int option,
+                                      size_t bytes) {
+  int value;
+  if (bytes == 0u || bytes > (size_t)INT_MAX) return TURBO_ERANGE;
+  value = (int)bytes;
+#ifdef _WIN32
+  if (setsockopt(socket, SOL_SOCKET, option, (const char *)&value, sizeof(value)) != 0) {
+    return -(int)WSAGetLastError();
+  }
+#else
+  if (setsockopt(socket, SOL_SOCKET, option, &value, sizeof(value)) != 0) {
+    return -errno;
+  }
+#endif
+  return 0;
+}
+
 int turbo_stream_apply_native_socket_options(turbo_stream_t *s,
                                              turbo_stream_native_socket_t socket) {
   int rc;
 
   if (!s) return TURBO_EINVAL;
+  if (s->socket_recv_buffer_configured) {
+    rc = stream_apply_socket_buffer(socket, SO_RCVBUF, s->socket_recv_buffer_bytes);
+    if (rc != 0) return rc;
+  }
+  if (s->socket_send_buffer_configured) {
+    rc = stream_apply_socket_buffer(socket, SO_SNDBUF, s->socket_send_buffer_bytes);
+    if (rc != 0) return rc;
+  }
   if (s->tcp_keepalive_configured) {
     rc = stream_apply_tcp_keepalive(socket, &s->tcp_keepalive_config);
     if (rc != 0) return rc;

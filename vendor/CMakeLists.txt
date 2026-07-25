@@ -1,5 +1,4 @@
 add_subdirectory(croar) 
-add_subdirectory(uuid)
 add_subdirectory(reed)
 
 set(CARES_STATIC ON CACHE BOOL "Build vendored c-ares as a static library" FORCE)

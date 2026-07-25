@@ -1433,6 +1433,14 @@ int coro_socket_recv(coro_socket_t *s, char **data, size_t *len) {
 int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
   if (!s || !data || !len) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->recv_start) return socket_return_error(s, TURBO_ENOTSUP);
+  if (s->pending_recv_interrupt) {
+    int status = s->pending_recv_interrupt_status;
+    s->pending_recv_interrupt = 0;
+    s->pending_recv_interrupt_status = 0;
+    *data = NULL;
+    *len = 0u;
+    return status;
+  }
   /* Return buffered data if available */
   if (s->recv_data) {
     int ret;
@@ -1532,12 +1540,14 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
 static void coro_socket_interrupt_wait_cb(void *arg1, void *arg2) {
   coro_socket_t *s = (coro_socket_t *)arg1;
   int status = (int)(intptr_t)arg2;
+  int waiter_interrupted = 0;
 
   if (!s) {
     return;
   }
 
   if (s->co_wait) {
+    waiter_interrupted = 1;
     stop_timeout_timer(s);
     s->timed_out = 0;
     if (status != 0 || s->status == 0) {
@@ -1552,11 +1562,18 @@ static void coro_socket_interrupt_wait_cb(void *arg1, void *arg2) {
     }
   }
 
-  if (s->co_write_wait) {
+  if (s->co_write_wait && status != TURBO_EINTR) {
+    waiter_interrupted = 1;
     coro_t *co = s->co_write_wait;
     s->write_status = status;
     s->co_write_wait = NULL;
     coro_resume_co(s->ctx, co);
+  }
+
+  if (!waiter_interrupted &&
+      (!s->pending_recv_interrupt || status != TURBO_OK)) {
+    s->pending_recv_interrupt = 1;
+    s->pending_recv_interrupt_status = status;
   }
 
   release_client(s);
@@ -1711,6 +1728,14 @@ void coro_socket_set_reuse_port(coro_socket_t *s, int enable) {
 int coro_socket_apply_stream_options(coro_socket_t *s) {
   int rc;
   if (!s || !s->handle.stream) return TURBO_EINVAL;
+  if (s->socket_recv_buffer_bytes) {
+    rc = turbo_stream_set_recv_buffer_size(s->handle.stream, s->socket_recv_buffer_bytes);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  if (s->socket_send_buffer_bytes) {
+    rc = turbo_stream_set_send_buffer_size(s->handle.stream, s->socket_send_buffer_bytes);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
   if (s->send_hwm_bytes) {
     rc = turbo_stream_set_send_hwm(s->handle.stream, s->send_hwm_bytes);
     if (rc != 0) return socket_return_error(s, rc);
@@ -1729,6 +1754,8 @@ int coro_socket_apply_stream_options(coro_socket_t *s) {
 int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t *parent) {
   if (!child || !parent) return TURBO_EINVAL;
   child->send_hwm_bytes = parent->send_hwm_bytes;
+  child->socket_recv_buffer_bytes = parent->socket_recv_buffer_bytes;
+  child->socket_send_buffer_bytes = parent->socket_send_buffer_bytes;
   child->tcp_keepalive_config = parent->tcp_keepalive_config;
   child->tcp_keepalive_configured = parent->tcp_keepalive_configured;
   child->linger_config = parent->linger_config;
@@ -1758,6 +1785,32 @@ int coro_socket_set_linger(coro_socket_t *s, const turbo_socket_linger_config_t 
   s->linger_configured = 1;
   if (s->handle.stream) {
     rc = turbo_stream_set_linger(s->handle.stream, config);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  return 0;
+}
+
+int coro_socket_set_recv_buffer_size(coro_socket_t *s, size_t bytes) {
+  int rc;
+  if (!s || bytes == 0u) return socket_return_error(s, TURBO_EINVAL);
+  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  if (bytes > (size_t)INT32_MAX) return socket_return_error(s, TURBO_ERANGE);
+  s->socket_recv_buffer_bytes = bytes;
+  if (s->handle.stream) {
+    rc = turbo_stream_set_recv_buffer_size(s->handle.stream, bytes);
+    if (rc != 0) return socket_return_error(s, rc);
+  }
+  return 0;
+}
+
+int coro_socket_set_send_buffer_size(coro_socket_t *s, size_t bytes) {
+  int rc;
+  if (!s || bytes == 0u) return socket_return_error(s, TURBO_EINVAL);
+  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  if (bytes > (size_t)INT32_MAX) return socket_return_error(s, TURBO_ERANGE);
+  s->socket_send_buffer_bytes = bytes;
+  if (s->handle.stream) {
+    rc = turbo_stream_set_send_buffer_size(s->handle.stream, bytes);
     if (rc != 0) return socket_return_error(s, rc);
   }
   return 0;

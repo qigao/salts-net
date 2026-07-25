@@ -573,6 +573,22 @@ int turbo_stream_set_linger(turbo_stream_t *s, const turbo_socket_linger_config_
   return 0;
 }
 
+int turbo_stream_set_recv_buffer_size(turbo_stream_t *s, size_t bytes) {
+  if (!s || bytes == 0u) return TURBO_EINVAL;
+  if (bytes > (size_t)INT32_MAX) return TURBO_ERANGE;
+  s->socket_recv_buffer_bytes = bytes;
+  s->socket_recv_buffer_configured = 1;
+  return 0;
+}
+
+int turbo_stream_set_send_buffer_size(turbo_stream_t *s, size_t bytes) {
+  if (!s || bytes == 0u) return TURBO_EINVAL;
+  if (bytes > (size_t)INT32_MAX) return TURBO_ERANGE;
+  s->socket_send_buffer_bytes = bytes;
+  s->socket_send_buffer_configured = 1;
+  return 0;
+}
+
 int turbo_stream_set_send_hwm(turbo_stream_t *s, size_t bytes) {
   if (!s) return TURBO_EINVAL;
   s->send_hwm_bytes = bytes;
@@ -867,11 +883,33 @@ int turbo_stream_listener_set_child_send_hwm(turbo_stream_listener_t *l, size_t 
   return 0;
 }
 
+int turbo_stream_listener_set_child_recv_buffer_size(turbo_stream_listener_t *l, size_t bytes) {
+  if (!l || bytes == 0u) return TURBO_EINVAL;
+  if (bytes > (size_t)INT32_MAX) return TURBO_ERANGE;
+  l->child_socket_recv_buffer_bytes = bytes;
+  return 0;
+}
+
+int turbo_stream_listener_set_child_send_buffer_size(turbo_stream_listener_t *l, size_t bytes) {
+  if (!l || bytes == 0u) return TURBO_EINVAL;
+  if (bytes > (size_t)INT32_MAX) return TURBO_ERANGE;
+  l->child_socket_send_buffer_bytes = bytes;
+  return 0;
+}
+
 int turbo_stream_listener_configure_child(turbo_stream_listener_t *l, turbo_stream_t *child) {
   int rc;
   if (!l || !child) return TURBO_EINVAL;
   if (l->child_send_hwm_bytes) {
     rc = turbo_stream_set_send_hwm(child, l->child_send_hwm_bytes);
+    if (rc != 0) return rc;
+  }
+  if (l->child_socket_recv_buffer_bytes) {
+    rc = turbo_stream_set_recv_buffer_size(child, l->child_socket_recv_buffer_bytes);
+    if (rc != 0) return rc;
+  }
+  if (l->child_socket_send_buffer_bytes) {
+    rc = turbo_stream_set_send_buffer_size(child, l->child_socket_send_buffer_bytes);
     if (rc != 0) return rc;
   }
   if (l->child_tcp_keepalive_configured) {

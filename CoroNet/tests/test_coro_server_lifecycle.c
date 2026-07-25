@@ -1,4 +1,5 @@
 #include "CoroNet.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "platform.h"
 #include "tinytest.h"
 #include "tls_test_support.h"
@@ -115,6 +116,16 @@ static int server_lifecycle_client_done(void *arg) {
 static int server_lifecycle_server_stopped(void *arg) {
   server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
   return coro_socket_server_is_stopped(state->server);
+}
+
+static int server_lifecycle_tls_admission_pending(void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  return state->client_connected && state->server &&
+         state->server->server_task_count > 0;
+}
+
+static int server_lifecycle_context_idle(void *arg) {
+  return !coro_context_alive((coro_context_t *)arg);
 }
 
 static void server_lifecycle_prepare(server_lifecycle_state_t *state) {
@@ -234,5 +245,55 @@ spec("Coroutine Server Lifecycle") {
     check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     server_lifecycle_cleanup(&state);
+  }
+
+  it("releases a stalled accepted TLS handshake during shutdown") {
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    server_lifecycle_state_t state;
+
+    server_lifecycle_prepare(&state);
+    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+                                             key_file, sizeof(key_file)), 0);
+    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+
+    state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
+    check_not_null(state.server);
+    coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+    check_int_eq(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
+                                          server_lifecycle_handler, &state,
+                                          server_lifecycle_closed, &state), 0);
+    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_stalled_client,
+                                    &state), 0);
+
+    /*
+     * The linked server task is the deterministic boundary: the raw TCP peer
+     * was accepted, but cannot finish TLS admission without a ClientHello.
+     */
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_tls_admission_pending, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+    check_size_eq(state.server->server_task_count, 1);
+    check_int_eq(state.handler_hits, 0);
+    check_int_eq(state.closed_count, 0);
+
+    check_int_eq(coro_socket_server_stop(state.server), 0);
+    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
+                                            &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    check_int_eq(state.handler_hits, 0);
+    check_int_eq(state.closed_count, 1);
+    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
+                                            &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+
+    coro_socket_destroy(state.server);
+    state.server = NULL;
+    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_context_idle,
+                                            state.ctx,
+                                            SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    server_lifecycle_cleanup(&state);
+    tls_test_clear_server_env();
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(key_file);
   }
 }

@@ -1,4 +1,5 @@
 #include "CoroNet.h"
+#include "CoroNet/turbo_coro_internal.h"
 #include "tinytest.h"
 #include "turbo_thread.h"
 
@@ -10,7 +11,8 @@ enum {
   TEST_POSTS_PER_PRODUCER = 4096,
   TEST_POST_TOTAL = TEST_POST_PRODUCERS * TEST_POSTS_PER_PRODUCER,
   TEST_POST_WAKE_ROUNDS = 256,
-  TEST_POST_TIMEOUT_MS = 10000
+  TEST_POST_TIMEOUT_MS = 10000,
+  TEST_IDLE_EXIT_TIMEOUT_MS = 500
 };
 
 static void count_post(void *arg1, void *arg2) {
@@ -29,6 +31,41 @@ static int wait_for_value(atomic_int *value, int expected) {
 
 static void context_runner(void *arg) {
   (void)coro_context_run((coro_context_t *)arg, TURBO_RUN_DEFAULT);
+}
+
+typedef struct {
+  coro_context_t *ctx;
+  atomic_int marker;
+  atomic_int exited;
+} idle_exit_state_t;
+
+static void mark_loop_running(void *arg1, void *arg2) {
+  idle_exit_state_t *state = (idle_exit_state_t *)arg1;
+  (void)arg2;
+  atomic_store_explicit(&state->marker, 1, memory_order_release);
+}
+
+static void idle_exit_context_runner(void *arg) {
+  idle_exit_state_t *state = (idle_exit_state_t *)arg;
+  (void)coro_context_run(state->ctx, TURBO_RUN_DEFAULT);
+  atomic_store_explicit(&state->exited, 1, memory_order_release);
+}
+
+static int wait_for_idle_exit(idle_exit_state_t *state, turbo_thread_t *thread) {
+  const uint64_t deadline = turbo_monotonic_ms() + TEST_IDLE_EXIT_TIMEOUT_MS;
+  int rc = TURBO_OK;
+
+  while (!atomic_load_explicit(&state->exited, memory_order_acquire) &&
+         turbo_monotonic_ms() < deadline) {
+    turbo_thread_yield();
+  }
+  if (!atomic_load_explicit(&state->exited, memory_order_acquire)) {
+    rc = TURBO_ETIMEDOUT;
+    coro_context_stop(state->ctx);
+  }
+  (void)turbo_thread_join(thread);
+  turbo_thread_destroy(thread);
+  return rc;
 }
 
 typedef struct {
@@ -131,6 +168,52 @@ spec("coro_post") {
     check_int_eq(turbo_thread_join(&context_thread), TURBO_OK);
     turbo_thread_destroy(&context_thread);
     coro_context_destroy(ctx);
+  }
+
+  it("wakes an idle default run when persistence is disabled") {
+    coro_context_t *ctx = coro_context_create(NULL);
+    turbo_thread_t context_thread;
+    idle_exit_state_t state;
+    int exit_rc;
+    check_not_null(ctx);
+    state.ctx = ctx;
+    atomic_init(&state.marker, 0);
+    atomic_init(&state.exited, 0);
+    coro_context_set_persistent(ctx, 1);
+    check_int_eq(turbo_thread_create(&context_thread, idle_exit_context_runner, &state),
+                 TURBO_OK);
+    check_int_eq(coro_post(ctx, mark_loop_running, &state, NULL), TURBO_OK);
+    check_int_eq(wait_for_value(&state.marker, 1), TURBO_OK);
+    turbo_sleep_ms(10u);
+
+    coro_context_set_persistent(ctx, 0);
+    exit_rc = wait_for_idle_exit(&state, &context_thread);
+    coro_context_destroy(ctx);
+
+    check_int_eq(exit_rc, TURBO_OK);
+  }
+
+  it("wakes an idle default run when its last external reference is released") {
+    coro_context_t *ctx = coro_context_create(NULL);
+    turbo_thread_t context_thread;
+    idle_exit_state_t state;
+    int exit_rc;
+    check_not_null(ctx);
+    state.ctx = ctx;
+    atomic_init(&state.marker, 0);
+    atomic_init(&state.exited, 0);
+    coro_context_acquire_external(ctx);
+    check_int_eq(turbo_thread_create(&context_thread, idle_exit_context_runner, &state),
+                 TURBO_OK);
+    check_int_eq(coro_post(ctx, mark_loop_running, &state, NULL), TURBO_OK);
+    check_int_eq(wait_for_value(&state.marker, 1), TURBO_OK);
+    turbo_sleep_ms(10u);
+
+    coro_context_release_external(ctx);
+    exit_rc = wait_for_idle_exit(&state, &context_thread);
+    coro_context_destroy(ctx);
+
+    check_int_eq(exit_rc, TURBO_OK);
   }
 
   it("delivers all callbacks from four concurrent producers") {

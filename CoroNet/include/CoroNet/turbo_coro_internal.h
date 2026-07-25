@@ -306,6 +306,8 @@ struct coro_socket_s {
   turbo_socket_linger_config_t linger_config; /**< OS SO_LINGER options for TCP-backed sockets */
   int linger_configured;                      /**< 1 = apply linger_config */
   size_t send_hwm_bytes;                      /**< 0 = no socket send queue HWM */
+  size_t socket_recv_buffer_bytes; /**< 0 = preserve the OS SO_RCVBUF default */
+  size_t socket_send_buffer_bytes; /**< 0 = preserve the OS SO_SNDBUF default */
   int accept_prestart_recv_disabled; /**< Listener: 1 = accepted raw TCP must not pre-read wrapper
                                         handshakes */
   int kcp_fec_configured;            /**< 1 = KCP FEC config should be applied */
@@ -328,6 +330,8 @@ struct coro_socket_s {
                                    Captured at yield time to avoid touching a
                                    potentially dangling pointer in callbacks. */
   int recv_call_inflight;     /**< 1 = coro_socket_recv() has yielded and not finished unwinding */
+  int pending_recv_interrupt; /**< 1 = an interrupt arrived before recv armed its waiter */
+  int pending_recv_interrupt_status; /**< Status consumed by the next recv call */
   char *recv_data;            /**< Received data buffer (caller frees via
                                    coro_socket_free_recv) */
   size_t recv_len;            /**< Length of received data */

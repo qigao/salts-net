@@ -337,6 +337,14 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
   if (s->send_hwm_bytes) {
     (void)turbo_stream_listener_set_child_send_hwm(ls->listener, s->send_hwm_bytes);
   }
+  if (s->socket_recv_buffer_bytes) {
+    (void)turbo_stream_listener_set_child_recv_buffer_size(
+        ls->listener, s->socket_recv_buffer_bytes);
+  }
+  if (s->socket_send_buffer_bytes) {
+    (void)turbo_stream_listener_set_child_send_buffer_size(
+        ls->listener, s->socket_send_buffer_bytes);
+  }
   return 0;
 }
 

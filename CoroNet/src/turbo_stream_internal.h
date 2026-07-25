@@ -65,6 +65,10 @@ struct turbo_stream_s {
   mem_buffer_t *send_tail;
   size_t send_queued;
   size_t send_hwm_bytes;
+  size_t socket_recv_buffer_bytes;
+  size_t socket_send_buffer_bytes;
+  int socket_recv_buffer_configured;
+  int socket_send_buffer_configured;
   turbo_tcp_keepalive_config_t tcp_keepalive_config;
   int tcp_keepalive_configured;
   turbo_socket_linger_config_t linger_config;
@@ -104,6 +108,8 @@ struct turbo_stream_listener_s {
   int finalized;
   int reuse_port;
   size_t child_send_hwm_bytes;
+  size_t child_socket_recv_buffer_bytes;
+  size_t child_socket_send_buffer_bytes;
   turbo_tcp_keepalive_config_t child_tcp_keepalive_config;
   int child_tcp_keepalive_configured;
   turbo_socket_linger_config_t child_linger_config;
@@ -191,6 +197,8 @@ int turbo_stream_listener_set_child_tcp_keepalive(turbo_stream_listener_t *l,
 int turbo_stream_listener_set_child_linger(turbo_stream_listener_t *l,
                                            const turbo_socket_linger_config_t *config);
 int turbo_stream_listener_set_child_send_hwm(turbo_stream_listener_t *l, size_t bytes);
+int turbo_stream_listener_set_child_recv_buffer_size(turbo_stream_listener_t *l, size_t bytes);
+int turbo_stream_listener_set_child_send_buffer_size(turbo_stream_listener_t *l, size_t bytes);
 
 /* ── Shared helpers ───────────────────────────────────────── */
 

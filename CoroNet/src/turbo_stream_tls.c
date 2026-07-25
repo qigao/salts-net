@@ -2031,6 +2031,20 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   st->tcp->user_data = st;
   st->tcp->managed   = 1; /* Owned by tls_state_t */
   st->tcp->on_write_complete = tls_on_tcp_write_complete;
+  if (s->socket_recv_buffer_configured) {
+    int rc = turbo_stream_set_recv_buffer_size(st->tcp, s->socket_recv_buffer_bytes);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+      return rc;
+    }
+  }
+  if (s->socket_send_buffer_configured) {
+    int rc = turbo_stream_set_send_buffer_size(st->tcp, s->socket_send_buffer_bytes);
+    if (rc != 0) {
+      tls_drop_inner_tcp(st);
+      return rc;
+    }
+  }
   if (s->send_hwm_bytes) {
     int rc = turbo_stream_set_send_hwm(st->tcp, s->send_hwm_bytes);
     if (rc != 0) {

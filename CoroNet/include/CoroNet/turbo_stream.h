@@ -192,6 +192,22 @@ CXX_C_API int turbo_stream_set_linger(turbo_stream_t *s,
                                       const turbo_socket_linger_config_t *config);
 
 /**
+ * @brief Configure the OS SO_RCVBUF request for a TCP-backed stream.
+ *
+ * Call before connect. The operating system may adjust the requested value.
+ * `bytes` must be in the range 1..INT_MAX.
+ */
+CXX_C_API int turbo_stream_set_recv_buffer_size(turbo_stream_t *s, size_t bytes);
+
+/**
+ * @brief Configure the OS SO_SNDBUF request for a TCP-backed stream.
+ *
+ * Call before connect. The operating system may adjust the requested value.
+ * `bytes` must be in the range 1..INT_MAX.
+ */
+CXX_C_API int turbo_stream_set_send_buffer_size(turbo_stream_t *s, size_t bytes);
+
+/**
  * @brief Limit bytes queued in the stream send path. 0 disables the limit.
  */
 CXX_C_API int turbo_stream_set_send_hwm(turbo_stream_t *s, size_t bytes);

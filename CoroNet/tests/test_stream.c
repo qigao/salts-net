@@ -177,6 +177,25 @@ typedef struct stream_write_interrupt_state_s {
     int status;
 } stream_write_interrupt_state_t;
 
+typedef struct stream_recv_interrupt_state_s {
+    coro_socket_t *socket;
+    int done;
+    int status;
+} stream_recv_interrupt_state_t;
+
+static void stream_recv_interrupt_task(coro_t *co, void *arg) {
+    stream_recv_interrupt_state_t *state = (stream_recv_interrupt_state_t *)arg;
+    char *data = NULL;
+    size_t size = 0u;
+    (void)co;
+
+    state->status = coro_socket_recv(state->socket, &data, &size);
+    if (data) {
+        coro_socket_free_recv(data);
+    }
+    state->done = 1;
+}
+
 static void stream_write_interrupt_task(coro_t *co, void *arg) {
     stream_write_interrupt_state_t *state = (stream_write_interrupt_state_t *)arg;
 
@@ -1219,6 +1238,26 @@ static int stream_test_raw_connect_send_bytes(unsigned short port, const uint8_t
 #endif
 
 spec("Stream") {
+    it("delivers a recv interrupt posted before the waiter is armed") {
+        stream_recv_interrupt_state_t state;
+        coro_context_t *ctx = coro_context_create(NULL);
+
+        memset(&state, 0, sizeof(state));
+        check_not_null(ctx);
+        state.socket = coro_socket_create_tcpv4(ctx);
+        check_not_null(state.socket);
+
+        check_int_eq(coro_socket_interrupt_wait(state.socket, TURBO_EINTR), 0);
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+        check_null(state.socket->co_wait);
+        check_int_eq(coro_context_spawn(ctx, stream_recv_interrupt_task, &state), 0);
+        check_int_eq(stream_test_run_until(ctx, &state.done, 1, 1000), 0);
+        check_int_eq(state.status, TURBO_EINTR);
+
+        coro_socket_destroy(state.socket);
+        stream_test_destroy_context_robust(ctx);
+    }
+
     it("should interrupt a pending coroutine write wait") {
         stream_write_interrupt_state_t state;
         coro_context_t *ctx = coro_context_create(NULL);
@@ -1239,6 +1278,37 @@ spec("Stream") {
         check_null(state.socket->co_write_wait);
 
         coro_socket_destroy(state.socket);
+        stream_test_destroy_context_robust(ctx);
+    }
+
+    it("queues a recv control interrupt without canceling a pending write") {
+        stream_write_interrupt_state_t write_state;
+        stream_recv_interrupt_state_t recv_state;
+        coro_context_t *ctx = coro_context_create(NULL);
+
+        memset(&write_state, 0, sizeof(write_state));
+        memset(&recv_state, 0, sizeof(recv_state));
+        check_not_null(ctx);
+        write_state.socket = coro_socket_create_tcpv4(ctx);
+        check_not_null(write_state.socket);
+        recv_state.socket = write_state.socket;
+
+        check_int_eq(coro_context_spawn(ctx, stream_write_interrupt_task, &write_state), 0);
+        check_int_eq(stream_test_run_until(ctx, &write_state.waiting, 1, 1000), 0);
+        check_int_eq(coro_socket_interrupt_wait(write_state.socket, TURBO_EINTR), 0);
+        coro_context_run(ctx, TURBO_RUN_NOWAIT);
+        check_int_eq(write_state.done, 0);
+        check_not_null(write_state.socket->co_write_wait);
+        check_int_eq(write_state.socket->pending_recv_interrupt, 1);
+
+        check_int_eq(coro_socket_interrupt_wait(write_state.socket, TURBO_ECANCELED), 0);
+        check_int_eq(stream_test_run_until(ctx, &write_state.done, 1, 1000), 0);
+        check_int_eq(write_state.status, TURBO_ECANCELED);
+        check_int_eq(coro_context_spawn(ctx, stream_recv_interrupt_task, &recv_state), 0);
+        check_int_eq(stream_test_run_until(ctx, &recv_state.done, 1, 1000), 0);
+        check_int_eq(recv_state.status, TURBO_EINTR);
+
+        coro_socket_destroy(write_state.socket);
         stream_test_destroy_context_robust(ctx);
     }
 
@@ -1299,6 +1369,11 @@ spec("Stream") {
         linger.enabled = 1;
         linger.timeout_ms = 1000;
         check_int_eq(turbo_stream_set_linger(stream, &linger), 0);
+        check_int_eq(turbo_stream_set_recv_buffer_size(stream, 1024u * 1024u), 0);
+        check_int_eq(turbo_stream_set_send_buffer_size(stream, 512u * 1024u), 0);
+        check_int_eq(turbo_stream_set_recv_buffer_size(stream, 0u), TURBO_EINVAL);
+        check_int_eq(turbo_stream_set_send_buffer_size(stream, (size_t)INT32_MAX + 1u),
+                     TURBO_ERANGE);
         turbo_stream_destroy(stream);
 
         tcp = coro_socket_create_tcpv4(ctx);
@@ -1307,9 +1382,13 @@ spec("Stream") {
         check(udp != NULL);
         check_int_eq(coro_socket_set_tcp_keepalive(tcp, &keepalive), 0);
         check_int_eq(coro_socket_set_linger(tcp, &linger), 0);
+        check_int_eq(coro_socket_set_recv_buffer_size(tcp, 1024u * 1024u), 0);
+        check_int_eq(coro_socket_set_send_buffer_size(tcp, 512u * 1024u), 0);
         check_int_eq(coro_socket_set_send_hwm(tcp, 4), 0);
         check_int_eq(coro_socket_set_tcp_keepalive(udp, &keepalive), TURBO_ENOTSUP);
         check_int_eq(coro_socket_set_linger(udp, &linger), TURBO_ENOTSUP);
+        check_int_eq(coro_socket_set_recv_buffer_size(udp, 1024u), TURBO_ENOTSUP);
+        check_int_eq(coro_socket_set_send_buffer_size(udp, 1024u), TURBO_ENOTSUP);
         check_int_eq(coro_socket_set_send_hwm(udp, 4), TURBO_ENOTSUP);
         coro_socket_destroy(tcp);
         coro_socket_destroy(udp);

@@ -380,8 +380,12 @@ void coro_context_acquire_external(coro_context_t *ctx) {
 }
 
 void coro_context_release_external(coro_context_t *ctx) {
+  int previous;
   if (!ctx) return;
-  atomic_fetch_sub_explicit(&ctx->external_refs, 1, memory_order_acq_rel);
+  previous = atomic_fetch_sub_explicit(&ctx->external_refs, 1, memory_order_acq_rel);
+  if (previous == 1) {
+    turbo_loop_wake(ctx->loop);
+  }
 }
 
 void coro_context_destroy(coro_context_t *ctx) {
@@ -561,6 +565,7 @@ void coro_context_set_persistent(coro_context_t *ctx, int persistent) {
   } else if (!persistent && ctx->persistent) {
     turbo_loop_unref(ctx->loop);
     ctx->persistent = 0;
+    turbo_loop_wake(ctx->loop);
   }
 }
 
@@ -622,6 +627,7 @@ void coro_context_native_unref(coro_context_t *ctx) {
   if (!ctx || ctx->native_keepalive_refs <= 0) return;
   ctx->native_keepalive_refs--;
   turbo_loop_unref(ctx->loop);
+  turbo_loop_wake(ctx->loop);
 }
 
 /* ── Coroutine Spawning ───────────────────────────────────────── */
@@ -1012,7 +1018,7 @@ void coro_sleep(coro_context_t *ctx, uint64_t ms) {
 
 /* ── Stubs for native loop methods ── */
 struct turbo_loop_s {
-  int ref_count;
+  atomic_int ref_count;
 #ifdef _WIN32
   HANDLE wake_event;
 #else
@@ -1096,7 +1102,9 @@ void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block) {
 #endif
 }
 
-int turbo_loop_alive(turbo_loop_t *loop) { return loop ? loop->ref_count > 0 : 0; }
+int turbo_loop_alive(turbo_loop_t *loop) {
+  return loop && atomic_load_explicit(&loop->ref_count, memory_order_acquire) > 0;
+}
 uint64_t turbo_loop_now(turbo_loop_t *loop) {
   (void)loop;
 #ifdef _WIN32
@@ -1109,10 +1117,16 @@ uint64_t turbo_loop_now(turbo_loop_t *loop) {
 }
 
 void turbo_loop_ref(turbo_loop_t *loop) {
-  if (loop) loop->ref_count++;
+  if (loop) atomic_fetch_add_explicit(&loop->ref_count, 1, memory_order_acq_rel);
 }
 void turbo_loop_unref(turbo_loop_t *loop) {
-  if (loop && loop->ref_count > 0) loop->ref_count--;
+  int current;
+  if (!loop) return;
+  current = atomic_load_explicit(&loop->ref_count, memory_order_acquire);
+  while (current > 0 &&
+         !atomic_compare_exchange_weak_explicit(&loop->ref_count, &current, current - 1,
+                                                memory_order_acq_rel, memory_order_acquire)) {
+  }
 }
 
 void turbo_loop_wake(turbo_loop_t *loop) {

@@ -157,6 +157,24 @@ CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
                                      const turbo_socket_linger_config_t *config);
 
 /**
+ * @brief Configure the OS SO_RCVBUF request for TCP/TLS/WS/WSS sockets.
+ *
+ * Call before bind/connect/listen. When configured on a listener, accepted
+ * sockets inherit the request. The operating system may adjust the requested
+ * value. `bytes` must be in the range 1..INT_MAX.
+ */
+CXX_C_API int coro_socket_set_recv_buffer_size(coro_socket_t *socket, size_t bytes);
+
+/**
+ * @brief Configure the OS SO_SNDBUF request for TCP/TLS/WS/WSS sockets.
+ *
+ * Call before bind/connect/listen. When configured on a listener, accepted
+ * sockets inherit the request. The operating system may adjust the requested
+ * value. `bytes` must be in the range 1..INT_MAX.
+ */
+CXX_C_API int coro_socket_set_send_buffer_size(coro_socket_t *socket, size_t bytes);
+
+/**
  * @brief Limit bytes queued in the socket send path. 0 disables the limit.
  *
  * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
@@ -508,11 +526,13 @@ CXX_C_API int coro_socket_recv_ws(coro_socket_t *socket, char **data, size_t *le
 CXX_C_API int coro_socket_set_compression_level(coro_socket_t *socket, int level);
 
 /**
- * @brief Interrupt a pending `coro_socket_recv()` wait from any thread.
+ * @brief Interrupt the current or next `coro_socket_recv()` wait from any thread.
  *
  * This lets an integration wake the coroutine that owns a live socket so it
  * can process out-of-band work on the loop thread. The underlying transport
- * recv remains armed, so later data can still be buffered normally.
+ * recv remains armed, so later data can still be buffered normally. If the
+ * socket has not armed a waiter yet, one interrupt is retained and consumed by
+ * the next recv call before it starts a transport operation.
  *
  * The interrupted recv typically returns `0` with `*data == NULL` and
  * `*len == 0`, allowing the caller to retry after handling the side work.

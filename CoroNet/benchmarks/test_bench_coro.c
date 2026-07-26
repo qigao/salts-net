@@ -58,6 +58,17 @@
 
 static volatile int g_bench_sink = 0;
 static int g_bench_dynamic_port = 49600;
+static const uint8_t BENCH_KCP_PSK[TURBO_KCP_PSK_SIZE] = {
+    0x42, 0x1d, 0xa3, 0x77, 0x09, 0xc5, 0xe8, 0x31, 0x5a, 0xb4, 0x6f,
+    0x90, 0x2e, 0xd8, 0x14, 0x63, 0x7c, 0x25, 0xf1, 0x48, 0x8b, 0x36,
+    0xca, 0x05, 0x9d, 0x72, 0x10, 0xef, 0x54, 0xb9, 0x68, 0x3a};
+
+static turbo_kcp_config_t bench_kcp_config(void) {
+  turbo_kcp_config_t config;
+  turbo_kcp_config_default(&config);
+  memcpy(config.pre_shared_key, BENCH_KCP_PSK, sizeof(config.pre_shared_key));
+  return config;
+}
 
 typedef struct {
   int completed;
@@ -866,11 +877,13 @@ static void kcp_echo_client(coro_t *co, void *arg) {
   (void)co;
   echo_state_t *s = (echo_state_t *)arg;
   coro_socket_t *sock = coro_socket_create_kcp(s->ctx);
+  turbo_kcp_config_t config = bench_kcp_config();
   int ok = 0;
 
   if (sock) {
     coro_socket_set_timeout(sock, 3000);
-    if (coro_socket_connect(sock, "127.0.0.1", s->port) == 0) {
+    if (coro_socket_set_kcp_config(sock, &config) == 0 &&
+        coro_socket_connect(sock, "127.0.0.1", s->port) == 0) {
       ok = 1;
       for (int i = 0; i < s->roundtrips; ++i) {
         char *data = NULL;
@@ -1755,7 +1768,9 @@ spec("coronet_transport_bench") {
     benchmark("kcp_echo_single_exchange_hot", BENCH_TRANSPORT_ITERATIONS, 1) {
       kcp_echo_server_state_t server_cfg = {1};
       coro_socket_t *server = coro_socket_create_kcp(ctx);
+      turbo_kcp_config_t config = bench_kcp_config();
       check_not_null(server);
+      check_int_eq(coro_socket_set_kcp_config(server, &config), 0);
       check_int_eq(coro_socket_listen_on(server, "127.0.0.1", BENCH_KCP_PORT,
                                          kcp_echo_server_handler, &server_cfg), 0);
       echo_state_t state = {ctx, BENCH_KCP_PORT, "ping", 4, 1, 0, 0};
@@ -1770,7 +1785,9 @@ spec("coronet_transport_bench") {
     benchmark("kcp_echo_1k_16exchanges_hot", BENCH_TRANSPORT_ITERATIONS, BENCH_TRANSPORT_ROUNDTRIPS) {
       kcp_echo_server_state_t server_cfg = {BENCH_TRANSPORT_ROUNDTRIPS};
       coro_socket_t *server = coro_socket_create_kcp(ctx);
+      turbo_kcp_config_t config = bench_kcp_config();
       check_not_null(server);
+      check_int_eq(coro_socket_set_kcp_config(server, &config), 0);
       check_int_eq(coro_socket_listen_on(server, "127.0.0.1", BENCH_KCP_PORT,
                                          kcp_echo_server_handler, &server_cfg), 0);
       echo_state_t state = {ctx, BENCH_KCP_PORT, payload, sizeof(payload),

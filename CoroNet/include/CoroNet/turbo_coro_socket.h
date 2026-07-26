@@ -182,17 +182,13 @@ CXX_C_API int coro_socket_set_send_buffer_size(coro_socket_t *socket, size_t byt
  */
 CXX_C_API int coro_socket_set_send_hwm(coro_socket_t *socket, size_t bytes);
 
-/**
- * @brief Configure optional FEC for a KCP socket before bind/connect.
- */
-CXX_C_API int coro_socket_set_kcp_fec(coro_socket_t *socket,
-                                      const turbo_kcp_fec_config_t *config);
+/** Configure the authenticated KCP session before bind/connect. */
+CXX_C_API int coro_socket_set_kcp_config(coro_socket_t *socket,
+                                         const turbo_kcp_config_t *config);
 
-/**
- * @brief Read the pending or active KCP FEC config for a KCP socket.
- */
-CXX_C_API int coro_socket_get_kcp_fec(coro_socket_t *socket,
-                                      turbo_kcp_fec_config_t *config);
+/** Read the pending or active authenticated KCP configuration. */
+CXX_C_API int coro_socket_get_kcp_config(coro_socket_t *socket,
+                                         turbo_kcp_config_t *config);
 
 /**
  * @brief Connect to a remote host:port.

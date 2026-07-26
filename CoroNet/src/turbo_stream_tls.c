@@ -1932,7 +1932,14 @@ static void tls_on_tcp_close(void *handle) {
   }
 
   if (st->pending_plaintext && st->pending_plaintext->used > 0) {
-    if (!outer || !outer->on_recv) {
+    if (!outer || outer->destroyed) {
+      tls_finalize_peer_close(st);
+      return;
+    }
+    if (!outer->on_recv) {
+      /* The peer closed before the consumer started receiving. Keep buffered
+       * plaintext readable, but allow a later close/destroy to finalize it. */
+      outer->closing = 0;
       return;
     }
     if (tls_flush_pending_plaintext(st) != 0) {

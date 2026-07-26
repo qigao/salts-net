@@ -426,6 +426,16 @@ static int listen_kcp(coro_socket_t *server, const char *host, int port) {
 
   server->listener = coro_socket_create(server->ctx, CORO_SOCKET_KCP);
   if (!server->listener) return TURBO_ENOMEM;
+  if (!server->kcp_configured) {
+    rollback_listener(server);
+    return TURBO_EINVAL;
+  }
+  r = coro_socket_set_kcp_config(server->listener, &server->kcp_config);
+  if (r != 0) {
+    rollback_listener(server);
+    return r;
+  }
+  server->listener->reuse_port = server->reuse_port;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
   if (r != 0) {

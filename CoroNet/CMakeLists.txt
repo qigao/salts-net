@@ -121,7 +121,7 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
     PUBLIC TurboUtils::Core TurboUtils::Parser Threads::Threads
     PRIVATE kcp::kcp ${TURBONET_CARES_TARGET} 
             OpenSSL::SSL OpenSSL::Crypto
-             TurboNet::WebSocketParser reed
+             TurboNet::WebSocketParser TurboNet::Crypto reed
   )
 
   if(WIN32)

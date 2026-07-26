@@ -626,6 +626,8 @@ static void tls_server_run_close_case(int pending_recv) {
   }
 
   tls_close_run_until_idle(state.ctx, 1000);
+  check_int_eq(coro_context_coro_count(state.ctx), 0);
+  check_int_eq(coro_context_alive(state.ctx), 0);
   coro_context_destroy(state.ctx);
   tls_test_clear_server_env();
   tls_test_clear_ca_env();

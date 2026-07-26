@@ -1506,13 +1506,11 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
     s->recv_data = NULL;
     s->recv_len = 0;
     s->recv_call_inflight = 0;
-    coro_socket_release_destroy_wait_handoff(s);
     if (timed_out) {
       s->timed_out = 0;
       if (status == TURBO_ETIMEDOUT) {
         s->status = 0;
       }
-      release_client(s);
     }
 
     *data = recv_data;
@@ -1522,6 +1520,10 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
       s->timed_out = 0;
       ret = 0;
       coro_socket_release_destroy_wait_guard(s);
+      coro_socket_release_destroy_wait_handoff(s);
+      if (timed_out) {
+        release_client(s);
+      }
       return ret;
     }
     if (status == TURBO_EINTR) {
@@ -1533,6 +1535,10 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
       ret = status;
     }
     coro_socket_release_destroy_wait_guard(s);
+    coro_socket_release_destroy_wait_handoff(s);
+    if (timed_out) {
+      release_client(s);
+    }
     return ret;
   }
 }

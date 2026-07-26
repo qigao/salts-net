@@ -310,8 +310,8 @@ struct coro_socket_s {
   size_t socket_send_buffer_bytes; /**< 0 = preserve the OS SO_SNDBUF default */
   int accept_prestart_recv_disabled; /**< Listener: 1 = accepted raw TCP must not pre-read wrapper
                                         handshakes */
-  int kcp_fec_configured;            /**< 1 = KCP FEC config should be applied */
-  turbo_kcp_fec_config_t kcp_fec_config; /**< Pending KCP FEC config */
+  int kcp_configured;                 /**< 1 = secure KCP config should be applied */
+  turbo_kcp_config_t kcp_config;      /**< Pending secure KCP config */
 
   /* ── Connection state ──────────────────────────────────── */
   int connected;      /**< 1 = transport is connected */

@@ -5,9 +5,9 @@
 
 #include "CoroNet/turbo_coro_internal.h"
 #include "CoroNet/turbo_kcp.h"
+#include "turbo_error.h"
 #include <stdlib.h>
 #include <string.h>
-#include "turbo_error.h"
 
 extern const coro_transport_ops_t transport_ops_kcp;
 
@@ -31,33 +31,12 @@ static int kcp_listen(coro_socket_t *s, int backlog);
 static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted);
 static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr);
 
-static int kcp_fec_config_validate_public(const turbo_kcp_fec_config_t *config) {
-  if (!config) {
-    return TURBO_EINVAL;
-  }
-  if (!config->enabled) {
-    return 0;
-  }
-  if (config->backend == TURBO_KCP_FEC_BACKEND_NONE ||
-      config->data_shards == 0 || config->parity_shards == 0 ||
-      config->data_shards > 256 || config->parity_shards > 256 ||
-      config->max_payload_size == 0) {
-    return TURBO_EINVAL;
-  }
-  if (!turbo_kcp_fec_backend_available(config->backend)) {
-    return TURBO_ENOTSUP;
-  }
-  return 0;
+static int kcp_apply_pending_config(coro_socket_t *s) {
+  if (!s || !s->handle.kcp || !s->kcp_configured) return TURBO_EINVAL;
+  return turbo_kcp_set_config(s->handle.kcp, &s->kcp_config);
 }
 
-static int kcp_apply_pending_fec(coro_socket_t *s) {
-  if (!s || !s->handle.kcp || !s->kcp_fec_configured) {
-    return 0;
-  }
-  return turbo_kcp_set_fec(s->handle.kcp, &s->kcp_fec_config);
-}
-
-int coro_socket_set_kcp_fec(coro_socket_t *s, const turbo_kcp_fec_config_t *config) {
+int coro_socket_set_kcp_config(coro_socket_t *s, const turbo_kcp_config_t *config) {
   int rc;
 
   if (!s || s->transport != TURBO_KCP || !config) {
@@ -65,41 +44,27 @@ int coro_socket_set_kcp_fec(coro_socket_t *s, const turbo_kcp_fec_config_t *conf
   }
 
   if (s->handle.kcp) {
-    rc = turbo_kcp_set_fec(s->handle.kcp, config);
-    if (rc != 0) {
-      return rc;
-    }
-  } else {
-    rc = kcp_fec_config_validate_public(config);
+    rc = turbo_kcp_set_config(s->handle.kcp, config);
     if (rc != 0) {
       return rc;
     }
   }
-
-  if (config->enabled) {
-    s->kcp_fec_config = *config;
-    s->kcp_fec_configured = 1;
-  } else {
-    turbo_kcp_fec_config_default(&s->kcp_fec_config);
-    s->kcp_fec_configured = 0;
-  }
+  s->kcp_config = *config;
+  s->kcp_configured = 1;
   return 0;
 }
 
-int coro_socket_get_kcp_fec(coro_socket_t *s, turbo_kcp_fec_config_t *config) {
+int coro_socket_get_kcp_config(coro_socket_t *s, turbo_kcp_config_t *config) {
   if (!s || s->transport != TURBO_KCP || !config) {
     return TURBO_EINVAL;
   }
 
   if (s->handle.kcp) {
-    return turbo_kcp_get_fec(s->handle.kcp, config);
+    return turbo_kcp_get_config(s->handle.kcp, config);
   }
 
-  if (s->kcp_fec_configured) {
-    *config = s->kcp_fec_config;
-  } else {
-    turbo_kcp_fec_config_default(config);
-  }
+  if (s->kcp_configured) *config = s->kcp_config;
+  else turbo_kcp_config_default(config);
   return 0;
 }
 
@@ -265,7 +230,7 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
     created_handle = 1;
-    r = kcp_apply_pending_fec(s);
+    r = kcp_apply_pending_config(s);
     if (r != 0) {
       turbo_kcp_destroy(s->handle.kcp);
       s->handle.kcp = NULL;
@@ -273,17 +238,11 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
       return r;
     }
   }
-  
+
   retain_client(s);
   coro_set_wait(s);
-  r = turbo_kcp_connect(
-      s->handle.kcp, 
-      host, 
-      port,
-      on_kcp_connect, 
-      on_kcp_recv
-  );
-  
+  r = turbo_kcp_connect(s->handle.kcp, host, port, on_kcp_connect, on_kcp_recv);
+
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
@@ -355,7 +314,7 @@ static int kcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     turbo_kcp_set_user_data(s->handle.kcp, s);
     s->owns_handle = 1;
     created_handle = 1;
-    r = kcp_apply_pending_fec(s);
+    r = kcp_apply_pending_config(s);
     if (r != 0) {
       turbo_kcp_destroy(s->handle.kcp);
       s->handle.kcp = NULL;
@@ -449,9 +408,7 @@ static int kcp_recv_start(coro_socket_t *s) {
   return 0; /* KCP recv is always active */
 }
 
-static void kcp_recv_stop(coro_socket_t *s) {
-  UNUSED(s);
-}
+static void kcp_recv_stop(coro_socket_t *s) { UNUSED(s); }
 
 /* ── KCP Close ────────────────────────────────────────────── */
 
@@ -481,8 +438,13 @@ static void kcp_close(coro_socket_t *s) {
       ls->active_child->native_tcp_state = NULL;
       ls->active_child->connected = 0;
       if (ls->active_child->co_wait) {
+        stop_timeout_timer(ls->active_child);
+        ls->active_child->timed_out = 0;
         ls->active_child->status = TURBO_EOF;
-        coro_resume_waiter(ls->active_child);
+        coro_resume_waiter_with_handoff(ls->active_child);
+        if (!ls->active_child->destroy_wait_handoff) {
+          release_client(ls->active_child);
+        }
       }
       ls->active_child = NULL;
     }
@@ -493,7 +455,7 @@ static void kcp_close(coro_socket_t *s) {
     kcp_listener_state_t *ls = (kcp_listener_state_t *)s->native_tcp_state;
     if (ls) {
       if (ls->active_child == s) ls->active_child = NULL;
-      /* Good taste: Ensure the listener's peer lock is reset so the next 
+      /* Good taste: Ensure the listener's peer lock is reset so the next
        * ephemeral port is accepted immediately after this handler ends. */
       if (ls->listener_coro && ls->listener_coro->handle.kcp) {
         turbo_kcp_reset_peer(ls->listener_coro->handle.kcp);
@@ -506,6 +468,8 @@ static void kcp_close(coro_socket_t *s) {
     turbo_kcp_destroy(s->handle.kcp);
     s->handle.kcp = NULL;
   }
+  turbo_kcp_config_wipe(&s->kcp_config);
+  s->kcp_configured = 0;
 }
 
 static int kcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
@@ -525,14 +489,12 @@ static int kcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
 
 /* ── KCP Transport Ops ────────────────────────────────────── */
 
-const coro_transport_ops_t transport_ops_kcp = {
-    .connect = kcp_connect,
-    .bind = kcp_bind,
-    .listen = kcp_listen,
-    .accept = kcp_accept,
-    .send = kcp_send,
-    .recv_start = kcp_recv_start,
-    .recv_stop = kcp_recv_stop,
-    .get_local_addr = kcp_get_local_addr,
-    .close = kcp_close
-};
+const coro_transport_ops_t transport_ops_kcp = {.connect = kcp_connect,
+                                                .bind = kcp_bind,
+                                                .listen = kcp_listen,
+                                                .accept = kcp_accept,
+                                                .send = kcp_send,
+                                                .recv_start = kcp_recv_start,
+                                                .recv_stop = kcp_recv_stop,
+                                                .get_local_addr = kcp_get_local_addr,
+                                                .close = kcp_close};

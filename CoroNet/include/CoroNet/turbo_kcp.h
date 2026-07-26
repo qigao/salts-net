@@ -14,18 +14,31 @@ typedef struct turbo_kcp_server_s turbo_kcp_server_t;
 
 typedef enum turbo_kcp_fec_backend_e {
   TURBO_KCP_FEC_BACKEND_NONE = 0,
-  TURBO_KCP_FEC_BACKEND_REED_SOLOMON = 1,
-  /** @deprecated Use TURBO_KCP_FEC_BACKEND_REED_SOLOMON. */
-  TURBO_KCP_FEC_BACKEND_WIREHAIR = TURBO_KCP_FEC_BACKEND_REED_SOLOMON
+  TURBO_KCP_FEC_BACKEND_REED_SOLOMON = 1
 } turbo_kcp_fec_backend_t;
 
 typedef struct turbo_kcp_fec_config_s {
-  int enabled;
   turbo_kcp_fec_backend_t backend;
   uint16_t data_shards;
   uint16_t parity_shards;
   uint16_t max_payload_size;
+  uint16_t receive_group_count;
 } turbo_kcp_fec_config_t;
+
+#define TURBO_KCP_PSK_SIZE 32U
+#define TURBO_KCP_SECURE_RECORD_OVERHEAD 48U
+
+typedef struct turbo_kcp_config_s {
+  uint8_t pre_shared_key[TURBO_KCP_PSK_SIZE];
+  uint16_t mtu;
+  uint16_t send_window;
+  uint16_t receive_window;
+  uint16_t interval_ms;
+  uint16_t handshake_retry_ms;
+  uint8_t fast_resend;
+  uint8_t no_congestion_window;
+  turbo_kcp_fec_config_t fec;
+} turbo_kcp_config_t;
 
 /**
  * @brief Create a KCP client context.
@@ -60,30 +73,33 @@ CXX_C_API int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
 CXX_C_API void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
 
 /**
- * @brief Fill a KCP FEC config with safe defaults.
+ * @brief Fill the authenticated KCP transport config with current defaults.
  *
- * Defaults keep FEC disabled. Callers must explicitly enable it before bind
- * or connect. Enabling an unavailable backend returns TURBO_ENOTSUP.
+ * A non-zero pre-shared key is still required before bind/connect. The current
+ * wire protocol always applies AEAD records and Reed-Solomon FEC; it has no raw
+ * KCP or unauthenticated fallback.
  */
-CXX_C_API void turbo_kcp_fec_config_default(turbo_kcp_fec_config_t* config);
+CXX_C_API void turbo_kcp_config_default(turbo_kcp_config_t* config);
+/** Wipe the pre-shared key and all copied configuration bytes. */
+CXX_C_API void turbo_kcp_config_wipe(turbo_kcp_config_t* config);
 
 /**
- * @brief Return non-zero if a KCP FEC backend is compiled in.
+ * @brief Return non-zero for the current Reed-Solomon backend.
  */
 CXX_C_API int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
 
 /**
- * @brief Configure optional packet-erasure FEC for this KCP handle.
+ * @brief Configure authenticated KCP, AEAD records, and Reed-Solomon FEC.
  *
- * FEC is off by default and must be configured before bind/connect so both
- * peers agree on packet framing. Passing a disabled config turns FEC off.
+ * This must be called with a non-zero PSK before bind/connect. Both peers must
+ * use the same FEC dimensions. NONE and partially configured values fail.
  */
-CXX_C_API int turbo_kcp_set_fec(turbo_kcp_t* kcp, const turbo_kcp_fec_config_t* config);
+CXX_C_API int turbo_kcp_set_config(turbo_kcp_t* kcp, const turbo_kcp_config_t* config);
 
 /**
- * @brief Read the current KCP FEC config.
+ * @brief Read the current authenticated KCP transport config.
  */
-CXX_C_API int turbo_kcp_get_fec(turbo_kcp_t* kcp, turbo_kcp_fec_config_t* config);
+CXX_C_API int turbo_kcp_get_config(turbo_kcp_t* kcp, turbo_kcp_config_t* config);
 
 /**
  * @brief Connect to a remote KCP server.

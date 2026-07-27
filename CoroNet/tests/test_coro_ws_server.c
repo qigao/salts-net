@@ -40,6 +40,15 @@ typedef struct ws_close_state_s {
   uint64_t hold_ms;
 } ws_close_state_t;
 
+typedef struct ws_dual_close_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int client_rc;
+  int handler_rc;
+  int handler_hits;
+} ws_dual_close_state_t;
+
 typedef struct ws_two_client_state_s ws_two_client_state_t;
 
 typedef struct ws_two_client_arg_s {
@@ -145,6 +154,13 @@ static int ws_close_case_done(void *arg) {
   ws_close_state_t *state = (ws_close_state_t *)arg;
   if (!state) return 1;
   return state->client_rc != TURBO_EBUSY && state->handler_rc != TURBO_EBUSY;
+}
+
+static int ws_dual_close_case_done(void *arg) {
+  ws_dual_close_state_t *state = (ws_dual_close_state_t *)arg;
+  if (!state) return 1;
+  return state->client_rc != TURBO_EBUSY &&
+         state->handler_rc != TURBO_EBUSY;
 }
 
 static int ws_close_client_status_expected(int pending_recv, int status) {
@@ -437,6 +453,49 @@ static void ws_close_idle_handler(coro_socket_t *client, void *arg) {
   coro_socket_destroy(client);
 }
 
+static void ws_dual_close_handler(coro_socket_t *client, void *arg) {
+  ws_dual_close_state_t *state = (ws_dual_close_state_t *)arg;
+  char *data = NULL;
+  size_t len = 0;
+  int rc;
+
+  if (!state) {
+    coro_socket_destroy(client);
+    return;
+  }
+
+  state->handler_hits++;
+  coro_socket_set_timeout(client, 3000);
+  rc = coro_socket_recv(client, &data, &len);
+  if (data) {
+    coro_socket_free_recv(data);
+  }
+  state->handler_rc = rc;
+  coro_socket_destroy(client);
+}
+
+static void ws_dual_close_client_task(coro_t *co, void *arg) {
+  static const char payload[] = "dual-close";
+  ws_dual_close_state_t *state = (ws_dual_close_state_t *)arg;
+  coro_socket_t *client;
+  int rc;
+  (void)co;
+
+  client = coro_socket_create_tcpv4(state->ctx);
+  if (!client) {
+    state->client_rc = TURBO_ENOMEM;
+    return;
+  }
+
+  coro_socket_set_timeout(client, 3000);
+  rc = coro_socket_connect_ws(client, "127.0.0.1", state->port, "/chat", 0);
+  if (rc == 0) {
+    rc = coro_socket_send(client, payload, sizeof(payload) - 1U);
+  }
+  state->client_rc = rc;
+  coro_socket_destroy(client);
+}
+
 static void ws_close_client_recv_task(coro_t *co, void *arg) {
   ws_close_state_t *state = (ws_close_state_t *)arg;
   coro_socket_t *client;
@@ -708,6 +767,37 @@ static void ws_server_run_close_case(int pending_recv) {
   coro_context_destroy(state.ctx);
 }
 
+static void ws_server_run_dual_close_case(void) {
+  enum { WS_DUAL_CLOSE_ITERATIONS = 16 };
+  ws_dual_close_state_t state;
+  test_socket_t probe = TEST_INVALID_SOCKET;
+
+  memset(&state, 0, sizeof(state));
+  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  test_close_socket(probe);
+
+  state.ctx = coro_context_create(NULL);
+  check_not_null(state.ctx);
+  state.server = coro_socket_create_tcpv4(state.ctx);
+  check_not_null(state.server);
+  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+                                     0, ws_dual_close_handler, &state), 0);
+
+  for (int iteration = 0; iteration < WS_DUAL_CLOSE_ITERATIONS; ++iteration) {
+    state.client_rc = TURBO_EBUSY;
+    state.handler_rc = TURBO_EBUSY;
+    check_int_eq(coro_context_spawn(state.ctx, ws_dual_close_client_task, &state), 0);
+    ws_server_run_until(state.ctx, 5000, ws_dual_close_case_done, &state);
+    check_int_eq(state.client_rc, 0);
+    check_int_eq(state.handler_rc, 0);
+  }
+  check_int_eq(state.handler_hits, WS_DUAL_CLOSE_ITERATIONS);
+
+  coro_socket_destroy(state.server);
+  ws_close_run_until_idle(state.ctx, 1000);
+  coro_context_destroy(state.ctx);
+}
+
 static void ws_server_run_two_client_case(void) {
   ws_two_client_state_t state;
   test_socket_t probe = TEST_INVALID_SOCKET;
@@ -804,6 +894,10 @@ spec("Coro WebSocket Server") {
 
   it("should close coro websocket sockets with pending send without use-after-free") {
     ws_server_run_close_case(0);
+  }
+
+  it("should unwind simultaneous WebSocket peer closes without use-after-free") {
+    ws_server_run_dual_close_case();
   }
 
   it("should hand handlers a fully-open Secure WebSocket socket") {

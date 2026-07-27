@@ -83,6 +83,11 @@ typedef struct ws_state_s {
   int             close_after_write;
   int             close_send_in_progress;
   int             close_write_completed;
+
+  /* Inner transports may complete close synchronously from send/flush. Keep
+   * adapter state alive until the outermost WS operation unwinds. */
+  unsigned int    operation_depth;
+  int             transport_close_pending;
 } ws_state_t;
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -317,6 +322,39 @@ static void ws_free_state(ws_state_t *st) {
   free(st);
 }
 
+static void ws_finish_transport_close(ws_state_t *st) {
+  turbo_stream_t *outer;
+
+  if (!st || !st->transport_close_pending || st->operation_depth != 0U) {
+    return;
+  }
+
+  outer = st->outer;
+  st->outer = NULL;
+  if (outer) {
+    outer->backend_data = NULL;
+  }
+  ws_free_state(st);
+  if (outer) {
+    turbo_stream_finalize_close(outer);
+  }
+}
+
+static void ws_operation_enter(ws_state_t *st) {
+  if (st) {
+    st->operation_depth++;
+  }
+}
+
+static void ws_operation_leave(ws_state_t *st) {
+  if (!st || st->operation_depth == 0U) {
+    return;
+  }
+
+  st->operation_depth--;
+  ws_finish_transport_close(st);
+}
+
 static void ws_cleanup_create_failure(ws_state_t *st) {
   ws_free_state(st);
 }
@@ -389,25 +427,27 @@ static int ws_on_tcp_recv_cb(void *handle, const mem_slice_t *slice, void *peer)
   (void)peer;
   turbo_stream_t *tcp = (turbo_stream_t *)handle;
   ws_state_t     *st;
+  int             rc = 0;
 
   if (!tcp) return 0;
   st = (ws_state_t *)tcp->user_data;
   if (!st || !st->outer) return 0;
+  ws_operation_enter(st);
 
   if (!slice || !slice->data || slice->length == 0) {
     /* EOF from inner stream. Process any remaining buffered data, then close. */
     if (st->rx_len > 0) {
-      ws_process_rx(st);
+      (void)ws_process_rx(st);
     }
     turbo_stream_close(st->outer);
-    return 0;
+  } else if (ws_append_rx_bytes(st, (const uint8_t *)slice->data, slice->length) != 0) {
+    rc = ws_fail(st, TURBO_ENOMEM);
+  } else {
+    rc = ws_process_rx(st);
   }
 
-  if (ws_append_rx_bytes(st, (const uint8_t *)slice->data, slice->length) != 0) {
-    return ws_fail(st, TURBO_ENOMEM);
-  }
-
-  return ws_process_rx(st);
+  ws_operation_leave(st);
+  return rc;
 }
 
 static void ws_on_tcp_connect(void *handle, int status, void *peer) {
@@ -418,25 +458,25 @@ static void ws_on_tcp_connect(void *handle, int status, void *peer) {
   if (!tcp) return;
   st = (ws_state_t *)tcp->user_data;
   if (!st || !st->outer) return;
+  ws_operation_enter(st);
 
   if (status != 0) {
     st->state = WS_ST_CLOSED;
     if (st->outer->on_connect)
       st->outer->on_connect(st->outer, status, NULL);
-    return;
-  }
-
-  {
+  } else {
     int rc = ws_start_client_handshake(st);
     if (rc != 0) {
       st->state = WS_ST_CLOSED;
       if (st->outer->on_connect) {
         st->outer->on_connect(st->outer, rc, NULL);
       }
-      turbo_stream_close(st->tcp);
-      return;
+      if (st->tcp) {
+        turbo_stream_close(st->tcp);
+      }
     }
   }
+  ws_operation_leave(st);
 }
 
 static void ws_on_tcp_close(void *handle) {
@@ -452,15 +492,11 @@ static void ws_on_tcp_close(void *handle) {
   tcp->on_write_complete = NULL;
   if (!st) return;
 
-  turbo_stream_t *outer = st->outer;
-  if (outer) {
-    outer->backend_data = NULL;
-  }
+  st->tcp = NULL;
+  st->state = WS_ST_CLOSED;
+  st->transport_close_pending = 1;
   tcp->user_data = NULL;
-  ws_free_state(st);
-  if (outer) {
-    turbo_stream_finalize_close(outer);
-  }
+  ws_finish_transport_close(st);
 }
 
 static void ws_on_tcp_write_complete(turbo_stream_t *tcp, int status) {
@@ -470,18 +506,21 @@ static void ws_on_tcp_write_complete(turbo_stream_t *tcp, int status) {
     return;
   }
   st = (ws_state_t *)tcp->user_data;
+  if (!st) {
+    return;
+  }
+  ws_operation_enter(st);
   if (st && st->close_after_write) {
     if (st->close_send_in_progress) {
       st->close_write_completed = 1;
-      return;
+    } else {
+      st->close_after_write = 0;
+      (void)ws_fail(st, status != 0 ? status : TURBO_EPROTONOSUPPORT);
     }
-    st->close_after_write = 0;
-    (void)ws_fail(st, status != 0 ? status : TURBO_EPROTONOSUPPORT);
-    return;
-  }
-  if (st && st->outer && st->outer->on_write_complete) {
+  } else if (st->outer && st->outer->on_write_complete) {
     st->outer->on_write_complete(st->outer, status);
   }
+  ws_operation_leave(st);
 }
 
 /* ── Handshake send ───────────────────────────────────────── */
@@ -1124,8 +1163,10 @@ int turbo_stream_ws_send_owned_recv(turbo_stream_t *ws_stream, char *data, size_
     return TURBO_ENOMEM;
   }
 
+  ws_operation_enter(st);
   rc = turbo_stream_send_buffer(st->tcp, send_buf, hlen + len);
   mem_unref(send_buf);
+  ws_operation_leave(st);
   return rc;
 }
 
@@ -1174,6 +1215,8 @@ fail:
 
 static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   ws_state_t *st = (ws_state_t *)s->backend_data;
+  int connect_rc;
+
   if (!st || !addr) return TURBO_EINVAL;
 
   /* Create inner TCP stream — TCP4/TCP6 or TLS based on kind */
@@ -1261,23 +1304,23 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   }
 
   {
-    int rc = ws_prepare_client_key(st);
-    if (rc != 0) {
+    connect_rc = ws_prepare_client_key(st);
+    if (connect_rc != 0) {
       ws_drop_inner_tcp(st);
-      return rc;
+      return connect_rc;
     }
   }
 
   st->state = WS_ST_CONNECTING;
-  {
-    int rc = turbo_stream_connect_addr(st->tcp, addr,
-                                       ws_on_tcp_connect,
-                                       ws_on_tcp_close);
-    if (rc != 0) {
-      ws_drop_inner_tcp(st);
-    }
-    return rc;
+  ws_operation_enter(st);
+  connect_rc = turbo_stream_connect_addr(st->tcp, addr,
+                                         ws_on_tcp_connect,
+                                         ws_on_tcp_close);
+  if (connect_rc != 0 && st->tcp) {
+    ws_drop_inner_tcp(st);
   }
+  ws_operation_leave(st);
+  return connect_rc;
 }
 
 static int ws_connect_pipe(turbo_stream_t *s, const char *name) {
@@ -1287,23 +1330,37 @@ static int ws_connect_pipe(turbo_stream_t *s, const char *name) {
 
 static int ws_send(turbo_stream_t *s, const char *data, size_t len) {
   ws_state_t *st = (ws_state_t *)s->backend_data;
+  int rc;
+
   if (!st || st->state != WS_ST_OPEN) return TURBO_ENOTCONN;
-  return ws_send_frame(st, WS_OPCODE_BINARY, (const uint8_t *)data, len);
+  ws_operation_enter(st);
+  rc = ws_send_frame(st, WS_OPCODE_BINARY, (const uint8_t *)data, len);
+  ws_operation_leave(st);
+  return rc;
 }
 
 int turbo_stream_ws_send_text(turbo_stream_t *ws_stream, const char *data, size_t len) {
   ws_state_t *st;
+  int rc;
 
   if (!ws_stream || !data || len == 0) return TURBO_EINVAL;
   st = (ws_state_t *)ws_stream->backend_data;
   if (!st || st->state != WS_ST_OPEN) return TURBO_ENOTCONN;
-  return ws_send_frame(st, WS_OPCODE_TEXT, (const uint8_t *)data, len);
+  ws_operation_enter(st);
+  rc = ws_send_frame(st, WS_OPCODE_TEXT, (const uint8_t *)data, len);
+  ws_operation_leave(st);
+  return rc;
 }
 
 static int ws_flush(turbo_stream_t *s) {
   ws_state_t *st = (ws_state_t *)s->backend_data;
+  int rc;
+
   if (!st || !st->tcp) return 0;
-  return turbo_stream_flush(st->tcp);
+  ws_operation_enter(st);
+  rc = turbo_stream_flush(st->tcp);
+  ws_operation_leave(st);
+  return rc;
 }
 
 static int ws_recv_start(turbo_stream_t *s) {
@@ -1311,13 +1368,18 @@ static int ws_recv_start(turbo_stream_t *s) {
      TCP recv was started during handshake — nothing more to do. */
   ws_state_t *st = (ws_state_t *)s->backend_data;
   if (st != NULL && st->state == WS_ST_OPEN && st->rx_len > 0) {
-    int rc = ws_process_rx(st);
+    int rc;
+
+    ws_operation_enter(st);
+    rc = ws_process_rx(st);
 
     /* Buffered protocol errors should still close asynchronously instead of
        making recv_start() itself fail. */
     if (rc == TURBO_EPROTONOSUPPORT && s->closing) {
+      ws_operation_leave(st);
       return 0;
     }
+    ws_operation_leave(st);
     return rc;
   }
   return 0;
@@ -1332,25 +1394,28 @@ static void ws_close(turbo_stream_t *s) {
   /* s->closing already set by turbo_stream_close() */
   ws_state_t *st = (ws_state_t *)s->backend_data;
   if (!st) { turbo_stream_finalize_close(s); return; }
+  ws_operation_enter(st);
 
   if (st->state == WS_ST_OPEN) {
     st->state = WS_ST_CLOSING;
     uint8_t close_payload[2] = { 0x03, 0xE8 }; /* 1000 Normal Closure */
-    ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
+    (void)ws_send_frame(st, WS_OPCODE_CLOSE, close_payload, 2);
   }
 
   if (st->tcp) {
     /* Flush any queued close frame before tearing down the transport. */
     (void)turbo_stream_flush(st->tcp);
-    st->tcp->on_recv = NULL;
-    st->tcp->on_connect = NULL;
-    st->tcp->on_write_complete = NULL;
-    turbo_stream_close(st->tcp);   /* triggers ws_on_tcp_close async */
-  } else {
-    s->backend_data = NULL;
-    ws_free_state(st);
-    turbo_stream_finalize_close(s);
+    if (st->tcp) {
+      st->tcp->on_recv = NULL;
+      st->tcp->on_connect = NULL;
+      st->tcp->on_write_complete = NULL;
+      turbo_stream_close(st->tcp);   /* triggers ws_on_tcp_close async */
+    }
   }
+  if (!st->tcp && !st->transport_close_pending) {
+    st->transport_close_pending = 1;
+  }
+  ws_operation_leave(st);
 }
 
 static int ws_get_local(turbo_stream_t *s, struct sockaddr_storage *a) {
@@ -1533,14 +1598,16 @@ int turbo_stream_ws_wrap_server(turbo_stream_t *ws_stream,
 
   st->state = WS_ST_HANDSHAKING;
   ws_stream->connected = 0;
+  ws_operation_enter(st);
   rc = turbo_stream_recv_start(st->tcp, ws_on_tcp_recv_cb);
   if (rc != 0) {
-    ws_drop_inner_tcp(st);
+    if (st->tcp) {
+      ws_drop_inner_tcp(st);
+    }
     st->state = WS_ST_CLOSED;
-    return rc;
   }
-
-  return 0;
+  ws_operation_leave(st);
+  return rc;
 }
 
 int turbo_stream_ws_wrap_client(turbo_stream_t *ws_stream,
@@ -1578,12 +1645,14 @@ int turbo_stream_ws_wrap_client(turbo_stream_t *ws_stream,
     return rc;
   }
 
+  ws_operation_enter(st);
   rc = ws_start_client_handshake(st);
   if (rc != 0) {
-    ws_drop_inner_tcp(st);
+    if (st->tcp) {
+      ws_drop_inner_tcp(st);
+    }
     st->state = WS_ST_CLOSED;
-    return rc;
   }
-
-  return 0;
+  ws_operation_leave(st);
+  return rc;
 }

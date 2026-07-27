@@ -403,6 +403,7 @@ static int listen_udp(coro_socket_t *server, const char *host, int port) {
   server->listener = coro_socket_create(server->ctx, server_udp_listener_type(&saddr));
   if (!server->listener) return TURBO_ENOMEM;
   server->listener->reuse_port = server->reuse_port;
+  server->listener->udp_sessionized = server->udp_sessionized;
 
   r = coro_socket_bind(server->listener, (const struct sockaddr *)&saddr);
   if (r != 0) {
@@ -410,7 +411,7 @@ static int listen_udp(coro_socket_t *server, const char *host, int port) {
     return r;
   }
 
-  r = coro_socket_listen(server->listener, 0);
+  r = coro_socket_listen(server->listener, server->udp_sessionized ? 128 : 0);
   if (r != 0) {
     rollback_listener(server);
     return r;
@@ -558,9 +559,7 @@ int coro_socket_listen_ws_ex(coro_socket_t *server, const char *host, int port,
   return listen_ws_internal(server, host, port, is_tls);
 }
 
-int coro_socket_server_stop(coro_socket_t *server) {
-  coro_server_task_t *task;
-
+int coro_socket_server_close_admission(coro_socket_t *server) {
   if (!server) return TURBO_EINVAL;
   server->server_stopping = 1;
 
@@ -569,6 +568,13 @@ int coro_socket_server_stop(coro_socket_t *server) {
     server->listener = NULL;
     coro_socket_destroy(listener);
   }
+  return 0;
+}
+
+int coro_socket_server_stop(coro_socket_t *server) {
+  coro_server_task_t *task;
+  int rc = coro_socket_server_close_admission(server);
+  if (rc != 0) return rc;
 
   for (;;) {
     coro_socket_t *socket = NULL;

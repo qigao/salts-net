@@ -1691,6 +1691,16 @@ int coro_socket_set_broadcast(coro_socket_t *s, int on) {
   return turbo_datagram_set_broadcast(dg, on);
 }
 
+int coro_socket_set_udp_sessionized(coro_socket_t *s, int enabled) {
+  if (!s || (enabled != 0 && enabled != 1)) return socket_return_error(s, TURBO_EINVAL);
+  if (s->transport != TURBO_UDP) return socket_return_error(s, TURBO_ENOTSUP);
+  if (s->listener || s->native_tcp_state || s->connected) {
+    return socket_return_error(s, TURBO_EBUSY);
+  }
+  s->udp_sessionized = enabled;
+  return 0;
+}
+
 int coro_socket_recvfrom(coro_socket_t *s, char **data, size_t *len,
                          struct sockaddr_storage *addr) {
   int r = coro_socket_recv(s, data, len);

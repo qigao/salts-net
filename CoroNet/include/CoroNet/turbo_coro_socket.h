@@ -637,6 +637,22 @@ CXX_C_API int coro_socket_set_multicast_ttl(coro_socket_t *socket, int ttl);
  */
 CXX_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
 
+/**
+ * @brief Select persistent per-peer admission for a UDP server.
+ *
+ * Disabled by default: each datagram creates one accepted socket and its
+ * second recv returns TURBO_EOF. When enabled before coro_socket_listen_on(),
+ * datagrams from one source address are routed to one accepted socket until
+ * its handler returns. At most one unread datagram is retained per peer;
+ * later datagrams are dropped while that slot is occupied.
+ *
+ * @param socket  UDP server socket which has not started listening.
+ * @param enabled 0 for single-datagram admission, 1 for per-peer sessions.
+ * @return 0 on success, TURBO_EINVAL for invalid arguments,
+ *         TURBO_ENOTSUP for non-UDP sockets, or TURBO_EBUSY after listen starts.
+ */
+CXX_C_API int coro_socket_set_udp_sessionized(coro_socket_t *socket, int enabled);
+
 /* ── Server Functions ──────────────────────────────────────── */
 
 /**
@@ -708,6 +724,22 @@ CXX_C_API int coro_socket_listen_ws_ex(coro_socket_t *socket, const char *host, 
                                        int is_tls, coro_handler_fn handler, void *arg,
                                        coro_handler_closed_fn handler_closed,
                                        void *handler_closed_arg);
+
+/**
+ * @brief Stop accepting while preserving already accepted connection tasks.
+ *
+ * This is the first phase of a graceful server shutdown. It closes the
+ * listener and prevents accepted-but-not-admitted tasks from entering the
+ * handler, while handlers that already own a connection continue running.
+ * Call coro_socket_server_stop() after those handlers have drained.
+ *
+ * This operation is asynchronous. Drive the owning coroutine context until
+ * the accept loop exits. Call this function on the socket's owning context
+ * thread.
+ *
+ * @return 0 on success, TURBO_EINVAL for a NULL socket.
+ */
+CXX_C_API int coro_socket_server_close_admission(coro_socket_t *socket);
 
 /**
  * @brief Stop accepting and cancel all accepted connection tasks.

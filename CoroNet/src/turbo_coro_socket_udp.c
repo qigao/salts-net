@@ -22,11 +22,21 @@ typedef struct udp_accept_node_s {
   struct udp_accept_node_s *next;
 } udp_accept_node_t;
 
+typedef struct udp_session_node_s {
+  coro_socket_t *socket;
+  struct sockaddr_storage peer_addr;
+  struct udp_session_node_s *next;
+} udp_session_node_t;
+
 typedef struct udp_listener_state_s {
   turbo_datagram_t *datagram;
   coro_socket_t *server_coro;
   udp_accept_node_t *head;
   udp_accept_node_t *tail;
+  udp_session_node_t *sessions;
+  size_t session_count;
+  size_t session_limit;
+  int sessionized;
   int recv_ref_held;
 } udp_listener_state_t;
 
@@ -35,6 +45,47 @@ static int socket_ctx_error(coro_socket_t *s, int fallback) {
 }
 
 static int udp_client_recv_start(coro_socket_t *s);
+
+static int udp_peer_equal(const struct sockaddr_storage *left,
+                          const struct sockaddr_storage *right) {
+  if (!left || !right || left->ss_family != right->ss_family) return 0;
+  if (left->ss_family == AF_INET) {
+    const struct sockaddr_in *a = (const struct sockaddr_in *)left;
+    const struct sockaddr_in *b = (const struct sockaddr_in *)right;
+    return a->sin_port == b->sin_port &&
+           memcmp(&a->sin_addr, &b->sin_addr, sizeof(a->sin_addr)) == 0;
+  }
+  if (left->ss_family == AF_INET6) {
+    const struct sockaddr_in6 *a = (const struct sockaddr_in6 *)left;
+    const struct sockaddr_in6 *b = (const struct sockaddr_in6 *)right;
+    return a->sin6_port == b->sin6_port && a->sin6_scope_id == b->sin6_scope_id &&
+           memcmp(&a->sin6_addr, &b->sin6_addr, sizeof(a->sin6_addr)) == 0;
+  }
+  return 0;
+}
+
+static udp_session_node_t *udp_session_find(udp_listener_state_t *ls,
+                                            const struct sockaddr_storage *peer) {
+  udp_session_node_t *node;
+  if (!ls || !peer) return NULL;
+  for (node = ls->sessions; node; node = node->next) {
+    if (udp_peer_equal(&node->peer_addr, peer)) return node;
+  }
+  return NULL;
+}
+
+static void udp_session_remove(udp_listener_state_t *ls, coro_socket_t *socket) {
+  udp_session_node_t **link;
+  if (!ls || !socket) return;
+  for (link = &ls->sessions; *link; link = &(*link)->next) {
+    udp_session_node_t *node = *link;
+    if (node->socket != socket) continue;
+    *link = node->next;
+    if (ls->session_count > 0u) ls->session_count -= 1u;
+    free(node);
+    return;
+  }
+}
 
 static int udp_status_is_transient(int status) {
   return status == TURBO_ETIMEDOUT || status == TURBO_ECANCELED;
@@ -105,6 +156,24 @@ static int on_udp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) 
   /* Server case: dispatch to accept loop */
   if (s->native_tcp_state) {
     udp_listener_state_t *ls = (udp_listener_state_t *)s->native_tcp_state;
+    const struct sockaddr_storage *peer_addr = (const struct sockaddr_storage *)peer;
+
+    if (ls->sessionized) {
+      udp_session_node_t *session = udp_session_find(ls, peer_addr);
+      if (session) {
+        coro_socket_t *child = session->socket;
+        /*
+         * UDP remains lossy and bounded: retain only one unread datagram per
+         * admitted peer. The protocol above this layer owns retransmission.
+         */
+        if (child->recv_data && !child->co_wait) return 0;
+        retain_client(child);
+        coro_socket_handle_transport_recv(child, slice);
+        release_client(child);
+        return 0;
+      }
+      if (!peer_addr || ls->session_count >= ls->session_limit) return 0;
+    }
     
     /* Create a pseudo-client socket for this packet */
     coro_socket_t *child = coro_socket_create_shell(s->ctx, TURBO_UDP, &udp_server_ops);
@@ -118,16 +187,33 @@ static int on_udp_coro_recv(void *handle, const mem_slice_t *slice, void *peer) 
     
     /* Pre-load data and peer addr */
     coro_deliver_recv(child, slice);
+    child->udp_sessionized = ls->sessionized;
+    child->dgram_consumed = ls->sessionized ? 0 : 1;
     if (peer) {
       memcpy(&child->peer_addr, peer, sizeof(struct sockaddr_storage));
     }
     child->connected = 1;
     child->handle.datagram = s->handle.datagram;
     child->owns_handle = 0; // Pseudo-socket borrows the listener datagram handle.
+
+    if (ls->sessionized) {
+      udp_session_node_t *session = (udp_session_node_t *)calloc(1, sizeof(*session));
+      if (!session) {
+        coro_socket_destroy(child);
+        udp_listener_fail(s, TURBO_ENOMEM);
+        return 0;
+      }
+      session->socket = child;
+      session->peer_addr = child->peer_addr;
+      session->next = ls->sessions;
+      ls->sessions = session;
+      ls->session_count += 1u;
+    }
     
     /* Queue for accept */
     udp_accept_node_t *node = malloc(sizeof(udp_accept_node_t));
     if (!node) {
+      if (ls->sessionized) udp_session_remove(ls, child);
       coro_socket_destroy(child);
       udp_listener_fail(s, TURBO_ENOMEM);
       return 0;
@@ -300,8 +386,6 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 static int udp_client_listen(coro_socket_t *s, int backlog) {
   udp_listener_state_t *ls;
 
-  UNUSED(backlog);
-
   if (!s || !s->handle.datagram) {
     return TURBO_EINVAL;
   }
@@ -314,6 +398,8 @@ static int udp_client_listen(coro_socket_t *s, int backlog) {
     }
     ls->server_coro = s;
     ls->datagram = s->handle.datagram;
+    ls->sessionized = s->udp_sessionized;
+    ls->session_limit = backlog > 0 ? (size_t)backlog : 128u;
     s->native_tcp_state = ls;
   }
 
@@ -362,6 +448,8 @@ static void udp_client_recv_stop(coro_socket_t *s) {
 static void udp_close(coro_socket_t *s) {
   if (s && !s->owns_handle && s->user_data) {
     coro_socket_t *parent = (coro_socket_t *)s->user_data;
+    udp_listener_state_t *ls = (udp_listener_state_t *)parent->native_tcp_state;
+    if (ls && ls->sessionized) udp_session_remove(ls, s);
     s->user_data = NULL;
     release_client(parent);
   }
@@ -378,6 +466,11 @@ static void udp_close(coro_socket_t *s) {
       coro_socket_destroy(n->socket);
       free(n);
       n = nx;
+    }
+    while (ls->sessions) {
+      udp_session_node_t *next = ls->sessions->next;
+      free(ls->sessions);
+      ls->sessions = next;
     }
     if (ls->recv_ref_held) {
       ls->recv_ref_held = 0;
@@ -471,7 +564,8 @@ static int udp_server_send(coro_socket_t *s, const char *data, size_t len) {
 /* ── UDP Server Recv ──────────────────────────────────────── */
 
 static int udp_server_recv_start(coro_socket_t *s) {
-  /* Connectionless UDP server: the datagram is already in coro_socket's recv buffer */
+  if (s->udp_sessionized) return 0;
+  /* Single-datagram admission: the packet is already in the recv buffer. */
   if (s->dgram_consumed) return TURBO_EOF;
   s->dgram_consumed = 1;
   return 0;

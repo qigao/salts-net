@@ -318,11 +318,9 @@ struct coro_socket_s {
   int status;         /**< Last operation status code */
   int peer_eof_pending; /**< Peer closed after queued data/current operation completed */
   int tls_cb_fired;   /**< TLS handshake callback guard */
-  int dgram_consumed; /**< UDP server: datagram already delivered to handler.
-                          Set to 1 by udp_server_recv_start on first call so
-                          that the recv_data pre-loaded by on_udp_server_recv
-                          is consumed exactly once.  A second recv returns EOF,
-                          matching the connectionless single-datagram semantics. */
+  int dgram_consumed; /**< UDP single-datagram server: admitted datagram was consumed. */
+  int udp_sessionized; /**< UDP server: group datagrams by remote address into one accepted
+                          socket. Disabled by default. */
 
   /* ── Coroutine suspend / receive ──────────────────────── */
   coro_t *co_wait;            /**< Coroutine waiting for I/O completion */

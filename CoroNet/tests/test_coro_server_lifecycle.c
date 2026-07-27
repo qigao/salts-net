@@ -20,12 +20,40 @@ typedef struct server_lifecycle_state_s {
   int client_connected;
   int client_done;
   int handler_hits;
+  int handler_entered;
+  int release_handler;
   int closed_count;
+  int first_recv_status;
+  int second_recv_status;
 } server_lifecycle_state_t;
 
 static void server_lifecycle_handler(coro_socket_t *client, void *arg) {
   server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
   (void)client;
+  state->handler_hits++;
+}
+
+static void server_lifecycle_draining_handler(coro_socket_t *client,
+                                              void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  (void)client;
+  state->handler_hits++;
+  state->handler_entered = 1;
+  while (!state->release_handler) coro_sleep(state->ctx, 1u);
+}
+
+static void server_lifecycle_udp_single_datagram_handler(coro_socket_t *client,
+                                                         void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  char *data = NULL;
+  size_t size = 0u;
+
+  state->first_recv_status = coro_socket_recv(client, &data, &size);
+  if (data) coro_socket_free_recv(data);
+  data = NULL;
+  size = 0u;
+  state->second_recv_status = coro_socket_recv(client, &data, &size);
+  if (data) coro_socket_free_recv(data);
   state->handler_hits++;
 }
 
@@ -62,6 +90,52 @@ static void server_lifecycle_delayed_tcp_client(coro_t *co, void *arg) {
   (void)co;
   coro_sleep(state->ctx, SERVER_LIFECYCLE_CLIENT_HOLD_MS);
   server_lifecycle_connect_and_close(state);
+}
+
+static void server_lifecycle_udp_client(coro_t *co, void *arg) {
+  static const char payload[] = "ping";
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  coro_socket_t *client;
+  int rc;
+
+  (void)co;
+  client = coro_socket_create_udpv4(state->ctx);
+  if (!client) {
+    state->client_done = 1;
+    return;
+  }
+  coro_socket_set_timeout(client, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+  rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  state->client_connected = (rc == 0);
+  if (rc == 0)
+    rc = coro_socket_send(client, payload, sizeof(payload) - 1u);
+  coro_socket_destroy(client);
+  state->client_done = 1;
+}
+
+static void server_lifecycle_udp_session_client(coro_t *co, void *arg) {
+  static const char first[] = "hello";
+  static const char second[] = "world";
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  coro_socket_t *client;
+  int rc;
+
+  (void)co;
+  client = coro_socket_create_udpv4(state->ctx);
+  if (!client) {
+    state->client_done = 1;
+    return;
+  }
+  coro_socket_set_timeout(client, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+  rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  state->client_connected = (rc == 0);
+  if (rc == 0) rc = coro_socket_send(client, first, sizeof(first) - 1u);
+  if (rc == 0) {
+    coro_sleep(state->ctx, 20u);
+    rc = coro_socket_send(client, second, sizeof(second) - 1u);
+  }
+  coro_socket_destroy(client);
+  state->client_done = 1;
 }
 
 static void server_lifecycle_stalled_client(coro_t *co, void *arg) {
@@ -111,6 +185,11 @@ static int server_lifecycle_client_connected(void *arg) {
 static int server_lifecycle_client_done(void *arg) {
   server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
   return state->client_done;
+}
+
+static int server_lifecycle_handler_entered(void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  return state->handler_entered;
 }
 
 static int server_lifecycle_server_stopped(void *arg) {
@@ -220,6 +299,110 @@ spec("Coroutine Server Lifecycle") {
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     check_int_eq(state.handler_hits, 1);
     check_int_eq(state.closed_count, 1);
+    server_lifecycle_cleanup(&state);
+  }
+
+  it("closes admission without canceling an already admitted handler") {
+    server_lifecycle_state_t state;
+
+    server_lifecycle_prepare(&state);
+    state.server = coro_socket_create_tcpv4(state.ctx);
+    check_not_null(state.server);
+    check_int_eq(coro_socket_listen_on_ex(
+                     state.server, "127.0.0.1", state.port,
+                     server_lifecycle_draining_handler, &state,
+                     server_lifecycle_closed, &state),
+                 0);
+    check_int_eq(
+        coro_context_spawn(state.ctx, server_lifecycle_stalled_client, &state),
+        0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_handler_entered, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    check_size_eq(state.server->server_task_count, 1u);
+
+    check_int_eq(coro_socket_server_close_admission(state.server), 0);
+    coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
+    check_size_eq(state.server->server_task_count, 1u);
+    check_false(coro_socket_server_is_stopped(state.server));
+    check_int_eq(state.closed_count, 0);
+
+    state.release_handler = 1;
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_connection_closed, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    check_int_eq(state.handler_hits, 1);
+    check_int_eq(coro_socket_server_stop(state.server), 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_server_stopped, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    server_lifecycle_cleanup(&state);
+  }
+
+  it("ends a UDP pseudo-client after its single admitted datagram") {
+    server_lifecycle_state_t state;
+
+    server_lifecycle_prepare(&state);
+    state.first_recv_status = TURBO_EIO;
+    state.second_recv_status = TURBO_EIO;
+    state.server = coro_socket_create_udpv4(state.ctx);
+    check_not_null(state.server);
+    check_int_eq(coro_socket_listen_on_ex(
+                     state.server, "127.0.0.1", state.port,
+                     server_lifecycle_udp_single_datagram_handler, &state,
+                     server_lifecycle_closed, &state),
+                 0);
+    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_udp_client,
+                                    &state),
+                 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_connection_closed, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    check_int_eq(state.first_recv_status, 0);
+    check_int_eq(state.second_recv_status, TURBO_EOF);
+    check_int_eq(state.handler_hits, 1);
+    check_int_eq(state.closed_count, 1);
+    check_int_eq(coro_socket_server_close_admission(state.server), 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_server_stopped, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    server_lifecycle_cleanup(&state);
+  }
+
+  it("routes successive datagrams from one UDP peer to a sessionized handler") {
+    server_lifecycle_state_t state;
+
+    server_lifecycle_prepare(&state);
+    state.first_recv_status = TURBO_EIO;
+    state.second_recv_status = TURBO_EIO;
+    state.server = coro_socket_create_udpv4(state.ctx);
+    check_not_null(state.server);
+    check_int_eq(coro_socket_set_udp_sessionized(state.server, 1), 0);
+    check_int_eq(coro_socket_listen_on_ex(
+                     state.server, "127.0.0.1", state.port,
+                     server_lifecycle_udp_single_datagram_handler, &state,
+                     server_lifecycle_closed, &state),
+                 0);
+    check_int_eq(coro_socket_set_udp_sessionized(state.server, 0), TURBO_EBUSY);
+    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_udp_session_client, &state), 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_connection_closed, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    check_int_eq(state.first_recv_status, 0);
+    check_int_eq(state.second_recv_status, 0);
+    check_int_eq(state.handler_hits, 1);
+    check_int_eq(state.closed_count, 1);
+    check_int_eq(coro_socket_server_close_admission(state.server), 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_server_stopped, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
     server_lifecycle_cleanup(&state);
   }
 

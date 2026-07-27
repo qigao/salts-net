@@ -131,9 +131,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 
   /* Create stream handle on first connect */
   if (!s->handle.stream) {
-    turbo_stream_kind_t kind = (sa->sa_family == AF_INET6)
-                                   ? TURBO_STREAM_TCP6
-                                   : TURBO_STREAM_TCP4;
+    turbo_stream_kind_t kind = (sa->sa_family == AF_INET6) ? TURBO_STREAM_TCP6 : TURBO_STREAM_TCP4;
     s->handle.stream = turbo_stream_create(s->ctx, kind);
     if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
     turbo_stream_set_user_data(s->handle.stream, s);
@@ -150,8 +148,7 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 
   retain_client(s);
   coro_set_wait(s);
-  int r = turbo_stream_connect_addr(s->handle.stream, sa,
-                                    on_tcp_connect, on_tcp_close);
+  int r = turbo_stream_connect_addr(s->handle.stream, sa, on_tcp_connect, on_tcp_close);
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
@@ -208,12 +205,10 @@ static void tcp_listener_fail(coro_socket_t *s, int status) {
   }
 }
 
-static void on_tcp_accept(void *listener_handle, void *stream_handle,
-                          void *peer) {
+static void on_tcp_accept(void *listener_handle, void *stream_handle, void *peer) {
   UNUSED(peer);
   turbo_stream_listener_t *l = (turbo_stream_listener_t *)listener_handle;
-  tcp_listener_state_t *ls =
-      (tcp_listener_state_t *)turbo_stream_listener_get_user_data(l);
+  tcp_listener_state_t *ls = (tcp_listener_state_t *)turbo_stream_listener_get_user_data(l);
   turbo_stream_t *stream = (turbo_stream_t *)stream_handle;
   coro_socket_t *child = NULL;
   if (!ls) {
@@ -269,10 +264,8 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle,
   node->socket = child;
   node->next = NULL;
 
-  if (ls->tail)
-    ls->tail->next = node;
-  else
-    ls->head = node;
+  if (ls->tail) ls->tail->next = node;
+  else ls->head = node;
   ls->tail = node;
 
   coro_socket_t *s = ls->server_coro;
@@ -296,8 +289,8 @@ static int tcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     s->native_tcp_state = ls;
   }
 
-  size_t addr_len = (addr->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6)
-                                                   : sizeof(struct sockaddr_in);
+  size_t addr_len =
+      (addr->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
   /* Store address in native_tcp_state for tcp_listen to use.
      We pack it after the listener_state struct. */
   void *new_ls = realloc(ls, sizeof(tcp_listener_state_t) + addr_len);
@@ -316,20 +309,17 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
   const struct sockaddr *addr =
       (const struct sockaddr *)((char *)ls + sizeof(tcp_listener_state_t));
 
-  turbo_stream_kind_t kind = (addr->sa_family == AF_INET6)
-                                 ? TURBO_STREAM_TCP6
-                                 : TURBO_STREAM_TCP4;
+  turbo_stream_kind_t kind = (addr->sa_family == AF_INET6) ? TURBO_STREAM_TCP6 : TURBO_STREAM_TCP4;
 
   ls->reuse_port = s->reuse_port;
-  ls->listener = turbo_stream_listen_ex(s->ctx, kind, addr, backlog, on_tcp_accept,
-                                        ls->reuse_port, ls);
+  ls->listener =
+      turbo_stream_listen_ex(s->ctx, kind, addr, backlog, on_tcp_accept, ls->reuse_port, ls);
   if (!ls->listener) {
     int rc = coro_context_get_last_error(s->ctx);
     return rc != 0 ? rc : TURBO_EIO;
   }
   if (s->tcp_keepalive_configured) {
-    (void)turbo_stream_listener_set_child_tcp_keepalive(ls->listener,
-                                                        &s->tcp_keepalive_config);
+    (void)turbo_stream_listener_set_child_tcp_keepalive(ls->listener, &s->tcp_keepalive_config);
   }
   if (s->linger_configured) {
     (void)turbo_stream_listener_set_child_linger(ls->listener, &s->linger_config);
@@ -338,12 +328,12 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
     (void)turbo_stream_listener_set_child_send_hwm(ls->listener, s->send_hwm_bytes);
   }
   if (s->socket_recv_buffer_bytes) {
-    (void)turbo_stream_listener_set_child_recv_buffer_size(
-        ls->listener, s->socket_recv_buffer_bytes);
+    (void)turbo_stream_listener_set_child_recv_buffer_size(ls->listener,
+                                                           s->socket_recv_buffer_bytes);
   }
   if (s->socket_send_buffer_bytes) {
-    (void)turbo_stream_listener_set_child_send_buffer_size(
-        ls->listener, s->socket_send_buffer_bytes);
+    (void)turbo_stream_listener_set_child_send_buffer_size(ls->listener,
+                                                           s->socket_send_buffer_bytes);
   }
   return 0;
 }
@@ -422,12 +412,12 @@ static int tcp_send_finish(coro_socket_t *s, coro_t *co, int scheduled, int subm
     if (scheduled) coro_set_waiting_for_io(co, 0);
     return submit_status;
   }
-  while (s->co_write_wait == co) coro_yield();
+  while (s->co_write_wait == co)
+    coro_yield();
 #ifdef TURBO_CORONET_INTERNAL_PROFILING
   if (s->send_profile_active && s->send_profile_resume_signal_ns != 0u) {
     turbo_coro_send_profile_record_resume(s->send_profile_resume_signal_ns,
-                                          s->ctx->send_profile_scheduler_entry_ns,
-                                          turbo_hrtime());
+                                          s->ctx->send_profile_scheduler_entry_ns, turbo_hrtime());
   }
   s->send_profile_active = 0;
 #endif
@@ -459,8 +449,7 @@ static int tcp_send(coro_socket_t *s, const char *data, size_t len) {
    * when a peer stops reading a multi-megabyte MQTT packet. */
   while (offset < len) {
     size_t chunk = len - offset;
-    if (chunk > CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES)
-      chunk = CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES;
+    if (chunk > CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES) chunk = CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES;
     rc = tcp_send_one(s, data + offset, chunk);
     if (rc != TURBO_OK) return rc;
     offset += chunk;
@@ -528,9 +517,7 @@ static int tcp_recv_start(coro_socket_t *s) {
   return turbo_stream_recv_start(s->handle.stream, on_tcp_recv);
 }
 
-static void tcp_recv_stop(coro_socket_t *s) {
-  turbo_stream_recv_stop(s->handle.stream);
-}
+static void tcp_recv_stop(coro_socket_t *s) { turbo_stream_recv_stop(s->handle.stream); }
 
 /* ── Close ────────────────────────────────────────────────── */
 
@@ -574,8 +561,7 @@ static void tcp_close(coro_socket_t *s) {
 /* ── Address query ────────────────────────────────────────── */
 
 static int tcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
-  if (s->handle.stream)
-    return turbo_stream_get_local_addr(s->handle.stream, addr);
+  if (s->handle.stream) return turbo_stream_get_local_addr(s->handle.stream, addr);
 
   /* Listener case */
   if (s->native_tcp_state) {
@@ -583,11 +569,9 @@ static int tcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
     if (ls->listener) {
       /* Bind address is stored after the struct */
       const struct sockaddr *bind_addr =
-          (const struct sockaddr *)((char *)ls +
-                                    sizeof(tcp_listener_state_t));
-      size_t len = (bind_addr->sa_family == AF_INET6)
-                       ? sizeof(struct sockaddr_in6)
-                       : sizeof(struct sockaddr_in);
+          (const struct sockaddr *)((char *)ls + sizeof(tcp_listener_state_t));
+      size_t len = (bind_addr->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6)
+                                                      : sizeof(struct sockaddr_in);
       memset(addr, 0, sizeof(*addr));
       memcpy(addr, bind_addr, len);
       return 0;
@@ -597,18 +581,23 @@ static int tcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
   return TURBO_ENOTSUP;
 }
 
+static int tcp_get_peer_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
+  if (s && s->handle.stream) return turbo_stream_get_peer_addr(s->handle.stream, addr);
+  return TURBO_ENOTSUP;
+}
+
 /* ── Ops table ────────────────────────────────────────────── */
 
-const coro_transport_ops_t transport_ops_tcp = {
-    .connect = tcp_connect,
-    .bind = tcp_bind,
-    .listen = tcp_listen,
-    .accept = tcp_accept,
-    .send = tcp_send,
-    .sendv = tcp_sendv,
-    .recv_start = tcp_recv_start,
-    .recv_stop = tcp_recv_stop,
-    .get_local_addr = tcp_get_local_addr,
-    .close = tcp_close,
-    .get_send_buffer = tcp_get_send_buffer,
-    .send_buffer = tcp_send_buffer};
+const coro_transport_ops_t transport_ops_tcp = {.connect = tcp_connect,
+                                                .bind = tcp_bind,
+                                                .listen = tcp_listen,
+                                                .accept = tcp_accept,
+                                                .send = tcp_send,
+                                                .sendv = tcp_sendv,
+                                                .recv_start = tcp_recv_start,
+                                                .recv_stop = tcp_recv_stop,
+                                                .get_local_addr = tcp_get_local_addr,
+                                                .get_peer_addr = tcp_get_peer_addr,
+                                                .close = tcp_close,
+                                                .get_send_buffer = tcp_get_send_buffer,
+                                                .send_buffer = tcp_send_buffer};

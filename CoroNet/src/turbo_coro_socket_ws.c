@@ -349,7 +349,8 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
       }
     }
 
-    turbo_stream_ws_set_path_host_protocol(s->handle.stream, cfg->path[0] ? cfg->path : "/", request_host,
+    turbo_stream_ws_set_path_host_protocol(s->handle.stream, cfg->path[0] ? cfg->path : "/",
+                                           request_host,
                                            cfg->subprotocol[0] ? cfg->subprotocol : NULL);
     turbo_stream_set_user_data(s->handle.stream, s);
     turbo_stream_set_write_cb(s->handle.stream, on_ws_write_complete);
@@ -455,6 +456,11 @@ static int ws_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
   return TURBO_ENOTSUP;
 }
 
+static int ws_get_peer_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
+  if (s && s->handle.stream) return turbo_stream_get_peer_addr(s->handle.stream, addr);
+  return TURBO_ENOTSUP;
+}
+
 static mem_buffer_t *ws_get_send_buffer(coro_socket_t *s, size_t min_size) {
   return turbo_stream_get_send_buffer(s->handle.stream, min_size);
 }
@@ -494,6 +500,7 @@ const coro_transport_ops_t transport_ops_ws = {.connect = ws_connect,
                                                .recv_start = ws_recv_start,
                                                .recv_stop = ws_recv_stop,
                                                .get_local_addr = ws_get_local_addr,
+                                               .get_peer_addr = ws_get_peer_addr,
                                                .close = ws_close,
                                                .get_send_buffer = ws_get_send_buffer,
                                                .send_buffer = ws_send_buffer};
@@ -503,6 +510,7 @@ const coro_transport_ops_t ws_server_ops = {.send = ws_send,
                                             .recv_start = ws_recv_start,
                                             .recv_stop = ws_recv_stop,
                                             .get_local_addr = ws_get_local_addr,
+                                            .get_peer_addr = ws_get_peer_addr,
                                             .close = ws_close,
                                             .get_send_buffer = ws_get_send_buffer,
                                             .send_buffer = ws_send_buffer};
@@ -529,11 +537,9 @@ int coro_socket_connect_ws_host_ex(coro_socket_t *s, const char *connect_host, i
     return socket_return_error(s, TURBO_EALREADY);
   }
 
-  actual_request_host =
-      (request_host && request_host[0] != '\0') ? request_host : connect_host;
+  actual_request_host = (request_host && request_host[0] != '\0') ? request_host : connect_host;
   {
-    int rc = ws_store_config(s,
-                             actual_request_host, path, is_tls, subprotocol);
+    int rc = ws_store_config(s, actual_request_host, path, is_tls, subprotocol);
     if (rc != 0) {
       return rc;
     }
@@ -562,8 +568,8 @@ int coro_socket_connect_ws_host_ex(coro_socket_t *s, const char *connect_host, i
   return coro_socket_connect(s, connect_host, port);
 }
 
-int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host,
-                              const char *path, const char *subprotocol) {
+int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host, const char *path,
+                              const char *subprotocol) {
   turbo_stream_kind_t kind;
   turbo_stream_t *raw_stream;
   turbo_stream_t *ws_stream;
@@ -574,7 +580,8 @@ int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host,
   if (!s || !s->ctx) {
     return TURBO_EINVAL;
   }
-  if ((s->transport != TURBO_TCP && s->transport != TURBO_TLS) || !s->handle.stream || !s->connected) {
+  if ((s->transport != TURBO_TCP && s->transport != TURBO_TLS) || !s->handle.stream ||
+      !s->connected) {
     return socket_return_error(s, TURBO_EINVAL);
   }
   if (s->co_wait) {
@@ -582,8 +589,7 @@ int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host,
   }
 
   actual_request_host = request_host;
-  if ((!actual_request_host || actual_request_host[0] == '\0') &&
-      s->resolved_ip[0] != '\0') {
+  if ((!actual_request_host || actual_request_host[0] == '\0') && s->resolved_ip[0] != '\0') {
     actual_request_host = s->resolved_ip;
   }
 
@@ -672,14 +678,11 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
   if (s->ws_server_configured) {
     coro_ws_server_config_t config = CORO_WS_SERVER_CONFIG_DEFAULT;
     config.path = s->ws_server_path[0] ? s->ws_server_path : NULL;
-    config.subprotocol = s->ws_server_subprotocol[0]
-                             ? s->ws_server_subprotocol
-                             : NULL;
+    config.subprotocol = s->ws_server_subprotocol[0] ? s->ws_server_subprotocol : NULL;
     config.max_message_size = s->ws_server_max_message_size;
     config.binary_only = s->ws_server_binary_only;
-    rc = turbo_stream_ws_set_server_config_internal(
-        ws_stream, config.path, config.subprotocol, config.max_message_size,
-        config.binary_only);
+    rc = turbo_stream_ws_set_server_config_internal(ws_stream, config.path, config.subprotocol,
+                                                    config.max_message_size, config.binary_only);
     if (rc != 0) {
       turbo_stream_set_user_data(ws_stream, NULL);
       s->handle.stream = NULL;

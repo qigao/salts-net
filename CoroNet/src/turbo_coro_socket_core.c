@@ -13,8 +13,9 @@
 #include "CoroNet/turbo_kcp.h"
 #include "tlog.h"
 #include "turbo_error.h"
-#include "turbo_zstd.h"
 #include "turbo_stream_internal.h"
+#include "turbo_zstd.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,10 +31,8 @@ static void zstd_store_u32_be(char *p, uint32_t v) {
 }
 
 static uint32_t zstd_load_u32_be(const char *p) {
-  return ((uint32_t)(unsigned char)p[0] << 24) |
-         ((uint32_t)(unsigned char)p[1] << 16) |
-         ((uint32_t)(unsigned char)p[2] << 8) |
-         (uint32_t)(unsigned char)p[3];
+  return ((uint32_t)(unsigned char)p[0] << 24) | ((uint32_t)(unsigned char)p[1] << 16) |
+         ((uint32_t)(unsigned char)p[2] << 8) | (uint32_t)(unsigned char)p[3];
 }
 
 /* ── External transport ops (defined in separate files) ────── */
@@ -127,7 +126,8 @@ static void socket_clear_tls_server_context(coro_socket_t *s) {
   s->tls_server_context = NULL;
 }
 
-static int socket_copy_tls_client_config(coro_socket_t *s, const turbo_tls_client_config_t *config) {
+static int socket_copy_tls_client_config(coro_socket_t *s,
+                                         const turbo_tls_client_config_t *config) {
   char *ca_file = NULL;
   char *cert_file = NULL;
   char *key_file = NULL;
@@ -987,8 +987,7 @@ int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_c
     return socket_return_error(s, rc);
   }
 
-  if (s->handle.stream == NULL ||
-      (s->transport != TURBO_TLS && s->transport != TURBO_WEBSOCKET)) {
+  if (s->handle.stream == NULL || (s->transport != TURBO_TLS && s->transport != TURBO_WEBSOCKET)) {
     return socket_return_error(s, 0);
   }
 
@@ -1008,8 +1007,7 @@ int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_c
   return socket_return_error(s, rc);
 }
 
-int coro_socket_set_tls_server_config(coro_socket_t *s,
-                                      const turbo_tls_server_config_t *config) {
+int coro_socket_set_tls_server_config(coro_socket_t *s, const turbo_tls_server_config_t *config) {
   turbo_tls_server_context_t *next = NULL;
   int rc;
 
@@ -1032,8 +1030,7 @@ int coro_socket_set_tls_server_config(coro_socket_t *s,
   return socket_return_error(s, 0);
 }
 
-int coro_socket_set_ws_server_config(coro_socket_t *s,
-                                     const coro_ws_server_config_t *config) {
+int coro_socket_set_ws_server_config(coro_socket_t *s, const coro_ws_server_config_t *config) {
   size_t path_len = 0;
   size_t subprotocol_len = 0;
 
@@ -1065,10 +1062,8 @@ int coro_socket_set_ws_server_config(coro_socket_t *s,
   }
   if (config->subprotocol) {
     subprotocol_len = strlen(config->subprotocol);
-    if (subprotocol_len == 0 ||
-        subprotocol_len >= sizeof(s->ws_server_subprotocol)) {
-      return socket_return_error(
-          s, subprotocol_len == 0 ? TURBO_EINVAL : TURBO_ERANGE);
+    if (subprotocol_len == 0 || subprotocol_len >= sizeof(s->ws_server_subprotocol)) {
+      return socket_return_error(s, subprotocol_len == 0 ? TURBO_EINVAL : TURBO_ERANGE);
     }
   }
 
@@ -1076,8 +1071,7 @@ int coro_socket_set_ws_server_config(coro_socket_t *s,
   s->ws_server_subprotocol[0] = '\0';
   if (path_len > 0) memcpy(s->ws_server_path, config->path, path_len + 1U);
   if (subprotocol_len > 0) {
-    memcpy(s->ws_server_subprotocol, config->subprotocol,
-           subprotocol_len + 1U);
+    memcpy(s->ws_server_subprotocol, config->subprotocol, subprotocol_len + 1U);
   }
   s->ws_server_max_message_size = config->max_message_size;
   s->ws_server_binary_only = config->binary_only ? 1 : 0;
@@ -1087,7 +1081,8 @@ int coro_socket_set_ws_server_config(coro_socket_t *s,
 
 /* ── Socket I/O ───────────────────────────────────────────── */
 
-static int coro_socket_recv_compression_append(coro_socket_t *s, const char *chunk, size_t chunk_len) {
+static int coro_socket_recv_compression_append(coro_socket_t *s, const char *chunk,
+                                               size_t chunk_len) {
   size_t new_len;
   char *new_cache;
 
@@ -1195,9 +1190,8 @@ static int coro_socket_recv_compressed_payload(coro_socket_t *s, char **data, si
     }
 
     {
-      int rc = turbo_zstd_decompress(
-          frame_base + sizeof(coro_recv_header_t), decompressed_len,
-          &decompressed, payload, compressed_len);
+      int rc = turbo_zstd_decompress(frame_base + sizeof(coro_recv_header_t), decompressed_len,
+                                     &decompressed, payload, compressed_len);
       if (rc != TURBO_OK) {
         free(frame_base);
         coro_socket_reset_recv_compression_state(s);
@@ -1213,7 +1207,8 @@ static int coro_socket_recv_compressed_payload(coro_socket_t *s, char **data, si
     coro_socket_compact_recv_cache(s, frame_total);
     s->recv_compression_expected_compressed_len = 0U;
     s->recv_compression_expected_uncompressed_len = 0U;
-    coro_recv_header_store_before_data(frame_base + sizeof(coro_recv_header_t), 0U, out_capacity, NULL);
+    coro_recv_header_store_before_data(frame_base + sizeof(coro_recv_header_t), 0U, out_capacity,
+                                       NULL);
     *data = frame_base + sizeof(coro_recv_header_t);
     *len = out_capacity;
     return 1;
@@ -1228,8 +1223,7 @@ static int coro_socket_recv_compressed_payload(coro_socket_t *s, char **data, si
   if (!*data) {
     return TURBO_ENOMEM;
   }
-  coro_recv_header_store_before_data(*data + sizeof(coro_recv_header_t), 0U, 0U,
-                                    NULL);
+  coro_recv_header_store_before_data(*data + sizeof(coro_recv_header_t), 0U, 0U, NULL);
   *data += sizeof(coro_recv_header_t);
   *len = 0U;
   coro_socket_compact_recv_cache(s, payload_len_needed);
@@ -1239,7 +1233,7 @@ static int coro_socket_recv_compressed_payload(coro_socket_t *s, char **data, si
 }
 
 static int coro_socket_send_compressed_internal(coro_socket_t *s, const char *d, size_t l,
-                                              int level) {
+                                                int level) {
   size_t expected_len;
   size_t compressed_cap;
   size_t compressed_len;
@@ -1271,8 +1265,7 @@ static int coro_socket_send_compressed_internal(coro_socket_t *s, const char *d,
   }
 
   payload = frame + CORO_ZSTD_FRAME_HEADER_LEN;
-  rc = turbo_zstd_compress(payload, compressed_cap, &compressed_len, d, l,
-                           level);
+  rc = turbo_zstd_compress(payload, compressed_cap, &compressed_len, d, l, level);
   if (rc != TURBO_OK) {
     free(frame);
     return rc;
@@ -1297,7 +1290,8 @@ int coro_socket_send(coro_socket_t *s, const char *d, size_t l) {
   if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
   if (s->recv_compression_auto && s->recv_compression_level > 0) {
-    return socket_return_error(s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
+    return socket_return_error(
+        s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
   }
   return coro_socket_send_raw_internal(s, d, l);
 }
@@ -1312,7 +1306,8 @@ int coro_socket_send_compressed(coro_socket_t *s, const char *d, size_t l) {
   if (!s || !d || l == 0) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->send) return socket_return_error(s, TURBO_ENOTSUP);
   if (s->recv_compression_level <= 0) return socket_return_error(s, TURBO_ENOTSUP);
-  return socket_return_error(s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
+  return socket_return_error(
+      s, coro_socket_send_compressed_internal(s, d, l, s->recv_compression_level));
 }
 
 int coro_socket_recv_compressed(coro_socket_t *s, char **data, size_t *len) {
@@ -1576,8 +1571,7 @@ static void coro_socket_interrupt_wait_cb(void *arg1, void *arg2) {
     coro_resume_co(s->ctx, co);
   }
 
-  if (!waiter_interrupted &&
-      (!s->pending_recv_interrupt || status != TURBO_OK)) {
+  if (!waiter_interrupted && (!s->pending_recv_interrupt || status != TURBO_OK)) {
     s->pending_recv_interrupt = 1;
     s->pending_recv_interrupt_status = status;
   }
@@ -1779,8 +1773,7 @@ int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t
   return child->handle.stream ? coro_socket_apply_stream_options(child) : 0;
 }
 
-int coro_socket_set_tcp_keepalive(coro_socket_t *s,
-                                  const turbo_tcp_keepalive_config_t *config) {
+int coro_socket_set_tcp_keepalive(coro_socket_t *s, const turbo_tcp_keepalive_config_t *config) {
   int rc;
   if (!s || !config) return socket_return_error(s, TURBO_EINVAL);
   if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
@@ -1989,4 +1982,51 @@ int coro_socket_get_local_address(coro_socket_t *s, struct sockaddr_storage *a) 
     return TURBO_ENOSYS;
   }
   return s->ops->get_local_addr ? s->ops->get_local_addr(s, a) : TURBO_ENOSYS;
+}
+
+int coro_socket_get_peer_address(coro_socket_t *s, struct sockaddr_storage *a) {
+  if (!s || !a) {
+    return TURBO_EINVAL;
+  }
+  memset(a, 0, sizeof(*a));
+  if (!s->ops) {
+    return TURBO_ENOSYS;
+  }
+  return s->ops->get_peer_addr ? s->ops->get_peer_addr(s, a) : TURBO_ENOSYS;
+}
+
+int coro_socket_get_peer_address_text(coro_socket_t *s,
+                                      char output[CORO_SOCKET_ADDRESS_TEXT_CAPACITY]) {
+  struct sockaddr_storage address;
+  const void *binary_address;
+  char host[INET6_ADDRSTRLEN];
+  unsigned int port;
+  int family;
+  int written;
+  int rc;
+  if (!output) return TURBO_EINVAL;
+  memset(output, 0, CORO_SOCKET_ADDRESS_TEXT_CAPACITY);
+  rc = coro_socket_get_peer_address(s, &address);
+  if (rc != TURBO_OK) return rc;
+  family = address.ss_family;
+  if (family == AF_INET) {
+    const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)&address;
+    binary_address = &ipv4->sin_addr;
+    port = (unsigned int)ntohs(ipv4->sin_port);
+  } else if (family == AF_INET6) {
+    const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)&address;
+    binary_address = &ipv6->sin6_addr;
+    port = (unsigned int)ntohs(ipv6->sin6_port);
+  } else {
+    return TURBO_EPROTONOSUPPORT;
+  }
+  if (!inet_ntop(family, binary_address, host, sizeof(host))) return TURBO_EIO;
+  written = family == AF_INET6
+                ? snprintf(output, CORO_SOCKET_ADDRESS_TEXT_CAPACITY, "[%s]:%u", host, port)
+                : snprintf(output, CORO_SOCKET_ADDRESS_TEXT_CAPACITY, "%s:%u", host, port);
+  if (written <= 0 || (size_t)written >= CORO_SOCKET_ADDRESS_TEXT_CAPACITY) {
+    memset(output, 0, CORO_SOCKET_ADDRESS_TEXT_CAPACITY);
+    return TURBO_ERANGE;
+  }
+  return TURBO_OK;
 }

@@ -228,6 +228,7 @@ struct coro_transport_ops_s {
   int (*recv_start)(coro_socket_t *s);
   void (*recv_stop)(coro_socket_t *s);
   int (*get_local_addr)(coro_socket_t *s, struct sockaddr_storage *addr);
+  int (*get_peer_addr)(coro_socket_t *s, struct sockaddr_storage *addr);
   void (*close)(coro_socket_t *s);
 
   /* Zero-copy extensions */
@@ -273,17 +274,17 @@ struct coro_socket_s {
     turbo_datagram_t *datagram; /**< UDP (turbo_datagram_t) */
     struct turbo_kcp_s *kcp;    /**< KCP (reliable UDP) */
   } handle;
-  void *native_tcp_state;      /**< Listener state (tcp_listener_state_t / pipe path) */
-  int tls_client_configured;   /**< 1 = use per-socket TLS client settings */
-  int tls_verify_peer;         /**< 1 = verify peer certificate */
-  char *tls_ca_file;           /**< Optional CA bundle file for client verification */
-  char *tls_cert_file;         /**< Optional client certificate */
-  char *tls_key_file;          /**< Optional client private key */
-  char *tls_key_password;      /**< Optional client key password */
-  char *tls_cipher_list;       /**< Optional OpenSSL cipher list */
+  void *native_tcp_state;    /**< Listener state (tcp_listener_state_t / pipe path) */
+  int tls_client_configured; /**< 1 = use per-socket TLS client settings */
+  int tls_verify_peer;       /**< 1 = verify peer certificate */
+  char *tls_ca_file;         /**< Optional CA bundle file for client verification */
+  char *tls_cert_file;       /**< Optional client certificate */
+  char *tls_key_file;        /**< Optional client private key */
+  char *tls_key_password;    /**< Optional client key password */
+  char *tls_cipher_list;     /**< Optional OpenSSL cipher list */
   turbo_tls_server_context_t *tls_server_context; /**< Prepared immutable server TLS context */
-  coro_proxy_settings_t proxy; /**< Copied outbound proxy configuration */
-  int ws_server_configured;    /**< 1 = enforce ws_server_* policy. */
+  coro_proxy_settings_t proxy;                    /**< Copied outbound proxy configuration */
+  int ws_server_configured;                       /**< 1 = enforce ws_server_* policy. */
   char ws_server_path[CORO_WS_SERVER_PATH_CAPACITY];
   char ws_server_subprotocol[CORO_WS_SERVER_SUBPROTOCOL_CAPACITY];
   size_t ws_server_max_message_size;
@@ -306,21 +307,21 @@ struct coro_socket_s {
   turbo_socket_linger_config_t linger_config; /**< OS SO_LINGER options for TCP-backed sockets */
   int linger_configured;                      /**< 1 = apply linger_config */
   size_t send_hwm_bytes;                      /**< 0 = no socket send queue HWM */
-  size_t socket_recv_buffer_bytes; /**< 0 = preserve the OS SO_RCVBUF default */
-  size_t socket_send_buffer_bytes; /**< 0 = preserve the OS SO_SNDBUF default */
+  size_t socket_recv_buffer_bytes;            /**< 0 = preserve the OS SO_RCVBUF default */
+  size_t socket_send_buffer_bytes;            /**< 0 = preserve the OS SO_SNDBUF default */
   int accept_prestart_recv_disabled; /**< Listener: 1 = accepted raw TCP must not pre-read wrapper
                                         handshakes */
-  int kcp_configured;                 /**< 1 = secure KCP config should be applied */
-  turbo_kcp_config_t kcp_config;      /**< Pending secure KCP config */
+  int kcp_configured;                /**< 1 = secure KCP config should be applied */
+  turbo_kcp_config_t kcp_config;     /**< Pending secure KCP config */
 
   /* ── Connection state ──────────────────────────────────── */
-  int connected;      /**< 1 = transport is connected */
-  int status;         /**< Last operation status code */
+  int connected;        /**< 1 = transport is connected */
+  int status;           /**< Last operation status code */
   int peer_eof_pending; /**< Peer closed after queued data/current operation completed */
-  int tls_cb_fired;   /**< TLS handshake callback guard */
-  int dgram_consumed; /**< UDP single-datagram server: admitted datagram was consumed. */
-  int udp_sessionized; /**< UDP server: group datagrams by remote address into one accepted
-                          socket. Disabled by default. */
+  int tls_cb_fired;     /**< TLS handshake callback guard */
+  int dgram_consumed;   /**< UDP single-datagram server: admitted datagram was consumed. */
+  int udp_sessionized;  /**< UDP server: group datagrams by remote address into one accepted
+                           socket. Disabled by default. */
 
   /* ── Coroutine suspend / receive ──────────────────────── */
   coro_t *co_wait;            /**< Coroutine waiting for I/O completion */
@@ -330,10 +331,10 @@ struct coro_socket_s {
   int recv_call_inflight;     /**< 1 = coro_socket_recv() has yielded and not finished unwinding */
   int pending_recv_interrupt; /**< 1 = an interrupt arrived before recv armed its waiter */
   int pending_recv_interrupt_status; /**< Status consumed by the next recv call */
-  char *recv_data;            /**< Received data buffer (caller frees via
-                                   coro_socket_free_recv) */
-  size_t recv_len;            /**< Length of received data */
-  uint8_t recv_ws_opcode;     /**< Opcode for the pending WebSocket message */
+  char *recv_data;                   /**< Received data buffer (caller frees via
+                                          coro_socket_free_recv) */
+  size_t recv_len;                   /**< Length of received data */
+  uint8_t recv_ws_opcode;            /**< Opcode for the pending WebSocket message */
   int recv_compression_level; /**< Zstd level used by compressed send/recv APIs and auto mode. 0
                                  disables compression behavior. */
   int recv_compression_auto;  /**< Non-zero enables zstd framing automatically in send()/recv(). */

@@ -28,8 +28,7 @@ void turbo_stream_tls_note_resume_wait(turbo_stream_t *s, uint64_t value_ns);
 void turbo_stream_tls_note_wrap_client_time(uint64_t value_ns);
 void turbo_stream_tls_note_waiter_signal(turbo_stream_t *s, uint64_t value_ns);
 int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
-                                 turbo_connect_cb on_connect,
-                                 turbo_close_cb on_close);
+                                 turbo_connect_cb on_connect, turbo_close_cb on_close);
 
 static void tls_note_wait_resume(coro_socket_t *s) {
   uint64_t resume_wait_ns;
@@ -296,12 +295,13 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   start_timeout_timer(s);
   {
     uint64_t wrap_start_ns = turbo_hrtime();
-    rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname, on_tls_connect, on_tls_close);
+    rc = turbo_stream_tls_wrap_client(tls_stream, tcp_stream, hostname, on_tls_connect,
+                                      on_tls_close);
     if (rc == 0) {
       turbo_stream_tls_note_wrap_client_time(turbo_hrtime() - wrap_start_ns);
     } else {
-      TLOG_ERROR("TLS upgrade attach failed rc={} tcp_kind={} tcp_connected={}",
-                 rc, (int)tcp_stream->kind, tcp_stream->connected);
+      TLOG_ERROR("TLS upgrade attach failed rc={} tcp_kind={} tcp_connected={}", rc,
+                 (int)tcp_stream->kind, tcp_stream->connected);
     }
   }
   if (rc != 0) {
@@ -361,8 +361,8 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
 
   retain_client(s);
   coro_set_wait(s);
-  rc = turbo_stream_tls_wrap_server_with_context(
-      tls_stream, tcp_stream, s->tls_server_context, on_tls_connect, on_tls_close);
+  rc = turbo_stream_tls_wrap_server_with_context(tls_stream, tcp_stream, s->tls_server_context,
+                                                 on_tls_connect, on_tls_close);
   if (rc != 0) {
     s->co_wait = NULL;
     release_client(s);
@@ -396,9 +396,8 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
   }
 }
 
-int coro_socket_tls_export_channel_binding(
-    const coro_socket_t *s,
-    uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]) {
+int coro_socket_tls_export_channel_binding(const coro_socket_t *s,
+                                           uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]) {
   if (!output) {
     return TURBO_EINVAL;
   }
@@ -411,24 +410,23 @@ int coro_socket_tls_export_channel_binding(
     if (!s->handle.stream) {
       return TURBO_ENOTCONN;
     }
-    return turbo_stream_tls_export_channel_binding_internal(
-        s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
+    return turbo_stream_tls_export_channel_binding_internal(s->handle.stream, output,
+                                                            CORO_TLS_CHANNEL_BINDING_SIZE);
   }
   if (s->transport == TURBO_WEBSOCKET) {
     if (!s->handle.stream) {
       return TURBO_ENOTCONN;
     }
     if (s->handle.stream->kind == TURBO_STREAM_WSS) {
-      return turbo_stream_wss_export_channel_binding_internal(
-          s->handle.stream, output, CORO_TLS_CHANNEL_BINDING_SIZE);
+      return turbo_stream_wss_export_channel_binding_internal(s->handle.stream, output,
+                                                              CORO_TLS_CHANNEL_BINDING_SIZE);
     }
   }
   return TURBO_ENOTSUP;
 }
 
 int coro_socket_tls_get_verified_peer_certificate_sha256(
-    const coro_socket_t *s,
-    char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]) {
+    const coro_socket_t *s, char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]) {
   if (!output) {
     return TURBO_EINVAL;
   }
@@ -476,8 +474,7 @@ static int tls_begin_write_wait(coro_socket_t *s, coro_t **co_out, int *schedule
   return TURBO_OK;
 }
 
-static int tls_finish_write_wait(coro_socket_t *s, coro_t *co, int scheduled,
-                                 int submit_status) {
+static int tls_finish_write_wait(coro_socket_t *s, coro_t *co, int scheduled, int submit_status) {
   if (!co) return submit_status;
   if (submit_status != TURBO_OK) {
     s->co_write_wait = NULL;
@@ -485,7 +482,8 @@ static int tls_finish_write_wait(coro_socket_t *s, coro_t *co, int scheduled,
     return submit_status;
   }
 
-  while (s->co_write_wait == co) coro_yield();
+  while (s->co_write_wait == co)
+    coro_yield();
   return s->write_status;
 }
 
@@ -506,6 +504,11 @@ static void tls_recv_stop(coro_socket_t *s) { turbo_stream_recv_stop(s->handle.s
 
 static int tls_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
   if (s->handle.stream) return turbo_stream_get_local_addr(s->handle.stream, addr);
+  return TURBO_ENOTSUP;
+}
+
+static int tls_get_peer_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
+  if (s && s->handle.stream) return turbo_stream_get_peer_addr(s->handle.stream, addr);
   return TURBO_ENOTSUP;
 }
 
@@ -543,6 +546,7 @@ const coro_transport_ops_t transport_ops_tls = {.connect = tls_connect,
                                                 .recv_start = tls_recv_start,
                                                 .recv_stop = tls_recv_stop,
                                                 .get_local_addr = tls_get_local_addr,
+                                                .get_peer_addr = tls_get_peer_addr,
                                                 .close = tls_close,
                                                 .get_send_buffer = tls_get_send_buffer,
                                                 .send_buffer = tls_send_buffer};

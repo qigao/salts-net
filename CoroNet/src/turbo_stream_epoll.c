@@ -1231,6 +1231,22 @@ static int epoll_recv_start(turbo_stream_t *s) {
 }
 static void epoll_recv_stop(turbo_stream_t *s) { (void)s; }
 
+static int epoll_get_local_addr(turbo_stream_t *s, struct sockaddr_storage *addr) {
+    stream_epoll_state_t *st = s ? (stream_epoll_state_t *)s->backend_data : NULL;
+    socklen_t len;
+    if (!st || st->fd < 0 || !addr) return TURBO_EINVAL;
+    len = (socklen_t)sizeof(*addr);
+    return getsockname(st->fd, (struct sockaddr *)addr, &len) == 0 ? 0 : -errno;
+}
+
+static int epoll_get_peer_addr(turbo_stream_t *s, struct sockaddr_storage *addr) {
+    stream_epoll_state_t *st = s ? (stream_epoll_state_t *)s->backend_data : NULL;
+    socklen_t len;
+    if (!st || st->fd < 0 || !addr) return TURBO_EINVAL;
+    len = (socklen_t)sizeof(*addr);
+    return getpeername(st->fd, (struct sockaddr *)addr, &len) == 0 ? 0 : -errno;
+}
+
 static void epoll_close(turbo_stream_t *s) {
     stream_epoll_state_t *st = s ? (stream_epoll_state_t *)s->backend_data : NULL;
     if (!s) return;
@@ -1314,7 +1330,9 @@ static void epoll_listener_close(turbo_stream_listener_t *l) {
 const turbo_stream_backend_ops_t turbo_stream_epoll_ops = {
     .init = epoll_init, .connect = epoll_connect, .connect_pipe = epoll_connect_pipe,
     .send = epoll_send, .flush = NULL, .recv_start = epoll_recv_start, .recv_stop = epoll_recv_stop,
-    .close = epoll_close, .bind = epoll_bind, .bind_pipe = epoll_bind_pipe, .listen = epoll_listen,
+    .close = epoll_close, .get_local_addr = epoll_get_local_addr,
+    .get_peer_addr = epoll_get_peer_addr, .bind = epoll_bind, .bind_pipe = epoll_bind_pipe,
+    .listen = epoll_listen,
     .listener_close = epoll_listener_close
 };
 

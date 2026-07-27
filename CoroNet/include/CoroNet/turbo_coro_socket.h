@@ -7,13 +7,13 @@
 #define TURBO_CORO_SOCKET_H
 
 #include "platform.h"
+#include "turbo_backend.h"
 #include "turbo_buffer.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
+#include "turbo_dns.h"
 #include "turbo_kcp.h"
 #include "turbo_stream.h"
-#include "turbo_backend.h"
-#include "turbo_dns.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -33,8 +33,7 @@ typedef struct coro_socket_s coro_socket_t;
  * result set when any address is forbidden.
  */
 typedef int (*coro_socket_connect_policy_fn)(const char *hostname, int port,
-                                             const turbo_dns_result_t *results,
-                                             size_t result_count,
+                                             const turbo_dns_result_t *results, size_t result_count,
                                              void *user_data);
 
 /** Socket types */
@@ -70,7 +69,7 @@ typedef struct coro_proxy_config_s {
   const char *password;   /**< Optional proxy password */
 } coro_proxy_config_t;
 
-#define CORO_PROXY_CONFIG_DEFAULT { CORO_PROXY_DIRECT, NULL, 0, NULL, NULL }
+#define CORO_PROXY_CONFIG_DEFAULT {CORO_PROXY_DIRECT, NULL, 0, NULL, NULL}
 
 /** Optional admission and message policy copied by a WebSocket server socket. */
 typedef struct coro_ws_server_config_s {
@@ -81,8 +80,7 @@ typedef struct coro_ws_server_config_s {
   int binary_only;         /**< Reject text data messages with close code 1003. */
 } coro_ws_server_config_t;
 
-#define CORO_WS_SERVER_CONFIG_DEFAULT \
-  { sizeof(coro_ws_server_config_t), NULL, NULL, 0, 0 }
+#define CORO_WS_SERVER_CONFIG_DEFAULT {sizeof(coro_ws_server_config_t), NULL, NULL, 0, 0}
 
 /**
  * @brief Create a new coroutine-aware socket.
@@ -183,12 +181,10 @@ CXX_C_API int coro_socket_set_send_buffer_size(coro_socket_t *socket, size_t byt
 CXX_C_API int coro_socket_set_send_hwm(coro_socket_t *socket, size_t bytes);
 
 /** Configure the authenticated KCP session before bind/connect. */
-CXX_C_API int coro_socket_set_kcp_config(coro_socket_t *socket,
-                                         const turbo_kcp_config_t *config);
+CXX_C_API int coro_socket_set_kcp_config(coro_socket_t *socket, const turbo_kcp_config_t *config);
 
 /** Read the pending or active authenticated KCP configuration. */
-CXX_C_API int coro_socket_get_kcp_config(coro_socket_t *socket,
-                                         turbo_kcp_config_t *config);
+CXX_C_API int coro_socket_get_kcp_config(coro_socket_t *socket, turbo_kcp_config_t *config);
 
 /**
  * @brief Connect to a remote host:port.
@@ -209,16 +205,14 @@ CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int p
  * @return 0 on success, TURBO_EINVAL for invalid configuration/state, or
  *         TURBO_ENOTSUP for a non-TCP-backed socket.
  */
-CXX_C_API int coro_socket_set_proxy(coro_socket_t *socket,
-                                    const coro_proxy_config_t *config);
+CXX_C_API int coro_socket_set_proxy(coro_socket_t *socket, const coro_proxy_config_t *config);
 
 /** Clear a previously configured outbound proxy before connect. */
 CXX_C_API int coro_socket_clear_proxy(coro_socket_t *socket);
 
 /** Configure or clear the pre-connect resolved-address policy callback. */
 CXX_C_API int coro_socket_set_connect_policy(coro_socket_t *socket,
-                                              coro_socket_connect_policy_fn policy,
-                                              void *user_data);
+                                             coro_socket_connect_policy_fn policy, void *user_data);
 
 /**
  * @brief Connect to one host while preserving a different host context.
@@ -299,8 +293,8 @@ CXX_C_API int coro_socket_set_tls_server_config(coro_socket_t *socket,
  *         TURBO_EBUSY after connect/listen starts, or TURBO_ERANGE when a
  *         string exceeds the implementation limit.
  */
-CXX_C_API int coro_socket_set_ws_server_config(
-    coro_socket_t *socket, const coro_ws_server_config_t *config);
+CXX_C_API int coro_socket_set_ws_server_config(coro_socket_t *socket,
+                                               const coro_ws_server_config_t *config);
 
 /** RFC 9266 tls-exporter channel binding output size. */
 #define CORO_TLS_CHANNEL_BINDING_SIZE 32U
@@ -326,8 +320,7 @@ CXX_C_API int coro_socket_set_ws_server_config(
  *         failure.
  */
 CXX_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
-    const coro_socket_t *socket,
-    char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]);
+    const coro_socket_t *socket, char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]);
 
 /**
  * @brief Export the RFC 9266 tls-exporter channel binding for this TLS/WSS connection.
@@ -348,9 +341,8 @@ CXX_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
  *         TURBO_EPERM when a client connection did not verify its peer; or
  *         TURBO_EIO if OpenSSL cannot export the binding.
  */
-CXX_C_API int coro_socket_tls_export_channel_binding(
-    const coro_socket_t *socket,
-    uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]);
+CXX_C_API int coro_socket_tls_export_channel_binding(const coro_socket_t *socket,
+                                                     uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]);
 
 /**
  * @brief Upgrade an already-connected TCP or TLS socket to WebSocket.
@@ -396,12 +388,12 @@ CXX_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host, in
  * @param subprotocol  Optional Sec-WebSocket-Protocol value, or NULL.
  */
 CXX_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host, int port,
-                                        const char *path, int is_tls,
-                                        const char *subprotocol);
+                                        const char *path, int is_tls, const char *subprotocol);
 
 /**
  * @brief Connect a WebSocket to one host while sending a different Host/SNI name.
- * @param socket         Socket created with CORO_SOCKET_TCP_V4, CORO_SOCKET_TCP_V6, or CORO_SOCKET_TLS.
+ * @param socket         Socket created with CORO_SOCKET_TCP_V4, CORO_SOCKET_TCP_V6, or
+ * CORO_SOCKET_TLS.
  * @param connect_host   Remote address or hostname used for the TCP connect.
  * @param port           Remote port.
  * @param request_host   Host header / TLS SNI name. NULL falls back to connect_host.
@@ -409,9 +401,9 @@ CXX_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host,
  * @param is_tls         1 for wss://, 0 for ws://.
  * @param subprotocol    Optional Sec-WebSocket-Protocol value, or NULL.
  */
-CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *connect_host, int port,
-                                             const char *request_host, const char *path, int is_tls,
-                                             const char *subprotocol);
+CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *connect_host,
+                                             int port, const char *request_host, const char *path,
+                                             int is_tls, const char *subprotocol);
 
 /**
  * @brief Send data through the socket.
@@ -435,8 +427,7 @@ CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t l
  *         the total size overflows size_t, TURBO_ENOTSUP for a non-TCP socket,
  *         or a transport error.
  */
-CXX_C_API int coro_socket_sendv(coro_socket_t *socket, const turbo_iovec_t *iov,
-                                size_t iovcnt);
+CXX_C_API int coro_socket_sendv(coro_socket_t *socket, const turbo_iovec_t *iov, size_t iovcnt);
 
 /**
  * @brief Send data through the socket using zstd compression.
@@ -592,6 +583,29 @@ CXX_C_API turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s
  * @brief Get local address of the socket.
  */
 CXX_C_API int coro_socket_get_local_address(coro_socket_t *socket, struct sockaddr_storage *addr);
+
+/** Maximum canonical peer address text, including brackets, port, and trailing NUL. */
+#define CORO_SOCKET_ADDRESS_TEXT_CAPACITY 80U
+
+/**
+ * @brief Get the connected peer address.
+ *
+ * The query is read-only and must run on the socket owner thread. TCP, TLS,
+ * WS, and WSS delegate to the active stream backend. Unsupported transports
+ * fail explicitly instead of returning a guessed or cached address.
+ */
+CXX_C_API int coro_socket_get_peer_address(coro_socket_t *socket, struct sockaddr_storage *addr);
+
+/**
+ * @brief Get the connected peer as canonical `IPv4:port` or `[IPv6]:port`.
+ *
+ * @param socket Connected socket on its owner thread.
+ * @param output Caller-owned CORO_SOCKET_ADDRESS_TEXT_CAPACITY-byte buffer.
+ * @return 0 on success; a transport/query error otherwise. Output is cleared
+ *         on every failure.
+ */
+CXX_C_API int coro_socket_get_peer_address_text(coro_socket_t *socket,
+                                                char output[CORO_SOCKET_ADDRESS_TEXT_CAPACITY]);
 
 /**
  * @brief Send datagram to specific address (UDP).

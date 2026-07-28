@@ -13,6 +13,7 @@ Async Redis client implementing the RESP (REdis Serialization Protocol) protocol
 - **Authentication**: Password and Redis ACL username/password authentication
 - **Database Selection**: Select different Redis databases (0-15)
 - **Explicit Outcomes**: Distinguishes not-sent, uncertain-send, lost-reply, and replied commands
+- **Sentinel Failover**: Discovers and validates non-clustered Redis masters by service name
 - **Zero External Dependencies**: Pure RESP implementation
 
 
@@ -507,6 +508,78 @@ printf("Commands: %llu sent, %llu failed\n",
 | `redis_pool_get_stats(pool, stats)` | Get pool statistics |
 | `redis_pool_is_healthy(pool)` | Check pool health |
 
+## Redis Sentinel
+
+Sentinel mode adds service discovery and failover for a non-clustered Redis
+master. It queries multiple Sentinel endpoints in order, verifies every reported
+data endpoint with `ROLE`, and only then publishes a new connection-pool
+generation. Existing commands keep their old generation alive until their
+borrowed connection is returned.
+
+```c
+#include "redis_sentinel.h"
+
+const char *sentinel_hosts[] = {"sentinel-a", "sentinel-b", "sentinel-c"};
+uint16_t sentinel_ports[] = {26379, 26379, 26379};
+
+redis_sentinel_config_t config = REDIS_SENTINEL_CONFIG_DEFAULT;
+config.sentinel_hosts = sentinel_hosts;
+config.sentinel_ports = sentinel_ports;
+config.sentinel_count = 3;
+config.service_name = "cache-primary";
+config.sentinel_username = "sentinel-client"; /* Optional Sentinel ACL */
+config.sentinel_password = "sentinel-secret";
+config.username = "application";              /* Optional Redis ACL */
+config.password = "redis-secret";
+config.database = 4;
+
+redis_sentinel_t *sentinel = redis_sentinel_create(&config);
+
+/* connect(), refresh(), and commands run inside a CoroNet coroutine. */
+if (sentinel && redis_sentinel_connect(sentinel) == TURBO_OK) {
+    redis_command_result_t result = REDIS_COMMAND_RESULT_INIT;
+    const char *argv[] = {"SET", "job:42", "done"};
+
+    int rc = redis_sentinel_commandv_result(sentinel, 3, argv, NULL, &result);
+    if (rc == TURBO_OK) {
+        /* Consume result.reply. */
+    }
+    redis_command_result_clear(&result);
+}
+
+redis_sentinel_destroy(sentinel);
+```
+
+Sentinel and Redis data-node credentials are independent. Discovery uses
+`SENTINEL get-master-addr-by-name`; a reported endpoint is never accepted until
+it answers `ROLE` as a master. An unavailable or stale Sentinel causes the next
+configured endpoint to be tried.
+
+On a disconnect, `READONLY`, or `MASTERDOWN`, the client refreshes topology.
+Commands rejected before sending and explicit `READONLY`/`MASTERDOWN` replies
+may be retried once after an actual master switch. An uncertain send or unknown
+reply is returned unchanged because the write may already have committed. The
+exact-result API must be used when callers need to reconcile that state.
+
+Periodic validation is controlled by `topology_refresh_ms`; zero disables it.
+The initial implementation routes all commands to the authoritative master and
+does not subscribe to Sentinel `+switch-master` events or route reads to
+replicas. Manual and failure-triggered refresh remain available without those
+optional paths. See the [Redis Sentinel client specification](https://redis.io/docs/latest/develop/reference/sentinel-clients/).
+
+| Function | Description |
+|----------|-------------|
+| `redis_sentinel_create(config)` | Copy Sentinel and data-node configuration |
+| `redis_sentinel_connect(sentinel)` | Discover, validate, and connect to the master |
+| `redis_sentinel_refresh(sentinel)` | Refresh and atomically switch master generation |
+| `redis_sentinel_commandv_result(...)` | Binary-safe command with exact completion state |
+| `redis_sentinel_commandv(...)` | Callback command API |
+| `redis_sentinel_set/get/del(...)` | Common command helpers |
+| `redis_sentinel_get_master(...)` | Copy the current validated master endpoint |
+| `redis_sentinel_get_stats(...)` | Read discovery, failover, and command statistics |
+| `redis_sentinel_disconnect(sentinel)` | Retire the current generation |
+| `redis_sentinel_destroy(sentinel)` | Drain generations and release the client |
+
 ## Redis Cluster
 
 Horizontal scaling across multiple masters with automatic slot routing.
@@ -657,21 +730,27 @@ are replica-eligible. Enabling replica routing is strict: a shard without an
 online replica makes topology connection/refresh fail instead of silently
 falling back to its master. Replica reads may be stale by Redis design.
 
-## Pool vs Cluster
+## Pool vs Sentinel vs Cluster
 
-| Feature | Pool | Cluster |
-|---------|------|---------|
-| Scaling | Vertical (replicas) | Horizontal (sharding) |
-| Write capacity | Single master | Multiple masters |
-| Data distribution | Full copy | Partitioned by slot |
-| Multi-key ops | Any keys | Same slot only |
-| Setup complexity | Low | Medium |
-| Use case | Read scaling | Write scaling |
+| Feature | Pool | Sentinel | Cluster |
+|---------|------|----------|---------|
+| Scaling | Vertical (static replicas) | Single-master HA | Horizontal (sharding) |
+| Write capacity | Single master | Single master | Multiple masters |
+| Data distribution | Full copy | Full copy | Partitioned by slot |
+| Master discovery | Static config | Sentinel service name | Cluster topology |
+| Multi-key ops | Any keys | Any keys | Same slot only |
+| Setup complexity | Low | Medium | Medium |
+| Use case | Static endpoints/read scaling | Automatic failover | Write scaling |
 
 **Use Pool for:**
 - Read-heavy workloads
 - Simple master-replica setup
 - Single-node Redis
+
+**Use Sentinel for:**
+- Automatic failover without sharding
+- Stable service names over changing master endpoints
+- Existing primary/replica deployments managed by Sentinel
 
 **Use Cluster for:**
 - Write-heavy workloads

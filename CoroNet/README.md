@@ -15,6 +15,69 @@ High-performance networking core library providing essential network protocols a
 - **Multithreading**: Worker-based architecture for multi-threaded applications
 - **Statistics**: Built-in performance monitoring and stats collection
 
+## Processing Model
+
+CoroNet exposes synchronous-style networking APIs over stackful coroutines. A
+network operation suspends only the calling coroutine; it does not block the
+`coro_context` event-loop thread. When the operation completes, the runtime
+marks the coroutine ready and the cooperative scheduler resumes it with the
+result.
+
+The public API presents a unified completion-driven model while the native I/O
+mechanism is selected by platform and backend configuration:
+
+```mermaid
+flowchart TB
+    APP[Application code<br/>synchronous-style socket API]
+    CORO[Stackful coroutine<br/>connect / send / recv]
+    ADAPTER[CoroNet transport adapter<br/>submit operation and suspend coroutine]
+    SELECT{Platform and backend selection}
+
+    APP --> CORO --> ADAPTER --> SELECT
+
+    SELECT -->|Linux / Android default| REACTOR
+    SELECT -->|macOS / BSD| REACTOR
+    SELECT -->|Windows| PROACTOR
+    SELECT -->|Linux with io_uring selected| PROACTOR
+
+    subgraph REACTOR[Reactor backend]
+        READY[epoll / kqueue<br/>wait for descriptor readiness]
+        EXECUTE[Worker performs<br/>accept / recv / send]
+        CONVERT[Convert readiness into<br/>logical completion events]
+        READY --> EXECUTE --> CONVERT
+    end
+
+    subgraph PROACTOR[Proactor backend]
+        SUBMIT[IOCP / io_uring<br/>submit asynchronous operation]
+        OS[Operating system performs I/O]
+        COMPLETE[Receive completion<br/>status and result]
+        SUBMIT --> OS --> COMPLETE
+    end
+
+    CONVERT --> HANDOFF
+    COMPLETE --> HANDOFF
+
+    HANDOFF[Cross-thread handoff<br/>bounded Disruptor queues<br/>and per-backend SPSC rings]
+    LOOP[coro_context event loop<br/>drain callbacks and completions]
+    SCHED[Cooperative coroutine scheduler]
+    RESUME[Resume suspended coroutine<br/>return operation result]
+
+    HANDOFF --> LOOP --> SCHED --> RESUME --> APP
+```
+
+| Platform / configuration | Native mechanism | Backend model | API-visible model |
+|--------------------------|------------------|---------------|-------------------|
+| Windows                  | IOCP             | Proactor      | Completion-driven |
+| Linux default            | epoll            | Reactor       | Completion-driven |
+| Linux with io_uring      | io_uring         | Proactor      | Completion-driven |
+| Android                  | epoll            | Reactor       | Completion-driven |
+| macOS / BSD              | kqueue           | Reactor       | Completion-driven |
+
+Disruptor queues provide bounded cross-thread handoff; they do not select the
+I/O model and are not the coroutine scheduler. Coroutines may be organized in
+an actor-like style by an application, but CoroNet itself is not an Actor
+runtime: it does not provide a mailbox or isolated state for each coroutine.
+
 ## Quick Start
 
 ### Coroutine Client
@@ -317,7 +380,7 @@ target_link_libraries(your_target TurboNet::CoroNet)
 
 ## Dependencies
 
-- c-ares (DNS resolution)
+- c-ares (DNS resolution; built as a static library by the repository vcpkg overlay)
 - KCP
 - llhttp 
 - OpenSSL
@@ -335,28 +398,6 @@ See the `examples/` directory for complete working examples:
 ## Documentation
 
 See the API reference in the `/docs` directory for detailed function documentation.
-
-## Migration from Old API
-
-If you're using the old transport-enum-based API, migration is simple:
-
-**Before:**
-
-```c
-turbo_client_t *client = turbo_client_create_with_transport(SYNC_CLIENT_TRANSPORT_TCP);
-char url[256];
-snprintf(url, sizeof(url), "tcp://%s:%d", host, port);
-turbo_client_connect(client, url);
-```
-
-**After:**
-
-```c
-turbo_client_t *client = turbo_client_create();
-turbo_client_connect(client, "tcp://example.com:8080");
-```
-
-The transport type is automatically determined from the URL scheme!
 
 ## Licensing
 

@@ -20,7 +20,8 @@
             "name": "android-vcpkg-chainload",
             "hidden": true,
             "cacheVariables": {
-                "VCPKG_MANIFEST_MODE": true
+                "VCPKG_MANIFEST_MODE": true,
+                "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-overlays"
             }
         },
         {

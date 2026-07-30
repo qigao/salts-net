@@ -26,7 +26,10 @@
 /* ── Client ─────────────────────────────────────────────── */
 
 static int pu_init(turbo_stream_t *s) { return NATIVE_OPS.init(s); }
-static int pu_connect(turbo_stream_t *s, const struct sockaddr *a) { return NATIVE_OPS.connect(s, a); }
+static int pu_connect(turbo_stream_t *s, const struct sockaddr *a,
+                      size_t addr_len) {
+    return NATIVE_OPS.connect(s, a, addr_len);
+}
 
 static int pu_connect_pipe(turbo_stream_t *s, const char *name) {
     if (!s || !name) return TURBO_EINVAL;
@@ -34,7 +37,7 @@ static int pu_connect_pipe(turbo_stream_t *s, const char *name) {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, name, sizeof(addr.sun_path)-1);
-    return pu_connect(s, (struct sockaddr *)&addr);
+    return pu_connect(s, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int pu_send(turbo_stream_t *s, const char *d, size_t l) { return NATIVE_OPS.send(s, d, l); }
@@ -47,7 +50,10 @@ static int pu_get_peer(turbo_stream_t *s, struct sockaddr_storage *a) { return N
 
 /* ── Listener ───────────────────────────────────────────── */
 
-static int pu_bind(turbo_stream_listener_t *l, const struct sockaddr *a) { return NATIVE_OPS.bind(l, a); }
+static int pu_bind(turbo_stream_listener_t *l, const struct sockaddr *a,
+                   size_t addr_len) {
+    return NATIVE_OPS.bind(l, a, addr_len);
+}
 
 static int pu_bind_pipe(turbo_stream_listener_t *l, const char *name) {
     if (!l || !name) return TURBO_EINVAL;
@@ -56,7 +62,7 @@ static int pu_bind_pipe(turbo_stream_listener_t *l, const char *name) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, name, sizeof(addr.sun_path)-1);
     unlink(name);
-    return pu_bind(l, (struct sockaddr *)&addr);
+    return pu_bind(l, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int pu_listen(turbo_stream_listener_t *l, int b) { return NATIVE_OPS.listen(l, b); }

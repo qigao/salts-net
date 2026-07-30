@@ -44,7 +44,8 @@ typedef enum {
   CORO_SOCKET_UDP_V4,
   CORO_SOCKET_UDP_V6,
   CORO_SOCKET_KCP,
-  CORO_SOCKET_PIPE
+  CORO_SOCKET_PIPE,
+  CORO_SOCKET_VSOCK
 } coro_socket_type_t;
 
 /** Outbound stream proxy type. DIRECT is the default. */
@@ -109,6 +110,9 @@ static inline coro_socket_t *coro_socket_create_kcp(coro_context_t *ctx) {
 static inline coro_socket_t *coro_socket_create_pipe(coro_context_t *ctx) {
   return coro_socket_create(ctx, CORO_SOCKET_PIPE);
 }
+static inline coro_socket_t *coro_socket_create_vsock(coro_context_t *ctx) {
+  return coro_socket_create(ctx, CORO_SOCKET_VSOCK);
+}
 
 /**
  * @brief Close and destroy the socket.
@@ -120,6 +124,20 @@ CXX_C_API void coro_socket_destroy(coro_socket_t *socket);
  * @brief Bind a socket to a local address.
  */
 CXX_C_API int coro_socket_bind(coro_socket_t *socket, const struct sockaddr *addr);
+
+/**
+ * @brief Bind a VSOCK socket to a local CID and port.
+ *
+ * CID_ANY and PORT_ANY are valid bind values. The endpoint is copied.
+ *
+ * @param socket VSOCK socket on its owner thread.
+ * @param endpoint Local endpoint copied during this call.
+ * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
+ *         non-VSOCK socket; TURBO_EPROTONOSUPPORT when VSOCK is not compiled
+ *         for the platform; otherwise an allocation error.
+ */
+CXX_C_API int coro_socket_bind_vsock(
+    coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint);
 
 /**
  * @brief Put a socket into listening mode.
@@ -146,7 +164,7 @@ CXX_C_API int coro_socket_set_tcp_keepalive(coro_socket_t *socket,
                                             const turbo_tcp_keepalive_config_t *config);
 
 /**
- * @brief Configure OS SO_LINGER for TCP/TLS/WS/WSS sockets.
+ * @brief Configure OS SO_LINGER for TCP/TLS/WS/WSS/VSOCK sockets.
  *
  * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
  * this policy.
@@ -155,7 +173,7 @@ CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
                                      const turbo_socket_linger_config_t *config);
 
 /**
- * @brief Configure the OS SO_RCVBUF request for TCP/TLS/WS/WSS sockets.
+ * @brief Configure the OS SO_RCVBUF request for TCP/TLS/WS/WSS/VSOCK sockets.
  *
  * Call before bind/connect/listen. When configured on a listener, accepted
  * sockets inherit the request. The operating system may adjust the requested
@@ -164,7 +182,7 @@ CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
 CXX_C_API int coro_socket_set_recv_buffer_size(coro_socket_t *socket, size_t bytes);
 
 /**
- * @brief Configure the OS SO_SNDBUF request for TCP/TLS/WS/WSS sockets.
+ * @brief Configure the OS SO_SNDBUF request for TCP/TLS/WS/WSS/VSOCK sockets.
  *
  * Call before bind/connect/listen. When configured on a listener, accepted
  * sockets inherit the request. The operating system may adjust the requested
@@ -193,6 +211,22 @@ CXX_C_API int coro_socket_get_kcp_config(coro_socket_t *socket, turbo_kcp_config
  * For WebSocket, use coro_socket_connect_ws instead.
  */
 CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
+
+/**
+ * @brief Connect a VSOCK socket to a remote CID and port.
+ *
+ * The call suspends the current coroutine until connect completes or the
+ * socket timeout expires. CID_ANY and PORT_ANY are rejected.
+ *
+ * @param socket VSOCK socket owned by the current coroutine context.
+ * @param endpoint Remote endpoint copied before the coroutine suspends.
+ * @return 0 on success; TURBO_EINVAL for NULL or wildcard input;
+ *         TURBO_ENOTSUP for a non-VSOCK socket; TURBO_EPROTONOSUPPORT when
+ *         VSOCK is not compiled for the platform; otherwise a socket, timeout,
+ *         cancellation, or allocation error.
+ */
+CXX_C_API int coro_socket_connect_vsock(
+    coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint);
 
 /**
  * @brief Configure outbound proxying for future stream connects.
@@ -584,6 +618,14 @@ CXX_C_API turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s
  */
 CXX_C_API int coro_socket_get_local_address(coro_socket_t *socket, struct sockaddr_storage *addr);
 
+/**
+ * @brief Get the local VSOCK CID and port for a connected or accepted socket.
+ * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
+ *         non-VSOCK socket; otherwise the backend query error.
+ */
+CXX_C_API int coro_socket_get_local_vsock_endpoint(
+    coro_socket_t *socket, turbo_vsock_endpoint_t *endpoint);
+
 /** Maximum canonical peer address text, including brackets, port, and trailing NUL. */
 #define CORO_SOCKET_ADDRESS_TEXT_CAPACITY 80U
 
@@ -595,6 +637,14 @@ CXX_C_API int coro_socket_get_local_address(coro_socket_t *socket, struct sockad
  * fail explicitly instead of returning a guessed or cached address.
  */
 CXX_C_API int coro_socket_get_peer_address(coro_socket_t *socket, struct sockaddr_storage *addr);
+
+/**
+ * @brief Get the remote VSOCK CID and port for a connected or accepted socket.
+ * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
+ *         non-VSOCK socket; otherwise the backend query error.
+ */
+CXX_C_API int coro_socket_get_peer_vsock_endpoint(
+    coro_socket_t *socket, turbo_vsock_endpoint_t *endpoint);
 
 /**
  * @brief Get the connected peer as canonical `IPv4:port` or `[IPv6]:port`.
@@ -717,6 +767,30 @@ CXX_C_API int coro_socket_listen_on_ex(coro_socket_t *socket, const char *host, 
                                        coro_handler_fn handler, void *arg,
                                        coro_handler_closed_fn handler_closed,
                                        void *handler_closed_arg);
+
+/**
+ * @brief Start a managed VSOCK server on a typed CID and port endpoint.
+ *
+ * Accepted sockets use the same handler ownership and lifecycle as managed TCP
+ * servers.
+ *
+ * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
+ *         non-VSOCK socket; otherwise a bind, listen, or allocation error.
+ */
+CXX_C_API int coro_socket_listen_vsock(
+    coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint,
+    coro_handler_fn handler, void *arg);
+
+/**
+ * @brief Start a managed VSOCK server with an accepted-socket close callback.
+ *
+ * Parameters and errors match coro_socket_listen_vsock(). handler_closed is
+ * invoked after each accepted socket finishes closing when it is non-NULL.
+ */
+CXX_C_API int coro_socket_listen_vsock_ex(
+    coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint,
+    coro_handler_fn handler, void *arg,
+    coro_handler_closed_fn handler_closed, void *handler_closed_arg);
 
 /**
  * @brief Start a WebSocket server.

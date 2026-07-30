@@ -154,6 +154,7 @@ static int stream_kind_is_valid(turbo_stream_kind_t kind) {
   case TURBO_STREAM_WS:
   case TURBO_STREAM_WSS:
   case TURBO_STREAM_TLS:
+  case TURBO_STREAM_VSOCK:
     return 1;
   default:
     return 0;
@@ -212,7 +213,21 @@ const turbo_stream_backend_ops_t *turbo_stream_resolve_backend(
   if (kind == TURBO_STREAM_TLS) {
     return &turbo_stream_tls_ops;
   }
+  if (kind == TURBO_STREAM_VSOCK) {
+#if defined(__linux__) && TURBO_HAS_VSOCK
+    return stream_tcp_backend_ops(ctx ? ctx->tcp_backend : stream_default_tcp_backend());
+#else
+    return NULL;
+#endif
+  }
   return stream_tcp_backend_ops(ctx ? ctx->tcp_backend : stream_default_tcp_backend());
+}
+
+static size_t stream_sockaddr_length(const struct sockaddr *addr) {
+  if (!addr) return 0u;
+  if (addr->sa_family == AF_INET) return sizeof(struct sockaddr_in);
+  if (addr->sa_family == AF_INET6) return sizeof(struct sockaddr_in6);
+  return 0u;
 }
 
 /* ── Common init / teardown ───────────────────────────────── */
@@ -514,7 +529,7 @@ int turbo_stream_connect(turbo_stream_t *s, const char *host,
   }
 
   if (sa) {
-    return s->ops->connect(s, sa);
+    return s->ops->connect(s, sa, stream_sockaddr_length(sa));
   }
 
   /* DNS resolution needed — backend handles it or we do it here.
@@ -525,10 +540,22 @@ int turbo_stream_connect(turbo_stream_t *s, const char *host,
 int turbo_stream_connect_addr(turbo_stream_t *s, const struct sockaddr *addr,
                                turbo_connect_cb on_connect,
                                turbo_close_cb on_close) {
-  if (!s || !addr) return TURBO_EINVAL;
+  size_t addr_len = stream_sockaddr_length(addr);
+  if (addr_len == 0u) return TURBO_EINVAL;
+  return turbo_stream_connect_addr_ex(s, addr, addr_len, on_connect, on_close);
+}
+
+int turbo_stream_connect_addr_ex(turbo_stream_t *s, const struct sockaddr *addr,
+                                 size_t addr_len,
+                                 turbo_connect_cb on_connect,
+                                 turbo_close_cb on_close) {
+  if (!s || !addr || addr_len < sizeof(addr->sa_family) ||
+      addr_len > sizeof(struct sockaddr_storage)) {
+    return TURBO_EINVAL;
+  }
   s->on_connect = on_connect;
   s->on_close = on_close;
-  return s->ops->connect(s, addr);
+  return s->ops->connect(s, addr, addr_len);
 }
 
 int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
@@ -556,6 +583,9 @@ int turbo_stream_connect_pipe(turbo_stream_t *s, const char *name,
 int turbo_stream_set_tcp_keepalive(turbo_stream_t *s,
                                    const turbo_tcp_keepalive_config_t *config) {
   if (!s || !config) return TURBO_EINVAL;
+  if (s->kind == TURBO_STREAM_VSOCK) {
+    return TURBO_ENOTSUP;
+  }
   if (config->idle_ms > INT32_MAX || config->interval_ms > INT32_MAX ||
       config->count > INT32_MAX) {
     return TURBO_ERANGE;
@@ -696,13 +726,15 @@ void turbo_stream_close(turbo_stream_t *s) {
 
 turbo_stream_listener_t *turbo_stream_listen_ex(
     coro_context_t *ctx, turbo_stream_kind_t kind,
-    const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept,
+    const struct sockaddr *addr, size_t addr_len, int backlog,
+    turbo_accept_cb on_accept,
     int reuse_port, void *user_data) {
   turbo_stream_listener_t *l;
   const turbo_stream_backend_ops_t *ops;
   int rc;
 
-  if (!ctx || !addr || !on_accept) {
+  if (!ctx || !addr || addr_len < sizeof(addr->sa_family) ||
+      addr_len > sizeof(struct sockaddr_storage) || !on_accept) {
     stream_record_error(ctx, TURBO_EINVAL);
     return NULL;
   }
@@ -727,7 +759,7 @@ turbo_stream_listener_t *turbo_stream_listen_ex(
   l->user_data = user_data;
   l->reuse_port = reuse_port ? 1 : 0;
 
-  rc = ops->bind(l, addr);
+  rc = ops->bind(l, addr, addr_len);
   if (rc != 0) {
     stream_record_error(ctx, rc);
     turbo_stream_listener_cleanup_create_failure(l);
@@ -748,14 +780,18 @@ turbo_stream_listener_t *turbo_stream_listen_ex(
 turbo_stream_listener_t *turbo_stream_listen(
     coro_context_t *ctx, turbo_stream_kind_t kind,
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept) {
-  return turbo_stream_listen_ex(ctx, kind, addr, backlog, on_accept, 0, NULL);
+  size_t addr_len = stream_sockaddr_length(addr);
+  return turbo_stream_listen_ex(ctx, kind, addr, addr_len, backlog,
+                                on_accept, 0, NULL);
 }
 
 turbo_stream_listener_t *turbo_stream_listen_with_data(
     coro_context_t *ctx, turbo_stream_kind_t kind,
     const struct sockaddr *addr, int backlog, turbo_accept_cb on_accept,
     void *user_data) {
-  return turbo_stream_listen_ex(ctx, kind, addr, backlog, on_accept, 0, user_data);
+  size_t addr_len = stream_sockaddr_length(addr);
+  return turbo_stream_listen_ex(ctx, kind, addr, addr_len, backlog,
+                                on_accept, 0, user_data);
 }
 
 turbo_stream_listener_t *turbo_stream_listen_pipe(

@@ -20,6 +20,11 @@ cmake_add_test(
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
+if(TURBO_HAS_VSOCK AND TURBO_ENABLE_VSOCK_INTEGRATION_TESTS)
+  target_compile_definitions(test_vsock PRIVATE
+                             TURBO_VSOCK_INTEGRATION_TESTS=1)
+endif()
+
 set(TLS_LSAN_SUPPRESSIONS
     "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/openssl_tls_handshake.lsan:print_suppressions=1"
 )

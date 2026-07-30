@@ -849,11 +849,14 @@ int coro_when_any(coro_context_t *ctx, coro_task_t **tasks, int count) {
 
 enum { CORO_WAIT_IDLE = 0, CORO_WAIT_ACTIVE, CORO_WAIT_COMPLETING };
 
+static const uint64_t CORO_WAIT_NS_PER_MS = UINT64_C(1000000);
+
 struct coro_wait_s {
   coro_t *co;
   int co_is_scheduled;
   coro_context_t *ctx;
   turbo_timer_t *timer;
+  uint64_t deadline_ns;
   turbo_mutex_t mutex;
   atomic_int state;
   atomic_int status;
@@ -899,9 +902,70 @@ static void coro_wait_post_completion(coro_wait_t *wait) {
   }
 }
 
+static void coro_wait_destroy_timer_on_context(void *arg1, void *arg2) {
+  (void)arg2;
+  turbo_timer_destroy((turbo_timer_t *)arg1);
+}
+
+static void coro_wait_post_timer_destroy(coro_wait_t *wait, turbo_timer_t *timer) {
+  int rc;
+
+  rc = coro_post(wait->ctx, coro_wait_destroy_timer_on_context, timer, NULL);
+  while (rc == TURBO_ENOMEM) {
+    turbo_thread_yield();
+    rc = coro_post(wait->ctx, coro_wait_destroy_timer_on_context, timer, NULL);
+  }
+}
+
 static void on_coro_wait_timer(turbo_timer_t *timer) {
   coro_wait_t *wait = (coro_wait_t *)turbo_timer_get_data(timer);
-  if (wait && coro_wait_claim_completion(wait, TURBO_OK) == TURBO_OK) {
+  turbo_timer_t *replacement = NULL;
+  uint64_t now_ns;
+  int completion_status = TURBO_OK;
+  int rc;
+
+  if (!wait) return;
+
+  now_ns = turbo_hrtime();
+  if (now_ns < wait->deadline_ns) {
+    replacement = turbo_timer_create(NULL);
+    if (replacement) turbo_timer_set_data(replacement, wait);
+  }
+
+  turbo_mutex_lock(&wait->mutex);
+  if (atomic_load_explicit(&wait->state, memory_order_acquire) != CORO_WAIT_ACTIVE) {
+    turbo_mutex_unlock(&wait->mutex);
+    turbo_timer_destroy(replacement);
+    return;
+  }
+
+  now_ns = turbo_hrtime();
+  if (now_ns < wait->deadline_ns) {
+    uint64_t remaining_ns = wait->deadline_ns - now_ns;
+    uint64_t remaining_ms =
+        remaining_ns / CORO_WAIT_NS_PER_MS +
+        ((remaining_ns % CORO_WAIT_NS_PER_MS) != 0 ? UINT64_C(1) : UINT64_C(0));
+
+    if (!replacement) {
+      completion_status = TURBO_ENOMEM;
+    } else {
+      wait->timer = replacement;
+      rc = turbo_timer_start(replacement, on_coro_wait_timer, remaining_ms, 0);
+      if (rc == TURBO_OK) {
+        turbo_mutex_unlock(&wait->mutex);
+        /* POSIX timer destruction waits for callbacks, so defer self-destruction. */
+        coro_wait_post_timer_destroy(wait, timer);
+        return;
+      }
+      wait->timer = timer;
+      completion_status = TURBO_EIO;
+    }
+  }
+
+  rc = coro_wait_claim_completion(wait, completion_status);
+  turbo_mutex_unlock(&wait->mutex);
+  turbo_timer_destroy(replacement);
+  if (rc == TURBO_OK) {
     coro_wait_post_completion(wait);
   }
 }
@@ -929,6 +993,7 @@ int coro_wait_destroy(coro_wait_t *wait) {
 }
 
 int coro_wait_for(coro_wait_t *wait, uint64_t ms) {
+  uint64_t now_ns;
   int rc;
   if (!wait || !wait->ctx) return TURBO_EINVAL;
 
@@ -946,13 +1011,19 @@ int coro_wait_for(coro_wait_t *wait, uint64_t ms) {
     turbo_mutex_unlock(&wait->mutex);
     return TURBO_EBUSY;
   }
+  now_ns = turbo_hrtime();
   wait->co = coro_running();
+  wait->deadline_ns =
+      ms > (UINT64_MAX - now_ns) / CORO_WAIT_NS_PER_MS
+          ? UINT64_MAX
+          : now_ns + ms * CORO_WAIT_NS_PER_MS;
   atomic_store_explicit(&wait->status, TURBO_OK, memory_order_release);
   wait->co_is_scheduled = coro_is_scheduled(wait->co);
   wait->timer = turbo_timer_create(NULL);
   if (!wait->timer) {
     wait->co = NULL;
     wait->co_is_scheduled = 0;
+    wait->deadline_ns = 0;
     turbo_mutex_unlock(&wait->mutex);
     return TURBO_ENOMEM;
   }
@@ -975,6 +1046,7 @@ int coro_wait_for(coro_wait_t *wait, uint64_t ms) {
     wait->timer = NULL;
     wait->co = NULL;
     wait->co_is_scheduled = 0;
+    wait->deadline_ns = 0;
     atomic_store_explicit(&wait->state, CORO_WAIT_IDLE, memory_order_release);
     turbo_mutex_unlock(&wait->mutex);
     return TURBO_EIO;
@@ -982,18 +1054,21 @@ int coro_wait_for(coro_wait_t *wait, uint64_t ms) {
   turbo_mutex_unlock(&wait->mutex);
   coro_yield();
   rc = atomic_load_explicit(&wait->status, memory_order_acquire);
+  wait->deadline_ns = 0;
   atomic_store_explicit(&wait->state, CORO_WAIT_IDLE, memory_order_release);
   return rc;
 }
 
 int coro_wait_interrupt(coro_wait_t *wait, int status) {
+  turbo_timer_t *timer;
   int rc;
   if (!wait || status == TURBO_OK) return TURBO_EINVAL;
   turbo_mutex_lock(&wait->mutex);
   rc = coro_wait_claim_completion(wait, status);
-  if (rc == TURBO_OK) (void)turbo_timer_stop(wait->timer);
+  timer = rc == TURBO_OK ? wait->timer : NULL;
   turbo_mutex_unlock(&wait->mutex);
   if (rc != TURBO_OK) return rc;
+  (void)turbo_timer_stop(timer);
   coro_wait_post_completion(wait);
   return TURBO_OK;
 }

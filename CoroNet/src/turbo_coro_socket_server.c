@@ -395,6 +395,33 @@ static int listen_pipe(coro_socket_t *server, const char *path) {
   return spawn_accept_loop(server);
 }
 
+static int listen_vsock_internal(
+    coro_socket_t *server, const turbo_vsock_endpoint_t *endpoint) {
+  int rc;
+
+  server->listener = coro_socket_create(server->ctx, CORO_SOCKET_VSOCK);
+  if (!server->listener) return TURBO_ENOMEM;
+  rc = coro_socket_inherit_stream_options(server->listener, server);
+  if (rc != 0) {
+    rollback_listener(server);
+    return rc;
+  }
+  server->listener->reuse_port = server->reuse_port;
+  server->listener->accept_prestart_recv_disabled = 0;
+
+  rc = coro_socket_bind_vsock(server->listener, endpoint);
+  if (rc != 0) {
+    rollback_listener(server);
+    return rc;
+  }
+  rc = coro_socket_listen(server->listener, 128);
+  if (rc != 0) {
+    rollback_listener(server);
+    return rc;
+  }
+  return spawn_accept_loop(server);
+}
+
 static int listen_udp(coro_socket_t *server, const char *host, int port) {
   struct sockaddr_storage saddr;
   int r = parse_bind_address(host, port, &saddr);
@@ -537,6 +564,26 @@ int coro_socket_listen_on_ex(coro_socket_t *server, const char *host, int port,
   case TURBO_PIPE:      return listen_pipe(server, host);
   default:              return TURBO_EPROTONOSUPPORT;
   }
+}
+
+int coro_socket_listen_vsock(
+    coro_socket_t *server, const turbo_vsock_endpoint_t *endpoint,
+    coro_handler_fn handler, void *arg) {
+  return coro_socket_listen_vsock_ex(server, endpoint, handler, arg, NULL, NULL);
+}
+
+int coro_socket_listen_vsock_ex(
+    coro_socket_t *server, const turbo_vsock_endpoint_t *endpoint,
+    coro_handler_fn handler, void *arg,
+    coro_handler_closed_fn handler_closed, void *handler_closed_arg) {
+  if (!server || !endpoint || !handler) return TURBO_EINVAL;
+  if (server->transport != TURBO_VSOCK) return TURBO_ENOTSUP;
+
+  server->handler = handler;
+  server->handler_arg = arg;
+  server->handler_closed = handler_closed;
+  server->handler_closed_arg = handler_closed_arg;
+  return listen_vsock_internal(server, endpoint);
 }
 
 int coro_socket_listen_ws(coro_socket_t *server, const char *host, int port,

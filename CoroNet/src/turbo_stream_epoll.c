@@ -1099,7 +1099,8 @@ int epoll_init_with_socket(turbo_stream_t *s, int existing) {
     return 0;
 }
 
-static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
+static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a,
+                         size_t addr_len) {
     stream_epoll_state_t *st = (stream_epoll_state_t *)s->backend_data;
     int connect_rc;
     int rc;
@@ -1117,10 +1118,7 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
         st->fd = -1;
         return rc;
     }
-    socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
-                         (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
-                                                      sizeof(struct sockaddr_in);
-    connect_rc = connect(st->fd, a, addr_len);
+    connect_rc = connect(st->fd, a, (socklen_t)addr_len);
     if (connect_rc < 0 && errno != EINPROGRESS) {
         int err = -errno;
         close(st->fd);
@@ -1151,7 +1149,7 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a) {
 static int epoll_connect_pipe(turbo_stream_t *s, const char *n) {
     struct sockaddr_un addr; memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX; strncpy(addr.sun_path, n, sizeof(addr.sun_path)-1);
-    return epoll_connect(s, (struct sockaddr *)&addr);
+    return epoll_connect(s, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
@@ -1260,7 +1258,8 @@ static void epoll_close(turbo_stream_t *s) {
     epoll_shutdown_state(st);
 }
 
-static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
+static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a,
+                      size_t addr_len) {
     stream_epoll_state_t *st;
     int r = epoll_init_state(&st, l, l->ctx, 1);
     if (r != 0) return r;
@@ -1281,10 +1280,11 @@ static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
         return TURBO_ENOTSUP;
 #endif
     }
-    socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
-                         (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
-                                                      sizeof(struct sockaddr_in);
-    if (bind(st->fd, a, addr_len) < 0) { int rc = -errno; epoll_destroy_state(st); return rc; }
+    if (bind(st->fd, a, (socklen_t)addr_len) < 0) {
+        int rc = -errno;
+        epoll_destroy_state(st);
+        return rc;
+    }
     l->backend_data = st;
     return 0;
 }
@@ -1292,7 +1292,7 @@ static int epoll_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
 static int epoll_bind_pipe(turbo_stream_listener_t *l, const char *n) {
     struct sockaddr_un addr; memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX; strncpy(addr.sun_path, n, sizeof(addr.sun_path)-1);
-    unlink(n); return epoll_bind(l, (struct sockaddr *)&addr);
+    unlink(n); return epoll_bind(l, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int epoll_listen(turbo_stream_listener_t *l, int b) {

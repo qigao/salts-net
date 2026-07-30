@@ -422,7 +422,8 @@ int kqueue_init_with_socket(turbo_stream_t *s, int existing) {
     return r;
 }
 
-static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a) {
+static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a,
+                          size_t addr_len) {
     stream_kqueue_state_t *st = (stream_kqueue_state_t *)s->backend_data;
     int rc;
 
@@ -439,10 +440,7 @@ static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a) {
     EV_SET(&evs[0], st->fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, NULL);
     EV_SET(&evs[1], st->fd, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, NULL);
     kevent(st->kq_fd, evs, 2, NULL, 0, NULL);
-    socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
-                         (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
-                                                      sizeof(struct sockaddr_in);
-    if (connect(st->fd, a, addr_len) < 0 && errno != EINPROGRESS) {
+    if (connect(st->fd, a, (socklen_t)addr_len) < 0 && errno != EINPROGRESS) {
         int err = -errno;
         close(st->fd);
         st->fd = -1;
@@ -460,7 +458,7 @@ static int kqueue_connect(turbo_stream_t *s, const struct sockaddr *a) {
 static int kqueue_connect_pipe(turbo_stream_t *s, const char *n) {
     struct sockaddr_un addr; memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX; strncpy(addr.sun_path, n, sizeof(addr.sun_path)-1);
-    return kqueue_connect(s, (struct sockaddr *)&addr);
+    return kqueue_connect(s, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int kqueue_send(turbo_stream_t *s, const char *d, size_t l) {
@@ -497,7 +495,8 @@ static void kqueue_listener_close(turbo_stream_listener_t *l) {
     turbo_stream_listener_notify_backend_released(l);
 }
 
-static int kqueue_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
+static int kqueue_bind(turbo_stream_listener_t *l, const struct sockaddr *a,
+                       size_t addr_len) {
     stream_kqueue_state_t *st;
     int r = kqueue_init_state(&st, l, l->ctx, 1);
     if (r != 0) return r;
@@ -516,10 +515,10 @@ static int kqueue_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
         return TURBO_ENOTSUP;
 #endif
     }
-    socklen_t addr_len = (a->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : 
-                         (a->sa_family == AF_UNIX)  ? sizeof(struct sockaddr_un) : 
-                                                      sizeof(struct sockaddr_in);
-    if (bind(st->fd, a, addr_len) < 0) { kqueue_cleanup_state(st); return -errno; }
+    if (bind(st->fd, a, (socklen_t)addr_len) < 0) {
+        kqueue_cleanup_state(st);
+        return -errno;
+    }
     l->backend_data = st;
     return 0;
 }
@@ -527,7 +526,7 @@ static int kqueue_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
 static int kqueue_bind_pipe(turbo_stream_listener_t *l, const char *n) {
     struct sockaddr_un addr; memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX; strncpy(addr.sun_path, n, sizeof(addr.sun_path)-1);
-    unlink(n); return kqueue_bind(l, (struct sockaddr *)&addr);
+    unlink(n); return kqueue_bind(l, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int kqueue_listen(turbo_stream_listener_t *l, int b) {

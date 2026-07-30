@@ -3,6 +3,27 @@ set(TARGET_NAME CoroNet)
 add_subdirectory(parser)
 
 set(TURBO_HAS_IO_URING OFF)
+set(TURBO_HAS_VSOCK OFF)
+option(TURBO_ENABLE_VSOCK_INTEGRATION_TESTS
+       "Run VSOCK loopback tests on a configured Linux host/guest" OFF)
+
+include(CheckCSourceCompiles)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+  check_c_source_compiles(
+    "
+    #include <sys/socket.h>
+    #include <linux/vm_sockets.h>
+    int main(void) {
+      struct sockaddr_vm address;
+      address.svm_family = AF_VSOCK;
+      return (int)address.svm_family;
+    }
+    "
+    TURBO_VSOCK_COMPILES)
+  if(TURBO_VSOCK_COMPILES)
+    set(TURBO_HAS_VSOCK ON)
+  endif()
+endif()
 
 set(TURBO_IO_URING_MIN_KERNEL_VERSION 5.1)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND
@@ -15,6 +36,9 @@ endif()
 
 if(TURBO_HAS_IO_URING)
   add_compile_definitions(TURBO_HAS_IO_URING=1)
+endif()
+if(TURBO_HAS_VSOCK)
+  add_compile_definitions(TURBO_HAS_VSOCK=1)
 endif()
 
 # Platform-specific backend mapping

@@ -2025,7 +2025,8 @@ fail:
   return rc;
 }
 
-static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
+static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr,
+                       size_t addr_len) {
   tls_state_t *st = (tls_state_t *)s->backend_data;
   if (!st || !addr) return TURBO_EINVAL;
 
@@ -2097,9 +2098,9 @@ static int tls_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   st->state = TLS_ST_CONNECTING_TCP;
   {
-    int rc = turbo_stream_connect_addr(st->tcp, addr,
-                                       tls_on_tcp_connect,
-                                       tls_on_tcp_close);
+    int rc = turbo_stream_connect_addr_ex(st->tcp, addr, addr_len,
+                                          tls_on_tcp_connect,
+                                          tls_on_tcp_close);
     if (rc != 0) {
       tls_drop_inner_tcp(st);
     }
@@ -2484,8 +2485,9 @@ static int tls_get_peer(turbo_stream_t *s, struct sockaddr_storage *a) {
 }
 
 /* Listener ops — TLS server accept is Phase 2 */
-static int  tls_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
-  UNUSED(l); UNUSED(a); return TURBO_ENOTSUP;
+static int  tls_bind(turbo_stream_listener_t *l, const struct sockaddr *a,
+                     size_t addr_len) {
+  UNUSED(l); UNUSED(a); UNUSED(addr_len); return TURBO_ENOTSUP;
 }
 static int  tls_bind_pipe(turbo_stream_listener_t *l, const char *n) {
   UNUSED(l); UNUSED(n); return TURBO_ENOTSUP;

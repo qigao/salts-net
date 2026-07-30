@@ -49,6 +49,7 @@ typedef enum turbo_transport_e {
   TURBO_PIPE = 4,
   TURBO_QUIC = 5,
   TURBO_WEBSOCKET = 6,
+  TURBO_VSOCK = 7,
   TURBO_TRANSPORT_MAX
 } turbo_transport_t;
 
@@ -597,6 +598,10 @@ void coro_socket_configure_transport_internal(coro_socket_t *s, turbo_transport_
                                               int connected);
 int coro_socket_connect_direct_internal(coro_socket_t *s, const char *connect_host, int port,
                                         const char *request_host);
+int coro_socket_connect_vsock_internal(
+    coro_socket_t *s, const turbo_vsock_endpoint_t *endpoint);
+int coro_socket_bind_vsock_internal(
+    coro_socket_t *s, const turbo_vsock_endpoint_t *endpoint);
 int coro_socket_send_raw_internal(coro_socket_t *s, const char *data, size_t len);
 int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len);
 int coro_socket_proxy_connect_internal(coro_socket_t *s, const char *connect_host, int port,
@@ -624,6 +629,8 @@ static inline void coro_resume_co(coro_context_t *ctx, coro_t *co) {
  * @note Defined in coro_client.c.
  */
 extern const coro_transport_ops_t *transport_ops_table[];
+extern const coro_transport_ops_t transport_ops_tcp;
+extern const coro_transport_ops_t transport_ops_vsock;
 
 /**
  * @brief Server-side WebSocket ops.

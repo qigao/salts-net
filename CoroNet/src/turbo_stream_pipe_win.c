@@ -524,9 +524,11 @@ static int pw_connect_pipe(turbo_stream_t *s, const char *name) {
   return 0;
 }
 
-static int pw_connect(turbo_stream_t *s, const struct sockaddr *a) {
+static int pw_connect(turbo_stream_t *s, const struct sockaddr *a,
+                      size_t addr_len) {
   UNUSED(s);
   UNUSED(a);
+  UNUSED(addr_len);
   return TURBO_EINVAL; /* Pipe doesn't do TCP connect */
 }
 
@@ -816,9 +818,11 @@ static void listener_tick(void *arg1, void *arg2) {
   }
 }
 
-static int pw_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
+static int pw_bind(turbo_stream_listener_t *l, const struct sockaddr *a,
+                   size_t addr_len) {
   UNUSED(l);
   UNUSED(a);
+  UNUSED(addr_len);
   return TURBO_EINVAL;
 }
 

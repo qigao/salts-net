@@ -91,6 +91,7 @@ struct stream_uring_reactor_s {
   uint64_t cmd_consumer_sequence;
   atomic_int wake_pending;
   stream_uring_op_t *pending_command;
+  stream_uring_op_t *wake_op;
 };
 
 typedef struct stream_uring_state_s {
@@ -241,21 +242,6 @@ static int stream_uring_post_wait(stream_uring_base_t *base,
   }
 }
 
-static socklen_t sockaddr_length(const struct sockaddr *addr) {
-  if (!addr) {
-    return 0;
-  }
-  switch (addr->sa_family) {
-  case AF_INET6:
-    return (socklen_t)sizeof(struct sockaddr_in6);
-  case AF_UNIX:
-    return (socklen_t)sizeof(struct sockaddr_un);
-  case AF_INET:
-  default:
-    return (socklen_t)sizeof(struct sockaddr_in);
-  }
-}
-
 static int set_nonblocking_cloexec(int fd) {
   int flags;
 
@@ -369,9 +355,28 @@ static struct io_uring_sqe *stream_uring_get_sqe(stream_uring_reactor_t *reactor
   return sqe;
 }
 
+static void stream_uring_cancel_inflight(stream_uring_reactor_t *reactor,
+                                         stream_uring_base_t *base) {
+  stream_uring_op_t *op;
+
+  for (op = base->inflight_head; op; op = op->next_inflight) {
+    struct io_uring_sqe *sqe = stream_uring_get_sqe(reactor);
+    if (!sqe) {
+      return;
+    }
+    io_uring_prep_cancel(sqe, op, 0);
+    /* The target operation retains cleanup ownership; the cancel CQE does not. */
+    io_uring_sqe_set_data(sqe, NULL);
+  }
+}
+
 static int stream_uring_submit_wake(stream_uring_reactor_t *reactor) {
   struct io_uring_sqe *sqe;
   stream_uring_op_t *op;
+
+  if (reactor->wake_op) {
+    return TURBO_EALREADY;
+  }
 
   op = (stream_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
@@ -387,6 +392,7 @@ static int stream_uring_submit_wake(stream_uring_reactor_t *reactor) {
   op->kind = STREAM_URING_OP_WAKE;
   io_uring_prep_read(sqe, reactor->wake_fd, &op->wake_value, sizeof(op->wake_value), 0);
   io_uring_sqe_set_data(sqe, op);
+  reactor->wake_op = op;
   return TURBO_OK;
 }
 
@@ -466,6 +472,7 @@ static int stream_uring_submit_command(stream_uring_reactor_t *reactor,
                base->fd,
                (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
     base->stopping = 1;
+    stream_uring_cancel_inflight(reactor, base);
     if (base->fd >= 0) {
       stream_uring_shutdown_fd(base->fd);
       close(base->fd);
@@ -540,6 +547,9 @@ static void stream_uring_process_cqe(stream_uring_reactor_t *reactor,
   io_uring_cqe_seen(&reactor->ring, cqe);
 
   if (op->kind == STREAM_URING_OP_WAKE) {
+    if (reactor->wake_op == op) {
+      reactor->wake_op = NULL;
+    }
     free(op);
     stream_uring_drain_commands(reactor);
     if (!reactor->stopping && reactor->wake_fd >= 0) {
@@ -732,6 +742,9 @@ static void stream_uring_reactor_release(stream_uring_reactor_t *reactor) {
     io_uring_queue_exit(&reactor->ring);
     reactor->ring_ready = 0;
   }
+  /* queue_exit must end the kernel's read of wake_value before its owner is freed. */
+  stream_uring_free_op(reactor->wake_op);
+  reactor->wake_op = NULL;
   coro_context_release_external(reactor->ctx);
   free(reactor);
 }
@@ -1144,7 +1157,8 @@ static int stream_uring_init_with_socket(turbo_stream_t *s, int existing_fd) {
   return 0;
 }
 
-static int uring_connect(turbo_stream_t *s, const struct sockaddr *addr) {
+static int uring_connect(turbo_stream_t *s, const struct sockaddr *addr,
+                         size_t addr_len) {
   stream_uring_state_t *st;
   stream_uring_op_t *op;
   int family;
@@ -1186,7 +1200,7 @@ static int uring_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   op->kind = STREAM_URING_OP_CONNECT;
   op->owner = s;
-  op->addr_len = sockaddr_length(addr);
+  op->addr_len = (socklen_t)addr_len;
   memcpy(&op->addr, addr, op->addr_len);
   st->connect_inflight = 1;
 
@@ -1208,7 +1222,7 @@ static int uring_connect_pipe(turbo_stream_t *s, const char *name) {
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, name, sizeof(addr.sun_path) - 1);
-  return uring_connect(s, (const struct sockaddr *)&addr);
+  return uring_connect(s, (const struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int uring_send(turbo_stream_t *s, const char *data, size_t len) {
@@ -1322,12 +1336,12 @@ static int uring_get_peer_addr(turbo_stream_t *s, struct sockaddr_storage *addr)
   return 0;
 }
 
-static int uring_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
+static int uring_bind(turbo_stream_listener_t *l, const struct sockaddr *addr,
+                      size_t addr_len) {
   stream_uring_server_state_t *st;
   int rc;
   int reuse;
   int family;
-  socklen_t len;
 
   if (!l || !addr) {
     return TURBO_EINVAL;
@@ -1379,8 +1393,7 @@ static int uring_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
 #endif
   }
 
-  len = sockaddr_length(addr);
-  if (bind(st->base.fd, addr, len) < 0) {
+  if (bind(st->base.fd, addr, (socklen_t)addr_len) < 0) {
     rc = -errno;
     stream_uring_destroy_base(&st->base);
     free(st);
@@ -1402,7 +1415,7 @@ static int uring_bind_pipe(turbo_stream_listener_t *l, const char *name) {
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, name, sizeof(addr.sun_path) - 1);
   unlink(name);
-  return uring_bind(l, (const struct sockaddr *)&addr);
+  return uring_bind(l, (const struct sockaddr *)&addr, sizeof(addr));
 }
 
 static int uring_listen(turbo_stream_listener_t *l, int backlog) {

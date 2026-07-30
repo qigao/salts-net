@@ -13,6 +13,10 @@
 #include "CoroNet/turbo_iovec.h"
 #include "turbo_buffer.h"
 
+#ifndef TURBO_HAS_VSOCK
+#define TURBO_HAS_VSOCK 0
+#endif
+
 #ifdef _WIN32
   #include <winsock2.h>
 typedef SOCKET turbo_stream_native_socket_t;
@@ -29,7 +33,8 @@ extern "C" {
 typedef struct turbo_stream_backend_ops_s {
   /* Client ops */
   int  (*init)(turbo_stream_t *s);
-  int  (*connect)(turbo_stream_t *s, const struct sockaddr *addr);
+  int  (*connect)(turbo_stream_t *s, const struct sockaddr *addr,
+                  size_t addr_len);
   int  (*connect_pipe)(turbo_stream_t *s, const char *name);
   int  (*send)(turbo_stream_t *s, const char *data, size_t len);
   int  (*sendv_borrowed)(turbo_stream_t *s, const turbo_iovec_t *iov, size_t iovcnt,
@@ -42,7 +47,8 @@ typedef struct turbo_stream_backend_ops_s {
   int  (*get_peer_addr)(turbo_stream_t *s, struct sockaddr_storage *addr);
 
   /* Listener ops */
-  int  (*bind)(turbo_stream_listener_t *l, const struct sockaddr *addr);
+  int  (*bind)(turbo_stream_listener_t *l, const struct sockaddr *addr,
+               size_t addr_len);
   int  (*bind_pipe)(turbo_stream_listener_t *l, const char *name);
   int  (*listen)(turbo_stream_listener_t *l, int backlog);
   void (*listener_close)(turbo_stream_listener_t *l);
@@ -139,9 +145,18 @@ extern const turbo_stream_backend_ops_t turbo_stream_ws_ops;
 extern const turbo_stream_backend_ops_t turbo_stream_tls_ops;
 
 turbo_stream_listener_t *turbo_stream_listen_ex(coro_context_t *ctx, turbo_stream_kind_t kind,
-                                                const struct sockaddr *addr, int backlog,
+                                                const struct sockaddr *addr,
+                                                size_t addr_len, int backlog,
                                                 turbo_accept_cb on_accept, int reuse_port,
                                                 void *user_data);
+
+int turbo_vsock_endpoint_to_sockaddr(const turbo_vsock_endpoint_t *endpoint,
+                                     int for_bind,
+                                     struct sockaddr_storage *addr,
+                                     size_t *addr_len);
+int turbo_vsock_endpoint_from_sockaddr(const struct sockaddr *addr,
+                                       size_t addr_len,
+                                       turbo_vsock_endpoint_t *endpoint);
 
 int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  turbo_stream_t *tcp_stream,

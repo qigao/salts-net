@@ -1,10 +1,10 @@
 /**
  * @file turbo_stream.h
- * @brief Unified stream transport (TCP + Pipe) with backend vtable dispatch.
+ * @brief Unified stream transport with backend vtable dispatch.
  *
  * turbo_stream_t is the foundational byte-stream layer. It abstracts TCP4,
- * TCP6, and named pipes behind a single API. TLS, WebSocket, and the coro
- * layer compose on top of this — they never touch raw sockets.
+ * TCP6, named pipes, and Linux VSOCK behind a single API. TLS, WebSocket, and
+ * the coro layer compose on top of this -- they never touch raw sockets.
  *
  * Backend selection (IOCP / epoll / kqueue) is resolved once at create time
  * and stored in the struct. Every subsequent call is a direct function-pointer
@@ -41,7 +41,25 @@ typedef enum turbo_stream_kind_e {
   TURBO_STREAM_WS   = 3,  /**< WebSocket over TCP (client, Phase 1) */
   TURBO_STREAM_WSS  = 4,  /**< WebSocket over TLS (Phase 2) */
   TURBO_STREAM_TLS  = 5,  /**< Native TLS over TCP */
+  TURBO_STREAM_VSOCK = 6, /**< Linux AF_VSOCK byte stream */
 } turbo_stream_kind_t;
+
+/** Portable VSOCK address. CID and port are both 32-bit values. */
+typedef struct turbo_vsock_endpoint_s {
+  uint32_t cid;
+  uint32_t port;
+} turbo_vsock_endpoint_t;
+
+/** Wildcard CID accepted only for local bind endpoints. */
+#define TURBO_VSOCK_CID_ANY UINT32_MAX
+/** Hypervisor endpoint CID defined by the Linux VSOCK ABI. */
+#define TURBO_VSOCK_CID_HYPERVISOR UINT32_C(0)
+/** Local host endpoint CID defined by the Linux VSOCK ABI. */
+#define TURBO_VSOCK_CID_LOCAL UINT32_C(1)
+/** Host endpoint CID used by a guest to reach its host. */
+#define TURBO_VSOCK_CID_HOST UINT32_C(2)
+/** Wildcard port accepted only for local bind endpoints. */
+#define TURBO_VSOCK_PORT_ANY UINT32_MAX
 
 typedef enum turbo_tls_protocol_mode_e {
   TURBO_TLS_PROTOCOL_DEFAULT = 0,
@@ -171,6 +189,42 @@ CXX_C_API int turbo_stream_connect_addr(turbo_stream_t *s,
                                          turbo_close_cb on_close);
 
 /**
+ * @brief Connect to a pre-resolved address with an explicit address length.
+ *
+ * @param s Stream handle on its owner thread.
+ * @param addr Address borrowed for this call.
+ * @param addr_len Exact byte length of addr.
+ * @param on_connect Completion callback, or NULL.
+ * @param on_close Close callback, or NULL.
+ * @return 0 when connect was started; TURBO_EINVAL for an invalid address
+ *         length; TURBO_ENOTSUP when the backend cannot connect; otherwise a
+ *         platform or allocation error.
+ */
+CXX_C_API int turbo_stream_connect_addr_ex(turbo_stream_t *s,
+                                            const struct sockaddr *addr,
+                                            size_t addr_len,
+                                            turbo_connect_cb on_connect,
+                                            turbo_close_cb on_close);
+
+/**
+ * @brief Connect a VSOCK stream to a remote CID and port.
+ *
+ * The stream must have kind TURBO_STREAM_VSOCK. CID_ANY and PORT_ANY are not
+ * valid remote endpoints.
+ *
+ * @param s VSOCK stream handle on its owner thread.
+ * @param endpoint Remote endpoint copied during this call.
+ * @param on_connect Completion callback, or NULL.
+ * @param on_close Close callback, or NULL.
+ * @return 0 when connect was started; TURBO_EINVAL for a wrong stream kind or
+ *         wildcard remote endpoint; otherwise a platform socket error.
+ */
+CXX_C_API int turbo_stream_connect_vsock(turbo_stream_t *s,
+                                          const turbo_vsock_endpoint_t *endpoint,
+                                          turbo_connect_cb on_connect,
+                                          turbo_close_cb on_close);
+
+/**
  * @brief Connect to a named pipe.
  *
  * Accepts native platform endpoints and the unified `pipe://name` form.
@@ -186,13 +240,13 @@ CXX_C_API int turbo_stream_set_tcp_keepalive(turbo_stream_t *s,
                                              const turbo_tcp_keepalive_config_t *config);
 
 /**
- * @brief Configure OS SO_LINGER for TCP-backed streams.
+ * @brief Configure OS SO_LINGER for native socket streams.
  */
 CXX_C_API int turbo_stream_set_linger(turbo_stream_t *s,
                                       const turbo_socket_linger_config_t *config);
 
 /**
- * @brief Configure the OS SO_RCVBUF request for a TCP-backed stream.
+ * @brief Configure the OS SO_RCVBUF request for a native socket stream.
  *
  * Call before connect. The operating system may adjust the requested value.
  * `bytes` must be in the range 1..INT_MAX.
@@ -200,7 +254,7 @@ CXX_C_API int turbo_stream_set_linger(turbo_stream_t *s,
 CXX_C_API int turbo_stream_set_recv_buffer_size(turbo_stream_t *s, size_t bytes);
 
 /**
- * @brief Configure the OS SO_SNDBUF request for a TCP-backed stream.
+ * @brief Configure the OS SO_SNDBUF request for a native socket stream.
  *
  * Call before connect. The operating system may adjust the requested value.
  * `bytes` must be in the range 1..INT_MAX.
@@ -279,6 +333,34 @@ CXX_C_API turbo_stream_listener_t *turbo_stream_listen_with_data(
     void *user_data);
 
 /**
+ * @brief Create a VSOCK listener.
+ *
+ * CID_ANY and PORT_ANY are accepted for bind endpoints. Use
+ * turbo_stream_get_local_vsock_endpoint() on an accepted stream to query its
+ * concrete local endpoint.
+ *
+ * @param ctx Event-loop context that owns the listener.
+ * @param endpoint Local endpoint copied during this call.
+ * @param backlog Native listener backlog.
+ * @param on_accept Required accept callback.
+ * @return Listener handle on success, or NULL. Query
+ *         coro_context_get_last_error(ctx) for the failure reason.
+ */
+CXX_C_API turbo_stream_listener_t *turbo_stream_listen_vsock(
+    coro_context_t *ctx, const turbo_vsock_endpoint_t *endpoint,
+    int backlog, turbo_accept_cb on_accept);
+
+/**
+ * @brief Create a VSOCK listener with initial listener user data.
+ *
+ * Parameters and errors match turbo_stream_listen_vsock(). user_data remains
+ * caller-owned and is retrievable from the listener.
+ */
+CXX_C_API turbo_stream_listener_t *turbo_stream_listen_vsock_with_data(
+    coro_context_t *ctx, const turbo_vsock_endpoint_t *endpoint,
+    int backlog, turbo_accept_cb on_accept, void *user_data);
+
+/**
  * @brief Create a named-pipe listener.
  *
  * Accepts native platform endpoints and the unified `pipe://name` form.
@@ -307,6 +389,25 @@ CXX_C_API int turbo_stream_get_local_addr(turbo_stream_t *s,
                                            struct sockaddr_storage *addr);
 CXX_C_API int turbo_stream_get_peer_addr(turbo_stream_t *s,
                                           struct sockaddr_storage *addr);
+/**
+ * @brief Get the local CID and port from a VSOCK stream.
+ * @return 0 on success; TURBO_EINVAL for a wrong kind or NULL argument;
+ *         otherwise the backend query error.
+ */
+CXX_C_API int turbo_stream_get_local_vsock_endpoint(
+    turbo_stream_t *s, turbo_vsock_endpoint_t *endpoint);
+/**
+ * @brief Get the peer CID and port from a connected VSOCK stream.
+ * @return 0 on success; TURBO_EINVAL for a wrong kind or NULL argument;
+ *         otherwise the backend query error.
+ */
+CXX_C_API int turbo_stream_get_peer_vsock_endpoint(
+    turbo_stream_t *s, turbo_vsock_endpoint_t *endpoint);
+/**
+ * @brief Check whether the running platform can create an AF_VSOCK stream.
+ * @return 1 when available, otherwise 0.
+ */
+CXX_C_API int turbo_vsock_is_available(void);
 CXX_C_API void turbo_stream_set_user_data(turbo_stream_t *s, void *data);
 CXX_C_API void *turbo_stream_get_user_data(turbo_stream_t *s);
 CXX_C_API void turbo_stream_set_write_cb(turbo_stream_t *s,

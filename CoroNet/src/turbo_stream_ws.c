@@ -1213,7 +1213,8 @@ fail:
   return rc;
 }
 
-static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
+static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr,
+                      size_t addr_len) {
   ws_state_t *st = (ws_state_t *)s->backend_data;
   int connect_rc;
 
@@ -1313,9 +1314,9 @@ static int ws_connect(turbo_stream_t *s, const struct sockaddr *addr) {
 
   st->state = WS_ST_CONNECTING;
   ws_operation_enter(st);
-  connect_rc = turbo_stream_connect_addr(st->tcp, addr,
-                                         ws_on_tcp_connect,
-                                         ws_on_tcp_close);
+  connect_rc = turbo_stream_connect_addr_ex(st->tcp, addr, addr_len,
+                                            ws_on_tcp_connect,
+                                            ws_on_tcp_close);
   if (connect_rc != 0 && st->tcp) {
     ws_drop_inner_tcp(st);
   }
@@ -1431,8 +1432,9 @@ static int ws_get_peer(turbo_stream_t *s, struct sockaddr_storage *a) {
 }
 
 /* Listener ops — Phase 2 */
-static int  ws_bind(turbo_stream_listener_t *l, const struct sockaddr *a) {
-  UNUSED(l); UNUSED(a); return TURBO_ENOTSUP;
+static int  ws_bind(turbo_stream_listener_t *l, const struct sockaddr *a,
+                    size_t addr_len) {
+  UNUSED(l); UNUSED(a); UNUSED(addr_len); return TURBO_ENOTSUP;
 }
 static int  ws_bind_pipe(turbo_stream_listener_t *l, const char *n) {
   UNUSED(l); UNUSED(n); return TURBO_ENOTSUP;

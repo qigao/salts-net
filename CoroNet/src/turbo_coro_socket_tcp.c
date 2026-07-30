@@ -11,9 +11,15 @@
 #include "turbo_coro_send_profile_internal.h"
 #include "turbo_stream_internal.h"
 #include <stdlib.h>
+
+#if defined(__linux__) && TURBO_HAS_VSOCK
+#include <sys/socket.h>
+#include <linux/vm_sockets.h>
+#endif
 #include <string.h>
 
 extern const coro_transport_ops_t transport_ops_tcp;
+extern const coro_transport_ops_t transport_ops_vsock;
 
 #define CORO_TCP_EPOLL_SUBMIT_CHUNK_BYTES (64u * 1024u)
 
@@ -101,29 +107,8 @@ static void tcp_discard_stream(coro_socket_t *s) {
 
 /* ── Connect ──────────────────────────────────────────────── */
 
-static int tcp_connect(coro_socket_t *s, const char *host, int port) {
-  const char *ip = s->resolved_ip[0] ? s->resolved_ip : host;
-
-  /* Build sockaddr from resolved IP */
-  struct sockaddr_in addr4;
-  struct sockaddr_in6 addr6;
-  struct sockaddr *sa = NULL;
-
-  memset(&addr4, 0, sizeof(addr4));
-  memset(&addr6, 0, sizeof(addr6));
-
-  if (inet_pton(AF_INET, ip, &addr4.sin_addr) == 1) {
-    addr4.sin_family = AF_INET;
-    addr4.sin_port = htons((unsigned short)port);
-    sa = (struct sockaddr *)&addr4;
-  } else if (inet_pton(AF_INET6, ip, &addr6.sin6_addr) == 1) {
-    addr6.sin6_family = AF_INET6;
-    addr6.sin6_port = htons((unsigned short)port);
-    sa = (struct sockaddr *)&addr6;
-  }
-
-  if (!sa) return TURBO_EINVAL;
-
+static int stream_connect_addr(coro_socket_t *s, turbo_stream_kind_t kind,
+                               const struct sockaddr *addr, size_t addr_len) {
   /* Retry path: failed connect attempts must not reuse a dead stream handle. */
   if (s->handle.stream && !s->connected) {
     tcp_discard_stream(s);
@@ -131,7 +116,6 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 
   /* Create stream handle on first connect */
   if (!s->handle.stream) {
-    turbo_stream_kind_t kind = (sa->sa_family == AF_INET6) ? TURBO_STREAM_TCP6 : TURBO_STREAM_TCP4;
     s->handle.stream = turbo_stream_create(s->ctx, kind);
     if (!s->handle.stream) return socket_ctx_error(s, TURBO_EIO);
     turbo_stream_set_user_data(s->handle.stream, s);
@@ -148,7 +132,8 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
 
   retain_client(s);
   coro_set_wait(s);
-  int r = turbo_stream_connect_addr(s->handle.stream, sa, on_tcp_connect, on_tcp_close);
+  int r = turbo_stream_connect_addr_ex(s->handle.stream, addr, addr_len,
+                                       on_tcp_connect, on_tcp_close);
   if (r != 0) {
     s->co_wait = NULL;
     release_client(s);
@@ -177,6 +162,41 @@ static int tcp_connect(coro_socket_t *s, const char *host, int port) {
   }
 }
 
+static int tcp_connect(coro_socket_t *s, const char *host, int port) {
+  const char *ip = s->resolved_ip[0] ? s->resolved_ip : host;
+  struct sockaddr_in addr4;
+  struct sockaddr_in6 addr6;
+
+  memset(&addr4, 0, sizeof(addr4));
+  memset(&addr6, 0, sizeof(addr6));
+
+  if (inet_pton(AF_INET, ip, &addr4.sin_addr) == 1) {
+    addr4.sin_family = AF_INET;
+    addr4.sin_port = htons((unsigned short)port);
+    return stream_connect_addr(s, TURBO_STREAM_TCP4,
+                               (const struct sockaddr *)&addr4, sizeof(addr4));
+  }
+  if (inet_pton(AF_INET6, ip, &addr6.sin6_addr) == 1) {
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons((unsigned short)port);
+    return stream_connect_addr(s, TURBO_STREAM_TCP6,
+                               (const struct sockaddr *)&addr6, sizeof(addr6));
+  }
+  return TURBO_EINVAL;
+}
+
+int coro_socket_connect_vsock_internal(
+    coro_socket_t *s, const turbo_vsock_endpoint_t *endpoint) {
+  struct sockaddr_storage addr;
+  size_t addr_len;
+  int rc;
+
+  rc = turbo_vsock_endpoint_to_sockaddr(endpoint, 0, &addr, &addr_len);
+  if (rc != 0) return rc;
+  return stream_connect_addr(s, TURBO_STREAM_VSOCK,
+                             (const struct sockaddr *)&addr, addr_len);
+}
+
 /* ── Bind/Listen/Accept ───────────────────────────────────── */
 
 typedef struct tcp_accept_node_s {
@@ -190,6 +210,7 @@ typedef struct tcp_listener_state_s {
   tcp_accept_node_t *head;
   tcp_accept_node_t *tail;
   int reuse_port;
+  size_t addr_len;
 } tcp_listener_state_t;
 
 static void tcp_listener_fail(coro_socket_t *s, int status) {
@@ -223,7 +244,9 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle, void *peer
     return;
   }
 
-  child = coro_socket_create_shell(ls->server_coro->ctx, TURBO_TCP, &transport_ops_tcp);
+  child = coro_socket_create_shell(ls->server_coro->ctx,
+                                   ls->server_coro->transport,
+                                   ls->server_coro->ops);
   if (!child) {
     free(node);
     turbo_stream_destroy(stream);
@@ -276,10 +299,12 @@ static void on_tcp_accept(void *listener_handle, void *stream_handle, void *peer
   }
 }
 
-static int tcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
-  /* Store bind address for later use in tcp_listen */
-  if (!s || !addr) return TURBO_EINVAL;
-
+static int stream_bind_addr(coro_socket_t *s, const struct sockaddr *addr,
+                            size_t addr_len) {
+  if (!s || !addr || addr_len < sizeof(addr->sa_family) ||
+      addr_len > sizeof(struct sockaddr_storage)) {
+    return TURBO_EINVAL;
+  }
   tcp_listener_state_t *ls = (tcp_listener_state_t *)s->native_tcp_state;
   if (!ls) {
     ls = calloc(1, sizeof(tcp_listener_state_t));
@@ -289,17 +314,44 @@ static int tcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
     s->native_tcp_state = ls;
   }
 
-  size_t addr_len =
-      (addr->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
-  /* Store address in native_tcp_state for tcp_listen to use.
-     We pack it after the listener_state struct. */
   void *new_ls = realloc(ls, sizeof(tcp_listener_state_t) + addr_len);
   if (!new_ls) return TURBO_ENOMEM;
   ls = (tcp_listener_state_t *)new_ls;
   s->native_tcp_state = ls;
+  ls->addr_len = addr_len;
   memcpy((char *)ls + sizeof(tcp_listener_state_t), addr, addr_len);
 
   return 0;
+}
+
+static int tcp_bind(coro_socket_t *s, const struct sockaddr *addr) {
+  if (!s || !addr) return TURBO_EINVAL;
+  if (s->transport == TURBO_VSOCK) {
+#if defined(__linux__) && TURBO_HAS_VSOCK
+    if (addr->sa_family == AF_VSOCK) {
+      return stream_bind_addr(s, addr, sizeof(struct sockaddr_vm));
+    }
+#endif
+    return TURBO_EPROTONOSUPPORT;
+  }
+  if (addr->sa_family == AF_INET) {
+    return stream_bind_addr(s, addr, sizeof(struct sockaddr_in));
+  }
+  if (addr->sa_family == AF_INET6) {
+    return stream_bind_addr(s, addr, sizeof(struct sockaddr_in6));
+  }
+  return TURBO_EPROTONOSUPPORT;
+}
+
+int coro_socket_bind_vsock_internal(
+    coro_socket_t *s, const turbo_vsock_endpoint_t *endpoint) {
+  struct sockaddr_storage addr;
+  size_t addr_len;
+  int rc;
+
+  rc = turbo_vsock_endpoint_to_sockaddr(endpoint, 1, &addr, &addr_len);
+  if (rc != 0) return rc;
+  return stream_bind_addr(s, (const struct sockaddr *)&addr, addr_len);
 }
 
 static int tcp_listen(coro_socket_t *s, int backlog) {
@@ -309,11 +361,23 @@ static int tcp_listen(coro_socket_t *s, int backlog) {
   const struct sockaddr *addr =
       (const struct sockaddr *)((char *)ls + sizeof(tcp_listener_state_t));
 
-  turbo_stream_kind_t kind = (addr->sa_family == AF_INET6) ? TURBO_STREAM_TCP6 : TURBO_STREAM_TCP4;
+  turbo_stream_kind_t kind;
+  if (addr->sa_family == AF_INET) {
+    kind = TURBO_STREAM_TCP4;
+  } else if (addr->sa_family == AF_INET6) {
+    kind = TURBO_STREAM_TCP6;
+#if defined(__linux__) && TURBO_HAS_VSOCK
+  } else if (addr->sa_family == AF_VSOCK) {
+    kind = TURBO_STREAM_VSOCK;
+#endif
+  } else {
+    return TURBO_EPROTONOSUPPORT;
+  }
 
   ls->reuse_port = s->reuse_port;
   ls->listener =
-      turbo_stream_listen_ex(s->ctx, kind, addr, backlog, on_tcp_accept, ls->reuse_port, ls);
+      turbo_stream_listen_ex(s->ctx, kind, addr, ls->addr_len, backlog,
+                             on_tcp_accept, ls->reuse_port, ls);
   if (!ls->listener) {
     int rc = coro_context_get_last_error(s->ctx);
     return rc != 0 ? rc : TURBO_EIO;
@@ -570,10 +634,8 @@ static int tcp_get_local_addr(coro_socket_t *s, struct sockaddr_storage *addr) {
       /* Bind address is stored after the struct */
       const struct sockaddr *bind_addr =
           (const struct sockaddr *)((char *)ls + sizeof(tcp_listener_state_t));
-      size_t len = (bind_addr->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6)
-                                                      : sizeof(struct sockaddr_in);
       memset(addr, 0, sizeof(*addr));
-      memcpy(addr, bind_addr, len);
+      memcpy(addr, bind_addr, ls->addr_len);
       return 0;
     }
   }
@@ -601,3 +663,17 @@ const coro_transport_ops_t transport_ops_tcp = {.connect = tcp_connect,
                                                 .close = tcp_close,
                                                 .get_send_buffer = tcp_get_send_buffer,
                                                 .send_buffer = tcp_send_buffer};
+
+const coro_transport_ops_t transport_ops_vsock = {.connect = NULL,
+                                                  .bind = tcp_bind,
+                                                  .listen = tcp_listen,
+                                                  .accept = tcp_accept,
+                                                  .send = tcp_send,
+                                                  .sendv = tcp_sendv,
+                                                  .recv_start = tcp_recv_start,
+                                                  .recv_stop = tcp_recv_stop,
+                                                  .get_local_addr = tcp_get_local_addr,
+                                                  .get_peer_addr = tcp_get_peer_addr,
+                                                  .close = tcp_close,
+                                                  .get_send_buffer = tcp_get_send_buffer,
+                                                  .send_buffer = tcp_send_buffer};

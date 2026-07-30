@@ -37,6 +37,7 @@ static uint32_t zstd_load_u32_be(const char *p) {
 
 /* ── External transport ops (defined in separate files) ────── */
 extern const coro_transport_ops_t transport_ops_tcp;
+extern const coro_transport_ops_t transport_ops_vsock;
 extern const coro_transport_ops_t transport_ops_pipe;
 extern const coro_transport_ops_t udp_client_ops;
 extern const coro_transport_ops_t transport_ops_kcp;
@@ -47,6 +48,7 @@ const coro_transport_ops_t *transport_ops_table[TURBO_TRANSPORT_MAX] = {
     [TURBO_TCP] = &transport_ops_tcp,   [TURBO_TLS] = &transport_ops_tls,
     [TURBO_KCP] = &transport_ops_kcp,   [TURBO_UDP] = &udp_client_ops,
     [TURBO_PIPE] = &transport_ops_pipe, [TURBO_WEBSOCKET] = &transport_ops_ws,
+    [TURBO_VSOCK] = &transport_ops_vsock,
 };
 
 /* ── Forward declarations ─────────────────────────────────── */
@@ -73,7 +75,12 @@ static int socket_is_tcp_backed(const coro_socket_t *s) {
 
 static int socket_is_stream_backed(const coro_socket_t *s) {
   return s && (s->transport == TURBO_TCP || s->transport == TURBO_TLS ||
-               s->transport == TURBO_WEBSOCKET || s->transport == TURBO_PIPE);
+               s->transport == TURBO_WEBSOCKET || s->transport == TURBO_PIPE ||
+               s->transport == TURBO_VSOCK);
+}
+
+static int socket_supports_native_stream_options(const coro_socket_t *s) {
+  return socket_is_tcp_backed(s) || (s && s->transport == TURBO_VSOCK);
 }
 
 static mem_buffer_t *socket_return_buffer_error(coro_socket_t *s, int err) {
@@ -287,6 +294,12 @@ void release_client(coro_socket_t *client) {
     if (client->transport == TURBO_KCP && client->handle.kcp && client->owns_handle) {
       turbo_kcp_destroy(client->handle.kcp);
       client->handle.kcp = NULL;
+    }
+
+    if (client->recv_data) {
+      coro_socket_free_recv(client->recv_data);
+      client->recv_data = NULL;
+      client->recv_len = 0;
     }
 
     coro_socket_reset_recv_compression_state(client);
@@ -763,6 +776,7 @@ static const coro_socket_protocol_desc_t g_socket_protocols[] = {
     {CORO_SOCKET_UDP_V6, TURBO_UDP, &udp_client_ops, TURBO_DNS_IPV6_ONLY, 1, socket_init_udp},
     {CORO_SOCKET_KCP, TURBO_KCP, &transport_ops_kcp, TURBO_DNS_ANY, 1, NULL},
     {CORO_SOCKET_PIPE, TURBO_PIPE, &transport_ops_pipe, TURBO_DNS_ANY, 1, socket_init_pipe},
+    {CORO_SOCKET_VSOCK, TURBO_VSOCK, &transport_ops_vsock, TURBO_DNS_ANY, 1, NULL},
 };
 
 static const coro_socket_protocol_desc_t *socket_protocol_desc(coro_socket_type_t type) {
@@ -879,6 +893,9 @@ int coro_socket_connect_direct_internal(coro_socket_t *s, const char *connect_ho
   if (transport == TURBO_PIPE) {
     return s->ops->connect(s, connect_host, port);
   }
+  if (transport == TURBO_VSOCK) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
 
   /* DNS resolution for host-based protocols */
   struct sockaddr_storage probe;
@@ -960,6 +977,17 @@ int coro_socket_connect_host_ex(coro_socket_t *s, const char *connect_host, int 
 
 int coro_socket_connect(coro_socket_t *s, const char *host, int port) {
   return coro_socket_connect_host_impl(s, host, port, host);
+}
+
+int coro_socket_connect_vsock(
+    coro_socket_t *s, const turbo_vsock_endpoint_t *endpoint) {
+  int rc;
+  if (!s || !endpoint) return socket_return_error(s, TURBO_EINVAL);
+  if (s->transport != TURBO_VSOCK) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
+  rc = coro_socket_connect_vsock_internal(s, endpoint);
+  return rc == 0 ? socket_return_error(s, 0) : socket_return_error(s, rc);
 }
 
 int coro_socket_connect_pipe(coro_socket_t *s, const char *path) {
@@ -1713,6 +1741,17 @@ int coro_socket_bind(coro_socket_t *s, const struct sockaddr *a) {
   return s->ops->bind(s, a);
 }
 
+int coro_socket_bind_vsock(
+    coro_socket_t *s, const turbo_vsock_endpoint_t *endpoint) {
+  int rc;
+  if (!s || !endpoint) return socket_return_error(s, TURBO_EINVAL);
+  if (s->transport != TURBO_VSOCK) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
+  rc = coro_socket_bind_vsock_internal(s, endpoint);
+  return rc == 0 ? socket_return_error(s, 0) : socket_return_error(s, rc);
+}
+
 int coro_socket_listen(coro_socket_t *s, int b) {
   if (!s) return socket_return_error(s, TURBO_EINVAL);
   if (!s->ops || !s->ops->listen) return socket_return_error(s, TURBO_ENOTSUP);
@@ -1789,7 +1828,9 @@ int coro_socket_set_tcp_keepalive(coro_socket_t *s, const turbo_tcp_keepalive_co
 int coro_socket_set_linger(coro_socket_t *s, const turbo_socket_linger_config_t *config) {
   int rc;
   if (!s || !config) return socket_return_error(s, TURBO_EINVAL);
-  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  if (!socket_supports_native_stream_options(s)) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
   s->linger_config = *config;
   s->linger_configured = 1;
   if (s->handle.stream) {
@@ -1802,7 +1843,9 @@ int coro_socket_set_linger(coro_socket_t *s, const turbo_socket_linger_config_t 
 int coro_socket_set_recv_buffer_size(coro_socket_t *s, size_t bytes) {
   int rc;
   if (!s || bytes == 0u) return socket_return_error(s, TURBO_EINVAL);
-  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  if (!socket_supports_native_stream_options(s)) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
   if (bytes > (size_t)INT32_MAX) return socket_return_error(s, TURBO_ERANGE);
   s->socket_recv_buffer_bytes = bytes;
   if (s->handle.stream) {
@@ -1815,7 +1858,9 @@ int coro_socket_set_recv_buffer_size(coro_socket_t *s, size_t bytes) {
 int coro_socket_set_send_buffer_size(coro_socket_t *s, size_t bytes) {
   int rc;
   if (!s || bytes == 0u) return socket_return_error(s, TURBO_EINVAL);
-  if (!socket_is_tcp_backed(s)) return socket_return_error(s, TURBO_ENOTSUP);
+  if (!socket_supports_native_stream_options(s)) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
   if (bytes > (size_t)INT32_MAX) return socket_return_error(s, TURBO_ERANGE);
   s->socket_send_buffer_bytes = bytes;
   if (s->handle.stream) {
@@ -1984,6 +2029,21 @@ int coro_socket_get_local_address(coro_socket_t *s, struct sockaddr_storage *a) 
   return s->ops->get_local_addr ? s->ops->get_local_addr(s, a) : TURBO_ENOSYS;
 }
 
+int coro_socket_get_local_vsock_endpoint(
+    coro_socket_t *s, turbo_vsock_endpoint_t *endpoint) {
+  struct sockaddr_storage addr;
+  int rc;
+  if (!s || !endpoint) return socket_return_error(s, TURBO_EINVAL);
+  if (s->transport != TURBO_VSOCK) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
+  rc = coro_socket_get_local_address(s, &addr);
+  if (rc != 0) return socket_return_error(s, rc);
+  rc = turbo_vsock_endpoint_from_sockaddr(
+      (const struct sockaddr *)&addr, sizeof(addr), endpoint);
+  return socket_return_error(s, rc);
+}
+
 int coro_socket_get_peer_address(coro_socket_t *s, struct sockaddr_storage *a) {
   if (!s || !a) {
     return TURBO_EINVAL;
@@ -1993,6 +2053,21 @@ int coro_socket_get_peer_address(coro_socket_t *s, struct sockaddr_storage *a) {
     return TURBO_ENOSYS;
   }
   return s->ops->get_peer_addr ? s->ops->get_peer_addr(s, a) : TURBO_ENOSYS;
+}
+
+int coro_socket_get_peer_vsock_endpoint(
+    coro_socket_t *s, turbo_vsock_endpoint_t *endpoint) {
+  struct sockaddr_storage addr;
+  int rc;
+  if (!s || !endpoint) return socket_return_error(s, TURBO_EINVAL);
+  if (s->transport != TURBO_VSOCK) {
+    return socket_return_error(s, TURBO_ENOTSUP);
+  }
+  rc = coro_socket_get_peer_address(s, &addr);
+  if (rc != 0) return socket_return_error(s, rc);
+  rc = turbo_vsock_endpoint_from_sockaddr(
+      (const struct sockaddr *)&addr, sizeof(addr), endpoint);
+  return socket_return_error(s, rc);
 }
 
 int coro_socket_get_peer_address_text(coro_socket_t *s,

@@ -8,7 +8,7 @@ High-performance networking core library providing essential network protocols a
 - **Coroutine I/O**: Native cross-platform I/O via IOCP (Windows), epoll (Linux), kqueue (macOS)
 - **Core Design**: Synchronous-style code with coro execution via coroutines
 - **Connection Pool**: Coroutine-aware connection pooling for high-concurrency workloads
-- **Multiple Protocols**: TCP, UDP, KCP, TLS, Named Pipes, WebSocket
+- **Multiple Protocols**: TCP, UDP, KCP, TLS, Named Pipes, WebSocket, Linux VSOCK
 - **Memory Management**: Efficient arena-based memory pooling and zero-copy buffers
 - **Configuration System**: Runtime configuration with hashmap-backed storage
 - **DNS Resolution**: High-performance DNS resolver using c-ares
@@ -209,6 +209,102 @@ int main(void) {
 }
 ```
 
+### Linux VSOCK
+
+VSOCK uses a typed `{cid, port}` endpoint instead of a hostname or URI. This
+keeps VM socket addresses out of DNS, proxy, and URL parsing paths.
+
+```c
+#include "turbo_coro_context.h"
+#include "turbo_coro_socket.h"
+
+static void vsock_client(coro_t *co, void *arg) {
+  coro_context_t *ctx = (coro_context_t *)arg;
+  const turbo_vsock_endpoint_t endpoint = {
+      TURBO_VSOCK_CID_HOST, UINT32_C(7000)};
+  coro_socket_t *socket = coro_socket_create_vsock(ctx);
+
+  UNUSED(co);
+  if (!socket) return;
+
+  if (coro_socket_connect_vsock(socket, &endpoint) == 0) {
+    static const char message[] = "hello";
+    (void)coro_socket_send(socket, message, sizeof(message) - 1);
+  }
+  coro_socket_destroy(socket);
+}
+
+int main(void) {
+  coro_context_t *ctx;
+
+  if (!turbo_vsock_is_available()) return 1;
+  ctx = coro_context_create(NULL);
+  if (!ctx) return 1;
+
+  if (coro_context_spawn(ctx, vsock_client, ctx) != 0) {
+    coro_context_destroy(ctx);
+    return 1;
+  }
+  coro_context_run(ctx, TURBO_RUN_DEFAULT);
+  coro_context_destroy(ctx);
+  return 0;
+}
+```
+
+A managed VSOCK server uses the same per-connection handler contract as TCP:
+
+```c
+#include "turbo_coro_context.h"
+#include "turbo_coro_socket.h"
+
+static void on_vsock_connection(coro_socket_t *client, void *arg) {
+  char *data = NULL;
+  size_t len = 0;
+
+  UNUSED(arg);
+  if (coro_socket_recv(client, &data, &len) == 0) {
+    (void)coro_socket_send(client, data, len);
+    coro_socket_free_recv(data);
+  }
+}
+
+int main(void) {
+  const turbo_vsock_endpoint_t bind_endpoint = {
+      TURBO_VSOCK_CID_ANY, UINT32_C(7000)};
+  coro_context_t *ctx;
+  coro_socket_t *server;
+
+  if (!turbo_vsock_is_available()) return 1;
+  ctx = coro_context_create(NULL);
+  if (!ctx) return 1;
+  server = coro_socket_create_vsock(ctx);
+  if (!server ||
+      coro_socket_listen_vsock(server, &bind_endpoint,
+                               on_vsock_connection, NULL) != 0) {
+    coro_socket_destroy(server);
+    coro_context_destroy(ctx);
+    return 1;
+  }
+
+  coro_context_run(ctx, TURBO_RUN_DEFAULT);
+  coro_socket_destroy(server);
+  coro_context_destroy(ctx);
+  return 0;
+}
+```
+
+`turbo_vsock_is_available()` reports whether the running Linux kernel permits
+creating an `AF_VSOCK` stream socket. Builds without Linux VSOCK headers keep
+the API available but fail VSOCK creation or use with
+`TURBO_EPROTONOSUPPORT`. Remote endpoints reject
+`TURBO_VSOCK_CID_ANY` and `TURBO_VSOCK_PORT_ANY`. Linger and socket buffer
+controls are supported; TCP keepalive is rejected with `TURBO_ENOTSUP`.
+
+VSOCK support currently targets Linux `AF_VSOCK`. Windows `AF_HYPERV` is a
+different address family and is not handled by these APIs. See
+[vsock(7)](https://man7.org/linux/man-pages/man7/vsock.7.html) and the
+[Linux virtio-vsock documentation](https://docs.kernel.org/virtio/vsock.html).
+
 ### Connection Pool
 
 ```c
@@ -328,6 +424,10 @@ peer-certificate verification fail explicitly.
 | WebSocket  | `ws://host:port/path`       | `ws://localhost:8080/chat`      | WebSocket over HTTP            |
 |            | `wss://host:port/path`      | `wss://example.com:443/api`     | WebSocket over HTTPS           |
 
+VSOCK is intentionally absent from this table. Use
+`coro_socket_connect_vsock()` or `turbo_stream_connect_vsock()` with a typed
+CID/port endpoint; VSOCK does not resolve hostnames or use outbound proxies.
+
 ### URL Helper Functions
 
 ```c
@@ -376,6 +476,16 @@ int size = turbo_config_get_int("tcp.recv_buffer_size", 8192);
 # Add to your CMake project
 find_package(TurboNet REQUIRED)
 target_link_libraries(your_target TurboNet::CoroNet)
+```
+
+Linux VSOCK loopback tests are opt-in because they require a kernel and
+host/guest configuration that supports `VMADDR_CID_LOCAL`:
+
+```bash
+cmake --preset linux-dev-user \
+  -DTURBO_ENABLE_VSOCK_INTEGRATION_TESTS=ON
+cmake --build --preset linux-dev-user --target test_vsock
+ctest --preset linux-dev-user -R test_vsock --output-on-failure
 ```
 
 ## Dependencies

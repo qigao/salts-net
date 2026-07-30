@@ -711,7 +711,8 @@ static int iocp_create_socket(turbo_stream_t *s, stream_iocp_state_t *st, int af
 
 /* ── Public Ops ───────────────────────────────────────────── */
 
-static int iocp_connect(turbo_stream_t *s, const struct sockaddr *addr) {
+static int iocp_connect(turbo_stream_t *s, const struct sockaddr *addr,
+                        size_t addr_len) {
   stream_iocp_state_t *st = (stream_iocp_state_t *)s->backend_data;
   int af = addr->sa_family;
 
@@ -746,12 +747,10 @@ static int iocp_connect(turbo_stream_t *s, const struct sockaddr *addr) {
   st->connect_pending = 1;
   st->connect_reported = 0;
 
-  int addr_len = (af == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
-
   InterlockedIncrement(&st->inflight_count);
   iocp_pool_inflight_inc(s->ctx->iocp_pool);
   
-  if (!st->connect_ex(st->socket, addr, addr_len, NULL, 0, NULL, &op->overlapped)) {
+  if (!st->connect_ex(st->socket, addr, (int)addr_len, NULL, 0, NULL, &op->overlapped)) {
     int err = WSAGetLastError();
     if (err != ERROR_IO_PENDING) {
       InterlockedDecrement(&st->inflight_count);
@@ -987,7 +986,8 @@ static int iocp_bind_pipe(turbo_stream_listener_t *l, const char *name) {
   return TURBO_ENOTSUP;
 }
 
-static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
+static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr,
+                     size_t addr_len) {
   if (!l || !addr) return TURBO_EINVAL;
 
   if (lazy_pool_init(l->ctx) != 0) return TURBO_ENOMEM;
@@ -1010,7 +1010,7 @@ static int iocp_bind(turbo_stream_listener_t *l, const struct sockaddr *addr) {
 #endif
   }
 
-  if (bind(sock, addr, (int)(addr->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6))) == SOCKET_ERROR) {
+  if (bind(sock, addr, (int)addr_len) == SOCKET_ERROR) {
     int rc = -(int)WSAGetLastError();
     closesocket(sock);
     return rc;

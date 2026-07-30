@@ -46,6 +46,11 @@
   #include <unistd.h>
 #endif
 
+#define ICE_CONSENT_MIN_BASE_INTERVAL_MS 5000
+#define ICE_CONSENT_MAX_BASE_INTERVAL_MS 20000
+#define ICE_CONSENT_EXPIRY_MS 30000
+#define ICE_CONSENT_TRANSACTION_CAPACITY 10
+
 static void ice_tracef(const char *fmt, ...) {
   const char *path = getenv("TURBO_ICE_TRACE");
   FILE *fp;
@@ -218,6 +223,11 @@ struct turbo_ice_agent_s {
   int selected_pair_io_running;
   int current_check_nominating;
   int current_check_select_on_success;
+  stun_transaction_id_t consent_txn_ids[ICE_CONSENT_TRANSACTION_CAPACITY];
+  uint64_t consent_txn_sent_ms[ICE_CONSENT_TRANSACTION_CAPACITY];
+  size_t consent_txn_next;
+  uint64_t last_consent_response_ms;
+  uint64_t next_consent_check_ms;
   ice_triggered_check_t triggered_checks[ICE_MAX_CANDIDATE_PAIRS];
   int triggered_check_head;
   int triggered_check_count;
@@ -310,6 +320,16 @@ static void set_state(turbo_ice_agent_t *agent, ice_state_t new_state) {
   if (agent->state != new_state) {
     ice_state_t old_state = agent->state;
     agent->state = new_state;
+
+    if ((new_state == ICE_STATE_CONNECTED || new_state == ICE_STATE_COMPLETED) &&
+        old_state != ICE_STATE_CONNECTED && old_state != ICE_STATE_COMPLETED) {
+      uint64_t now = turbo_monotonic_ms();
+      memset(agent->consent_txn_ids, 0, sizeof(agent->consent_txn_ids));
+      memset(agent->consent_txn_sent_ms, 0, sizeof(agent->consent_txn_sent_ms));
+      agent->consent_txn_next = 0;
+      agent->last_consent_response_ms = now;
+      agent->next_consent_check_ms = 0;
+    }
 
     if ((new_state == ICE_STATE_CONNECTED || new_state == ICE_STATE_COMPLETED) &&
         agent->ctx && !agent->selected_pair_io_running) {
@@ -407,7 +427,8 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
                                 const struct sockaddr *from, const char *peer_ip_override,
                                 uint16_t peer_port_override, ice_candidate_t *local_cand);
 static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, size_t len,
-                                 const struct sockaddr *from);
+                                 const struct sockaddr *from, const char *peer_ip_override,
+                                 uint16_t peer_port_override);
 static ice_candidate_pair_t *find_pair_by_addresses(turbo_ice_agent_t *agent, const char *local_ip,
                                                      uint16_t local_port, const char *remote_ip,
                                                      uint16_t remote_port);
@@ -938,6 +959,9 @@ int ice_agent_set_role(turbo_ice_agent_t *agent, int is_controlling) {
 turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *config) {
   if (!config)
     return NULL;
+  if (config->keepalive_interval_ms < ICE_CONSENT_MIN_BASE_INTERVAL_MS ||
+      config->keepalive_interval_ms > ICE_CONSENT_MAX_BASE_INTERVAL_MS)
+    return NULL;
 
   turbo_ice_agent_t *agent = calloc(1, sizeof(turbo_ice_agent_t));
   if (!agent)
@@ -1076,18 +1100,97 @@ void ice_agent_get_local_credentials(turbo_ice_agent_t *agent, char *ufrag, size
 }
 
 int ice_agent_set_remote_credentials(turbo_ice_agent_t *agent, const char *ufrag, const char *pwd) {
+  size_t ufrag_len;
+  size_t pwd_len;
+
   if (!agent)
     return -1;
   if (ice_agent_is_closed(agent))
     return ICE_AGENT_ERROR_CLOSED;
   if (!ufrag || !pwd)
     return -1;
+  ufrag_len = strlen(ufrag);
+  pwd_len = strlen(pwd);
+  if (ufrag_len == 0 || ufrag_len >= sizeof(agent->remote_ufrag) ||
+      pwd_len == 0 || pwd_len >= sizeof(agent->remote_pwd))
+    return -2;
 
-  strncpy(agent->remote_ufrag, ufrag, sizeof(agent->remote_ufrag) - 1);
-  strncpy(agent->remote_pwd, pwd, sizeof(agent->remote_pwd) - 1);
+  memcpy(agent->remote_ufrag, ufrag, ufrag_len + 1);
+  memcpy(agent->remote_pwd, pwd, pwd_len + 1);
   agent->remote_credentials_set = 1;
 
   return 0;
+}
+
+ice_restart_options_t ice_restart_options_default(void) {
+  ice_restart_options_t options;
+
+  memset(&options, 0, sizeof(options));
+  options.version = ICE_RESTART_OPTIONS_VERSION_1;
+  options.struct_size = (uint32_t)sizeof(options);
+  return options;
+}
+
+int ice_agent_restart(turbo_ice_agent_t *agent,
+                      const ice_restart_options_t *options) {
+  char next_ufrag[sizeof(agent->local_ufrag)];
+  char next_pwd[sizeof(agent->local_pwd)];
+  uint64_t next_tie_breaker;
+
+  if (!agent || !options)
+    return -1;
+  if (ice_agent_is_closed(agent))
+    return ICE_AGENT_ERROR_CLOSED;
+  if (options->version != ICE_RESTART_OPTIONS_VERSION_1 ||
+      options->struct_size < sizeof(*options) ||
+      options->flags != 0 || options->reserved != 0)
+    return ICE_AGENT_ERROR_INVALID_OPTIONS;
+  if ((agent->state == ICE_STATE_GATHERING &&
+       agent->gathering_state != ICE_GATHERING_COMPLETE) ||
+      agent->state == ICE_STATE_CONNECTING ||
+      agent->checks_in_progress)
+    return ICE_AGENT_ERROR_BUSY;
+  if (generate_random_u64(&next_tie_breaker) != 0 ||
+      generate_random_string(next_ufrag, sizeof(next_ufrag)) != 0 ||
+      generate_random_string(next_pwd, sizeof(next_pwd)) != 0)
+    return -2;
+
+  memcpy(agent->local_ufrag, next_ufrag, sizeof(next_ufrag));
+  memcpy(agent->local_pwd, next_pwd, sizeof(next_pwd));
+  agent->tie_breaker = next_tie_breaker;
+
+  memset(agent->remote_ufrag, 0, sizeof(agent->remote_ufrag));
+  memset(agent->remote_pwd, 0, sizeof(agent->remote_pwd));
+  memset(agent->remote_candidates, 0, sizeof(agent->remote_candidates));
+  memset(agent->pairs, 0, sizeof(agent->pairs));
+  memset(&agent->current_txn_id, 0, sizeof(agent->current_txn_id));
+  memset(agent->triggered_checks, 0, sizeof(agent->triggered_checks));
+
+  agent->remote_candidate_count = 0;
+  agent->pair_count = 0;
+  agent->selected_pair = NULL;
+  agent->current_check_pair = -1;
+  agent->checks_in_progress = 0;
+  agent->valid_pairs_count = 0;
+  agent->check_start_time = 0;
+  agent->pending_stun_requests = 0;
+  agent->pending_turn_requests = 0;
+  agent->remote_credentials_set = 0;
+  agent->remote_candidates_complete = 0;
+  agent->nomination_started = 0;
+  agent->current_check_nominating = 0;
+  agent->current_check_select_on_success = 0;
+  agent->triggered_check_head = 0;
+  agent->triggered_check_count = 0;
+  agent->last_keepalive_ms = 0;
+  memset(agent->consent_txn_ids, 0, sizeof(agent->consent_txn_ids));
+  memset(agent->consent_txn_sent_ms, 0, sizeof(agent->consent_txn_sent_ms));
+  agent->consent_txn_next = 0;
+  agent->last_consent_response_ms = 0;
+  agent->next_consent_check_ms = 0;
+
+  set_state(agent, ICE_STATE_NEW);
+  return ice_agent_is_closed(agent) ? ICE_AGENT_ERROR_CLOSED : 0;
 }
 
 int ice_agent_gather_candidates(turbo_ice_agent_t *agent) {
@@ -1331,9 +1434,9 @@ static int send_connectivity_check_internal(turbo_ice_agent_t *agent, ice_candid
       pair->last_check_time = turbo_monotonic_ms();
       agent->current_check_nominating = nominate;
     }
-    TLOG_INFO("ICE check sent {}:{} -> {}:{} nominate={} pair_state={}",
-              pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port,
-              nominate, (int)pair->state);
+    TLOG_DEBUG("ICE check sent {}:{} -> {}:{} nominate={} pair_state={}",
+               pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port,
+               nominate, (int)pair->state);
   } else {
     TLOG_WARN("ICE check send failed {}:{} -> {}:{} rc={}",
               pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port, rc);
@@ -1462,8 +1565,8 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
    * the response against the credentials we advertised in signaling. */
   TLOG_DEBUG("Incoming BINDING REQUEST from {}:{} (txn: {})", remote_ip, remote_port,
             STUN_TRANSACTION_ID_LEN, rx_txn_id.id);
-  TLOG_INFO("Incoming STUN request from {}:{} to {}:{} use_candidate={}",
-            remote_ip, remote_port, local_cand->ip, local_cand->port, use_candidate);
+  TLOG_DEBUG("Incoming STUN request from {}:{} to {}:{} use_candidate={}",
+             remote_ip, remote_port, local_cand->ip, local_cand->port, use_candidate);
   ice_tracef("handle_stun_request accepted from=%s:%u to=%s:%u use_candidate=%d", remote_ip,
              (unsigned int)remote_port, local_cand->ip, (unsigned int)local_cand->port,
              use_candidate);
@@ -1521,11 +1624,83 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
   }
 }
 
+static int stun_response_source_matches(const ice_candidate_pair_t *pair,
+                                        const struct sockaddr *from,
+                                        const char *peer_ip_override,
+                                        uint16_t peer_port_override) {
+  if (!pair || !pair->remote)
+    return 0;
+
+  if (from && from->sa_family == AF_INET) {
+    const struct sockaddr_in *addr4 = (const struct sockaddr_in *)from;
+    struct in_addr expected_addr4;
+    if (ntohs(addr4->sin_port) != pair->remote->port ||
+        inet_pton(AF_INET, pair->remote->ip, &expected_addr4) != 1)
+      return 0;
+    return memcmp(&addr4->sin_addr, &expected_addr4, sizeof(expected_addr4)) == 0;
+  } else if (from && from->sa_family == AF_INET6) {
+    const struct sockaddr_in6 *addr6 = (const struct sockaddr_in6 *)from;
+    struct in6_addr expected_addr6;
+    if (ntohs(addr6->sin6_port) != pair->remote->port ||
+        inet_pton(AF_INET6, pair->remote->ip, &expected_addr6) != 1)
+      return 0;
+    return memcmp(&addr6->sin6_addr, &expected_addr6, sizeof(expected_addr6)) == 0;
+  } else if (peer_ip_override && peer_ip_override[0] != '\0') {
+    struct in_addr peer_addr4;
+    struct in_addr expected_addr4;
+    struct in6_addr peer_addr6;
+    struct in6_addr expected_addr6;
+
+    if (peer_port_override != pair->remote->port)
+      return 0;
+    if (inet_pton(AF_INET, peer_ip_override, &peer_addr4) == 1 &&
+        inet_pton(AF_INET, pair->remote->ip, &expected_addr4) == 1)
+      return memcmp(&peer_addr4, &expected_addr4, sizeof(expected_addr4)) == 0;
+    if (inet_pton(AF_INET6, peer_ip_override, &peer_addr6) == 1 &&
+        inet_pton(AF_INET6, pair->remote->ip, &expected_addr6) == 1)
+      return memcmp(&peer_addr6, &expected_addr6, sizeof(expected_addr6)) == 0;
+    return 0;
+  } else {
+    return 0;
+  }
+}
+
+static int find_consent_transaction(const turbo_ice_agent_t *agent, const uint8_t *data) {
+  if (!agent || !data)
+    return -1;
+
+  for (size_t i = 0; i < ICE_CONSENT_TRANSACTION_CAPACITY; ++i) {
+    if (agent->consent_txn_sent_ms[i] != 0 &&
+        memcmp(data + 8, agent->consent_txn_ids[i].id, STUN_TRANSACTION_ID_LEN) == 0)
+      return (int)i;
+  }
+
+  return -1;
+}
+
 static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, size_t len,
-                                 const struct sockaddr *from) {
+                                 const struct sockaddr *from, const char *peer_ip_override,
+                                 uint16_t peer_port_override) {
+  int consent_txn_index;
+
   if (!agent || !data || len < STUN_HEADER_SIZE || !stun_is_stun_message(data, len))
     return;
-  (void)from;
+
+  consent_txn_index = find_consent_transaction(agent, data);
+  if (consent_txn_index >= 0) {
+    if (!stun_response_source_matches(agent->selected_pair, from, peer_ip_override,
+                                      peer_port_override))
+      return;
+    if (stun_validate_message_integrity(data, len, agent->remote_pwd) != 0 ||
+        stun_get_error_code(data, len) != 0)
+      return;
+
+    memset(&agent->consent_txn_ids[consent_txn_index], 0,
+           sizeof(agent->consent_txn_ids[consent_txn_index]));
+    agent->consent_txn_sent_ms[consent_txn_index] = 0;
+    agent->last_consent_response_ms = turbo_monotonic_ms();
+    return;
+  }
 
   /* Verify transaction ID matches our current check */
   if (memcmp(data + 8, agent->current_txn_id.id, STUN_TRANSACTION_ID_LEN) != 0) {
@@ -1536,6 +1711,12 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
       TLOG_WARN("%s", "STUN txn mismatch while waiting for response");
     }
     return; /* Not our transaction */
+  }
+
+  if (agent->current_check_pair < 0 || agent->current_check_pair >= agent->pair_count ||
+      !stun_response_source_matches(&agent->pairs[agent->current_check_pair], from,
+                                    peer_ip_override, peer_port_override)) {
+    return;
   }
 
   /* Validate MESSAGE-INTEGRITY with the same peer password used to sign the
@@ -1588,9 +1769,9 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
     ice_candidate_pair_t *pair = &agent->pairs[agent->current_check_pair];
 
     if (pair->state != ICE_PAIR_STATE_SUCCEEDED) {
-      TLOG_INFO("ICE check succeeded pair={} {}:{} <-> {}:{}",
-                agent->current_check_pair, pair->local->ip, pair->local->port,
-                pair->remote->ip, pair->remote->port);
+      TLOG_DEBUG("ICE check succeeded pair={} {}:{} <-> {}:{}",
+                 agent->current_check_pair, pair->local->ip, pair->local->port,
+                 pair->remote->ip, pair->remote->port);
       pair->state = ICE_PAIR_STATE_SUCCEEDED;
       agent->valid_pairs_count++;
     }
@@ -1867,7 +2048,8 @@ static void service_udp_candidate_socket(turbo_ice_agent_t *agent, ice_candidate
     if (stun_is_stun_message((const uint8_t *)data, data_len)) {
       uint16_t msg_type = read_u16_be((const uint8_t *)data);
       if (msg_type == STUN_MSG_BINDING_RESPONSE || msg_type == STUN_MSG_BINDING_ERROR_RESPONSE) {
-        handle_stun_response(agent, (const uint8_t *)data, data_len, (const struct sockaddr *)&from);
+        handle_stun_response(agent, (const uint8_t *)data, data_len,
+                             (const struct sockaddr *)&from, NULL, 0);
       } else if (msg_type == STUN_MSG_BINDING_REQUEST) {
         handle_stun_request(agent, (const uint8_t *)data, data_len, (const struct sockaddr *)&from,
                             NULL, 0, local_cand);
@@ -1944,7 +2126,7 @@ static void service_turn_candidate_socket(turbo_ice_agent_t *agent, ice_candidat
                (unsigned int)msg_type, peer_ip, (unsigned int)peer_port, local_cand->ip,
                (unsigned int)local_cand->port);
     if (msg_type == STUN_MSG_BINDING_RESPONSE || msg_type == STUN_MSG_BINDING_ERROR_RESPONSE) {
-      handle_stun_response(agent, payload, payload_len, NULL);
+      handle_stun_response(agent, payload, payload_len, NULL, peer_ip, peer_port);
     } else if (msg_type == STUN_MSG_BINDING_REQUEST) {
       handle_stun_request(agent, payload, payload_len, NULL, peer_ip, peer_port, local_cand);
     }
@@ -1975,36 +2157,90 @@ static void service_turn_candidate_socket(turbo_ice_agent_t *agent, ice_candidat
   }
 }
 
+static int schedule_next_consent_check(turbo_ice_agent_t *agent, uint64_t now) {
+  uint8_t random_byte;
+  uint64_t base_interval;
+  uint64_t minimum_interval;
+  uint64_t jitter_span;
+
+  if (!agent || turbo_secure_random(&random_byte, sizeof(random_byte)) != 0)
+    return -1;
+
+  base_interval = (uint64_t)agent->config.keepalive_interval_ms;
+  minimum_interval = (base_interval * 4u) / 5u;
+  jitter_span = (base_interval * 2u) / 5u;
+  agent->next_consent_check_ms =
+      now + minimum_interval + ((jitter_span * random_byte) / UINT8_MAX);
+  return 0;
+}
+
+static int send_consent_check(turbo_ice_agent_t *agent, uint64_t now) {
+  ice_candidate_pair_t *pair;
+  stun_transaction_id_t txn_id;
+  uint8_t stun_buf[STUN_MAX_MESSAGE_SIZE];
+  uint32_t peer_reflexive_priority;
+  int local_preference;
+  int stun_len;
+  int send_rc = -1;
+
+  if (!agent || !(pair = agent->selected_pair) || !pair->local || !pair->remote)
+    return -1;
+  if (stun_generate_transaction_id(&txn_id) != 0)
+    return -1;
+
+  local_preference = (int)((pair->local->priority >> 8) & 0xffffu);
+  peer_reflexive_priority = ice_calculate_priority(
+      ICE_CANDIDATE_TYPE_PRFLX, local_preference, pair->local->component_id);
+  stun_len = stun_build_ice_request(stun_buf, &txn_id, agent->local_ufrag,
+                                    agent->remote_ufrag, agent->remote_pwd,
+                                    peer_reflexive_priority,
+                                    agent->role == ICE_ROLE_CONTROLLING,
+                                    agent->tie_breaker, 0);
+  if (stun_len < 0)
+    return -1;
+
+  if (pair->local->type == ICE_CANDIDATE_TYPE_RELAY && pair->local->turn_client) {
+    send_rc = turn_client_send((turbo_turn_client_t *)pair->local->turn_client,
+                               pair->remote->ip, pair->remote->port,
+                               stun_buf, (size_t)stun_len);
+  } else if (pair->local->socket) {
+    send_rc = send_udp_to_remote((coro_socket_t *)pair->local->socket,
+                                 pair->remote->ip, pair->remote->port,
+                                 stun_buf, (size_t)stun_len);
+  }
+
+  if (send_rc == 0) {
+    size_t slot = agent->consent_txn_next;
+    agent->consent_txn_ids[slot] = txn_id;
+    agent->consent_txn_sent_ms[slot] = now;
+    agent->consent_txn_next = (slot + 1u) % ICE_CONSENT_TRANSACTION_CAPACITY;
+  }
+  agent->last_keepalive_ms = now;
+  return schedule_next_consent_check(agent, now);
+}
+
 static void run_selected_pair_io(turbo_ice_agent_t *agent) {
   while (agent && (agent->state == ICE_STATE_CONNECTED || agent->state == ICE_STATE_COMPLETED)) {
     if (agent->selected_pair && agent->selected_pair->local) {
       uint64_t now = turbo_monotonic_ms();
-      uint64_t keepalive_interval = agent->config.keepalive_interval_ms > 0
-                                        ? (uint64_t)agent->config.keepalive_interval_ms
-                                        : (uint64_t)ICE_DEFAULT_KEEPALIVE_INTERVAL;
-      if (agent->last_keepalive_ms == 0 || now - agent->last_keepalive_ms >= keepalive_interval) {
-        uint8_t indication[STUN_HEADER_SIZE];
-        stun_transaction_id_t txn_id;
-        int rc = -1;
-        if (stun_generate_transaction_id(&txn_id) == 0 &&
-            stun_build_binding_indication(indication, &txn_id) == sizeof(indication)) {
-          if (agent->selected_pair->local->type == ICE_CANDIDATE_TYPE_RELAY &&
-              agent->selected_pair->local->turn_client) {
-            rc = turn_client_send((turbo_turn_client_t *)agent->selected_pair->local->turn_client,
-                                  agent->selected_pair->remote->ip,
-                                  agent->selected_pair->remote->port,
-                                  indication, sizeof(indication));
-          } else if (agent->selected_pair->local->socket) {
-            rc = send_udp_to_remote((coro_socket_t *)agent->selected_pair->local->socket,
-                                    agent->selected_pair->remote->ip,
-                                    agent->selected_pair->remote->port,
-                                    indication, sizeof(indication));
-          }
-        }
-        agent->last_keepalive_ms = now;
-        if (rc != 0)
-          TLOG_WARN("ICE keepalive failed rc={}", rc);
+
+      if (agent->last_consent_response_ms == 0 ||
+          now - agent->last_consent_response_ms >= ICE_CONSENT_EXPIRY_MS) {
+        set_state(agent, ICE_STATE_DISCONNECTED);
+        break;
       }
+
+      if (agent->next_consent_check_ms == 0) {
+        if (schedule_next_consent_check(agent, now) != 0) {
+          set_state(agent, ICE_STATE_DISCONNECTED);
+          break;
+        }
+      } else if (now >= agent->next_consent_check_ms &&
+                 send_consent_check(agent, now) != 0) {
+        set_state(agent, ICE_STATE_DISCONNECTED);
+        break;
+      }
+
       if (agent->selected_pair->local->type == ICE_CANDIDATE_TYPE_RELAY) {
         service_turn_candidate_socket(agent, agent->selected_pair->local, 1, 1);
       } else {
@@ -2069,14 +2305,14 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
     /* Connectivity checks need inbound STUN pumping before a pair can advance. */
     service_connectivity_check_io(agent, 1);
     if (agent->state != ICE_STATE_CONNECTING) {
-      return;
+      break;
     }
 
     /* Check for overall timeout */
     if (elapsed > (uint64_t)agent->config.connectivity_timeout_ms) {
       TLOG_INFO("%s", "Connectivity check timeout elapsed");
       set_state(agent, agent->selected_pair ? ICE_STATE_COMPLETED : ICE_STATE_FAILED);
-      return;
+      break;
     }
 
     /* If a check is in progress, wait for response or per-check timeout */
@@ -2171,7 +2407,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
       /* All pairs checked — determine final state */
       if (agent->selected_pair) {
         set_state(agent, ICE_STATE_COMPLETED);
-        return;
+        break;
       }
 
       /* Check if all pairs failed */
@@ -2186,13 +2422,17 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
         if (all_failed) {
           TLOG_INFO("All %d built pairs failed", agent->pair_count);
           set_state(agent, ICE_STATE_FAILED);
-          return;
+          break;
         }
       }
     }
 
     coro_sleep(agent->ctx, ICE_DEFAULT_TA_INTERVAL);
   }
+  agent->checks_in_progress = 0;
+  agent->current_check_pair = -1;
+  agent->current_check_nominating = 0;
+  agent->current_check_select_on_success = 0;
 }
 
 

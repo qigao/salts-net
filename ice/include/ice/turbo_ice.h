@@ -47,7 +47,7 @@ extern "C" {
 /* Default timeouts (ms) */
 #define ICE_DEFAULT_GATHERING_TIMEOUT   10000
 #define ICE_DEFAULT_CONNECTIVITY_TIMEOUT 12000
-#define ICE_DEFAULT_KEEPALIVE_INTERVAL  15000
+#define ICE_DEFAULT_KEEPALIVE_INTERVAL  5000
 #define ICE_DEFAULT_TA_INTERVAL         50    /* Pacing interval */
 
 /* ============================================================================
@@ -108,6 +108,8 @@ typedef enum {
  * This value is reserved across all int-returning ice_agent_* operations.
  */
 #define ICE_AGENT_ERROR_CLOSED (-100)
+#define ICE_AGENT_ERROR_INVALID_OPTIONS (-101)
+#define ICE_AGENT_ERROR_BUSY (-102)
 
 /**
  * @brief Convert ice_state_t to string.
@@ -208,7 +210,7 @@ typedef struct {
     /* Timeouts */
     int gathering_timeout_ms;
     int connectivity_timeout_ms;
-    int keepalive_interval_ms;
+    int keepalive_interval_ms;       /* RFC 7675 consent-check base interval */
 
     /* Options */
     int is_controlling;             /* 1 = controlling, 0 = controlled */
@@ -217,6 +219,22 @@ typedef struct {
     int use_mdns_candidates;        /* Use mDNS .local hostnames for privacy (WebRTC spec) */
     int allow_loopback;             /* Allow gathering of loopback addresses (127.0.0.1) */
 } ice_config_t;
+
+#define ICE_RESTART_OPTIONS_VERSION_1 1u
+
+/**
+ * Versioned ICE restart options.
+ *
+ * Version 1 always reuses gathered local candidates and their transports.
+ * The restart generates new local credentials and a new tie-breaker, while
+ * clearing all remote credentials/candidates and connectivity-check state.
+ */
+typedef struct {
+    uint32_t version;
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t reserved;
+} ice_restart_options_t;
 
 /**
  * Override the ICE role before connectivity checks start.
@@ -344,6 +362,28 @@ CXX_C_API int ice_agent_set_remote_credentials(
     turbo_ice_agent_t *agent,
     const char *ufrag,
     const char *pwd
+);
+
+/**
+ * Return initialized version-1 restart options.
+ */
+CXX_C_API ice_restart_options_t ice_restart_options_default(void);
+
+/**
+ * Start a new ICE generation while reusing gathered local candidates.
+ *
+ * The caller must signal the newly generated local credentials and existing
+ * local candidates, then set the new remote credentials/candidates before
+ * calling ice_agent_start_checks(). The operation is rejected while gathering
+ * or connectivity checks are running.
+ *
+ * @return 0 on success; ICE_AGENT_ERROR_CLOSED after close;
+ *         ICE_AGENT_ERROR_INVALID_OPTIONS for an unsupported options layout;
+ *         ICE_AGENT_ERROR_BUSY while gathering/checks are active.
+ */
+CXX_C_API int ice_agent_restart(
+    turbo_ice_agent_t *agent,
+    const ice_restart_options_t *options
 );
 
 /**

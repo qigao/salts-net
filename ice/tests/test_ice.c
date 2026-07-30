@@ -13,6 +13,8 @@
 #endif
 #include <string.h>
 
+#define TEST_ICE_CONSENT_TRANSACTION_CAPACITY 10
+
 typedef struct {
     ice_config_t config;
     coro_context_t *ctx;
@@ -34,6 +36,25 @@ typedef struct {
     int current_check_pair;
     stun_transaction_id_t current_txn_id;
     int checks_in_progress;
+    int valid_pairs_count;
+    uint64_t check_start_time;
+    int pending_stun_requests;
+    int pending_turn_requests;
+    void *turn_clients[ICE_MAX_TURN_SERVERS];
+    void *mdns_ctx;
+    int foundation_counter;
+    ice_callbacks_t callbacks;
+    int remote_credentials_set;
+    int remote_candidates_complete;
+    int nomination_started;
+    int selected_pair_io_running;
+    int current_check_nominating;
+    int current_check_select_on_success;
+    stun_transaction_id_t consent_txn_ids[TEST_ICE_CONSENT_TRANSACTION_CAPACITY];
+    uint64_t consent_txn_sent_ms[TEST_ICE_CONSENT_TRANSACTION_CAPACITY];
+    size_t consent_txn_next;
+    uint64_t last_consent_response_ms;
+    uint64_t next_consent_check_ms;
 } test_ice_agent_view_t;
 
 typedef struct {
@@ -318,6 +339,16 @@ spec("ice") {
         check_int_eq(config.stun_server_count, 0);
         check_int_eq(config.turn_server_count, 0);
     }
+
+    it("should reject consent intervals outside the RFC-safe range") {
+        ice_config_t config = ice_default_config();
+
+        config.keepalive_interval_ms = 4999;
+        check_null(ice_agent_create(NULL, &config));
+
+        config.keepalive_interval_ms = 20001;
+        check_null(ice_agent_create(NULL, &config));
+    }
   }
 
   describe("ICE Agent Creation") {
@@ -373,10 +404,95 @@ spec("ice") {
     it("should return error for invalid credentials parameters") {
         ice_config_t config = ice_default_config();
         turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
+        char oversized_ufrag[33];
+        char oversized_pwd[65];
+
+        memset(oversized_ufrag, 'u', sizeof(oversized_ufrag) - 1);
+        oversized_ufrag[sizeof(oversized_ufrag) - 1] = '\0';
+        memset(oversized_pwd, 'p', sizeof(oversized_pwd) - 1);
+        oversized_pwd[sizeof(oversized_pwd) - 1] = '\0';
 
         check_int_eq(ice_agent_set_remote_credentials(NULL, "ufrag", "pwd"), -1);
         check_int_eq(ice_agent_set_remote_credentials(agent, NULL, "pwd"), -1);
         check_int_eq(ice_agent_set_remote_credentials(agent, "ufrag", NULL), -1);
+        check_int_eq(ice_agent_set_remote_credentials(agent, "", "pwd"), -2);
+        check_int_eq(ice_agent_set_remote_credentials(agent, "ufrag", ""), -2);
+        check_int_eq(
+            ice_agent_set_remote_credentials(agent, oversized_ufrag, "pwd"), -2);
+        check_int_eq(
+            ice_agent_set_remote_credentials(agent, "ufrag", oversized_pwd), -2);
+
+        ice_agent_destroy(agent);
+    }
+
+    it("should start a new credential generation and clear remote state") {
+        static const char *candidate =
+            "candidate:1 1 UDP 2130706431 192.0.2.10 40000 typ host";
+        ice_config_t config = ice_default_config();
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
+        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        ice_restart_options_t options = ice_restart_options_default();
+        char old_ufrag[32];
+        char old_pwd[64];
+        char new_ufrag[32];
+        char new_pwd[64];
+
+        check_not_null(agent);
+        ice_agent_get_local_credentials(
+            agent, old_ufrag, sizeof(old_ufrag), old_pwd, sizeof(old_pwd));
+        check_int_eq(
+            ice_agent_set_remote_credentials(agent, "remote", "remote-password"), 0);
+        check_int_eq(ice_agent_add_remote_candidate(agent, candidate), 0);
+        view->gathering_state = ICE_GATHERING_COMPLETE;
+        view->state = ICE_STATE_GATHERING;
+        view->pair_count = 1;
+        view->selected_pair = &view->pairs[0];
+
+        check_int_eq(ice_agent_restart(agent, &options), 0);
+        ice_agent_get_local_credentials(
+            agent, new_ufrag, sizeof(new_ufrag), new_pwd, sizeof(new_pwd));
+
+        check_str_ne(new_ufrag, old_ufrag);
+        check_str_ne(new_pwd, old_pwd);
+        check_int_eq(ice_agent_get_state(agent), ICE_STATE_NEW);
+        check_int_eq(ice_agent_get_gathering_state(agent), ICE_GATHERING_COMPLETE);
+        check_int_eq(view->remote_candidate_count, 0);
+        check_int_eq(view->pair_count, 0);
+        check_null(view->selected_pair);
+        check_int_eq(ice_agent_start_checks(agent), -3);
+
+        ice_agent_destroy(agent);
+    }
+
+    it("should reject incompatible restart options and active checks") {
+        ice_config_t config = ice_default_config();
+        turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
+        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        ice_restart_options_t options = ice_restart_options_default();
+
+        check_not_null(agent);
+        check_int_eq(ice_agent_restart(NULL, &options), -1);
+        check_int_eq(ice_agent_restart(agent, NULL), -1);
+
+        options.version++;
+        check_int_eq(
+            ice_agent_restart(agent, &options),
+            ICE_AGENT_ERROR_INVALID_OPTIONS);
+        options = ice_restart_options_default();
+        options.flags = 1;
+        check_int_eq(
+            ice_agent_restart(agent, &options),
+            ICE_AGENT_ERROR_INVALID_OPTIONS);
+
+        options = ice_restart_options_default();
+        view->state = ICE_STATE_GATHERING;
+        view->gathering_state = ICE_GATHERING_GATHERING;
+        check_int_eq(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_BUSY);
+        view->state = ICE_STATE_CONNECTING;
+        check_int_eq(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_BUSY);
+        view->state = ICE_STATE_NEW;
+        ice_agent_close(agent);
+        check_int_eq(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_CLOSED);
 
         ice_agent_destroy(agent);
     }
@@ -887,6 +1003,12 @@ spec("ice") {
         ice_candidate_t left_remote;
         ice_candidate_t right_local;
         ice_candidate_t right_remote;
+        test_ice_agent_view_t *left_view;
+        test_ice_agent_view_t *right_view;
+        ice_restart_options_t restart_options = ice_restart_options_default();
+        uint64_t initial_consent_time;
+        uint64_t consent_deadline;
+        char payload = 'x';
 
         check_not_null(ctx);
 
@@ -961,6 +1083,33 @@ spec("ice") {
         check_int_eq(ice_agent_get_selected_pair(right, &right_local, &right_remote), 0);
         check(left_local.port != 0);
         check(right_local.port != 0);
+
+        left_view = (test_ice_agent_view_t *)left;
+        right_view = (test_ice_agent_view_t *)right;
+        check_int_eq(left_view->checks_in_progress, 0);
+        check_int_eq(right_view->checks_in_progress, 0);
+        if (left_view->last_consent_response_ms > 100) {
+            left_view->last_consent_response_ms -= 100;
+        }
+        initial_consent_time = left_view->last_consent_response_ms;
+        left_view->next_consent_check_ms = turbo_monotonic_ms();
+        consent_deadline = turbo_monotonic_ms() + 1000;
+        while (left_view->last_consent_response_ms <= initial_consent_time &&
+               turbo_monotonic_ms() < consent_deadline) {
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        }
+        check(left_view->last_consent_response_ms > initial_consent_time);
+
+        left_view->last_consent_response_ms = 0;
+        consent_deadline = turbo_monotonic_ms() + 1000;
+        while (ice_agent_get_state(left) != ICE_STATE_DISCONNECTED &&
+               turbo_monotonic_ms() < consent_deadline) {
+            coro_context_run(ctx, TURBO_RUN_ONCE);
+        }
+        check_int_eq(ice_agent_get_state(left), ICE_STATE_DISCONNECTED);
+        check_int_eq(ice_agent_send(left, &payload, sizeof(payload)), -2);
+        check_int_eq(ice_agent_restart(left, &restart_options), 0);
+        check_int_eq(ice_agent_get_state(left), ICE_STATE_NEW);
 
         ice_agent_destroy(right);
         ice_agent_destroy(left);

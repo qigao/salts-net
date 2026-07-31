@@ -11,6 +11,8 @@
 #include <netinet/in.h>
 #endif
 
+#define DATAGRAM_IO_URING_CLOSE_STRESS_ITERATIONS 64
+
 static int s_received = 0;
 static char s_datagram_send_payload[60 * 1024];
 static int on_datagram_recv(void *handle, const mem_slice_t *slice, void *addr) {
@@ -250,6 +252,26 @@ spec("Datagram") {
 
         datagram_test_destroy_context_robust(ctx);
     }
+
+#if defined(__linux__) && defined(TURBO_HAS_IO_URING)
+    it("should close io_uring datagrams without racing the command wakeup") {
+        for (int iteration = 0;
+             iteration < DATAGRAM_IO_URING_CLOSE_STRESS_ITERATIONS;
+             ++iteration) {
+            coro_context_t *ctx = coro_context_create(NULL);
+            turbo_datagram_t *dg;
+
+            check_not_null(ctx);
+            check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
+            dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
+            check_not_null(dg);
+            check_int_eq(turbo_datagram_bind(dg, "127.0.0.1", 0), 0);
+
+            turbo_datagram_destroy(dg);
+            datagram_test_destroy_context_robust(ctx);
+        }
+    }
+#endif
 
     it("should configure IPv4 multicast and broadcast options") {
         coro_context_t *ctx = coro_context_create(NULL);

@@ -58,7 +58,7 @@ typedef struct dg_uring_state_s {
   int worker_started;
   int recv_started;
   int recv_inflight;
-  volatile int stopping;
+  int stopping;
   volatile long inflight_count;
   dg_uring_op_t *inflight_head;
   turbo_mutex_t cmd_lock;
@@ -149,6 +149,25 @@ static int dg_uring_post_wait(dg_uring_state_t *st,
 
 static int dg_kind_family(turbo_datagram_kind_t kind) {
   return (kind == TURBO_DATAGRAM_UDP6) ? AF_INET6 : AF_INET;
+}
+
+static int dg_is_stopping(const dg_uring_state_t *st) {
+  return __atomic_load_n(&st->stopping, __ATOMIC_ACQUIRE);
+}
+
+static void dg_request_stop(dg_uring_state_t *st) {
+  uint64_t signal_value;
+
+  if (!st) {
+    return;
+  }
+
+  __atomic_store_n(&st->stopping, 1, __ATOMIC_RELEASE);
+  signal_value = 1;
+  if (st->wake_fd >= 0) {
+    (void)write(st->wake_fd, &signal_value, sizeof(signal_value));
+  }
+  turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(st->ctx));
 }
 
 static int dg_parse_addr(int family, const char *host, unsigned short port,
@@ -285,15 +304,7 @@ static int dg_submit_command(dg_uring_state_t *st, dg_uring_op_t *op) {
     return 0;
 
   case DG_URING_OP_CLOSE:
-    st->stopping = 1;
-    if (st->fd >= 0) {
-      close(st->fd);
-      st->fd = -1;
-    }
-    if (st->wake_fd >= 0) {
-      close(st->wake_fd);
-      st->wake_fd = -1;
-    }
+    __atomic_store_n(&st->stopping, 1, __ATOMIC_RELEASE);
     free(op);
     return 0;
 
@@ -331,7 +342,7 @@ static void dg_uring_process_cqe(dg_uring_state_t *st,
   if (op->kind == DG_URING_OP_WAKE) {
     free(op);
     dg_drain_commands(st);
-    if (!st->stopping && st->wake_fd >= 0) {
+    if (!dg_is_stopping(st) && st->wake_fd >= 0) {
       (void)dg_submit_wake(st);
       (void)io_uring_submit(&st->ring);
     }
@@ -359,7 +370,7 @@ static void dg_uring_worker(void *arg) {
     dg_drain_commands(st);
     io_uring_submit(&st->ring);
 
-    if (st->stopping) {
+    if (dg_is_stopping(st)) {
       break;
     }
 
@@ -545,7 +556,7 @@ static int dg_uring_submit_recv(turbo_datagram_t *d) {
   int rc;
 
   st = (dg_uring_state_t *)d->backend_data;
-  if (!st || st->recv_inflight || st->stopping) {
+  if (!st || st->recv_inflight || dg_is_stopping(st)) {
     return 0;
   }
 
@@ -601,16 +612,7 @@ static void dg_iouring_close(turbo_datagram_t *d) {
 
   op = (dg_uring_op_t *)calloc(1, sizeof(*op));
   if (!op) {
-    st->stopping = 1;
-    if (st->fd >= 0) {
-      close(st->fd);
-      st->fd = -1;
-    }
-    if (st->wake_fd >= 0) {
-      close(st->wake_fd);
-      st->wake_fd = -1;
-    }
-    (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, d);
+    dg_request_stop(st);
     return;
   }
 
@@ -618,16 +620,7 @@ static void dg_iouring_close(turbo_datagram_t *d) {
   op->dg = d;
   if (dg_queue_push(st, op) != 0) {
     free(op);
-    st->stopping = 1;
-    if (st->fd >= 0) {
-      close(st->fd);
-      st->fd = -1;
-    }
-    if (st->wake_fd >= 0) {
-      close(st->wake_fd);
-      st->wake_fd = -1;
-    }
-    (void)dg_uring_post_wait(st, dg_uring_cleanup_task, st, d);
+    dg_request_stop(st);
   }
 }
 

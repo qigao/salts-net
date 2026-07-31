@@ -363,7 +363,7 @@ struct coro_socket_s {
   turbo_timer_t *timer;          /**< Timeout timer handle */
   uint64_t timeout_ms;           /**< Timeout duration (0 = no timeout) */
   int timed_out;                 /**< 1 = last op timed out */
-  int timer_active;              /**< 0 idle, 1 armed, 2 timeout posted, 3 posted then canceled */
+  int timer_active;              /**< Atomic state: 0 idle, 1 armed, 2 posted, 3 posted then canceled */
   int close_pending;             /**< 1 = transport close was requested and holds a reference */
   int destroy_wait_handoff;      /**< 1 = a resumed waiter still owns the pending wait reference */
   int destroy_wait_guard_ref;    /**< 1 = destroy kept the socket alive until the waiter returns */

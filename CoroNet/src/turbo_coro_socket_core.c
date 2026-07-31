@@ -353,67 +353,89 @@ enum {
   CORO_TIMEOUT_CANCELED_POSTED = 3,
 };
 
+static int timeout_state_transition(coro_socket_t *s, int *expected, int desired) {
+  return __atomic_compare_exchange_n(&s->timer_active, expected, desired, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
 static void on_timer_fired_bounce(void *arg1, void *arg2) {
   (void)arg2;
   coro_socket_t *s = (coro_socket_t *)arg1;
+  int expected;
 
-  if (s->timer_active == CORO_TIMEOUT_IDLE) {
-    return; /* Already cancelled and released via stop_timeout_timer */
-  }
-  if (s->timer_active == CORO_TIMEOUT_CANCELED_POSTED) {
-    s->timer_active = CORO_TIMEOUT_IDLE;
+  expected = CORO_TIMEOUT_POSTED;
+  if (!timeout_state_transition(s, &expected, CORO_TIMEOUT_IDLE)) {
+    if (expected != CORO_TIMEOUT_CANCELED_POSTED ||
+        !timeout_state_transition(s, &expected, CORO_TIMEOUT_IDLE)) {
+      return;
+    }
     release_client(s);
     return;
   }
   if (!s->co_wait) {
-    s->timer_active = CORO_TIMEOUT_IDLE;
     release_client(s);
     return;
   }
 
   s->timed_out = 1;
   s->status = TURBO_ETIMEDOUT;
-  s->timer_active = CORO_TIMEOUT_IDLE; /* Clear flag before resume to avoid race */
   if (s->co_wait) coro_resume_waiter(s);
   release_client(s);
 }
 
 static void on_timer_fired(turbo_timer_t *timer) {
   coro_socket_t *s = (coro_socket_t *)turbo_timer_get_data(timer);
+  int expected;
   int rc;
 
   if (!s) {
     return;
   }
-  if (s->timer_active != CORO_TIMEOUT_ARMED) {
+  expected = CORO_TIMEOUT_ARMED;
+  if (!timeout_state_transition(s, &expected, CORO_TIMEOUT_POSTED)) {
     return;
   }
-  s->timer_active = CORO_TIMEOUT_POSTED;
 
   rc = coro_post(s->ctx, on_timer_fired_bounce, s, NULL);
-  if (rc != 0) {
-    on_timer_fired_bounce(s, NULL);
+  while (rc == TURBO_ENOMEM) {
+    turbo_thread_yield();
+    rc = coro_post(s->ctx, on_timer_fired_bounce, s, NULL);
+  }
+  if (rc != TURBO_OK) {
+    int previous = __atomic_exchange_n(&s->timer_active, CORO_TIMEOUT_IDLE, __ATOMIC_ACQ_REL);
+    if (previous == CORO_TIMEOUT_POSTED || previous == CORO_TIMEOUT_CANCELED_POSTED) {
+      release_client(s);
+    }
   }
 }
 
 void start_timeout_timer(coro_socket_t *s) {
+  int expected;
+
   s->timed_out = 0;
-  if (s->timeout_ms > 0 && s->timer && !s->timer_active) {
-    s->timer_active = CORO_TIMEOUT_ARMED;
+  expected = CORO_TIMEOUT_IDLE;
+  if (s->timeout_ms > 0 && s->timer &&
+      timeout_state_transition(s, &expected, CORO_TIMEOUT_ARMED)) {
     retain_client(s);
-    turbo_timer_start(s->timer, on_timer_fired, s->timeout_ms, 0);
+    if (turbo_timer_start(s->timer, on_timer_fired, s->timeout_ms, 0) != TURBO_OK) {
+      expected = CORO_TIMEOUT_ARMED;
+      if (timeout_state_transition(s, &expected, CORO_TIMEOUT_IDLE)) {
+        release_client(s);
+      }
+    }
   }
 }
 
 void stop_timeout_timer(coro_socket_t *s) {
-  if (s->timer_active == CORO_TIMEOUT_ARMED) {
-    s->timer_active = CORO_TIMEOUT_IDLE;
+  int expected = CORO_TIMEOUT_ARMED;
+
+  if (timeout_state_transition(s, &expected, CORO_TIMEOUT_IDLE)) {
     turbo_timer_stop(s->timer);
     release_client(s);
     return;
   }
-  if (s->timer_active == CORO_TIMEOUT_POSTED) {
-    s->timer_active = CORO_TIMEOUT_CANCELED_POSTED;
+  if (expected == CORO_TIMEOUT_POSTED &&
+      timeout_state_transition(s, &expected, CORO_TIMEOUT_CANCELED_POSTED)) {
     turbo_timer_stop(s->timer);
   }
 }

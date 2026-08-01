@@ -73,10 +73,11 @@
             "name": "win-dev-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug"
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turbonet-debug"
             },
             "environment": {
-                "PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug/bin${pathListSep}$penv{PATH}"
+                "PATH": "${sourceDir}/vcpkg_installed/x64-windows/debug/bin${pathListSep}$env{MSVC_ROOT}/bin/Hostx64/x64${pathListSep}$penv{PATH}"
             },
             "inherits": ["base-win-dev-user", "win-paths"]
         },

@@ -350,10 +350,9 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   } else {
     coro_set_wait(s);
     coro_yield();
-    coro_socket_release_destroy_wait_handoff(s);
     if (s->status != 0) {
-      int status = s->status;  /* save before release_client may free 's' */
-      release_client(s);
+      int status = s->status;
+      coro_socket_release_accept_wait_refs(s);
       return status;
     }
   }
@@ -361,13 +360,13 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   if (s->status != 0) {
     int status = s->status;
     s->status = 0;
-    release_client(s);
+    coro_socket_release_accept_wait_refs(s);
     return status;
   }
 
   udp_listener_state_t *ls = (udp_listener_state_t *)s->native_tcp_state;
   if (!ls || !ls->head) {
-    release_client(s);
+    coro_socket_release_accept_wait_refs(s);
     return TURBO_EBUSY;
   }
 
@@ -379,7 +378,7 @@ static int udp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   free(node);
 
   *accepted = child;
-  release_client(s);
+  coro_socket_release_accept_wait_refs(s);
   return 0;
 }
 

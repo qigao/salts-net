@@ -56,7 +56,8 @@ target_link_libraries(turbo_crypto PRIVATE TurboUtils::Core)
 set_target_properties(
   turbo_crypto
   PROPERTIES FOLDER "vendor"
-             EXPORT_NAME Crypto)
+             EXPORT_NAME Crypto
+             C_VISIBILITY_PRESET hidden)
 
 install(
   TARGETS turbo_crypto

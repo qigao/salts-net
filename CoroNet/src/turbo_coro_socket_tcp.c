@@ -146,10 +146,6 @@ static int stream_connect_addr(coro_socket_t *s, turbo_stream_kind_t kind,
   {
     int status = s->status;
     int timed_out = s->timed_out;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
     if (timed_out) {
       s->timed_out = 0;
       release_client(s);
@@ -158,6 +154,7 @@ static int stream_connect_addr(coro_socket_t *s, turbo_stream_kind_t kind,
       s->connected = 0;
       tcp_discard_stream(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -414,10 +411,9 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   if (!ls || !ls->head) {
     coro_set_wait(s);
     coro_yield();
-    coro_socket_release_destroy_wait_handoff(s);
     if (s->status != 0) {
       int status = s->status;
-      release_client(s);
+      coro_socket_release_accept_wait_refs(s);
       return status;
     }
     if (s->accept_pending) {
@@ -427,13 +423,13 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 
   if (s->status != 0) {
     int status = s->status;
-    release_client(s);
+    coro_socket_release_accept_wait_refs(s);
     return status;
   }
 
   ls = (tcp_listener_state_t *)s->native_tcp_state;
   if (!ls || !ls->head) {
-    release_client(s);
+    coro_socket_release_accept_wait_refs(s);
     return TURBO_EBUSY;
   }
 
@@ -445,7 +441,7 @@ static int tcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
   free(node);
 
   *accepted = child;
-  release_client(s);
+  coro_socket_release_accept_wait_refs(s);
   return 0;
 }
 

@@ -387,15 +387,21 @@ turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx) {
 }
 
 void turbo_kcp_destroy(turbo_kcp_t* kcp) {
+  turbo_timer_t* update_timer;
+
   if (!kcp || kcp->closing) return;
   kcp->closing = 1;
   kcp->connected = 0;
-  
-  if (kcp->update_timer) {
-    turbo_timer_stop(kcp->update_timer);
-    turbo_timer_set_data(kcp->update_timer, NULL);
+
+  /* The native timer is the only producer of KCP tick posts. Destroying it
+   * waits for an in-flight callback, so every tick it can publish is ordered
+   * before the final-free post below. */
+  update_timer = kcp->update_timer;
+  kcp->update_timer = NULL;
+  if (update_timer) {
+    turbo_timer_destroy(update_timer);
   }
-  
+
   if (kcp->ikcp) {
     ikcp_release(kcp->ikcp);
     kcp->ikcp = NULL;

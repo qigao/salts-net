@@ -94,7 +94,7 @@ typedef struct turbo_tls_server_config_s {
   const char *key_file;                /**< Required PEM private key. */
   const char *key_password;            /**< Optional private-key password. */
   const char *ca_file;                 /**< Client CA bundle; required for mTLS. */
-  const char *cipher_list;             /**< Optional OpenSSL pre-TLS-1.3 cipher list. */
+  const char *cipher_list;             /**< Optional pre-TLS-1.3 cipher list. */
   turbo_tls_client_auth_t client_auth; /**< NONE or REQUIRED. */
 } turbo_tls_server_config_t;
 

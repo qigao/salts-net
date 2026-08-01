@@ -104,10 +104,7 @@ static int pipe_connect(coro_socket_t *s, const char *path, int port) {
   coro_yield();
   {
     int status = s->status;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -192,22 +189,24 @@ static int pipe_accept(coro_socket_t *s, coro_socket_t **accepted) {
   } else {
     coro_set_wait(s);
     coro_yield();
-    coro_socket_release_destroy_wait_handoff(s);
     if (s->status != 0) {
       int status = s->status;
-      release_client(s);
+      coro_socket_release_accept_wait_refs(s);
       return status;
     }
   }
 
   if (s->status != 0) {
     int status = s->status;
-    release_client(s);
+    coro_socket_release_accept_wait_refs(s);
     return status;
   }
 
   pipe_listener_state_t *ls = (pipe_listener_state_t *)s->native_tcp_state;
-  if (!ls || !ls->head) { release_client(s); return TURBO_EBUSY; }
+  if (!ls || !ls->head) {
+    coro_socket_release_accept_wait_refs(s);
+    return TURBO_EBUSY;
+  }
 
   pipe_accept_node_t *node = ls->head;
   ls->head = node->next;
@@ -220,7 +219,7 @@ static int pipe_accept(coro_socket_t *s, coro_socket_t **accepted) {
                                                    &transport_ops_pipe);
   if (!child) {
     turbo_stream_destroy(stream);
-    release_client(s);
+    coro_socket_release_accept_wait_refs(s);
     return TURBO_ENOMEM;
   }
 
@@ -235,7 +234,7 @@ static int pipe_accept(coro_socket_t *s, coro_socket_t **accepted) {
   retain_client(child);
 
   *accepted = child;
-  release_client(s);
+  coro_socket_release_accept_wait_refs(s);
   return 0;
 }
 

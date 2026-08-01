@@ -256,20 +256,14 @@ static int kcp_connect(coro_socket_t *s, const char *host, int port) {
 
   if (!s->co_wait) {
     int status = s->status;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 
   coro_yield();
   {
     int status = s->status;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -373,10 +367,9 @@ static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
     } else {
       coro_set_wait(s);
       coro_yield();
-      coro_socket_release_destroy_wait_handoff(s);
       if (s->status != 0) {
         int status = s->status;
-        release_client(s);
+        coro_socket_release_accept_wait_refs(s);
         return status;
       }
     }
@@ -390,7 +383,7 @@ static int kcp_accept(coro_socket_t *s, coro_socket_t **accepted) {
 
   *accepted = node->socket;
   free(node);
-  release_client(s);
+  coro_socket_release_accept_wait_refs(s);
   return 0;
 }
 

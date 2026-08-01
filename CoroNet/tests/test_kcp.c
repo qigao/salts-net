@@ -18,6 +18,13 @@ static const uint8_t KCP_TEST_PSK[TURBO_KCP_PSK_SIZE] = {
     0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xa9, 0xba, 0xcb, 0xdc, 0xed, 0xfe, 0x0f,
     0x1f, 0x2e, 0x3d, 0x4c, 0x5b, 0x6a, 0x79, 0x88, 0x97, 0xa6, 0xb5, 0xc4, 0xd3, 0xe2, 0xf1, 0x01};
 
+enum {
+  KCP_TIMER_DESTROY_RACE_ATTEMPTS = 32,
+  KCP_INITIAL_TICK_MS = 10,
+  KCP_POST_DESTROY_SETTLE_MS = 1,
+  KCP_DESTROY_DRAIN_TIMEOUT_MS = 250
+};
+
 static turbo_kcp_config_t kcp_test_config(void) {
   turbo_kcp_config_t config;
   turbo_kcp_config_default(&config);
@@ -417,6 +424,39 @@ spec("KCP Transport") {
     }
     check(!coro_context_alive(ctx));
     coro_context_destroy(ctx);
+  }
+
+  it("should not run a KCP timer task after final destruction") {
+    coro_context_t *ctx = coro_context_create(NULL);
+    check(ctx != NULL);
+
+    for (int attempt = 0; attempt < KCP_TIMER_DESTROY_RACE_ATTEMPTS; ++attempt) {
+      turbo_kcp_t *client = turbo_kcp_create(ctx);
+      turbo_kcp_config_t config = kcp_test_config();
+      uint64_t drain_deadline;
+
+      check(client != NULL);
+      if (!client) {
+        break;
+      }
+      check_int_eq(turbo_kcp_set_config(client, &config), TURBO_OK);
+      check_int_eq(turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv),
+                   TURBO_OK);
+
+      /* Destroy at the initial tick boundary so the timer producer and the
+       * context post consumer exercise their lifetime handoff. */
+      turbo_sleep_ms(KCP_INITIAL_TICK_MS);
+      turbo_kcp_destroy(client);
+      drain_deadline = coro_context_now(ctx) + KCP_DESTROY_DRAIN_TIMEOUT_MS;
+      while (coro_context_alive(ctx) && coro_context_now(ctx) < drain_deadline) {
+        coro_context_run(ctx, TURBO_RUN_ONCE);
+      }
+      turbo_sleep_ms(KCP_POST_DESTROY_SETTLE_MS);
+      coro_context_run(ctx, TURBO_RUN_NOWAIT);
+      check(!coro_context_alive(ctx));
+    }
+
+    kcp_test_destroy_context_robust(ctx);
   }
 
   it("should propagate invalid udp backend through turbo_kcp_connect") {

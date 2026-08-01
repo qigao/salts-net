@@ -223,11 +223,10 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
       tls_discard_stream(s);
     }
     tls_clear_wait_metric(s);
-    coro_socket_release_destroy_wait_guard(s);
-    coro_socket_release_destroy_wait_handoff(s);
     if (timed_out) {
       release_client(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -331,11 +330,10 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
       s->timed_out = 0;
     }
     tls_clear_wait_metric(s);
-    coro_socket_release_destroy_wait_guard(s);
-    coro_socket_release_destroy_wait_handoff(s);
     if (timed_out) {
       release_client(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -387,11 +385,10 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
       s->timed_out = 0;
     }
     tls_clear_wait_metric(s);
-    coro_socket_release_destroy_wait_guard(s);
-    coro_socket_release_destroy_wait_handoff(s);
     if (timed_out) {
       release_client(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }

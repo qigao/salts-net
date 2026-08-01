@@ -356,14 +356,6 @@ static int configure_server_ctx_from_env_unlocked(void) {
     return TURBO_EIO;
   }
 
-#if defined(TLS1_3_VERSION) && !defined(OPENSSL_IS_BORINGSSL)
-  if (SSL_CTX_set_ciphersuites(
-          s_server_ctx,
-          "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256") != 1) {
-    return TURBO_EIO;
-  }
-#endif
-
   s_server_configured = 1;
   return 0;
 }
@@ -633,15 +625,6 @@ int turbo_stream_tls_server_context_create_internal(
     SSL_CTX_free(ctx);
     return TURBO_EIO;
   }
-#if defined(TLS1_3_VERSION) && !defined(OPENSSL_IS_BORINGSSL)
-  if (SSL_CTX_set_ciphersuites(
-          ctx,
-          "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256") != 1) {
-    SSL_CTX_free(ctx);
-    return TURBO_EIO;
-  }
-#endif
-
   if (config->client_auth == TURBO_TLS_CLIENT_AUTH_REQUIRED) {
     if (SSL_CTX_load_verify_locations(ctx, config->ca_file, NULL) != 1) {
       SSL_CTX_free(ctx);
@@ -2278,11 +2261,7 @@ int turbo_stream_tls_get_verified_peer_certificate_sha256_internal(
     return TURBO_EPERM;
   }
 
-#ifdef OPENSSL_IS_BORINGSSL
   peer = SSL_get_peer_certificate(st->ssl);
-#else
-  peer = SSL_get1_peer_certificate(st->ssl);
-#endif
   if (!peer) {
     return TURBO_ENOENT;
   }
@@ -2582,9 +2561,7 @@ CXX_C_API void turbo_stream_tls_reset_client_session_cache(void) {
 }
 
 CXX_C_API void turbo_stream_tls_thread_cleanup(void) {
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(OPENSSL_IS_BORINGSSL)
-  OPENSSL_thread_stop();
-#endif
+  ERR_clear_error();
 }
 
 CXX_C_API void turbo_stream_tls_global_cleanup(void) {

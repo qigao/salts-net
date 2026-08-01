@@ -363,7 +363,7 @@ struct coro_socket_s {
   turbo_timer_t *timer;          /**< Timeout timer handle */
   uint64_t timeout_ms;           /**< Timeout duration (0 = no timeout) */
   int timed_out;                 /**< 1 = last op timed out */
-  int timer_active;              /**< Atomic state: 0 idle, 1 armed, 2 posted, 3 posted then canceled */
+  atomic_int timer_active;       /**< State: 0 idle, 1 armed, 2 posted, 3 posted then canceled */
   int close_pending;             /**< 1 = transport close was requested and holds a reference */
   int destroy_wait_handoff;      /**< 1 = a resumed waiter still owns the pending wait reference */
   int destroy_wait_guard_ref;    /**< 1 = destroy kept the socket alive until the waiter returns */
@@ -590,8 +590,8 @@ static inline void coro_resume_waiter_with_handoff(coro_socket_t *client) {
  */
 void start_timeout_timer(coro_socket_t *s);
 void stop_timeout_timer(coro_socket_t *s);
-void coro_socket_release_destroy_wait_handoff(coro_socket_t *s);
-void coro_socket_release_destroy_wait_guard(coro_socket_t *s);
+void coro_socket_release_destroy_wait_refs(coro_socket_t *s);
+void coro_socket_release_accept_wait_refs(coro_socket_t *s);
 int coro_socket_apply_stream_options(coro_socket_t *s);
 int coro_socket_inherit_stream_options(coro_socket_t *child, const coro_socket_t *parent);
 void coro_socket_configure_transport_internal(coro_socket_t *s, turbo_transport_t transport,

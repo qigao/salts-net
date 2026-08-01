@@ -317,22 +317,36 @@ void release_client(coro_socket_t *client) {
   }
 }
 
-void coro_socket_release_destroy_wait_handoff(coro_socket_t *s) {
-  if (!s || !s->destroy_wait_handoff) {
+void coro_socket_release_destroy_wait_refs(coro_socket_t *s) {
+  int release_handoff;
+  int release_guard;
+
+  if (!s) {
     return;
   }
 
+  release_handoff = s->destroy_wait_handoff;
+  release_guard = s->destroy_wait_guard_ref;
   s->destroy_wait_handoff = 0;
-  release_client(s);
+  s->destroy_wait_guard_ref = 0;
+
+  if (release_handoff) {
+    release_client(s);
+  }
+  if (release_guard) {
+    release_client(s);
+  }
 }
 
-void coro_socket_release_destroy_wait_guard(coro_socket_t *s) {
-  if (!s || !s->destroy_wait_guard_ref) {
+void coro_socket_release_accept_wait_refs(coro_socket_t *s) {
+  if (!s) {
     return;
   }
 
-  s->destroy_wait_guard_ref = 0;
-  release_client(s);
+  if (!s->destroy_wait_handoff) {
+    release_client(s);
+  }
+  coro_socket_release_destroy_wait_refs(s);
 }
 
 static void release_accepted_transport_ref_if_orphaned(coro_socket_t *s) {
@@ -354,8 +368,8 @@ enum {
 };
 
 static int timeout_state_transition(coro_socket_t *s, int *expected, int desired) {
-  return __atomic_compare_exchange_n(&s->timer_active, expected, desired, 0,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+  return atomic_compare_exchange_strong_explicit(&s->timer_active, expected, desired,
+                                                 memory_order_acq_rel, memory_order_acquire);
 }
 
 static void on_timer_fired_bounce(void *arg1, void *arg2) {
@@ -402,7 +416,8 @@ static void on_timer_fired(turbo_timer_t *timer) {
     rc = coro_post(s->ctx, on_timer_fired_bounce, s, NULL);
   }
   if (rc != TURBO_OK) {
-    int previous = __atomic_exchange_n(&s->timer_active, CORO_TIMEOUT_IDLE, __ATOMIC_ACQ_REL);
+    int previous = atomic_exchange_explicit(&s->timer_active, CORO_TIMEOUT_IDLE,
+                                            memory_order_acq_rel);
     if (previous == CORO_TIMEOUT_POSTED || previous == CORO_TIMEOUT_CANCELED_POSTED) {
       release_client(s);
     }
@@ -828,6 +843,7 @@ coro_socket_t *coro_socket_create_shell(coro_context_t *ctx, turbo_transport_t t
   s->loop = ctx->loop;
   s->ctx = ctx;
   atomic_init(&s->ref_count, 1);
+  atomic_init(&s->timer_active, CORO_TIMEOUT_IDLE);
   s->arena = ctx->arena;
   s->transport = transport;
   s->ops = ops;
@@ -952,10 +968,16 @@ int coro_socket_connect_direct_internal(coro_socket_t *s, const char *connect_ho
     {
       int timed_out = s->timed_out;
       int status = s->status;
-      coro_socket_release_destroy_wait_handoff(s);
 
-      if (timed_out) return TURBO_ETIMEDOUT;
-      if (status != 0) return status;
+      if (timed_out) {
+        coro_socket_release_destroy_wait_refs(s);
+        return TURBO_ETIMEDOUT;
+      }
+      if (status != 0) {
+        coro_socket_release_destroy_wait_refs(s);
+        return status;
+      }
+      coro_socket_release_destroy_wait_refs(s);
     }
   }
 
@@ -1564,11 +1586,10 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
       s->status = 0;
       s->timed_out = 0;
       ret = 0;
-      coro_socket_release_destroy_wait_guard(s);
-      coro_socket_release_destroy_wait_handoff(s);
       if (timed_out) {
         release_client(s);
       }
+      coro_socket_release_destroy_wait_refs(s);
       return ret;
     }
     if (status == TURBO_EINTR) {
@@ -1579,11 +1600,10 @@ int coro_socket_recv_raw_internal(coro_socket_t *s, char **data, size_t *len) {
     } else {
       ret = status;
     }
-    coro_socket_release_destroy_wait_guard(s);
-    coro_socket_release_destroy_wait_handoff(s);
     if (timed_out) {
       release_client(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return ret;
   }
 }

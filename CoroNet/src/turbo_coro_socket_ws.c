@@ -374,10 +374,6 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
   {
     int status = s->status;
     int timed_out = s->timed_out;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
     if (timed_out) {
       s->timed_out = 0;
       release_client(s);
@@ -386,6 +382,7 @@ static int ws_connect(coro_socket_t *s, const char *host, int port) {
       s->connected = 0;
       ws_discard_stream(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -640,14 +637,11 @@ int coro_socket_upgrade_ws_ex(coro_socket_t *s, const char *request_host, const 
   {
     int status = s->status;
     int timed_out = s->timed_out;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
     if (timed_out) {
       s->timed_out = 0;
       release_client(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }
@@ -731,14 +725,11 @@ int coro_socket_wrap_accepted_ws_server(coro_socket_t *s) {
   {
     int status = s->status;
     int timed_out = s->timed_out;
-    if (s->destroy_wait_handoff) {
-      s->destroy_wait_handoff = 0;
-      release_client(s);
-    }
     if (timed_out) {
       s->timed_out = 0;
       release_client(s);
     }
+    coro_socket_release_destroy_wait_refs(s);
     return status;
   }
 }

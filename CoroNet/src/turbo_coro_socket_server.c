@@ -222,6 +222,20 @@ static int run_pre_tls_admission(coro_server_task_t *task,
   }
 }
 
+static int preserve_tcp_admission_remainder(coro_server_task_t *task,
+                                            const uint8_t *buffer,
+                                            size_t buffer_size,
+                                            size_t consumed) {
+  mem_slice_t remainder = {0};
+
+  if (!task || !task->socket || !buffer || consumed == buffer_size) return 0;
+
+  remainder.data = (char *)(buffer + consumed);
+  remainder.length = buffer_size - consumed;
+  coro_deliver_recv(task->socket, &remainder);
+  return task->socket->status;
+}
+
 static void coro_entry_bridge(coro_t *co, void *arg) {
   UNUSED(co);
   coro_server_task_t *task = (coro_server_task_t *)arg;
@@ -235,7 +249,11 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
                               &pre_tls_buffer_size, &pre_tls_consumed);
   }
 
-  if (r == 0 && task->server_transport == TURBO_TLS) {
+  if (r == 0 && task->server_transport == TURBO_TCP) {
+    r = preserve_tcp_admission_remainder(task, pre_tls_buffer,
+                                         pre_tls_buffer_size,
+                                         pre_tls_consumed);
+  } else if (r == 0 && task->server_transport == TURBO_TLS) {
     r = coro_socket_wrap_accepted_tls_server(
         task->socket, pre_tls_buffer ? pre_tls_buffer + pre_tls_consumed : NULL,
         pre_tls_buffer_size - pre_tls_consumed);
@@ -743,7 +761,8 @@ int coro_socket_listen_on_ex(coro_socket_t *server, const char *host, int port,
                              coro_handler_closed_fn handler_closed,
                              void *handler_closed_arg) {
   if (!server || !host || !handler) return TURBO_EINVAL;
-  if (server->server_pre_tls_callback && server->transport != TURBO_TLS) {
+  if (server->server_pre_tls_callback && server->transport != TURBO_TCP &&
+      server->transport != TURBO_TLS) {
     return TURBO_ENOTSUP;
   }
 

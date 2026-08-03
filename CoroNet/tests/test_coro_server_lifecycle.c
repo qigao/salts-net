@@ -5,6 +5,7 @@
 #include "tls_test_support.h"
 #include "turbo_coro.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -29,6 +30,132 @@ typedef struct server_lifecycle_state_s {
   int first_recv_status;
   int second_recv_status;
 } server_lifecycle_state_t;
+
+typedef struct server_prefix_admission_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int callback_calls;
+  int context_valid;
+  int handler_rc;
+  int client_rc;
+  int release_hits;
+} server_prefix_admission_state_t;
+
+typedef struct server_prefix_admission_context_s {
+  server_prefix_admission_state_t *state;
+  unsigned int marker;
+} server_prefix_admission_context_t;
+
+enum { SERVER_PREFIX_ADMISSION_MARKER = 0x50585631u };
+
+static int server_prefix_admission_callback(
+    coro_socket_t *accepted, const uint8_t *data, size_t data_size,
+    size_t *consumed, void *user_data, void **connection_context) {
+  static const uint8_t prefix[] = {'P', 'X', 'V', '1', '\r', '\n'};
+  server_prefix_admission_state_t *state =
+      (server_prefix_admission_state_t *)user_data;
+  server_prefix_admission_context_t *context;
+  size_t comparable;
+
+  if (!accepted || !consumed || !state || !connection_context)
+    return TURBO_EINVAL;
+  *consumed = 0u;
+  *connection_context = NULL;
+  state->callback_calls++;
+  comparable = data_size < sizeof(prefix) ? data_size : sizeof(prefix);
+  if (comparable != 0u && memcmp(data, prefix, comparable) != 0)
+    return TURBO_EPROTO;
+  if (data_size < sizeof(prefix))
+    return CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE;
+
+  context = (server_prefix_admission_context_t *)calloc(1, sizeof(*context));
+  if (!context) return TURBO_ENOMEM;
+  context->state = state;
+  context->marker = SERVER_PREFIX_ADMISSION_MARKER;
+  *consumed = sizeof(prefix);
+  *connection_context = context;
+  return 0;
+}
+
+static void server_prefix_admission_release(void *connection_context) {
+  server_prefix_admission_context_t *context =
+      (server_prefix_admission_context_t *)connection_context;
+
+  if (!context) return;
+  if (context->state) context->state->release_hits++;
+  free(context);
+}
+
+static void server_prefix_admission_handler(coro_socket_t *client, void *arg) {
+  static const char expected_payload[] = "mqtt-connect";
+  static const char response[] = "accepted";
+  server_prefix_admission_state_t *state =
+      (server_prefix_admission_state_t *)arg;
+  server_prefix_admission_context_t *context =
+      (server_prefix_admission_context_t *)
+          coro_socket_get_server_pre_tls_admission_context(client);
+  char *data = NULL;
+  size_t data_size = 0u;
+
+  state->context_valid = context && context->state == state &&
+                         context->marker == SERVER_PREFIX_ADMISSION_MARKER;
+  state->handler_rc = state->context_valid
+                          ? coro_socket_recv(client, &data, &data_size)
+                          : TURBO_EPROTO;
+  if (state->handler_rc == 0 &&
+      (data_size != sizeof(expected_payload) - 1u ||
+       memcmp(data, expected_payload, data_size) != 0)) {
+    state->handler_rc = TURBO_EPROTO;
+  }
+  coro_socket_free_recv(data);
+  if (state->handler_rc == 0)
+    state->handler_rc =
+        coro_socket_send(client, response, sizeof(response) - 1u);
+}
+
+static void server_prefix_admission_client(coro_t *co, void *arg) {
+  static const char request[] = "PXV1\r\nmqtt-connect";
+  static const char expected_response[] = "accepted";
+  server_prefix_admission_state_t *state =
+      (server_prefix_admission_state_t *)arg;
+  coro_socket_t *client;
+  char *data = NULL;
+  size_t data_size = 0u;
+
+  (void)co;
+  client = coro_socket_create_tcpv4(state->ctx);
+  if (!client) {
+    state->client_rc = TURBO_ENOMEM;
+    return;
+  }
+  coro_socket_set_timeout(client, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+  state->client_rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  if (state->client_rc == 0)
+    state->client_rc = coro_socket_send(client, request, sizeof(request) - 1u);
+  if (state->client_rc == 0)
+    state->client_rc = coro_socket_recv(client, &data, &data_size);
+  if (state->client_rc == 0 &&
+      (data_size != sizeof(expected_response) - 1u ||
+       memcmp(data, expected_response, data_size) != 0)) {
+    state->client_rc = TURBO_EPROTO;
+  }
+  coro_socket_free_recv(data);
+  coro_socket_destroy(client);
+}
+
+static int server_prefix_admission_done(void *arg) {
+  server_prefix_admission_state_t *state =
+      (server_prefix_admission_state_t *)arg;
+  return state->client_rc != TURBO_EBUSY &&
+         state->handler_rc != TURBO_EBUSY && state->release_hits == 1;
+}
+
+static int server_prefix_admission_stopped(void *arg) {
+  server_prefix_admission_state_t *state =
+      (server_prefix_admission_state_t *)arg;
+  return coro_socket_server_is_stopped(state->server);
+}
 
 static void server_lifecycle_handler(coro_socket_t *client, void *arg) {
   server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
@@ -290,6 +417,58 @@ static void server_lifecycle_cleanup(server_lifecycle_state_t *state) {
 }
 
 spec("Coroutine Server Lifecycle") {
+  it("preserves bytes following a cleartext TCP admission prefix") {
+    server_prefix_admission_state_t state;
+    coro_server_pre_tls_admission_config_t admission =
+        CORO_SERVER_PRE_TLS_ADMISSION_CONFIG_DEFAULT;
+    test_socket_t probe = TEST_INVALID_SOCKET;
+
+    memset(&state, 0, sizeof(state));
+    state.client_rc = TURBO_EBUSY;
+    state.handler_rc = TURBO_EBUSY;
+    check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+    test_close_socket(probe);
+    state.ctx = coro_context_create(NULL);
+    check_not_null(state.ctx);
+    state.server = coro_socket_create_tcpv4(state.ctx);
+    check_not_null(state.server);
+
+    admission.max_prefix_bytes = 64u;
+    admission.timeout_ms = SERVER_LIFECYCLE_TEST_TIMEOUT_MS;
+    admission.callback = server_prefix_admission_callback;
+    admission.user_data = &state;
+    admission.release = server_prefix_admission_release;
+    check_int_eq(
+        coro_socket_set_server_pre_tls_admission(state.server, &admission), 0);
+    check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+                                       server_prefix_admission_handler, &state),
+                 0);
+    check_int_eq(coro_context_spawn(state.ctx, server_prefix_admission_client,
+                                    &state),
+                 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_prefix_admission_done, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+
+    check_true(state.callback_calls >= 1);
+    check_int_eq(state.context_valid, 1);
+    check_int_eq(state.handler_rc, 0);
+    check_int_eq(state.client_rc, 0);
+    check_int_eq(state.release_hits, 1);
+    check_int_eq(coro_socket_server_stop(state.server), 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_prefix_admission_stopped, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    coro_socket_destroy(state.server);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_context_idle, state.ctx,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
+                 0);
+    coro_context_destroy(state.ctx);
+  }
+
   it("rejects a raw connection before TLS handshake when admission is full") {
     char cert_file[512] = {0};
     char key_file[512] = {0};

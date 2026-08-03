@@ -754,15 +754,16 @@ CXX_C_API int coro_socket_set_server_admission_limit(coro_socket_t *socket, size
 #define CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE 1
 
 /**
- * @brief Inspect and consume a bounded cleartext prefix before server TLS.
+ * @brief Inspect and consume a bounded cleartext prefix before server transport admission.
  *
  * The callback runs on the accepted socket's owning context thread. `data`
  * contains the complete prefix accumulated so far, not only the newest receive.
  * Return 0 to admit, CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE to receive more,
  * or a Turbo error code to reject the connection. On success, set `consumed`
- * to the prefix bytes removed before TLS; any remaining bytes are injected into
- * the TLS input exactly once. A non-NULL `connection_context` is exposed to the
- * connection handler and released after that handler returns.
+ * to the removed prefix bytes. For TCP, any remaining bytes are delivered to
+ * the connection handler's receive path exactly once; for TLS/WSS they are
+ * injected into the TLS input exactly once. A non-NULL `connection_context` is
+ * exposed to the connection handler and released after that handler returns.
  */
 typedef int (*coro_server_pre_tls_admission_fn)(
     coro_socket_t *accepted, const uint8_t *data, size_t data_size,
@@ -771,7 +772,7 @@ typedef int (*coro_server_pre_tls_admission_fn)(
 /** Release a connection context produced by pre-TLS admission. */
 typedef void (*coro_server_pre_tls_admission_release_fn)(void *connection_context);
 
-/** Optional pre-TLS admission policy copied by a TLS/WSS server socket. */
+/** Optional prefix admission policy copied by a TCP/TLS/WSS server socket. */
 typedef struct coro_server_pre_tls_admission_config_s {
   size_t size; /**< Must be sizeof(coro_server_pre_tls_admission_config_t). */
   size_t max_prefix_bytes; /**< Maximum bytes the callback may consume. */
@@ -785,10 +786,11 @@ typedef struct coro_server_pre_tls_admission_config_s {
   {sizeof(coro_server_pre_tls_admission_config_t), 0u, 0u, NULL, NULL, NULL}
 
 /**
- * @brief Configure bounded pre-TLS admission for accepted TLS/WSS sockets.
+ * @brief Configure bounded prefix admission for accepted TCP/TLS/WSS sockets.
  *
- * Configure before listen. The policy is rejected for cleartext transports.
- * The default is disabled, preserving existing server behavior.
+ * Configure before listen. The historical function name is retained for ABI
+ * compatibility. The policy is rejected for UDP, pipe, VSOCK, and cleartext
+ * WebSocket listeners. The default is disabled, preserving existing behavior.
  *
  * @return 0 on success, TURBO_EINVAL for an invalid configuration, or
  *         TURBO_EBUSY after managed listen/admission has started.

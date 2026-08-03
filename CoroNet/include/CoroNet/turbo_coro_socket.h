@@ -734,6 +734,79 @@ typedef void (*coro_handler_fn)(coro_socket_t *client, void *arg);
 typedef void (*coro_handler_closed_fn)(void *arg);
 
 /**
+ * @brief Bound accepted server tasks before TLS/WebSocket handshakes begin.
+ *
+ * The limit covers every task from raw socket acceptance through handshake,
+ * handler execution, and accepted-socket close completion. When all slots are
+ * occupied, a newly accepted socket is closed before transport admission and
+ * the handler is not called. This is a resource guard only; it does not select
+ * or authorize application owners.
+ *
+ * The default is unlimited for compatibility. Configure a non-zero limit
+ * before listen. Call on the socket's owning context thread.
+ *
+ * @return 0 on success, TURBO_EINVAL for a NULL socket or zero limit, or
+ *         TURBO_EBUSY after managed listen/admission has started.
+ */
+CXX_C_API int coro_socket_set_server_admission_limit(coro_socket_t *socket, size_t limit);
+
+/** The pre-TLS admission callback needs more bytes before deciding. */
+#define CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE 1
+
+/**
+ * @brief Inspect and consume a bounded cleartext prefix before server TLS.
+ *
+ * The callback runs on the accepted socket's owning context thread. `data`
+ * contains the complete prefix accumulated so far, not only the newest receive.
+ * Return 0 to admit, CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE to receive more,
+ * or a Turbo error code to reject the connection. On success, set `consumed`
+ * to the prefix bytes removed before TLS; any remaining bytes are injected into
+ * the TLS input exactly once. A non-NULL `connection_context` is exposed to the
+ * connection handler and released after that handler returns.
+ */
+typedef int (*coro_server_pre_tls_admission_fn)(
+    coro_socket_t *accepted, const uint8_t *data, size_t data_size,
+    size_t *consumed, void *user_data, void **connection_context);
+
+/** Release a connection context produced by pre-TLS admission. */
+typedef void (*coro_server_pre_tls_admission_release_fn)(void *connection_context);
+
+/** Optional pre-TLS admission policy copied by a TLS/WSS server socket. */
+typedef struct coro_server_pre_tls_admission_config_s {
+  size_t size; /**< Must be sizeof(coro_server_pre_tls_admission_config_t). */
+  size_t max_prefix_bytes; /**< Maximum bytes the callback may consume. */
+  uint64_t timeout_ms; /**< Total deadline for obtaining and validating the prefix. */
+  coro_server_pre_tls_admission_fn callback;
+  void *user_data;
+  coro_server_pre_tls_admission_release_fn release;
+} coro_server_pre_tls_admission_config_t;
+
+#define CORO_SERVER_PRE_TLS_ADMISSION_CONFIG_DEFAULT                              \
+  {sizeof(coro_server_pre_tls_admission_config_t), 0u, 0u, NULL, NULL, NULL}
+
+/**
+ * @brief Configure bounded pre-TLS admission for accepted TLS/WSS sockets.
+ *
+ * Configure before listen. The policy is rejected for cleartext transports.
+ * The default is disabled, preserving existing server behavior.
+ *
+ * @return 0 on success, TURBO_EINVAL for an invalid configuration, or
+ *         TURBO_EBUSY after managed listen/admission has started.
+ */
+CXX_C_API int coro_socket_set_server_pre_tls_admission(
+    coro_socket_t *socket,
+    const coro_server_pre_tls_admission_config_t *config);
+
+/**
+ * @brief Return the context created by this connection's pre-TLS admission.
+ *
+ * The borrowed pointer remains valid only while the managed connection handler
+ * is running. Returns NULL when no policy was configured or no context exists.
+ */
+CXX_C_API void *coro_socket_get_server_pre_tls_admission_context(
+    const coro_socket_t *socket);
+
+/**
  * @brief Start listening on a URL (tcp://, udp://, ws://, etc.).
  * @param socket   Socket to use as server
  * @param url      Bind URL (e.g., "tcp://0.0.0.0:8080")

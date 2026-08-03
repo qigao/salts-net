@@ -338,7 +338,9 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
   }
 }
 
-int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
+int coro_socket_wrap_accepted_tls_server(coro_socket_t *s,
+                                         const uint8_t *prefetched,
+                                         size_t prefetched_size) {
   turbo_stream_t *tcp_stream;
   turbo_stream_t *tls_stream;
   int rc;
@@ -359,8 +361,9 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s) {
 
   retain_client(s);
   coro_set_wait(s);
-  rc = turbo_stream_tls_wrap_server_with_context(tls_stream, tcp_stream, s->tls_server_context,
-                                                 on_tls_connect, on_tls_close);
+  rc = turbo_stream_tls_wrap_server_with_context_prefetched(
+      tls_stream, tcp_stream, s->tls_server_context, prefetched, prefetched_size,
+      on_tls_connect, on_tls_close);
   if (rc != 0) {
     s->co_wait = NULL;
     release_client(s);

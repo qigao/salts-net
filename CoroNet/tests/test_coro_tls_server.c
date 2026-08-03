@@ -13,6 +13,7 @@
 #include "tinytest.h"
 #include "tls_test_support.h"
 
+#include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
 #include <signal.h>
@@ -65,6 +66,25 @@ typedef struct tls_tiny_write_state_s {
   int sends_completed;
   size_t received;
 } tls_tiny_write_state_t;
+
+typedef struct tls_pre_admission_state_s {
+  coro_context_t *ctx;
+  coro_socket_t *server;
+  unsigned short port;
+  int callback_calls;
+  int handler_hits;
+  int context_valid;
+  int release_hits;
+  int client_rc;
+  int handler_rc;
+} tls_pre_admission_state_t;
+
+typedef struct tls_pre_admission_context_s {
+  tls_pre_admission_state_t *state;
+  unsigned int marker;
+} tls_pre_admission_context_t;
+
+enum { TLS_PRE_ADMISSION_MARKER = 0x54504658u };
 
 static int  g_tls_server_handler_rc   = TURBO_EBUSY;
 static int  g_tls_server_client_rc    = TURBO_EBUSY;
@@ -134,6 +154,102 @@ static int tls_tiny_write_case_done(void *arg) {
   tls_tiny_write_state_t *state = (tls_tiny_write_state_t *)arg;
   if (!state) return 1;
   return state->client_rc != TURBO_EBUSY && state->handler_rc != TURBO_EBUSY;
+}
+
+static int tls_pre_admission_case_done(void *arg) {
+  tls_pre_admission_state_t *state = (tls_pre_admission_state_t *)arg;
+  if (!state) return 1;
+  return state->client_rc != TURBO_EBUSY &&
+         state->handler_rc != TURBO_EBUSY && state->release_hits == 1;
+}
+
+static int tls_pre_admission_callback(
+    coro_socket_t *accepted, const uint8_t *data, size_t data_size,
+    size_t *consumed, void *user_data, void **connection_context) {
+  static const uint8_t prefix[] = {'P', 'X', 'Y', '2'};
+  tls_pre_admission_state_t *state = (tls_pre_admission_state_t *)user_data;
+  tls_pre_admission_context_t *context;
+  size_t comparable;
+
+  if (!accepted || !consumed || !connection_context || !state) return TURBO_EINVAL;
+  *consumed = 0u;
+  *connection_context = NULL;
+  state->callback_calls++;
+  comparable = data_size < sizeof(prefix) ? data_size : sizeof(prefix);
+  if (comparable != 0u && memcmp(data, prefix, comparable) != 0) {
+    return TURBO_EPROTO;
+  }
+  /* Waiting for one TLS byte forces CoroNet to preserve a pre-read ClientHello. */
+  if (data_size <= sizeof(prefix)) {
+    return CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE;
+  }
+
+  context = (tls_pre_admission_context_t *)calloc(1, sizeof(*context));
+  if (!context) return TURBO_ENOMEM;
+  context->state = state;
+  context->marker = TLS_PRE_ADMISSION_MARKER;
+  *consumed = sizeof(prefix);
+  *connection_context = context;
+  return 0;
+}
+
+static void tls_pre_admission_release(void *connection_context) {
+  tls_pre_admission_context_t *context =
+      (tls_pre_admission_context_t *)connection_context;
+  if (!context) return;
+  if (context->state) context->state->release_hits++;
+  free(context);
+}
+
+static void tls_pre_admission_handler(coro_socket_t *client, void *arg) {
+  static const char banner[] = "pre-admission-ready";
+  tls_pre_admission_state_t *state = (tls_pre_admission_state_t *)arg;
+  tls_pre_admission_context_t *context =
+      (tls_pre_admission_context_t *)
+          coro_socket_get_server_pre_tls_admission_context(client);
+
+  state->handler_hits++;
+  state->context_valid = context && context->state == state &&
+                         context->marker == TLS_PRE_ADMISSION_MARKER;
+  state->handler_rc = state->context_valid
+                          ? coro_socket_send(client, banner, sizeof(banner) - 1u)
+                          : TURBO_EPROTO;
+}
+
+static void tls_pre_admission_client_task(coro_t *co, void *arg) {
+  static const char first_prefix[] = "PX";
+  static const char second_prefix[] = "Y2";
+  static const char expected_banner[] = "pre-admission-ready";
+  tls_pre_admission_state_t *state = (tls_pre_admission_state_t *)arg;
+  turbo_tls_client_config_t tls_config;
+  coro_socket_t *client;
+  char *data = NULL;
+  size_t data_size = 0u;
+  int rc;
+  (void)co;
+
+  client = coro_socket_create(state->ctx, CORO_SOCKET_TCP_V4);
+  if (!client) {
+    state->client_rc = TURBO_ENOMEM;
+    return;
+  }
+  coro_socket_set_timeout(client, 5000);
+  memset(&tls_config, 0, sizeof(tls_config));
+  tls_config.verify_peer = 0;
+  rc = coro_socket_set_tls_client_config(client, &tls_config);
+  if (rc == 0) rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  if (rc == 0) rc = coro_socket_send(client, first_prefix, sizeof(first_prefix) - 1u);
+  if (rc == 0) coro_sleep(state->ctx, 1);
+  if (rc == 0) rc = coro_socket_send(client, second_prefix, sizeof(second_prefix) - 1u);
+  if (rc == 0) rc = coro_socket_upgrade_tls(client, "localhost");
+  if (rc == 0) rc = coro_socket_recv(client, &data, &data_size);
+  if (rc == 0 && (data_size != sizeof(expected_banner) - 1u ||
+                  memcmp(data, expected_banner, data_size) != 0)) {
+    rc = TURBO_EPROTO;
+  }
+  coro_socket_free_recv(data);
+  state->client_rc = rc;
+  coro_socket_destroy(client);
 }
 
 /* ── Handler & client coroutines ──────────────────────────── */
@@ -681,6 +797,60 @@ static void tls_server_run_tiny_write_case(void) {
   tls_test_remove_file(key_file);
 }
 
+static void tls_server_run_pre_admission_case(void) {
+  char ca_file[512] = {0};
+  char cert_file[512] = {0};
+  char key_file[512] = {0};
+  tls_pre_admission_state_t state;
+  coro_server_pre_tls_admission_config_t admission =
+      CORO_SERVER_PRE_TLS_ADMISSION_CONFIG_DEFAULT;
+  test_socket_t probe = TEST_INVALID_SOCKET;
+
+  memset(&state, 0, sizeof(state));
+  state.client_rc = TURBO_EBUSY;
+  state.handler_rc = TURBO_EBUSY;
+  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  test_close_socket(probe);
+  check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+                                           key_file, sizeof(key_file)), 0);
+  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
+  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+
+  state.ctx = coro_context_create(NULL);
+  check_not_null(state.ctx);
+  state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
+  check_not_null(state.server);
+
+  admission.max_prefix_bytes = 5u;
+  admission.timeout_ms = 1000u;
+  admission.callback = tls_pre_admission_callback;
+  admission.user_data = &state;
+  admission.release = tls_pre_admission_release;
+  check_int_eq(coro_socket_set_server_pre_tls_admission(state.server, &admission), 0);
+  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+                                     tls_pre_admission_handler, &state), 0);
+  check_int_eq(coro_context_spawn(state.ctx, tls_pre_admission_client_task, &state), 0);
+
+  tls_server_run_until(state.ctx, 5000, tls_pre_admission_case_done, &state);
+
+  check(state.callback_calls >= 3);
+  check_int_eq(state.handler_hits, 1);
+  check_int_eq(state.context_valid, 1);
+  check_int_eq(state.handler_rc, 0);
+  check_int_eq(state.client_rc, 0);
+  check_int_eq(state.release_hits, 1);
+
+  coro_socket_destroy(state.server);
+  tls_close_run_until_idle(state.ctx, 1000);
+  coro_context_destroy(state.ctx);
+  tls_test_clear_server_env();
+  tls_test_clear_ca_env();
+  tls_test_remove_file(ca_file);
+  tls_test_remove_file(cert_file);
+  tls_test_remove_file(key_file);
+}
+
 /* ── Test specs ───────────────────────────────────────────── */
 
 spec("Coro TLS Server") {
@@ -764,6 +934,10 @@ spec("Coro TLS Server") {
 
   it("should preserve completion ownership across consecutive tiny TLS writes") {
     tls_server_run_tiny_write_case();
+  }
+
+  it("should preserve pre-read TLS bytes and handler-lifetime admission context") {
+    tls_server_run_pre_admission_case();
   }
 
 #ifdef _WIN32

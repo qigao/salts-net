@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <limits.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -1332,11 +1333,15 @@ static void tls_log_handshake_failure(tls_state_t *st, int ssl_rc) {
 
 static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
                                  const char *hostname, int server_mode,
+                                 const uint8_t *prefetched, size_t prefetched_size,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close) {
   tls_state_t *st;
 
   if (!outer || !tcp) return TURBO_EINVAL;
+  if ((prefetched_size != 0u && !prefetched) || prefetched_size > (size_t)INT_MAX) {
+    return TURBO_EINVAL;
+  }
   if (tcp->kind == TURBO_STREAM_TLS) return TURBO_EPROTOTYPE;
 
   st = (tls_state_t *)outer->backend_data;
@@ -1384,6 +1389,12 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
     tls_mark_server_handshake_start(st);
   }
   outer->connected = 0;
+  if (prefetched_size != 0u &&
+      BIO_write(st->rbio, prefetched, (int)prefetched_size) != (int)prefetched_size) {
+    tls_detach_tcp(st);
+    st->state = TLS_ST_CLOSED;
+    return TURBO_EIO;
+  }
   {
     int rc = turbo_stream_recv_start(st->tcp, tls_on_tcp_recv_cb);
     if (rc != 0) {
@@ -2096,7 +2107,7 @@ int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  const char *hostname,
                                  turbo_connect_cb on_connect,
                                  turbo_close_cb on_close) {
-  return tls_attach_tcp_stream(tls_stream, tcp_stream, hostname, 0,
+  return tls_attach_tcp_stream(tls_stream, tcp_stream, hostname, 0, NULL, 0u,
                                on_connect, on_close);
 }
 
@@ -2112,10 +2123,20 @@ int turbo_stream_tls_wrap_server_with_context(
     turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
     turbo_tls_server_context_t *server_context,
     turbo_connect_cb on_connect, turbo_close_cb on_close) {
+  return turbo_stream_tls_wrap_server_with_context_prefetched(
+      tls_stream, tcp_stream, server_context, NULL, 0u, on_connect, on_close);
+}
+
+int turbo_stream_tls_wrap_server_with_context_prefetched(
+    turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
+    turbo_tls_server_context_t *server_context,
+    const uint8_t *prefetched, size_t prefetched_size,
+    turbo_connect_cb on_connect, turbo_close_cb on_close) {
   tls_state_t *st;
   int rc;
 
-  if (!tls_stream || !tcp_stream) {
+  if (!tls_stream || !tcp_stream ||
+      (prefetched_size != 0u && !prefetched) || prefetched_size > (size_t)INT_MAX) {
     return TURBO_EINVAL;
   }
 
@@ -2163,7 +2184,8 @@ int turbo_stream_tls_wrap_server_with_context(
   }
 
   SSL_set_bio(st->ssl, st->rbio, st->wbio);
-  return tls_attach_tcp_stream(tls_stream, tcp_stream, NULL, 1, on_connect, on_close);
+  return tls_attach_tcp_stream(tls_stream, tcp_stream, NULL, 1,
+                               prefetched, prefetched_size, on_connect, on_close);
 
 fail:
   tls_free_state(st);

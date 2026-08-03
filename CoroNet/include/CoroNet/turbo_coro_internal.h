@@ -299,6 +299,13 @@ struct coro_socket_s {
   void *handler_closed_arg;              /**< User data for handler_closed */
   coro_server_task_t *server_tasks;      /**< Accepted tasks owned by this server */
   size_t server_task_count;              /**< Number of accepted tasks still running */
+  size_t server_admission_limit;         /**< 0 = unlimited accepted tasks */
+  size_t server_pre_tls_max_prefix_bytes;
+  uint64_t server_pre_tls_timeout_ms;
+  coro_server_pre_tls_admission_fn server_pre_tls_callback;
+  void *server_pre_tls_user_data;
+  coro_server_pre_tls_admission_release_fn server_pre_tls_release;
+  void *server_pre_tls_connection_context; /**< Accepted-socket handler-lifetime context. */
   int accept_loop_active;                /**< 1 while the managed accept coroutine runs */
   int server_stopping;                   /**< 1 after server stop begins */
   int reuse_port;                        /**< 1 = bind listener with SO_REUSEPORT */

@@ -23,7 +23,9 @@
 extern const coro_transport_ops_t transport_ops_tcp;
 extern const coro_transport_ops_t transport_ops_pipe;
 extern const coro_transport_ops_t *transport_ops_table[];
-int coro_socket_wrap_accepted_tls_server(coro_socket_t *s);
+int coro_socket_wrap_accepted_tls_server(coro_socket_t *s,
+                                         const uint8_t *prefetched,
+                                         size_t prefetched_size);
 int coro_socket_wrap_accepted_ws_server(coro_socket_t *s);
 extern const coro_transport_ops_t ws_server_ops;
 
@@ -42,6 +44,11 @@ struct coro_server_task_s {
   void *handler_closed_arg;
   turbo_transport_t server_transport;
   int ws_is_tls;
+  size_t pre_tls_max_prefix_bytes;
+  uint64_t pre_tls_timeout_ms;
+  coro_server_pre_tls_admission_fn pre_tls_callback;
+  void *pre_tls_user_data;
+  coro_server_pre_tls_admission_release_fn pre_tls_release;
   int cancel_requested;
   coro_server_task_t *next;
 };
@@ -83,16 +90,155 @@ static void wait_for_socket_close_completion(coro_socket_t *socket) {
 static int server_admission_end_is_expected(const coro_server_task_t *task, int rc) {
   return (task && task->server && task->server->server_stopping) ||
          rc == TURBO_ECANCELED || rc == TURBO_ETIMEDOUT || rc == TURBO_EOF ||
-         rc == TURBO_EPERM || rc == TURBO_ECONNABORTED;
+         rc == TURBO_EPERM || rc == TURBO_EPROTO || rc == TURBO_EMSGSIZE ||
+         rc == TURBO_ECONNABORTED;
+}
+
+static void release_pre_tls_context(coro_server_task_t *task) {
+  void *connection_context;
+
+  if (!task || !task->socket) return;
+  connection_context = task->socket->server_pre_tls_connection_context;
+  task->socket->server_pre_tls_connection_context = NULL;
+  if (connection_context && task->pre_tls_release) {
+    task->pre_tls_release(connection_context);
+  }
+}
+
+static int pre_tls_admission_validate_result(
+    coro_server_task_t *task, int rc, size_t data_size, size_t consumed,
+    void *connection_context) {
+  if (rc == CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE) {
+    if (consumed != 0u || connection_context != NULL) return TURBO_EPROTO;
+    return rc;
+  }
+  if (rc != 0) {
+    if (connection_context != NULL) task->pre_tls_release(connection_context);
+    return rc;
+  }
+  if (consumed > data_size || consumed > task->pre_tls_max_prefix_bytes) {
+    if (connection_context != NULL) task->pre_tls_release(connection_context);
+    return TURBO_EPROTO;
+  }
+  task->socket->server_pre_tls_connection_context = connection_context;
+  return 0;
+}
+
+static int run_pre_tls_admission(coro_server_task_t *task,
+                                 uint8_t **buffer, size_t *buffer_size,
+                                 size_t *consumed) {
+  static const uint64_t nanoseconds_per_millisecond = UINT64_C(1000000);
+  uint64_t saved_timeout_ms;
+  uint64_t started_ns;
+  uint64_t deadline_ns;
+  uint8_t *prefix = NULL;
+  size_t prefix_size = 0u;
+  int rc;
+
+  if (!task || !buffer || !buffer_size || !consumed || !task->pre_tls_callback) {
+    return TURBO_EINVAL;
+  }
+  *buffer = NULL;
+  *buffer_size = 0u;
+  *consumed = 0u;
+  saved_timeout_ms = task->socket->timeout_ms;
+  started_ns = turbo_hrtime();
+  if (task->pre_tls_timeout_ms >
+      (UINT64_MAX - started_ns) / nanoseconds_per_millisecond) {
+    return TURBO_ERANGE;
+  }
+  deadline_ns = started_ns +
+                task->pre_tls_timeout_ms * nanoseconds_per_millisecond;
+
+  for (;;) {
+    void *connection_context = NULL;
+    size_t accepted_prefix_size = 0u;
+
+    rc = task->pre_tls_callback(task->socket, prefix, prefix_size,
+                                &accepted_prefix_size, task->pre_tls_user_data,
+                                &connection_context);
+    rc = pre_tls_admission_validate_result(task, rc, prefix_size,
+                                           accepted_prefix_size,
+                                           connection_context);
+    if (rc == 0) {
+      *buffer = prefix;
+      *buffer_size = prefix_size;
+      *consumed = accepted_prefix_size;
+      task->socket->timeout_ms = saved_timeout_ms;
+      return 0;
+    }
+    if (rc != CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE) {
+      free(prefix);
+      task->socket->timeout_ms = saved_timeout_ms;
+      return rc;
+    }
+    if (prefix_size >= task->pre_tls_max_prefix_bytes) {
+      free(prefix);
+      task->socket->timeout_ms = saved_timeout_ms;
+      return TURBO_EMSGSIZE;
+    }
+
+    {
+      uint64_t now_ns = turbo_hrtime();
+      uint64_t remaining_ns;
+      char *chunk = NULL;
+      size_t chunk_size = 0u;
+      uint8_t *expanded;
+
+      if (now_ns >= deadline_ns) {
+        free(prefix);
+        task->socket->timeout_ms = saved_timeout_ms;
+        return TURBO_ETIMEDOUT;
+      }
+      remaining_ns = deadline_ns - now_ns;
+      task->socket->timeout_ms =
+          (remaining_ns + nanoseconds_per_millisecond - 1u) /
+          nanoseconds_per_millisecond;
+      rc = coro_socket_recv(task->socket, &chunk, &chunk_size);
+      if (rc != 0 || chunk_size == 0u) {
+        coro_socket_free_recv(chunk);
+        free(prefix);
+        task->socket->timeout_ms = saved_timeout_ms;
+        return rc != 0 ? rc : TURBO_EOF;
+      }
+      if (chunk_size > SIZE_MAX - prefix_size) {
+        coro_socket_free_recv(chunk);
+        free(prefix);
+        task->socket->timeout_ms = saved_timeout_ms;
+        return TURBO_EMSGSIZE;
+      }
+      expanded = (uint8_t *)realloc(prefix, prefix_size + chunk_size);
+      if (!expanded) {
+        coro_socket_free_recv(chunk);
+        free(prefix);
+        task->socket->timeout_ms = saved_timeout_ms;
+        return TURBO_ENOMEM;
+      }
+      prefix = expanded;
+      memcpy(prefix + prefix_size, chunk, chunk_size);
+      prefix_size += chunk_size;
+      coro_socket_free_recv(chunk);
+    }
+  }
 }
 
 static void coro_entry_bridge(coro_t *co, void *arg) {
   UNUSED(co);
   coro_server_task_t *task = (coro_server_task_t *)arg;
+  uint8_t *pre_tls_buffer = NULL;
+  size_t pre_tls_buffer_size = 0u;
+  size_t pre_tls_consumed = 0u;
   int r = 0;
 
-  if (task->server_transport == TURBO_TLS) {
-    r = coro_socket_wrap_accepted_tls_server(task->socket);
+  if (task->pre_tls_callback) {
+    r = run_pre_tls_admission(task, &pre_tls_buffer,
+                              &pre_tls_buffer_size, &pre_tls_consumed);
+  }
+
+  if (r == 0 && task->server_transport == TURBO_TLS) {
+    r = coro_socket_wrap_accepted_tls_server(
+        task->socket, pre_tls_buffer ? pre_tls_buffer + pre_tls_consumed : NULL,
+        pre_tls_buffer_size - pre_tls_consumed);
     if (r != 0) {
       if (server_admission_end_is_expected(task, r)) {
         TLOG_DEBUG("server: TLS admission ended rc={}", r);
@@ -102,9 +248,11 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
     } else {
       TLOG_DEBUG("server: accepted client wrapped as TLS");
     }
-  } else if (task->server_transport == TURBO_WEBSOCKET) {
+  } else if (r == 0 && task->server_transport == TURBO_WEBSOCKET) {
     if (task->ws_is_tls) {
-      r = coro_socket_wrap_accepted_tls_server(task->socket);
+      r = coro_socket_wrap_accepted_tls_server(
+          task->socket, pre_tls_buffer ? pre_tls_buffer + pre_tls_consumed : NULL,
+          pre_tls_buffer_size - pre_tls_consumed);
       if (r != 0) {
         if (server_admission_end_is_expected(task, r)) {
           TLOG_DEBUG("server: secure WebSocket TLS admission ended rc={}", r);
@@ -124,11 +272,13 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
       }
     }
   }
+  free(pre_tls_buffer);
 
   if (r == 0 && !task->server->server_stopping) {
     task->handler(task->socket, task->arg);
   }
 
+  release_pre_tls_context(task);
   coro_socket_destroy(task->socket);
   wait_for_socket_close_completion(task->socket);
   release_client(task->socket);
@@ -163,6 +313,11 @@ static void spawn_handler_coro(coro_socket_t *server, coro_socket_t *s,
   task->handler_closed_arg = server->handler_closed_arg;
   task->server_transport = server_transport;
   task->ws_is_tls = ws_is_tls ? 1 : 0;
+  task->pre_tls_max_prefix_bytes = server->server_pre_tls_max_prefix_bytes;
+  task->pre_tls_timeout_ms = server->server_pre_tls_timeout_ms;
+  task->pre_tls_callback = server->server_pre_tls_callback;
+  task->pre_tls_user_data = server->server_pre_tls_user_data;
+  task->pre_tls_release = server->server_pre_tls_release;
 
   retain_client(s);
   retain_client(server);
@@ -204,6 +359,12 @@ static void accept_loop_task(coro_t *co, void *arg) {
 
     if (r == 0 && client) {
       int ws_is_tls = 0;
+
+      if (server->server_admission_limit != 0u &&
+          server->server_task_count >= server->server_admission_limit) {
+        coro_socket_destroy(client);
+        continue;
+      }
 
       client->timeout_ms = server->timeout_ms;
       if (server->tls_server_context) {
@@ -538,6 +699,40 @@ static int listen_ws_internal(coro_socket_t *server, const char *host, int port,
 
 /* ── Public API ───────────────────────────────────────────── */
 
+int coro_socket_set_server_admission_limit(coro_socket_t *server, size_t limit) {
+  if (!server || limit == 0u) return TURBO_EINVAL;
+  if (server->listener || server->accept_loop_active || server->server_task_count != 0u)
+    return TURBO_EBUSY;
+  server->server_admission_limit = limit;
+  return 0;
+}
+
+int coro_socket_set_server_pre_tls_admission(
+    coro_socket_t *server,
+    const coro_server_pre_tls_admission_config_t *config) {
+  if (!server || !config ||
+      config->size != sizeof(coro_server_pre_tls_admission_config_t) ||
+      config->max_prefix_bytes == 0u || config->timeout_ms == 0u ||
+      !config->callback || !config->release) {
+    return TURBO_EINVAL;
+  }
+  if (server->listener || server->accept_loop_active ||
+      server->server_task_count != 0u) {
+    return TURBO_EBUSY;
+  }
+  server->server_pre_tls_max_prefix_bytes = config->max_prefix_bytes;
+  server->server_pre_tls_timeout_ms = config->timeout_ms;
+  server->server_pre_tls_callback = config->callback;
+  server->server_pre_tls_user_data = config->user_data;
+  server->server_pre_tls_release = config->release;
+  return 0;
+}
+
+void *coro_socket_get_server_pre_tls_admission_context(
+    const coro_socket_t *socket) {
+  return socket ? socket->server_pre_tls_connection_context : NULL;
+}
+
 int coro_socket_listen_on(coro_socket_t *server, const char *host, int port,
                            void (*handler)(coro_socket_t *, void *), void *arg) {
   return coro_socket_listen_on_ex(server, host, port, handler, arg, NULL, NULL);
@@ -548,6 +743,9 @@ int coro_socket_listen_on_ex(coro_socket_t *server, const char *host, int port,
                              coro_handler_closed_fn handler_closed,
                              void *handler_closed_arg) {
   if (!server || !host || !handler) return TURBO_EINVAL;
+  if (server->server_pre_tls_callback && server->transport != TURBO_TLS) {
+    return TURBO_ENOTSUP;
+  }
 
   server->handler = handler;
   server->handler_arg = arg;
@@ -597,6 +795,9 @@ int coro_socket_listen_ws_ex(coro_socket_t *server, const char *host, int port,
                              void *handler_closed_arg) {
   if (!server || !host || !handler) {
     return TURBO_EINVAL;
+  }
+  if (server->server_pre_tls_callback && !is_tls) {
+    return TURBO_ENOTSUP;
   }
 
   server->handler = handler;

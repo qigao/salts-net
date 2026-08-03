@@ -19,6 +19,9 @@ typedef struct server_lifecycle_state_s {
   unsigned short port;
   int client_connected;
   int client_done;
+  int release_client;
+  int probe_done;
+  int probe_status;
   int handler_hits;
   int handler_entered;
   int release_handler;
@@ -160,6 +163,48 @@ static void server_lifecycle_stalled_client(coro_t *co, void *arg) {
   state->client_done = 1;
 }
 
+static void server_lifecycle_held_client(coro_t *co, void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  coro_socket_t *client;
+  int rc;
+
+  (void)co;
+  client = coro_socket_create_tcpv4(state->ctx);
+  if (!client) {
+    state->client_done = 1;
+    return;
+  }
+  coro_socket_set_timeout(client, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+  rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  state->client_connected = (rc == 0);
+  while (rc == 0 && !state->release_client) coro_sleep(state->ctx, 1u);
+  coro_socket_destroy(client);
+  state->client_done = 1;
+}
+
+static void server_lifecycle_admission_probe(coro_t *co, void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  coro_socket_t *client;
+  char *data = NULL;
+  size_t size = 0u;
+  int rc;
+
+  (void)co;
+  client = coro_socket_create_tcpv4(state->ctx);
+  if (!client) {
+    state->probe_status = TURBO_ENOMEM;
+    state->probe_done = 1;
+    return;
+  }
+  coro_socket_set_timeout(client, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+  rc = coro_socket_connect(client, "127.0.0.1", state->port);
+  if (rc == 0) rc = coro_socket_recv(client, &data, &size);
+  if (data) coro_socket_free_recv(data);
+  state->probe_status = rc;
+  state->probe_done = 1;
+  coro_socket_destroy(client);
+}
+
 static int server_lifecycle_run_until(coro_context_t *ctx, int (*done)(void *),
                                       void *arg, uint64_t timeout_ms) {
   uint64_t deadline;
@@ -185,6 +230,11 @@ static int server_lifecycle_client_connected(void *arg) {
 static int server_lifecycle_client_done(void *arg) {
   server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
   return state->client_done;
+}
+
+static int server_lifecycle_probe_done(void *arg) {
+  server_lifecycle_state_t *state = (server_lifecycle_state_t *)arg;
+  return state->probe_done;
 }
 
 static int server_lifecycle_handler_entered(void *arg) {
@@ -240,6 +290,52 @@ static void server_lifecycle_cleanup(server_lifecycle_state_t *state) {
 }
 
 spec("Coroutine Server Lifecycle") {
+  it("rejects a raw connection before TLS handshake when admission is full") {
+    char cert_file[512] = {0};
+    char key_file[512] = {0};
+    server_lifecycle_state_t state;
+
+    server_lifecycle_prepare(&state);
+    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+                                             key_file, sizeof(key_file)), 0);
+    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
+    check_not_null(state.server);
+    check_int_eq(coro_socket_set_server_admission_limit(NULL, 1u), TURBO_EINVAL);
+    check_int_eq(coro_socket_set_server_admission_limit(state.server, 0u), TURBO_EINVAL);
+    check_int_eq(coro_socket_set_server_admission_limit(state.server, 1u), 0);
+    coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
+    check_int_eq(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
+                                          server_lifecycle_handler, &state,
+                                          server_lifecycle_closed, &state), 0);
+    check_int_eq(coro_socket_set_server_admission_limit(state.server, 2u), TURBO_EBUSY);
+    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_held_client, &state), 0);
+    check_int_eq(server_lifecycle_run_until(
+                     state.ctx, server_lifecycle_tls_admission_pending, &state,
+                     SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    check_size_eq(state.server->server_task_count, 1u);
+    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_admission_probe, &state), 0);
+    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_probe_done,
+                                            &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    check_true(state.probe_status == TURBO_EOF || state.probe_status == TURBO_ECANCELED ||
+               state.probe_status == TURBO_ECONNABORTED || state.probe_status == TURBO_ECONNRESET);
+    check_size_eq(state.server->server_task_count, 1u);
+    check_int_eq(state.handler_hits, 0);
+    check_int_eq(state.closed_count, 0);
+
+    state.release_client = 1;
+    check_int_eq(coro_socket_server_stop(state.server), 0);
+    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
+                                            &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    check_int_eq(state.closed_count, 1);
+    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
+                                            &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
+    server_lifecycle_cleanup(&state);
+    tls_test_clear_server_env();
+    tls_test_remove_file(cert_file);
+    tls_test_remove_file(key_file);
+  }
+
   it("reports TCP accepted socket close completion") {
     server_lifecycle_state_t state;
 

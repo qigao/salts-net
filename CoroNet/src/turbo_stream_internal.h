@@ -183,6 +183,11 @@ int turbo_stream_tls_wrap_server_with_context(
     turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
     turbo_tls_server_context_t *server_context,
     turbo_connect_cb on_connect, turbo_close_cb on_close);
+int turbo_stream_tls_wrap_server_with_context_prefetched(
+    turbo_stream_t *tls_stream, turbo_stream_t *tcp_stream,
+    turbo_tls_server_context_t *server_context,
+    const uint8_t *prefetched, size_t prefetched_size,
+    turbo_connect_cb on_connect, turbo_close_cb on_close);
 int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *stream,
                                                       uint8_t *output,
                                                       size_t output_len);

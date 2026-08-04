@@ -61,6 +61,10 @@ add_subdirectory(vendor)
 set(TURBONET_CARES_TARGET c-ares::cares)
 
 add_subdirectory(CoroNet)
+if(TURBONET_ENABLE_LSQUIC)
+  add_subdirectory(lsquic)
+endif()
+
 add_subdirectory(ice)
 add_subdirectory(snmp)
 add_subdirectory(ldap)

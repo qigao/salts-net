@@ -15,6 +15,19 @@ High-performance networking core library providing essential network protocols a
 - **Multithreading**: Worker-based architecture for multi-threaded applications
 - **Statistics**: Built-in performance monitoring and stats collection
 
+## WebSocket Session Adapters
+
+`coro_websocket_t` provides the shared WebSocket frame/message session after a
+transport handshake has completed. The same session API supports client and
+server masking rules for `CORO_WEBSOCKET_TRANSPORT_HTTP1`,
+`CORO_WEBSOCKET_TRANSPORT_HTTP2`, and `CORO_WEBSOCKET_TRANSPORT_HTTP3`.
+
+The session owns RFC 6455 frame parsing, fragmentation, bounded message
+assembly, control-frame handling, and close state. HTTP/1.1 Upgrade, HTTP/2
+RFC 8441 extended CONNECT, and HTTP/3 QUIC/QPACK setup remain transport
+adapter responsibilities. The HTTP/3 kind is currently an API contract only;
+it does not create or drive a QUIC connection.
+
 ## Processing Model
 
 CoroNet exposes synchronous-style networking APIs over stackful coroutines. A

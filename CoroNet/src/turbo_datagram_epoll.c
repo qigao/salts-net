@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
@@ -35,6 +36,8 @@ typedef struct {
   turbo_thread_t worker_thread;
   volatile int stopping;
   int recv_started;
+  atomic_int posted_callbacks;
+  int closing;
 
   ring_spsc_t event_ring;
   uint8_t *event_buf;
@@ -43,12 +46,41 @@ typedef struct {
 static void on_dg_bounce(void *arg1, void *arg2);
 static void on_dg_error(void *arg1, void *arg2);
 
+static void dg_epoll_free_state(turbo_datagram_t *owner,
+                                dg_epoll_state_t *st) {
+  if (!owner || !st || owner->backend_data != st) {
+    return;
+  }
+
+  owner->backend_data = NULL;
+  free(st->event_buf);
+  free(st);
+}
+
+static void dg_epoll_post_complete(turbo_datagram_t *owner,
+                                   dg_epoll_state_t *st) {
+  if (st && atomic_fetch_sub_explicit(&st->posted_callbacks, 1,
+                                      memory_order_acq_rel) == 1 &&
+      st->closing) {
+    dg_epoll_free_state(owner, st);
+  }
+  turbo_datagram_release(owner);
+}
+
 static void dg_epoll_post_wait(dg_epoll_state_t *st, coro_post_fn fn) {
+  turbo_datagram_t *owner;
+
   if (!st || !fn) {
     return;
   }
 
-  while (coro_post((coro_context_t *)st->ctx, fn, st, NULL) != 0) {
+  owner = st->owner;
+  if (!owner) {
+    return;
+  }
+  atomic_fetch_add_explicit(&st->posted_callbacks, 1, memory_order_relaxed);
+  turbo_datagram_retain(owner);
+  while (coro_post((coro_context_t *)st->ctx, fn, owner, NULL) != 0) {
     turbo_loop_wake((turbo_loop_t *)coro_context_native_loop((coro_context_t *)st->ctx));
     turbo_thread_yield();
   }
@@ -180,12 +212,17 @@ static void *dg_epoll_worker(void *arg) {
 }
 
 static void on_dg_bounce(void *arg1, void *arg2) {
+  turbo_datagram_t *owner;
   dg_epoll_state_t *st;
   size_t avail;
 
   UNUSED(arg2);
-  st = (dg_epoll_state_t *)arg1;
-  if (!st || !st->owner) {
+  owner = (turbo_datagram_t *)arg1;
+  st = owner ? (dg_epoll_state_t *)owner->backend_data : NULL;
+  if (!owner || !st) {
+    if (owner) {
+      turbo_datagram_release(owner);
+    }
     return;
   }
 
@@ -204,18 +241,25 @@ static void on_dg_bounce(void *arg1, void *arg2) {
     }
     ring_spsc_read_release(&st->event_ring, sizeof(dg_event_t) + ev->slice.length);
   }
+  dg_epoll_post_complete(owner, st);
 }
 
 static void on_dg_error(void *arg1, void *arg2) {
+  turbo_datagram_t *owner;
   dg_epoll_state_t *st;
 
   UNUSED(arg2);
-  st = (dg_epoll_state_t *)arg1;
+  owner = (turbo_datagram_t *)arg1;
+  st = owner ? (dg_epoll_state_t *)owner->backend_data : NULL;
   if (!st || !st->owner || !st->owner->on_recv) {
+    if (owner) {
+      turbo_datagram_release(owner);
+    }
     return;
   }
 
   st->owner->on_recv(st->owner, NULL, NULL);
+  dg_epoll_post_complete(owner, st);
 }
 
 static void dg_epoll_stop_worker(dg_epoll_state_t *st) {
@@ -252,6 +296,7 @@ static int dg_epoll_init(turbo_datagram_t *d, const char *host, unsigned short p
   st->ctx = d->ctx;
   st->epoll_fd = -1;
   st->fd = -1;
+  atomic_init(&st->posted_callbacks, 0);
 
   st->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
   if (st->epoll_fd < 0) {
@@ -422,9 +467,10 @@ static void dg_epoll_close(turbo_datagram_t *d) {
   if (st->fd >= 0) {
     close(st->fd);
   }
-  free(st->event_buf);
-  free(st);
-  d->backend_data = NULL;
+  st->closing = 1;
+  if (atomic_load_explicit(&st->posted_callbacks, memory_order_acquire) == 0) {
+    dg_epoll_free_state(d, st);
+  }
   turbo_datagram_finalize_close(d);
 }
 

@@ -104,6 +104,8 @@ struct turbo_tls_server_context_s {
   atomic_int ref_count;
   SSL_CTX *ctx;
   turbo_tls_client_auth_t client_auth;
+  uint8_t *alpn_wire;   /* Server-preference ALPN list in wire format. */
+  size_t alpn_wire_len;
 };
 
 #define TLS_PLAINTEXT_READ_CHUNK_SIZE 16384U
@@ -425,6 +427,8 @@ typedef struct tls_state_s {
   char           *key_file;
   char           *key_password;
   char           *cipher_list;
+  uint8_t        *alpn_wire;
+  size_t          alpn_wire_len;
 
   SSL_CTX        *ctx;    /* OpenSSL context */
   SSL            *ssl;    /* OpenSSL connection object */
@@ -473,6 +477,65 @@ static char *tls_strdup_nullable(const char *value) {
 
   memcpy(copy, value, len + 1U);
   return copy;
+}
+
+/* Builds the TLS ALPN wire-format list (series of non-empty, 8-bit
+ * length-prefixed strings) from an array of protocol names. The total list
+ * must fit in 65535 bytes (the ClientHello protocol-list length is 16 bits).
+ * Returns 0 on success; TURBO_EINVAL on malformed input; TURBO_ENOMEM on
+ * allocation failure. A NULL/empty input yields an empty wire list. */
+static int tls_alpn_wire_build(const char *const *protos, size_t count,
+                               uint8_t **out_wire, size_t *out_wire_len) {
+  size_t total = 0;
+  size_t i;
+  uint8_t *wire;
+
+  if (out_wire) {
+    *out_wire = NULL;
+  }
+  if (out_wire_len) {
+    *out_wire_len = 0;
+  }
+  if (count == 0) {
+    return 0;
+  }
+  /* A non-empty count requires a non-NULL list; a NULL list with a non-zero
+   * count is inconsistent input and must fail fast. */
+  if (protos == NULL || out_wire == NULL || out_wire_len == NULL) {
+    return TURBO_EINVAL;
+  }
+
+  for (i = 0; i < count; ++i) {
+    size_t len;
+    if (protos[i] == NULL || protos[i][0] == '\0') {
+      return TURBO_EINVAL;
+    }
+    len = strlen(protos[i]);
+    if (len > 255 || total > SIZE_MAX - len - 1U) {
+      return TURBO_EINVAL;
+    }
+    total += len + 1U;
+  }
+  if (total == 0 || total > 65535U) {
+    return TURBO_EINVAL;
+  }
+
+  wire = (uint8_t *)malloc(total);
+  if (wire == NULL) {
+    return TURBO_ENOMEM;
+  }
+  {
+    size_t off = 0;
+    for (i = 0; i < count; ++i) {
+      size_t len = strlen(protos[i]);
+      wire[off++] = (uint8_t)len;
+      memcpy(wire + off, protos[i], len);
+      off += len;
+    }
+  }
+  *out_wire = wire;
+  *out_wire_len = total;
+  return 0;
 }
 
 static void tls_clear_client_config(tls_state_t *st) {
@@ -540,7 +603,6 @@ static int tls_copy_client_config(tls_state_t *st, const turbo_tls_client_config
     free(ca_file);
     return TURBO_ENOMEM;
   }
-
   tls_clear_client_config(st);
   st->ca_file = ca_file;
   st->cert_file = cert_file;
@@ -568,6 +630,27 @@ static int tls_password_cb(char *buf, int size, int rwflag, void *userdata) {
   memcpy(buf, password, length);
   buf[length] = '\0';
   return (int)length;
+}
+
+/* ALPN select callback installed via SSL_CTX_set_alpn_select_cb. Selects the
+ * first server-preferred protocol also offered by the client, or declines to
+ * negotiate (handshake continues without ALPN) when there is no overlap. */
+static int tls_server_alpn_select_cb(SSL *ssl, const uint8_t **out,
+                                     uint8_t *out_len, const uint8_t *in,
+                                     unsigned in_len, void *arg) {
+  const turbo_tls_server_context_t *context = (const turbo_tls_server_context_t *)arg;
+
+  UNUSED(ssl);
+  if (context == NULL || context->alpn_wire == NULL ||
+      context->alpn_wire_len == 0) {
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+  if (SSL_select_next_proto((uint8_t **)out, out_len, context->alpn_wire,
+                            (unsigned)context->alpn_wire_len, in, in_len) ==
+      OPENSSL_NPN_NEGOTIATED) {
+    return SSL_TLSEXT_ERR_OK;
+  }
+  return SSL_TLSEXT_ERR_NOACK;
 }
 
 int turbo_stream_tls_server_context_create_internal(
@@ -644,6 +727,17 @@ int turbo_stream_tls_server_context_create_internal(
   atomic_init(&server_context->ref_count, 1);
   server_context->ctx = ctx;
   server_context->client_auth = config->client_auth;
+  rc = tls_alpn_wire_build(config->alpn_protos, config->alpn_proto_count,
+                           &server_context->alpn_wire,
+                           &server_context->alpn_wire_len);
+  if (rc != 0) {
+    free(server_context);
+    SSL_CTX_free(ctx);
+    return rc;
+  }
+  if (server_context->alpn_wire != NULL) {
+    SSL_CTX_set_alpn_select_cb(ctx, tls_server_alpn_select_cb, server_context);
+  }
   *output = server_context;
   return 0;
 }
@@ -663,6 +757,7 @@ void turbo_stream_tls_server_context_release_internal(
   if (atomic_fetch_sub_explicit(&context->ref_count, 1, memory_order_acq_rel) == 1) {
     SSL_CTX_free(context->ctx);
     context->ctx = NULL;
+    free(context->alpn_wire);
     free(context);
   }
 }
@@ -789,6 +884,16 @@ static int tls_prepare_client_ssl(tls_state_t *st) {
   }
 
   SSL_set_bio(ssl, rbio, wbio);
+  if (st->alpn_wire != NULL && st->alpn_wire_len != 0) {
+    /* SSL_set_alpn_protos returns zero on success (BoringSSL/OpenSSL). */
+    if (SSL_set_alpn_protos(ssl, st->alpn_wire, st->alpn_wire_len) != 0) {
+      SSL_free(ssl);
+      if (owns_ctx) {
+        SSL_CTX_free(ctx);
+      }
+      return TURBO_EIO;
+    }
+  }
   st->ctx = ctx;
   st->client_ctx_owned = owns_ctx;
   st->ssl = ssl;
@@ -996,6 +1101,7 @@ static void tls_free_state(tls_state_t *st) {
     mem_unref(st->pending_plaintext);
   }
   st->pending_plaintext = NULL;
+  free(st->alpn_wire);
   tls_clear_client_config(st);
   free(st);
 }
@@ -2217,6 +2323,48 @@ int turbo_stream_tls_set_client_config_internal(turbo_stream_t *s,
   return tls_prepare_client_ssl(st);
 }
 
+int turbo_stream_tls_set_alpn(turbo_stream_t *s, const char *const *protos,
+                              size_t count) {
+  tls_state_t *st;
+  uint8_t *wire = NULL;
+  size_t wire_len = 0;
+  int rc;
+
+  if (!s || s->kind != TURBO_STREAM_TLS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)s->backend_data;
+  if (!st) {
+    return TURBO_EINVAL;
+  }
+  /* ALPN is consumed when the client SSL object is prepared, so it can only be
+   * changed while the stream is still in the initial pre-connect state. */
+  if (st->server_mode || st->tcp != NULL || st->state != TLS_ST_INIT) {
+    return TURBO_EBUSY;
+  }
+
+  if (count == 0) {
+    /* count == 0 clears any previously configured client ALPN list. */
+    free(st->alpn_wire);
+    st->alpn_wire = NULL;
+    st->alpn_wire_len = 0;
+    return tls_prepare_client_ssl(st);
+  }
+
+  rc = tls_alpn_wire_build(protos, count, &wire, &wire_len);
+  if (rc != 0) {
+    return rc;
+  }
+
+  /* Swap in the new wire list, then rebuild the SSL so the offered protocols
+   * take effect on the next handshake. */
+  free(st->alpn_wire);
+  st->alpn_wire = wire;
+  st->alpn_wire_len = wire_len;
+  return tls_prepare_client_ssl(st);
+}
+
 int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *stream,
                                                       uint8_t *output,
                                                       size_t output_len) {
@@ -2707,4 +2855,34 @@ CXX_C_API void turbo_stream_tls_reset_metrics(void) {
   atomic_store_explicit(&s_tls_metrics.server_handshake_clientfinished_to_done_ns, 0,
                         memory_order_relaxed);
   atomic_store_explicit(&s_tls_metrics.server_handshake_pumps, 0, memory_order_relaxed);
+}
+
+int turbo_stream_tls_get_negotiated_alpn_internal(const turbo_stream_t *stream,
+                                                  char *out, size_t out_cap) {
+  const uint8_t *data = NULL;
+  unsigned len = 0;
+  tls_state_t *st;
+
+  if (!out || out_cap == 0) {
+    return TURBO_EINVAL;
+  }
+  out[0] = '\0';
+  if (!stream || stream->kind != TURBO_STREAM_TLS) {
+    return TURBO_EINVAL;
+  }
+
+  st = (tls_state_t *)stream->backend_data;
+  if (!st || !st->ssl || st->state != TLS_ST_OPEN) {
+    return TURBO_ENOTCONN;
+  }
+  SSL_get0_alpn_selected(st->ssl, &data, &len);
+  if (len == 0) {
+    return TURBO_ENOENT;
+  }
+  if ((size_t)len >= out_cap) {
+    return TURBO_ERANGE;
+  }
+  memcpy(out, data, len);
+  out[len] = '\0';
+  return 0;
 }

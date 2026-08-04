@@ -283,6 +283,8 @@ struct coro_socket_s {
   char *tls_key_file;        /**< Optional client private key */
   char *tls_key_password;    /**< Optional client key password */
   char *tls_cipher_list;     /**< Optional OpenSSL cipher list */
+  char **tls_alpn_protos;    /**< Optional ALPN protocol list (owned copy) */
+  size_t tls_alpn_proto_count; /**< Number of entries in tls_alpn_protos */
   turbo_tls_server_context_t *tls_server_context; /**< Prepared immutable server TLS context */
   coro_proxy_settings_t proxy;                    /**< Copied outbound proxy configuration */
   int ws_server_configured;                       /**< 1 = enforce ws_server_* policy. */

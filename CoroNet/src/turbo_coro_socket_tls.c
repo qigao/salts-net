@@ -186,6 +186,15 @@ static int tls_connect(coro_socket_t *s, const char *host, int port) {
         return socket_ctx_error(s, TURBO_EIO);
       }
     }
+    /* ALPN is socket-owned state configured by coro_socket_set_tls_alpn();
+     * apply it through the stream-layer setter before the handshake starts. */
+    if (s->tls_alpn_proto_count > 0 &&
+        turbo_stream_tls_set_alpn(s->handle.stream,
+                                  (const char *const *)s->tls_alpn_protos,
+                                  s->tls_alpn_proto_count) != 0) {
+      tls_discard_stream(s);
+      return socket_ctx_error(s, TURBO_EIO);
+    }
 
     /* Important: Set SNI for TLS handshake */
     turbo_stream_tls_set_sni(s->handle.stream, host);
@@ -263,6 +272,18 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
     rc = turbo_stream_tls_set_client_config(tls_stream, &tls_config);
     if (rc != 0) {
       TLOG_ERROR("TLS upgrade client configuration failed rc={}", rc);
+      turbo_stream_destroy(tls_stream);
+      return rc;
+    }
+  }
+  /* ALPN is socket-owned state configured by coro_socket_set_tls_alpn();
+   * apply it through the stream-layer setter before the handshake starts. */
+  if (s->tls_alpn_proto_count > 0) {
+    rc = turbo_stream_tls_set_alpn(tls_stream,
+                                   (const char *const *)s->tls_alpn_protos,
+                                   s->tls_alpn_proto_count);
+    if (rc != 0) {
+      TLOG_ERROR("TLS upgrade ALPN configuration failed rc={}", rc);
       turbo_stream_destroy(tls_stream);
       return rc;
     }
@@ -550,3 +571,18 @@ const coro_transport_ops_t transport_ops_tls = {.connect = tls_connect,
                                                 .close = tls_close,
                                                 .get_send_buffer = tls_get_send_buffer,
                                                 .send_buffer = tls_send_buffer};
+
+int coro_socket_tls_get_negotiated_alpn(const coro_socket_t *socket,
+                                        char *out, size_t out_cap) {
+  if (!socket) {
+    return TURBO_EINVAL;
+  }
+  if (socket->transport != TURBO_TLS) {
+    return TURBO_ENOTSUP;
+  }
+  if (socket->handle.stream == NULL) {
+    return TURBO_ENOTCONN;
+  }
+  return turbo_stream_tls_get_negotiated_alpn_internal(socket->handle.stream,
+                                                       out, out_cap);
+}

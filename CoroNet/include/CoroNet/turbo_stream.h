@@ -96,6 +96,8 @@ typedef struct turbo_tls_server_config_s {
   const char *ca_file;                 /**< Client CA bundle; required for mTLS. */
   const char *cipher_list;             /**< Optional pre-TLS-1.3 cipher list. */
   turbo_tls_client_auth_t client_auth; /**< NONE or REQUIRED. */
+  const char *const *alpn_protos;      /**< Optional ALPN protocols to select, in preference order. */
+  size_t alpn_proto_count;             /**< Number of entries in alpn_protos. */
 } turbo_tls_server_config_t;
 
 typedef struct turbo_tcp_keepalive_config_s {

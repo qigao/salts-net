@@ -289,6 +289,31 @@ CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
                                                 const turbo_tls_client_config_t *config);
 
 /**
+ * @brief Configure the ALPN protocols a TLS client offers during the handshake.
+ *
+ * The list is deep-copied into socket-owned storage, so the caller may release
+ * or reuse @p protocols immediately after the call. This must be called before
+ * coro_socket_connect() / coro_socket_upgrade_tls(): the protocol list is
+ * snapshotted when the TLS handshake is prepared and cannot be changed once a
+ * connect or upgrade is in flight.
+ *
+ * Every entry must be a non-empty protocol name of at most 255 bytes. A NULL
+ * list with a non-zero count and an empty count are both rejected. Repeated
+ * calls atomically replace the previous list: the new list is fully copied and
+ * validated first, and only on success does the old list get released, so a
+ * failed call leaves the previously configured list intact.
+ *
+ * @param socket     TLS socket to configure.
+ * @param protocols  Protocol names in client preference order (e.g. {"h2"}).
+ * @param count      Number of entries in @p protocols; must be > 0.
+ * @return 0 on success; TURBO_EINVAL for a NULL socket or a malformed list
+ *         (count == 0, NULL list with count > 0, NULL/empty entry, or an entry
+ *         longer than 255 bytes); TURBO_ENOMEM when the copy fails.
+ */
+CXX_C_API int coro_socket_set_tls_alpn(coro_socket_t *socket,
+                                       const char *const *protocols, size_t count);
+
+/**
  * @brief Configure TLS server credentials and client authentication for a future listener.
  *
  * The socket must not be connected or listening. The call validates certificate
@@ -377,6 +402,24 @@ CXX_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
  */
 CXX_C_API int coro_socket_tls_export_channel_binding(const coro_socket_t *socket,
                                                      uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]);
+
+/**
+ * @brief Return the ALPN protocol negotiated during the TLS handshake.
+ *
+ * Copies the negotiated protocol name (e.g. "h2") into @p out, NUL-terminated.
+ * On every failure, @p out is cleared.
+ *
+ * @param socket  TLS coroutine socket in the open (handshake-complete) state.
+ * @param out     Destination buffer.
+ * @param out_cap Capacity of @p out.
+ * @return 0 on success; TURBO_EINVAL for invalid arguments; TURBO_ENOTSUP for
+ *         a non-TLS socket; TURBO_ENOTCONN outside the open state;
+ *         TURBO_ENOENT when the handshake completed without negotiating an
+ *         ALPN protocol; or TURBO_ERANGE when the protocol name does not fit
+ *         in @p out.
+ */
+CXX_C_API int coro_socket_tls_get_negotiated_alpn(const coro_socket_t *socket,
+                                                  char *out, size_t out_cap);
 
 /**
  * @brief Upgrade an already-connected TCP or TLS socket to WebSocket.

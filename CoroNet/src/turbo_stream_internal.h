@@ -165,6 +165,8 @@ int turbo_stream_tls_wrap_client(turbo_stream_t *tls_stream,
                                  turbo_close_cb on_close);
 int turbo_stream_tls_set_client_config_internal(turbo_stream_t *s,
                                                 const turbo_tls_client_config_t *config);
+int turbo_stream_tls_set_alpn(turbo_stream_t *s, const char *const *protos,
+                              size_t count);
 int turbo_stream_wss_set_client_config_internal(turbo_stream_t *s,
                                                 const turbo_tls_client_config_t *config);
 int turbo_stream_tls_wrap_server(turbo_stream_t *tls_stream,
@@ -193,6 +195,8 @@ int turbo_stream_tls_export_channel_binding_internal(const turbo_stream_t *strea
                                                       size_t output_len);
 int turbo_stream_tls_get_verified_peer_certificate_sha256_internal(
     const turbo_stream_t *stream, char *output, size_t output_len);
+int turbo_stream_tls_get_negotiated_alpn_internal(const turbo_stream_t *stream,
+                                                  char *out, size_t out_cap);
 int turbo_stream_wss_export_channel_binding_internal(const turbo_stream_t *stream,
                                                       uint8_t *output,
                                                       size_t output_len);

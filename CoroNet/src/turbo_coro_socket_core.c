@@ -125,6 +125,20 @@ static void socket_clear_tls_client_config(coro_socket_t *s) {
   s->tls_verify_peer = 1;
 }
 
+static void socket_clear_tls_alpn(coro_socket_t *s) {
+  size_t i;
+
+  if (!s || !s->tls_alpn_protos) {
+    return;
+  }
+  for (i = 0; i < s->tls_alpn_proto_count; ++i) {
+    free(s->tls_alpn_protos[i]);
+  }
+  free(s->tls_alpn_protos);
+  s->tls_alpn_protos = NULL;
+  s->tls_alpn_proto_count = 0;
+}
+
 static void socket_clear_tls_server_context(coro_socket_t *s) {
   if (!s || !s->tls_server_context) {
     return;
@@ -218,6 +232,7 @@ static void socket_destroy_shell(coro_socket_t *s) {
 
   coro_socket_reset_recv_compression_state(s);
   socket_clear_tls_client_config(s);
+  socket_clear_tls_alpn(s);
   socket_clear_tls_server_context(s);
   free(s);
 }
@@ -235,6 +250,7 @@ static void coro_socket_cleanup_create_failure(coro_socket_t *s) {
 
   coro_socket_reset_recv_compression_state(s);
   socket_clear_tls_client_config(s);
+  socket_clear_tls_alpn(s);
   socket_clear_tls_server_context(s);
   free(s);
 }
@@ -312,6 +328,7 @@ void release_client(coro_socket_t *client) {
     }
 
     socket_clear_tls_client_config(client);
+    socket_clear_tls_alpn(client);
     socket_clear_tls_server_context(client);
     free(client);
   }
@@ -1075,8 +1092,61 @@ int coro_socket_set_tls_client_config(coro_socket_t *s, const turbo_tls_client_c
   } else {
     rc = turbo_stream_tls_set_client_config(s->handle.stream, NULL);
   }
+  /* ALPN is socket-owned state configured by coro_socket_set_tls_alpn(); apply
+   * it through the stream-layer setter instead of the credential config. Only
+   * native TLS streams consume it; WebSocket-over-TLS has no ALPN path and the
+   * old client-config ALPN fields were never forwarded to the inner stream. */
+  if (rc == 0 && s->transport == TURBO_TLS && s->tls_alpn_proto_count > 0) {
+    rc = turbo_stream_tls_set_alpn(s->handle.stream,
+                                   (const char *const *)s->tls_alpn_protos,
+                                   s->tls_alpn_proto_count);
+  }
 
   return socket_return_error(s, rc);
+}
+
+int coro_socket_set_tls_alpn(coro_socket_t *s, const char *const *protocols,
+                             size_t count) {
+  char **copied = NULL;
+  size_t i;
+
+  if (!s) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  if (count == 0 || protocols == NULL) {
+    return socket_return_error(s, TURBO_EINVAL);
+  }
+  for (i = 0; i < count; ++i) {
+    if (protocols[i] == NULL || protocols[i][0] == '\0') {
+      return socket_return_error(s, TURBO_EINVAL);
+    }
+    if (strlen(protocols[i]) > 255U) {
+      return socket_return_error(s, TURBO_EINVAL);
+    }
+  }
+
+  /* Deep-copy the whole list before touching the existing state so a failed
+   * copy leaves the previously configured ALPN list intact. */
+  copied = (char **)calloc(count, sizeof(char *));
+  if (copied == NULL) {
+    return socket_return_error(s, TURBO_ENOMEM);
+  }
+  for (i = 0; i < count; ++i) {
+    copied[i] = socket_strdup_nullable(protocols[i]);
+    if (copied[i] == NULL) {
+      size_t j;
+      for (j = 0; j < i; ++j) {
+        free(copied[j]);
+      }
+      free(copied);
+      return socket_return_error(s, TURBO_ENOMEM);
+    }
+  }
+
+  socket_clear_tls_alpn(s);
+  s->tls_alpn_protos = copied;
+  s->tls_alpn_proto_count = count;
+  return 0;
 }
 
 int coro_socket_set_tls_server_config(coro_socket_t *s, const turbo_tls_server_config_t *config) {

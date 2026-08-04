@@ -1,7 +1,6 @@
 # Build directories and binary files
 build*/
 install/
-bin/
 out/
 cmake-build-*/
 .vcpkg_installed/

@@ -1,4 +1,5 @@
 #include "CoroNet/turbo_lsquic.h"
+#include "CoroNet/turbo_coro_internal.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -7,14 +8,18 @@
 #include <string.h>
 
 #include "turbo_error.h"
+#include "turbo_thread.h"
+
+#define TURBO_LSQUIC_MIN_TICK_DELAY_MS 1U
 
 struct turbo_lsquic_s {
   coro_context_t *context;
   turbo_datagram_t *datagram;
+  turbo_timer_t *timer;
   lsquic_engine_t *engine;
   struct sockaddr_storage local_addr;
   void *peer_ctx;
-  int closing;
+  atomic_int closing;
 };
 
 static atomic_flag g_lsquic_global_lock = ATOMIC_FLAG_INIT;
@@ -58,6 +63,98 @@ static void turbo_lsquic_global_release(void) {
     }
   }
   turbo_lsquic_global_unlock();
+}
+
+static int turbo_lsquic_is_closing(const turbo_lsquic_t *adapter) {
+  return atomic_load_explicit(&adapter->closing, memory_order_acquire) != 0;
+}
+
+static int turbo_lsquic_post_wait(coro_context_t *context, coro_post_fn fn,
+                                  void *arg1, void *arg2) {
+  int rc;
+
+  if (!context || !fn) {
+    return TURBO_EINVAL;
+  }
+
+  do {
+    rc = coro_post(context, fn, arg1, arg2);
+    if (rc != TURBO_OK) {
+      turbo_loop_wake((turbo_loop_t *)coro_context_native_loop(context));
+      turbo_thread_yield();
+    }
+  } while (rc != TURBO_OK);
+
+  return TURBO_OK;
+}
+
+static void turbo_lsquic_on_timer(turbo_timer_t *timer);
+
+static void turbo_lsquic_arm_timer(turbo_lsquic_t *adapter) {
+  uint64_t delay_ms;
+  int diff_us;
+
+  if (!adapter || turbo_lsquic_is_closing(adapter) || !adapter->engine ||
+      !adapter->timer) {
+    return;
+  }
+
+  (void)turbo_timer_stop(adapter->timer);
+  if (!lsquic_engine_earliest_adv_tick(adapter->engine, &diff_us)) {
+    return;
+  }
+
+  if (diff_us <= 0) {
+    delay_ms = TURBO_LSQUIC_MIN_TICK_DELAY_MS;
+  } else {
+    delay_ms = ((uint64_t)diff_us + 999U) / 1000U;
+    if (delay_ms < TURBO_LSQUIC_MIN_TICK_DELAY_MS) {
+      delay_ms = TURBO_LSQUIC_MIN_TICK_DELAY_MS;
+    }
+  }
+
+  (void)turbo_timer_start(adapter->timer, turbo_lsquic_on_timer, delay_ms, 0);
+}
+
+static void turbo_lsquic_process_on_context(turbo_lsquic_t *adapter) {
+  if (!adapter || turbo_lsquic_is_closing(adapter) || !adapter->engine) {
+    return;
+  }
+
+  lsquic_engine_process_conns(adapter->engine);
+  turbo_lsquic_arm_timer(adapter);
+}
+
+static void turbo_lsquic_tick_task(void *arg1, void *arg2) {
+  turbo_lsquic_t *adapter = (turbo_lsquic_t *)arg1;
+  (void)arg2;
+
+  turbo_lsquic_process_on_context(adapter);
+}
+
+static void turbo_lsquic_on_timer(turbo_timer_t *timer) {
+  turbo_lsquic_t *adapter =
+      (turbo_lsquic_t *)turbo_timer_get_data(timer);
+
+  if (!adapter || turbo_lsquic_is_closing(adapter)) {
+    return;
+  }
+  (void)turbo_lsquic_post_wait(adapter->context, turbo_lsquic_tick_task,
+                               adapter, NULL);
+}
+
+static void turbo_lsquic_final_free_task(void *arg1, void *arg2) {
+  turbo_lsquic_t *adapter = (turbo_lsquic_t *)arg1;
+  coro_context_t *context;
+  (void)arg2;
+
+  if (!adapter) {
+    return;
+  }
+  context = adapter->context;
+  turbo_lsquic_global_release();
+  free(adapter);
+  coro_context_release_external(context);
 }
 
 static void turbo_lsquic_set_send_errno(int rc) {
@@ -123,7 +220,8 @@ int turbo_lsquic_packets_out(void *packets_out_ctx,
   turbo_lsquic_t *adapter = (turbo_lsquic_t *)packets_out_ctx;
   unsigned sent_packets = 0;
 
-  if (!adapter || adapter->closing || !adapter->datagram || !out_spec) {
+  if (!adapter || turbo_lsquic_is_closing(adapter) || !adapter->datagram ||
+      !out_spec) {
     errno = EINVAL;
     return -1;
   }
@@ -203,7 +301,7 @@ static int turbo_lsquic_packet_in(void *handle, const mem_slice_t *data,
                                 (const struct sockaddr *)&adapter->local_addr,
                                 (const struct sockaddr *)peer,
                                 adapter->peer_ctx, 0);
-  lsquic_engine_process_conns(adapter->engine);
+  turbo_lsquic_process_on_context(adapter);
   return 0;
 }
 
@@ -225,17 +323,32 @@ int turbo_lsquic_create(const turbo_lsquic_config_t *config,
   }
   adapter->context = config->context;
   adapter->peer_ctx = config->peer_ctx;
+  atomic_init(&adapter->closing, 0);
+
+  coro_context_acquire_external(config->context);
 
   if (turbo_lsquic_global_acquire() != 0) {
+    coro_context_release_external(config->context);
     free(adapter);
     return TURBO_EIO;
   }
+
+  adapter->timer = turbo_timer_create(NULL);
+  if (!adapter->timer) {
+    turbo_lsquic_global_release();
+    coro_context_release_external(config->context);
+    free(adapter);
+    return TURBO_ENOMEM;
+  }
+  turbo_timer_set_data(adapter->timer, adapter);
 
   adapter->datagram = turbo_datagram_create(config->context,
                                             config->datagram_kind);
   if (!adapter->datagram) {
     rc = coro_context_get_last_error(config->context);
+    turbo_timer_destroy(adapter->timer);
     turbo_lsquic_global_release();
+    coro_context_release_external(config->context);
     free(adapter);
     return rc != 0 ? rc : TURBO_EIO;
   }
@@ -244,7 +357,9 @@ int turbo_lsquic_create(const turbo_lsquic_config_t *config,
                            config->bind_port);
   if (rc != 0) {
     turbo_datagram_destroy(adapter->datagram);
+    turbo_timer_destroy(adapter->timer);
     turbo_lsquic_global_release();
+    coro_context_release_external(config->context);
     free(adapter);
     return rc;
   }
@@ -252,7 +367,9 @@ int turbo_lsquic_create(const turbo_lsquic_config_t *config,
   rc = turbo_datagram_get_local_addr(adapter->datagram, &adapter->local_addr);
   if (rc != 0) {
     turbo_datagram_destroy(adapter->datagram);
+    turbo_timer_destroy(adapter->timer);
     turbo_lsquic_global_release();
+    coro_context_release_external(config->context);
     free(adapter);
     return rc;
   }
@@ -263,7 +380,9 @@ int turbo_lsquic_create(const turbo_lsquic_config_t *config,
   adapter->engine = lsquic_engine_new(config->engine_flags, &engine_api);
   if (!adapter->engine) {
     turbo_datagram_destroy(adapter->datagram);
+    turbo_timer_destroy(adapter->timer);
     turbo_lsquic_global_release();
+    coro_context_release_external(config->context);
     free(adapter);
     return TURBO_EIO;
   }
@@ -275,7 +394,9 @@ int turbo_lsquic_create(const turbo_lsquic_config_t *config,
     turbo_datagram_set_user_data(adapter->datagram, NULL);
     lsquic_engine_destroy(adapter->engine);
     turbo_datagram_destroy(adapter->datagram);
+    turbo_timer_destroy(adapter->timer);
     turbo_lsquic_global_release();
+    coro_context_release_external(config->context);
     free(adapter);
     return rc;
   }
@@ -286,12 +407,23 @@ int turbo_lsquic_create(const turbo_lsquic_config_t *config,
 
 void turbo_lsquic_destroy(turbo_lsquic_t *adapter) {
   lsquic_engine_t *engine;
+  turbo_timer_t *timer;
 
   if (!adapter) {
     return;
   }
 
-  adapter->closing = 1;
+  if (atomic_exchange_explicit(&adapter->closing, 1, memory_order_acq_rel)) {
+    return;
+  }
+
+  timer = adapter->timer;
+  adapter->timer = NULL;
+  if (timer) {
+    turbo_timer_set_data(timer, NULL);
+    turbo_timer_destroy(timer);
+  }
+
   turbo_datagram_set_user_data(adapter->datagram, NULL);
   engine = adapter->engine;
   adapter->engine = NULL;
@@ -301,20 +433,22 @@ void turbo_lsquic_destroy(turbo_lsquic_t *adapter) {
   }
   if (adapter->datagram) {
     turbo_datagram_destroy(adapter->datagram);
+    adapter->datagram = NULL;
   }
-  turbo_lsquic_global_release();
-  free(adapter);
+
+  /* Timer destruction orders all published ticks before this queue entry. */
+  (void)turbo_lsquic_post_wait(adapter->context,
+                               turbo_lsquic_final_free_task, adapter, NULL);
 }
 
 void turbo_lsquic_process(turbo_lsquic_t *adapter) {
-  if (adapter && !adapter->closing && adapter->engine) {
-    lsquic_engine_process_conns(adapter->engine);
-  }
+  turbo_lsquic_process_on_context(adapter);
 }
 
 void turbo_lsquic_send_unsent(turbo_lsquic_t *adapter) {
-  if (adapter && !adapter->closing && adapter->engine) {
+  if (adapter && !turbo_lsquic_is_closing(adapter) && adapter->engine) {
     lsquic_engine_send_unsent_packets(adapter->engine);
+    turbo_lsquic_arm_timer(adapter);
   }
 }
 

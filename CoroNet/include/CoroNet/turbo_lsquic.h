@@ -26,7 +26,9 @@ typedef struct turbo_lsquic_s turbo_lsquic_t;
  * The adapter copies @p engine_api during creation and replaces
  * ea_packets_out with its CoroNet-backed sender. Callback functions and their
  * user contexts remain owned by the caller and must outlive the adapter.
- * The caller owns @p context and must keep running it after creation.
+ * The caller owns @p context and must keep running it after creation. Engine
+ * callbacks and all public processing functions run on that context's owner
+ * thread. Advisory QUIC ticks are scheduled automatically.
  */
 typedef struct turbo_lsquic_config_s {
   coro_context_t *context;
@@ -55,7 +57,7 @@ CXX_C_API int turbo_lsquic_create(const turbo_lsquic_config_t *config,
  */
 CXX_C_API void turbo_lsquic_destroy(turbo_lsquic_t *adapter);
 
-/** Process tickable connections; call this from the owning event-loop thread. */
+/** Process connections immediately and reschedule the next advisory tick. */
 CXX_C_API void turbo_lsquic_process(turbo_lsquic_t *adapter);
 
 /** Retry packets that LSQUIC could not send earlier. */

@@ -499,7 +499,6 @@ spec("Datagram") {
         datagram_test_destroy_context_robust(ctx);
     }
 
-#ifdef _WIN32
     it("should close datagrams with pending recv without use-after-free") {
         enum { DATAGRAM_CLOSE_LOOPS = 16 };
         int i;
@@ -558,7 +557,6 @@ spec("Datagram") {
             datagram_test_destroy_context_robust(ctx);
         }
     }
-#endif
 
     it("should exchange data on connected coro udp sockets") {
         coro_context_t *ctx = coro_context_create(NULL);

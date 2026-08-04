@@ -28,38 +28,47 @@ endif()
 set(TLS_LSAN_SUPPRESSIONS
     "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/openssl_tls_handshake.lsan:print_suppressions=1"
 )
-set(CORONET_SHUTDOWN_TEST_TARGETS
-    test_coro_server_lifecycle
-    test_stream
-    test_stream_pipe
-    test_datagram
-    test_stream_tls
-    test_stream_ws
-    test_coro_tls_server
-    test_coro_ws_server)
 
-set_tests_properties(${CORONET_SHUTDOWN_TEST_TARGETS} PROPERTIES LABELS
-                                                                 "shutdown")
+# Focused shutdown close-path regressions (transport close / use-after-free).
+# TinyTest's --filter is an inclusion filter, so "without use-after-free"
+# selects exactly the close-path cases and nothing else. test_coro_server_lifecycle
+# runs unfiltered because its shutdown cases use varied names. On non-Windows the
+# close-path cases in test_stream / test_stream_pipe / test_datagram are compiled
+# out (#ifdef _WIN32), so those focused tests run empty and pass vacuously there.
+# Run with: ctest -L shutdown
+add_test(NAME test_stream.shutdown
+         COMMAND test_stream --filter "without use-after-free")
+add_test(NAME test_stream_pipe.shutdown
+         COMMAND test_stream_pipe --filter "without use-after-free")
+add_test(NAME test_datagram.shutdown
+         COMMAND test_datagram --filter "without use-after-free")
+add_test(NAME test_stream_tls.shutdown
+         COMMAND test_stream_tls --filter "without use-after-free")
+add_test(NAME test_stream_ws.shutdown
+         COMMAND test_stream_ws --filter "without use-after-free")
+add_test(NAME test_coro_tls_server.shutdown
+         COMMAND test_coro_tls_server --filter "without use-after-free")
+add_test(NAME test_coro_ws_server.shutdown
+         COMMAND test_coro_ws_server --filter "without use-after-free")
+
+set_tests_properties(
+  test_coro_server_lifecycle
+  test_stream.shutdown
+  test_stream_pipe.shutdown
+  test_datagram.shutdown
+  test_stream_tls.shutdown
+  test_stream_ws.shutdown
+  test_coro_tls_server.shutdown
+  test_coro_ws_server.shutdown
+  PROPERTIES LABELS "shutdown" TIMEOUT 600)
+
+# TLS smoke tests run under LSan in CI; apply the OpenSSL suppression file to
+# both the full suite and the focused shutdown variants.
 set_tests_properties(test_stream_tls PROPERTIES ENVIRONMENT
                                                 "${TLS_LSAN_SUPPRESSIONS}")
 set_tests_properties(test_stream_ws PROPERTIES ENVIRONMENT
                                                "${TLS_LSAN_SUPPRESSIONS}")
-
-add_custom_target(
-  coronet_shutdown_regressions
-  COMMAND $<TARGET_FILE:test_coro_server_lifecycle>
-  COMMAND $<TARGET_FILE:test_stream> --filter "without use-after-free"
-  COMMAND $<TARGET_FILE:test_stream_pipe> --filter "without use-after-free"
-  COMMAND $<TARGET_FILE:test_datagram> --filter "without use-after-free"
-  COMMAND ${CMAKE_COMMAND} -E env "${TLS_LSAN_SUPPRESSIONS}"
-          $<TARGET_FILE:test_stream_tls> --filter "without use-after-free"
-  COMMAND ${CMAKE_COMMAND} -E env "${TLS_LSAN_SUPPRESSIONS}"
-          $<TARGET_FILE:test_stream_ws> --filter "without use-after-free"
-  COMMAND $<TARGET_FILE:test_coro_tls_server> --filter "without use-after-free"
-  COMMAND $<TARGET_FILE:test_coro_ws_server> --filter "without use-after-free"
-  DEPENDS ${CORONET_SHUTDOWN_TEST_TARGETS}
-  USES_TERMINAL
-  COMMENT "Run focused CoroNet shutdown close-path regressions")
-
-set_target_properties(coronet_shutdown_regressions PROPERTIES
-  FOLDER "${TARGET_NAME}/test")
+set_tests_properties(test_stream_tls.shutdown PROPERTIES ENVIRONMENT
+                                               "${TLS_LSAN_SUPPRESSIONS}")
+set_tests_properties(test_stream_ws.shutdown PROPERTIES ENVIRONMENT
+                                              "${TLS_LSAN_SUPPRESSIONS}")

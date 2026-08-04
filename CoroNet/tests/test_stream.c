@@ -18,9 +18,7 @@
 static int s_connected = -1;
 static int s_closed = 0;
 static int s_connect_count = 0;
-#ifdef _WIN32
 static char s_send_payload[256 * 1024];
-#endif
 
 static void on_connect(void *handle, int status, void *arg) {
   (void)handle;
@@ -45,14 +43,12 @@ static void on_close(void *handle) {
   s_closed = 1;
 }
 
-#ifdef _WIN32
 static int on_recv_noop(void *handle, const mem_slice_t *slice, void *arg) {
   (void)handle;
   (void)slice;
   (void)arg;
   return 0;
 }
-#endif
 
 static int on_recv_capture(void *handle, const mem_slice_t *slice, void *arg);
 
@@ -1426,7 +1422,6 @@ spec("Stream") {
     stream_test_destroy_context_robust(ctx);
   }
 
-#ifdef _WIN32
   it("should close tcp streams with pending connects without use-after-free") {
     enum { STREAM_CONNECT_CLOSE_LOOPS = 16 };
     int i;
@@ -1571,7 +1566,6 @@ spec("Stream") {
       stream_test_destroy_context_robust(ctx);
     }
   }
-#endif
 
 #if defined(__linux__) || defined(__ANDROID__)
   it("should reject unavailable io_uring tcp backend") {
@@ -2283,7 +2277,6 @@ spec("Stream") {
   #endif
 #endif
 
-#ifdef _WIN32
   it("should close tcp listeners with pending accepts without use-after-free") {
     enum { LISTENER_CLOSE_LOOPS = 16 };
     int i;
@@ -2309,6 +2302,7 @@ spec("Stream") {
     }
   }
 
+#ifdef _WIN32
   it("should observe eof for queued accepted sockets closed before accept") {
     coro_context_t *ctx = coro_context_create(NULL);
     coro_socket_t *server = NULL;

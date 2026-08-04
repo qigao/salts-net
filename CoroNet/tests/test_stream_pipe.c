@@ -66,6 +66,17 @@ static unsigned long long pipe_test_unique_id(void) {
 #endif
 }
 
+static int pipe_test_close_name(char *buf, size_t size, const char *tag,
+                                int index) {
+#ifdef _WIN32
+    return snprintf(buf, size, "\\\\.\\pipe\\turbo_test_pipe_%s_%llu_%d", tag,
+                    pipe_test_unique_id(), index);
+#else
+    return snprintf(buf, size, "/tmp/turbo_test_pipe_%s_%llu_%d.sock", tag,
+                    pipe_test_unique_id(), index);
+#endif
+}
+
 static int pipe_test_run_until(coro_context_t *ctx, int *predicate, int expected,
                                uint64_t timeout_ms) {
     uint64_t deadline;
@@ -189,7 +200,6 @@ spec("Stream Pipe") {
         coro_context_destroy(ctx);
     }
 
-#ifdef _WIN32
     it("should close pipe listeners with pending accepts without use-after-free") {
         enum { PIPE_LISTENER_CLOSE_LOOPS = 16 };
         int i;
@@ -200,9 +210,7 @@ spec("Stream Pipe") {
             char pipe_name[256];
 
             check_not_null(ctx);
-            check_true(snprintf(pipe_name, sizeof(pipe_name),
-                                "\\\\.\\pipe\\turbo_test_pipe_close_%llu_%d",
-                                pipe_test_unique_id(), i) > 0);
+            check_true(pipe_test_close_name(pipe_name, sizeof(pipe_name), "close", i) > 0);
 
             listener = turbo_stream_listen_pipe(ctx, pipe_name, 128, on_accept_local);
             check_not_null(listener);
@@ -225,9 +233,7 @@ spec("Stream Pipe") {
             client = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
             check_not_null(client);
 
-            check_true(snprintf(pipe_name, sizeof(pipe_name),
-                                "\\\\.\\pipe\\turbo_test_pipe_missing_%llu_%d",
-                                pipe_test_unique_id(), i) > 0);
+            check_true(pipe_test_close_name(pipe_name, sizeof(pipe_name), "missing", i) > 0);
 
             s_connected = -1;
             s_closed = 0;
@@ -253,9 +259,7 @@ spec("Stream Pipe") {
             check_not_null(ctx);
             reset_pipe_test_state();
 
-            check_true(snprintf(pipe_name, sizeof(pipe_name),
-                                "\\\\.\\pipe\\turbo_test_pipe_recv_close_%llu_%d",
-                                pipe_test_unique_id(), i) > 0);
+            check_true(pipe_test_close_name(pipe_name, sizeof(pipe_name), "recv_close", i) > 0);
 
             listener = turbo_stream_listen_pipe(ctx, pipe_name, 128, on_accept_local);
             check_not_null(listener);
@@ -296,9 +300,7 @@ spec("Stream Pipe") {
             check_not_null(ctx);
             reset_pipe_test_state();
 
-            check_true(snprintf(pipe_name, sizeof(pipe_name),
-                                "\\\\.\\pipe\\turbo_test_pipe_send_close_%llu_%d",
-                                pipe_test_unique_id(), i) > 0);
+            check_true(pipe_test_close_name(pipe_name, sizeof(pipe_name), "send_close", i) > 0);
 
             listener = turbo_stream_listen_pipe(ctx, pipe_name, 128, on_accept_local);
             check_not_null(listener);
@@ -324,7 +326,6 @@ spec("Stream Pipe") {
             pipe_test_destroy_context_robust(ctx);
         }
     }
-#endif
 
 #ifndef _WIN32
     it("should preserve legacy ipc URL on unix") {

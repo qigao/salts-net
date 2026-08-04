@@ -111,6 +111,6 @@ clang -DWIN32 -Dwrite=_write -include io.h -DNFAIR=8 -O2 -o pan_server.exe pan.c
 - `CoroNet/src/turbo_coro_context.c`：lazy task ownership and combinator reference rules；
 - `CoroNet/src/turbo_coro_socket_server.c`：server admission、handler cleanup、close pending and stop；
 - `CoroNet/tests/test_coro_server_lifecycle.c`：accepted handler、stalled admission、TLS/WS shutdown；
-- `CoroNet/tests/CMakeLists.txt` 中的 `coronet_shutdown_regressions`：实际 transport close/use-after-free 回归。
+- `CoroNet/tests/CMakeLists.txt` 中标为 `shutdown` 的聚焦回归测试（`ctest -L shutdown`）：实际 transport close/use-after-free 回归。
 
 Spin 发现的是抽象状态空间中的反例；每个反例都必须回溯到对应 C 实现和 TinyTest 场景，确认模型没有遗漏必要的状态或错误地扩大了原子区间。

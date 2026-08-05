@@ -102,6 +102,17 @@ coro_context_create_ex(void *loop, const struct coro_object_pool_config_s *pool_
 CXX_C_API void coro_context_destroy(coro_context_t *ctx);
 
 /**
+ * Keep a context alive while an external asynchronous producer may post work.
+ * Calls are thread-safe and must be balanced with
+ * coro_context_release_external(). The caller must release the reference
+ * before destroying its producer.
+ */
+CXX_C_API void coro_context_acquire_external(coro_context_t *ctx);
+
+/** Release one external-producer reference acquired for this context. */
+CXX_C_API void coro_context_release_external(coro_context_t *ctx);
+
+/**
  * @brief Controls how coro_context_run() drives the event loop.
  *
  * Values remain stable across backends so the implementation can forward

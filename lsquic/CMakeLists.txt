@@ -473,16 +473,17 @@ ENDIF()
 
 
 if(NOT LSQUIC_EMBEDDED)
-FIND_PROGRAM(SPHINX NAMES sphinx-build)
-IF(SPHINX)
-    ADD_CUSTOM_TARGET(docs
-        ${SPHINX} -b html
-        docs
-        docs/_build
-    )
-ELSE()
-    MESSAGE(STATUS "sphinx-build not found: docs won't be made")
-ENDIF()
+    FIND_PROGRAM(SPHINX NAMES sphinx-build)
+    IF(SPHINX)
+        ADD_CUSTOM_TARGET(docs
+            ${SPHINX} -b html
+            docs
+            docs/_build
+        )
+    ELSE()
+        MESSAGE(STATUS "sphinx-build not found: docs won't be made")
+    ENDIF()
+endif()
 
 INSTALL(FILES
     include/lsquic.h
@@ -496,5 +497,4 @@ if(WIN32)
         wincompat/vc_compat.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lsquic
     )
-endif()
 endif()

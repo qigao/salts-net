@@ -191,5 +191,10 @@ install(
     NAMESPACE lsquic::
     FILE lsquic-targets.cmake)
 else()
+    set_target_properties(lsquic PROPERTIES EXPORT_NAME LSQUICCore
+                                            FOLDER "LSQUIC")
     add_library(TurboNet::LSQUICCore ALIAS lsquic)
+    install(TARGETS lsquic
+        EXPORT TurboNetTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endif()

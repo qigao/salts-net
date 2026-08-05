@@ -170,7 +170,6 @@ install(
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet.h DESTINATION include)
 cmake_install_headers(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/CoroNet EXCLUDES "internal.h"
-  "turbo_lsquic.h"
   "turbo_coro_internal.h" "turbo_native_*_internal.h")
 
 add_subdirectory(tests)

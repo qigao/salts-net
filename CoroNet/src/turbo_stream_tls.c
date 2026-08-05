@@ -12,6 +12,7 @@
 
 #include "turbo_stream_internal.h"
 #include "CoroNet/turbo_coro_internal.h"
+#include "CoroNet/turbo_tls.h"
 #include "turbo_buffer.h"
 #include "turbo_thread.h"
 #include "tlog.h"
@@ -42,7 +43,6 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
-#  include <wincrypt.h>
 #else
 #  include <arpa/inet.h>
 #endif
@@ -243,62 +243,6 @@ static const char *tls_get_env_value(const char *name, char *buffer, size_t buff
   return NULL;
 }
 
-#ifdef _WIN32
-static int load_windows_cert_store(SSL_CTX *ctx, const char *store_name) {
-  HCERTSTORE store;
-  PCCERT_CONTEXT cert = NULL;
-  X509_STORE *x509_store;
-
-  if (!ctx || !store_name) {
-    return 0;
-  }
-
-  store = CertOpenSystemStoreA(0, store_name);
-  if (!store) {
-    return 0;
-  }
-
-  x509_store = SSL_CTX_get_cert_store(ctx);
-  if (!x509_store) {
-    CertCloseStore(store, 0);
-    return 0;
-  }
-
-  while ((cert = CertEnumCertificatesInStore(store, cert)) != NULL) {
-    const unsigned char *encoded = cert->pbCertEncoded;
-    X509 *x509 = d2i_X509(NULL, &encoded, cert->cbCertEncoded);
-    if (!x509) {
-      ERR_clear_error();
-      continue;
-    }
-
-    if (X509_STORE_add_cert(x509_store, x509) != 1) {
-      unsigned long err = ERR_peek_last_error();
-      if (ERR_GET_LIB(err) == ERR_LIB_X509 &&
-          ERR_GET_REASON(err) == X509_R_CERT_ALREADY_IN_HASH_TABLE) {
-        ERR_clear_error();
-      }
-    }
-
-    X509_free(x509);
-  }
-
-  CertCloseStore(store, 0);
-  return 1;
-}
-
-static void configure_ca_from_windows_store(void) {
-  if (s_ca_configured || !s_default_ctx) {
-    return;
-  }
-
-  if (load_windows_cert_store(s_default_ctx, "ROOT")) {
-    load_windows_cert_store(s_default_ctx, "CA");
-    s_ca_configured = 1;
-  }
-}
-#endif
-
 static void configure_ca_from_env(void) {
   char file_buf[1024];
   char path_buf[1024];
@@ -311,10 +255,13 @@ static void configure_ca_from_env(void) {
   }
 
   if (s_default_ctx) {
-    SSL_CTX_load_verify_locations(s_default_ctx,
-                                  (file && file[0]) ? file : NULL,
-                                  (path && path[0]) ? path : NULL);
-    s_ca_configured = 1;
+    if (SSL_CTX_load_verify_locations(s_default_ctx,
+                                      (file && file[0]) ? file : NULL,
+                                      (path && path[0]) ? path : NULL) == 1) {
+      s_ca_configured = 1;
+    } else {
+      ERR_clear_error();
+    }
   }
 }
 
@@ -815,15 +762,17 @@ static int tls_prepare_client_ssl(tls_state_t *st) {
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
     SSL_CTX_set_verify(ctx, st->client_verify_peer ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, NULL);
     if (st->client_verify_peer) {
-      SSL_CTX_set_default_verify_paths(ctx);
-#ifdef _WIN32
-      load_windows_cert_store(ctx, "ROOT");
-      load_windows_cert_store(ctx, "CA");
-#endif
-      if (st->ca_file != NULL && st->ca_file[0] != '\0' &&
-          SSL_CTX_load_verify_locations(ctx, st->ca_file, NULL) != 1) {
-        SSL_CTX_free(ctx);
-        return TURBO_EIO;
+      if (st->ca_file != NULL && st->ca_file[0] != '\0') {
+        if (SSL_CTX_load_verify_locations(ctx, st->ca_file, NULL) != 1) {
+          SSL_CTX_free(ctx);
+          return TURBO_EIO;
+        }
+      } else {
+        rc = turbo_tls_load_system_ca_certificates(ctx);
+        if (rc != TURBO_OK) {
+          SSL_CTX_free(ctx);
+          return rc;
+        }
       }
     }
     rc = tls_apply_protocol_mode_to_ctx(ctx);
@@ -1518,6 +1467,7 @@ static int tls_attach_tcp_stream(turbo_stream_t *outer, turbo_stream_t *tcp,
 
 static SSL_CTX *get_default_tls_ctx(void) {
   SSL_CTX *ctx;
+  int system_ca_rc;
 
   turbo_once(&s_tls_cleanup_once, tls_register_global_cleanup);
 
@@ -1544,7 +1494,7 @@ static SSL_CTX *get_default_tls_ctx(void) {
     SSL_CTX_set_session_cache_mode(s_default_ctx, SSL_SESS_CACHE_CLIENT);
     SSL_CTX_sess_set_new_cb(s_default_ctx, tls_on_new_client_session);
     SSL_CTX_set_verify(s_default_ctx, SSL_VERIFY_PEER, NULL);
-    SSL_CTX_set_default_verify_paths(s_default_ctx);
+    system_ca_rc = turbo_tls_load_system_ca_certificates(s_default_ctx);
     if (tls_apply_protocol_mode_to_ctx(s_default_ctx) != 0) {
       SSL_CTX_free(s_default_ctx);
       s_default_ctx = NULL;
@@ -1552,9 +1502,13 @@ static SSL_CTX *get_default_tls_ctx(void) {
       return NULL;
     }
     configure_ca_from_env();
-#ifdef _WIN32
-    configure_ca_from_windows_store();
-#endif
+    if (system_ca_rc != TURBO_OK && !s_ca_configured) {
+      SSL_CTX_free(s_default_ctx);
+      s_default_ctx = NULL;
+      tls_global_unlock();
+      return NULL;
+    }
+    if (!s_ca_configured && system_ca_rc == TURBO_OK) s_ca_configured = 1;
   }
   ctx = s_default_ctx;
   tls_global_unlock();

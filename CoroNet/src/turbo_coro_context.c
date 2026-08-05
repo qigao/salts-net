@@ -81,8 +81,6 @@ static int ensure_post_queue(coro_context_t *ctx);
 static void drain_post_queue(coro_context_t *ctx);
 static int post_queue_empty(const coro_context_t *ctx);
 static void drain_shutdown_callbacks(coro_context_t *ctx);
-void coro_context_acquire_external(coro_context_t *ctx);
-void coro_context_release_external(coro_context_t *ctx);
 static int context_loop_alive(const coro_context_t *ctx);
 
 static void coro_context_cleanup_create_failure(coro_context_t *ctx) {

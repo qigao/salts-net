@@ -67,7 +67,7 @@ typedef enum turbo_tls_protocol_mode_e {
 } turbo_tls_protocol_mode_t;
 
 typedef struct turbo_tls_client_config_s {
-  const char *ca_file;
+  const char *ca_file; /**< Optional PEM CA bundle; replaces system trust when set. */
   const char *cert_file;
   const char *key_file;
   const char *key_password;

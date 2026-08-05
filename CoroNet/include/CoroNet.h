@@ -15,6 +15,7 @@
 #include "CoroNet/turbo_kcp.h"
 #include "CoroNet/turbo_mdns.h"
 #include "CoroNet/turbo_stream.h"
+#include "CoroNet/turbo_tls.h"
 #include "CoroNet/turbo_backend.h"
 
 #endif /* TURBO_CORONET_H */

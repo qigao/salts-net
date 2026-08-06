@@ -1,7 +1,7 @@
 # Copyright (c) 2017 - 2026 LiteSpeed Technologies Inc.  See LICENSE.
 cmake_minimum_required(VERSION 3.0...3.23)
 
-
+find_package(ZLIB REQUIRED)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     PROJECT(lsquic C CXX)
     set(LSQUIC_EMBEDDED OFF)

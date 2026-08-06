@@ -93,7 +93,7 @@ target_link_libraries(${TARGET_NAME} PUBLIC TurboUtils::Core OpenSSL::Crypto)
 
 set_target_properties(
   ${TARGET_NAME}
-  PROPERTIES FOLDER snmp/asn1_parser
+  PROPERTIES FOLDER snmp/asn1
              VERSION ${PROJECT_VERSION}
              SOVERSION ${PROJECT_VERSION_MAJOR}
              EXPORT_NAME Asn1Parser)
@@ -109,7 +109,7 @@ target_link_libraries(mib_compiler PRIVATE ${TARGET_NAME})
 target_include_directories(mib_compiler
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-set_target_properties(mib_compiler PROPERTIES FOLDER snmp/tools)
+set_target_properties(mib_compiler PROPERTIES FOLDER snmp/asn1/tools)
 
 # Install
 install(

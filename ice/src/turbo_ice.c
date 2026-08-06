@@ -831,6 +831,9 @@ static void gather_srflx_candidates(turbo_ice_agent_t *agent) {
 
 static void gather_relay_candidates(turbo_ice_agent_t *agent) {
   for (int i = 0; i < agent->config.turn_server_count && i < ICE_MAX_TURN_SERVERS; i++) {
+    if (ice_agent_is_closed(agent))
+      return;
+
     const char *url = agent->config.turn_servers[i].url;
     const char *username = agent->config.turn_servers[i].username;
     const char *password = agent->config.turn_servers[i].credential;
@@ -876,7 +879,12 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
     turn_allocation_t alloc;
     int result = -1;
     for (int attempt = 0; attempt < 3; attempt++) {
+      if (ice_agent_is_closed(agent))
+        return;
+
       result = turn_client_allocate(turn, &alloc);
+      if (ice_agent_is_closed(agent))
+        return;
       if (result == 0) {
         break;
       }
@@ -884,6 +892,8 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
                 attempt + 1, result);
       if (agent->ctx && attempt + 1 < 3) {
         coro_sleep(agent->ctx, 200);
+        if (ice_agent_is_closed(agent))
+          return;
       }
     }
 
@@ -2608,10 +2618,11 @@ void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow) {
 }
 
 void ice_agent_close(turbo_ice_agent_t *agent) {
-  if (agent && agent->state != ICE_STATE_CLOSED) {
+  if (agent) {
     agent->checks_in_progress = 0;
     agent->current_check_pair = -1;
-    set_state(agent, ICE_STATE_CLOSED);
+    if (agent->state != ICE_STATE_CLOSED)
+      set_state(agent, ICE_STATE_CLOSED);
     ice_agent_interrupt_waits(agent);
   }
 }

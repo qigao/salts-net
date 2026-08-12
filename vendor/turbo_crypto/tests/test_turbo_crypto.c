@@ -170,6 +170,77 @@ spec("turbo crypto") {
     }
   }
 
+  it("matches the official xxtea cross-language vector") {
+    /* https://github.com/xxtea/xxtea-php/blob/master/tests/XXTEATest.php */
+    static const uint8_t plain_text[] = {
+        0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c,
+        0x64, 0x21, 0x20, 0xe4, 0xbd, 0xa0, 0xe5, 0xa5, 0xbd, 0xef,
+        0xbc, 0x8c, 0xe4, 0xb8, 0xad, 0xe5, 0x9b, 0xbd, 0xf0, 0x9f,
+        0x87, 0xa8, 0xf0, 0x9f, 0x87, 0xb3, 0xef, 0xbc, 0x81};
+    static const uint8_t key[] = {
+        '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'};
+    static const uint8_t expected[] = {
+        0x0f, 0x8b, 0x74, 0xad, 0x55, 0xd4, 0x0e, 0x5d, 0xdb, 0x9d,
+        0x67, 0x44, 0x46, 0x1a, 0x89, 0x98, 0x52, 0x1a, 0x9d, 0xf9,
+        0xff, 0xeb, 0x30, 0x31, 0x01, 0x8f, 0x63, 0x0f, 0xa9, 0xfd,
+        0x31, 0x23, 0x10, 0x36, 0x80, 0xfc, 0x4c, 0xe4, 0xb8, 0xac,
+        0x71, 0xdc, 0x1a, 0xe1};
+    uint8_t cipher_text[sizeof(expected)];
+    uint8_t decrypted[sizeof(expected) - 4U];
+    size_t cipher_text_len = 0U;
+    size_t plain_text_len = 0U;
+
+    check_int_eq(turbo_crypto_xxtea_encrypt_size(sizeof(plain_text),
+                                                  &cipher_text_len),
+                 TURBO_CRYPTO_OK);
+    check_size_eq(cipher_text_len, sizeof(expected));
+    check_int_eq(turbo_crypto_xxtea_encrypt(
+                     cipher_text, sizeof(cipher_text), &cipher_text_len,
+                     plain_text, sizeof(plain_text), key, sizeof(key)),
+                 TURBO_CRYPTO_OK);
+    check_uint8_array_eq(cipher_text, expected, sizeof(expected));
+    check_int_eq(turbo_crypto_xxtea_decrypt(
+                     decrypted, sizeof(decrypted), &plain_text_len,
+                     cipher_text, cipher_text_len, key, sizeof(key)),
+                 TURBO_CRYPTO_OK);
+    check_size_eq(plain_text_len, sizeof(plain_text));
+    check_uint8_array_eq(decrypted, plain_text, sizeof(plain_text));
+  }
+
+  it("rejects invalid XXTEA framing and reports required capacity") {
+    static const uint8_t plain_text[] = {0x00, 0x01, 0x00, 0xff, 0x7f};
+    static const uint8_t key[] = {'l', 'e', 'g', 'a', 'c', 'y'};
+    uint8_t cipher_text[12];
+    uint8_t decrypted[8];
+    size_t output_len = 0U;
+
+    check_int_eq(turbo_crypto_xxtea_encrypt(
+                     cipher_text, sizeof(cipher_text) - 1U, &output_len,
+                     plain_text, sizeof(plain_text), key, sizeof(key)),
+                 TURBO_CRYPTO_EBUFFER);
+    check_size_eq(output_len, sizeof(cipher_text));
+    check_int_eq(turbo_crypto_xxtea_encrypt(
+                     cipher_text, sizeof(cipher_text), &output_len,
+                     plain_text, sizeof(plain_text), key, sizeof(key)),
+                 TURBO_CRYPTO_OK);
+    check_int_eq(turbo_crypto_xxtea_decrypt(
+                     decrypted, sizeof(decrypted) - 1U, &output_len,
+                     cipher_text, sizeof(cipher_text), key, sizeof(key)),
+                 TURBO_CRYPTO_EBUFFER);
+    check_size_eq(output_len, sizeof(decrypted));
+    check_int_eq(turbo_crypto_xxtea_decrypt(
+                     decrypted, sizeof(decrypted), &output_len,
+                     cipher_text, sizeof(cipher_text) - 1U, key, sizeof(key)),
+                 TURBO_CRYPTO_EINVAL);
+    check_int_eq(turbo_crypto_xxtea_encrypt_size(0U, &output_len),
+                 TURBO_CRYPTO_EINVAL);
+    check_int_eq(turbo_crypto_xxtea_encrypt(
+                     cipher_text, sizeof(cipher_text), &output_len,
+                     plain_text, sizeof(plain_text), key,
+                     TURBO_CRYPTO_XXTEA_KEY_SIZE + 1U),
+                 TURBO_CRYPTO_EINVAL);
+  }
+
   it("matches the RFC 8032 Ed448 empty-message vector") {
     uint8_t public_key[TURBO_CRYPTO_ED448_PUBLIC_KEY_SIZE];
     uint8_t signature[TURBO_CRYPTO_ED448_SIGNATURE_SIZE];

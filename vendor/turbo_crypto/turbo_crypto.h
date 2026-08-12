@@ -30,6 +30,7 @@ extern "C" {
 #define TURBO_CRYPTO_CHACHA20_X_NONCE_SIZE 24U
 #define TURBO_CRYPTO_POLY1305_MAC_SIZE 16U
 #define TURBO_CRYPTO_POLY1305_KEY_SIZE 32U
+#define TURBO_CRYPTO_XXTEA_KEY_SIZE 16U
 
 #define TURBO_CRYPTO_ARGON2_D 0U
 #define TURBO_CRYPTO_ARGON2_I 1U
@@ -41,6 +42,7 @@ extern "C" {
 #define TURBO_CRYPTO_EVERIFY (-3)
 #define TURBO_CRYPTO_ERANDOM (-4)
 #define TURBO_CRYPTO_ECRYPTO (-5)
+#define TURBO_CRYPTO_EBUFFER (-6)
 
 /**
  * SHA-256 streaming context with implementation-private storage.
@@ -104,6 +106,78 @@ int turbo_crypto_pbkdf2_hmac_sha256(
  */
 int turbo_crypto_md5(const void* data, size_t len,
                      uint8_t out[TURBO_CRYPTO_MD5_SIZE]);
+
+/**
+ * Calculate the ciphertext size produced by turbo_crypto_xxtea_encrypt().
+ *
+ * XXTEA is exposed only for compatibility with existing data formats. It is
+ * deterministic and unauthenticated; new protocols should use
+ * turbo_crypto_aead_lock() instead.
+ *
+ * @param plain_text_len Plaintext length in bytes; zero is not supported.
+ * @param cipher_text_len Receives the exact required output size.
+ * @return TURBO_CRYPTO_OK or TURBO_CRYPTO_EINVAL for an invalid or
+ *         unrepresentable length.
+ */
+int turbo_crypto_xxtea_encrypt_size(size_t plain_text_len,
+                                    size_t* cipher_text_len);
+
+/**
+ * Encrypt bytes with the xxtea-c compatible data framing.
+ *
+ * Keys shorter than 16 bytes are zero-padded. For compatibility with
+ * xxtea-c, the first zero byte terminates the effective key. Input and output
+ * may overlap. Time O(plain_text_len), temporary space O(plain_text_len).
+ *
+ * @param cipher_text Caller-owned output buffer.
+ * @param cipher_text_capacity Available bytes in cipher_text.
+ * @param cipher_text_len Receives the exact ciphertext size, including when
+ *        TURBO_CRYPTO_EBUFFER is returned.
+ * @param plain_text Non-empty plaintext bytes.
+ * @param plain_text_len Plaintext length in bytes.
+ * @param key Key bytes; NULL is valid only when key_len is zero.
+ * @param key_len Key length from zero through TURBO_CRYPTO_XXTEA_KEY_SIZE.
+ * @return TURBO_CRYPTO_OK, TURBO_CRYPTO_EINVAL for invalid arguments,
+ *         TURBO_CRYPTO_EBUFFER for insufficient output capacity, or
+ *         TURBO_CRYPTO_ECRYPTO when the private implementation fails.
+ */
+int turbo_crypto_xxtea_encrypt(void* cipher_text,
+                               size_t cipher_text_capacity,
+                               size_t* cipher_text_len,
+                               const void* plain_text,
+                               size_t plain_text_len,
+                               const void* key,
+                               size_t key_len);
+
+/**
+ * Decrypt bytes produced by turbo_crypto_xxtea_encrypt() or xxtea-c.
+ *
+ * The output buffer must have at least cipher_text_len - 4 bytes available;
+ * plain_text_len receives the actual plaintext size. Because XXTEA has no
+ * authentication, successful decryption does not prove ciphertext integrity.
+ * Input and output may overlap. Time O(cipher_text_len), temporary space
+ * O(cipher_text_len).
+ *
+ * @param plain_text Caller-owned output buffer.
+ * @param plain_text_capacity Available bytes in plain_text.
+ * @param plain_text_len Receives the actual plaintext size on success and the
+ *        required upper bound when TURBO_CRYPTO_EBUFFER is returned.
+ * @param cipher_text Ciphertext bytes with xxtea-c length framing.
+ * @param cipher_text_len Ciphertext length; at least eight and divisible by
+ *        four.
+ * @param key Key bytes; NULL is valid only when key_len is zero.
+ * @param key_len Key length from zero through TURBO_CRYPTO_XXTEA_KEY_SIZE.
+ * @return TURBO_CRYPTO_OK, TURBO_CRYPTO_EINVAL for invalid arguments or
+ *         framing, TURBO_CRYPTO_EBUFFER for insufficient output capacity, or
+ *         TURBO_CRYPTO_ECRYPTO when decryption fails.
+ */
+int turbo_crypto_xxtea_decrypt(void* plain_text,
+                               size_t plain_text_capacity,
+                               size_t* plain_text_len,
+                               const void* cipher_text,
+                               size_t cipher_text_len,
+                               const void* key,
+                               size_t key_len);
 
 /**
  * Derive an RFC 8032 Ed448 public key from a 57-byte private seed.

@@ -16,6 +16,8 @@ TurboScript while keeping third-party headers and types private:
   verification.
 - BLAKE2b, XChaCha20-Poly1305 AEAD, Argon2, X25519, Curve25519 EdDSA,
   ChaCha20, Poly1305, and Elligator through validated one-shot adapters.
+- XXTEA for compatibility with existing xxtea-c ciphertexts. XXTEA is
+  deterministic and unauthenticated; new formats must use the AEAD API.
 - MD5 only for S3 fields that explicitly require it, including Content-MD5,
   multipart ETags, and SSE-C key checksums.
 
@@ -35,6 +37,11 @@ BSD license and compiles only WEI448, SHAKE256, and EDDSA448 into the same
 `turbo_crypto` archive. The public adapter accepts RFC 8032's 57-byte private
 seed and keeps all libecc types and headers private. libecc's scalar-blinding
 randomness is supplied by TurboUtils' operating-system CSPRNG.
+
+xxtea-c is vendored from https://github.com/xxtea/xxtea-c at commit
+`7ec961540996934d939572d885ea1d5b21689688` under the MIT license. Its public
+header remains private; callers use the capacity-checked `turbo_crypto_xxtea_*`
+adapters and the shared `TURBO_CRYPTO_*` error model.
 
 ## Ed448 usage
 

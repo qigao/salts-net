@@ -27,11 +27,14 @@ add_library(
   turbo_crypto.c
   turbo_crypto_monocypher.c
   turbo_crypto_ed448.c
+  turbo_crypto_xxtea.c
   turbo_crypto.h
   monocypher/monocypher.c
   monocypher/monocypher.h
   sha2/sha-256.c
   sha2/sha-256.h
+  xxtea/xxtea.c
+  xxtea/xxtea.h
   ${LIBECC_ED448_SOURCES})
 
 add_library(TurboNet::Crypto ALIAS turbo_crypto)
